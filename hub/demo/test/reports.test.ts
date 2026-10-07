@@ -23,7 +23,7 @@ test('every reported-cost demo entry holds its advertised state through the real
       if(!calendar[0]?.month.confirmed)codes.push('incomplete-month');
       if(BigInt(calendar[0]?.month.amount??'0')<0n)codes.push('signed-report');
       for(const expected of scene.expect)assert.ok(codes.includes(expected),scene.id+': '+expected);
-      assert.equal(state.windows.length,0);assert.equal(result.expiryKnown,false);
+      assert.equal(state.windows.length,0);assert.equal(result.expiryKind,'unknown');
     }finally{transport.close();}
   }}finally{store.close();}
 });

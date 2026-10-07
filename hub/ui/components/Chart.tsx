@@ -12,7 +12,7 @@ import {useTimeAxis} from './timeAxis';
 import {navigationKey, type AxisNavigation} from '../lib/axisNavigation';
 import {PlotLayer, PlotOverlay} from './PlotLayer';
 import {covered, type PlotBuffer} from '../lib/historyPlot';
-import {plotPathPrepared} from '../lib/plotPath';
+import {observationRunsPrepared,plotPathPrepared} from '../lib/plotPath';
 import {clipPrepared} from '../lib/forecast';
 import {usePrepared, usePreparationBasis} from './prepared';
 
@@ -291,7 +291,7 @@ export const Chart = memo(function Chart({
   onSelect?: (range: TimeRange) => void;
   plot?: number;
   onBase?: (height: number) => void;
-  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string;detail?:(key:string,at:number)=>ReactNode};
+  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;detail?:(key:string,at:number)=>ReactNode};
   stepped?:boolean;
   strip?: PlotBuffer | null;
   prepared?: boolean;
@@ -302,7 +302,7 @@ export const Chart = memo(function Chart({
 }) {
   const left = valueAxis?76:40;
   const right = 12;
-  const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady, navigation});
+  const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady, precise: incomingLines.some(line=>!!line.capCells||!!line.intervals||line.pointMode==='observation'), navigation});
   const {box, svg, width, scale, drag, timeAt, handlers, panning} = axis;
   const base = plotHeight(width);
   const height = plot === undefined ? base : Math.max(base, plot / scale);
@@ -326,10 +326,26 @@ export const Chart = memo(function Chart({
       let lastAt:number|undefined;
       for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; lastAt=at; yield;}
       if(lastAt!==undefined&&valueAxis?.rawValue)latest=`${lastAt}:${valueAxis.rawValue(line.key,lastAt)}`;
-      if(line.intervals) {
+      if(line.pointMode==='observation') {
+        const observed=yield* observationRunsPrepared(line.points,incomingStrip?.from??drawFrom,incomingStrip?.to??basis.to,drawNow);
+        const runs:[number,number][][]=[];
+        for(const run of observed.runs){const mapped:[number,number][]=[];for(const [at,value] of run){mapped.push([x(at),y(value)]);yield;}runs.push(mapped);}
+        paths.push({line:yield* plotPathPrepared(runs,true),last:observed.last?[x(observed.last[0]),y(observed.last[1])]:null,parts:null,latest});
+      } else if(line.intervals) {
         let path='';
         for(const interval of line.intervals){if(interval.from<drawNow&&interval.to>drawFrom)path+=`M${x(interval.from).toFixed(1)},${y(interval.value).toFixed(1)}L${x(interval.to).toFixed(1)},${y(interval.value).toFixed(1)}`;yield;}
         paths.push({line:path,last:null,parts:null,latest});
+      } else if(line.capCells) {
+        let path='',last:[number,number]|null=null;
+        for(const cell of line.capCells) {
+          yield;
+          const start=Math.max(cell.from,incomingStrip?.from??drawFrom),end=Math.min(cell.to,drawNow);
+          if(end<=start)continue;
+          const py=y(cell.value);
+          path+=`M${x(start).toFixed(1)},${py.toFixed(1)}L${x(end).toFixed(1)},${py.toFixed(1)}`;
+          last=[x(end),py];
+        }
+        paths.push({line:path,last,parts:null,latest});
       } else if (incomingStrip && line.blocks) {
         let last: [number, number] | null = null;
         const parts: {key: string; line: string}[] = [];
@@ -407,12 +423,13 @@ export const Chart = memo(function Chart({
   const y = (value: number) => top + (1 - (value-(shownAxis?.min??0)) / ((shownAxis?.max??100)-(shownAxis?.min??0))) * (height - top - bottom);
   const bx = (at: number) => axis.screenX(Math.min(now, at + cellMs / 2));
   const hover = incomingReady && prepared.ready && axis.hover !== null && (!strip || axis.hover > now || covered(strip.coverage, axis.hover, axis.hover + cellMs)) ? axis.hover : null;
+  const pointedAt = axis.hoverAt ?? axis.rawHover ?? hover;
   const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (width < 560 ? 4 : 7) * (tickTo - tickFrom) / span);
   useLayoutEffect(() => {axis.commitDrawing(basis, incomingReady && prepared.ready);});
 
   const none = {left: false, plan: false, gap: false, forecast: false};
-  const {rows, columns} = hover === null ? {rows: [], columns: none} : readCell(lines, plans, hover, cellMs, now, to, forecasts, strip?.coverage);
+  const {rows, columns} = hover === null ? {rows: [], columns: none} : readCell(lines, plans, hover, cellMs, now, to, forecasts, strip?.coverage, pointedAt!);
   const columnCount = Object.values(columns).filter(Boolean).length;
   // A cell ahead of now where no line reads anything says only what happens in it.
   const grid = rows.length > 0 && columnCount > 0;
@@ -502,7 +519,9 @@ export const Chart = memo(function Chart({
     stackTop,
   );
   // A cell ahead of now is read at its middle; the one holding now, at now.
-  const hoverX = hover === null ? 0 : hover > now ? axis.screenX(Math.min(to, hover + cellMs / 2)) : bx(hover);
+  const observationHover=lines.some(l=>l.pointMode==='observation'||!!l.capCells);
+  const rowTime=(line:Line)=>line.pointMode==='observation'||line.capCells||line.intervals?pointedAt!:hover!;
+  const hoverX = hover === null ? 0 : hover > now ? axis.screenX(Math.min(to, hover + cellMs / 2)) : observationHover?axis.screenX(pointedAt!):bx(hover);
   // On a narrow chart it spans the chart's width under the plot; a marker's time stands over its label and does not rise.
   const narrow = width < 560;
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: !edgeKey, bottom: height * scale});
@@ -672,7 +691,7 @@ export const Chart = memo(function Chart({
           <g className="crosshair">
             <rect x={axis.screenX(hover)} width={bandWidth} y={top} height={height - top - bottom} className="hover-band" />
             <line x1={hoverX} x2={hoverX} y1={top} y2={height - bottom} />
-            {rows.map(row => row.value !== null && <circle key={row.line.key} cx={hoverX} cy={y(row.value)} r={4} fill={row.line.color} />)}
+            {rows.map(row => row.value !== null && <circle key={row.line.key} cx={row.line.pointMode==='observation'||row.line.capCells||row.line.intervals?hoverX:bx(hover!)} cy={y(row.value)} r={4} fill={row.line.color} />)}
           </g>
         )}
       </PlotOverlay>
@@ -708,7 +727,7 @@ export const Chart = memo(function Chart({
                       <line x1="0" x2="14" y1="2" y2="2" stroke={row.line.color} strokeWidth="2" strokeDasharray={row.line.dash || undefined} />
                     </svg>
                     <span className="tooltip-name">{row.line.name}</span>
-                    {columns.left && <strong>{row.left !== null && (shownAxis?shownAxis.formatValue(row.line.key,row.left,hover!):`${num(row.left)}%`)}</strong>}
+                    {columns.left && <strong>{row.left !== null && (shownAxis?shownAxis.formatValue(row.line.key,row.left,rowTime(row.line)):`${num(row.left)}%`)}</strong>}
                     {columns.plan && <span className="tooltip-plan">{row.plan !== null && `${num(row.plan)}%`}</span>}
                     {columns.gap && <span className={`tooltip-gap ${row.gap !== null ? gapTone(row.gap) : ''}`}>{row.gap !== null && gapText(row.gap)}</span>}
                     {columns.forecast && <span className="tooltip-forecast">{row.forecast !== null && `${num(row.forecast)}%`}</span>}
@@ -716,7 +735,7 @@ export const Chart = memo(function Chart({
                 ))}
               </div>
             )}
-            {shownAxis?.detail&&rows.map(row=><div className="tooltip-mark" key={'money:'+row.line.key}>{shownAxis.detail!(row.line.key,hover!)}</div>)}
+            {shownAxis?.detail&&rows.map(row=><div className="tooltip-mark" key={'money:'+row.line.key}>{shownAxis.detail!(row.line.key,rowTime(row.line))}</div>)}
             {grid && markerReadout.length > 0 && <div className="tooltip-sep" />}
             {markerReadout.map(marker => (
               <div className={`tooltip-mark ${marker.strong ? 'is-strong' : ''}`} key={marker.key}>

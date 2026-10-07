@@ -1,9 +1,10 @@
 import {useEffect,useState} from 'react';
-import {useBoardId,type Named} from '../lib/board';
+import {DEFAULT_CURRENCY} from '../../server/domain/currency';
+import {useBoardId,useCurrencyContext,type Named} from '../lib/board';
 import {ApiError,call} from '../lib/http';
-import {archivedKeyGroups,moneySelection,chooseMoney} from '../lib/moneySelection';
+import {archivedKeyGroups,keyMeter,moneySelection,chooseMoney} from '../lib/moneySelection';
 import {usePrefs,setPrefs} from '../lib/prefs';
-import {keyName} from '../lib/money';
+import {referenceBalance,balanceGroups,balanceRoleLabel,keyName} from '../lib/money';
 import type {MeterHistory} from '../lib/moneyView';
 import {MAX_METERS} from '../../server/domain/meterHistory';
 import {t} from '../i18n';
@@ -13,19 +14,19 @@ import {KEYS_PER_PAGE,KeyPages,KeyPageContent} from './KeyPages';
 import type {KeyPage} from '../lib/moneyKeys';
 
 /** Series are chosen in the chart's settings; the key table only reads measurements. */
-export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
-  const board=useBoardId(),prefs=usePrefs(),unit=prefs.money.unit??'USD';
-  const accounts=sources.filter(s=>!hidden.includes('source:'+s.id)&&s.meters?.some(m=>m.kind==='balance'&&m.unit===unit));
+export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
+  const context=useCurrencyContext(),board=useBoardId(),prefs=usePrefs(),unit=prefs.money.unit??DEFAULT_CURRENCY;
+  const accounts=sources.filter(s=>!hidden.includes('source:'+s.id)&&(unit===DEFAULT_CURRENCY?!!referenceBalance(s,context.target.id!==DEFAULT_CURRENCY):s.meters?.some(m=>m.kind==='balance'&&m.unit===unit)));
   const [sourceId,setSource]=useState<string|null>(()=>accounts.length===1?accounts[0].id:null);
   const [loaded,setPage]=useState<KeyPage|null>(null),[after,setAfter]=useState<string|undefined>(),[back,setBack]=useState<(string|undefined)[]>([]),[error,setError]=useState<unknown>(null),[changed,setChanged]=useState(false);
   const [loading,setLoading]=useState(true);
   const [archivePage,setArchivePage]=useState(0);
   const [membership,setMembership]=useState<{context:string;keys:string[]}|null>(null);
-  const selected=moneySelection(sources,hidden,prefs.money).selection?.ids??[];
+  const selected=moneySelection(sources,hidden,prefs.money,context).selection?.ids??[];
   const source=sources.find(s=>s.id===sourceId);
   const inCard=source?.keysCount===source?.keys?.length&&!!source?.keys;
   const page:KeyPage|null=inCard?{keys:source!.keys!,meters:source!.meters??[],total:source!.keysCount!,inventory:source!.inventory,next:null}:loaded;
-  const selectedKeys=JSON.stringify([...new Set(selected.filter(([id,m])=>id===sourceId&&m!=='balance').map(([,m])=>m.match(/^key:([^:]+):/)?.[1]).filter((id):id is string=>!!id))].sort());
+  const selectedKeys=JSON.stringify([...new Set(selected.filter(([id])=>id===sourceId).map(([,m])=>keyMeter(m)?.[1]).filter((id):id is string=>!!id))].sort());
   const membershipContext=JSON.stringify([board,sourceId,source?.successAt,selectedKeys]);
   useEffect(()=>{
     const ids:string[]=JSON.parse(selectedKeys);
@@ -68,6 +69,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
   const total=(page?.total??source?.keysCount??0)+archived.length;
   const busy=!inCard&&loading;
   useEffect(()=>{if(archivePage>extraPages)setArchivePage(extraPages);},[archivePage,extraPages]);
+  const balances=(s:Named)=>(unit===DEFAULT_CURRENCY?[referenceBalance(s,context.target.id!==DEFAULT_CURRENCY)].filter((g):g is NonNullable<typeof g>=>!!g):balanceGroups(s).filter(g=>g.total.unit===unit)).flatMap(g=>[{meter:g.total,role:'total' as const},...g.components].map(({meter,role})=>row(s.id,meter.id,(meter.conversion?'≈ ':'')+balanceRoleLabel(role),false)));
   return <>
     <div className="popover-title popover-section">{t('source.show')}</div>
     <p className="popover-note">{selected.length} / {MAX_METERS}</p>
@@ -75,7 +77,7 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
     {source?<>
       {accounts.length>1&&<button className="popover-row" onClick={()=>setSource(null)}><span>← {t('money.accounts')}</span></button>}
       <div className="popover-title">{source.title}</div>
-      {row(source.id,'balance',t('money.balance'))}
+      {balances(source)}
       <ErrorLine error={error}/>
       {changed&&<p className="popover-note">{t('money.changed')}</p>}
       {(page?.inventory??source.inventory)?.complete===false&&<p className="popover-note">{t('money.inventoryPartial')}</p>}
@@ -101,11 +103,13 @@ export function MoneySettings({sources,hidden,series}:{sources:readonly Named[];
     </>:<>
       <div>{accounts.map(s=><div key={s.id} className="popover-section">
         <div className="popover-title">{s.title}</div>
-        {row(s.id,'balance',t('money.balance'))}
+        {balances(s)}
         {!!s.keysCount&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.keySeries',{count:s.keysCount})}</span><b>›</b></button>}
-        {!s.keysCount&&selected.some(([id,m])=>id===s.id&&m!=='balance')&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.selectedDetails')}</span><b>›</b></button>}
+        {!s.keysCount&&selected.some(([id,m])=>id===s.id&&keyMeter(m))&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.selectedDetails')}</span><b>›</b></button>}
       </div>)}</div>
     </>}
     <div className="popover-section"><button className="popover-row" onClick={()=>setPrefs({money:chooseMoney(prefs.money,unit,null)})}>{t('money.resetSelection')}</button></div>
   </>;
 }
+
+export const MoneySettings=KeyMoneySettings;

@@ -31,9 +31,9 @@ function centsToken(value:string):bigint {
 }
 const statusCode=(error:unknown):SecretCode=>error instanceof ConnectorStatus&&error.status===401?'credential_access_invalid':error instanceof ConnectorStatus&&error.status===403?'credential_permission':error instanceof SecretError?error.code:'connector_failed';
 
-export function openAIPlatform(transport=new ConnectorTransport({host:'api.openai.com',port:443,operations:{costs:{path:'/v1/organization/costs',query:['start_time','end_time','bucket_width','limit','page'],cursor:'page'},limit:{path:'/v1/organization/spend_limit'}}},{decode:decodeOpenAI,organizationProof:true}),now=Date.now):Connector {
+export function openAIPlatform(transport=new ConnectorTransport({host:'api.openai.com',port:443,operations:{costs:{path:'/v1/organization/costs',query:['start_time','end_time','bucket_width','limit','page'],cursor:'page'},limit:{path:'/v1/organization/spend_limit'}}},{decode:decodeOpenAI,organizationProof:true}),now=Date.now):Connector<Extract<ConnectorIdentity,{account:string}>> {
   const abilities=['usage'] as const;
-  const read=async(secret:Buffer,expected:string|undefined,signal?:AbortSignal):Promise<ConnectorIdentity>=>{
+  const read=async(secret:Buffer,expected:string|undefined,signal?:AbortSignal):Promise<Extract<ConnectorIdentity,{account:string}>>=>{
     const started=now(),from=Math.floor((started-90*REPORT_DAY)/REPORT_DAY)*REPORT_DAY,to=Math.floor(started/REPORT_DAY)*REPORT_DAY+REPORT_DAY;
     const controller=new AbortController(),abort=()=>controller.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
     const deadline=setTimeout(abort,60_000);deadline.unref();
@@ -105,7 +105,7 @@ export function openAIPlatform(transport=new ConnectorTransport({host:'api.opena
       }
       if(!account||!expected&&(!proved||attempt.outcome==='access_lost'))throw new SecretError(attempt.safeCode??'credential_identity_unavailable');
       if(signal?.aborted)throw new SecretError('connector_cancelled');
-      return {account,abilities:[...abilities],expiresAt:null,expiryKnown:false,attempt,measurement:{type:'meters',reportDigest:createHash('sha256').update(JSON.stringify([reports.intervals.map(r=>[r.meterId,r.unit,r.from,r.to,r.amount]).sort(),limit.value])).digest('hex'),observedAt:started,staleAfterMs:204_000,meters:[],keys:[],inventoryComplete:true,inventoryError:null,reports,monthlyLimit:limit}};
+      return {account,abilities:[...abilities],expiresAt:null,expiryKind:'unknown',attempt,measurement:{type:'meters',reportDigest:createHash('sha256').update(JSON.stringify([reports.intervals.map(r=>[r.meterId,r.unit,r.from,r.to,r.amount]).sort(),limit.value])).digest('hex'),observedAt:started,staleAfterMs:204_000,meters:[],keys:[],inventoryComplete:true,inventoryError:null,reports,monthlyLimit:limit}};
     }finally{clearTimeout(deadline);signal?.removeEventListener('abort',abort);}
   };
   return {id:'openai_platform',secretFormat:value=>/^sk-admin-[A-Za-z0-9_-]{16,4000}$/.test(value),abilities,transport,map:()=>null,identify:(secret,signal)=>read(secret,undefined,signal),measure:(secret,expected,signal)=>read(secret,expected.account,signal)};

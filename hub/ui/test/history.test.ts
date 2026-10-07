@@ -1,13 +1,19 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {followPan, HistoryStore} from '../lib/history';
+import {follow,followPan, HistoryStore} from '../lib/history';
 import {Pan} from '../lib/pan';
 import {covered} from '../lib/historyPlot';
 import {HistoryTile} from '../lib/historyTiles';
 import {Preparations} from '../lib/prepare';
 import {ApiError} from '../lib/http';
-import {composeMeters} from '../../server/domain/meterHistory';
+import {composeMeters,type MeterSelection} from '../../server/domain/meterHistory';
 import {CLOCK_TOLERANCE_MS, READ_CELLS, cellOf, cellStart, compose, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis} from '../../server/domain/history';
+import {createStore} from '../lib/store';
+import {INITIAL,reduce,type Snapshot} from '../lib/board';
+import {prefs,setPrefs} from '../lib/prefs';
+import {DEFAULT_MONEY} from '../lib/moneySelection';
+import {EMPTY_VIEW} from '../../server/domain/view';
+import {QUOTA_IDS} from '../../server/domain/meters';
 
 const M = 60_000;
 const H = 60 * M;
@@ -20,12 +26,12 @@ function harness(budget?: number, preparations?: Preparations) {
   let elapsed = 0;
   let dropped = 0;
   const timers = new Map<unknown, {at: number; run: () => void}>();
-  const reads: {board: string; cell: number; from: number; to: number; signal?: AbortSignal; metadata?: HistoryBasis; settled: boolean; answer(patch?: Partial<HistoryAnswer>): Promise<void>; fail(error: unknown): Promise<void>}[] = [];
+  const reads: {board: string; cell: number; from: number; to: number; signal?: AbortSignal; meters?:MeterSelection; metadata?: HistoryBasis; settled: boolean; answer(patch?: Partial<HistoryAnswer>): Promise<void>; fail(error: unknown): Promise<void>}[] = [];
   const store = new HistoryStore({
     now: () => now,
     preparations,
     elapsedNow: () => elapsed,
-    read: (board, cell, from, to, signal, _meters, metadata) => new Promise((resolve, reject) => reads.push({board, cell, from, to, signal, metadata, settled: false,
+    read: (board, cell, from, to, signal, meters, metadata) => new Promise((resolve, reject) => reads.push({board, cell, from, to, signal, meters, metadata, settled: false,
       async answer(patch = {}) {
         this.settled = true;
         const end = Math.min(to, cellStart((patch.now ?? now) + CLOCK_TOLERANCE_MS, cell) + cell);
@@ -52,6 +58,36 @@ function harness(budget?: number, preparations?: Preparations) {
   const start = async () => {store.open('b'); store.hello('run'); store.snapshot(['s'], ['s w']); await flush();};
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
+
+test('the ordinary history follower loads subscription caps once with native windows and keeps period switches cached',async()=>{
+  const before=prefs(),h=harness(),page=createStore(reduce,INITIAL),stop=follow(h.store,page);
+  setPrefs({money:DEFAULT_MONEY,kind:'weekly'});
+  const base={plan:'',resets:null,owners:[],error:null,successAt:NOW,stale:false,staleAfterMs:10*M,measureIntervalMs:null};
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:EMPTY_VIEW,historyStart:0,
+    sources:[{...base,id:'s',provider:'codex',windows:[{id:'w',kind:'weekly',label:null,used:20,remaining:80,resetAt:null,minutes:10080}]},{...base,id:'zai:fixture',provider:'zai',windows:[]}],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
+  try {
+    page.dispatch({type:'board-open',id:'b'});
+    page.dispatch({type:'hub',event:{type:'hello',data:{epoch:'run'}}});
+    page.dispatch({type:'hub',event:{type:'snapshot',data:snapshot}});await flush();
+    assert.equal(h.reads.length,1);
+    assert.deepEqual(h.reads[0].meters,{unit:'credits:zai',ids:QUOTA_IDS.map(id=>['zai:fixture',id])});
+    const read=h.reads[0],chunks:Chunk[]=[];
+    for(let from=read.from;from<read.to;){const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell));
+      chunks.push({...empty(from,to),series:[{source:'s',window:'w',hold:10*M,open:80,cells:[[0,80,0,0]]}],meterSeries:QUOTA_IDS.map(meter=>({source:'zai:fixture',meter,kind:'cap',unit:'credits:zai',semantics:{limit:'2000000000',resetAt:null,scope:'five_hour',minutes:300,label:null},cells:[[0,'1200000000','0','0',0,{knownFrom:from,knownUntil:from+read.cell}]]}))});from=to;
+    }
+    await read.answer({chunks,known:{work:0,sources:{s:0,'zai:fixture':0}}});
+    assert.equal(h.store.get().history?.series.length,1);assert.equal(h.store.get().history?.meterSeries?.length,2);
+    const count=h.reads.length,answer=h.store.get().history;
+    setPrefs({kind:'session'});page.dispatch({type:'hub',event:{type:'card',data:{...snapshot.sources[1],successAt:NOW+100}}});await flush();
+    assert.equal(h.reads.length,count);assert.equal(h.store.get().history,answer,'a card heartbeat and period switch retain the complete answer');
+    page.dispatch({type:'hub',event:{type:'history',data:{sources:['zai:fixture'],since:NOW}}});await flush();
+    assert.equal(h.reads.length,count+1);assert.ok(h.reads.at(-1)!.to-h.reads.at(-1)!.from<=2*read.cell,'an accepted quota event reads only the tail');
+    assert.deepEqual(h.reads.at(-1)!.meters,read.meters);
+    await h.reads.at(-1)!.answer();
+    page.dispatch({type:'hub',event:{type:'view',data:{view:{...EMPTY_VIEW,windows:[`zai:fixture/${QUOTA_IDS[0]}`]}}}});await flush();
+    assert.deepEqual(h.reads.at(-1)!.meters?.ids,[['zai:fixture',QUOTA_IDS[1]]]);
+  }finally{stop();h.store.close();setPrefs(before);}
+});
 
 test('each history flight captures metadata without crossing boards or hub restarts', async () => {
   const h = harness(); await h.start();

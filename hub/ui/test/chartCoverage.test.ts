@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
 import {HistoryStore} from '../lib/history';
 import {cellsOf} from '../../server/domain/cells';
 import {CLOCK_TOLERANCE_MS, cellStart, targetOf, type Chunk, type HistoryAnswer} from '../../server/domain/history';
@@ -34,10 +35,11 @@ test('the actual chart does not carry a held value through unread history after 
     await flush();
   };
   const source = readFileSync(new URL('../components/Chart.tsx', import.meta.url), 'utf8');
-  const hoverSource = source.match(/  const hover = incomingReady[^\n]+/)![0];
+  const hoverSource = source.slice(source.indexOf('  const hover = incomingReady'), source.indexOf('  const tickFrom'));
   const rowsSource = source.slice(source.indexOf('  const none = {'), source.indexOf('  const columnCount'));
+  const readoutSource = ts.transpileModule(hoverSource + '\n' + rowsSource + '\n({hover,rows});', {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText;
   const chart = (strip: PlotBuffer | null, lines: PlotSeries[], hover = at('11:06'), to = at('11:40'), plans: PlanLine[] = [], forecasts: ForecastLine[] = []) =>
-    runInNewContext(hoverSource + '\n' + rowsSource + '\n({hover,rows});', {
+    runInNewContext(readoutSource, {
       axis: {hover}, incomingReady: true, prepared: {ready: true}, strip, now, cellMs: M, covered, plans, forecasts, to, readCell,
       lines: lines.map(line => ({...line, key: 's w'})),
     }) as {hover: number | null; rows: ReadoutRow[]};

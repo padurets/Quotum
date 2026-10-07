@@ -204,7 +204,9 @@ uses the still showcase; `DEV_SET=activity` uses the activity set. `DEV_RESETS` 
 a scene from `hub/demo/catalogue.ts`. `DEV_SET=money DEV_STILL=true make dev` places subscriptions beside
 the monetary cases on Ana's personal board: balance and caps, large key inventory,
 revoked and expired access, a history gap, negative balance, zero cap and an unknown
-provider. The other catalogue cards remain available in the widget menu.
+provider. `DEV_SET=quotas DEV_STILL=true make dev` shows personal z.ai subscription
+quotas in credits, unknown resets, exhausted and closed allowances, partial and
+unsupported readings, and private access failures. The other catalogue cards remain available in the widget menu.
 `DEV_MODE=hub make dev` starts an ordinary hub on
 isolated persistent data with reset trackers disabled. No mode starts coding clients.
 To connect trusted sources in hub mode, set `QUOTUM_SECRET_KEY_FILE` in `.env` to a

@@ -27,7 +27,7 @@ export async function seedReports(store:Store,directory:Directory,stand:Stand) {
     // Two saved connections exercise the public flow without exhausting its abuse limit.
     // Other durable measurement states use the same explicit synthetic adapter.
     let sourceId:string;
-    if(index<2)sourceId=(await owner.post<{sourceId:string}>('/api/credentials',{provider:'openai_platform',secret:REPORT_KEY(index),allowNoExpiry:true})).sourceId;
+    if(index<2)sourceId=(await owner.post<{sourceId:string}>('/api/credentials',{provider:'openai_platform',secret:REPORT_KEY(index),allowUnknownExpiry:true})).sourceId;
     else {
       const transport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}});
       transport.send=async(op,_secret,query={})=>{

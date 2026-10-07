@@ -6,11 +6,10 @@ import {HubSources} from '../hubSources.js';
 import {Credentials} from '../secrets/credentials.js';
 import {SecretError,SecretKey} from '../secrets/crypto.js';
 import {startSecrets} from '../secrets/start.js';
-import {ConnectorTransport} from '../connectors/transport.js';
+import {ConnectorTransport,ConnectorStatus} from '../connectors/transport.js';
+import {openAIPlatform,decodeOpenAI} from '../connectors/openai.js';
 import type {Connector,ConnectorIdentity} from '../connectors/registry.js';
 import type {Clock} from '../events.js';
-import {openAIPlatform,decodeOpenAI} from '../connectors/openai.js';
-import {ConnectorStatus} from '../connectors/transport.js';
 import type {Meter} from '../domain/meters.js';
 
 class TestClock implements Clock {
@@ -128,6 +127,16 @@ test('permanent access failure preserves numbers and turns automatic retry off',
   }finally{h.sources.stop();h.store.close();}
 });
 
+test('polling updates known expiry metadata without confusing it with unknown expiry',async()=>{
+  const h=harness();try {
+    h.setExpiry(null);const record=await h.connect(),source=record.sourceId!;assert.equal(record.expiryKind,'none');
+    h.setExpiry(h.clock.now()+90_000);h.clock.tick(1);await h.credentials.measure(source);
+    assert.equal(h.credentials.list(h.alice.id)[0].expiryKind,'dated');assert.equal(h.credentials.access(h.alice.id,source)?.expiryKind,'dated');
+    h.setExpiry(null);h.clock.tick(1);await h.credentials.measure(source);
+    assert.equal(h.credentials.list(h.alice.id)[0].expiryKind,'none');assert.equal(h.credentials.access(h.alice.id,source)?.expiryKind,'none');
+  }finally{h.sources.stop();h.store.close();}
+});
+
 for(const limited of ['limit','page'] as const)test('OpenAI '+limited+' rate limits commit certified data and keep retry deadlines through refresh, rotation and restart',async()=>{
   const clock=new TestClock(),store=new Store(':memory:',clock.now()),directory=new Directory(store.db);
   const owner=directory.createUser('report-retry@fixture.example','Retry','unused',clock.now());
@@ -141,7 +150,7 @@ for(const limited of ['limit','page'] as const)test('OpenAI '+limited+' rate lim
   const connector=openAIPlatform(transport,clock.now),credentials=new Credentials(store,key,report,new Map([['openai_platform',connector]]));
   let sources=new HubSources(store,credentials,clock);
   try {
-    const saved=await credentials.create(owner.id,connector.id,'sk-admin-'+'a'.repeat(32),{allowNoExpiry:true}),source=saved.sourceId!;
+    const saved=await credentials.create(owner.id,connector.id,'sk-admin-'+'a'.repeat(32),{allowUnknownExpiry:true}),source=saved.sourceId!;
     assert.equal(calls,2,'a costs-page rate limit stops optional reads too');
     assert.equal(store.reports.intervals(source,'costs','USD',0,clock.now()+86400000)[0].amount,'5000000');
     assert.equal(credentials.list(owner.id)[0].lastError,'connector_status');
@@ -149,7 +158,7 @@ for(const limited of ['limit','page'] as const)test('OpenAI '+limited+' rate lim
     sources.start();clock.tick();await settle();assert.equal(calls,before);
     assert.deepEqual(sources.requestRefresh(source,clock.now()),{status:'too_soon',retryAt});
     store.setMeasureInterval(source,60000);sources.frequencyChanged(source,clock.now());assert.equal(sources.cadence(source).value?.next,retryAt);
-    await credentials.replace(owner.id,saved.id,'sk-admin-'+'b'.repeat(32),{allowNoExpiry:true});const rotatedCalls=calls;
+    await credentials.replace(owner.id,saved.id,'sk-admin-'+'b'.repeat(32),{allowUnknownExpiry:true});const rotatedCalls=calls;
     sources.stop();sources=new HubSources(store,credentials,clock);sources.start();clock.tick(60000);await settle();
     assert.equal(calls,rotatedCalls,'rotation and restart do not bypass the source polling deadline');
     assert.ok(sources.cadence(source).value!.next>=retryAt);

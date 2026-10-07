@@ -4,6 +4,8 @@ import type {KeyPage} from '../lib/moneyKeys';
 import {ApiError,call} from '../lib/http';
 import {keyName,money,capLeft} from '../lib/money';
 import {keyShown,withKeyShown,type Arrange} from '../lib/view';
+import {useCurrencyContext} from '../lib/board';
+import {displayMeter} from '../../server/domain/currencyPresentation';
 import {t} from '../i18n';
 import {ErrorLine} from './Kit';
 import {SwitchRow} from './Popover';
@@ -11,6 +13,7 @@ import {KEYS_PER_PAGE,KeyPages,KeyPageContent} from './KeyPages';
 
 /** A source's scales are chosen here, like subscription windows, without a key table. */
 export function KeyScaleSettings({source,board,arrange}:{source:Card;board:string;arrange:Arrange}) {
+  const context=useCurrencyContext(source.id);
   const inCard=source.keysCount===source.keys?.length;
   const [loaded,setPage]=useState<KeyPage|null>(null),[after,setAfter]=useState<string|undefined>(),[back,setBack]=useState<(string|undefined)[]>([]);
   const [error,setError]=useState<unknown>(null),[changed,setChanged]=useState(false);
@@ -35,10 +38,10 @@ export function KeyScaleSettings({source,board,arrange}:{source:Card;board:strin
     {changed&&<p className="popover-note">{t('money.changed')}</p>}
     {(loaded?.inventory??source.inventory)?.complete===false&&<p className="popover-note">{t('money.inventoryPartial')}</p>}
     <KeyPageContent loading={!inCard&&loading} rows={Math.min(KEYS_PER_PAGE,source.keysCount??0)}>{page?.keys.map(part=>{
-      const cap=page.meters.find(m=>m.id===`key:${part.id}:cap`);
-      return <SwitchRow key={part.id} className="key-slot" on={!!cap&&keyShown(arrange.view,source.id,part.id,source.keys??[])} disabled={!cap}
+      const native=page.meters.find(m=>m.id===`key:${part.id}:cap`),cap=native&&displayMeter(native,source.id,context);
+      return <SwitchRow key={part.id} className="key-slot" on={!!native&&keyShown(arrange.view,source.id,part.id,source.keys??[])} disabled={!native}
         onChange={on=>arrange.update(view=>withKeyShown(view,source.id,part.id,on))}
-        value={cap?money(capLeft(cap)):t('money.noCap')}>{keyName(part)}</SwitchRow>;
+        value={cap?money(capLeft(cap),cap.unit,false,context):native?'— '+context.target.symbol:t('money.noCap')}>{keyName(part)}</SwitchRow>;
     })}</KeyPageContent>
     {((source.keysCount??0)>KEYS_PER_PAGE||!!page?.next||back.length>0)&&<KeyPages page={back.length+1} pages={Math.ceil((page?.total??source?.keysCount??0)/KEYS_PER_PAGE)} previous={!!back.length} next={!!page?.next}
       loading={loading}

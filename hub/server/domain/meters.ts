@@ -1,18 +1,28 @@
-import {amount, isUnit, type Unit} from './amount.js';
+import {balanceDescriptor} from './providers.js';
 import type {ReportRead,MonthlyLimitRead} from './reports.js';
+import {amount, isUnit, type Unit} from './amount.js';
+import type {Conversion} from './currency.js';
 
+export type BalanceIssue = 'currency_invalid'|'currency_unknown'|'currency_duplicate'|'currency_missing'|'empty_balances';
+export type BalanceStatus = {isAvailable:boolean;at:number;staleAfterMs:number;partial:boolean;issues:BalanceIssue[]};
 export type MeterKind = 'counter' | 'balance' | 'cap';
-export type MeterSemantics = {limit: string | null; resetAt: number | null; minutes: number | null; scope: string | null; label: string | null};
+export type MeterSemantics = {limit: string | null; resetAt: number | null; minutes: number | null; scope: string | null; label: string | null;conversion?:Conversion};
 export type Meter = MeterSemantics & {id: string; kind: MeterKind; unit: Unit; amount: string; at: number; staleAfterMs: number; stale: boolean};
 export type KeyPart = {
   id: string; name: string | null; disabled: boolean; expiresAt: number | null; includeByok: boolean;
   at: number; staleAfterMs: number; presence: 'observed' | 'missing'; missCount: number;
   periods: {day: string | null; week: string | null; month: string | null};
+  byokUsage?: {total:string|null;day:string|null;week:string|null;month:string|null};
+  createdAt?:number|null; updatedAt?:number|null;
 };
 /** Confirmed uncapped key IDs let partial rounds end a cap while retaining its history. */
-export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; uncapped?: string[];reports?:ReportRead;reportDigest?:string;monthlyLimit?:MonthlyLimitRead};
+export type QuotaIssue = 'empty' | 'unsupported' | 'invalid' | 'missing';
+export type QuotaStatus = {observedAt: number; generation: 'credit' | null; complete: boolean; issue: QuotaIssue | null};
+export type QuotaObservation = {observedAt: number; receivedIds: string[]; quota: QuotaStatus; plan: string};
+export const QUOTA_IDS = ['quota:credit:5h', 'quota:credit:week'] as const;
+export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; inventoryAt?:number; uncapped?: string[]; balanceStatus?:BalanceStatus;quota?:QuotaStatus;plan?:string;reports?:ReportRead;reportDigest?:string;monthlyLimit?:MonthlyLimitRead};
 export type Reading = Omit<Meter, 'stale'> & {previousAt: number | null};
-export type MeterSpan = {from: number; to: number; staleAfterMs: number};
+export type MeterSpan = {from: number; to: number; staleAfterMs: number;interruptedAt?:number;holdUntil?:number|null};
 export type ExceptionalStep = {from: number; to: number; amount: string; evidence: 'continuous' | 'gap' | 'estimate'};
 export type SpendSummary = {from: number; to: number; amount: string | null; complete: boolean; knownFrom: number | null; uncertain: boolean; unlocated: ExceptionalStep[]};
 export type CalendarSpend = {day: SpendSummary; week: SpendSummary; month: SpendSummary};
@@ -26,7 +36,7 @@ export function validateMeter(meter: Meter): void {
   if (meter.resetAt !== null && (!Number.isSafeInteger(meter.resetAt) || meter.resetAt < 0) || meter.minutes !== null && (!Number.isSafeInteger(meter.minutes) || meter.minutes <= 0)) throw new Error('invalid_meter');
 }
 
-export const semanticsOf = (m: MeterSemantics): MeterSemantics => ({limit: m.limit, resetAt: m.resetAt, minutes: m.minutes, scope: m.scope, label: m.label});
+export const semanticsOf = (m: MeterSemantics): MeterSemantics => ({limit: m.limit, resetAt: m.resetAt, minutes: m.minutes, scope: m.scope, label: m.label,...(m.conversion?{conversion:m.conversion}:{})});
 export const sameMeter = (a: Meter, b: Meter) => a.kind === b.kind && a.unit === b.unit && a.amount === b.amount && JSON.stringify(semanticsOf(a)) === JSON.stringify(semanticsOf(b));
 export const plottedAmount = (m: Pick<Meter, 'kind' | 'amount' | 'limit'>) => m.kind === 'cap' ? (amount(m.limit!) - amount(m.amount)).toString() : m.amount;
 
@@ -66,4 +76,13 @@ export function utcPeriods(now: number): {day: number; week: number; month: numb
 export function calendarSpending(readings: readonly Reading[], spans: readonly MeterSpan[], now: number): CalendarSpend {
   const p = utcPeriods(now);
   return {day: spending(readings, spans, p.day, now), week: spending(readings, spans, p.week, now), month: spending(readings, spans, p.month, now)};
+}
+
+/** The persisted status and cadence compare the same retained logical observation. */
+export function balanceStatusOf(provider:string,previous:readonly Meter[],measurement:MeterMeasurement):BalanceStatus|undefined {
+  const status=measurement.balanceStatus;if(!status)return undefined;
+  const accepted=new Set(measurement.meters.map(m=>m.id));
+  const missing=previous.some(m=>balanceDescriptor(provider,m.id)&&!accepted.has(m.id));
+  const issues=[...new Set([...status.issues,...(missing?['currency_missing' as const]:[])])].sort();
+  return {...status,partial:issues.length>0,issues};
 }

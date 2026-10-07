@@ -11,6 +11,7 @@ import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} fro
 import type {History} from './types';
 import type {MeterSelection} from '../../server/domain/meterHistory';
 import {chooseMoney,moneyChoices,moneySelection} from './moneySelection';
+import {subscriptionSelection} from './subscription';
 import {pan, type Pan} from './pan';
 import {plotPrepared, type Coverage, type PlotBuffer} from './historyPlot';
 
@@ -734,7 +735,7 @@ export class HistoryStore {
 
 const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
 export const loader = new HistoryStore({
-  read: (board, cell, from, to, signal, meters, meta) => call<HistoryReply>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids)) : ''}`, undefined, 12_000, signal).then(reply => expandHistory(reply, meta)),
+  read: (board, cell, from, to, signal, meters, meta) => call<HistoryReply>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids))+(meters.displayCurrency?'&currency='+encodeURIComponent(meters.displayCurrency):'') : ''}`, undefined, 12_000, signal).then(reply => expandHistory(reply, meta)),
   now: hubNow,
   setTimeout: (run, ms) => setTimeout(run, ms),
   clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
@@ -756,9 +757,9 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>)
     }
     const board=state.board;
     if(board) {
-      const settings=prefs().money,result=moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,settings);
+      const settings=prefs().money,result=moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,settings,board.currencies);
       if(result.removed&&settings.unit&&moneyChoices(settings)[settings.unit])setPrefs({money:{...chooseMoney(settings,settings.unit,result.selection!.ids),removed:result.removed}});
-      loader.setMeters(result.selection);
+      loader.setMeters(settings.unit?result.selection:subscriptionSelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view));
     }
   });
 }
@@ -789,7 +790,7 @@ if (typeof window !== 'undefined') {
   const chosen = () => {
     loader.choose(prefs().range, timeRange());
     const board=page.get().board;
-    if(board)loader.setMeters(moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,prefs().money).selection);
+    if(board)loader.setMeters(prefs().money.unit?moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,prefs().money,board.currencies).selection:subscriptionSelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view));
   };
   onPrefs(chosen);
   onTimeRange(chosen);

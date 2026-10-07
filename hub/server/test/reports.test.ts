@@ -75,7 +75,7 @@ function adapter(read:(op:string,query:Readonly<Record<string,string>>)=>unknown
 const limit={object:'organization.spend_limit',threshold_amount:10000,currency:'USD',interval:'month',enforcement:{status:'inactive'}};
 test('OpenAI parses daily costs and integer cents independently and proves unknown key expiry',async()=>{
   const c=adapter(op=>op==='costs'?{object:'page',data:[bucket(0),bucket(1,7)],has_more:false,next_page:null}:limit);
-  try{const result=await c.identify(secret);assert.equal(result.expiryKnown,false);assert.equal(result.expiresAt,null);assert.equal(result.measurement!.monthlyLimit!.value!.amount,'100000000');assert.equal(result.measurement!.reports!.intervals[1].amount,'7000000');assert.equal(JSON.stringify(result).includes('org-Fixture'),false);}finally{c.transport.close();}
+  try{const result=await c.identify(secret);assert.equal(result.expiryKind,'unknown');assert.equal(result.expiresAt,null);assert.equal(result.measurement!.monthlyLimit!.value!.amount,'100000000');assert.equal(result.measurement!.reports!.intervals[1].amount,'7000000');assert.equal(JSON.stringify(result).includes('org-Fixture'),false);}finally{c.transport.close();}
 });
 test('certified partial pages retain retry disposition and optional permission does not lose access',async()=>{
   const first={object:'page',data:[bucket(0)],has_more:true,next_page:'page cursor+/='};
@@ -90,12 +90,12 @@ test('a proven organization preserves rotations, rejects another org and records
   const c=adapter(op=>op==='costs'?{object:'page',data:[bucket(0)],has_more:false,next_page:null}:limit,Date.now);
   const credentials=new Credentials(store,key,report,new Map([['openai_platform',c]]));
   try {
-    await assert.rejects(credentials.create(owner.id,c.id,secret.toString()),/credential_expiry_unknown_confirmation/);
-    const first=await credentials.create(owner.id,c.id,secret.toString(),{allowNoExpiry:true});
-    const second=await credentials.replace(owner.id,first.id,'sk-admin-'+'b'.repeat(40),{allowNoExpiry:true});
-    assert.equal(first.sourceId,second.sourceId);assert.equal(second.expiryKnown,false);
+    await assert.rejects(credentials.create(owner.id,c.id,secret.toString()),/credential_expiry_confirmation/);
+    const first=await credentials.create(owner.id,c.id,secret.toString(),{allowUnknownExpiry:true});
+    const second=await credentials.replace(owner.id,first.id,'sk-admin-'+'b'.repeat(40),{allowUnknownExpiry:true});
+    assert.equal(first.sourceId,second.sourceId);assert.equal(second.expiryKind,'unknown');
     c.transport.send=async()=>({organization:'org-Other',data:decodeOpenAI(JSON.stringify({object:'page',data:[],has_more:false,next_page:null}))});
-    await assert.rejects(credentials.replace(owner.id,first.id,secret.toString(),{allowNoExpiry:true}),/credential_account_mismatch/);
+    await assert.rejects(credentials.replace(owner.id,first.id,secret.toString(),{allowUnknownExpiry:true}),/credential_account_mismatch/);
     assert.equal(credentials.list(owner.id)[0].sourceId,first.sourceId);
   }finally{c.transport.close();store.close();}
 });

@@ -7,6 +7,8 @@ import {catalogue} from '../../server/domain/providers';
  */
 export const PROVIDERS: Record<string, {name: string; color: string}> = Object.fromEntries(catalogue.map(p => [p.id, {name: p.name, color: p.color}]));
 
+export const hasSubscriptionCaps=(id:string)=>catalogue.some(p=>p.id===id&&p.funding==='subscription'&&p.meterKinds.some(kind=>kind==='cap'));
+
 /** The colour of a series whose provider has none. */
 export const FALLBACK_COLOR = '#8b90b5';
 
@@ -38,9 +40,3 @@ export const DASHES = ['', '7 5', '2 4', '10 3 2 3'];
  * checks all of it.
  */
 export const CATEGORY_COLORS = ['#67cfe3', '#cd93ff', '#75a322', '#0593bf', '#97854b', '#3f8f7f', '#eab0d1'];
-
-export const SOURCE_FORMS={
-  openrouter:{rights:'sources.rights',key:'sources.key',expiryAdvice:'sources.expiryAdvice',settings:'https://openrouter.ai/settings/keys'},
-  openai_platform:{rights:'sources.openaiRights',key:'sources.adminKey',expiryAdvice:'sources.openaiExpiryAdvice',settings:'https://platform.openai.com/settings/organization/admin-keys'},
-} as const;
-export type SourceProvider=keyof typeof SOURCE_FORMS;

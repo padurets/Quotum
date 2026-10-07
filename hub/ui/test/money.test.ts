@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {money,capPercent,capStale,capChangesAt,monthlyLimitStale,monthlyLimitChangesAt,accessTone,accessChangesAt} from '../lib/money';
+import {money,capPercent,capStale,capChangesAt,accessTone,accessChangesAt} from '../lib/money';
 import {setLocale} from '../i18n';
 import {archivedKeyGroups,moneySelection,readMoney,chooseMoney} from '../lib/moneySelection';
 import {moneyTotal,type MeterHistory} from '../lib/moneyView';
@@ -22,6 +22,10 @@ test('unknown spending stays unknown, and a known subtotal identifies missing co
 test('a selected live key on another page is not archived, and archived scales share one key group',()=>{
   const selected:[string,string][]=[['s','key:live:usage'],['s','key:gone:usage'],['s','key:gone:cap'],['other','key:else:cap']];
   assert.deepEqual(archivedKeyGroups('s',selected,new Set(['live']),[]),[{id:'gone',label:'gone',usage:'key:gone:usage',cap:'key:gone:cap'}]);
+});
+test('account balances, converted balances and counters cannot become archived key groups',()=>{
+  const ids=['balance','balance:CNY','granted:CNY','fx:USD:balance:CNY','fx:USD:granted:CNY','usage','credits','key:gone:usage','key:gone:cap'];
+  assert.deepEqual(archivedKeyGroups('s',ids.map(id=>['s',id]),new Set(),[]),[{id:'gone',label:'gone',usage:'key:gone:usage',cap:'key:gone:cap'}]);
 });
 test('access warnings begin exactly seven days before expiry, and expired access is critical',()=>{
   const now=Date.UTC(2026,9,4),expiry=now+8*86_400_000,warning=now+86_400_000;
@@ -54,17 +58,7 @@ test('a selected cap stays fresh until its own deadline or earlier reset',()=>{
   assert.equal(capChangesAt(cap,100),800);assert.equal(capStale(cap,799),false);assert.equal(capStale(cap,800),true);assert.equal(capChangesAt(cap,800),null);
   const lifetime={...cap,resetAt:null};assert.equal(capChangesAt(lifetime,1100),1101);assert.equal(capStale(lifetime,1100),false);assert.equal(capStale(lifetime,1101),true);
 });
-test('monthly enforcement becomes unknown at its read deadline, independently of cost coverage',()=>{
-  const limit={status:'ok' as const,observedAt:100,error:null,value:{unit:'USD',amount:'0',enforcement:'enforcing' as const},valueAt:100,staleAfterMs:1000};
-  assert.equal(monthlyLimitStale(limit,1100),false);
-  assert.equal(monthlyLimitChangesAt(limit,1100),1101);
-  assert.equal(monthlyLimitStale(limit,1101),true);
-  assert.equal(monthlyLimitChangesAt(limit,1101),null);
-  for(const unknown of [undefined,{...limit,value:null},{...limit,valueAt:null},{...limit,status:'unavailable' as const}]){
-    assert.equal(monthlyLimitStale(unknown,100),true);
-    assert.equal(monthlyLimitChangesAt(unknown,100),null);
-  }
-});
+
 test('explicit card scales outside the bounded preview survive saving, reload and preview changes',()=>{
   const preview=[{id:'first'}],source='openrouter:fixture';
   assert.equal(keyShown(EMPTY_VIEW,source,'first',preview),true);
