@@ -121,20 +121,15 @@ async function main() {
   const seconds = options.ci ? IDLE.ci : IDLE.full;
 
   let browser: Browser | undefined;
-  let launch: Promise<Browser> | undefined;
-  const startup = new AbortController();
   let tab: Awaited<ReturnType<typeof openTab>> | undefined;
   let heard: Heard | undefined;
   let finished = false;
   const finish = async (code: number) => {
     if (finished) return;
     finished = true;
-    startup.abort();
-    // The launcher owns its child before readiness publishes a Browser.
-    await launch?.catch(() => undefined);
     heard?.close();
     await tab?.close().catch(() => undefined);
-    await browser?.close().catch(error => {say('browser cleanup failed: ' + String(error)); code = 1;});
+    await browser?.close().catch(() => undefined);
     await demo.stop();
     process.exit(code);
   };
@@ -150,9 +145,7 @@ async function main() {
     const overview = () => overviewCards(path => ana.get<Snapshot>(path), board);
     heard = await hear(address.base, ana.cookie, board);
 
-    launch = options.cdp ? Promise.resolve(attachedChrome(options.cdp)) : launchChrome(chrome!, !process.env.CI, startup.signal);
-    browser = await launch;
-    if (finished) return;
+    browser = options.cdp ? attachedChrome(options.cdp) : await launchChrome(chrome!, !process.env.CI);
     if(process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1'){
       say('diagnostic native replay only; this does not run the canonical benchmark');
       await diagnoseReversal(browser,address.base,ana.cookie,24);
