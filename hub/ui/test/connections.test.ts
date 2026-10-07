@@ -14,7 +14,7 @@ const nodes=(value:unknown):Node[]=>Array.isArray(value)?value.flatMap(nodes):va
 const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
 
 function fixture(initialOwner='u',local=false,boards:Session['boards']=[]){
-  const hooks=preparationFixture(),errorLine={},reads:{url:string;body:unknown;resolve:(value:unknown)=>void;reject:(error:Error)=>void}[]=[];
+  const hooks=preparationFixture(),errorLine={},field={},reads:{url:string;body:unknown;resolve:(value:unknown)=>void;reject:(error:Error)=>void}[]=[];
   const cleanups=new Set<()=>void>(),modal={};let userId=initialOwner;
   const memo=(read:()=>unknown,deps:unknown[])=>{const box=hooks.useRef(undefined) as {current?:{deps:unknown[];value:unknown}};if(!box.current||deps.some((value,i)=>!Object.is(value,box.current!.deps[i])))box.current={deps,value:read()};return box.current.value;};
   let scopeActive=true;
@@ -26,10 +26,10 @@ function fixture(initialOwner='u',local=false,boards:Session['boards']=[]){
     if(name.endsWith('/view'))return {flushView:async()=>{}};
     if(name.endsWith('/router'))return {};
     if(name.endsWith('/session'))return {boardTitle:(board:{name:string})=>board.name};
-    if(name.endsWith('/providers'))return {PROVIDERS:{openrouter:{name:'OpenRouter'}}};
+    if(name.endsWith('/providers'))return {PROVIDERS:{openrouter:{name:'OpenRouter'},deepseek:{name:'DeepSeek'},zai:{name:'z.ai'}},catalogue:[{id:'openrouter',name:'OpenRouter',measuredBy:'hub'},{id:'deepseek',name:'DeepSeek',measuredBy:'hub'},{id:'zai',name:'z.ai',measuredBy:'hub'}]};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key};
     if(name.endsWith('/format'))return {stamp:()=>''};
-    if(name==='./Kit')return {ErrorLine:errorLine,Modal:modal};
+    if(name==='./Kit')return {Field:field,ErrorLine:errorLine,Modal:modal};
     if(name==='./Popover')return {};
     if(name==='./logos')return {logoOf:()=>''};
     if(name==='./Machines')return {};
@@ -118,4 +118,31 @@ for(const local of [false,true])test(`a changed ${local?'local':'remote'} sessio
   assert.equal(bob.accounts.rows().length,0,'previous owner hints cannot survive a failed new-owner load');
   assert.equal(bob.accounts.errors().length,1);assert.equal(bob.accounts.removing(),false);
   active=bob;active.accounts.unmount();
+});
+
+test('z.ai form keeps its destination and requires unknown expiry plus same-account consent for replacement',async()=>{
+  const f=fixture(),props={provider:'zai',board:{id:'team',name:'Team',personal:false,role:'member'},personal:false,available:true,onClose:()=>{},replace:{id:'zai-key',provider:'zai',sourceId:'zai-source',revision:0,identityOrigin:'declared',expiryKind:'unknown'}};
+  let tree=f.keyForm(props);const key=tree.find(node=>node.props.label==='sources.apiKey')!;(key.props.onChange as (event:unknown)=>void)({target:{value:'synthetic-key'}});
+  tree=f.keyForm(props);assert.equal(tree.filter(node=>node.type==='input'&&node.props.type==='checkbox').length,2);
+  assert.equal(tree.find(node=>node.type==='button'&&node.props.children==='sources.replace')!.props.disabled,true);
+  for(const checkbox of tree.filter(node=>node.type==='input'&&node.props.type==='checkbox'))(checkbox.props.onChange as (event:unknown)=>void)({target:{checked:true}});
+  tree=f.keyForm(props);assert.equal(tree.find(node=>node.type==='button'&&node.props.children==='sources.replace')!.props.disabled,false);
+  (tree.find(node=>node.type==='form')!.props.onSubmit as (event:unknown)=>void)({preventDefault:()=>{}});await flush();
+  assert.equal(f.reads[0].url,'/api/additions');assert.deepEqual(JSON.parse(JSON.stringify((f.reads[0].body as {item:unknown}).item)),{kind:'replace',credentialId:'zai-key'});
+  f.reads[0].resolve({id:'intent',boardId:null,item:{kind:'replace',credentialId:'zai-key',provider:'zai'},state:'ready'});await flush();
+  assert.equal(f.reads[1].url,'/api/additions/intent/run');assert.deepEqual(JSON.parse(JSON.stringify(f.reads[1].body)),{secret:'synthetic-key',allowUnknownExpiry:true,sameAccount:true});f.unmount();
+});
+
+test('DeepSeek Add binds a named private account and one informed submission to the selected board',async()=>{
+  const f=fixture(),props={provider:'deepseek',board:{id:'team',name:'Team',personal:false,role:'member'},personal:false,available:true,onClose:()=>{}};
+  f.keyForm(props);assert.equal(f.reads[0].url,'/api/source-accounts?provider=deepseek&limit=10');f.reads[0].resolve({accounts:[],next:null});await flush();
+  let tree=f.keyForm(props);
+  (tree.find(node=>node.props.label==='sources.accountName')!.props.onChange as (event:unknown)=>void)({target:{value:'Personal'}});
+  (tree.find(node=>node.props.label==='sources.apiKey')!.props.onChange as (event:unknown)=>void)({target:{value:'synthetic-key'}});
+  tree=f.keyForm(props);assert.equal(tree.find(node=>node.type==='button'&&node.props.children==='add.connectAndAdd')!.props.disabled,true);
+  (tree.find(node=>node.type==='input'&&node.props.type==='checkbox')!.props.onChange as (event:unknown)=>void)({target:{checked:true}});
+  tree=f.keyForm(props);assert.equal(tree.find(node=>node.type==='button'&&node.props.children==='add.connectAndAdd')!.props.disabled,false);
+  (tree.find(node=>node.type==='form')!.props.onSubmit as (event:unknown)=>void)({preventDefault:()=>{}});await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify((f.reads[1].body as {boardId:string;item:unknown}).item)),{kind:'connection',provider:'deepseek',account:{kind:'new'}});assert.equal((f.reads[1].body as {boardId:string}).boardId,'team');
+  f.reads[1].resolve({id:'intent',boardId:'team',item:{kind:'connection',provider:'deepseek',account:{kind:'new'}},state:'ready'});await flush();assert.deepEqual(JSON.parse(JSON.stringify(f.reads[2].body)),{secret:'synthetic-key',allowUnknownExpiry:true,accountName:'Personal'});f.unmount();
 });

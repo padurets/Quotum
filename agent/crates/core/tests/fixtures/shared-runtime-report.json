@@ -1,0 +1,36 @@
+{
+  "agent": "quotum/0.5.0",
+  "machine": {
+    "arch": "x86_64",
+    "id": "0123456789abcdef",
+    "name": "test",
+    "os": "linux"
+  },
+  "sentAt": "2026-09-21T14:13:35Z",
+  "sessions": [
+    {
+      "account": "4b7e0c1d2e3f4a5b6c7d8e9f",
+      "origin": "terminal",
+      "project": "project-a",
+      "provider": "codex",
+      "startedAt": "2026-09-21T13:13:20Z",
+      "working": false
+    },
+    {
+      "account": "4b7e0c1d2e3f4a5b6c7d8e9f",
+      "origin": "terminal",
+      "provider": "codex",
+      "startedAt": "2026-09-21T13:13:20Z",
+      "working": true
+    },
+    {
+      "account": "4b7e0c1d2e3f4a5b6c7d8e9f",
+      "origin": "terminal",
+      "project": "project-b",
+      "provider": "codex",
+      "startedAt": "2026-09-21T13:13:20Z",
+      "working": false
+    }
+  ],
+  "version": 1
+}

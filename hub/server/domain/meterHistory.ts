@@ -3,12 +3,15 @@ import {locatedIn, meterStep, plottedAmount, semanticsOf, type ExceptionalStep, 
 import {drain, ordered, type Preparation} from './prepare.js';
 
 export const MAX_METERS = 32;
-export type MeterSelection = {unit: Unit; ids: [source: string, meter: string][]};
-export type MeterCellExtra = {first?: string; open?: string | null; segment?: number; semantics?: MeterSemantics; steps?: ExceptionalStep[]; topupInternal?: string; topupSteps?: ExceptionalStep[]};
-export type MeterCell = [index: number, value: string, spentInternal: string, spentExceptional: string, coveredMs: number, extra?: MeterCellExtra];
-export type MeterSeriesCells = {source: string; meter: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; cells: MeterCell[]};
-export type MeterHistory = {sourceId: string; meterId: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; start: string | null; end: string | null; spent: string; unlocated: ExceptionalStep[]; topup: string; topupUnlocated: ExceptionalStep[]; coveredMs: number; points: {at: number; value: string; spent:string;segment: number; semantics: MeterSemantics | null; steps: ExceptionalStep[]}[]};
-export type MeterGroup = {source: string; meter: string; readings: Reading[]; spans: MeterSpan[]; paired?: {readings: Reading[]; spans: MeterSpan[]}};
+export type MeterSelection = {unit: Unit; displayCurrency?:string;displayRevision?:string;nativeCurrencies?:boolean; ids: [source: string, meter: string][]};
+export type Accounting = {spending:'counter'|'unavailable';topups:'counter'|'unavailable'};
+export type MonetaryPolicy = {accounting?:Accounting;role?:'total'|'granted'|'toppedUp';pointMode?:'cell'|'observation'};
+export type MeterObservation={at:number;value:string;validUntil:number;semantics?:MeterSemantics|null};
+export type MeterCellExtra = {observations?:MeterObservation[];pointOffsetMs?:number;openOffsetMs?:number;openSemantics?:MeterSemantics;validUntil?:number;first?: string; open?: string | null; segment?: number; knownFrom?:number;knownUntil?:number; semantics?: MeterSemantics; steps?: ExceptionalStep[]; topupInternal?: string; topupSteps?: ExceptionalStep[]};
+export type MeterCell = [index: number, value: string, spentInternal: string|null, spentExceptional: string|null, coveredMs: number, extra?: MeterCellExtra];
+export type MeterSeriesCells = MonetaryPolicy & {source: string; meter: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; cells: MeterCell[]};
+export type MeterHistory = MonetaryPolicy & {sourceId: string; meterId: string; kind: MeterKind; unit: Unit; semantics: MeterSemantics | null; start: string | null; end: string | null; spent: string|null; unlocated: ExceptionalStep[]; topup: string|null; topupUnlocated: ExceptionalStep[]; coveredMs: number; points: {at: number;knownFrom?:number;knownUntil?:number; value: string; spent:string|null;validUntil?:number;segment: number; semantics: MeterSemantics | null; steps: ExceptionalStep[]}[]};
+export type MeterGroup = MonetaryPolicy & {source: string; meter: string; readings: Reading[]; spans: MeterSpan[]; retainedFrom?:number; paired?: {readings: Reading[]; spans: MeterSpan[]}};
 
 export function selectionOf(raw: unknown, unit: unknown): MeterSelection {
   if (!Array.isArray(raw) || !isUnit(unit) || raw.length > MAX_METERS) throw new Error('invalid_meter_selection');
@@ -25,10 +28,11 @@ const predecessor = (rows: readonly Reading[], at: number) => {
   return undefined;
 };
 const coverage = (spans: readonly MeterSpan[], from: number, to: number) => spans.reduce((sum,s) => sum + Math.max(0,Math.min(to,s.to)-Math.max(from,s.from)),0);
-const fresh = (spans: readonly MeterSpan[], at: number) => spans.some(s => s.from <= at && s.to + s.staleAfterMs >= at);
+const fresh = (spans: readonly MeterSpan[], at: number) => spans.some(s => s.from <= at && at < Math.min(s.to + s.staleAfterMs + 1,s.holdUntil??Infinity,s.interruptedAt??Infinity));
 
 /** Values are steps, while spending keeps the original observation intervals. */
 export function meterCells(group: MeterGroup, unit: Unit, from: number, to: number, cell: number): MeterSeriesCells[] {
+  if(group.pointMode==='observation')return observationCells(group,unit,from,to,cell);
   const identities = [...new Set(group.readings.filter(r => r.unit === unit).map(r => r.kind))];
   const output: MeterSeriesCells[] = [];
   for (const kind of identities) {
@@ -48,7 +52,7 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
     }
     const before = predecessor(group.readings, from - 1);
     const initial = matches(before) ? semanticsOf(before) : null;
-    const series: MeterSeriesCells = {source: group.source,meter: group.meter,kind: group.paired ? 'balance' : kind,unit,semantics: initial,cells: []};
+    const series: MeterSeriesCells = {...policyOf(group),source: group.source,meter: group.meter,kind: group.paired ? 'balance' : kind,unit,semantics: initial,cells: []};
     let semantics = initial;
     let previousValue: string | null = null;
     const spent: ExceptionalStep[] = [], topups: ExceptionalStep[] = [];
@@ -60,9 +64,9 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
         if (step) dest.push(step);
       }
     };
-    deltas(group.readings,group.spans,spent);
-    if (group.paired) deltas(group.paired.readings,group.paired.spans,topups);
-    else if (kind === 'balance') {
+    if(group.accounting?.spending!=='unavailable')deltas(group.readings,group.spans,spent);
+    if (group.paired && group.accounting?.topups!=='unavailable') deltas(group.paired.readings,group.paired.spans,topups);
+    else if (kind === 'balance' && group.accounting?.topups!=='unavailable') {
       for (let i=1;i<group.readings.length;i++) {
         const a=group.readings[i-1],b=group.readings[i];
         if (!matches(a) || !matches(b)) continue;
@@ -76,12 +80,46 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
       if (!credits || credits.unit!==unit || !fresh(group.paired.spans,at)) return null;
       return (amount(credits.amount)-amount(r.amount)).toString();
     };
+    const admitted:{from:number;to:number;row:Reading;segment:number}[]=[];
+    let capSpanIndex=0,admittedIndex=0,coverageIndex=0;
+    if(kind==='cap')for(let i=0;i<group.readings.length;i++) {
+      const row=group.readings[i];if(!matches(row))continue;
+      // Ordered spans meet each reading only where its value can still apply.
+      while(capSpanIndex<group.spans.length&&group.spans[capSpanIndex].to<row.at)capSpanIndex++;
+      const until=group.readings[i+1]?.at??Infinity;
+      for(let n=capSpanIndex;n<group.spans.length&&group.spans[n].from<until;n++) {
+        const span=group.spans[n];
+        const start=Math.max(row.at,span.from),end=Math.min(until,span.to+span.staleAfterMs+1,span.holdUntil??Infinity,row.resetAt??Infinity);
+        if(end>start)admitted.push({from:start,to:end,row,segment:span.from});
+      }
+    }
     for (let at=from,index=0;at<to;at+=cell,index++) {
       const end=Math.min(at+cell,to);
+      if(kind==='cap') {
+        while(admittedIndex<admitted.length&&admitted[admittedIndex].to<=at)admittedIndex++;
+        const intervals:typeof admitted=[];
+        for(let n=admittedIndex;n<admitted.length&&admitted[n].from<end;n++)if(admitted[n].to>at)intervals.push(admitted[n]);
+        if(!intervals.length)continue;
+        // A coarse cell cannot assert one value across incompatible quota periods.
+        const last=intervals.at(-1)!;
+        if(intervals.some((s,i)=>!sameCapSemantics(s.row,last.row)||i>0&&intervals[i-1].to<s.from))continue;
+        let first=intervals.length-1;
+        while(first>0&&intervals[first-1].row.amount===last.row.amount)first--;
+        const knownFrom=Math.max(at,intervals[first].from),knownUntil=Math.min(end,last.to);
+        const nextSemantics=semanticsOf(last.row),value=plottedAmount(last.row);
+        const extra:MeterCellExtra={knownFrom,knownUntil,segment:last.segment,open:knownFrom===at?value:null};
+        if(JSON.stringify(nextSemantics)!==JSON.stringify(semantics))extra.semantics=nextSemantics;
+        semantics=nextSemantics;
+        while(coverageIndex<group.spans.length&&group.spans[coverageIndex].to<=knownFrom)coverageIndex++;
+        let coveredMs=0;
+        for(let n=coverageIndex;n<group.spans.length&&group.spans[n].from<knownUntil;n++)coveredMs+=Math.max(0,Math.min(knownUntil,group.spans[n].to)-Math.max(knownFrom,group.spans[n].from));
+        series.cells.push([index,value,'0','0',coveredMs,extra]);
+        previousValue=value;continue;
+      }
       const closing=predecessor(group.readings,end-1);
       let last=matches(closing)?closing:undefined;
       if(!last)for(let i=group.readings.length-1;i>=0;i--){const row=group.readings[i];if(row.at<at)break;if(row.at<end&&matches(row)){last=row;break;}}
-      if (!matches(last) || !fresh(group.spans,Math.max(at,last.at)) || kind==='cap' && last.resetAt!==null && last.resetAt<=at) continue;
+      if (!matches(last) || !fresh(group.spans,Math.max(at,last.at))) continue;
       const pointAt=Math.max(at,last.at,group.paired ? predecessor(group.paired.readings,end-1)?.at??at : at);
       const value=valueOf(last,pointAt);
       if (value===null) continue;
@@ -103,13 +141,40 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
       if (exceptional.length) extra.steps=exceptional;
       if (topKnown.length) extra.topupInternal=sumSteps(topKnown);
       if (topExceptional.length) extra.topupSteps=topExceptional;
-      series.cells.push([index,value,sumSteps(known),sumSteps(exceptional),coverage(spans,at,end),extra]);
+      series.cells.push([index,value,group.accounting?.spending==='unavailable'?null:sumSteps(known),group.accounting?.spending==='unavailable'?null:sumSteps(exceptional),coverage(spans,at,end),extra]);
       previousValue=value;
     }
     if (series.cells.length) output.push(series);
   }
   return output;
 }
+const policyOf=(group:MonetaryPolicy):MonetaryPolicy=>({...group.accounting?{accounting:group.accounting}:{},...group.role?{role:group.role}:{},...group.pointMode?{pointMode:group.pointMode}:{}});
+const availableUntil=(span:MeterSpan)=>Math.min(span.interruptedAt??Infinity,span.holdUntil??Infinity,span.to+span.staleAfterMs+1);
+/** Observation anchors and exclusive deadlines preserve accepted holes on the fixed grid. */
+function observationCells(group:MeterGroup,unit:Unit,from:number,to:number,cell:number):MeterSeriesCells[] {
+  const series:MeterSeriesCells={...policyOf(group),source:group.source,meter:group.meter,kind:'balance',unit,semantics:null,cells:[]};
+  const retainedFrom=group.retainedFrom??from;
+  let semantics:MeterSemantics|null=null;
+  for(let at=from,index=0;at<to;at+=cell,index++) {
+    const end=at+cell;
+    const span=group.spans.filter(s=>s.from<end&&availableUntil(s)>at).at(-1);
+    if(!span)continue;
+    const last=predecessor(group.readings,Math.min(end,availableUntil(span))-1);
+    if(!last||last.unit!==unit)continue;
+    const pointAt=Math.max(at,span.from,last.at,retainedFrom),validUntil=Math.min(end,availableUntil(span));
+    if(pointAt>=validUntil)continue;
+    const openAt=Math.max(at,retainedFrom),first=predecessor(group.readings,openAt);
+    const open=span.from<=openAt&&first&&first.unit===unit?plottedAmount(first):null;
+    const extra:MeterCellExtra={segment:span.from,open,...(open!==null&&openAt>at?{openOffsetMs:openAt-at}:{}),...(pointAt===at?{}:{pointOffsetMs:pointAt-at}),...(validUntil===end?{}:{validUntil})};
+    const next=semanticsOf(last);
+    if(open!==null&&first&&JSON.stringify(semanticsOf(first))!==JSON.stringify(next))extra.openSemantics=semanticsOf(first);
+    if(JSON.stringify(next)!==JSON.stringify(semantics))extra.semantics=next;
+    semantics=next;
+    series.cells.push([index,plottedAmount(last),null,null,coverage(group.spans,Math.max(at,retainedFrom),end),extra]);
+  }
+  return series.cells.length?[series]:[];
+}
+const sameCapSemantics=(a:Reading,b:Reading)=>JSON.stringify(semanticsOf(a))===JSON.stringify(semanticsOf(b));
 const sumSteps = (steps: readonly ExceptionalStep[]) => steps.reduce((sum,s)=>sum+BigInt(s.amount),0n).toString();
 
 /** Whole cells and exceptional intervals compose identically, regardless of tile partition. */
@@ -156,16 +221,28 @@ export function* composeMetersPrepared(chunks: readonly {from:number;meterSeries
       const extra=row[5]??{};
       const previousSpent=spent;
       if(at>=quantities.from&&at<quantities.to) {
-        spent+=BigInt(row[2]);topup+=BigInt(extra.topupInternal??'0');coveredMs+=row[4];
-        yield* classify(extra.steps??[],false);yield* classify(extra.topupSteps??[],true);
+        coveredMs+=row[4];
+        if(series.accounting?.spending!=='unavailable') {
+          if(row[2]===null)throw new Error('invalid_meter_accounting');
+          spent+=BigInt(row[2]);yield* classify(extra.steps??[],false);
+        }
+        if(series.accounting?.topups!=='unavailable') {topup+=BigInt(extra.topupInternal??'0');yield* classify(extra.topupSteps??[],true);}
       }
       if(at!==previous+cell || (extra.segment??0)!==lastLocal)segment++;
       previous=at;lastLocal=extra.segment??0;
-      points.push({at,value:row[1],spent:(spent-previousSpent).toString(),segment,semantics,steps:extra.steps??[]});yield;
+      if(series.pointMode==='observation'&&extra.observations) {
+        for(const point of extra.observations){points.push({...point,semantics:point.semantics===undefined?semantics:point.semantics,spent:null,segment,steps:[]});yield;}
+        continue;
+      }
+      const observation=series.pointMode==='observation',pointAt=at+(observation?extra.pointOffsetMs??0:0);
+      const validUntil=observation?extra.validUntil??at+cell:undefined;
+      const openAt=at+(observation?extra.openOffsetMs??0:0);
+      if(observation&&pointAt>openAt&&extra.open!=null)points.push({at:openAt,value:extra.open,spent:null,segment,semantics:extra.openSemantics??semantics,steps:[],validUntil:pointAt});
+      points.push({at:pointAt,...(extra.knownFrom!==undefined&&extra.knownUntil!==undefined?{knownFrom:extra.knownFrom,knownUntil:extra.knownUntil}:{}),...(observation?{validUntil}:{}),value:row[1],spent:series.accounting?.spending==='unavailable'?null:(spent-previousSpent).toString(),segment,semantics,steps:series.accounting?.spending==='unavailable'?[]:extra.steps??[]});yield;
     }
     const first=rows[0][1].row,last=rows.at(-1)![1];
-    const start=first[5] && 'open' in first[5] ? first[5].open! : first[5]?.first??first[1];
-    result.push({sourceId:series.source,meterId:series.meter,kind:series.kind,unit:series.unit,semantics:last.semantics,start,end:last.row[1],spent:spent.toString(),unlocated,topup:topup.toString(),topupUnlocated,coveredMs,points});yield;
+    const start=first[5] && 'open' in first[5] ? (first[5].openOffsetMs??0)>0?null:first[5].open! : first[5]?.first??first[1];
+    result.push({...policyOf(series),sourceId:series.source,meterId:series.meter,kind:series.kind,unit:series.unit,semantics:last.semantics,start,end:series.kind==='cap'&&(last.row[5]?.knownUntil??-Infinity)<to?null:last.row[1],spent:series.accounting?.spending==='unavailable'?null:spent.toString(),unlocated,topup:series.accounting?.topups==='unavailable'?null:topup.toString(),topupUnlocated,coveredMs,points});yield;
   }
   return result;
 }

@@ -9,7 +9,7 @@ import {t} from '../i18n';
 
 type Shares = {
   shared: {source: string; provider: string; sharedBy: string; mine: boolean}[];
-  mine: {source: string; provider: string; shared: boolean; devices: string[]}[];
+  mine: {source: string; provider: string; shared: boolean; devices: string[];accountLabel?:string}[];
 };
 type Member = {id: string; name: string; email: string; role: 'owner' | 'member'};
 

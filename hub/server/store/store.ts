@@ -12,9 +12,13 @@ import type {Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
 import {tell, type Touches} from '../touches.js';
 import {migrate} from './schema.js';
+import type {QuotaObservation, MeterMeasurement} from '../domain/meters.js';
 import {MeterStore} from './meters.js';
 import type {MeterSelection} from '../domain/meterHistory.js';
+import {DEFAULT_CURRENCY} from '../domain/currency.js';
 import {providerOf} from '../domain/providers.js';
+import {CurrencyStore} from './currencies.js';
+import {importLegacyCurrencies} from './legacyCurrencies.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
 export type WorkContext = {source: string; origin: Origin; startedAt: number; project: string; folder: string};
@@ -62,6 +66,9 @@ export type BoardSource = Source & {holders: string[]; sharedBy: string | null};
 export class Store {
   readonly db: DatabaseSync;
   readonly meters: MeterStore;
+  readonly currencies:CurrencyStore;
+  private monetaryRecords=new Set<(source:string)=>void>();
+  private currencyChanges=new Set<(owner:string)=>void>();
   /** When this database was made. */
   private readonly created: number;
   private observer: Touches | null = null;
@@ -70,7 +77,10 @@ export class Store {
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
-    this.meters = new MeterStore(this.db);
+    this.currencies=new CurrencyStore(this.db);
+    this.currencies.onChange=owner=>{if(owner){for(const listener of this.currencyChanges)listener(owner);tell(this.observer,o=>o.touchUser(owner));}};
+    importLegacyCurrencies(this.db,this.currencies);
+    this.meters = new MeterStore(this.db,this.currencies);
     this.created = Number((this.db.prepare("SELECT value FROM meta WHERE key = 'historyStart'").get() as {value: string}).value);
   }
 
@@ -91,6 +101,13 @@ export class Store {
   setObserver(observer: Touches) {
     this.observer = observer;
   }
+  onMonetaryRecord(listener:(source:string)=>void){this.monetaryRecords.add(listener);return()=>{this.monetaryRecords.delete(listener);};}
+  onCurrencyChange(listener:(owner:string)=>void){this.currencyChanges.add(listener);return()=>{this.currencyChanges.delete(listener);};}
+  currencyReaders(source:string):string[] {
+    return (this.db.prepare('SELECT user_id FROM holders WHERE source_id=? UNION SELECT m.user_id FROM shares s JOIN members m ON m.board_id=s.board_id WHERE s.source_id=?').all(source,source) as {user_id:string}[]).map(r=>r.user_id).filter(user=>this.currencies.preference(user).id!==DEFAULT_CURRENCY);
+  }
+  currencyReaderChanged(owner:string){tell(this.observer,o=>o.touchUser(owner));}
+  currencyChanged(source:string,since:number){tell(this.observer,o=>{o.touchSources([source]);o.history(source,since);});}
 
   /** The boards a source shows on: the personal boards of its holders and the boards it is shared with. */
   boardsOf(source: string): string[] {
@@ -316,16 +333,37 @@ export class Store {
    * detail: its name) from each moment it was reported otherwise, the first one included:
    * a forecast's history begins anew after a change (domain/forecast.ts, `planSince`).
    */
+  quotaObservation(id:string,observation:QuotaObservation,measurement?:MeterMeasurement) {
+    this.db.exec('SAVEPOINT quota_observation');
+    let accepted=false,since=observation.observedAt;
+    try {
+      this.db.prepare('UPDATE state SET payload=payload WHERE source_id=?').run(id);
+      const previous=this.state(id);
+      if(observation.observedAt>(previous.quota?.observedAt??-Infinity)) {
+        if(measurement&&(measurement.observedAt!==observation.observedAt||JSON.stringify(measurement.meters.map(m=>m.id).sort())!==JSON.stringify([...observation.receivedIds].sort())))throw new Error('invalid_quota_observation');
+        if(!measurement&&observation.receivedIds.length)throw new Error('invalid_quota_observation');
+        const result=this.meters.observeQuota(id,previous,observation);
+        if(measurement)since=Math.min(since,this.meters.record(id,result.state,measurement).since??since);
+        accepted=true;
+      }
+      this.db.exec('RELEASE quota_observation');
+    }catch(error){this.db.exec('ROLLBACK TO quota_observation');this.db.exec('RELEASE quota_observation');throw error;}
+    if(accepted)tell(this.observer,o=>{o.touchSources([id]);o.history(id,since);});
+    return accepted;
+  }
+
   record(id: string, measurement: Measurement) {
     const previous = this.state(id);
     if ('meters' in measurement) {
       this.db.exec('SAVEPOINT record');
-      let since: number;
+      let since: number|null;
       try {
         // A sparse heartbeat reads before it writes. Reserve the writer first so a
         // concurrent connection cannot invalidate that read snapshot in WAL mode.
         this.db.prepare('UPDATE state SET payload=payload WHERE source_id=?').run(id);
-        since = this.meters.record(id, this.state(id), measurement).since;
+        const current=this.state(id);
+        if(measurement.observedAt<=Math.max(current.successAt??-Infinity,current.balanceStatus?.at??-Infinity)) {this.db.exec('RELEASE record');return;}
+        since = this.meters.record(id, current, measurement).since;
         this.db.exec('RELEASE record');
       } catch (error) {
         this.db.exec('ROLLBACK TO record');
@@ -333,7 +371,8 @@ export class Store {
         throw error;
       }
       tell(this.observer, o => o.touchSources([id]));
-      tell(this.observer, o => o.history(id, since));
+      if(since!==null)tell(this.observer, o => o.history(id, since!));
+      for(const listener of this.monetaryRecords)listener(id);
       return;
     }
     const {provider} = previous;
@@ -427,6 +466,8 @@ export class Store {
   /** Complete cells of every measured window, read once through a run of missing tiles. */
   cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, []), meters}: {now?: number; shown?: Shown; meters?: MeterSelection} = {}): Chunk<number>[] {
     const sources = this.sources(board);
+    // Subscription caps accompany native windows; wallet selections retain their cheaper read.
+    const withWindows=!meters||meters.ids.some(([id])=>sources.some(source=>source.id===id&&providerOf(source.provider)?.funding==='subscription'));
     // Skip through window names on the primary key; testing time inside the recursive
     // step would scan the source's whole retained history for every missing name.
     const windows = this.db.prepare(
@@ -440,7 +481,7 @@ export class Store {
     );
     read.setReturnArrays(true);
     const groups: CellSamples[] = [];
-    for (const {id} of meters?[]:sources) for (const {w} of windows.all(id, id, id, from, to) as {w: string}[]) {
+    for (const {id} of withWindows?sources:[]) for (const {w} of windows.all(id, id, id, from, to) as {w: string}[]) {
       const rows = read.all(id, w, to, from, id, w, from) as unknown as [number, number, number | null, number][];
       groups.push({source: id, window: w, samples: rows.map(([at, used, resetAt, staleAfterMs]) => ({at, used, resetAt, staleAfterMs}))});
     }
@@ -460,7 +501,7 @@ export class Store {
       .all(JSON.stringify(sources.map(s => s.id)), from, to) as {source_id: string; at: number; detail: string}[];
     for (const event of grants) chunks[tileOf(event.at, cellMs) - tileOf(from, cellMs)].grants.push([event.source_id, event.at, Number(event.detail)]);
     if (meters) {
-      const groups=this.meters.groups(meters,from,to);
+      const groups=this.meters.groups(meters,from,to).map(group=>({...group,retainedFrom:now-config.retention.sampleDays*86_400_000}));
       for (const chunk of chunks) chunk.meterSeries = this.meters.cells(meters,chunk.from,chunk.to,cellMs,groups);
     }
     return chunks;

@@ -388,8 +388,8 @@ td.muted, small.muted { color: var(--text-3); }
 .tray-pill svg { flex-shrink: 0; opacity: .8; }
 .tray-pill b { font-weight: 560; color: var(--text); }
 .tray-pill .tray-icon { stroke-width: 2.2; }
-.text-button.access-mark.is-warn { color: var(--warn); }
-.text-button.access-mark.is-crit { color: var(--crit); }
+.text-button.tray-pill.is-warn { color: var(--warn); }
+.text-button.tray-pill.is-crit { color: var(--crit); }
 /* The glow is on the icon itself, never on the button: a filter there would spoil the glass of its panel. */
 .text-button.reset-mark.is-accent { color: var(--reset); border-color: color-mix(in oklab, var(--reset) 28%, transparent); background: color-mix(in oklab, var(--reset) 7%, transparent); font-weight: 560; }
 .text-button.reset-mark.is-accent:hover, .text-button.reset-mark.is-accent[aria-expanded=true] { border-color: color-mix(in oklab, var(--reset) 45%, transparent); background: color-mix(in oklab, var(--reset) 13%, transparent); }
@@ -932,15 +932,22 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .compact-quality { color: var(--text-3); font-size: 12px; margin: 4px 0; }
 
 /* Unit-valued sources share the board's card and table surfaces. */
-.money-body { display: grid; gap: 12px; min-width: 0; }
+.money-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
 .money-balance { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 12px; }
 .money-balance > span:first-child { color: var(--text-3); }
+.money-balance-trigger.text-button { height: auto; min-width: 0; max-width: 100%; padding: 0; border: 0; border-radius: 0; background: none; font-size: inherit; cursor: pointer; }
+.money-balance .picker { margin-left: 0; }
+.money-balance-values { display: grid; gap: 6px; min-width: 0; max-width: 100%; margin-left: auto; text-align: right; }
 .money-balance .limit-value { max-width: 100%; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.money-limits { min-width: 0; }
 .money-limits:not(:empty) { border-top: 1px solid var(--hair); padding-top: 16px; margin-top: 4px; }
 .money-partial { margin-left: 4px; color: var(--text-3); }
 .money-limit .limit-top { flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
-.money-limit .limit-name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.money-limit .limit-name { display: flex; align-items: center; flex: 1; min-width: 0; }
 .key-status { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--warn); vertical-align: middle; }
+.cap-label { display: flex; align-items: center; min-width: 0; }
+.cap-label > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cap-label .key-status { flex-shrink: 0; }
 .key-status.is-inactive { background: var(--text-3); }
 .key-status[aria-hidden="true"] { visibility: hidden; }
 .money-limit .limit-value { max-width: 100%; overflow-wrap: anywhere; }
@@ -949,8 +956,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .resource-type { display: block; margin-top: 2px; color: var(--text-3); font-size: 10.5px; line-height: 1.2; }
 .compact-limit.is-money { grid-template-columns: minmax(0, 1.5fr) 7.5ch minmax(36px, 1fr) auto; }
 .compact-limit.is-money > strong { max-width: 18ch; overflow-wrap: anywhere; }
-.is-stale { opacity: .6; }
-.money-limit:has(.cap-stale), .compact-limit.is-money:has(.cap-stale) { opacity: .6; }
+.source-consent { display: flex; gap: 8px; align-items: flex-start; }
 .monetary-table th:not(:first-child), .monetary-table td:not(:first-child) { text-align: right; }
 .compact .money-balance .limit-value { font-size: 1.15rem; }
 .compact .money-body .limit-value small { font-size: 11px; }
@@ -1075,3 +1081,8 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .widget-catalogue .field { gap: 4px; }
 .widget-catalogue input[type=search] { height: 30px; }
 .topbar .status .picker { margin-left: 0; }
+.money-breakdown { display: grid; gap: 12px; padding: 4px 0; font-size: 12px; color: var(--text-2); }
+.money-breakdown > section { display: grid; gap: 4px; }
+.money-breakdown > section > div { display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+.money-breakdown-total { padding-bottom: 4px; color: var(--text); }
+.money-balance .is-stale,.money-breakdown .is-stale {opacity:.6;}

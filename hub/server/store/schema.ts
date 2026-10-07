@@ -1,4 +1,5 @@
 import type {DatabaseSync} from 'node:sqlite';
+import {adoptDeclaredLayout} from './legacyDeclared.js';
 
 /**
  * The database layout. Each version is one step applied in order; a database records
@@ -163,7 +164,84 @@ export const STEPS = [
   CREATE INDEX meter_spans_by_end ON meter_spans (to_at);
   CREATE INDEX credentials_by_source ON credentials (source_id, created_at, id);
   `,
-  // 10 — recoverable additions, concurrent board views and private connection discovery.
+  // 10 — declared account provenance, unknown key expiry and hard quota history bounds.
+  `
+  CREATE TABLE source_identity (
+    source_id TEXT PRIMARY KEY REFERENCES sources(id), kind TEXT NOT NULL CHECK (kind IN ('supplier','declared')),
+    owner_id TEXT REFERENCES users(id), CHECK ((kind='declared' AND owner_id IS NOT NULL) OR (kind='supplier' AND owner_id IS NULL)));
+  INSERT INTO source_identity (source_id,kind,owner_id) SELECT id,'supplier',NULL FROM sources WHERE provider='openrouter';
+  ALTER TABLE credentials ADD COLUMN expiry_kind TEXT NOT NULL DEFAULT 'none' CHECK (expiry_kind IN ('dated','none','unknown'));
+  UPDATE credentials SET expiry_kind='dated' WHERE expires_at IS NOT NULL;
+  ALTER TABLE meter_spans ADD COLUMN hold_until INTEGER;
+  `,
+
+  // 11 — declared accounts, truthful expiry and accepted observation interruptions.
+  `
+  CREATE TABLE declared_accounts (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, provider TEXT NOT NULL, source_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL, name_key TEXT NOT NULL, created_at INTEGER NOT NULL,
+    lifecycle_revision INTEGER NOT NULL DEFAULT 0 CHECK(typeof(lifecycle_revision)='integer' AND lifecycle_revision>=0), UNIQUE(user_id,provider,name_key));
+  CREATE INDEX declared_accounts_by_owner ON declared_accounts (user_id,provider,id);
+  ALTER TABLE meter_spans ADD COLUMN interrupted_at INTEGER;
+  CREATE TRIGGER declared_account_withdrawn AFTER DELETE ON credentials
+    WHEN NOT EXISTS (SELECT 1 FROM credentials WHERE user_id=OLD.user_id AND source_id=OLD.source_id)
+    BEGIN
+      UPDATE declared_accounts SET lifecycle_revision=lifecycle_revision+1
+        WHERE user_id=OLD.user_id AND provider=OLD.provider AND source_id=OLD.source_id;
+    END;
+  `,
+  // 12 — sparse histories of safe provider context beside the exact money ledger.
+  `
+  CREATE TABLE meter_contexts (
+    source_id TEXT NOT NULL, item TEXT NOT NULL, from_at INTEGER NOT NULL, to_at INTEGER NOT NULL,
+    stale_after_ms INTEGER NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY (source_id,item,from_at)) WITHOUT ROWID;
+  CREATE INDEX meter_contexts_by_end ON meter_contexts (to_at);
+  `,
+  // 13 — shared exchange-rate data and separate monetary valuations.
+  `
+  CREATE TABLE exchange_rates (
+    id TEXT PRIMARY KEY, source TEXT NOT NULL, reference_date INTEGER NOT NULL,
+    fetched_at INTEGER NOT NULL, payload TEXT NOT NULL);
+  CREATE INDEX exchange_rates_by_date ON exchange_rates(reference_date);
+  CREATE TABLE money_valuations (
+    source_id TEXT NOT NULL, meter_id TEXT NOT NULL, at INTEGER NOT NULL, previous_at INTEGER,
+    native_id TEXT NOT NULL, native_unit TEXT NOT NULL, native_amount TEXT NOT NULL,
+    unit TEXT NOT NULL, amount TEXT NOT NULL, quote_id TEXT NOT NULL, semantics TEXT NOT NULL,
+    stale_after_ms INTEGER NOT NULL, PRIMARY KEY(source_id,meter_id,at)) WITHOUT ROWID;
+  CREATE INDEX money_valuations_by_time ON money_valuations(at);
+  -- Preserve old derived history, while current provider state contains only reported facts.
+  UPDATE state SET payload=json_set(json_remove(payload,'$.usdRate'),'$.meters',json(
+    (SELECT coalesce(json_group_array(json(value)),'[]') FROM json_each(state.payload,'$.meters')
+     WHERE json_extract(value,'$.id') NOT LIKE 'converted:%')))
+    WHERE json_type(payload,'$.meters')='array';
+  UPDATE state SET payload=json_set(payload,'$.balanceStatus.issues',json(
+    (SELECT coalesce(json_group_array(value),'[]') FROM json_each(state.payload,'$.balanceStatus.issues') WHERE value<>'rate_unavailable')),
+    '$.balanceStatus.partial',json(CASE WHEN EXISTS(SELECT 1 FROM json_each(state.payload,'$.balanceStatus.issues') WHERE value<>'rate_unavailable') THEN 'true' ELSE 'false' END))
+    WHERE json_type(payload,'$.balanceStatus.issues')='array';
+  `,
+  // 14 — private currency definitions, display preferences and immutable rate bindings.
+  `
+  CREATE TABLE currency_definitions (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, symbol TEXT NOT NULL,
+    fraction_digits INTEGER NOT NULL, archived_at INTEGER);
+  CREATE TABLE currency_preferences (user_id TEXT PRIMARY KEY, currency_id TEXT NOT NULL);
+  ALTER TABLE exchange_rates ADD COLUMN owner_id TEXT NOT NULL DEFAULT '';
+  CREATE INDEX exchange_rates_by_owner ON exchange_rates(owner_id,reference_date);
+  CREATE TABLE currency_bindings (
+    owner_id TEXT NOT NULL, source_id TEXT NOT NULL, from_currency TEXT NOT NULL, target_currency TEXT NOT NULL,
+    observation_at INTEGER NOT NULL, through_at INTEGER NOT NULL, anchor TEXT NOT NULL, steps TEXT NOT NULL,
+    PRIMARY KEY(owner_id,source_id,from_currency,target_currency,observation_at,anchor)) WITHOUT ROWID;
+  `,
+  // 15 — preserve the initial nominal quote without retaining every zero-date revision.
+  `
+  ALTER TABLE currency_definitions ADD COLUMN initial_quote_id TEXT;
+  UPDATE currency_definitions SET initial_quote_id=(SELECT q.id FROM exchange_rates q
+    WHERE q.owner_id=currency_definitions.owner_id AND q.source='manual' AND q.reference_date=0
+      AND json_type(q.payload,'$.rates."'||currency_definitions.id||'"') IS NOT NULL
+    ORDER BY q.fetched_at,q.rowid LIMIT 1);
+  `,
+  // 16 — recoverable additions, concurrent board views and private connection discovery.
   `
   ALTER TABLE views ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE credentials ADD COLUMN access_revision INTEGER NOT NULL DEFAULT 0;
@@ -193,7 +271,7 @@ export const STEPS = [
     ['device_source_changed', 'AFTER UPDATE OF source_id ON device_sources WHEN OLD.source_id IS NOT NEW.source_id', '(SELECT user_id FROM devices WHERE id=NEW.device_id)'],
     ['credential_added', 'AFTER INSERT ON credentials', 'NEW.user_id'],
     ['credential_removed', 'AFTER DELETE ON credentials', 'OLD.user_id'],
-    ['credential_changed', 'AFTER UPDATE OF access_revision, expires_at, last_error, unreadable ON credentials WHEN OLD.access_revision IS NOT NEW.access_revision OR OLD.expires_at IS NOT NEW.expires_at OR OLD.last_error IS NOT NEW.last_error OR OLD.unreadable IS NOT NEW.unreadable', 'NEW.user_id'],
+    ['credential_changed', 'AFTER UPDATE OF access_revision, expires_at, expiry_kind, last_error, unreadable ON credentials WHEN OLD.access_revision IS NOT NEW.access_revision OR OLD.expires_at IS NOT NEW.expires_at OR OLD.expiry_kind IS NOT NEW.expiry_kind OR OLD.last_error IS NOT NEW.last_error OR OLD.unreadable IS NOT NEW.unreadable', 'NEW.user_id'],
   ].map(([name, event, owner]) => `CREATE TRIGGER connections_${name} ${event} BEGIN
     INSERT INTO account_revisions (user_id,revision) VALUES (${owner},1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1;
   END;`).join('\n')}
@@ -214,7 +292,7 @@ export function migrate(db: DatabaseSync, now: number) {
   if (current === SCHEMA_VERSION) return;
   db.exec('BEGIN IMMEDIATE');
   try {
-    for (const step of STEPS.slice(current)) db.exec(step);
+    for (const step of STEPS.slice(adoptDeclaredLayout(db,current))) db.exec(step);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('historyStart', String(now));
     // Before this, how agents worked is not known (the sums of layout 2 are gone), rather than none worked.

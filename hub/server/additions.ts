@@ -3,6 +3,8 @@ import type {Store} from './store/store.js';
 import type {Board, Directory} from './store/directory.js';
 import {SecretError, secretCode, permanentAccess, type Credentials, type VerifiedAccess} from './secrets/index.js';
 import {checkpoint} from './secrets/start.js';
+import {UUID} from './store/sourceAccounts.js';
+import type {CredentialOptions} from './secrets/credentials.js';
 import {cardId, providerNames} from './domain/presentation.js';
 import type {View} from './domain/view.js';
 
@@ -10,8 +12,8 @@ const DAY = 86_400_000, LEASE = 30_000;
 export const WIDGETS = ['agents', 'activity', 'history', 'forecast'] as const;
 export type WidgetId = typeof WIDGETS[number];
 export type AdditionItem = {kind: 'sources'; sourceIds: string[]} | {kind: 'widget'; widgetId: WidgetId} |
-  {kind: 'connection'; provider: string} | {kind: 'replace'; credentialId: string; provider?: string; sourceId?: string; expectedRevision?: number};
-type Result = {sourceIds: string[]; credentialId?: string; connection?: 'created' | 'reused'; expiresAt?: number | null;
+  {kind: 'connection'; provider: string; account?:{kind:'new'}|{kind:'existing';id:string}} | {kind: 'replace'; credentialId: string; provider?: string; sourceId?: string; expectedRevision?: number};
+type Result = {sourceIds: string[]; credentialId?: string; connection?: 'created' | 'reused'; expiresAt?: number | null; expiryKind?:import('./connectors/registry.js').ExpiryKind;
   placement?: 'added' | 'already_visible' | 'personal'; viewRevision?: number; credentialRevision?: number; appliedAt: number; maintenance?: 'pending' | 'ok'; replacementRequired?: boolean};
 type State = 'ready' | 'verifying' | 'needs_input' | 'complete' | 'failed' | 'expired';
 type Row = {id: string; owner_id: string; request_id: string; board_id: string | null; item: string; state: State;
@@ -47,6 +49,7 @@ export class BoardAdditions {
   }
   catalogue(owner: string, boardId: string) {
     const board = this.board(owner, boardId), own = this.store.held(owner), sources = this.store.sources(boardId), view = this.directory.view(boardId);
+    const accounts=new Map(this.credentials.list(owner).filter(record=>record.sourceId&&record.accountName).map(record=>[record.sourceId,record.accountName]));
     const personal = this.directory.boards(owner).find(board => board.personal)!;
     const ownNames = this.directory.view(personal.id).names;
     const candidates = [...own, ...sources.filter(source => !own.some(item => item.id === source.id))];
@@ -60,7 +63,7 @@ export class BoardAdditions {
       sources: candidates.flatMap(source => {
         const mine = this.store.holds(owner, source.id), onBoard = sources.some(item => item.id === source.id), visible = onBoard && !hidden(view, cardId(source.id));
         if (visible || !mine && board.role !== 'owner') return [];
-        const label = (mine ? ownNames[source.id] : view.names[source.id]) ?? labels.get(source.id)!;
+        const label = (mine ? ownNames[source.id] : view.names[source.id]) ?? (mine?accounts.get(source.id):undefined) ?? labels.get(source.id)!;
         return [{id: source.id, provider: source.provider, label, origin: mine ? 'own' : 'shared', onBoard, visible, action: onBoard ? 'show' : 'add'}];
       }),
       widgets: board.role === 'owner' ? WIDGETS.filter(id => !widgetVisible(view, id, sources.length)).map(id => ({id, action: 'add'})) : [],
@@ -87,7 +90,11 @@ export class BoardAdditions {
     }
     if (item.kind === 'connection') {
       if (!this.credentials.providers().some(provider => provider.id === item.provider)) throw new AdditionError('addition_invalid');
-      return {kind: 'connection', provider: item.provider};
+      const descriptor=this.credentials.providers().find(provider=>provider.id===item.provider)!;
+      let account:typeof item.account;
+      if(descriptor.declaredAccounts){if(!item.account)throw new AdditionError('addition_invalid');account=item.account.kind==='new'?{kind:'new'}:this.credentials.validateTarget(owner,item.provider,item.account) as {kind:'existing';id:string};}
+      else if(item.account!==undefined)throw new AdditionError('addition_invalid');
+      return {kind: 'connection', provider: item.provider,...(account?{account}:{})};
     }
     if (board) throw new AdditionError('addition_invalid');
     const record = this.credentials.list(owner).find(record => record.id === item.credentialId);
@@ -101,7 +108,7 @@ export class BoardAdditions {
       const previous = this.store.db.prepare('SELECT * FROM board_additions WHERE owner_id=? AND request_id=?').get(owner, requestId) as Row | undefined;
       if (previous) {
         const saved = JSON.parse(previous.item) as AdditionItem;
-        const normalized = item.kind === 'sources' ? {...item, sourceIds: [...new Set(item.sourceIds)].sort()} : item;
+        const normalized = item.kind === 'sources' ? {...item, sourceIds: [...new Set(item.sourceIds)].sort()} : item.kind==='connection'?{kind:item.kind,provider:item.provider,...(item.account?{account:item.account.kind==='new'?{kind:'new'}:item.account.kind==='existing'&&UUID.test(item.account.id)?{kind:'existing',id:item.account.id}:(()=>{throw new AdditionError('addition_invalid');})()}:{})}:item;
         const binding = saved.kind === 'replace' ? {kind: saved.kind, credentialId: saved.credentialId} : saved;
         if (previous.board_id !== boardId || JSON.stringify(binding) !== JSON.stringify(normalized)) throw new AdditionError('addition_conflict');
         return this.answer(previous);
@@ -160,15 +167,15 @@ export class BoardAdditions {
         ...(result?.credentialId?{credential:{exists:!!credential,revisionMatches:credential?.revision===result.credentialRevision}}:{})}};
   }
 
-  run(owner: string, id: string, secret: unknown, validSession: () => boolean) {
+  run(owner: string, id: string, secret: unknown, validSession: () => boolean, options:Pick<CredentialOptions,'allowUnknownExpiry'|'sameAccount'>&{accountName?:string}={}) {
     const row=this.row(owner,id);
     if (row.state==='complete') {if(row.result&&JSON.parse(row.result).maintenance==='pending')this.maintenance(owner,id);return Promise.resolve(this.get(owner,id));}
     const pending=this.running.get(id);if(pending)return pending;
-    const work=this.perform(owner,id,secret,validSession).finally(()=>this.running.delete(id));
+    const work=this.perform(owner,id,secret,validSession,options).finally(()=>this.running.delete(id));
     this.running.set(id,work);return work;
   }
 
-  private async perform(owner: string, id: string, secret: unknown, validSession: () => boolean) {
+  private async perform(owner: string, id: string, secret: unknown, validSession: () => boolean, options:Pick<CredentialOptions,'allowUnknownExpiry'|'sameAccount'>&{accountName?:string}) {
     const attempt=this.directory.transaction(()=>{
       this.recover();const row=this.row(owner,id);
       if(['complete','failed','expired','verifying'].includes(row.state))return null;
@@ -185,7 +192,7 @@ export class BoardAdditions {
       if(item.kind==='connection'||item.kind==='replace') {
         const signal=AbortSignal.timeout(25_000);
         // A nonconforming adapter cannot extend a verification lease or keep bytes after timeout.
-        const verification=this.credentials.verify(item.provider!,secret,signal);
+        const verification=this.credentials.verify(owner,item.provider!,secret,{allowUnknownExpiry:options.allowUnknownExpiry,sameAccount:options.sameAccount,...(item.kind==='connection'&&item.account?{account:item.account.kind==='new'?{kind:'new',name:options.accountName??''}:item.account}:{})},signal,item.kind==='replace'?{id:item.credentialId,revision:item.expectedRevision!}:undefined);
         verified=await new Promise<VerifiedAccess>((resolve,reject)=>{
           signal.addEventListener('abort',()=>reject(new SecretError('connector_timeout')),{once:true});
           void verification.then(value=>{if(signal.aborted)value.dispose();else resolve(value);},reject);
@@ -200,7 +207,7 @@ export class BoardAdditions {
         if(item.kind==='connection'||item.kind==='replace') {
           const saved=this.credentials.commitVerified(owner,verified!,item.kind==='replace'?{id:item.credentialId,revision:item.expectedRevision!}:undefined);
           result={...result,sourceIds:[saved.credential.sourceId!],credentialId:saved.credential.id,credentialRevision:saved.credential.revision,
-            connection:saved.connection,expiresAt:saved.credential.expiresAt,...(item.kind==='replace'?{maintenance:'pending' as const}:{})};
+            connection:saved.connection,expiresAt:saved.credential.expiresAt,expiryKind:saved.credential.expiryKind,...(item.kind==='replace'?{maintenance:'pending' as const}:{})};
           if(saved.connection==='reused'&&(saved.credential.unreadable||permanentAccess(saved.credential.lastError??'')||saved.credential.expiresAt!==null&&saved.credential.expiresAt<=now))result.replacementRequired=true;
         } else if(item.kind==='sources') result.sourceIds=item.sourceIds;
         if(board) {

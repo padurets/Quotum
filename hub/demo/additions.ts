@@ -1,6 +1,8 @@
 import {newSecret} from '../server/domain/auth.js';
 import type {ExtendHub} from '../server/api.js';
 import {currentUser, sameSite} from '../server/session.js';
+import {DEEPSEEK_KEY} from './deepseek.js';
+import {QUOTA_KEY} from './quotas.js';
 import {DEMO_ADDITION_KEYS} from './onboarding.js';
 
 /** Only external answers and fault injection are synthetic; additions use production routes. */
@@ -10,7 +12,7 @@ export const demoAdditionControls: ExtendHub = async (app, hub, guards) => {
     const route = request.routeOptions.url;
     if (typeof payload !== 'string' || reply.statusCode >= 400) return payload;
     if (request.method === 'GET' && (route === '/api/boards/:board/catalogue' || route === '/api/connections'))
-      return JSON.stringify({...JSON.parse(payload), demo: {keys: DEMO_ADDITION_KEYS}});
+      return JSON.stringify({...JSON.parse(payload), demo: {keys: [...DEMO_ADDITION_KEYS,{provider:'deepseek',label:'deepseekBalance',secret:DEEPSEEK_KEY(0)},{provider:'zai',label:'zaiQuotas',secret:QUOTA_KEY(0)}]}});
     if (request.method === 'POST' && route === '/api/additions/:id/run') {
       const user = currentUser(request, hub.directory);
       if (user && lostReplies.has(user.id) && JSON.parse(payload).state === 'complete') {

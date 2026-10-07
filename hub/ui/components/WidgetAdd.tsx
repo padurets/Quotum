@@ -7,6 +7,7 @@ import {useBoardId, useConnectionsRevision, useLineup, useServerView} from '../l
 import {cardId, flushView, isHidden} from '../lib/view';
 import {PROVIDERS} from '../lib/providers';
 import {stamp} from '../lib/format';
+import {catalogue as providerCatalogue} from '../../server/domain/providers';
 import type {Credential} from '../../server/store/credentials';
 import {Modal, Field, ErrorLine} from './Kit';
 import {logoOf} from './logos';
@@ -16,10 +17,10 @@ import {ConnectDevice, type Device} from './Machines';
 type Candidate = {id: string; provider: string; label: string; origin: 'own' | 'shared'; onBoard: boolean; visible: boolean; action: 'add' | 'show'};
 type WidgetId = 'agents' | 'activity' | 'history' | 'forecast';
 const LABELS: Record<WidgetId, Key> = {agents: 'agents.title', activity: 'activity.title', history: 'widgets.history', forecast: 'forecast.title'};
-type Demo = {keys: {label: 'noExpiry' | 'partial' | 'expired' | 'temporary' | 'invalid'; secret: string}[]};
+type Demo = {keys: {label: 'noExpiry' | 'partial' | 'expired' | 'temporary' | 'invalid' | 'deepseekBalance' | 'zaiQuotas'; secret: string; provider?:string}[]};
 type Catalogue = {operations?: Operation[]; board: Board; sources: Candidate[]; widgets: {id: WidgetId; action: Candidate['action']}[]; connectors: {id: string; name: string}[]; demo?: Demo};
-type Item = {kind: 'sources'; sourceIds: string[]} | {kind: 'widget'; widgetId: WidgetId} | {kind: 'connection'; provider: string} | {kind: 'replace'; credentialId: string};
-type Operation = {id: string; boardId: string | null; item: Item; createdAt: number; state: 'ready' | 'verifying' | 'needs_input' | 'complete' | 'failed' | 'expired'; current?: {boardAccessible: boolean | null; sources?: {id: string; placement: string}[]; widget?: {id: string; placement: string}; credential?: {exists: boolean; revisionMatches: boolean}}; error?: string; warning?: string; result?: {sourceIds: string[]; credentialId?: string; connection?: 'created' | 'reused'; expiresAt?: number | null; replacementRequired?: boolean}};
+type Item = {kind: 'sources'; sourceIds: string[]} | {kind: 'widget'; widgetId: WidgetId} | {kind: 'connection'; provider: string; account?:{kind:'new'}|{kind:'existing';id:string}} | {kind: 'replace'; credentialId: string; provider?:string};
+type Operation = {id: string; boardId: string | null; item: Item; createdAt: number; state: 'ready' | 'verifying' | 'needs_input' | 'complete' | 'failed' | 'expired'; current?: {boardAccessible: boolean | null; sources?: {id: string; placement: string}[]; widget?: {id: string; placement: string}; credential?: {exists: boolean; revisionMatches: boolean}}; error?: string; warning?: string; result?: {sourceIds: string[]; credentialId?: string; connection?: 'created' | 'reused'; expiresAt?: number | null; expiryKind?:'none'|'unknown'|'dated'; replacementRequired?: boolean}};
 
 /** Form lifetime affects its UI; only the authenticated shell may end its submitted action. */
 export const AdditionScope = createContext<() => boolean>(() => false);
@@ -32,9 +33,9 @@ function useAddition() {
   const request = useRef(crypto.randomUUID());
   useEffect(() => () => {generation.current++;}, []);
   const accept = (next: Operation) => {current.current = next; setOperation(next);};
-  const submit = async (boardId: string | null, item: Item, secret?: string) => {
+  const submit = async (boardId: string | null, item: Item, secret?: string, options:{allowUnknownExpiry?:boolean;sameAccount?:boolean;accountName?:string}={}) => {
     if (flight.current) return;
-    const binding = (item: Item) => item.kind === 'replace' ? {kind: item.kind, credentialId: item.credentialId} : item.kind === 'sources' ? {...item, sourceIds: [...new Set(item.sourceIds)].sort()} : item;
+    const binding = (item: Item) => item.kind === 'replace' ? {kind: item.kind, credentialId: item.credentialId} : item.kind === 'sources' ? {...item, sourceIds: [...new Set(item.sourceIds)].sort()} : item.kind==='connection'&&item.account?.kind==='new'?{...item,account:{kind:'new'}}:item;
     if (current.current && (current.current.boardId !== boardId || JSON.stringify(binding(current.current.item)) !== JSON.stringify(binding(item)))) {current.current = null; request.current = crypto.randomUUID();}
     flight.current = true; setBusy(true); setError(null);
     const own = generation.current;
@@ -45,7 +46,7 @@ function useAddition() {
       if (!reserved) reserved = await call<Operation>('POST', '/api/additions', {requestId: request.current, boardId, item});
       if (!currentScope()) return;
       if (own === generation.current) accept(reserved);
-      const next = await call<Operation>('POST', '/api/additions/' + reserved.id + '/run', secret === undefined ? {} : {secret}, 30_000);
+      const next = await call<Operation>('POST', '/api/additions/' + reserved.id + '/run', secret === undefined ? {} : {secret,...options}, 30_000);
       if (!currentScope() || own !== generation.current) return;
       accept(next);
       if (next.error) setError(new ApiError(400, next.error));
@@ -102,7 +103,7 @@ function Completion({operation, board, personal, onClose}: {operation: Operation
     {operation.result?.connection === 'reused' && <p className="dialog-text">{t(operation.result.replacementRequired ? 'add.replaceNeeded' : 'add.reused')}</p>}
     {operation.result?.replacementRequired && <a href={settingsHref('/settings/connections', board?.id ?? '')} onClick={event => {event.preventDefault(); onClose(); navigate(settingsHref('/settings/connections', board?.id ?? ''));}}>{t('settings.connections')}</a>}
     {operation.warning && <ErrorLine error={new ApiError(503, operation.warning)} />}
-    {operation.result?.expiresAt !== undefined && <p className="dialog-text">{operation.result.expiresAt === null ? t('sources.noExpiry') : t('connections.expires', {time: stamp(operation.result.expiresAt)})}</p>}
+    {operation.result?.expiresAt !== undefined && <p className="dialog-text">{operation.result.expiryKind==='unknown'?t('sources.unknownExpiry'):operation.result.expiresAt === null ? t('sources.noExpiry') : t('connections.expires', {time: stamp(operation.result.expiresAt)})}</p>}
     <button className="button primary" disabled={!board || operation.current?.boardAccessible === false} onClick={focus}>{t(personal || !visible ? 'add.openBoard' : 'add.viewWidget')}</button>
   </div>;
 }
@@ -119,19 +120,38 @@ function RecoveredAddition({operation, board, onClose}: {operation: Operation; b
   </div>;
 }
 
-function KeyForm({board, replace, personal, demo, available, onClose, onSaved, onAddToBoard, initialOperation}: {
-  board: Board | null; replace?: Credential; personal: boolean; demo?: Demo; available: boolean;
+function KeyForm({board, provider:chosenProvider='openrouter', replace, personal, demo, available, onClose, onSaved, onAddToBoard, initialOperation}: {
+  board: Board | null; provider?:string; replace?: Credential; personal: boolean; demo?: Demo; available: boolean;
   onClose: () => void; onSaved?: () => void; onAddToBoard?: (sourceId: string) => void;
   initialOperation?: Operation;
 }) {
   const [secret, setSecret] = useState('');
+  const provider=replace?.provider??(initialOperation?.item.kind==='connection'||initialOperation?.item.kind==='replace'?initialOperation.item.provider:undefined)??chosenProvider;
+  const namedAccounts=provider==='deepseek',declared=namedAccounts||provider==='zai';
+  const savedTarget=initialOperation?.item.kind==='connection'?initialOperation.item.account:undefined;
+  const [account,setAccount]=useState(savedTarget?.kind==='existing'?savedTarget.id:'new'),[name,setName]=useState('');
+  const [consent,setConsent]=useState(false),[sameAccount,setSameAccount]=useState(false);
+  const [accounts,setAccounts]=useState<{id:string;name:string;connected:boolean}[]>([]),[after,setAfter]=useState<string>(),[next,setNext]=useState<string|null>(null),[back,setBack]=useState<(string|undefined)[]>([]),[loadedAfter,setLoadedAfter]=useState<string|undefined|null>(null),[accountsError,setAccountsError]=useState<unknown>(null);
+  useEffect(()=>{
+    if(!namedAccounts||replace||initialOperation)return;
+    let live=true;
+    call<{accounts:{id:string;name:string;connected:boolean}[];next:string|null}>('GET','/api/source-accounts?provider=deepseek&limit=10'+(after?'&after='+encodeURIComponent(after):''))
+      .then(reply=>{if(live){setAccounts(reply.accounts);setNext(reply.next);setLoadedAfter(after);setAccountsError(null);}},failure=>{if(live)setAccountsError(failure);});
+    return()=>{live=false;};
+  },[namedAccounts,replace?.id,initialOperation?.id,after]);
   const addition = useAddition();
   const replacing = !!replace || initialOperation?.item.kind === 'replace';
+  const needsSame=declared&&(replacing||namedAccounts&&account!=='new');
+  const accountReady=!!initialOperation||!namedAccounts||replacing||loadedAfter===after;
+  const validAccount=account==='new'||!!savedTarget||accountReady&&accounts.some(item=>item.id===account);
+  const blocked=!available||addition.busy||declared&&!consent||needsSame&&!sameAccount||namedAccounts&&!replacing&&(!accountReady||!validAccount||account==='new'&&!name.trim());
+  const changed=()=>{if(!initialOperation)addition.reset();setSameAccount(false);};
   useEffect(() => {if (initialOperation) addition.restore(initialOperation);}, [initialOperation?.id]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const item: Item = initialOperation?.item.kind === 'replace' ? {kind: 'replace', credentialId: initialOperation.item.credentialId} : replace ? {kind: 'replace', credentialId: replace.id} : {kind: 'connection', provider: 'openrouter'};
-    void addition.submit(personal || replacing ? null : board!.id, item, secret);
+    const item: Item = initialOperation?.item.kind === 'replace' ? {kind: 'replace', credentialId: initialOperation.item.credentialId} : replace ? {kind: 'replace', credentialId: replace.id} : {kind: 'connection', provider,...(namedAccounts?{account:savedTarget??(account==='new'?{kind:'new'}:{kind:'existing',id:account})}:{})};
+    if(blocked)return;
+    void addition.submit(personal || replacing ? null : board!.id, item, secret,declared?{allowUnknownExpiry:consent,...(needsSame?{sameAccount}:{}),...(namedAccounts&&!replacing&&account==='new'?{accountName:name}:{})}:{});
   };
   useEffect(() => {if (addition.operation?.state === 'complete') {setSecret(''); onSaved?.();}}, [addition.operation?.state]);
   if (addition.operation?.state === 'complete') {
@@ -150,19 +170,26 @@ function KeyForm({board, replace, personal, demo, available, onClose, onSaved, o
   return <form className="dialog-form" onSubmit={submit}>
     {demo && <DemoNotice />}
     <div className="connect-destination"><small>{t('add.destination')}</small><b>{personal ? t('boards.personalName') : boardTitle(board!)}</b></div>
-    <p className="dialog-text">{t('add.keyRights')}</p>
-    <a href="https://openrouter.ai/settings/management-keys" target="_blank" rel="noopener noreferrer">{t('sources.providerSettings')} ↗</a>
+    <p className="dialog-text">{t(namedAccounts?'sources.deepseekRights':provider==='zai'?'sources.zaiRights':'add.keyRights')}</p>
+    <a href={namedAccounts?'https://platform.deepseek.com/api_keys':provider==='zai'?'https://z.ai/manage-apikey/apikey-list':'https://openrouter.ai/settings/management-keys'} target="_blank" rel="noopener noreferrer">{t(namedAccounts?'sources.deepseekSettings':provider==='zai'?'sources.zaiSettings':'sources.providerSettings')} ↗</a>
     {!personal && !board?.personal && <p className="sharing-disclosure">{t('add.disclosure', {board: boardTitle(board!)})}</p>}
     {replacing && <p className="dialog-text">{t('add.replacePreserved')}</p>}
-    {demo && <details className="demo-examples"><summary>{t('prototype.examples')}</summary><div className="button-row is-start">{demo.keys.map(key => <button type="button" className="button" key={key.label} disabled={addition.busy} onClick={() => setSecret(key.secret)}>{t(`prototype.${key.label}`)}</button>)}</div></details>}
+    {demo && <details className="demo-examples"><summary>{t('prototype.examples')}</summary><div className="button-row is-start">{demo.keys.filter(key=>(key.provider??'openrouter')===provider).map(key => <button type="button" className="button" key={key.label} disabled={addition.busy} onClick={() => {setSecret(key.secret);changed();setConsent(false);}}>{t(`prototype.${key.label}`)}</button>)}</div></details>}
     {demo && <label className="demo-loss"><input type="checkbox" disabled={addition.busy} onChange={event => {void call('POST', '/api/prototype/control', {lostReply: event.target.checked});}} />{t('prototype.lostReply')}</label>}
-    <Field type="password" label={t('sources.key')} value={secret} autoComplete="new-password" data-1p-ignore="" data-lpignore="true" required maxLength={4096} autoFocus disabled={addition.busy} onChange={event => setSecret(event.target.value)} />
-    <p className="drawer-note">{t('add.expiryInfo')}</p>
+    {namedAccounts&&<><p className="drawer-note">{t('sources.declaredIdentity')}</p>{!replacing&&<>
+      <label className="field"><span>{t('sources.account')}</span><select value={account} disabled={addition.busy||!available||!accountReady||!!initialOperation} onChange={event=>{setAccount(event.target.value);changed();}}><option value="new">{t('sources.newAccount')}</option>{savedTarget?.kind==='existing'&&<option value={savedTarget.id}>{t('sources.account')}</option>}{accounts.map(item=><option key={item.id} value={item.id}>{item.name}{item.connected?'':` (${t('sources.disconnected')})`}</option>)}</select></label>
+      {(back.length>0||next)&&<div className="button-row"><button type="button" className="button" disabled={addition.busy||!accountReady||!back.length} onClick={()=>{setAfter(back.at(-1));setBack(back.slice(0,-1));setAccount('new');changed();}}>{t('sources.backAccounts')}</button><button type="button" className="button" disabled={addition.busy||!accountReady||!next} onClick={()=>{setBack([...back,after]);setAfter(next!);setAccount('new');changed();}}>{t('sources.moreAccounts')}</button></div>}
+      {account==='new'&&<Field label={t('sources.accountName')} value={name} maxLength={240} required disabled={addition.busy||!available} onChange={event=>{setName(event.target.value);changed();}}/>}
+    </>}</>}
+    {needsSame&&<><p className="drawer-note">{t('sources.declaredAccount')}</p><label className="source-consent"><input type="checkbox" checked={sameAccount} disabled={addition.busy||!available} onChange={event=>setSameAccount(event.target.checked)}/>{namedAccounts?t('sources.sameAccount',{name:replace?.accountName??accounts.find(item=>item.id===account)?.name??t('sources.account')}):t('sources.sameAccountConsent')}</label><p className="drawer-note">{t('sources.otherAccount')}</p></>}
+    <Field type="password" label={t(declared?'sources.apiKey':'sources.key')} value={secret} autoComplete="new-password" data-1p-ignore="" data-lpignore="true" required maxLength={4096} autoFocus disabled={addition.busy} onChange={event => {setSecret(event.target.value);changed();setConsent(false);}} />
+    {declared?<label className="source-consent"><input type="checkbox" checked={consent} disabled={addition.busy||!available} onChange={event=>setConsent(event.target.checked)}/>{t('sources.unknownExpiryConsent')}</label>:<p className="drawer-note">{t('add.expiryInfo')}</p>}
+    <ErrorLine error={accountsError}/>
     {!available && <p className="form-error">{t('trustedKeys.serverMissing')}</p>}
     <ErrorLine error={addition.error} />
     {addition.busy && <p role="status" className="progress-line"><i className="spinner" />{t('add.verifying')}</p>}
     {addition.operation && !!addition.error && <button className="link-button" type="button" disabled={addition.busy} onClick={() => void addition.check()}>{t('add.checkResult')}</button>}
-    <div className="button-row"><button type="button" className="button" onClick={onClose}>{t('common.close')}</button><button className="button primary" disabled={!available || !secret || addition.busy}>{t(replacing ? 'sources.replace' : personal ? 'sources.connect' : 'add.connectAndAdd')}</button></div>
+    <div className="button-row"><button type="button" className="button" onClick={onClose}>{t('common.close')}</button><button className="button primary" disabled={blocked || !secret}>{replacing?t('sources.replace'):personal?t('sources.connectProvider',{provider:provider==='zai'?t('sources.zaiPersonal'):PROVIDERS[provider]?.name??provider}):t('add.connectAndAdd')}</button></div>
     {addition.busy && <p className="drawer-note">{t('add.closePending')}</p>}
   </form>;
 }
@@ -227,7 +254,7 @@ function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; onClose
 
 function WidgetCatalogue({board, local, trustedKeys, onClose, initialSourceId}: {initialSourceId?: string; board: Board; local: boolean; trustedKeys: Session['trustedKeys']; onClose: () => void}) {
   const [catalogue, setCatalogue] = useState<Catalogue | null>(null), [error, setError] = useState<unknown>(null), [search, setSearch] = useState('');
-  const [page, setPage] = useState<'catalogue' | 'openrouter' | 'device'>('catalogue');
+  const [page, setPage] = useState<'catalogue' | 'connection' | 'device'>('catalogue');
   const [candidate, setCandidate] = useState<Candidate | null>(null);
   const addition = useAddition();
   const revision = useConnectionsRevision();
@@ -239,11 +266,12 @@ function WidgetCatalogue({board, local, trustedKeys, onClose, initialSourceId}: 
   }, [board.id, revision]);
   useEffect(() => {const initial = catalogue?.sources.find(item => item.id === initialSourceId); if (initial && ['add', 'show'].includes(initial.action)) setCandidate(initial);}, [catalogue, initialSourceId]);
   const sources = catalogue?.sources.filter(source => (source.label + ' ' + source.provider).toLowerCase().includes(search.toLowerCase())) ?? [];
+  const [provider,setProvider]=useState('openrouter');
   const complete = addition.operation?.state === 'complete';
   return <div className="widget-catalogue">
-    <div className="catalogue-heading"><h3>{page === 'openrouter' ? t('sources.connect') : page === 'device' ? t('connections.connectDevice') : t('add.title')}</h3><button className="icon-button" aria-label={t('common.close')} title={t('common.close')} onClick={onClose}><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" /></svg></button></div>
+    <div className="catalogue-heading"><h3>{page === 'connection' ? t('sources.connectProvider',{provider:provider==='zai'?t('sources.zaiPersonal'):PROVIDERS[provider]?.name??provider}) : page === 'device' ? t('connections.connectDevice') : t('add.title')}</h3><button className="icon-button" aria-label={t('common.close')} title={t('common.close')} onClick={onClose}><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" /></svg></button></div>
     {page !== 'catalogue' && <button className="link-button connection-back" onClick={() => setPage('catalogue')}>← {t('add.title')}</button>}
-    {page === 'openrouter' ? <KeyForm board={board} personal={false} initialOperation={recovered} demo={catalogue?.demo} available={trustedKeys?.available === true} onClose={onClose} /> :
+    {page === 'connection' ? <KeyForm key={recovered?.id??provider} provider={provider} board={board} personal={false} initialOperation={recovered} demo={catalogue?.demo} available={trustedKeys?.available === true} onClose={onClose} /> :
       page === 'device' ? <DeviceAdd board={board} demo={!!catalogue?.demo} onClose={onClose} /> :
       complete ? <Completion operation={addition.operation!} board={board} personal={false} onClose={onClose} /> : candidate ? <div className="dialog-form">
         <button className="link-button connection-back" onClick={() => setCandidate(null)}>← {t('add.title')}</button><h3>{candidate.label}</h3><p className="sharing-disclosure">{t(board.personal || candidate.onBoard ? 'add.showDisclosure' : 'add.disclosure', {board: boardTitle(board)})}</p>
@@ -252,14 +280,14 @@ function WidgetCatalogue({board, local, trustedKeys, onClose, initialSourceId}: 
         {catalogue?.demo && <DemoNotice />}<p className="dialog-text">{t('add.catalogueFor', {board: boardTitle(board)})}</p>
         {!!catalogue?.sources.length && <Field label={t('add.search')} type="search" value={search} autoFocus onChange={event => setSearch(event.target.value)} />}
         <ErrorLine error={error ?? addition.error} />
-        <RecentAdditions boardId={board.id} onRestore={operation => {if (operation.item.kind === 'connection') {setRecovered(operation); setPage('openrouter');} else addition.restore(operation);}} />
+        <RecentAdditions boardId={board.id} onRestore={operation => {if (operation.item.kind === 'connection') {setRecovered(operation);setProvider(operation.item.provider);setPage('connection');} else addition.restore(operation);}} />
         {addition.operation && <div className="addition-recovery"><ErrorLine error={addition.error} /><button className="button" disabled={addition.busy} onClick={() => void addition.check()}>{t('add.checkResult')}</button>{['ready', 'needs_input'].includes(addition.operation.state) && <button className="button" disabled={addition.busy} onClick={() => void addition.submit(addition.operation!.boardId, addition.operation!.item)}>{t('add.action')}</button>}{['expired', 'failed'].includes(addition.operation.state) && <button className="button" onClick={addition.reset}>{t('add.startAgain')}</button>}</div>}
         {catalogue && <>{!!catalogue.sources.length && <div className="catalogue-group"><h3>{t('add.sources')}</h3>{sources.length ? sources.map(source => <div className="catalogue-row" key={source.id}>
           <img src={logoOf(source.provider)} alt="" /><span className="catalogue-name"><b>{source.label}</b><small>{t(source.origin === 'own' ? 'add.ownSource' : 'add.sharedSource')}</small></span>
           <button className="button" disabled={addition.busy} onClick={() => setCandidate(source)}>{t(source.action === 'show' ? 'add.show' : 'add.action')}</button>
         </div>) : <p className="admin-empty">{t('add.noSources')}</p>}</div>}
         {!!catalogue.widgets.length && <div className="catalogue-group"><h3>{t('analytics.title')}</h3>{catalogue.widgets.map(widget => <div className="catalogue-row" key={widget.id}><span className="catalogue-symbol" aria-hidden="true">▥</span><span className="catalogue-name"><b>{t(LABELS[widget.id])}</b></span><button className="button" disabled={addition.busy} onClick={() => void addition.submit(board.id, {kind: 'widget', widgetId: widget.id})}>{t('add.action')}</button></div>)}</div>}
-        <div className="catalogue-group"><h3>{t('add.connectNew')}</h3>{catalogue.connectors.map(connector => <button className="popover-row catalogue-connect" key={connector.id} onClick={() => setPage('openrouter')}><img src={logoOf(connector.id)} alt="" /><span>{connector.name}</span><span aria-hidden="true">→</span></button>)}{!local && <button className="popover-row catalogue-connect" onClick={() => setPage('device')}><span>{t('connections.connectDevice')}</span><span aria-hidden="true">→</span></button>}</div></>}
+        <div className="catalogue-group"><h3>{t('add.connectNew')}</h3>{catalogue.connectors.map(connector => <button className="popover-row catalogue-connect" key={connector.id} onClick={() => {setRecovered(undefined);setProvider(connector.id);setPage('connection');}}><img src={logoOf(connector.id)} alt="" /><span>{connector.id==='zai'?t('sources.zaiPersonal'):connector.name}</span><span aria-hidden="true">→</span></button>)}{!local && <button className="popover-row catalogue-connect" onClick={() => setPage('device')}><span>{t('connections.connectDevice')}</span><span aria-hidden="true">→</span></button>}</div></>}
       </div>}
   </div>;
 }
@@ -278,6 +306,7 @@ type ConnectionDetails = Credential & {label: string; lastSuccessAt: number | nu
 
 export function ConnectionsPage({userId, boards, trustedKeys, local}: {userId: string; boards: Board[]; trustedKeys: Session['trustedKeys']; local: boolean}) {
   const [connections, setConnections] = useState<ConnectionDetails[]>([]), [demo, setDemo] = useState<Demo | undefined>();
+  const [provider,setProvider]=useState<string|null>(null);
   const [connecting, setConnecting] = useState(false), [replace, setReplace] = useState<Credential | undefined>(), [error, setError] = useState<unknown>(null), [remove, setRemove] = useState<Credential | null>(null);
   const [adding, setAdding] = useState<Board | null>(null), [choosing, setChoosing] = useState(false), [selectedSource, setSelectedSource] = useState<string | undefined>();
   const [readAt, setReadAt] = useState<number | null>(null);
@@ -297,21 +326,21 @@ export function ConnectionsPage({userId, boards, trustedKeys, local}: {userId: s
   const recoveryBoard = recovered?.boardId ? boards.find(board => board.id === recovered.boardId) : boards.find(board => board.personal);
   const restore = (operation: Operation) => {
     const id = operation.item.kind === 'replace' ? operation.item.credentialId : undefined;
-    setRecovered(operation); setReplace(connections.find(record => record.id === id));
+    setRecovered(operation); setReplace(connections.find(record => record.id === id));setProvider(operation.item.kind==='connection'||operation.item.kind==='replace'?operation.item.provider??connections.find(record=>record.id===id)?.provider??'openrouter':null);
     setConnecting(operation.item.kind === 'connection' || operation.item.kind === 'replace');
   };
   const groups = [...new Set(connections.map(record => record.sourceId ?? record.id))].map(id => connections.filter(record => (record.sourceId ?? record.id) === id));
-  return <div className="dialog-form"><div className="settings-section-head"><h2>{t('settings.connections')}</h2><button className="button primary" onClick={() => {setRecovered(undefined); setReplace(undefined); setConnecting(true);}}>{t('add.connectNew')}</button></div>
+  return <div className="dialog-form"><div className="settings-section-head"><h2>{t('settings.connections')}</h2><button className="button primary" onClick={() => {setRecovered(undefined); setReplace(undefined);setProvider(null);setConnecting(true);}}>{t('add.connectNew')}</button></div>
     {demo && <DemoNotice />}<p className="dialog-text">{t('settings.connectionScope')}</p><div className="settings-section-head"><small className="drawer-note">{readAt && t('settings.checkedAt', {time: stamp(readAt)})}</small><button className="link-button" onClick={() => void read()}>{t('refresh.action')}</button></div>
     <ErrorLine error={error} />{!connections.length && <p className="admin-empty">{t('sources.empty')}</p>}
     <RecentAdditions onRestore={restore} />
     {recovered && !connecting && <section className="connection-editor"><RecoveredAddition key={recovered.id} operation={recovered} board={recoveryBoard ?? null} onClose={() => setRecovered(undefined)} /></section>}
     {groups.map(group => <section className="connection-group" key={group[0].sourceId ?? group[0].id}>{group.length > 1 && <h3>{t('connections.savedAccesses', {count: group.length})}</h3>}{group.map(connection => <article key={connection.id} className="connection-record"><div className="connection-record-head"><img src={logoOf(connection.provider)} alt="" /><div><h3>{connection.label}</h3><small>{t('sources.account')}{connection.hint && ' …' + connection.hint}</small></div></div>
       {connection.lastError ? <ErrorLine error={new ApiError(400, connection.lastError)} /> : <p className="connection-health">{t('connections.healthy')}</p>}
-      <dl className="connection-facts"><dt>{t('connections.expiry')}</dt><dd>{connection.expiresAt === null ? t('sources.noExpiry') : stamp(connection.expiresAt)}</dd><dt>{t('connections.lastSuccess')}</dt><dd>{connection.lastSuccessAt ? stamp(connection.lastSuccessAt) : '—'}</dd><dt>{t('connections.boards')}</dt><dd>{connection.placements.map(placement => <span className="placement-tag" key={placement.id}>{boardTitle(placement)}{!placement.visible && <small>{t('connections.hidden')}</small>}</span>)}</dd></dl>
-      <div className="button-row is-start"><button className="button" onClick={() => {setSelectedSource(connection.sourceId ?? undefined); setChoosing(true);}}>{t('add.toBoard')}</button><button className="button" onClick={() => {setRecovered(undefined); setReplace(connection); setConnecting(true);}}>{t('sources.replace')}</button><button className="link-button danger" onClick={() => setRemove(connection)}>{t('sources.remove')}</button></div>
+      <dl className="connection-facts"><dt>{t('connections.expiry')}</dt><dd>{connection.expiryKind==='unknown'?t('sources.unknownExpiry'):connection.expiresAt === null ? t('sources.noExpiry') : stamp(connection.expiresAt)}</dd><dt>{t('connections.lastSuccess')}</dt><dd>{connection.lastSuccessAt ? stamp(connection.lastSuccessAt) : '—'}</dd><dt>{t('connections.boards')}</dt><dd>{connection.placements.map(placement => <span className="placement-tag" key={placement.id}>{boardTitle(placement)}{!placement.visible && <small>{t('connections.hidden')}</small>}</span>)}</dd></dl>
+      <div className="button-row is-start"><button className="button" onClick={() => {setSelectedSource(connection.sourceId ?? undefined); setChoosing(true);}}>{t('add.toBoard')}</button><button className="button" onClick={() => {setRecovered(undefined); setReplace(connection);setProvider(connection.provider);setConnecting(true);}}>{t('sources.replace')}</button><button className="link-button danger" onClick={() => setRemove(connection)}>{t('sources.remove')}</button></div>
     </article>)}</section>)}
-    {connecting && <section className="connection-editor"><h3>{t(replace ? 'sources.replace' : 'sources.connect')}</h3>{!recoveryBoard && recovered ? <ErrorLine error={new ApiError(403, 'addition_permission')} /> : <KeyForm key={recovered?.id ?? replace?.id ?? 'new'} board={recoveryBoard ?? boards.find(board => board.personal) ?? null} personal={!recovered?.boardId} initialOperation={recovered} replace={replace} demo={demo} available={trustedKeys?.available === true} onClose={() => {setConnecting(false); setRecovered(undefined);}} onSaved={() => void read()} onAddToBoard={sourceId => {setConnecting(false); setSelectedSource(sourceId); setChoosing(true);}} />}</section>}
+    {connecting && <section className="connection-editor"><h3>{replace?t('sources.replace'):provider?t('sources.connectProvider',{provider:provider==='zai'?t('sources.zaiPersonal'):PROVIDERS[provider]?.name??provider}):t('add.connectNew')}</h3>{!provider?<div className="dialog-form">{providerCatalogue.filter(item=>item.measuredBy==='hub').map(item=><button type="button" className="popover-row" key={item.id} onClick={()=>setProvider(item.id)}><img src={logoOf(item.id)} width="22" alt=""/><span>{item.id==='zai'?t('sources.zaiPersonal'):item.name}</span></button>)}</div>:!recoveryBoard && recovered ? <ErrorLine error={new ApiError(403, 'addition_permission')} /> : <KeyForm key={recovered?.id ?? replace?.id ?? provider} provider={provider} board={recoveryBoard ?? boards.find(board => board.personal) ?? null} personal={!recovered?.boardId} initialOperation={recovered} replace={replace} demo={demo} available={trustedKeys?.available === true} onClose={() => {setConnecting(false); setRecovered(undefined);}} onSaved={() => void read()} onAddToBoard={sourceId => {setConnecting(false); setSelectedSource(sourceId); setChoosing(true);}} />}</section>}
     {choosing && <section className="connection-editor"><h3>{t('add.toBoard')}</h3><p className="dialog-text">{t('add.chooseBoard')}</p>{boards.map(board => <button className="popover-row" key={board.id} onClick={() => {setChoosing(false); setAdding(board);}}><span>{boardTitle(board)}</span></button>)}<button className="link-button" onClick={() => setChoosing(false)}>{t('common.cancel')}</button></section>}
     {adding && <WidgetAdd board={adding} initialSourceId={selectedSource} local={local} trustedKeys={trustedKeys} open onOpenChange={open => {if (!open) {setAdding(null); void read();}}} trigger={boardTitle(adding)} />}
     {remove && <Modal title={t('sources.remove')} onClose={() => setRemove(null)}><p className="dialog-text">{t('sources.removeText')}</p><p className="dialog-text">{t('add.disconnectEffect')}</p><ErrorLine error={error} /><div className="button-row"><button className="button" onClick={() => setRemove(null)}>{t('common.cancel')}</button><button className="button danger" onClick={() => void disconnect()}>{t('sources.remove')}</button></div></Modal>}

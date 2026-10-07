@@ -134,3 +134,61 @@ test('ordinary maintenance removes old completed and expired addition and device
   assert.equal((h.store.db.prepare('SELECT count(*) AS n FROM board_additions').get() as {n:number}).n,0);
   assert.equal((h.store.db.prepare('SELECT count(*) AS n FROM device_onboarding').get() as {n:number}).n,0);
 });
+
+function declaredFixture(provider:'deepseek'|'zai') {
+  const store=new Store(':memory:'),directory=new Directory(store.db),key=SecretKey.parse(Buffer.from(Buffer.alloc(32,23).toString('base64url')));
+  const report=startSecrets(store.db,{current:key,previous:null,reset:null,storageAtStart:null,wasFileAtStart:false}),at=Date.now();
+  const transport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}});
+  const answer:ConnectorIdentity={identityOrigin:'declared',expiryKind:'unknown',expiresAt:null,abilities:[provider==='zai'?'quota':'balance'],measurement:{type:'meters',inventoryComplete:true,inventoryError:null,observedAt:at,staleAfterMs:60_000,meters:[{id:'allowance',unit:provider==='zai'?'credits:zai':'USD',kind:provider==='zai'?'cap':'balance',amount:'37000000',limit:provider==='zai'?'100000000':null,resetAt:null,minutes:provider==='zai'?300:null,scope:'account',label:'',at,stale:false,staleAfterMs:60_000}],keys:[]}};
+  const connector:Connector={id:provider,identityOrigin:'declared',declaredAccounts:provider==='deepseek',transport,abilities:answer.abilities,secretFormat:()=>true,map:()=>null,identify:async()=>answer,measure:async()=>answer};
+  const credentials=new Credentials(store,key,report,new Map([[provider,connector]]));
+  const owner=directory.createUser('owner@fixture.example','Owner','unused',at),member=directory.createUser('member@fixture.example','Member','unused',at),board=directory.createBoard('Team',owner.id,at);
+  directory.addMember(board.id,member.id,at);
+  return {store,directory,credentials,connector,member,board,answer,additions:new BoardAdditions(store,directory,credentials),close(){transport.close();store.close();}};
+}
+for(const provider of ['deepseek','zai'] as const)test(provider+' additions preserve declared identity, unknown expiry, atomic publication and explicit replacement',async t=>{
+  const h=declaredFixture(provider);t.after(()=>h.close());
+  const item=provider==='deepseek'?{kind:'connection' as const,provider,account:{kind:'new' as const}}:{kind:'connection' as const,provider};
+  const action=h.additions.reserve(h.member.id,randomUUID(),h.board.id,item);
+  const refused=await h.additions.run(h.member.id,action.id,KEY,()=>true,provider==='deepseek'?{accountName:'Personal'}:{});
+  assert.equal(refused.error,'credential_expiry_confirmation');assert.equal(h.credentials.list(h.member.id).length,0);assert.equal(h.store.sources(h.board.id).length,0);
+  const done=await h.additions.run(h.member.id,action.id,KEY,()=>true,{allowUnknownExpiry:true,...(provider==='deepseek'?{accountName:' Personal '}:{})});
+  assert.equal(done.state,'complete',done.error);assert.equal(done.result!.expiryKind,'unknown');const record=h.credentials.list(h.member.id)[0];
+  assert.equal(record.identityOrigin,'declared');assert.equal(h.store.sources(h.board.id)[0].id,record.sourceId);assert.equal(h.directory.view(h.board.id).hidden.includes('source:'+record.sourceId),false);
+  assert.equal(h.store.state(record.sourceId!).meters?.[0].amount,'37000000');
+  if(provider==='deepseek') {
+    assert.equal(record.accountName,'Personal');
+    const reuse=h.additions.reserve(h.member.id,randomUUID(),h.board.id,{kind:'connection',provider,account:{kind:'existing',id:record.accountId!}});
+    assert.equal((await h.additions.run(h.member.id,reuse.id,'other',()=>true,{allowUnknownExpiry:true})).error,'credential_account_confirmation');
+    assert.equal((await h.additions.run(h.member.id,reuse.id,'other',()=>true,{allowUnknownExpiry:true,sameAccount:true})).result!.connection,'reused');assert.equal(h.credentials.list(h.member.id).length,1);
+  }
+  const replace=h.additions.reserve(h.member.id,randomUUID(),null,{kind:'replace',credentialId:record.id});
+  const before=h.store.db.prepare('SELECT cipher,nonce FROM credentials').get();
+  assert.equal((await h.additions.run(h.member.id,replace.id,'rotated',()=>true,{allowUnknownExpiry:true})).error,'credential_account_confirmation');assert.deepEqual(h.store.db.prepare('SELECT cipher,nonce FROM credentials').get(),before);
+  assert.equal((await h.additions.run(h.member.id,replace.id,'rotated',()=>true,{allowUnknownExpiry:true,sameAccount:true})).state,'complete');
+  assert.equal(h.credentials.list(h.member.id)[0].sourceId,record.sourceId);assert.equal(h.credentials.list(h.member.id)[0].revision,1);
+});
+
+test('declared-account additions roll back private identity and reject withdrawal during verification',async t=>{
+  const h=declaredFixture('deepseek');t.after(()=>h.close());
+  const item={kind:'connection' as const,provider:'deepseek',account:{kind:'new' as const}},action=h.additions.reserve(h.member.id,randomUUID(),h.board.id,item);
+  h.store.db.exec("CREATE TRIGGER fail_declared_share BEFORE INSERT ON shares BEGIN SELECT RAISE(ABORT,'fixture'); END");
+  assert.equal((await h.additions.run(h.member.id,action.id,KEY,()=>true,{allowUnknownExpiry:true,accountName:'Personal'})).state,'needs_input');
+  for(const table of ['declared_accounts','credentials','source_identity','sources','readings','holders'])assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM '+table).get()!.n,0);
+  h.store.db.exec('DROP TRIGGER fail_declared_share');
+  const done=await h.additions.run(h.member.id,action.id,KEY,()=>true,{allowUnknownExpiry:true,accountName:'Personal'}),record=h.credentials.list(h.member.id)[0];assert.equal(done.state,'complete');
+  const next=h.additions.reserve(h.member.id,randomUUID(),h.board.id,{kind:'connection',provider:'deepseek',account:{kind:'existing',id:record.accountId!}}),barrier=deferred<ConnectorIdentity>(),started=deferred<void>();
+  h.connector.identify=()=>{started.resolve();return barrier.promise;};const pending=h.additions.run(h.member.id,next.id,KEY,()=>true,{allowUnknownExpiry:true,sameAccount:true});await started.promise;
+  h.credentials.remove(h.member.id,record.id);barrier.resolve(h.answer);
+  assert.equal((await pending).error,'credential_conflict');assert.equal(h.credentials.list(h.member.id).length,0);assert.equal(h.store.holds(h.member.id,record.sourceId!),false);
+});
+
+test('a new declared account keeps its free name out of the ledger and validates it with the secret',async t=>{
+  const h=declaredFixture('deepseek');t.after(()=>h.close());
+  const operation=h.additions.reserve(h.member.id,randomUUID(),h.board.id,{kind:'connection',provider:'deepseek',account:{kind:'new'}});
+  assert.deepEqual(operation.item,{kind:'connection',provider:'deepseek',account:{kind:'new'}});
+  const refused=await h.additions.run(h.member.id,operation.id,KEY,()=>true,{accountName:'Personal '+KEY,allowUnknownExpiry:true});assert.equal(refused.error,'credential_invalid');
+  assert.equal(JSON.stringify(h.store.db.prepare('SELECT * FROM board_additions').all()).includes(KEY),false);assert.equal(h.credentials.list(h.member.id).length,0);
+  assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM declared_accounts').get()!.n,0);
+  const saved=await h.additions.run(h.member.id,operation.id,KEY,()=>true,{accountName:'Personal',allowUnknownExpiry:true});assert.equal(saved.state,'complete');assert.equal(h.credentials.list(h.member.id)[0].accountName,'Personal');
+});

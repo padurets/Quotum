@@ -147,6 +147,7 @@ export class Events implements Touches {
   // What readers last got of what is theirs, and of the hub's news.
   private readonly mines = new Map<string, string>();
   private readonly sourceAccess=new Map<string,string>();
+  private readonly currencyContexts=new Map<string,string>();
   private readonly boardLists = new Map<string, {json: string; value: unknown}>();
   private readonly connections = new Map<string, number>();
   private hub: {key: string; json: string; value: HubPart} | null = null;
@@ -369,6 +370,7 @@ export class Events implements Touches {
 
     const mines = new Map<string, Frame[]>();
     const accesses=new Map<string,Frame[]>();
+    const currencies=new Map<string,Frame[]>();
     const lists = new Map<string, Frame[]>();
     const connectionFrames = new Map<string, Frame[]>();
     for (const watched of this.watched.values()) {
@@ -384,7 +386,8 @@ export class Events implements Touches {
           try {
             if (!mines.has(key)) mines.set(key, this.refreshMine(sub.user, watched.id, lineups));
             if (!lists.has(sub.user)) lists.set(sub.user, this.refreshBoards(sub.user));
-            own = [...mines.get(key)!, ...lists.get(sub.user)!];
+            if (!currencies.has(key)) currencies.set(key,this.refreshCurrencies(sub.user,watched.id,lineups,now));
+            own = [...mines.get(key)!, ...lists.get(sub.user)!,...currencies.get(key)!];
             if (!connectionFrames.has(sub.user)) {
               const revision = this.parts.directory.connectionsRevision(sub.user);
               connectionFrames.set(sub.user, this.connections.get(sub.user) === revision ? [] : [frame('connections', {revision})]);
@@ -511,6 +514,11 @@ export class Events implements Touches {
     if (this.mines.get(key) === json) return [];
     this.mines.set(key, json);
     return [{type: 'mine', data: `{"sources":${json}}`}];
+  }
+  private refreshCurrencies(user:string,board:string,lineups:Map<string,BoardSource[]>,now:number):Frame[] {
+    const key=user+'\n'+board,json=JSON.stringify(this.projection.currencyContext(user,lineups.get(board)??this.projection.lineup(board),now));
+    if(this.currencyContexts.get(key)===json)return [];
+    this.currencyContexts.set(key,json);return [{type:'currencies',data:json}];
   }
   private refreshSourceAccess(user:string,board:string,lineups:Map<string,BoardSource[]>,now:number,force=false):Frame[] {
     const lineup=lineups.get(board)??this.projection.lineup(board);
@@ -662,6 +670,7 @@ export class Events implements Touches {
       snapshot = {
         providers: catalogue,
         sourceAccess:JSON.parse(this.sourceAccess.get(reader.user+'\n'+reader.board)??'{}'),
+        currencies:JSON.parse(this.currencyContexts.get(reader.user+'\n'+reader.board)??JSON.stringify(this.projection.currencyContext(reader.user,this.projection.lineup(reader.board),now))),
         board: value('board'),
         view: value('view'),
         viewRevision: value('viewRevision'),
@@ -733,7 +742,7 @@ export class Events implements Touches {
     const watched = this.watched.get(sub.board);
     watched?.subscribers.delete(sub);
     const all = [...this.subscribers.values()];
-    if (!all.some(s => s.user === sub.user && s.board === sub.board)) {this.mines.delete(`${sub.user}\n${sub.board}`);this.sourceAccess.delete(sub.user+'\n'+sub.board);}
+    if (!all.some(s => s.user === sub.user && s.board === sub.board)) {this.mines.delete(`${sub.user}\n${sub.board}`);this.sourceAccess.delete(sub.user+'\n'+sub.board);this.currencyContexts.delete(sub.user+'\n'+sub.board);}
     if (!all.some(s => s.user === sub.user)) {this.boardLists.delete(sub.user);this.connections.delete(sub.user);}
     if (watched && !watched.subscribers.size) {
       watched.deadline?.cancel();
