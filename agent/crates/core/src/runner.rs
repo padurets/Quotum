@@ -424,6 +424,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn corrected_shared_sessions_keep_native_ids_through_the_wire() {
+        let state = std::env::temp_dir().join(format!("quotum-attribution-ids-{}-{}", std::process::id(), now_ms()));
+        std::fs::create_dir(&state).unwrap();
+        let salt = "0123456789abcdef0123456789abcdef";
+        std::fs::write(state.join("session-salt"), salt).unwrap();
+        let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state: state.clone() };
+        let runner = Runner::new(Config::default(), paths, &[Provider::Codex], Stop::new());
+        let observed = crate::activity::attribution::corrected_sessions();
+        let expected: Vec<_> = observed
+            .iter()
+            .map(|s| crate::session_identity::identify(salt, s.provider, s.native_birth.as_deref().unwrap()))
+            .collect();
+        let accounts = [Some((Some("4b7e0c1d2e3f4a5b6c7d8e9f".into()), None))];
+        let reported = runner.running(observed.clone(), &accounts, &[Vec::new()]);
+        let request = crate::sink::tests::capture_sessions(&reported);
+        for (i, id) in expected.iter().enumerate() {
+            assert_eq!(request["sessions"][i]["sessionId"], *id);
+        }
+        let mut changed = observed;
+        changed[0].working = Some(true);
+        changed[0].project = Some("another-project".into());
+        assert_eq!(runner.running(changed, &accounts, &[Vec::new()])[0].session_id.as_ref(), Some(&expected[0]));
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn corrected_collector_sessions_reach_the_full_wire_report() {
+        // No state directory means the optional identity capability is unavailable.
+        // The report fixture is shared with the hub's future-credit acceptance test.
+        let state = std::env::temp_dir().join(format!("quotum-attribution-wire-{}", std::process::id()));
+        let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
+        let runner = Runner::new(Config::default(), paths, &[Provider::Codex], Stop::new());
+        let observed = crate::activity::attribution::corrected_sessions();
+        let reported =
+            runner.running(observed, &[Some((Some("4b7e0c1d2e3f4a5b6c7d8e9f".into()), None))], &[Vec::new()]);
+        assert_eq!(reported.len(), 3);
+        let mut request = crate::sink::tests::capture_sessions(&reported);
+        // Only the send clock is fixed; sessions came through collector, Runner and HTTP.
+        request["sentAt"] = serde_json::json!(crate::model::ts::format(1_790_000_015_000));
+        let expected: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/shared-runtime-report.json")).unwrap();
+        assert_eq!(request["sessions"], expected["sessions"]);
+        assert_eq!(request["machine"], expected["machine"]);
+        assert_eq!(request["version"], expected["version"]);
+    }
+
+    #[test]
     fn a_long_list_keeps_the_working_sessions_and_then_the_newest() {
         let session = |working, started_at| RunningSession {
             session_id: None,

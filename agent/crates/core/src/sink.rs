@@ -568,7 +568,7 @@ fn read_directive(directive: &Value, now: Millis) -> Directive {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -648,6 +648,15 @@ mod tests {
         let sink =
             HubSink::new(&hub, machine, spool, Box::new(move |line: &str| log.lock().unwrap().push(line.into())));
         (sink, lines)
+    }
+
+    pub(crate) fn capture_sessions(sessions: &[RunningSession]) -> Value {
+        let (url, seen) = hub(|_, _| json(200, json!({"accepted": 3})));
+        let (mut sender, _) = sink(&url, "shared-runtime-attribution");
+        assert!(sender.sessions(sessions));
+        let (path, body) = seen.lock().unwrap()[0].clone();
+        assert_eq!(path, "/v1/sessions");
+        body
     }
 
     #[test]

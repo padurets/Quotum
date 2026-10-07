@@ -100,25 +100,81 @@ Documents, Downloads, iCloud Drive, other volumes), neither directly nor through
 is the folder. Paths are checked as git writes them; a chain of links made by hand may
 still lead there. Boards list agents by project, with the folder under it where that is
 another, so agents in different worktrees stay apart. An editor or the app runs one client per
-window for all its chats, so there a session is a window. A session works while it and
-what it started (tools, builds, tests) spend more of a CPU core than the client does
-when idle (6% for Claude Code, which redraws its screen even then; 3–4% for the others),
-and for a minute after, so a pause of the model is not idleness. Only this user's
-processes count (on Windows, those of this logon session), and the clients the agent
-starts to measure do not. On Linux, a bounded invocation prefix of this user's Codex
-processes also distinguishes `app-server daemon pid-update-loop` (maintenance) and
-`app-server proxy` (transport forwarding), which are not sessions. The reader skips at
-most 2048 bytes of the executable name, then compares only the leading role, byte by
-byte, stopping at the first mismatch or the end of a recognised role. It never reads
-ahead into argument values, retains no command line, and checks the process's identity
-again after the read. Unknown or unreadable roles remain eligible; processes that exited
-or whose identity changed during the read are left for the next look. A service ancestor
-does not hide a real client it started. Persistent app servers remain eligible, including
-detached servers that may serve remote work; idle alone does not make a service. macOS
-and Windows currently have no invocation-role reader. No client settings or session files
-are read or changed, and no program is started for it. A look is one pass over the process
-list for names and parents, then the times of the clients' own processes: about 20 µs per process
-on Linux. Not seen: a client that runs as `node` (an npm install on macOS and Windows),
+window for all its chats, so there a session is a window. A session works while its owned
+process tree (the client, tools, builds and tests) spends more of a CPU core than the
+client does when idle (6% for Claude Code, which redraws its screen even then; 3–4%
+for the others), and for a minute after, so a pause of the model is not idleness.
+Only this user's processes count (on Windows, those of this logon session), and the
+clients the agent starts to measure do not, even behind an accounting boundary.
+
+On Linux, bounded Codex invocation metadata recognises `app-server daemon
+pid-update-loop` (maintenance), `app-server proxy` (transport), and app-server
+runtimes. Service branches stop both same-provider session folding and ancestor CPU
+accounting. A known runtime in a different OS process session from its provider owner
+is also separated; merely detaching an ordinary shell or build is no boundary. A
+runtime behind such a boundary, or without a proven client or editor/app owner, remains
+visible, with its own CPU estimate but no project or folder. Its inherited cwd does
+not establish which projects it serves. Private same-provider runtimes and ordinary
+editor/app windows retain their existing ownership and placement. CPU is never moved
+to another client based on a connection or a tool's folder.
+
+Linux skips at most 2048 executable-name bytes, compares exact leading role words,
+and stops at the first mismatch, a recognised service role, or the first option-prefix
+byte of a runtime. No option values, process environments or conversation files are
+read; no command line is retained or sent. Process birth and executable file identity
+are checked around these reads and every CPU contributor. Unknown or initially
+unreadable roles prove no boundary. A previously proven boundary survives temporarily
+unreadable metadata and reparenting for that process birth; exhausting the invocation
+read bound or losing executable metadata does not prove a replacement. A confirmed
+invocation or executable change invalidates placement authority. Current shared roots
+are boundaries for every descendant on the same look, and an initially proven ancestor
+can still deny ownership or measurement eligibility if its later validation fails.
+Temporary missing owner metadata leaves placement unproven for that observation,
+including the first look without a cache. An absent non-init parent is incomplete
+ancestry, not proof of an orphan. It does not make a private runtime permanently shared.
+Confirmed role, image and accounting
+scope remain tied to the observed birth across snapshot gaps, until exit or replacement
+is proved. An initially known unsafe branch also retains pending birth-specific ancestor
+evidence until that same ancestor can be validated. This includes a first snapshot's
+proof when its additional validation fails, and a retained unsafe birth whose current
+validation is unavailable. Observed parent links pin both process births, so pending
+ancestor evidence survives the later absence of the source too. A cached parent PID
+supplies only a conditional target until its birth is confirmed; it cannot prove that
+old birth's other ancestors. Raw-proven authority changes invalidate old ownership
+and working holds even before successful additional validation; newer validated
+evidence supersedes them. A reused PID inherits no state.
+These guarantees require observed or conditional birth links. If an ancestor's birth
+was never available before the excluded source disappeared, its later child CPU
+cannot be safely linked by PPID alone; the existing fallback can still show work for
+that first-seen client. Completely unavailable metadata is a detector capability limit.
+
+The OS also gives CPU of finished children, without telling which branch earned it.
+For every ancestor of a proven excluded branch, across wrappers and other-provider
+session roots, this reaped CPU is ignored for that ancestor's remaining process birth.
+The restriction survives branch exit, reparenting and same-birth exec. A previously
+excluded process that becomes eligible also keeps its delayed child CPU excluded,
+including when the first raw Shared proof is superseded before its cache is committed.
+Its own CPU and live owned tools still count; clean trees retain their finished-tool
+accounting. The conservative cost is that a short owned tool entirely between looks
+can be missed at an affected ancestor. Changing the accounting basis discards incompatible deltas and
+working holds rather than turning a lifetime-counter jump into work. Accounting owner
+and authority transitions of observed births also reset affected sessions, even when
+an ancestor was already marked unsafe. New owned tools retain their first observed CPU.
+Unsafe births count their own CPU separately from clean owned subtrees. Each clean
+subtree keeps its live-plus-reaped counter; sampled increases accumulate without
+subtracting retired subtrees, so an observed tool's exit cannot hide new self or live
+CPU. Short looks retain their sampled CPU while keeping references at the last full
+judgement, so a brief metadata gap cannot replay an unchanged counter. Regrouping
+observed contributors discards incompatible deltas and holds. Unsafe
+births continue to mark physical ancestors after the original service has gone,
+including an ancestor whose metadata becomes readable later.
+
+macOS and Windows currently have no invocation-role or process-session detector for
+these shared branches; their existing process observation remains the fallback, not
+proof of shared ownership. Persistent/remote-only servers are not hidden simply for
+being detached or idle. Collection reads process metadata only, starts no program,
+and looks once through the process list, then validates the relevant ancestry and CPU
+trees. Not seen: a client that runs as `node` (an npm install on macOS and Windows),
 and on Windows the folder, which the system does not tell of another process. macOS names
 a process after the file a link leads to, so there a client is also told by its path.
 
