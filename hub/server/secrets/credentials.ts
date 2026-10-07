@@ -185,7 +185,7 @@ export class Credentials {
       return {credential:this.answer(row),connection:'created'};
     });
   }
-  async create(owner:string,provider:string,secret:unknown,options:Options={}):Promise<Credential&{replayed?:true}> {
+  async create(owner:string,provider:string,secret:unknown,options:Options={},validSession:()=>boolean=()=>true):Promise<Credential&{replayed?:true}> {
     return this.boundaryAsync(async()=>{
       const connector=this.connector(provider);this.options(connector,options,false);
       const selected=connector.declaredAccounts?this.accountTarget(secret,options.account):null,selector=selected?JSON.stringify(selected):undefined;
@@ -193,6 +193,7 @@ export class Credentials {
       const verified=await this.verify(owner,provider,secret,options);
       try{return this.mutation(()=>{
         const replay=this.replay(owner,provider,options.requestId,selector);if(replay)return replay;
+        if(!validSession())throw new SecretError('credential_permission');
         const {credential}=this.commitVerified(owner,verified,undefined,!connector.declaredAccounts);
         if(options.requestId)this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('credential-request:'+owner+':'+options.requestId,JSON.stringify({provider,id:credential.id,at:Date.now(),...(selector===undefined?{}:{target:selector})}));
         return credential;

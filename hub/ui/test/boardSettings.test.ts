@@ -38,3 +38,30 @@ test('a definite loss of board access clears the settings snapshot and refreshes
   reads[2].resolve(snapshot);await flush();
   assert.equal(render().some(node=>node.props.children==='Alice Private'),false,'a late pre-revocation snapshot cannot resurrect private rows');
 });
+
+test('Members discards rows, invitations and delayed pre-revocation replies after known access loss',async()=>{
+  const hooks=preparationFixture(),reads:{resolve:(value:unknown)=>void;reject:(error:unknown)=>void}[]=[];let refreshes=0,reload=()=>{};
+  const memo=(read:()=>unknown,deps:unknown[])=>{const box=hooks.useRef(undefined) as {current?:{deps:unknown[];value:unknown}};if(!box.current||deps.some((value,i)=>!Object.is(value,box.current!.deps[i])))box.current={deps,value:read()};return box.current.value;};
+  const context={confirm:()=>true,exports:{} as {MembersTab:(props:unknown)=>Node},require:(name:string)=>{
+    if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect:hooks.useLayoutEffect,useCallback:(fn:()=>void,deps:unknown[])=>{const value=memo(()=>fn,deps);reload=value as ()=>void;return value;}};
+    if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props})};
+    if(name.endsWith('/http'))return {ApiError,call:()=>new Promise((resolve,reject)=>reads.push({resolve,reject}))};
+    if(name.endsWith('/session'))return {rereadSession:()=>{refreshes++;}};
+    if(name.endsWith('/board'))return {};
+    if(name.endsWith('/providers'))return {PROVIDERS:{}};
+    if(name.endsWith('/i18n'))return {t:(key:string)=>key};
+    if(name==='./Kit'||name==='./logos')return {};
+    throw new Error(name);
+  }};
+  runInNewContext(ts.transpileModule(readFileSync(new URL('../components/BoardDialog.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+  const render=()=>{hooks.begin();const tree=context.exports.MembersTab({board:{id:'shared',name:'Shared',role:'owner',personal:false},userId:'owner'});hooks.commit();return nodes(tree);};
+  const snapshot=[{id:'other',name:'Private member',email:'private@example.invalid',role:'member'}];render();reads[0].resolve(snapshot);await flush();
+  assert.equal(render().some(node=>node.props.children==='private@example.invalid'),true);
+  (render().find(node=>node.type==='button'&&node.props.children==='members.createLink')!.props.onClick as ()=>void)();
+  reload();
+  (render().find(node=>node.type==='button'&&node.props.children==='members.createLink')!.props.onClick as ()=>void)();
+  reads[3].reject(new ApiError(404,'board_not_found'));await flush();
+  assert.equal(render().some(node=>node.type==='button'),false);assert.equal(refreshes,1);
+  reads[1].resolve({url:'private-invitation'});reads[2].resolve(snapshot);await flush();
+  const current=render();assert.equal(current.some(node=>node.props.children==='private@example.invalid'||node.props.value==='private-invitation'),false);assert.equal(current.some(node=>node.type==='button'),false);
+});

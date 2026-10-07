@@ -146,3 +146,11 @@ test('DeepSeek Add binds a named private account and one informed submission to 
   assert.deepEqual(JSON.parse(JSON.stringify((f.reads[1].body as {boardId:string;item:unknown}).item)),{kind:'connection',provider:'deepseek',account:{kind:'new'}});assert.equal((f.reads[1].body as {boardId:string}).boardId,'team');
   f.reads[1].resolve({id:'intent',boardId:'team',item:{kind:'connection',provider:'deepseek',account:{kind:'new'}},state:'ready'});await flush();assert.deepEqual(JSON.parse(JSON.stringify(f.reads[2].body)),{secret:'synthetic-key',allowUnknownExpiry:true,accountName:'Personal'});f.unmount();
 });
+
+test('unavailable connection forms retain matching-key and damaged-storage recovery reasons',()=>{
+  for(const reason of ['secret_key_mismatch','secret_key_storage_invalid','secret_key_storage_missing','secret_key_storage_unavailable']) {
+    const f=fixture(),rendered=f.keyForm({provider:'deepseek',board:{id:'personal',name:'Personal',personal:true,role:'owner'},personal:true,available:false,storageReason:reason,onClose:()=>{}});
+    assert.equal(rendered.some(node=>reason==='secret_key_mismatch'?node.props.children==='trustedKeys.serverMismatch':node.type===f.errorLine&&(node.props.error as ApiError)?.code===reason),true);
+    assert.equal(rendered.some(node=>node.props.children==='trustedKeys.serverMissing'),false);f.unmount();
+  }
+});

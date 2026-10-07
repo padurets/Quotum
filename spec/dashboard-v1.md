@@ -837,12 +837,13 @@ creates, replacement and polls, including resets with no credentials.
 
 OpenRouter connections use owner-only `POST /api/credentials` with `{provider, secret,
 allowNoExpiry?, requestId?}` and replacement with `{secret, allowNoExpiry?}`. An access
-without expiry requires explicit `allowNoExpiry: true`; otherwise the hub returns
-`409 credential_expiry_confirmation` with `{expiresAt: null, expiryKind: "none"}`
-without writing. Replacement keeps owner, provider
-and source; a different account is refused. The optional creation requestId is a UUID,
-replayed for the same owner/provider for 24 hours, with a tombstone after deletion.
-Replacement accepts no requestId. Deleting the last own bound credential releases
+with confirmed no expiry is admitted in one informed submit; `allowNoExpiry` remains
+accepted for compatibility but does not gate admission. Replacement keeps owner,
+provider and source; a different supplier account is refused. The optional creation
+requestId is a UUID, replayed for the same owner/provider for 24 hours, with a tombstone
+after deletion. Replacement accepts an optional requestId and returns the durable
+operationId for recovery; its committed cleanup warning does not ask for a new key.
+Deleting the last own bound credential releases
 that person's holding and orphan shares, preserving other holders and history.
 
 z.ai expiry is `unknown`, distinct from confirmed `none` and `dated`. Owner credential

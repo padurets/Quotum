@@ -37,7 +37,8 @@ their provider when no longer needed. Key names and measured spending are shared
 management secrets, raw creator ids, masked labels and raw key hashes are not.
 
 On a new server, Quotum creates a key outside its data directory. Docker requires a
-separate persistent `/keys` mount; the standard commands use a named key volume.
+separate persistent `/keys` mount; known temporary filesystems such as tmpfs and
+ramfs are refused before key admission. The standard commands use a named key volume.
 POSIX standalone uses a private sibling directory; Windows standalone uses a private
 nonvolatile HKCU registry branch bound to a stable instance UUID in SQLite. A lost,
 damaged or mismatched established store never causes automatic replacement or deletion

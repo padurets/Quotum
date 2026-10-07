@@ -89,3 +89,10 @@ test('a data-only restore cannot generate a replacement for a lost encryption ke
   writeFileSync(h.file,material,{mode:0o600});assert.equal(h.start().report.outcome,'ok');
   const restored=SecretKey.parse(material);restored.use({...record,...sealed},bytes=>assert.equal(bytes.toString(),'PRIVATE_PROVIDER_CANARY'));
 });
+
+test('container key admission refuses known volatile backing before publishing a key',()=>{
+  for(const filesystem of ['tmpfs','ramfs','devtmpfs']) {
+    const mounts=mountsOf('1 0 8:1 /volumes/data /data rw - ext4 disk rw\n2 1 0:2 / /keys rw - '+filesystem+' '+filesystem+' rw');
+    assert.throws(()=>separateMount('/data','/keys',mounts,{data:'1',keys:'2'}),/secret_key_storage_unavailable/);
+  }
+});

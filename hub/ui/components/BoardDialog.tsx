@@ -83,34 +83,42 @@ export function MembersTab({board, userId}: {board: Board; userId: string}) {
   const [invite, setInvite] = useState<string | null>(null);
   const [reset, setReset] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [allowed,setAllowed]=useState(true);
+  const generation=useRef(0);
+  const failed=(failure:unknown)=>{
+    if(failure instanceof ApiError&&[401,403,404].includes(failure.status)) {
+      generation.current++;setMembers([]);setInvite(null);setReset(false);setAllowed(false);rereadSession();
+    }
+    setError(failure);
+  };
   const owner = board.role === 'owner';
   const load = useCallback(() => {
-    call<Member[]>('GET', `/api/boards/${encodeURIComponent(board.id)}/members`).then(setMembers, setError);
+    const own=++generation.current;
+    call<Member[]>('GET', `/api/boards/${encodeURIComponent(board.id)}/members`).then(value=>{if(own===generation.current){setMembers(value);setAllowed(true);setError(null);}},failure=>{if(own===generation.current)failed(failure);});
   }, [board.id]);
-  useEffect(load, [load]);
+  useEffect(()=>{setMembers([]);setInvite(null);setAllowed(true);load();return()=>{generation.current++;};}, [load]);
 
-  const run = async (work: () => Promise<unknown>) => {
+  const run = async <T,>(work: () => Promise<T>,apply:(value:T)=>void) => {
+    const own=generation.current;
     setError(null);
     try {
-      await work();
+      const value=await work();if(own===generation.current)apply(value);
     } catch (failure) {
-      setError(failure);
+      if(own===generation.current)failed(failure);
     }
   };
   const remove = (member: Member) =>
     confirm(t('members.confirmRemove', {name: member.name})) &&
-    run(async () => {
-      await call('DELETE', `/api/boards/${encodeURIComponent(board.id)}/members/${encodeURIComponent(member.id)}`);
-      load();
-    });
-  const create = () => run(async () => setInvite((await call<{url: string}>('POST', `/api/boards/${encodeURIComponent(board.id)}/invites`)).url));
+    run(()=>call('DELETE', `/api/boards/${encodeURIComponent(board.id)}/members/${encodeURIComponent(member.id)}`),()=>load());
+  const create = () => run(()=>call<{url: string}>('POST', `/api/boards/${encodeURIComponent(board.id)}/invites`),value=>setInvite(value.url));
   const revoke = () =>
     confirm(t('members.confirmReset')) &&
-    run(async () => {
-      await call('DELETE', `/api/boards/${encodeURIComponent(board.id)}/invites`);
+    run(()=>call('DELETE', `/api/boards/${encodeURIComponent(board.id)}/invites`),()=>{
       setInvite(null);
       setReset(true);
     });
+
+  if(!allowed)return <ErrorLine error={error}/>;
 
   return (
     <div className="connect">

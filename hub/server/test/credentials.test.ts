@@ -254,3 +254,25 @@ test('legacy and addition APIs share the same provider verification limit',async
   assert.equal((await h.call('POST','/api/additions/'+operation.id+'/run',{secret:CANARY})).statusCode,429);
   assert.equal(calls,10);
 });
+
+test('legacy create rechecks a revoked session after asynchronous verification before any saved access',async t=>{
+  const h=await harness();t.after(async()=>{await h.app.close();h.store.close();});
+  let release!:(value:Awaited<ReturnType<typeof fixture.identify>>)=>void,started!:()=>void;
+  const paused=new Promise<Awaited<ReturnType<typeof fixture.identify>>>(resolve=>release=resolve),ready=new Promise<void>(resolve=>started=resolve);
+  t.mock.method(fixture,'identify',()=>{started();return paused;});
+  const request=h.call('POST','/api/credentials',{provider:'test',secret:CANARY});await ready;
+  h.directory.deleteSessions(h.users.get('alice')!);release({account:'0'.repeat(24),abilities:['balance'],expiresAt:Date.now()+60_000});
+  assert.equal((await request).json().error,'credential_permission');
+  for(const table of ['credentials','holders','sources'])assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM '+table).get()!.n,0);
+});
+
+test('legacy replacement preserves unknown expiry rather than claiming confirmed no expiry',async t=>{
+  const h=await harness();t.after(async()=>{await h.app.close();h.store.close();});
+  t.mock.method(fixture,'identify',async()=>({account:'0'.repeat(24),abilities:['balance'],expiresAt:null,expiryKind:'unknown' as const}));
+  // The low-level synthetic provider permits unknown expiry during measurement; a declared provider drives the HTTP contract.
+  Object.assign(fixture,{identityOrigin:'declared',declaredAccounts:false});t.after(()=>{delete fixture.identityOrigin;delete fixture.declaredAccounts;});
+  t.mock.method(fixture,'identify',async()=>({identityOrigin:'declared' as const,abilities:['balance'],expiresAt:null,expiryKind:'unknown' as const}));
+  const created=await h.call('POST','/api/credentials',{provider:'test',secret:CANARY,allowUnknownExpiry:true});assert.equal(created.statusCode,201);
+  const refused=await h.call('POST','/api/credentials/'+created.json().id,{secret:CANARY,sameAccount:true});
+  assert.equal(refused.statusCode,409);assert.deepEqual(refused.json(),{error:'credential_expiry_confirmation',expiresAt:null,expiryKind:'unknown'});
+});

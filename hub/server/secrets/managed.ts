@@ -3,14 +3,14 @@ import {closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSy
 import path from 'node:path';
 import {SecretError, SecretKey} from './crypto.js';
 
-type Mount = {id: string; device: string; root: string; at: string};
+type Mount = {id: string; device: string; root: string; at: string; filesystem?:string};
 const within = (parent: string, child: string) => {const relative=path.relative(parent,child);return !relative||relative!=='..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);};
 const decoded = (value: string) => value.replace(/\\([0-7]{3})/g,(_,octal:string)=>String.fromCharCode(parseInt(octal,8)));
 export function mountsOf(text: string): Mount[] {
   return text.trim().split('\n').map(line=>{
     const fields=line.split(' '),split=fields.indexOf('-');
     if(split<6||fields.length<split+4||!/^\d+:\d+$/.test(fields[2]))throw new SecretError('secret_key_storage_unavailable');
-    return {id:fields[0],device:fields[2],root:decoded(fields[3]),at:decoded(fields[4])};
+    return {id:fields[0],device:fields[2],root:decoded(fields[3]),at:decoded(fields[4]),filesystem:fields[split+1]};
   });
 }
 /** Mount roots, rather than device numbers alone, distinguish named volumes on one filesystem. */
@@ -19,6 +19,7 @@ export function separateMount(data: string, keys: string, mounts: Mount[], opene
   const dataMount=identified(opened.data),keyMount=identified(opened.keys);
   if(!dataMount||!keyMount||keyMount.at!==keys||dataMount.at===keyMount.at)throw new SecretError('secret_key_storage_unavailable');
   if(!within(dataMount.at,data)||!within(keyMount.at,keys))throw new SecretError('secret_key_storage_unavailable');
+  if(['tmpfs','ramfs','devtmpfs'].includes(keyMount.filesystem??''))throw new SecretError('secret_key_storage_unavailable');
   const backing=path.resolve(keyMount.root,path.relative(keyMount.at,keys));
   if(dataMount.device===keyMount.device&&within(dataMount.root,backing))throw new SecretError('secret_key_storage_unavailable');
 }
