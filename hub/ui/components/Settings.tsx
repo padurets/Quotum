@@ -13,6 +13,7 @@ import {AppSection, Measuring} from './Desktop';
 import {DeleteBoard} from './Header';
 import {ErrorLine, Field} from './Kit';
 import {ConnectionsPage} from './WidgetAdd';
+import {ArrowLeft} from 'lucide-react';
 
 type Section = {id: string; title: Key};
 const PERSONAL: Section[] = [
@@ -27,7 +28,7 @@ function SettingsFrame({title, sections, section, base, board, children}: {
 }) {
   const returnTo = settingsHref('/', board?.id);
   return <main className="settings-page">
-    <div className="settings-heading"><a href={returnTo} onClick={event => {event.preventDefault(); navigate(returnTo);}}>← {t('settings.back', {board: board ? boardTitle(board) : t('boards.personalName')})}</a><h1>{title}</h1></div>
+    <div className="settings-heading"><a href={returnTo} onClick={event => {event.preventDefault(); navigate(returnTo);}}><ArrowLeft size={14} aria-hidden="true" />{t('settings.back', {board: board ? boardTitle(board) : t('boards.personalName')})}</a><h1>{title}</h1></div>
     <div className="settings-layout"><nav className="settings-nav" aria-label={title}>
       {sections.map(item => {const href = settingsHref(base + '/' + item.id, board?.id); return <a key={item.id} href={href} aria-current={section === item.id ? 'page' : undefined} onClick={event => {event.preventDefault(); navigate(href);}}>{t(item.title)}</a>;})}
     </nav><section key={section} className="panel settings-content">

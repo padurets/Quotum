@@ -2,10 +2,9 @@ import {useEffect, useId, useRef, useState} from 'react';
 import {t, useLocale} from '../i18n';
 import {page, useCanRefreshSources, useCard, useConnection, useRefresh, useTitle} from '../lib/board';
 import {refreshErrorText, requestRefresh, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow, refreshRowPending, type RefreshRow} from '../lib/refresh';
-import {hubNow} from '../lib/clock';
-import {stamp} from '../lib/format';
+import {hubNow, useClock} from '../lib/clock';
+import {ago, agoChangesAt, stamp} from '../lib/format';
 import {problemOf} from '../lib/quota';
-import {widgetKind} from '../lib/widgetKind';
 import {Activity, ChartNoAxesCombined, Check, CircleAlert, List, LockKeyhole, LockKeyholeOpen, PanelsTopLeft, Settings, Table2, Users} from 'lucide-react';
 import {RefreshIcon} from './RefreshAction';
 import {Popover} from './Popover';
@@ -83,7 +82,7 @@ export function WidgetManage({board, ids, widgets, owner, locked, onLock, onSett
     <Popover
       label={t('widgets.manage')}
       trigger={<><PanelsTopLeft size={16} aria-hidden="true" /><span>{t('widgets.title')}</span></>}
-      triggerClass="button board-action-button"
+      triggerClass="board-action-button"
       open={open}
       onOpenChange={setOpen}
       width={660}
@@ -94,7 +93,7 @@ export function WidgetManage({board, ids, widgets, owner, locked, onLock, onSett
           <div className="manage-list popover-scroll">
             {widgets.length ? widgets.map(widget => widget.id.startsWith('source:')
               ? <MeasurementItem key={widget.id} id={widget.id.slice(7)} row={rows.find(row => row.id === widget.id.slice(7))} attempt={attempt} />
-              : <div className="manage-widget" key={widget.id}><WidgetIcon id={widget.id} /><div className="manage-widget-info"><b>{widget.title}</b><small>{t(widgetKind(widget.id))}</small><span className="manage-measured">{t('widgets.followsData')}</span></div></div>)
+              : <div className="popover-row manage-widget" key={widget.id}><WidgetIcon id={widget.id} /><span className="manage-widget-name" title={widget.title}>{widget.title}</span></div>)
               : <p className="popover-note dialog-text">{t('widgets.none')}</p>}
           </div>
           <div className="manage-actions">
@@ -103,7 +102,7 @@ export function WidgetManage({board, ids, widgets, owner, locked, onLock, onSett
             {offline && !connected && <p className="popover-note dialog-text" role="status">{t('refresh.offline')}</p>}
             {owner && <button type="button" className="popover-row manage-action" aria-pressed={!locked} aria-label={t(locked ? 'widgets.unlock' : 'widgets.lock')} onClick={onLock}>
               {locked ? <LockKeyhole size={19} aria-hidden="true" /> : <LockKeyholeOpen size={19} aria-hidden="true" />}
-              <span><b>{t('widgets.movement')}</b><small>{t(locked ? 'widgets.layoutLocked' : 'widgets.layoutFree')}</small></span>
+              <span>{t(locked ? 'widgets.layoutLocked' : 'widgets.layoutFree')}</span>
             </button>}
             {onSettings && <>
               <button type="button" className="popover-row manage-action" onClick={() => {setOpen(false); onSettings('general');}}><Settings size={18} aria-hidden="true" /><span>{t('boardSettings.title')}</span></button>
@@ -118,53 +117,56 @@ export function WidgetManage({board, ids, widgets, owner, locked, onLock, onSett
 
 function RefreshButton({ids, disabled, sending, send}: {ids: string[]; disabled: boolean; sending: boolean; send: () => void}) {
   const allowed = useCanRefreshSources(ids);
-  return <button type="button" className="button manage-refresh" disabled={disabled || !allowed} onClick={send}>
+  return <button type="button" className="popover-row manage-action manage-refresh" disabled={disabled || !allowed} onClick={send}>
     {sending ? <i className="spinner" aria-hidden="true" /> : <RefreshIcon />}<span>{t('refresh.all')}</span>
   </button>;
 }
 
 function WidgetIcon({id}: {id: string}) {
   const Icon = ({agents: List, activity: Activity, history: ChartNoAxesCombined, forecast: Table2} as Record<string, typeof List>)[id] ?? PanelsTopLeft;
-  return <Icon size={20} aria-hidden="true" />;
+  return <Icon size={16} aria-hidden="true" />;
 }
 
 function MeasurementItem({id, row, attempt}: {id: string; row?: RefreshRow; attempt: number}) {
   const title = useTitle(id), source = useCard(id), refresh = useRefresh(id);
+  const [open, setOpen] = useState(false);
+  const details = useId();
+  useEffect(() => setOpen(false), [attempt]);
   if (!source) return null;
-  const problem = problemOf(source);
-  return <div className="manage-widget" data-source-status={id}>
-    <img src={logoOf(source.provider)} alt="" /><div className="manage-widget-info">
-      <b>{title}</b><small>{t(widgetKind('', source.provider))}</small>
-      <span className="manage-measured" data-time="widget-measurement">{source.successAt !== null ? t('widgets.measuredAt', {time: stamp(source.successAt)}) : t('widgets.notMeasured')}</span>
-      {problem && <span className="manage-error">{problem}</span>}
-      {!problem && source.stale && <span className="manage-error">{t('widgets.stale')}</span>}
-      {!problem && source.inventory?.complete === false && <span className="manage-error">{t('money.inventoryPartial')}</span>}
-      {row ? <RefreshItem key={`${attempt}/${row.id}`} row={row} /> : refresh?.request && <span className="manage-measured">{t(`refresh.row.${refresh.request.status}`)}</span>}
-    </div>
+  const problem = problemOf(source) ?? (source.stale && source.successAt !== null ? t('widgets.stale') : source.inventory?.complete === false ? t('money.inventoryPartial') : null);
+  const trouble = !!row && !refreshRowPending(row) && row.status !== 'updated';
+  const message = problem ?? (trouble ? refreshMessage(row!) : null);
+  const measured = source.successAt !== null ? t('widgets.measuredAt', {time: stamp(source.successAt)}) : t('widgets.notMeasured');
+  const content = <><img src={logoOf(source.provider)} alt="" /><span className="manage-widget-name" title={title}>{title}</span>
+    {problem ? <span className="manage-widget-state manage-error"><CircleAlert size={14} aria-hidden="true" /><span>{t('widgets.error')}</span></span>
+      : row ? <RefreshState row={row} />
+      : refresh?.request && ['queued', 'waiting'].includes(refresh.request.status) ? <span className="manage-widget-state"><i className="spinner" aria-hidden="true" /><span>{t(`refresh.row.${refresh.request.status}`)}</span></span>
+      : <MeasuredAt at={source.successAt} />}
+  </>;
+  return <div className="manage-entry" data-source-status={id}>
+    {message ? <button type="button" className="popover-row manage-widget" title={measured + '\n' + message} aria-expanded={open} aria-controls={details} onClick={() => setOpen(value => !value)}>{content}</button>
+      : <div className="popover-row manage-widget" title={measured}>{content}</div>}
+    {message && open && <p id={details} className="manage-details" role="status">{message}<br />{measured}</p>}
   </div>;
 }
 
-function RefreshItem({row}: {row: RefreshRow}) {
-  const [open, setOpen] = useState(true);
-  const details = useId();
+function MeasuredAt({at}: {at: number | null}) {
+  const now = useClock(now => agoChangesAt(at, now));
+  return <span className="manage-widget-state" data-time="widget-measurement" title={at !== null ? t('widgets.measuredAt', {time: stamp(at)}) : t('widgets.notMeasured')}>{ago(at, now)}</span>;
+}
+
+function refreshMessage(row: RefreshRow) {
+  return row.error !== null
+    ? refreshErrorText(row.error, row.state ? {...row.state, retryAt: null, availableAt: null} : null, hubNow())
+    : t(row.status === 'unknown' ? 'refresh.uncertain' : row.status === 'refused' ? 'refresh.failed' : `refresh.${row.status}`);
+}
+
+function RefreshState({row}: {row: RefreshRow}) {
   const pending = refreshRowPending(row);
   const updated = row.status === 'updated';
-  const trouble = !pending && !updated;
   const label = t(`refresh.row.${row.status}`);
   const Icon = updated ? Check : CircleAlert;
   const icon = pending ? <i className="spinner" aria-hidden="true" /> : <Icon className={`row-icon ${updated ? 'v-ok' : 'v-warn'}`} size={14} aria-hidden="true" />;
   const content = <>{icon}<span>{label}</span></>;
-  const message = row.error !== null
-    ? refreshErrorText(row.error, row.state ? {...row.state, retryAt: null, availableAt: null} : null, hubNow())
-    : trouble ? t(row.status === 'unknown' ? 'refresh.uncertain' : row.status === 'refused' ? 'refresh.failed' : `refresh.${row.status}`) : '';
-  return (
-    <div data-refresh-row={row.id} data-refresh-status={row.status}>
-      {trouble ? (
-        <button type="button" className="popover-row" aria-expanded={open} aria-controls={details} onClick={() => setOpen(previous => !previous)}>
-          {content}
-        </button>
-      ) : <div className="popover-row">{content}</div>}
-      {trouble && open && <div id={details} className="popover-note dialog-text">{message}</div>}
-    </div>
-  );
+  return <span className="manage-widget-state" data-refresh-row={row.id} data-refresh-status={row.status}>{content}</span>;
 }

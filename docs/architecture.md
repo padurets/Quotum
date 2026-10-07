@@ -305,8 +305,12 @@ Add lists eligible absent or hidden widgets with their type; its Connect entry o
 a separate provider/device choice while retaining the target board. Widgets shows
 current widgets, their last successful measurements and errors, an explicit Refresh
 all action, the original free/locked layout control and board settings. Opening it
-makes no refresh requests. Its wide layout puts status beside actions; at narrow
+makes no refresh requests. The list keeps compact single-line rows: name and a short
+measurement age or outcome, with the complete timestamp in its tooltip and error
+details revealed only by clicking the row. Its wide layout puts status beside actions; at narrow
 widths actions precede the status list in one column, scrolling inside the Popover.
+The header's text triggers have no permanent fill or border; their dropdowns start
+below the header's bottom edge. Navigation icons use library SVGs.
 Refresh all requests non-hidden cards through the same source endpoint, up to four
 at a time. A refusal does not stop the rest. Outcomes stay with each source's row
 after the hub retires its status, also while the dropdown is closed. Error details

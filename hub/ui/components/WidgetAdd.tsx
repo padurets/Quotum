@@ -14,7 +14,7 @@ import {Modal, Field, ErrorLine} from './Kit';
 import {logoOf} from './logos';
 import {Popover} from './Popover';
 import {ConnectDevice, type Device} from './Machines';
-import {Activity, ChartNoAxesCombined, List, Monitor, Plug, Plus, Table2, X} from 'lucide-react';
+import {Activity, ArrowLeft, ArrowRight, ChartNoAxesCombined, Check, ExternalLink, List, Monitor, Plug, Plus, Table2, X} from 'lucide-react';
 
 type Candidate = {id: string; provider: string; label: string; origin: 'own' | 'shared'; onBoard: boolean; visible: boolean; action: 'add' | 'show'};
 type WidgetId = 'agents' | 'activity' | 'history' | 'forecast';
@@ -100,7 +100,7 @@ function Completion({operation, board, personal, onClose}: {operation: Operation
       if (element) {element.tabIndex = -1; element.scrollIntoView({block: 'center', behavior: 'smooth'}); element.focus({preventScroll: true});}
     });
   };
-  return <div className="addition-complete" role="status"><span className="completion-symbol" aria-hidden="true">✓</span>
+  return <div className="addition-complete" role="status"><span className="completion-symbol" aria-hidden="true"><Check size={24} /></span>
     <h3>{t(changed ? 'add.changed' : personal ? 'add.connected' : visible ? 'add.complete' : 'add.waiting')}</h3>
     <p>{t(changed ? 'add.changedText' : personal ? 'add.personalResult' : 'add.boardResult', {board: board ? boardTitle(board) : t('boards.personalName')})}</p>
     {operation.result?.connection === 'reused' && <p className="dialog-text">{t(operation.result.replacementRequired ? 'add.replaceNeeded' : 'add.reused')}</p>}
@@ -174,7 +174,7 @@ function KeyForm({board, provider:chosenProvider='openrouter', replace, personal
     {demo && <DemoNotice />}
     <div className="connect-destination"><small>{t('add.destination')}</small><b>{personal ? t('boards.personalName') : boardTitle(board!)}</b></div>
     <p className="dialog-text">{t(namedAccounts?'sources.deepseekRights':provider==='zai'?'sources.zaiRights':'add.keyRights')}</p>
-    <a href={namedAccounts?'https://platform.deepseek.com/api_keys':provider==='zai'?'https://z.ai/manage-apikey/apikey-list':'https://openrouter.ai/settings/management-keys'} target="_blank" rel="noopener noreferrer">{t(namedAccounts?'sources.deepseekSettings':provider==='zai'?'sources.zaiSettings':'sources.providerSettings')} ↗</a>
+    <a className="provider-link" href={namedAccounts?'https://platform.deepseek.com/api_keys':provider==='zai'?'https://z.ai/manage-apikey/apikey-list':'https://openrouter.ai/settings/management-keys'} target="_blank" rel="noopener noreferrer">{t(namedAccounts?'sources.deepseekSettings':provider==='zai'?'sources.zaiSettings':'sources.providerSettings')}<ExternalLink size={14} aria-hidden="true" /></a>
     {!personal && !board?.personal && <p className="sharing-disclosure">{t('add.disclosure', {board: boardTitle(board!)})}</p>}
     {replacing && <p className="dialog-text">{t('add.replacePreserved')}</p>}
     {demo && <details className="demo-examples"><summary>{t('prototype.examples')}</summary><div className="button-row is-start">{demo.keys.filter(key=>(key.provider??'openrouter')===provider).map(key => <button type="button" className="button" key={key.label} disabled={addition.busy} onClick={() => {setSecret(key.secret);changed();setConsent(false);}}>{t(`prototype.${key.label}`)}</button>)}</div></details>}
@@ -276,16 +276,16 @@ function WidgetCatalogue({board, local, trustedKeys, onClose, initialSourceId}: 
   const complete = addition.operation?.state === 'complete';
   return <div className="widget-catalogue">
     <div className="catalogue-heading"><h3>{page === 'connection' ? t('sources.connectProvider',{provider:provider==='zai'?t('sources.zaiPersonal'):PROVIDERS[provider]?.name??provider}) : page === 'device' ? t('connections.connectDevice') : page === 'connect' ? t('add.connect') : t('add.title')}</h3><button className="icon-button" aria-label={t('common.close')} title={t('common.close')} onClick={onClose}><X size={14} aria-hidden="true" /></button></div>
-    {page !== 'catalogue' && <button className="link-button connection-back" onClick={() => setPage('catalogue')}>← {t('add.title')}</button>}
+    {page !== 'catalogue' && <button className="link-button connection-back" onClick={() => setPage('catalogue')}><ArrowLeft size={14} aria-hidden="true" />{t('add.title')}</button>}
     {page === 'connection' ? <KeyForm key={provider} provider={provider} board={board} personal={false} demo={catalogue?.demo} available={trustedKeys?.available === true} storageReason={trustedKeys?.reason} onClose={onClose} /> :
       page === 'device' ? <DeviceAdd board={board} demo={!!catalogue?.demo} onClose={onClose} /> :
       page === 'connect' ? <div className="dialog-form">
         <Field label={t('add.searchProviders')} type="search" autoFocus value={providerSearch} onChange={event => setProviderSearch(event.target.value)} />
-        <div className="catalogue-list popover-scroll">{connectors.map(connector => <button type="button" className="popover-row catalogue-connect" key={connector.id} onClick={() => {setProvider(connector.id);setPage('connection');}}><img src={logoOf(connector.id)} alt="" /><span>{connector.id === 'zai' ? t('sources.zaiPersonal') : connector.name}</span><span aria-hidden="true">→</span></button>)}{!connectors.length && <p className="popover-note dialog-text">{t('add.noProviders')}</p>}</div>
-        {!local && <button type="button" className="popover-row catalogue-connect" onClick={() => setPage('device')}><Monitor size={20} aria-hidden="true" /><span>{t('connections.connectDevice')}</span><span aria-hidden="true">→</span></button>}
+        <div className="catalogue-list popover-scroll">{connectors.map(connector => <button type="button" className="popover-row catalogue-connect" key={connector.id} onClick={() => {setProvider(connector.id);setPage('connection');}}><img src={logoOf(connector.id)} alt="" /><span>{connector.id === 'zai' ? t('sources.zaiPersonal') : connector.name}</span><ArrowRight size={16} aria-hidden="true" /></button>)}{!connectors.length && <p className="popover-note dialog-text">{t('add.noProviders')}</p>}</div>
+        {!local && <button type="button" className="popover-row catalogue-connect" onClick={() => setPage('device')}><Monitor size={20} aria-hidden="true" /><span>{t('connections.connectDevice')}</span><ArrowRight size={16} aria-hidden="true" /></button>}
       </div> :
       complete ? <Completion operation={addition.operation!} board={board} personal={false} onClose={onClose} /> : candidate ? <div className="dialog-form">
-        <button className="link-button connection-back" onClick={() => setCandidate(null)}>← {t('add.title')}</button><h3>{candidate.label}</h3><p className="sharing-disclosure">{t(board.personal || candidate.onBoard ? 'add.showDisclosure' : 'add.disclosure', {board: boardTitle(board)})}</p>
+        <button className="link-button connection-back" onClick={() => setCandidate(null)}><ArrowLeft size={14} aria-hidden="true" />{t('add.title')}</button><h3>{candidate.label}</h3><p className="sharing-disclosure">{t(board.personal || candidate.onBoard ? 'add.showDisclosure' : 'add.disclosure', {board: boardTitle(board)})}</p>
         <ErrorLine error={addition.error} /><div className="button-row"><button className="button" onClick={() => setCandidate(null)}>{t('common.cancel')}</button><button className="button primary" disabled={addition.busy} onClick={() => void addition.submit(board.id, {kind: 'sources', sourceIds: [candidate.id]})}>{t(candidate.action === 'show' ? 'add.show' : 'add.action')}</button></div>
       </div> : <div className="dialog-form">
         <Field label={t('add.search')} type="search" value={search} autoFocus onChange={event => setSearch(event.target.value)} />
@@ -297,7 +297,7 @@ function WidgetCatalogue({board, local, trustedKeys, onClose, initialSourceId}: 
         </div>)}
         {widgets.map(widget => {const Icon = WIDGET_ICONS[widget.id];return <div className="catalogue-row" key={widget.id}><Icon size={22} aria-hidden="true" /><span className="catalogue-name"><b>{t(LABELS[widget.id])}</b><small>{t(widgetKind(widget.id))}</small></span><button className="button" disabled={addition.busy} onClick={() => void addition.submit(board.id, {kind: 'widget', widgetId: widget.id})}>{t('add.action')}</button></div>;})}
         {!sources.length && !widgets.length && <p className="popover-note dialog-text">{t(search.trim() ? 'add.noWidgets' : 'add.allVisible')}</p>}
-        </div><button type="button" className="popover-row catalogue-connect catalogue-connect-entry" onClick={() => setPage('connect')}><Plug size={20} aria-hidden="true" /><span>{t('add.connect')}</span><span aria-hidden="true">→</span></button></>}
+        </div><button type="button" className="popover-row catalogue-connect catalogue-connect-entry" onClick={() => setPage('connect')}><Plug size={20} aria-hidden="true" /><span>{t('add.connect')}</span><ArrowRight size={16} aria-hidden="true" /></button></>}
       </div>}
   </div>;
 }
@@ -307,7 +307,7 @@ export function WidgetAdd({board, local, trustedKeys, open, onOpenChange, initia
   onOpenChange: (open: boolean) => void; initialSourceId?: string; trigger?: string;
 }) {
   return <Popover label={t('add.title')}
-    trigger={trigger ?? <><Plus size={16} aria-hidden="true" /><span>{t('add.action')}</span></>} triggerClass={trigger ? 'button' : 'button board-action-button'} open={open} onOpenChange={onOpenChange} width={420}>
+    trigger={trigger ?? <><Plus size={16} aria-hidden="true" /><span>{t('add.action')}</span></>} triggerClass={trigger ? 'button' : 'board-action-button'} open={open} onOpenChange={onOpenChange} width={420}>
     {open && <WidgetCatalogue key={board.id} board={board} local={local} trustedKeys={trustedKeys} initialSourceId={initialSourceId} onClose={() => onOpenChange(false)} />}
   </Popover>;
 }
