@@ -105,7 +105,7 @@ needs no additional expiry submission. Receipts include the truthful `expiryKind
 
 Concurrent requests may share provider verification, but each waiting request's session
 is checked before returning its private result. A revoked session receives
-`403 addition_permission` (`400 credential_permission` through legacy replacement).
+`403 addition_permission` (`401 unauthorized` through legacy credentials APIs).
 Another authorized request's committed result remains intact.
 
 `GET /api/additions/:id` is owner-only; another owner's ID and an unknown ID both give

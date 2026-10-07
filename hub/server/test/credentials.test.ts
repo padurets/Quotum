@@ -265,7 +265,7 @@ test('legacy create rechecks a revoked session after asynchronous verification b
   t.mock.method(fixture,'identify',()=>{started();return paused;});
   const request=h.call('POST','/api/credentials',{provider:'test',secret:CANARY});await ready;
   h.directory.deleteSessions(h.users.get('alice')!);release({account:'0'.repeat(24),abilities:['balance'],expiresAt:Date.now()+60_000});
-  assert.equal((await request).json().error,'credential_permission');
+  const denied=await request;assert.equal(denied.statusCode,401);assert.deepEqual(denied.json(),{error:'unauthorized'});
   for(const table of ['credentials','holders','sources'])assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM '+table).get()!.n,0);
 });
 
@@ -279,7 +279,7 @@ test('a revoked in-flight create cannot replay a concurrent request from a new s
   const owner=h.users.get('alice')!,token=newSecret('qt_s');h.directory.deleteSessions(owner);h.directory.createSession(token,owner,Date.now(),60_000);
   const concurrent=await h.app.inject({method:'POST',url:'/api/credentials',payload:input,headers:{origin:ORIGIN,cookie:`quotum_session=${token}`}});
   assert.equal(concurrent.statusCode,201);release();
-  const late=await pending;assert.equal(late.statusCode,400);assert.deepEqual(late.json(),{error:'credential_permission'});
+  const late=await pending;assert.equal(late.statusCode,401);assert.deepEqual(late.json(),{error:'unauthorized'});
   assert.equal((await h.call('GET','/api/credentials')).statusCode,401);
   assert.equal(h.credentials.list(owner).length,1);assert.equal(h.credentials.list(owner)[0].id,concurrent.json().id);
   h.clean(late.body,concurrent.body);
@@ -301,7 +301,7 @@ test('each session waiting for a shared addition or replacement must retain acce
     const pending=h.app.inject({method:'POST',url,payload:input,headers:{origin:ORIGIN,cookie:`quotum_session=${token}`}});await joining;
     h.directory.deleteSession(token);release();
     const saved=await winner,late=await pending;assert.equal(saved.statusCode,200);
-    assert.equal(late.statusCode,mode==='addition'?403:400);assert.deepEqual(late.json(),{error:mode==='addition'?'addition_permission':'credential_permission'});
+    assert.equal(late.statusCode,mode==='addition'?403:401);assert.deepEqual(late.json(),{error:mode==='addition'?'addition_permission':'unauthorized'});
     const records=h.credentials.list(h.users.get('alice')!);assert.equal(records.length,1);
     if(mode==='addition'){assert.equal(saved.json().state,'complete');assert.equal(records[0].id,saved.json().result.credentialId);}
     else {assert.equal(records[0].id,credential.id);assert.equal(records[0].revision,credential.revision+1);}
@@ -309,6 +309,15 @@ test('each session waiting for a shared addition or replacement must retain acce
     h.clean(saved.body,late.body);
     t.mock.restoreAll();
   }
+});
+
+test('a provider permission refusal remains a key error while the session is active',async t=>{
+  const h=await harness();t.after(async()=>{await h.app.close();h.store.close();});
+  t.mock.method(fixture,'identify',async()=>{throw new SecretError('credential_permission');});
+  const refused=await h.call('POST','/api/credentials',{provider:'test',secret:CANARY});
+  assert.equal(refused.statusCode,400);assert.deepEqual(refused.json(),{error:'credential_permission'});
+  assert.equal((await h.call('GET','/api/credentials')).statusCode,200);assert.equal(h.credentials.list(h.users.get('alice')!).length,0);
+  h.clean(refused.body);
 });
 
 test('legacy replacement preserves unknown expiry rather than claiming confirmed no expiry',async t=>{
