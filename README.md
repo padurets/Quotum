@@ -163,7 +163,9 @@ Codex         api                  idle     started 25m ago · editor
   it; a board's owner alone cannot. A device's own interval remains its minimum and
   can make measurements less frequent. Refresh and error pauses still apply.
 - **Fresh limits on demand.** Choose **Refresh data** in a card's menu, or **Refresh all
-  data** in the header for every visible card on the board. A circular loader by the
+  data** in the header's **Widgets** menu for every visible card on the board. Opening
+  the menu shows the last measurement and errors; refreshing needs an explicit click.
+  A circular loader by the
   logo shows that the card is waiting for fresh numbers. Refresh respects the device's
   interval and error pauses, and accepts one new request per minute per subscription.
   Every reader of a shared card can use it.
@@ -351,7 +353,7 @@ Only holders may refresh the source.
 
 ## Connecting OpenRouter
 
-On the chosen board, open **Add widget** (the plus in the header), then **OpenRouter**.
+On the chosen board, open **Add** in the header, then **Connect** → **OpenRouter**.
 Create a dedicated OpenRouter management key in
 [OpenRouter management-key settings](https://openrouter.ai/settings/management-keys)
 and paste it into the password field. **Connect and add** verifies it, saves your access

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {isSending, refreshAllStarts, refreshRowPending, refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefresh, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow} from '../lib/refresh';
+import {isSending, refreshRowPending, refreshChangesAt, refreshPending, refreshText, refreshErrorText, refreshErrorChangesAt, requestRefresh, requestRefreshAll, startRefreshRows, observeRefreshRows, answerRefreshRow} from '../lib/refresh';
 import {ApiError} from '../lib/http';
 import {setLocale} from '../i18n';
 import type {Refresh} from '../lib/types';
@@ -187,13 +187,6 @@ test('a refusal is the outcome of its row, whatever is requested after it', () =
   const refused = answerRefreshRow(row, {...queued, request: null}, new ApiError(429, 'refresh_too_soon'));
   assert.equal(refused.status, 'refused');
   assert.equal(observeRefreshRows([refused], {a: {...queued, request: {...queued.request!, requestedAt: 80_000}}})[0], refused);
-});
-
-test('the header list opens on its last attempt; only a first open starts one', () => {
-  assert.equal(refreshAllStarts([]), true);
-  const finished = observeRefreshRows(startRefreshRows(['a'], {a: queued}), {a: {...queued, request: {...queued.request!, status: 'updated', finishedAt: 20_000}}});
-  assert.equal(refreshAllStarts(finished), false);
-  assert.equal(refreshAllStarts(startRefreshRows(['a'], {})), false);
 });
 
 test('a card waits out whichever ends later, its cooldown or its pause', () => {

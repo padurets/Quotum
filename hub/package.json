@@ -36,6 +36,7 @@
     "@types/node": "24.10.0",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
+    "lucide-react": "1.52.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "tsx": "4.23.13",

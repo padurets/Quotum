@@ -322,6 +322,7 @@ export const useSessions = (id: string) => usePage(s => s.board?.sessions[id] ??
 /** The agents of several sources at once, for a list of them all: not a hook per source. */
 export const useSessionsOf = (ids: string[]) => usePage(s => ids.map(id => s.board?.sessions[id] ?? NONE), shallowEqual);
 export const useRefresh = (id: string) => usePage(s => s.board?.refresh[id] ?? null);
+export const useCanRefreshSources = (ids: string[]) => usePage(s => !!s.board && ids.some(id => s.board!.refresh[id]?.by !== 'hub' || s.board!.sourceAccess?.[id]?.canRefresh === true));
 export const useCadence = (id: string) => usePage(s => s.board?.cadence[id] ?? null);
 /** The hub's forecasts of several sources' weekly windows at once, for the table and the chart: not a hook per source. */
 export const useForecastsOf = (ids: string[]) => usePage(s => ids.map(id => s.board?.forecast[id] ?? NO_FORECAST), shallowEqual);

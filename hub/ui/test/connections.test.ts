@@ -29,6 +29,8 @@ function fixture(initialOwner='u',local=false,boards:Session['boards']=[]){
     if(name.endsWith('/providers'))return {PROVIDERS:{openrouter:{name:'OpenRouter'},deepseek:{name:'DeepSeek'},zai:{name:'z.ai'}},catalogue:[{id:'openrouter',name:'OpenRouter',measuredBy:'hub'},{id:'deepseek',name:'DeepSeek',measuredBy:'hub'},{id:'zai',name:'z.ai',measuredBy:'hub'}]};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key};
     if(name.endsWith('/format'))return {stamp:()=>''};
+    if(name.endsWith('/widgetKind'))return {widgetKind:()=> 'resource.subscription'};
+    if(name==='lucide-react')return {};
     if(name==='./Kit')return {Field:field,ErrorLine:errorLine,Modal:modal};
     if(name==='./Popover')return {};
     if(name==='./logos')return {logoOf:()=>''};

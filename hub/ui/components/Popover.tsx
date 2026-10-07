@@ -277,7 +277,7 @@ export function Popover({
       {open && (
         <div
           className={`popover glass ${align === 'left' ? 'is-left' : ''} ${(side?.up ?? up) ? 'is-up' : ''} ${side?.cap != null ? 'is-capped' : ''} ${side?.cramped ? 'is-cramped' : ''}`}
-          style={width !== undefined || side?.cap != null ? {...(width !== undefined ? {width} : {}), ...(side?.cap != null ? {maxHeight: side.cap} : {})} : undefined}
+          style={width !== undefined || side?.cap != null ? {...(width !== undefined ? {width, maxWidth: 'calc(100vw - 32px)'} : {}), ...(side?.cap != null ? {maxHeight: side.cap} : {})} : undefined}
           role="dialog"
           aria-label={label}
           ref={panel}

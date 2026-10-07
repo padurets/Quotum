@@ -3,12 +3,9 @@ import {t, useLocale} from '../i18n';
 import {useConnection, useRefresh,useSourceAccess} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {refreshErrorChangesAt, refreshErrorText, refreshPending, requestRefresh, useSending} from '../lib/refresh';
+import {RefreshCw} from 'lucide-react';
 
-export const RefreshIcon = () => (
-  <svg className="row-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-    <path d="M13 6.5a5 5 0 1 0 0 4M13 2.5v4H9" />
-  </svg>
-);
+export const RefreshIcon = () => <RefreshCw className="row-icon" size={16} aria-hidden="true" />;
 
 type Failure = {kind: 'offline'} | {kind: 'request'; error: unknown; previous: number | null};
 

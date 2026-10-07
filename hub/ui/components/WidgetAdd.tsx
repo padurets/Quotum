@@ -7,16 +7,19 @@ import {useBoardId, useConnectionsRevision, useLineup, useServerView} from '../l
 import {cardId, flushView, isHidden} from '../lib/view';
 import {PROVIDERS} from '../lib/providers';
 import {stamp} from '../lib/format';
+import {widgetKind} from '../lib/widgetKind';
 import {catalogue as providerCatalogue} from '../../server/domain/providers';
 import type {Credential} from '../../server/store/credentials';
 import {Modal, Field, ErrorLine} from './Kit';
 import {logoOf} from './logos';
 import {Popover} from './Popover';
 import {ConnectDevice, type Device} from './Machines';
+import {Activity, ChartNoAxesCombined, List, Monitor, Plug, Plus, Table2, X} from 'lucide-react';
 
 type Candidate = {id: string; provider: string; label: string; origin: 'own' | 'shared'; onBoard: boolean; visible: boolean; action: 'add' | 'show'};
 type WidgetId = 'agents' | 'activity' | 'history' | 'forecast';
 const LABELS: Record<WidgetId, Key> = {agents: 'agents.title', activity: 'activity.title', history: 'widgets.history', forecast: 'forecast.title'};
+const WIDGET_ICONS = {agents: List, activity: Activity, history: ChartNoAxesCombined, forecast: Table2};
 type Demo = {keys: {label: 'noExpiry' | 'partial' | 'expired' | 'temporary' | 'invalid' | 'deepseekBalance' | 'zaiQuotas'; secret: string; provider?:string}[]};
 type Catalogue = {operations?: Operation[]; board: Board; sources: Candidate[]; widgets: {id: WidgetId; action: Candidate['action']}[]; connectors: {id: string; name: string}[]; demo?: Demo};
 type Item = {kind: 'sources'; sourceIds: string[]} | {kind: 'widget'; widgetId: WidgetId} | {kind: 'connection'; provider: string; account?:{kind:'new'}|{kind:'existing';id:string}} | {kind: 'replace'; credentialId: string; provider?:string};
@@ -254,40 +257,47 @@ function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; onClose
 
 function WidgetCatalogue({board, local, trustedKeys, onClose, initialSourceId}: {initialSourceId?: string; board: Board; local: boolean; trustedKeys: Session['trustedKeys']; onClose: () => void}) {
   const [catalogue, setCatalogue] = useState<Catalogue | null>(null), [error, setError] = useState<unknown>(null), [search, setSearch] = useState('');
-  const [page, setPage] = useState<'catalogue' | 'connection' | 'device'>('catalogue');
+  const [page, setPage] = useState<'catalogue' | 'connect' | 'connection' | 'device'>('catalogue');
   const [candidate, setCandidate] = useState<Candidate | null>(null);
   const addition = useAddition();
   const revision = useConnectionsRevision();
-  const [recovered, setRecovered] = useState<Operation | undefined>();
+  const [providerSearch, setProviderSearch] = useState('');
   useEffect(() => {
     const abort = new AbortController();
     call<Catalogue>('GET', '/api/boards/' + board.id + '/catalogue', undefined, 12_000, abort.signal).then(setCatalogue, failure => {if (!abort.signal.aborted) setError(failure);});
     return () => abort.abort();
   }, [board.id, revision]);
   useEffect(() => {const initial = catalogue?.sources.find(item => item.id === initialSourceId); if (initial && ['add', 'show'].includes(initial.action)) setCandidate(initial);}, [catalogue, initialSourceId]);
-  const sources = catalogue?.sources.filter(source => (source.label + ' ' + source.provider).toLowerCase().includes(search.toLowerCase())) ?? [];
+  const matches = (label: string, query = search) => label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+  const sources = catalogue?.sources.filter(source => matches(source.label + ' ' + source.provider + ' ' + t(widgetKind('', source.provider)))) ?? [];
+  const widgets = catalogue?.widgets.filter(widget => matches(t(LABELS[widget.id]) + ' ' + t(widgetKind(widget.id)))) ?? [];
+  const connectors = catalogue?.connectors.filter(connector => matches(connector.id === 'zai' ? t('sources.zaiPersonal') : connector.name, providerSearch)) ?? [];
   const [provider,setProvider]=useState('openrouter');
   const complete = addition.operation?.state === 'complete';
   return <div className="widget-catalogue">
-    <div className="catalogue-heading"><h3>{page === 'connection' ? t('sources.connectProvider',{provider:provider==='zai'?t('sources.zaiPersonal'):PROVIDERS[provider]?.name??provider}) : page === 'device' ? t('connections.connectDevice') : t('add.title')}</h3><button className="icon-button" aria-label={t('common.close')} title={t('common.close')} onClick={onClose}><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" /></svg></button></div>
+    <div className="catalogue-heading"><h3>{page === 'connection' ? t('sources.connectProvider',{provider:provider==='zai'?t('sources.zaiPersonal'):PROVIDERS[provider]?.name??provider}) : page === 'device' ? t('connections.connectDevice') : page === 'connect' ? t('add.connect') : t('add.title')}</h3><button className="icon-button" aria-label={t('common.close')} title={t('common.close')} onClick={onClose}><X size={14} aria-hidden="true" /></button></div>
     {page !== 'catalogue' && <button className="link-button connection-back" onClick={() => setPage('catalogue')}>← {t('add.title')}</button>}
-    {page === 'connection' ? <KeyForm key={recovered?.id??provider} provider={provider} board={board} personal={false} initialOperation={recovered} demo={catalogue?.demo} available={trustedKeys?.available === true} storageReason={trustedKeys?.reason} onClose={onClose} /> :
+    {page === 'connection' ? <KeyForm key={provider} provider={provider} board={board} personal={false} demo={catalogue?.demo} available={trustedKeys?.available === true} storageReason={trustedKeys?.reason} onClose={onClose} /> :
       page === 'device' ? <DeviceAdd board={board} demo={!!catalogue?.demo} onClose={onClose} /> :
+      page === 'connect' ? <div className="dialog-form">
+        <Field label={t('add.searchProviders')} type="search" autoFocus value={providerSearch} onChange={event => setProviderSearch(event.target.value)} />
+        <div className="catalogue-list popover-scroll">{connectors.map(connector => <button type="button" className="popover-row catalogue-connect" key={connector.id} onClick={() => {setProvider(connector.id);setPage('connection');}}><img src={logoOf(connector.id)} alt="" /><span>{connector.id === 'zai' ? t('sources.zaiPersonal') : connector.name}</span><span aria-hidden="true">→</span></button>)}{!connectors.length && <p className="popover-note dialog-text">{t('add.noProviders')}</p>}</div>
+        {!local && <button type="button" className="popover-row catalogue-connect" onClick={() => setPage('device')}><Monitor size={20} aria-hidden="true" /><span>{t('connections.connectDevice')}</span><span aria-hidden="true">→</span></button>}
+      </div> :
       complete ? <Completion operation={addition.operation!} board={board} personal={false} onClose={onClose} /> : candidate ? <div className="dialog-form">
         <button className="link-button connection-back" onClick={() => setCandidate(null)}>← {t('add.title')}</button><h3>{candidate.label}</h3><p className="sharing-disclosure">{t(board.personal || candidate.onBoard ? 'add.showDisclosure' : 'add.disclosure', {board: boardTitle(board)})}</p>
         <ErrorLine error={addition.error} /><div className="button-row"><button className="button" onClick={() => setCandidate(null)}>{t('common.cancel')}</button><button className="button primary" disabled={addition.busy} onClick={() => void addition.submit(board.id, {kind: 'sources', sourceIds: [candidate.id]})}>{t(candidate.action === 'show' ? 'add.show' : 'add.action')}</button></div>
       </div> : <div className="dialog-form">
-        {catalogue?.demo && <DemoNotice />}<p className="dialog-text">{t('add.catalogueFor', {board: boardTitle(board)})}</p>
-        {!!catalogue?.sources.length && <Field label={t('add.search')} type="search" value={search} autoFocus onChange={event => setSearch(event.target.value)} />}
+        <Field label={t('add.search')} type="search" value={search} autoFocus onChange={event => setSearch(event.target.value)} />
         <ErrorLine error={error ?? addition.error} />
-        <RecentAdditions boardId={board.id} onRestore={operation => {if (operation.item.kind === 'connection') {setRecovered(operation);setProvider(operation.item.provider);setPage('connection');} else addition.restore(operation);}} />
         {addition.operation && <div className="addition-recovery"><ErrorLine error={addition.error} /><button className="button" disabled={addition.busy} onClick={() => void addition.check()}>{t('add.checkResult')}</button>{['ready', 'needs_input'].includes(addition.operation.state) && <button className="button" disabled={addition.busy} onClick={() => void addition.submit(addition.operation!.boardId, addition.operation!.item)}>{t('add.action')}</button>}{['expired', 'failed'].includes(addition.operation.state) && <button className="button" onClick={addition.reset}>{t('add.startAgain')}</button>}</div>}
-        {catalogue && <>{!!catalogue.sources.length && <div className="catalogue-group"><h3>{t('add.sources')}</h3>{sources.length ? sources.map(source => <div className="catalogue-row" key={source.id}>
-          <img src={logoOf(source.provider)} alt="" /><span className="catalogue-name"><b>{source.label}</b><small>{t(source.origin === 'own' ? 'add.ownSource' : 'add.sharedSource')}</small></span>
+        {catalogue && <><div className="catalogue-list popover-scroll">{sources.map(source => <div className="catalogue-row" key={source.id}>
+          <img src={logoOf(source.provider)} alt="" /><span className="catalogue-name"><b>{source.label}</b><small>{t(widgetKind('', source.provider))}</small></span>
           <button className="button" disabled={addition.busy} onClick={() => setCandidate(source)}>{t(source.action === 'show' ? 'add.show' : 'add.action')}</button>
-        </div>) : <p className="admin-empty">{t('add.noSources')}</p>}</div>}
-        {!!catalogue.widgets.length && <div className="catalogue-group"><h3>{t('analytics.title')}</h3>{catalogue.widgets.map(widget => <div className="catalogue-row" key={widget.id}><span className="catalogue-symbol" aria-hidden="true">▥</span><span className="catalogue-name"><b>{t(LABELS[widget.id])}</b></span><button className="button" disabled={addition.busy} onClick={() => void addition.submit(board.id, {kind: 'widget', widgetId: widget.id})}>{t('add.action')}</button></div>)}</div>}
-        <div className="catalogue-group"><h3>{t('add.connectNew')}</h3>{catalogue.connectors.map(connector => <button className="popover-row catalogue-connect" key={connector.id} onClick={() => {setRecovered(undefined);setProvider(connector.id);setPage('connection');}}><img src={logoOf(connector.id)} alt="" /><span>{connector.id==='zai'?t('sources.zaiPersonal'):connector.name}</span><span aria-hidden="true">→</span></button>)}{!local && <button className="popover-row catalogue-connect" onClick={() => setPage('device')}><span>{t('connections.connectDevice')}</span><span aria-hidden="true">→</span></button>}</div></>}
+        </div>)}
+        {widgets.map(widget => {const Icon = WIDGET_ICONS[widget.id];return <div className="catalogue-row" key={widget.id}><Icon size={22} aria-hidden="true" /><span className="catalogue-name"><b>{t(LABELS[widget.id])}</b><small>{t(widgetKind(widget.id))}</small></span><button className="button" disabled={addition.busy} onClick={() => void addition.submit(board.id, {kind: 'widget', widgetId: widget.id})}>{t('add.action')}</button></div>;})}
+        {!sources.length && !widgets.length && <p className="popover-note dialog-text">{t(search.trim() ? 'add.noWidgets' : 'add.allVisible')}</p>}
+        </div><button type="button" className="popover-row catalogue-connect catalogue-connect-entry" onClick={() => setPage('connect')}><Plug size={20} aria-hidden="true" /><span>{t('add.connect')}</span><span aria-hidden="true">→</span></button></>}
       </div>}
   </div>;
 }
@@ -296,8 +306,8 @@ export function WidgetAdd({board, local, trustedKeys, open, onOpenChange, initia
   board: Board; local: boolean; trustedKeys: Session['trustedKeys']; open: boolean;
   onOpenChange: (open: boolean) => void; initialSourceId?: string; trigger?: string;
 }) {
-  return <Popover label={t('add.title')} icon={<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>}
-    trigger={trigger} triggerClass={trigger ? 'button' : undefined} open={open} onOpenChange={onOpenChange} width={420}>
+  return <Popover label={t('add.title')}
+    trigger={trigger ?? <><Plus size={16} aria-hidden="true" /><span>{t('add.action')}</span></>} triggerClass={trigger ? 'button' : 'button board-action-button'} open={open} onOpenChange={onOpenChange} width={420}>
     {open && <WidgetCatalogue key={board.id} board={board} local={local} trustedKeys={trustedKeys} initialSourceId={initialSourceId} onClose={() => onOpenChange(false)} />}
   </Popover>;
 }

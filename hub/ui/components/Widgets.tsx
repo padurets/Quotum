@@ -649,11 +649,3 @@ export function Widgets({
     </div>
   );
 }
-
-
-export const LockIcon = ({open = false}: {open?: boolean}) => (
-  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-    <rect x="3" y="7" width="10" height="7" rx="1.6" />
-    <path d={open ? 'M5.5 7V5a2.5 2.5 0 0 1 4.9-.7' : 'M5.5 7V5a2.5 2.5 0 0 1 5 0v2'} />
-  </svg>
-);

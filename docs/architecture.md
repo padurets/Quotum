@@ -300,16 +300,19 @@ real next measurement even then.
 
 **Refresh on demand.** Any reader of a subscription on a board can request fresh data
 through its existing card menu, above the action to hide the widget, in the web
-dashboard and the desktop app. The header also refreshes all non-hidden cards on the
-current board through those same requests, up to four at a time. A refused request does
-not stop the rest; a tooltip at the header button lists every requested card in one
-compact row, with its name, status icon and short outcome. Error details expand by
-clicking the row. Each outcome stays in this attempt's receipt after the hub retires its
-status, also while the tooltip is closed. An old outcome cannot stand in for a new
-request, and a reconnect with a missing outcome says it is unknown. Nothing moves the
-widgets. While its refresh is pending, and once it has finished, clicking the button
-only opens or closes that information; a row at the top of the tooltip starts another
-attempt. An individual card cannot be requested again until its refresh finishes, nor
+dashboard and the desktop app. The header has two board dropdowns: Add and Widgets.
+Add lists eligible absent or hidden widgets with their type; its Connect entry opens
+a separate provider/device choice while retaining the target board. Widgets shows
+current widgets, their last successful measurements and errors, an explicit Refresh
+all action, the original free/locked layout control and board settings. Opening it
+makes no refresh requests. Its wide layout puts status beside actions; at narrow
+widths actions precede the status list in one column, scrolling inside the Popover.
+Refresh all requests non-hidden cards through the same source endpoint, up to four
+at a time. A refusal does not stop the rest. Outcomes stay with each source's row
+after the hub retires its status, also while the dropdown is closed. Error details
+expand in that row. An old outcome cannot stand in for a new request, and a reconnect
+with a missing outcome says it is unknown. Nothing moves the widgets. A new attempt
+needs an explicit click, including the first one. An individual card cannot be requested again until its refresh finishes, nor
 while the page is still sending its request, from its menu or the header. Already
 pending subscriptions need no additional POST from the board action. The charts and
 tables receive new measurements through the usual events. Leaving the board stops

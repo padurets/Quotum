@@ -5,24 +5,11 @@ import {page, useConnection} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {Brand, ErrorLine, Field, Modal} from './Kit';
 import {Popover} from './Popover';
-import {LockIcon} from './Widgets';
+import {ChevronDown, Settings as SettingsIcon} from 'lucide-react';
 import {t} from '../i18n';
 
 /** The connection lost this long (by the hub's clock) is said in the header. */
 const OFFLINE_AFTER = 45_000;
-
-const ChevronIcon = () => (
-  <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-    <path d="M4.5 6.5L8 10l3.5-3.5" />
-  </svg>
-);
-
-const GearIcon = () => (
-  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-    <path d="M5.65 3.93L6.63 3.51L6.74 1.52L9.26 1.52L9.37 3.51L10.35 3.93L11.21 4.56L12.98 3.67L14.24 5.85L12.58 6.94L12.70 8.00L12.58 9.06L14.24 10.15L12.98 12.33L11.21 11.44L10.35 12.07L9.37 12.49L9.26 14.48L6.74 14.48L6.63 12.49L5.65 12.07L4.79 11.44L3.02 12.33L1.76 10.15L3.42 9.06L3.30 8.00L3.42 6.94L1.76 5.85L3.02 3.67L4.79 4.56Z" strokeLinejoin="round" />
-    <circle cx="8" cy="8" r="1.9" />
-  </svg>
-);
 
 /** Deleting a shared board: its name typed out, since nothing of it can come back. */
 export function DeleteBoard({board, onClose}: {board: Board; onClose: () => void}) {
@@ -95,7 +82,7 @@ function BoardSwitcher({boards, board, onSelect}: {boards: Board[]; board: Board
       trigger={
         <span className="board-name">
           <span className="board-name-text">{board ? boardTitle(board) : '—'}</span>
-          <ChevronIcon />
+          <ChevronDown size={14} aria-hidden="true" />
         </span>
       }
       align="left"
@@ -155,7 +142,7 @@ export function Header({boards, board, onBoard, user, onAccount, onSignedOut, lo
     {!local && <BoardSwitcher boards={boards} board={board} onSelect={onBoard} />}
     <div className="status">
       {actions}
-      {local ? <button className="icon-button" aria-label={t('header.settings')} onClick={onAccount}><GearIcon /></button> :
+      {local ? <button className="icon-button" aria-label={t('header.settings')} onClick={onAccount}><SettingsIcon size={16} aria-hidden="true" /></button> :
         <Popover label={t('account.open')} triggerClass="avatar-button" trigger={<span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>} open={open} onOpenChange={setOpen}>
           <div className="popover-title">{user.name}<small className="account-email">{user.email}</small></div>
           <button className="popover-row" onClick={() => {setOpen(false); onAccount();}}><span>{t('header.settings')}</span></button>
@@ -167,17 +154,10 @@ export function Header({boards, board, onBoard, user, onAccount, onSignedOut, lo
 }
 
 /** These actions always name the current board; personal management has its own pages. */
-export function BoardActions({board, refresh, owner, locked, onLock, add, onSettings}: {
-  board: Board | null; refresh: ReactNode; owner: boolean; locked: boolean;
-  onLock: () => void; add: ReactNode; onSettings: ((section: 'general' | 'members') => void) | null;
+export function BoardActions({board, add, manage}: {
+  board: Board | null; add: ReactNode; manage: ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
-  return <div className="board-actions" role="group" aria-label={board ? boardTitle(board) : undefined}><Offline />{refresh}
-      {add}
-      {owner && <button className="icon-button" aria-pressed={locked} aria-label={t(locked ? 'widgets.unlock' : 'widgets.lock')} title={t(locked ? 'widgets.unlock' : 'widgets.lock')} onClick={onLock}><LockIcon open={!locked} /></button>}
-      {onSettings && <Popover label={t('boardSettings.title')} icon={<GearIcon />} open={open} onOpenChange={setOpen}>
-        <button className="popover-row" onClick={() => {setOpen(false); onSettings('general');}}><span>{t('boardSettings.title')}</span></button>
-        {!board?.personal && <button className="popover-row" onClick={() => {setOpen(false); onSettings('members');}}><span>{t('admin.members')}</span></button>}
-      </Popover>}
+  return <div className="board-actions" role="group" aria-label={board ? boardTitle(board) : undefined}><Offline />
+      {add}{manage}
   </div>;
 }
