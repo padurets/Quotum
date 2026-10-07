@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {mkdtempSync, readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {buildApp} from '../api.js';
+import {buildApp, type Hub} from '../api.js';
+import type {BoardAdditions} from '../additions.js';
 import {Cadence} from '../cadence.js';
 import {Duty} from '../duty.js';
 import {Ingest} from '../ingest.js';
@@ -35,13 +36,15 @@ async function harness(options: {available?: boolean; report?: SecretKeyReport} 
     const token = newSecret('qt_s'); directory.createSession(token, user.id, Date.now(), 60_000);
     cookies.set(name, `quotum_session=${token}`); users.set(name, user.id);
   }
-  const app = await buildApp({store, directory, credentials, resets: new ResetFeed(undefined, () => {}), ingest: new Ingest(store, directory, new Duty(), new Cadence()), pairing: new Pairing(directory), setup: new Setup(false, null), local: null});
+  const hub:Hub={store, directory, credentials, resets: new ResetFeed(undefined, () => {}), ingest: new Ingest(store, directory, new Duty(), new Cadence()), pairing: new Pairing(directory), setup: new Setup(false, null), local: null};
+  let additions!:BoardAdditions;
+  const app = await buildApp(hub,(_app,current)=>{additions=current.additions!;});
   const call = (method: 'POST' | 'GET' | 'DELETE', url: string, payload?: object | string, as = 'alice', origin: string | null = ORIGIN) => app.inject({method, url, payload, headers: {...(cookies.has(as) ? {cookie: cookies.get(as)} : {}), ...(origin ? {origin} : {}), ...(typeof payload === 'string' ? {'content-type': 'application/json'} : {})}});
   const clean = (...outputs: string[]) => {
     for (const output of outputs) for (const secret of [CANARY, KEK]) assert.equal(output.includes(secret), false, 'no complete secret in output');
     for (const suffix of ['', '-wal', '-shm']) for (const secret of [CANARY, KEK]) assert.equal(readFileSync(file + suffix).includes(Buffer.from(secret)), false, 'no plaintext in SQLite files');
   };
-  return {app, call, store, directory, credentials, users, clean};
+  return {app, call, store, directory, credentials, additions, users, clean};
 }
 
 test('credentials are owner-only, write-only, and never shared with a board', async t => {
@@ -280,6 +283,32 @@ test('a revoked in-flight create cannot replay a concurrent request from a new s
   assert.equal((await h.call('GET','/api/credentials')).statusCode,401);
   assert.equal(h.credentials.list(owner).length,1);assert.equal(h.credentials.list(owner)[0].id,concurrent.json().id);
   h.clean(late.body,concurrent.body);
+});
+
+test('each session waiting for a shared addition or replacement must retain access to its result',async t=>{
+  for(const mode of ['addition','replacement'] as const) {
+    const h=await harness();t.after(async()=>{await h.app.close();h.store.close();});
+    const credential=mode==='replacement'?(await h.call('POST','/api/credentials',{provider:'test',secret:CANARY})).json():null;
+    const operation=mode==='addition'?(await h.call('POST','/api/additions',{requestId:'44444444-4444-4444-8444-444444444444',boardId:null,item:{kind:'connection',provider:'test'}})).json():null;
+    let release!:()=>void,started!:()=>void,joined!:()=>void,calls=0;
+    const paused=new Promise<void>(resolve=>release=resolve),ready=new Promise<void>(resolve=>started=resolve),joining=new Promise<void>(resolve=>joined=resolve),identify=fixture.identify,run=h.additions.run.bind(h.additions);
+    t.mock.method(fixture,'identify',async(...args:Parameters<Connector['identify']>)=>{started();await paused;return identify(...args);});
+    t.mock.method(h.additions,'run',(...args:Parameters<BoardAdditions['run']>)=>{const result=run(...args);if(++calls===2)joined();return result;});
+    const url=mode==='addition'?'/api/additions/'+operation.id+'/run':'/api/credentials/'+credential.id;
+    const input={secret:CANARY+'_next',...(mode==='replacement'?{requestId:'55555555-5555-4555-8555-555555555555'}:{})};
+    const token=newSecret('qt_s');h.directory.createSession(token,h.users.get('alice')!,Date.now(),60_000);
+    const winner=h.call('POST',url,input);await ready;
+    const pending=h.app.inject({method:'POST',url,payload:input,headers:{origin:ORIGIN,cookie:`quotum_session=${token}`}});await joining;
+    h.directory.deleteSession(token);release();
+    const saved=await winner,late=await pending;assert.equal(saved.statusCode,200);
+    assert.equal(late.statusCode,mode==='addition'?403:400);assert.deepEqual(late.json(),{error:mode==='addition'?'addition_permission':'credential_permission'});
+    const records=h.credentials.list(h.users.get('alice')!);assert.equal(records.length,1);
+    if(mode==='addition'){assert.equal(saved.json().state,'complete');assert.equal(records[0].id,saved.json().result.credentialId);}
+    else {assert.equal(records[0].id,credential.id);assert.equal(records[0].revision,credential.revision+1);}
+    const denied=await h.app.inject({method:'GET',url:'/api/credentials',headers:{cookie:`quotum_session=${token}`}});assert.equal(denied.statusCode,401);
+    h.clean(saved.body,late.body);
+    t.mock.restoreAll();
+  }
 });
 
 test('legacy replacement preserves unknown expiry rather than claiming confirmed no expiry',async t=>{

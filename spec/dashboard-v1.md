@@ -103,6 +103,11 @@ the ledger item. Existing declared identities are owner-scoped. Unknown expiry r
 `sameAccount: true` for declared providers. OpenRouter's confirmed no-expiry access
 needs no additional expiry submission. Receipts include the truthful `expiryKind`.
 
+Concurrent requests may share provider verification, but each waiting request's session
+is checked before returning its private result. A revoked session receives
+`403 addition_permission` (`400 credential_permission` through legacy replacement).
+Another authorized request's committed result remains intact.
+
 `GET /api/additions/:id` is owner-only; another owner's ID and an unknown ID both give
 `404 addition_not_found`. `GET /api/additions?limit=20&before=<cursor>` discovers the
 owner's recent unfinished and terminal receipts, with a maximum page size of 50 and

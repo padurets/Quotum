@@ -168,11 +168,13 @@ export class BoardAdditions {
   }
 
   run(owner: string, id: string, secret: unknown, validSession: () => boolean, options:Pick<CredentialOptions,'allowUnknownExpiry'|'sameAccount'>&{accountName?:string}={}) {
+    const respond=(result:ReturnType<BoardAdditions['answer']>)=>{if(!validSession())throw new AdditionError('addition_permission');return result;};
     const row=this.row(owner,id);
-    if (row.state==='complete') {if(row.result&&JSON.parse(row.result).maintenance==='pending')this.maintenance(owner,id);return Promise.resolve(this.get(owner,id));}
-    const pending=this.running.get(id);if(pending)return pending;
+    if (row.state==='complete') {if(row.result&&JSON.parse(row.result).maintenance==='pending')this.maintenance(owner,id);return Promise.resolve(this.get(owner,id)).then(respond);}
+    // Provider work is shared; each waiting request still needs its own current session.
+    const pending=this.running.get(id);if(pending)return pending.then(respond);
     const work=this.perform(owner,id,secret,validSession,options).finally(()=>this.running.delete(id));
-    this.running.set(id,work);return work;
+    this.running.set(id,work);return work.then(respond);
   }
 
   private async perform(owner: string, id: string, secret: unknown, validSession: () => boolean, options:Pick<CredentialOptions,'allowUnknownExpiry'|'sameAccount'>&{accountName?:string}) {

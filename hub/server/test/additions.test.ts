@@ -50,7 +50,9 @@ test('authority is checked after verification; logout and lost membership never 
     const operation=h.reserve();let session=true;
     const running=h.additions.run(h.member.id,operation.id,KEY,()=>session);await started.promise;
     if(loss==='session')session=false;else h.directory.removeMember(h.board.id,h.member.id);
-    waiting.resolve(identity);const result=await running;
+    waiting.resolve(identity);
+    if(loss==='session')await assert.rejects(running,{message:'addition_permission'});
+    const result=loss==='session'?h.additions.get(h.member.id,operation.id):await running;
     assert.equal(result.state,'failed');assert.equal(result.error,'addition_permission');assert.deepEqual(h.credentials.list(h.member.id),[]);assert.deepEqual(h.store.held(h.member.id),[]);
   }
 });
@@ -59,6 +61,7 @@ test('durable receipts survive a new service instance, reuse access and respect 
   const h=fixture();t.after(h.close);
   const operation=h.reserve(),created=await h.additions.run(h.member.id,operation.id,KEY,()=>true),source=created.result!.sourceIds[0];
   assert.equal(created.state,'complete');assert.equal(created.result!.placement,'added');
+  await assert.rejects(h.additions.run(h.member.id,operation.id,undefined,()=>false),{message:'addition_permission'});
   const before=h.store.db.prepare('SELECT cipher,nonce FROM credentials').get();
   const repeat=h.reserve(),reused=await h.additions.run(h.member.id,repeat.id,'DIFFERENT_VALID_SECRET',()=>true);
   assert.equal(reused.result!.connection,'reused');assert.deepEqual(h.store.db.prepare('SELECT cipher,nonce FROM credentials').get(),before);
