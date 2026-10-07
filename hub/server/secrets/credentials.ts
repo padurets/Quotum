@@ -9,7 +9,7 @@ import {SecretError,secretCode, type SecretCode, type SecretKey} from './crypto.
 import {checkpoint, type SecretKeyReport} from './start.js';
 
 const DAY=86_400_000;
-export const permanentAccess = (code:string) => ['credential_rejected','credential_auth_rejected','credential_expired','credential_revoked','credential_wrong_type','credential_permission','credential_account_mismatch','credential_unreadable','secret_key_missing','secret_key_mismatch','secret_key_metadata_invalid','credential_provider_unknown'].includes(code);
+export const permanentAccess = (code:string) => ['credential_access_invalid','credential_identity_unavailable','credential_rejected','credential_auth_rejected','credential_expired','credential_revoked','credential_wrong_type','credential_permission','credential_account_mismatch','credential_unreadable','secret_key_missing','secret_key_mismatch','secret_key_metadata_invalid','credential_provider_unknown'].includes(code);
 export type SourceAccess = {error:SecretCode|null;expiresAt:number|null;expiryKind?:import('../connectors/registry.js').ExpiryKind;canRefresh:boolean;credentialIds:string[]};
 export type CredentialOptions={allowNoExpiry?:boolean;allowUnknownExpiry?:boolean;sameAccount?:boolean;requestId?:string;account?:AccountTarget};
 type Options=CredentialOptions;
@@ -72,6 +72,7 @@ export class Credentials {
     if(!['dated','none','unknown'].includes(expiry)||(expiry==='dated')!==(answer.expiresAt!==null))throw new SecretError('connector_invalid_response');
     if(answer.abilities.some(a=>!connector.abilities.includes(a))||answer.expiresAt!==null&&(!Number.isSafeInteger(answer.expiresAt)||answer.expiresAt<0))throw new SecretError('connector_invalid_response');
     if(answer.retryAfterMs!==undefined&&(!Number.isSafeInteger(answer.retryAfterMs)||answer.retryAfterMs<0||answer.retryAfterMs>3_600_000))throw new SecretError('connector_invalid_response');
+    if(answer.attempt&&(!['ok','degraded','transient','access_lost'].includes(answer.attempt.outcome)||answer.attempt.safeCode!==null&&!secretCode(answer.attempt.safeCode)||answer.attempt.retryNotBefore!==null&&(!Number.isSafeInteger(answer.attempt.retryNotBefore)||answer.attempt.retryNotBefore<0)))throw new SecretError('connector_invalid_response');
     if(answer.expiresAt!==null&&answer.expiresAt<=Date.now())throw new SecretError('credential_expired');
     if(expiry==='unknown'&&options.allowUnknownExpiry!==true)throw new SecretError('credential_expiry_confirmation','unknown');
     if(expiry==='none'&&options.allowNoExpiry!==true)throw new SecretError('credential_expiry_confirmation','none');
@@ -82,11 +83,12 @@ export class Credentials {
       if(options.allowNoExpiry!==undefined||!connector.declaredAccounts&&options.account!==undefined)throw new SecretError('credential_invalid');
       if(replacing&&options.sameAccount!==true)throw new SecretError('credential_account_confirmation');
       if(!replacing&&!connector.declaredAccounts&&options.sameAccount!==undefined)throw new SecretError('credential_invalid');
-    }else if(options.account!==undefined||options.sameAccount!==undefined||options.allowUnknownExpiry!==undefined)throw new SecretError('credential_invalid');
+    }else if(options.account!==undefined||options.sameAccount!==undefined)throw new SecretError('credential_invalid');
   }
-  private accept(source:string,result:ConnectorIdentity) {
+  private accept(source:string,result:ConnectorIdentity,row?:CredentialRow) {
     if(result.quotaObservation)this.store.quotaObservation(source,result.quotaObservation,result.measurement);
     else if(result.measurement)this.store.record(source,result.measurement);
+    if(row)this.disposition(source,row,result);
   }
   private accountTarget(secret:unknown,target:unknown):AccountTarget {
     if(!target||typeof target!=='object'||Array.isArray(target))throw new SecretError('credential_invalid');
@@ -146,7 +148,7 @@ export class Credentials {
           const record={id:randomUUID(),user_id:owner,provider};
           const row:CredentialRow={...record,...authority.key.seal(record,bytes),source_id:source,key_version:authority.epoch,hint:bytes.subarray(-4).toString('ascii'),abilities:JSON.stringify(identity.abilities),created_at:Date.now(),expires_at:identity.expiresAt,expiry_kind:identity.expiryKind,last_used_at:null,last_error:null,unreadable:0};
           this.#repository.add(row);this.store.hold(source,owner,row.created_at);
-          this.accept(source,identity);
+          this.accept(source,identity,row);
           if(options.requestId)this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('credential-request:'+owner+':'+options.requestId,JSON.stringify({provider,id:row.id,at:row.created_at,...(selector===undefined?{}:{target:selector})}));
           return this.answer(row);
         },false,()=>{if(source)this.changed(source,owner);});
@@ -168,7 +170,7 @@ export class Credentials {
           this.currentAuthority(authority);
           if(binding&&!this.accounts.current(binding)||!this.#repository.current(row)||!this.#repository.replace(owner,id,authority.key.seal(row,bytes),authority.epoch,bytes.subarray(-4).toString('ascii'),row))throw new SecretError('credential_conflict');
           this.db.prepare('UPDATE credentials SET abilities=?,expires_at=?,expiry_kind=?,last_used_at=NULL WHERE id=? AND user_id=?').run(JSON.stringify(identity.abilities),identity.expiresAt,identity.expiryKind,id,owner);
-          this.accept(row.source_id!,identity);
+          this.accept(row.source_id!,identity,this.#repository.get(owner,id)!);
           return this.answer(this.#repository.get(owner,id)!);
         },true,()=>this.changed(row.source_id!,owner));
       });
@@ -198,6 +200,12 @@ export class Credentials {
     });
   }
   sources():string[]{return this.boundary(()=>[...new Set((this.db.prepare('SELECT source_id FROM credentials WHERE source_id IS NOT NULL').all() as {source_id:string}[]).map(r=>r.source_id))]);}
+  retryNotBefore(source:string):number {return Number(this.db.prepare('SELECT value FROM meta WHERE key=?').get('connector-retry:'+source)?.value??0);}
+  private disposition(source:string,row:CredentialRow,result:ConnectorIdentity) {
+    const attempt=result.attempt;if(!attempt)return;
+    if(attempt.retryNotBefore!==null)this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('connector-retry:'+source,String(Math.max(this.retryNotBefore(source),attempt.retryNotBefore)));
+    if(attempt.outcome==='transient'||attempt.outcome==='access_lost')this.#repository.error(row.user_id,row.id,attempt.safeCode??'connector_failed',false,row);
+  }
   reconcile() {
     this.mutation(()=>{
       for(const row of this.db.prepare('SELECT h.source_id,h.user_id,s.provider FROM holders h JOIN sources s ON s.id=h.source_id WHERE NOT EXISTS (SELECT 1 FROM credentials c WHERE c.source_id=h.source_id AND c.user_id=h.user_id)').all() as {source_id:string;user_id:string;provider:string}[])
@@ -223,10 +231,11 @@ export class Credentials {
             if(signal?.aborted||!valid()||!this.#repository.current(row)||!this.store.holds(row.user_id,source))return false;
             this.currentAuthority(authority);
             this.#repository.used(row.user_id,row.id,row,result.abilities,result.expiresAt,result.expiryKind);
-            this.accept(source,result);
+            this.accept(source,result,row);
             return true;
           },false);
           if(accepted)tell(this.observer,o=>o.touchUser(row.user_id));
+          if(accepted&&result.attempt?.outcome==='access_lost'){failure=new SecretError(result.attempt.safeCode??'credential_access_invalid');continue;}
           return accepted?result:null;
         }catch(error){
           const safe=error instanceof SecretError?error:new SecretError('credential_failed');failure=safe;

@@ -993,3 +993,6 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-breakdown > section > div { display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
 .money-breakdown-total { padding-bottom: 4px; color: var(--text); }
 .money-balance .is-stale,.money-breakdown .is-stale {opacity:.6;}
+
+.report-name small { color: var(--text-3); }
+.report-periods { display: flex; flex-wrap: wrap; gap: 6px 24px; color: var(--text-2); }

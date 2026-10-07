@@ -9,6 +9,7 @@ export const catalogue = [
     {meterId:'balance:USD',unit:'USD',role:'total'},{meterId:'granted:USD',unit:'USD',role:'granted'},{meterId:'topped_up:USD',unit:'USD',role:'toppedUp'},
   ]}},
   {id: 'zai', funding: 'subscription', name: 'z.ai', color: '#f0f0f0', logoAsset: 'zai', order: 4, measuredBy: 'hub', meterKinds: ['cap'], resets: false, connectorId: 'zai'},
+  {id:'openai_platform',name:'OpenAI Platform',color:'#71c8ae',logoAsset:'openai',order:5,measuredBy:'hub',funding:'wallet',meterKinds:['reported','cap'],resets:false,connectorId:'openai_platform',monetary:{spending:'unavailable',topups:'unavailable',balances:[]}},
 ] as const;
 
 export type Provider = (typeof catalogue)[number]['id'];

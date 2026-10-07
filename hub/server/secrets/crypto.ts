@@ -10,6 +10,7 @@ export const SECRET_CODE = Object.freeze({
   AUTH_REJECTED: 'credential_auth_rejected',
   QUOTA_EMPTY: 'connector_quota_empty', QUOTA_UNSUPPORTED: 'connector_quota_unsupported', QUOTA_INVALID: 'connector_quota_invalid', QUOTA_PARTIAL: 'connector_quota_partial',
   INVENTORY_PARTIAL: 'connector_inventory_partial', ROUND_LIMIT: 'connector_round_limit',
+  ACCESS_INVALID:'credential_access_invalid',EXPIRY_UNKNOWN:'credential_expiry_unknown_confirmation',IDENTITY_UNAVAILABLE:'credential_identity_unavailable',
   DESTINATION_INVALID: 'connector_destination_invalid', CANCELLED: 'connector_cancelled', REDIRECT: 'connector_redirect', STATUS: 'connector_status', RESPONSE_TOO_LARGE: 'connector_response_too_large', INVALID_RESPONSE: 'connector_invalid_response', CONNECTOR_FAILED: 'connector_failed', TIMEOUT: 'connector_timeout',
 } as const);
 export type SecretCode = (typeof SECRET_CODE)[keyof typeof SECRET_CODE];

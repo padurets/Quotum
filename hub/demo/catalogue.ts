@@ -33,6 +33,7 @@ export {KEY_STORAGE} from './key-storage.js';
 export {DEEPSEEK_SCENES} from './deepseek.js';
 export {QUOTA_SCENES} from './quotas.js';
 export {MONEY_SCENES} from './money.js';
+export {REPORT_SCENES} from './reports.js';
 
 /**
  * The catalogue of the demo board: every state the dashboard knows today, one entry each,

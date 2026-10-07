@@ -1,4 +1,5 @@
 import {balanceDescriptor} from './providers.js';
+import type {ReportRead,MonthlyLimitRead} from './reports.js';
 import {amount, isUnit, type Unit} from './amount.js';
 import type {Conversion} from './currency.js';
 
@@ -19,7 +20,7 @@ export type QuotaIssue = 'empty' | 'unsupported' | 'invalid' | 'missing';
 export type QuotaStatus = {observedAt: number; generation: 'credit' | null; complete: boolean; issue: QuotaIssue | null};
 export type QuotaObservation = {observedAt: number; receivedIds: string[]; quota: QuotaStatus; plan: string};
 export const QUOTA_IDS = ['quota:credit:5h', 'quota:credit:week'] as const;
-export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; inventoryAt?:number; uncapped?: string[]; balanceStatus?:BalanceStatus;quota?:QuotaStatus;plan?:string};
+export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; inventoryAt?:number; uncapped?: string[]; balanceStatus?:BalanceStatus;quota?:QuotaStatus;plan?:string;reports?:ReportRead;reportDigest?:string;monthlyLimit?:MonthlyLimitRead};
 export type Reading = Omit<Meter, 'stale'> & {previousAt: number | null};
 export type MeterSpan = {from: number; to: number; staleAfterMs: number;interruptedAt?:number;holdUntil?:number|null};
 export type ExceptionalStep = {from: number; to: number; amount: string; evidence: 'continuous' | 'gap' | 'estimate'};

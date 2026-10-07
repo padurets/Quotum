@@ -1,6 +1,8 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {balanceDescriptor,monetaryOf} from '../domain/providers.js';
-import {amount} from '../domain/amount.js';
+import {amount,AMOUNT_MAX} from '../domain/amount.js';
+import {ReportStore} from './reports.js';
+import {reportAllowance} from '../domain/reports.js';
 import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading, type QuotaObservation, QUOTA_IDS} from '../domain/meters.js';
 import type {SourceState} from '../domain/quota.js';
 import {MeterContexts} from './meterContexts.js';
@@ -18,6 +20,17 @@ export class MeterStore {
   constructor(private readonly db: DatabaseSync,private readonly currencies:CurrencyStore) {this.contexts=new MeterContexts(db);this.contexts.seed();}
 
   record(source: string, previous: SourceState, measurement: MeterMeasurement): {state: SourceState; since: number|null} {
+    const reportStore=new ReportStore(this.db);
+    const reports=measurement.reports?reportStore.record(source,measurement.reports,measurement.staleAfterMs):null;
+    const monthlyLimit=measurement.monthlyLimit?{...measurement.monthlyLimit,value:measurement.monthlyLimit.status==='ok'?measurement.monthlyLimit.value:previous.monthlyLimit?.value??null,valueAt:measurement.monthlyLimit.status==='ok'?measurement.monthlyLimit.observedAt:previous.monthlyLimit?.valueAt??null,staleAfterMs:measurement.staleAfterMs}:previous.monthlyLimit;
+    let incoming=measurement.meters;
+    if(reports&&monthlyLimit) {
+      const at=Math.max(measurement.reports!.observedAt,measurement.monthlyLimit?.observedAt??0),calendar=reportStore.calendar(source,at),allowance=reportAllowance(calendar,monthlyLimit,at),month=calendar.find(c=>c.unit===allowance?.unit)?.month;
+      if(allowance&&allowance.remaining!==null&&month?.amount!==null&&month?.amount!==undefined&&BigInt(month.amount)>=0n&&BigInt(month.amount)<=AMOUNT_MAX) {
+        const start=utcPeriods(at).month,date=new Date(at),end=Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,1);
+        incoming=[...incoming,{id:'monthly',kind:'cap',unit:allowance.unit,amount:month.amount,at,staleAfterMs:measurement.staleAfterMs,stale:false,limit:allowance.limit,resetAt:end,minutes:(end-start)/60000,scope:'monthly',label:null}];
+      }
+    }
     const current = new Map((previous.meters ?? []).map(m => [m.id, {...m, stale: true}]));
     const ids = new Set<string>();
     const keyTimes = new Map(measurement.keys.map(key => [key.id, key.at]));
@@ -26,23 +39,24 @@ export class MeterStore {
       const result=this.db.prepare('UPDATE meter_spans SET interrupted_at=? WHERE source_id=? AND meter_id=? AND interrupted_at IS NULL AND from_at=(SELECT max(from_at) FROM meter_spans WHERE source_id=? AND meter_id=?)').run(measurement.observedAt,source,old.id,source,old.id);
       if(result.changes){since=Math.min(since,measurement.observedAt);}
     }
-    for (const meter of measurement.meters) {
+    for (const meter of incoming) {
       validateMeter(meter);
       if(meter.conversion)throw new Error('derived_provider_measurement');
       const key = keyMeter(meter.id);
-      if (ids.has(meter.id) || meter.at !== (key === null ? measurement.observedAt : keyTimes.get(key) ?? measurement.observedAt)) throw new Error('invalid_meter');
+      if (ids.has(meter.id) || !(reports&&meter.id==='monthly')&&meter.at !== (key === null ? measurement.observedAt : keyTimes.get(key) ?? measurement.observedAt)) throw new Error('invalid_meter');
       ids.add(meter.id);
       const old = current.get(meter.id);
       if (old && old.at >= meter.at) continue;
       const last = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source, meter.id) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null;hold_until:number|null} | undefined;
-      if (!old || !sameMeter(old, meter)) {
+      const numericChanged=!old||!sameMeter(old,meter);
+      if (numericChanged) {
         this.db.prepare('INSERT INTO readings (source_id,meter_id,at,previous_at,kind,unit,amount,limit_amount,reset_at,minutes,scope,label,stale_after_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
           .run(source, meter.id, meter.at, old?.at ?? last?.to_at ?? null, meter.kind, meter.unit, amount(meter.amount), meter.limit === null ? null : amount(meter.limit), meter.resetAt, meter.minutes, meter.scope, meter.label, meter.staleAfterMs);
       }
       if (last && last.interrupted_at===null && last.hold_until===null && old && meter.at - last.to_at <= last.stale_after_ms && old.kind === meter.kind && old.unit === meter.unit) {
         this.db.prepare('UPDATE meter_spans SET to_at=?,stale_after_ms=? WHERE source_id=? AND meter_id=? AND from_at=?').run(meter.at, meter.staleAfterMs, source, meter.id, last.from_at);
       } else this.db.prepare('INSERT INTO meter_spans (source_id,meter_id,from_at,to_at,stale_after_ms) VALUES (?,?,?,?,?)').run(source, meter.id, meter.at, meter.at, meter.staleAfterMs);
-      since = Math.min(since, last?.interrupted_at==null?old?.at??meter.at:meter.at);
+      if(!reports||numericChanged)since = Math.min(since, last?.interrupted_at==null?old?.at??meter.at:meter.at);
       current.set(meter.id, {...meter, stale: false});
     }
     const keys = new Map((previous.keys ?? []).map(k => [k.id, {...k}]));
@@ -68,17 +82,20 @@ export class MeterStore {
         for (const meter of current.keys()) if (keyMeter(meter) === id) current.delete(meter);
       } else keys.set(id, {...key, presence: measurement.inventoryComplete ? 'missing' : key.presence, missCount});
     }
-    const accountSuccess = previous.provider === 'openrouter' ? ids.has('credits') && ids.has('usage') : measurement.meters.some(m => !keyMeter(m.id));
+    if(reports?.since!==null&&reports?.since!==undefined)since=Math.min(since,reports.since);
+    const accountSuccess = previous.provider === 'openrouter' ? ids.has('credits') && ids.has('usage') : measurement.reports ? measurement.reports.status!=='unavailable' : measurement.meters.some(m => !keyMeter(m.id));
     const balanceStatus=balanceStatusOf(previous.provider,previous.meters??[],measurement);
     this.contexts.observe(source,previous.provider,measurement,balanceStatus);
     const state: SourceState = {
       ...previous, windows: [], resets: null,
       ...(measurement.plan !== undefined ? {plan: measurement.plan} : {}),
       ...(measurement.quota ? {quota: measurement.quota} : {}),
-      successAt: accountSuccess ? measurement.observedAt : previous.successAt,
+      successAt: accountSuccess ? measurement.reports?.observedAt??measurement.observedAt : previous.successAt,
       staleAfterMs: accountSuccess ? measurement.staleAfterMs : previous.staleAfterMs,
       error: accountSuccess||balanceStatus ? null : previous.error,
       ...(balanceStatus?{balanceStatus}:{}),
+      ...(reports?{reportQuality:reports.quality,reportAttemptedAt:measurement.observedAt,reportDigest:measurement.reportDigest}:{}),
+      ...(monthlyLimit?{monthlyLimit}:{}),
       meters: [...current.values()], keys: [...keys.values()].sort((a,b) => (a.name ?? '').localeCompare(b.name ?? '') || a.id.localeCompare(b.id)),
       ...(measurement.quota ? {} : {inventory: {complete: measurement.inventoryComplete, observed: observed.size, missing: [...keys.values()].filter(k => k.presence === 'missing').length, error: measurement.inventoryError}}),
     };

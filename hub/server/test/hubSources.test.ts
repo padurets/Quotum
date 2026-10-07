@@ -6,7 +6,8 @@ import {HubSources} from '../hubSources.js';
 import {Credentials} from '../secrets/credentials.js';
 import {SecretError,SecretKey} from '../secrets/crypto.js';
 import {startSecrets} from '../secrets/start.js';
-import {ConnectorTransport} from '../connectors/transport.js';
+import {ConnectorTransport,ConnectorStatus} from '../connectors/transport.js';
+import {openAIPlatform,decodeOpenAI} from '../connectors/openai.js';
 import type {Connector,ConnectorIdentity} from '../connectors/registry.js';
 import type {Clock} from '../events.js';
 import type {Meter} from '../domain/meters.js';
@@ -134,4 +135,32 @@ test('polling updates known expiry metadata without confusing it with unknown ex
     h.setExpiry(null);h.clock.tick(1);await h.credentials.measure(source);
     assert.equal(h.credentials.list(h.alice.id)[0].expiryKind,'none');assert.equal(h.credentials.access(h.alice.id,source)?.expiryKind,'none');
   }finally{h.sources.stop();h.store.close();}
+});
+
+for(const limited of ['limit','page'] as const)test('OpenAI '+limited+' rate limits commit certified data and keep retry deadlines through refresh, rotation and restart',async()=>{
+  const clock=new TestClock(),store=new Store(':memory:',clock.now()),directory=new Directory(store.db);
+  const owner=directory.createUser('report-retry@fixture.example','Retry','unused',clock.now());
+  const key=SecretKey.parse(Buffer.from(Buffer.alloc(32,7).toString('base64url'))),report=startSecrets(store.db,{current:key,previous:null,reset:null,storageAtStart:null,wasFileAtStart:false});
+  let calls=0;const transport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}});
+  transport.send=async(op,_secret,query={})=>{
+    calls++;if(op==='limit'&&limited==='limit'||query.page)throw new ConnectorStatus(429,'7200');
+    const day=86400000,start=Math.floor(clock.now()/day)*day;
+    return {organization:'org-Retry',data:decodeOpenAI(JSON.stringify(op==='costs'?{object:'page',data:[{object:'bucket',start_time:start/1000,end_time:(start+day)/1000,results:[{object:'organization.costs.result',amount:{value:5,currency:'usd'}}]}],has_more:limited==='page',next_page:limited==='page'?'next':null}:{object:'organization.spend_limit',threshold_amount:10000,currency:'USD',interval:'month',enforcement:{status:'enforcing'}}))};
+  };
+  const connector=openAIPlatform(transport,clock.now),credentials=new Credentials(store,key,report,new Map([['openai_platform',connector]]));
+  let sources=new HubSources(store,credentials,clock);
+  try {
+    const saved=await credentials.create(owner.id,connector.id,'sk-admin-'+'a'.repeat(32),{allowUnknownExpiry:true}),source=saved.sourceId!;
+    assert.equal(calls,2,'a costs-page rate limit stops optional reads too');
+    assert.equal(store.reports.intervals(source,'costs','USD',0,clock.now()+86400000)[0].amount,'5000000');
+    assert.equal(credentials.list(owner.id)[0].lastError,'connector_status');
+    const before=calls,retryAt=credentials.retryNotBefore(source);assert.ok(retryAt>=clock.now()+7199000);
+    sources.start();clock.tick();await settle();assert.equal(calls,before);
+    assert.deepEqual(sources.requestRefresh(source,clock.now()),{status:'too_soon',retryAt});
+    store.setMeasureInterval(source,60000);sources.frequencyChanged(source,clock.now());assert.equal(sources.cadence(source).value?.next,retryAt);
+    await credentials.replace(owner.id,saved.id,'sk-admin-'+'b'.repeat(32),{allowUnknownExpiry:true});const rotatedCalls=calls;
+    sources.stop();sources=new HubSources(store,credentials,clock);sources.start();clock.tick(60000);await settle();
+    assert.equal(calls,rotatedCalls,'rotation and restart do not bypass the source polling deadline');
+    assert.ok(sources.cadence(source).value!.next>=retryAt);
+  }finally{sources.stop();transport.close();store.close();}
 });

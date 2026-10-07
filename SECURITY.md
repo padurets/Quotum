@@ -40,6 +40,15 @@ confirmation and cannot verify it through the quota interface. Revoke the key wi
 provider when it is no longer needed. Key names and measured spending are shared board data;
 management secrets, raw creator ids, masked labels and raw key hashes are not.
 
+OpenAI Platform uses a dedicated organization Admin key, with access to administrative
+resources. Quotum uses only fixed Costs and Spend Limit GET operations. A successful
+response must prove the organization through the allowlisted organization header;
+raw organization identifiers and header maps are never persisted or projected. Different
+organizations cannot replace one another’s history. The two selected methods leave
+expiry unknown, which requires explicit consent; an authentication failure without
+expiry evidence is described as revoked or expired. Remove saved access in Quotum and
+revoke the dedicated key in the provider’s Admin keys settings when it is no longer needed.
+
 On a server, configure `QUOTUM_SECRET_KEY` or `QUOTUM_SECRET_KEY_FILE`; without it,
 ordinary subscriptions still work, but connecting with a trusted key is unavailable.
 The app chooses its system password store when it can use one, and a private file

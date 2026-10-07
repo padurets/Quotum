@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {money,capPercent,capStale,capChangesAt,accessTone,accessChangesAt} from '../lib/money';
 import {setLocale} from '../i18n';
-import {archivedKeyGroups,moneySelection,readMoney} from '../lib/moneySelection';
+import {archivedKeyGroups,moneySelection,readMoney,chooseMoney} from '../lib/moneySelection';
 import {moneyTotal,type MeterHistory} from '../lib/moneyView';
 import type {Card} from '../lib/types';
 import type {Meter} from '../../server/domain/meters';
@@ -58,6 +58,7 @@ test('a selected cap stays fresh until its own deadline or earlier reset',()=>{
   assert.equal(capChangesAt(cap,100),800);assert.equal(capStale(cap,799),false);assert.equal(capStale(cap,800),true);assert.equal(capChangesAt(cap,800),null);
   const lifetime={...cap,resetAt:null};assert.equal(capChangesAt(lifetime,1100),1101);assert.equal(capStale(lifetime,1100),false);assert.equal(capStale(lifetime,1101),true);
 });
+
 test('explicit card scales outside the bounded preview survive saving, reload and preview changes',()=>{
   const preview=[{id:'first'}],source='openrouter:fixture';
   assert.equal(keyShown(EMPTY_VIEW,source,'first',preview),true);
@@ -87,4 +88,14 @@ test('source access is an independent private slice and disappears with its line
   const next=reduce(before,{type:'hub',event:{type:'sourceAccess',data:{one:own}}});
   assert.equal(next.board?.cards,before.board?.cards);assert.equal(next.boards,before.boards);assert.equal(next.board?.sourceAccess?.one,own);
   const gone=reduce(next,{type:'hub',event:{type:'lineup',data:{sources:[]}}});assert.deepEqual(gone.board?.sourceAccess,{});
+});
+
+test('reported-only sources default to Spending and mode choices preserve earlier explicit selections',()=>{
+  const reported={...card('report'),meters:[{...meter('monthly','30000000'),kind:'cap' as const,limit:'100000000',scope:'monthly'}],reportQuality:[]};
+  const legacy=readMoney({unit:'USD',view:'balance',selected:{USD:[['one','balance']]}});
+  const spending=chooseMoney({...legacy,view:'spending'},'USD',[['report','costs']]);
+  assert.deepEqual(moneySelection([card('one'),reported],[],spending).selection?.ids,[['report','costs']]);
+  assert.deepEqual(moneySelection([card('one'),reported],[],{...spending,view:'balance'}).selection?.ids,[['one','balance']]);
+  assert.deepEqual(moneySelection([reported],[],readMoney({unit:'USD',view:'spending'})).selection?.ids,[['report','costs']]);
+  assert.deepEqual(moneySelection([reported],[],readMoney({unit:'USD',view:'balance'})).selection?.ids,[]);
 });

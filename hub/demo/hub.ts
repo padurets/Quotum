@@ -4,12 +4,15 @@ import path from 'node:path';
 import {DEEPSEEK_SCENES,DEEPSEEK_KEY,deepSeekPayload,demoRates} from './deepseek.js';
 import {QUOTA_KEY,QUOTA_SCENES,quotaFixture} from './quotas.js';
 import {MONEY_KEY} from './money.js';
+import {REPORT_KEY,REPORT_SCENES,reportFixture} from './reports.js';
 import {readFileSync} from 'node:fs';
 const root=path.resolve(process.cwd(),'dist','server');
 const load=(name:string)=>import(pathToFileURL(path.join(root,name)).href);
 const {connectors}=await load('connectors/registry.js') as typeof import('../server/connectors/registry.js');
 const {ConnectorTransport}=await load('connectors/transport.js') as typeof import('../server/connectors/transport.js');
 const {openRouter,decodeOpenRouter}=await load('connectors/openrouter.js') as typeof import('../server/connectors/openrouter.js');
+const {openAIPlatform,decodeOpenAI}=await load('connectors/openai.js') as typeof import('../server/connectors/openai.js');
+const {ConnectorStatus}=await load('connectors/transport.js') as typeof import('../server/connectors/transport.js');
 const {Limiter}=await load('session.js') as typeof import('../server/session.js');
 // Catalogue setup connects more than ten synthetic keys in one burst. Ordinary
 // hub limits are exercised by credentials.test.ts; this realm accepts fixture keys only.
@@ -75,4 +78,11 @@ quotaTransport.send=async(_operation,secret)=>{
   return decodeZai(JSON.stringify(quotaFixture(index,quotaStart)));
 };
 (connectors as Map<string,import('../server/connectors/registry.js').Connector>).set('zai',zai(quotaTransport));
+const reportTransport=new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}});
+reportTransport.send=async(operation,secret,query={})=>{
+  const index=REPORT_SCENES.findIndex((_,i)=>REPORT_KEY(i)===secret.toString('ascii'));if(index<0)throw new SecretError('credential_invalid');
+  if(operation==='limit'&&(index===4||index===5))throw new ConnectorStatus(index===4?403:404,null);
+  return {organization:'org-demo-reports-'+index,data:decodeOpenAI(JSON.stringify(reportFixture(index,operation,Number(query.start_time)*1000,Number(query.end_time)*1000,Date.now())))};
+};
+(connectors as Map<string,import('../server/connectors/registry.js').Connector>).set('openai_platform',openAIPlatform(reportTransport));
 await load('index.js');

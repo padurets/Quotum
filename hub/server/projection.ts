@@ -1,6 +1,7 @@
 import {level, sameWindow, type AttentionState, type Candidate} from './domain/attention.js';
 import {sourceHidden, isWindowHidden, titled} from './domain/presentation.js';
 import {balanceDescriptor, catalogue, monetaryOf, providerOf} from './domain/providers.js';
+import {reportAllowance,type ReportCalendar,type Allowance} from './domain/reports.js';
 import {DEFAULT_CURRENCY,type CurrencyContext} from './domain/currency.js';
 import {utcPeriods,type CalendarSpend} from './domain/meters.js';
 import type {Credentials,SourceAccess} from './secrets/credentials.js';
@@ -34,7 +35,7 @@ import type {Announcement, BoardSource, Store} from './store/store.js';
 export type Timed<T> = {value: T; changesAt: number | null};
 
 /** A source as a card shows it: its state, whose it is on this board, and whether its numbers are too old. */
-export type Card = SourceState & {owners: string[]; stale: boolean; measureIntervalMs: MeasureIntervalMs;spending?:CalendarSpend|null;keysCount?:number;currencyUnavailable?:boolean;identityOrigin?:'supplier'|'declared'};
+export type Card = SourceState & {owners: string[]; stale: boolean; measureIntervalMs: MeasureIntervalMs;spending?:CalendarSpend|null;keysCount?:number;reportedSpending?:ReportCalendar[];allowance?:Allowance|null;currencyUnavailable?:boolean;identityOrigin?:'supplier'|'declared'};
 
 /** When a source is measured next and why, while its holder follows the hub's pace. */
 export type Cadence = {by?:'hub';next: number; why: Why} | null;
@@ -70,7 +71,7 @@ const DAY = 86_400_000;
 /** Credential failures are private even to other members of a source's shared board. */
 export function publicSourceState(state: SourceState): SourceState {
   const error = state.error?.startsWith('secret_key_') || state.error?.startsWith('credential_') ? 'unmeasured' : state.error;
-  return {id: state.id, provider: state.provider, plan: state.plan, successAt: state.successAt, error, windows: state.windows, staleAfterMs: state.staleAfterMs, resets: state.resets,...(state.quota?{quota:state.quota}:{}),...(state.balanceStatus?{balanceStatus:{isAvailable:state.balanceStatus.isAvailable,at:state.balanceStatus.at,staleAfterMs:state.balanceStatus.staleAfterMs,partial:state.balanceStatus.partial,issues:state.balanceStatus.issues}}:{}),...(state.meters?{meters:state.meters,keys:state.keys,inventory:state.inventory}:{})};
+  return {id: state.id, provider: state.provider, plan: state.plan, successAt: state.successAt, error, windows: state.windows, staleAfterMs: state.staleAfterMs, resets: state.resets,...(state.quota?{quota:state.quota}:{}),...(state.balanceStatus?{balanceStatus:{isAvailable:state.balanceStatus.isAvailable,at:state.balanceStatus.at,staleAfterMs:state.balanceStatus.staleAfterMs,partial:state.balanceStatus.partial,issues:state.balanceStatus.issues}}:{}),...(state.meters?{meters:state.meters,keys:state.keys,inventory:state.inventory}:{}),...(state.reportQuality?{reportQuality:state.reportQuality,monthlyLimit:state.monthlyLimit?{...state.monthlyLimit,error:state.monthlyLimit.error?'unavailable':null}:undefined}:{})};
 }
 
 export class Projection {
@@ -120,15 +121,16 @@ export class Projection {
       const nativeUsd=card.meters.some(m=>m.unit===DEFAULT_CURRENCY&&!m.conversion&&balanceDescriptor(card.provider,m.id)?.role==='total');
       if(!nativeUsd&&originals.some(m=>!m.stale&&balanceDescriptor(card.provider,m.id)?.role==='total'&&!card.meters!.some(v=>v.conversion?.original.meterId===m.id&&!v.stale)))card.currencyUnavailable=true;
       const accounting=monetaryOf(card.provider);
-      if(accounting)card.spending=accounting.spending==='counter'?store.meters.calendar(source.id,now,state.successAt??utcPeriods(now).day):null;
+      if(accounting&&!state.reportQuality)card.spending=accounting.spending==='counter'?store.meters.calendar(source.id,now,state.successAt??utcPeriods(now).day):null;
     }
+    if(state.reportQuality){card.reportedSpending=store.reports.calendar(source.id,now);card.allowance=reportAllowance(card.reportedSpending,state.monthlyLimit,now);}
     const people = source.holders.filter(id => members.has(id));
     const byHub=providerOf(source.provider)?.measuredBy==='hub';
     const refresh = byHub?this.hub.hubSources?.refresh(source.id,now)??{value:{by:'hub' as const,unavailable:'no_access' as const,availableAt:null,retryAt:null,request:null},changesAt:null}:ingest.refresh(source.id, now);
     const cadence = byHub?this.hub.hubSources?.cadence(source.id)??{value:null,changesAt:null}:ingest.nextMeasurement(source.id, source.account, now);
     return {
       value: {card, sessions: ingest.live.of(source.id, people, now), cadence: cadence.value, refresh: refresh.value},
-      changesAt: earliest(state.balanceStatus&&now<=state.balanceStatus.at+state.balanceStatus.staleAfterMs?state.balanceStatus.at+state.balanceStatus.staleAfterMs+1:null,...state.windows.map(w => w.resetAt !== null && w.resetAt > now ? w.resetAt : null),...(card.meters??[]).map(m=>m.stale?null:m.at+m.staleAfterMs+1),...(card.meters??[]).map(m=>m.resetAt!==null&&m.resetAt>now?m.resetAt:null),card.spending?utcPeriods(now).day+86_400_000:null,this.hub.credentials?.nextExpiry(source.id,now)??null, stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt, refresh.changesAt),
+      changesAt: earliest(state.balanceStatus&&now<=state.balanceStatus.at+state.balanceStatus.staleAfterMs?state.balanceStatus.at+state.balanceStatus.staleAfterMs+1:null,...state.windows.map(w => w.resetAt !== null && w.resetAt > now ? w.resetAt : null),...(card.meters??[]).map(m=>m.stale?null:m.at+m.staleAfterMs+1),...(card.meters??[]).map(m=>m.resetAt!==null&&m.resetAt>now?m.resetAt:null),card.spending||card.reportedSpending?utcPeriods(now).day+86_400_000:null,this.hub.credentials?.nextExpiry(source.id,now)??null, stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt, refresh.changesAt),
     };
   }
 

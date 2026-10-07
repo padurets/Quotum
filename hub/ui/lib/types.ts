@@ -1,6 +1,7 @@
 export type {Refresh, RefreshRequest} from '../../server/domain/refresh';
 export {MEASURE_INTERVAL, type MeasureIntervalMs} from '../../server/domain/frequency';
 import type {MeasureIntervalMs} from '../../server/domain/frequency';
+import type {ReportQuality,MonthlyLimit,ReportCalendar,Allowance} from '../../server/domain/reports';
 import type {BalanceStatus,Meter,KeyPart,CalendarSpend,QuotaStatus} from '../../server/domain/meters';
 /** A window's length as the agent classifies it. */
 export type Kind = 'session' | 'weekly' | 'other';
@@ -47,6 +48,10 @@ export type Card = {
   identityOrigin?:'supplier'|'declared';
   keys?:KeyPart[];
   keysCount?:number;
+  reportQuality?:ReportQuality[];
+  monthlyLimit?:MonthlyLimit;
+  reportedSpending?:ReportCalendar[];
+  allowance?:Allowance|null;
   inventory?:{complete:boolean;observed:number;missing:number;error:string|null};
   spending?:CalendarSpend|null;
 };

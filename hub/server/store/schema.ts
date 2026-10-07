@@ -241,6 +241,18 @@ export const STEPS = [
       AND json_type(q.payload,'$.rates."'||currency_definitions.id||'"') IS NOT NULL
     ORDER BY q.fetched_at,q.rowid LIMIT 1);
   `,
+  // 16 — replaceable daily reports and component confirmations.
+  `
+  CREATE TABLE reported_intervals (
+    source_id TEXT NOT NULL, meter_id TEXT NOT NULL, unit TEXT NOT NULL,
+    from_at INTEGER NOT NULL, to_at INTEGER NOT NULL, amount INTEGER NOT NULL,
+    observed_at INTEGER NOT NULL, revision INTEGER NOT NULL,
+    PRIMARY KEY (source_id,meter_id,unit,from_at,to_at)) WITHOUT ROWID;
+  CREATE INDEX reported_by_end ON reported_intervals (to_at);
+  CREATE TABLE reported_components (
+    source_id TEXT NOT NULL, meter_id TEXT NOT NULL, unit TEXT NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY (source_id,meter_id,unit)) WITHOUT ROWID;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

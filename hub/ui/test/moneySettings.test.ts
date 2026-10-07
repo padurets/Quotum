@@ -6,7 +6,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {preparationFixture} from './preparationFixture';
-import {archivedKeyGroups,keyMeter,moneySelection,readMoney} from '../lib/moneySelection';
+import {archivedKeyGroups,keyMeter,moneySelection,readMoney,chooseMoney} from '../lib/moneySelection';
 import {Store} from '../../server/store/store';
 import {deepSeekMeasurement} from '../../server/connectors/deepseek';
 import {ApiError} from '../lib/http';
@@ -40,7 +40,7 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),jsxs:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),Fragment:'fragment'};
     if(name.endsWith('/board'))return {useBoardId:()=> 'b',useCurrencyContext:()=>budget?.context??defaultCurrencyContext};
     if(name.endsWith('/http'))return {ApiError,call};
-    if(name.endsWith('/moneySelection'))return {moneySelection,archivedKeyGroups,keyMeter};
+    if(name.endsWith('/moneySelection'))return {moneySelection,archivedKeyGroups,keyMeter,chooseMoney};
     if(name.endsWith('/prefs'))return {usePrefs:()=>prefs,setPrefs:(patch:typeof prefs)=>{prefs=patch;}};
     if(name.endsWith('/money'))return {keyName,balanceRoleLabel,balanceGroups,referenceBalance};
     if(name.endsWith('/providers'))return providers;

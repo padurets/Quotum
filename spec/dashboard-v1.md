@@ -925,3 +925,65 @@ their source changes; they never poll. Membership and source visibility still ap
 Chart settings show current and selected archived keys through the same pages of at
 most ten keys. Selected current keys on other pages are not duplicated. An open page
 reloads after a successful source measurement.
+
+
+## Reported spending
+
+A reported source has `reportQuality` and optional `monthlyLimit`, `reportedSpending`
+and `allowance` on its card, independently of percentage windows. Costs retain exact
+signed whole-millionth values in their own currency. A monthly limit is a nonnegative
+threshold; supplier integer cents are multiplied by 10000. Report lines are aggregated
+exactly before one rounding operation. Different currencies are never added together.
+
+`reportQuality` contains one entry per meter/unit: `{meterId, unit, roundVersion,
+attemptedAt, lastCompleteReadAt, status, acquiredAt, requestFrom, requestTo,
+traversalComplete, staleAfterMs, confirmation}`. Confirmation entries are
+`{from, to, valueRevision, readAt}`. Traversal completion is not proof that missing
+reports are zero or that costs are final. A partial attempt confirms only certified
+rows; failed attempts preserve numeric evidence and clear current confirmation.
+`monthlyLimit` contains `{status, observedAt, error, value, valueAt, staleAfterMs}`;
+value is `{unit, amount, enforcement}`, with enforcement `enforcing`, `inactive` or
+`unknown`. Errors are neutral safe component states; credential failures are private.
+An unavailable read preserves the last valid threshold without making it fresh.
+A 404 alone does not prove that no limit is configured.
+
+`reportedSpending` contains meter/unit day/week/month summaries with `{from, to,
+amount, complete, confirmed, provisional, asOf, overlapping}`. Bounds use UTC and
+Monday weeks. Amount can be a retained partial subtotal or null; completeness of
+numeric coverage and fresh confirmation are separate. Current days are provisional.
+`allowance` is null without a known threshold, otherwise `{unit, limit, remaining,
+overspend, enforcement, stale}`. Remaining/overspend are nullable: arithmetic requires
+fresh confirmed monthly costs and a fresh threshold in the same unit. Negative net
+reports remain exact. They produce no negative-used cap observation. A derived
+nonnegative monthly cap uses the ordinary `monthly` meter and its historical semantics.
+
+The existing history selection also admits `[source, "costs"]`. Each chunk can contain
+`reportSeries`: `{source, meter, kind: "reported", unit, intervals}`. Intervals are
+`{from, to, amount, valueObservedAt, revision}` with original half-open daily bounds.
+They contain stable numeric evidence, never mutable freshness or confirmation flags.
+Repeated intervals in adjacent tiles compose once, keeping the highest accepted
+revision. Corrections invalidate history from the original changed day. Numeric
+heartbeats and quality changes update the source without another history event/read.
+Confirmation requires the matching value revision, so corrected metadata cannot
+confirm an older cached value before its replacement arrives. Original report bounds
+survive retention crossings; fully expired reports are removed.
+
+Whole days inside a selected range contribute their exact amount. Partial-day overlaps
+retain the entire reported amount separately, with unknown spending inside the selected
+part. Daily marks span the original day; no hourly distribution, lifetime counter,
+quota forecast or top-up is inferred. Report byte leaves count toward the same history
+limits and use the existing staging and preparation scheduler. Report-only sources are
+selected by default in Spending; allowance and spending selections persist separately.
+Legacy explicit money selections remain available in both modes. A monthly spending
+cap is not selected by default in Balance. Cards and compact use the shared Available balance view. A reported cost or
+monthly cap does not supply the account funds section; without a supported balance
+it remains unavailable. Threshold and enforcement metadata stay separate; reported
+spending remains in analytics.
+
+OpenAI access uses the shared `expiryKind: "unknown"` credential contract. Saving it
+requires `allowUnknownExpiry`, with the ordinary `credential_expiry_confirmation` response
+and explicit unknown-expiry consent. Authentication failure without expiry
+proof is `credential_access_invalid` (revoked or expired). Keys and raw organization
+headers never enter board state, events or history. Hub refresh may finish as
+`updated_partially`; certified data can remain visible while a transient attempt still
+fails and preserves its supplier retry deadline across refresh, rotation and restart.

@@ -19,6 +19,7 @@ const resultContent=(result:import('./connectors/registry.js').ConnectorIdentity
 type Job={generation:number;next:number|null;last:number|null;retryAt:number;interval:number;failures:number;controller:AbortController|null;request:RefreshRequest|null;requestedAt:number|null};
 
 export function measurementFingerprint(state:SourceState,measurement?:MeterMeasurement):string {
+  if(measurement?.reportDigest??state.reportDigest)return measurement?.reportDigest??state.reportDigest!;
   if(!state.balanceStatus&&!measurement?.balanceStatus)return JSON.stringify((measurement?.meters??state.meters)?.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
   const current=new Map((state.meters??[]).map(m=>[m.id,{...m,stale:measurement?true:m.stale}]));
   for(const meter of measurement?.meters??[])current.set(meter.id,{...meter,stale:false});
@@ -46,7 +47,8 @@ export class HubSources {
     if(!this.credentials.sources().includes(source)){this.jobs.delete(source);this.arm();return;}
     if(providerOf(this.store.state(source).provider)?.measuredBy!=='hub')return;
     const now=this.clock.now();
-    this.jobs.set(source,{generation:(old?.generation??0)+1,next:Math.max(now,(old?.last??-Infinity)+60_000,old?.retryAt??0),last:old?.last??null,retryAt:old?.retryAt??0,interval:120_000,failures:0,controller:null,request:null,requestedAt:old?.requestedAt??null});
+    const retryAt=Math.max(old?.retryAt??0,this.credentials.retryNotBefore(source));
+    this.jobs.set(source,{generation:(old?.generation??0)+1,next:Math.max(now,(old?.last??-Infinity)+60_000,retryAt),last:old?.last??null,retryAt,interval:120_000,failures:0,controller:null,request:null,requestedAt:old?.requestedAt??null});
     this.arm();this.touch(source);
   }
   private touch(source:string){tell(this.observer,o=>o.touchSources([source]));}
@@ -54,7 +56,7 @@ export class HubSources {
     this.cancelTimer?.();this.cancelTimer=null;if(!this.running||this.active>=2)return;
     const next=Math.min(...[...this.jobs].filter(([s,j])=>!this.activeSources.has(s)&&!j.controller&&j.next!==null).map(([,j])=>j.next!));
     if(!Number.isFinite(next))return;
-    this.cancelTimer=this.clock.after(Math.max(0,next-this.clock.now()),()=>{this.cancelTimer=null;this.pump();});
+    this.cancelTimer=this.clock.after(Math.min(2_147_483_647,Math.max(0,next-this.clock.now())),()=>{this.cancelTimer=null;this.pump();});
   }
   private pump() {
     if(!this.running)return;
@@ -78,16 +80,17 @@ export class HubSources {
       });
       if(!valid())return;if(!result)throw new SecretError('connector_timeout');
       const after=resultContent(result,this.store.state(source));
-      if(result.quotaObservation&&!result.measurement)job.failures++;else job.failures=0;job.interval=this.store.measureInterval(source)??(!result.measurement?Math.min(120_000*2**Math.min(job.failures-1,3),900_000):before===after?Math.min(job.interval*2,900_000):120_000);
+      const transient=result.attempt?.outcome==='transient';
+      if(transient||result.quotaObservation&&!result.measurement)job.failures++;else job.failures=0;job.interval=this.store.measureInterval(source)??(!result.measurement?Math.min(120_000*2**Math.min(job.failures-1,3),900_000):before===after?Math.min(job.interval*2,900_000):120_000);
       // Freshness belongs to the accepted observation; it is never extended after failure.
-      job.retryAt=this.clock.now()+(result.retryAfterMs??0);
-      job.next=Math.max(this.clock.now()+job.interval,job.retryAt);
-      if(job.request){job.request.status=result.measurement?'updated':'failed';job.request.finishedAt=this.clock.now();}
+      job.retryAt=Math.max(job.retryAt,this.credentials.retryNotBefore(source),this.clock.now()+(result.retryAfterMs??0));
+      job.next=Math.max(this.clock.now()+(transient?Math.min(120_000*2**Math.min(job.failures-1,3),900_000):job.interval),job.retryAt);
+      if(job.request){job.request.status=transient||!result.measurement?'failed':result.measurement.reports?.status==='partial'?'updated_partially':'updated';job.request.finishedAt=this.clock.now();}
     }catch(error){
       if(!valid())return;
       const code=error instanceof SecretError?error.code:'credential_failed';
       this.store.fail(source,code);
-      job.retryAt=this.clock.now()+(error instanceof ConnectorStatus?error.retryAfterMs??0:0);
+      job.retryAt=Math.max(job.retryAt,this.credentials.retryNotBefore(source),this.clock.now()+(error instanceof ConnectorStatus?error.retryAfterMs??0:0));
       job.failures++;job.next=permanentAccess(code)?null:Math.max(this.clock.now()+Math.min(120_000*2**Math.min(job.failures-1,3),900_000),job.retryAt);
       if(job.request){job.request.status='failed';job.request.finishedAt=this.clock.now();}
     }finally{
