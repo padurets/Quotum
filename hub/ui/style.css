@@ -1044,7 +1044,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .catalogue-row:hover { background: var(--hair); }
 .catalogue-row > img, .catalogue-connect > img { width: 22px; height: 22px; }
 .catalogue-name { flex: 1; min-width: 0; }
-.catalogue-name b { display: block; font-weight: 550; font-size: 13px; overflow-wrap: anywhere; }
+.catalogue-name b { display: block; font-weight: 550; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .catalogue-name small { display: block; color: var(--text-4); font-size: 11px; margin-top: 3px; }
 .catalogue-row .button { flex-shrink: 0; font-size: 12px; }
 .catalogue-connect { display: flex; gap: 12px; align-items: center; }
