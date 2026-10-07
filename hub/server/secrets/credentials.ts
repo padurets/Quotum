@@ -192,8 +192,8 @@ export class Credentials {
       const replay=this.replay(owner,provider,options.requestId,selector);if(replay)return replay;
       const verified=await this.verify(owner,provider,secret,options);
       try{return this.mutation(()=>{
-        const replay=this.replay(owner,provider,options.requestId,selector);if(replay)return replay;
         if(!validSession())throw new SecretError('credential_permission');
+        const replay=this.replay(owner,provider,options.requestId,selector);if(replay)return replay;
         const {credential}=this.commitVerified(owner,verified,undefined,!connector.declaredAccounts);
         if(options.requestId)this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('credential-request:'+owner+':'+options.requestId,JSON.stringify({provider,id:credential.id,at:Date.now(),...(selector===undefined?{}:{target:selector})}));
         return credential;

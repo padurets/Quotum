@@ -266,6 +266,22 @@ test('legacy create rechecks a revoked session after asynchronous verification b
   for(const table of ['credentials','holders','sources'])assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM '+table).get()!.n,0);
 });
 
+test('a revoked in-flight create cannot replay a concurrent request from a new session',async t=>{
+  const h=await harness();t.after(async()=>{await h.app.close();h.store.close();});
+  let release!:()=>void,started!:()=>void,calls=0;
+  const paused=new Promise<void>(resolve=>release=resolve),ready=new Promise<void>(resolve=>started=resolve),identify=fixture.identify;
+  t.mock.method(fixture,'identify',async(...args:Parameters<Connector['identify']>)=>{if(++calls===1){started();await paused;}return identify(...args);});
+  const input={provider:'test',secret:CANARY,requestId:'33333333-3333-4333-8333-333333333333'};
+  const pending=h.call('POST','/api/credentials',input);await ready;
+  const owner=h.users.get('alice')!,token=newSecret('qt_s');h.directory.deleteSessions(owner);h.directory.createSession(token,owner,Date.now(),60_000);
+  const concurrent=await h.app.inject({method:'POST',url:'/api/credentials',payload:input,headers:{origin:ORIGIN,cookie:`quotum_session=${token}`}});
+  assert.equal(concurrent.statusCode,201);release();
+  const late=await pending;assert.equal(late.statusCode,400);assert.deepEqual(late.json(),{error:'credential_permission'});
+  assert.equal((await h.call('GET','/api/credentials')).statusCode,401);
+  assert.equal(h.credentials.list(owner).length,1);assert.equal(h.credentials.list(owner)[0].id,concurrent.json().id);
+  h.clean(late.body,concurrent.body);
+});
+
 test('legacy replacement preserves unknown expiry rather than claiming confirmed no expiry',async t=>{
   const h=await harness();t.after(async()=>{await h.app.close();h.store.close();});
   t.mock.method(fixture,'identify',async()=>({account:'0'.repeat(24),abilities:['balance'],expiresAt:null,expiryKind:'unknown' as const}));
