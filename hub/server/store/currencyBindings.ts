@@ -46,7 +46,8 @@ export class CurrencyBindings {
   changes(source:string,unit:string,from:number,to:number,anchor:string|null=null):number[] {
     if(unit===this.target)return [];
     const group=this.group(source,unit),saved=group.anchors.get(anchor??'');
-    const missing=group.missingByAnchor.get(anchor??'')??[],times=missing.slice(upper(missing,from),upper(missing,to-1));if(!saved)return times;
+    // Native capture can precede normalization, so every anchor must revisit its missing observations.
+    const missing=group.missingStarts,times=missing.slice(upper(missing,from),upper(missing,to-1));if(!saved)return times;
     for(let at=upper(saved.starts,from);at<saved.rows.length&&saved.starts[at]<to;at++)times.push(saved.starts[at]);
     for(let at=upper(saved.ends,from);at<saved.ends.length&&saved.ends[at]<to;at++)times.push(saved.ends[at]);
     return times;

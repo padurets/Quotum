@@ -163,6 +163,9 @@ export class CurrencyStore extends CurrencyRegistry {
       AND NOT EXISTS(SELECT 1 FROM readings r WHERE r.source_id=currency_bindings.source_id AND r.unit=currency_bindings.from_currency
         AND (r.at BETWEEN currency_bindings.observation_at AND currency_bindings.through_at
           OR r.previous_at BETWEEN currency_bindings.observation_at AND currency_bindings.through_at))
+      AND NOT EXISTS(SELECT 1 FROM meter_spans s WHERE s.source_id=currency_bindings.source_id
+        AND (s.from_at BETWEEN currency_bindings.observation_at AND currency_bindings.through_at
+          OR s.to_at BETWEEN currency_bindings.observation_at AND currency_bindings.through_at))
       AND NOT EXISTS(SELECT 1 FROM money_valuations v JOIN meter_spans s ON s.source_id=v.source_id AND s.meter_id=v.meter_id
         WHERE v.source_id=currency_bindings.source_id AND v.native_unit=currency_bindings.from_currency AND v.quote_id=currency_bindings.anchor
           AND (v.at BETWEEN currency_bindings.observation_at AND currency_bindings.through_at

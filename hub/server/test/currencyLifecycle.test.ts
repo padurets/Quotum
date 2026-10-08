@@ -9,6 +9,7 @@ import {deepSeekMeasurement} from '../connectors/deepseek.js';
 import {displayHistory} from '../currencies/history.js';
 import {Currencies} from '../currencies/service.js';
 import {composeMeters} from '../domain/meterHistory.js';
+import type {Meter} from '../domain/meters.js';
 
 function fixture(){const store=new Store(':memory:',1),directory=new Directory(store.db),owner=directory.createUser('currency@example.com','Owner','fixture',1),other=directory.createUser('other@example.com','Other','fixture',1);return {store,owner:owner.id,other:other.id};}
 const fields={name:'Points',symbol:'PT',fractionDigits:2};
@@ -143,5 +144,45 @@ test('management summarizes current pairs without resurrecting stopped or supers
     const summary=new CurrencyStore(store.db).manage(owner).personal[0];
     assert.equal(summary.archivedAt,50);assert.deepEqual(summary.pairs,[{base:'EUR',rate:'2500000'},{base:'USD',rate:null}]);
     assert.deepEqual(c.manage(other).personal[0].pairs,[{base:'USD',rate:'99000000'}]);
+  }finally{store.close();}
+});
+
+test('derived reference history preserves an unavailable native heartbeat across coalesced updates',async()=>{
+  const {store,owner}=fixture(),service=new Currencies(store,async()=>{throw new Error('reference already cached');},()=>100);
+  try {
+    const c=store.currencies,target=c.create(owner,fields,'USD','2000000',1),source=store.source('deepseek','5'.repeat(24),1);store.hold(source,owner,1);c.select(owner,target.id);
+    c.save({source:'fixture',base:'USD',date:0,fetchedAt:1,validUntil:null,rates:{USD:'1000000',CNY:'7000000'}});c.markChecked(100);service.start();
+    const observe=(at:number)=>store.record(source,deepSeekMeasurement({is_available:true,balance_infos:[{currency:'CNY',total_balance:'700',granted_balance:'0',topped_up_balance:'700'}]},at));
+    observe(10);await service.update(source);
+    c.stopRate(owner,target.id,'USD',c.rates(owner,target.id)[0].id,30);observe(35);
+    c.setRate(owner,target.id,'USD','4000000',40,40);observe(50);await service.update(source);
+    const points=(meter:string,unit:string)=>{
+      const chunks=[{from:0,to:60,series:[],activity:{devices:{},sources:{},projects:{},sessions:[],cells:[]},resets:[],grants:[],meterSeries:store.meters.cells({unit,ids:[[source,meter]]},0,60,60)}];
+      const times=[...store.meters.readings(source,meter,0,60).map(row=>row.at),...store.meters.spans(source,meter,0,60).map(span=>span.to)].sort((a,b)=>a-b);
+      return composeMeters(displayHistory(chunks,c,owner,target.id,60,(_source,_meter,until)=>times.filter(at=>at<=until).at(-1)??null),60,0,60)[0].points.map(point=>[point.at,point.validUntil,point.value]);
+    };
+    const expected=[[10,35,'200000000'],[50,60,'400000000']];
+    assert.deepEqual(points('fx:USD:balance:CNY','USD'),expected);
+    assert.deepEqual(points('balance:CNY','CNY'),expected);
+    c.setRate(owner,target.id,'USD','3000000',34,60);
+    assert.deepEqual(points('fx:USD:balance:CNY','USD'),[[10,35,'200000000'],[35,50,'300000000'],[50,60,'400000000']]);
+  }finally{await service.stop();store.close();}
+});
+
+test('retention preserves a packed native key endpoint after the key leaves current inventory',()=>{
+  const {store,owner}=fixture();try {
+    const c=store.currencies,target=c.create(owner,fields,'USD','2000000',1),source=store.source('openrouter','6'.repeat(24),1),key='012345abcdef';c.select(owner,target.id);
+    const meter=(id:string,at:number):Meter=>({id,amount:'1000000',kind:'counter',unit:'USD',limit:null,at,staleAfterMs:300000,stale:false,resetAt:null,minutes:null,scope:null,label:null});
+    const observe=(at:number,present:boolean)=>{
+      store.record(source,{type:'meters',observedAt:at,staleAfterMs:300000,meters:[meter('credits',at),meter('usage',at),...(present?[meter('key:'+key+':usage',at)]:[])],keys:present?[{id:key,name:'Fixture',disabled:false,expiresAt:null,includeByok:false,at,staleAfterMs:300000,presence:'observed',missCount:0,periods:{day:'1',week:'1',month:'1'}}]:[],inventoryComplete:true,inventoryError:null});
+      c.context(owner,{[source]:store.state(source)!.meters!.map(m=>({unit:m.unit,at:m.at}))});
+    };
+    observe(10,true);c.setRate(owner,target.id,'USD','3000000',20,20);observe(25,true);
+    c.setRate(owner,target.id,'USD','4000000',30,30);observe(35,false);observe(40,false);
+    c.setRate(owner,target.id,'USD','5000000',24,50);
+    const pin=c.binding(owner,'USD',target.id,25,null,source)!;assert.equal(convertBy('1000000',pin),'3000000');
+    store.meters.prune(50);
+    assert.deepEqual(store.meters.spans(source,'key:'+key+':usage',0,100).map(span=>[span.from,span.to]),[[10,25]]);
+    assert.deepEqual(new CurrencyStore(store.db).binding(owner,'USD',target.id,25,null,source),pin);
   }finally{store.close();}
 });
