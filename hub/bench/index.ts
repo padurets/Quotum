@@ -322,6 +322,14 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
     }
     latencies.push(changed === null ? Infinity : changed - sent);
     chartLatencies.push(chart === null ? Infinity : chart - sent);
+    if (chart === null) {
+      const key = source + ' gemini:weekly';
+      const shown = await cdp.evaluate(`(() => {
+        const line = [...document.querySelectorAll('[data-series]')].find(node => node.getAttribute('data-series') === ${JSON.stringify(key)});
+        return {last: line?.getAttribute('data-last'), chart: line?.closest('svg')?.dataset, paths: line?.querySelectorAll('path').length};
+      })()`);
+      say(`missing quota update: ${JSON.stringify({measurement: i + 1, observedAt: taken.observedAt, expected: last, shown})}`);
+    }
     await sleep(sent + MEASURE_EVERY - Date.now());
   }
   await drain(requests); requests.counting = false;
