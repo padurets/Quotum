@@ -17,6 +17,7 @@ import {Cadence} from '../../server/cadence.js';
 import {Pairing} from '../../server/pairing.js';
 import {ResetFeed} from '../../server/resets.js';
 import {Setup} from '../../server/setup.js';
+import {BUDGET_WIDGETS, QUOTA_WIDGETS, widgetVisible} from '../../server/domain/widgets.js';
 
 const secret = 'SYNTHETIC_PROVIDER_KEY_0123456789';
 async function harness(extended = true) {
@@ -105,6 +106,35 @@ test('members add only their sources; an empty analytic does not expose the othe
   const memberWidget = await h.reserve({kind: 'widget', widgetId: 'agents'}, h.member.id);
   assert.equal(memberWidget.error, 'addition_permission');
   assert.deepEqual(h.directory.view(h.board.id).shown, ['quota-history']);
+});
+
+for (const first of ['codex', 'deepseek'] as const) test(`a new board waits for its first ${first} source before placing only that analytics pair`, async t => {
+  const h = await harness(); t.after(h.close);
+  const pair = first === 'codex' ? QUOTA_WIDGETS : BUDGET_WIDGETS;
+  const other = first === 'codex' ? BUDGET_WIDGETS : QUOTA_WIDGETS;
+  const source = h.store.source(first, 'first-source', Date.now());
+  h.store.hold(source, h.owner.id, Date.now());
+  // Owning the source on the personal board does not place it on a new shared board.
+  const snapshot = async () => (await h.call('GET', '/api/overview?board=' + h.board.id)).json();
+  const before = await snapshot();
+  assert.equal(before.sources.length, 0);
+  for (const id of [...pair, ...other]) assert.equal(widgetVisible(before.view, id, 0), false);
+  const operation = await h.reserve({kind: 'sources', sourceIds: [source]});
+  assert.equal((await h.call('POST', '/api/additions/' + operation.id + '/run', {})).json().state, 'complete');
+  const after = await snapshot();
+  assert.equal(after.sources.length, 1);
+  for (const id of pair) assert.equal(widgetVisible(after.view, id, 1), true);
+  for (const id of other) assert.equal(widgetVisible(after.view, id, 1), false);
+  assert.deepEqual((await snapshot()).view, after.view, 'reload preserves the same placement');
+  const hidden = {...after.view, hidden: [...after.view.hidden, pair[0]]};
+  h.directory.saveView(h.board.id, hidden, h.owner.id, Date.now());
+  const second = h.store.source(first === 'codex' ? 'deepseek' : 'codex', 'second-source', Date.now());
+  h.store.hold(second, h.owner.id, Date.now());
+  const next = await h.reserve({kind: 'sources', sourceIds: [second]});
+  assert.equal((await h.call('POST', '/api/additions/' + next.id + '/run', {})).json().state, 'complete');
+  const mixed = await snapshot();
+  for (const id of other) assert.equal(widgetVisible(mixed.view, id, 2), true);
+  assert.equal(widgetVisible(mixed.view, pair[0], 2), false, 'a hidden widget is not restored by another family');
 });
 
 test('synthetic device discovery provides nothing until its selected source is added', async t => {

@@ -12,6 +12,25 @@ import {DEFAULT_MONEY,moneySelection} from '../../ui/lib/moneySelection.js';
 import {EMPTY_VIEW} from '../../server/domain/view.js';
 import {BUDGET_WIDGETS,QUOTA_WIDGETS,showWidgets,widgetVisible} from '../../server/domain/widgets.js';
 import type {Card} from '../../ui/lib/types.js';
+import {shareConnectorScene, type Stand} from '../setup.js';
+
+test('connector scenes populate the mixed demo board and leave empty and limit-only boards alone', () => {
+  const store = new Store(':memory:', 1), directory = new Directory(store.db);
+  try {
+    const owner = directory.createUser('scenes@fixture.example', 'Owner', 'x', 1);
+    const team = directory.createBoard('Team', owner.id, 1), empty = directory.createBoard('Empty', owner.id, 1), limits = directory.createBoard('Limits', owner.id, 1);
+    const stand = {boards: new Map([['team', team.id], ['empty', empty.id], ['limits', limits.id]])} as Stand;
+    for (const provider of ['openrouter', 'deepseek', 'zai'] as const) {
+      const source = store.source(provider, provider, 1); store.hold(source, owner.id, 1);
+      shareConnectorScene(store, stand, source, owner.id, 1);
+    }
+    assert.equal(store.sources(team.id).length, 3);
+    for (const board of [empty, limits]) {
+      assert.equal(store.sources(board.id).length, 0);
+      assert.deepEqual(directory.view(board.id).shown, []);
+    }
+  } finally {store.close();}
+});
 
 test('mixed analytics catalogue keeps both resource families, exact amounts and sticky empty widgets',()=>{
   const store=new Store(':memory:',1),directory=new Directory(store.db),seen=new Set<string>();

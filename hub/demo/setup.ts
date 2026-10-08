@@ -33,6 +33,12 @@ import {
 import {emailOf, PASSWORD} from './access.js';
 export {emailOf, PASSWORD} from './access.js';
 
+/** Connector scenes belong to the mixed team board; other boards keep their catalogue state. */
+export function shareConnectorScene(store: Store, stand: Stand, source: string, owner: string, at: number) {
+  const team = stand.boards.get('team');
+  if (team) store.share(team, source, owner, at);
+}
+
 /** A set brought up on a hub: who is who there, by the catalogue's names. */
 export type Stand = {
   set: DemoSet;
