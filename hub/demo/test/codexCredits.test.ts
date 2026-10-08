@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {CODEX_CREDIT_SCENES,creditMeasurement} from '../codexCredits.js';
+import {CODEX_CREDIT_SCENES,creditHistory} from '../codexCredits.js';
 import {Store} from '../../server/store/store.js';
 import {Directory} from '../../server/store/directory.js';
 import {scalarDecimal} from '../../server/domain/amount.js';
@@ -13,11 +13,12 @@ test('every durable Codex credit scene has real resource, precision and consent 
       const directory=new Directory(store.db),owner=directory.createUser('credits@example.test','Credits','fixture',1),board=directory.createBoard('Shared',owner.id,1);
       const source=store.source('codex','a'.repeat(24),1);store.hold(source,owner.id,1);
       store.share(board.id,source,owner.id,1,scene.id!=='quota-only-share');
-      store.record(source,creditMeasurement(scene.id,1,true));
-      store.record(source,creditMeasurement(scene.id,60_001));
+      const history=creditHistory(scene.id,24*3_600_000);
+      for(const sample of history)store.record(source,sample);
       const state=store.state(source),meter=state.meters?.[0],seen=new Set<string>();
       seen.add(state.windows.length?'mixed':'quota-missing');
       seen.add(state.creditBalance!.status);
+      if(new Set(history.flatMap(sample=>sample.balances?.flatMap(balance=>balance.status==='finite'?[balance.amount]:[])??[])).size>1)seen.add('changing-balance');
       if(meter){seen.add(scalarDecimal({amount:meter.amount,scale:meter.scale??6}));if(meter.stale||state.creditBalance!.staleAfterMs<60_000)seen.add('last-known');}
       if(state.creditBalance!.staleAfterMs<60_000)seen.add('stale');
       if(!store.sources(board.id)[0].budget?.enabled)seen.add('shared-funds-off');

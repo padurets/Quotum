@@ -1,4 +1,4 @@
-import {budgetVisible} from '../lib/money';
+import {budgetVisible, subscriptionFundsVisible} from '../lib/money';
 import {memo, useEffect, useRef} from 'react';
 import {useBoard} from '../lib/session';
 import {useApp, useBoardId, useCard, useConnection, useVisibleLimits, useServerView, useSessions, useTitle} from '../lib/board';
@@ -10,6 +10,7 @@ import {t, useLocale} from '../i18n';
 import {CardMark, ResetLine} from './SourceCard';
 import {PercentLimit} from './Meter';
 import {MoneyCard,QuotaCard,BalanceMark} from './MoneyCard';
+import {FreeResets} from './ResetMarks';
 import {providerOf} from '../../server/domain/providers';
 import {hasSubscriptionCaps} from '../lib/providers';
 import {quotaPeriods} from '../lib/subscription';
@@ -25,18 +26,23 @@ const Row = memo(function Row({id}: {id: string}) {
   if (!card || !view) return null;
   const windows = card.windows.filter(w => !isWindowHidden(view, id, w.id));
   const periods=quotaPeriods(card),shownPeriods=periods.filter(w=>!isWindowHidden(view,id,w.id));
+  const funds=budgetVisible(card)&&providerOf(card.provider)?.funding==='subscription';
   if (periods.length && !shownPeriods.length && !budgetVisible(card)) return null;
   const working = t('desktop.working', {count: sessions.filter(s => s.working).length});
   return <section className="card compact-card">
     <div className="card-head">
-      <CardMark source={card}/><BalanceMark source={card}/><div className="card-heading"><h2 title={title}>{title}</h2>
+      <CardMark source={card}/>{!funds&&<BalanceMark source={card}/>}<div className="card-heading"><h2 title={title}>{title}</h2>
         {(card.meters||providerOf(card.provider))&&<small className="resource-type">{t(providerOf(card.provider)?.funding==='wallet'?'resource.budget':'resource.subscription')}</small>}
       </div>
       {sessions.length > 0 && <small className="compact-agents" title={t('desktop.total', {count: sessions.length})}>{working}</small>}
     </div>
     {hasSubscriptionCaps(card.provider)?<QuotaCard source={card} ids={shownPeriods.map(w=>w.id)} compact/>:!budgetVisible(card)&&!windows.length&&<p className="compact-quality">{t('desktop.unavailable')}</p>}
     {windows.map(w => <PercentLimit key={w.id} name={windowName(w)} remaining={w.remaining} reset={<ResetLine w={w} short/>} compact/>)}
-    {budgetVisible(card)&&<MoneyCard source={card} board={board??''} view={view} compact/>}
+    {budgetVisible(card)&&!funds&&<MoneyCard source={card} board={board??''} view={view} compact/>}
+    {(subscriptionFundsVisible(card)||!!card.resets?.available)&&<footer className="card-foot">
+      {subscriptionFundsVisible(card)&&<MoneyCard source={card} board={board??''} view={view} tray/>}
+      {!!card.resets?.available&&<FreeResets resets={card.resets} observation={card.resources?.resets}/>}
+    </footer>}
   </section>;
 });
 

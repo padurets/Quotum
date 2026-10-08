@@ -656,9 +656,15 @@ Invalid money leaves stay distinct from null. The ledger retains the last confir
 span endpoint as evidence through archival and retention; reappearance uses that
 heartbeat time as its spending anchor.
 
-Codex reports purchased credits on its existing subscription source. Windows, free
-resets and credit status have independent strictly newer observation watermarks; a
-separate monotonic delivery baseline drives cadence and survives restart. Deferred
+Codex reports purchased credits on its existing subscription source. Dashboard and
+compact show additional funds as a footer mark, with exact amounts and conversion
+details in its disclosure; the subscription body keeps its percentage limits.
+Clients that have never reported credits get no empty footer mark. A confirmed zero
+is numeric; a missing, invalid or stale balance uses a warning mark whose disclosure
+preserves the last known amount. The separate Budget trends widget plots credit
+history in the display currency alongside the subscription limit chart.
+Windows, free resets and credit status have independent strictly newer observation
+watermarks; a separate monotonic delivery baseline drives cadence and survives restart. Deferred
 runtime acknowledgements run only after the mixed database transaction commits.
 Native credit amounts use exact coefficient/scale values, with scale stored per reading
 and retained in packed history and conversion provenance. Finite availability ends

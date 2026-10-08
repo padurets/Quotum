@@ -392,6 +392,7 @@ td.muted, small.muted { color: var(--text-3); }
 .tray-pill svg { flex-shrink: 0; opacity: .8; }
 .tray-pill b { font-weight: 560; color: var(--text); }
 .tray-pill .tray-icon { stroke-width: 2.2; }
+.funds-mark .funds-value { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; }
 .text-button.tray-pill.is-warn { color: var(--warn); }
 .text-button.tray-pill.is-crit { color: var(--crit); }
 /* The glow is on the icon itself, never on the button: a filter there would spoil the glass of its panel. */
@@ -916,6 +917,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .compact h1 { font-size: 15px; margin: 0; flex: 1; }
 .compact-card { padding: 10px; margin: 0 0 8px; gap: 6px; }
 .compact-card:last-child { margin-bottom: 0; }
+.compact-card .card-foot { min-height: 34px; margin: 4px -10px -10px; }
 .compact-card .card-head { gap: 8px; margin-bottom: 2px; }
 .compact-card .provider-logo { width: 24px; height: 24px; padding: 4px; border-radius: 7px; }
 .compact-card .provider-mark .dot { width: 5px; height: 5px; border-width: 1.5px; }

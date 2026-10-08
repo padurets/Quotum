@@ -316,11 +316,13 @@ export function MoneyCard({
   board,
   view,
   compact = false,
+  tray = false,
 }: {
   source: Card;
   board: string;
   view?: View;
   compact?: boolean;
+  tray?: boolean;
 }) {
   const context = useCurrencyContext(source.id);
   const {keys, meters, error} = useShownKeys(source, view, board);
@@ -399,6 +401,7 @@ export function MoneyCard({
       ))}
     </div>
   );
+  if(tray)return <FundsMark source={source} groups={groups} context={context} breakdown={breakdown} displayUnavailable={!!displayUnavailable}/>;
   return (
     <div className="money-body">
       <div className="money-balance">
@@ -466,6 +469,22 @@ export function MoneyCard({
       <ErrorLine error={error} />
     </div>
   );
+}
+/** Subscription funds share the budget value and disclosure, in the existing footer. */
+function FundsMark({source,groups,context,breakdown,displayUnavailable}:{source:Card;groups:ReturnType<typeof budgetView>['remaining']['values'];context:CurrencyContext;breakdown:ReactNode;displayUnavailable:boolean}) {
+  const now=useClock(now=>creditChangesAt(source,now));
+  const status=creditBalanceText(source,now)??(displayUnavailable?t('money.noDisplayBalance',{currency:context.target.symbol}):!groups.length?t('money.noBalance'):null);
+  const values=groups.map(({total,approximate})=>({total,text:(approximate?'≈ ':'')+money(total.amount,total.unit,false,context,total.scale)}));
+  const label=[t('money.additionalFunds'),status??values.map(value=>value.text).join('\n')].join('\n');
+  const unlimited=source.creditBalance?.status==='unlimited'&&status===t('money.unlimited');
+  const tone=status&&!unlimited&&source.creditBalance?'warn':undefined;
+  return <span className="funds-tray" data-time={status?'credit-status':undefined}><StatusMark label={label} className="funds-mark" tone={tone} align="right" trigger={<>
+    {status&&!unlimited?<WarningIcon/>:<><svg className="tray-icon" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M20 8V5H6a3 3 0 0 0 0 6h14v9H6a3 3 0 0 1-3-3V8m17 3h1v5h-5v-5h4m-1 2.5h.01"/></svg>
+      {unlimited?<b>∞</b>:values.map(({total,text})=><b className="funds-value" data-money={total.amount} key={total.id}>{text}</b>)}</>}
+  </>}>
+    <div className="tray-panel-head"><p className="tray-panel-lead">{t('money.additionalFunds')}</p>{status&&<p>{status}</p>}{status&&source.creditBalance&&<p className="tray-panel-when">{stamp(source.creditBalance.at)}</p>}</div>
+    {breakdown}
+  </StatusMark></span>;
 }
 function creditChangesAt(source: Card, now: number) {
   const status = source.creditBalance;

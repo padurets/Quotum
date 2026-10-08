@@ -189,7 +189,10 @@ and platform smoke checks still apply.
 - **Budget widgets share one semantic presentation.** Dashboard and compact use the
   same budget view and renderer: one Available balance, supported scoped allowances
   separately, and balance composition in the existing disclosure. Accounting totals
-  belong in analytics. Never add card rows just because a provider returns more fields;
+  belong in analytics. A subscription's additional funds belong in its footer beside
+  free resets, as a compact amount with a disclosure, in both dashboard and compact.
+  They never add a balance row to the subscription's main body.
+  Never add card rows just because a provider returns more fields;
   each extra field needs a defined purpose, while safe financial observations are saved
   at capture for later analytics. Only reported caps have scales, and lifetime credits
   never become a wallet's percentage denominator. Totals, components and currency
