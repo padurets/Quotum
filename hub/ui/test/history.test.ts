@@ -778,10 +778,10 @@ test('a new epoch discards knowledge of a prefetched head and cold-reads only th
   assert.equal(h.reads.length, 4, 'old epoch buffers outside the new interval remain unknown');
 });
 
-function cooperativeHarness() {
+function cooperativeHarness(pool?: HistoryPool, scope?: 'quota'|'budget') {
   const tasks: (() => void)[] = []; let clock = 0;
   const preparations = new Preparations({now: () => clock++, post: run => tasks.push(run)});
-  const h = harness(undefined, preparations);
+  const h = harness(undefined, preparations, scope, pool);
   const tick = () => tasks.shift()?.();
   const finish = async () => {for (let i = 0; i < 10_000; i++) {while (tasks.length) tick(); await flush(); if (!tasks.length) return;} throw new Error('preparation did not quiesce');};
   const internals = h.store as unknown as {responses: Map<object, {started: boolean}>; reservations: Map<string, object>; flights: Set<object>; grids: Map<number, Map<number, {readFrom: number; readTo: number; writeSeq: number}>>};
@@ -1281,4 +1281,22 @@ test('a second family foreground preempts speculation while retaining the first 
   b.store.setMeters({unit:'USD',ids:[['s','balance']]});await b.start();
   assert.equal(cancelled,true);assert.equal(pool.isActive(visible),true);assert.equal(b.reads.length,1);assert.equal(pool.activeFlights,2);
   b.store.close();pool.release(visible);assert.equal(pool.activeFlights,0);
+});
+
+test('cross-family eviction resumes a pending complete projection without another network event',async()=>{
+  const pool=new HistoryPool(),h=cooperativeHarness(pool,'quota');
+  const first={from:NOW-5*H,to:NOW-4*H},second={from:NOW-3*H,to:NOW-2*H};
+  h.store.choose('1h',first);await h.start();await h.reads[0].answer();await h.finish();
+  h.store.choose('1h',second);await h.advance(300);await flush();await pending(h)[0].answer();await h.finish();
+  assert.equal(h.store.get().history?.range,`${second.from}-${second.to}`);
+  const candidate=h.store.evictionCandidates()[0];assert.ok(candidate,'the previous nonvisible range can be evicted');
+  const final={from:second.from+5*M,to:second.to-5*M};
+  h.store.choose('1h',final);await h.advance(300);await flush();
+  assert.ok(h.tasks.length,'final totals are being cooperatively prepared');
+  const incoming={role:'visible' as const};
+  assert.ok(pool.reserve(incoming,pool.budget-pool.estimatedBytes+candidate.bytes));
+  await h.finish();
+  assert.equal(h.store.get().history?.range,`${final.from}-${final.to}`);
+  assert.equal(h.reads.length,2,'eviction of unrelated cached cells requires no data reread');
+  pool.release(incoming);h.store.close();
 });

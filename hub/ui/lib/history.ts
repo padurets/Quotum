@@ -766,6 +766,8 @@ export class HistoryStore {
       if(this.active&&shown&&cell===shown.cellMs&&tile.to>shown.since&&tile.from<shown.to)continue;
       candidates.push({bytes:tile.bytes,shownAt:tile.shownAt,drop:()=>{
         tiles.delete(n);this.plotChunks.delete(`${cell}:${tile.from}`);this.version++;this.aheadStopped=true;
+        // Another reader can evict this tile while our final projection is yielding.
+        this.schedule();
       }});
     }
     return candidates;
