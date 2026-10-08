@@ -156,17 +156,6 @@ export function BoardControls({
               )}
               {onSettings && (
                 <>
-                  <button
-                    type="button"
-                    className="popover-row manage-action"
-                    onClick={() => {
-                      setOpen(false);
-                      onSettings('general');
-                    }}
-                  >
-                    <Settings size={18} aria-hidden="true" />
-                    <span>{t('boardSettings.title')}</span>
-                  </button>
                   {!personal && (
                     <button
                       type="button"
@@ -180,6 +169,17 @@ export function BoardControls({
                       <span>{t('admin.members')}</span>
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="popover-row manage-action"
+                    onClick={() => {
+                      setOpen(false);
+                      onSettings('general');
+                    }}
+                  >
+                    <Settings size={18} aria-hidden="true" />
+                    <span>{t('boardSettings.title')}</span>
+                  </button>
                 </>
               )}
             </div>

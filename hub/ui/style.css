@@ -1004,7 +1004,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .topbar .popover.is-up { top: auto; bottom: calc(50% + 36px); }
 .widget-manager { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .popover.is-capped:not(.is-cramped) > .widget-manager { flex-shrink: 1; }
-.manage-layout { display: grid; grid-template-columns: minmax(0, 1fr) 205px; grid-template-rows: minmax(0, 1fr); gap: 20px; align-items: start; min-height: 0; flex: 1; }
+.manage-layout { display: grid; grid-template-columns: minmax(0, 1fr) 222px; grid-template-rows: minmax(0, 1fr); gap: 12px; align-items: start; min-height: 0; flex: 1; }
 .manage-sources { display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: 100%; }
 .manage-list { --least: 96px; min-width: 0; min-height: 0; max-height: 100%; overflow-y: auto; overscroll-behavior: contain; }
 .manage-widget { min-height: 32px; height: 32px; gap: 8px; padding: 6px 8px; }
@@ -1014,7 +1014,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .manage-widget-state > svg, .manage-widget-state > .spinner { flex-shrink: 0; }
 .manage-widget .manage-error { color: var(--warn); }
 .manage-details { margin: 0; padding: 4px 8px 8px 32px; color: var(--text-3); font-size: 11px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
-.manage-actions { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-top: 4px; }
+.manage-actions { display: flex; flex-direction: column; gap: 6px; min-width: 0; align-self: stretch; padding: 4px 0 0 16px; border-left: 1px solid var(--hair); }
 .manage-refresh { width: 100%; }
 .manage-action { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 .manage-action > svg { flex-shrink: 0; color: var(--text-3); }
@@ -1088,7 +1088,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
   .board-actions { gap: 4px; }
   .board-controls { gap: 4px; padding-right: 8px; }
   .manage-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
-  .manage-actions { grid-row: 1; }
+  .manage-actions { grid-row: 1; padding: 4px 0 12px; border-left: 0; border-bottom: 1px solid var(--hair); }
   .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .settings-nav { flex-direction: row; flex-wrap: wrap; gap: 4px; }
   .settings-nav a { padding: 8px 10px; font-size: 12px; }
