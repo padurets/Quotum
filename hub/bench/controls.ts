@@ -33,11 +33,11 @@ export async function frequencyKeys(cdp: Cdp) {
   await cdp.send('Input.dispatchKeyEvent', {type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
 }
 
-/** A zero cap keeps the scale's origin unchanged when balances become spending. */
-export async function moneyView(cdp: Cdp, source: string, cappedSource: string, cap: string) {
+/** Each phase keeps its intended monetary selection across the page reload. */
+export async function selectMoney(cdp: Cdp, ids: [string, string][]) {
   await cdp.evaluate(`(() => {
     const prefs = JSON.parse(localStorage.getItem('quotum.prefs') || '{}');
-    prefs.money = {unit: 'USD', view: 'balance', selected: {USD: ${JSON.stringify([[source, 'balance'], [cappedSource, cap]])}}};
+    prefs.money = {unit: 'USD', view: 'balance', selected: {USD: ${JSON.stringify(ids)}}};
     prefs.muted = {};
     localStorage.setItem('quotum.prefs', JSON.stringify(prefs));
   })()`);
@@ -55,13 +55,18 @@ export async function moneyView(cdp: Cdp, source: string, cappedSource: string, 
       await new Promise(requestAnimationFrame);
       const root = document.querySelector('.budget-history .chart > svg');
       const series = Array.from(document.querySelectorAll('.budget-history [data-series]'));
-      const ready = root?.dataset.drawReady === 'true' && !document.querySelector('.budget-history.is-loading') && series.length === 2 && series.every(line => Array.from(line.querySelectorAll('path.series')).some(path => path.getAttribute('d')));
+      const ready = root?.dataset.drawReady === 'true' && !document.querySelector('.budget-history.is-loading') && series.length === ${ids.length} && series.every(line => Array.from(line.querySelectorAll('path.series')).some(path => path.getAttribute('d')));
       const box = root?.getBoundingClientRect(), size = box ? [box.x, box.y, box.width, box.height].join(':') : '';
       const moving = document.getAnimations().some(animation => animation.playState === 'running' && animation.effect?.target?.matches('.widget, .widget-body'));
       stable = ready && !moving && size === previous ? stable + 1 : 0;
       previous = size;
     }
   })()`);
+}
+
+/** A zero cap keeps the scale's origin unchanged when balances become spending. */
+export async function moneyView(cdp: Cdp, source: string, cappedSource: string, cap: string) {
+  await selectMoney(cdp, [[source, 'balance'], [cappedSource, cap]]);
   await cdp.evaluate(`document.querySelector('.budget-history .panel-head button').click()`);
   for (const label of ['Spending', 'Balance', 'Spending']) {
     await cdp.evaluate(`(async () => {

@@ -17,7 +17,7 @@ import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
 import {overviewCards, stillProblems, warmUntil} from './still.js';
 import {hear, type Heard} from './stream.js';
-import {frequencyKeys, moneyView} from './controls.js';
+import {frequencyKeys, moneyView, selectMoney} from './controls.js';
 import {panning} from './panning.js';
 import {seedPanningBudgets,panningSet} from './fixture.js';
 import {profilePanning} from './panningProfile.js';
@@ -221,7 +221,7 @@ async function main() {
     const panned = await panning(cdp);
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95))})), problems: panned.problems})}`);
-    // The diagnostic needs the quota charts, before the money phase replaces them.
+    // Capture any movement failure before the later phases change the selection.
     if (panned.problems.length) {
       try {await profilePanning(cdp);}
       catch (error) {say(`panning diagnostic failed: ${(error as Error).message}`);}
@@ -340,6 +340,8 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
   const source=record.sourceId!;
   const shownBy=Date.now()+SHOWN_WITHIN;
   while(!await cdp.evaluate<boolean>(`!!document.querySelector('[data-card="${source}"] [data-money]')`)){if(Date.now()>shownBy)throw new Stop('money card did not appear');await sleep(20);}
+  // The dense panning wallets must not change the single-account update baseline.
+  await selectMoney(cdp, [[source, 'balance']]);
   const readyBy=Date.now()+SHOWN_WITHIN;
   while(!await cdp.evaluate<boolean>(`!!document.querySelector('[data-series="${source} balance"]')`)){if(Date.now()>readyBy)throw new Stop('money chart did not appear');await sleep(20);}
   await cdp.evaluate(`(async () => {
