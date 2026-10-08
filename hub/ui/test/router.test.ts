@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {navigate, onLocation, selectedBoard, settingsHref} from '../lib/router';
+import {guardNavigation, navigate, onLocation, selectedBoard, settingsHref} from '../lib/router';
 import {onTimeRange, showBoard, timeRange} from '../lib/timeRange';
 
 test('Back restores its own board and range after settings instead of rewriting the URL', () => {
@@ -35,4 +35,19 @@ test('Back restores its own board and range after settings instead of rewriting 
       if (previous[key]) Object.defineProperty(globalThis, key, previous[key]); else Reflect.deleteProperty(globalThis, key);
     }
   }
+});
+
+test('dirty navigation restores the exact history entry before asking, and confirms Back without duplicating it',()=>{
+  const previous=Object.getOwnPropertyDescriptors(globalThis),events=new EventTarget();
+  let index=0,entries=[{url:new URL('http://fixture.example/?board=A&from=10&to=20'),state:null as unknown}];
+  const history={get state(){return entries[index].state;},pushState(state:unknown,_title:string,href:string){entries.splice(index+1);entries.push({url:new URL(href,entries[index].url),state});index++;},replaceState(state:unknown,_title:string,href:string){entries[index]={url:new URL(href,entries[index].url),state};},go(delta:number){index+=delta;events.dispatchEvent(new Event('popstate'));}};
+  Object.defineProperties(globalThis,{location:{configurable:true,get:()=>entries[index].url},history:{configurable:true,value:history},window:{configurable:true,value:events},PopStateEvent:{configurable:true,value:Event}});
+  let changes=0,proceed:(()=>void)|undefined;const stop=onLocation(()=>changes++);
+  try {
+    navigate('/settings/currencies?board=A&from=10&to=20');
+    const off=guardNavigation(go=>{proceed=go;});
+    history.go(-1);assert.equal(index,1);assert.equal(entries[index].url.pathname,'/settings/currencies');assert.equal(changes,1);
+    proceed=undefined;history.go(-1);assert.equal(index,1);proceed!();assert.equal(index,0);assert.equal(entries.length,2);assert.equal(entries[index].url.search,'?board=A&from=10&to=20');assert.equal(changes,2);
+    off();history.go(1);assert.equal(entries[index].url.pathname,'/settings/currencies');
+  }finally{stop();for(const key of ['location','history','window','PopStateEvent']){if(previous[key])Object.defineProperty(globalThis,key,previous[key]);else Reflect.deleteProperty(globalThis,key);}}
 });

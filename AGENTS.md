@@ -197,10 +197,10 @@ and platform smoke checks still apply.
 - **Currency behavior belongs to the shared money layer.** Provider adapters capture
   native facts; shared services own rate integrations, cache, exact conversion and
   provenance. Widgets consume common presentation and formatting instead of choosing
-  provider-specific currencies or fetching rates. USD is the current display policy.
+  provider-specific currencies or fetching rates. USD is the initial display default.
   The user's display currency and personal currency definitions use one user-scoped
-  registry and persisted preference consumed by every monetary widget; future settings
-  forms must use that same contract.
+  registry and persisted preference consumed by every monetary widget; settings
+  forms use that same contract.
   Keep public reference rates separate from private user rates. Preserve original
   amounts and recorded conversion provenance; changing a display preference must not
   rewrite provider history or turn exchange movements into spending. Percentage quotas
