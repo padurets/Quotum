@@ -6,36 +6,28 @@ import {boardTitle, rereadSession, type Board, type Session, type User} from '..
 import {inApp, settingsSections, type AppState} from '../lib/app';
 import {useApp} from '../lib/board';
 import {Profile, Password, Browser} from './Account';
-import {Devices, ConnectDevice} from './Machines';
+import {Devices, DeviceCode, DeviceTokens} from './Machines';
 import {Projects} from './Projects';
 import {SharesTab, MembersTab} from './BoardDialog';
 import {AppSection, Measuring} from './Desktop';
 import {DeleteBoard} from './Header';
 import {ErrorLine, Field} from './Kit';
 import {ConnectionsPage} from './ConnectionsPage';
-import {ArrowLeft} from 'lucide-react';
 
 type Section = {id: string; title: Key};
 const PERSONAL: Section[] = [
   {id: 'profile', title: 'settings.profile'}, {id: 'connections', title: 'settings.connections'},
-  {id: 'devices', title: 'connections.device'}, {id: 'projects', title: 'projects.manage'},
+  {id: 'devices', title: 'devices.title'}, {id: 'projects', title: 'projects.manage'},
   {id: 'interface', title: 'settings.interface'}, {id: 'application', title: 'settings.application'},
 ];
 const BOARD: Section[] = [{id: 'general', title: 'boardSettings.general'}, {id: 'members', title: 'admin.members'}, {id: 'data', title: 'boardSettings.data'}];
 
-function SettingsFrame({title, sections, section, base, board, back, children}: {
-  title: string; sections: Section[]; section: string; base: string; board: Board | null; back: boolean; children: ReactNode;
+function SettingsFrame({title, sections, section, base, board, children}: {
+  title: string; sections: Section[]; section: string; base: string; board: Board | null; children: ReactNode;
 }) {
-  const returnTo = settingsHref('/', board?.id);
   return (
     <main className="settings-page">
       <div className="settings-heading">
-        {back && (
-          <a href={returnTo} onClick={event => {event.preventDefault(); navigate(returnTo);}}>
-            <ArrowLeft size={14} aria-hidden="true" />
-            {t('settings.back', {board: board ? boardTitle(board) : t('boards.personalName')})}
-          </a>
-        )}
         <h1>{title}</h1>
       </div>
       <div className="settings-layout">
@@ -126,11 +118,21 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
   }, [path, base, section, board?.id]);
   if (boardPath && (local || board?.id !== boardPath[1])) return <main><section className="panel settings-content"><ErrorLine error={null} /><p>{t('settings.unavailable')}</p></section></main>;
   const visible = boardPath ? (board?.personal ? BOARD.slice(0, 1) : BOARD) : sections;
-  return <SettingsFrame title={boardPath ? t('boardSettings.forBoard', {board: boardTitle(board!)}) : t('header.settings')} sections={visible} section={section} base={base} board={board} back={!boardPath}>
+  return <SettingsFrame title={boardPath ? t('boardSettings.forBoard', {board: boardTitle(board!)}) : t('header.settings')} sections={visible} section={section} base={base} board={board}>
     {boardPath ? section === 'general' ? <General board={board!} /> : section === 'members' ? <MembersTab board={board!} userId={user.id} /> : <SharesTab board={board!} /> :
       section === 'profile' ? <><Profile user={user} onChanged={refresh} /><Password /></> :
       section === 'connections' ? <ConnectionsPage userId={user.id} boards={boards} trustedKeys={trustedKeys} local={local} /> :
-      section === 'devices' ? <><h2>{t('connections.device')}</h2><ul className="connections-list"><Devices local={local} /></ul>{!local && <ConnectDevice />}</> :
+      section === 'devices' ? <>
+        <section className="settings-section">
+          <h2>{t('devices.title')}</h2>
+          <ul className="connections-list"><Devices local={local} /></ul>
+          {!local && <DeviceCode />}
+        </section>
+        {!local && <section className="settings-section">
+          <h2>{t('connect.tokenTitle')}</h2>
+          <DeviceTokens />
+        </section>}
+      </> :
       section === 'projects' ? <Projects /> : section === 'interface' ? <><p className="dialog-text">{t('settings.browserScope')}</p><Browser title={t('settings.interface')} /></> :
       section === 'application' && appState ? <>{capabilities.includes('measuring') && <Measuring state={appState} onState={onAppState} />}{capabilities.includes('app') && <AppSection state={appState} onState={onAppState} />}</> : null}
   </SettingsFrame>;

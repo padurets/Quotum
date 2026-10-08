@@ -23,7 +23,6 @@ export const en = {
   "settings.connections": "My connections",
   "settings.interface": "Interface",
   "settings.application": "Application",
-  "settings.back": "Back to {board}",
   "settings.unavailable": "This section is unavailable for this account or board.",
   "settings.browserScope": "These preferences apply to this browser or app window. They do not change a shared board for other people.",
   "settings.connectionScope": "Connections belong to you. Adding their measurements to a shared board is a separate, explicit action.",
@@ -698,7 +697,8 @@ export const en = {
 
   'connect.codeTitle': 'Your machine: a one-time code',
   'connect.codeText': 'Run this on the machine where your agents work. It shows a code; confirm it in the browser, and the machine becomes yours: what it measures shows on your board.',
-  'connect.tokenTitle': 'Many machines: a machine token',
+  'devices.title': 'Devices',
+  'connect.tokenTitle': 'Device tokens',
   'connect.tokenText': 'For images, VMs and containers: set the token once, and every machine started with it joins as yours. Keep it secret: it works for anyone who has it.',
   'connect.tokenDefault': 'Automation',
   'connect.tokenShownOnce': 'Token “{name}” — shown only once',

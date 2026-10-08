@@ -923,8 +923,9 @@ and its limits.
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
 - **Devices** are running agents, and each belongs to a person. The *Settings → Devices* page
   shows a person's devices, what each delivers and the last failure of each client
-  there (not logged in, too old…); the person names them there. The same list contains
-  their devices. Provider accounts have their own *My connections* page.
+  there (not logged in, too old…); the person names them there. The page has two open
+  sections: devices with the one-time connection command, and device tokens with their
+  creation and revocation actions. Provider accounts have their own *My connections* page.
   *Agent activity → Settings → Manage projects* lists the projects their agents worked
   on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are

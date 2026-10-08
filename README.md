@@ -285,7 +285,7 @@ have your system start `quotum run`, the same in the foreground (a systemd user
 service, launchd, Windows autostart). With npx, put `npx` before every command.
 
 **Many machines at once** (images, VMs, containers): create a machine token in the
-dashboard (*Settings → Devices → Connect*) and start every machine with it. Each one joins as
+dashboard (*Settings → Devices → Device tokens*) and start every machine with it. Each one joins as
 yours by itself:
 
 ```sh
@@ -303,9 +303,10 @@ QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… quotum start
 A machine token is one person's: every teammate creates their own. Machines are named
 in *Settings → Devices*, so an image doesn't need a name per copy.
 
-**Sharing with a team.** Create a shared board, invite people with a link, and share
-your subscriptions with it (*People and subscriptions → Subscriptions*). You can take
-yours off again at any time; the board's owner can take any card off their board.
+**Sharing with a team.** Create a shared board and invite people with a link from
+*Board controls → Members*. Share your subscriptions through the board's *Add widget*
+menu. In *Board settings → Provided data*, you can take yours off again at any time;
+the board's owner can take any shared source off their board.
 
 **By hand:** every [release](https://github.com/padurets/quotum/releases) has the agent
 for Linux, macOS and Windows as an archive (`quotum-cli-<version>-<platform>`, with the

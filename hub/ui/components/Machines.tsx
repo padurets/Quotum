@@ -87,7 +87,27 @@ export function Devices({local}: {local: boolean}) {
   </>;
 }
 
+export function DeviceCode() {
+  return <>
+    <p className="dialog-text">{t('connect.codeText')}</p>
+    <CopyField value={`npx quotum connect ${origin()}`} />
+  </>;
+}
+
+/** Settings show both methods; onboarding keeps automation optional within its current step. */
 export function ConnectDevice({onboardingId}: {onboardingId?: string} = {}) {
+  return (
+    <div className="dialog-form">
+      <DeviceCode />
+      <details className="connection-tokens">
+        <summary>{t('connect.tokenTitle')}</summary>
+        <DeviceTokens onboardingId={onboardingId} />
+      </details>
+    </div>
+  );
+}
+
+export function DeviceTokens({onboardingId}: {onboardingId?: string} = {}) {
   const revision = useConnectionsRevision();
   const [tokens, setTokens] = useState<Token[]>([]);
   const [name, setName] = useState('');
@@ -130,43 +150,44 @@ export function ConnectDevice({onboardingId}: {onboardingId?: string} = {}) {
 
   return (
     <div className="dialog-form">
-        <p>{t('connect.codeText')}</p>
-        <CopyField value={`npx quotum connect ${origin()}`} />
-      <details className="connection-tokens"><summary>{t('connect.tokenTitle')}</summary><div className="dialog-form">
-        <p>{t('connect.tokenText')}</p>
-        {created ? (
-          <div className="token-created">
-            <CopyField label={t('connect.tokenShownOnce', {name: created.name})} value={created.secret} secret />
-            <CopyField label={t('connect.run')} value={`QUOTUM_HUB_URL=${origin()} QUOTUM_HUB_TOKEN=${created.secret} npx quotum run`} />
-            <button type="button" className="link-button" onClick={() => setCreated(null)}>
-              {t('connect.done')}
-            </button>
-          </div>
-        ) : (
-          <form className="inline-form" onSubmit={create}>
-            <Field label={t('connect.name')} placeholder={t('connect.namePlaceholder')} value={name} onChange={e => setName(e.target.value)} maxLength={80} />
-            <button type="submit" className="button primary" disabled={busy}>
-              {t('connect.create')}
-            </button>
-          </form>
-        )}
-        <ErrorLine error={error} />
-        {tokens.length > 0 && (
-          <ul className="token-list">
-            {tokens.map(token => (
-              <li key={token.id}>
-                <span>
-                  <b>{tokenName(token)}</b> <span className="mono">{token.hint}</span>
-                </span>
-                <small title={token.lastUsedAt ? stamp(token.lastUsedAt) : undefined}>{token.lastUsedAt ? rich('connect.used', {ago: <Ago at={token.lastUsedAt} />}) : t('connect.unused')}</small>
-                <button type="button" className="link-button danger" onClick={() => revoke(token)}>
+      <p className="dialog-text">{t('connect.tokenText')}</p>
+      {created ? (
+        <div className="token-created">
+          <CopyField label={t('connect.tokenShownOnce', {name: created.name})} value={created.secret} secret />
+          <CopyField label={t('connect.run')} value={`QUOTUM_HUB_URL=${origin()} QUOTUM_HUB_TOKEN=${created.secret} npx quotum run`} />
+          <button type="button" className="button" onClick={() => setCreated(null)}>
+            {t('connect.done')}
+          </button>
+        </div>
+      ) : (
+        <form className="inline-form is-wrap settings-form" onSubmit={create}>
+          <Field label={t('connect.name')} placeholder={t('connect.namePlaceholder')} value={name} onChange={e => setName(e.target.value)} maxLength={80} />
+          <button type="submit" className="button primary" disabled={busy}>
+            {t('connect.create')}
+          </button>
+        </form>
+      )}
+      <ErrorLine error={error} />
+      {tokens.length > 0 && (
+        <ul className="settings-list">
+          {tokens.map(token => (
+            <li key={token.id} className="popover-row settings-list-row">
+              <div className="settings-item-main">
+                <b>{tokenName(token)}</b>
+                <small className="mono">{token.hint}</small>
+              </div>
+              <small className="settings-item-detail" title={token.lastUsedAt ? stamp(token.lastUsedAt) : undefined}>
+                {token.lastUsedAt ? rich('connect.used', {ago: <Ago at={token.lastUsedAt} />}) : t('connect.unused')}
+              </small>
+              <div className="settings-item-actions">
+                <button type="button" className="button" onClick={() => revoke(token)}>
                   {t('connect.revoke')}
                 </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div></details>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
