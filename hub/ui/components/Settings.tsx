@@ -23,18 +23,39 @@ const PERSONAL: Section[] = [
 ];
 const BOARD: Section[] = [{id: 'general', title: 'boardSettings.general'}, {id: 'members', title: 'admin.members'}, {id: 'data', title: 'boardSettings.data'}];
 
-function SettingsFrame({title, sections, section, base, board, children}: {
-  title: string; sections: Section[]; section: string; base: string; board: Board | null; children: ReactNode;
+function SettingsFrame({title, sections, section, base, board, back, children}: {
+  title: string; sections: Section[]; section: string; base: string; board: Board | null; back: boolean; children: ReactNode;
 }) {
   const returnTo = settingsHref('/', board?.id);
-  return <main className="settings-page">
-    <div className="settings-heading"><a href={returnTo} onClick={event => {event.preventDefault(); navigate(returnTo);}}><ArrowLeft size={14} aria-hidden="true" />{t('settings.back', {board: board ? boardTitle(board) : t('boards.personalName')})}</a><h1>{title}</h1></div>
-    <div className="settings-layout"><nav className="settings-nav" aria-label={title}>
-      {sections.map(item => {const href = settingsHref(base + '/' + item.id, board?.id); return <a key={item.id} href={href} aria-current={section === item.id ? 'page' : undefined} onClick={event => {event.preventDefault(); navigate(href);}}>{t(item.title)}</a>;})}
-    </nav><section key={section} className="panel settings-content">
-      {sections.some(item => item.id === section) ? children : <p>{t('settings.unavailable')}</p>}
-    </section></div>
-  </main>;
+  return (
+    <main className="settings-page">
+      <div className="settings-heading">
+        {back && (
+          <a href={returnTo} onClick={event => {event.preventDefault(); navigate(returnTo);}}>
+            <ArrowLeft size={14} aria-hidden="true" />
+            {t('settings.back', {board: board ? boardTitle(board) : t('boards.personalName')})}
+          </a>
+        )}
+        <h1>{title}</h1>
+      </div>
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label={title}>
+          {sections.map(item => {
+            const href = settingsHref(base + '/' + item.id, board?.id);
+            return (
+              <a key={item.id} href={href} aria-current={section === item.id ? 'page' : undefined}
+                onClick={event => {event.preventDefault(); navigate(href);}}>
+                {t(item.title)}
+              </a>
+            );
+          })}
+        </nav>
+        <section key={section} className="panel settings-content">
+          {sections.some(item => item.id === section) ? children : <p>{t('settings.unavailable')}</p>}
+        </section>
+      </div>
+    </main>
+  );
 }
 
 function General({board}: {board: Board}) {
@@ -50,13 +71,43 @@ function General({board}: {board: Board}) {
     try { await call('POST', '/api/boards/' + board.id + '/leave'); rereadSession(); navigate('/'); }
     catch (failure) { setError(failure); }
   };
-  return <div className="dialog-form"><h2>{t('boardSettings.general')}</h2><p className="dialog-text">{t(board.personal ? 'boardSettings.personal' : 'boardSettings.shared')}</p>
-    <form className="dialog-form" onSubmit={save}><Field label={t('boards.renameLabel')} value={name} placeholder={board.personal ? t('boards.personalName') : undefined} maxLength={80} disabled={board.role !== 'owner'} onChange={event => setName(event.target.value)} />
-      {board.role === 'owner' && <div className="button-row is-start"><button className="button" disabled={busy || !board.personal && !name.trim()}>{t('account.save')}</button></div>}
-    </form><ErrorLine error={error} />
-    {!board.personal && <div className="settings-danger"><p>{t(board.role === 'owner' ? 'boards.deleteText' : 'boardSettings.leaveText')}</p><button className="button danger" onClick={() => board.role === 'owner' ? setDeleting(true) : void leave()}>{t(board.role === 'owner' ? 'boards.delete' : 'boardSettings.leave')}</button></div>}
-    {deleting && <DeleteBoard board={board} onClose={() => {setDeleting(false); rereadSession();}} />}
-  </div>;
+  return (
+    <>
+      <section className="settings-section">
+        <h2>{t('boardSettings.general')}</h2>
+        <p className="dialog-text">{t(board.personal ? 'boardSettings.personal' : 'boardSettings.shared')}</p>
+        <form className="dialog-form settings-form" onSubmit={save}>
+          <Field
+            label={t('boards.renameLabel')}
+            value={name}
+            placeholder={board.personal ? t('boards.personalName') : undefined}
+            maxLength={80}
+            disabled={board.role !== 'owner'}
+            onChange={event => setName(event.target.value)}
+          />
+          {board.role === 'owner' && (
+            <div className="button-row is-start">
+              <button className="button" disabled={busy || !board.personal && !name.trim()}>
+                {t('account.save')}
+              </button>
+            </div>
+          )}
+        </form>
+        <ErrorLine error={error} />
+      </section>
+      {!board.personal && (
+        <section className="settings-section">
+          <p className="dialog-text">{t(board.role === 'owner' ? 'boards.deleteText' : 'boardSettings.leaveText')}</p>
+          <div className="button-row is-start">
+            <button className="button danger" onClick={() => board.role === 'owner' ? setDeleting(true) : void leave()}>
+              {t(board.role === 'owner' ? 'boards.delete' : 'boardSettings.leave')}
+            </button>
+          </div>
+        </section>
+      )}
+      {deleting && <DeleteBoard board={board} onClose={() => {setDeleting(false); rereadSession();}} />}
+    </>
+  );
 }
 
 export function Settings({user, board, boards, local, trustedKeys, refresh, onAppState}: {
@@ -75,7 +126,7 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
   }, [path, base, section, board?.id]);
   if (boardPath && (local || board?.id !== boardPath[1])) return <main><section className="panel settings-content"><ErrorLine error={null} /><p>{t('settings.unavailable')}</p></section></main>;
   const visible = boardPath ? (board?.personal ? BOARD.slice(0, 1) : BOARD) : sections;
-  return <SettingsFrame title={boardPath ? t('boardSettings.forBoard', {board: boardTitle(board!)}) : t('header.settings')} sections={visible} section={section} base={base} board={board}>
+  return <SettingsFrame title={boardPath ? t('boardSettings.forBoard', {board: boardTitle(board!)}) : t('header.settings')} sections={visible} section={section} base={base} board={board} back={!boardPath}>
     {boardPath ? section === 'general' ? <General board={board!} /> : section === 'members' ? <MembersTab board={board!} userId={user.id} /> : <SharesTab board={board!} /> :
       section === 'profile' ? <><Profile user={user} onChanged={refresh} /><Password /></> :
       section === 'connections' ? <ConnectionsPage userId={user.id} boards={boards} trustedKeys={trustedKeys} local={local} /> :

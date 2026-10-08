@@ -220,6 +220,9 @@ and platform smoke checks still apply.
   a dialog, across its whole width, as its columns run edge to edge. A row of a list or a
   menu in a `Popover` or a `Modal`, inset with rounded corners (`.popover-row`), and a
   little brighter, to show on the glass.
+- Settings sections share their page's surface: `.settings-section` separates them
+  with space and a rule. Reuse `.settings-list` for aligned names, details and actions,
+  and `.button` for visible actions; do not nest decorative panels inside the content.
 - Colours come from the tokens at the top of `hub/ui/style.css`, and the colours of
   series from `hub/ui/lib/providers.ts`. Status colours (ok, warn, crit) are for status
   only: how much of a limit is left, a source or device in trouble, a destructive

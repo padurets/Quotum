@@ -295,10 +295,7 @@ export function Popover({
 export function PopoverHeading({children, detail, onClose}: {children: ReactNode; detail?: ReactNode; onClose: () => void}) {
   return (
     <div className="popover-heading">
-      <div>
-        <h3>{children}</h3>
-        {detail && <small>{detail}</small>}
-      </div>
+      <h3>{children}</h3>
       <button
         type="button"
         className="icon-button"
@@ -311,6 +308,7 @@ export function PopoverHeading({children, detail, onClose}: {children: ReactNode
       >
         <X size={14} aria-hidden="true" />
       </button>
+      {detail && <small>{detail}</small>}
     </div>
   );
 }
