@@ -59,6 +59,53 @@ function harness(budget?: number, preparations?: Preparations) {
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
 
+test('settings retain live invalidations without reading history until the dashboard returns', async () => {
+  const h = harness();
+  h.store.setActive(false);
+  await h.start();
+  h.store.news(NOW - H);
+  h.store.choose('7d', null);
+  await flush();
+  assert.equal(h.reads.length, 0);
+
+  h.store.setActive(true);
+  await flush();
+  assert.equal(h.reads.length, 1);
+  await h.reads[0].answer();
+  assert.equal(h.store.get().history?.range, '7d');
+
+  h.store.setActive(false);
+  h.store.news(NOW - H);
+  await flush();
+  assert.equal(h.reads.length, 1, 'live news does not load unmounted charts');
+  h.store.setActive(true);
+  await flush();
+  assert.equal(h.reads.length, 2, 'returning catches up with the retained invalidation');
+  h.store.close();
+});
+
+test('leaving the dashboard aborts its history read and a later board cannot receive that answer', async () => {
+  const h = harness();
+  await h.start();
+  const old = h.reads[0];
+  h.store.setActive(false);
+  assert.equal(old.signal?.aborted, true);
+  h.store.open('other');
+  h.store.hello('run');
+  h.store.snapshot(['s'], ['s w']);
+  await old.answer();
+  assert.equal(h.store.get().history, null);
+  assert.equal(h.reads.length, 1);
+
+  h.store.setActive(true);
+  await flush();
+  assert.equal(h.reads.length, 2);
+  assert.equal(h.reads[1].board, 'other');
+  await h.reads[1].answer();
+  assert.equal(h.store.get().history?.board, 'other');
+  h.store.close();
+});
+
 test('the ordinary history follower loads subscription caps once with native windows and keeps period switches cached',async()=>{
   const before=prefs(),h=harness(),page=createStore(reduce,INITIAL),stop=follow(h.store,page);
   setPrefs({money:DEFAULT_MONEY,kind:'weekly'});

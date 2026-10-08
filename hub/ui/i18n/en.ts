@@ -7,6 +7,7 @@ import type {Message} from './types';
  * monetary measurements keep their explicit units and never become window percentages.
  */
 export const en = {
+  "boardControls.loading": "Loading source status…",
   "add.loading": "Loading widgets…",
   "add.changedInline": "This widget was removed or hidden after adding.",
   "add.actionLabel": "Add {widget}",

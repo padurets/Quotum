@@ -41,6 +41,7 @@ export type PlotInterest = {token: number; length: number; from: number; to: num
 /** History belongs to the open board. Cells are read only when missing or touched. */
 export class HistoryStore {
   private board: string | null = null;
+  private active = true;
   private ready = false;
   private run: string | null = null;
   private epoch = 0;
@@ -89,6 +90,19 @@ export class HistoryStore {
   private readonly plotChunks = new Map<string, {tile: HistoryTile; seq: number; from: number; to: number; chunk: Chunk}>();
 
   constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES) {}
+
+  /** Settings keep the board's live context without reading or preparing its charts. */
+  setActive(active: boolean) {
+    if (this.active === active) return;
+    this.active = active;
+    if (active) this.schedule();
+    else {
+      this.cancelProjection();
+      this.abortFlights();
+      this.clear('settle');
+      this.clear('retry');
+    }
+  }
 
   open(board: string) {
     if (board === this.board) return;
@@ -340,6 +354,7 @@ export class HistoryStore {
   }
 
   private pump() {
+    if (!this.active) return;
     this.startResponses();
     if (!this.board || !this.ready || !this.run || this.historyLimit) return;
     if(this.meters){this.evict();if(this.historyLimit)return;}

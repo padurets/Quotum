@@ -1,4 +1,4 @@
-import {useEffect, useMemo, useRef, useState} from 'react';
+import {useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
@@ -12,6 +12,7 @@ import {legacyLayout, withArranged} from './lib/grid';
 import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles, useViewRevision} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
+import {loader as history} from './lib/history';
 import {UNAUTHORIZED} from './lib/http';
 import {t, useLocale} from './i18n';
 import {Compact} from './components/Compact';
@@ -83,10 +84,14 @@ function Dashboard({
   const boards = useBoards() ?? NO_BOARDS;
   const [board, selectBoard] = useBoard();
   const boardId = board?.id ?? '';
+  useLayoutEffect(() => {
+    history.setActive(active);
+    return () => history.setActive(false);
+  }, [active]);
   useEffect(() => {
-    if (boardId && active) live.open(boardId);
+    if (boardId) live.open(boardId);
     else live.close();
-  }, [boardId, active]);
+  }, [boardId]);
   useEffect(() => () => live.close(), []);
 
   // The board as the hub told it: nothing of it until its snapshot came. Each widget reads
@@ -180,12 +185,43 @@ function Dashboard({
 
   return (
     <AdditionScope.Provider value={additionScope}>
-      <Header boards={boards} board={board} onBoard={selectBoard} user={user} onAccount={openSettings} onSignedOut={onSignedOut} local={local}
-        actions={active && <BoardActions board={board}
-          add={board && <WidgetAdd key={'add/' + boardId} board={board} local={local} trustedKeys={trustedKeys} open={adding?.id === boardId} onOpenChange={open => setAdding(open ? board : null)} />}
-          manage={meta && <BoardControls key={'manage/' + boardId} board={boardId} ids={lineup.filter(id => !isHidden(arrange.view, cardId(id)))}
-            owner={arrange.owner} locked={prefs.locked} onLock={() => setPrefs({locked: !prefs.locked})}
-            onSettings={local ? null : section => navigate(settingsHref('/boards/' + boardId + '/settings/' + section, boardId))} personal={!!board?.personal} />} />} />
+      <Header
+        boards={boards}
+        board={board}
+        onBoard={selectBoard}
+        user={user}
+        onAccount={openSettings}
+        onSignedOut={onSignedOut}
+        local={local}
+        actions={board && (
+          <BoardActions
+            board={board}
+            add={
+              <WidgetAdd
+                key={'add/' + boardId}
+                board={board}
+                local={local}
+                trustedKeys={trustedKeys}
+                open={adding?.id === boardId}
+                onOpenChange={open => setAdding(open ? board : null)}
+              />
+            }
+            manage={
+              <BoardControls
+                key={'manage/' + boardId}
+                board={boardId}
+                ready={!!meta}
+                ids={meta ? lineup.filter(id => !isHidden(arrange.view, cardId(id))) : []}
+                owner={board.role === 'owner'}
+                locked={prefs.locked}
+                onLock={() => setPrefs({locked: !prefs.locked})}
+                onSettings={local ? null : section => navigate(settingsHref('/boards/' + boardId + '/settings/' + section, boardId))}
+                personal={board.personal}
+              />
+            }
+          />
+        )}
+      />
       {arrange.saveFailures?.map(failure => <aside key={failure.board} className="view-save-notice" role="alert"><b>{t('layout.saveFailed', {board: boards.find(board => board.id === failure.board) ? boardTitle(boards.find(board => board.id === failure.board)!) : t('layout.unavailableBoard')})}</b><ErrorLine error={failure.error} />
         <div className="button-row is-start">{failure.retryable && <button className="button" onClick={() => {void arrange.retrySave?.(failure.board).catch(() => {});}}>{t('layout.retrySave')}</button>}<button className="link-button" onClick={() => arrange.dismissSave?.(failure.board)}>{t('common.close')}</button></div>
       </aside>)}

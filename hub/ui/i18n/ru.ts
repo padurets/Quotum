@@ -2,6 +2,7 @@ import type {Catalog} from './index';
 
 /** Русский. Разница двух долей лимита тоже в «%»: всё здесь — доля лимита. */
 export const ru = {
+  "boardControls.loading": "Загружаем статусы источников…",
   "add.loading": "Загружаем виджеты…",
   "add.changedInline": "После добавления виджет был скрыт или убран с доски.",
   "add.actionLabel": "Добавить {widget}",

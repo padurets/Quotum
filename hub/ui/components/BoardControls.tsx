@@ -22,6 +22,7 @@ import {logoOf} from './logos';
 /** The receipt stays with this attempt, also while the reader closes its popup. */
 export function BoardControls({
   board,
+  ready = true,
   ids,
   owner,
   locked,
@@ -30,6 +31,7 @@ export function BoardControls({
   personal,
 }: {
   board: string;
+  ready?: boolean;
   ids: string[];
   owner: boolean;
   locked: boolean;
@@ -70,7 +72,7 @@ export function BoardControls({
   }, [connected]);
   const send = async () => {
     const state = page.get();
-    if (busy.current || pending) return;
+    if (!ready || state.board?.id !== board || busy.current || pending) return;
     if (!connected) {
       setOffline(true);
       return;
@@ -123,7 +125,9 @@ export function BoardControls({
             <div className="manage-sources">
               <div className="popover-title is-group">{t('boardControls.measurements')}</div>
               <div className="manage-list popover-scroll">
-                {ids.length ? (
+                {!ready ? (
+                  <p className="popover-note dialog-text" role="status">{t('boardControls.loading')}</p>
+                ) : ids.length ? (
                   ids.map(id => <MeasurementItem key={id} id={id} row={rows.find(row => row.id === id)} attempt={attempt} />)
                 ) : (
                   <p className="popover-note dialog-text">{t('boardControls.empty')}</p>
@@ -131,7 +135,7 @@ export function BoardControls({
               </div>
             </div>
             <div className="manage-actions">
-              <RefreshButton ids={ids} disabled={pending || sending || !connected} sending={sending || pending} send={() => void send()} />
+              <RefreshButton ids={ids} disabled={!ready || pending || sending || !connected} sending={sending || pending} send={() => void send()} />
               {(pending || sending) && (
                 <p className="popover-note dialog-text" role="status">
                   {t('refresh.summary', {done: rows.filter(row => !refreshRowPending(row)).length, total: rows.length})}

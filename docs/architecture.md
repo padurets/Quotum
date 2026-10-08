@@ -302,6 +302,10 @@ real next measurement even then.
 through its existing card menu, above the action to hide the widget, in the web
 dashboard and the desktop app. The header groups the board selector and two icon
 buttons on the right, before the account menu: Add widget and Board controls.
+These controls remain available on settings pages for the selected board. Changing
+boards preserves their space in the header while source status loads inside the menu.
+The board's event connection stays open across settings navigation; history reads and
+chart preparation pause until the dashboard returns, with live invalidations retained.
 Add names the destination board and lists eligible absent or hidden widgets with their
 type. One Add action provides or restores the selected widget; a source being shared
 discloses access to its measurements and history in its row before submission.
