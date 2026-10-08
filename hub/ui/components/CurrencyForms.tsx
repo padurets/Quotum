@@ -88,24 +88,25 @@ function RateFields({standards,base,rate,symbol,onBase,onRate}:{standards:Curren
 export function DefinitionForm({data,item,refresh,dirty,onDone,onCancel}:{data:CurrencyManagement;item?:ManagedCurrency;refresh:Refresh;dirty:Dirty;onDone:(id:string)=>void;onCancel:()=>void}) {
   const locale=useLocale(),original=item?.definition,form=useRef<HTMLFormElement>(null);
   const [name,setName]=useState(original?.name??''),[symbol,setSymbol]=useState(original?.symbol??''),[digits,setDigits]=useState(String(original?.fractionDigits??2));
-  const [base,setBase]=useState('USD'),[rate,setRate]=useState(''),[error,setError]=useState<unknown>(null),[edited,setEdited]=useState(false);
-  const reset=()=>{setName(original?.name??'');setSymbol(original?.symbol??'');setDigits(String(original?.fractionDigits??2));setRate('');setBase('USD');setEdited(false);setError(null);};
+  const [base,setBase]=useState('USD'),[rate,setRate]=useState(''),[error,setError]=useState<unknown>(null),[baseline,setBaseline]=useState(original);
+  const edited=name!==(baseline?.name??'')||symbol!==(baseline?.symbol??'')||digits!==String(baseline?.fractionDigits??2)||base!=='USD'||rate!=='';
+  const reset=()=>{setBaseline(original);setName(original?.name??'');setSymbol(original?.symbol??'');setDigits(String(original?.fractionDigits??2));setRate('');setBase('USD');setError(null);};
   const save=useSave(data.registryRevision,edited,refresh,dirty,reset);
   useEffect(()=>{form.current?.querySelector('input')?.focus({preventScroll:true});},[]);
-  useEffect(()=>{if(!edited){setName(original?.name??'');setSymbol(original?.symbol??'');setDigits(String(original?.fractionDigits??2));}},[original?.name,original?.symbol,original?.fractionDigits,edited]);
+  useEffect(()=>{if(!edited){setBaseline(original);setName(original?.name??'');setSymbol(original?.symbol??'');setDigits(String(original?.fractionDigits??2));}},[original,edited]);
   const submit=(event:FormEvent)=>{
     event.preventDefault();setError(null);
     try {
       const body={name,symbol,fractionDigits:Number(digits),...(!original?{base,rate:currencyRate(rate,locale)}:{})};
-      save.send('/api/currencies'+(original?'/'+original.id:''),body,value=>{setEdited(false);onDone((value as CurrencyDefinition).id);});
+      save.send('/api/currencies'+(original?'/'+original.id:''),body,value=>onDone((value as CurrencyDefinition).id));
     }catch{setError(new ApiError(400,'invalid_currency'));}
   };
-  return <form className="dialog-form currency-form" ref={form} onSubmit={submit} onChange={()=>setEdited(true)}>
+  return <form className="dialog-form currency-form" ref={form} onSubmit={submit}>
     <fieldset disabled={save.disabled||item?.archivedAt!=null} className="currency-fields">
       <Field label={t('currencies.name')} value={name} maxLength={64} required onChange={event=>setName(event.target.value)} />
       <div className="currency-metadata-fields"><Field label={t('currencies.symbol')} value={symbol} maxLength={12} required onChange={event=>setSymbol(event.target.value)} />
       <Field label={t('currencies.precision')} type="number" min={0} max={6} step={1} required value={digits} onChange={event=>setDigits(event.target.value)} /></div>
-      {!original&&<><h3>{t('currencies.initialRate')}</h3><RateFields standards={data.standards} base={base} rate={rate} symbol={symbol} onBase={id=>{setBase(id);setEdited(true);}} onRate={setRate} /><p className="dialog-text">{t('currencies.nominalBrief')}</p><details className="currency-disclosure"><summary>{t('currencies.details')}</summary><p className="dialog-text">{t('currencies.nominalHelp')}</p></details></>}
+      {!original&&<><h3>{t('currencies.initialRate')}</h3><RateFields standards={data.standards} base={base} rate={rate} symbol={symbol} onBase={setBase} onRate={setRate} /><p className="dialog-text">{t('currencies.nominalBrief')}</p><details className="currency-disclosure"><summary>{t('currencies.details')}</summary><p className="dialog-text">{t('currencies.nominalHelp')}</p></details></>}
       <div className="button-row currency-actions"><button type="button" className="button" onClick={onCancel}>{t('common.cancel')}</button><button className="button primary" disabled={!edited}>{t(original?'account.save':'currencies.create')}</button></div>
     </fieldset>
     {save.conflict&&original&&<p className="dialog-text">{t('currencies.serverVersion',{name:original.name,symbol:original.symbol,digits:original.fractionDigits})}</p>}
@@ -117,7 +118,7 @@ export type RateSeed={base:string;rate:string};
 export function RateForm({data,item,refresh,dirty,seed,onDone,onCancel}:{data:CurrencyManagement;item:ManagedCurrency;refresh:Refresh;dirty:Dirty;seed:RateSeed|null;onDone:()=>void;onCancel:()=>void}) {
   const locale=useLocale(),form=useRef<HTMLFormElement>(null),when=useId();
   const [base,setBase]=useState(seed?.base??'USD'),[rate,setRate]=useState(seed?.rate??''),[date,setDate]=useState(''),[past,setPast]=useState(false),[error,setError]=useState<unknown>(null);
-  const edited=!!rate||past||base!==(seed?.base??'USD'),save=useSave(data.registryRevision,edited,refresh,dirty,()=>{setRate('');setDate('');setPast(false);setBase(seed?.base??'USD');setError(null);});
+  const edited=rate!==(seed?.rate??'')||past||base!==(seed?.base??'USD'),save=useSave(data.registryRevision,edited,refresh,dirty,()=>{setRate(seed?.rate??'');setDate('');setPast(false);setBase(seed?.base??'USD');setError(null);});
   useEffect(()=>{form.current?.querySelector<HTMLInputElement>('input[inputmode="decimal"]')?.focus({preventScroll:true});},[]);
   return <form className="dialog-form currency-form" ref={form} onSubmit={event=>{
     event.preventDefault();setError(null);try{const at=past?new Date(date).getTime():undefined;if(at!==undefined&&(!Number.isSafeInteger(at)||at>Date.now()))throw new Error();save.send('/api/currencies/'+item.definition.id+'/rates',{base,rate:currencyRate(rate,locale),...(at===undefined?{}:{date:at})},onDone);}catch{setError(new ApiError(400,'invalid_currency'));}
