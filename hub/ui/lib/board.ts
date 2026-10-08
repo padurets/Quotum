@@ -8,7 +8,7 @@ import type {Board} from './session';
 import {createStore, sameJson, shallowEqual, useSelect} from './store';
 import type {Card, LiveSession, Pace, Refresh, SourceForecast, View} from './types';
 import type {SourceAccess} from '../../server/secrets/credentials';
-import {providerOf} from '../../server/domain/providers';
+import {providerOf,supportsBudget,supportsQuota} from '../../server/domain/providers';
 import {quotaPeriods} from './subscription';
 
 /**
@@ -368,8 +368,8 @@ export const useTitle = (id: string, names?: Record<string, string>) => usePage(
 export type Named = Card & {title?: string};
 
 /** The board's cards in its order, each with its name: what the chart and the table draw. Not their agents or pace. */
-export function useNamed(names?: Record<string, string>): Named[] {
-  const cards = useCards(useLineup());
+export function useNamed(names?: Record<string, string>, scope?: 'quota'|'budget'): Named[] {
+  const cards = usePage(s=>(s.board?.lineup??[]).flatMap(id=>{const card=s.board?.cards[id];return card&&(!scope||(scope==='quota'?supportsQuota:supportsBudget)(providerOf(card.provider)))?[card]:[];}),shallowEqual);
   const titles = useTitles(names);
   return useMemo(() => cards.map(card => ({...card, title: titles[card.id]?.title})), [cards, titles]);
 }

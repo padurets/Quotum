@@ -29,7 +29,7 @@ import {cadenceOf, dotOf, level, resetLine, titled, windowName} from '../../ui/l
 import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.js';
 import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type SourceForecast, type View} from '../../ui/lib/types.js';
 import type {Snapshot} from '../../ui/lib/board.js';
-import {ACTIVITY, AGENTS, boardState, cardId, columnShown, FORECAST, HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
+import {ACTIVITY, AGENTS, boardState, cardId, columnShown, QUOTA_TABLE, QUOTA_HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
 import {SCENES, SETS} from '../catalogue.js';
 import {
   awake,
@@ -206,7 +206,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       const {marked: provider, range} = check as {marked: ResetProvider; range?: string};
       const board = people(set)[0].id;
       const [overview, history] = await Promise.all([reading.overview(board), reading.history(board, range)]);
-      if (isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${board}`;
+      if (isHidden(overview.view, QUOTA_HISTORY)) return `the chart is hidden on the board ${board}`;
       const frame = frameOf(null, {range: range ?? '24h', horizon: 'auto'}, now, overview.historyStart);
       const marks = chartResets(told.past, linesOf(history, overview.sources, overview.view, 'weekly'), frame.from, frame.to).filter(m => m.provider === provider);
       return {marked: provider, resets: marks.length, range};
@@ -234,8 +234,8 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     const overview = await reading.overview(entry.id);
     if ('tableLayout' in check) {
       // On a screen wide enough for the whole board: six columns of 184 pixels and gaps of 16, less the panel's border.
-      const span = overview.view.layout.places[FORECAST]?.w ?? 6;
-      const columns = LIVE_COLUMNS.filter(column => columnShown(overview.view, FORECAST, column));
+      const span = overview.view.layout.places[QUOTA_TABLE]?.w ?? 6;
+      const columns = LIVE_COLUMNS.filter(column => columnShown(overview.view, QUOTA_TABLE, column));
       return {tableLayout: forecastLayout(columns, span * 184 + (span - 1) * 16 - 2)};
     }
     if ('activity' in check || 'activityOf' in check || 'activityTotals' in check || 'activityKnownFrom' in check || 'activityEmpty' in check) {
@@ -266,7 +266,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     }
     // A widget hidden on the board shows none of its codes.
     if (('rows' in check || 'agentsOf' in check || 'agentGroup' in check) && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
-    if ('weeklySeries' in check && isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${entry.id}`;
+    if ('weeklySeries' in check && isHidden(overview.view, QUOTA_HISTORY)) return `the chart is hidden on the board ${entry.id}`;
     const {rows, empty} = agentRows(overview.sources, overview.view);
     if ('agentGroup' in check) {
       const {agentGroup} = check as {agentGroup: string};
@@ -329,7 +329,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     });
   }
   if ('forecast' in card && live) {
-    if (isHidden(overview.view, FORECAST)) return `the table is hidden on the board ${board}`;
+    if (isHidden(overview.view, QUOTA_TABLE)) return `the table is hidden on the board ${board}`;
     if (!ANALYTICS_KINDS.includes(live.kind)) return `window ${id} is of the kind ${live.kind}: the table shows only weekly and five-hour windows`;
     const line = linesOf(await reading.history(board), overview.sources, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
     if (!line) return `no line of ${id} in the table`;
@@ -345,7 +345,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     });
   }
   if ('work' in card && live) {
-    if (isHidden(overview.view, FORECAST)) return `the table is hidden on the board ${board}`;
+    if (isHidden(overview.view, QUOTA_TABLE)) return `the table is hidden on the board ${board}`;
     const history = await reading.history(board, card.range);
     const line = linesOf(history, overview.sources, overview.view, live.kind).find(l => l.sourceId === source.id && l.windowId === id);
     if (!line) return `no line of ${id} in the table`;
@@ -354,7 +354,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     const tenth = (value: number) => Math.round(value * 10) / 10;
     const hours = (cell: (typeof cells)['work']) => ('value' in cell ? tenth(cell.value / 3_600_000) : 'untilReset' in cell ? 'untilReset' : 'usedUp' in cell ? 'usedUp' : 'outlasts' in cell ? 'outlasts' : undefined);
     // A column off on the board shows nothing to check.
-    const on = <T,>(column: 'work' | 'agenthours' | 'perwork' | 'workleft' | 'during', value: T) => (columnShown(overview.view, FORECAST, column) ? value : 'hidden');
+    const on = <T,>(column: 'work' | 'agenthours' | 'perwork' | 'workleft' | 'during', value: T) => (columnShown(overview.view, QUOTA_TABLE, column) ? value : 'hidden');
     const {since, share} = workNotes(line.work, history.since);
     // A dash as its tooltip tells it: a reason about the whole period, since when work is known.
     const why = (cell: (typeof cells)['work']) => ('none' in cell ? (cell.none === 'unknown' ? 'unknown' : dashOf(cell.none, since).text) : undefined);
@@ -372,7 +372,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
       duringWhy: on('during', why(cells.during)),
       since: since === null ? null : since - stand.start,
       // Told in the tooltips of the pace and the forecast by work: nowhere with both off.
-      lowShare: columnShown(overview.view, FORECAST, 'perwork') || columnShown(overview.view, FORECAST, 'workleft') ? (share === null ? null : Math.round(share)) : 'hidden',
+      lowShare: columnShown(overview.view, QUOTA_TABLE, 'perwork') || columnShown(overview.view, QUOTA_TABLE, 'workleft') ? (share === null ? null : Math.round(share)) : 'hidden',
     });
   }
   if ('reachesBack' in card) {
@@ -383,7 +383,7 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
   }
   if ('event' in card) {
     // Marked on the chart as it opens: the weekly windows of the last 24 hours.
-    if (isHidden(overview.view, HISTORY)) return `the chart is hidden on the board ${board}`;
+    if (isHidden(overview.view, QUOTA_HISTORY)) return `the chart is hidden on the board ${board}`;
     const history = await reading.history(board);
     const marks = chartEvents(history.events, linesOf(history, overview.sources, overview.view, 'weekly'), frameOf(null, {range: '24h', horizon: 'auto'}, now, overview.historyStart).from);
     const events = marks.filter(m => m.event.sourceId === source.id).map(m => m.event.kind);
@@ -570,7 +570,7 @@ test('every entry of the whole catalogue shows what it claims over its span', {t
       }
       // The heights chosen on the boards the benchmark and the look go through.
       const ana = (await reading.overview('ana')).view.layout.places;
-      assert.deepEqual([ana.agents, ana.activity, ana.history, ana.forecast].map(place => place.h), [32, 12, 16, 30]);
+      assert.deepEqual([ana.agents, ana.activity, ana['quota-history'], ana['quota-table']].map(place => place.h), [32, 12, 16, 30]);
       assert.deepEqual(
         await Promise.all(['ben', 'team', 'quiet'].map(async board => (await reading.overview(board)).view.layout.places.agents.h)),
         [2, 5, 2],

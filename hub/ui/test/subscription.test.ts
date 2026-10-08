@@ -82,7 +82,7 @@ test('common period visibility selects both quotas by default and uses no money 
   const hidden={...EMPTY_VIEW,hidden:[`source:${zai.id}`]};
   assert.equal(subscriptionSelection([zai],hidden),undefined);assert.deepEqual(subscriptionLinesOf(history,[zai],hidden,'weekly'),[]);
   const saved=readMoney({unit:'credits:zai',selected:{'credits:zai':[[zai.id,five.id]],USD:[['wallet','balance']]}});
-  assert.equal(saved.unit,null);assert.deepEqual(saved.selected,{USD:[['wallet','balance']]});
+  assert.equal(saved.unit,'USD');assert.deepEqual(saved.selected,{USD:[['wallet','balance']]});
   assert.deepEqual(moneySelection([zai],[],{...saved,unit:'USD'}).selection?.ids,[]);
   const many=Array.from({length:17},(_,i)=>({...zai,id:`zai:${i}`}));
   assert.equal(subscriptionSelection(many,EMPTY_VIEW)?.ids.length,32);assert.equal(subscriptionOverflow(many,EMPTY_VIEW),2);

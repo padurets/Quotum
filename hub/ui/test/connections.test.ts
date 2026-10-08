@@ -1,3 +1,4 @@
+import * as widgets from '../../server/domain/widgets';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -22,6 +23,7 @@ function fixture(initialOwner='u',local=false,boards:Session['boards']=[]){
   const context={exports:{} as {ConnectionsPage:(props:unknown)=>Node;KeyForm:(props:unknown)=>Node;useAddition:()=>{submit:(board:string,item:unknown,secret?:string)=>Promise<void>}},crypto:{randomUUID:()=> 'request'},AbortController,require:(name:string)=>{
     if(name==='react')return {createContext:()=>({}),useContext:()=>()=>scopeActive,useState:hooks.useState,useRef:hooks.useRef,useCallback:(fn:unknown,deps:unknown[])=>memo(()=>fn,deps),useEffect:(effect:()=>void|(()=>void),deps:unknown[])=>hooks.useLayoutEffect(()=>{const cleanup=effect();if(!cleanup)return;cleanups.add(cleanup);return()=>{cleanups.delete(cleanup);cleanup();};},deps)};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'};
+    if(name.endsWith('/widgets'))return widgets;
     if(name.endsWith('/http'))return {ApiError,call:(_method:string,url:string,body:unknown)=>new Promise((resolve,reject)=>reads.push({url,body,resolve,reject}))};
     if(name.endsWith('/board'))return {};
     if(name.endsWith('/view'))return {flushView:async()=>{}};

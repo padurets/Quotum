@@ -8,7 +8,6 @@ import {FALLBACK_COLOR, PROVIDERS} from './providers';
 import {EMPTY_VIEW as EMPTY, VIEW_VERSION_HEADER, VIEW_KEEPALIVE_LIMIT} from '../../server/domain/view';
 import {widgetHidden, splitWidget, ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, BUDGET_HISTORY, BUDGET_TABLE} from '../../server/domain/widgets';
 export {ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, BUDGET_HISTORY, BUDGET_TABLE};
-export const HISTORY = QUOTA_HISTORY, FORECAST = QUOTA_TABLE;
 import {cardId, windowKey} from '../../server/domain/presentation';
 export {cardId, isWindowHidden, keyShown} from '../../server/domain/presentation';
 export const isOffByDefault = (id: string) => id === AGENTS || splitWidget(id);
@@ -38,7 +37,7 @@ export const withHidden = (view: View, id: string, hidden: boolean): View => ({
  * than when it last worked and how long it worked; the table's share of spending during work, which does not fit a widget as wide as
  * the board beside the rest, nor do agent-hours (see FORECAST_WIDTHS).
  */
-const OFF_BY_DEFAULT_COLUMNS: Record<string, string[]> = {[AGENTS]: ['running'], [FORECAST]: ['during', 'agenthours']};
+const OFF_BY_DEFAULT_COLUMNS: Record<string, string[]> = {[AGENTS]: ['running'], [QUOTA_TABLE]: ['during', 'agenthours']};
 const columnOffByDefault = (widget: string, column: string) => OFF_BY_DEFAULT_COLUMNS[widget]?.includes(column) ?? false;
 
 /** Whether a column of a widget's table is shown. */

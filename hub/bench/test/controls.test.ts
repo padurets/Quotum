@@ -28,11 +28,11 @@ function moneyPage(broken?: 'blank' | 'scale') {
     Date: {now: () => frame * 16},
     requestAnimationFrame: (callback: (stamp: number) => void) => queueMicrotask(() => callback(++frame * 16)),
     document: {
-      querySelector: (selector: string) => selector === '.history .chart > svg' ? root
-        : selector === '.history.is-loading' ? ready() ? null : {}
-        : selector === '.history .panel-head button' ? {click() {}}
+      querySelector: (selector: string) => selector === '.budget-history .chart > svg' ? root
+        : selector === '.budget-history.is-loading' ? ready() ? null : {}
+        : selector === '.budget-history .panel-head button' ? {click() {}}
         : selector.startsWith('[data-series=') ? line : null,
-      querySelectorAll: (selector: string) => selector === '.history [data-series]' ? frame >= 3 ? [line, line] : [] : buttons,
+      querySelectorAll: (selector: string) => selector === '.budget-history [data-series]' ? frame >= 3 ? [line, line] : [] : buttons,
       getAnimations: () => frame < 8 ? [{playState: 'running', effect: {target: {matches: () => true}}}] : [],
     },
   };

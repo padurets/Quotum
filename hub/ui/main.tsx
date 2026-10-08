@@ -7,8 +7,8 @@ import {setPrefs, usePrefs} from './lib/prefs';
 import {showBoard} from './lib/timeRange';
 import {navigate, settingsHref, usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, FORECAST, HISTORY, isHidden, useView} from './lib/view';
-import {legacyLayout, withArranged} from './lib/grid';
+import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, QUOTA_TABLE, QUOTA_HISTORY, BUDGET_HISTORY, BUDGET_TABLE, isHidden, useView} from './lib/view';
+import {withArranged} from './lib/grid';
 import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles, useViewRevision} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
@@ -25,6 +25,8 @@ import {ErrorLine, SERVICE} from './components/Kit';
 import {SourceCard} from './components/SourceCard';
 import {AgentsPanel} from './components/Agents';
 import {History} from './components/History';
+import {MoneyHistory,MoneyTable} from './components/MoneyAnalytics';
+import {widgetVisible} from '../server/domain/widgets';
 import {Forecast} from './components/Forecast';
 import {Activity} from './components/Activity';
 import {AnalyticsHead} from './components/Analytics';
@@ -100,14 +102,9 @@ function Dashboard({
   const role = useRole();
   const lineup = useLineup();
   const serverView = useServerView();
-  const translated = useMemo(() => {
-    if (!serverView) return null;
-    const areas = {cards: [...lineup.map(cardId), AGENTS], analytics: ANALYTICS};
-    return legacyLayout(serverView, areas, [...areas.cards, ...areas.analytics].filter(id => isHidden(serverView, id)));
-  }, [serverView, lineup]);
   const snapshotMatches = useBoardId() === boardId;
   const viewRevision = useViewRevision();
-  const arrange = useView(boardId, snapshotMatches ? translated : null, snapshotMatches && role === 'owner', snapshotMatches ? viewRevision : 0);
+  const arrange = useView(boardId, snapshotMatches ? serverView : null, snapshotMatches && role === 'owner', snapshotMatches ? viewRevision : 0);
   const titles = useTitles(arrange.view.names);
   const prefs = usePrefs();
   const [adding, setAdding] = useState<Board | null>(null);
@@ -141,19 +138,21 @@ function Dashboard({
     content: <AgentsPanel arrange={arrange} />,
   });
   const panels = new Map<string, Widget>([
+    [BUDGET_HISTORY,{id:BUDGET_HISTORY,name:t('widgets.budgetHistory'),content:<MoneyHistory arrange={arrange}/>}],
+    [BUDGET_TABLE,{id:BUDGET_TABLE,name:t('widgets.budgetTable'),content:<MoneyTable arrange={arrange}/>}],
     [
-      HISTORY,
+      QUOTA_HISTORY,
       {
-        id: HISTORY,
-        name: t('widgets.history'),
+        id: QUOTA_HISTORY,
+        name: t('widgets.quotaHistory'),
         content: <History arrange={arrange} />,
       },
     ],
     [
-      FORECAST,
+      QUOTA_TABLE,
       {
-        id: FORECAST,
-        name: t('forecast.title'),
+        id: QUOTA_TABLE,
+        name: t('widgets.quotaTable'),
         content: <Forecast arrange={arrange} />,
       },
     ],
@@ -170,7 +169,7 @@ function Dashboard({
   // filters, are the analytics. Each area is arranged on its own grid, and on its own.
   const cardWidgets = [...cards.values()];
   const panelWidgets = ANALYTICS.map(id => panels.get(id)!);
-  const shownOf = (list: Widget[]) => list.filter(widget => !isHidden(arrange.view, widget.id) && (lineup.length > 0 || arrange.view.enabledWhenEmpty?.includes(widget.id)));
+  const shownOf = (list: Widget[]) => list.filter(widget => widgetVisible(arrange.view, widget.id, lineup.length));
   const shownCards = shownOf(cardWidgets);
   const shownPanels = shownOf(panelWidgets);
   const grid = (list: Widget[], area: string) => (

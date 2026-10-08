@@ -426,7 +426,7 @@ test('a source taken off and back comes back whole, before the lineup; a reader 
   assert.deepEqual([later.snapshot.sources, later.snapshot.sessions, later.snapshot.cadence], [[], {}, {}]);
 
   await h.call('POST', `/api/boards/${team}/shares`, {as: 'alice', body: {source}});
-  assert.deepEqual(await s.types(), ['view', 'card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'history'], 'with no measurement in between, its work shown again');
+  assert.deepEqual(await s.types(), ['card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'history'], 'with no measurement in between, its work shown again');
 });
 
 test('a reader coming while changes wait to go out has them in the snapshot and hears of them no more', async t => {

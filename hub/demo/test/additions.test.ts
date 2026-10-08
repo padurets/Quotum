@@ -39,7 +39,7 @@ async function harness(extended = true) {
   const cookies = new Map<string, string>();
   for (const user of [owner, member]) {const token = newSecret('qt_s'); directory.createSession(token, user.id, Date.now(), 60_000); cookies.set(user.id, 'quotum_session=' + token);}
   const app = await buildApp({store, directory, credentials, ingest: new Ingest(store, directory, new Duty(), new Cadence()), pairing: new Pairing(directory), resets: new ResetFeed(undefined, () => {}), setup: new Setup(false, null), local: null}, extended ? demoAdditionControls : undefined);
-  const call = (method: 'GET' | 'POST', url: string, payload?: object, user = owner.id, origin: string | null = 'http://localhost') => app.inject({method, url, payload, headers: {cookie: cookies.get(user)!, ...(origin ? {origin} : {})}});
+  const call = (method: 'GET' | 'POST', url: string, payload?: object, user = owner.id, origin: string | null = 'http://localhost') => app.inject({method, url, payload, headers: {'X-Quotum-View-Version':'2',cookie: cookies.get(user)!, ...(origin ? {origin} : {})}});
   const reserve = async (item: object, user = owner.id, boardId: string | null = board.id) => (await call('POST', '/api/additions', {requestId: randomUUID(), boardId, item}, user)).json();
   const close = async () => {await app.close(); store.close(); transport.close(); rmSync(dir, {recursive: true, force: true});};
   return {store, directory, credentials, owner, member, board, call, reserve, close};
@@ -99,12 +99,12 @@ test('members add only their sources; an empty analytic does not expose the othe
   const stolen = await h.reserve({kind: 'sources', sourceIds: [source]}, h.member.id);
   assert.equal(stolen.error, 'addition_permission');
   assert.equal(h.store.sources(h.board.id).length, 0);
-  const widget = await h.reserve({kind: 'widget', widgetId: 'history'});
+  const widget = await h.reserve({kind: 'widget', widgetId: 'quota-history'});
   assert.equal((await h.call('POST', '/api/additions/' + widget.id + '/run', {})).json().state, 'complete');
-  assert.deepEqual(h.directory.view(h.board.id).enabledWhenEmpty, ['history']);
+  assert.deepEqual(h.directory.view(h.board.id).shown, ['quota-history']);
   const memberWidget = await h.reserve({kind: 'widget', widgetId: 'agents'}, h.member.id);
   assert.equal(memberWidget.error, 'addition_permission');
-  assert.deepEqual(h.directory.view(h.board.id).enabledWhenEmpty, ['history']);
+  assert.deepEqual(h.directory.view(h.board.id).shown, ['quota-history']);
 });
 
 test('synthetic device discovery provides nothing until its selected source is added', async t => {
@@ -129,10 +129,10 @@ test('the add catalogue contains only eligible absent or hidden widgets', async 
   const read = async (user = h.owner.id) => (await h.call('GET', '/api/boards/' + h.board.id + '/catalogue', undefined, user)).json();
   assert.deepEqual((await read()).sources.map((source: {id: string}) => source.id), [own]);
   const view = h.directory.view(h.board.id);
-  h.directory.saveView(h.board.id, {...view, hidden: ['source:' + shared, 'history']}, h.owner.id, Date.now());
+  h.directory.saveView(h.board.id, {...view, hidden: ['source:' + shared, 'quota-history']}, h.owner.id, Date.now());
   const owner = await read();
   assert.deepEqual(owner.sources.map((source: {id: string; action: string}) => [source.id, source.action]), [[own, 'add'], [shared, 'show']]);
-  assert.deepEqual(owner.widgets.map((widget: {id: string}) => widget.id), ['agents', 'history']);
+  assert.deepEqual(owner.widgets.map((widget: {id: string}) => widget.id), ['agents', 'quota-history', 'budget-history', 'budget-table']);
   const member = await read(h.member.id);
   assert.deepEqual(member.sources.map((source: {id: string; action: string}) => [source.id, source.action]), [[shared, 'show']]);
   assert.deepEqual(member.widgets, []);

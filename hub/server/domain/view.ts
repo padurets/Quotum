@@ -16,7 +16,7 @@ import type {Place, Layout} from './layout.js';
 export type View = {
   version: 2;
   layout: Layout;
-  /** Boards arranged before the grid: the page translates these; POST never saves them. */
+  /** Boards arranged before the grid: the hub migrates these; POST never saves them. */
   order?: string[];
   sizes?: Record<string, number>;
   /** Card names the board's owner gave, by source id, instead of the automatic one. */
@@ -40,7 +40,8 @@ export type View = {
 
 export const VIEW_VERSION = 2;
 export const VIEW_VERSION_HEADER = 'X-Quotum-View-Version';
-export const VIEW_BODY_LIMIT = 68 * 1024;
+// A pre-grid view may materialize 200 ordered and 200 separately sized places.
+export const VIEW_BODY_LIMIT = 76 * 1024;
 export const VIEW_KEEPALIVE_LIMIT = 64 * 1024;
 
 export const EMPTY_VIEW: View = {

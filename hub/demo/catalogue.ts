@@ -35,6 +35,16 @@ export {DEEPSEEK_SCENES} from './deepseek.js';
 export {QUOTA_SCENES} from './quotas.js';
 export {MONEY_SCENES} from './money.js';
 
+/** Mixed analytics stays visible; loading and read failures are held by history tests.
+ * Legend mutes, table-only views and explicit empty Add are exercised on this set in
+ * both languages. The shared range and all three real plots use the native-input bench.
+ */
+export const ANALYTICS_SCENES=[
+  {id:'mixed',expect:['four-widgets','quota-percentages','budget-amounts','independent-units']},
+  {id:'empty',expect:['pending-empty','explicit-empty','sticky-placement']},
+] as const;
+
+
 /**
  * The catalogue of the demo board: every state the dashboard knows today, one entry each,
  * but two that never last on a working hub (see the end).
@@ -467,7 +477,7 @@ const all: DemoSet = {
       // Heights she chose, which the benchmark renders too: the list after all her cards however many, 32 rows tall, so most of its
       // agents show with their work totals and a few are left to the dialog; the analytics taller than drawn by themselves.
       agentsPlace: {x: 0, y: 99, w: 6, h: 32},
-      places: {activity: {x: 0, y: 0, w: 6, h: 12}, history: {x: 0, y: 1, w: 6, h: 16}, forecast: {x: 0, y: 2, w: 6, h: 30}},
+      places: {activity: {x: 0, y: 0, w: 6, h: 12}, 'quota-history': {x: 0, y: 1, w: 6, h: 16}, 'quota-table': {x: 0, y: 2, w: 6, h: 30}},
       projects: {'docs-site': 'docs'},
       // Each group has a working agent that works within the first twenty minutes.
       expect: [
@@ -1618,5 +1628,6 @@ const activity: DemoSet = {
 };
 
 const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures'};
+const analytics:DemoSet={...all,id:'analytics',about:'Independent quota and budget history and tables with native quotas, z.ai, OpenRouter and DeepSeek'};
 const quotas:DemoSet={...all,id:'quotas',about:'Personal z.ai subscription quotas in credits, unknown resets and partial readings'};
-export const SETS: DemoSet[] = [all, showcase, activity,money,quotas, ONBOARDING];
+export const SETS: DemoSet[] = [all, showcase, activity,money,quotas,analytics, ONBOARDING];

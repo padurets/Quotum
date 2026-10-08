@@ -1,3 +1,4 @@
+import {HistoryFailure} from './HistoryFailure';
 import {memo, useLayoutEffect, useRef} from 'react';
 import {earliest, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
@@ -5,11 +6,9 @@ import {planAt, started, weeklyPlanLinePrepared} from '../lib/plan';
 import {announcedOf, forecastLinePrepared, type Context} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
 import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
-import {usePref} from '../lib/prefs';
-import {MoneyHistory} from './MoneyAnalytics';
 import {setTimeRange, timeRangeKey, useTimeRange} from '../lib/timeRange';
 import {frameChangesAt, frameOf, measuredTo} from '../lib/periods';
-import {HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
+import {QUOTA_HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEventsPrepared, chartResetsPrepared, type PlotLine} from '../lib/lines';
 import {subscriptionLinesPrepared,subscriptionPlotLinesPrepared,subscriptionOverflow} from '../lib/subscription';
 import {lineRegistry} from '../lib/plotRegistry';
@@ -17,7 +16,7 @@ import {Chart, type Marker} from './Chart';
 import {chartMoments, type ForecastLine, type PlanLine} from '../lib/readout';
 import {useBoardId, useForecastsOf, useLineup, useNamed, usePastResets, useResetNews, useResetsFor} from '../lib/board';
 import {useClock} from '../lib/clock';
-import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
+import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {t, useLocale} from '../i18n';
 import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
@@ -66,7 +65,7 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
         </div>
         {horizonNote && <div className="popover-note">{t('history.horizonNote')}</div>}
       </div>
-      {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, HISTORY, true))}>{t('widget.hide')}</HideRow>}
+      {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, QUOTA_HISTORY, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
   );
 }
@@ -85,7 +84,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const panel = useRef<HTMLElement>(null);
   // Made taller by its owner, the widget gives the room to the plot, not to empty space under the legend.
   const {plot, onBase} = usePlot(panel);
-  const sources = useNamed(arrange.view.names);
+  const sources = useNamed(arrange.view.names,'quota');
   const lineup = useLineup();
   const hubForecasts = useForecastsOf(lineup);
   const news = useResetNews();
@@ -195,14 +194,14 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const wantedTo = historyProjection(frame, measured, prefs, currentHints, context?.lookAhead);
 
   return (
-    <section ref={panel} className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading}>
+    <section ref={panel} className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading} data-history-range={history?.range}>
       <div className="panel-head">
-        <h2>{t('history.title')}</h2>
+        <h2>{t('widgets.quotaHistory')}</h2>
         <HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)} horizonNote={frame.live && !model?.planShown && !model?.forecastShown} />
       </div>
 
       {omitted>0&&<p className="drawer-note">{t('history.quotaOverflow',{count:omitted})}</p>}
-      {error&&<p className="form-error">{t('money.historyLimit')}</p>}
+      <HistoryFailure error={error} retry={quotaHistory.retry}/>
       <Chart
           lines={model?.visible ?? []}
           plans={model?.plans}
@@ -216,9 +215,9 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
           clock={now}
           cellMs={model?.cellMs ?? history?.cellMs ?? 60_000}
           strip={model?.strip ?? null}
-          prepared={prepared.ready && (panning !== null || answered)}
+          prepared={prepared.ready && (panning !== null || answered || !!error)}
           modelContext={`${history?.board}:${prefs.kind}`}
-          empty={!history ? error?null:t('history.loading') : lines.length ? t('chart.empty') : null}
+          empty={error ? null : !history ? t('history.loading') : lines.length ? t('analytics.allMuted') : t('history.noLines')}
           onSelect={setTimeRange}
           plot={plot}
           onBase={onBase}
@@ -240,12 +239,10 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
             <b>{line.current===null?'—':`${num(line.current)}%`}</b>
           </button>
         ))}
-        {!lines.length && !error && <span className="legend-empty">{t('history.noLines')}</span>}
+        {!!history && !lines.length && !error && <span className="legend-empty">{t('history.noLines')}</span>}
       </div>
     </section>
   );
 });
 
-export const History=memo(function History({arrange}:{arrange:Arrange}) {
-  const money=usePref('money');return money.unit?<MoneyHistory arrange={arrange}/>:<WindowHistory arrange={arrange}/>;
-});
+export const History = WindowHistory;

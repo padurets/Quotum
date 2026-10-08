@@ -1,9 +1,5 @@
-import {DEFAULT_CURRENCY} from '../../server/domain/currency';
-import {useCurrencyContext} from '../lib/board';
 import {useRef, useState, useSyncExternalStore} from 'react';
 import type {Kind} from '../lib/types';
-import {unitLabel} from '../lib/money';
-import {useMoneyUnits} from '../lib/board';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
 import {goTo, setTimeRange, timeRangeLabel, useTimeRange, type TimeRange} from '../lib/timeRange';
@@ -16,7 +12,6 @@ import {Popover} from './Popover';
 
 /** Weekly or 5-hour windows. */
 function KindSwitch({value, onChange}: {value: string; onChange: (kind: string) => void}) {
-  const units=useMoneyUnits(),context=useCurrencyContext();
   return (
     <Segmented
       value={value}
@@ -24,7 +19,6 @@ function KindSwitch({value, onChange}: {value: string; onChange: (kind: string) 
       options={[
         ['weekly', t('history.weekly')],
         ['session', t('history.session')],
-        ...units.map(unit=>[unit,unit===DEFAULT_CURRENCY?context.target.symbol:unitLabel(unit)] as [string,string]),
       ]}
       label={t('history.kind')}
     />
@@ -164,7 +158,7 @@ export function AnalyticsHead() {
     <div className="analytics-head">
       <h2>{t('analytics.title')}</h2>
       <div className="controls">
-        <KindSwitch value={prefs.money.unit??kind} onChange={next => next==='weekly'||next==='session'?setPrefs({kind:next as Kind,money:{...prefs.money,unit:null}}):setPrefs({money:{...prefs.money,unit:next}})} />
+        <KindSwitch value={kind} onChange={next => setPrefs({kind:next as Kind})} />
         <PeriodSwitch historyStart={historyStart} />
       </div>
     </div>

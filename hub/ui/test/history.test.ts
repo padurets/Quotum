@@ -1248,3 +1248,37 @@ test('empty budget selection is a complete frame without transport or retry loop
   b.store.setMeters({unit:'USD',ids:[]});await b.start();assert.ok(b.store.get().history);assert.equal(b.store.get().loading,false);
   b.store.news(NOW);b.store.choose('7d',null);await flush();assert.equal(b.reads.length,0);assert.equal(b.store.get().history?.range,'7d');b.store.close();
 });
+
+test('family followers invalidate only their evidence and preserve selections belonging to another board',async()=>{
+  const before=prefs(),pool=new HistoryPool(),q=harness(undefined,undefined,'quota',pool),b=harness(undefined,undefined,'budget',pool),page=createStore(reduce,INITIAL);
+  const stopQ=follow(q.store,page),stopB=follow(b.store,page);
+  const selected:{USD:[string,string][]}={USD:[['wallet','balance'],['another-board','balance']]};
+  setPrefs({money:{unit:'USD',view:'balance',selected}});
+  const base={plan:'',resets:null,owners:[],error:null,successAt:NOW,stale:false,staleAfterMs:10*M,measureIntervalMs:null};
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:EMPTY_VIEW,historyStart:0,sources:[
+    {...base,id:'s',provider:'codex',windows:[{id:'w',kind:'weekly',label:null,used:20,remaining:80,resetAt:null,minutes:10080}]},
+    {...base,id:'wallet',provider:'openrouter',windows:[],meters:[{id:'balance',kind:'balance',unit:'USD',amount:'10000000',at:NOW,staleAfterMs:10*M,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null}]}
+  ],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
+  try {
+    page.dispatch({type:'board-open',id:'b'});page.dispatch({type:'hub',event:{type:'hello',data:{epoch:'run'}}});page.dispatch({type:'hub',event:{type:'snapshot',data:snapshot}});await flush();
+    assert.equal(q.reads.length,1);assert.equal(b.reads.length,1);await q.reads[0].answer();await b.reads[0].answer();
+    page.dispatch({type:'hub',event:{type:'history',data:{sources:['s'],since:NOW,changes:[{source:'s',scope:'quota',since:NOW}]}}});await flush();
+    assert.equal(q.reads.length,2);assert.equal(b.reads.length,1);await q.reads[1].answer();
+    page.dispatch({type:'hub',event:{type:'history',data:{sources:['wallet'],since:NOW,changes:[{source:'wallet',scope:'budget',since:NOW}]}}});await flush();
+    assert.equal(q.reads.length,2);assert.equal(b.reads.length,2);
+    assert.deepEqual(prefs().money.selected,selected,'admission filters do not destroy saved choices');
+    page.dispatch({type:'board-close'});assert.equal(b.reads[1].signal?.aborted,true);assert.equal(q.store.get().history,null);
+  }finally{stopQ();stopB();q.store.close();b.store.close();setPrefs(before);}
+});
+
+test('a second family foreground preempts speculation while retaining the first visible request',async()=>{
+  const pool=new HistoryPool(),b=harness(undefined,undefined,'budget',pool);
+  const owner={estimatedBytes:0,evictionCandidates:()=>[]},visible={role:'visible' as const},ahead={role:'ahead' as const};
+  let cancelled=false,started=0;pool.register(owner);
+  pool.request(owner,visible,()=>started++,()=>{throw new Error('a visible request was preempted');});
+  pool.request(owner,ahead,()=>started++,()=>{cancelled=true;pool.release(ahead);});
+  await flush();assert.equal(started,2);assert.equal(pool.activeFlights,2);
+  b.store.setMeters({unit:'USD',ids:[['s','balance']]});await b.start();
+  assert.equal(cancelled,true);assert.equal(pool.isActive(visible),true);assert.equal(b.reads.length,1);assert.equal(pool.activeFlights,2);
+  b.store.close();pool.release(visible);assert.equal(pool.activeFlights,0);
+});

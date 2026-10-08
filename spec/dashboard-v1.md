@@ -82,7 +82,7 @@ only the board owner may show another member's hidden card or add a standard wid
 `{kind:"sources", sourceIds:[...]}`, `{kind:"widget", widgetId}`,
 `{kind:"connection", provider, account?: {kind:"new"} | {kind:"existing", id}}`, or `{kind:"replace", credentialId}`.
 Source selections contain one to 100 unique IDs. Standard widgets are `agents`,
-`activity`, `history`, `forecast`. Replacement is personal; the server captures its
+`activity`, `quota-history`, `budget-history`, `quota-table`, `budget-table`. Replacement is personal; the server captures its
 provider, source and access revision. Reusing a request ID with another destination or
 selection returns `409 addition_conflict`. No secret goes into reservation or storage.
 
@@ -132,7 +132,7 @@ Status and reservation have a separate bounded request limit. Credentials cannot
 submitted in a query. Closed panels do not poll or read catalogue/history data.
 
 `POST /api/boards/:board/view` is owner-only and accepts a full View with
-`version: 2`, up to 68 KiB (69,632 UTF-8 bytes including JSON syntax). The independent
+`version: 2`, up to 76 KiB (77,824 UTF-8 bytes including JSON syntax). The independent
 writer header `X-Quotum-View-Version: 2` is required, even when a previous page echoes
 a received v2 body. Missing or incompatible writer headers and absent/legacy body
 versions return `428 view_reload_required` without mutation; malformed or future body
@@ -231,12 +231,11 @@ content: a widget never takes fewer rows than the least its content can show (al
 or the table, a chart as tall as it draws by itself, the first agent of the list and how
 many more), so `h` is what the owner asked for, not what shows, and the hub does not check
 it against the content. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
-else is refused. Stored views from before the grid can still contain `order`
-and `sizes`, with an empty layout: the page translates them, including hidden or absent
-widgets. Saving a view requires `layout`; the hub drops the old fields. A save is
-limited to 64 KiB (65,536 UTF-8 bytes), so it fits the page's keepalive request when
-leaving before the debounced save. There is no separate count limit on places; each
-place is validated.
+else is refused. The hub migrates stored pre-grid views and split analytics IDs before
+serving the view with its revision. Saves require version 2, its writer header and
+`layout`, with a 76 KiB UTF-8 body limit. The page uses keepalive only within its
+aggregate 64 KiB budget; larger drafts use immediate serialized ordinary saves.
+There is no separate count limit on places; each place is validated.
 
 In a `snapshot`, `sources` are the cards of the board's sources in its order; `sessions`,
 `cadence`, `refresh` and `forecast` are by source id, for those sources only. `board` is

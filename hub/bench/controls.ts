@@ -53,16 +53,16 @@ export async function moneyView(cdp: Cdp, source: string, cappedSource: string, 
     while (stable < 3) {
       if (Date.now() > end) throw new Error('money selection did not load');
       await new Promise(requestAnimationFrame);
-      const root = document.querySelector('.history .chart > svg');
-      const series = Array.from(document.querySelectorAll('.history [data-series]'));
-      const ready = root?.dataset.drawReady === 'true' && !document.querySelector('.history.is-loading') && series.length === 2 && series.every(line => Array.from(line.querySelectorAll('path.series')).some(path => path.getAttribute('d')));
+      const root = document.querySelector('.budget-history .chart > svg');
+      const series = Array.from(document.querySelectorAll('.budget-history [data-series]'));
+      const ready = root?.dataset.drawReady === 'true' && !document.querySelector('.budget-history.is-loading') && series.length === 2 && series.every(line => Array.from(line.querySelectorAll('path.series')).some(path => path.getAttribute('d')));
       const box = root?.getBoundingClientRect(), size = box ? [box.x, box.y, box.width, box.height].join(':') : '';
       const moving = document.getAnimations().some(animation => animation.playState === 'running' && animation.effect?.target?.matches('.widget, .widget-body'));
       stable = ready && !moving && size === previous ? stable + 1 : 0;
       previous = size;
     }
   })()`);
-  await cdp.evaluate(`document.querySelector('.history .panel-head button').click()`);
+  await cdp.evaluate(`document.querySelector('.budget-history .panel-head button').click()`);
   for (const label of ['Spending', 'Balance', 'Spending']) {
     await cdp.evaluate(`(async () => {
       const button = Array.from(document.querySelectorAll('.popover .segmented button')).find(b => b.textContent === ${JSON.stringify(label)});
@@ -78,7 +78,7 @@ export async function moneyView(cdp: Cdp, source: string, cappedSource: string, 
         const box = series.getBBox(), height = series.ownerSVGElement.viewBox.baseVal.height;
         if (box.y < 0 || box.y + box.height > height) throw new Error('switching money view left the line outside its new scale');
         if (Date.now() > end) throw new Error('money view did not commit ${label}');
-      } while (++frames < 2 || document.querySelector('.history .chart > svg')?.dataset.drawReady !== 'true');
+      } while (++frames < 2 || document.querySelector('.budget-history .chart > svg')?.dataset.drawReady !== 'true');
     })()`);
   }
   await cdp.send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});

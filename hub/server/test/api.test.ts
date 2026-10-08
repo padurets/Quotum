@@ -19,7 +19,7 @@ import {KEEP_MS} from '../sessions.js';
 import {hashPassword, normalizeUserCode, verifyPassword} from '../domain/auth.js';
 import {Setup} from '../setup.js';
 import {legacyLayout, MAX_ROWS, ordered, placesOf, settle, widened, withPlaces} from '../../ui/lib/grid.js';
-import {MAX_ROWS as HUB_MAX_ROWS} from '../domain/view.js';
+import {VIEW_BODY_LIMIT, MAX_ROWS as HUB_MAX_ROWS} from '../domain/view.js';
 
 const PERIODS = Object.entries({'1h': 1, '3h': 3, '6h': 6, '12h': 12, '24h': 24, '3d': 72, '7d': 168, '14d': 336, '30d': 720}).map(([id, hours]) => ({id, ms: hours * 3_600_000}));
 const periodOf = (id: string) => PERIODS.find(p => p.id === id)!;
@@ -385,16 +385,16 @@ test('a full view request has a small UTF-8 migration reserve above the keepaliv
   const places = Object.fromEntries(Array.from({length: 50}, (_, i) => [`source:${i}`, {x: 0, y: i * 10, w: 6, h: i % 2 ? MAX_ROWS : 1}]));
   for (const unit of ['x', 'я']) {
     const empty = {...EMPTY, layout: {columns: 6, places}, padding: ''};
-    const room = 69632 - Buffer.byteLength(JSON.stringify(empty));
+    const room = VIEW_BODY_LIMIT - Buffer.byteLength(JSON.stringify(empty));
     const unitBytes = Buffer.byteLength(unit);
     // An ignored field fills the request without changing any validated view settings.
     const exact = {...empty, padding: unit.repeat(Math.floor(room / unitBytes)) + 'x'.repeat(room % unitBytes)};
-    assert.equal(Buffer.byteLength(JSON.stringify(exact)), 69632);
+    assert.equal(Buffer.byteLength(JSON.stringify(exact)), VIEW_BODY_LIMIT);
     const saved = await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: exact});
     assert.equal(saved.status, 200);
     assert.deepEqual(saved.body.view.layout.places, places);
     const over = {...exact, padding: exact.padding + 'x'};
-    assert.equal(Buffer.byteLength(JSON.stringify(over)), 69633);
+    assert.equal(Buffer.byteLength(JSON.stringify(over)), VIEW_BODY_LIMIT + 1);
     assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: over})).status, 413);
   }
 });

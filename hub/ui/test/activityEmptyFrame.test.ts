@@ -1,3 +1,4 @@
+import {HistoryFailure} from '../components/HistoryFailure';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -27,7 +28,7 @@ test('the actual empty activity result keeps its time axis and legend container 
   const range = {from: NOW - 72 * H, to: NOW - 48 * H};
   const history: History = {since: range.from, to: range.to, range: `${range.from}-${range.to}`, live: false, cellMs: 5 * M, historyStart: 0, series: [], events: [], activity: {known: {from: range.from, to: range.to}, since: 0, barMs: H, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}};
   const x = (at: number) => 48 + (at - range.from) / DAY * 340;
-  const context = {
+  const context = {HistoryFailure,quotaHistory:{retry:()=>{}},error:undefined as 'history_failed'|undefined,
     navigationKey, navigation: {context: 'test', range: 'range'}, React, ...React, CSS: {escape: (id: string) => id}, StackPaths, stacksHeight, activityScale, niceTicks, cellStart, activityEmpty, MINUTE: M, clipPlot, PlotLayer, PlotOverlay, usePreparationBasis: (basis: unknown) => basis, usePrepared: (work: () => Generator<void, unknown, void>) => ({value: drain(work()), ready: true}), EMPTY_ACTIVITY: history.activity,
     pan: new Pan({now: () => NOW, commit: () => {}, requestFrame: () => null, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}}),
     useLocale: () => 'en', useTimeAxis: () => ({box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {...range, end: range.to}, x, drawX: x, screenX: x, commitDrawing: () => {}}),
@@ -57,4 +58,8 @@ test('the actual empty activity result keeps its time axis and legend container 
   assert.ok(!markup().includes('class="chart-empty">activity.none'), 'an old answer cannot describe a pending selected frame');
   context.history = null;
   assert.ok(markup().includes('viewBox="0 0 400 160"'), 'initial loading keeps an input-capable empty axis');
+  context.error='history_failed';
+  const failed=markup();
+  assert.ok(failed.includes('history-error'));assert.ok(!failed.includes('history.loading'));
+  assert.ok(failed.includes('viewBox="0 0 400 160"'),'a failed reader retains a usable empty axis');
 });

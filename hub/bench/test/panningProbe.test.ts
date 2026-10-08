@@ -13,30 +13,31 @@ function fixture() {
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
   const schedule = (callback: (stamp: number) => void) => {callbacks.push(callback); return callbacks.length;};
   const layer = (data = false) => {const slides = {style: {transform: 'none'}, getAnimations: () => []}; return {style: {transform: 'none'}, slides, querySelector: (selector: string) => selector === '.activity-stack' ? data ? {} : null : slides};};
-  const historyLayer = layer(), activityLayer = layer(true), activityTicks = layer(), activityEdge = layer(true);
+  const budgetLayer = layer(), historyLayer = layer(), activityLayer = layer(true), activityTicks = layer(), activityEdge = layer(true);
   const restoreClip = {style: {transform: 'none'}, firstElementChild: activityLayer};
   const endClip = {style: {transform: 'none'}, firstElementChild: restoreClip};
   const startClip = {style: {transform: 'none'}, firstElementChild: endClip};
   const activityClip = {style: {transform: 'none', visibility: ''}, firstElementChild: startClip};
   const hiddenHistory = layer(), hiddenActivity = layer();
   const svg = (slides: ReturnType<typeof layer>) => ({
-    isConnected: true, dataset: {drawReady: 'true', drawFrom: '0', drawTo: slides === historyLayer ? '424' : '720'} as Record<string, string>, style: {height: '200px'},
+    isConnected: true, dataset: {drawReady: 'true', drawFrom: '0', drawTo: slides === historyLayer ? '424' : slides === budgetLayer ? '406' : '720'} as Record<string, string>, style: {height: '200px'},
     classList: {contains: () => false}, getAttribute: () => '0 0 900 200', closest: () => null,
     querySelector: () => slides === historyLayer ? hiddenHistory : hiddenActivity,
     getBoundingClientRect: () => ({width: 450}), viewBox: {baseVal: {width: 900}},
     parentElement: {
       dataset: {axisEnd: '0'},
-      querySelector: (selector: string) => slides === historyLayer ? historyLayer : selector === '.plot-clip.is-band' ? activityClip : selector === '.plot-clip.is-band .plot-move' ? activityLayer : activityTicks,
+      querySelector: (selector: string) => slides === budgetLayer ? budgetLayer : slides === historyLayer ? historyLayer : selector === '.plot-clip.is-band' ? activityClip : selector === '.plot-clip.is-band .plot-move' ? activityLayer : activityTicks,
       querySelectorAll: () => slides === historyLayer ? [historyLayer] : [activityTicks, activityLayer, activityEdge],
       addEventListener: (name: string, fn: (event: object) => void) => listeners.set(name, fn), removeEventListener: () => {},
     },
   });
-  const historySvg = svg(historyLayer), activitySvg = svg(activityLayer);
+  const historySvg = svg(historyLayer), activitySvg = svg(activityLayer), budgetSvg = svg(budgetLayer);
+  Object.assign(budgetSvg.dataset, {panToken: '1', panOrigin: '0', panScale: '1', panEnd: '0'});
   Object.assign(historySvg.dataset, {panToken: '1', panOrigin: '0', panScale: '1', panEnd: '0'});
   Object.assign(activitySvg.dataset, {panToken: '1', panOrigin: '0', panScale: String(12 / 7), panEnd: '0'});
   const context = {
     performance: {now: () => time, timeOrigin: 0}, URL, URLSearchParams, location: {href: 'https://example.test/', search: ''},
-    document: {body: {}, querySelector: (selector: string) => selector.startsWith('.history') ? historySvg : activitySvg},
+    document: {body: {}, querySelector: (selector: string) => selector.startsWith('.history') ? historySvg : selector.startsWith('.budget-history') ? budgetSvg : activitySvg},
     history: {pushState: () => {}}, getComputedStyle: () => ({opacity: '1', transform: 'none'}),
     requestAnimationFrame: schedule, cancelAnimationFrame: () => {},
     MutationObserver: class {observe() {} disconnect() {}},
@@ -52,6 +53,7 @@ function fixture() {
   };
   const update = (i: number, at: number, moves = true, synchronized = true, proportional = true, historyMoves = true, edgeMoves = true) => {
     time = at;
+    budgetSvg.dataset.panEnd = String(12*i);budgetLayer.style.transform = `translateX(${-12*i}px)`;
     historySvg.dataset.panEnd = String(12 * i); activitySvg.dataset.panEnd = String(12 * (synchronized ? i : i - 1));
     if (historyMoves) historyLayer.style.transform = `translateX(${-12 * i}px)`;
     if (moves) activityLayer.style.transform = `translateX(${-(proportional ? 7 : 14) * i}px)`;
@@ -61,7 +63,7 @@ function fixture() {
   };
   const frame = (at: number) => {time = at; return callbacks.splice(0);};
   const runFrame = (at: number) => frame(at).forEach(callback => callback(at));
-  return {reading, wheel, update, frame, runFrame, requestFrame: context.window.requestAnimationFrame, context, historySvg, activitySvg, historyLayer, activityLayer, activityClip};
+  return {reading, wheel, update, frame, runFrame, requestFrame: context.window.requestAnimationFrame, context, historySvg, activitySvg, budgetSvg, budgetLayer, historyLayer, activityLayer, activityClip};
 }
 
 test('the probe includes clipping transforms and rejects a missing inverse on the real data layer', () => {
@@ -89,10 +91,10 @@ function run(moves: boolean, synchronized: boolean, proportional = true, history
     f.requestFrame(() => f.update(i, i * 16.7, moves, synchronized, proportional, historyMoves, edgeMoves));
     f.runFrame(i * 16.7);
   }
-  return {...f.reading, period: '24h', series: 12, charts: 2, rate: 4, expectedPushes: 0, coldReads: 1};
+  return {...f.reading, period: '24h', series: 12, budgetSeries: 12, charts: 3, rate: 4, expectedPushes: 0, coldReads: 1};
 }
 
-test('the actual probe measures input only after both charts move on the same time frame', () => {
+test('the actual probe measures input only after all three charts move on the same time frame', () => {
   assert.deepEqual(panningProblems(run(true, true)), []);
   const failures: [string, PanReading][] = [
     ['stationary Activity data must fail even while its ticks move', run(false, true)],
@@ -101,7 +103,13 @@ test('the actual probe measures input only after both charts move on the same ti
     ['stationary History data must fail', run(true, true, true, false)],
     ['stationary Activity edges must fail while the band moves', run(true, true, true, true, false)],
   ];
-  for (const [reason, reading] of failures) assert.ok(panningProblems(reading).some(problem => problem.includes('both charts')), reason);
+  for (const [reason, reading] of failures) assert.ok(panningProblems(reading).some(problem => problem.includes('all three charts')), reason);
+});
+
+test('stationary budget data cannot be credited by matching time metadata', () => {
+  const f=fixture();f.wheel(0,0);
+  f.requestFrame(()=>{f.update(1,16.7);f.budgetLayer.style.transform='none';});f.runFrame(16.7);
+  assert.equal(f.reading.synchronized,false);assert.equal(f.reading.latency.length,0);
 });
 
 test('the probe observes the production update in its own RAF and credits only reached input', () => {
@@ -136,14 +144,14 @@ test('input-free gaps are excluded but pending input keeps delayed frames measur
 test('unpainted final input is credited only after its geometry commits', () => {
   const f = fixture();
   f.wheel(0, 0);
-  delete f.historySvg.dataset.panEnd; delete f.activitySvg.dataset.panEnd;
+  delete f.historySvg.dataset.panEnd; delete f.activitySvg.dataset.panEnd; delete f.budgetSvg.dataset.panEnd;
   f.context.location.search = '?from=0&to=12';
   f.runFrame(16.7);
   assert.equal(f.reading.latency.length, 0, 'the address alone cannot prove the final chart updated');
   f.historySvg.parentElement.dataset.axisEnd = '12';
   f.runFrame(33.4);
-  assert.equal(f.reading.latency.length, 0, 'both charts must publish the final geometry');
-  f.activitySvg.parentElement.dataset.axisEnd = '12'; f.runFrame(50.1);
+  assert.equal(f.reading.latency.length, 0, 'all three charts must publish the final geometry');
+  f.activitySvg.parentElement.dataset.axisEnd = f.budgetSvg.parentElement.dataset.axisEnd = '12'; f.runFrame(50.1);
   assert.equal(f.reading.latency[0], 50.1);
   assert.equal(f.reading.updated, 0, 'final metadata cannot manufacture moving frames');
 });
@@ -163,9 +171,10 @@ test('an implicit wheel restart receives a fresh immutable gesture anchor', () =
   f.wheel(300, 320, 0, () => {
     Object.assign(f.historySvg.dataset, {panToken: '2', panOrigin: '12', panEnd: '12', drawFrom: '12', drawTo: '436'});
     Object.assign(f.activitySvg.dataset, {panToken: '2', panOrigin: '12', panEnd: '12', drawFrom: '12', drawTo: '732'});
-    f.historyLayer.style.transform = f.activityLayer.style.transform = 'none';
+    Object.assign(f.budgetSvg.dataset, {panToken: '2', panOrigin: '12', panEnd: '12', drawFrom: '12', drawTo: '418'});
+    f.historyLayer.style.transform = f.activityLayer.style.transform = f.budgetLayer.style.transform = 'none';
   });
-  f.requestFrame(() => {f.update(1, 322);f.historySvg.dataset.panEnd='24';f.activitySvg.dataset.panEnd='24';});
+  f.requestFrame(() => {f.update(1, 322);f.historySvg.dataset.panEnd='24';f.activitySvg.dataset.panEnd='24';f.budgetSvg.dataset.panEnd='24';});
   f.runFrame(321);
   assert.equal(f.reading.pending.length, 0, 'the new wheel token must not retain the previous cumulative offset');
   assert.equal(f.reading.latency[1], 22, 'delivery and handler work stay included after a restart');
@@ -185,9 +194,9 @@ test('a nonzero HTML baseline is retained on restart without crediting a model s
 
 test('a pending drawing model cannot credit the final input from the URL or axis alone', () => {
   const f = fixture(); f.wheel(0, 0);
-  delete f.historySvg.dataset.panEnd; delete f.activitySvg.dataset.panEnd;
+  delete f.historySvg.dataset.panEnd; delete f.activitySvg.dataset.panEnd; delete f.budgetSvg.dataset.panEnd;
   f.context.location.search = '?from=0&to=12';
-  f.historySvg.parentElement.dataset.axisEnd = f.activitySvg.parentElement.dataset.axisEnd = '12';
+  f.historySvg.parentElement.dataset.axisEnd = f.activitySvg.parentElement.dataset.axisEnd = f.budgetSvg.parentElement.dataset.axisEnd = '12';
   f.activitySvg.dataset.drawReady = 'false'; f.runFrame(16.7);
   assert.equal(f.reading.latency.length, 0);
   f.activitySvg.dataset.drawReady = 'true'; f.runFrame(33.4);
@@ -202,8 +211,8 @@ test('the actual probe rejects a wrong frozen SVG scale or a changed domain behi
       f.requestFrame(() => {f.update(i, i * 16.7); if (wrong === 'svg') f.historyLayer.slides.style.transform = 'scaleX(2)'; else f.activitySvg.dataset.drawFrom = '40';});
       f.runFrame(i * 16.7);
     }
-    const reading = {...f.reading, period: '24h', series: 12, charts: 2, rate: 4, expectedPushes: 0, coldReads: 1};
-    assert.ok(panningProblems(reading).some(problem => problem.includes('both charts')), wrong);
+    const reading = {...f.reading, period: '24h', series: 12, budgetSeries: 12, charts: 3, rate: 4, expectedPushes: 0, coldReads: 1};
+    assert.ok(panningProblems(reading).some(problem => problem.includes('all three charts')), wrong);
     assert.equal(f.reading.latency.length, 0, 'a reached HTML offset alone cannot credit the wrong composed drawing');
   }
 });

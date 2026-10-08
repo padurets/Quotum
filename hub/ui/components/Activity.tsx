@@ -1,3 +1,4 @@
+import {HistoryFailure} from './HistoryFailure';
 import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
@@ -10,7 +11,7 @@ import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
 import {useBoardId, useLineup, useTitles, type Title} from '../lib/board';
 import {useClock} from '../lib/clock';
-import {useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
+import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {usePrepared, usePreparationBasis} from './prepared';
 import {axisNavigation, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
@@ -205,7 +206,7 @@ const Totals = memo(function Totals({activity, shownMs, since}: {activity: Activ
  * render it. The unknown part of the period is hatched rather than drawn as idle.
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
-  const {history, loading} = useHistory();
+  const {history, loading,error} = useHistory();
   const strip = useHistoryPlot();
   const registry = useRef<{token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
   const panel = useRef<HTMLElement>(null);
@@ -262,7 +263,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
 
   const said = activityEmpty(history, shownSources.length);
-  const empty = !said
+  const empty = error || !said
     ? null
     : said.key === 'loading'
       ? t('history.loading')
@@ -278,6 +279,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
         <div><h2>{t('activity.title')}</h2>{history && <span className="answered-range">{t('history.answeredRange', {range: answeredRangeLabel(history)})}</span>}</div>
         <ActivitySettings arrange={arrange} />
       </div>
+      <HistoryFailure error={error} retry={quotaHistory.retry}/>
       <Totals activity={activity} shownMs={shownMs} since={since} />
       <>
           <Stacks
@@ -291,7 +293,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             plot={plot}
             onBase={onBase}
             strip={presentation.strip}
-            prepared={prepared.ready && (panning !== null || answered)}
+            prepared={prepared.ready && (panning !== null || answered || !!error)}
             navigation={navigation}
             by={by}
             allMuted={!emptyFrame && presentation.identities.length > 0 && presentation.shown.length === 0}

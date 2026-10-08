@@ -68,8 +68,13 @@ test('near-limit legacy documents retain every entry and fit the bounded migrati
     input.names = Object.fromEntries(Array.from({length:100},(_,i) => ['n'+i, 'é'.repeat(60)]));
     input.columns.forecast = Array.from({length:20},(_,i) => String.fromCharCode(97+i).repeat(20));
     input.layout.places.history = {x:3,y:99999,w:3,h:200};
-    if (pregrid) {input.order = ['forecast','history']; input.sizes = {history:6,forecast:12}; input.layout.places = {};}
-    for (let i=0;;i++) {
+    if (pregrid) {
+      input.order = ['forecast','history',...Array.from({length:198},(_,i)=>'source:ordered-'+i)];
+      input.sizes = Object.fromEntries(Array.from({length:200},(_,i)=>['source:sized-'+i,12]));
+      input.layout.places = {};
+      for(let i=0;i<500;i++){const id='é'.repeat(50)+i;const next={...input,windows:[...input.windows,id]};if(Buffer.byteLength(JSON.stringify(next))>65536)break;input.windows=next.windows;}
+    }
+    for (let i=0;!pregrid;i++) {
       const id = 'source:'+i, next = {...input, layout:{columns:6,places:{...input.layout.places,[id]:{x:0,y:i,w:3}}}};
       if (Buffer.byteLength(JSON.stringify(next)) > 65536) break;
       input.layout = next.layout;
@@ -80,6 +85,8 @@ test('near-limit legacy documents retain every entry and fit the bounded migrati
     assert.ok(parseView(migrated));
     for (const [id,place] of Object.entries(input.layout.places)) if (!['history','forecast'].includes(id)) assert.deepEqual(migrated.layout.places[id],place);
     assert.deepEqual(migrated.names,input.names);
+    if(pregrid) {assert.equal(Object.keys(input.layout.places).length,0);for(const id of [...input.order!,...Object.keys(input.sizes!)])if(!['history','forecast'].includes(id))assert.ok(migrated.layout.places[id]);}
+    assert.deepEqual(migrated.windows,input.windows);
     assert.equal(migrated.hidden.length,202);
   }
 });

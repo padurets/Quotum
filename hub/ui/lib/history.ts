@@ -600,7 +600,7 @@ export class HistoryStore {
       flight.startedAt=this.elapsedNow();
       this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
     };
-    if(this.pool)this.pool.request(this,flight,start);else start();
+    if(this.pool)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
   }
 
   private abort(flight: Flight) {this.preparations?.cancel(flight); this.responses.delete(flight); for (const [key, owner] of this.reservations) if (owner === flight) this.reservations.delete(key); this.flights.delete(flight); flight.controller.abort(); this.pool?.release(flight);}

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {AGENTS, FORECAST, chosenPlanOf, colorOf, columnShown, isHidden, planOf, withColumn, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withWindowHidden} from '../lib/view';
+import {AGENTS, QUOTA_TABLE, chosenPlanOf, colorOf, columnShown, isHidden, planOf, withColumn, weeklyPlanOf, withColor, withHidden, withPlan, withPlanned, withWindowHidden} from '../lib/view';
 import {CARD_COLORS, PROVIDERS} from '../lib/providers';
 import {DEFAULT_PLAN} from '../lib/plan';
 import type {View} from '../lib/types';
@@ -69,18 +69,18 @@ test('the colour grid is five hues in five steps, each a colour the hub takes', 
 
 
 test("the table's columns are on until the owner turns one off, but the share during work, and off in a range and a period alike", () => {
-  assert.ok(['now', 'spent', 'work', 'perwork', 'workleft'].every(column => columnShown(EMPTY, FORECAST, column)), 'a view saved before them');
-  assert.equal(columnShown(EMPTY, FORECAST, 'during'), false);
-  assert.equal(columnShown(EMPTY, FORECAST, 'agenthours'), false);
-  const agentHours = withColumn(EMPTY, FORECAST, 'agenthours', true);
-  assert.equal(columnShown(agentHours, FORECAST, 'agenthours'), true);
-  assert.equal(columnShown(withColumn(agentHours, FORECAST, 'agenthours', false), FORECAST, 'agenthours'), false);
-  const off = withColumn(EMPTY, FORECAST, 'work', false);
-  assert.deepEqual(off.columns, {forecast: ['work']});
-  assert.deepEqual([columnShown(off, FORECAST, 'work'), columnShown(off, FORECAST, 'spent')], [false, true]);
-  const during = withColumn(EMPTY, FORECAST, 'during', true);
-  assert.deepEqual(during.shownColumns, {forecast: ['during']});
-  assert.equal(columnShown(during, FORECAST, 'during'), true);
+  assert.ok(['now', 'spent', 'work', 'perwork', 'workleft'].every(column => columnShown(EMPTY, QUOTA_TABLE, column)), 'a view saved before them');
+  assert.equal(columnShown(EMPTY, QUOTA_TABLE, 'during'), false);
+  assert.equal(columnShown(EMPTY, QUOTA_TABLE, 'agenthours'), false);
+  const agentHours = withColumn(EMPTY, QUOTA_TABLE, 'agenthours', true);
+  assert.equal(columnShown(agentHours, QUOTA_TABLE, 'agenthours'), true);
+  assert.equal(columnShown(withColumn(agentHours, QUOTA_TABLE, 'agenthours', false), QUOTA_TABLE, 'agenthours'), false);
+  const off = withColumn(EMPTY, QUOTA_TABLE, 'work', false);
+  assert.deepEqual(off.columns, {'quota-table': ['work']});
+  assert.deepEqual([columnShown(off, QUOTA_TABLE, 'work'), columnShown(off, QUOTA_TABLE, 'spent')], [false, true]);
+  const during = withColumn(EMPTY, QUOTA_TABLE, 'during', true);
+  assert.deepEqual(during.shownColumns, {'quota-table': ['during']});
+  assert.equal(columnShown(during, QUOTA_TABLE, 'during'), true);
 });
 
 test('running time is off by default; the owner explicitly shows it without reviving an old hidden column', () => {

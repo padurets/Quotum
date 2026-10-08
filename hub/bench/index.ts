@@ -19,7 +19,7 @@ import {overviewCards, stillProblems, warmUntil} from './still.js';
 import {hear, type Heard} from './stream.js';
 import {frequencyKeys, moneyView} from './controls.js';
 import {panning} from './panning.js';
-import {panningSet} from './fixture.js';
+import {seedPanningBudgets,panningSet} from './fixture.js';
 import {profilePanning} from './panningProfile.js';
 import {historyTraffic} from './historyTraffic.js';
 import {diagnoseReversal} from './historyTrafficBrowser.js';
@@ -140,6 +140,7 @@ async function main() {
   try {
     say(`a still hub of the ${set.id} set at ${address.base}`);
     const stand = await demo.run();
+    seedPanningBudgets(path.join(demo.dir,'quotum.sqlite'),stand);
     const ana = stand.people.get(people(set)[0].id)!;
     const board = ana.personalBoard;
     const overview = () => overviewCards(path => ana.get<Snapshot>(path), board);
@@ -339,7 +340,6 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
   const source=record.sourceId!;
   const shownBy=Date.now()+SHOWN_WITHIN;
   while(!await cdp.evaluate<boolean>(`!!document.querySelector('[data-card="${source}"] [data-money]')`)){if(Date.now()>shownBy)throw new Stop('money card did not appear');await sleep(20);}
-  await cdp.evaluate(`Array.from(document.querySelectorAll('.analytics-head button')).find(b=>b.textContent==='USD')?.click()`);
   const readyBy=Date.now()+SHOWN_WITHIN;
   while(!await cdp.evaluate<boolean>(`!!document.querySelector('[data-series="${source} balance"]')`)){if(Date.now()>readyBy)throw new Stop('money chart did not appear');await sleep(20);}
   await cdp.evaluate(`(async () => {

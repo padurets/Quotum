@@ -1,3 +1,4 @@
+import {HistoryFailure} from './HistoryFailure';
 import {Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {num, rateText} from '../lib/format';
 import {level} from '../lib/quota';
@@ -19,15 +20,14 @@ import {
 } from '../lib/forecast';
 import {planChangesAt} from '../lib/plan';
 import {lineWork, workLeftChangesAt, workText, type WorkColumn} from '../lib/work';
-import {FORECAST, chosenPlanOf, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
+import {QUOTA_TABLE, chosenPlanOf, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
 import {type Line} from '../lib/lines';
 import {subscriptionLinesOf,subscriptionOverflow} from '../lib/subscription';
-import {usePrefs,usePref} from '../lib/prefs';
-import {MoneyTable} from './MoneyAnalytics';
+import {usePrefs} from '../lib/prefs';
 import {answeredRangeLabel, ofTimeRange} from '../lib/timeRange';
 import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
 import {hubNow, useClock} from '../lib/clock';
-import {useHistory} from '../lib/history';
+import {quotaHistory, useHistory} from '../lib/history';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 
@@ -91,7 +91,7 @@ const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: 
  */
 const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange}) {
   const {history, loading,error} = useHistory();
-  const sources = useNamed(arrange.view.names);
+  const sources = useNamed(arrange.view.names,'quota');
   const lineup = useLineup();
   const forecasts = useForecastsOf(lineup);
   const news = useResetNews();
@@ -104,7 +104,7 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
   const locale = useLocale();
   const lines = useMemo(() => subscriptionLinesOf(history, sources, view, kind), [history, sources, view.windows, view.hidden, view.colors, kind, locale]);
   const modeColumns = range ? RANGE_COLUMNS : LIVE_COLUMNS;
-  const columns = useMemo(() => modeColumns.filter(column => columnShown(view, FORECAST, column)), [modeColumns, view]);
+  const columns = useMemo(() => modeColumns.filter(column => columnShown(view, QUOTA_TABLE, column)), [modeColumns, view]);
   const panel = useRef<HTMLElement>(null);
   const [layout, setLayout] = useState<'table' | 'list'>('table');
 
@@ -219,23 +219,23 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
   const details = columns.filter(column => column !== lead);
 
   return (
-    <section ref={panel} className={`panel forecast ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading} data-history-range={history?.range}>
+    <section ref={panel} className={`panel forecast ${loading ? 'is-loading' : ''}`} aria-label={t('widgets.quotaTable')} aria-busy={loading} data-history-range={history?.range}>
       <div className="panel-head">
-        <div><h2>{t('forecast.title')}</h2>{history && <span className="answered-range">{t('history.answeredRange', {range: answeredRangeLabel(history)})}</span>}</div>
+        <div><h2>{t('widgets.quotaTable')}</h2>{history && <span className="answered-range">{t('history.answeredRange', {range: answeredRangeLabel(history)})}</span>}</div>
         {arrange.owner && (
           <Popover label={t('forecast.settings')} icon={<SlidersIcon />}>
             <div className="popover-title">{t('table.columns')}</div>
             {modeColumns.map(column => (
-              <SwitchRow key={column} on={columns.includes(column)} onChange={on => arrange.update(next => withColumn(next, FORECAST, column, on))}>
+              <SwitchRow key={column} on={columns.includes(column)} onChange={on => arrange.update(next => withColumn(next, QUOTA_TABLE, column, on))}>
                 {heading(column, range)}
               </SwitchRow>
             ))}
-            <HideRow onHide={() => arrange.update(next => withHidden(next, FORECAST, true))}>{t('widget.hide')}</HideRow>
+            <HideRow onHide={() => arrange.update(next => withHidden(next, QUOTA_TABLE, true))}>{t('widget.hide')}</HideRow>
           </Popover>
         )}
       </div>
       {omitted>0&&<p className="drawer-note">{t('history.quotaOverflow',{count:omitted})}</p>}
-      {error&&<p className="form-error">{t('money.historyLimit')}</p>}
+      <HistoryFailure error={error} retry={quotaHistory.retry}/>
       {!history ? error?null:(
         <div className="panel-loading">{t('history.loading')}</div>
       ) : !lines.length ? (
@@ -320,6 +320,4 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
   );
 });
 
-export const Forecast=memo(function Forecast({arrange}:{arrange:Arrange}) {
-  const money=usePref('money');return money.unit?<MoneyTable arrange={arrange}/>:<WindowForecast arrange={arrange}/>;
-});
+export const Forecast = WindowForecast;
