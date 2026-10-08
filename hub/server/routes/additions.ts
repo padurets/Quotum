@@ -42,7 +42,10 @@ function itemOf(value: unknown): AdditionItem {
 export async function additionRoutes(app: FastifyInstance, hub: Hub, guards: Guards, additions: BoardAdditions, attempts: Limiter) {
   const requests=new Limiter(240,60_000);
   app.setErrorHandler((error: {statusCode?:number},_request,reply)=>{
-    const code=error instanceof AdditionError||error instanceof SecretError?error.code:error.statusCode===413?'addition_invalid':'credential_failed';
+    const badRequest = error.statusCode !== undefined && error.statusCode >= 400 && error.statusCode < 500;
+    const code = error instanceof AdditionError || error instanceof SecretError
+      ? error.code
+      : badRequest ? 'addition_invalid' : 'credential_failed';
     const status=['addition_not_found','declared_account_not_found'].includes(code)?404:code==='addition_permission'?403:['addition_invalid','credential_invalid'].includes(code)?400:code==='addition_limit'?429:code==='addition_conflict'||code==='addition_expired'?409:500;
     return reply.code(status).send({error:code});
   });

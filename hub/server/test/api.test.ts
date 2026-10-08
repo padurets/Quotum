@@ -85,6 +85,24 @@ const batch = (id: string, failures: object[] = []) => ({
   failures,
 });
 
+test('addition and device onboarding reject malformed request bodies without server errors or writes', async t => {
+  const h = await hub();
+  t.after(async () => {await h.app.close(); h.store.close();});
+  await h.person('ana');
+  for (const url of ['/api/additions', '/api/device-onboarding']) {
+    for (const type of ['application/json', 'application/octet-stream']) {
+      const result = await h.call('POST', url, {
+        as: 'ana', body: '{"requestId":', headers: {origin: ORIGIN, 'content-type': type},
+      });
+      assert.equal(result.status, 400);
+      assert.deepEqual(result.body, {error: 'addition_invalid'});
+    }
+  }
+  for (const table of ['board_additions', 'device_onboarding', 'credentials']) {
+    assert.equal(h.store.db.prepare(`SELECT count(*) AS n FROM ${table}`).get()!.n, 0);
+  }
+});
+
 test('history recounts a cached early reset when retention removes its distant predecessor', async t => {
   const M = 60_000, H = 60 * M, day = 24 * H;
   let now = tileStart(tileOf(Date.now(), M), M);
