@@ -1,7 +1,13 @@
 import {DAY, HOUR, steady, weekly, type DemoSet} from './model.js';
 import {MONEY_KEY} from './money.js';
 
-/** No OpenRouter credential, holding, share or card exists before the user's submit. */
+/**
+ * No OpenRouter credential, holding, share or card exists before the user's submit.
+ * Existing-source Add shows its publication disclosure in the row and retains Added
+ * until the menu closes. Exercise repeated adds, search, EN/RU and keyboard focus;
+ * Board controls lists only measured sources. Pending and lost-reply transitions are
+ * held by ui/test/widgetAdd.test.ts and server/test/additions.test.ts.
+ */
 export const ONBOARDING: DemoSet = {
   id: 'onboarding', about: 'Board and account onboarding, with unconnected OpenRouter and two people', scene: 'quiet',
   entries: [

@@ -17,8 +17,9 @@ import {t, useLocale} from './i18n';
 import {Compact} from './components/Compact';
 import {Header, BoardActions} from './components/Header';
 import {Settings} from './components/Settings';
-import {AdditionScope, WidgetAdd} from './components/WidgetAdd';
-import {WidgetManage} from './components/WidgetManage';
+import {WidgetAdd} from './components/WidgetAdd';
+import {AdditionScope} from './lib/addition';
+import {BoardControls} from './components/BoardControls';
 import {ErrorLine, SERVICE} from './components/Kit';
 import {SourceCard} from './components/SourceCard';
 import {AgentsPanel} from './components/Agents';
@@ -182,8 +183,7 @@ function Dashboard({
       <Header boards={boards} board={board} onBoard={selectBoard} user={user} onAccount={openSettings} onSignedOut={onSignedOut} local={local}
         actions={active && <BoardActions board={board}
           add={board && <WidgetAdd key={'add/' + boardId} board={board} local={local} trustedKeys={trustedKeys} open={adding?.id === boardId} onOpenChange={open => setAdding(open ? board : null)} />}
-          manage={meta && <WidgetManage key={'manage/' + boardId} board={boardId} ids={lineup.filter(id => !isHidden(arrange.view, cardId(id)))}
-            widgets={[...shownCards, ...shownPanels].map(widget => ({id: widget.id, title: widget.name}))}
+          manage={meta && <BoardControls key={'manage/' + boardId} board={boardId} ids={lineup.filter(id => !isHidden(arrange.view, cardId(id)))}
             owner={arrange.owner} locked={prefs.locked} onLock={() => setPrefs({locked: !prefs.locked})}
             onSettings={local ? null : section => navigate(settingsHref('/boards/' + boardId + '/settings/' + section, boardId))} personal={!!board?.personal} />} />} />
       {arrange.saveFailures?.map(failure => <aside key={failure.board} className="view-save-notice" role="alert"><b>{t('layout.saveFailed', {board: boards.find(board => board.id === failure.board) ? boardTitle(boards.find(board => board.id === failure.board)!) : t('layout.unavailableBoard')})}</b><ErrorLine error={failure.error} />

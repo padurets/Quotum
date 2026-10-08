@@ -4,7 +4,7 @@ import {boardTitle, type Board, type User} from '../lib/session';
 import {page, useConnection} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {Brand, ErrorLine, Field, Modal} from './Kit';
-import {Popover} from './Popover';
+import {Popover, PopoverHeading} from './Popover';
 import {ChevronDown, Settings as SettingsIcon} from 'lucide-react';
 import {t} from '../i18n';
 
@@ -32,7 +32,13 @@ export function DeleteBoard({board, onClose}: {board: Board; onClose: () => void
     <Modal title={t('boards.deleteTitle', {board: board.name})} onClose={onClose}>
       <form className="dialog-form" onSubmit={remove}>
         <p className="dialog-text">{t('boards.deleteText')}</p>
-        <Field label={t('boards.deleteConfirm', {board: board.name})} value={typed} autoComplete="off" autoFocus onChange={e => setTyped(e.target.value)} />
+        <Field
+          label={t('boards.deleteConfirm', {board: board.name})}
+          value={typed}
+          autoComplete="off"
+          autoFocus
+          onChange={e => setTyped(e.target.value)}
+        />
         <ErrorLine error={error} />
         <div className="button-row">
           <button type="button" className="button" onClick={onClose}>
@@ -74,7 +80,6 @@ function BoardSwitcher({boards, board, onSelect}: {boards: Board[]; board: Board
     }
   };
   return (
-    <>
     <Popover
       label={t('boards.title')}
       open={open}
@@ -85,24 +90,38 @@ function BoardSwitcher({boards, board, onSelect}: {boards: Board[]; board: Board
           <ChevronDown size={14} aria-hidden="true" />
         </span>
       }
-      align="left"
     >
-      <div className="popover-title">{t('boards.title')}</div>
+      <PopoverHeading onClose={() => setOpen(false)}>{t('boards.title')}</PopoverHeading>
       {boards.map(b => (
-        <button key={b.id} type="button" className="popover-row board-row" aria-current={b.id === board?.id} onClick={() => {onSelect(b.id); setOpen(false);}}>
+        <button
+          key={b.id}
+          type="button"
+          className="popover-row board-row"
+          aria-current={b.id === board?.id}
+          onClick={() => {
+            onSelect(b.id);
+            setOpen(false);
+          }}
+        >
           <i className={`check ${b.id === board?.id ? 'on' : ''}`} />
-          <span>{boardTitle(b)}</span><b>{t(b.personal ? 'boards.personal' : 'boards.shared')}</b>
+          <span>{boardTitle(b)}</span>
+          <b>{t(b.personal ? 'boards.personal' : 'boards.shared')}</b>
         </button>
       ))}
       <form className="popover-section popover-form" onSubmit={create}>
-        <input placeholder={t('boards.newPlaceholder')} value={name} maxLength={80} onChange={e => setName(e.target.value)} aria-label={t('boards.newLabel')} />
+        <input
+          placeholder={t('boards.newPlaceholder')}
+          value={name}
+          maxLength={80}
+          onChange={e => setName(e.target.value)}
+          aria-label={t('boards.newLabel')}
+        />
         <button className="button" disabled={busy || !name.trim()}>
           {t('boards.create')}
         </button>
       </form>
       <ErrorLine error={error} />
     </Popover>
-    </>
   );
 }
 
@@ -127,37 +146,89 @@ function Offline() {
 }
 
 /** Global navigation and the person's menu stay available on settings pages too. */
-export function Header({boards, board, onBoard, user, onAccount, onSignedOut, local, actions}: {
-  boards: Board[]; board: Board | null; onBoard: (id: string) => void;
-  user: User; onAccount: () => void; onSignedOut: () => void; local: boolean; actions?: ReactNode;
+export function Header({
+  boards,
+  board,
+  onBoard,
+  user,
+  onAccount,
+  onSignedOut,
+  local,
+  actions,
+}: {
+  boards: Board[];
+  board: Board | null;
+  onBoard: (id: string) => void;
+  user: User;
+  onAccount: () => void;
+  onSignedOut: () => void;
+  local: boolean;
+  actions?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const signOut = async () => {
-    try { await call('POST', '/api/auth/logout'); onSignedOut(); }
-    catch (failure) { setError(failure); }
+    try {
+      await call('POST', '/api/auth/logout');
+      onSignedOut();
+    } catch (failure) {
+      setError(failure);
+    }
   };
-  return <header className="topbar"><div className="topbar-inner">
-    <Brand href="/" />
-    {!local && <BoardSwitcher boards={boards} board={board} onSelect={onBoard} />}
-    <div className="status">
-      {actions}
-      {local ? <button className="icon-button" aria-label={t('header.settings')} onClick={onAccount}><SettingsIcon size={16} aria-hidden="true" /></button> :
-        <Popover label={t('account.open')} triggerClass="avatar-button" trigger={<span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>} open={open} onOpenChange={setOpen}>
-          <div className="popover-title">{user.name}<small className="account-email">{user.email}</small></div>
-          <button className="popover-row" onClick={() => {setOpen(false); onAccount();}}><span>{t('header.settings')}</span></button>
-          <button className="popover-row" onClick={() => void signOut()}><span>{t('account.signOut')}</span></button>
-          <ErrorLine error={error} />
-        </Popover>}
-    </div>
-  </div></header>;
+  return (
+    <header className="topbar">
+      <div className="topbar-inner">
+        <Brand href="/" />
+        <div className="status">
+          {(!local || actions) && (
+            <div className="board-controls" role="group" aria-label={board ? boardTitle(board) : t('boards.title')}>
+              {!local && <BoardSwitcher boards={boards} board={board} onSelect={onBoard} />}
+              {actions}
+            </div>
+          )}
+          {local ? (
+            <button className="icon-button" aria-label={t('header.settings')} onClick={onAccount}>
+              <SettingsIcon size={16} aria-hidden="true" />
+            </button>
+          ) : (
+            <Popover
+              label={t('account.open')}
+              triggerClass="avatar-button"
+              trigger={<span className="avatar">{user.name.slice(0, 1).toUpperCase()}</span>}
+              open={open}
+              onOpenChange={setOpen}
+            >
+              <PopoverHeading detail={user.email} onClose={() => setOpen(false)}>
+                {user.name}
+              </PopoverHeading>
+              <button
+                className="popover-row"
+                onClick={() => {
+                  setOpen(false);
+                  onAccount();
+                }}
+              >
+                <span>{t('header.settings')}</span>
+              </button>
+              <button className="popover-row" onClick={() => void signOut()}>
+                <span>{t('account.signOut')}</span>
+              </button>
+              <ErrorLine error={error} />
+            </Popover>
+          )}
+        </div>
+      </div>
+    </header>
+  );
 }
 
 /** These actions always name the current board; personal management has its own pages. */
-export function BoardActions({board, add, manage}: {
-  board: Board | null; add: ReactNode; manage: ReactNode;
-}) {
-  return <div className="board-actions" role="group" aria-label={board ? boardTitle(board) : undefined}><Offline />
-      {add}{manage}
-  </div>;
+export function BoardActions({board, add, manage}: {board: Board | null; add: ReactNode; manage: ReactNode}) {
+  return (
+    <div className="board-actions" role="group" aria-label={board ? boardTitle(board) : undefined}>
+      <Offline />
+      {add}
+      {manage}
+    </div>
+  );
 }

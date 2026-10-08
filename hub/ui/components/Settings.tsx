@@ -12,7 +12,7 @@ import {SharesTab, MembersTab} from './BoardDialog';
 import {AppSection, Measuring} from './Desktop';
 import {DeleteBoard} from './Header';
 import {ErrorLine, Field} from './Kit';
-import {ConnectionsPage} from './WidgetAdd';
+import {ConnectionsPage} from './ConnectionsPage';
 import {ArrowLeft} from 'lucide-react';
 
 type Section = {id: string; title: Key};

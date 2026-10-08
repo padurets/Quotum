@@ -18,6 +18,7 @@ function fixture(initialOwner='u',local=false,boards:Session['boards']=[]){
   const cleanups=new Set<()=>void>(),modal={};let userId=initialOwner;
   const memo=(read:()=>unknown,deps:unknown[])=>{const box=hooks.useRef(undefined) as {current?:{deps:unknown[];value:unknown}};if(!box.current||deps.some((value,i)=>!Object.is(value,box.current!.deps[i])))box.current={deps,value:read()};return box.current.value;};
   let scopeActive=true;
+  const modules: Record<string, Record<string, unknown>> = {};
   const context={exports:{} as {ConnectionsPage:(props:unknown)=>Node;KeyForm:(props:unknown)=>Node;useAddition:()=>{submit:(board:string,item:unknown,secret?:string)=>Promise<void>}},crypto:{randomUUID:()=> 'request'},AbortController,require:(name:string)=>{
     if(name==='react')return {createContext:()=>({}),useContext:()=>()=>scopeActive,useState:hooks.useState,useRef:hooks.useRef,useCallback:(fn:unknown,deps:unknown[])=>memo(()=>fn,deps),useEffect:(effect:()=>void|(()=>void),deps:unknown[])=>hooks.useLayoutEffect(()=>{const cleanup=effect();if(!cleanup)return;cleanups.add(cleanup);return()=>{cleanups.delete(cleanup);cleanup();};},deps)};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'};
@@ -35,9 +36,17 @@ function fixture(initialOwner='u',local=false,boards:Session['boards']=[]){
     if(name==='./Popover')return {};
     if(name==='./logos')return {logoOf:()=>''};
     if(name==='./Machines')return {};
+    if(name.endsWith('/addition'))return modules.addition;
+    if(name==='./ConnectionForms')return modules.forms;
+    if(name==='./WidgetAdd')return {WidgetAdd: function WidgetAdd() {}};
     throw new Error(name);
   }};
-  runInNewContext(ts.transpileModule(readFileSync(new URL('../components/WidgetAdd.tsx',import.meta.url),'utf8')+'\nexports.KeyForm=KeyForm;exports.useAddition=useAddition;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+  for (const [name, file] of [['addition', '../lib/addition.ts'], ['forms', '../components/ConnectionForms.tsx'], ['connections', '../components/ConnectionsPage.tsx']]) {
+    const exports = {};
+    runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,{...context,exports});
+    modules[name] = exports;
+    Object.assign(context.exports, exports);
+  }
   const render=()=>{hooks.begin();const tree=context.exports.ConnectionsPage({userId,trustedKeys:{available:true},boards,local});hooks.commit();return nodes(tree);};
   const keyForm=(props:unknown)=>{hooks.begin();const tree=context.exports.KeyForm(props);hooks.commit();return nodes(tree);};
   const reply={connections:[{id:'c',provider:'openrouter',sourceId:null,hint:'abcd',lastError:null,expiresAt:null,label:'OpenRouter',lastSuccessAt:null,placements:[]}]};

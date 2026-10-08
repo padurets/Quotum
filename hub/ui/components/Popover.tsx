@@ -1,6 +1,8 @@
 import {useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode} from 'react';
 import {barsOf, coverOf, crampedOf, roomOf, shiftOf, sideOf} from '../lib/place';
 import {settler} from '../lib/settle';
+import {X} from 'lucide-react';
+import {t} from '../i18n';
 
 /** A button with an anchored panel; closes on outside click, Escape, focus moving out and its button going out of sight. */
 export function Popover({
@@ -285,6 +287,30 @@ export function Popover({
           {children}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Shared heading for menus with a title, optional context and a close action. */
+export function PopoverHeading({children, detail, onClose}: {children: ReactNode; detail?: ReactNode; onClose: () => void}) {
+  return (
+    <div className="popover-heading">
+      <div>
+        <h3>{children}</h3>
+        {detail && <small>{detail}</small>}
+      </div>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={t('common.close')}
+        title={t('common.close')}
+        onClick={event => {
+          event.currentTarget.closest('.picker')?.querySelector<HTMLButtonElement>(':scope > button')?.focus({preventScroll: true});
+          onClose();
+        }}
+      >
+        <X size={14} aria-hidden="true" />
+      </button>
     </div>
   );
 }

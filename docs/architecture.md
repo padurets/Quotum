@@ -300,17 +300,26 @@ real next measurement even then.
 
 **Refresh on demand.** Any reader of a subscription on a board can request fresh data
 through its existing card menu, above the action to hide the widget, in the web
-dashboard and the desktop app. The header has two board dropdowns: Add and Widgets.
-Add lists eligible absent or hidden widgets with their type; its Connect entry opens
-a separate provider/device choice while retaining the target board. Widgets shows
-current widgets, their last successful measurements and errors, an explicit Refresh
-all action, the original free/locked layout control and board settings. Opening it
+dashboard and the desktop app. The header groups the board selector and two icon
+buttons on the right, before the account menu: Add widget and Board controls.
+Add names the destination board and lists eligible absent or hidden widgets with their
+type. One Add action provides or restores the selected widget; a source being shared
+discloses access to its measurements and history in its row before submission.
+The row retains an Added mark until the menu closes, without a confirmation page,
+success page or automatic scroll. Pending requests and recoverable errors stay in
+the row too. Search preserves pending rows and their receipts; reopening reads the
+eligible catalogue again. Its Connect entry opens a separate provider/device choice
+while retaining the target board and the connection's verification and recovery flow.
+Board controls shows only the measured sources with visible cards under Data updates,
+their last successful measurements and errors, an explicit Refresh all action, the
+original free/locked layout control and board settings. Analytic widgets keep their
+settings and hiding actions in their own menus. Opening Board controls
 makes no refresh requests. The list keeps compact single-line rows: name and a short
 measurement age or outcome, with the complete timestamp in its tooltip and error
 details revealed only by clicking the row. Its wide layout puts status beside actions; at narrow
 widths actions precede the status list in one column, scrolling inside the Popover.
-The header's text triggers have no permanent fill or border; their dropdowns start
-below the header's bottom edge. Navigation icons use library SVGs.
+The dropdowns share their heading, close action and inset row styles and start below
+the header's bottom edge. Navigation icons use library SVGs.
 Refresh all requests non-hidden cards through the same source endpoint, up to four
 at a time. A refusal does not stop the rest. Outcomes stay with each source's row
 after the hub retires its status, also while the dropdown is closed. Error details
