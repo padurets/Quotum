@@ -1413,3 +1413,26 @@ test('a financial grant revision clears warm history and rejects a response from
   b.store.setMeters({...selection,ids:[],resourceRevision:'revoked'});await flush();
   assert.equal(b.store.get().history?.meterSeries?.length??0,0);b.store.close();
 });
+
+
+test('subscription funds read independently from wallet budgets and retire on financial revoke',async()=>{
+  const before=prefs(),pool=new HistoryPool(),b=harness(undefined,undefined,'budget',pool),f=harness(undefined,undefined,'budget',pool),store=createStore(reduce,INITIAL);
+  const stopB=follow(b.store,store),stopF=follow(f.store,store,'funds');
+  setPrefs({money:DEFAULT_MONEY,funds:DEFAULT_MONEY});
+  const base={plan:'',resets:null,owners:[],windows:[],error:null,successAt:NOW,stale:false,staleAfterMs:10*M,measureIntervalMs:null};
+  const meter={kind:'balance' as const,amount:'10000000',at:NOW,staleAfterMs:10*M,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null};
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:EMPTY_VIEW,historyStart:0,sources:[
+    {...base,id:'subscription',provider:'codex',budget:{enabled:true,since:1,anchor:1,revision:'on'},meters:[{...meter,id:'balance:credits',unit:'credits:codex'}]},
+    {...base,id:'wallet',provider:'openrouter',meters:[{...meter,id:'balance',unit:'USD'}]},
+  ],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
+  try {
+    store.dispatch({type:'board-open',id:'b'});store.dispatch({type:'hub',event:{type:'hello',data:{epoch:'run'}}});store.dispatch({type:'hub',event:{type:'snapshot',data:snapshot}});await flush();
+    assert.deepEqual(b.reads[0].meters?.ids,[['wallet','balance']]);assert.deepEqual(f.reads[0].meters?.ids,[['subscription','balance:credits']]);
+    await b.reads[0].answer();await f.reads[0].answer();
+    store.dispatch({type:'hub',event:{type:'history',data:{sources:['subscription'],since:NOW,changes:[{source:'subscription',scope:'budget',since:NOW}]}}});await flush();
+    assert.equal(b.reads.length,1);assert.equal(f.reads.length,2);
+    store.dispatch({type:'hub',event:{type:'card',data:{...snapshot.sources[0],budget:{enabled:false,since:null,anchor:null,revision:'off'}}}});await flush();
+    assert.equal(f.reads[1].signal?.aborted,true);assert.equal(f.store.get().history?.meterSeries?.length??0,0);
+    assert.equal(b.reads.length,1);assert.deepEqual(prefs().money,DEFAULT_MONEY);
+  }finally{stopB();stopF();b.store.close();f.store.close();setPrefs(before);}
+});

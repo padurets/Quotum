@@ -481,7 +481,7 @@ export type Machine = {
 };
 
 /** Where a board's owner put agent activity, the chart and the table, with the heights they chose, where not as they come. */
-export type AnalyticsPlaces = Partial<Record<'activity' | 'quota-history' | 'quota-table' | 'budget-history' | 'budget-table', Place>>;
+export type AnalyticsPlaces = Partial<Record<'activity' | 'quota-history' | 'quota-table' | 'subscription-funds' | 'budget-history' | 'budget-table', Place>>;
 
 /**
  * Someone on the hub; their codes are read on their personal board, where `agents` turns the

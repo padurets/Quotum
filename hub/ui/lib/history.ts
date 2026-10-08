@@ -1,6 +1,6 @@
 import {HistoryPool} from './historyPool';
 import type {HistoryScope} from '../../server/domain/history';
-import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, ACTIVITY} from '../../server/domain/widgets';
+import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVITY} from '../../server/domain/widgets';
 import {useSyncExternalStore} from 'react';
 import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type HistoryReply, type Target} from '../../server/domain/history';
 import {page, type PageEvent, type PageState} from './board';
@@ -13,6 +13,7 @@ import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
 import type {History} from './types';
 import type {MeterSelection} from '../../server/domain/meterHistory';
+import type {MoneyFamily} from '../../server/domain/providers';
 import {moneySelection} from './moneySelection';
 import {subscriptionSelection} from './subscription';
 import {pan, type Pan} from './pan';
@@ -845,23 +846,24 @@ function reader(scope: HistoryScope) {
     accessLost: () => {page.dispatch({type:'board-close'});window.dispatchEvent(new Event(UNAUTHORIZED));},
   }, STORED_BYTES, scope, historyPool);
 }
-export const quotaHistory = reader('quota'), budgetHistory = reader('budget');
+export const quotaHistory = reader('quota'), budgetHistory = reader('budget'), fundsHistory = reader('budget');
 export const loader = quotaHistory;
 let shellActive = true;
-const selectedMeters = (state: PageState, scope: HistoryScope) => {
+const selectedMeters = (state: PageState, scope: HistoryScope, family: MoneyFamily = 'budget') => {
   const board=state.board;if(!board)return undefined;
   const cards=board.lineup.flatMap(id=>board.cards[id]??[]);
-  return scope==='budget'?moneySelection(cards,board.view.hidden,prefs().money,board.currencies).selection:subscriptionSelection(cards,board.view);
+  return scope==='budget'?moneySelection(cards,board.view.hidden,prefs()[family==='funds'?'funds':'money'],board.currencies,family).selection:subscriptionSelection(cards,board.view);
 };
 function activeReaders(state=page.get()) {
   const board=state.board;
   quotaHistory.setActive(shellActive&&!!board&&[ACTIVITY,...QUOTA_WIDGETS].some(id=>widgetVisible(board.view,id,board.lineup.length)));
+  fundsHistory.setActive(shellActive&&!!board&&widgetVisible(board.view,SUBSCRIPTION_FUNDS,board.lineup.length));
   budgetHistory.setActive(shellActive&&!!board&&BUDGET_WIDGETS.some(id=>widgetVisible(board.view,id,board.lineup.length)));
 }
 export const historyReaders = {setActive(active: boolean) {shellActive=active;activeReaders();}};
 
 /** Event changes identify resources; a reader's choices never mutate another board's selections. */
-export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>) {
+export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>, family: MoneyFamily = 'budget') {
   const scope=loader.scope??'quota';
   return store.listen((event, state) => {
     if (event.type === 'board-open') {pan.cancel(); loader.open(event.id);}
@@ -873,17 +875,17 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>)
       else if (hub.type === 'lineup') {loader.lineup(state.board?.lineup ?? []); if(scope==='quota')loader.setWindows(windowsOf(state));}
       else if (hub.type === 'card'&&scope==='quota') loader.setWindows(windowsOf(state));
       else if (hub.type === 'history') {
-        const selected=scope==='budget'?new Set(selectedMeters(state,scope)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
+        const selected=scope==='budget'?new Set(selectedMeters(state,scope,family)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
         const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source));
         if(changes?.length)loader.news(Math.min(...changes.map(change=>change.since)));
         else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since);
       }
     }
-    if(state.board)loader.setMeters(selectedMeters(state,scope));
+    if(state.board)loader.setMeters(selectedMeters(state,scope,family));
   });
 }
 const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).flatMap(card => card.windows.map(window => `${card.id} ${window.id}`));
-follow(quotaHistory,page);follow(budgetHistory,page);
+follow(quotaHistory,page);follow(budgetHistory,page);follow(fundsHistory,page,'funds');
 page.listen((_event,state)=>activeReaders(state));
 
 /** The plot follows the gesture; only its completion chooses exact quantities. */
@@ -908,18 +910,19 @@ export function followPan(loader: HistoryStore, gesture: Pick<Pan, 'get' | 'subs
 if (typeof window !== 'undefined') {
   followPan(quotaHistory, pan, timeRange);
   followPan(budgetHistory, pan, timeRange);
+  followPan(fundsHistory, pan, timeRange);
   const chosen = () => {
-    for(const reader of [quotaHistory,budgetHistory]) {
+    for(const reader of [quotaHistory,budgetHistory,fundsHistory]) {
       reader.choose(prefs().range,timeRange());
-      if(page.get().board)reader.setMeters(selectedMeters(page.get(),reader.scope!));
+      if(page.get().board)reader.setMeters(selectedMeters(page.get(),reader.scope!,reader===fundsHistory?'funds':'budget'));
     }
   };
   onPrefs(chosen);onTimeRange(chosen);chosen();
 }
 export function useHistory(): Shown {return useSyncExternalStore(quotaHistory.subscribe, quotaHistory.get, quotaHistory.get);}
-export function useBudgetHistory(): Shown {return useSyncExternalStore(budgetHistory.subscribe, budgetHistory.get, budgetHistory.get);}
+export function useBudgetHistory(family: MoneyFamily = 'budget'): Shown {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribe, reader.get, reader.get);}
 export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
-export function useBudgetHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(budgetHistory.subscribePlot, budgetHistory.getPlot, budgetHistory.getPlot);}
+export function useBudgetHistoryPlot(family: MoneyFamily = 'budget'): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribePlot, reader.getPlot, reader.getPlot);}
 /** A fresh answer from either resource family supersedes the board's initial snapshot. */
 export function historyBegins(board: string | null, snapshot: number | null, answers: readonly (HistoryBoundary | null)[]): number {
   const current = answers.filter((answer): answer is HistoryBoundary => !!answer && answer.board === board);
@@ -927,12 +930,12 @@ export function historyBegins(board: string | null, snapshot: number | null, ans
   return current.length ? Math.min(...current.filter(answer => answer.at === newest).map(answer => answer.start)) : snapshot ?? 0;
 }
 const subscribeHistoryBegins = (listener: () => void) => {
-  const stops = [page.subscribe(listener), quotaHistory.subscribeBoundary(listener), budgetHistory.subscribeBoundary(listener)];
+  const stops = [page.subscribe(listener), quotaHistory.subscribeBoundary(listener), budgetHistory.subscribeBoundary(listener), fundsHistory.subscribeBoundary(listener)];
   return () => stops.forEach(stop => stop());
 };
 const readHistoryBegins = () => {
   const board = page.get().board;
-  return historyBegins(board?.id ?? null, board?.historyStart ?? null, [quotaHistory.getBoundary(), budgetHistory.getBoundary()]);
+  return historyBegins(board?.id ?? null, board?.historyStart ?? null, [quotaHistory.getBoundary(), budgetHistory.getBoundary(), fundsHistory.getBoundary()]);
 };
 /** Reading fresh metadata only renders navigation when its numeric boundary changes. */
 export function useHistoryBegins(): number {return useSyncExternalStore(subscribeHistoryBegins, readHistoryBegins, readHistoryBegins);}

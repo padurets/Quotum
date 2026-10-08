@@ -5,7 +5,7 @@ import type {WindowMeasurement} from '../server/domain/quota.js';
 
 /** Command races and rate-save conflicts are held by the credit API and cadence tests. */
 export const CODEX_CREDIT_SCENES = [
-  {id:'finite',expect:['mixed','finite','2500','default-USD','changing-balance']},
+  {id:'finite',expect:['mixed','finite','2500','default-USD','changing-balance','dedicated-funds-chart']},
   {id:'precise',expect:['mixed','finite','1234.5678912','default-USD']},
   {id:'zero',expect:['mixed','finite','0','default-USD']},
   {id:'unlimited',expect:['mixed','unlimited','last-known']},

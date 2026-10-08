@@ -111,3 +111,20 @@ for (const version of [16,18]) test(`schema ${version} conversion is atomic, fre
     assert.equal(db.prepare('SELECT updated_by FROM views').get()!.updated_by,'owner');
   } finally {db.close();}
 });
+
+
+test('subscription funds get their own placement without enabling wallet budget widgets',()=>{
+  const subscription={id:'s',provider:'codex'},wallet={id:'w',provider:'openrouter'};
+  const view=reconcileAnalytics(EMPTY_VIEW,[subscription]);
+  assert.ok(widgetVisible(view,'subscription-funds',1));
+  assert.ok(widgetVisible(view,'quota-history',1));
+  assert.equal(widgetVisible(view,'budget-history',1),false);
+  assert.equal(widgetVisible(view,'budget-table',1),false);
+  assert.equal(widgetVisible(reconcileAnalytics(EMPTY_VIEW,[{...subscription,budget:{enabled:false}}]),'subscription-funds',1),false);
+  const mixed=reconcileAnalytics(view,[subscription,wallet]);
+  assert.ok(widgetVisible(mixed,'budget-history',2));
+  assert.deepEqual(mixed.layout.places['subscription-funds'],view.layout.places['subscription-funds']);
+  const hidden={...mixed,hidden:['subscription-funds']};
+  assert.equal(reconcileAnalytics(hidden,[subscription,wallet]),hidden);
+  assert.ok(widgetVisible(reconcileAnalytics(mixed,[]),'subscription-funds',0));
+});

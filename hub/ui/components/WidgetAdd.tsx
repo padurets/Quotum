@@ -14,7 +14,7 @@ import {logoOf} from './logos';
 import {Popover, PopoverHeading} from './Popover';
 import {KeyForm, DeviceAdd} from './ConnectionForms';
 
-const WIDGET_ICONS = {agents: List, activity: Activity, 'quota-history': ChartNoAxesCombined, 'budget-history': ChartNoAxesCombined, 'quota-table': Table2, 'budget-table': Table2};
+const WIDGET_ICONS = {agents: List, activity: Activity, 'quota-history': ChartNoAxesCombined, 'subscription-funds': ChartNoAxesCombined, 'budget-history': ChartNoAxesCombined, 'quota-table': Table2, 'budget-table': Table2};
 
 /** Keep attempted rows in place until this menu closes, including while the board catches up. */
 function retainRows<T extends {id: string}>(previous: T[], next: T[], kept: Set<string>, key: (item: T) => string): T[] {

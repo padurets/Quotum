@@ -1,17 +1,18 @@
 import {legacyLayout, ordered} from './layout.js';
 import {EMPTY_VIEW, type View} from './view.js';
-import {providerOf, supportsBudget, supportsQuota} from './providers.js';
-import {ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, BUDGET_HISTORY, BUDGET_TABLE, QUOTA_WIDGETS, BUDGET_WIDGETS, showWidgets} from './widgets.js';
+import {providerOf, moneyFamily, supportsQuota} from './providers.js';
+import {ACTIVITY, SUBSCRIPTION_FUNDS, QUOTA_HISTORY, QUOTA_TABLE, BUDGET_HISTORY, BUDGET_TABLE, QUOTA_WIDGETS, BUDGET_WIDGETS, showWidgets} from './widgets.js';
 
 export type AnalyticsResources = {id: string; provider: string;budget?:{enabled:boolean}}[];
 type LegacyView = Omit<View, 'version' | 'layout'> & {version?: 1; layout?: View['layout']};
-const families = (resources: AnalyticsResources) => ({quota: resources.some(s => supportsQuota(providerOf(s.provider))), budget: resources.some(s => s.budget?.enabled!==false&&supportsBudget(providerOf(s.provider)))});
+const families = (resources: AnalyticsResources) => ({quota: resources.some(s => supportsQuota(providerOf(s.provider))), budget: resources.some(s => s.budget?.enabled!==false&&moneyFamily(providerOf(s.provider))==='budget')});
 const legacyIds = ['history', 'forecast'];
 
 /** The server applies defaults once; hidden and placed widgets never depend on a reader. */
 export function reconcileAnalytics(view: View, resources: AnalyticsResources): View {
   const {quota, budget} = families(resources);
-  const add = [...(quota ? QUOTA_WIDGETS : []), ...(budget ? BUDGET_WIDGETS : [])].filter(id => !view.shown.includes(id) && !view.hidden.includes(id));
+  const funds = resources.some(s => s.budget?.enabled!==false && moneyFamily(providerOf(s.provider))==='funds');
+  const add = [...(quota ? QUOTA_WIDGETS : []), ...(funds ? [SUBSCRIPTION_FUNDS] : []), ...(budget ? BUDGET_WIDGETS : [])].filter(id => !view.shown.includes(id) && !view.hidden.includes(id));
   if (!add.length) return view;
   const next = showWidgets(view, add), places = {...view.layout.places};
   // Existing anchors keep their coordinates. Newly applicable panels use free trailing rows.

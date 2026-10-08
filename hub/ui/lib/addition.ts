@@ -20,6 +20,7 @@ export const LABELS: Record<WidgetId, Key> = {
   agents: 'agents.title',
   activity: 'activity.title',
   'quota-history': 'history.title',
+  'subscription-funds': 'widgets.subscriptionFunds',
   'budget-history': 'widgets.budgetHistory',
   'quota-table': 'forecast.title',
   'budget-table': 'widgets.budgetTable',

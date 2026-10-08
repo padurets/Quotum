@@ -218,7 +218,7 @@ async function main() {
     // Panning has its own movement and mutation probe. Traversing React and the
     // DOM for the finished measurement phase would add unrelated work to every frame.
     await cdp.evaluate('__quotumBench.pause()');
-    say('checking native continuous wheel and Shift-drag from quota and budget at 24h and 30d, CPU ×4');
+    say('checking native continuous wheel and Shift-drag from quota, budget and subscription funds at 24h and 30d, CPU ×4');
     const panned = await panning(cdp);
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95))})), problems: panned.problems})}`);

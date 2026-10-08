@@ -1115,7 +1115,9 @@ history's grid at a time; a label past the chart's right edge counts down on its
 a forecast's line goes at the moment the table says it runs out, or at the reset; in the
 table, the plan, where the pace leads and the active hours left each read otherwise at
 their own moment. History is read when the hub tells of measurements or credited agent
-work. Quota/activity and budget use separate readers, caches and scoped invalidations.
+work. Quota/activity, wallet budgets and additional subscription funds use separate readers,
+caches and selections. The two monetary readers share the budget history protocol;
+selected source IDs isolate their invalidations.
 Budget reads never query native quota or agent-work history, and money never enters
 quota forecasts. Legacy unscoped history replies retain their combined contract.
 The page makes cells from `since` stale and reads only those its frame needs,
@@ -1143,11 +1145,13 @@ when it was measured and, while the hub sets the pace, when the next measurement
 and why, each a line of its own.
 A board has two areas: the cards (and the list of running agents, when turned on),
 which are about now and show every window, and under
-them the analytics: agent activity, quota history and table, and budget history and
-table. All use the period in the analytics head; the weekly/session switch applies
-only to the quota pair. Each of the four analytics widgets has independent placement,
+them the analytics: agent activity, quota history and table, additional subscription
+funds history, and wallet budget history and table. All use the period in the analytics head; the weekly/session switch applies
+only to the quota pair. Each analytics widget has independent placement,
 visibility and table columns. Budget series are chosen in the budget chart settings
-and shared with its table, even while the chart is hidden. Each
+and shared with its table, even while the chart is hidden. Subscription funds have
+their own balance-only chart and subscription selection. They never appear in wallet
+budget charts or tables; both monetary charts reuse the same renderer. Each
 analytics panel uses the same heading and reader-error component. The selected
 period appears once in the shared analytics controls. While a different range is loading
 or has failed, retained results name the interval they actually cover; this status
@@ -1242,15 +1246,15 @@ Failed saves keep their unsent intent and a notice throughout settings navigatio
 with an explicit retry carrying the captured revision. Ending the authenticated shell
 drops unsent successors; a submitted Add continues when only its form closes, while an
 owner-scope change prevents further phases. No timer polls for those results.
-New empty boards keep the four analytics widgets pending. Resource capabilities place
-the matching pair on first use. An explicit Add also places an empty widget; placement
+New empty boards keep analytics widgets pending. Resource capabilities place
+the quota or wallet pair and the subscription-funds chart independently on first use. An explicit Add also places an empty widget; placement
 is sticky after its last source or series disappears. Explicit hidden intent wins.
 `enabledWhenEmpty` applies to agents and activity; analytics placement lives in `shown`.
 What
 is only about how one person looks (the analytics' period and window type, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents table's sort order, the chosen board and language) stays in their browser.
-Quota history, budget history and agent activity read and move along time alike
+Quota history, budget history, subscription-funds history and agent activity read and move along time alike
 (`ui/components/timeAxis.ts`), each with its legend under it. A time range selected on
 any of them becomes the analytics' period; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
@@ -1324,7 +1328,7 @@ generator advances; server and synchronous readers drain those same generators. 
 keeps only its latest job. Tile responses use private COW staging and publish their
 tiles, read bounds and metadata together. At most two responses are admitted for
 HTTP and processing together, including raw answers waiting for a tile reservation.
-Quota and budget readers share that pool and a 15 MiB retained-tile and staged-growth
+Quota, budget and subscription-funds readers share that pool and a 15 MiB retained-tile and staged-growth
 budget. Global eviction considers only nonvisible, unreserved tiles; an incoming frame
 that cannot fit fails losslessly without evicting the other reader's visible frame. Flights and reservations remain owned until commit or
 discard. Completed projections pin the current tile entry and its write sequence.

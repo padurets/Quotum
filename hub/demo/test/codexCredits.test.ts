@@ -1,5 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {widgetVisible} from '../../server/domain/widgets.js';
+import {moneySelection,DEFAULT_MONEY} from '../../ui/lib/moneySelection.js';
 import {CODEX_CREDIT_SCENES,creditHistory} from '../codexCredits.js';
 import {Store} from '../../server/store/store.js';
 import {Directory} from '../../server/store/directory.js';
@@ -17,6 +19,11 @@ test('every durable Codex credit scene has real resource, precision and consent 
       for(const sample of history)store.record(source,sample);
       const state=store.state(source),meter=state.meters?.[0],seen=new Set<string>();
       seen.add(state.windows.length?'mixed':'quota-missing');
+      assert.ok(widgetVisible(directory.view(directory.boards(owner.id).find(b=>b.personal)!.id),'subscription-funds',1));
+      const cards=[{...state,owners:[],stale:false,measureIntervalMs:null}];
+      assert.deepEqual(moneySelection(cards,[],DEFAULT_MONEY).selection?.ids,[]);
+      assert.deepEqual(moneySelection(cards,[],DEFAULT_MONEY,undefined,'funds').selection?.ids,[[source,'balance:credits']]);
+      seen.add('dedicated-funds-chart');
       seen.add(state.creditBalance!.status);
       if(new Set(history.flatMap(sample=>sample.balances?.flatMap(balance=>balance.status==='finite'?[balance.amount]:[])??[])).size>1)seen.add('changing-balance');
       if(meter){seen.add(scalarDecimal({amount:meter.amount,scale:meter.scale??6}));if(meter.stale||state.creditBalance!.staleAfterMs<60_000)seen.add('last-known');}

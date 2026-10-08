@@ -112,3 +112,22 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
 }
 
 export const MoneySettings=KeyMoneySettings;
+
+/** Additional subscription funds have their own balance-only series selection. */
+export function FundsSettings({sources,hidden}:{sources:readonly Named[];hidden:readonly string[]}) {
+  const context=useCurrencyContext(),prefs=usePrefs(),settings=prefs.funds,unit=settings.unit??DEFAULT_CURRENCY;
+  const selected=moneySelection(sources,hidden,settings,context,'funds').selection?.ids??[];
+  const available=sources.flatMap(source=>moneySelection([source],hidden,{...settings,selected:{}},context,'funds').selection?.ids??[]);
+  const toggle=(source:string,meter:string,on:boolean)=>{
+    const ids=on?[...selected,[source,meter] as [string,string]]:selected.filter(([s,m])=>s!==source||m!==meter);
+    if(ids.length<=MAX_METERS)setPrefs({funds:{...settings,selected:{...settings.selected,[unit]:ids}}});
+  };
+  return <>
+    <div className="popover-title popover-section">{t('funds.subscriptions')}</div>
+    {available.map(([source,meter])=>{
+      const on=selected.some(([s,m])=>s===source&&m===meter);
+      return <SwitchRow key={source+':'+meter} on={on} disabled={!on&&selected.length>=MAX_METERS} onChange={next=>toggle(source,meter,next)}>{sources.find(s=>s.id===source)?.title??source}</SwitchRow>;
+    })}
+    <div className="popover-section"><button className="popover-row" onClick={()=>{const next={...settings.selected};delete next[unit];setPrefs({funds:{...settings,selected:next}});}}>{t('funds.allSubscriptions')}</button></div>
+  </>;
+}

@@ -30,3 +30,8 @@ export const supportsQuota = (provider: ResourceDescriptor | undefined) => !!pro
 export const supportsBudget = (provider: ResourceDescriptor | undefined) => !!provider?.monetary;
 export const quotaMeter = (provider: ResourceDescriptor | undefined, id: string) => provider?.quotaMeters?.includes(id) ?? false;
 export const budgetMeter = (provider: ResourceDescriptor | undefined, id: string) => supportsBudget(provider) && !quotaMeter(provider, id) && (provider?.id!=='codex'||id==='balance:credits');
+
+/** Monetary history is shared; wallet budgets and subscription funds have separate widgets. */
+export type MoneyFamily = 'budget' | 'funds';
+export const moneyFamily = (provider: ReturnType<typeof providerOf>): MoneyFamily | null =>
+  !supportsBudget(provider) ? null : provider?.funding === 'subscription' ? 'funds' : 'budget';

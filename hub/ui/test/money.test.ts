@@ -92,11 +92,21 @@ test('source access is an independent private slice and disappears with its line
 
 test('mixed credits select one native meter through USD context and grant metadata changes selection identity',()=>{
   const source:Card={...card('codex'),provider:'codex',meters:[{...meter('balance:credits','12345678912'),unit:'credits:codex',scale:7}],budget:{enabled:true,since:10,anchor:20,revision:'first'}};
-  const selection=moneySelection([source],[],readMoney({})).selection!;
+  const selection=moneySelection([source],[],readMoney({}),undefined,'funds').selection!;
   assert.deepEqual(selection.ids,[['codex','balance:credits']]);assert.equal(selection.displayCurrency,'USD');
-  assert.notEqual(JSON.stringify(moneySelection([{...source,budget:{...source.budget!,anchor:30}}],[],readMoney({})).selection),JSON.stringify(selection));
-  assert.deepEqual(moneySelection([{...source,budget:{...source.budget!,enabled:false}}],[],readMoney({})).selection?.ids,[]);
-  assert.deepEqual(moneySelection([source],['source:codex'],readMoney({})).selection?.ids,[]);
+  assert.notEqual(JSON.stringify(moneySelection([{...source,budget:{...source.budget!,anchor:30}}],[],readMoney({}),undefined,'funds').selection),JSON.stringify(selection));
+  assert.deepEqual(moneySelection([{...source,budget:{...source.budget!,enabled:false}}],[],readMoney({}),undefined,'funds').selection?.ids,[]);
+  assert.deepEqual(moneySelection([source],['source:codex'],readMoney({}),undefined,'funds').selection?.ids,[]);
   for(const locale of ['en','ru'] as const){setLocale(locale);const exact=money('12345678912','credits:codex',true,undefined,7);assert.match(exact,/5678912/);assert.ok(!exact.includes('12345678'));}
   setLocale('en');
+});
+
+
+test('wallet and subscription fund selections stay disjoint even with explicit saved meters',()=>{
+  const wallet=card('wallet'),funds:Card={...card('subscription'),provider:'codex',meters:[{...meter('balance:credits','2500000000'),unit:'credits:codex'}]};
+  const cards=[wallet,funds],settings=readMoney({selected:{USD:[['wallet','balance'],['subscription','balance:credits']]}});
+  assert.deepEqual(moneySelection(cards,[],settings).selection?.ids,[['wallet','balance']]);
+  assert.deepEqual(moneySelection(cards,[],settings,undefined,'funds').selection?.ids,[['subscription','balance:credits']]);
+  assert.deepEqual(moneySelection(cards,[],readMoney({selected:{USD:[]}}),undefined,'funds').selection?.ids,[]);
+  assert.deepEqual(moneySelection(cards,[],readMoney({})).selection?.ids,[['wallet','balance']]);
 });

@@ -82,7 +82,7 @@ only the board owner may show another member's hidden card or add a standard wid
 `{kind:"sources", sourceIds:[...]}`, `{kind:"widget", widgetId}`,
 `{kind:"connection", provider, account?: {kind:"new"} | {kind:"existing", id}}`, or `{kind:"replace", credentialId}`.
 Source selections contain one to 100 unique IDs. Standard widgets are `agents`,
-`activity`, `quota-history`, `budget-history`, `quota-table`, `budget-table`. Replacement is personal; the server captures its
+`activity`, `quota-history`, `subscription-funds`, `budget-history`, `quota-table`, `budget-table`. Replacement is personal; the server captures its
 provider, source and access revision. Reusing a request ID with another destination or
 selection returns `409 addition_conflict`. No secret goes into reservation or storage.
 
@@ -142,8 +142,10 @@ is `409 view_conflict` with the authorized current `{view, revision}`.
 Success returns `{view, revision}`. Semantic changes increment revision; no-op saves
 do not. Snapshots and view events carry that revision.
 
-The standard widgets are `agents`, `activity`, `quota-history`, `budget-history`,
-`quota-table` and `budget-table`. Each analytics replacement in `shown` is placed;
+The standard widgets are `agents`, `activity`, `quota-history`, `subscription-funds`, `budget-history`,
+`quota-table` and `budget-table`. `subscription-funds` shows additional balances of
+subscriptions. The budget pair shows wallets only. These widgets share monetary
+history transport but keep independent selections and visibility. Each analytics replacement in `shown` is placed;
 `hidden` takes precedence. Unplaced analytics become placed once their resource
 capabilities appear, independently of filters, latest errors or zero balances. Placed
 widgets remain when resources leave. `enabledWhenEmpty` applies only to explicit
