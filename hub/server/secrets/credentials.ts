@@ -9,7 +9,13 @@ import {SecretError,secretCode, type SecretCode, type SecretKey, type RecordIden
 import {checkpoint, type SecretKeyReport} from './start.js';
 
 const DAY=86_400_000;
-export const permanentAccess = (code:string) => ['credential_rejected','credential_auth_rejected','credential_expired','credential_revoked','credential_wrong_type','credential_permission','credential_account_mismatch','credential_unreadable','secret_key_missing','secret_key_mismatch','secret_key_metadata_invalid','credential_provider_unknown'].includes(code);
+export const permanentAccess = (code:string) => [
+  'credential_rejected', 'credential_auth_rejected', 'credential_expired', 'credential_revoked',
+  'credential_wrong_type', 'credential_permission', 'credential_account_mismatch', 'credential_unreadable',
+  'secret_key_missing', 'secret_key_mismatch', 'secret_key_metadata_invalid',
+  'secret_key_storage_missing', 'secret_key_storage_invalid', 'secret_key_storage_unavailable',
+  'credential_provider_unknown',
+].includes(code);
 export type SourceAccess = {error:SecretCode|null;expiresAt:number|null;expiryKind?:import('../connectors/registry.js').ExpiryKind;canRefresh:boolean;credentialIds:string[]};
 export type CredentialOptions={allowNoExpiry?:boolean;allowUnknownExpiry?:boolean;sameAccount?:boolean;requestId?:string;account?:AccountTarget};
 type Options=CredentialOptions;

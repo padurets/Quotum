@@ -8,6 +8,10 @@ import {syncBuiltinESMExports} from 'node:module';
 import {Store} from '../store/store.js';
 import {readInputs, SecretKey, startSecrets} from '../secrets/index.js';
 import {mountsOf, separateMount} from '../secrets/managed.js';
+import {Directory} from '../store/directory.js';
+import {Credentials} from '../secrets/credentials.js';
+import {HubSources} from '../hubSources.js';
+import type {Clock} from '../events.js';
 
 const posix={skip:process.platform==='win32'};
 function fixture() {
@@ -16,6 +20,57 @@ function fixture() {
   const start=(directory?:string)=>{const input=readInputs(directory?{QUOTUM_SECRET_DIR:directory}:{},data,false);return {input,report:startSecrets(store.db,input)};};
   return {root,data,keys,file,store,start,close:()=>{store.close();rmSync(root,{recursive:true,force:true});}};
 }
+
+test('unavailable managed keys pause source updates until a successful restart', posix, async t => {
+  for (const failure of ['missing', 'invalid', 'unavailable'] as const) {
+    const h = fixture(); t.after(h.close);
+    const first = h.start(), material = readFileSync(h.file);
+    const directory = new Directory(h.store.db);
+    const owner = directory.createUser('owner@fixture.example', 'Owner', 'unused', Date.now()).id;
+    const source = h.store.source('openrouter', '1'.repeat(24), Date.now());
+    h.store.hold(source, owner, Date.now());
+    const identity = {id: 'access', user_id: owner, provider: 'openrouter'};
+    const sealed = first.input.current!.seal(identity, Buffer.from('SYNTHETIC_PROVIDER_KEY'));
+    h.store.db.prepare("INSERT INTO credentials (id,user_id,provider,source_id,cipher,nonce,key_version,abilities,created_at) VALUES (?,?,?,?,?,?,1,'[]',1)")
+      .run(identity.id, owner, identity.provider, source, sealed.cipher, sealed.nonce);
+    if (failure === 'missing') fs.unlinkSync(h.file);
+    if (failure === 'invalid') writeFileSync(h.file, 'damaged');
+    const lost = h.start(failure === 'unavailable' ? h.data : undefined);
+    assert.equal(lost.report.reason, 'secret_key_storage_' + failure);
+
+    let now = Date.now(), id = 0, changes = 0;
+    const tasks = new Map<number, {at: number; run: () => void}>();
+    const clock: Clock = {now: () => now, after: (ms, run) => {
+      const key = ++id; tasks.set(key, {at: now + ms, run}); return () => {tasks.delete(key);};
+    }};
+    const tick = async (ms: number) => {
+      now += ms;
+      for (const [key, task] of [...tasks]) if (task.at <= now) {tasks.delete(key); task.run();}
+      for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+    };
+    const sources = new HubSources(h.store, new Credentials(h.store, lost.input.current, lost.report), clock);
+    const noop = () => {};
+    sources.setObserver({touchSources: () => changes++, touchBoards: noop, touchUser: noop, touchHub: noop, history: noop, dropSessions: noop, dropMember: noop, dropBoard: noop});
+    try {
+      sources.start(); await tick(0);
+      assert.equal(h.store.state(source).error, lost.report.reason);
+      assert.equal(sources.cadence(source).value, null, 'the captured missing key cannot recover by retrying');
+      const before = changes;
+      await tick(900_000);
+      assert.equal(changes, before, 'an unavailable key causes no repeated writes or events');
+      assert.equal(tasks.size, 0);
+    } finally {sources.stop();}
+
+    writeFileSync(h.file, material, {mode: 0o600});
+    const restored = h.start();
+    const resumed = new HubSources(h.store, new Credentials(h.store, restored.input.current, restored.report), clock);
+    try {
+      resumed.start();
+      assert.equal(restored.report.outcome, 'ok');
+      assert.equal(resumed.cadence(source).value?.next, now, 'restoring the key and restarting resumes updates');
+    } finally {resumed.stop();}
+  }
+});
 
 test('clean automatic startup publishes one private key outside data and admits it again after restart',posix,t=>{
   const h=fixture();t.after(h.close);const first=h.start();
