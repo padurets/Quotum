@@ -298,6 +298,15 @@ export const STEPS = [
     response TEXT NOT NULL, status INTEGER NOT NULL, created_at INTEGER NOT NULL,
     PRIMARY KEY(owner_id,request_id)) WITHOUT ROWID;
   `,
+  // 18 — public rate ordering reveals only the owner's own activity.
+  `
+  ALTER TABLE currency_rate_changes ADD COLUMN owner_sequence INTEGER NOT NULL DEFAULT 0;
+  WITH numbered AS (SELECT sequence,row_number() OVER (PARTITION BY owner_id ORDER BY sequence) n FROM currency_rate_changes)
+    UPDATE currency_rate_changes SET owner_sequence=(SELECT n FROM numbered WHERE numbered.sequence=currency_rate_changes.sequence);
+  CREATE UNIQUE INDEX currency_rate_owner_sequence ON currency_rate_changes(owner_id,owner_sequence);
+  INSERT INTO meta(key,value) SELECT 'currencyRateSequence:'||owner_id,CAST(max(owner_sequence) AS TEXT)
+    FROM currency_rate_changes GROUP BY owner_id;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

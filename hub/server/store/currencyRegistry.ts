@@ -3,7 +3,7 @@ import type {DatabaseSync} from 'node:sqlite';
 import {DEFAULT_CURRENCY,defaultCurrency,currencyDefinitionOf,type CurrencyDefinition,type CurrencyManagement,type CurrencyMutation,type CurrencyRateChange,type CurrencyRateHistory,type ExchangeRates,type RateSnapshot} from '../domain/currency.js';
 
 type DefinitionRow={id:string;name:string;symbol:string;fraction_digits:number;archived_at:number|null;initial_quote_id:string|null};
-export type RateChangeRow={sequence:number;owner_id:string;currency_id:string;base:string;effective_at:number;recorded_at:number;kind:'rate'|'stop';quote_id:string|null};
+export type RateChangeRow={sequence:number;owner_sequence:number;owner_id:string;currency_id:string;base:string;effective_at:number;recorded_at:number;kind:'rate'|'stop';quote_id:string|null};
 const standards=Intl.supportedValuesOf('currency').map(id=>({id,name:id,symbol:id,fractionDigits:new Intl.NumberFormat('en',{style:'currency',currency:id}).resolvedOptions().maximumFractionDigits!}));
 const definition=(row:DefinitionRow):CurrencyDefinition=>({id:row.id,name:row.name,symbol:row.symbol,fractionDigits:row.fraction_digits});
 const canonical=(value:unknown):string=>JSON.stringify(value,(_key,item:unknown)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))):item);
@@ -33,6 +33,10 @@ export abstract class CurrencyRegistry {
   registryRevision(owner:string):string {return String(this.db.prepare('SELECT value FROM meta WHERE key=?').get('currencyRegistryRevision:'+owner)?.value??0);}
   pathRevision(owner:string):string {return String(this.db.prepare('SELECT value FROM meta WHERE key=?').get('currencyPathRevision:'+owner)?.value??0);}
   private increment(key:string){this.db.prepare("INSERT INTO meta(key,value) VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1").run(key);}
+  private nextRateSequence(owner:string):number {
+    const key='currencyRateSequence:'+owner;this.increment(key);
+    return Number(this.db.prepare('SELECT value FROM meta WHERE key=?').get(key)!.value);
+  }
   private write<T>(owner:string,paths:boolean,work:()=>T,mutates=true):T {
     if(this.writing){this.pathsChanged ||= paths;this.changed ||= mutates;return work();}
     const own=!this.db.isTransaction;if(own)this.db.exec('BEGIN IMMEDIATE');
@@ -102,7 +106,7 @@ export abstract class CurrencyRegistry {
       this.row(owner,id);this.definition(owner,id);this.definition(owner,base);
       if(!/^[A-Z]{3}$/.test(base)||!Number.isSafeInteger(date)||date<0||date>now||typeof rate!=='string')throw new Error('invalid_currency');
       const quote=this.save({source:'manual',base,date,fetchedAt:now,validUntil:null,rates:{[base]:'1000000',[id]:rate}},owner);
-      this.db.prepare("INSERT INTO currency_rate_changes(owner_id,currency_id,base,effective_at,recorded_at,kind,quote_id) VALUES (?,?,?,?,?,'rate',?)").run(owner,id,base,date,now,quote.id);return quote;
+      this.db.prepare("INSERT INTO currency_rate_changes(owner_id,currency_id,base,effective_at,recorded_at,kind,quote_id,owner_sequence) VALUES (?,?,?,?,?,'rate',?,?)").run(owner,id,base,date,now,quote.id,this.nextRateSequence(owner));return quote;
     });
   }
   stopRate(owner:string,id:string,base:string,quoteId:string,now:number) {
@@ -110,7 +114,7 @@ export abstract class CurrencyRegistry {
       this.row(owner,id);this.definition(owner,id);
       const current=this.db.prepare('SELECT * FROM currency_rate_changes WHERE owner_id=? AND currency_id=? AND base=? AND effective_at<=? ORDER BY effective_at DESC,sequence DESC LIMIT 1').get(owner,id,base,now) as RateChangeRow|undefined;
       if(!current||current.kind!=='rate'||current.quote_id!==quoteId)throw new Error('currency_conflict');
-      this.db.prepare("INSERT INTO currency_rate_changes(owner_id,currency_id,base,effective_at,recorded_at,kind) VALUES (?,?,?,?,?,'stop')").run(owner,id,base,now,now);return {base,stoppedAt:now};
+      this.db.prepare("INSERT INTO currency_rate_changes(owner_id,currency_id,base,effective_at,recorded_at,kind,owner_sequence) VALUES (?,?,?,?,?,'stop',?)").run(owner,id,base,now,now,this.nextRateSequence(owner));return {base,stoppedAt:now};
     });
   }
   rateHistory(owner:string,id:string,before:string|undefined,limit=32,now=Date.now()):CurrencyRateHistory {
@@ -119,9 +123,9 @@ export abstract class CurrencyRegistry {
     if(before){try{const value=JSON.parse(Buffer.from(before,'base64url').toString()) as unknown[];
       if(value.length!==3||value[0]!==owner||value[1]!==id||!Number.isSafeInteger(value[2])||Number(value[2])<1)throw new Error();sequence=Number(value[2]);
     }catch{throw new Error('invalid_currency');}}
-    const convert=(change:RateChangeRow):CurrencyRateChange=>({sequence:change.sequence,base:change.base,effectiveAt:change.effective_at,recordedAt:change.recorded_at,kind:change.kind,quote:change.quote_id?this.get(change.quote_id,owner):null,nominal:change.quote_id===row.initial_quote_id});
-    const rows=this.db.prepare('SELECT * FROM currency_rate_changes WHERE owner_id=? AND currency_id=? AND sequence<? ORDER BY sequence DESC LIMIT ?').all(owner,id,sequence,limit+1) as RateChangeRow[];
+    const convert=(change:RateChangeRow):CurrencyRateChange=>({sequence:change.owner_sequence,base:change.base,effectiveAt:change.effective_at,recordedAt:change.recorded_at,kind:change.kind,quote:change.quote_id?this.get(change.quote_id,owner):null,nominal:change.quote_id===row.initial_quote_id});
+    const rows=this.db.prepare('SELECT * FROM currency_rate_changes WHERE owner_id=? AND currency_id=? AND owner_sequence<? ORDER BY owner_sequence DESC LIMIT ?').all(owner,id,sequence,limit+1) as RateChangeRow[];
     const pairs=this.db.prepare('SELECT * FROM (SELECT *,row_number() OVER (PARTITION BY base ORDER BY effective_at DESC,sequence DESC) position FROM currency_rate_changes WHERE owner_id=? AND currency_id=? AND effective_at<=?) WHERE position=1 ORDER BY base').all(owner,id,now) as RateChangeRow[];
-    return {definition:definition(row),archivedAt:row.archived_at,pairs:pairs.map(convert),changes:rows.slice(0,limit).map(convert),nextCursor:rows.length>limit?Buffer.from(JSON.stringify([owner,id,rows[limit-1].sequence])).toString('base64url'):null};
+    return {definition:definition(row),archivedAt:row.archived_at,pairs:pairs.map(convert),changes:rows.slice(0,limit).map(convert),nextCursor:rows.length>limit?Buffer.from(JSON.stringify([owner,id,rows[limit-1].owner_sequence])).toString('base64url'):null};
   }
 }

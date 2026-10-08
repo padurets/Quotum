@@ -824,7 +824,8 @@ Authenticated registry operations, also available in local mode:
 - `GET /api/currencies/:id/history?before=<cursor>&limit=<1..64>`: retained personal
   definition, archivedAt, current `pairs`, paginated `changes` and `nextCursor`.
   A change carries `{sequence, base, effectiveAt, recordedAt, kind: 'rate' | 'stop',
-  quote: RateSnapshot | null, nominal}`. Pages run newest sequence first; the opaque
+  quote: RateSnapshot | null, nominal}`. Sequence numbers count only this owner's rate
+  changes and stops. Pages run newest sequence first; the opaque
   cursor is scoped to this owner and currency. Current pairs are independent of paging.
 - `POST /api/currencies/:id`: `{name, symbol, fractionDigits, ...mutation}` updates
   metadata without changing identity, the nominal ratio or any recorded amounts.

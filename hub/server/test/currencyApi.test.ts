@@ -34,12 +34,21 @@ for(const local of [false,true])test(`currency HTTP commands retain authority, r
     assert.equal((await request('POST','/api/currencies/'+id,{name:'Old',symbol:'O',fractionDigits:2,expectedRevision:initial.registryRevision,requestId:randomUUID()})).json().error,'currency_conflict');
     if(!local)assert.equal((await request('GET','/api/currencies/'+id+'/history',undefined,b.id)).statusCode,404);
     if(!local)assert.equal((await request('POST','/api/currencies/'+id+'/restore',{requestId:randomUUID(),expectedRevision:'0'},b.id)).statusCode,404);
+    if(!local){
+      const foreign=await request('POST','/api/currencies',{...input,requestId:randomUUID(),expectedRevision:'0'},b.id);assert.equal(foreign.statusCode,201);
+      assert.equal((await request('POST','/api/currencies/'+foreign.json().id+'/rates',{base:'USD',rate:'9000000',requestId:randomUUID(),expectedRevision:'1'},b.id)).statusCode,200);
+    }
     assert.equal((await request('POST','/api/currencies/display',{currency:id},a.id,'https://foreign.example')).statusCode,403);
     await command('/api/currencies/display',{currency:id});assert.equal((await command('/api/currencies/'+id+'/archive',{})).json().error,'currency_selected');
     assert.equal((await command('/api/currencies/'+id+'/archive',{replacement:'EUR'})).statusCode,200);assert.equal((await management()).selected,'EUR');
     assert.equal((await command('/api/currencies/'+id+'/restore',{})).statusCode,200);
     const rate=await command('/api/currencies/'+id+'/rates',{base:'USD',rate:'3000000'});assert.equal(rate.statusCode,200);
     assert.equal((await command('/api/currencies/'+id+'/rates/'+rate.json().id+'/archive',{base:'USD'})).statusCode,200);
+    const page=(await request('GET','/api/currencies/'+id+'/history?limit=2')).json();
+    assert.deepEqual(page.changes.map((change:{sequence:number})=>change.sequence),[3,2]);assert.equal(page.pairs[0].sequence,3);
+    assert.deepEqual(JSON.parse(Buffer.from(page.nextCursor,'base64url').toString()),[a.id,id,2]);
+    const older=(await request('GET','/api/currencies/'+id+'/history?before='+encodeURIComponent(page.nextCursor))).json();
+    assert.deepEqual(older.changes.map((change:{sequence:number})=>change.sequence),[1]);assert.equal(older.nextCursor,null);
     for(const bad of [{base:'USD',rate:'0'},{base:'USD',rate:2},{base:'USD',rate:'1',date:Date.now()+60000}])assert.equal((await command('/api/currencies/'+id+'/rates',bad)).statusCode,400);
     assert.equal((await command('/api/currencies/USD',{name:'Bad',symbol:'X',fractionDigits:2})).statusCode,404);
   }finally{await app.close();store.close();}

@@ -7,6 +7,7 @@ import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {STEPS,SCHEMA_VERSION,migrate} from '../store/schema.js';
 import {Store} from '../store/store.js';
+import {CurrencyStore} from '../store/currencies.js';
 
 /**
  * Every step a release shipped, by its hash. A database records which steps it has
@@ -150,7 +151,7 @@ test('board additions append to the integrated currency layout without rewriting
     for(const table of ['sources','holders','shares'])assert.deepEqual(db.prepare('SELECT * FROM '+table).all(),before[table]);
     const credential=db.prepare('SELECT * FROM credentials').get()!;assert.equal(credential.access_revision,0);delete credential.access_revision;assert.deepEqual([credential],before.credentials);
     assert.deepEqual({...db.prepare('SELECT payload,revision,updated_by,updated_at FROM views').get()},{payload,revision:0,updated_by:'owner',updated_at:1});
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,17);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,18);
   }finally{db.close();}
 });
 
@@ -168,5 +169,20 @@ test('currency lifecycle upgrade backfills stable pair ordering without changing
     assert.deepEqual(db.prepare('SELECT * FROM exchange_rates ORDER BY id').all(),quotes);assert.deepEqual(db.prepare('SELECT * FROM currency_bindings').all(),pins);
     assert.deepEqual(db.prepare('SELECT quote_id FROM currency_rate_changes ORDER BY sequence').all().map(row=>row.quote_id),['initial','revised','dated']);
     assert.equal(db.prepare("SELECT count(*) n FROM currency_rate_changes WHERE kind='stop'").get()?.n,0);
+  }finally{db.close();}
+});
+
+test('public rate sequences migrate per owner and never reuse pruned numbers after reopening',()=>{
+  const db=new DatabaseSync(':memory:');try {
+    for(const step of STEPS.slice(0,17))db.exec(step);db.exec('PRAGMA user_version=17');
+    for(const owner of ['a','b'])db.prepare('INSERT INTO users VALUES (?,?,?,?,?)').run(owner,owner+'@example.com',owner,'fixture',1);
+    for(const [index,owner] of ['a','b','b','a'].entries())db.prepare("INSERT INTO currency_rate_changes(owner_id,currency_id,base,effective_at,recorded_at,kind) VALUES (?,'old','USD',?,?,'stop')").run(owner,index,index);
+    migrate(db,100);migrate(db,101);
+    assert.deepEqual(db.prepare('SELECT owner_sequence FROM currency_rate_changes ORDER BY sequence').all().map(row=>row.owner_sequence),[1,1,2,2]);
+    db.prepare('DELETE FROM currency_rate_changes WHERE owner_id=?').run('a');
+    const c=new CurrencyStore(db),id=c.create('a',{name:'Points',symbol:'PT',fractionDigits:2},'USD','2000000',110).id;
+    assert.equal(c.rateHistory('a',id,undefined).changes[0].sequence,3);
+    const reopened=new CurrencyStore(db);reopened.setRate('a',id,'USD','3000000',120,120);
+    assert.deepEqual(reopened.rateHistory('a',id,undefined).changes.map(change=>change.sequence),[4,3]);
   }finally{db.close();}
 });
