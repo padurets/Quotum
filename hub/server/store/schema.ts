@@ -277,7 +277,38 @@ export const STEPS = [
     INSERT INTO account_revisions (user_id,revision) VALUES (${owner},1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1;
   END;`).join('\n')}
   `,
-  // 17 — independently placed quota and budget analytics, with frozen addition targets.
+  // 17 — reversible personal currencies, immutable pair lifecycle and recoverable settings saves.
+  `
+  CREATE TABLE currency_rate_changes (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, currency_id TEXT NOT NULL,
+    base TEXT NOT NULL, effective_at INTEGER NOT NULL, recorded_at INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('rate','stop')), quote_id TEXT,
+    CHECK((kind='rate' AND quote_id IS NOT NULL) OR (kind='stop' AND quote_id IS NULL)));
+  CREATE INDEX currency_rate_timeline ON currency_rate_changes(owner_id,currency_id,base,effective_at,sequence);
+  INSERT INTO currency_rate_changes(owner_id,currency_id,base,effective_at,recorded_at,kind,quote_id)
+    SELECT q.owner_id,d.id,json_extract(q.payload,'$.base'),q.reference_date,q.fetched_at,'rate',q.id
+    FROM exchange_rates q JOIN currency_definitions d ON d.owner_id=q.owner_id
+    WHERE q.source='manual' AND json_type(q.payload,'$.rates."'||d.id||'"') IS NOT NULL
+    ORDER BY q.reference_date,q.fetched_at,q.id;
+  CREATE TABLE currency_unavailable_observations (
+    owner_id TEXT NOT NULL, source_id TEXT NOT NULL, from_currency TEXT NOT NULL, target_currency TEXT NOT NULL,
+    observation_at INTEGER NOT NULL, anchor TEXT NOT NULL,
+    PRIMARY KEY(owner_id,source_id,from_currency,target_currency,observation_at,anchor)) WITHOUT ROWID;
+  CREATE TABLE currency_mutations (
+    owner_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL,
+    response TEXT NOT NULL, status INTEGER NOT NULL, created_at INTEGER NOT NULL,
+    PRIMARY KEY(owner_id,request_id)) WITHOUT ROWID;
+  `,
+  // 18 — public rate ordering reveals only the owner's own activity.
+  `
+  ALTER TABLE currency_rate_changes ADD COLUMN owner_sequence INTEGER NOT NULL DEFAULT 0;
+  WITH numbered AS (SELECT sequence,row_number() OVER (PARTITION BY owner_id ORDER BY sequence) n FROM currency_rate_changes)
+    UPDATE currency_rate_changes SET owner_sequence=(SELECT n FROM numbered WHERE numbered.sequence=currency_rate_changes.sequence);
+  CREATE UNIQUE INDEX currency_rate_owner_sequence ON currency_rate_changes(owner_id,owner_sequence);
+  INSERT INTO meta(key,value) SELECT 'currencyRateSequence:'||owner_id,CAST(max(owner_sequence) AS TEXT)
+    FROM currency_rate_changes GROUP BY owner_id;
+  `,
+  // 19 — independently placed quota and budget analytics, with frozen addition targets.
   `ALTER TABLE board_additions ADD COLUMN widget_targets TEXT;`,
 ];
 
@@ -296,7 +327,7 @@ export function migrate(db: DatabaseSync, now: number) {
   db.exec('BEGIN IMMEDIATE');
   try {
     for (const step of STEPS.slice(adoptDeclaredLayout(db,current))) db.exec(step);
-    if (current < 17) migrateAnalyticsViews(db, now);
+    if (current < 19) migrateAnalyticsViews(db, now);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('historyStart', String(now));
     // Before this, how agents worked is not known (the sums of layout 2 are gone), rather than none worked.

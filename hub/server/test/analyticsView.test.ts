@@ -91,11 +91,11 @@ test('near-limit legacy documents retain every entry and fit the bounded migrati
   }
 });
 
-test('schema conversion is atomic, freezes legacy receipt targets and reconciles defaults once', () => {
+for (const version of [16,18]) test(`schema ${version} conversion is atomic, freezes legacy receipt targets and reconciles defaults once`, () => {
   const db = new DatabaseSync(':memory:');
   try {
-    for (const step of STEPS.slice(0,16)) db.exec(step);
-    db.exec("PRAGMA user_version=16; INSERT INTO boards VALUES('board','',1,'owner',0); INSERT INTO sources(id,provider,account,created_at) VALUES('q','codex','account',0); INSERT INTO holders VALUES('q','owner',0)");
+    for (const step of STEPS.slice(0,version)) db.exec(step);
+    db.exec(`PRAGMA user_version=${version}; INSERT INTO boards VALUES('board','',1,'owner',0); INSERT INTO sources(id,provider,account,created_at) VALUES('q','codex','account',0); INSERT INTO holders VALUES('q','owner',0)`);
     db.prepare('INSERT INTO views VALUES(?,?,?,?,?)').run('board',JSON.stringify(legacy()),'owner',0,7);
     db.prepare('INSERT INTO board_additions(id,owner_id,request_id,board_id,item,state,created_at,updated_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?)').run('receipt','owner','request','board',JSON.stringify({kind:'widget',widgetId:'history'}),'complete',0,0,100);
     migrate(db,1);

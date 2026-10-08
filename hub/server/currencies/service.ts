@@ -16,7 +16,12 @@ export class Currencies {
   constructor(private readonly store:Store,private readonly read:RatesReader=rateSources.get(DEFAULT_RATE_SOURCE)!,private readonly now=Date.now){}
   start() {
     if(this.running)return;this.running=true;
-    this.unsubscribe=this.store.onMonetaryRecord(source=>this.schedule(source));
+    this.unsubscribe=this.store.onMonetaryRecord(source=>{
+      // Capture every accepted anchor before deferred reference fetching can coalesce reports.
+      const points=(this.store.state(source).meters??[]).map(m=>({unit:m.unit,at:m.at}));
+      for(const owner of this.store.currencyReaders(source))this.store.currencies.context(owner,{[source]:points});
+      this.schedule(source);
+    });
     this.stopCurrencyChanges=this.store.onCurrencyChange(owner=>{
       for(const row of this.store.db.prepare('SELECT source_id FROM holders WHERE user_id=? UNION SELECT s.source_id FROM shares s JOIN members m ON m.board_id=s.board_id WHERE m.user_id=?').all(owner,owner) as {source_id:string}[])this.schedule(row.source_id);
     });

@@ -13,11 +13,13 @@ import {AppSection, Measuring} from './Desktop';
 import {DeleteBoard} from './Header';
 import {ErrorLine, Field} from './Kit';
 import {ConnectionsPage} from './ConnectionsPage';
+import {CurrencySettings} from './CurrencySettings';
 
 type Section = {id: string; title: Key};
 const PERSONAL: Section[] = [
   {id: 'profile', title: 'settings.profile'}, {id: 'connections', title: 'settings.connections'},
   {id: 'devices', title: 'devices.title'}, {id: 'projects', title: 'projects.manage'},
+  {id: 'currencies', title: 'currencies.title'},
   {id: 'interface', title: 'settings.interface'}, {id: 'application', title: 'settings.application'},
 ];
 const BOARD: Section[] = [{id: 'general', title: 'boardSettings.general'}, {id: 'members', title: 'admin.members'}, {id: 'data', title: 'boardSettings.data'}];
@@ -122,6 +124,7 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
     {boardPath ? section === 'general' ? <General board={board!} /> : section === 'members' ? <MembersTab board={board!} userId={user.id} /> : <SharesTab board={board!} /> :
       section === 'profile' ? <><Profile user={user} onChanged={refresh} /><Password /></> :
       section === 'connections' ? <ConnectionsPage userId={user.id} boards={boards} trustedKeys={trustedKeys} local={local} /> :
+      section === 'currencies' ? <CurrencySettings key={user.id} /> :
       section === 'devices' ? <>
         <section className="settings-section">
           <h2>{t('devices.title')}</h2>

@@ -332,10 +332,13 @@ Key expiry is unknown and saving it requires an explicit acknowledgement. Server
 desktop modes use the same encrypted credential protection described in [SECURITY.md](SECURITY.md).
 
 The card and compact panel use the same budget layout as OpenRouter: one
-**Available balance** in USD, followed by any supported limits. DeepSeek has no limit
-scales. USD is the initial shared display policy. The currency registry supports owner-scoped
-personal units and a persisted reader preference through the API; the settings form is
-not yet exposed. Reported reference currency takes precedence. When only CNY is reported,
+**Available balance** in your display currency, followed by any supported limits. DeepSeek has no limit
+scales. USD is the initial display currency. **Settings → Currencies** lets you choose a
+standard currency or create a personal unit with your own rates. Your choice applies to
+monetary cards, the compact panel, tables and charts on every board, independently of
+other readers. Edit names and precision, add dated rate versions, or archive and restore
+a currency. Archiving the selected currency requires a replacement. Saved estimates
+keep their original rate; unavailable conversion is distinct from zero. Reported reference currency takes precedence. When only CNY is reported,
 the shared hub currency service uses
 the [ECB daily reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html)
 to record a separate USD estimate, marked **≈**. Click the balance amount for its

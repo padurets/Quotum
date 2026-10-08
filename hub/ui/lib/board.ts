@@ -145,7 +145,7 @@ function normalizedSessions(sessions: LiveSession[]): LiveSession[] {
 
 function keepCurrencyContext(old:CurrencyContext|undefined,next:CurrencyContext):CurrencyContext {
   const target=keep(old?.target,next.target),definitions=keep(old?.definitions,next.definitions),sources=keepEach(old?.sources,next.sources);
-  return old&&target===old.target&&definitions===old.definitions&&sources===old.sources&&next.revision===old.revision?old:{target,definitions,sources,...(next.revision?{revision:next.revision}:{})};
+  return old&&target===old.target&&definitions===old.definitions&&sources===old.sources&&next.revision===old.revision&&next.registryRevision===old.registryRevision?old:{target,definitions,sources,revision:next.revision,registryRevision:next.registryRevision};
 }
 function snapshot(state: PageState, data: Snapshot): PageState {
   const old = state.board?.id === data.board.id ? state.board : null;
@@ -309,6 +309,7 @@ const NO_ACCESS:Record<string,SourceAccess>={};
 export const useSourceAccesses=()=>usePage(s=>s.board?.sourceAccess??NO_ACCESS);
 const NO_CURRENCY_BINDINGS:CurrencyContext['sources'][string]=[];
 export const currencyContextOf=(state:PageState)=>state.board?.currencies??defaultCurrencyContext;
+export const useCurrencyRegistryRevision=()=>usePage(s=>currencyContextOf(s).registryRevision);
 export function useCurrencyContext(source?:string):CurrencyContext {
   const target=usePage(s=>currencyContextOf(s).target),definitions=usePage(s=>currencyContextOf(s).definitions);
   const bindings=usePage(s=>source?currencyContextOf(s).sources[source]??NO_CURRENCY_BINDINGS:NO_CURRENCY_BINDINGS);
