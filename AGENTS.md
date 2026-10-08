@@ -47,7 +47,9 @@ one system, say so.
 against its budget (`hub/bench/budget.ts`). An idle board has neither measurements nor
 working agents: it asks the hub nothing and renders only what shows time. Every
 measurement reaches its card and chart, 95 of 100 within a second, reading only new
-history cells and rendering no other card nor the header. A machine report crediting
+history cells and rendering no other card nor the header. A mixed Codex subscription's
+credit changes and unchanged-value heartbeats update its card and funds history while
+quota and wallet analytics remain unchanged. A machine report crediting
 work makes at most one small history read and renders only its card, agents and
 analytics. Run it when you change the dashboard and have Chrome (`QUOTUM_CHROME`, one
 on `PATH`, or `--cdp` to one already running); CI fails over budget. After the readings,

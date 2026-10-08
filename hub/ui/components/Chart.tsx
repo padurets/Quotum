@@ -351,10 +351,11 @@ export const Chart = memo(function Chart({
             let segment = -1, previousX = -Infinity;
             const runs: [number, number][][] = [];
             let end: [number, number] | null = null;
-            for (const [at, remaining, group] of block.points) {
+            for (const [at, remaining, group, , validUntil] of block.points) {
               yield;
               if (at > drawNow) break;
-              const px = bx(at), py = y(remaining);
+              if (validUntil !== undefined && validUntil <= at) {segment = -1; continue;}
+              const px = validUntil === undefined ? bx(at) : x(Math.min(drawNow, at + cellMs / 2, validUntil)), py = y(remaining);
               if (group === segment && px - previousX < .5) continue;
               if (group !== segment) runs.push([]);
               runs.at(-1)!.push([px, py]); segment = group; previousX = px; end = [px, py];
@@ -370,11 +371,12 @@ export const Chart = memo(function Chart({
       } else {
         const runs: [number, number][][] = [];
         let segment = -1, previousX = -1;
-        for (const [at, remaining, group] of line.points) {
+        for (const [at, remaining, group, validUntil] of line.points) {
           yield;
           if (at + cellMs < (incomingStrip?.from ?? drawFrom)) continue;
           if (at > drawNow) break;
-          const px = bx(at), py = y(remaining);
+          if (validUntil !== undefined && validUntil <= at) {segment = -1; continue;}
+          const px = validUntil === undefined ? bx(at) : x(Math.min(drawNow, at + cellMs / 2, validUntil)), py = y(remaining);
           if (group !== segment) {runs.push([]); segment = group;}
           else if (px - previousX < .5) continue;
           runs.at(-1)!.push([px, py]); previousX = px;

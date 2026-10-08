@@ -17,12 +17,16 @@ measures this machine once.
 
 After building the hub, `npm run bench -- --ci` in `hub/` checks dashboard costs in
 Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp http://host:port`). It includes native
-wheel and Shift-drag on all three charts at 24h and 30d, with at least twelve real series per resource family and
+wheel and Shift-drag starting from the quota, budget and subscription-funds charts at
+24h and 30d, moving all four charts with at least twelve real series per resource family and
 CPU throttled fourfold. The scenario covers delayed history, strip rebuilding, reversal
 and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 50 ms
 at p99; input to an actually updated chart frame must stay within 34 ms at p95. Empty
 callbacks and missing samples fail. The previous idle, measurement, work and native
-frequency-focus checks retain their budgets. No browser means the check was not run.
+frequency-focus checks retain their budgets. Mixed Codex subscriptions also exercise
+changed credit balances and unchanged-value heartbeats: each updates its own card and
+funds history without waking quota or wallet analytics. No browser means the check
+was not run.
 The owned headless browser uses one raster worker: concurrent software raster jobs
 in Chrome 154 can leave a tile unfinished and deadlock an input frame's commit.
 An attached CDP browser retains its own launch settings.

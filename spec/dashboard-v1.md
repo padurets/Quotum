@@ -398,7 +398,7 @@ type Chunk = {
   series: {
     source: string; window: string; hold: number; open: number | null;
     cells: [index: number, low: number, spent: number, covered: number, extra?: {
-      f?: number; l?: number; o?: number | null; g?: 1; h?: number;
+      f?: number; l?: number; o?: number | null; g?: 1; h?: number; u?: number;
       w?: [spent: number, covered: number, duringWork: number];
     }][];
   }[];
@@ -441,7 +441,15 @@ Only differences from these decoded defaults are written:
 | `open` (`o`) | series `open` in its first measured cell, then the preceding measured cell's `last` |
 | break (`g`) | 0 |
 | `hold` (`h`) | series `hold` |
+| availability end (`u`) | no explicit bound; an exclusive Unix-millisecond cutoff after an unavailable quota observation |
 | work (`w`) | `[spent, 0, 0]` at or after the subscription's known threshold, `[0, 0, 0]` before |
+
+A reported availability end limits drawing and readout without changing the original
+measurement's freshness promise. Recovery begins a new segment: neither spending nor
+forecast evidence crosses an explicit unavailable observation.
+If an unavailable observation and recovery fall within one aggregate cell, that cell
+is unavailable for drawing and readout (`g=1`, `u=cell start`). Its spending totals still
+include only proven steps; the aggregate does not invent intra-cell sample positions.
 
 A field is omitted only when its rounded value equals the decoded default. `f` is
 omitted while `open` is not null. The subscription's known threshold is
@@ -1154,6 +1162,14 @@ Native history cache identity includes the financial revision, cutoff and anchor
 Clients include those fields in their selection generation and discard revoked data
 and late responses. Both scoped and legacy history endpoints enforce the same authority
 before currency conversion, without substituting crop boundaries for admission.
+Before delivering a prepared batch, the hub rechecks its financial authority. A
+mismatch rebuilds the current snapshot, including the reader's currency context.
+Poll leases also retain the authority of their last delivered dataset: an intervening
+grant revision discards undelivered frames and returns a fresh snapshot, including
+after a disable/re-enable cycle. Normal SSE updates keep the delta protocol; current
+card grant metadata changes the client's financial history generation. Financial
+invalidations exclude disabled or unadmitted grants and cannot precede the current
+admission anchor.
 
 `credits:codex` is an immutable builtin currency definition with `kind: provider-credit`.
 It is convertible but cannot be selected as a display currency and uses none of the 64
@@ -1170,10 +1186,12 @@ preserving old overrides and successful observation bindings. Overrides are priv
 Valuation uses an existing binding first, otherwise exactly one current credit/USD
 rate followed by the shared USD/display path (at most three legs), with one final
 rounding. USD selection follows this contract too. There is no synthetic USD meter
-for Codex: budget analytics select the native meter and request `displayCurrency=USD`
+for Codex: subscription-funds analytics select the native meter and request `currency=USD`
 when appropriate. Provider history and spending do not change with exchange rates.
-Cards and compact rows show Additional funds below quotas, using the shared budget
-renderer; unlimited, missing, unsupported, invalid, stale and confirmed zero remain
-distinct. A disclosure gives the exact native value, timestamp and rate provenance.
-Stale amounts appear only as last-known detail. Credit history has unavailable spending
-and top-ups, and quota analytics remain percentage-based.
+Cards and compact rows show Additional funds in the subscription footer beside free
+resets, using the shared money renderer; unlimited, missing, unsupported, invalid, stale
+and confirmed zero remain distinct. Hovering shows the exact native balance; the
+disclosure adds the timestamp and rate provenance. A stale amount stays visible in
+the warning colour as the last known balance. Subscription extra funds trends shows
+credit history separately from wallet budgets. Spending and top-ups are unavailable
+for credits, and quota analytics remain percentage-based.

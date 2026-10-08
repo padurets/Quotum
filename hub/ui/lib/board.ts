@@ -9,7 +9,7 @@ import type {Board} from './session';
 import {createStore, sameJson, shallowEqual, useSelect} from './store';
 import type {Card, LiveSession, Pace, Refresh, SourceForecast, View} from './types';
 import type {SourceAccess} from '../../server/secrets/credentials';
-import {providerOf,moneyFamily,supportsQuota,type MoneyFamily} from '../../server/domain/providers';
+import {providerOf,moneyFamily,supportsQuota,quotaMeter,type MoneyFamily} from '../../server/domain/providers';
 import {quotaPeriods} from './subscription';
 
 /**
@@ -369,9 +369,22 @@ export const useTitle = (id: string, names?: Record<string, string>) => usePage(
 
 export type Named = Card & {title?: string};
 
+/** Financial heartbeats of a subscription cannot change its quota drawing inputs. */
+export function namedCardsOf(state:PageState,scope?:'quota'|MoneyFamily):Card[] {
+  return (state.board?.lineup??[]).flatMap(id=>{
+    const card=state.board?.cards[id];
+    if(!card||scope&&(scope==='quota'?!supportsQuota(providerOf(card.provider)):moneyFamily(providerOf(card.provider))!==scope))return [];
+    if(scope!=='quota')return [card];
+    return [{id:card.id,provider:card.provider,plan:card.plan,successAt:card.successAt,error:card.error,stale:card.stale,
+      windows:card.windows,resets:card.resets,owners:card.owners,staleAfterMs:card.staleAfterMs,measureIntervalMs:card.measureIntervalMs,
+      ...(card.quota?{quota:card.quota}:{}),...(card.resources?{resources:card.resources}:{}),
+      meters:card.meters?.filter(m=>quotaMeter(providerOf(card.provider),m.id))??[]}];
+  });
+}
+
 /** The board's cards in its order, each with its name: what the chart and the table draw. Not their agents or pace. */
 export function useNamed(names?: Record<string, string>, scope?: 'quota'|MoneyFamily): Named[] {
-  const cards = usePage(s=>(s.board?.lineup??[]).flatMap(id=>{const card=s.board?.cards[id];return card&&(!scope||(scope==='quota'?supportsQuota(providerOf(card.provider)):moneyFamily(providerOf(card.provider))===scope))?[card]:[];}),shallowEqual);
+  const cards = usePage(s=>namedCardsOf(s,scope),scope==='quota'?sameJson:shallowEqual);
   const titles = useTitles(names);
   return useMemo(() => cards.map(card => ({...card, title: titles[card.id]?.title})), [cards, titles]);
 }

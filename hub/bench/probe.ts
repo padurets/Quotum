@@ -25,7 +25,7 @@ export type Place = {closest(selector: string): Place | null};
  * The parts of the page work is counted by, the nearest first: a label that shows time, a
  * card, the header, the list of agents, the analytics. Anything else is the page.
  */
-export const NODES = '[data-time], [data-card], header.topbar, section.agents-panel, section.analytics';
+export const NODES = '[data-time], [data-card], header.topbar, section.agents-panel, section.forecast, section.budget-table, section.analytics';
 
 /**
  * The components that rendered in a commit, found as React DevTools finds them: walking
@@ -73,7 +73,7 @@ export function nodeOf(fiber: Fiber, selector: string): Place | null {
  * One part of the page and how many times it rendered or changed. `time`: it shows time,
  * and `kind` is what (its `data-time`: a label, a cell of the table, the chart).
  */
-export type Counted = {node: string; time: boolean; kind: string | null; region: string; count: number};
+export type Counted = {node: string; time: boolean; kind: string | null; region: string; count: number; widget?:'quota'|'budget'|'funds'|'activity'};
 
 /** What the probe counted since its last `reset`. */
 export type Reading = {
@@ -149,6 +149,7 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
       time: !!node?.hasAttribute('data-time'),
       kind: node?.getAttribute('data-time') ?? null,
       region: regionOf(node),
+      ...(node?.closest('section.history, section.forecast')?{widget:'quota' as const}:node?.closest('section.budget-history, section.budget-table')?{widget:'budget' as const}:node?.closest('section.subscription-funds')?{widget:'funds' as const}:node?.closest('section.activity')?{widget:'activity' as const}:{}),
       count,
     }));
 

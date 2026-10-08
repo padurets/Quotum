@@ -134,6 +134,10 @@ Quota windows, free resets and purchased credits have independent strictly newer
 watermarks; equal timestamps keep the first observation. An omitted legacy resource
 is unobserved, retaining its value and original freshness. Explicit missing resets
 retain their last count without inferring a grant on recovery. Missing, invalid and
+unsupported quota observations end availability exclusively at their timestamp while
+preserving the last reported values and their original freshness. History, forecasts
+and quota alerts cannot infer consumption across that gap; recovery establishes a new
+baseline without a threshold-crossing alert. Missing, invalid, unsupported and
 unlimited credit observations end finite availability exclusively at their timestamp;
 returning to the same finite amount begins a new span. Credits never generate spending,
 top-ups, quota forecasts or quota alerts.

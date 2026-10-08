@@ -380,7 +380,7 @@ export class Store {
       // Reserve the writer before a sparse heartbeat reads its previous state.
       this.db.prepare('UPDATE state SET payload=payload WHERE source_id=?').run(id);
       const previous = this.state(id);
-      const result = {accepted:false, windows:false, resets:false, budget:false, delivery:false};
+      const result = {accepted:false, windows:false, unavailable:false, resets:false, budget:false, delivery:false};
       const at = measurement.observedAt, ttl = measurement.staleAfterMs;
       let state = previous, quotaSince: number | null = null, budgetSince: number | null = null;
       if ('meters' in measurement) {
@@ -392,7 +392,10 @@ export class Store {
         if (measurement.meters.some(m => quotaMeter(providerOf(previous.provider), m.id))) quotaSince = recorded.since;
         if (result.budget) budgetSince = recorded.since;
       } else {
-        const resources = {...previous.resources};
+        // Freeze legacy anchors before any independent resource advances quota success.
+        const legacy = previous.successAt !== null && previous.staleAfterMs !== null
+          ? {status:'observed' as const,at:previous.successAt,staleAfterMs:previous.staleAfterMs,valueAt:previous.successAt,valueStaleAfterMs:previous.staleAfterMs} : null;
+        const resources = {...(legacy ? {windows:legacy,...(previous.resets ? {resets:legacy} : {})} : {}),...previous.resources};
         const windowStatus = measurement.resourceStatus?.windows ?? 'observed';
         if (at > (resources.windows?.at ?? previous.successAt ?? -Infinity)) {
           resources.windows = {status:windowStatus, at, staleAfterMs:ttl};
@@ -406,18 +409,23 @@ export class Store {
             if (measurement.plan !== '' && measurement.plan !== this.lastPlan(id)) {
               this.db.prepare('INSERT OR IGNORE INTO events VALUES (?,?,?,?)').run(id,at,'plan',measurement.plan);
             }
+          } else {
+            this.db.prepare('INSERT OR IGNORE INTO events VALUES (?,?,?,?)').run(id,at,'quota_unavailable',windowStatus);
+            // The preceding sample's tile now ends at this exclusive boundary.
+            quotaSince = previous.successAt ?? at;
+            result.unavailable = true;
           }
         }
         const resetStatus = measurement.resourceStatus?.resets ?? (measurement.resets ? 'observed' : null);
         const resetAt = resources.resets?.at ?? (previous.resets ? previous.successAt : null);
         if (resetStatus && at > (resetAt ?? -Infinity)) {
-          const continuous = (previous.successAt===null||resetAt!==null&&previous.successAt<=resetAt) && (resources.resets?.status ?? 'observed') === 'observed' && resetAt !== null && at-resetAt <= (resources.resets?.staleAfterMs ?? previous.staleAfterMs ?? 0);
+          const continuous = (resources.resets?.status ?? 'observed') === 'observed' && resetAt !== null && at-resetAt <= (resources.resets?.staleAfterMs ?? previous.staleAfterMs ?? 0);
           const granted = continuous && measurement.resets && previous.resets ? measurement.resets.available-previous.resets.available : 0;
           if (resetStatus === 'observed') state = {...state,resets:measurement.resets};
           if (granted > 0) this.db.prepare('INSERT OR IGNORE INTO events VALUES (?,?,?,?)').run(id,at,'resets_granted',String(granted));
           resources.resets = {status:resetStatus,at,staleAfterMs:ttl,...(resetStatus==='observed'?{valueAt:at,valueStaleAfterMs:ttl}:previous.resets?{valueAt:resources.resets?.valueAt??resetAt!,valueStaleAfterMs:resources.resets?.valueStaleAfterMs??previous.staleAfterMs??ttl}:{})};
           result.accepted = result.resets = true;
-          quotaSince = at;
+          quotaSince = Math.min(quotaSince ?? at, at);
         }
         state = previous.provider==='codex'?{...state,resources}:state;
         if(previous.provider!=='codex'&&result.windows)state={...state,resets:measurement.resets};
@@ -537,7 +545,7 @@ export class Store {
     const groups: CellSamples[] = [];
     for (const {id} of withWindows?sources:[]) for (const {w} of windows.all(id, id, id, from, to) as {w: string}[]) {
       const rows = read.all(id, w, to, from, id, w, from) as unknown as [number, number, number | null, number][];
-      groups.push({source: id, window: w, samples: rows.map(([at, used, resetAt, staleAfterMs]) => ({at, used, resetAt, staleAfterMs}))});
+      groups.push({source: id, window: w, samples: this.quotaAvailability(id, rows.map(([at, used, resetAt, staleAfterMs]) => ({at, used, resetAt, staleAfterMs})))});
     }
     const known = this.historyKnown(shown);
     const readFrom = workFrom(groups, from);
@@ -566,6 +574,21 @@ export class Store {
     return row?.detail ?? null;
   }
 
+  /** Status observations bound derived availability; original values and TTLs stay intact. */
+  private quotaAvailability<T extends {at: number}>(source: string, samples: T[], adjacentOnly = true): (T & {validUntil?: number})[] {
+    if (!samples.length) return samples;
+    const barriers = this.db.prepare(
+      "SELECT at FROM events WHERE source_id=? AND kind='quota_unavailable' AND at>? AND at<=coalesce(" +
+      "(SELECT min(at) FROM events WHERE source_id=? AND kind='quota_unavailable' AND at>?),?) ORDER BY at",
+    ).all(source,samples[0].at,source,samples.at(-1)!.at,samples.at(-1)!.at) as {at: number}[];
+    let next = 0;
+    return samples.map((sample, i) => {
+      while (next < barriers.length && barriers[next].at <= sample.at) next++;
+      const boundary = barriers[next]?.at;
+      return boundary !== undefined && (!adjacentOnly || boundary <= (samples[i + 1]?.at ?? Infinity)) ? {...sample,validUntil:boundary} : sample;
+    });
+  }
+
   /** The plans a subscription was reported with up to `upTo`, each from when it was new, oldest first. */
   planChanges(source: string, upTo: number): PlanChange[] {
     const rows = this.db.prepare("SELECT at, detail FROM events WHERE source_id = ? AND kind = 'plan' AND at <= ? ORDER BY at").all(source, upTo) as {at: number; detail: string}[];
@@ -584,7 +607,9 @@ export class Store {
     );
     read.setReturnArrays(true);
     const rows = read.all(source, window, to, from, source, window, from) as unknown as [number, number, number | null, number | null][];
-    return rows.map(([at, used, resetAt, minutes]) => ({at, used, resetAt, minutes}));
+    // Forecasts may skip a sample lacking reset metadata; its availability barrier
+    // must still apply to the preceding usable sample.
+    return this.quotaAvailability(source, rows.map(([at, used, resetAt, minutes]) => ({at, used, resetAt, minutes})), false);
   }
 
   /** Whether a window has a sample after `after` up to `upTo`. */
@@ -592,12 +617,16 @@ export class Store {
     return !!this.db.prepare('SELECT 1 FROM samples WHERE source_id = ? AND window_id = ? AND at > ? AND at <= ? LIMIT 1').get(source, window, after, upTo);
   }
 
+  quotaInterrupted(source: string, after: number, upTo: number): boolean {
+    return !!this.db.prepare("SELECT 1 FROM events WHERE source_id=? AND kind='quota_unavailable' AND at>? AND at<=? LIMIT 1").get(source,after,upTo);
+  }
+
   /** A window's sample at `at` and the next one: when each was taken and how long it held. */
-  sampleAndNext(source: string, window: string, at: number): {at: number; staleAfterMs: number}[] {
+  sampleAndNext(source: string, window: string, at: number): {at: number; staleAfterMs: number; validUntil?: number}[] {
     const rows = this.db
       .prepare('SELECT at, stale_after_ms FROM samples WHERE source_id = ? AND window_id = ? AND at >= ? ORDER BY at LIMIT 2')
       .all(source, window, at) as {at: number; stale_after_ms: number}[];
-    return rows.map(r => ({at: r.at, staleAfterMs: r.stale_after_ms}));
+    return this.quotaAvailability(source, rows.map(r => ({at: r.at, staleAfterMs: r.stale_after_ms})));
   }
 
   /** What was kept under `key` (server/forecasts.ts: a series' forecast memory), as JSON; null when nothing. */

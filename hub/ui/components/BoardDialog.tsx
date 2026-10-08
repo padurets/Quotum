@@ -27,10 +27,13 @@ export function SharesTab({board}: {board: Board}) {
   const [shares, setShares] = useState<Shares | null>(null);
   const [error, setError] = useState<unknown>(null);
   const generation = useRef(0);
+  const budgetRequest = useRef<object|null>(null);
   const [pending,setPending]=useState<string|null>(null);
   const failed = (failure: unknown) => {
     if (failure instanceof ApiError && [401, 403, 404].includes(failure.status)) {
       generation.current++;
+      budgetRequest.current=null;
+      setPending(null);
       setShares(null);
       rereadSession();
     }
@@ -43,7 +46,7 @@ export function SharesTab({board}: {board: Board}) {
       failure => {if (own === generation.current) failed(failure);},
     );
   }, [board.id]);
-  useEffect(() => {setShares(null); load(); return () => {generation.current++;};}, [load]);
+  useEffect(() => {setShares(null);setPending(null); load(); return () => {generation.current++;budgetRequest.current=null;};}, [load]);
 
   const change = async (source: string, share: boolean) => {
     setError(null);
@@ -57,11 +60,11 @@ export function SharesTab({board}: {board: Board}) {
   };
 
   const budget=async(source:string,enabled:boolean,expectedRevision:string)=>{
-    if(pending)return;
-    const own=generation.current;setPending(source);setError(null);
+    if(budgetRequest.current)return;
+    const own={};budgetRequest.current=own;setPending(source);setError(null);
     try{await call('PUT',`/api/boards/${encodeURIComponent(board.id)}/shares/${encodeURIComponent(source)}/budget`,{enabled,expectedRevision});}
-    catch(failure){if(own===generation.current)failed(failure);}
-    finally{if(own===generation.current){setPending(null);load();}}
+    catch(failure){if(budgetRequest.current===own)failed(failure);}
+    finally{if(budgetRequest.current===own){budgetRequest.current=null;setPending(null);load();}}
   };
   if (!shares) return <ErrorLine error={error} />;
   return (

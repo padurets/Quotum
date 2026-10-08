@@ -111,6 +111,18 @@ function page() {
     insert: (target: Element, ...addedNodes: unknown[]) => observer!([{target, addedNodes}])};
 }
 
+test('the live probe distinguishes subscription funds, quota and wallets inside shared analytics',()=>{
+  const p=page(),analytics=el('section',null,{},'analytics');
+  for(const [name,widget] of [['history','quota'],['forecast','quota'],['budget-history','budget'],['budget-table','budget'],['subscription-funds','funds'],['activity','activity']] as const) {
+    const panel=el('section',analytics,name.endsWith('table')||name==='forecast'?{}:{'data-time':'chart'},name);
+    p.bench.reset();
+    p.hook.onCommitFiberRoot(1,{current:fiber(FUNCTION,{children:[fiber(HOST,{stateNode:panel})]})});
+    p.mutate(panel);
+    const reading=p.bench.read();assert.equal(reading.renders[0].widget,widget);assert.equal(reading.mutations[0].widget,widget);
+    assert.equal(reading.renders[0].region,'analytics');
+  }
+});
+
 test('a finished measurement probe disconnects and reset resumes complete counting', () => {
   const {hook, bench, mutate, observing} = page();
   const card = el('article', null, {'data-card': 's1'}, 'card');

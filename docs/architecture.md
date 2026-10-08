@@ -663,14 +663,23 @@ Clients that have never reported credits get no empty footer mark. A confirmed z
 is numeric; a missing, invalid or stale reading keeps the last known amount visible
 in the same warning colour as stale free resets. It remains one balance informer,
 with no separate warning icon. Its disclosure uses the tray's shared heading and
-detail table for native credits, measurement time and rate. The separate Budget trends widget plots credit
-history in the display currency alongside the subscription limit chart.
+detail table for native credits, measurement time and rate. Hovering shows the exact
+native balance. The separate Subscription extra funds trends widget plots credit
+history in the display currency alongside the subscription limit chart. Wallet budget
+charts and tables exclude subscription funds.
 Windows, free resets and credit status have independent strictly newer observation
 watermarks; a separate monotonic delivery baseline drives cadence and survives restart. Deferred
 runtime acknowledgements run only after the mixed database transaction commits.
+An explicit unavailable quota observation persists an availability barrier separately
+from the original samples and their freshness promises. Native quota history, forecast
+evidence and alert baselines break there; recovery starts a new segment without an
+inferred spend or a threshold-crossing alert. Packed quota cells carry an exclusive
+availability end for both drawing and readout.
+A coarse cell containing both a gap and recovery remains unavailable as a whole for
+drawing and readout, while its totals retain only proven consumption steps.
 Native credit amounts use exact coefficient/scale values, with scale stored per reading
 and retained in packed history and conversion provenance. Finite availability ends
-exclusively on missing, invalid or unlimited observations; equal-value recovery starts
+exclusively on missing, invalid, unsupported or unlimited observations; equal-value recovery starts
 a new span. No credit change implies spending, top-ups or quota forecasts.
 
 The shared currency layer defines `credits:codex` and an offline public default of
@@ -689,6 +698,11 @@ geometry. Current last-known values preserve their original time. Projection, ev
 history and currency context use the same grant; revision changes invalidate both
 native tiles and client generations. See the dashboard and ingest specs for the wire
 fields, exact decimal bounds and privacy contract.
+Event delivery rechecks the prepared batch's financial authority before sending. A
+mismatch rebuilds its snapshot and private currency context. A changed revision also
+discards undelivered poll frames, including across a disable/re-enable cycle. Normal
+SSE changes keep the delta protocol; grant metadata invalidates client history.
+History invalidations expose only admitted resource scopes and anchors.
 
 DeepSeek reports totals, granted credits and topped-up balances separately for CNY
 and USD. Stable catalogue descriptors identify total and component roles. Its
@@ -1164,7 +1178,7 @@ Each widget fills the fewest whole rows that contain its content, with any spare
 above a card's tray or at the bottom of a panel, unless the owner chose a height for it
 (`h`, in rows). A chosen height is a request, not what shows: a card or the table never
 gets shorter than its content, and grows past the chosen rows while its content needs
-more, back to them when it needs less, without the view changing. All three charts give a
+more, back to them when it needs less, without the view changing. All four charts give a
 chosen height to their plot, never drawing it lower than they do by themselves, their
 heads, totals and legends whole. The Agent sessions widget gathers them by project (one name
 across people, as agent activity counts it), machine or subscription, each viewer for
@@ -1261,7 +1275,7 @@ address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it ca
 ‹ and › beside the period move the analytics by half their length: back, to a range in
 the past held in the address like a dragged one; forward, up to now, where the chosen
 period comes back. A horizontal touchpad swipe, Shift with the wheel, or Shift with a
-mouse or pen drag moves all three charts continuously. A page-local transaction captures
+mouse or pen drag moves all four charts continuously. A page-local transaction captures
 each chart's scale in CSS pixels and applies the same time delta on animation frames;
 plain dragging still selects a range and touch retains its hold-to-select gesture.
 Prepared SVG artwork moves in composited HTML surfaces behind a stationary clip;
@@ -1345,7 +1359,7 @@ also requires the complete history answer for the requested range, so a partial
 strip cannot start the fold before that answer replaces it.
 User navigation owns the requested projection separately from drawing readiness.
 Back, a preset or a horizon change retires an older held pose and its pending RAF or
-fold; all three charts immediately place their retained data in the requested projection.
+fold; all four charts immediately place their retained data in the requested projection.
 Ready data keeps that projection when it replaces the borrowed model. Borrowed data
 keeps its own coverage and time domain, so future points are clipped rather than
 clamped into an edge and a requested past frame shows no old future labels.

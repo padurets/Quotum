@@ -104,7 +104,14 @@ export class Ingest {
         const recorded = this.store.record(source, measurement);
         if (recorded.accepted) result.accepted++; else result.duplicates++;
         if (recorded.windows) attention?.record(previous, measurement, now);
+        if (recorded.unavailable) attention?.unavailable(previous, observedAt);
         afterCommit(() => {
+          // A late resource may be the first delivery after restart. Its accepted
+          // value must not seed runtime transport behind the persisted baseline.
+          if (recorded.accepted && !recorded.delivery) {
+            const delivery = deliveryOf(previous);
+            if (delivery) this.cadence.restore(account, delivery.at, delivery.staleAfterMs, previous.successAt === null ? null : previous.windows, now);
+          }
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
           if (recorded.delivery) {
             this.cadence.refreshResult(account, device.id, observedAt, true, now);

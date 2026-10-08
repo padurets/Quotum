@@ -81,7 +81,7 @@ const BURST_MIN_HOURS = 3;
 const BURST_TIMES = 2;
 
 /** One value of a series: its reset time and length, null when the provider gave none. */
-export type SeriesSample = {at: number; used: number; resetAt: number | null; minutes: number | null};
+export type SeriesSample = {at: number; used: number; resetAt: number | null; minutes: number | null; validUntil?: number};
 
 /**
  * What a forecast leaves the next one of the same window (`win`, its reset time): whether it
@@ -133,7 +133,7 @@ export type ForecastInput = {
   since: number | null;
 };
 
-type Measured = {at: number; used: number; resetAt: number; minutes: number};
+type Measured = SeriesSample & {resetAt: number; minutes: number};
 type Window = {resetAt: number; minutes: number; start: number};
 /** Prefix sums over the counted cells: how many (`counted`) and what they spent (`spent`). */
 type Cells = {t0: number; n: number; counted: Float64Array; spent: Float64Array};
@@ -241,6 +241,7 @@ function cellsOf(samples: Measured[], windows: Window[], of: number[], plan: Mea
   for (let i = 1; i < samples.length; i++) {
     const a = samples[i - 1];
     const b = samples[i];
+    if (b.at >= (a.validUntil ?? Infinity)) continue;
     if (of[i - 1] === of[i]) {
       put(a.at, b.at, Math.max(0, b.used - a.used), a.used >= AT_ZERO, windows[of[i]].resetAt);
       continue;
@@ -259,7 +260,7 @@ function cellsOf(samples: Measured[], windows: Window[], of: number[], plan: Mea
     for (let j = 1; j < plan.length; j++) {
       const p = plan[j - 1];
       const q = plan[j];
-      if (p.used < AT_ZERO || !sameWindow(p, q)) continue;
+      if (p.used < AT_ZERO || !sameWindow(p, q) || q.at >= (p.validUntil ?? Infinity)) continue;
       for (let i = Math.max(0, Math.floor((p.at - t0) / CELL)); i < n && t0 + i * CELL < q.at; i++) {
         if (Math.min(q.at, t0 + (i + 1) * CELL) <= Math.max(p.at, t0 + i * CELL)) continue;
         // Claude resets the weekly and a model's window together: equal times are the usual case.
@@ -519,7 +520,8 @@ export function forecastOf({samples: all, plan, since}: ForecastInput, asOf: num
   const pace = paceOf(c, top, upTo);
   let rate = pace.rate;
   const cold = hours < COLD_HOURS;
-  if (cold && typeof rate === 'number') {
+  const interrupted = samples.some(s => s.validUntil !== undefined && s.validUntil > window.start && s.validUntil <= last.at);
+  if (cold && typeof rate === 'number' && !interrupted) {
     // Under a day of history the line leans on the window's own mean: fully at first, less as the history grows.
     const elapsed = anchor.at - window.start;
     const long = Math.max(BLEND_AFTER, window.minutes * MINUTE * BLEND_SHARE);

@@ -12,7 +12,7 @@ import {SETS} from '../demo/catalogue.js';
 import {addressOf, Demo, prepare, Stop} from '../demo/index.js';
 import {cards, MIN, people, snapshot} from '../demo/model.js';
 import type {Snapshot} from '../server/projection.js';
-import {chartProblems, HISTORY_BYTES_PER_MEASUREMENT, idleProblems, measuredProblems, percentile, renderProblems} from './budget.js';
+import {chartProblems, creditRenderProblems, HISTORY_BYTES_PER_MEASUREMENT, idleProblems, measuredProblems, percentile, renderProblems} from './budget.js';
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
@@ -24,6 +24,7 @@ import {seedPanningBudgets,panningSet} from './fixture.js';
 import {profilePanning} from './panningProfile.js';
 import {historyTraffic} from './historyTraffic.js';
 import {diagnoseReversal} from './historyTrafficBrowser.js';
+import {creditSnapshot} from './credits.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -89,6 +90,7 @@ export class Requests {
   bytes = 0;
   readonly byPath: Record<string, number> = {};
   readonly bytesByPath: Record<string, number> = {};
+  readonly history: {scope:string|null;meters:string|null;from:number;to:number}[] = [];
   private readonly ids = new Map<string, string>();
   get historyPending() {return [...this.ids.values()].filter(path => path === '/api/history').length;}
 
@@ -98,6 +100,7 @@ export class Requests {
       const url = new URL(event.request.url);
       this.count++;
       this.byPath[url.pathname] = (this.byPath[url.pathname] ?? 0) + 1;
+      if(url.pathname==='/api/history')this.history.push({scope:url.searchParams.get('scope'),meters:url.searchParams.get('meters'),from:Number(url.searchParams.get('from')),to:Number(url.searchParams.get('to'))});
       this.ids.set(event.requestId, url.pathname);
     });
     cdp.on<{requestId: string; encodedDataLength: number}>('Network.loadingFinished', event => {
@@ -240,6 +243,8 @@ async function main() {
     }
     problems.push(...traffic.problems);
     if(process.env.QUOTUM_BENCH_REVERSAL_PROBE==='1')await diagnoseReversal(browser,address.base,ana.cookie,12);
+    const credits=await creditPhase(demo,stand,cdp);
+    problems.push(...credits.problems);
     const monetary=await moneyPhase(demo,stand,cdp);
     problems.push(...monetary.problems);
     const result = {
@@ -270,6 +275,7 @@ async function main() {
       },
       work: worked.reports,
       money:monetary,
+      credits,
       historyTraffic: traffic,
       panning: panned.reports.map(report => ({...report,
         frames: {count: report.frames.length, p95Ms: round(percentile(report.frames, .95)), p99Ms: round(percentile(report.frames, .99))},
@@ -335,6 +341,52 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
   await drain(requests); requests.counting = false;
   say(`quota measurement latencies: ${JSON.stringify({cards: latencies.map(String), charts: chartLatencies.map(String)})}`);
   return {source, latencies, chartLatencies, historyBytes: (requests.bytesByPath['/api/history'] ?? 0) / MEASUREMENTS, reading: await cdp.evaluate<Reading>('__quotumBench.read()'), from, to: Date.now()};
+}
+
+/** Mixed-source credit updates retain quota drawings and only read their own financial tail. */
+async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp) {
+  say('checking Codex balance changes and unchanged credit heartbeats independently of quota and wallet analytics');
+  const owner=stand.people.get(people(stand.set)[0].id)!,overview=await owner.get<Snapshot>('/api/overview');
+  const card=cards(stand.set).find(card=>card.provider==='codex'&&overview.sources.some(source=>source.id===stand.sources.get(card.id)&&source.windows.length))!;
+  if(!card)throw new Stop('no measured Codex subscription for the credit heartbeat phase');
+  const source=stand.sources.get(card.id)!,agent=stand.agents.get(card.machines[0])!;
+  const deliver=(amount:string,at:number)=>agent.ingest([creditSnapshot(card,stand.start,at,amount)],[],Date.now());
+  await cdp.evaluate(`(async()=>{document.querySelector('.period .picker > button').click();await new Promise(requestAnimationFrame);document.querySelectorAll('.period .popover .popover-row')[4].click();})()`);
+  // Late independent balances are accepted without replacing these newer quotas.
+  // Observation time stays in the past; latency below starts at actual delivery.
+  const quotaAt=Date.now();
+  await agent.ingest([snapshot(card,stand.start,quotaAt-stand.start,3*3_600_000)],[],quotaAt);
+  await deliver('2500',quotaAt-25_000);
+  await selectMoney(cdp,[[source,'balance:credits']],'funds');
+  const ledger=new DatabaseSync(path.join(demo.dir,'quotum.sqlite'),{readOnly:true});
+  const rows=()=>Number(ledger.prepare('SELECT count(*) n FROM readings WHERE source_id=? AND meter_id=?').get(source,'balance:credits')?.n);
+  const coverage=()=>Number(ledger.prepare('SELECT max(to_at) at FROM meter_spans WHERE source_id=? AND meter_id=?').get(source,'balance:credits')?.at);
+  const problems:string[]=[],updates:{amount:string;heartbeat:boolean;chartMs:number|null;historyRequests:number;historyBytes:number;ledgerRowsUnchanged:boolean;coverageAdvanced:boolean}[]=[];
+  try {
+    for(const [index,amount] of ['2499','2498','2498','2498'].entries()) {
+      await cdp.evaluate('__quotumBench.reset()');
+      const beforeRows=rows(),beforeCoverage=coverage(),at=quotaAt-20_000+index*2000,sent=Date.now(),heartbeat=index>=2,requests=new Requests(cdp);requests.counting=true;
+      await deliver(amount,at);
+      const value=String(BigInt(amount)*40_000n),last=at+':'+value;
+      let chart:number|null=null,changed:number|null=null;
+      while(Date.now()<sent+SHOWN_WITHIN&&(chart===null||!heartbeat&&changed===null)) {
+        chart=await cdp.evaluate<number|null>(`__quotumBench.seriesChanged(${JSON.stringify(source+' balance:credits')},${JSON.stringify(last)})`);
+        changed=await cdp.evaluate<number|null>(`__quotumBench.cardChanged(${JSON.stringify(source)})`);
+        if(chart===null||!heartbeat&&changed===null)await sleep(20);
+      }
+      await drain(requests);await sleep(100);requests.counting=false;
+      const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),to=Date.now(),historyBytes=requests.bytesByPath['/api/history']??0;
+      const balance=await cdp.evaluate<string|null>(`document.querySelector('[data-card="${source}"] [data-money]')?.getAttribute('data-money')??null`);
+      const point={amount,heartbeat,chartMs:chart===null?null:chart-sent,historyRequests:requests.history.length,historyBytes,ledgerRowsUnchanged:rows()===beforeRows,coverageAdvanced:coverage()>beforeCoverage};
+      updates.push(point);
+      problems.push(...chartProblems([chart===null?Infinity:chart-sent]),...creditRenderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from:sent,to,cellMs:cellOf(86_400_000)}));
+      if(!heartbeat)problems.push(...measuredProblems({card:source,latencies:[changed===null?Infinity:changed-sent],renders:reading.renders,mutations:reading.mutations,from:sent,to}));
+      if(balance!==value||!point.coverageAdvanced||heartbeat&&!point.ledgerRowsUnchanged)problems.push('Codex heartbeat lost coverage, changed the ledger or displayed the wrong amount');
+      if(requests.history.length!==1||historyBytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push('Codex credit update exceeds the existing single-tail history budget');
+      if(requests.history.some(read=>read.scope!=='budget'||read.meters!==JSON.stringify([[source,'balance:credits']])||read.from<cellStart(at,cellOf(86_400_000))-cellOf(86_400_000)))problems.push('Codex credit update read another resource or its full historical period');
+    }
+  } finally {ledger.close();}
+  return {source,updates,problems};
 }
 
 async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp) {
