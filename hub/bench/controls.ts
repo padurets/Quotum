@@ -33,11 +33,11 @@ export async function frequencyKeys(cdp: Cdp) {
   await cdp.send('Input.dispatchKeyEvent', {type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
 }
 
-/** A zero cap keeps the scale's origin unchanged when balances become spending. */
-export async function moneyView(cdp: Cdp, source: string, cappedSource: string, cap: string) {
+/** Each phase keeps its intended monetary selection across the page reload. */
+export async function selectMoney(cdp: Cdp, ids: [string, string][]) {
   await cdp.evaluate(`(() => {
     const prefs = JSON.parse(localStorage.getItem('quotum.prefs') || '{}');
-    prefs.money = {unit: 'USD', view: 'balance', selected: {USD: ${JSON.stringify([[source, 'balance'], [cappedSource, cap]])}}};
+    prefs.money = {unit: 'USD', view: 'balance', selected: {USD: ${JSON.stringify(ids)}}};
     prefs.muted = {};
     localStorage.setItem('quotum.prefs', JSON.stringify(prefs));
   })()`);
@@ -53,16 +53,22 @@ export async function moneyView(cdp: Cdp, source: string, cappedSource: string, 
     while (stable < 3) {
       if (Date.now() > end) throw new Error('money selection did not load');
       await new Promise(requestAnimationFrame);
-      const root = document.querySelector('.history .chart > svg');
-      const series = Array.from(document.querySelectorAll('.history [data-series]'));
-      const ready = root?.dataset.drawReady === 'true' && !document.querySelector('.history.is-loading') && series.length === 2 && series.every(line => Array.from(line.querySelectorAll('path.series')).some(path => path.getAttribute('d')));
+      const root = document.querySelector('.budget-history .chart > svg');
+      const series = Array.from(document.querySelectorAll('.budget-history [data-series]'));
+      const waiting = document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.chart>svg[data-draw-ready="false"]');
+      const ready = root?.dataset.drawReady === 'true' && !waiting && series.length === ${ids.length} && series.every(line => Array.from(line.querySelectorAll('path.series')).some(path => path.getAttribute('d')));
       const box = root?.getBoundingClientRect(), size = box ? [box.x, box.y, box.width, box.height].join(':') : '';
       const moving = document.getAnimations().some(animation => animation.playState === 'running' && animation.effect?.target?.matches('.widget, .widget-body'));
       stable = ready && !moving && size === previous ? stable + 1 : 0;
       previous = size;
     }
   })()`);
-  await cdp.evaluate(`document.querySelector('.history .panel-head button').click()`);
+}
+
+/** A zero cap keeps the scale's origin unchanged when balances become spending. */
+export async function moneyView(cdp: Cdp, source: string, cappedSource: string, cap: string) {
+  await selectMoney(cdp, [[source, 'balance'], [cappedSource, cap]]);
+  await cdp.evaluate(`document.querySelector('.budget-history .panel-head button').click()`);
   for (const label of ['Spending', 'Balance', 'Spending']) {
     await cdp.evaluate(`(async () => {
       const button = Array.from(document.querySelectorAll('.popover .segmented button')).find(b => b.textContent === ${JSON.stringify(label)});
@@ -78,7 +84,7 @@ export async function moneyView(cdp: Cdp, source: string, cappedSource: string, 
         const box = series.getBBox(), height = series.ownerSVGElement.viewBox.baseVal.height;
         if (box.y < 0 || box.y + box.height > height) throw new Error('switching money view left the line outside its new scale');
         if (Date.now() > end) throw new Error('money view did not commit ${label}');
-      } while (++frames < 2 || document.querySelector('.history .chart > svg')?.dataset.drawReady !== 'true');
+      } while (++frames < 2 || document.querySelector('.budget-history .chart > svg')?.dataset.drawReady !== 'true');
     })()`);
   }
   await cdp.send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});

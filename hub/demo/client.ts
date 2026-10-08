@@ -98,7 +98,7 @@ export class Person {
 
   async saveView(board: string, view: object) {
     const snapshot=await this.get<{viewRevision:number}>(`/api/overview?board=${encodeURIComponent(board)}`);
-    await call(this.base,'POST',`/api/boards/${encodeURIComponent(board)}/view`,{body:view,cookie:this.cookie,headers:{'If-Match':'"'+snapshot.viewRevision+'"'}});
+    await call(this.base,'POST',`/api/boards/${encodeURIComponent(board)}/view`,{body:view,cookie:this.cookie,headers:{'X-Quotum-View-Version':'2','If-Match':'"'+snapshot.viewRevision+'"'}});
   }
 
   async approve(code: string) {

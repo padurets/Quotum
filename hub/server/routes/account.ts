@@ -12,7 +12,7 @@ import {
 } from '../domain/auth.js';
 import type {Guards, Hub} from '../api.js';
 import type {Board, User} from '../store/directory.js';
-import {parseView} from '../domain/view.js';
+import {parseView, VIEW_BODY_LIMIT} from '../domain/view.js';
 import {longerThan} from '../domain/ingest.js';
 import {PROJECT_NAME_CHARS} from '../domain/projects.js';
 import {validFrequency} from '../domain/frequency.js';
@@ -284,19 +284,22 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   // ---------- views ----------
 
   // The owner arranges a board for everyone on it, as a dashboard is in Grafana.
-  // A full view must also fit the page's keepalive save when it leaves before the debounce.
-  app.post<{Params: {board: string}}>('/api/boards/:board/view', {bodyLimit: 64 * 1024}, (request, reply) => {
+  // Larger migrated views use ordinary autosave; keepalive retains its browser limit.
+  app.post<{Params: {board: string}}>('/api/boards/:board/view', {bodyLimit: VIEW_BODY_LIMIT}, (request, reply) => {
     const access = guards.board(request, reply, request.params.board);
     if (!access) return reply;
     if (!isOwner(access.board)) return forbidden(reply);
+    if (request.headers['x-quotum-view-version'] !== '2') return reply.code(428).send({error: 'view_reload_required'});
+    const version = (request.body as {version?: unknown} | null)?.version;
+    if (version === undefined || version === 1) return reply.code(428).send({error: 'view_reload_required'});
     const view = parseView(request.body);
     if (!view) return reply.code(400).send({error: 'invalid_request'});
     const match = request.headers['if-match'];
     if (match === undefined) return reply.code(428).send({error: 'view_reload_required'});
     if (typeof match !== 'string' || !/^"(?:0|[1-9][0-9]*)"$/.test(match) || !Number.isSafeInteger(Number(match.slice(1, -1)))) return reply.code(400).send({error: 'invalid_request'});
     return directory.transaction(() => {
-      const revision = directory.viewRevision(access.board.id);
-      if (revision !== Number(match.slice(1, -1))) return reply.code(409).send({error: 'view_conflict', view: directory.view(access.board.id), revision});
+      const {revision, view: currentView} = directory.viewState(access.board.id);
+      if (revision !== Number(match.slice(1, -1))) return reply.code(409).send({error: 'view_conflict', view: currentView, revision});
       return {view, revision: directory.saveView(access.board.id, view, access.user.id, Date.now())};
     });
   });

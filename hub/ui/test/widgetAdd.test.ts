@@ -4,6 +4,8 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {ApiError} from '../lib/http';
+import {EMPTY_VIEW} from '../../server/domain/view';
+import * as widgets from '../../server/domain/widgets';
 import {preparationFixture} from './preparationFixture';
 
 type Node = {type: unknown; props: Record<string, any>};
@@ -18,13 +20,15 @@ const flush = async () => {
 };
 
 function fixture() {
-  const hooks = preparationFixture();
+  const instances = {AdditionRow: preparationFixture(), WidgetCatalogue: preparationFixture()};
+  let hooks = instances.WidgetCatalogue;
+  const document = {body: {}, activeElement: {} as any};
   const reads: {method: string; url: string; body: unknown; resolve: (value: unknown) => void; reject: (error: Error) => void}[] = [];
   const modules: Record<string, any> = {};
   const board = {id: 'board', name: 'Team', role: 'owner', personal: false};
   const source = {id: 's', label: 'Account', provider: 'codex', origin: 'own', onBoard: false, visible: false, action: 'add'};
   const catalogue = {board, sources: [source], widgets: [], connectors: []};
-  let view = {hidden: ['source:s']},
+  let view = {...EMPTY_VIEW, hidden: ['source:s']},
     lineup: string[] = [],
     revision = 0;
   const require = (name: string): any => {
@@ -32,9 +36,10 @@ function fixture() {
       return {
         createContext: () => ({}),
         useContext: () => () => true,
-        useState: hooks.useState,
-        useRef: hooks.useRef,
-        useEffect: hooks.useLayoutEffect,
+        useState: (...args: Parameters<typeof hooks.useState>) => hooks.useState(...args),
+        useRef: (...args: Parameters<typeof hooks.useRef>) => hooks.useRef(...args),
+        useEffect: (...args: Parameters<typeof hooks.useLayoutEffect>) => hooks.useLayoutEffect(...args),
+        useLayoutEffect: (...args: Parameters<typeof hooks.useLayoutEffect>) => hooks.useLayoutEffect(...args),
       };
     if (name === 'react/jsx-runtime')
       return {
@@ -42,6 +47,7 @@ function fixture() {
         jsxs: (type: unknown, props: unknown) => ({type, props}),
         Fragment: 'fragment',
       };
+    if (name.endsWith('/domain/widgets')) return widgets;
     if (name.endsWith('/addition')) return modules.addition;
     if (name.endsWith('/i18n')) return {t: (key: string) => key};
     if (name.endsWith('/http'))
@@ -76,13 +82,15 @@ function fixture() {
       ts.transpileModule(readFileSync(new URL(file, import.meta.url), 'utf8') + extra, {
         compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX},
       }).outputText,
-      {exports, require, crypto: {randomUUID: () => 'request'}, AbortController},
+      {exports, require, document, crypto: {randomUUID: () => 'request'}, AbortController},
     );
     modules[name] = exports;
   }
-  const render = (component: string, props: unknown) => {
+  const render = (component: keyof typeof instances, props: unknown, root?: unknown) => {
+    hooks = instances[component];
     hooks.begin();
     const tree = modules.widgets[component](props);
+    if (root) tree.props.ref.current = root;
     hooks.commit();
     return nodes(tree);
   };
@@ -100,14 +108,15 @@ function fixture() {
       onStart: () => {},
       ...extra,
     });
-  const menu = () => render('WidgetCatalogue', {board, local: false, trustedKeys: {}, onClose: () => {}});
+  const menu = (root?: unknown) => render('WidgetCatalogue', {board, local: false, trustedKeys: {}, onClose: () => {}}, root);
   return {
     reads,
     row,
     menu,
-    catalogue,
+    catalogue, document,
+    setView: (next: typeof view, sources: string[] = []) => {view = next; lineup = sources; revision++;},
     change: () => {
-      view = {hidden: []};
+      view = {...view, hidden: []};
       lineup = ['s'];
       revision++;
     },
@@ -167,14 +176,15 @@ test('lost run response is recovered in the row without another reservation or a
 
 test('the catalogue retains an attempted row through board events and search changes', async () => {
   const f = fixture();
+  const others = Array.from({length: 10}, (_, i) => ({...f.catalogue.sources[0], id: 'other-' + i}));
   f.menu();
-  f.reads[0].resolve(f.catalogue);
+  f.reads[0].resolve({...f.catalogue, sources: [...f.catalogue.sources, ...others]});
   await flush();
   const findRow = (tree: Node[]) => tree.find(node => typeof node.type === 'function' && (node.type as Function).name === 'AdditionRow');
   findRow(f.menu())!.props.onStart();
   f.change();
   f.menu();
-  f.reads[1].resolve({...f.catalogue, sources: []});
+  f.reads[1].resolve({...f.catalogue, sources: others});
   await flush();
   assert.ok(findRow(f.menu()), 'losing eligibility must not unmount the operation');
   const search = f.menu().find(node => node.type === 'field')!;
@@ -182,6 +192,24 @@ test('the catalogue retains an attempted row through board events and search cha
   assert.equal(findRow(f.menu())?.props.hidden, true, 'search hides the row without losing its receipt');
   search.props.onChange({target: {value: ''}});
   assert.equal(findRow(f.menu())?.props.hidden, false);
+});
+
+test('catalogue search starts above ten entries, survives filtering, and cannot hide a smaller refreshed list', async () => {
+  for (const count of [0, 10, 11]) {
+    const f = fixture();
+    const sources = Array.from({length: count}, (_, i) => ({...f.catalogue.sources[0], id: 'source-' + i}));
+    f.menu();f.reads[0].resolve({...f.catalogue, sources});await flush();
+    const search = f.menu().find(node => node.type === 'field');
+    assert.equal(!!search, count > 10);
+    if (!search) continue;
+    search.props.onChange({target: {value: 'no matching widget'}});
+    assert.ok(f.menu().some(node => node.type === 'field'), 'filtering does not remove its own input');
+    f.change();f.menu();f.reads[1].resolve({...f.catalogue, sources: sources.slice(0, 10)});await flush();
+    const smaller = f.menu();
+    assert.equal(smaller.some(node => node.type === 'field'), false);
+    const rows = smaller.filter(node => node.props.item?.kind === 'sources');
+    assert.equal(rows.length, 10);assert.ok(rows.every(node => !node.props.hidden), 'a hidden search cannot keep filtering');
+  }
 });
 
 test('a later hide offers an explicit addition without replay resurrecting it automatically', async () => {
@@ -195,4 +223,51 @@ test('a later hide offers an explicit addition without replay resurrecting it au
   f.row({visible: true});
   assert.equal(addButton(f.row({visible: false})).props['aria-disabled'], false);
   assert.equal(f.reads.length, 2);
+});
+
+
+test('empty-board analytics use canonical placement and offer re-add after an external hide', async () => {
+  const f = fixture();
+  f.menu();
+  f.reads[0].resolve({...f.catalogue, sources: [], widgets: [{id: 'budget-table'}]}); await flush();
+  const props = () => f.menu().find(node => node.props.id === 'budget-table')!.props;
+  addButton(f.row(props())).props.onClick(); await flush();
+  const operation = {...receipt, item: {kind: 'widget', widgetId: 'budget-table'}};
+  f.reads[1].resolve(operation); await flush();
+  f.reads[2].resolve({...operation, state: 'complete', current: {boardAccessible: true, widgets: [{id: 'budget-table', placement: 'visible'}]}}); await flush();
+  const placed = {...EMPTY_VIEW, shown: ['budget-table']};
+  f.setView(placed);
+  assert.equal(props().visible, true, 'explicit analytics placement needs no sources');
+  assert.equal(addButton(f.row(props())).props['aria-disabled'], true);
+  f.setView(placed, ['s']); assert.equal(props().visible, true);
+  f.setView(placed); assert.equal(props().visible, true, 'removing the last source preserves placement');
+  f.setView({...placed, hidden: ['budget-table']});
+  const retry = addButton(f.row(props()));
+  assert.equal(retry.props['aria-disabled'], false);
+  const before = f.reads.length;
+  retry.props.onClick(); await flush();
+  assert.equal(f.reads.length, before + 1, 'an explicit re-add creates a new operation');
+});
+
+test('catalogue refresh preserves row focus and gives a removed search a local successor', async () => {
+  const f = fixture(), document = f.document;
+  const button = {isConnected: true, focus: () => {document.activeElement = button;}};
+  const input = {isConnected: true, focus: () => {document.activeElement = input;}};
+  let searchable = false;
+  const root = {querySelector: (selector: string) => selector === 'input[type="search"]' ? searchable ? input : null : button};
+  const sources = Array.from({length: 11}, (_, index) => ({...f.catalogue.sources[0], id: 's' + index}));
+  f.menu(root); f.reads[0].resolve({...f.catalogue, sources: sources.slice(0, 10)}); await flush();
+  const menu = f.menu(root);
+  menu[0].props.onFocusCapture({target: button});
+  assert.equal(document.activeElement, button);
+  f.change(); f.menu(root); f.reads[1].resolve({...f.catalogue, sources}); await flush();
+  searchable = true;
+  const larger = f.menu(root);
+  assert.equal(document.activeElement, button, 'new search cannot steal focus from a row');
+  assert.ok(larger.filter(node => node.type === 'field').every(node => !node.props.autoFocus));
+  input.focus(); larger[0].props.onFocusCapture({target: input});
+  f.change(); f.menu(root); f.reads[2].resolve({...f.catalogue, sources: sources.slice(0, 10)}); await flush();
+  searchable = false; input.isConnected = false; document.activeElement = document.body;
+  f.menu(root);
+  assert.equal(document.activeElement, button, 'removing the focused search keeps keyboard navigation in the list');
 });

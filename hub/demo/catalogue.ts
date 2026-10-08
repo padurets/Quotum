@@ -36,6 +36,16 @@ export {QUOTA_SCENES} from './quotas.js';
 export {MONEY_SCENES} from './money.js';
 export {CURRENCY_SCENES} from './currencies.js';
 
+/** Mixed analytics stays visible; loading and read failures are held by history tests.
+ * Legend mutes, table-only views and explicit empty Add are exercised on this set in
+ * both languages. The shared range and all three real plots use the native-input bench.
+ */
+export const ANALYTICS_SCENES=[
+  {id:'mixed',expect:['four-widgets','quota-percentages','budget-amounts','independent-units']},
+  {id:'empty',expect:['pending-empty','explicit-empty','sticky-placement']},
+] as const;
+
+
 /**
  * The catalogue of the demo board: every state the dashboard knows today, one entry each,
  * but two that never last on a working hub (see the end).
@@ -468,7 +478,7 @@ const all: DemoSet = {
       // Heights she chose, which the benchmark renders too: the list after all her cards however many, 32 rows tall, so most of its
       // agents show with their work totals and a few are left to the dialog; the analytics taller than drawn by themselves.
       agentsPlace: {x: 0, y: 99, w: 6, h: 32},
-      places: {activity: {x: 0, y: 0, w: 6, h: 12}, history: {x: 0, y: 1, w: 6, h: 16}, forecast: {x: 0, y: 2, w: 6, h: 30}},
+      places: {activity: {x: 0, y: 0, w: 6, h: 12}, 'quota-history': {x: 0, y: 1, w: 6, h: 16}, 'quota-table': {x: 0, y: 2, w: 6, h: 30}},
       projects: {'docs-site': 'docs'},
       // Each group has a working agent that works within the first twenty minutes.
       expect: [
@@ -500,8 +510,9 @@ const all: DemoSet = {
         {activityEmpty: 'knownFrom', range: {from: -13 * DAY, to: -11 * DAY}, from: 0, to: 0},
       ],
       look: [
-        'The list of agents gathers them by project, by activity: quotum is one row of three agents, its marks in the colours of Max and Pro, with their agent-hours and last activity (a date and time, or now while one works); a click opens its three agents, each with its folder, where it runs, machine, subscription, the time it worked and last activity',
+        'The list of agents gathers them by project, by activity: quotum is one row of three agents, its marks in the colours of Max and Pro, with their agent-hours and last activity (now while one works or within the first minute, minutes or hours ago today, yesterday, then a date and time; exact timestamps on hover); a click opens its three agents, each with its folder, where it runs, machine, subscription, the time it worked and last activity',
         'infra has no known activity time: its last activity is a dash, explained on hover',
+        'The widget and its Add entry are named Agent sessions; Add search appears only above ten unfiltered entries and remains while its query narrows them',
         'The list\'s settings, for every viewer, group it by machine or subscription, or put each agent on a row of its own; the owner also picks its columns, how long each agent has run among them, off at first',
         'The table of agents in a dialog has a way back to all the groups when it was opened from them, and none when opened from a row',
         'The agent details dialog has no repeated working-count or work-total summary above its rows; the toolbar appears only for Back or compact-list sorting',
@@ -1619,5 +1630,6 @@ const activity: DemoSet = {
 };
 
 const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures'};
+const analytics:DemoSet={...all,id:'analytics',about:'Independent quota and budget history and tables with native quotas, z.ai, OpenRouter and DeepSeek'};
 const quotas:DemoSet={...all,id:'quotas',about:'Personal z.ai subscription quotas in credits, unknown resets and partial readings'};
-export const SETS: DemoSet[] = [all, showcase, activity,money,quotas, ONBOARDING];
+export const SETS: DemoSet[] = [all, showcase, activity,money,quotas,analytics, ONBOARDING];

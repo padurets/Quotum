@@ -112,9 +112,9 @@ test('actual ledger, packed cells, money preparation, chart geometry and raw rea
     const saved=original[0];
     assert.equal(moneyPointAt(saved,120_000),undefined);assert.equal(moneyPointAt(saved,120_010)?.value,'110000000');
     assert.equal(moneyPointAt(saved,65_000),undefined);assert.equal(moneyPointAt(saved,180_000)?.value,'110000000');assert.equal(moneyPointAt(saved,180_001)?.value,'105000000');
-    const moneySource=readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8'),start=moneySource.indexOf('  const prepared=usePrepared(');
+    const moneySource=readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8'),start=moneySource.indexOf('  const modelContext=');
     const region=moneySource.slice(start,moneySource.indexOf('  const model=prepared.value',start));
-    const moneyContext={context:defaultCurrencyContext,original,history:{meterSeries:original},strip:null,unit:'CNY',prefs:{money:{view:'balance'},muted:{}},sources:[{id,title:'Fixture',provider:'deepseek'}],arrange:{view:{}},locale:'en',board:'b',moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof original;lines:Line[]}};
+    const moneyContext={context:defaultCurrencyContext,original,history:{meterSeries:original},strip:null,unit:'CNY',prefs:{money:{view:'balance'},muted:{}},sources:[{id,title:'Fixture',provider:'deepseek'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[['s','balance']]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof original;lines:Line[]}};
     runInNewContext(ts.transpileModule(region+'\nglobalThis.model=prepared.value;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,moneyContext);
     const line=moneyContext.model.lines[0];assert.equal(line.pointMode,'observation');assert.ok(line.points.some(p=>p[0]===120_001&&p[3]===180_000));
     assert.equal(readout([line],[],120_000,M,210_000,240_000,[],undefined,120_000).rows[0].value,null);
@@ -134,7 +134,7 @@ test('subscription preferences survive new currencies, and money defaults choose
   const store=new Store(':memory:',1);try {
     const id=store.source('deepseek','1'.repeat(24),1);store.record(id,deepSeekMeasurement(answer(),1));
     const card:Card={...store.state(id),stale:false,owners:[],measureIntervalMs:null};
-    assert.equal(moneySelection([card],[],readMoney({unit:null})).selection,undefined);
+    assert.deepEqual(moneySelection([card],[],readMoney({unit:null})).selection,{unit:'USD',ids:[]});
     assert.equal(readMoney({unit:'CNY'}).unit,'USD');assert.deepEqual(moneySelection([card],[],readMoney({unit:'CNY'})).selection?.ids,[]);
     assert.equal(balanceGroups(card)[0].total.amount,'110000000');assert.equal(balanceGroups(card)[0].components.length,2);
     assert.equal(readMoney({unit:'USD'}).unit,'USD');assert.equal(moneySelection([card],[],readMoney({unit:'USD'})).selection?.ids.length,0);

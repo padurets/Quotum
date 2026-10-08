@@ -39,7 +39,9 @@ export class HistoryTile {
   }
 
   /** A private COW tile keeps every published buffer untouched until response commit. */
-  *staged(chunk: Chunk, known: HistoryMeta['known']): Preparation<HistoryTile> {
+  staged(chunk: Chunk, known: HistoryMeta['known']): Preparation<HistoryTile>;
+  staged(chunk: Chunk, known: HistoryMeta['known'], admit: (bytes: number) => boolean): Preparation<HistoryTile | null>;
+  *staged(chunk: Chunk, known: HistoryMeta['known'], admit?: (bytes: number) => boolean): Preparation<HistoryTile | null> {
     const copy = new HistoryTile(this.from, this.cell);
     copy.readFrom = this.readFrom; copy.readTo = this.readTo; copy.validTo = this.validTo;
     copy.writeSeq = this.writeSeq; copy.shownAt = this.shownAt;
@@ -49,7 +51,20 @@ export class HistoryTile {
     for (const key in this.devices) {copy.devices[key] = this.devices[key]; yield;}
     copy.hasMeters = this.hasMeters; copy.meters = yield* this.meters.clonePrepared();
     copy.activity = this.activity; copy.resets = this.resets; copy.grants = this.grants;
-    yield* copy.mergePrepared(chunk, known);
+    // Earlier chunks of this response remain owned while their replacement is copied.
+    let reserved = this.bytes;
+    const fits = () => {
+      if (!admit) return true;
+      const bytes = copy.bytes;
+      if (bytes <= reserved) return true;
+      if (!admit(bytes)) return false;
+      reserved = bytes; return true;
+    };
+    for (const step of copy.mergePrepared(chunk, known)) {
+      if (!fits()) return null;
+      yield step;
+    }
+    if (!fits()) return null;
     return copy;
   }
 

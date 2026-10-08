@@ -4,10 +4,14 @@ import ts from 'typescript';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {PageClock} from '../lib/clock';
-import {ago, agoChangesAt, countdown, countdownChangesAt, duration, durationChangesAt, durationUntilChangesAt} from '../lib/format';
+import {ago, agoChangesAt, countdown, countdownChangesAt, duration, durationChangesAt, durationUntilChangesAt, recentActivity, recentActivityChangesAt} from '../lib/format';
 import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, resetLine, resetLineChangesAt} from '../lib/quota';
 import {resetLabel, resetLabelChangesAt, type ResetStatus} from '../lib/resets';
-import {DEFAULT_PLAN, planAt, planChangesAt, planNote} from '../lib/plan';
+import {DEFAULT_PLAN, planAt, planChangesAt, planNote, planMark, planMarkChangesAt, planNoteChangesAt} from '../lib/plan';
+import * as plan from '../lib/plan';
+import * as jsx from 'react/jsx-runtime';
+import {num} from '../lib/format';
+import {t} from '../i18n';
 import {since, sinceChangesAt} from '../lib/agents';
 import {frameChangesAt, step, stepChangesAt} from '../lib/periods';
 import {cellChangesAt, forecastLine, outlook, outlookText, planCell, planEndOf, type Context} from '../lib/forecast';
@@ -183,6 +187,7 @@ const before = (to: number) => [
 
 test('ago, countdown and duration say when they read otherwise, to the millisecond', () => {
   const time = T0 - 3 * S;
+  changesAtItsMoment('last activity', now => recentActivity(time, now), now => recentActivityChangesAt(time, now), around(time));
   changesAtItsMoment(
     'ago',
     now => ago(time, now),
@@ -313,6 +318,42 @@ test("a limit's plan says when its mark, its gap or its end show otherwise", () 
     );
   }
   assert.equal(planChangesAt(weekly, measuredAt, T0, null), null, 'no plan: nothing to change');
+});
+
+test('each card plan leaf wakes only when its own visible reading changes', () => {
+  const measuredAt = T0 - MIN;
+  for (const kind of ['session', 'weekly'] as const) for (const remaining of [0, 5, 9.5, 15, 62.5, 85.1, 100]) {
+    const w: Win = {id: kind, kind, label: null, used: 100 - remaining, remaining, resetAt: T0 + (kind === 'weekly' ? 4 * DAY : 3 * HOUR), minutes: kind === 'weekly' ? 10080 : 300};
+    const moments = [...around(T0), ...before(w.resetAt!), ...before(w.resetAt! - DAY)];
+    changesAtItsMoment('plan mark', now => planMark(w, measuredAt, now), now => planMarkChangesAt(w, measuredAt, now), moments);
+    changesAtItsMoment('plan note', now => {const note = planNote(w, measuredAt, now); return note && [note.key, Math.round(note.value), note.weekly];}, now => planNoteChangesAt(w, measuredAt, now), moments);
+  }
+  const c = pageClock(), from = T0 + 8 * MIN + 8 * S;
+  c.jump(from - T0);
+  const w: Win = {id: 'session', kind: 'session', label: null, used: 14.9, remaining: 85.1, resetAt: T0 + 13 * MIN, minutes: 300};
+  c.part('mark', now => planMarkChangesAt(w, T0 - 12 * MIN, now));
+  c.part('note', now => planNoteChangesAt(w, T0 - 12 * MIN, now));
+  c.advance(24 * S);
+  assert.deepEqual(c.woken, ['mark'], 'the half-point gap cannot wake the unrelated mark or an empty note');
+});
+
+test('the actual card plan components do not subscribe to another projection at a half-point boundary', () => {
+  const c = pageClock(); c.jump(8 * MIN + 8 * S);
+  const w: Win = {id: 'session', kind: 'session', label: null, used: 14.9, remaining: 85.1, resetAt: T0 + 13 * MIN, minutes: 300};
+  let changesAt: (now: number) => number | null = () => null;
+  const context = {...plan, num, t, exports: {}, useClock: (read: typeof changesAt) => {changesAt = read; return c.now();}, require: () => jsx,
+    leaves: {} as Record<string, (props: {w: Win; measuredAt: number; weekly: number[]}) => unknown>};
+  const source = readFileSync(new URL('../components/SourceCard.tsx', import.meta.url), 'utf8');
+  const region = source.slice(source.indexOf('function PlanMark('), source.indexOf('/** When the limit resets:'));
+  runInNewContext(ts.transpileModule(region + '\nglobalThis.leaves={PlanMark,PlanNote};', {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, context);
+  const counts: Record<string, number> = {};
+  for (const [name, leaf] of Object.entries(context.leaves)) {
+    const watch = c.clock.watch(); counts[name] = 0;
+    const render = () => {leaf({w, measuredAt: T0 - 12 * MIN, weekly: DEFAULT_PLAN}); c.clock.due(watch, changesAt(c.now()), c.now());};
+    c.clock.subscribe(watch, () => {counts[name]++; render();}); render();
+  }
+  c.advance(24 * S);
+  assert.deepEqual(counts, {PlanMark: 1, PlanNote: 0});
 });
 
 test('the arrows of the analytics say when they turn on or off; the frame moves on a cell at a time', () => {

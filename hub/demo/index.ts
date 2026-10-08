@@ -185,8 +185,8 @@ export class Demo {
     const store = new Store(path.join(this.dir, 'quotum.sqlite'));
     try {
       seedWork(store, stand);
-      if(this.options.money!==false&&(set.id==='all'||set.id==='money')){await seedMoney(store,new Directory(store.db),stand);await seedDeepSeek(store,new Directory(store.db),stand);seedCurrencies(store,stand);}
-      if(this.options.money!==false&&(set.id==='all'||set.id==='quotas'))await seedQuotas(store,new Directory(store.db),stand);
+      if(this.options.money!==false&&(set.id==='all'||set.id==='money'||set.id==='analytics')){await seedMoney(store,new Directory(store.db),stand);await seedDeepSeek(store,new Directory(store.db),stand);seedCurrencies(store,stand);}
+      if(this.options.money!==false&&(set.id==='all'||set.id==='quotas'||set.id==='analytics'))await seedQuotas(store,new Directory(store.db),stand);
     } finally {
       store.close();
     }

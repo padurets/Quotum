@@ -5,28 +5,28 @@ import {MAX_METERS,selectionOf,type MeterSelection} from '../../server/domain/me
 import type {Card} from './types';
 import type {MeterHistory} from './moneyView';
 import {referenceBalance} from './money';
-import {providerOf} from '../../server/domain/providers';
+import {providerOf, supportsBudget, budgetMeter} from '../../server/domain/providers';
 
 export type MoneyPrefs={unit:string|null;view:'balance'|'spending';selected:Record<string,[string,string][]>;removed?:number};
-export const DEFAULT_MONEY:MoneyPrefs={unit:null,view:'balance',selected:{}};
+export const DEFAULT_MONEY:MoneyPrefs={unit:DEFAULT_CURRENCY,view:'balance',selected:{}};
 export function readMoney(value:unknown):MoneyPrefs {
   if(!value||typeof value!=='object')return DEFAULT_MONEY;
   const raw=value as Partial<MoneyPrefs>,selected:MoneyPrefs['selected']={};
   if(raw.selected&&typeof raw.selected==='object')for(const [unit,ids] of Object.entries(raw.selected)){
     try{if(!unit.startsWith('credits:'))selected[unit]=selectionOf(ids,unit).ids;}catch{/* Invalid saved selections grant no capabilities. */}
   }
-  return {unit:isUnit(raw.unit)&&!raw.unit.startsWith('credits:')?raw.unit==='CNY'?DEFAULT_CURRENCY:raw.unit:null,view:raw.view==='spending'?'spending':'balance',selected,...(Number.isSafeInteger(raw.removed)&&raw.removed!>0&&raw.removed!<=32?{removed:raw.removed}:{})};
+  return {unit:isUnit(raw.unit)&&!raw.unit.startsWith('credits:')?raw.unit==='CNY'?DEFAULT_CURRENCY:raw.unit:DEFAULT_CURRENCY,view:raw.view==='spending'?'spending':'balance',selected,...(Number.isSafeInteger(raw.removed)&&raw.removed!>0&&raw.removed!<=32?{removed:raw.removed}:{})};
 }
 export function moneySelection(cards:readonly Card[],hidden:readonly string[],settings:MoneyPrefs,context:CurrencyContext=defaultCurrencyContext):{selection:MeterSelection|undefined;omitted:number;removed:number} {
-  if(!settings.unit)return {selection:undefined,omitted:0,removed:0};
-  const shown=cards.filter(c=>providerOf(c.provider)?.funding==='wallet'&&!hidden.includes('source:'+c.id)),visible=new Set(shown.map(c=>c.id));
-  const explicit=settings.selected[settings.unit];
+  const unit=settings.unit??DEFAULT_CURRENCY;
+  const shown=cards.filter(c=>supportsBudget(providerOf(c.provider))&&!hidden.includes('source:'+c.id)),visible=new Set(shown.map(c=>c.id));
+  const explicit=settings.selected[unit];
   const ids=explicit??shown.flatMap(card=>{
-    const balance=settings.unit===DEFAULT_CURRENCY?(referenceBalance(card,context.target.id!==DEFAULT_CURRENCY)?.total):card.meters?.find(m=>m.kind==='balance'&&m.unit===settings.unit&&balanceDescriptor(card.provider,m.id)?.role==='total');
+    const balance=unit===DEFAULT_CURRENCY?(referenceBalance(card,context.target.id!==DEFAULT_CURRENCY)?.total):card.meters?.find(m=>m.kind==='balance'&&m.unit===unit&&balanceDescriptor(card.provider,m.id)?.role==='total');
     return balance?[[card.id,balance.id] as [string,string]]:[];
   });
-  const admitted=ids.filter(([source])=>visible.has(source));
-  return {selection:{...selectionOf(admitted.slice(0,MAX_METERS),settings.unit),...(settings.unit===DEFAULT_CURRENCY&&context.target.id!==DEFAULT_CURRENCY?{displayCurrency:context.target.id,...(context.revision?{displayRevision:context.revision}:{})}:{})},omitted:Math.max(0,admitted.length-MAX_METERS),removed:ids.length-admitted.length};
+  const admitted=ids.filter(([source,meter])=>visible.has(source)&&budgetMeter(providerOf(shown.find(card=>card.id===source)?.provider??''),meter));
+  return {selection:{...selectionOf(admitted.slice(0,MAX_METERS),unit),...(unit===DEFAULT_CURRENCY&&context.target.id!==DEFAULT_CURRENCY?{displayCurrency:context.target.id,...(context.revision?{displayRevision:context.revision}:{})}:{})},omitted:Math.max(0,admitted.length-MAX_METERS),removed:ids.length-admitted.length};
 }
 
 /** Membership is checked against the inventory, not against the visible page. */

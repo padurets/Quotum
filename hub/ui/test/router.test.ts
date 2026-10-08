@@ -1,13 +1,38 @@
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {guardNavigation, navigate, onLocation, selectedBoard, settingsHref} from '../lib/router';
 import {onTimeRange, showBoard, timeRange} from '../lib/timeRange';
 
+test('leaving settings confirms its draft before flushing a large view and keeps history intact on failure',async()=>{
+  const events=new EventTarget();let url=new URL('http://fixture.example/settings/currencies'),state:unknown=null,changes=0;
+  let proceed:(()=>void)|undefined;
+  const saves:{resolve:()=>void;reject:(error:Error)=>void}[]=[];
+  const context={exports:{} as {onLocation:(fn:()=>void)=>()=>void;guardNavigation:(fn:(go:()=>void)=>void)=>()=>void;navigate:(path:string)=>void},
+    get location(){return url;},window:events,PopStateEvent:Event,
+    history:{get state(){return state;},replaceState(next:unknown,_title:string,href:string){state=next;url=new URL(href,url);},pushState(next:unknown,_title:string,href:string){state=next;url=new URL(href,url);}},
+    require:(name:string)=>name==='./view'?{flushLargeViews:()=>new Promise<void>((resolve,reject)=>saves.push({resolve,reject}))}:{},
+  };
+  runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/router.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const router=context.exports,stop=router.onLocation(()=>changes++),unguard=router.guardNavigation(go=>{proceed=go;});
+  try {
+    router.navigate('/compact');assert.equal(saves.length,0);assert.equal(url.pathname,'/settings/currencies');
+    proceed!();assert.equal(saves.length,1);assert.equal(url.pathname,'/settings/currencies');
+    saves[0].reject(new Error('save failed'));await Promise.resolve();await Promise.resolve();
+    assert.equal(url.pathname,'/settings/currencies');assert.equal(changes,0);
+    router.navigate('/compact');proceed!();saves[1].resolve();await Promise.resolve();
+    assert.equal(url.pathname,'/compact');assert.equal(changes,1);assert.equal((state as {quotumPosition:number}).quotumPosition,1);
+  }finally{unguard();stop();}
+});
+
 test('Back restores its own board and range after settings instead of rewriting the URL', () => {
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   const events = new EventTarget();
   let url = new URL('http://fixture.example/?board=A&from=1800000000000&to=1800003600000');
-  const history = {pushState: (_state: unknown, _title: string, href: string) => {url = new URL(href, url);}, replaceState: (_state: unknown, _title: string, href: string) => {url = new URL(href, url);}};
+  let state: unknown = null;
+  const history = {get state() {return state;}, pushState: (next: unknown, _title: string, href: string) => {state = next; url = new URL(href, url);}, replaceState: (next: unknown, _title: string, href: string) => {state = next; url = new URL(href, url);}};
   Object.defineProperties(globalThis, {location: {configurable: true, get: () => url}, history: {configurable: true, value: history}, window: {configurable: true, value: events}, PopStateEvent: {configurable: true, value: Event}});
   let changes = 0;
   const stop = onLocation(() => changes++), stopRange = onTimeRange(() => {});

@@ -78,30 +78,7 @@ export type LiveSession = {
  * are `source:<id>` cards, the `agents` list, and the analytics: `activity`, the `history`
  * chart and the `forecast` table.
  */
-export type View = {
-  layout: import('./grid').Layout;
-  /** Boards arranged before the grid: the page translates these; POST never saves them. */
-  order?: string[];
-  sizes?: Record<string, number>;
-  /** Names the board's owner gave cards, by source id. */
-  names: Record<string, string>;
-  hidden: string[];
-  /** Widgets off by default and explicitly enabled key scales beyond the card preview. */
-  shown: string[];
-  /** `windowKey`s of windows hidden from cards and the chart. */
-  windows: string[];
-  /** Weekly spending plans by source id; absent means the default. */
-  plans: Record<string, number[]>;
-  /** Source ids whose plan is switched off on this board. */
-  unplanned: string[];
-  /** Colours given to cards, by source id, instead of the provider's. */
-  colors: Record<string, string>;
-  /** Columns hidden in a widget's table, by widget id. */
-  columns: Record<string, string[]>;
-  /** Columns off by default that the owner turned on, by widget id. */
-  shownColumns: Record<string, string[]>;
-  enabledWhenEmpty?: string[];
-};
+export type {View} from '../../server/domain/view';
 
 export type {HistorySeries, History, SourceEvent} from '../../server/domain/history';
 

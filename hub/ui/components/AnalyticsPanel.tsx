@@ -1,0 +1,39 @@
+/** @jsxRuntime automatic */
+import type {ReactNode, Ref} from 'react';
+import type {Shown} from '../lib/history';
+import {HistoryFailure} from './HistoryFailure';
+import {t} from '../i18n';
+import {usePref} from '../lib/prefs';
+import {timeRangeKey, timeRangeLabel, useTimeRange} from '../lib/timeRange';
+
+/** The same heading and reader state for every analytics widget. */
+export function AnalyticsPanel({ref, className, title, settings, history, loading, error, retry, chart, children}: {
+  ref?: Ref<HTMLElement>; className: string; title: string; settings?: ReactNode;
+  history: Shown['history']; loading: boolean; error: Shown['error']; retry: () => void; chart?: boolean; children: ReactNode;
+}) {
+  const selected = useTimeRange(), period = usePref('range');
+  const retained = history && history.range !== (selected ? timeRangeKey(selected) : period);
+  return <section ref={ref} className={`panel ${className}${loading ? ' is-loading' : ''}`} aria-label={title} aria-busy={loading} data-history-range={history?.range} data-time={chart ? 'chart' : undefined}>
+    <div className="panel-head">
+      <h2 className="panel-heading">{title}</h2>
+      {settings}
+    </div>
+    {retained && <p className="analytics-note history-retained" role="status">{t('analytics.retainedRange', {range: timeRangeLabel({from: history.since, to: history.to})})}</p>}
+    <HistoryFailure error={error} retry={retry}/>
+    {children}
+  </section>;
+}
+
+export function AnalyticsNote({children, title}: {children: ReactNode; title?: string}) {
+  return <p className="analytics-note" title={title}>{children}</p>;
+}
+
+/** Both histories toggle a series without changing their table's selection. */
+export function SeriesLegendItem({name, color, dash, muted, onToggle, children}: {
+  name: string; color: string; dash?: string; muted: boolean; onToggle: () => void; children: ReactNode;
+}) {
+  return <button type="button" className="legend-item" aria-pressed={!muted} onClick={onToggle}>
+    <svg width="18" height="6" aria-hidden="true"><line x1="1" x2="17" y1="3" y2="3" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeDasharray={dash || undefined}/></svg>
+    <span>{name}</span>{children}
+  </button>;
+}

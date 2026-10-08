@@ -21,11 +21,13 @@ function component(file: string, modules: Record<string, unknown>, globals = {})
 test('the header returns from settings to its selected board and range through the router', () => {
   const previous = Object.getOwnPropertyDescriptors(globalThis), events = new EventTarget();
   let address = new URL('http://fixture.example/settings/profile?board=B&from=1800000000000&to=1800003600000');
-  const history = {pushState: (_state: unknown, _title: string, href: string) => {address = new URL(href, address);}};
+  let state: unknown = null;
+  const history = {get state() {return state;}, pushState: (next: unknown, _title: string, href: string) => {state = next; address = new URL(href, address);}, replaceState: (next: unknown, _title: string, href: string) => {state = next; address = new URL(href, address);}};
   Object.defineProperties(globalThis, {
     location: {configurable: true, get: () => address}, history: {configurable: true, value: history},
     window: {configurable: true, value: events}, PopStateEvent: {configurable: true, value: Event},
   });
+  const stop = router.onLocation(() => {});
   try {
     const Brand = 'brand';
     const {Header} = component('../components/Header.tsx', {
@@ -47,6 +49,7 @@ test('the header returns from settings to its selected board and range through t
     assert.equal(prevented, 1);
     assert.equal(address.pathname + address.search, link.props.href);
   } finally {
+    stop();
     for (const key of ['location', 'history', 'window', 'PopStateEvent']) {
       if (previous[key]) Object.defineProperty(globalThis, key, previous[key]); else Reflect.deleteProperty(globalThis, key);
     }

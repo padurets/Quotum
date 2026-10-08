@@ -1,11 +1,14 @@
+import {HistoryPool} from './historyPool';
+import type {HistoryScope} from '../../server/domain/history';
+import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, ACTIVITY} from '../../server/domain/widgets';
 import {useSyncExternalStore} from 'react';
 import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type HistoryReply, type Target} from '../../server/domain/history';
-import {page, useHistoryStart, type PageEvent, type PageState} from './board';
+import {page, type PageEvent, type PageState} from './board';
 import {hubNow} from './clock';
 import {HistoryTile} from './historyTiles';
-import {ApiError, call} from './http';
+import {ApiError, call, UNAUTHORIZED} from './http';
 import {periodOf} from './periods';
-import {onPrefs, prefs,setPrefs} from './prefs';
+import {onPrefs, prefs} from './prefs';
 import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
 import type {History} from './types';
@@ -29,12 +32,14 @@ export type HistoryEnv = {
   setTimeout(run: () => void, ms: number): unknown;
   clearTimeout(timer: unknown): void;
   dropTimeRange(): void;
+  accessLost?(): void;
   schedule?(run: () => void): void;
   preparations?: Preparations | null;
 };
-export type Shown = {history: History | null; loading: boolean;error?:'history_limit'};
+export type Shown = {history: History | null; loading: boolean;error?:'history_limit'|'history_failed'};
+type HistoryBoundary = {board: string; at: number; start: number};
 type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead'};
-type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean};
+type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean; limited?: boolean};
 type TilePin = {tile: HistoryTile; seq: number; from: number; to: number};
 export type PlotInterest = {token: number; length: number; from: number; to: number; direction: -1 | 0 | 1};
 
@@ -57,6 +62,15 @@ export class HistoryStore {
   private shown: History | null = null;
   private meta: HistoryBasis | null = null;
   private metaAt: number | null = null;
+  private historyStart = 0;
+  private boundary: HistoryBoundary | null = null;
+  private readonly boundaryListeners = new Set<() => void>();
+  getBoundary = () => this.boundary;
+  subscribeBoundary = (listener: () => void) => {this.boundaryListeners.add(listener); return () => void this.boundaryListeners.delete(listener);};
+  private setBoundary(value: HistoryBoundary | null) {
+    this.boundary = value;
+    for (const listener of this.boundaryListeners) listener();
+  }
   private cutTo: number | null = null;
   private readonly grids = new Map<number, Map<number, HistoryTile>>();
   private readonly flights = new Set<Flight>();
@@ -67,6 +81,7 @@ export class HistoryStore {
   private readonly listeners = new Set<() => void>();
   private state: Shown = {history: null, loading: false};
   private historyLimit=false;
+  private readError=false;
   private interest: PlotInterest | null = null;
   private panReads = false;
   private cohort = '';
@@ -89,7 +104,7 @@ export class HistoryStore {
   private readonly reservations = new Map<string, Flight>();
   private readonly plotChunks = new Map<string, {tile: HistoryTile; seq: number; from: number; to: number; chunk: Chunk}>();
 
-  constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES) {}
+  constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES, readonly scope?: HistoryScope, private readonly pool?: HistoryPool) {pool?.register(this);}
 
   /** Settings keep the board's live context without reading or preparing its charts. */
   setActive(active: boolean) {
@@ -122,8 +137,9 @@ export class HistoryStore {
     this.cancelProjection();
     this.epoch++;
     this.board = null;
+    this.setBoundary(null);
     this.ready = false;
-    this.historyLimit=false;
+    this.historyLimit=false;this.readError=false;
     this.run = null;
     this.shown = this.meta = null;
     this.metaAt = null;
@@ -148,23 +164,32 @@ export class HistoryStore {
   hello(run: string) {
     if (run === this.run) return;
     this.run = run;
+    this.setBoundary(null);
     this.invalidate();
     this.ready = false;
   }
 
-  snapshot(lineup: string[], windows: Iterable<string> = this.windows) {
+  snapshot(lineup: string[], windows: Iterable<string> = this.windows, historyStart = 0) {
+    this.historyStart=historyStart;
+    this.setBoundary(null);
+    if(this.removesSource(lineup)){this.shown=null;this.grids.clear();}
     this.lineupKey = keyOf(lineup);
     this.setWindows(windows);
     this.invalidate();
     this.ready = true;
-    this.schedule();
+    this.publish();this.schedule();
   }
 
   lineup(lineup: string[]) {
     if (keyOf(lineup) === this.lineupKey) return;
+    if(this.removesSource(lineup)){this.shown=null;this.grids.clear();}
     this.lineupKey = keyOf(lineup);
-    this.invalidate();
+    this.invalidate();this.publish();
     this.schedule();
+  }
+
+  private removesSource(lineup: string[]) {
+    return this.lineupKey !== '' && (JSON.parse(this.lineupKey) as string[]).some(id => !lineup.includes(id));
   }
 
   setWindows(windows: Iterable<string>) {
@@ -181,7 +206,7 @@ export class HistoryStore {
   setMeters(meters: MeterSelection | undefined) {
     if(JSON.stringify(meters)===JSON.stringify(this.meters))return;
     this.meters=meters;
-    this.historyLimit=false;
+    this.historyLimit=false;this.readError=false;this.meta=null;this.metaAt=null;
     this.grids.clear();
     this.shown=null;
     this.invalidate();
@@ -207,7 +232,7 @@ export class HistoryStore {
     const key = selected ? timeRangeKey(selected) : period;
     if (key === (this.selected ? timeRangeKey(this.selected) : this.period)) return;
     this.period = period;
-    this.historyLimit=false;
+    this.historyLimit=false;this.readError=false;
     this.selected = selected;
     if (!this.interest) this.panReads = false;
     this.needsCompose = true;
@@ -259,9 +284,11 @@ export class HistoryStore {
     this.optional.clear();
     this.reconsiderResponses();
     const target = this.target();
+    let retained=false;
     for (const flight of [...this.flights]) {
       if (flight.epoch !== this.epoch || flight.cell !== target.cell || flight.to <= target.k0 * target.cell || flight.from > target.k1 * target.cell) this.abort(flight);
-      else flight.role = 'visible';
+      else if(this.pool&&retained)this.abort(flight);
+      else {flight.role = 'visible';retained=true;}
     }
     if (!commit) {
       this.plotPending = false;
@@ -305,8 +332,8 @@ export class HistoryStore {
 
   private publish() {
     const history = this.shown;
-    const loading = !this.plotPending && !!history && history.range !== this.target().key;
-    const error=this.historyLimit?'history_limit' as const:undefined;
+    const loading = !this.historyLimit && !this.readError && (!history && this.ready || !this.plotPending && !!history && history.range !== this.target().key);
+    const error=this.historyLimit?'history_limit' as const:this.readError?'history_failed' as const:undefined;
     if (history === this.state.history && loading === this.state.loading&&error===this.state.error) return;
     this.state = {history, loading,...(error?{error}:{})};
     for (const listener of this.listeners) listener();
@@ -357,8 +384,12 @@ export class HistoryStore {
     if (!this.active) return;
     this.startResponses();
     if (!this.board || !this.ready || !this.run || this.historyLimit) return;
-    if(this.meters){this.evict();if(this.historyLimit)return;}
+    if(this.meters||this.pool){this.evict();if(this.historyLimit)return;}
     const target = this.target();
+    if(this.scope==='budget'&&this.meters?.ids.length===0){
+      this.meta??={run:this.run,now:this.env.now(),historyStart:this.historyStart,known:{work:0,sources:{}}};
+      this.prepareCompose(target);return;
+    }
     if (this.interest) {
       this.publishPlot();
       this.pumpPan();
@@ -387,9 +418,9 @@ export class HistoryStore {
     if ([...this.flights].some(f => f.epoch === this.epoch && f.target === target.key && f.cell === target.cell)) return;
     const bad = this.bad(target);
     if (!bad.length) return;
-    const first = this.tile(bad[0], target.cell);
+    const first = this.grids.get(target.cell)?.get(tileOf(bad[0], target.cell));
     // Cold reads omit the unseen head. Entering a held tile's head fills it once.
-    const from = first.readTo === first.readFrom ? bad[0] : bad[0] < first.readFrom ? first.from : first.validTo;
+    const from = !first || first.readTo === first.readFrom ? bad[0] : bad[0] < first.readFrom ? first.from : first.validTo;
     const to = Math.min(tileEnd(tileOf(bad.at(-1)!, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
     this.read(target, from, to, 'visible');
   }
@@ -528,11 +559,11 @@ export class HistoryStore {
       from = Math.min(from, next); to = Math.max(to, next + target.cell);
       last = next;
     }
-    const first = this.tile(from, target.cell), end = this.tile(to - target.cell, target.cell);
+    const tiles = this.grids.get(target.cell), first = tiles?.get(tileOf(from, target.cell)), end = tiles?.get(tileOf(to - target.cell, target.cell));
     // A skipped part of a held tile must connect to its existing fresh prefix.
     // Empty tiles have no unseen head to fill, and fresh cells are never crossed.
-    if (first.readTo > first.readFrom && from >= first.readFrom) from = Math.min(from, first.validTo);
-    if (end.readTo > end.readFrom && to < end.readFrom) to = end.readFrom;
+    if (first && first.readTo > first.readFrom && from >= first.readFrom) from = Math.min(from, first.validTo);
+    if (end && end.readTo > end.readFrom && to < end.readFrom) to = end.readFrom;
     if (this.interest?.direction && !this.aheadStopped && !this.inheritedExtra && this.estimatedBytes < this.budget) {
       const direction = this.interest.direction;
       const buffer = this.bufferCells(target);
@@ -571,13 +602,20 @@ export class HistoryStore {
   }
 
   private read(target: Target, from: number, to: number, role: Flight['role']) {
+    if(this.pool)for(const waiting of [...this.flights])if(!this.pool.isActive(waiting)&&waiting.role===role)this.abort(waiting);
     const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role};
     this.flights.add(flight);
     const meta = this.meta?.run === this.run ? this.meta : undefined;
-    this.env.read(this.board!, target.cell, from, to, flight.controller.signal, this.meters, meta).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
+    const board=this.board!,meters=this.meters;
+    const start=()=>{
+      if(flight.controller.signal.aborted||flight.epoch!==this.epoch){this.abort(flight);return;}
+      flight.startedAt=this.elapsedNow();
+      this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
+    };
+    if(this.pool)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
   }
 
-  private abort(flight: Flight) {this.preparations?.cancel(flight); this.responses.delete(flight); for (const [key, owner] of this.reservations) if (owner === flight) this.reservations.delete(key); this.flights.delete(flight); flight.controller.abort();}
+  private abort(flight: Flight) {this.preparations?.cancel(flight); this.releaseResponse(flight); flight.controller.abort();}
   private abortFlights() {for (const flight of [...this.flights]) this.abort(flight);}
   private setPlot(plot: PlotBuffer | null) {
     if(plot&&this.meters&&this.meta) {
@@ -622,8 +660,8 @@ export class HistoryStore {
       // A late inherited slice cannot create a bounding interval across an unread
       // gap. Discard the whole answer and let the planner connect the current base.
       if (response.answer.chunks.some(chunk => {
-        const base = this.tile(chunk.from, flight.cell);
-        return base.writeSeq <= flight.seq && base.readTo > base.readFrom && (chunk.to < base.readFrom || chunk.from > base.readTo);
+        const base = this.grids.get(flight.cell)?.get(tileOf(chunk.from, flight.cell));
+        return base && base.writeSeq <= flight.seq && base.readTo > base.readFrom && (chunk.to < base.readFrom || chunk.from > base.readTo);
       })) {this.abort(flight); this.schedule(); continue;}
       for (const key of response.keys) this.reservations.set(key, flight);
       response.started = true;
@@ -637,8 +675,18 @@ export class HistoryStore {
           if (base.writeSeq > flight.seq) continue;
           let pin = pins.get(base);
           if (!pin) {pin = {seq: base.writeSeq, from: base.readFrom, to: base.readTo, staged: base, chunks: []}; pins.set(base, pin);}
-          pin.staged = yield* pin.staged.staged(chunk, response.answer.known);
-          pin.chunks.push(chunk); yield;
+          const otherGrowth = [...pins].reduce((sum, [other, value]) => sum + (other === base ? 0 : Math.max(0, value.staged.bytes - other.bytes)), 0);
+          const admit = (bytes: number) => !store.pool || store.pool.reserve(flight, otherGrowth + Math.max(0, bytes - base.bytes));
+          // Include new empty tile headers before preparation can yield, too.
+          if (!admit(pin.staged.bytes)) {response.limited = true; completed = true; return;}
+          const staged = yield* pin.staged.staged(chunk, response.answer.known, admit);
+          if (!staged) {response.limited = true; completed = true; return;}
+          pin.staged = staged;
+          pin.chunks.push(chunk);
+          if(store.pool&&!store.pool.reserve(flight,[...pins].reduce((sum,[base,pin])=>sum+Math.max(0,pin.staged.bytes-base.bytes),0))) {
+            response.limited=true;completed=true;return;
+          }
+          yield;
         }
         completed = true;
         } finally {
@@ -646,6 +694,7 @@ export class HistoryStore {
         }
       };
       prepare(flight, work(this), valid, () => {
+        if(response.limited){if(flight.role==='ahead'){this.aheadStopped=true;this.abort(flight);this.schedule();}else this.limit();return;}
         // No yield between the last ownership check and the entire response's publication.
         for (const [base, {staged, chunks}] of pins) {
           staged.readFrom = base.readFrom; staged.readTo = base.readTo; staged.validTo = base.validTo;
@@ -662,10 +711,12 @@ export class HistoryStore {
           this.grids.get(base.cell)!.set(tileOf(base.from, base.cell), staged);
         }
         const answer = response.answer;
+        this.readError=false;
         if (flight.seq > this.metaSeq) {
           this.metaSeq = flight.seq;
           this.meta = {run: answer.run, now: answer.now, historyStart: answer.historyStart, known: answer.known, ...(answer.meta ? {meta: answer.meta} : {})};
           this.metaAt = flight.startedAt;
+          this.setBoundary({board: this.board!, at: answer.now, start: answer.historyStart});
           const to = answer.chunks.at(-1)?.to;
           if (flight.newsSeq === this.newsSeq && to !== undefined && to > answer.now + CLOCK_TOLERANCE_MS) this.cutTo = Math.min(this.cutTo ?? to, to);
         }
@@ -679,30 +730,45 @@ export class HistoryStore {
   }
 
   private releaseResponse(flight: Flight) {
-    this.responses.delete(flight); this.flights.delete(flight);
-    for (const [key, owner] of this.reservations) if (owner === flight) this.reservations.delete(key);
+    this.responses.delete(flight); this.flights.delete(flight); this.pool?.release(flight);
+    for (const [key, owner] of this.reservations) if (owner === flight) {
+      this.reservations.delete(key);
+      const [cell, n] = key.split(':').map(Number), tiles = this.grids.get(cell);
+      if (tiles?.get(n)?.writeSeq === 0) tiles.delete(n);
+    }
   }
 
   private failed(flight: Flight, error: unknown) {
-    this.flights.delete(flight);
+    this.flights.delete(flight);this.pool?.release(flight);
     if (flight.controller.signal.aborted || flight.epoch !== this.epoch) return;
+    if(error instanceof ApiError&&(error.status===401||error.status===403||error.code==='board_not_found')) {
+      this.close();this.env.accessLost?.();return;
+    }
+    if(error instanceof ApiError&&error.code==='not_found') {
+      this.cancelProjection();this.abortFlights();this.grids.clear();this.plotChunks.clear();this.shown=null;this.setPlot(null);
+      this.readError=true;this.publish();return;
+    }
+    const target = this.interest ? this.plotTarget() : this.target();
+    const needed = flight.cell === target.cell && this.bad(target).some(at => at >= flight.from && at < flight.to);
+    if(!needed){this.aheadStopped=true;this.schedule();return;}
     if(error instanceof ApiError&&error.code==='history_limit') {this.limit();return;}
     if (this.interest) {
       const visible = this.plotTarget();
       const needed = flight.cell === visible.cell && this.bad(visible).some(at => at >= flight.from && at < flight.to);
+      if(needed){this.readError=true;this.publish();}
       if (needed) this.timers.set('retry', this.env.setTimeout(() => {this.clear('retry'); this.schedule();}, RETRY_MS));
       else this.aheadStopped = true;
       this.schedule();
       return;
     }
-    const target = this.interest ? this.plotTarget() : this.target();
     if (flight.target !== target.key || flight.cell !== target.cell || !this.bad(target).some(at => at >= flight.from && at < flight.to)) {
       this.schedule();
       return;
     }
     // A necessary read of this selected target validates it, even in a partial
     // final batch. Obsolete and speculative failures were excluded above.
-    if (error instanceof ApiError && error.status === 400 && this.selected) return this.env.dropTimeRange();
+    if (error instanceof ApiError && (this.scope ? error.code === 'history_range_invalid' : error.status === 400) && this.selected) return this.env.dropTimeRange();
+    this.readError=true;this.publish();
     this.clear('retry');
     this.timers.set('retry', this.env.setTimeout(() => {this.clear('retry'); this.schedule();}, RETRY_MS));
   }
@@ -714,7 +780,26 @@ export class HistoryStore {
     this.shown=null;this.setPlot(null);this.clear('retry');this.publish();
   }
 
+  evictionCandidates() {
+    const target=this.interest?this.plotTarget():this.target(),shown=this.shown;
+    const candidates:{bytes:number;shownAt:number;drop:()=>void}[]=[];
+    for(const [cell,tiles] of this.grids)for(const [n,tile] of tiles){
+      if(this.reservations.has(`${cell}:${n}`))continue;
+      if(this.active&&cell===target.cell&&tile.to>target.k0*cell&&tile.from<=(target.k1)*cell)continue;
+      if(this.active&&shown&&cell===shown.cellMs&&tile.to>shown.since&&tile.from<shown.to)continue;
+      candidates.push({bytes:tile.bytes,shownAt:tile.shownAt,drop:()=>{
+        tiles.delete(n);this.plotChunks.delete(`${cell}:${tile.from}`);this.version++;this.aheadStopped=true;
+        // Another reader can evict this tile while our final projection is yielding.
+        this.schedule();
+      }});
+    }
+    return candidates;
+  }
+
+  retry = () => {this.readError=false;this.historyLimit=false;this.clear('retry');this.publish();this.schedule();};
+
   private evict() {
+    if(this.pool){if(!this.pool.trim())this.limit();return;}
     let bytes = this.estimatedBytes;
     if (bytes <= this.budget) return;
     const target = this.interest ? this.plotTarget() : this.target();
@@ -749,37 +834,57 @@ export class HistoryStore {
 }
 
 const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
-export const loader = new HistoryStore({
-  read: (board, cell, from, to, signal, meters, meta) => call<HistoryReply>('GET', `/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids))+(meters.displayCurrency?'&currency='+encodeURIComponent(meters.displayCurrency):'') : ''}`, undefined, 12_000, signal).then(reply => expandHistory(reply, meta)),
-  now: hubNow,
-  setTimeout: (run, ms) => setTimeout(run, ms),
-  clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
-  dropTimeRange,
-});
+export const historyPool = new HistoryPool();
+function reader(scope: HistoryScope) {
+  return new HistoryStore({
+    read: (board, cell, from, to, signal, meters, meta) => call<HistoryReply>('GET', `/api/history?scope=${scope}&board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids))+(meters.displayCurrency?'&currency='+encodeURIComponent(meters.displayCurrency):'') : ''}`, undefined, 12_000, signal).then(reply => expandHistory(reply, meta)),
+    now: hubNow,
+    setTimeout: (run, ms) => setTimeout(run, ms),
+    clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
+    dropTimeRange: () => {if(timeRange())dropTimeRange();},
+    accessLost: () => {page.dispatch({type:'board-close'});window.dispatchEvent(new Event(UNAUTHORIZED));},
+  }, STORED_BYTES, scope, historyPool);
+}
+export const quotaHistory = reader('quota'), budgetHistory = reader('budget');
+export const loader = quotaHistory;
+let shellActive = true;
+const selectedMeters = (state: PageState, scope: HistoryScope) => {
+  const board=state.board;if(!board)return undefined;
+  const cards=board.lineup.flatMap(id=>board.cards[id]??[]);
+  return scope==='budget'?moneySelection(cards,board.view.hidden,prefs().money,board.currencies).selection:subscriptionSelection(cards,board.view);
+};
+function activeReaders(state=page.get()) {
+  const board=state.board;
+  quotaHistory.setActive(shellActive&&!!board&&[ACTIVITY,...QUOTA_WIDGETS].some(id=>widgetVisible(board.view,id,board.lineup.length)));
+  budgetHistory.setActive(shellActive&&!!board&&BUDGET_WIDGETS.some(id=>widgetVisible(board.view,id,board.lineup.length)));
+}
+export const historyReaders = {setActive(active: boolean) {shellActive=active;activeReaders();}};
 
-/** Connection, board and window changes drive history; widgets only read it. */
+/** Event changes identify resources; a reader's choices never mutate another board's selections. */
 export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>) {
+  const scope=loader.scope??'quota';
   return store.listen((event, state) => {
     if (event.type === 'board-open') {pan.cancel(); loader.open(event.id);}
     else if (event.type === 'board-close') {pan.cancel(); loader.close();}
     else if (event.type === 'hub') {
       const hub = event.event;
       if (hub.type === 'hello') loader.hello(hub.data.epoch);
-      else if (hub.type === 'snapshot') loader.snapshot(state.board?.lineup ?? [], windowsOf(state));
-      else if (hub.type === 'lineup') {loader.lineup(state.board?.lineup ?? []); loader.setWindows(windowsOf(state));}
-      else if (hub.type === 'card') loader.setWindows(windowsOf(state));
-      else if (hub.type === 'history') loader.news(hub.data.since);
+      else if (hub.type === 'snapshot') loader.snapshot(state.board?.lineup ?? [], scope==='quota'?windowsOf(state):[], state.board?.historyStart);
+      else if (hub.type === 'lineup') {loader.lineup(state.board?.lineup ?? []); if(scope==='quota')loader.setWindows(windowsOf(state));}
+      else if (hub.type === 'card'&&scope==='quota') loader.setWindows(windowsOf(state));
+      else if (hub.type === 'history') {
+        const selected=scope==='budget'?new Set(selectedMeters(state,scope)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
+        const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source));
+        if(changes?.length)loader.news(Math.min(...changes.map(change=>change.since)));
+        else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since);
+      }
     }
-    const board=state.board;
-    if(board) {
-      const settings=prefs().money,result=moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,settings,board.currencies);
-      if(result.removed&&settings.unit&&settings.selected[settings.unit])setPrefs({money:{...settings,removed:result.removed,selected:{...settings.selected,[settings.unit]:result.selection!.ids}}});
-      loader.setMeters(settings.unit?result.selection:subscriptionSelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view));
-    }
+    if(state.board)loader.setMeters(selectedMeters(state,scope));
   });
 }
 const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).flatMap(card => card.windows.map(window => `${card.id} ${window.id}`));
-follow(loader, page);
+follow(quotaHistory,page);follow(budgetHistory,page);
+page.listen((_event,state)=>activeReaders(state));
 
 /** The plot follows the gesture; only its completion chooses exact quantities. */
 export function followPan(loader: HistoryStore, gesture: Pick<Pan, 'get' | 'subscribe'>, selectedRange: () => TimeRange | null) {
@@ -790,7 +895,7 @@ export function followPan(loader: HistoryStore, gesture: Pick<Pan, 'get' | 'subs
     if (frame) {
       token = frame.token;
       origin = frame.origin;
-      loader.pan({token: frame.token, length: frame.length, from: frame.from, to: Math.min(frame.now, frame.to + frame.lookAhead), direction: frame.direction});
+      loader.pan({token: frame.token, length: frame.length, from: frame.from, to: Math.min(frame.now, frame.to + (loader.scope==='budget'?0:frame.lookAhead)), direction: frame.direction});
     } else if (token !== null) {
       const selected = selectedRange();
       const committed = origin === null ? selected !== null : selected === null || selected.from !== origin.from || selected.to !== origin.to;
@@ -801,23 +906,33 @@ export function followPan(loader: HistoryStore, gesture: Pick<Pan, 'get' | 'subs
 }
 
 if (typeof window !== 'undefined') {
-  followPan(loader, pan, timeRange);
+  followPan(quotaHistory, pan, timeRange);
+  followPan(budgetHistory, pan, timeRange);
   const chosen = () => {
-    loader.choose(prefs().range, timeRange());
-    const board=page.get().board;
-    if(board)loader.setMeters(prefs().money.unit?moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,prefs().money,board.currencies).selection:subscriptionSelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view));
+    for(const reader of [quotaHistory,budgetHistory]) {
+      reader.choose(prefs().range,timeRange());
+      if(page.get().board)reader.setMeters(selectedMeters(page.get(),reader.scope!));
+    }
   };
-  onPrefs(chosen);
-  onTimeRange(chosen);
-  chosen();
+  onPrefs(chosen);onTimeRange(chosen);chosen();
 }
-export function useHistory(): Shown {return useSyncExternalStore(loader.subscribe, loader.get, loader.get);}
-export function useHistoryPlot(): PlotBuffer | null {
-  return useSyncExternalStore(loader.subscribePlot, loader.getPlot, loader.getPlot);
+export function useHistory(): Shown {return useSyncExternalStore(quotaHistory.subscribe, quotaHistory.get, quotaHistory.get);}
+export function useBudgetHistory(): Shown {return useSyncExternalStore(budgetHistory.subscribe, budgetHistory.get, budgetHistory.get);}
+export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
+export function useBudgetHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(budgetHistory.subscribePlot, budgetHistory.getPlot, budgetHistory.getPlot);}
+/** A fresh answer from either resource family supersedes the board's initial snapshot. */
+export function historyBegins(board: string | null, snapshot: number | null, answers: readonly (HistoryBoundary | null)[]): number {
+  const current = answers.filter((answer): answer is HistoryBoundary => !!answer && answer.board === board);
+  const newest = Math.max(...current.map(answer => answer.at));
+  return current.length ? Math.min(...current.filter(answer => answer.at === newest).map(answer => answer.start)) : snapshot ?? 0;
 }
-const answeredStart = () => loader.get().history?.historyStart ?? null;
-export function useHistoryBegins(): number {
-  const answered = useSyncExternalStore(loader.subscribe, answeredStart, answeredStart);
-  const snapshot = useHistoryStart();
-  return answered ?? snapshot ?? 0;
-}
+const subscribeHistoryBegins = (listener: () => void) => {
+  const stops = [page.subscribe(listener), quotaHistory.subscribeBoundary(listener), budgetHistory.subscribeBoundary(listener)];
+  return () => stops.forEach(stop => stop());
+};
+const readHistoryBegins = () => {
+  const board = page.get().board;
+  return historyBegins(board?.id ?? null, board?.historyStart ?? null, [quotaHistory.getBoundary(), budgetHistory.getBoundary()]);
+};
+/** Reading fresh metadata only renders navigation when its numeric boundary changes. */
+export function useHistoryBegins(): number {return useSyncExternalStore(subscribeHistoryBegins, readHistoryBegins, readHistoryBegins);}

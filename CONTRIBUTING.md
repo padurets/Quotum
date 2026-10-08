@@ -17,7 +17,7 @@ measures this machine once.
 
 After building the hub, `npm run bench -- --ci` in `hub/` checks dashboard costs in
 Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp http://host:port`). It includes native
-wheel and Shift-drag on both charts at 24h and 30d, with at least twelve real series and
+wheel and Shift-drag on all three charts at 24h and 30d, with at least twelve real series per resource family and
 CPU throttled fourfold. The scenario covers delayed history, strip rebuilding, reversal
 and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 50 ms
 at p99; input to an actually updated chart frame must stay within 34 ms at p95. Empty
@@ -208,6 +208,7 @@ provider. `DEV_SET=quotas DEV_STILL=true make dev` shows personal z.ai subscript
 quotas in credits, unknown resets, exhausted and closed allowances, partial and
 unsupported readings, and private access failures. The other catalogue cards remain
 available through Add widget.
+`DEV_SET=analytics DEV_STILL=true make dev` shows native quotas, z.ai, OpenRouter and DeepSeek with all four analytics widgets.
 `DEV_SET=onboarding DEV_STILL=true make dev` exercises board and account onboarding.
 Ana owns *Studio* and *New board*; Boris is a member of both. OpenRouter starts
 unconnected. Add widget offers synthetic keys for successful, partial and failed
@@ -363,13 +364,16 @@ one already running. CI runs it on every push; run it when you change the dashbo
 and have Chrome.
 
 The completed measurement phase's React/DOM observer is disconnected before native
-panning. Panning keeps its own movement and mutation checks; resetting the measurement
+panning. Native wheel and Shift-drag start separately from the subscription limit and budget
+charts at both periods. Each input owner starts with fresh readers, captures its own
+events and must move all three plots within the same budgets.
+Panning keeps its own movement and mutation checks; resetting the measurement
 probe resumes full observation for money updates. Money-view controls wait for a
 populated, committed drawing and stable layout before switching, then require the
 line to remain present and inside its scale on every frame until the new view commits.
 
 The same run checks pan traffic separately from the native frame budget, using the
-dense 75-day fixture and both charts at 24h and 30d. Controlled production-loader
+dense 75-day fixture and all three charts at 24h and 30d. Controlled production-loader
 replays and native browser gestures use 0, 100 and 400 ms answer delays. Cached
 return and repeat must start no history GETs; half-width movements allow at most
 seven attempts from the history chart and five from activity, and a 4% movement

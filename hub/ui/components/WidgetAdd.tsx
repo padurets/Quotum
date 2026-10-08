@@ -1,10 +1,11 @@
-import {useEffect, useRef, useState, type ReactNode} from 'react';
+import {useEffect, useLayoutEffect, useRef, useState, type ReactNode} from 'react';
 import {Activity, ArrowLeft, ArrowRight, ChartNoAxesCombined, Check, List, Monitor, Plug, Plus, Table2} from 'lucide-react';
 import {t} from '../i18n';
 import {call} from '../lib/http';
 import {boardTitle, type Board, type Session} from '../lib/session';
 import {useBoardId, useConnectionsRevision, useLineup, useServerView} from '../lib/board';
 import {cardId, isHidden} from '../lib/view';
+import {widgetVisible} from '../../server/domain/widgets';
 import {PROVIDERS} from '../lib/providers';
 import {widgetKind} from '../lib/widgetKind';
 import {useAddition, LABELS, type Candidate, type Catalogue, type Item, type WidgetId} from '../lib/addition';
@@ -13,7 +14,7 @@ import {logoOf} from './logos';
 import {Popover, PopoverHeading} from './Popover';
 import {KeyForm, DeviceAdd} from './ConnectionForms';
 
-const WIDGET_ICONS = {agents: List, activity: Activity, history: ChartNoAxesCombined, forecast: Table2};
+const WIDGET_ICONS = {agents: List, activity: Activity, 'quota-history': ChartNoAxesCombined, 'budget-history': ChartNoAxesCombined, 'quota-table': Table2, 'budget-table': Table2};
 
 /** Keep attempted rows in place until this menu closes, including while the board catches up. */
 function retainRows<T extends {id: string}>(previous: T[], next: T[], kept: Set<string>, key: (item: T) => string): T[] {
@@ -58,7 +59,7 @@ function AdditionRow({
     complete &&
     (operation.current?.boardAccessible === false ||
       operation.current?.sources?.some(source => source.placement !== 'visible') ||
-      (operation.current?.widget && operation.current.widget.placement !== 'visible') ||
+      operation.current?.widgets?.some(widget => widget.placement !== 'visible') ||
       (seenVisible.current && !visible));
   const done = complete && !changed;
   const pending = addition.busy || operation?.state === 'verifying';
@@ -129,8 +130,9 @@ export function WidgetCatalogue({
   const [providerSearch, setProviderSearch] = useState('');
   const [provider, setProvider] = useState('openrouter');
   const retained = useRef(new Set<string>());
-  const initialFocus = useRef(false);
-  const list = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const focused = useRef<HTMLElement | null>(null);
+  const focusedPage = useRef<string | null>(null);
   const revision = useConnectionsRevision();
   const currentBoard = useBoardId(),
     view = useServerView(),
@@ -157,24 +159,36 @@ export function WidgetCatalogue({
     );
     return () => abort.abort();
   }, [board.id, revision, view, lineup]);
-  useEffect(() => {
-    if (!catalogue || !initialSourceId || initialFocus.current) return;
-    initialFocus.current = true;
-    list.current?.querySelector<HTMLElement>(`[data-addition="${cardId(initialSourceId)}"] button`)?.focus();
-  }, [catalogue, initialSourceId]);
-  const matches = (label: string, query = search) => label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!catalogue || !element) return;
+    const entering = focusedPage.current !== page;
+    const first = focusedPage.current === null;
+    focusedPage.current = page;
+    if (page !== 'catalogue' && page !== 'connect') return;
+    // Refreshing the list never steals focus. If its focused search disappears,
+    // continue from the first available row instead of the start of the document.
+    const removed = focused.current && !focused.current.isConnected && document.activeElement === document.body;
+    if (!entering && !removed) return;
+    const initial = first && initialSourceId ? element.querySelector<HTMLElement>(`[data-addition="${cardId(initialSourceId)}"] button`) : null;
+    const target = initial ?? (entering ? element.querySelector<HTMLElement>('input[type="search"]') : null)
+      ?? element.querySelector<HTMLElement>('.catalogue-entry:not([hidden]) button, .catalogue-connect');
+    target?.focus({preventScroll: true});
+  }, [catalogue, page, initialSourceId]);
+  const searchable = !!catalogue && catalogue.sources.length + catalogue.widgets.length > 10;
+  const providersSearchable = !!catalogue && catalogue.connectors.length > 10;
+  const matches = (label: string, query = searchable ? search : '') => label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
   const sourceMatches = (source: Candidate) => matches(source.label + ' ' + source.provider + ' ' + t(widgetKind('', source.provider)));
   const widgetMatches = (widget: {id: WidgetId}) => matches(t(LABELS[widget.id]) + ' ' + t(widgetKind(widget.id)));
   const connectors =
     catalogue?.connectors.filter(connector =>
-      matches(connector.id === 'zai' ? t('sources.zaiPersonal') : connector.name, providerSearch),
+      matches(connector.id === 'zai' ? t('sources.zaiPersonal') : connector.name, providersSearchable ? providerSearch : ''),
     ) ?? [];
   const any = catalogue?.sources.some(sourceMatches) || catalogue?.widgets.some(widgetMatches);
   const visible = (id: string) =>
     currentBoard === board.id &&
     !!view &&
-    !isHidden(view, id) &&
-    (id.startsWith('source:') ? lineup.includes(id.slice(7)) : lineup.length > 0 || !!view.enabledWhenEmpty?.includes(id));
+    (id.startsWith('source:') ? !isHidden(view, id) && lineup.includes(id.slice(7)) : widgetVisible(view, id, lineup.length));
   const title =
     page === 'connection'
       ? t('sources.connectProvider', {provider: provider === 'zai' ? t('sources.zaiPersonal') : (PROVIDERS[provider]?.name ?? provider)})
@@ -184,7 +198,7 @@ export function WidgetCatalogue({
           ? t('add.connect')
           : t('add.onBoard', {board: boardTitle(board)});
   return (
-    <div className="widget-catalogue">
+    <div className="widget-catalogue" ref={root} onFocusCapture={event => {focused.current = event.target as HTMLElement;}}>
       <PopoverHeading onClose={onClose}>{title}</PopoverHeading>
       {page !== 'catalogue' && (
         <div className="popover-body">
@@ -213,15 +227,14 @@ export function WidgetCatalogue({
         </div>
       ) : page === 'connect' ? (
         <>
-          <div className="popover-body">
+          {providersSearchable && <div className="popover-body">
             <Field
               label={t('add.searchProviders')}
               type="search"
-              autoFocus
               value={providerSearch}
               onChange={event => setProviderSearch(event.target.value)}
             />
-          </div>
+          </div>}
           <div className="catalogue-list popover-scroll">
             {connectors.map(connector => (
               <button
@@ -252,10 +265,10 @@ export function WidgetCatalogue({
         </>
       ) : (
         <>
-          <div className="popover-body">
-            <Field label={t('add.search')} type="search" value={search} autoFocus onChange={event => setSearch(event.target.value)} />
+          {(searchable || !!error) && <div className="popover-body">
+            {searchable && <Field label={t('add.search')} type="search" value={search} onChange={event => setSearch(event.target.value)} />}
             <ErrorLine error={error} />
-          </div>
+          </div>}
           {!catalogue && !error && (
             <p className="popover-note" role="status">
               {t('add.loading')}
@@ -263,7 +276,7 @@ export function WidgetCatalogue({
           )}
           {catalogue && (
             <>
-              <div className="catalogue-list popover-scroll" ref={list}>
+              <div className="catalogue-list popover-scroll">
                 {catalogue.sources.map(source => (
                   <AdditionRow
                     key={source.id}
@@ -297,7 +310,7 @@ export function WidgetCatalogue({
                     />
                   );
                 })}
-                {!any && <p className="popover-note dialog-text">{t(search.trim() ? 'add.noWidgets' : 'add.allVisible')}</p>}
+                {!any && <p className="popover-note dialog-text">{t(searchable && search.trim() ? 'add.noWidgets' : 'add.allVisible')}</p>}
               </div>
               <div className="popover-section">
                 <button type="button" className="popover-row catalogue-connect" onClick={() => setPage('connect')}>

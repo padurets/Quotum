@@ -112,13 +112,16 @@ Codex         api                  idle     started 25m ago · editor
 - **A weekly spending plan.** By default you spend 30 / 25 / 15 / 15 / 10 / 5% on the
   six days after the reset and nothing on the seventh. Each subscription can have its
   own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
+- **Separate subscription limit and budget charts and metrics**, each movable, resizable and
+  hideable. They share one time interval with agent activity; weekly/session switches
+  affect only subscription limits. Budget history opens with balances, with spending in its settings.
 - **A chart of the weekly or the 5-hour windows** over the last hour up to the last 30
   days. Ahead of now it draws the plan, where each window is going (a weekly one nearly
   flat over the hours its subscription usually spends nothing) and the next resets, as
   far as you choose; behind, it marks when limits came back early and when free resets
   were granted. Drag across it to zoom into a burst of work (on a phone, hold a finger
   on it first). ‹ and › move it by half its length; a horizontal touchpad swipe,
-  Shift with the wheel, or Shift-drag moves both charts continuously through time.
+  Shift with the wheel, or Shift-drag moves all three charts continuously through time.
   The open page keeps the history it has read and fetches only missing
   or changed parts as measurements and agent work arrive.
 - **A table with two forecasts:** what the period spent, each subscription's active time
@@ -344,8 +347,8 @@ and rate date. Native observations are saved before a rate read; the shared, per
 rate cache contains no credentials or account information. Historical estimates keep
 their original rate. Without a usable rate, CNY is retained and USD stays unknown or stale.
 All original balances, estimates, rate provenance, funds status and safe provider
-context are retained within the history retention period. Choose **USD** in analytics;
-connecting an account keeps your existing subscription view. Totals are selected by
+context are retained within the history retention period. Budget history and its table
+appear beside subscription analytics. Totals are selected by
 default; components can be added in the chart's settings. The total is not added to its
 components. Reported USD and converted CNY are never summed. Spending and top-up events
 are **unavailable** because the endpoint has no spending counter; a balance change
@@ -387,8 +390,8 @@ Settings show at most ten keys per page. Access turns amber seven days before ex
 expired, revoked or forbidden access is red. Working keys without expiry have no expiry
 mark. Temporary read failures are amber.
 The chart's own settings select
-key usage and remaining limits for analytics. Choose **USD** in the
-shared analytics controls for the money chart and table. Account balances are selected
+key usage and remaining limits for the independent budget chart and table.
+Account balances are selected
 by default; at most 32 logical series are drawn, with visible overflow. The chart uses
 one unit per axis and keeps the same time range and gestures as subscription history.
 Wallet balances have no percentage; only positive key limits do.

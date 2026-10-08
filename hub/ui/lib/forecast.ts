@@ -1,3 +1,4 @@
+import {tableLayout} from './table';
 import {drain, type Preparation} from './prepare';
 import type {ForecastBasis, SeriesForecast, Win} from './types';
 import type {Line} from './lines';
@@ -430,7 +431,7 @@ export const FORECAST_EDGES = 2 * (22 - 10);
 
 /** A table where the chosen columns fit the widget, otherwise a list of rows. */
 export function forecastLayout(columns: readonly ForecastColumn[], width: number): 'table' | 'list' {
-  return columns.reduce((sum, column) => sum + FORECAST_WIDTHS[column], FORECAST_WIDTHS.limit + FORECAST_EDGES) <= width ? 'table' : 'list';
+  return tableLayout(columns.map(column => FORECAST_WIDTHS[column]), width, FORECAST_WIDTHS.limit, FORECAST_EDGES);
 }
 
 function valueAt(...args: Parameters<typeof valuePrepared>): number {return drain(valuePrepared(...args));}

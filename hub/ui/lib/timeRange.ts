@@ -1,7 +1,6 @@
 import {useSyncExternalStore} from 'react';
-import {navigate, onLocation} from './router';
+import {navigate, onLocation, routeLocation} from './router';
 import {clock, day, stamp} from './format';
-import {periodLabel, periodOf} from './periods';
 
 /** A period selected on the chart, in milliseconds. */
 export type TimeRange = {from: number; to: number};
@@ -34,27 +33,27 @@ export function parseTimeRange(search: string): TimeRange | null {
 
 // Tests import the helpers below without a page.
 const page = typeof location !== 'undefined';
-let current = page ? parseTimeRange(location.search) : null;
-let search = page ? location.search : '';
+let current = page ? parseTimeRange(routeLocation().search) : null;
+let search = page ? routeLocation().search : '';
 let board = '';
 const listeners = new Set<() => void>();
 
 function changed() {
-  if (location.search === search) return;
-  search = location.search;
+  if (routeLocation().search === search) return;
+  search = routeLocation().search;
   current = parseTimeRange(search);
   for (const listener of [...listeners]) listener();
 }
 
 function go(params: URLSearchParams, push: boolean) {
   const query = params.toString();
-  const url = `${location.pathname}${query ? `?${query}` : ''}${location.hash}`;
+  const url = `${routeLocation().pathname}${query ? `?${query}` : ''}${routeLocation().hash}`;
   navigate(url, !push);
   changed();
 }
 
 export function setTimeRange(selected: TimeRange | null) {
-  const params = new URLSearchParams(location.search);
+  const params = new URLSearchParams(routeLocation().search);
   if (selected) {
     params.set('from', String(selected.from));
     params.set('to', String(selected.to));
@@ -73,7 +72,7 @@ export function goTo(next: TimeRange | 'live' | null) {
 
 /** Forgets a selection the hub will not read (older than it keeps history), without a step back to it. */
 export function dropTimeRange() {
-  const params = new URLSearchParams(location.search);
+  const params = new URLSearchParams(routeLocation().search);
   params.delete('from');
   params.delete('to');
   go(params, false);
@@ -111,12 +110,6 @@ export function timeRangeLabel({from, to}: TimeRange) {
   if (to - from >= 3 * DAY) return `${day(from)} – ${day(to)}`;
   if (new Date(from).toDateString() === new Date(to).toDateString()) return `${day(from)} ${clock(from)}–${clock(to)}`;
   return `${stamp(from)} – ${stamp(to)}`;
-}
-
-/** The complete answer's own period, independent of a plot preview or pending selection. */
-export function answeredRangeLabel(history: {range: string}) {
-  const [from, to] = history.range.split('-').map(Number);
-  return Number.isFinite(from) && Number.isFinite(to) ? timeRangeLabel({from, to}) : periodLabel(periodOf(history.range));
 }
 
 /**

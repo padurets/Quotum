@@ -1,12 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
-import {moneyView} from '../controls.js';
+import {moneyView, selectMoney} from '../controls.js';
 import type {Cdp} from '../cdp.js';
 
-function moneyPage(broken?: 'blank' | 'scale') {
+function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
   let frame = 0, changedAt: number | null = null, loaded = () => {};
   const selected: {label: string; frame: number}[] = [];
+  let ids: [string, string][] = [['dense-1', 'balance'], ['dense-2', 'balance']];
   const ready = () => changedAt === null ? frame >= 9 : frame - changedAt >= 4;
   const root = {
     dataset: {get drawReady() {return String(ready());}},
@@ -24,15 +25,16 @@ function moneyPage(broken?: 'blank' | 'scale') {
     selected.push({label: textContent, frame}); changedAt = frame;
   }}));
   const context = {
-    localStorage: {getItem: () => '{}', setItem: () => {}},
+    localStorage: {getItem: () => '{}', setItem: (_key: string, value: string) => {ids = JSON.parse(value).money.selected.USD;}},
     Date: {now: () => frame * 16},
     requestAnimationFrame: (callback: (stamp: number) => void) => queueMicrotask(() => callback(++frame * 16)),
     document: {
-      querySelector: (selector: string) => selector === '.history .chart > svg' ? root
-        : selector === '.history.is-loading' ? ready() ? null : {}
-        : selector === '.history .panel-head button' ? {click() {}}
+      querySelector: (selector: string) => selector === '.budget-history .chart > svg' ? root
+        : selector === '.budget-history.is-loading' ? ready() ? null : {}
+        : selector.startsWith('.history.is-loading,') ? broken === 'slow-quota' && frame < 20 ? {} : null
+        : selector === '.budget-history .panel-head button' ? {click() {}}
         : selector.startsWith('[data-series=') ? line : null,
-      querySelectorAll: (selector: string) => selector === '.history [data-series]' ? frame >= 3 ? [line, line] : [] : buttons,
+      querySelectorAll: (selector: string) => selector === '.budget-history [data-series]' ? frame >= 3 ? ids.map(() => line) : [] : buttons,
       getAnimations: () => frame < 8 ? [{playState: 'running', effect: {target: {matches: () => true}}}] : [],
     },
   };
@@ -41,8 +43,21 @@ function moneyPage(broken?: 'blank' | 'scale') {
     send: async (method: string) => {if (method === 'Page.reload') loaded();},
     evaluate: async (source: string) => runInNewContext(source, context),
   } as unknown as Cdp;
-  return {cdp, selected};
+  return {cdp, selected, ids: () => ids, frame: () => frame};
 }
+
+test('the monetary update phase replaces the dense pan selection with its measured account', async () => {
+  const page = moneyPage();
+  await selectMoney(page.cdp, [['measured', 'balance']]);
+  assert.deepEqual(page.ids(), [['measured', 'balance']]);
+  assert.deepEqual(page.selected, [], 'selecting accounts does not switch the financial view');
+});
+
+test('monetary measurements wait for the other reader to finish after selection reload', async () => {
+  const page = moneyPage('slow-quota');
+  await selectMoney(page.cdp, [['measured', 'balance']]);
+  assert.ok(page.frame() >= 22, 'three stable frames start only after quota history is ready');
+});
 
 test('money controls start from a complete drawing and await each prepared view', async () => {
   const page = moneyPage();

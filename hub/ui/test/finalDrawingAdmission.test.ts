@@ -12,7 +12,7 @@ test('actual chart consumers reserve final drawing readiness for the complete ta
     const start = source.indexOf(`<${consumer}\n`), element = source.slice(start, source.indexOf('/>', start) + 2);
     const answered = source.split('\n').find(line => line.startsWith('  const answered = ')) ?? '';
     const selected = {from: 3_600_000, to: 7_200_000};
-    const context = {React, Chart: () => null, Stacks: () => null, timeRangeKey,
+    const context = {React,error:undefined, Chart: () => null, Stacks: () => null, timeRangeKey,
       selected: selected as typeof selected | null, prefs: {range: '24h', kind: 'weekly'}, history: {board: 'b', range: 'old'},
       panning: null as number | null, prepared: {ready: true}, loading: false,
       model: {visible: [], plans: [], forecasts: [], markers: [], cellMs: 60_000, strip: null}, lines: [],

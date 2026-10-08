@@ -183,9 +183,9 @@ async function hub(options: Partial<EventsOptions> = {}, clock?: Clock) {
     const response = await app.inject({
       method,
       url,
-      payload: options.body,
+      payload: method==='POST'&&url.endsWith('/view')&&options.body&&typeof options.body==='object'?{version:2,...options.body}:options.body,
       headers: {
-        ...(method==='POST'&&url.endsWith('/view')?{'If-Match':'"'+directory.viewRevision(url.split('/')[3])+'"'}:{}),
+        ...(method==='POST'&&url.endsWith('/view')?{'X-Quotum-View-Version':'2','If-Match':'"'+directory.viewRevision(url.split('/')[3])+'"'}:{}),
         ...(options.as && cookies.get(options.as) ? {cookie: cookies.get(options.as)!} : {}),
         ...(options.token ? {authorization: `Bearer ${options.token}`} : {}),
         ...options.headers,
@@ -396,13 +396,13 @@ test("the board's own events and each reader's own go apart: its owner and a mem
   // Whose agents' work the board shows changed with it: all of its history reads otherwise.
   assert.deepEqual(
     ofAlice.map(e => e.type),
-    ['card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'history'],
+    ['view', 'card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'history'],
   );
   assert.deepEqual(ofAlice.at(-2)!.data, {sources: [source]});
-  assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source], since: 0});
+  assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source], since: 0, changes: [{source,scope:'quota',since:0}]});
   assert.deepEqual(
     ofBob.map(e => e.type),
-    ['card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'history'],
+    ['view', 'card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'history'],
     "not Bob's: no mine for him",
   );
   for (const event of ofBob) assert.ok(!JSON.stringify(event.data).includes('"role"'), 'no role in what the board tells everyone');
@@ -1155,7 +1155,7 @@ test('all of a board’s history is news when whose agents’ work it shows, or 
   const laptop = (await h.call('GET', '/api/devices', {as: 'alice'})).body[0].id;
   const s = await reading(h, 'alice', board);
   t.after(s.close);
-  const all = {sources: [source], since: 0};
+  const all = {sources: [source], since: 0, changes: [{source,scope:'quota',since:0}]};
   const history = async () => (await s.within()).filter(e => e.type === 'history').map(e => e.data);
 
   await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: {}}, hidden: [`source:${source}`]}});
@@ -1276,4 +1276,21 @@ test('refresh deadlines and terminal expiry reach both boards without polling', 
   assert.deepEqual([ended.request.status, ended.unavailable], ['no_result', 'silent']);
   h.clock.advance(start + 7 * MIN + 200 - h.clock.now());
   assert.equal((await states()).request, null);
+});
+
+test('history coalesces each resource scope independently and keeps monetary news beside a work refresh',async t=>{
+  const clock=new ManualClock(Date.now()),h=await hub({},clock);t.after(()=>{letGo();return h.app.close();});
+  const board=await h.person('alice'),secret=await h.token('alice');await h.measure(secret,clock.now()-MIN);
+  const source=h.store.sources(board)[0].id,s=await reading(h,'alice',board);t.after(s.close);
+  h.events.history(source,clock.now()-MIN,['budget']);h.events.history(source,clock.now()-2*MIN,['quota']);
+  h.events.history(source,clock.now()-MIN/2,['budget']);h.events.history('inaccessible',0,['budget']);
+  clock.advance(config.events.smoothMs);
+  const packet=(await s.within()).find(event=>event.type==='history')!.data;
+  assert.deepEqual(packet.sources,[source]);assert.equal(packet.since,clock.now()-config.events.smoothMs-2*MIN);
+  assert.deepEqual(packet.changes,[{source,scope:'budget',since:clock.now()-config.events.smoothMs-MIN},{source,scope:'quota',since:clock.now()-config.events.smoothMs-2*MIN}]);
+  const since=clock.now()-MIN;h.events.history(source,since,['budget']);
+  const view=h.directory.view(board);h.directory.saveView(board,{...view,hidden:[...view.hidden,'source:'+source]},h.directory.credentials('alice@example.com')!.user.id,clock.now());
+  clock.advance(config.events.smoothMs);
+  const combined=(await s.within()).find(event=>event.type==='history')!.data;
+  assert.deepEqual(combined.changes,[{source,scope:'budget',since},{source,scope:'quota',since:0}]);
 });

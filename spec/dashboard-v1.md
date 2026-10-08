@@ -82,7 +82,7 @@ only the board owner may show another member's hidden card or add a standard wid
 `{kind:"sources", sourceIds:[...]}`, `{kind:"widget", widgetId}`,
 `{kind:"connection", provider, account?: {kind:"new"} | {kind:"existing", id}}`, or `{kind:"replace", credentialId}`.
 Source selections contain one to 100 unique IDs. Standard widgets are `agents`,
-`activity`, `history`, `forecast`. Replacement is personal; the server captures its
+`activity`, `quota-history`, `budget-history`, `quota-table`, `budget-table`. Replacement is personal; the server captures its
 provider, source and access revision. Reusing a request ID with another destination or
 selection returns `409 addition_conflict`. No secret goes into reservation or storage.
 
@@ -131,16 +131,50 @@ with 32-KiB bodies and ten key-verification attempts per minute per user and add
 Status and reservation have a separate bounded request limit. Credentials cannot be
 submitted in a query. Closed panels do not poll or read catalogue/history data.
 
-`POST /api/boards/:board/view` remains owner-only and accepts a full View with a
-64-KiB body limit. It requires `If-Match: "<revision>"`: missing is `428
-view_reload_required`, malformed is `400 invalid_request`, stale is `409 view_conflict`
-with the authorized current `{view, revision}`. Success returns `{view, revision}`.
-Semantic changes increment revision; no-op saves do not. New snapshot and view events
-carry that revision. Older responses cannot replace newer state. The page serializes
-its own saves and flushes a pending save before Add; a conflict is shown, never silently
-reapplied. `enabledWhenEmpty` contains only standard widgets explicitly enabled on an
-empty board; hiding removes the entry. New boards begin with analytics hidden; older
-saved and absent views preserve their defaults and retained widget options.
+`POST /api/boards/:board/view` is owner-only and accepts a full View with
+`version: 2`, up to 76 KiB (77,824 UTF-8 bytes including JSON syntax). The independent
+writer header `X-Quotum-View-Version: 2` is required, even when a previous page echoes
+a received v2 body. Missing or incompatible writer headers and absent/legacy body
+versions return `428 view_reload_required` without mutation; malformed or future body
+versions return `400 invalid_request`. `If-Match: "<revision>"` remains required:
+missing is `428 view_reload_required`, malformed is `400 invalid_request`, and stale
+is `409 view_conflict` with the authorized current `{view, revision}`.
+Success returns `{view, revision}`. Semantic changes increment revision; no-op saves
+do not. Snapshots and view events carry that revision.
+
+The standard widgets are `agents`, `activity`, `quota-history`, `budget-history`,
+`quota-table` and `budget-table`. Each analytics replacement in `shown` is placed;
+`hidden` takes precedence. Unplaced analytics become placed once their resource
+capabilities appear, independently of filters, latest errors or zero balances. Placed
+widgets remain when resources leave. `enabledWhenEmpty` applies only to explicit
+`agents` and `activity` additions. New empty boards have no analytics placed and keep
+activity hidden; any standard widget can be added explicitly to an empty board.
+
+The schema upgrade converts legacy history/table placements atomically. Mixed boards
+keep the quota pair at the old coordinates and append the budget pair after existing
+analytics anchors. Money-only boards give the old coordinates to the budget pair.
+Explicitly hidden legacy panels hide both replacements. Columns follow their family;
+other source settings and geometry are retained. Reader-local modes never participate.
+Runtime capability reconciliation produces one authoritative view/revision pair and
+preserves the previous editor; a concurrent owner save receives the normal conflict.
+
+Widget reservation and run/resume also require the writer header. Existing addition
+items and request bindings remain immutable; legacy receipts carry frozen canonical
+`widgetIds` and report `current.widgets` with their current placement. Replaying a
+completed receipt never restores a subsequently hidden widget. Only a current client
+may resume an interrupted legacy widget addition. Non-widget connection operations
+retain their existing version-independent authorization.
+
+The page serializes its own saves and flushes pending changes before Add. Ordinary
+bodies retain the debounce; bodies above 64 KiB start an ordinary save immediately.
+No oversized body uses keepalive, and outstanding view keepalives share a 64-KiB
+budget. In a browser only, pending/failed oversized changes register the native close
+warning until acknowledged or explicitly discarded; navigation destroying the saver
+waits for these writes. Board/settings navigation keeps the saver and its queue.
+This is best-effort browser protection, not durability through forced termination.
+Electron and Tauri use the same ordinary save limit and queue without a new browser
+warning or change to native close/quit behavior. Save errors retain the existing
+retry/discard flow; conflicts never silently reapply an old full document.
 
 `POST /api/device-onboarding {requestId, boardId}` reserves a private device intent.
 The existing token-create and code-approval routes accept optional `onboardingId`;
@@ -197,12 +231,11 @@ content: a widget never takes fewer rows than the least its content can show (al
 or the table, a chart as tall as it draws by itself, the first agent of the list and how
 many more), so `h` is what the owner asked for, not what shows, and the hub does not check
 it against the content. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
-else is refused. Stored views from before the grid can still contain `order`
-and `sizes`, with an empty layout: the page translates them, including hidden or absent
-widgets. Saving a view requires `layout`; the hub drops the old fields. A save is
-limited to 64 KiB (65,536 UTF-8 bytes), so it fits the page's keepalive request when
-leaving before the debounced save. There is no separate count limit on places; each
-place is validated.
+else is refused. The hub migrates stored pre-grid views and split analytics IDs before
+serving the view with its revision. Saves require version 2, its writer header and
+`layout`, with a 76 KiB UTF-8 body limit. The page uses keepalive only within its
+aggregate 64 KiB budget; larger drafts use immediate serialized ordinary saves.
+There is no separate count limit on places; each place is validated.
 
 In a `snapshot`, `sources` are the cards of the board's sources in its order; `sessions`,
 `cadence`, `refresh` and `forecast` are by source id, for those sources only. `board` is
@@ -659,6 +692,26 @@ Safe provider context and reported period totals are retained in sparse internal
 history with their own observation times and UTC period anchors. This storage does
 not add board events or a new history capability. No raw response, raw key hash,
 creator/workspace id, connection label or credential enters that archive.
+
+`GET /api/history` accepts optional `scope=quota|budget`. Current readers send a
+scope; absent scope retains the previous combined contract. Quota reads contain native
+windows, resets, work and selected catalogue-defined subscription cap meters. Budget
+reads contain only selected financial meters and never execute native-window or agent
+work reads; the native/activity wire fields are empty. Budget scope requires a valid
+`unit`/`meters` pair, including an explicit empty list. Resource-family mismatches return
+`400 invalid_request`; hidden or unauthorized selected sources remain `404 not_found`.
+Quota reads cannot request private monetary conversion. Validated ranges outside readable
+bounds return `400 history_range_invalid` for scoped readers, independently of malformed
+selection errors. Existing cell, tile, meter, response and retention limits remain.
+
+Cache and metadata identities include the read scope. Work-name changes invalidate only
+quota caches; metadata offered by another scope cannot be reused. A `history` event keeps
+its legacy `sources` union and minimum `since`, and adds `changes: [{source, scope, since}]`.
+Each source/scope keeps its own earliest changed time. Native samples, subscription caps
+and credited work affect quota; monetary observations and valuation changes affect budget.
+Work refreshes preserve coalesced budget changes. Clients without `changes` conservatively
+invalidate both relevant scopes. Scope never grants access or adds private rate or owner
+information to a shared event.
 
 `GET /api/history` additionally accepts `unit` and `meters`: a JSON array of at most
 32 logical `[sourceId, meterId]` pairs, sorted and deduplicated. Sources must be visible

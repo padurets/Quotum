@@ -85,7 +85,8 @@ export class Projection {
   boardPart(board: string, lineup = this.lineup(board)): BoardPart | null {
     const found = this.hub.directory.board(board);
     if (!found) return null;
-    return {board: found, view: this.hub.directory.view(board), viewRevision: this.hub.directory.viewRevision(board), lineup: lineup.map(s => s.id)};
+    const {view, revision} = this.hub.directory.viewState(board);
+    return {board: found, view, viewRevision: revision, lineup: lineup.map(s => s.id)};
   }
 
   /**

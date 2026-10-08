@@ -1,8 +1,9 @@
 import {isValidPlan} from './plan.js';
+export type {Place, Layout} from './layout.js';
+import type {Place, Layout} from './layout.js';
 
 /** `h`: the height in rows the board's owner chose; none while a widget is as tall as its content. */
-export type Place = {x: number; y: number; w: number; h?: number};
-export type Layout = {columns: number; places: Record<string, Place>};
+
 
 /**
  * How a board is arranged: the places of its widgets (a card per source, the history
@@ -13,8 +14,9 @@ export type Layout = {columns: number; places: Record<string, Place>};
  * measured or stored.
  */
 export type View = {
+  version: 2;
   layout: Layout;
-  /** Boards arranged before the grid: the page translates these; POST never saves them. */
+  /** Boards arranged before the grid: the hub migrates these; POST never saves them. */
   order?: string[];
   sizes?: Record<string, number>;
   /** Card names the board's owner gave, by source id, instead of the automatic one. */
@@ -36,7 +38,14 @@ export type View = {
   enabledWhenEmpty?: string[];
 };
 
+export const VIEW_VERSION = 2;
+export const VIEW_VERSION_HEADER = 'X-Quotum-View-Version';
+// A pre-grid view may materialize 200 ordered and 200 separately sized places.
+export const VIEW_BODY_LIMIT = 76 * 1024;
+export const VIEW_KEEPALIVE_LIMIT = 64 * 1024;
+
 export const EMPTY_VIEW: View = {
+  version: VIEW_VERSION,
   layout: {columns: 6, places: {}},
   names: {},
   hidden: [],
@@ -80,7 +89,7 @@ const isPlace = (value: unknown): value is Place => {
     [2, 3, 4, 6].includes(p.w as number) &&
     (p.x as number) + (p.w as number) <= COLUMNS &&
     (p.y as number) >= 0 &&
-    (p.y as number) < 100000
+    (p.y as number) < 100004
   );
 };
 const parseLayout = (value: unknown): Layout | null => {
@@ -100,18 +109,19 @@ const isColumns = (value: unknown): value is string[] =>
 export function parseView(body: unknown): View | null {
   if (!body || typeof body !== 'object') return null;
   const input = body as Record<string, unknown>;
+  if (input.version !== VIEW_VERSION) return null;
   const layout = parseLayout(input.layout);
-  const hidden = ids(input.hidden ?? [], LIMITS.widgets);
-  const shown = ids(input.shown ?? [], LIMITS.widgets);
+  const hidden = ids(input.hidden ?? [], LIMITS.widgets + 4);
+  const shown = ids(input.shown ?? [], LIMITS.widgets + 4);
   const windows = ids(input.windows ?? [], LIMITS.windows);
   const names = byId(input.names, isName);
   const plans = byId(input.plans, isValidPlan);
   const unplanned = ids(input.unplanned ?? [], LIMITS.widgets);
   const colors = byId(input.colors, isColor);
-  const columns = byId(input.columns, isColumns);
-  const shownColumns = byId(input.shownColumns, isColumns);
-  const enabledWhenEmpty = ids(input.enabledWhenEmpty ?? [], 4);
-  if (!layout || !hidden || !shown || !windows || !names || !plans || !unplanned || !colors || !columns || !shownColumns || !enabledWhenEmpty || enabledWhenEmpty.some(id => !['agents', 'activity', 'history', 'forecast'].includes(id))) return null;
+  const columns = byId(input.columns, isColumns, LIMITS.widgets + 4);
+  const shownColumns = byId(input.shownColumns, isColumns, LIMITS.widgets + 4);
+  const enabledWhenEmpty = ids(input.enabledWhenEmpty ?? [], 2);
+  if (!layout || !hidden || !shown || !windows || !names || !plans || !unplanned || !colors || !columns || !shownColumns || !enabledWhenEmpty || enabledWhenEmpty.some(id => !['agents', 'activity'].includes(id))) return null;
   const uniqueColumns = (map: Record<string, string[]>) => Object.fromEntries(Object.entries(map).map(([id, list]) => [id, [...new Set(list)]]));
-  return {layout, names, hidden, shown, windows, plans, unplanned, colors, columns: uniqueColumns(columns), shownColumns: uniqueColumns(shownColumns), enabledWhenEmpty};
+  return {version: VIEW_VERSION, layout, names, hidden, shown, windows, plans, unplanned, colors, columns: uniqueColumns(columns), shownColumns: uniqueColumns(shownColumns), enabledWhenEmpty};
 }

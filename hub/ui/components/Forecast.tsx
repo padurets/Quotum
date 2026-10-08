@@ -1,4 +1,6 @@
-import {Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
+import {AnalyticsPanel, AnalyticsNote} from './AnalyticsPanel';
+import {AnalyticsTable, TableSettings, type Cell, type TimedCell} from './AnalyticsTable';
+import {memo, useMemo, useRef} from 'react';
 import {num, rateText} from '../lib/format';
 import {level} from '../lib/quota';
 import {
@@ -7,7 +9,6 @@ import {
   RANGE_COLUMNS,
   announcedOf,
   cellChangesAt,
-  forecastLayout,
   outlook,
   outlookText,
   planCell,
@@ -19,17 +20,15 @@ import {
 } from '../lib/forecast';
 import {planChangesAt} from '../lib/plan';
 import {lineWork, workLeftChangesAt, workText, type WorkColumn} from '../lib/work';
-import {FORECAST, chosenPlanOf, columnShown, planOf, withColumn, withHidden, type Arrange} from '../lib/view';
+import {QUOTA_TABLE, chosenPlanOf, columnShown, planOf, type Arrange} from '../lib/view';
 import {type Line} from '../lib/lines';
 import {subscriptionLinesOf,subscriptionOverflow} from '../lib/subscription';
-import {usePrefs,usePref} from '../lib/prefs';
-import {MoneyTable} from './MoneyAnalytics';
-import {answeredRangeLabel, ofTimeRange} from '../lib/timeRange';
+import {usePrefs} from '../lib/prefs';
+import {ofTimeRange} from '../lib/timeRange';
 import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
-import {hubNow, useClock} from '../lib/clock';
-import {useHistory} from '../lib/history';
+import {hubNow} from '../lib/clock';
+import {quotaHistory, useHistory} from '../lib/history';
 import {t, useLocale, type Key} from '../i18n';
-import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 
 const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', {value: num(spent.value, 1)}) : spent.key === 'unused' ? t('table.unused') : '—');
 
@@ -54,25 +53,6 @@ const HEADINGS: Record<ForecastColumn, {title: Key; range?: Key; hint?: Key}> = 
 
 const heading = (column: ForecastColumn, range: boolean) => t((range && HEADINGS[column].range) || HEADINGS[column].title);
 
-type Cell = {content: ReactNode; title?: string; className?: string};
-
-/**
- * A cell that reads otherwise as time passes (the plan, where the pace leads, the hours of
- * work left): worked out at the hub's time, again at `changesAt`, and marked with what it
- * shows (`time`, as `npm run bench` counts it).
- */
-type TimedCell = {time: string; changesAt: (now: number) => number | null; at: (now: number) => Cell};
-
-/** A cell that changes with time, as a part of its own: rendered when it reads otherwise, not the table. */
-function Timed({cell, render}: {cell: TimedCell; render: (cell: Cell, time: string) => ReactNode}) {
-  const now = useClock(cell.changesAt);
-  return render(cell.at(now), cell.time);
-}
-
-/** A cell of either kind, drawn by `render`: one that changes with time as a part of its own. */
-const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: string) => ReactNode) =>
-  'at' in cell ? <Timed key={key} cell={cell} render={render} /> : <Fragment key={key}>{render(cell)}</Fragment>;
-
 /**
  * The windows of one kind, from what is left to where it leads: what is left and what the
  * plan expects; what the period spent, how long agents worked on each window's
@@ -91,7 +71,7 @@ const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: 
  */
 const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange}) {
   const {history, loading,error} = useHistory();
-  const sources = useNamed(arrange.view.names);
+  const sources = useNamed(arrange.view.names,'quota');
   const lineup = useLineup();
   const forecasts = useForecastsOf(lineup);
   const news = useResetNews();
@@ -104,23 +84,8 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
   const locale = useLocale();
   const lines = useMemo(() => subscriptionLinesOf(history, sources, view, kind), [history, sources, view.windows, view.hidden, view.colors, kind, locale]);
   const modeColumns = range ? RANGE_COLUMNS : LIVE_COLUMNS;
-  const columns = useMemo(() => modeColumns.filter(column => columnShown(view, FORECAST, column)), [modeColumns, view]);
+  const columns = useMemo(() => modeColumns.filter(column => columnShown(view, QUOTA_TABLE, column)), [modeColumns, view]);
   const panel = useRef<HTMLElement>(null);
-  const [layout, setLayout] = useState<'table' | 'list'>('table');
-
-  // Before the first paint: the table does not flash on a narrow widget.
-  useLayoutEffect(() => {
-    const element = panel.current!;
-    const fit = () => {
-      const next = forecastLayout(columns, element.clientWidth);
-      setLayout(before => (before === next ? before : next));
-    };
-    const observer = new ResizeObserver(fit);
-    observer.observe(element);
-    fit();
-    return () => observer.disconnect();
-  }, [columns]);
-
   /** Every cell of a line, by column. */
   const cellsOf = (line: Line): Record<ForecastColumn, Cell | TimedCell> => {
     const source = sources.find(s => s.id === line.sourceId);
@@ -214,112 +179,20 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
     } as Record<ForecastColumn, Cell | TimedCell>;
   };
 
-  // In the list, what is left leads each row; the rest follows under the name, each value with its heading.
-  const lead: ForecastColumn = range ? 'end' : 'now';
-  const details = columns.filter(column => column !== lead);
-
+  const definitions = modeColumns.map(id => ({id, title: heading(id, range), width: FORECAST_WIDTHS[id], hint: HEADINGS[id].hint ? t(HEADINGS[id].hint!) : undefined}));
   return (
-    <section ref={panel} className={`panel forecast ${loading ? 'is-loading' : ''}`} aria-label={t('forecast.title')} aria-busy={loading} data-history-range={history?.range}>
-      <div className="panel-head">
-        <div><h2>{t('forecast.title')}</h2>{history && <span className="answered-range">{t('history.answeredRange', {range: answeredRangeLabel(history)})}</span>}</div>
-        {arrange.owner && (
-          <Popover label={t('forecast.settings')} icon={<SlidersIcon />}>
-            <div className="popover-title">{t('table.columns')}</div>
-            {modeColumns.map(column => (
-              <SwitchRow key={column} on={columns.includes(column)} onChange={on => arrange.update(next => withColumn(next, FORECAST, column, on))}>
-                {heading(column, range)}
-              </SwitchRow>
-            ))}
-            <HideRow onHide={() => arrange.update(next => withHidden(next, FORECAST, true))}>{t('widget.hide')}</HideRow>
-          </Popover>
-        )}
-      </div>
-      {omitted>0&&<p className="drawer-note">{t('history.quotaOverflow',{count:omitted})}</p>}
-      {error&&<p className="form-error">{t('money.historyLimit')}</p>}
-      {!history ? error?null:(
-        <div className="panel-loading">{t('history.loading')}</div>
-      ) : !lines.length ? (
-        <p className="panel-empty">{t('forecast.empty')}</p>
-      ) : layout === 'list' ? (
-        <ul className="forecast-compact">
-          {lines.map(line => {
-            const cells = cellsOf(line);
-            return (
-              <li key={line.key}>
-                <div className="forecast-compact-main">
-                  <span className="swatch" style={{background: line.color}} />
-                  <span className="forecast-compact-name">{line.name}</span>
-                  {columns.includes(lead) &&
-                    shown(lead, cells[lead], (cell, time) => (
-                      <span data-time={time} className={cell.className} title={cell.title}>
-                        <span className="sr-only">{heading(lead, range)}: </span>
-                        {cell.content}
-                      </span>
-                    ))}
-                </div>
-                {details.length > 0 && (
-                  <div className="forecast-compact-details">
-                    {details.map(column =>
-                      shown(column, cells[column], (cell, time) => (
-                        <span data-time={time} title={cell.title}>
-                          {heading(column, range)} <span className={cell.className}>{cell.content}</span>
-                        </span>
-                      )),
-                    )}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <div className="table-wrap">
-          <table>
-            <colgroup>
-              <col />
-              {columns.map(column => (
-                <col key={column} style={{width: FORECAST_WIDTHS[column]}} />
-              ))}
-            </colgroup>
-            <thead>
-              <tr>
-                <th>{t('table.limit')}</th>
-                {columns.map(column => (
-                  <th key={column} title={HEADINGS[column].hint ? t(HEADINGS[column].hint!) : undefined}>
-                    {heading(column, range)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map(line => {
-                const cells = cellsOf(line);
-                return (
-                  <tr key={line.key}>
-                    <td>
-                      <span className="forecast-name">
-                        <span className="swatch" style={{background: line.color}} />
-                        <span>{line.name}</span>
-                      </span>
-                    </td>
-                    {columns.map(column =>
-                      shown(column, cells[column], (cell, time) => (
-                        <td data-time={time} className={cell.className} title={cell.title}>
-                          {cell.content}
-                        </td>
-                      )),
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
+    <AnalyticsPanel ref={panel} className="forecast" title={t('forecast.title')} history={history} loading={loading} error={error} retry={quotaHistory.retry}
+      settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}/>}
+    >
+      {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}
+      {!history ? error ? null : <div className="panel-loading">{t('history.loading')}</div>
+        : !lines.length ? <p className="panel-empty">{t('forecast.empty')}</p>
+        : <AnalyticsTable columns={definitions.filter(column => columns.includes(column.id))}
+            rows={lines.map(line => ({key: line.key, name: line.name, color: line.color, cells: cellsOf(line)}))}
+            name={t('table.limit')} nameWidth={FORECAST_WIDTHS.limit} lead={range ? 'end' : 'now'}/>
+      }
+    </AnalyticsPanel>
   );
 });
 
-export const Forecast=memo(function Forecast({arrange}:{arrange:Arrange}) {
-  const money=usePref('money');return money.unit?<MoneyTable arrange={arrange}/>:<WindowForecast arrange={arrange}/>;
-});
+export const Forecast = WindowForecast;

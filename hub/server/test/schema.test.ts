@@ -137,7 +137,7 @@ test('unreleased declared-account layouts adopt canonical provenance without los
   }
 });
 
-test('board additions append to the integrated currency layout without rewriting views, shares or encrypted access',()=>{
+test('board additions append to the integrated currency layout while analytics migration preserves view settings, shares and encrypted access',()=>{
   const db=new DatabaseSync(':memory:');try {
     for(const step of STEPS.slice(0,15))db.exec(step);db.exec('PRAGMA user_version = 15');
     db.exec("INSERT INTO users VALUES ('owner','upgrade@example.test','Owner','fixture',1); INSERT INTO boards VALUES ('board','Board',0,'owner',1); INSERT INTO members VALUES ('board','owner','owner',1)");
@@ -150,8 +150,12 @@ test('board additions append to the integrated currency layout without rewriting
     migrate(db,2);
     for(const table of ['sources','holders','shares'])assert.deepEqual(db.prepare('SELECT * FROM '+table).all(),before[table]);
     const credential=db.prepare('SELECT * FROM credentials').get()!;assert.equal(credential.access_revision,0);delete credential.access_revision;assert.deepEqual([credential],before.credentials);
-    assert.deepEqual({...db.prepare('SELECT payload,revision,updated_by,updated_at FROM views').get()},{payload,revision:0,updated_by:'owner',updated_at:1});
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,18);
+    const saved=db.prepare('SELECT payload,revision,updated_by,updated_at FROM views').get()!;
+    assert.deepEqual({...saved,payload:undefined},{payload:undefined,revision:1,updated_by:'owner',updated_at:1});
+    const view=JSON.parse(String(saved.payload)); assert.equal(view.version,2);
+    assert.deepEqual(view.names,{legacy:'Kept'}); assert.deepEqual(view.unknown,{kept:true});
+    assert.deepEqual(view.hidden,['source:deepseek:123456789abc']);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,19);
   }finally{db.close();}
 });
 

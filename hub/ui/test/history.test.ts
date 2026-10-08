@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {follow,followPan, HistoryStore} from '../lib/history';
+import {follow,followPan, historyBegins, HistoryStore} from '../lib/history';
+import {HistoryPool} from '../lib/historyPool';
 import {Pan} from '../lib/pan';
 import {covered} from '../lib/historyPlot';
 import {HistoryTile} from '../lib/historyTiles';
@@ -21,7 +22,7 @@ const NOW = Date.parse('2026-09-26T12:23:00Z');
 const flush = async () => {for (let i = 0; i < 5; i++) await Promise.resolve();};
 const empty = (from: number, to: number): Chunk => ({from, to, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []});
 const pending = (h: ReturnType<typeof harness>) => h.reads.filter(r => !r.settled && !r.signal?.aborted);
-function harness(budget?: number, preparations?: Preparations) {
+function harness(budget?: number, preparations?: Preparations, scope?: 'quota'|'budget', pool?: HistoryPool) {
   let now = NOW;
   let elapsed = 0;
   let dropped = 0;
@@ -45,7 +46,7 @@ function harness(budget?: number, preparations?: Preparations) {
     setTimeout: (run, ms) => {const id = {}; timers.set(id, {at: now + ms, run}); return id;},
     clearTimeout: id => {timers.delete(id);},
     dropTimeRange: () => {dropped++;},
-  }, budget);
+  }, budget, scope, pool);
   const advance = async (ms: number) => {
     const end = now + ms;
     for (;;) {
@@ -777,10 +778,10 @@ test('a new epoch discards knowledge of a prefetched head and cold-reads only th
   assert.equal(h.reads.length, 4, 'old epoch buffers outside the new interval remain unknown');
 });
 
-function cooperativeHarness() {
+function cooperativeHarness(pool?: HistoryPool, scope?: 'quota'|'budget') {
   const tasks: (() => void)[] = []; let clock = 0;
   const preparations = new Preparations({now: () => clock++, post: run => tasks.push(run)});
-  const h = harness(undefined, preparations);
+  const h = harness(undefined, preparations, scope, pool);
   const tick = () => tasks.shift()?.();
   const finish = async () => {for (let i = 0; i < 10_000; i++) {while (tasks.length) tick(); await flush(); if (!tasks.length) return;} throw new Error('preparation did not quiesce');};
   const internals = h.store as unknown as {responses: Map<object, {started: boolean}>; reservations: Map<string, object>; flights: Set<object>; grids: Map<number, Map<number, {readFrom: number; readTo: number; writeSeq: number}>>};
@@ -1198,4 +1199,204 @@ test('a custom 31-day range keeps its grid and exact accounting through a pan an
   h.store.pan({token: 2, length, ...origin, direction: 1}); await flush();
   h.store.choose('30d', origin); h.store.endPan(true); await flush(); assert.equal(h.reads.length, count);
   h.store.close();
+});
+
+test('two scoped readers share transport slots, prioritize both visible ranges and release cancelled owners', async () => {
+  const pool=new HistoryPool(),q=harness(undefined,undefined,'quota',pool),b=harness(undefined,undefined,'budget',pool);
+  b.store.setMeters({unit:'USD',ids:[['s','balance']]});
+  await Promise.all([q.start(),b.start()]);
+  assert.equal(pool.activeFlights,2);assert.equal(q.reads.length,1);assert.equal(b.reads.length,1);
+  q.store.choose('7d',null);q.store.choose('30d',null);await flush();
+  assert.equal(pool.activeFlights,2);assert.equal(q.reads.length,1,'the same family cannot take another foreground slot');
+  await q.reads[0].answer();await q.advance(300);
+  assert.equal(q.reads.at(-1)!.to-q.reads.at(-1)!.from>24*H,true);
+  b.store.close();assert.equal(b.reads[0].signal?.aborted,true);
+  await b.reads[0].answer();assert.equal(b.store.get().history,null);
+  q.store.close();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+});
+
+test('an incoming family cannot evict the other visible frame or publish an oversized response',async()=>{
+  const pool=new HistoryPool(40_000),q=harness(undefined,undefined,'quota',pool),b=harness(undefined,undefined,'budget',pool);
+  b.store.setMeters({unit:'USD',ids:[['s','balance']]});
+  await q.start();await q.reads[0].answer();const retained=q.store.get().history;
+  assert.ok(retained);await b.start();
+  const read=b.reads[0],chunks:Chunk[]=[];
+  for(let from=read.from;from<read.to;){const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell));
+    chunks.push({...empty(from,to),meterSeries:Array.from({length:24},(_,i)=>({source:'s',meter:'m'+i,kind:'balance' as const,unit:'USD',semantics:null,cells:[[0,'1000000000000000000000000000000000000','0','0',0]]}))});from=to;}
+  await read.answer({chunks});
+  assert.equal(b.store.get().error,'history_limit');assert.equal(b.store.get().history,null);
+  assert.equal(q.store.get().history,retained);assert.ok(pool.estimatedBytes<=pool.budget);assert.equal(pool.activeFlights,0);
+  b.store.setMeters({unit:'USD',ids:[]});await flush();
+  assert.equal(b.store.get().error,undefined);assert.ok(b.store.get().history);assert.equal(b.reads.length,1,'empty selection completes locally');
+  q.store.close();b.store.close();
+});
+
+test('every preparation slice accounts for private tile growth, including cancellation and rejection',async()=>{
+  const prototype = HistoryTile.prototype as unknown as {mergePrepared(chunk: Chunk, known: HistoryAnswer['known']): Generator<void, void>};
+  const original = prototype.mergePrepared;
+  for (const outcome of ['complete', 'limit', 'cancel'] as const) {
+    const pool = new HistoryPool(outcome === 'complete' ? 1_000_000 : 400_000);
+    const q = harness(undefined, undefined, 'quota', pool), b = cooperativeHarness(pool, 'budget');
+    const quotaSources = Array.from({length: 16}, (_, i) => `q${i}`), moneySources = Array.from({length: 32}, (_, i) => `s${i}`);
+    const known = {work: 0, sources: Object.fromEntries([...quotaSources, ...moneySources].map(source => [source, 0]))};
+    const chunks = (read: typeof q.reads[number], money: boolean) => {
+      const result: Chunk[] = [], cut = Math.min(read.to, cellStart(NOW + CLOCK_TOLERANCE_MS, read.cell) + read.cell);
+      for (let from = read.from; from < cut;) {
+        const to = Math.min(cut, tileEnd(tileOf(from, read.cell), read.cell));
+        result.push({...empty(from, to), ...(money ? {meterSeries: moneySources.map(source => ({source, meter: 'balance', kind: 'balance' as const, unit: 'USD', semantics: null,
+          cells: Array.from({length: (to - from) / read.cell}, (_, i): NonNullable<Chunk['meterSeries']>[number]['cells'][number] => [i, '10000000', '0', '0', read.cell]),
+        }))} : {series: quotaSources.flatMap(source => ['session', 'weekly'].map(window => ({source, window, hold: read.cell, open: 80, cells: [[0, 80, 0, 0] as [number, number, number, number]]})))})});
+        from = to;
+      }
+      return result;
+    };
+    const candidates = new Map<HistoryTile, HistoryTile>();
+    prototype.mergePrepared = function* (this: HistoryTile, chunk, metadata) {
+      const base = b.internals.grids.get(this.cell)?.get(tileOf(this.from, this.cell)) as HistoryTile | undefined;
+      if (base) candidates.set(base, this);
+      yield* original.call(this, chunk, metadata);
+    };
+    try {
+      q.store.choose('1h', null); q.store.open('b'); q.store.hello('run');
+      q.store.snapshot(quotaSources, quotaSources.flatMap(source => ['session', 'weekly'].map(window => `${source} ${window}`)));
+      await flush(); await q.reads[0].answer({known, chunks: chunks(q.reads[0], false)});
+      const retained = q.store.get().history; assert.equal(retained?.series.length, 32);
+      b.store.choose('1h', null); b.store.setMeters({unit: 'USD', ids: moneySources.map(source => [source, 'balance'])});
+      b.store.open('b'); b.store.hello('run'); b.store.snapshot(moneySources); await flush();
+      await b.reads[0].answer({known, chunks: chunks(b.reads[0], true)});
+      let slices = 0, growingSlices = 0, canceled = false;
+      while (b.tasks.length) {
+        b.tick(); slices++;
+        const retainedBytes = q.store.estimatedBytes + b.store.estimatedBytes;
+        const growth = b.internals.responses.size ? [...candidates].reduce((sum, [base, copy]) => sum + Math.max(0, copy.bytes - base.bytes), 0) : 0;
+        assert.ok(pool.estimatedBytes >= retainedBytes + growth, `${outcome}: a yielded private tile must have a reservation`);
+        assert.ok(pool.estimatedBytes <= pool.budget, `${outcome}: shared estimate exceeded the budget`);
+        assert.equal(q.store.get().history, retained, 'the other family keeps its complete frame');
+        if (growth) growingSlices++;
+        if (outcome === 'cancel' && growth && !canceled) {
+          b.store.close(); canceled = true;
+          assert.equal(pool.estimatedBytes, q.store.estimatedBytes, 'cancel releases private growth and empty headers');
+        }
+        await flush();
+      }
+      assert.ok(slices >= (outcome === 'cancel' ? 1 : 3) && growingSlices > 0, `${outcome}: the test observes actual partially prepared tiles`);
+      assert.equal(pool.activeFlights, 0);
+      if (outcome === 'limit') {assert.equal(b.store.get().error, 'history_limit'); assert.equal(b.store.get().history, null);}
+      if (outcome === 'complete') {assert.equal(b.store.get().error, undefined); assert.equal(b.store.get().history?.meterSeries?.length, 32);}
+      if (outcome === 'cancel') assert.ok(canceled);
+    } finally {prototype.mergePrepared = original; q.store.close(); b.store.close();}
+  }
+});
+
+test('an incoming empty tile header is admitted before yielding and discarded if it cannot fit',async()=>{
+  const pool = new HistoryPool(2_544), q = harness(undefined, undefined, 'quota', pool), b = cooperativeHarness(pool, 'budget');
+  q.store.choose('1h', null); b.store.choose('1h', null); b.store.setMeters({unit: 'USD', ids: [['s', 'balance']]});
+  try {
+    await q.start(); await q.reads[0].answer();
+    const retained = q.store.get().history; assert.ok(retained); assert.equal(pool.estimatedBytes, pool.budget);
+    await b.start(); assert.equal(pool.estimatedBytes, pool.budget, 'planning a read does not allocate a tile');
+    await b.reads[0].answer(); assert.equal(pool.estimatedBytes, pool.budget, 'a queued answer does not allocate a tile');
+    while (b.tasks.length) {b.tick(); assert.ok(pool.estimatedBytes <= pool.budget); await flush();}
+    assert.equal(b.store.get().error, 'history_limit'); assert.equal(b.store.estimatedBytes, 0);
+    assert.equal(q.store.get().history, retained); assert.equal(pool.activeFlights, 0);
+  } finally {q.store.close(); b.store.close();}
+});
+
+test('scoped failures preserve the shared range except an explicit unreadable-range response',async()=>{
+  const pool=new HistoryPool(),q=harness(undefined,undefined,'quota',pool),b=harness(undefined,undefined,'budget',pool);
+  b.store.setMeters({unit:'USD',ids:[['s','balance']]});
+  const range={from:NOW-4*H,to:NOW-3*H};q.store.choose('24h',range);b.store.choose('24h',range);
+  await Promise.all([q.start(),b.start()]);await q.reads[0].answer();const retained=q.store.get().history;
+  await b.reads[0].fail(new ApiError(400,'invalid_request'));
+  assert.equal(b.dropped(),0);assert.equal(b.store.get().error,'history_failed');assert.equal(q.store.get().history,retained);
+  b.store.retry();await flush();await b.reads[1].fail(new ApiError(400,'history_range_invalid'));assert.equal(b.dropped(),1);
+  q.store.lineup([]);assert.equal(q.store.get().history,null,'removed sources disappear before their replacement answer');
+  q.store.close();b.store.close();
+});
+
+test('empty budget selection is a complete frame without transport or retry loops',async()=>{
+  const b=harness(undefined,undefined,'budget',new HistoryPool());
+  b.store.setMeters({unit:'USD',ids:[]});await b.start();assert.ok(b.store.get().history);assert.equal(b.store.get().loading,false);
+  b.store.news(NOW);b.store.choose('7d',null);await flush();assert.equal(b.reads.length,0);assert.equal(b.store.get().history?.range,'7d');b.store.close();
+});
+
+test('family followers invalidate only their evidence and preserve selections belonging to another board',async()=>{
+  const before=prefs(),pool=new HistoryPool(),q=harness(undefined,undefined,'quota',pool),b=harness(undefined,undefined,'budget',pool),page=createStore(reduce,INITIAL);
+  const stopQ=follow(q.store,page),stopB=follow(b.store,page);
+  const selected:{USD:[string,string][]}={USD:[['wallet','balance'],['another-board','balance']]};
+  setPrefs({money:{unit:'USD',view:'balance',selected}});
+  const base={plan:'',resets:null,owners:[],error:null,successAt:NOW,stale:false,staleAfterMs:10*M,measureIntervalMs:null};
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:EMPTY_VIEW,historyStart:0,sources:[
+    {...base,id:'s',provider:'codex',windows:[{id:'w',kind:'weekly',label:null,used:20,remaining:80,resetAt:null,minutes:10080}]},
+    {...base,id:'wallet',provider:'openrouter',windows:[],meters:[{id:'balance',kind:'balance',unit:'USD',amount:'10000000',at:NOW,staleAfterMs:10*M,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null}]}
+  ],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
+  try {
+    page.dispatch({type:'board-open',id:'b'});page.dispatch({type:'hub',event:{type:'hello',data:{epoch:'run'}}});page.dispatch({type:'hub',event:{type:'snapshot',data:snapshot}});await flush();
+    assert.equal(q.reads.length,1);assert.equal(b.reads.length,1);await q.reads[0].answer();await b.reads[0].answer();
+    page.dispatch({type:'hub',event:{type:'history',data:{sources:['s'],since:NOW,changes:[{source:'s',scope:'quota',since:NOW}]}}});await flush();
+    assert.equal(q.reads.length,2);assert.equal(b.reads.length,1);await q.reads[1].answer();
+    page.dispatch({type:'hub',event:{type:'history',data:{sources:['wallet'],since:NOW,changes:[{source:'wallet',scope:'budget',since:NOW}]}}});await flush();
+    assert.equal(q.reads.length,2);assert.equal(b.reads.length,2);
+    assert.deepEqual(prefs().money.selected,selected,'admission filters do not destroy saved choices');
+    page.dispatch({type:'board-close'});assert.equal(b.reads[1].signal?.aborted,true);assert.equal(q.store.get().history,null);
+  }finally{stopQ();stopB();q.store.close();b.store.close();setPrefs(before);}
+});
+
+test('a second family foreground preempts speculation while retaining the first visible request',async()=>{
+  const pool=new HistoryPool(),b=harness(undefined,undefined,'budget',pool);
+  const owner={estimatedBytes:0,evictionCandidates:()=>[]},visible={role:'visible' as const},ahead={role:'ahead' as const};
+  let cancelled=false,started=0;pool.register(owner);
+  pool.request(owner,visible,()=>started++,()=>{throw new Error('a visible request was preempted');});
+  pool.request(owner,ahead,()=>started++,()=>{cancelled=true;pool.release(ahead);});
+  await flush();assert.equal(started,2);assert.equal(pool.activeFlights,2);
+  b.store.setMeters({unit:'USD',ids:[['s','balance']]});await b.start();
+  assert.equal(cancelled,true);assert.equal(pool.isActive(visible),true);assert.equal(b.reads.length,1);assert.equal(pool.activeFlights,2);
+  b.store.close();pool.release(visible);assert.equal(pool.activeFlights,0);
+});
+
+test('cross-family eviction resumes a pending complete projection without another network event',async()=>{
+  const pool=new HistoryPool(),h=cooperativeHarness(pool,'quota');
+  const first={from:NOW-5*H,to:NOW-4*H},second={from:NOW-3*H,to:NOW-2*H};
+  h.store.choose('1h',first);await h.start();await h.reads[0].answer();await h.finish();
+  h.store.choose('1h',second);await h.advance(300);await flush();await pending(h)[0].answer();await h.finish();
+  assert.equal(h.store.get().history?.range,`${second.from}-${second.to}`);
+  const candidate=h.store.evictionCandidates()[0];assert.ok(candidate,'the previous nonvisible range can be evicted');
+  const final={from:second.from+5*M,to:second.to-5*M};
+  h.store.choose('1h',final);await h.advance(300);await flush();
+  assert.ok(h.tasks.length,'final totals are being cooperatively prepared');
+  const incoming={role:'visible' as const};
+  assert.ok(pool.reserve(incoming,pool.budget-pool.estimatedBytes+candidate.bytes));
+  await h.finish();
+  assert.equal(h.store.get().history?.range,`${final.from}-${final.to}`);
+  assert.equal(h.reads.length,2,'eviction of unrelated cached cells requires no data reread');
+  pool.release(incoming);h.store.close();
+});
+
+
+test('navigation uses fresh boundary metadata from either reader and discards previous contexts', async () => {
+  const quota = harness(undefined, undefined, 'quota'), budget = harness(undefined, undefined, 'budget');
+  const readers = [quota, budget], snapshot = NOW - 2 * H;
+  const begins = (board = 'b', initial = snapshot) => historyBegins(board, initial, readers.map(h => h.store.getBoundary()));
+  let changes = 0;
+  const stops = readers.map(h => h.store.subscribeBoundary(() => changes++));
+  try {
+    for (const h of readers) {h.store.open('b'); h.store.hello('run'); h.store.snapshot(['s'], ['s w'], snapshot);}
+    await flush();
+    assert.equal(begins(), snapshot);
+    await quota.reads[0].answer({historyStart: snapshot});
+    await budget.reads[0].answer({now: NOW + 1, historyStart: NOW - 48 * H});
+    assert.equal(begins(), NOW - 48 * H, 'budget-only backfill supersedes the initial quota answer and snapshot');
+    quota.store.news(0); await flush();
+    await pending(quota)[0].answer({now: NOW + 2, historyStart: NOW - 72 * H});
+    assert.equal(begins(), NOW - 72 * H, 'quota backfill also expands navigation');
+    budget.store.news(0); await flush();
+    await pending(budget)[0].answer({now: NOW + 3, historyStart: NOW - 24 * H});
+    assert.equal(begins(), NOW - 24 * H, 'fresh retention metadata can move the boundary forward');
+    assert.equal(begins('other', NOW), NOW, 'another board cannot borrow old metadata before its readers switch');
+    for (const h of readers) h.store.snapshot(['s'], ['s w'], NOW - H);
+    assert.equal(begins('b', NOW - H), NOW - H, 'a new snapshot invalidates older answers');
+    for (const h of readers) {h.store.open('other'); h.store.hello('next-run');}
+    assert.ok(readers.every(h => h.store.getBoundary() === null));
+    assert.ok(changes >= 8, 'metadata wakes navigation independently of complete totals');
+  } finally {for (const stop of stops) stop(); for (const h of readers) h.store.close();}
 });

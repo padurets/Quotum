@@ -1,3 +1,4 @@
+import {migrateAnalyticsViews} from './analyticsView.js';
 import type {DatabaseSync} from 'node:sqlite';
 import {adoptDeclaredLayout} from './legacyDeclared.js';
 
@@ -307,6 +308,8 @@ export const STEPS = [
   INSERT INTO meta(key,value) SELECT 'currencyRateSequence:'||owner_id,CAST(max(owner_sequence) AS TEXT)
     FROM currency_rate_changes GROUP BY owner_id;
   `,
+  // 19 — independently placed quota and budget analytics, with frozen addition targets.
+  `ALTER TABLE board_additions ADD COLUMN widget_targets TEXT;`,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;
@@ -324,6 +327,7 @@ export function migrate(db: DatabaseSync, now: number) {
   db.exec('BEGIN IMMEDIATE');
   try {
     for (const step of STEPS.slice(adoptDeclaredLayout(db,current))) db.exec(step);
+    if (current < 19) migrateAnalyticsViews(db, now);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('historyStart', String(now));
     // Before this, how agents worked is not known (the sums of layout 2 are gone), rather than none worked.

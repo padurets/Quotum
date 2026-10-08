@@ -1,6 +1,6 @@
 import type {Store} from '../server/store/store.js';
 import type {Directory} from '../server/store/directory.js';
-import type {Stand} from './setup.js';
+import {shareConnectorScene, type Stand} from './setup.js';
 import {ConnectorTransport} from '../server/connectors/transport.js';
 import {Credentials,SecretKey,startSecrets} from '../server/secrets/index.js';
 import {decodeZai,mapZai,zai} from '../server/connectors/zai.js';
@@ -64,7 +64,7 @@ export async function seedQuotas(store:Store,directory:Directory,stand:Stand) {
       store.db.prepare('UPDATE credentials SET last_error=?,unreadable=? WHERE id=?').run(code,scene.id==='storage-unavailable'?1:0,connected.id);store.fail(source,code);
     }
     const personal=directory.boards(owner.id).find(b=>b.personal)!,view=directory.view(personal.id);view.names[source]=`z.ai ${scene.id}`;directory.saveView(personal.id,view,owner.id,now);
-    for(const board of directory.boards(owner.id).filter(b=>!b.personal))store.share(board.id,source,owner.id,now);
+    shareConnectorScene(store,stand,source,owner.id,now);
   }
   transport.close();
   if(stand.set.id==='quotas') {

@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import type {Store} from '../server/store/store.js';
 import type {Directory} from '../server/store/directory.js';
-import type {Stand} from './setup.js';
+import {shareConnectorScene, type Stand} from './setup.js';
 import type {Meter,KeyPart} from '../server/domain/meters.js';
 import type {Provider} from '../server/domain/providers.js';
 
@@ -49,7 +49,7 @@ export async function seedMoney(store:Store,directory:Directory,stand:Stand) {
     const view=directory.view(personal.id);
     view.names[source]='OpenRouter '+scene.id;
     directory.saveView(personal.id,view,owner.id,now);
-    for(const board of directory.boards(owner.id).filter(b=>!b.personal))store.share(board.id,source,owner.id,now);
+    shareConnectorScene(store,stand,source,owner.id,now);
   }
   if(stand.set.id==='money') {
     const personal=directory.boards(owner.id).find(board=>board.personal)!;

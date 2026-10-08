@@ -48,6 +48,7 @@ export async function profilePanning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>)
     console.error('pan diagnostic ' + JSON.stringify({top, preparation, trace: [...trace].sort((a, b) => b[1].ms - a[1].ms).slice(0, 16)}));
   };
   const measured = {
+    on: cdp.on.bind(cdp),
     evaluate: cdp.evaluate.bind(cdp),
     send: async <T = unknown>(method: string, params: object = {}): Promise<T> => {
       const rate = (params as {rate?: number}).rate;

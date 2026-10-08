@@ -33,6 +33,12 @@ import {
 import {emailOf, PASSWORD} from './access.js';
 export {emailOf, PASSWORD} from './access.js';
 
+/** Connector scenes belong to the mixed team board; other boards keep their catalogue state. */
+export function shareConnectorScene(store: Store, stand: Stand, source: string, owner: string, at: number) {
+  const team = stand.boards.get('team');
+  if (team) store.share(team, source, owner, at);
+}
+
 /** A set brought up on a hub: who is who there, by the catalogue's names. */
 export type Stand = {
   set: DemoSet;
@@ -181,16 +187,17 @@ export function viewOf(stand: Stand, key: string) {
   const shown = cards(set).filter(card => (personal ? holdersOf(set, card).includes(key) : !!card.on?.[key]));
   const board = boards(set).find(b => b.id === key) ?? people(set).find(p => p.id === key);
   const view = {
+    version: 2 as const,
     layout: {columns: COLUMNS, places: {}} as Layout,
     names: {} as Record<string, string>,
     hidden: [] as string[],
-    shown: board?.agents ? ['agents'] : [],
+    shown: [...(board?.agents ? ['agents'] : []),...(shown.length?['quota-history','quota-table']:[])],
     windows: [] as string[],
     plans: {} as Record<string, number[]>,
     unplanned: [] as string[],
     colors: {} as Record<string, string>,
     columns: {},
-    shownColumns: board?.kind === 'board' && board.tableColumns ? {forecast: board.tableColumns} : {},
+    shownColumns: board?.kind === 'board' && board.tableColumns ? {'quota-table': board.tableColumns} : {},
   };
   let cursor = 0;
   let rank = 0;
@@ -213,8 +220,8 @@ export function viewOf(stand: Stand, key: string) {
   }
   view.layout.places.agents = board?.agentsPlace ?? place(COLUMNS);
   rank = cursor = 0;
-  for (const id of ['activity', 'history', 'forecast'] as const) {
-    const auto = place(id === 'forecast' ? board?.forecastWidth ?? COLUMNS : COLUMNS);
+  for (const id of ['activity', 'quota-history', 'quota-table'] as const) {
+    const auto = place(id === 'quota-table' ? board?.forecastWidth ?? COLUMNS : COLUMNS);
     view.layout.places[id] = board?.places?.[id] ?? auto;
   }
   return view;

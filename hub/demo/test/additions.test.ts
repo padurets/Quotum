@@ -17,6 +17,7 @@ import {Cadence} from '../../server/cadence.js';
 import {Pairing} from '../../server/pairing.js';
 import {ResetFeed} from '../../server/resets.js';
 import {Setup} from '../../server/setup.js';
+import {BUDGET_WIDGETS, QUOTA_WIDGETS, widgetVisible} from '../../server/domain/widgets.js';
 
 const secret = 'SYNTHETIC_PROVIDER_KEY_0123456789';
 async function harness(extended = true) {
@@ -39,7 +40,7 @@ async function harness(extended = true) {
   const cookies = new Map<string, string>();
   for (const user of [owner, member]) {const token = newSecret('qt_s'); directory.createSession(token, user.id, Date.now(), 60_000); cookies.set(user.id, 'quotum_session=' + token);}
   const app = await buildApp({store, directory, credentials, ingest: new Ingest(store, directory, new Duty(), new Cadence()), pairing: new Pairing(directory), resets: new ResetFeed(undefined, () => {}), setup: new Setup(false, null), local: null}, extended ? demoAdditionControls : undefined);
-  const call = (method: 'GET' | 'POST', url: string, payload?: object, user = owner.id, origin: string | null = 'http://localhost') => app.inject({method, url, payload, headers: {cookie: cookies.get(user)!, ...(origin ? {origin} : {})}});
+  const call = (method: 'GET' | 'POST', url: string, payload?: object, user = owner.id, origin: string | null = 'http://localhost') => app.inject({method, url, payload, headers: {'X-Quotum-View-Version':'2',cookie: cookies.get(user)!, ...(origin ? {origin} : {})}});
   const reserve = async (item: object, user = owner.id, boardId: string | null = board.id) => (await call('POST', '/api/additions', {requestId: randomUUID(), boardId, item}, user)).json();
   const close = async () => {await app.close(); store.close(); transport.close(); rmSync(dir, {recursive: true, force: true});};
   return {store, directory, credentials, owner, member, board, call, reserve, close};
@@ -99,12 +100,41 @@ test('members add only their sources; an empty analytic does not expose the othe
   const stolen = await h.reserve({kind: 'sources', sourceIds: [source]}, h.member.id);
   assert.equal(stolen.error, 'addition_permission');
   assert.equal(h.store.sources(h.board.id).length, 0);
-  const widget = await h.reserve({kind: 'widget', widgetId: 'history'});
+  const widget = await h.reserve({kind: 'widget', widgetId: 'quota-history'});
   assert.equal((await h.call('POST', '/api/additions/' + widget.id + '/run', {})).json().state, 'complete');
-  assert.deepEqual(h.directory.view(h.board.id).enabledWhenEmpty, ['history']);
+  assert.deepEqual(h.directory.view(h.board.id).shown, ['quota-history']);
   const memberWidget = await h.reserve({kind: 'widget', widgetId: 'agents'}, h.member.id);
   assert.equal(memberWidget.error, 'addition_permission');
-  assert.deepEqual(h.directory.view(h.board.id).enabledWhenEmpty, ['history']);
+  assert.deepEqual(h.directory.view(h.board.id).shown, ['quota-history']);
+});
+
+for (const first of ['codex', 'deepseek'] as const) test(`a new board waits for its first ${first} source before placing only that analytics pair`, async t => {
+  const h = await harness(); t.after(h.close);
+  const pair = first === 'codex' ? QUOTA_WIDGETS : BUDGET_WIDGETS;
+  const other = first === 'codex' ? BUDGET_WIDGETS : QUOTA_WIDGETS;
+  const source = h.store.source(first, 'first-source', Date.now());
+  h.store.hold(source, h.owner.id, Date.now());
+  // Owning the source on the personal board does not place it on a new shared board.
+  const snapshot = async () => (await h.call('GET', '/api/overview?board=' + h.board.id)).json();
+  const before = await snapshot();
+  assert.equal(before.sources.length, 0);
+  for (const id of [...pair, ...other]) assert.equal(widgetVisible(before.view, id, 0), false);
+  const operation = await h.reserve({kind: 'sources', sourceIds: [source]});
+  assert.equal((await h.call('POST', '/api/additions/' + operation.id + '/run', {})).json().state, 'complete');
+  const after = await snapshot();
+  assert.equal(after.sources.length, 1);
+  for (const id of pair) assert.equal(widgetVisible(after.view, id, 1), true);
+  for (const id of other) assert.equal(widgetVisible(after.view, id, 1), false);
+  assert.deepEqual((await snapshot()).view, after.view, 'reload preserves the same placement');
+  const hidden = {...after.view, hidden: [...after.view.hidden, pair[0]]};
+  h.directory.saveView(h.board.id, hidden, h.owner.id, Date.now());
+  const second = h.store.source(first === 'codex' ? 'deepseek' : 'codex', 'second-source', Date.now());
+  h.store.hold(second, h.owner.id, Date.now());
+  const next = await h.reserve({kind: 'sources', sourceIds: [second]});
+  assert.equal((await h.call('POST', '/api/additions/' + next.id + '/run', {})).json().state, 'complete');
+  const mixed = await snapshot();
+  for (const id of other) assert.equal(widgetVisible(mixed.view, id, 2), true);
+  assert.equal(widgetVisible(mixed.view, pair[0], 2), false, 'a hidden widget is not restored by another family');
 });
 
 test('synthetic device discovery provides nothing until its selected source is added', async t => {
@@ -129,10 +159,10 @@ test('the add catalogue contains only eligible absent or hidden widgets', async 
   const read = async (user = h.owner.id) => (await h.call('GET', '/api/boards/' + h.board.id + '/catalogue', undefined, user)).json();
   assert.deepEqual((await read()).sources.map((source: {id: string}) => source.id), [own]);
   const view = h.directory.view(h.board.id);
-  h.directory.saveView(h.board.id, {...view, hidden: ['source:' + shared, 'history']}, h.owner.id, Date.now());
+  h.directory.saveView(h.board.id, {...view, hidden: ['source:' + shared, 'quota-history']}, h.owner.id, Date.now());
   const owner = await read();
   assert.deepEqual(owner.sources.map((source: {id: string; action: string}) => [source.id, source.action]), [[own, 'add'], [shared, 'show']]);
-  assert.deepEqual(owner.widgets.map((widget: {id: string}) => widget.id), ['agents', 'history']);
+  assert.deepEqual(owner.widgets.map((widget: {id: string}) => widget.id), ['agents', 'quota-history', 'budget-history', 'budget-table']);
   const member = await read(h.member.id);
   assert.deepEqual(member.sources.map((source: {id: string; action: string}) => [source.id, source.action]), [[shared, 'show']]);
   assert.deepEqual(member.widgets, []);

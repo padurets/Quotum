@@ -18,7 +18,7 @@ export type KeyPart = {
 export type QuotaIssue = 'empty' | 'unsupported' | 'invalid' | 'missing';
 export type QuotaStatus = {observedAt: number; generation: 'credit' | null; complete: boolean; issue: QuotaIssue | null};
 export type QuotaObservation = {observedAt: number; receivedIds: string[]; quota: QuotaStatus; plan: string};
-export const QUOTA_IDS = ['quota:credit:5h', 'quota:credit:week'] as const;
+export {QUOTA_IDS} from './providers.js';
 export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; inventoryAt?:number; uncapped?: string[]; balanceStatus?:BalanceStatus;quota?:QuotaStatus;plan?:string};
 export type Reading = Omit<Meter, 'stale'> & {previousAt: number | null};
 export type MeterSpan = {from: number; to: number; staleAfterMs: number;interruptedAt?:number;holdUntil?:number|null};

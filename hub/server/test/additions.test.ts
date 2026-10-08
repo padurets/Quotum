@@ -130,7 +130,7 @@ test('verification cannot commit with a stale encryption key after concurrent ro
 });
 
 test('ordinary maintenance removes old completed and expired addition and device receipts',async t=>{
-  const h=fixture();t.after(h.close);const completed=h.reserve({kind:'widget',widgetId:'history'},h.owner.id);
+  const h=fixture();t.after(h.close);const completed=h.reserve({kind:'widget',widgetId:'quota-history'},h.owner.id);
   await h.additions.run(h.owner.id,completed.id,undefined,()=>true);h.reserve();
   const onboarding=new DeviceOnboarding(h.store,h.directory,h.additions);onboarding.reserve(h.owner.id,randomUUID(),h.board.id);
   h.directory.prune(Date.now()+40*86_400_000);

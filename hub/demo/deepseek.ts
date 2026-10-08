@@ -1,6 +1,6 @@
 import type {Store} from '../server/store/store.js';
 import type {Directory} from '../server/store/directory.js';
-import type {Stand} from './setup.js';
+import {shareConnectorScene, type Stand} from './setup.js';
 import {deepSeekMeasurement} from '../server/connectors/deepseek.js';
 import type {ExchangeRates} from '../server/domain/currency.js';
 
@@ -51,7 +51,7 @@ export async function seedDeepSeek(store:Store,directory:Directory,stand:Stand) 
       store.db.prepare('UPDATE credentials SET last_error=? WHERE source_id=?').run(code,source);
     }
     const view=directory.view(personal.id);view.names[source]='DeepSeek '+scene.id;directory.saveView(personal.id,view,owner.id,now);
-    for(const board of directory.boards(owner.id).filter(b=>!b.personal))store.share(board.id,source,owner.id,now);
+    shareConnectorScene(store,stand,source,owner.id,now);
   }
   // Another person may use the same private account name without sharing its identity.
   const other=[...stand.people.values()][1];
