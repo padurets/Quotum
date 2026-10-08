@@ -162,12 +162,14 @@ export function WidgetCatalogue({
     initialFocus.current = true;
     list.current?.querySelector<HTMLElement>(`[data-addition="${cardId(initialSourceId)}"] button`)?.focus();
   }, [catalogue, initialSourceId]);
-  const matches = (label: string, query = search) => label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+  const searchable = !!catalogue && catalogue.sources.length + catalogue.widgets.length > 10;
+  const providersSearchable = !!catalogue && catalogue.connectors.length > 10;
+  const matches = (label: string, query = searchable ? search : '') => label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
   const sourceMatches = (source: Candidate) => matches(source.label + ' ' + source.provider + ' ' + t(widgetKind('', source.provider)));
   const widgetMatches = (widget: {id: WidgetId}) => matches(t(LABELS[widget.id]) + ' ' + t(widgetKind(widget.id)));
   const connectors =
     catalogue?.connectors.filter(connector =>
-      matches(connector.id === 'zai' ? t('sources.zaiPersonal') : connector.name, providerSearch),
+      matches(connector.id === 'zai' ? t('sources.zaiPersonal') : connector.name, providersSearchable ? providerSearch : ''),
     ) ?? [];
   const any = catalogue?.sources.some(sourceMatches) || catalogue?.widgets.some(widgetMatches);
   const visible = (id: string) =>
@@ -213,7 +215,7 @@ export function WidgetCatalogue({
         </div>
       ) : page === 'connect' ? (
         <>
-          <div className="popover-body">
+          {providersSearchable && <div className="popover-body">
             <Field
               label={t('add.searchProviders')}
               type="search"
@@ -221,7 +223,7 @@ export function WidgetCatalogue({
               value={providerSearch}
               onChange={event => setProviderSearch(event.target.value)}
             />
-          </div>
+          </div>}
           <div className="catalogue-list popover-scroll">
             {connectors.map(connector => (
               <button
@@ -252,10 +254,10 @@ export function WidgetCatalogue({
         </>
       ) : (
         <>
-          <div className="popover-body">
-            <Field label={t('add.search')} type="search" value={search} autoFocus onChange={event => setSearch(event.target.value)} />
+          {(searchable || !!error) && <div className="popover-body">
+            {searchable && <Field label={t('add.search')} type="search" value={search} autoFocus onChange={event => setSearch(event.target.value)} />}
             <ErrorLine error={error} />
-          </div>
+          </div>}
           {!catalogue && !error && (
             <p className="popover-note" role="status">
               {t('add.loading')}
@@ -297,7 +299,7 @@ export function WidgetCatalogue({
                     />
                   );
                 })}
-                {!any && <p className="popover-note dialog-text">{t(search.trim() ? 'add.noWidgets' : 'add.allVisible')}</p>}
+                {!any && <p className="popover-note dialog-text">{t(searchable && search.trim() ? 'add.noWidgets' : 'add.allVisible')}</p>}
               </div>
               <div className="popover-section">
                 <button type="button" className="popover-row catalogue-connect" onClick={() => setPage('connect')}>

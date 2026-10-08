@@ -25,13 +25,13 @@ import {
   type AgentsSort,
   type Dimension,
 } from '../lib/agents';
-import {stamp, workHours} from '../lib/format';
+import {recentActivity, stamp, workHours} from '../lib/format';
 import {useLineup, useSessionsOf, useTitles} from '../lib/board';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {hubNow} from '../lib/clock';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
-import {Since} from './Time';
+import {RecentActivity, Since} from './Time';
 import {Modal} from './Kit';
 import {fillOf, pixels, useSizing} from './sizing';
 
@@ -204,9 +204,9 @@ function Tally({group, color}: {group: AgentGroup; color: Context['color']}) {
   );
 }
 
-/** Last observed work: now while any agent works, its time when known, otherwise a dash. */
-function LastActivity({group}: {group: AgentGroup}) {
-  if (group.working) return <>{t('agents.now')}</>;
+/** Last observed work; the unseen sizing copy never subscribes to the page clock. */
+function LastActivity({group, still}: {group: AgentGroup; still: boolean}) {
+  if (group.working) return <>{t('time.now')}</>;
   if (group.lastWorkedAt === null)
     return (
       <span title={t('agents.activityUnknown')}>
@@ -214,7 +214,7 @@ function LastActivity({group}: {group: AgentGroup}) {
         <span className="sr-only">{t('agents.activityUnknown')}</span>
       </span>
     );
-  return <>{stamp(group.lastWorkedAt)}</>;
+  return still ? <span title={stamp(group.lastWorkedAt)}>{recentActivity(group.lastWorkedAt, hubNow())}</span> : <RecentActivity at={group.lastWorkedAt} />;
 }
 
 /** A dimension shown in a row: shared by the group, or belonging to its one agent. */
@@ -230,7 +230,7 @@ const COLUMNS: Record<AgentColumn, {title: Key; hint?: Key; cell: (group: AgentG
   subscription: {title: 'agents.subscription', cell: group => dimensionName(group, 'subscription')},
   agents: {title: 'agents.agents', cell: (group, {color}) => <Tally group={group} color={color} />},
   worked: {title: 'agents.worked', hint: 'agents.workedHint', cell: group => <WorkTime ms={group.workedMs} />},
-  activity: {title: 'agents.lastActivity', hint: 'agents.lastActivityHint', cell: group => <LastActivity group={group} />},
+  activity: {title: 'agents.lastActivity', hint: 'agents.lastActivityHint', cell: (group, {still}) => <LastActivity group={group} still={still} />},
   running: {title: 'agents.running', cell: (group, {still}) => (still ? stillSince(group.startedAt) : <Since from={group.startedAt} />)},
 };
 

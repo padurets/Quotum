@@ -4,7 +4,7 @@ import ts from 'typescript';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {PageClock} from '../lib/clock';
-import {ago, agoChangesAt, countdown, countdownChangesAt, duration, durationChangesAt, durationUntilChangesAt} from '../lib/format';
+import {ago, agoChangesAt, countdown, countdownChangesAt, duration, durationChangesAt, durationUntilChangesAt, recentActivity, recentActivityChangesAt} from '../lib/format';
 import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, resetLine, resetLineChangesAt} from '../lib/quota';
 import {resetLabel, resetLabelChangesAt, type ResetStatus} from '../lib/resets';
 import {DEFAULT_PLAN, planAt, planChangesAt, planNote} from '../lib/plan';
@@ -183,6 +183,7 @@ const before = (to: number) => [
 
 test('ago, countdown and duration say when they read otherwise, to the millisecond', () => {
   const time = T0 - 3 * S;
+  changesAtItsMoment('last activity', now => recentActivity(time, now), now => recentActivityChangesAt(time, now), around(time));
   changesAtItsMoment(
     'ago',
     now => ago(time, now),

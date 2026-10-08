@@ -1,6 +1,6 @@
 import {since, sinceChangesAt} from '../lib/agents';
 import {useClock} from '../lib/clock';
-import {ago, agoChangesAt} from '../lib/format';
+import {ago, agoChangesAt, recentActivity, recentActivityChangesAt, stamp} from '../lib/format';
 
 /*
  * Labels that show time. Each is a part of its own, woken by the page's clock
@@ -18,6 +18,12 @@ export function Ago({at, className}: {at: number | null; className?: string}) {
       {ago(at, now)}
     </span>
   );
+}
+
+/** The last observed work, with its exact time available on hover. */
+export function RecentActivity({at}: {at: number}) {
+  const now = useClock(now => recentActivityChangesAt(at, now));
+  return <span data-time="activity" title={stamp(at)}>{recentActivity(at, now)}</span>;
 }
 
 /** How long something has run: "31m". */

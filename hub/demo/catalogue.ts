@@ -510,8 +510,9 @@ const all: DemoSet = {
         {activityEmpty: 'knownFrom', range: {from: -13 * DAY, to: -11 * DAY}, from: 0, to: 0},
       ],
       look: [
-        'The list of agents gathers them by project, by activity: quotum is one row of three agents, its marks in the colours of Max and Pro, with their agent-hours and last activity (a date and time, or now while one works); a click opens its three agents, each with its folder, where it runs, machine, subscription, the time it worked and last activity',
+        'The list of agents gathers them by project, by activity: quotum is one row of three agents, its marks in the colours of Max and Pro, with their agent-hours and last activity (now while one works or within the first minute, minutes or hours ago today, yesterday, then a date and time; exact timestamps on hover); a click opens its three agents, each with its folder, where it runs, machine, subscription, the time it worked and last activity',
         'infra has no known activity time: its last activity is a dash, explained on hover',
+        'The widget and its Add entry are named Agent sessions; Add search appears only above ten unfiltered entries and remains while its query narrows them',
         'The list\'s settings, for every viewer, group it by machine or subscription, or put each agent on a row of its own; the owner also picks its columns, how long each agent has run among them, off at first',
         'The table of agents in a dialog has a way back to all the groups when it was opened from them, and none when opened from a row',
         'The agent details dialog has no repeated working-count or work-total summary above its rows; the toolbar appears only for Back or compact-list sorting',

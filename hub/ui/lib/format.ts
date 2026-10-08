@@ -124,6 +124,37 @@ export function ago(time: number | null, now: number) {
   return t('time.daysAgo', {n: Math.floor(seconds / 86_400)});
 }
 
+/** Calendar boundaries in the reader's zone, including days with a clock change. */
+function activityDays(now: number) {
+  const day = new Date(now);
+  day.setHours(0, 0, 0, 0);
+  const today = day.getTime();
+  day.setDate(day.getDate() - 1);
+  const yesterday = day.getTime();
+  day.setDate(day.getDate() + 2);
+  return {today, yesterday, tomorrow: day.getTime()};
+}
+
+/** Recent work stays relative today, reads yesterday for that calendar day, then a timestamp. */
+export function recentActivity(time: number, now: number) {
+  const {today, yesterday} = activityDays(now);
+  if (time < yesterday) return stamp(time);
+  if (time < today) return t('time.yesterday');
+  const minutes = Math.max(0, Math.floor((now - time) / 60_000));
+  if (minutes < 1) return t('time.now');
+  return minutes < 60 ? t('time.minutesAgo', {n: minutes}) : t('time.hoursAgo', {n: Math.floor(minutes / 60)});
+}
+
+/** `recentActivity(time, now)`, with no clock wakes once it reads as a date. */
+export function recentActivityChangesAt(time: number, now: number): number | null {
+  if (time > now) return Math.min(activityDays(time).tomorrow, time + 60_000);
+  const {today, yesterday, tomorrow} = activityDays(now);
+  if (time < yesterday) return null;
+  if (time < today) return tomorrow;
+  const elapsed = Math.max(0, now - time), unit = elapsed < 3_600_000 ? 60_000 : 3_600_000;
+  return Math.min(tomorrow, time + (Math.floor(elapsed / unit) + 1) * unit);
+}
+
 const SHAPES = {
   clock: {hour: '2-digit', minute: '2-digit', hourCycle: 'h23'},
   shortDay: {day: 'numeric', month: 'short'},

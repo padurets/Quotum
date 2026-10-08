@@ -314,7 +314,8 @@ type. One Add action provides or restores the selected widget; a source being sh
 discloses access to its measurements and history in its row before submission.
 The row retains an Added mark until the menu closes, without a confirmation page,
 success page or automatic scroll. Pending requests and recoverable errors stay in
-the row too. Search preserves pending rows and their receipts; reopening reads the
+the row too. Search appears only above ten unfiltered entries in either list, preserves
+pending rows and their receipts, and stays visible while filtering; reopening reads the
 eligible catalogue again. Its Connect entry opens a separate provider/device choice
 while retaining the target board and the connection's verification and recovery flow.
 Board controls shows only the measured sources with visible cards under Data updates,
@@ -1124,11 +1125,14 @@ above a card's tray or at the bottom of a panel, unless the owner chose a height
 gets shorter than its content, and grows past the chosen rows while its content needs
 more, back to them when it needs less, without the view changing. All three charts give a
 chosen height to their plot, never drawing it lower than they do by themselves, their
-heads, totals and legends whole. The list of agents gathers them by project (one name
+heads, totals and legends whole. The Agent sessions widget gathers them by project (one name
 across people, as agent activity counts it), machine or subscription, each viewer for
 themselves, or lists each agent: a group tells how many of its agents work, how long they
 have worked (each running agent's credited work, which the hub sends with it) and their
-last activity as a date and time, or now while any works; an unknown time is a dash.
+last activity as now while any works or within the first minute, minutes or hours ago
+on the current day, yesterday for the previous local day, then a date and time. The exact
+time stays in the tooltip; an unknown time is a dash. Only the time label wakes when its
+wording changes.
 In a narrow grouped list, the default first line pairs the name with the agent count;
 the second pairs credited work on the left with last activity on the right, aligned
 with the line above.

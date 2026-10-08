@@ -167,14 +167,15 @@ test('lost run response is recovered in the row without another reservation or a
 
 test('the catalogue retains an attempted row through board events and search changes', async () => {
   const f = fixture();
+  const others = Array.from({length: 10}, (_, i) => ({...f.catalogue.sources[0], id: 'other-' + i}));
   f.menu();
-  f.reads[0].resolve(f.catalogue);
+  f.reads[0].resolve({...f.catalogue, sources: [...f.catalogue.sources, ...others]});
   await flush();
   const findRow = (tree: Node[]) => tree.find(node => typeof node.type === 'function' && (node.type as Function).name === 'AdditionRow');
   findRow(f.menu())!.props.onStart();
   f.change();
   f.menu();
-  f.reads[1].resolve({...f.catalogue, sources: []});
+  f.reads[1].resolve({...f.catalogue, sources: others});
   await flush();
   assert.ok(findRow(f.menu()), 'losing eligibility must not unmount the operation');
   const search = f.menu().find(node => node.type === 'field')!;
@@ -182,6 +183,24 @@ test('the catalogue retains an attempted row through board events and search cha
   assert.equal(findRow(f.menu())?.props.hidden, true, 'search hides the row without losing its receipt');
   search.props.onChange({target: {value: ''}});
   assert.equal(findRow(f.menu())?.props.hidden, false);
+});
+
+test('catalogue search starts above ten entries, survives filtering, and cannot hide a smaller refreshed list', async () => {
+  for (const count of [0, 10, 11]) {
+    const f = fixture();
+    const sources = Array.from({length: count}, (_, i) => ({...f.catalogue.sources[0], id: 'source-' + i}));
+    f.menu();f.reads[0].resolve({...f.catalogue, sources});await flush();
+    const search = f.menu().find(node => node.type === 'field');
+    assert.equal(!!search, count > 10);
+    if (!search) continue;
+    search.props.onChange({target: {value: 'no matching widget'}});
+    assert.ok(f.menu().some(node => node.type === 'field'), 'filtering does not remove its own input');
+    f.change();f.menu();f.reads[1].resolve({...f.catalogue, sources: sources.slice(0, 10)});await flush();
+    const smaller = f.menu();
+    assert.equal(smaller.some(node => node.type === 'field'), false);
+    const rows = smaller.filter(node => node.props.item?.kind === 'sources');
+    assert.equal(rows.length, 10);assert.ok(rows.every(node => !node.props.hidden), 'a hidden search cannot keep filtering');
+  }
 });
 
 test('a later hide offers an explicit addition without replay resurrecting it automatically', async () => {
