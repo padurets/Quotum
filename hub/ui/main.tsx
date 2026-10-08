@@ -139,12 +139,12 @@ function Dashboard({
   });
   const panels = new Map<string, Widget>([
     [BUDGET_HISTORY,{id:BUDGET_HISTORY,name:t('widgets.budgetHistory'),content:<MoneyHistory arrange={arrange}/>}],
-    [BUDGET_TABLE,{id:BUDGET_TABLE,name:t('widgets.budgetTable'),content:<MoneyTable arrange={arrange}/>}],
+    [BUDGET_TABLE,{id:BUDGET_TABLE,name:t('money.spending'),content:<MoneyTable arrange={arrange}/>}],
     [
       QUOTA_HISTORY,
       {
         id: QUOTA_HISTORY,
-        name: t('widgets.quotaHistory'),
+        name: t('history.title'),
         content: <History arrange={arrange} />,
       },
     ],
@@ -152,7 +152,7 @@ function Dashboard({
       QUOTA_TABLE,
       {
         id: QUOTA_TABLE,
-        name: t('widgets.quotaTable'),
+        name: t('forecast.title'),
         content: <Forecast arrange={arrange} />,
       },
     ],

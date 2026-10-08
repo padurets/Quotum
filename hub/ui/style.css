@@ -444,10 +444,10 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-sort-arrow { width: 10px; flex-shrink: 0; }
 .agents-controls { display: flex; gap: 6px; margin-left: auto; }
 .agents-panel .panel-head { gap: 8px; }
-.agents-compact, .forecast-compact { list-style: none; margin: 18px calc(-1 * var(--panel-pad)) 0; padding: 0; }
-.agents-compact > li, .forecast-compact > li { padding: 11px var(--panel-pad); border-bottom: 1px solid var(--hair); color: var(--text-2); }
-.agents-compact > li:last-child, .forecast-compact > li:last-child { border-bottom: 0; }
-.agents-compact > li:hover, .forecast-compact > li:hover { background: #ffffff04; }
+.agents-compact, .analytics-compact { list-style: none; margin: 18px calc(-1 * var(--panel-pad)) 0; padding: 0; }
+.agents-compact > li, .analytics-compact > li { padding: 11px var(--panel-pad); border-bottom: 1px solid var(--hair); color: var(--text-2); }
+.agents-compact > li:last-child, .analytics-compact > li:last-child { border-bottom: 0; }
+.agents-compact > li:hover, .analytics-compact > li:hover { background: #ffffff04; }
 .agents-compact > li.is-working { color: var(--text); }
 /* The last row of a list made shorter than its agents: how many more, opening them all. */
 .agents-more-button { display: block; width: 100%; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--text-3); text-align: left; outline-offset: -2px; }
@@ -471,17 +471,17 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .agents-compact-details > span { min-width: 0; overflow-wrap: anywhere; }
 /* Group names have no leading mark: work and last activity line up with the name and tally above. */
 .agents-compact.is-grouped .agents-compact-details { margin-left: 0; justify-content: space-between; }
-/* The table of limits as a list: a window's name and what is left, then its other values, each with its heading, wrapping whole. */
-.forecast-compact-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 13px; }
+/* Analytics as a list: a window's name and what is left, then its other values, each with its heading, wrapping whole. */
+.analytics-compact-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 13px; }
 /* The gap sets the name after its colour, which the details below line up with. */
-.forecast-compact-main > .swatch { margin-right: 0; }
-.forecast-compact-name { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
-.forecast-compact-main > :last-child:not(.forecast-compact-name) { flex-shrink: 0; font-variant-numeric: tabular-nums; }
-.forecast-compact-details { display: flex; flex-wrap: wrap; gap: 3px 16px; margin: 4px 0 0 13px; color: var(--text-3); font-size: 11.5px; }
+.analytics-compact-main > .swatch { margin-right: 0; }
+.analytics-compact-name { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; }
+.analytics-compact-main > :last-child:not(.analytics-compact-name) { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.analytics-compact-details { display: flex; flex-wrap: wrap; gap: 3px 16px; margin: 4px 0 0; color: var(--text-3); font-size: 11.5px; }
+.analytics-compact > li:has(.swatch) .analytics-compact-details { margin-left: 13px; }
 /* A heading wraps where the row is narrow (a phone); its value stays whole. */
-.budget-table .forecast-compact-details { margin-left: 0; }
-.forecast-compact-details > span { min-width: 0; overflow-wrap: anywhere; }
-.forecast-compact-details > span > span { color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.analytics-compact-details > span { min-width: 0; overflow-wrap: anywhere; }
+.analytics-compact-details > span > span { color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* Cut short, it keeps a machine's heading and two rows, each with its folder under the project. */
 .agents-list { box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; width: min(340px, calc(100vw - 48px)); max-width: 100%; overflow: hidden auto; padding: 0 0 4px; --least: 116px; }
 .agents-list-head { display: flex; justify-content: space-between; gap: 12px; }
@@ -517,6 +517,8 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .panel { --panel-pad: 22px; padding: 20px var(--panel-pad) 22px; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .panel-head h2 { margin: 0; font-size: 15px; font-weight: 560; letter-spacing: -.01em; }
+.panel-heading { min-width: 0; }
+.analytics-note { margin: 6px 0 0; font-size: 11.5px; color: var(--text-4); }
 /* A few words beside the title; the panel's settings stay at the right. */
 .panel-note { margin-right: auto; color: var(--text-3); font-size: 12.5px; }
 .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -573,7 +575,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .activity-totals { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 6px; font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .activity-totals > span { white-space: nowrap; }
 .activity-totals b { color: var(--text); font-weight: 500; }
-.answered-range { display: block; margin-top: 3px; font-size: 11px; color: var(--text-3); }
+.panel-description { display: block; margin-top: 3px; font-size: 11px; color: var(--text-3); }
 .activity-totals + .chart { margin-top: 12px; }
 .activity-since { font-size: 11px; color: var(--text-2); border: 1px solid var(--hair-2); padding: 0 6px; border-radius: 5px; }
 .activity .chart-loading { min-height: 200px; }
@@ -682,12 +684,12 @@ th:last-child, td:last-child { padding-right: var(--table-edge, 12px); }
 .dialog .table-wrap { --table-edge: 24px; margin-inline: -24px; contain: inline-size; }
 td:first-child { color: var(--text); }
 /* A window's name wraps rather than widening the table past its widget: the columns beside it keep their room. Its lines start after its colour, as in the list. */
-.panel.forecast td:first-child, .panel.budget-table td:first-child { white-space: normal; overflow-wrap: anywhere; }
+.analytics-table td:first-child { white-space: normal; overflow-wrap: anywhere; }
 /* A burst beside a forecast's words: quiet, whatever their tone. */
 .forecast-burst { margin-left: 5px; color: var(--text-3); }
-.forecast-name { display: flex; align-items: baseline; }
-.forecast-name > .swatch { flex-shrink: 0; }
-.forecast-name > :last-child { min-width: 0; }
+.analytics-name { display: flex; align-items: baseline; }
+.analytics-name > .swatch { flex-shrink: 0; }
+.analytics-name > :last-child { min-width: 0; }
 /* A row's colour, marked like the card it belongs to. */
 .swatch { display: inline-block; width: 3px; height: 13px; border-radius: 2px; margin-right: 10px; vertical-align: -2px; }
 
@@ -956,7 +958,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .compact-limit.is-money { grid-template-columns: minmax(0, 1.5fr) 7.5ch minmax(36px, 1fr) auto; }
 .compact-limit.is-money > strong { max-width: 18ch; overflow-wrap: anywhere; }
 .source-consent { display: flex; gap: 8px; align-items: flex-start; }
-.monetary-table th:not(:first-child), .monetary-table td:not(:first-child) { text-align: right; }
+.analytics-table .is-right { text-align: right; }
 .compact .money-balance .limit-value { font-size: 1.15rem; }
 .compact .money-body .limit-value small { font-size: 11px; }
 .compact .money-limits:not(:empty) { padding-top: 8px; margin-top: 0; }

@@ -1,4 +1,4 @@
-import {HistoryFailure} from './HistoryFailure';
+import {AnalyticsPanel, AnalyticsNote, SeriesLegendItem} from './AnalyticsPanel';
 import {memo, useLayoutEffect, useRef} from 'react';
 import {earliest, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
@@ -194,14 +194,10 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const wantedTo = historyProjection(frame, measured, prefs, currentHints, context?.lookAhead);
 
   return (
-    <section ref={panel} className={`panel history ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('history.label')} aria-busy={loading} data-history-range={history?.range}>
-      <div className="panel-head">
-        <h2>{t('widgets.quotaHistory')}</h2>
-        <HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)} horizonNote={frame.live && !model?.planShown && !model?.forecastShown} />
-      </div>
-
-      {omitted>0&&<p className="drawer-note">{t('history.quotaOverflow',{count:omitted})}</p>}
-      <HistoryFailure error={error} retry={quotaHistory.retry}/>
+    <AnalyticsPanel ref={panel} className="history" title={t('history.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
+      settings={<HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)} horizonNote={frame.live && !model?.planShown && !model?.forecastShown}/>}
+    >
+      {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}
       <Chart
           lines={model?.visible ?? []}
           plans={model?.plans}
@@ -225,23 +221,13 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
 
       <div className="legend">
         {lines.map(line => (
-          <button
-            key={line.key}
-            type="button"
-            className="legend-item"
-            aria-pressed={!prefs.muted[line.key]}
-            onClick={() => setMuted(line.key, !prefs.muted[line.key])}
-          >
-            <svg width="18" height="6" aria-hidden="true">
-              <line x1="1" x2="17" y1="3" y2="3" stroke={line.color} strokeWidth="2.5" strokeLinecap="round" strokeDasharray={line.dash || undefined} />
-            </svg>
-            <span>{line.name}</span>
-            <b>{line.current===null?'—':`${num(line.current)}%`}</b>
-          </button>
+          <SeriesLegendItem key={line.key} name={line.name} color={line.color} dash={line.dash} muted={!!prefs.muted[line.key]} onToggle={() => setMuted(line.key, !prefs.muted[line.key])}>
+            <b>{line.current === null ? '—' : `${num(line.current)}%`}</b>
+          </SeriesLegendItem>
         ))}
         {!!history && !lines.length && !error && <span className="legend-empty">{t('history.noLines')}</span>}
       </div>
-    </section>
+    </AnalyticsPanel>
   );
 });
 

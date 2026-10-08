@@ -1,4 +1,4 @@
-import {HistoryFailure} from './HistoryFailure';
+import {AnalyticsPanel} from './AnalyticsPanel';
 import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
@@ -274,12 +274,10 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const emptyFrame = answered && panning === null && !strip ? empty : null;
 
   return (
-    <section ref={panel} className={`panel activity ${loading ? 'is-loading' : ''}`} data-time="chart" aria-label={t('activity.title')} aria-busy={loading} data-history-range={history?.range}>
-      <div className="panel-head">
-        <div><h2>{t('activity.title')}</h2>{history && <span className="answered-range">{t('history.answeredRange', {range: answeredRangeLabel(history)})}</span>}</div>
-        <ActivitySettings arrange={arrange} />
-      </div>
-      <HistoryFailure error={error} retry={quotaHistory.retry}/>
+    <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
+      description={history && t('history.answeredRange', {range: answeredRangeLabel(history)})}
+      settings={<ActivitySettings arrange={arrange}/>}
+    >
       <Totals activity={activity} shownMs={shownMs} since={since} />
       <>
           <Stacks
@@ -305,7 +303,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             ))}
           </div>
       </>
-    </section>
+    </AnalyticsPanel>
   );
 });
 

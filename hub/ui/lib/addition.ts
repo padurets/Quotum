@@ -19,10 +19,10 @@ export type Candidate = {
 export const LABELS: Record<WidgetId, Key> = {
   agents: 'agents.title',
   activity: 'activity.title',
-  'quota-history': 'widgets.quotaHistory',
+  'quota-history': 'history.title',
   'budget-history': 'widgets.budgetHistory',
-  'quota-table': 'widgets.quotaTable',
-  'budget-table': 'widgets.budgetTable',
+  'quota-table': 'forecast.title',
+  'budget-table': 'money.spending',
 };
 export type Demo = {
   keys: {

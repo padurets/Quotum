@@ -1089,7 +1089,11 @@ table. All use the period in the analytics head; the weekly/session switch appli
 only to the quota pair. Each of the four analytics widgets has independent placement,
 visibility and table columns. Budget series are chosen in the budget chart settings
 and shared with its table, even while the chart is hidden. Each
-area is arranged on its own grid. A row is 48 px (a 32 px track and a 16 px gap).
+analytics panel uses the same heading, description and reader-error component. The
+limit and budget tables share their column controls, cells and responsive renderer;
+when their selected columns no longer fit, both become labelled rows. Their own
+data models provide the values and column widths, including clock-driven cells.
+Each area is arranged on its own grid. A row is 48 px (a 32 px track and a 16 px gap).
 Each widget fills the fewest whole rows that contain its content, with any spare room
 above a card's tray or at the bottom of a panel, unless the owner chose a height for it
 (`h`, in rows). A chosen height is a request, not what shows: a card or the table never
