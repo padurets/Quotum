@@ -6,12 +6,13 @@ import {NODES, nodeOf, probeScript, rendered, type Fiber, type Reading} from '..
 /** A stand-in element: its tag, classes and attributes, and `closest` for the simple selectors the probe uses. */
 class Element {
   readonly nodeType = 1;
+  readonly children: Element[] = [];
   constructor(
     readonly tagName: string,
     readonly className: string,
     private readonly attributes: Record<string, string>,
     readonly parentElement: Element | null,
-  ) {}
+  ) {parentElement?.children.push(this);}
   hasAttribute(name: string) {
     return Object.hasOwn(this.attributes, name);
   }
@@ -28,6 +29,9 @@ class Element {
     const any = selector.split(',').map(s => s.trim());
     for (let e: Element | null = this; e; e = e.parentElement) if (any.some(s => e!.matches(s))) return e;
     return null;
+  }
+  querySelectorAll(selector: string): Element[] {
+    return this.children.flatMap(child => [...(child.matches(selector) ? [child] : []), ...child.querySelectorAll(selector)]);
   }
 }
 
@@ -84,13 +88,14 @@ test("a component's work is counted in the part of the page its first element is
 
 /** Runs the probe as the browser gets it, in a context of its own with a stand-in DOM. */
 function page() {
-  let observer: ((records: {target: unknown}[]) => void) | undefined;
+  type Mutation = {target: unknown; addedNodes?: unknown[]};
+  let observer: ((records: Mutation[]) => void) | undefined;
   let observing = false;
   const context: Record<string, unknown> = {
     performance,
     document: {body: {}, readyState: 'complete', addEventListener() {}},
     MutationObserver: class {
-      constructor(callback: (records: {target: unknown}[]) => void) {
+      constructor(callback: (records: Mutation[]) => void) {
         observer = callback;
       }
       observe() {observing = true;}
@@ -102,7 +107,8 @@ function page() {
   const probed = context.__quotumBench as {reset(): void; pause(): void; read(): Reading; seriesChanged(key: string, last: string): number | null; forgetCards(): void};
   // What the page answers comes over as JSON, as Runtime.evaluate returns it.
   const bench = {reset: () => probed.reset(), pause: () => probed.pause(), read: (): Reading => JSON.parse(JSON.stringify(probed.read())), seriesChanged: (key: string, last: string) => probed.seriesChanged(key, last), forget: () => probed.forgetCards()};
-  return {hook, bench, observing: () => observing, mutate: (...targets: unknown[]) => observer!(targets.map(target => ({target})))};
+  return {hook, bench, observing: () => observing, mutate: (...targets: unknown[]) => observer!(targets.map(target => ({target}))),
+    insert: (target: Element, ...addedNodes: unknown[]) => observer!([{target, addedNodes}])};
 }
 
 test('a finished measurement probe disconnects and reset resumes complete counting', () => {
@@ -154,6 +160,24 @@ test('a graph measurement is seen only at its expected point value', () => {
   assert.ok(bench.seriesChanged('s1 weekly', '60000:79') !== null);
   bench.forget();
   assert.equal(bench.seriesChanged('s1 weekly', '60000:79'), null);
+});
+
+test('the first plotted point counts when React inserts a ready series or its whole SVG subtree', () => {
+  const {bench, insert} = page();
+  const region = el('section', null, {}, 'analytics');
+  const svg = el('svg', region);
+  const series = el('g', svg, {'data-series': 's1 weekly', 'data-last': '60000:79'});
+  el('path', series);
+  assert.equal(bench.seriesChanged('s1 weekly', '60000:79'), null, 'building detached geometry is not a DOM change');
+  insert(svg, series);
+  const first = bench.seriesChanged('s1 weekly', '60000:79');
+  assert.ok(Number.isFinite(first), 'childList targets the parent, not the new series');
+  assert.equal(bench.seriesChanged('s1 weekly', '60000:80'), null, 'an inserted point still needs the expected value');
+  insert(svg, series);
+  assert.equal(bench.seriesChanged('s1 weekly', '60000:79'), first, 'keep the first observed commit');
+  bench.forget();
+  insert(region, svg, {nodeType: 3});
+  assert.ok(Number.isFinite(bench.seriesChanged('s1 weekly', '60000:79')), 'a new ancestor carries its plotted descendants');
 });
 
 test('the probe counts DOM changes by part once per callback, and notes when a card first changed outside what shows time', () => {

@@ -99,13 +99,14 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     closest(selector: string): Element | null;
     hasAttribute(name: string): boolean;
     getAttribute(name: string): string | null;
+    querySelectorAll(selector: string): Iterable<Element>;
     tagName: string;
     className: unknown;
   };
   const page = globalThis as unknown as {
     __REACT_DEVTOOLS_GLOBAL_HOOK__: object;
     __quotumBench: {reset(): void; pause(): void; read(): Reading; forgetCards(): void; cardChanged(id: string): number | null; seriesChanged(key: string, last: string): number | null};
-    MutationObserver: new (callback: (records: {target: {nodeType: number; parentElement: Element | null}}[]) => void) => {
+    MutationObserver: new (callback: (records: {target: {nodeType: number; parentElement: Element | null}; addedNodes?: Iterable<{nodeType: number}>}[]) => void) => {
       observe(target: unknown, options: object): void;
       disconnect(): void;
     };
@@ -176,13 +177,21 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     const began = clock.now();
     const nodes = new Set<Element | null>();
     const at = clock.timeOrigin + clock.now();
+    const changedSeries = (series: Element | null | undefined) => {
+      if (!series) return;
+      const key = `${series.getAttribute('data-series')}\n${series.getAttribute('data-last')}`;
+      seriesChanged[key] ??= at;
+    };
     for (const record of records) {
       const element = record.target.nodeType === 1 ? (record.target as unknown as Element) : record.target.parentElement;
       nodes.add(element ? element.closest(selector) : null);
-      const series = element?.closest('[data-series]');
-      if (series) {
-        const key = `${series.getAttribute('data-series')}\n${series.getAttribute('data-last')}`;
-        seriesChanged[key] ??= at;
+      changedSeries(element?.closest('[data-series]'));
+      // A mounted SVG subtree arrives with its attributes already set. Its mutation
+      // targets the parent, so looking only above that target misses the first point.
+      for (const node of record.addedNodes ?? []) if (node.nodeType === 1) {
+        const added = node as unknown as Element;
+        changedSeries(added.closest('[data-series]'));
+        for (const series of added.querySelectorAll('[data-series]')) changedSeries(series);
       }
     }
     bump(mutations, nodes);
