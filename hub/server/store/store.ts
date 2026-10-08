@@ -422,8 +422,13 @@ export class Store {
 
   /** Remembers which source a device last delivered for a provider; its failures for the provider are over. */
   seenDevice(device: string, provider: Provider, source: string, at: number) {
-    this.db.prepare('INSERT OR REPLACE INTO device_sources VALUES (?, ?, ?, ?)').run(device, provider, source, at);
+    const changed = this.deviceSource(device, provider) !== source;
+    this.db.prepare('INSERT INTO device_sources (device_id,provider,source_id,seen_at) VALUES (?,?,?,?) ON CONFLICT(device_id,provider) DO UPDATE SET source_id=excluded.source_id,seen_at=excluded.seen_at').run(device, provider, source, at);
     this.db.prepare('DELETE FROM device_failures WHERE device_id = ? AND provider = ?').run(device, provider);
+    if (changed) {
+      const owner = this.db.prepare('SELECT user_id FROM devices WHERE id=?').get(device) as {user_id: string} | undefined;
+      if (owner) tell(this.observer, o => o.touchUser(owner.user_id));
+    }
   }
 
   deviceSource(device: string, provider: Provider): string | null {

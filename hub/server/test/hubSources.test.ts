@@ -83,20 +83,20 @@ test('verified connections deduplicate an account, preserve holds until the last
     const a=await h.connect(h.alice.id,requestId),again=await h.connect(h.alice.id,requestId),second=await h.connect(),b=await h.connect(h.bob.id);
     assert.equal(a.id,again.id);assert.equal(again.replayed,true);assert.equal(a.sourceId,b.sourceId);
     assert.equal(h.store.held(h.alice.id).length,1);
-    h.credentials.remove(h.alice.id,a.id);assert.equal(h.store.holds(h.alice.id,a.sourceId!),true);
+    assert.equal(second.id,a.id,'new access reuses the same owner account');
+    h.credentials.remove(h.alice.id,a.id);assert.equal(h.store.holds(h.alice.id,a.sourceId!),false);
     await assert.rejects(h.connect(h.alice.id,requestId),/credential_not_found/);
     h.credentials.remove(h.alice.id,second.id);assert.equal(h.store.holds(h.alice.id,a.sourceId!),false);assert.equal(h.store.holds(h.bob.id,a.sourceId!),true);
     assert.equal(h.credentials.access(h.alice.id,a.sourceId!),null);
   }finally{h.sources.stop();h.store.close();}
 });
 
-test('replacement consent and identity checks preserve ciphertext, and a delayed poll cannot restore a removed access',async()=>{
+test('replacement accepts no-expiry keys, preserves identity, and a delayed poll cannot restore removed access',async()=>{
   const h=harness();try {
     const a=await h.connect(),source=a.sourceId!;
     const before=h.store.db.prepare('SELECT cipher,nonce FROM credentials WHERE id=?').get(a.id);
-    h.setExpiry(null);await assert.rejects(h.credentials.replace(h.alice.id,a.id,'fixture-next-secret'),/credential_expiry_confirmation/);
-    assert.deepEqual(h.store.db.prepare('SELECT cipher,nonce FROM credentials WHERE id=?').get(a.id),before);
-    await h.credentials.replace(h.alice.id,a.id,'fixture-next-secret',{allowNoExpiry:true});
+    h.setExpiry(null);await h.credentials.replace(h.alice.id,a.id,'fixture-next-secret');
+    assert.notDeepEqual(h.store.db.prepare('SELECT cipher,nonce FROM credentials WHERE id=?').get(a.id),before);
     h.setAccount('2'.repeat(24));await assert.rejects(h.credentials.replace(h.alice.id,a.id,'fixture-next-secret',{allowNoExpiry:true}),/credential_account_mismatch/);h.setAccount('1'.repeat(24));
     h.delay();h.sources.start();h.clock.tick();await settle();h.setUsage('9000000');h.credentials.remove(h.alice.id,a.id);h.finish();await settle();
     assert.equal(h.store.holds(h.alice.id,source),false);assert.equal(h.store.state(source).meters?.find(m=>m.id==='usage')?.amount,'1000000');

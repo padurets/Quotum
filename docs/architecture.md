@@ -300,16 +300,39 @@ real next measurement even then.
 
 **Refresh on demand.** Any reader of a subscription on a board can request fresh data
 through its existing card menu, above the action to hide the widget, in the web
-dashboard and the desktop app. The header also refreshes all non-hidden cards on the
-current board through those same requests, up to four at a time. A refused request does
-not stop the rest; a tooltip at the header button lists every requested card in one
-compact row, with its name, status icon and short outcome. Error details expand by
-clicking the row. Each outcome stays in this attempt's receipt after the hub retires its
-status, also while the tooltip is closed. An old outcome cannot stand in for a new
-request, and a reconnect with a missing outcome says it is unknown. Nothing moves the
-widgets. While its refresh is pending, and once it has finished, clicking the button
-only opens or closes that information; a row at the top of the tooltip starts another
-attempt. An individual card cannot be requested again until its refresh finishes, nor
+dashboard and the desktop app. The header groups the board selector and two icon
+buttons on the right, before the account menu: Add widget and Board controls.
+These controls remain available on settings pages for the selected board. Changing
+boards preserves their space in the header while source status loads inside the menu.
+The board's event connection stays open across settings navigation; history reads and
+chart preparation pause until the dashboard returns, with live invalidations retained.
+The brand link returns to the selected board and its range through the shared router.
+A completed connection opened from settings navigates to its destination before focusing
+the card; visibility in the live store alone does not mean that its widget is on screen.
+Add names the destination board and lists eligible absent or hidden widgets with their
+type. One Add action provides or restores the selected widget; a source being shared
+discloses access to its measurements and history in its row before submission.
+The row retains an Added mark until the menu closes, without a confirmation page,
+success page or automatic scroll. Pending requests and recoverable errors stay in
+the row too. Search preserves pending rows and their receipts; reopening reads the
+eligible catalogue again. Its Connect entry opens a separate provider/device choice
+while retaining the target board and the connection's verification and recovery flow.
+Board controls shows only the measured sources with visible cards under Data updates,
+their last successful measurements and errors, an explicit Refresh all action, the
+original free/locked layout control and board settings. Analytic widgets keep their
+settings and hiding actions in their own menus. Opening Board controls
+makes no refresh requests. The list keeps compact single-line rows: name and a short
+measurement age or outcome, with the complete timestamp in its tooltip and error
+details revealed only by clicking the row. Its wide layout puts status beside actions; at narrow
+widths actions precede the status list in one column, scrolling inside the Popover.
+The dropdowns share their heading, close action and inset row styles and start below
+the header's bottom edge. Navigation icons use library SVGs.
+Refresh all requests non-hidden cards through the same source endpoint, up to four
+at a time. A refusal does not stop the rest. Outcomes stay with each source's row
+after the hub retires its status, also while the dropdown is closed. Error details
+expand in that row. An old outcome cannot stand in for a new request, and a reconnect
+with a missing outcome says it is unknown. Nothing moves the widgets. A new attempt
+needs an explicit click, including the first one. An individual card cannot be requested again until its refresh finishes, nor
 while the page is still sending its request, from its menu or the header. Already
 pending subscriptions need no additional POST from the board action. The charts and
 tables receive new measurements through the usual events. Leaving the board stops
@@ -816,7 +839,8 @@ tests inject their own adapter. Each credential belongs to its person and can be
 created, replaced, listed or removed only by that person's session. Create and replacement
 identify the account outside SQLite, then commit encrypted access and its verified
 source holding atomically. A replacement cannot change the account. No-expiry access
-requires explicit consent. DeepSeek has declared identity: each owner creates an
+is admitted in one informed submit.
+DeepSeek has declared identity: each owner creates an
 immutable account UUID and private name, independent of keys. An owner/provider-scoped
 pseudonym determines the source. Same-account replacement requires an attestation;
 a different account needs a new connection. Both declared connectors use the same
@@ -835,6 +859,19 @@ an explicit same-site Origin before parsing, accept only a connector's strict pr
 ASCII key format, and are limited to ten attempts a minute per person and address.
 Replies contain only the safe record details, including a last-four hint; neither the
 key nor encrypted bytes go to the dashboard's events or shared boards.
+
+Without explicit inputs a new server creates a durable key in separate storage:
+`/keys/current.key` on a distinct persistent container mount, a private POSIX sibling
+of the canonical data directory, or a private nonvolatile HKCU branch on Windows.
+POSIX publication uses an exclusive temporary file, file fsync, a no-replace hard
+link, and directory/parent-entry barriers, repeated when admitting an existing key.
+Linux container storage identifies the opened directories by their kernel `mnt_id`
+and compares the actual backing mount roots, including stacked and hidden mounts.
+Windows reserves a durable nonsecret UUID, then a packaged bounded helper owns a
+global native mutex through private registry query/write, flush and read-back. The
+resolver runs under the same SQLite transaction as the key check; an established
+missing or mismatched store is never regenerated, including an empty credential set.
+The desktop's native controller remains the authority in local mode.
 
 z.ai does not supply account identity or key expiry. Its connector declares authenticated
 access without an account pseudonym; the credential service creates a random,
@@ -887,10 +924,11 @@ and its limits.
   signs up without an invitation but with its setup code: a new hub prints one to its
   log, so only whoever started it can claim it. After that, signing up needs an invite
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
-- **Devices** are running agents, and each belongs to a person. The *My connections* dialog
+- **Devices** are running agents, and each belongs to a person. The *Settings → Devices* page
   shows a person's devices, what each delivers and the last failure of each client
-  there (not logged in, too old…); the person names them there. The same list contains
-  their provider accounts, and its Connect menu opens a device or provider form directly.
+  there (not logged in, too old…); the person names them there. The page has two open
+  sections: devices with the one-time connection command, and device tokens with their
+  creation and revocation actions. Provider accounts have their own *My connections* page.
   *Agent activity → Settings → Manage projects* lists the projects their agents worked
   on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are
@@ -1112,7 +1150,18 @@ separate limit on the number of places: new visible neighbours can get their pla
 without removing the ids kept by old views.
 The board's view comes with its events; the owner's changes show at once and are saved
 about half a second later, one request per burst (a drag, typing a plan), and stay on
-screen until the hub tells the view it saved. What
+screen until the hub tells the view it saved. Saves carry `If-Match` with the persistent
+view revision and are serialized per board by the authenticated shell. A stale save
+returns the current view and a visible conflict; it never silently reapplies an old
+full document over an Add or another window's edit. Add flushes this shell's pending
+save first, then patches only its requested visibility inside its transaction.
+Failed saves keep their unsent intent and a notice throughout settings navigation,
+with an explicit retry carrying the captured revision. Ending the authenticated shell
+drops unsent successors; a submitted Add continues when only its form closes, while an
+owner-scope change prevents further phases. No timer polls for those results.
+New boards start with analytics hidden. `enabledWhenEmpty` permits only the standard
+widgets explicitly added to an empty board; old views retain their previous defaults.
+What
 is only about how one person looks (the analytics' period and window type, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents table's sort order, the chosen board and language) stays in their browser.

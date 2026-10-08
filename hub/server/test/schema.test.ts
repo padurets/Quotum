@@ -7,7 +7,6 @@ import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {STEPS,SCHEMA_VERSION,migrate} from '../store/schema.js';
 import {Store} from '../store/store.js';
-import {Directory} from '../store/directory.js';
 
 /**
  * Every step a release shipped, by its hash. A database records which steps it has
@@ -120,7 +119,7 @@ test('unreleased declared-account layouts adopt canonical provenance without los
       db.exec("ALTER TABLE credentials ADD COLUMN expiry_kind TEXT NOT NULL DEFAULT 'none' CHECK(expiry_kind IN ('at','none','unknown')); ");
       db.exec(STEPS[10]);for(const step of STEPS.slice(11,version+1))db.exec(step);
       db.exec('PRAGMA user_version='+version);
-      const directory=new Directory(db),owner=directory.createUser('migration@example.com','Owner','fixture',1);
+      const owner={id:'owner'};db.prepare('INSERT INTO users(id,email,name,password,created_at) VALUES (?,?,?,?,?)').run(owner.id,'migration@example.com','Owner','fixture',1);
       db.prepare("INSERT INTO sources(id,provider,account,created_at) VALUES ('s','deepseek','native',1)").run();
       db.prepare('INSERT INTO declared_accounts VALUES (?,?,?,?,?,?,?,?)').run('account',owner.id,'deepseek','s','Private','private',1,0);
       const cipher=Buffer.from('encrypted fixture'),nonce=Buffer.alloc(12,7);
@@ -135,4 +134,22 @@ test('unreleased declared-account layouts adopt canonical provenance without los
       assert.equal(db.prepare('PRAGMA user_version').get()?.user_version,SCHEMA_VERSION);migrate(db,3);
     }finally{db.close();}
   }
+});
+
+test('board additions append to the integrated currency layout without rewriting views, shares or encrypted access',()=>{
+  const db=new DatabaseSync(':memory:');try {
+    for(const step of STEPS.slice(0,15))db.exec(step);db.exec('PRAGMA user_version = 15');
+    db.exec("INSERT INTO users VALUES ('owner','upgrade@example.test','Owner','fixture',1); INSERT INTO boards VALUES ('board','Board',0,'owner',1); INSERT INTO members VALUES ('board','owner','owner',1)");
+    const payload=JSON.stringify({hidden:['source:deepseek:123456789abc'],order:['legacy'],names:{legacy:'Kept'},unknown:{kept:true}});
+    db.prepare('INSERT INTO views VALUES (?,?,?,?)').run('board',payload,'owner',1);
+    db.exec("INSERT INTO sources(id,provider,account,created_at) VALUES ('deepseek:123456789abc','deepseek','native',1); INSERT INTO holders VALUES ('deepseek:123456789abc','owner',1); INSERT INTO shares VALUES ('board','deepseek:123456789abc','owner',1); INSERT INTO source_identity VALUES ('deepseek:123456789abc','declared','owner')");
+    const cipher=Buffer.from('encrypted fixture'),nonce=Buffer.alloc(12,9);
+    db.prepare("INSERT INTO credentials(id,user_id,provider,source_id,cipher,nonce,key_version,abilities,created_at,expiry_kind) VALUES ('key','owner','deepseek','deepseek:123456789abc',?,?,1,'[\"balance\"]',1,'unknown')").run(cipher,nonce);
+    const before=Object.fromEntries(['sources','holders','shares','credentials'].map(table=>[table,db.prepare('SELECT * FROM '+table).all()]));
+    migrate(db,2);
+    for(const table of ['sources','holders','shares'])assert.deepEqual(db.prepare('SELECT * FROM '+table).all(),before[table]);
+    const credential=db.prepare('SELECT * FROM credentials').get()!;assert.equal(credential.access_revision,0);delete credential.access_revision;assert.deepEqual([credential],before.credentials);
+    assert.deepEqual({...db.prepare('SELECT payload,revision,updated_by,updated_at FROM views').get()},{payload,revision:0,updated_by:'owner',updated_at:1});
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,16);
+  }finally{db.close();}
 });

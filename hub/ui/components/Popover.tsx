@@ -1,6 +1,8 @@
-import {useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode} from 'react';
+import {useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode} from 'react';
 import {barsOf, coverOf, crampedOf, roomOf, shiftOf, sideOf} from '../lib/place';
 import {settler} from '../lib/settle';
+import {X} from 'lucide-react';
+import {t} from '../i18n';
 
 /** A button with an anchored panel; closes on outside click, Escape, focus moving out and its button going out of sight. */
 export function Popover({
@@ -38,6 +40,11 @@ export function Popover({
   const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const panelRef = useCallback((element: HTMLDivElement | null) => {
+    // A form can close its panel directly. Return focus before its focused control is removed.
+    if (!element && panel.current?.contains(document.activeElement)) button.current?.focus({preventScroll: true});
+    panel.current = element;
+  }, []);
   // A panel never scrolls the page, lengthens it nor widens it: it opens whole in the window,
   // under the bars stuck at its top, on the side of its button that `sideOf` picks, cut to the
   // room there and scrolling inside, and moves sideways as far as keeps it on the screen (from a
@@ -277,14 +284,33 @@ export function Popover({
       {open && (
         <div
           className={`popover glass ${align === 'left' ? 'is-left' : ''} ${(side?.up ?? up) ? 'is-up' : ''} ${side?.cap != null ? 'is-capped' : ''} ${side?.cramped ? 'is-cramped' : ''}`}
-          style={width !== undefined || side?.cap != null ? {...(width !== undefined ? {width} : {}), ...(side?.cap != null ? {maxHeight: side.cap} : {})} : undefined}
+          style={width !== undefined || side?.cap != null ? {...(width !== undefined ? {width, maxWidth: 'calc(100vw - 32px)'} : {}), ...(side?.cap != null ? {maxHeight: side.cap} : {})} : undefined}
           role="dialog"
           aria-label={label}
-          ref={panel}
+          ref={panelRef}
         >
           {children}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Shared heading for menus with a title, optional context and a close action. */
+export function PopoverHeading({children, detail, onClose}: {children: ReactNode; detail?: ReactNode; onClose: () => void}) {
+  return (
+    <div className="popover-heading">
+      <h3>{children}</h3>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={t('common.close')}
+        title={t('common.close')}
+        onClick={onClose}
+      >
+        <X size={14} aria-hidden="true" />
+      </button>
+      {detail && <small>{detail}</small>}
     </div>
   );
 }

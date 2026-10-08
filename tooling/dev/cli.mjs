@@ -86,7 +86,7 @@ export async function command(action, root, json = false) {
     // Fail malformed scenarios before dependency installation, port assignment or stopping a stand.
     if (c.DEV_MODE === 'demo') {
       const catalogue = readFileSync(path.join(ctx.root, 'hub/demo/catalogue.ts'), 'utf8');
-      if (!['all', 'showcase', 'activity', 'money', 'quotas'].includes(c.DEV_SET)) throw new Error('Invalid DEV_SET; use all, showcase, activity, money or quotas.');
+      if (!['all', 'showcase', 'activity', 'money', 'quotas', 'onboarding'].includes(c.DEV_SET)) throw new Error('Invalid DEV_SET; use all, showcase, activity, money, quotas or onboarding.');
       if (c.DEV_RESETS && !new RegExp(`kind: 'scene',\\s*id: ['"]${c.DEV_RESETS.replace(/[^a-z0-9-]/gi, '!')}['"]`).test(catalogue)) throw new Error('Invalid DEV_RESETS; see hub/demo/catalogue.ts.');
     }
     const {pool, problem} = await accessFor(c);

@@ -1,7 +1,7 @@
 import {Attention} from './attention.js';
 import {STATUS_CODES} from 'node:http';
 import type {Socket} from 'node:net';
-import Fastify, {type FastifyReply, type FastifyRequest} from 'fastify';
+import Fastify, {type FastifyInstance, type FastifyReply, type FastifyRequest} from 'fastify';
 import staticFiles from '@fastify/static';
 import {config, serviceName, version} from './config.js';
 import type {Ingest} from './ingest.js';
@@ -12,7 +12,7 @@ import type {Pairing} from './pairing.js';
 import type {ResetFeed} from './resets.js';
 import type {Store} from './store/store.js';
 import type {Board, Directory, User} from './store/directory.js';
-import {CSP, currentUser, sameSite} from './session.js';
+import {CSP, currentUser, Limiter, sameSite} from './session.js';
 import type {Setup} from './setup.js';
 import {Events} from './events.js';
 import {Projection} from './projection.js';
@@ -27,18 +27,24 @@ import {displayHistory} from './currencies/history.js';
 import type {Chunk} from './domain/history.js';
 import {currencyRoutes} from './routes/currencies.js';
 import {sourceKeyRoutes} from './routes/sourceKeys.js';
+import {BoardAdditions} from './additions.js';
+import {additionRoutes} from './routes/additions.js';
+import {DeviceOnboarding} from './deviceOnboarding.js';
 
 /**
  * `local`: the desktop app's hub, with the key its window enters with (see local.ts); null
  * on a server. `events`: what open dashboards hear, made here when not given.
  */
-export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events; credentials?: Credentials; hubSources?:HubSources; secretSnapshot?: Pick<SecretInputs, 'storageAtStart' | 'wasFileAtStart'>};
+export type Hub = {store: Store; directory: Directory; resets: ResetFeed; ingest: Ingest; pairing: Pairing; setup: Setup; local: {key: string} | null; events?: Events; credentials?: Credentials; additions?:BoardAdditions; deviceOnboarding?:DeviceOnboarding; hubSources?:HubSources; secretSnapshot?: Pick<SecretInputs, 'storageAtStart' | 'wasFileAtStart'>};
 
 /** Route helpers shared by the route modules. */
 export type Guards = {
   user(request: FastifyRequest, reply: FastifyReply): User | null;
   board(request: FastifyRequest, reply: FastifyReply, boardId: string | undefined): {user: User; board: Board} | null;
 };
+
+/** Explicit composition for synthetic demo routes; ordinary startup supplies none. */
+export type ExtendHub = (app: FastifyInstance, hub: Hub, guards: Guards) => void | Promise<void>;
 
 /** Errors of the framework itself (malformed JSON, a body too large…) in the hub's `{error}` shape. */
 function errorCode(status: number, path: string): string {
@@ -77,10 +83,13 @@ function clientError(error: NodeJS.ErrnoException, socket: Socket & {_httpMessag
  * The desktop app's hub (`local`) has one person who never signs in: the window enters
  * at `/local`, and what is about accounts, sharing and connecting is not there.
  */
-export async function buildApp(hub: Hub) {
+export async function buildApp(hub: Hub, extend?: ExtendHub) {
   hub = {...hub, credentials: hub.credentials ?? new Credentials(hub.store, null, startSecrets(hub.store.db, {current: null, previous: null, reset: null, storageAtStart: null, wasFileAtStart: false}))};
   const {store, directory} = hub;
   const projection = new Projection(hub);
+  const additions = new BoardAdditions(store, directory, hub.credentials!);
+  hub.additions = additions;
+  hub.deviceOnboarding = new DeviceOnboarding(store, directory, additions);
   const {requestTimeoutMs, checkMs} = config.http;
   const app = Fastify({
     logger: false,
@@ -226,7 +235,10 @@ export async function buildApp(hub: Hub) {
   accountRoutes(app, hub, guards);
   sourceKeyRoutes(app,hub,guards);
   currencyRoutes(app,hub,guards);
-  await app.register(async scope => credentialRoutes(scope, hub.credentials!, guards));
+  await extend?.(app, hub, guards);
+  const verificationAttempts=new Limiter(10,60_000);
+  await app.register(async scope => credentialRoutes(scope, hub.credentials!, guards, verificationAttempts, additions, directory));
+  await app.register(async scope => additionRoutes(scope, hub, guards, additions, verificationAttempts));
   agentRoutes(app, hub);
   if (hub.local) localRoutes(app, hub, hub.local.key);
 

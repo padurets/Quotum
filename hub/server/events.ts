@@ -149,6 +149,7 @@ export class Events implements Touches {
   private readonly sourceAccess=new Map<string,string>();
   private readonly currencyContexts=new Map<string,string>();
   private readonly boardLists = new Map<string, {json: string; value: unknown}>();
+  private readonly connections = new Map<string, number>();
   private hub: {key: string; json: string; value: HubPart} | null = null;
   private hubDeadline: {at: number; cancel: () => void} | null = null;
   private stopHubRecheck: (() => void) | null = null;
@@ -371,6 +372,7 @@ export class Events implements Touches {
     const accesses=new Map<string,Frame[]>();
     const currencies=new Map<string,Frame[]>();
     const lists = new Map<string, Frame[]>();
+    const connectionFrames = new Map<string, Frame[]>();
     for (const watched of this.watched.values()) {
       for (const sub of watched.subscribers) {
         let own: Frame[] = [];
@@ -386,6 +388,12 @@ export class Events implements Touches {
             if (!lists.has(sub.user)) lists.set(sub.user, this.refreshBoards(sub.user));
             if (!currencies.has(key)) currencies.set(key,this.refreshCurrencies(sub.user,watched.id,lineups,now));
             own = [...mines.get(key)!, ...lists.get(sub.user)!,...currencies.get(key)!];
+            if (!connectionFrames.has(sub.user)) {
+              const revision = this.parts.directory.connectionsRevision(sub.user);
+              connectionFrames.set(sub.user, this.connections.get(sub.user) === revision ? [] : [frame('connections', {revision})]);
+              this.connections.set(sub.user, revision);
+            }
+            own.push(...connectionFrames.get(sub.user)!);
           } catch (error) {
             // What was kept of them may be ahead of what they were sent: forgotten, it is sent whole next time.
             trouble(error);
@@ -453,7 +461,8 @@ export class Events implements Touches {
       const board = this.changed(base, 'board', part.board);
       if (board !== null) frames.push({type: 'board', data: `{"board":${board}}`});
       const view = this.changed(base, 'view', part.view);
-      if (view !== null) frames.push({type: 'view', data: `{"view":${view}}`});
+      const revision = this.changed(base, 'viewRevision', part.viewRevision);
+      if (view !== null || revision !== null) frames.push({type: 'view', data: JSON.stringify({view: part.view, revision: part.viewRevision})});
       // Sources that left take what was sent of them along: one that comes back is sent whole.
       for (const id of watched.lineup) {
         if (part.lineup.includes(id)) continue;
@@ -657,12 +666,14 @@ export class Events implements Touches {
         return null;
       }
       const value = (key: string) => watched.base.get(key)?.value;
+      this.connections.set(reader.user, this.parts.directory.connectionsRevision(reader.user));
       snapshot = {
         providers: catalogue,
         sourceAccess:JSON.parse(this.sourceAccess.get(reader.user+'\n'+reader.board)??'{}'),
         currencies:JSON.parse(this.currencyContexts.get(reader.user+'\n'+reader.board)??JSON.stringify(this.projection.currencyContext(reader.user,this.projection.lineup(reader.board),now))),
         board: value('board'),
         view: value('view'),
+        viewRevision: value('viewRevision'),
         historyStart: this.parts.store.historyStart(now),
         sources: watched.lineup.map(id => value(`card:${id}`)),
         sessions: Object.fromEntries(watched.lineup.map(id => [id, value(`sessions:${id}`)])),
@@ -671,6 +682,7 @@ export class Events implements Touches {
         forecast: Object.fromEntries(watched.lineup.map(id => [id, value(`forecast:${id}`)])),
         mine: JSON.parse(this.mines.get(`${reader.user}\n${reader.board}`) ?? '[]'),
         boards: this.boardLists.get(reader.user)?.value ?? [],
+        connectionsRevision: this.parts.directory.connectionsRevision(reader.user),
         resets: this.hub?.value,
       };
     } catch (error) {
@@ -731,7 +743,7 @@ export class Events implements Touches {
     watched?.subscribers.delete(sub);
     const all = [...this.subscribers.values()];
     if (!all.some(s => s.user === sub.user && s.board === sub.board)) {this.mines.delete(`${sub.user}\n${sub.board}`);this.sourceAccess.delete(sub.user+'\n'+sub.board);this.currencyContexts.delete(sub.user+'\n'+sub.board);}
-    if (!all.some(s => s.user === sub.user)) this.boardLists.delete(sub.user);
+    if (!all.some(s => s.user === sub.user)) {this.boardLists.delete(sub.user);this.connections.delete(sub.user);}
     if (watched && !watched.subscribers.size) {
       watched.deadline?.cancel();
       watched.stopRecheck();

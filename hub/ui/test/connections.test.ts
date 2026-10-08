@@ -13,81 +13,92 @@ type Node={type:unknown;props:Record<string,unknown>};
 const nodes=(value:unknown):Node[]=>Array.isArray(value)?value.flatMap(nodes):value&&typeof value==='object'&&'props' in value?[value as Node,...nodes((value as Node).props.children)]:[];
 const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
 
-function fixture(initialOwner='u'){
-  const hooks=preparationFixture(),errorLine={},field={},reads:{resolve:(value:unknown)=>void;reject:(error:Error)=>void}[]=[];
-  const calls:{method:string;url:string;body:unknown}[]=[];
+function fixture(initialOwner='u',local=false,boards:Session['boards']=[]){
+  const hooks=preparationFixture(),errorLine={},field={},reads:{url:string;body:unknown;resolve:(value:unknown)=>void;reject:(error:Error)=>void}[]=[];
   const cleanups=new Set<()=>void>(),modal={};let userId=initialOwner;
-  let notify:(event:unknown)=>void=()=>{};
-  const context={crypto,window:{addEventListener:()=>{},removeEventListener:()=>{}},exports:{} as {ConnectedAccounts:(props:unknown)=>Node;ConnectSource:(props:unknown)=>Node},require:(name:string)=>{
-    if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect:(effect:()=>void|(()=>void),deps:unknown[])=>hooks.useLayoutEffect(()=>{const cleanup=effect();if(!cleanup)return;cleanups.add(cleanup);return()=>{cleanups.delete(cleanup);cleanup();};},deps)};
+  const memo=(read:()=>unknown,deps:unknown[])=>{const box=hooks.useRef(undefined) as {current?:{deps:unknown[];value:unknown}};if(!box.current||deps.some((value,i)=>!Object.is(value,box.current!.deps[i])))box.current={deps,value:read()};return box.current.value;};
+  let scopeActive=true;
+  const modules: Record<string, Record<string, unknown>> = {};
+  const context={exports:{} as {ConnectionsPage:(props:unknown)=>Node;KeyForm:(props:unknown)=>Node;useAddition:()=>{submit:(board:string,item:unknown,secret?:string)=>Promise<void>}},crypto:{randomUUID:()=> 'request'},AbortController,require:(name:string)=>{
+    if(name==='react')return {createContext:()=>({}),useContext:()=>()=>scopeActive,useState:hooks.useState,useRef:hooks.useRef,useCallback:(fn:unknown,deps:unknown[])=>memo(()=>fn,deps),useEffect:(effect:()=>void|(()=>void),deps:unknown[])=>hooks.useLayoutEffect(()=>{const cleanup=effect();if(!cleanup)return;cleanups.add(cleanup);return()=>{cleanups.delete(cleanup);cleanup();};},deps)};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'};
-    if(name.endsWith('/http'))return {ApiError,call:(method:string,url:string,body:unknown)=>{calls.push({method,url,body});return new Promise((resolve,reject)=>reads.push({resolve,reject}));}};
-    if(name.endsWith('/board'))return {useApp:()=>null,useTitles:()=>({}),page:{listen:(listener:typeof notify)=>{notify=listener;return()=>{};}}};
-    if(name.endsWith('/providers'))return {PROVIDERS:{openrouter:{name:'OpenRouter'},deepseek:{name:'DeepSeek'},zai:{name:'z.ai'}}};
+    if(name.endsWith('/http'))return {ApiError,call:(_method:string,url:string,body:unknown)=>new Promise((resolve,reject)=>reads.push({url,body,resolve,reject}))};
+    if(name.endsWith('/board'))return {};
+    if(name.endsWith('/view'))return {flushView:async()=>{}};
+    if(name.endsWith('/router'))return {};
+    if(name.endsWith('/session'))return {boardTitle:(board:{name:string})=>board.name};
+    if(name.endsWith('/providers'))return {PROVIDERS:{openrouter:{name:'OpenRouter'},deepseek:{name:'DeepSeek'},zai:{name:'z.ai'}},catalogue:[{id:'openrouter',name:'OpenRouter',measuredBy:'hub'},{id:'deepseek',name:'DeepSeek',measuredBy:'hub'},{id:'zai',name:'z.ai',measuredBy:'hub'}]};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key};
     if(name.endsWith('/format'))return {stamp:()=>''};
+    if(name.endsWith('/widgetKind'))return {widgetKind:()=> 'resource.subscription'};
+    if(name==='lucide-react')return {};
     if(name==='./Kit')return {Field:field,ErrorLine:errorLine,Modal:modal};
     if(name==='./Popover')return {};
     if(name==='./logos')return {logoOf:()=>''};
+    if(name==='./Machines')return {};
+    if(name.endsWith('/addition'))return modules.addition;
+    if(name==='./ConnectionForms')return modules.forms;
+    if(name==='./WidgetAdd')return {WidgetAdd: function WidgetAdd() {}};
     throw new Error(name);
   }};
-  runInNewContext(ts.transpileModule(readFileSync(new URL('../components/Connections.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
-  const render=()=>{hooks.begin();const tree=context.exports.ConnectedAccounts({userId,trustedKeys:{available:true},onReplace:()=>{}});hooks.commit();return nodes(tree);};
-  const form=(provider='deepseek',replace:unknown=null)=>{hooks.begin();const node=context.exports.ConnectSource({provider,userId,replace,local:false,trustedKeys:{available:true},onClose:()=>{}}),tree=(node.type as (props:unknown)=>Node)(node.props);hooks.commit();return nodes(tree);};
-  const reply={credentials:[{id:'c',provider:'openrouter',sourceId:null,hint:'abcd',lastError:null,expiresAt:null}]};
-  return {reads,calls,reply,render,form,field,event:()=>notify({type:'hub',event:{type:'sourceAccess'}}),errors:()=>render().filter(n=>n.type===errorLine),rows:()=>render().filter(n=>typeof n.type==='function'&&n.props.name==='OpenRouter'),owner:(next:string)=>{userId=next;},unmount:()=>{for(const cleanup of cleanups)cleanup();cleanups.clear();},removing:()=>render().some(n=>n.type===modal)};
-}
-
-test('the connection form keeps paging accounts and their attestations in the current page',async()=>{
-  const f=fixture(),first='11111111-1111-4111-8111-111111111111',second='22222222-2222-4222-8222-222222222222';
-  const select=()=>f.form().find(n=>n.type==='select')!;
-  const button=(key:string)=>f.form().find(n=>n.type==='button'&&n.props.children===key)!;
-  const change=(node:Node,value:string|boolean)=>(node.props.onChange as (event:unknown)=>void)({target:{value,checked:value}});
-  f.form();f.reads[0].resolve({accounts:[{id:first,name:'Personal',connected:true}],next:first});await flush();
-  const oldSelector=select();(button('sources.moreAccounts').props.onClick as ()=>void)();f.form();
-  assert.equal(select().props.disabled,true,'old page must not remain interactive while the new page loads');
-  assert.equal(button('sources.moreAccounts').props.disabled,true);assert.equal(button('sources.backAccounts').props.disabled,true);
-  // An obsolete selection callback must not make a hidden account submittable either.
-  change(oldSelector,first);change(f.form().find(n=>n.type===f.field&&n.props.type==='password')!,'synthetic-key');
-  const checks=()=>f.form().filter(n=>n.type==='input'&&n.props.type==='checkbox');
-  change(checks()[0],true);change(checks()[1],true);
-  await (f.form().find(n=>n.type==='form')!.props.onSubmit as (event:unknown)=>Promise<void>)({preventDefault:()=>{}});
-  assert.equal(f.calls.filter(c=>c.method==='POST').length,0,'a hidden account cannot be submitted');
-  f.reads[1].resolve({accounts:[{id:second,name:'Work',connected:false}],next:null});await flush();
-  assert.equal(select().props.value,'new');assert.equal(checks().length,1,'old same-account attestation is withdrawn');
-  change(select(),second);change(checks()[0],true);
-  const saving=(f.form().find(n=>n.type==='form')!.props.onSubmit as (event:unknown)=>Promise<void>)({preventDefault:()=>{}});
-  const post=f.calls.find(c=>c.method==='POST');assert.ok(post);
-  assert.deepEqual(JSON.parse(JSON.stringify((post.body as {account:unknown}).account)),{kind:'existing',id:second});
-  assert.equal((post.body as {sameAccount:boolean}).sameAccount,true);
-  f.reads[2].resolve({});await saving;
-  f.unmount();
-});
-
-for(const provider of ['deepseek','zai'])test(`${provider} replacement submits the shared same-account attestation and withdraws it on key changes`,async()=>{
-  const f=fixture(),record={id:'credential',provider,accountName:'Personal'};
-  const form=()=>f.form(provider,record),submit=()=> (form().find(n=>n.type==='form')!.props.onSubmit as (e:unknown)=>Promise<void>)({preventDefault:()=>{}});
-  const change=(node:Node,value:string|boolean)=>(node.props.onChange as (e:unknown)=>void)({target:{value,checked:value}});
-  const secret=()=>form().find(n=>n.type===f.field&&n.props.type==='password')!;
-  const checks=()=>form().filter(n=>n.type==='input'&&n.props.type==='checkbox');
-  form();change(secret(),'synthetic-first-key');await submit();assert.equal(f.calls.length,0);
-  for(const checkbox of checks())change(checkbox,true);
-  if(provider==='zai') {
-    const confirmation=submit();f.reads[0].reject(new ApiError(409,'credential_expiry_confirmation'));await confirmation;await flush();
-    assert.equal(checks().length,2);for(const checkbox of checks())change(checkbox,true);
+  for (const [name, file] of [['addition', '../lib/addition.ts'], ['forms', '../components/ConnectionForms.tsx'], ['connections', '../components/ConnectionsPage.tsx']]) {
+    const exports = {};
+    runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,{...context,exports});
+    modules[name] = exports;
+    Object.assign(context.exports, exports);
   }
-  const saving=submit(),post=f.calls.at(-1)!;
-  assert.equal(post.url,'/api/credentials/credential');
-  assert.deepEqual(JSON.parse(JSON.stringify(post.body)),{secret:'synthetic-first-key',sameAccount:true,allowUnknownExpiry:true});
-  f.reads.at(-1)!.resolve({});await saving;
-  const count=f.calls.length;change(secret(),'synthetic-second-key');await submit();assert.equal(f.calls.length,count,'a new key needs a new same-account confirmation');
-  f.unmount();
-});
+  const render=()=>{hooks.begin();const tree=context.exports.ConnectionsPage({userId,trustedKeys:{available:true},boards,local});hooks.commit();return nodes(tree);};
+  const keyForm=(props:unknown)=>{hooks.begin();const tree=context.exports.KeyForm(props);hooks.commit();return nodes(tree);};
+  const reply={connections:[{id:'c',provider:'openrouter',sourceId:null,hint:'abcd',lastError:null,expiresAt:null,label:'OpenRouter',lastSuccessAt:null,placements:[]}]};
+  const addition=()=>{hooks.begin();const value=context.exports.useAddition();hooks.commit();return value;};
+  return {reads,reply,render,keyForm,addition,endScope:()=>{scopeActive=false;},errorLine,event:()=>{const refresh=render().find(n=>n.type==='button'&&n.props.children==='refresh.action')!;(refresh.props.onClick as ()=>void)();},errors:()=>render().filter(n=>n.type===errorLine&&n.props.error),rows:()=>render().filter(n=>n.type==='article'&&n.props.className==='connection-record'),owner:(next:string)=>{userId=next;},unmount:()=>{for(const cleanup of cleanups)cleanup();cleanups.clear();},removing:()=>render().some(n=>n.type===modal)};
+}
 
 test('a recovered owner credential list clears the earlier network error',async()=>{
   const f=fixture();f.render();f.reads[0].reject(new Error('offline'));await flush();
   assert.equal(f.errors().length,1);f.event();f.reads[1].resolve(f.reply);await flush();
   assert.equal(f.rows().length,1);assert.equal(f.errors().length,0);
+});
+
+test('recovered replacement displays cleanup warnings and preserves later replacement or removal',()=>{
+  const f=fixture(),initialOperation={id:'receipt',boardId:null,item:{kind:'replace',credentialId:'c'},createdAt:1,state:'complete',warning:'credential_cleanup_pending',current:{credential:{exists:true,revisionMatches:false}},result:{sourceIds:['s']}};
+  const props={board:{id:'personal',name:'Personal',personal:true,role:'owner'},personal:true,available:true,onClose:()=>{},initialOperation};
+  f.keyForm(props);const rendered=f.keyForm(props);
+  assert.equal(rendered.some(node=>node.type==='h3'&&node.props.children==='add.keyChanged'),true);
+  assert.equal(rendered.some(node=>node.type===f.errorLine&&(node.props.error as ApiError)?.code==='credential_cleanup_pending'),true);
+  assert.equal(rendered.some(node=>node.type==='h3'&&node.props.children==='add.replaced'),false);
+});
+
+test('committed replacement retries only its cleanup receipt without another key or reservation',async()=>{
+  const f=fixture(),operation={id:'receipt',boardId:null,item:{kind:'replace',credentialId:'c'},createdAt:1,state:'complete',warning:'credential_cleanup_pending',current:{credential:{exists:true,revisionMatches:true}},result:{sourceIds:['s']}};
+  const props={board:{id:'personal',name:'Personal',personal:true,role:'owner'},personal:true,available:true,onClose:()=>{},initialOperation:operation};
+  f.keyForm(props);const action=f.keyForm(props).find(node=>node.type==='button'&&node.props.children==='add.retryCleanup')!;
+  (action.props.onClick as ()=>void)();await flush();
+  assert.equal(f.reads.length,1);assert.equal(f.reads[0].url,'/api/additions/receipt/run');assert.equal(Object.keys(f.reads[0].body as object).length,0);
+  f.reads[0].resolve({...operation,warning:undefined});await flush();
+  assert.equal(f.keyForm(props).some(node=>node.type==='button'&&node.props.children==='add.retryCleanup'),false);
+});
+
+test('closing an addition form after submit still runs its reserved action in the same owner scope',async()=>{
+  const f=fixture(),operation={id:'receipt',boardId:'board',item:{kind:'widget',widgetId:'history'},state:'ready',createdAt:1};
+  const submitting=f.addition().submit('board',operation.item);await flush();assert.equal(f.reads.length,1);
+  f.unmount();f.reads[0].resolve(operation);await flush();assert.equal(f.reads.length,2);
+  f.reads[1].resolve({...operation,state:'complete',result:{sourceIds:[]}});await submitting;
+});
+
+test('ending the authenticated owner scope before reservation returns prevents the run',async()=>{
+  const f=fixture(),operation={id:'receipt',boardId:'board',item:{kind:'widget',widgetId:'history'},state:'ready',createdAt:1};
+  const submitting=f.addition().submit('board',operation.item);await flush();f.endScope();f.unmount();
+  f.reads[0].resolve(operation);await submitting;assert.equal(f.reads.length,1);
+});
+
+test('adding a saved connection from local settings retains the local capability boundary',async()=>{
+  const f=fixture('u',true,[{id:'personal',name:'Personal',personal:true,role:'owner'}]);f.render();f.reads[0].resolve(f.reply);await flush();
+  (f.render().find(node=>node.type==='button'&&node.props.children==='add.toBoard')!.props.onClick as ()=>void)();
+  const choice=f.render().find(node=>node.type==='button'&&node.props.className==='popover-row')!;
+  (choice.props.onClick as ()=>void)();
+  const add=f.render().find(node=>typeof node.type==='function'&&node.props.initialSourceId!==undefined || typeof node.type==='function'&&node.props.trigger==='Personal')!;
+  assert.ok(add);assert.equal(add.props.local,true);
 });
 
 test('an obsolete failed credential read cannot restore an error after the latest reply',async()=>{
@@ -107,8 +118,8 @@ for(const local of [false,true])test(`a changed ${local?'local':'remote'} sessio
   let key:string|null|undefined,scope:{open:boolean;accounts:ReturnType<typeof fixture>};
   // React retains a child's state only while its type and key retain their identity.
   const render=()=>{const node=context.exports.App();assert.equal(node.type,Dashboard);if(!scope||node.key!==key){scope?.accounts.unmount();scope={open:false,accounts:fixture(node.props.user.id)};key=node.key;}scope.accounts.owner(node.props.user.id);if(scope.open)scope.accounts.render();return scope;};
-  let active=render();active.open=true;render();active.accounts.reply.credentials[0].hint='ALIC';active.accounts.reads[0].resolve(active.accounts.reply);await flush();
-  const removal=nodes(active.accounts.rows()[0].props.actions).find(n=>n.type==='button'&&n.props.className==='popover-row danger')!;
+  let active=render();active.open=true;render();active.accounts.reply.connections[0].hint='ALIC';active.accounts.reads[0].resolve(active.accounts.reply);await flush();
+  const removal=nodes(active.accounts.rows()[0]).find(n=>n.type==='button'&&n.props.children==='sources.remove')!;
   (removal.props.onClick as ()=>void)();assert.equal(active.accounts.removing(),true);
   next={...current};await reader.refresh();assert.equal(render(),active,'a normal session refresh preserves the open action');
   active.accounts.event();const obsolete=active.accounts.reads[1];
@@ -118,4 +129,39 @@ for(const local of [false,true])test(`a changed ${local?'local':'remote'} sessio
   assert.equal(bob.accounts.rows().length,0,'previous owner hints cannot survive a failed new-owner load');
   assert.equal(bob.accounts.errors().length,1);assert.equal(bob.accounts.removing(),false);
   active=bob;active.accounts.unmount();
+});
+
+test('z.ai form keeps its destination and requires unknown expiry plus same-account consent for replacement',async()=>{
+  const f=fixture(),props={provider:'zai',board:{id:'team',name:'Team',personal:false,role:'member'},personal:false,available:true,onClose:()=>{},replace:{id:'zai-key',provider:'zai',sourceId:'zai-source',revision:0,identityOrigin:'declared',expiryKind:'unknown'}};
+  let tree=f.keyForm(props);const key=tree.find(node=>node.props.label==='sources.apiKey')!;(key.props.onChange as (event:unknown)=>void)({target:{value:'synthetic-key'}});
+  tree=f.keyForm(props);assert.equal(tree.filter(node=>node.type==='input'&&node.props.type==='checkbox').length,2);
+  assert.equal(tree.find(node=>node.type==='button'&&node.props.children==='sources.replace')!.props.disabled,true);
+  for(const checkbox of tree.filter(node=>node.type==='input'&&node.props.type==='checkbox'))(checkbox.props.onChange as (event:unknown)=>void)({target:{checked:true}});
+  tree=f.keyForm(props);assert.equal(tree.find(node=>node.type==='button'&&node.props.children==='sources.replace')!.props.disabled,false);
+  (tree.find(node=>node.type==='form')!.props.onSubmit as (event:unknown)=>void)({preventDefault:()=>{}});await flush();
+  assert.equal(f.reads[0].url,'/api/additions');assert.deepEqual(JSON.parse(JSON.stringify((f.reads[0].body as {item:unknown}).item)),{kind:'replace',credentialId:'zai-key'});
+  f.reads[0].resolve({id:'intent',boardId:null,item:{kind:'replace',credentialId:'zai-key',provider:'zai'},state:'ready'});await flush();
+  assert.equal(f.reads[1].url,'/api/additions/intent/run');assert.deepEqual(JSON.parse(JSON.stringify(f.reads[1].body)),{secret:'synthetic-key',allowUnknownExpiry:true,sameAccount:true});f.unmount();
+});
+
+test('DeepSeek Add binds a named private account and one informed submission to the selected board',async()=>{
+  const f=fixture(),props={provider:'deepseek',board:{id:'team',name:'Team',personal:false,role:'member'},personal:false,available:true,onClose:()=>{}};
+  f.keyForm(props);assert.equal(f.reads[0].url,'/api/source-accounts?provider=deepseek&limit=10');f.reads[0].resolve({accounts:[],next:null});await flush();
+  let tree=f.keyForm(props);
+  (tree.find(node=>node.props.label==='sources.accountName')!.props.onChange as (event:unknown)=>void)({target:{value:'Personal'}});
+  (tree.find(node=>node.props.label==='sources.apiKey')!.props.onChange as (event:unknown)=>void)({target:{value:'synthetic-key'}});
+  tree=f.keyForm(props);assert.equal(tree.find(node=>node.type==='button'&&node.props.children==='add.connectAndAdd')!.props.disabled,true);
+  (tree.find(node=>node.type==='input'&&node.props.type==='checkbox')!.props.onChange as (event:unknown)=>void)({target:{checked:true}});
+  tree=f.keyForm(props);assert.equal(tree.find(node=>node.type==='button'&&node.props.children==='add.connectAndAdd')!.props.disabled,false);
+  (tree.find(node=>node.type==='form')!.props.onSubmit as (event:unknown)=>void)({preventDefault:()=>{}});await flush();
+  assert.deepEqual(JSON.parse(JSON.stringify((f.reads[1].body as {boardId:string;item:unknown}).item)),{kind:'connection',provider:'deepseek',account:{kind:'new'}});assert.equal((f.reads[1].body as {boardId:string}).boardId,'team');
+  f.reads[1].resolve({id:'intent',boardId:'team',item:{kind:'connection',provider:'deepseek',account:{kind:'new'}},state:'ready'});await flush();assert.deepEqual(JSON.parse(JSON.stringify(f.reads[2].body)),{secret:'synthetic-key',allowUnknownExpiry:true,accountName:'Personal'});f.unmount();
+});
+
+test('unavailable connection forms retain matching-key and damaged-storage recovery reasons',()=>{
+  for(const reason of ['secret_key_mismatch','secret_key_storage_invalid','secret_key_storage_missing','secret_key_storage_unavailable']) {
+    const f=fixture(),rendered=f.keyForm({provider:'deepseek',board:{id:'personal',name:'Personal',personal:true,role:'owner'},personal:true,available:false,storageReason:reason,onClose:()=>{}});
+    assert.equal(rendered.some(node=>reason==='secret_key_mismatch'?node.props.children==='trustedKeys.serverMismatch':node.type===f.errorLine&&(node.props.error as ApiError)?.code===reason),true);
+    assert.equal(rendered.some(node=>node.props.children==='trustedKeys.serverMissing'),false);f.unmount();
+  }
 });

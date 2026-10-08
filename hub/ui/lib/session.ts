@@ -3,13 +3,14 @@ import {t} from '../i18n';
 import {page, useBoards} from './board';
 import {call, UNAUTHORIZED} from './http';
 import {SessionReader} from './sessionReader';
+import {navigate, useSelectedBoard} from './router';
 
 export type User = {id: string; email: string; name: string};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
 /** `local`: the desktop app's hub, one person who never signs in (see lib/app.ts). */
 export type Session = {
   user: User | null; boards: Board[]; signup: {first: boolean; open: boolean}; local: boolean;
-  trustedKeys?: {available: boolean; reason: 'secret_key_missing' | 'secret_key_mismatch' | null};
+  trustedKeys?: {available: boolean; reason: 'secret_key_missing' | 'secret_key_mismatch' | 'secret_key_storage_missing' | 'secret_key_storage_invalid' | 'secret_key_storage_unavailable' | null};
   secretKey?: {outcome: 'created' | 'ok' | 'rotated' | 'mismatch' | 'missing'; storageAtStart: 'keystore' | 'file' | 'waiting' | 'missing' | null; wasFileAtStart: boolean};
 };
 
@@ -100,11 +101,11 @@ function remembered(): string | null {
  */
 export function useBoard(): [Board | null, (id: string) => void] {
   const boards = useBoards();
-  const [id, setId] = useState(remembered);
+  const id = useSelectedBoard() ?? remembered();
   const board = boards?.find(b => b.id === id) ?? boards?.[0] ?? null;
   const select = useCallback((next: string) => {
-    setId(next);
     rememberBoard(next);
+    navigate('/?board=' + encodeURIComponent(next));
   }, []);
   return [board, select];
 }

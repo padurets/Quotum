@@ -1,4 +1,4 @@
-# The Quotum hub in one image: `docker run -p 8080:8080 -v quotum:/data ghcr.io/padurets/quotum-hub`.
+# The hub uses separate named data and key volumes; see the README's Docker command.
 # The first account needs the setup code the hub prints to its log (`docker logs`).
 
 # JavaScript is built once, natively; the image of every platform only copies it (no native modules).
@@ -18,12 +18,14 @@ ENV NODE_ENV=production \
     QUOTUM_BIND=0.0.0.0 \
     QUOTUM_PORT=8080 \
     QUOTUM_DATA_DIR=/data \
+    QUOTUM_SECRET_DIR=/keys \
+    QUOTUM_MANAGED_CONTAINER=1 \
     QUOTUM_ALLOWED_HOSTS=*
 WORKDIR /hub
 COPY --from=build /hub/package.json ./
 COPY --from=build /hub/node_modules ./node_modules
 COPY --from=build /hub/dist ./dist
-RUN mkdir -p /data && chown node:node /data
+RUN mkdir -p /data /keys && chmod 700 /keys && chown node:node /data /keys
 USER node
 VOLUME /data
 EXPOSE 8080

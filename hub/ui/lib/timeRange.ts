@@ -1,4 +1,5 @@
 import {useSyncExternalStore} from 'react';
+import {navigate, onLocation} from './router';
 import {clock, day, stamp} from './format';
 import {periodLabel, periodOf} from './periods';
 
@@ -42,14 +43,13 @@ function changed() {
   if (location.search === search) return;
   search = location.search;
   current = parseTimeRange(search);
-  for (const listener of listeners) listener();
+  for (const listener of [...listeners]) listener();
 }
 
 function go(params: URLSearchParams, push: boolean) {
   const query = params.toString();
   const url = `${location.pathname}${query ? `?${query}` : ''}${location.hash}`;
-  if (push) history.pushState(null, '', url);
-  else history.replaceState(null, '', url);
+  navigate(url, !push);
   changed();
 }
 
@@ -83,32 +83,16 @@ export function dropTimeRange() {
  * The board on screen. A selected range is shared together with it, and an address that
  * names a board follows another one chosen, so a reload does not go back to the first.
  */
-export function showBoard(id: string) {
-  board = id;
-  const params = new URLSearchParams(location.search);
-  if (id && params.has('board') && params.get('board') !== id) {
-    params.set('board', id);
-    go(params, false);
-  }
-}
-
-/** Back and Forward may bring back the address of another board than the one on screen: it follows the screen. */
-function popped() {
-  changed();
-  if (board) showBoard(board);
-}
+export function showBoard(id: string) { board = id; }
 
 /** Hears of every change of the selection, as the page's history loader does; the page's components use `useTimeRange`. */
+let stopLocation: (() => void) | null = null;
 export function onTimeRange(listener: () => void) {
   listeners.add(listener);
-  if (listeners.size === 1) {
-    window.addEventListener('popstate', popped);
-    // The address may have changed while nothing was listening.
-    changed();
-  }
+  if (listeners.size === 1) {stopLocation = onLocation(changed); changed();}
   return () => {
     listeners.delete(listener);
-    if (!listeners.size) window.removeEventListener('popstate', popped);
+    if (!listeners.size) {stopLocation?.(); stopLocation = null;}
   };
 }
 

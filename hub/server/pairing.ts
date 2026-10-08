@@ -49,12 +49,15 @@ export class Pairing {
     this.directory.polled(request.id, now);
     if (request.status === 'pending') return tooSoon ? 'slow_down' : 'authorization_pending';
 
-    if (!this.directory.useCode(request.id)) return 'expired_token';
-    const user = this.directory.user(request.userId!)!;
-    const token = newSecret('qt_d');
-    const {agent, ...machine} = request.machine;
-    const device = this.directory.saveDevice({userId: user.id, machine, agent, tokenId: null, secret: token}, now);
-    return {token, device, account: {name: user.name}};
+    return this.directory.transaction(() => {
+      if (!this.directory.useCode(request.id)) return 'expired_token';
+      const user = this.directory.user(request.userId!)!;
+      const token = newSecret('qt_d');
+      const {agent, ...machine} = request.machine;
+      const device = this.directory.saveDevice({userId: user.id, machine, agent, tokenId: null, secret: token}, now);
+      this.directory.bindOnboardingDevice(request.id, user.id, device.id);
+      return {token, device, account: {name: user.name}};
+    });
   }
 
   /** A pending request as the approving person sees it. */

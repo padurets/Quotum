@@ -5,18 +5,12 @@ import {errorText} from '../lib/quota';
 import {call} from '../lib/http';
 import {logoOf} from './logos';
 import {CopyField, ErrorLine, Field, Modal} from './Kit';
-import {Popover} from './Popover';
 import {rich, t} from '../i18n';
 import {Ago} from './Time';
-import {catalogue,providerOf} from '../../server/domain/providers';
-import {ConnectedAccounts,ConnectSource,ConnectionRow} from './Connections';
-import type {Session} from '../lib/session';
+import {ConnectionRow} from './Connections';
+import {useConnectionsRevision} from '../lib/board';
 
-import type {Credential} from '../../server/store/credentials';
-
-export type ConnectionsStart = 'list' | 'connect';
-
-type Device = {
+export type Device = {
   id: string;
   /** The name given on the hub, else the one the machine reports. */
   name: string;
@@ -54,7 +48,7 @@ function Agents({device}: {device: Device}) {
 }
 
 /** The reader's devices; on the desktop app's board, its one machine, which cannot be disconnected (it is the app's own agent). */
-function Devices({local}: {local: boolean}) {
+export function Devices({local}: {local: boolean}) {
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [renaming,setRenaming]=useState<Device|null>(null),[name,setName]=useState('');
   const [error, setError] = useState<unknown>(null);
@@ -93,7 +87,28 @@ function Devices({local}: {local: boolean}) {
   </>;
 }
 
-function ConnectDevice() {
+export function DeviceCode() {
+  return <>
+    <p className="dialog-text">{t('connect.codeText')}</p>
+    <CopyField value={`npx quotum connect ${origin()}`} />
+  </>;
+}
+
+/** Settings show both methods; onboarding keeps automation optional within its current step. */
+export function ConnectDevice({onboardingId}: {onboardingId?: string} = {}) {
+  return (
+    <div className="dialog-form">
+      <DeviceCode />
+      <details className="connection-tokens">
+        <summary>{t('connect.tokenTitle')}</summary>
+        <DeviceTokens onboardingId={onboardingId} />
+      </details>
+    </div>
+  );
+}
+
+export function DeviceTokens({onboardingId}: {onboardingId?: string} = {}) {
+  const revision = useConnectionsRevision();
   const [tokens, setTokens] = useState<Token[]>([]);
   const [name, setName] = useState('');
   const [created, setCreated] = useState<{secret: string; name: string} | null>(null);
@@ -102,7 +117,7 @@ function ConnectDevice() {
   const load = useCallback(() => {
     call<Token[]>('GET', '/api/tokens').then(setTokens, setError);
   }, []);
-  useEffect(load, [load]);
+  useEffect(load, [load, revision]);
 
   const create = async (event: FormEvent) => {
     event.preventDefault();
@@ -110,7 +125,7 @@ function ConnectDevice() {
     setBusy(true);
     setError(null);
     try {
-      const token = await call<Token & {secret: string}>('POST', '/api/tokens', {name: name.trim()});
+      const token = await call<Token & {secret: string}>('POST', '/api/tokens', {name: name.trim(), ...(onboardingId ? {onboardingId} : {})});
       setCreated({secret: token.secret, name: tokenName(token)});
       setName('');
       load();
@@ -135,67 +150,44 @@ function ConnectDevice() {
 
   return (
     <div className="dialog-form">
-        <p>{t('connect.codeText')}</p>
-        <CopyField value={`npx quotum connect ${origin()}`} />
-      <details className="connection-tokens"><summary>{t('connect.tokenTitle')}</summary><div className="dialog-form">
-        <p>{t('connect.tokenText')}</p>
-        {created ? (
-          <div className="token-created">
-            <CopyField label={t('connect.tokenShownOnce', {name: created.name})} value={created.secret} secret />
-            <CopyField label={t('connect.run')} value={`QUOTUM_HUB_URL=${origin()} QUOTUM_HUB_TOKEN=${created.secret} npx quotum run`} />
-            <button type="button" className="link-button" onClick={() => setCreated(null)}>
-              {t('connect.done')}
-            </button>
-          </div>
-        ) : (
-          <form className="inline-form" onSubmit={create}>
-            <Field label={t('connect.name')} placeholder={t('connect.namePlaceholder')} value={name} onChange={e => setName(e.target.value)} maxLength={80} />
-            <button type="submit" className="button primary" disabled={busy}>
-              {t('connect.create')}
-            </button>
-          </form>
-        )}
-        <ErrorLine error={error} />
-        {tokens.length > 0 && (
-          <ul className="token-list">
-            {tokens.map(token => (
-              <li key={token.id}>
-                <span>
-                  <b>{tokenName(token)}</b> <span className="mono">{token.hint}</span>
-                </span>
-                <small title={token.lastUsedAt ? stamp(token.lastUsedAt) : undefined}>{token.lastUsedAt ? rich('connect.used', {ago: <Ago at={token.lastUsedAt} />}) : t('connect.unused')}</small>
-                <button type="button" className="link-button danger" onClick={() => revoke(token)}>
+      <p className="dialog-text">{t('connect.tokenText')}</p>
+      {created ? (
+        <div className="token-created">
+          <CopyField label={t('connect.tokenShownOnce', {name: created.name})} value={created.secret} secret />
+          <CopyField label={t('connect.run')} value={`QUOTUM_HUB_URL=${origin()} QUOTUM_HUB_TOKEN=${created.secret} npx quotum run`} />
+          <button type="button" className="button" onClick={() => setCreated(null)}>
+            {t('connect.done')}
+          </button>
+        </div>
+      ) : (
+        <form className="inline-form is-wrap settings-form" onSubmit={create}>
+          <Field label={t('connect.name')} placeholder={t('connect.namePlaceholder')} value={name} onChange={e => setName(e.target.value)} maxLength={80} />
+          <button type="submit" className="button primary" disabled={busy}>
+            {t('connect.create')}
+          </button>
+        </form>
+      )}
+      <ErrorLine error={error} />
+      {tokens.length > 0 && (
+        <ul className="settings-list">
+          {tokens.map(token => (
+            <li key={token.id} className="popover-row settings-list-row">
+              <div className="settings-item-main">
+                <b>{tokenName(token)}</b>
+                <small className="mono">{token.hint}</small>
+              </div>
+              <small className="settings-item-detail" title={token.lastUsedAt ? stamp(token.lastUsedAt) : undefined}>
+                {token.lastUsedAt ? rich('connect.used', {ago: <Ago at={token.lastUsedAt} />}) : t('connect.unused')}
+              </small>
+              <div className="settings-item-actions">
+                <button type="button" className="button" onClick={() => revoke(token)}>
                   {t('connect.revoke')}
                 </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div></details>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
-}
-
-const accountProviders=catalogue.filter(p=>p.measuredBy==='hub');
-type ConnectionKind='device'|(typeof accountProviders)[number]['id'];
-
-export function ConnectionsDialog({start,onClose,local,userId,trustedKeys}:{start:ConnectionsStart;onClose:()=>void;local:boolean;userId:string;trustedKeys:Session['trustedKeys']}) {
-  const [kind,setKind]=useState<ConnectionKind|null>(null);
-  const [open,setOpen]=useState(start==='connect');
-  const [replace,setReplace]=useState<Credential|null>(null);
-  const back=()=>{setKind(null);setReplace(null);};
-  const choose=(next:ConnectionKind)=>{setOpen(false);setKind(next);};
-  const title=kind==='device'?t('connections.connectDevice'):kind?replace?t('sources.replace'):t('sources.connectProvider',{provider:providerOf(kind)?.name??kind}):t('machines.title');
-  return <Modal key={kind??'list'} title={title} onClose={onClose} wide={!kind}>
-    {kind?<div className="dialog-form">
-      <button type="button" className="link-button connection-back" onClick={back}>← {t('connections.back')}</button>
-      {kind==='device'?<ConnectDevice/>:<ConnectSource provider={kind} userId={userId} local={local} trustedKeys={trustedKeys} replace={replace} onClose={back}/>}
-    </div>:<div className="dialog-body">
-      <div className="connections-toolbar"><Popover label={t('admin.connect')} trigger={t('admin.connect')} triggerClass="button primary" open={open} onOpenChange={setOpen} align="left">
-        {!local&&<button className="popover-row" onClick={()=>choose('device')}><span>{t('connections.device')}</span></button>}
-        {accountProviders.map(provider=><button key={provider.id} className="popover-row" onClick={()=>choose(provider.id)}><span>{provider.id==='zai'?t('sources.zaiPersonal'):provider.name}</span></button>)}
-      </Popover></div>
-      <ul className="connections-list"><Devices local={local}/><ConnectedAccounts userId={userId} trustedKeys={trustedKeys} onReplace={record=>{const provider=accountProviders.find(p=>p.id===record.provider);if(provider){setReplace(record);choose(provider.id);}}}/></ul>
-    </div>}
-  </Modal>;
 }

@@ -3,6 +3,7 @@ import {inspect} from 'node:util';
 
 export const SECRET_CODE = Object.freeze({
   INVALID: 'secret_key_invalid', CONFIGURATION_INVALID: 'secret_key_configuration_invalid', FILE_IN_DATA: 'secret_key_file_in_data', FILE_UNAVAILABLE: 'secret_key_file_unavailable',
+  STORAGE_UNAVAILABLE: 'secret_key_storage_unavailable', STORAGE_INVALID: 'secret_key_storage_invalid', STORAGE_MISSING: 'secret_key_storage_missing',
   METADATA_INVALID: 'secret_key_metadata_invalid', RESET_INVALID: 'secret_key_reset_invalid', RESET_CONFLICT: 'secret_key_reset_conflict', START_FAILED: 'secret_key_start_failed', CHECKPOINT_PENDING: 'secret_key_checkpoint_pending', MISSING: 'secret_key_missing', MISMATCH: 'secret_key_mismatch',
   CREDENTIAL_INVALID: 'credential_invalid', CREDENTIAL_NOT_FOUND: 'credential_not_found', CREDENTIAL_PROVIDER_UNKNOWN: 'credential_provider_unknown', CREDENTIAL_FAILED: 'credential_failed', CREDENTIAL_UNREADABLE: 'credential_unreadable', CREDENTIAL_CLEANUP_PENDING: 'credential_cleanup_pending',
   CREDENTIAL_EXPIRED: 'credential_expired', CREDENTIAL_REVOKED: 'credential_revoked', CREDENTIAL_WRONG_TYPE: 'credential_wrong_type', CREDENTIAL_PERMISSION: 'credential_permission', CREDENTIAL_ACCOUNT_MISMATCH: 'credential_account_mismatch', CREDENTIAL_EXPIRY_CONFIRMATION: 'credential_expiry_confirmation', CREDENTIAL_CONFLICT: 'credential_conflict',

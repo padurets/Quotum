@@ -92,7 +92,7 @@ function InlineName({
  * the reader renames, merges and gives back their own names; every change applies to all
  * the time kept. The rules are in ui/lib/projects.ts.
  */
-function Projects() {
+export function Projects() {
   const [list, setList] = useState<ProjectList | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [merge, setMerge] = useState(false);

@@ -8,6 +8,7 @@ coverage/
 
 # Data and logs of a running hub or agent
 data/
+*.keys/
 *.sqlite
 *.sqlite-*
 *.log

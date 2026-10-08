@@ -206,13 +206,22 @@ the monetary cases on Ana's personal board: balance and caps, large key inventor
 revoked and expired access, a history gap, negative balance, zero cap and an unknown
 provider. `DEV_SET=quotas DEV_STILL=true make dev` shows personal z.ai subscription
 quotas in credits, unknown resets, exhausted and closed allowances, partial and
-unsupported readings, and private access failures. The other catalogue cards remain available in the widget menu.
+unsupported readings, and private access failures. The other catalogue cards remain
+available through Add widget.
+`DEV_SET=onboarding DEV_STILL=true make dev` exercises board and account onboarding.
+Ana owns *Studio* and *New board*; Boris is a member of both. OpenRouter starts
+unconnected. Add widget offers synthetic keys for successful, partial and failed
+answers, a lost-reply control, and an explicit subset from a synthetic device report.
+Services, encrypted storage, receipts and board events use production code; only
+external answers and device reports are synthetic. No real provider or client is
+contacted. Use `make info` for the actual address and synthetic sign-in.
+
 `DEV_MODE=hub make dev` starts an ordinary hub on
 isolated persistent data with reset trackers disabled. No mode starts coding clients.
-To connect trusted sources in hub mode, set `QUOTUM_SECRET_KEY_FILE` in `.env` to a
-private file containing the encryption key described in the README. Relative paths
-start at the checkout root. Keep it outside `hub-data` and version control; only its
-path enters the stand's configuration. Demo, builds and component checks do not inherit
+Hub mode provisions its persistent key automatically in the private `hub-keys`
+directory outside `hub-data`. Explicit `QUOTUM_SECRET_KEY_FILE` overrides remain
+supported; relative paths start at the checkout root and must stay outside data and
+version control. Demo, builds and component checks do not inherit
 it. After changing a key file's contents, restart with `make down` and `make dev`.
 Changing mode restarts the owned stand. Demo data goes away on stop; hub data stays in
 `.quotum-dev/hub-data` until the tree is removed. Managed state, build stamps and logs

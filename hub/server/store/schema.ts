@@ -241,6 +241,41 @@ export const STEPS = [
       AND json_type(q.payload,'$.rates."'||currency_definitions.id||'"') IS NOT NULL
     ORDER BY q.fetched_at,q.rowid LIMIT 1);
   `,
+  // 16 — recoverable additions, concurrent board views and private connection discovery.
+  `
+  ALTER TABLE views ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE credentials ADD COLUMN access_revision INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE board_additions (
+    id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, request_id TEXT NOT NULL, board_id TEXT,
+    item TEXT NOT NULL, state TEXT NOT NULL, result TEXT, error TEXT,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+    attempt_generation INTEGER NOT NULL DEFAULT 0, run_id TEXT, verify_until INTEGER,
+    onboarding_id TEXT UNIQUE, UNIQUE(owner_id, request_id));
+  CREATE INDEX additions_by_owner ON board_additions (owner_id, created_at DESC, id DESC);
+  CREATE TABLE device_onboarding (
+    id TEXT PRIMARY KEY, request_id TEXT NOT NULL, user_id TEXT NOT NULL, board_id TEXT NOT NULL,
+    code_id TEXT, token_id TEXT, device_id TEXT, source_ids TEXT, addition_id TEXT UNIQUE,
+    created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, status TEXT NOT NULL,
+    UNIQUE(user_id, request_id));
+  CREATE TABLE account_revisions (
+    user_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0
+    CHECK (revision BETWEEN 0 AND 9007199254740991));
+  ${[
+    ['holder_added', 'AFTER INSERT ON holders', 'NEW.user_id'],
+    ['holder_removed', 'AFTER DELETE ON holders', 'OLD.user_id'],
+    ['device_added', 'AFTER INSERT ON devices', 'NEW.user_id'],
+    ['token_added', 'AFTER INSERT ON tokens', 'NEW.user_id'],
+    ['token_changed', 'AFTER UPDATE OF hash, revoked_at ON tokens WHEN OLD.hash IS NOT NEW.hash OR OLD.revoked_at IS NOT NEW.revoked_at', 'NEW.user_id'],
+    ['device_changed', 'AFTER UPDATE OF token_id, token_hash, revoked_at, label ON devices WHEN OLD.token_id IS NOT NEW.token_id OR OLD.token_hash IS NOT NEW.token_hash OR OLD.revoked_at IS NOT NEW.revoked_at OR OLD.label IS NOT NEW.label', 'NEW.user_id'],
+    ['device_source_added', 'AFTER INSERT ON device_sources', '(SELECT user_id FROM devices WHERE id=NEW.device_id)'],
+    ['device_source_changed', 'AFTER UPDATE OF source_id ON device_sources WHEN OLD.source_id IS NOT NEW.source_id', '(SELECT user_id FROM devices WHERE id=NEW.device_id)'],
+    ['credential_added', 'AFTER INSERT ON credentials', 'NEW.user_id'],
+    ['credential_removed', 'AFTER DELETE ON credentials', 'OLD.user_id'],
+    ['credential_changed', 'AFTER UPDATE OF access_revision, expires_at, expiry_kind, last_error, unreadable ON credentials WHEN OLD.access_revision IS NOT NEW.access_revision OR OLD.expires_at IS NOT NEW.expires_at OR OLD.expiry_kind IS NOT NEW.expiry_kind OR OLD.last_error IS NOT NEW.last_error OR OLD.unreadable IS NOT NEW.unreadable', 'NEW.user_id'],
+  ].map(([name, event, owner]) => `CREATE TRIGGER connections_${name} ${event} BEGIN
+    INSERT INTO account_revisions (user_id,revision) VALUES (${owner},1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1;
+  END;`).join('\n')}
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

@@ -4,15 +4,22 @@ import {CredentialStore, type Credential, type CredentialRow} from '../store/cre
 import type {Store} from '../store/store.js';
 import {SourceAccounts,accountName,declaredPseudonym,UUID,type AccountTarget,type DeclaredAccount} from '../store/sourceAccounts.js';
 import {providerOf, type Provider} from '../domain/providers.js';
-import {tell, type Touches} from '../touches.js';
-import {SecretError,secretCode, type SecretCode, type SecretKey} from './crypto.js';
+import {afterCommit, transaction, tell, type Touches} from '../touches.js';
+import {SecretError,secretCode, type SecretCode, type SecretKey, type RecordIdentity, type Sealed} from './crypto.js';
 import {checkpoint, type SecretKeyReport} from './start.js';
 
 const DAY=86_400_000;
-export const permanentAccess = (code:string) => ['credential_rejected','credential_auth_rejected','credential_expired','credential_revoked','credential_wrong_type','credential_permission','credential_account_mismatch','credential_unreadable','secret_key_missing','secret_key_mismatch','secret_key_metadata_invalid','credential_provider_unknown'].includes(code);
+export const permanentAccess = (code:string) => [
+  'credential_rejected', 'credential_auth_rejected', 'credential_expired', 'credential_revoked',
+  'credential_wrong_type', 'credential_permission', 'credential_account_mismatch', 'credential_unreadable',
+  'secret_key_missing', 'secret_key_mismatch', 'secret_key_metadata_invalid',
+  'secret_key_storage_missing', 'secret_key_storage_invalid', 'secret_key_storage_unavailable',
+  'credential_provider_unknown',
+].includes(code);
 export type SourceAccess = {error:SecretCode|null;expiresAt:number|null;expiryKind?:import('../connectors/registry.js').ExpiryKind;canRefresh:boolean;credentialIds:string[]};
 export type CredentialOptions={allowNoExpiry?:boolean;allowUnknownExpiry?:boolean;sameAccount?:boolean;requestId?:string;account?:AccountTarget};
 type Options=CredentialOptions;
+export type VerifiedAccess = {provider:string;identity:ConnectorIdentity&{expiryKind:NonNullable<ConnectorIdentity['expiryKind']>};generation:number;hint:string;seal(record:RecordIdentity):Sealed;dispose():void};
 
 /** Trusted keys are write-only; raw errors stop inside this service. */
 export class Credentials {
@@ -20,6 +27,7 @@ export class Credentials {
   private readonly accounts:SourceAccounts;
   private readonly db:Store['db'];
   private observer:Touches|null=null;
+  private readonly verified=new WeakMap<VerifiedAccess,{owner:string;check:()=>void;target:ReturnType<Credentials['target']>;previous:CredentialRow|null;binding:DeclaredAccount|null}>();
   onChange:(source:string)=>void=()=>{};
   constructor(private readonly store:Store,private readonly key:SecretKey|null,readonly report:SecretKeyReport,private readonly registry:ReadonlyMap<string,Connector>=connectors) {
     this.db=store.db;this.accounts=new SourceAccounts(this.db);this.#repository=new CredentialStore(this.db);
@@ -33,15 +41,14 @@ export class Credentials {
   }
   private mutation<T>(work:()=>T,maintenance:boolean,changed?:()=>void):T {
     return this.boundary(()=>{
-      this.db.exec('BEGIN IMMEDIATE');let result:T;
-      try{result=work();this.db.exec('COMMIT');}catch(error){this.db.exec('ROLLBACK');throw error;}
+      const result=transaction(this.db,work);
       changed?.();
       if(maintenance)checkpoint(this.db,'credential_cleanup_pending');
       return result;
     });
   }
   private requireKey():SecretKey {
-    if(!this.key||this.report.outcome==='missing')throw new SecretError('secret_key_missing');
+    if(!this.key||this.report.outcome==='missing')throw new SecretError(this.report.reason??'secret_key_missing');
     if(this.report.outcome==='mismatch')throw new SecretError('secret_key_mismatch');
     const kcv=this.db.prepare("SELECT value FROM meta WHERE key='secretKeyKcv'").get()?.value;
     if(typeof kcv!=='string'||!this.key.matches(kcv))throw new SecretError('secret_key_mismatch');
@@ -49,10 +56,6 @@ export class Credentials {
   }
   private connector(provider:string):Connector {
     const connector=this.registry.get(provider);if(!connector)throw new SecretError('credential_provider_unknown');return connector;
-  }
-  private async secret<T>(connector:Connector,value:unknown,use:(bytes:Buffer)=>Promise<T>):Promise<T> {
-    if(typeof value!=='string'||!/^[\x21-\x7e]{1,4096}$/.test(value)||!connector.secretFormat(value))throw new SecretError('credential_invalid');
-    const bytes=Buffer.from(value,'ascii');try{return await use(bytes);}finally{bytes.fill(0);}
   }
   private generation():number {
     const raw=this.db.prepare("SELECT value FROM meta WHERE key='secretKeyVersion'").get()?.value;
@@ -74,7 +77,6 @@ export class Credentials {
     if(answer.retryAfterMs!==undefined&&(!Number.isSafeInteger(answer.retryAfterMs)||answer.retryAfterMs<0||answer.retryAfterMs>3_600_000))throw new SecretError('connector_invalid_response');
     if(answer.expiresAt!==null&&answer.expiresAt<=Date.now())throw new SecretError('credential_expired');
     if(expiry==='unknown'&&options.allowUnknownExpiry!==true)throw new SecretError('credential_expiry_confirmation','unknown');
-    if(expiry==='none'&&options.allowNoExpiry!==true)throw new SecretError('credential_expiry_confirmation','none');
     return {...answer,expiryKind:expiry};
   }
   private options(connector:Connector,options:Options,replacing:boolean) {
@@ -107,9 +109,18 @@ export class Credentials {
   }
   private answer(row:CredentialRow):Credential {return this.#repository.answer(row.user_id,row.id)!;}
   listAccounts(owner:string,provider:string,limit?:number,after?:string){return this.boundary(()=>this.accounts.list(owner,provider,limit,after));}
+  validateTarget(owner:string,provider:string,value:unknown):AccountTarget|undefined {
+    return this.boundary(()=>{
+      const connector=this.connector(provider);
+      if(!connector.declaredAccounts){if(value!==undefined)throw new SecretError('credential_invalid');return undefined;}
+      const selected=this.accountTarget(undefined,value);
+      if(selected.kind==='existing')this.accounts.get(owner,provider,selected.id);
+      return selected;
+    });
+  }
   private changed(source:string,owner:string) {
     tell(this.observer,o=>{o.touchSources([source]);o.touchUser(owner);});
-    this.onChange(source);
+    afterCommit(()=>this.onChange(source));
   }
   private replay(owner:string,provider:string,requestId?:string,target?:string):(Credential&{replayed:true})|null {
     if(!requestId)return null;
@@ -122,56 +133,85 @@ export class Credentials {
     return {...this.answer(row),replayed:true};
   }
   list(owner:string):Credential[]{return this.boundary(()=>this.#repository.list(owner));}
-  async create(owner:string,provider:string,secret:unknown,options:Options={}):Promise<Credential&{replayed?:true}> {
+  details(owner:string){return this.list(owner).map(record=>({...record,lastSuccessAt:record.sourceId?this.store.state(record.sourceId).successAt:null}));}
+  providers(){return [...this.registry.values()].map(connector=>({id:connector.id,name:providerOf(connector.id)?.name??connector.id,identityOrigin:connector.identityOrigin??'supplier',declaredAccounts:!!connector.declaredAccounts}));}
+
+  /** Transient verification captures account and key authority before any network wait. */
+  async verify(owner:string,provider:string,secret:unknown,options:Options={},signal?:AbortSignal,replace?:{id:string;revision:number}):Promise<VerifiedAccess> {
+    return this.boundaryAsync(async()=>{
+      const connector=this.connector(provider);this.options(connector,options,!!replace);
+      const previous=replace?this.#repository.get(owner,replace.id):null;
+      if(replace&&(!previous||previous.provider!==provider||(previous.access_revision??0)!==replace.revision))throw new SecretError('credential_conflict');
+      const selected=!replace&&connector.declaredAccounts?this.accountTarget(secret,options.account):null;
+      const target=!replace&&connector.declaredAccounts?this.target(owner,provider,selected,options):null;
+      const binding=previous&&connector.declaredAccounts?this.accounts.forSource(owner,provider,previous.source_id??''):null;
+      const authority=this.authority();
+      if(typeof secret!=='string'||!/^[\x21-\x7e]{1,4096}$/.test(secret)||!connector.secretFormat(secret))throw new SecretError('credential_invalid');
+      const bytes=Buffer.from(secret,'ascii');
+      try {
+        const identity=this.validate(connector,await connector.identify(bytes,signal),options);
+        const verified:VerifiedAccess={provider,identity,generation:authority.epoch,hint:bytes.subarray(-4).toString('ascii'),seal:record=>authority.key.seal(record,bytes),dispose:()=>{bytes.fill(0);this.verified.delete(verified);}};
+        this.verified.set(verified,{owner,check:()=>this.currentAuthority(authority),target,previous,binding});
+        return verified;
+      }catch(error){bytes.fill(0);throw error;}
+    });
+  }
+
+  /** Access, native readings, publication and the receipt join the caller's transaction. */
+  commitVerified(owner:string,verified:VerifiedAccess,replace?:{id:string;revision:number},reuse=true):{credential:Credential;connection:'created'|'reused'} {
+    return this.boundary(()=>{
+      const context=this.verified.get(verified);
+      if(!this.db.isTransaction||!context||context.owner!==owner)throw new SecretError('credential_failed');
+      context.check();
+      const {provider,identity}=verified,declared=identity.identityOrigin==='declared';
+      if(context.target?.row&&!this.accounts.current(context.target.row)||context.binding&&!this.accounts.current(context.binding))throw new SecretError('credential_conflict');
+      let row:CredentialRow;
+      if(replace) {
+        const previous=context.previous;
+        if(!previous||previous.id!==replace.id||(previous.access_revision??0)!==replace.revision||!this.#repository.current(previous))throw new SecretError('credential_conflict');
+        const provenance=previous.source_id?this.db.prepare('SELECT kind,owner_id FROM source_identity WHERE source_id=?').get(previous.source_id):null;
+        if(!previous.source_id||(declared?(provenance?.kind!=='declared'||provenance.owner_id!==owner):this.store.account(previous.source_id)!==identity.account))throw new SecretError('credential_account_mismatch');
+        if(!this.#repository.replace(owner,previous.id,verified.seal(previous),verified.generation,verified.hint,previous))throw new SecretError('credential_conflict');
+        this.db.prepare('UPDATE credentials SET abilities=?,expires_at=?,expiry_kind=?,last_used_at=NULL WHERE id=? AND user_id=?').run(JSON.stringify(identity.abilities),identity.expiresAt,identity.expiryKind,previous.id,owner);
+        row=this.#repository.get(owner,previous.id)!;
+      }else {
+        if(context.previous)throw new SecretError('credential_conflict');
+        const target=context.target,account=target?(target.row??this.accounts.add(owner,provider,target.name!,account=>this.store.source(provider as Provider,account,Date.now()))):null;
+        const source=account?.source_id??this.store.source(provider as Provider,declared?declaredPseudonym(owner,provider,randomUUID()):identity.account!,Date.now());
+        const provenance=this.db.prepare('SELECT kind,owner_id FROM source_identity WHERE source_id=?').get(source);
+        if(provenance&&(provenance.kind!==(declared?'declared':'supplier')||declared&&provenance.owner_id!==owner))throw new SecretError('credential_account_mismatch');
+        this.db.prepare('INSERT OR IGNORE INTO source_identity(source_id,kind,owner_id) VALUES (?,?,?)').run(source,declared?'declared':'supplier',declared?owner:null);
+        const existing=this.#repository.bound(source).find(record=>record.user_id===owner&&record.provider===provider);
+        if(existing&&reuse)return {credential:this.answer(existing),connection:'reused'};
+        const record={id:randomUUID(),user_id:owner,provider};
+        row={...record,...verified.seal(record),source_id:source,key_version:verified.generation,hint:verified.hint,abilities:JSON.stringify(identity.abilities),created_at:Date.now(),expires_at:identity.expiresAt,expiry_kind:identity.expiryKind,last_used_at:null,last_error:null,unreadable:0};
+        this.#repository.add(row);this.store.hold(source,owner,row.created_at);
+      }
+      this.accept(row.source_id!,identity);this.changed(row.source_id!,owner);
+      return {credential:this.answer(row),connection:'created'};
+    });
+  }
+  async create(owner:string,provider:string,secret:unknown,options:Options={},validSession:()=>boolean=()=>true):Promise<Credential&{replayed?:true}> {
     return this.boundaryAsync(async()=>{
       const connector=this.connector(provider);this.options(connector,options,false);
-      // Replay is checked before a dormant account's lifecycle permission.
-      const selected=connector.declaredAccounts?this.accountTarget(secret,options.account):null;
-      const selector=selected?JSON.stringify(selected):undefined;
+      const selected=connector.declaredAccounts?this.accountTarget(secret,options.account):null,selector=selected?JSON.stringify(selected):undefined;
       const replay=this.replay(owner,provider,options.requestId,selector);if(replay)return replay;
-      const target=connector.declaredAccounts?this.target(owner,provider,selected,options):null,authority=this.authority();
-      return this.secret(connector,secret,async bytes=>{
-        const identity=this.validate(connector,await connector.identify(bytes),options);
-        let source:string|null=null;
-        return this.mutation(()=>{
-          const replay=this.replay(owner,provider,options.requestId,selector);if(replay)return replay;
-          this.currentAuthority(authority);
-          if(target?.row&&!this.accounts.current(target.row))throw new SecretError('credential_conflict');
-          const account=target?(target.row??this.accounts.add(owner,provider,target.name!,account=>this.store.source(provider as Provider,account,Date.now()))):null;
-          const declared=identity.identityOrigin==='declared';
-          source=account?.source_id??this.store.source(provider as Provider,declared?declaredPseudonym(owner,provider,randomUUID()):identity.account!,Date.now());
-          const provenance=this.db.prepare('SELECT kind,owner_id FROM source_identity WHERE source_id=?').get(source);
-          if(provenance&&(provenance.kind!==(declared?'declared':'supplier')||declared&&provenance.owner_id!==owner))throw new SecretError('credential_account_mismatch');
-          this.db.prepare('INSERT OR IGNORE INTO source_identity(source_id,kind,owner_id) VALUES (?,?,?)').run(source,declared?'declared':'supplier',declared?owner:null);
-          const record={id:randomUUID(),user_id:owner,provider};
-          const row:CredentialRow={...record,...authority.key.seal(record,bytes),source_id:source,key_version:authority.epoch,hint:bytes.subarray(-4).toString('ascii'),abilities:JSON.stringify(identity.abilities),created_at:Date.now(),expires_at:identity.expiresAt,expiry_kind:identity.expiryKind,last_used_at:null,last_error:null,unreadable:0};
-          this.#repository.add(row);this.store.hold(source,owner,row.created_at);
-          this.accept(source,identity);
-          if(options.requestId)this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('credential-request:'+owner+':'+options.requestId,JSON.stringify({provider,id:row.id,at:row.created_at,...(selector===undefined?{}:{target:selector})}));
-          return this.answer(row);
-        },false,()=>{if(source)this.changed(source,owner);});
-      });
+      const verified=await this.verify(owner,provider,secret,options);
+      try{return this.mutation(()=>{
+        if(!validSession())throw new SecretError('credential_permission');
+        const replay=this.replay(owner,provider,options.requestId,selector);if(replay)return replay;
+        const {credential}=this.commitVerified(owner,verified,undefined,!connector.declaredAccounts);
+        if(options.requestId)this.db.prepare('INSERT OR REPLACE INTO meta VALUES (?,?)').run('credential-request:'+owner+':'+options.requestId,JSON.stringify({provider,id:credential.id,at:Date.now(),...(selector===undefined?{}:{target:selector})}));
+        return credential;
+      },false);}finally{verified.dispose();}
     });
   }
   async replace(owner:string,id:string,secret:unknown,options:Omit<Options,'account'|'requestId'>={}):Promise<Credential> {
     return this.boundaryAsync(async()=>{
-      const row=this.#repository.get(owner,id);if(!row)throw new SecretError('credential_not_found');
-      const connector=this.connector(row.provider),declared=connector.identityOrigin==='declared';this.options(connector,options,true);
-      const authority=this.authority();
-      const binding=connector.declaredAccounts?this.accounts.forSource(owner,row.provider,row.source_id??''):null;
-      if(connector.declaredAccounts&&!binding)throw new SecretError('declared_account_not_found');
-      return this.secret(connector,secret,async bytes=>{
-        const identity=this.validate(connector,await connector.identify(bytes),options);
-        const provenance=row.source_id?this.db.prepare('SELECT kind,owner_id FROM source_identity WHERE source_id=?').get(row.source_id):null;
-        if(!row.source_id||(declared?(provenance?.kind!=='declared'||provenance.owner_id!==owner):this.store.account(row.source_id)!==identity.account))throw new SecretError('credential_account_mismatch');
-        return this.mutation(()=>{
-          this.currentAuthority(authority);
-          if(binding&&!this.accounts.current(binding)||!this.#repository.current(row)||!this.#repository.replace(owner,id,authority.key.seal(row,bytes),authority.epoch,bytes.subarray(-4).toString('ascii'),row))throw new SecretError('credential_conflict');
-          this.db.prepare('UPDATE credentials SET abilities=?,expires_at=?,expiry_kind=?,last_used_at=NULL WHERE id=? AND user_id=?').run(JSON.stringify(identity.abilities),identity.expiresAt,identity.expiryKind,id,owner);
-          this.accept(row.source_id!,identity);
-          return this.answer(this.#repository.get(owner,id)!);
-        },true,()=>this.changed(row.source_id!,owner));
-      });
+      const previous=this.#repository.get(owner,id);if(!previous)throw new SecretError('credential_not_found');
+      const replacement={id,revision:previous.access_revision??0};
+      const verified=await this.verify(owner,previous.provider,secret,options,undefined,replacement);
+      try{return this.mutation(()=>this.commitVerified(owner,verified,replacement).credential,true);}finally{verified.dispose();}
     });
   }
   remove(owner:string,id:string):void {

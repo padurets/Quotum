@@ -91,9 +91,6 @@ export const refreshRowPending = (row: RefreshRow) => row.status === 'sending' |
 const settledRow = (row: RefreshRow) =>
   ['updated', 'failed', 'unavailable', 'no_result', 'refused'].includes(row.status) || (row.status === 'unknown' && row.error === null && row.state !== null);
 
-/** Opening the header's list shows the last attempt; only with none yet does it start one. */
-export const refreshAllStarts = (rows: RefreshRow[]) => rows.length === 0;
-
 /** A receipt starts afresh, except for subscriptions already waiting for their data. */
 export const startRefreshRows = (ids: string[], states: Record<string, Refresh>): RefreshRow[] => [...new Set(ids)].map(id => {
   const state = states[id] ?? null;

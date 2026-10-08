@@ -1,9 +1,11 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {SecretError, type RecordIdentity, type Sealed, type SecretKey, type SecretCode} from './crypto.js';
 import type {ResetIntent, SecretInputs} from './inputs.js';
+import {managedFile} from './managed.js';
+import {managedRegistry, reserveManagedId} from './windows.js';
 
 export type SecretKeyOutcome = 'created' | 'ok' | 'rotated' | 'mismatch' | 'missing';
-export type SecretKeyReport = {outcome: SecretKeyOutcome; stored: string | null; current: string | null; credentials: number; unreadable: number};
+export type SecretKeyReport = {outcome: SecretKeyOutcome; stored: string | null; current: string | null; credentials: number; unreadable: number; reason?: SecretCode};
 type EncryptedRow = RecordIdentity & Sealed & {key_version: number; unreadable: number};
 
 /** A busy checkpoint never authorizes destruction of the key that opened the old WAL. */
@@ -15,10 +17,19 @@ export function checkpoint(db: DatabaseSync, code: SecretCode = 'secret_key_chec
 /** All startup decisions share one transaction, on server and desktop. */
 export function startSecrets(db: DatabaseSync, inputs: SecretInputs, oneShot: ResetIntent | null = inputs.reset): SecretKeyReport {
   try {
+    const managedId=inputs.managed&&process.platform==='win32'?reserveManagedId(db):null;
     db.exec('BEGIN IMMEDIATE');
     let report: SecretKeyReport;
     try {
-      report = decide(db, inputs.current, inputs.previous, oneShot);
+      let reason:SecretCode|undefined;
+      if(inputs.managed) {
+        inputs.current=null;
+        const established=!!db.prepare("SELECT 1 FROM meta WHERE key IN ('secretKeyKcv','secretKeyVersion')").get()||!!db.prepare('SELECT 1 FROM credentials LIMIT 1').get();
+        try {inputs.current=managedId?managedRegistry(managedId,!established&&!oneShot,inputs.managed.directory):managedFile(inputs.managed.dataDir,inputs.managed.directory,!established&&!oneShot,inputs.managed.container);}
+        catch(error) {if(!(error instanceof SecretError))throw error;reason=error.code;}
+      }
+      report = decide(db, inputs.current, inputs.previous, oneShot, !!inputs.managed);
+      if(reason)report.reason=reason;
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');
@@ -31,7 +42,7 @@ export function startSecrets(db: DatabaseSync, inputs: SecretInputs, oneShot: Re
   }
 }
 
-function decide(db: DatabaseSync, current: SecretKey | null, previous: SecretKey | null, reset: ResetIntent | null): SecretKeyReport {
+function decide(db: DatabaseSync, current: SecretKey | null, previous: SecretKey | null, reset: ResetIntent | null, managed = false): SecretKeyReport {
   const meta = new Map((db.prepare("SELECT key, value FROM meta WHERE key IN ('secretKeyKcv', 'secretKeyVersion')").all() as {key: string; value: string}[]).map(row => [row.key, row.value]));
   const kcv = meta.get('secretKeyKcv');
   const version = meta.get('secretKeyVersion');
@@ -74,6 +85,7 @@ function decide(db: DatabaseSync, current: SecretKey | null, previous: SecretKey
     writeMeta();
     return answer('created');
   }
+  if(managed&&kcv)return answer('mismatch');
   if (!rows.length) {
     if (kcv && !Number.isSafeInteger(++generation)) throw new SecretError('secret_key_metadata_invalid');
     writeMeta(); return answer('created');

@@ -99,6 +99,14 @@ test('a snapshot is the board; the same snapshot again keeps every slice as it w
   same(first, changed, ['s2']);
 });
 
+test('an older snapshot or view response cannot overwrite a newer board revision', () => {
+  const latest={...snapshot().view,hidden:['history']};
+  const state=run(hub({type:'snapshot',data:snapshot({view:latest,viewRevision:8,connectionsRevision:6})}));
+  const old=reduce(state,hub({type:'snapshot',data:snapshot({viewRevision:3,connectionsRevision:2})}));
+  assert.equal(old.board!.view,latest);assert.equal(old.board!.viewRevision,8);assert.equal(old.board!.connectionsRevision,6);
+  assert.equal(reduce(state,hub({type:'view',data:{view:snapshot().view,revision:7}})),state);
+});
+
 test('each event changes its own slice and leaves the others as they were', () => {
   const s = run(hub({type: 'snapshot', data: snapshot()}));
   same(s, reduce(s, hub({type: 'card', data: card('s1', 70)})), ['s1']);

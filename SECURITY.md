@@ -24,24 +24,27 @@ write-only path: AES-256-GCM encryption before database writes, with its encrypt
 (KEK) outside the database and data directory. OpenRouter uses this path for a
 dedicated management key. That key can create, edit and delete provider keys; Quotum
 uses only fixed GET operations for identity, credits, workspaces and key measurements.
+Access without expiry is accepted in the same informed connection action.
 DeepSeek uses the same protection for a dedicated API key and only
-`GET https://api.deepseek.com/user/balance`. That key may also authorize model requests;
+`GET https://api.deepseek.com/user/balance`. That key may authorize model requests;
 Quotum never exercises those rights. The endpoint reports neither identity nor expiry:
-its owner declares a private account identity and explicitly acknowledges unknown
-expiry. Same-account replacement is a human declaration the provider API cannot verify.
-Private account labels and credential details remain owner-only. Access without expiry
-or with unknown expiry requires its own explicit consent. Revoke keys with their
-provider when no longer needed. Key names and measured spending are shared board data;
-Access without expiry requires explicit consent. z.ai personal quota access uses the
-same encryption boundary with a dedicated ordinary API key, which may also permit
-model requests; Quotum calls only its fixed quota GET. Its unknown expiry has separate
-consent. Account identity is owner-declared: replacement requires explicit same-account
-confirmation and cannot verify it through the quota interface. Revoke the key with its
-provider when it is no longer needed. Key names and measured spending are shared board data;
+its owner declares a private account identity and acknowledges unknown expiry.
+Private account labels and credential details remain owner-only. z.ai personal quota
+access uses a dedicated ordinary API key and only the fixed quota GET. Both declared
+connectors require explicit same-account confirmation for replacement, which the
+provider API cannot verify. Unknown expiry has separate consent. Revoke keys with
+their provider when no longer needed. Key names and measured spending are shared board data;
 management secrets, raw creator ids, masked labels and raw key hashes are not.
 
-On a server, configure `QUOTUM_SECRET_KEY` or `QUOTUM_SECRET_KEY_FILE`; without it,
-ordinary subscriptions still work, but connecting with a trusted key is unavailable.
+On a new server, Quotum creates a key outside its data directory. Docker requires a
+separate persistent `/keys` mount; known temporary filesystems such as tmpfs and
+ramfs are refused before key admission. The standard commands use a named key volume.
+POSIX standalone uses a private sibling directory; Windows standalone uses a private
+nonvolatile HKCU registry branch bound to a stable instance UUID in SQLite. A lost,
+damaged or mismatched established store never causes automatic replacement or deletion
+of credentials. Ordinary subscriptions remain available when key storage is unavailable.
+Explicit `QUOTUM_SECRET_KEY` or `QUOTUM_SECRET_KEY_FILE` inputs keep precedence and
+their rotation behavior. See [server deployment](deploy/README.md) for backup and recovery.
 The app chooses its system password store when it can use one, and a private file
 outside its data directory only when the store is known to be unavailable on first
 use. A locked, denied or inconclusive store leaves it waiting; it does not prove that
@@ -50,6 +53,7 @@ a key was lost.
 | KEK storage | Protection and limits |
 |---|---|
 | Server environment or separate secret file | Keep the KEK out of database and volume backups. The hub operator can decrypt the credentials. |
+| Managed server directory, separate Docker key volume or private HKCU branch | A data-only backup omits the KEK. Back up the key store separately; a combined host or profile backup can reveal credentials. File modes or registry DACLs protect against other ordinary OS users, not the same user or administrator. |
 | Windows Credential Manager or Linux Secret Service | Protection is the same as for other passwords in that store. It depends on the store's protection, often the login password; Quotum does not know that password. |
 | Private file | File permissions protect against other ordinary OS users. A home or profile backup containing this file and the database can reveal the saved credentials. |
 

@@ -3,11 +3,15 @@ import type {Guards} from '../api.js';
 import {Limiter, sameSite} from '../session.js';
 import {UUID,type AccountTarget} from '../store/sourceAccounts.js';
 import {SecretError, type Credentials} from '../secrets/index.js';
+import {AdditionError, type BoardAdditions} from '../additions.js';
+import {randomUUID} from 'node:crypto';
+import {currentUser} from '../session.js';
+import type {Directory} from '../store/directory.js';
 
-export async function credentialRoutes(app: FastifyInstance, credentials: Credentials, guards: Guards) {
-  const attempts = new Limiter(10, 60_000);
+export async function credentialRoutes(app: FastifyInstance, credentials: Credentials, guards: Guards, attempts: Limiter, additions?: BoardAdditions, directory?: Directory) {
   app.setErrorHandler((error: {statusCode?: number}, request, reply) => {
-    const code = error instanceof SecretError ? error.code : error.statusCode === 413 ? 'credential_invalid' : error.statusCode && error.statusCode < 500 ? 'credential_invalid' : 'credential_failed';
+    if(!guards.user(request,reply))return reply;
+    const code = error instanceof AdditionError ? error.code==='addition_not_found'?'credential_not_found':error.code==='addition_conflict'?'credential_conflict':error.code==='addition_permission'?'credential_permission':'credential_failed' : error instanceof SecretError ? error.code : error.statusCode === 413 ? 'credential_invalid' : error.statusCode && error.statusCode < 500 ? 'credential_invalid' : 'credential_failed';
     const status = code === 'declared_account_not_found'?404:code === 'credential_not_found' ? request.method==='POST' && request.routeOptions.url==='/api/credentials' ? 409 : 404 : code === 'credential_cleanup_pending' ? 503 : ['secret_key_missing','secret_key_mismatch','credential_expiry_confirmation','credential_account_mismatch','credential_conflict','credential_account_confirmation','declared_account_name_conflict'].includes(code) ? 409 : ['credential_invalid','credential_provider_unknown','credential_expired','credential_revoked','credential_wrong_type','credential_permission','credential_rejected','credential_auth_rejected'].includes(code) ? 400 : 500;
     return reply.code(status).send({error: code,...(code==='credential_expiry_confirmation'?{expiresAt:null,expiryKind:error instanceof SecretError?error.expiryKind??'none':'none'}:{})});
   });
@@ -41,7 +45,11 @@ export async function credentialRoutes(app: FastifyInstance, credentials: Creden
   });
   app.get('/api/credentials', (request, reply) => {
     const user = guards.user(request, reply);
-    return user ? {credentials: credentials.list(user.id)} : reply;
+    return user ? {credentials: credentials.details(user.id)} : reply;
+  });
+  app.get<{Params:{id:string}}>('/api/credentials/:id/placements',(request,reply)=>{
+    const user=guards.user(request,reply);if(!user)return reply;
+    return {placements:additions?.placements(user.id,id(request.params.id))??[]};
   });
   app.post('/api/credentials', {bodyLimit: 32 * 1024}, async (request, reply) => {
     const user = guards.user(request, reply);
@@ -49,16 +57,22 @@ export async function credentialRoutes(app: FastifyInstance, credentials: Creden
     const provider=(request.body as {provider?:unknown}|null)?.provider;
     const input = body(request.body, ['provider', 'secret'],provider==='deepseek'?['account','allowUnknownExpiry','sameAccount','requestId']:['allowNoExpiry','allowUnknownExpiry','requestId']);
     if (typeof input.provider !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(input.provider) || typeof input.secret !== 'string') throw new SecretError('credential_invalid');
-    return reply.code(201).send(await credentials.create(user.id, input.provider, input.secret,{allowNoExpiry:input.allowNoExpiry as boolean|undefined,requestId:input.requestId as string|undefined,account:input.account as AccountTarget|undefined,allowUnknownExpiry:input.allowUnknownExpiry as boolean|undefined,sameAccount:input.sameAccount as boolean|undefined}));
+    return reply.code(201).send(await credentials.create(user.id, input.provider, input.secret,{allowNoExpiry:input.allowNoExpiry as boolean|undefined,requestId:input.requestId as string|undefined,account:input.account as AccountTarget|undefined,allowUnknownExpiry:input.allowUnknownExpiry as boolean|undefined,sameAccount:input.sameAccount as boolean|undefined},()=>!!directory&&currentUser(request,directory)?.id===user.id));
   });
-  app.post<{Params: {id: string}}>('/api/credentials/:id', {bodyLimit: 32 * 1024}, (request, reply) => {
+  app.post<{Params: {id: string}}>('/api/credentials/:id', {bodyLimit: 32 * 1024}, async (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
-    const credential=credentials.list(user.id).find(c=>c.id===id(request.params.id));
-    if(!credential)throw new SecretError('credential_not_found');
-    const input = body(request.body, ['secret'],credential.provider==='deepseek'?['allowUnknownExpiry','sameAccount']:['allowNoExpiry','allowUnknownExpiry','sameAccount']);
+    const input = body(request.body, ['secret'],['allowNoExpiry','allowUnknownExpiry','sameAccount','requestId']);
     if (typeof input.secret !== 'string') throw new SecretError('credential_invalid');
-    return credentials.replace(user.id, id(request.params.id), input.secret,{allowNoExpiry:input.allowNoExpiry as boolean|undefined,allowUnknownExpiry:input.allowUnknownExpiry as boolean|undefined,sameAccount:input.sameAccount as boolean|undefined});
+    const credentialId=id(request.params.id);
+    if(!additions)return credentials.replace(user.id,credentialId,input.secret,{allowNoExpiry:input.allowNoExpiry as boolean|undefined,allowUnknownExpiry:input.allowUnknownExpiry as boolean|undefined,sameAccount:input.sameAccount as boolean|undefined});
+    const operation=additions.reserve(user.id,input.requestId as string|undefined??randomUUID(),null,{kind:'replace',credentialId});
+    const result=await additions.run(user.id,operation.id,input.secret,()=>!!directory&&currentUser(request,directory)?.id===user.id,{allowUnknownExpiry:input.allowUnknownExpiry as boolean|undefined,sameAccount:input.sameAccount as boolean|undefined});
+    if(result.state!=='complete')throw new SecretError(result.error as import('../secrets/crypto.js').SecretCode??'credential_failed',result.error==='credential_expiry_confirmation'?'unknown':undefined);
+    if(result.warning)return reply.code(503).send({error:result.warning,operationId:result.id,committed:true});
+    const record=credentials.list(user.id).find(record=>record.id===credentialId);
+    if(!record)return reply.code(404).send({error:'credential_not_found',operationId:result.id,committed:true});
+    return {...record,operationId:result.id};
   });
   app.delete<{Params: {id: string}}>('/api/credentials/:id', {bodyLimit: 32 * 1024}, (request, reply) => {
     const user = guards.user(request, reply);

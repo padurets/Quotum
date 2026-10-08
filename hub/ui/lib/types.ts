@@ -100,6 +100,7 @@ export type View = {
   columns: Record<string, string[]>;
   /** Columns off by default that the owner turned on, by widget id. */
   shownColumns: Record<string, string[]>;
+  enabledWhenEmpty?: string[];
 };
 
 export type {HistorySeries, History, SourceEvent} from '../../server/domain/history';

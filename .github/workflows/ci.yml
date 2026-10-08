@@ -61,6 +61,26 @@ jobs:
       - run: npm run build
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
 
+  managed-keys:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npx tsx --test server/test/managedKeys.test.ts server/test/windowsKeys.test.ts
+
   # On every system the agent ships for: its process handling differs between them.
   agent:
     strategy:
