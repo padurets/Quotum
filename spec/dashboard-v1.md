@@ -818,7 +818,9 @@ Authenticated registry operations, also available in local mode:
 
 - `GET /api/currencies/manage`: `{registryRevision, selected, standards, personal, maxActive}`.
   Standards are the server-issued ISO catalogue. Each personal entry is
-  `{definition, archivedAt: number | null}`, including archived definitions; maxActive is 64.
+  `{definition, archivedAt: number | null, pairs}`, including archived definitions; maxActive is 64.
+  Each current pair summary is `{base, rate: string | null}`: exact integer millionths,
+  or null for a stopped pair. Superseded rates do not reappear in this summary.
 - `GET /api/currencies/:id/history?before=<cursor>&limit=<1..64>`: retained personal
   definition, archivedAt, current `pairs`, paginated `changes` and `nextCursor`.
   A change carries `{sequence, base, effectiveAt, recordedAt, kind: 'rate' | 'stop',

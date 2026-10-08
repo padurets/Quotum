@@ -684,7 +684,11 @@ are ISO codes; personal definitions use opaque `personal:<24 hex digits>` identi
 with owner-only names, symbols and display precision. Percentage quotas and non-monetary
 counters keep their units. Personal Settings → Currencies manages this same registry
 and preference on the web and in the local desktop hub. Standard definitions and public
-reference rates are read-only. Personal metadata can be edited without changing identity.
+reference rates are read-only. Display, Personal and Archive tabs separate the overview.
+Clicking a currency row opens a dialog with Settings and Rate history tabs; the row menu
+holds selection and archive actions. Editing shows one form at a time with native
+selectors, without nested menus.
+Personal metadata can be edited without changing identity.
 Archiving the selected currency requires an explicit active replacement in one transaction;
 restoring a currency does not select it or resume stopped rate pairs.
 Standard display precision comes from the runtime's currency metadata; personal

@@ -1118,12 +1118,75 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-breakdown-total { padding-bottom: 4px; color: var(--text); }
 .money-balance .is-stale,.money-breakdown .is-stale {opacity:.6;}
 
+/* Currency settings keep reading, editing and history at separate levels. */
+.dialog:has(> .currency-details, > .currency-form) .dialog-head h2 { min-width: 0; overflow-wrap: anywhere; }
+.currency-details, .currency-page { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.currency-details > .segmented { flex-shrink: 0; }
+.currency-details .segmented-radio span { padding-block: 8px; }
+.currency-details h3, .currency-form h3 { margin: 0; font-size: 14px; font-weight: 550; }
+.currency-details p, .currency-form p, .currency-overview p { margin: 0; }
+.currency-details .settings-section-head { gap: 12px; }
+.currency-details .settings-section + .settings-section { padding-top: 24px; }
 .currency-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 .currency-fields:disabled { opacity: .65; }
-.currency-actions { flex-wrap: wrap; }
-.currency-choice .picker { min-width: 0; }
-.currency-choice .picker > button { max-width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.currency-fields .field, .currency-display-form .field { min-width: 0; }
+.currency-fields input, .currency-fields select { min-width: 0; width: 100%; }
+.currency-form { gap: 16px; }
+.currency-actions { flex-wrap: wrap; gap: 8px; }
+.currency-actions .button { height: auto; min-height: 36px; padding-block: 8px; white-space: normal; }
+.currency-choice .picker { min-width: 0; margin-left: 0; }
+.currency-choice .picker > button { width: 100%; max-width: 100%; height: auto; min-height: 36px; padding-block: 8px; justify-content: space-between; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.currency-choice .picker > button > span { min-width: 0; }
+.currency-choice .picker > button > svg { flex-shrink: 0; }
 .currency-choice .popover-row { white-space: normal; overflow-wrap: anywhere; }
 .currency-choice .popover-scroll { --least: 120px; }
-.currency-details > .button { align-self: flex-start; }
+.currency-display-form { display: flex; align-items: start; gap: 8px; flex-wrap: wrap; max-width: 640px; }
+.currency-display-form > fieldset { flex: 1 1 220px; }
+.currency-display-form > .dialog-text, .currency-display-form > .currency-notice { flex-basis: 100%; }
+.currency-notice:empty { display: none; }
+.currency-row-notice { grid-column: 1 / -1; }
+.currency-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.currency-name { text-align: left; font-size: 13px; font-weight: 550; color: var(--text); overflow-wrap: anywhere; }
+.currency-open { grid-column: 1 / 3; grid-row: 1; display: grid; grid-template-columns: subgrid; align-items: center; gap: 4px 20px; padding: 0; min-width: 0; border: 0; background: none; color: inherit; text-align: left; cursor: pointer; }
+.currency-open span { white-space: normal; overflow: visible; text-overflow: clip; }
+.currency-open .currency-name { flex: 0 1 auto; min-width: 0; }
+.currency-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+.currency-open:hover .currency-name { text-decoration: underline; text-underline-offset: 3px; }
+.currency-tabs .segmented-radio { min-width: 0; }
+.currency-tabs .segmented-radio span { padding: 8px 6px; }
+@media (max-width: 700px) {
+  .currency-open { grid-column: 1; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .currency-tabs .segmented-radio span { font-size: 12px; }
+}
+.currency-overview .settings-item-actions .picker { margin-left: 0; }
+.currency-notice { font-size: 13px; color: var(--text-2); }
 .currency-equation { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.currency-overview-rates { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 32ch; }
+.currency-overview-rates > span { white-space: normal; overflow: visible; flex: none; }
+.currency-identity .currency-state { flex: none; }
+.currency-state { display: inline-flex; align-items: center; width: fit-content; padding: 3px 8px; border: 1px solid var(--hair); border-radius: 6px; font-size: 11.5px; color: var(--text-3); }
+.currency-state.is-selected { color: var(--accent); }
+.currency-facts { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 0; }
+.currency-facts dt { color: var(--text-3); font-size: 12px; }
+.currency-facts dd { margin: 6px 0 0; font-size: 14px; overflow-wrap: anywhere; }
+.currency-metadata-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: end; }
+.currency-ratio { display: grid; grid-template-columns: auto 76px auto minmax(60px, 1fr) minmax(0, auto); align-items: center; gap: 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.currency-unit { max-width: 12ch; overflow-wrap: anywhere; }
+.currency-disclosure { color: var(--text-3); font-size: 12.5px; }
+.currency-disclosure > summary { cursor: pointer; width: fit-content; }
+.currency-disclosure > summary:hover { color: var(--text); }
+.currency-disclosure[open] > summary { margin-bottom: 16px; }
+.currency-disclosure > .dialog-text { margin-bottom: 16px; }
+.currency-disclosure > .dialog-text:last-child { margin-bottom: 0; }
+.currency-reference { display: flex; flex-direction: column; gap: 8px; }
+.currency-details .currency-list { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
+.currency-row-actions { gap: 4px; }
+.currency-details .settings-list-row { column-gap: 12px; }
+.currency-details .settings-item-actions { grid-column: 2; grid-row: 1; }
+@media (max-width: 520px) {
+  .dialog:has(> .currency-details, > .currency-form) { padding-inline: 16px; }
+  .currency-ratio { gap: 6px; }
+  .currency-ratio .currency-unit { max-width: 6ch; }
+  .currency-details .currency-history { grid-template-columns: minmax(0, 1fr); }
+  .currency-history .settings-item-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 4px; }
+}

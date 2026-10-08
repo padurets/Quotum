@@ -1,178 +1,125 @@
-import {useCallback,useEffect,useId,useRef,useState,type FormEvent} from 'react';
+import {useCallback,useEffect,useId,useRef,useState,type ReactNode} from 'react';
+import {Archive,MoreHorizontal,Pencil} from 'lucide-react';
 import type {CurrencyDefinition,CurrencyManagement,CurrencyRateHistory,ManagedCurrency,RateSnapshot} from '../../server/domain/currency';
 import {t,useLocale} from '../i18n';
-import {ApiError,call} from '../lib/http';
+import {call} from '../lib/http';
 import {useCurrencyRegistryRevision} from '../lib/board';
 import {guardNavigation} from '../lib/router';
-import {currencyRate,rateText} from '../lib/currencySettings';
+import {rateText} from '../lib/currencySettings';
 import {stamp} from '../lib/format';
-import {ErrorLine,Field,Modal} from './Kit';
-import {Popover,PopoverHeading} from './Popover';
+import {ErrorLine,Modal,Segmented} from './Kit';
+import {Popover} from './Popover';
+import {CurrencyChoice,CurrencySelect,DefinitionForm,RateForm,currencyLabel,personal,useSave,type Dirty,type Refresh,type RateSeed} from './CurrencyForms';
 
-type Refresh=()=>Promise<CurrencyManagement>;
-type Dirty=(key:string,value:boolean,discard?:()=>void)=>void;
-const personal=(id:string)=>id.startsWith('personal:');
-const label=(definition:CurrencyDefinition,locale:string)=>personal(definition.id)?`${definition.name} (${definition.symbol}, ${definition.id.slice(-6)})`:`${definition.id} — ${new Intl.DisplayNames([locale],{type:'currency'}).of(definition.id)??definition.name}`;
-
-function CurrencyChoice({items,value,onChange,title,disabled=false}:{items:CurrencyDefinition[];value:string;onChange:(id:string)=>void;title:string;disabled?:boolean}) {
-  const locale=useLocale(),[open,setOpen]=useState(false),[search,setSearch]=useState(''),chosen=items.find(item=>item.id===value),box=useRef<HTMLDivElement>(null);
-  useEffect(()=>{if(open)box.current?.querySelector('input')?.focus({preventScroll:true});},[open]);
-  return <div className="field currency-choice" aria-disabled={disabled} ref={box}>
-    <span>{title}</span>
-    <Popover label={title} trigger={chosen?label(chosen,locale):t('currencies.choose')} triggerClass="button" align="left" width={420} open={!disabled&&open} onOpenChange={next=>{if(!disabled){setOpen(next);if(next)setSearch('');}}}>
-      <PopoverHeading onClose={()=>setOpen(false)}>{title}</PopoverHeading>
-      <div className="popover-section"><Field label={t('currencies.search')} value={search} onChange={event=>setSearch(event.target.value)} /></div>
-      <div className="popover-scroll">
-        {items.filter(item=>label(item,locale).toLocaleLowerCase(locale).includes(search.toLocaleLowerCase(locale))).map(item=><button type="button" className="popover-row" key={item.id} aria-pressed={value===item.id} onClick={()=>{onChange(item.id);setOpen(false);}}>{label(item,locale)}</button>)}
-      </div>
-    </Popover>
-  </div>;
-}
-
-function useDirty(dirty:Dirty,value:boolean,discard?:()=>void) {
-  const key=useId(),latest=useRef(discard);latest.current=discard;useEffect(()=>{dirty(key,value,()=>latest.current?.());return ()=>dirty(key,false);},[dirty,key,value]);
-}
-
-/** A retry keeps the exact receipt, payload and revision after an unconfirmed response. */
-function useSave(revision:string,changed:boolean,refresh:Refresh,dirty:Dirty,discard?:()=>void) {
-  const [busy,setBusy]=useState(false),[uncertain,setUncertain]=useState(false),[error,setError]=useState<unknown>(null),[saved,setSaved]=useState(false);
-  const baseline=useRef(revision),alive=useRef(true),sending=useRef(false),request=useRef<{url:string;body:Record<string,unknown>;done:(value:unknown)=>void}|null>(null);
-  if(!changed&&!request.current)baseline.current=revision;
-  useEffect(()=>{alive.current=true;return ()=>{alive.current=false;};},[]);
-  useDirty(dirty,changed||busy||uncertain,discard);
-  const submit=async()=>{
-    const current=request.current;if(!current||sending.current)return;sending.current=true;setBusy(true);setError(null);setSaved(false);
-    try {
-      const value=await call<unknown>('POST',current.url,current.body);
-      if(!alive.current)return;
-      await refresh().then(data=>{baseline.current=data.registryRevision;}).catch(()=>{});
-      if(!alive.current)return;request.current=null;setUncertain(false);current.done(value);setSaved(true);
-    }catch(failure){
-      if(!alive.current)return;
-      if(failure instanceof ApiError&&failure.status<500){request.current=null;setUncertain(false);setError(failure);if(failure.status===409)await refresh().then(data=>{baseline.current=data.registryRevision;}).catch(()=>{});}
-      else{setUncertain(true);setError(null);}
-    }finally{sending.current=false;if(alive.current)setBusy(false);}
-  };
-  const send=(url:string,body:Record<string,unknown>,done:(value:unknown)=>void=()=>{})=>{
-    if(request.current||sending.current)return;request.current={url,body:{...body,expectedRevision:baseline.current,requestId:crypto.randomUUID()},done};void submit();
-  };
-  return {send,disabled:busy||uncertain,notice:<>
-    {busy&&<p role="status">{t('currencies.saving')}</p>}
-    {saved&&!busy&&!error&&<p role="status">{t('currencies.saved')}</p>}
-    <ErrorLine error={error} />
-    {uncertain&&<div role="alert"><p>{t('currencies.unconfirmed')}</p><button type="button" className="button" disabled={busy} onClick={()=>void submit()}>{t('currencies.retry')}</button></div>}
-  </>};
+type Leave=(go:()=>void)=>void;
+const restoreCurrency=(id:string)=>{
+  const row=document.querySelector<HTMLElement>(`[data-currency-id="${id}"]`);
+  return row?.getClientRects().length?row:document.querySelector<HTMLElement>('.currency-overview button');
+};
+function CurrencyMenu({label,disabled,children}:{label:string;disabled?:boolean;children:(close:()=>void)=>ReactNode}) {
+  const [open,setOpen]=useState(false);
+  return <Popover label={label} icon={<MoreHorizontal size={16} />} open={!disabled&&open} onOpenChange={next=>{if(!disabled)setOpen(next);}} width={240}>
+    {children(()=>setOpen(false))}
+  </Popover>;
 }
 
 function DisplayCurrency({data,refresh,dirty}:{data:CurrencyManagement;refresh:Refresh;dirty:Dirty}) {
-  const [choice,setChoice]=useState(data.selected),[edited,setEdited]=useState(false),[detail,setDetail]=useState<{definition:CurrencyDefinition;rates:RateSnapshot[]}|null>(null),[error,setError]=useState<unknown>(null);
-  const save=useSave(data.registryRevision,edited,refresh,dirty,()=>{setChoice(data.selected);setEdited(false);}),locale=useLocale();
+  const [choice,setChoice]=useState(data.selected),[edited,setEdited]=useState(false),[details,setDetails]=useState(false),[detail,setDetail]=useState<{definition:CurrencyDefinition;rates:RateSnapshot[]}|null>(null),[error,setError]=useState<unknown>(null);
+  const reset=()=>{setChoice(data.selected);setEdited(false);},save=useSave(data.registryRevision,edited,refresh,dirty,reset),locale=useLocale();
   useEffect(()=>{if(!edited)setChoice(data.selected);},[data.selected,edited]);
-  useEffect(()=>{let live=true;setDetail(null);setError(null);if(!personal(choice))void call<{definition:CurrencyDefinition;rates:RateSnapshot[]}>('GET','/api/currencies/'+choice).then(value=>{if(live)setDetail(value);}).catch(error=>{if(live)setError(error);});return ()=>{live=false;};},[choice,data.registryRevision]);
+  useEffect(()=>{let live=true;setDetail(null);setError(null);if(details&&!personal(choice))void call<{definition:CurrencyDefinition;rates:RateSnapshot[]}>('GET','/api/currencies/'+choice).then(value=>{if(live)setDetail(value);}).catch(error=>{if(live)setError(error);});return ()=>{live=false;};},[choice,data.registryRevision,details]);
   const items=[...data.standards,...data.personal.filter(item=>item.archivedAt===null).map(item=>item.definition)];
-  return <section className="settings-section">
+  return <section className="settings-section currency-overview">
     <h2>{t('currencies.display')}</h2><p className="dialog-text">{t('currencies.scope')}</p>
-    <form className="dialog-form settings-form" onSubmit={event=>{event.preventDefault();save.send('/api/currencies/display',{currency:choice},()=>setEdited(false));}}>
-      <CurrencyChoice title={t('currencies.display')} items={items} value={choice} disabled={save.disabled} onChange={id=>{setChoice(id);setEdited(id!==data.selected);}} />
-      <p className="dialog-text">{t('currencies.current',{currency:label(items.find(item=>item.id===data.selected)!,locale)})}</p>
-      <div className="button-row is-start currency-actions"><button className="button" disabled={save.disabled||!edited}>{t('account.save')}</button>{edited&&<button type="button" className="button" disabled={save.disabled} onClick={()=>{setChoice(data.selected);setEdited(false);}}>{t('common.cancel')}</button>}</div>
-      {save.notice}
+    <form className="currency-display-form" onSubmit={event=>{event.preventDefault();save.send('/api/currencies/display',{currency:choice},()=>setEdited(false));}}>
+      <fieldset className="currency-fields" disabled={save.disabled}><CurrencyChoice title={t('currencies.display')} items={items} value={choice} disabled={save.disabled} compact onChange={id=>{setChoice(id);setEdited(id!==data.selected);}} /></fieldset>
+      {edited&&<div className="button-row currency-actions"><button className="button primary" disabled={save.disabled}>{t('account.save')}</button><button type="button" className="button" disabled={save.disabled} onClick={reset}>{t('common.cancel')}</button></div>}
+      {save.conflict&&<p className="dialog-text">{t('currencies.current',{currency:currencyLabel(items.find(item=>item.id===data.selected)!,locale,items)})}</p>}
+      <div className="currency-notice">{save.notice}</div>
     </form>
-    {detail&&detail.definition.id===choice&&<div className="dialog-text"><p>{t('currencies.precisionValue',{digits:detail.definition.fractionDigits})}</p>{detail.rates.length?detail.rates.slice(0,3).map(quote=><p key={quote.id}>{quote.source.toUpperCase()}<br />{stamp(quote.date)}<br />1 {quote.base} = {rateText(quote.rates[detail.definition.id])} {detail.definition.id}</p>):<p>{t('currencies.noPublicRate')}</p>}</div>}
-    <ErrorLine error={error} />
+    {!personal(choice)&&<details className="currency-disclosure" open={details} onToggle={event=>setDetails(event.currentTarget.open)}><summary>{t('currencies.referenceRates')}</summary>
+      {!detail&&!error&&<p role="status">{t('currencies.loading')}</p>}
+      {detail&&detail.definition.id===choice&&<div className="currency-reference"><p className="dialog-text">{t('currencies.precisionValue',{digits:detail.definition.fractionDigits})}</p>{detail.rates.length?<ul className="settings-list currency-list">{detail.rates.slice(0,3).map(quote=><li className="settings-list-row popover-row" key={quote.id}><div className="settings-item-main"><b className="currency-equation">1 {quote.base} = {rateText(quote.rates[detail.definition.id])} {detail.definition.id}</b><small>{quote.source.toUpperCase()}</small></div><span className="settings-item-detail">{stamp(quote.date)}</span></li>)}</ul>:<p className="dialog-text">{t('currencies.noPublicRate')}</p>}</div>}
+      <ErrorLine error={error} />
+    </details>}
   </section>;
-}
-
-function DefinitionForm({data,item,refresh,dirty,onCreated}:{data:CurrencyManagement;item?:ManagedCurrency;refresh:Refresh;dirty:Dirty;onCreated?:(id:string)=>void}) {
-  const locale=useLocale(),original=item?.definition;
-  const [name,setName]=useState(original?.name??''),[symbol,setSymbol]=useState(original?.symbol??''),[digits,setDigits]=useState(String(original?.fractionDigits??2));
-  const [base,setBase]=useState('USD'),[rate,setRate]=useState(''),[error,setError]=useState<unknown>(null),[edited,setEdited]=useState(false);
-  const save=useSave(data.registryRevision,edited,refresh,dirty,()=>reset());
-  const reset=()=>{setName(original?.name??'');setSymbol(original?.symbol??'');setDigits(String(original?.fractionDigits??2));setRate('');setBase('USD');setEdited(false);setError(null);};
-  useEffect(()=>{if(!edited){setName(original?.name??'');setSymbol(original?.symbol??'');setDigits(String(original?.fractionDigits??2));}},[original?.name,original?.symbol,original?.fractionDigits,edited]);
-  const submit=(event:FormEvent)=>{
-    event.preventDefault();setError(null);
-    try {
-      const body={name,symbol,fractionDigits:Number(digits),...(!original?{base,rate:currencyRate(rate,locale)}:{})};
-      save.send('/api/currencies'+(original?'/'+original.id:''),body,value=>{setEdited(false);if(!original){reset();onCreated?.((value as CurrencyDefinition).id);}});
-    }catch{setError(new ApiError(400,'invalid_currency'));}
-  };
-  return <form className="dialog-form settings-form" onSubmit={submit} onChange={()=>setEdited(true)}>
-    <fieldset disabled={save.disabled||item?.archivedAt!=null} className="currency-fields">
-      <Field label={t('currencies.name')} value={name} maxLength={64} required onChange={event=>setName(event.target.value)} />
-      <Field label={t('currencies.symbol')} value={symbol} maxLength={12} required onChange={event=>setSymbol(event.target.value)} />
-      <Field label={t('currencies.precision')} type="number" min={0} max={6} step={1} required value={digits} onChange={event=>setDigits(event.target.value)} />
-      {!original&&<><CurrencyChoice items={data.standards} value={base} title={t('currencies.base')} onChange={id=>{setBase(id);setEdited(true);}} /><Field label={t('currencies.rate')} inputMode="decimal" value={rate} required onChange={event=>setRate(event.target.value)} /><p className="currency-equation">1 {base} = {rate||'…'} {symbol||'…'}</p><p className="dialog-text">{t('currencies.nominalHelp')}</p></>}
-      <div className="button-row is-start currency-actions"><button className="button" disabled={!edited}>{t(original?'account.save':'currencies.create')}</button><button type="button" className="button" onClick={reset}>{t('common.cancel')}</button></div>
-    </fieldset>
-    {edited&&original&&<p className="dialog-text">{t('currencies.serverVersion',{name:original.name,symbol:original.symbol,digits:original.fractionDigits})}</p>}
-    <ErrorLine error={error} />{save.notice}
-  </form>;
-}
-
-function RateForm({data,item,refresh,dirty,seed}:{data:CurrencyManagement;item:ManagedCurrency;refresh:Refresh;dirty:Dirty;seed:{base:string;rate:string}|null}) {
-  const locale=useLocale(),[base,setBase]=useState(seed?.base??'USD'),[rate,setRate]=useState(seed?.rate??''),[date,setDate]=useState(''),[error,setError]=useState<unknown>(null);
-  const edited=!!rate||!!date,save=useSave(data.registryRevision,edited,refresh,dirty,()=>reset());
-  const reset=()=>{setRate('');setDate('');setError(null);};
-  return <form className="dialog-form settings-form" onSubmit={event=>{
-    event.preventDefault();setError(null);try{const at=date?new Date(date).getTime():undefined;if(at!==undefined&&(!Number.isSafeInteger(at)||at>Date.now()))throw new Error();save.send('/api/currencies/'+item.definition.id+'/rates',{base,rate:currencyRate(rate,locale),...(at===undefined?{}:{date:at})},reset);}catch{setError(new ApiError(400,'invalid_currency'));}
-  }}>
-    <h3>{t('currencies.setRate')}</h3><p className="dialog-text">{t('currencies.rateHelp')}</p>
-    <fieldset className="currency-fields" disabled={save.disabled}>
-      <CurrencyChoice items={data.standards} value={base} onChange={setBase} title={t('currencies.base')} disabled={save.disabled} />
-      <Field label={t('currencies.rate')} inputMode="decimal" required value={rate} onChange={event=>setRate(event.target.value)} />
-      <p className="currency-equation">1 {base} = {rate||'…'} {item.definition.symbol}</p>
-      <Field label={t('currencies.effective')} hint={t('currencies.nowHelp')} type="datetime-local" value={date} onChange={event=>setDate(event.target.value)} />
-      <div className="button-row is-start currency-actions"><button className="button" disabled={!rate}>{t('account.save')}</button><button type="button" className="button" onClick={reset}>{t('common.cancel')}</button></div>
-    </fieldset><ErrorLine error={error} />{save.notice}
-  </form>;
 }
 
 function ArchiveCurrency({data,item,refresh,dirty,onClose}:{data:CurrencyManagement;item:ManagedCurrency;refresh:Refresh;dirty:Dirty;onClose:()=>void}) {
   const [replacement,setReplacement]=useState(''),save=useSave(data.registryRevision,false,refresh,dirty),selected=data.selected===item.definition.id;
-  return <Modal title={t('currencies.archive')} onClose={save.disabled?undefined:onClose}>
+  return <Modal title={t('currencies.archive')} restore={()=>restoreCurrency(item.definition.id)} onClose={save.disabled?undefined:onClose}>
     <p className="dialog-text">{t('currencies.archiveHelp',{name:item.definition.name})}</p>
-    {selected&&<CurrencyChoice title={t('currencies.replacement')} value={replacement} onChange={setReplacement} disabled={save.disabled} items={[...data.standards,...data.personal.filter(row=>row.archivedAt===null&&row.definition.id!==item.definition.id).map(row=>row.definition)]} />}
+    {selected&&<fieldset className="currency-fields" disabled={save.disabled}><CurrencySelect title={t('currencies.replacement')} value={replacement} onChange={setReplacement} items={[...data.standards,...data.personal.filter(row=>row.archivedAt===null&&row.definition.id!==item.definition.id).map(row=>row.definition)]} /></fieldset>}
     <div className="button-row currency-actions"><button className="button" disabled={save.disabled} onClick={onClose}>{t('common.cancel')}</button><button className="button danger" disabled={save.disabled||selected&&!replacement} onClick={()=>save.send('/api/currencies/'+item.definition.id+'/archive',{...(replacement?{replacement}:{})},onClose)}>{t('currencies.archive')}</button></div>
     {save.notice}
   </Modal>;
 }
 
-function CurrencyDetails({data,item,refresh,dirty,leave}:{data:CurrencyManagement;item:ManagedCurrency;refresh:Refresh;dirty:Dirty;leave:(go:()=>void)=>void}) {
-  const [history,setHistory]=useState<CurrencyRateHistory|null>(null),[error,setError]=useState<unknown>(null),[loading,setLoading]=useState(false),[archive,setArchive]=useState(false),[stop,setStop]=useState<{base:string;quote:string}|null>(null);
-  const [seed,setSeed]=useState<{base:string;rate:string;key:number}|null>(null),save=useSave(data.registryRevision,false,refresh,dirty),generation=useRef(0);
+function CurrencyDetails({data,item,refresh,dirty,leave}:{data:CurrencyManagement;item:ManagedCurrency;refresh:Refresh;dirty:Dirty;leave:Leave}) {
+  const [history,setHistory]=useState<CurrencyRateHistory|null>(null),[error,setError]=useState<unknown>(null),[loading,setLoading]=useState(false),[stop,setStop]=useState<{base:string;quote:string}|null>(null);
+  const [editor,setEditor]=useState<{kind:'definition'}|{kind:'rate';seed:RateSeed|null;key:number}|null>(null),[notice,setNotice]=useState(false),[tab,setTab]=useState<'settings'|'history'>('settings'),tabs=useId();
+  const save=useSave(data.registryRevision,false,refresh,dirty),generation=useRef(0),focus=useRef<HTMLElement|null>(null),body=useRef<HTMLDivElement>(null),serial=useRef(0);
   const read=useCallback(async(before?:string)=>{
     const token=++generation.current;setLoading(true);setError(null);
     try{const answer=await call<CurrencyRateHistory>('GET','/api/currencies/'+item.definition.id+'/history'+(before?'?before='+encodeURIComponent(before):''));if(token===generation.current)setHistory(old=>before&&old?{...answer,changes:[...old.changes,...answer.changes]}:answer);}catch(failure){if(token===generation.current)setError(failure);}finally{if(token===generation.current)setLoading(false);}
   },[item.definition.id]);
   useEffect(()=>{void read();return ()=>{generation.current++;};},[read,data.registryRevision]);
-  const archived=item.archivedAt!==null;
-  return <section className="settings-section currency-details">
-    <h2>{item.definition.name}</h2>
-    {archived?<><p className="dialog-text">{t('currencies.archivedHelp')}</p><button type="button" className="button" disabled={save.disabled||data.personal.filter(row=>row.archivedAt===null).length>=data.maxActive} onClick={()=>save.send('/api/currencies/'+item.definition.id+'/restore',{})}>{t('currencies.restore')}</button></>:<>
-      <DefinitionForm data={data} item={item} refresh={refresh} dirty={dirty} />
-      <div className="button-row is-start currency-actions"><button type="button" className="button" disabled={save.disabled||data.selected===item.definition.id} onClick={()=>save.send('/api/currencies/display',{currency:item.definition.id})}>{t('currencies.use')}</button><button type="button" className="button danger" onClick={()=>setArchive(true)}>{t('currencies.archive')}</button></div>
-    </>}
-    {save.notice}
-    <h3>{t('currencies.pairs')}</h3>
-    {loading&&!history&&<p role="status">{t('currencies.loading')}</p>}
-    <ErrorLine error={error} />
-    {history&&<ul className="settings-list">{history.pairs.map(pair=><li key={pair.base} className="settings-list-row popover-row">
-      <div className="settings-item-main"><b>{pair.quote?`1 ${pair.base} = ${rateText(pair.quote.rates[item.definition.id])} ${item.definition.symbol}`:pair.base}</b><small>{t(pair.kind==='stop'?'currencies.stopped':'currencies.active')}</small><small>{pair.nominal?t('currencies.nominal'):stamp(pair.effectiveAt)}</small></div>
-      <div className="settings-item-actions">{!archived&&pair.quote&&<button className="button" type="button" disabled={save.disabled} onClick={()=>setStop({base:pair.base,quote:pair.quote!.id})}>{t('currencies.stop')}</button>}</div>
-    </li>)}</ul>}
-    {!archived&&<RateForm key={seed?.key??0} seed={seed} data={data} item={item} refresh={refresh} dirty={dirty} />}
-    <h3>{t('currencies.versions')}</h3><p className="dialog-text">{t('currencies.retentionHelp')}</p>
-    {history&&<><ul className="settings-list">{history.changes.map(change=><li key={change.sequence} className="settings-list-row popover-row">
-      <div className="settings-item-main"><b>{change.quote?`1 ${change.base} = ${rateText(change.quote.rates[item.definition.id])} ${item.definition.symbol}`:t('currencies.stopped')}</b><small>{change.nominal?t('currencies.nominal'):t('currencies.effectiveAt',{time:stamp(change.effectiveAt)})}</small><small>{t('currencies.recordedAt',{time:stamp(change.recordedAt)})}</small></div>
-      <div className="settings-item-actions">{!archived&&change.quote&&<button type="button" className="button" onClick={()=>leave(()=>setSeed({base:change.base,rate:rateText(change.quote!.rates[item.definition.id]),key:(seed?.key??0)+1}))}>{t('currencies.reuse')}</button>}</div>
-    </li>)}</ul>{history.nextCursor&&<button type="button" className="button" disabled={loading} onClick={()=>void read(history.nextCursor!)}>{t('currencies.more')}</button>}</>}
-    {archive&&<ArchiveCurrency data={data} item={item} refresh={refresh} dirty={dirty} onClose={()=>setArchive(false)} />}
+  useEffect(()=>{if(!editor&&focus.current){if(focus.current.isConnected)focus.current.focus({preventScroll:true});else body.current?.querySelector<HTMLButtonElement>('button')?.focus({preventScroll:true});focus.current=null;}},[editor]);
+  const open=(next:NonNullable<typeof editor>)=>leave(()=>{focus.current=document.activeElement as HTMLElement;setNotice(false);setTab('settings');setEditor(next);});
+  const close=()=>setEditor(null),done=()=>{close();setNotice(true);},archived=item.archivedAt!==null;
+  const rate=(seed:RateSeed|null)=>open({kind:'rate',seed,key:++serial.current});
+  return <div className="currency-details" ref={body}>
+    <Segmented options={[['settings',t('currencies.settings')],['history',t('currencies.versions')]]} value={tab} radioName={tabs} label={t('currencies.sections')} onChange={next=>{if(next!==tab)leave(()=>{close();setTab(next);});}} />
+    {loading&&!history&&<p role="status">{t('currencies.loading')}</p>}<ErrorLine error={error} />
+    {!!error&&<div><button type="button" className="button" onClick={()=>void read()}>{t('currencies.retry')}</button></div>}
+    {tab==='settings'&&!editor&&<div className="currency-page">
+      {archived&&<section className="settings-section"><span className="currency-state">{t('currencies.archived')}</span><p className="dialog-text">{t('currencies.archivedHelp')}</p><div><button type="button" className="button" disabled={save.disabled||data.personal.filter(row=>row.archivedAt===null).length>=data.maxActive} onClick={()=>save.send('/api/currencies/'+item.definition.id+'/restore',{})}>{t('currencies.restore')}</button></div>{data.personal.filter(row=>row.archivedAt===null).length>=data.maxActive&&<p className="dialog-text">{t('api.currency_limit')}</p>}</section>}
+      <div className="currency-notice">{save.notice}{notice&&<p className="dialog-text" role="status">{t('currencies.saved')}</p>}</div>
+    <section className="settings-section">
+      <div className="settings-section-head"><h3>{t('currencies.definition')}</h3>{!archived&&<button type="button" className="icon-button" aria-label={t('currencies.editDefinition')} title={t('currencies.editDefinition')} onClick={()=>open({kind:'definition'})}><Pencil size={15} /></button>}</div>
+      <dl className="currency-facts"><div><dt>{t('currencies.symbol')}</dt><dd>{item.definition.symbol}</dd></div><div><dt>{t('currencies.decimals')}</dt><dd>{item.definition.fractionDigits}</dd></div></dl>
+    </section>
+    <section className="settings-section">
+      <div className="settings-section-head"><h3>{t('currencies.pairs')}</h3>{!archived&&<button type="button" className="button" onClick={()=>rate(null)}>{t('currencies.add')}</button>}</div>
+      {history&&<ul className="settings-list currency-list">{history.pairs.map(pair=><li key={pair.base} className="settings-list-row popover-row">
+        <div className="settings-item-main"><b className="currency-equation">{pair.quote?`1 ${pair.base} = ${rateText(pair.quote.rates[item.definition.id])} ${item.definition.symbol}`:pair.base}</b><small>{pair.kind==='stop'?t('currencies.stopped'):pair.nominal?t('currencies.nominal'):t('currencies.effectiveAt',{time:stamp(pair.effectiveAt)})}</small></div>
+        {!archived&&<div className="settings-item-actions currency-row-actions"><button className="icon-button" type="button" disabled={save.disabled} aria-label={t('currencies.editRate',{base:pair.base})} title={t('currencies.editRate',{base:pair.base})} onClick={()=>rate({base:pair.base,rate:pair.quote?rateText(pair.quote.rates[item.definition.id]):''})}><Pencil size={15} /></button>{pair.quote&&<button className="icon-button" type="button" disabled={save.disabled} aria-label={t('currencies.stop')} title={t('currencies.stop')} onClick={()=>setStop({base:pair.base,quote:pair.quote!.id})}><Archive size={15} /></button>}</div>}
+      </li>)}</ul>}
+    </section>
+    </div>}
+    {tab==='settings'&&editor?.kind==='definition'&&<section className="settings-section"><h3>{t('currencies.definition')}</h3><DefinitionForm data={data} item={item} refresh={refresh} dirty={dirty} onDone={done} onCancel={()=>leave(close)} /></section>}
+    {tab==='settings'&&editor?.kind==='rate'&&<section className="settings-section"><h3>{t('currencies.setRate')}</h3><RateForm key={editor.key} seed={editor.seed} data={data} item={item} refresh={refresh} dirty={dirty} onDone={done} onCancel={()=>leave(close)} /></section>}
+    {tab==='history'&&<section className="settings-section"><p className="dialog-text">{t('currencies.retentionHelp')}</p>
+      {history&&<><ul className="settings-list currency-list currency-history">{history.changes.map(change=><li key={change.sequence} className="settings-list-row popover-row">
+        <div className="settings-item-main"><b className="currency-equation">{change.quote?`1 ${change.base} = ${rateText(change.quote.rates[item.definition.id])} ${item.definition.symbol}`:`${change.base} — ${t('currencies.stopped')}`}</b><small>{change.nominal?t('currencies.nominal'):t('currencies.effectiveAt',{time:stamp(change.effectiveAt)})}</small><small>{t('currencies.recordedAt',{time:stamp(change.recordedAt)})}</small></div>
+        {!archived&&change.quote&&<div className="settings-item-actions"><button type="button" className="button" onClick={()=>rate({base:change.base,rate:rateText(change.quote!.rates[item.definition.id])})}>{t('currencies.reuse')}</button></div>}
+      </li>)}</ul>{history.nextCursor&&<button type="button" className="button" disabled={loading} onClick={()=>void read(history.nextCursor!)}>{t('currencies.more')}</button>}</>}
+    </section>}
     {stop&&<Modal title={t('currencies.stop')} onClose={save.disabled?undefined:()=>setStop(null)}><p className="dialog-text">{t('currencies.stopHelp')}</p><div className="button-row currency-actions"><button type="button" className="button" disabled={save.disabled} onClick={()=>setStop(null)}>{t('common.cancel')}</button><button type="button" className="button danger" disabled={save.disabled} onClick={()=>save.send('/api/currencies/'+item.definition.id+'/rates/'+stop.quote+'/archive',{base:stop.base},()=>setStop(null))}>{t('currencies.stop')}</button></div>{save.notice}</Modal>}
-  </section>;
+  </div>;
+}
+
+function CurrencyRow({data,item,refresh,dirty,leave,onOpen}:{data:CurrencyManagement;item:CurrencyManagement['personal'][number];refresh:Refresh;dirty:Dirty;leave:Leave;onOpen:()=>void}) {
+  const [archive,setArchive]=useState(false),save=useSave(data.registryRevision,false,refresh,dirty),archived=item.archivedAt!==null;
+  const definition=item.definition,selected=data.selected===definition.id;
+  const duplicate=data.personal.some(row=>row.definition.id!==definition.id&&row.definition.name===definition.name&&row.definition.symbol===definition.symbol);
+  return <li className="settings-list-row popover-row">
+    <button className="currency-open" data-currency-id={definition.id} type="button" aria-label={definition.name} aria-haspopup="dialog" onClick={()=>leave(onOpen)}>
+      <span className="settings-item-main"><span className="currency-identity"><span className="currency-name">{definition.name}</span>{selected&&<span className="currency-state is-selected">{t('currencies.selected')}</span>}</span><small>{definition.symbol}{duplicate?' — '+definition.id.slice(-6):''}</small></span>
+      <span className="settings-item-detail currency-overview-rates">{archived?<span>{stamp(item.archivedAt!)}</span>:item.pairs.map(pair=><span key={pair.base} className="currency-equation">{pair.rate?`1 ${pair.base} = ${rateText(pair.rate)} ${definition.symbol}`:`${pair.base} — ${t('currencies.stopped')}`}</span>)}</span>
+    </button>
+    <div className="settings-item-actions"><CurrencyMenu label={t('currencies.namedActions',{name:definition.name})} disabled={save.disabled}>{dismiss=><>
+      <button type="button" className="popover-row" onClick={()=>{dismiss();leave(onOpen);}}>{t('currencies.configure')}</button>
+      {!archived&&!selected&&<button type="button" className="popover-row" onClick={()=>{dismiss();leave(()=>save.send('/api/currencies/display',{currency:definition.id}));}}>{t('currencies.use')}</button>}
+      {archived?<button type="button" className="popover-row" disabled={data.personal.filter(row=>row.archivedAt===null).length>=data.maxActive} onClick={()=>{dismiss();leave(()=>save.send('/api/currencies/'+definition.id+'/restore',{}));}}>{t('currencies.restore')}</button>:<button type="button" className="popover-row" onClick={()=>{dismiss();leave(()=>setArchive(true));}}>{t('currencies.archive')}</button>}
+    </>}</CurrencyMenu></div>
+    <div className="currency-notice currency-row-notice">{save.notice}</div>
+    {archive&&<ArchiveCurrency data={data} item={item} refresh={refresh} dirty={dirty} onClose={()=>setArchive(false)} />}
+  </li>;
 }
 
 export function CurrencySettings() {
+  const [tab,setTab]=useState<'display'|'personal'|'archive'>('display'),tabs=useId();
   const [data,setData]=useState<CurrencyManagement|null>(null),[error,setError]=useState<unknown>(null),[selected,setSelected]=useState<string|null>(null),[confirm,setConfirm]=useState<{go:()=>void}|null>(null);
   const revision=useCurrencyRegistryRevision(),generation=useRef(0),alive=useRef(true),drafts=useRef(new Map<string,()=>void>()),[hasDraft,setHasDraft]=useState(false);
   const dirty=useCallback<Dirty>((key,value,discard)=>{if(value)drafts.current.set(key,discard??(()=>{}));else drafts.current.delete(key);setHasDraft(drafts.current.size>0);},[]);
@@ -183,18 +130,19 @@ export function CurrencySettings() {
   useEffect(()=>guardNavigation(leave),[leave]);
   useEffect(()=>{if(!hasDraft)return;const unload=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue='';};window.addEventListener('beforeunload',unload);return ()=>window.removeEventListener('beforeunload',unload);},[hasDraft]);
   const item=data?.personal.find(row=>row.definition.id===selected);
+  const rows=(archived:boolean)=><ul className="settings-list currency-list currency-registry-list">{data!.personal.filter(row=>(row.archivedAt!==null)===archived).map(row=><CurrencyRow key={row.definition.id} data={data!} item={row} refresh={refresh} dirty={dirty} leave={leave} onOpen={()=>setSelected(row.definition.id)} />)}</ul>;
   return <>
     <ErrorLine error={error} />{error&&<button className="button" onClick={()=>void refresh().catch(()=>{})}>{t('currencies.retry')}</button>}
     {!data?<p role="status">{t('currencies.loading')}</p>:<>
-      <DisplayCurrency data={data} refresh={refresh} dirty={dirty} />
-      <section className="settings-section"><div className="settings-section-head"><h2>{t('currencies.personal')}</h2><button type="button" className="button" disabled={data.personal.filter(row=>row.archivedAt===null).length>=data.maxActive} onClick={()=>leave(()=>setSelected('new'))}>{t('currencies.create')}</button></div>
-        {data.personal.filter(row=>row.archivedAt===null).length>=data.maxActive&&<p>{t('api.currency_limit')}</p>}
-        <ul className="settings-list">{data.personal.filter(row=>row.archivedAt===null).map(row=><li className="settings-list-row popover-row" key={row.definition.id}><div className="settings-item-main"><b>{row.definition.name}</b><small>{row.definition.symbol}{data.selected===row.definition.id?' — '+t('currencies.selected'):''}</small></div><div className="settings-item-actions"><button className="button" type="button" aria-expanded={selected===row.definition.id} onClick={()=>leave(()=>setSelected(selected===row.definition.id?null:row.definition.id))}>{t('currencies.manage')}</button></div></li>)}</ul>
-        {!data.personal.some(row=>row.archivedAt===null)&&<p className="dialog-text">{t('currencies.empty')}</p>}
-      </section>
-      {selected==='new'&&<section className="settings-section"><h2>{t('currencies.create')}</h2><DefinitionForm data={data} refresh={refresh} dirty={dirty} onCreated={setSelected} /></section>}
-      {item&&<CurrencyDetails key={item.definition.id} data={data} item={item} refresh={refresh} dirty={dirty} leave={leave} />}
-      <section className="settings-section"><details><summary>{t('currencies.archiveList')}</summary><ul className="settings-list">{data.personal.filter(row=>row.archivedAt!==null).map(row=><li key={row.definition.id} className="settings-list-row popover-row"><div className="settings-item-main"><b>{row.definition.name}</b><small>{stamp(row.archivedAt!)}</small></div><div className="settings-item-actions"><button type="button" className="button" onClick={()=>leave(()=>setSelected(row.definition.id))}>{t('currencies.manage')}</button></div></li>)}</ul></details></section>
+      <div className="currency-tabs"><Segmented options={[['display',t('currencies.displayTab')],['personal',t('currencies.personalTab')],['archive',t('currencies.archiveTab')]]} value={tab} radioName={tabs} label={t('currencies.title')} onChange={next=>{if(next!==tab)leave(()=>setTab(next));}} /></div>
+      {tab==='display'&&<DisplayCurrency data={data} refresh={refresh} dirty={dirty} />}
+      {tab==='personal'&&<section className="settings-section currency-overview"><div className="settings-section-head"><h2>{t('currencies.personal')}</h2><button type="button" className="button" disabled={data.personal.filter(row=>row.archivedAt===null).length>=data.maxActive} onClick={()=>leave(()=>setSelected('new'))}>{t('currencies.create')}</button></div>
+        {data.personal.filter(row=>row.archivedAt===null).length>=data.maxActive&&<p className="dialog-text">{t('api.currency_limit')}</p>}
+        {data.personal.some(row=>row.archivedAt===null)?rows(false):<p className="dialog-text">{t('currencies.empty')}</p>}
+      </section>}
+      {tab==='archive'&&<section className="settings-section currency-overview"><h2>{t('currencies.archiveList')}</h2>{data.personal.filter(row=>row.archivedAt===null).length>=data.maxActive&&<p className="dialog-text">{t('api.currency_limit')}</p>}{data.personal.some(row=>row.archivedAt!==null)?rows(true):<p className="dialog-text">{t('currencies.archiveEmpty')}</p>}</section>}
+      {selected==='new'&&<Modal title={t('currencies.create')} onClose={()=>leave(()=>setSelected(null))}><DefinitionForm data={data} refresh={refresh} dirty={dirty} onDone={setSelected} onCancel={()=>leave(()=>setSelected(null))} /></Modal>}
+      {item&&<Modal title={item.definition.name} restore={()=>restoreCurrency(item.definition.id)} onClose={()=>leave(()=>setSelected(null))}><CurrencyDetails key={item.definition.id} data={data} item={item} refresh={refresh} dirty={dirty} leave={leave} /></Modal>}
     </>}
     {confirm&&<Modal title={t('currencies.unsaved')} onClose={()=>setConfirm(null)}><p className="dialog-text">{t('currencies.unsavedHelp')}</p><div className="button-row currency-actions"><button type="button" className="button" onClick={()=>setConfirm(null)}>{t('currencies.stay')}</button><button type="button" className="button danger" onClick={()=>{const go=confirm.go;setConfirm(null);for(const discard of drafts.current.values())discard();go();}}>{t('currencies.discard')}</button></div></Modal>}
   </>;

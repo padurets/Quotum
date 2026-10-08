@@ -129,3 +129,19 @@ test('deferred reference fetching cannot coalesce away an unavailable native hea
     assert.equal(c.binding(owner,'USD',target.id,25,null,source),null);
   }finally{await service.stop();store.close();}
 });
+
+test('management summarizes current pairs without resurrecting stopped or superseded prices',()=>{
+  const {store,owner,other}=fixture();try {
+    const c=store.currencies,target=c.create(owner,fields,'USD','2000000',1);
+    c.create(other,fields,'USD','99000000',1);
+    const latest=c.setRate(owner,target.id,'USD','3000000',20,20);
+    c.setRate(owner,target.id,'USD','4000000',10,30);
+    c.setRate(owner,target.id,'EUR','2500000',15,30);
+    assert.deepEqual(c.manage(owner).personal[0].pairs,[{base:'EUR',rate:'2500000'},{base:'USD',rate:'3000000'}]);
+    c.stopRate(owner,target.id,'USD',latest.id,40);
+    c.archive(owner,target.id,undefined,50);
+    const summary=new CurrencyStore(store.db).manage(owner).personal[0];
+    assert.equal(summary.archivedAt,50);assert.deepEqual(summary.pairs,[{base:'EUR',rate:'2500000'},{base:'USD',rate:null}]);
+    assert.deepEqual(c.manage(other).personal[0].pairs,[{base:'USD',rate:'99000000'}]);
+  }finally{store.close();}
+});

@@ -59,7 +59,13 @@ export abstract class CurrencyRegistry {
   }
   manage(owner:string):CurrencyManagement {
     const rows=this.db.prepare('SELECT * FROM currency_definitions WHERE owner_id=? ORDER BY name,id').all(owner) as DefinitionRow[];
-    return {registryRevision:this.registryRevision(owner),selected:this.preference(owner).id,standards,personal:rows.map(row=>({definition:definition(row),archivedAt:row.archived_at})),maxActive:64};
+    // The overview reads current pairs together, without fetching each currency's history.
+    const pairs=this.db.prepare(`SELECT c.currency_id,c.base,json_extract(q.payload,'$.rates."'||c.currency_id||'"') rate
+      FROM (SELECT *,row_number() OVER (PARTITION BY currency_id,base ORDER BY effective_at DESC,sequence DESC) position
+        FROM currency_rate_changes WHERE owner_id=? AND effective_at<=?) c
+      LEFT JOIN exchange_rates q ON q.id=c.quote_id AND q.owner_id=c.owner_id
+      WHERE c.position=1 ORDER BY c.base`).all(owner,Date.now()) as {currency_id:string;base:string;rate:string|null}[];
+    return {registryRevision:this.registryRevision(owner),selected:this.preference(owner).id,standards,personal:rows.map(row=>({definition:definition(row),archivedAt:row.archived_at,pairs:pairs.filter(pair=>pair.currency_id===row.id).map(({base,rate})=>({base,rate}))})),maxActive:64};
   }
   private capacity(owner:string){if(this.definitions(owner).length>64)throw new Error('currency_limit');}
   select(owner:string,id:string){return this.write(owner,false,()=>{this.definition(owner,id);this.db.prepare('INSERT OR REPLACE INTO currency_preferences VALUES (?,?)').run(owner,id);});}
