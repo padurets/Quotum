@@ -1,3 +1,4 @@
+import {HISTORY_SCOPES, type HistoryScope, type HistoryChange} from './domain/history.js';
 import type {AttentionEvents, Candidate, Invalidation} from './domain/attention.js';
 import {randomBytes} from 'node:crypto';
 import {readFileSync} from 'node:fs';
@@ -124,7 +125,7 @@ export function clientScript(root = config.clientRoot): string | null {
 
 export class Events implements Touches {
   /** The history cache hears every touch, also when no board is watched. */
-  onHistory: ((source: string, since: number) => void) | null = null;
+  onHistory: ((source: string, since: number, scopes?: readonly HistoryScope[]) => void) | null = null;
   /** When this start of the hub began, base 36: a page tells a restart by it. */
   readonly epoch: string;
   readonly client: string | null;
@@ -141,7 +142,7 @@ export class Events implements Touches {
   private readonly dirtySources = new Map<string, Set<string>>();
   private readonly dirtyUsers = new Set<string>();
   private dirtyHub = false;
-  private readonly histories = new Map<string, Map<string, number>>();
+  private readonly histories = new Map<string, Map<string, HistoryChange>>();
   private stopFlush: (() => void) | null = null;
 
   // What readers last got of what is theirs, and of the hub's news.
@@ -263,9 +264,9 @@ export class Events implements Touches {
     this.schedule();
   }
 
-  history(source: string, since: number) {
+  history(source: string, since: number, scopes: readonly HistoryScope[] = HISTORY_SCOPES) {
     try {
-      this.onHistory?.(source, since);
+      this.onHistory?.(source, since, scopes);
     } catch (error) {
       trouble(error);
     }
@@ -273,7 +274,10 @@ export class Events implements Touches {
       if (!watched.lineup.includes(source)) continue;
       let pending = this.histories.get(watched.id);
       if (!pending) this.histories.set(watched.id, (pending = new Map()));
-      pending.set(source, Math.min(pending.get(source) ?? since, since));
+      for(const scope of scopes) {
+        const key=JSON.stringify([source,scope]);
+        pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??since,since)});
+      }
     }
     this.schedule();
   }
@@ -355,7 +359,10 @@ export class Events implements Touches {
       }
       if (whole.has(id)) for (const sub of watched.subscribers) users.add(sub.user);
       const pending = histories.get(id);
-      if (pending?.size) tails.set(id, [frame('history', {sources: [...pending.keys()], since: Math.min(...pending.values())})]);
+      if (pending?.size) {
+        const changes=[...pending.values()].filter(change=>watched.lineup.includes(change.source));
+        if(changes.length)tails.set(id,[frame('history',{sources:[...new Set(changes.map(change=>change.source))],since:Math.min(...changes.map(change=>change.since)),changes})]);
+      }
     }
     let news: Frame[] = [];
     if (hubTouched) {
@@ -441,7 +448,7 @@ export class Events implements Touches {
     touched: Set<string>,
     now: number,
     lineups: Map<string, BoardSource[]>,
-    histories: Map<string, Map<string, number>>,
+    histories: Map<string, Map<string, HistoryChange>>,
   ): Frame[] | null {
     const {projection} = this;
     const lineup = projection.lineup(watched.id);
@@ -473,7 +480,10 @@ export class Events implements Touches {
       watched.lineup = ids;
       computed = lineup;
       const work = projection.workKey(watched.id);
-      if (watched.work !== null && watched.work !== work) histories.set(watched.id, new Map(ids.map(id => [id, 0])));
+      if (watched.work !== null && watched.work !== work) {
+        let pending=histories.get(watched.id);if(!pending)histories.set(watched.id,(pending=new Map()));
+        for(const source of ids)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0});
+      }
       watched.work = work;
     }
     if (computed.length) {

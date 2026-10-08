@@ -694,6 +694,26 @@ history with their own observation times and UTC period anchors. This storage do
 not add board events or a new history capability. No raw response, raw key hash,
 creator/workspace id, connection label or credential enters that archive.
 
+`GET /api/history` accepts optional `scope=quota|budget`. Current readers send a
+scope; absent scope retains the previous combined contract. Quota reads contain native
+windows, resets, work and selected catalogue-defined subscription cap meters. Budget
+reads contain only selected financial meters and never execute native-window or agent
+work reads; the native/activity wire fields are empty. Budget scope requires a valid
+`unit`/`meters` pair, including an explicit empty list. Resource-family mismatches return
+`400 invalid_request`; hidden or unauthorized selected sources remain `404 not_found`.
+Quota reads cannot request private monetary conversion. Validated ranges outside readable
+bounds return `400 history_range_invalid` for scoped readers, independently of malformed
+selection errors. Existing cell, tile, meter, response and retention limits remain.
+
+Cache and metadata identities include the read scope. Work-name changes invalidate only
+quota caches; metadata offered by another scope cannot be reused. A `history` event keeps
+its legacy `sources` union and minimum `since`, and adds `changes: [{source, scope, since}]`.
+Each source/scope keeps its own earliest changed time. Native samples, subscription caps
+and credited work affect quota; monetary observations and valuation changes affect budget.
+Work refreshes preserve coalesced budget changes. Clients without `changes` conservatively
+invalidate both relevant scopes. Scope never grants access or adds private rate or owner
+information to a shared event.
+
 `GET /api/history` additionally accepts `unit` and `meters`: a JSON array of at most
 32 logical `[sourceId, meterId]` pairs, sorted and deduplicated. Sources must be visible
 on the board. `balance` resolves its internal counter pair without spending extra

@@ -1,3 +1,4 @@
+import type {HistoryScope} from '../domain/history.js';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {config} from '../config.js';
@@ -16,7 +17,7 @@ import type {QuotaObservation, MeterMeasurement} from '../domain/meters.js';
 import {MeterStore} from './meters.js';
 import type {MeterSelection} from '../domain/meterHistory.js';
 import {DEFAULT_CURRENCY} from '../domain/currency.js';
-import {providerOf} from '../domain/providers.js';
+import {providerOf, quotaMeter, budgetMeter, supportsBudget} from '../domain/providers.js';
 import {CurrencyStore} from './currencies.js';
 import {importLegacyCurrencies} from './legacyCurrencies.js';
 
@@ -107,7 +108,7 @@ export class Store {
     return (this.db.prepare('SELECT user_id FROM holders WHERE source_id=? UNION SELECT m.user_id FROM shares s JOIN members m ON m.board_id=s.board_id WHERE s.source_id=?').all(source,source) as {user_id:string}[]).map(r=>r.user_id).filter(user=>this.currencies.preference(user).id!==DEFAULT_CURRENCY);
   }
   currencyReaderChanged(owner:string){tell(this.observer,o=>o.touchUser(owner));}
-  currencyChanged(source:string,since:number){tell(this.observer,o=>{o.touchSources([source]);o.history(source,since);});}
+  currencyChanged(source:string,since:number){tell(this.observer,o=>{o.touchSources([source]);o.history(source,since,['budget']);});}
 
   /** The boards a source shows on: the personal boards of its holders and the boards it is shared with. */
   boardsOf(source: string): string[] {
@@ -348,7 +349,7 @@ export class Store {
       }
       this.db.exec('RELEASE quota_observation');
     }catch(error){this.db.exec('ROLLBACK TO quota_observation');this.db.exec('RELEASE quota_observation');throw error;}
-    if(accepted)tell(this.observer,o=>{o.touchSources([id]);o.history(id,since);});
+    if(accepted)tell(this.observer,o=>{o.touchSources([id]);o.history(id,since,['quota']);});
     return accepted;
   }
 
@@ -371,7 +372,7 @@ export class Store {
         throw error;
       }
       tell(this.observer, o => o.touchSources([id]));
-      if(since!==null)tell(this.observer, o => o.history(id, since!));
+      if(since!==null)tell(this.observer, o => o.history(id, since!, [...new Set<HistoryScope>([...measurement.meters,...(previous.meters??[])].flatMap<HistoryScope>(m=>quotaMeter(providerOf(previous.provider),m.id)?['quota']:budgetMeter(providerOf(previous.provider),m.id)?['budget']:[]).concat(supportsBudget(providerOf(previous.provider))?['budget']:[]))]));
       for(const listener of this.monetaryRecords)listener(id);
       return;
     }
@@ -411,7 +412,7 @@ export class Store {
       throw error;
     }
     tell(this.observer, o => o.touchSources([id]));
-    tell(this.observer, o => o.history(id, measurement.observedAt));
+    tell(this.observer, o => o.history(id, measurement.observedAt, ['quota']));
   }
 
   /** Records a failed attempt; the last good values stay on screen. */
@@ -464,10 +465,18 @@ export class Store {
   }
 
   /** Complete cells of every measured window, read once through a run of missing tiles. */
-  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, []), meters}: {now?: number; shown?: Shown; meters?: MeterSelection} = {}): Chunk<number>[] {
+  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, []), meters, scope}: {now?: number; shown?: Shown; meters?: MeterSelection; scope?: HistoryScope} = {}): Chunk<number>[] {
     const sources = this.sources(board);
     // Subscription caps accompany native windows; wallet selections retain their cheaper read.
-    const withWindows=!meters||meters.ids.some(([id])=>sources.some(source=>source.id===id&&providerOf(source.provider)?.funding==='subscription'));
+    const withWindows=scope ? scope==='quota' : !meters||meters.ids.some(([id])=>sources.some(source=>source.id===id&&providerOf(source.provider)?.funding==='subscription'));
+    if(scope==='budget') {
+      const chunks=cellsOf([],[],{},cellMs,from,to,this.historyKnown(shown));
+      if(meters) {
+        const groups=this.meters.groups(meters,from,to).map(group=>({...group,retainedFrom:now-config.retention.sampleDays*86_400_000}));
+        for(const chunk of chunks)chunk.meterSeries=this.meters.cells(meters,chunk.from,chunk.to,cellMs,groups);
+      }
+      return chunks;
+    }
     // Skip through window names on the primary key; testing time inside the recursive
     // step would scan the source's whole retained history for every missing name.
     const windows = this.db.prepare(
@@ -634,7 +643,7 @@ export class Store {
       this.db.exec('RELEASE credit');
       throw error;
     }
-    for (const [source, start] of credited) tell(this.observer, o => o.history(source, start));
+    for (const [source, start] of credited) tell(this.observer, o => o.history(source, start, ['quota']));
   }
 
   /** Retained credit of an identified session on its current subscription; legacy identity is unknown. */

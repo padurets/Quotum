@@ -20,7 +20,7 @@ function fixture(budget?: number) {
   store.hold(source, user.id, start);
   const tiles = new HistoryTiles(store, budget);
   const nothing = () => {};
-  const observer: Touches = {touchSources: nothing, touchBoards: nothing, touchUser: nothing, touchHub: nothing, history: (source, since) => tiles.touch(source, since), dropSessions: nothing, dropMember: nothing, dropBoard: nothing};
+  const observer: Touches = {touchSources: nothing, touchBoards: nothing, touchUser: nothing, touchHub: nothing, history: (source, since, scopes) => tiles.touch(source, since, scopes), dropSessions: nothing, dropMember: nothing, dropBoard: nothing};
   store.setObserver(observer);
   const sample = (at: number, used: number, window = 'weekly') => store.record(source, {observedAt: at, staleAfterMs: 5 * M, plan: '', resets: null, windows: [{id: window, kind: 'weekly', label: null, used, remaining: 100 - used, resetAt: start + 24 * H, minutes: 10080}]});
   let calls = 0;
@@ -188,4 +188,23 @@ test('work and event deletions also invalidate a held tile without changing its 
   h.store.db.prepare("INSERT INTO events(source_id, at, kind, detail) VALUES (?, ?, 'resets_granted', '1')").run(h.source, now - 91 * day);
   h.store.prune(now); h.read(); assert.equal(h.calls(), 3);
   h.store.close();
+});
+
+
+test('scoped caches and metadata isolate quota/work changes from monetary tiles',()=>{
+  const h=fixture();try {
+    h.sample(start,20);
+    const shown=h.store.shown(h.board,[]),selection={unit:'USD',ids:[] as [string,string][]};
+    const read=(scope:'quota'|'budget')=>h.tiles.read(h.board,M,start,start+H,start+3*H,shown,scope==='budget'?selection:undefined,scope);
+    read('quota');read('budget');assert.equal(h.calls(),2);
+    h.sample(start+M,21);read('budget');assert.equal(h.calls(),2);read('quota');assert.equal(h.calls(),3);
+    h.tiles.touch(h.source,start,['budget']);read('quota');assert.equal(h.calls(),3);read('budget');assert.equal(h.calls(),4);
+    const workKey=h.store.workKey.bind(h.store);let workKeys=0;h.store.workKey=(...args)=>{workKeys++;return workKey(...args);};
+    read('budget');assert.equal(workKeys,0);
+    const basis={run:'run',historyStart:start,known:h.store.historyKnown(shown)};
+    assert.notEqual(h.tiles.metadata(h.board,basis,'quota'),h.tiles.metadata(h.board,basis,'budget'));
+    const work=h.store.agentWork.bind(h.store);let reads=0;h.store.agentWork=(...args)=>{reads++;return work(...args);};
+    h.store.cells(h.board,M,start,start+H,{scope:'budget',shown,meters:selection});assert.equal(reads,0);
+    h.store.cells(h.board,M,start,start+H,{scope:'quota',shown});assert.equal(reads,1);
+  }finally{h.store.close();}
 });

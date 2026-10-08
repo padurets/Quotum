@@ -1,3 +1,7 @@
+export type HistoryScope = 'quota' | 'budget';
+export type HistoryChange = {source: string; scope: HistoryScope; since: number};
+export const HISTORY_SCOPES: readonly HistoryScope[] = ['quota', 'budget'];
+
 import {drain, ordered, type Preparation} from './prepare.js';
 import {barOf, type Activity, type ActivityGroup, type Dimension, type SeriesWork} from './work.js';
 import {composeMetersPrepared, type MeterHistory, type MeterSeriesCells} from './meterHistory.js';

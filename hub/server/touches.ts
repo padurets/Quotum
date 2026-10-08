@@ -1,3 +1,4 @@
+import type {HistoryScope} from './domain/history.js';
 /**
  * What changes data tells the events of open dashboards (events.ts): what it touched.
  * Store, Directory, Ingest and the reset feed tell it as they change; working out what
@@ -13,7 +14,7 @@ export type Touches = {
   /** What is the same for everyone changed: the reset trackers' news. */
   touchHub(): void;
   /** A source's history changed from `since`: a measurement or credited agent work. */
-  history(source: string, since: number): void;
+  history(source: string, since: number, scopes?: readonly HistoryScope[]): void;
   /** Some sessions of this person may have ended. */
   dropSessions(user: string): void;
   /** This person may be off this board. */

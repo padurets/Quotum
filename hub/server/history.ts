@@ -1,12 +1,12 @@
 import {createHmac, randomBytes} from 'node:crypto';
 import {config} from './config.js';
-import {tileEnd, tileOf, tileStart, type Chunk, type HistoryBasis} from './domain/history.js';
+import {tileEnd, tileOf, tileStart, type Chunk, type HistoryBasis, type HistoryScope} from './domain/history.js';
 import type {Shown, Store} from './store/store.js';
 import type {MeterSelection} from './domain/meterHistory.js';
 
 export class HistoryLimit extends Error { constructor() {super('history_limit');} }
 
-type Kept = {workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
+type Kept = {scope?: HistoryScope; workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
 
 /** JSON permits shorter exact integer spellings (300000 is 3e5); names stay untouched. */
 function compactJSON(value: unknown): string {
@@ -27,16 +27,16 @@ export class HistoryTiles {
 
   constructor(private readonly store: Store, private readonly budget = 32 * 1024 * 1024) {}
 
-  metadata(board: string, value: Omit<HistoryBasis, 'now' | 'meta'>) {
-    return createHmac('sha256', this.key).update(`meta:${board}:${JSON.stringify(value)}`).digest('base64url');
+  metadata(board: string, value: Omit<HistoryBasis, 'now' | 'meta'>, scope?: HistoryScope) {
+    return createHmac('sha256', this.key).update(`meta:${board}:${scope ?? 'legacy'}:${JSON.stringify(value)}`).digest('base64url');
   }
 
   ref(board: string, session: number) {
     return createHmac('sha256', this.key).update(`${board}:${session}`).digest('base64url').slice(0, 8);
   }
 
-  touch(source: string, since: number) {
-    for (const [key, tile] of this.kept) if (tile.sources.has(source) && tileEnd(tile.tile, tile.cell) > since) this.drop(key);
+  touch(source: string, since: number, scopes?: readonly HistoryScope[]) {
+    for (const [key, tile] of this.kept) if ((!tile.scope || !scopes || scopes.includes(tile.scope)) && tile.sources.has(source) && tileEnd(tile.tile, tile.cell) > since) this.drop(key);
   }
 
   private drop(key: string) {
@@ -46,7 +46,7 @@ export class HistoryTiles {
   }
 
   /** JSON is stored as sent, so hits do not allocate or serialize all the cells again. */
-  read(board: string, cell: number, from: number, to: number, now: number, shown: Shown, meters?: MeterSelection): string[] {
+  read(board: string, cell: number, from: number, to: number, now: number, shown: Shown, meters?: MeterSelection, scope?: HistoryScope): string[] {
     if (this.retentionRevision !== this.store.retentionRevision) {
       this.kept.clear();
       this.bytes = 0;
@@ -58,10 +58,10 @@ export class HistoryTiles {
     for (let at = from; at < to;) {
       const tile = tileOf(at, cell);
       const end = Math.min(to, tileEnd(tile, cell));
-      parts.push({from: at, to: end, tile, key: `${board} ${cell} ${tile}${meters ? ' '+JSON.stringify(meters) : ''}`, eligible: at === tileStart(tile, cell) && end === tileEnd(tile, cell) && end <= now && at >= oldest});
+      parts.push({from: at, to: end, tile, key: `${board} ${scope ?? 'legacy'} ${cell} ${tile}${meters ? ' '+JSON.stringify(meters) : ''}`, eligible: at === tileStart(tile, cell) && end === tileEnd(tile, cell) && end <= now && at >= oldest});
       at = end;
     }
-    const workKey = parts.some(p => p.eligible) ? this.store.workKey(board, shown) : '';
+    const workKey = scope !== 'budget' && parts.some(p => p.eligible) ? this.store.workKey(board, shown) : '';
     for (const part of parts) {
       const hit = part.eligible ? this.kept.get(part.key) : undefined;
       if (hit?.workKey !== workKey) continue;
@@ -73,7 +73,7 @@ export class HistoryTiles {
       if (parts[i].json !== undefined) {i++; continue;}
       const start = i;
       while (i < parts.length && parts[i].json === undefined) i++;
-      const chunks = this.store.cells(board, cell, parts[start].from, parts[i - 1].to, {now, shown, meters});
+      const chunks = this.store.cells(board, cell, parts[start].from, parts[i - 1].to, {now, shown, meters, scope});
       chunks.forEach((raw, offset) => {
         const part = parts[start + offset];
         const chunk: Chunk = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, ...rest]) => [this.ref(board, id), ...rest])}};
@@ -82,7 +82,7 @@ export class HistoryTiles {
         if (part.eligible) {
           this.drop(part.key);
           const bytes = Buffer.byteLength(json);
-          this.kept.set(part.key, {workKey, sources, cell, tile: part.tile, json, bytes});
+          this.kept.set(part.key, {scope, workKey, sources, cell, tile: part.tile, json, bytes});
           this.bytes += bytes;
           while (this.bytes > this.budget && this.kept.size) this.drop(this.kept.keys().next().value!);
         }

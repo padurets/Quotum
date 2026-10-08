@@ -60,7 +60,7 @@ export type HubEvent =
   | {type:'sourceAccess';data:Record<string,SourceAccess>}
   | {type:'currencies';data:CurrencyContext}
   | {type: 'boards'; data: {boards: Board[]}}
-  | {type: 'history'; data: {sources: string[]; since: number}}
+  | {type: 'history'; data: {sources: string[]; since: number; changes?: import('../../server/domain/history').HistoryChange[]}}
   | {type: 'resets'; data: HubResets};
 
 export type ConnectionStatus = 'connecting' | 'live' | 'polling' | 'retrying' | 'paused';

@@ -1079,3 +1079,27 @@ test('view writes require an independent current writer header even when an old 
   assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:1}})).status,428);
   assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:current,headers:{'If-Match':'"0"'}})).status,409);
 });
+
+
+test('scoped history validates resource families and preserves legacy reads and metadata isolation',async t=>{
+  const {app,call,person,store}=await hub();t.after(()=>app.close());const board=await person('alice');
+  const user=store.db.prepare("SELECT id FROM users WHERE email='alice@example.com'").get()!.id as string;
+  const native=store.source('codex','native',Date.now()),money=store.source('deepseek','budget',Date.now()),cap=store.source('zai','cap',Date.now());
+  for(const id of [native,money,cap])store.hold(id,user,Date.now());
+  const cell=60_000,from=Math.floor((Date.now()-3600_000)/cell)*cell,to=from+1800_000;
+  const url='/api/history?board='+board+'&cell='+cell+'&from='+from+'&to='+to;
+  const read=(scope:string,source?:string,id?:string,unit='USD',meta='')=>call('GET',url+'&scope='+scope+'&meta='+meta+(source?'&unit='+unit+'&meters='+encodeURIComponent(JSON.stringify([[source,id]])):''),{as:'alice'});
+  assert.equal((await read('quota')).status,200);
+  assert.equal((await read('budget')).status,400);
+  assert.equal((await read('budget',native,'balance')).status,400);
+  assert.equal((await read('quota',money,'balance:USD')).status,400);
+  assert.equal((await read('budget',cap,'quota:credit:5h','credits:zai')).status,400);
+  const quota=await read('quota',cap,'quota:credit:5h','credits:zai');assert.equal(quota.status,200);
+  const budget=await read('budget',money,'balance:USD');assert.equal(budget.status,200);
+  for(const chunk of budget.body.chunks){assert.deepEqual(chunk.series,[]);assert.deepEqual(chunk.activity.sessions,[]);}
+  const crossed=await read('quota',undefined,undefined,'USD',budget.body.meta);assert.ok(crossed.body.known);
+  const reused=await read('budget',money,'balance:USD','USD',budget.body.meta);assert.equal(reused.body.known,undefined);
+  assert.equal((await call('GET',url,{as:'alice'})).status,200);
+  const future=url.replace('from='+from,'from='+(to+86400_000));
+  assert.equal((await call('GET',future+'&scope=quota',{as:'alice'})).body.error,'history_range_invalid');
+});

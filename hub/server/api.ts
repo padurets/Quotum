@@ -1,3 +1,4 @@
+import {providerOf, quotaMeter, budgetMeter} from './domain/providers.js';
 import {Attention} from './attention.js';
 import {STATUS_CODES} from 'node:http';
 import type {Socket} from 'node:net';
@@ -109,7 +110,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   const anyHost = hosts.has('*');
   const history = new HistoryTiles(store);
   const events = hub.events ?? new Events(hub);
-  events.onHistory = (source, since) => history.touch(source, since);
+  events.onHistory = (source, since, scopes) => history.touch(source, since, scopes);
   events.attach();
   hub.credentials!.setObserver(events);
   hub.hubSources?.setObserver(events);
@@ -176,12 +177,14 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
     return snapshot;
   });
 
-  app.get<{Querystring: {cell?: string; from?: string; to?: string; board?: string; meters?: string; unit?: string; currency?:string; meta?:string}}>('/api/history', (request, reply) => {
+  app.get<{Querystring: {cell?: string; from?: string; to?: string; board?: string; meters?: string; unit?: string; currency?:string; meta?:string; scope?:string}}>('/api/history', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
+    const scope = request.query.scope;
+    if(scope!==undefined&&scope!=='quota'&&scope!=='budget')return reply.code(400).send({error:'invalid_request'});
     const now = Date.now();
     // Credit quiet machines before deciding whether their tiles can be reused.
-    hub.ingest.live.sweep(now);
+    if(scope!=='budget')hub.ingest.live.sweep(now);
     const number = (value: string | undefined) => value && /^\d{1,15}$/.test(value) ? Number(value) : NaN;
     const cell = number(request.query.cell);
     const from = number(request.query.from);
@@ -190,7 +193,8 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
     if (!READ_CELLS.includes(cell) || !Number.isFinite(from) || !Number.isFinite(askedTo) || from % cell || (askedTo <= now && askedTo % cell)) return reply.code(400).send({error: 'invalid_request'});
     const to = Math.min(Math.ceil(askedTo / cell) * cell, cellStart(now + CLOCK_TOLERANCE_MS, cell) + cell);
     const oldest = tileStart(tileOf(now - config.retention.sampleDays * 86_400_000, cell), cell);
-    if (to <= from || to % cell || from < oldest || tileOf(to - 1, cell) - tileOf(from, cell) + 1 > MAX_READ_TILES) return reply.code(400).send({error: 'invalid_request'});
+    if (to <= from || from < oldest) return reply.code(400).send({error: scope ? 'history_range_invalid' : 'invalid_request'});
+    if (to % cell || tileOf(to - 1, cell) - tileOf(from, cell) + 1 > MAX_READ_TILES) return reply.code(400).send({error: 'invalid_request'});
     const board = access.board.id;
     const shown = store.shown(board, directory.view(board).hidden);
     let meters: MeterSelection | undefined;
@@ -200,8 +204,13 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
       if (meters.ids.some(([source])=>!shown.has(source))) return reply.code(404).send({error:'not_found'});
       if(request.query.currency!==undefined)meters={...meters,nativeCurrencies:true};
     }
+    if(scope==='budget'&&!meters || scope==='quota'&&request.query.currency!==undefined)return reply.code(400).send({error:'invalid_request'});
+    if(scope&&meters) {
+      const sources=new Map(store.sources(board).map(source=>[source.id,providerOf(source.provider)]));
+      if(meters.ids.some(([source,id])=>!(scope==='quota'?quotaMeter:budgetMeter)(sources.get(source),id)))return reply.code(400).send({error:'invalid_request'});
+    }
     let chunks: string[];
-    try {chunks=history.read(board, cell, from, to, now, shown, meters);}
+    try {chunks=history.read(board, cell, from, to, now, shown, meters, scope);}
     catch(error){if(error instanceof HistoryLimit)return reply.code(413).send({error:'history_limit'});throw error;}
     if(request.query.currency!==undefined){
       if(!meters)return reply.code(400).send({error:'invalid_request'});
@@ -217,7 +226,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
       if(chunks.reduce((sum,json)=>sum+Buffer.byteLength(json),0)>16*1024*1024)return reply.code(413).send({error:'history_limit'});
     }
     const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown)};
-    const tag = request.query.meta === undefined ? undefined : history.metadata(board, basis);
+    const tag = request.query.meta === undefined ? undefined : history.metadata(board, basis, scope);
     const meta = JSON.stringify(tag && request.query.meta === tag ? {now, run: events.epoch, meta: tag} : {now, ...basis, ...(tag ? {meta: tag} : {})});
 
     return reply.type('application/json').send(`${meta.slice(0, -1)},"chunks":[${chunks.join(',')}]}`);
