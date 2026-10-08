@@ -1,7 +1,6 @@
 import {useSyncExternalStore} from 'react';
 import {navigate, onLocation} from './router';
 import {clock, day, stamp} from './format';
-import {periodLabel, periodOf} from './periods';
 
 /** A period selected on the chart, in milliseconds. */
 export type TimeRange = {from: number; to: number};
@@ -111,12 +110,6 @@ export function timeRangeLabel({from, to}: TimeRange) {
   if (to - from >= 3 * DAY) return `${day(from)} – ${day(to)}`;
   if (new Date(from).toDateString() === new Date(to).toDateString()) return `${day(from)} ${clock(from)}–${clock(to)}`;
   return `${stamp(from)} – ${stamp(to)}`;
-}
-
-/** The complete answer's own period, independent of a plot preview or pending selection. */
-export function answeredRangeLabel(history: {range: string}) {
-  const [from, to] = history.range.split('-').map(Number);
-  return Number.isFinite(from) && Number.isFinite(to) ? timeRangeLabel({from, to}) : periodLabel(periodOf(history.range));
 }
 
 /**

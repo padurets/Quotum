@@ -286,7 +286,8 @@ export const en = {
   "analytics.allMuted": "All series are hidden. Select one in the legend.",
   "analytics.noBudget": "No budget sources on this board",
   "analytics.noSelection": "No series selected. Choose them in the chart settings.",
-  'widgets.budgetHistory': 'Budget history',
+  'widgets.budgetHistory': 'Budget trends',
+  'widgets.budgetTable': 'Budget metrics',
   'widgets.history': 'History chart',
   'widgets.move': 'Move “{name}”',
   'widgets.moveHint': 'Drag by the head, or use the arrow keys',
@@ -461,7 +462,7 @@ export const en = {
   'plan.default': 'Reset to default',
 
   'history.label': 'History',
-  'history.title': 'Remaining over time',
+  'history.title': 'Subscription limit trends',
   'history.kind': 'Window type',
   'history.weekly': 'Weekly',
   'history.session': '5-hour',
@@ -479,7 +480,6 @@ export const en = {
   'history.planHint': 'The plan is set in each subscription widget’s settings',
   'history.loading': 'Loading history…',
   'history.quotaOverflow': 'Some limit series are omitted: {count}. Hide unused sources or periods to show them.',
-  'history.answeredRange': 'Totals for {range}',
   'history.settings': 'Chart settings',
   'chart.panHint': 'Swipe sideways or hold Shift with the wheel or a drag to move through time. Release Shift to finish scrolling. Drag without Shift to select a range.',
   'history.horizon': 'Look ahead',
@@ -540,7 +540,7 @@ export const en = {
   'work.noSpendSince': 'Nothing spent since {time}',
   'work.slow': 'Lasts over a week of activity',
   
-  'forecast.title': 'Spending and forecast',
+  'forecast.title': 'Subscription limit metrics',
   'forecast.settings': 'Table settings',
   'forecast.empty': 'No measurements in this period',
 

@@ -1089,7 +1089,8 @@ table. All use the period in the analytics head; the weekly/session switch appli
 only to the quota pair. Each of the four analytics widgets has independent placement,
 visibility and table columns. Budget series are chosen in the budget chart settings
 and shared with its table, even while the chart is hidden. Each
-analytics panel uses the same heading, description and reader-error component. The
+analytics panel uses the same heading and reader-error component. The selected
+period appears once in the shared analytics controls. The
 limit and budget tables share their column controls, cells and responsive renderer;
 when their selected columns no longer fit, both become labelled rows. Their own
 data models provide the values and column widths, including clock-driven cells.

@@ -24,7 +24,7 @@ import {QUOTA_TABLE, chosenPlanOf, columnShown, planOf, type Arrange} from '../l
 import {type Line} from '../lib/lines';
 import {subscriptionLinesOf,subscriptionOverflow} from '../lib/subscription';
 import {usePrefs} from '../lib/prefs';
-import {answeredRangeLabel, ofTimeRange} from '../lib/timeRange';
+import {ofTimeRange} from '../lib/timeRange';
 import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
 import {hubNow} from '../lib/clock';
 import {quotaHistory, useHistory} from '../lib/history';
@@ -182,7 +182,6 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
   const definitions = modeColumns.map(id => ({id, title: heading(id, range), width: FORECAST_WIDTHS[id], hint: HEADINGS[id].hint ? t(HEADINGS[id].hint!) : undefined}));
   return (
     <AnalyticsPanel ref={panel} className="forecast" title={t('forecast.title')} history={history} loading={loading} error={error} retry={quotaHistory.retry}
-      description={history && t('history.answeredRange', {range: answeredRangeLabel(history)})}
       settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}/>}
     >
       {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}

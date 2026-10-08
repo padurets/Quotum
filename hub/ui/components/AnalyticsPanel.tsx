@@ -3,14 +3,14 @@ import type {ReactNode, Ref} from 'react';
 import type {Shown} from '../lib/history';
 import {HistoryFailure} from './HistoryFailure';
 
-/** The same heading, description and reader state for every analytics widget. */
-export function AnalyticsPanel({ref, className, title, description, settings, history, loading, error, retry, chart, children}: {
-  ref?: Ref<HTMLElement>; className: string; title: string; description?: ReactNode; settings?: ReactNode;
+/** The same heading and reader state for every analytics widget. */
+export function AnalyticsPanel({ref, className, title, settings, history, loading, error, retry, chart, children}: {
+  ref?: Ref<HTMLElement>; className: string; title: string; settings?: ReactNode;
   history: Shown['history']; loading: boolean; error: Shown['error']; retry: () => void; chart?: boolean; children: ReactNode;
 }) {
   return <section ref={ref} className={`panel ${className}${loading ? ' is-loading' : ''}`} aria-label={title} aria-busy={loading} data-history-range={history?.range} data-time={chart ? 'chart' : undefined}>
     <div className="panel-head">
-      <div className="panel-heading"><h2>{title}</h2>{description && <div className="panel-description">{description}</div>}</div>
+      <h2 className="panel-heading">{title}</h2>
       {settings}
     </div>
     <HistoryFailure error={error} retry={retry}/>

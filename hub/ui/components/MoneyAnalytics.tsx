@@ -11,7 +11,7 @@ import {money,capName} from '../lib/money';
 import {moneyIdentity,moneyPointAt,meterPointIn,moneyTotal,type MeterHistory} from '../lib/moneyView';
 import {colorOf,columnShown,withHidden,BUDGET_HISTORY,BUDGET_TABLE,type Arrange} from '../lib/view';
 import {frameOf,frameChangesAt,measuredTo} from '../lib/periods';
-import {useTimeRange,setTimeRange,timeRangeKey,answeredRangeLabel} from '../lib/timeRange';
+import {useTimeRange,setTimeRange,timeRangeKey} from '../lib/timeRange';
 import {useClock} from '../lib/clock';
 import {stamp} from '../lib/format';
 import type {Line} from '../lib/lines';
@@ -99,7 +99,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
       }};
   },[model,unit,locale,context,strip?.cell,history?.cellMs]);
   const answered=history?.range===(selected?timeRangeKey(selected):prefs.range);
-  return <AnalyticsPanel ref={panel} className="budget-history" title={`${t(prefs.money.view === 'spending' ? 'money.spending' : 'money.balance')} (${symbol})`} chart history={history} loading={loading} error={error} retry={budgetHistory.retry}
+  return <AnalyticsPanel ref={panel} className="budget-history" title={t('widgets.budgetHistory')} chart history={history} loading={loading} error={error} retry={budgetHistory.retry}
     settings={<Popover label={t('history.settings')} icon={<SlidersIcon/>}>
       <div className="popover-pad"><Segmented value={prefs.money.view} onChange={view=>setPrefs({money:{...prefs.money,view}})} options={[["balance",t('money.balance')],["spending",t('money.spending')]]} label={t('money.value')}/></div>
       <MoneySettings sources={sources} hidden={arrange.view.hidden} series={original}/>
@@ -128,8 +128,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
     const title=[total.unknown?t('money.unknown'):total.partial?t('money.partial'):'',...steps.map(p=>`${money(p.amount,s.unit,true,context)}\n${stamp(p.from)} — ${stamp(p.to)}`)].filter(Boolean).join('\n');
     return {title,content:<>{money(total.amount,s.unit,false,context)}{total.partial&&<small className="money-partial">*</small>}</>};
   };
-  return <AnalyticsPanel ref={panel} className="budget-table" title={`${t('money.spending')} (${currencySymbol(unit,context)})`} history={history} loading={loading} error={error} retry={budgetHistory.retry}
-    description={history && t('history.answeredRange', {range: answeredRangeLabel(history)})}
+  return <AnalyticsPanel ref={panel} className="budget-table" title={t('widgets.budgetTable')} history={history} loading={loading} error={error} retry={budgetHistory.retry}
     settings={<TableSettings arrange={arrange} widget={BUDGET_TABLE} columns={definitions} visible={columns.map(column=>column.id)}/>}
   >
     <SelectionNotice/>

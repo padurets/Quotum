@@ -281,7 +281,8 @@ export const ru = {
   "analytics.allMuted": "Все ряды скрыты. Включите нужный в легенде.",
   "analytics.noBudget": "На этой доске нет источников бюджета",
   "analytics.noSelection": "Ряды не выбраны. Выберите их в настройках графика.",
-  'widgets.budgetHistory': 'История бюджета',
+  'widgets.budgetHistory': 'Динамика бюджета',
+  'widgets.budgetTable': 'Показатели бюджета',
   'widgets.history': 'График истории',
   'widgets.move': 'Переместить «{name}»',
   'widgets.moveHint': 'Тяните за шапку или используйте стрелки',
@@ -456,7 +457,7 @@ export const ru = {
   'plan.default': 'Вернуть по умолчанию',
 
   'history.label': 'История',
-  'history.title': 'История остатка',
+  'history.title': 'Динамика лимитов подписки',
   'history.kind': 'Тип окна',
   'history.weekly': 'Недельные',
   'history.session': '5-часовые',
@@ -474,7 +475,6 @@ export const ru = {
   'history.planHint': 'План задаётся в настройках виджета подписки',
   'history.loading': 'Загружаем историю…',
   'history.quotaOverflow': 'Часть рядов лимитов не показана: {count}. Скройте ненужные источники или периоды, чтобы показать остальные.',
-  'history.answeredRange': 'Итоги за {range}',
   'history.settings': 'Настройки графика',
   'chart.panHint': 'Листайте вбок или удерживайте Shift при прокрутке или перетаскивании, чтобы двигаться во времени. Отпустите Shift, чтобы закончить прокрутку. Перетаскивание без Shift выбирает диапазон.',
   'history.horizon': 'Горизонт',
@@ -535,7 +535,7 @@ export const ru = {
   'work.noSpendSince': 'С {time} ничего не потрачено',
   'work.slow': 'Хватит больше чем на неделю активности',
   
-  'forecast.title': 'Расход и прогноз',
+  'forecast.title': 'Показатели лимитов подписки',
   'forecast.settings': 'Настройки таблицы',
   'forecast.empty': 'За этот период нет замеров',
 

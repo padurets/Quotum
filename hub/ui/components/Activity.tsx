@@ -6,7 +6,7 @@ import {clock, num, shortDay, stamp, workHours} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {activityEmpty, activityScale, atOnce, groupColors, mutedKey} from '../lib/activity';
 import {ACTIVITY_BY, setMuted, setPrefs, usePrefs} from '../lib/prefs';
-import {answeredRangeLabel, setTimeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
+import {setTimeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
 import {useBoardId, useLineup, useTitles, type Title} from '../lib/board';
@@ -275,7 +275,6 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
 
   return (
     <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
-      description={history && t('history.answeredRange', {range: answeredRangeLabel(history)})}
       settings={<ActivitySettings arrange={arrange}/>}
     >
       <Totals activity={activity} shownMs={shownMs} since={since} />

@@ -139,7 +139,7 @@ function Dashboard({
   });
   const panels = new Map<string, Widget>([
     [BUDGET_HISTORY,{id:BUDGET_HISTORY,name:t('widgets.budgetHistory'),content:<MoneyHistory arrange={arrange}/>}],
-    [BUDGET_TABLE,{id:BUDGET_TABLE,name:t('money.spending'),content:<MoneyTable arrange={arrange}/>}],
+    [BUDGET_TABLE,{id:BUDGET_TABLE,name:t('widgets.budgetTable'),content:<MoneyTable arrange={arrange}/>}],
     [
       QUOTA_HISTORY,
       {
