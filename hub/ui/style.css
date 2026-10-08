@@ -1152,10 +1152,10 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .currency-open .currency-name { flex: 0 1 auto; min-width: 0; }
 /* The primary button covers the row's spacing; separate actions stay above it. */
 .currency-registry-list > .settings-list-row { position: relative; }
-.currency-open::after { content: ''; position: absolute; inset: 0; border-radius: 8px; }
+.currency-open::after { content: ''; position: absolute; inset: 0; z-index: 1; border-radius: 8px; }
 .currency-open:focus-visible { outline: none; }
 .currency-open:focus-visible::after { outline: 2px solid var(--accent); outline-offset: 2px; }
-.currency-registry-list .picker > button, .currency-row-notice button { position: relative; z-index: 1; }
+.currency-registry-list .picker > button, .currency-row-notice button { position: relative; z-index: 2; }
 .currency-tabs .segmented-radio { min-width: 0; }
 .currency-tabs .segmented-radio span { padding: 8px 6px; }
 @media (max-width: 700px) {
