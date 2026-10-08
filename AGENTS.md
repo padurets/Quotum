@@ -192,6 +192,9 @@ and platform smoke checks still apply.
   belong in analytics. A subscription's additional funds belong in its footer beside
   free resets, as a compact amount with a disclosure, in both dashboard and compact.
   They never add a balance row to the subscription's main body.
+  Keep the last known amount visible in the warning tone when stale, just like free
+  resets; do not replace it with a warning icon or add another status mark. Its
+  disclosure uses the shared tray heading and detail table.
   Never add card rows just because a provider returns more fields;
   each extra field needs a defined purpose, while safe financial observations are saved
   at capture for later analytics. Only reported caps have scales, and lifetime credits

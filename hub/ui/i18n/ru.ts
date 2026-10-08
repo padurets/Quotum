@@ -7,6 +7,8 @@ export const ru = {
   'money.codexCreditUnit': 'кред. Codex',
   'money.additionalFunds': 'Дополнительные средства',
   'money.defaultEstimate': 'Стандартная оценка',
+  'money.rate': 'Курс',
+  'money.rateDate': 'Дата курса',
   'money.unlimited': 'Без ограничений',
   'money.notReported': 'Не сообщается',
   'money.invalidBalance': 'Некорректный ответ о балансе',

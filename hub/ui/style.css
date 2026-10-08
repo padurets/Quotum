@@ -395,6 +395,7 @@ td.muted, small.muted { color: var(--text-3); }
 .funds-mark .funds-value { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; }
 .text-button.tray-pill.is-warn { color: var(--warn); }
 .text-button.tray-pill.is-crit { color: var(--crit); }
+.tray-pill:is(.is-warn, .is-crit) b { color: inherit; }
 /* The glow is on the icon itself, never on the button: a filter there would spoil the glass of its panel. */
 .text-button.reset-mark.is-accent { color: var(--reset); border-color: color-mix(in oklab, var(--reset) 28%, transparent); background: color-mix(in oklab, var(--reset) 7%, transparent); font-weight: 560; }
 .text-button.reset-mark.is-accent:hover, .text-button.reset-mark.is-accent[aria-expanded=true] { border-color: color-mix(in oklab, var(--reset) 45%, transparent); background: color-mix(in oklab, var(--reset) 13%, transparent); }

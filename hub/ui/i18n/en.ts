@@ -12,6 +12,8 @@ export const en = {
   'money.codexCreditUnit': 'Codex credits',
   'money.additionalFunds': 'Additional funds',
   'money.defaultEstimate': 'Standard estimate',
+  'money.rate': 'Rate',
+  'money.rateDate': 'Rate date',
   'money.unlimited': 'Unlimited',
   'money.notReported': 'Not reported',
   'money.invalidBalance': 'Invalid balance response',

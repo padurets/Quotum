@@ -660,8 +660,10 @@ Codex reports purchased credits on its existing subscription source. Dashboard a
 compact show additional funds as a footer mark, with exact amounts and conversion
 details in its disclosure; the subscription body keeps its percentage limits.
 Clients that have never reported credits get no empty footer mark. A confirmed zero
-is numeric; a missing, invalid or stale balance uses a warning mark whose disclosure
-preserves the last known amount. The separate Budget trends widget plots credit
+is numeric; a missing, invalid or stale reading keeps the last known amount visible
+in the same warning colour as stale free resets. It remains one balance informer,
+with no separate warning icon. Its disclosure uses the tray's shared heading and
+detail table for native credits, measurement time and rate. The separate Budget trends widget plots credit
 history in the display currency alongside the subscription limit chart.
 Windows, free resets and credit status have independent strictly newer observation
 watermarks; a separate monotonic delivery baseline drives cadence and survives restart. Deferred

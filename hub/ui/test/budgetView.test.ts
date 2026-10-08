@@ -19,6 +19,7 @@ import * as currency from '../../server/domain/currency';
 import {defaultCurrencyContext} from '../../server/domain/currency';
 import {Store} from '../../server/store/store';
 import * as statusMarks from '../components/StatusMark';
+import * as currencySettings from '../lib/currencySettings';
 
 Object.assign(globalThis,{React});
 
@@ -37,6 +38,7 @@ const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact
   if(name==='../../server/domain/currency')return currency;
   if(name==='../../server/domain/meters')return meterDomain;
   if(name==='../lib/money')return money;
+  if(name==='../lib/currencySettings')return currencySettings;
   if(name==='../lib/format')return format;
   if(name==='../i18n')return {t};
   if(name==='../lib/moneyKeys')return {useShownKeys:(source:Card)=>({keys:source.keys??[],meters:source.meters??[],error:null})};
@@ -51,7 +53,7 @@ const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact
 runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneyCard.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2023,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,fixture);
 const {MoneyCard}=fixture.exports;
 
-test('subscription footer distinguishes zero, unlimited and failed observations without placeholder amounts',()=>{
+test('subscription footer keeps the last known balance in its warning tone, like free resets',()=>{
   const source={...card('codex',[{...meter('balance:credits','0','credits:codex'),scale:0}]),creditBalance:{id:'balance:credits' as const,unit:'credits:codex' as const,status:'finite' as const,at:1,staleAfterMs:1000}};
   shownCurrency={...defaultCurrencyContext,sources:{s:[{from:'credits:codex',at:1,anchor:null,steps:[{id:'default',source:'codex-default',base:'credits:codex',date:0,fetchedAt:1,from:'1000000',to:'40000'}]}]}};
   try {
@@ -64,7 +66,10 @@ test('subscription footer distinguishes zero, unlimited and failed observations 
       for(const status of ['missing','invalid','unsupported'] as const) {
         const html=draw({...source,creditBalance:{...source.creditBalance,status}});
         assert.match(html,/tray-pill is-warn/);
-        assert.ok(!html.includes('—')&&!html.includes('data-money='),'unavailable funds have an explanation, not a placeholder or current amount');
+        assert.match(html,/data-money="0"/,'the last known zero remains visible');
+        assert.ok(!html.includes('—')&&!html.includes('m12 3 10 18H2Z'),'no placeholder or warning icon replaces the balance');
+        const positive=draw({...source,meters:[{...source.meters![0],amount:'2500',stale:true}],creditBalance:{...source.creditBalance,status}});
+        assert.match(positive,/data-money="100000000"/,'the last known positive balance stays visible without opening details');
       }
       assert.equal(money.subscriptionFundsVisible({...source,meters:[],creditBalance:undefined}),false);
       assert.equal(money.subscriptionFundsVisible({...source,meters:[],creditBalance:{...source.creditBalance,status:'missing'}}),false);
