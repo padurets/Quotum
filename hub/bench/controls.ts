@@ -55,7 +55,8 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][]) {
       await new Promise(requestAnimationFrame);
       const root = document.querySelector('.budget-history .chart > svg');
       const series = Array.from(document.querySelectorAll('.budget-history [data-series]'));
-      const ready = root?.dataset.drawReady === 'true' && !document.querySelector('.budget-history.is-loading') && series.length === ${ids.length} && series.every(line => Array.from(line.querySelectorAll('path.series')).some(path => path.getAttribute('d')));
+      const waiting = document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.chart>svg[data-draw-ready="false"]');
+      const ready = root?.dataset.drawReady === 'true' && !waiting && series.length === ${ids.length} && series.every(line => Array.from(line.querySelectorAll('path.series')).some(path => path.getAttribute('d')));
       const box = root?.getBoundingClientRect(), size = box ? [box.x, box.y, box.width, box.height].join(':') : '';
       const moving = document.getAnimations().some(animation => animation.playState === 'running' && animation.effect?.target?.matches('.widget, .widget-body'));
       stable = ready && !moving && size === previous ? stable + 1 : 0;

@@ -4,7 +4,7 @@ import {runInNewContext} from 'node:vm';
 import {moneyView, selectMoney} from '../controls.js';
 import type {Cdp} from '../cdp.js';
 
-function moneyPage(broken?: 'blank' | 'scale') {
+function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
   let frame = 0, changedAt: number | null = null, loaded = () => {};
   const selected: {label: string; frame: number}[] = [];
   let ids: [string, string][] = [['dense-1', 'balance'], ['dense-2', 'balance']];
@@ -31,6 +31,7 @@ function moneyPage(broken?: 'blank' | 'scale') {
     document: {
       querySelector: (selector: string) => selector === '.budget-history .chart > svg' ? root
         : selector === '.budget-history.is-loading' ? ready() ? null : {}
+        : selector.startsWith('.history.is-loading,') ? broken === 'slow-quota' && frame < 20 ? {} : null
         : selector === '.budget-history .panel-head button' ? {click() {}}
         : selector.startsWith('[data-series=') ? line : null,
       querySelectorAll: (selector: string) => selector === '.budget-history [data-series]' ? frame >= 3 ? ids.map(() => line) : [] : buttons,
@@ -42,7 +43,7 @@ function moneyPage(broken?: 'blank' | 'scale') {
     send: async (method: string) => {if (method === 'Page.reload') loaded();},
     evaluate: async (source: string) => runInNewContext(source, context),
   } as unknown as Cdp;
-  return {cdp, selected, ids: () => ids};
+  return {cdp, selected, ids: () => ids, frame: () => frame};
 }
 
 test('the monetary update phase replaces the dense pan selection with its measured account', async () => {
@@ -50,6 +51,12 @@ test('the monetary update phase replaces the dense pan selection with its measur
   await selectMoney(page.cdp, [['measured', 'balance']]);
   assert.deepEqual(page.ids(), [['measured', 'balance']]);
   assert.deepEqual(page.selected, [], 'selecting accounts does not switch the financial view');
+});
+
+test('monetary measurements wait for the other reader to finish after selection reload', async () => {
+  const page = moneyPage('slow-quota');
+  await selectMoney(page.cdp, [['measured', 'balance']]);
+  assert.ok(page.frame() >= 22, 'three stable frames start only after quota history is ready');
 });
 
 test('money controls start from a complete drawing and await each prepared view', async () => {
