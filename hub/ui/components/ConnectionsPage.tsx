@@ -59,7 +59,7 @@ function RecentAdditions({boardId, onRestore}: {boardId?: string; onRestore: (op
             {operation.item.kind === 'connection'
               ? (PROVIDERS[operation.item.provider]?.name ?? operation.item.provider)
               : operation.item.kind === 'widget'
-                ? t(LABELS[operation.item.widgetId])
+                ? operation.widgetIds?.map(id => t(LABELS[id])).join(' / ') ?? t(operation.item.widgetId === 'history' ? 'widgets.history' : operation.item.widgetId === 'forecast' ? 'forecast.title' : LABELS[operation.item.widgetId])
                 : t('add.title')}
             <small>{stamp(operation.createdAt)}</small>
           </span>

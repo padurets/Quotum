@@ -131,16 +131,50 @@ with 32-KiB bodies and ten key-verification attempts per minute per user and add
 Status and reservation have a separate bounded request limit. Credentials cannot be
 submitted in a query. Closed panels do not poll or read catalogue/history data.
 
-`POST /api/boards/:board/view` remains owner-only and accepts a full View with a
-64-KiB body limit. It requires `If-Match: "<revision>"`: missing is `428
-view_reload_required`, malformed is `400 invalid_request`, stale is `409 view_conflict`
-with the authorized current `{view, revision}`. Success returns `{view, revision}`.
-Semantic changes increment revision; no-op saves do not. New snapshot and view events
-carry that revision. Older responses cannot replace newer state. The page serializes
-its own saves and flushes a pending save before Add; a conflict is shown, never silently
-reapplied. `enabledWhenEmpty` contains only standard widgets explicitly enabled on an
-empty board; hiding removes the entry. New boards begin with analytics hidden; older
-saved and absent views preserve their defaults and retained widget options.
+`POST /api/boards/:board/view` is owner-only and accepts a full View with
+`version: 2`, up to 68 KiB (69,632 UTF-8 bytes including JSON syntax). The independent
+writer header `X-Quotum-View-Version: 2` is required, even when a previous page echoes
+a received v2 body. Missing or incompatible writer headers and absent/legacy body
+versions return `428 view_reload_required` without mutation; malformed or future body
+versions return `400 invalid_request`. `If-Match: "<revision>"` remains required:
+missing is `428 view_reload_required`, malformed is `400 invalid_request`, and stale
+is `409 view_conflict` with the authorized current `{view, revision}`.
+Success returns `{view, revision}`. Semantic changes increment revision; no-op saves
+do not. Snapshots and view events carry that revision.
+
+The standard widgets are `agents`, `activity`, `quota-history`, `budget-history`,
+`quota-table` and `budget-table`. Each analytics replacement in `shown` is placed;
+`hidden` takes precedence. Unplaced analytics become placed once their resource
+capabilities appear, independently of filters, latest errors or zero balances. Placed
+widgets remain when resources leave. `enabledWhenEmpty` applies only to explicit
+`agents` and `activity` additions. New empty boards have no analytics placed and keep
+activity hidden; any standard widget can be added explicitly to an empty board.
+
+The schema upgrade converts legacy history/table placements atomically. Mixed boards
+keep the quota pair at the old coordinates and append the budget pair after existing
+analytics anchors. Money-only boards give the old coordinates to the budget pair.
+Explicitly hidden legacy panels hide both replacements. Columns follow their family;
+other source settings and geometry are retained. Reader-local modes never participate.
+Runtime capability reconciliation produces one authoritative view/revision pair and
+preserves the previous editor; a concurrent owner save receives the normal conflict.
+
+Widget reservation and run/resume also require the writer header. Existing addition
+items and request bindings remain immutable; legacy receipts carry frozen canonical
+`widgetIds` and report `current.widgets` with their current placement. Replaying a
+completed receipt never restores a subsequently hidden widget. Only a current client
+may resume an interrupted legacy widget addition. Non-widget connection operations
+retain their existing version-independent authorization.
+
+The page serializes its own saves and flushes pending changes before Add. Ordinary
+bodies retain the debounce; bodies above 64 KiB start an ordinary save immediately.
+No oversized body uses keepalive, and outstanding view keepalives share a 64-KiB
+budget. In a browser only, pending/failed oversized changes register the native close
+warning until acknowledged or explicitly discarded; navigation destroying the saver
+waits for these writes. Board/settings navigation keeps the saver and its queue.
+This is best-effort browser protection, not durability through forced termination.
+Electron and Tauri use the same ordinary save limit and queue without a new browser
+warning or change to native close/quit behavior. Save errors retain the existing
+retry/discard flow; conflicts never silently reapply an old full document.
 
 `POST /api/device-onboarding {requestId, boardId}` reserves a private device intent.
 The existing token-create and code-approval routes accept optional `onboardingId`;

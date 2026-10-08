@@ -1,3 +1,4 @@
+import {flushLargeViews} from '../lib/view';
 import {useState, type FormEvent, type ReactNode} from 'react';
 import {call} from '../lib/http';
 import {boardTitle, type Board, type User} from '../lib/session';
@@ -181,6 +182,7 @@ export function Header({
   const [error, setError] = useState<unknown>(null);
   const signOut = async () => {
     try {
+      await flushLargeViews();
       await call('POST', '/api/auth/logout');
       onSignedOut();
     } catch (failure) {

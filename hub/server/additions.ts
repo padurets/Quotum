@@ -6,11 +6,10 @@ import {checkpoint} from './secrets/start.js';
 import {UUID} from './store/sourceAccounts.js';
 import type {CredentialOptions} from './secrets/credentials.js';
 import {cardId, providerNames} from './domain/presentation.js';
-import type {View} from './domain/view.js';
 
 const DAY = 86_400_000, LEASE = 30_000;
-export const WIDGETS = ['agents', 'activity', 'history', 'forecast'] as const;
-export type WidgetId = typeof WIDGETS[number];
+export {WIDGETS, widgetVisible, type WidgetId} from './domain/widgets.js';
+import {WIDGETS, widgetVisible, widgetHidden as hidden, showWidgets as shown, type WidgetId} from './domain/widgets.js';
 export type AdditionItem = {kind: 'sources'; sourceIds: string[]} | {kind: 'widget'; widgetId: WidgetId} |
   {kind: 'connection'; provider: string; account?:{kind:'new'}|{kind:'existing';id:string}} | {kind: 'replace'; credentialId: string; provider?: string; sourceId?: string; expectedRevision?: number};
 type Result = {sourceIds: string[]; credentialId?: string; connection?: 'created' | 'reused'; expiresAt?: number | null; expiryKind?:import('./connectors/registry.js').ExpiryKind;
@@ -18,20 +17,10 @@ type Result = {sourceIds: string[]; credentialId?: string; connection?: 'created
 type State = 'ready' | 'verifying' | 'needs_input' | 'complete' | 'failed' | 'expired';
 type Row = {id: string; owner_id: string; request_id: string; board_id: string | null; item: string; state: State;
   result: string | null; error: string | null; created_at: number; updated_at: number; expires_at: number;
-  attempt_generation: number; run_id: string | null; verify_until: number | null; onboarding_id: string | null};
+  attempt_generation: number; run_id: string | null; verify_until: number | null; onboarding_id: string | null; widget_targets: string | null};
 export class AdditionError extends Error {
   constructor(readonly code: 'addition_invalid' | 'addition_conflict' | 'addition_not_found' | 'addition_limit' | 'addition_expired' | 'addition_permission' | 'addition_unavailable' | 'addition_interrupted') {super(code);}
 }
-const hidden = (view: View, id: string) => id === 'agents' ? !view.shown.includes(id) : view.hidden.includes(id);
-export const widgetVisible = (view: View, id: string, sources: number) => !hidden(view, id) && (sources > 0 || (view.enabledWhenEmpty ?? []).includes(id));
-
-/** Publication changes only the requested visibility, preserving layout and display options. */
-function shown(view: View, ids: string[]): View {
-  return {...view, hidden: view.hidden.filter(id => !ids.includes(id)),
-    shown: ids.includes('agents') ? [...new Set([...view.shown, 'agents'])] : view.shown,
-    enabledWhenEmpty: [...new Set([...(view.enabledWhenEmpty ?? []), ...ids.filter(id => WIDGETS.includes(id as WidgetId))])]};
-}
-
 /** A bounded, owner-private ledger for the board's four addition actions. It never stores secrets. */
 export class BoardAdditions {
   private readonly running = new Map<string, Promise<ReturnType<BoardAdditions['answer']>>>();
@@ -86,6 +75,7 @@ export class BoardAdditions {
     }
     if (item.kind === 'widget') {
       if (!board || board.role !== 'owner') throw new AdditionError('addition_permission');
+      if (!WIDGETS.includes(item.widgetId)) throw new AdditionError('addition_invalid');
       return {kind: 'widget', widgetId: item.widgetId};
     }
     if (item.kind === 'connection') {
@@ -127,6 +117,8 @@ export class BoardAdditions {
     if (!row || row.updated_at < this.now()-30*DAY) throw new AdditionError('addition_not_found');
     return row;
   }
+  isWidget(owner: string, id: string) {return JSON.parse(this.row(owner, id).item).kind === 'widget';}
+  private targets(row: Row): string[] {const item = JSON.parse(row.item) as AdditionItem; return item.kind === 'widget' ? row.widget_targets ? JSON.parse(row.widget_targets) : [item.widgetId] : [];}
   get(owner: string, id: string) {this.recover(); return this.answer(this.row(owner,id));}
   list(owner: string, limit = 20, before?: string, requestId?: string) {
     this.prune();
@@ -159,11 +151,12 @@ export class BoardAdditions {
     const view=accessible?this.directory.view(destination!):null, sources=accessible?this.store.sources(destination!):[];
     const credential=result?.credentialId?this.credentials.list(row.owner_id).find(record=>record.id===result.credentialId):undefined;
     return {id:row.id,boardId:row.board_id,item,state:row.state,createdAt:row.created_at,updatedAt:row.updated_at,expiresAt:row.expires_at,retainedUntil:row.updated_at+30*DAY,
+      ...(item.kind==='widget'?{widgetIds:this.targets(row)}:{}),
       ...(result?{result}:{}),...(row.error?{error:row.error}:{}),
       ...(result?.maintenance==='pending'?{warning:'credential_cleanup_pending'}:{}),
       current:{boardAccessible:row.board_id===null?null:accessible,
         ...(result?{sources:result.sourceIds.map(id=>({id,placement:!accessible?'unavailable':!sources.some(source=>source.id===id)?'removed':hidden(view!,cardId(id))?'hidden':'visible'}))}:{}),
-        ...(item.kind==='widget'?{widget:{id:item.widgetId,placement:!accessible?'unavailable':widgetVisible(view!,item.widgetId,sources.length)?'visible':'hidden'}}:{}),
+        ...(item.kind==='widget'?{widgets:this.targets(row).map(id=>({id,placement:!accessible?'unavailable':widgetVisible(view!,id,sources.length)?'visible':'hidden'}))}:{}),
         ...(result?.credentialId?{credential:{exists:!!credential,revisionMatches:credential?.revision===result.credentialRevision}}:{})}};
   }
 
@@ -216,10 +209,10 @@ export class BoardAdditions {
           if(item.kind==='widget'&&board.role!=='owner')throw new AdditionError('addition_permission');
           this.eligible(owner,board,result.sourceIds);
           const view=this.directory.view(board.id),existing=this.store.sources(board.id);
-          const ids=item.kind==='widget'?[item.widgetId]:result.sourceIds.map(cardId);
-          const already=item.kind==='widget'?widgetVisible(view,item.widgetId,existing.length):result.sourceIds.every(id=>existing.some(source=>source.id===id)&&!hidden(view,cardId(id)));
+          const ids=item.kind==='widget'?this.targets(row):result.sourceIds.map(cardId);
+          const already=item.kind==='widget'?ids.every(id=>widgetVisible(view,id,existing.length)):result.sourceIds.every(id=>existing.some(source=>source.id===id)&&!hidden(view,cardId(id)));
           if(!board.personal)for(const source of result.sourceIds)if(this.store.holds(owner,source))this.store.share(board.id,source,owner,now);
-          result.viewRevision=this.directory.saveView(board.id,shown(view,ids),owner,now);
+          result.viewRevision=this.directory.saveView(board.id,shown(this.directory.view(board.id),ids),owner,now);
           result.placement=already?'already_visible':'added';
         } else result.placement='personal';
         if(row.onboarding_id)this.completeOnboarding(row.onboarding_id,owner,id,result.sourceIds);

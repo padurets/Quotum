@@ -13,7 +13,7 @@ import {logoOf} from './logos';
 import {Popover, PopoverHeading} from './Popover';
 import {KeyForm, DeviceAdd} from './ConnectionForms';
 
-const WIDGET_ICONS = {agents: List, activity: Activity, history: ChartNoAxesCombined, forecast: Table2};
+const WIDGET_ICONS = {agents: List, activity: Activity, 'quota-history': ChartNoAxesCombined, 'budget-history': ChartNoAxesCombined, 'quota-table': Table2, 'budget-table': Table2};
 
 /** Keep attempted rows in place until this menu closes, including while the board catches up. */
 function retainRows<T extends {id: string}>(previous: T[], next: T[], kept: Set<string>, key: (item: T) => string): T[] {
@@ -58,7 +58,7 @@ function AdditionRow({
     complete &&
     (operation.current?.boardAccessible === false ||
       operation.current?.sources?.some(source => source.placement !== 'visible') ||
-      (operation.current?.widget && operation.current.widget.placement !== 'visible') ||
+      operation.current?.widgets?.some(widget => widget.placement !== 'visible') ||
       (seenVisible.current && !visible));
   const done = complete && !changed;
   const pending = addition.busy || operation?.state === 'verifying';

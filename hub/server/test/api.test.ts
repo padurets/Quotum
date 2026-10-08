@@ -1,3 +1,4 @@
+import {migrateAnalytics} from '../domain/analyticsView.js';
 import {cellOf, compose, targetOf, tileOf, tileStart, type HistoryAnswer} from '../domain/history.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,7 +26,7 @@ const periodOf = (id: string) => PERIODS.find(p => p.id === id)!;
 const iso = (ms: number) => new Date(ms).toISOString();
 const ORIGIN = 'http://localhost';
 const SETUP = 'BCDF-GHJK';
-const EMPTY = {layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}, enabledWhenEmpty: []};
+const EMPTY = {version: 2 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}, enabledWhenEmpty: []};
 
 async function hub() {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-api-')), 'db.sqlite'));
@@ -40,12 +41,13 @@ async function hub() {
     local: null,
   });
   const cookies = new Map<string, string>();
-  const call = async (method: 'GET' | 'POST' | 'DELETE', url: string, options: {as?: string; body?: object | string; headers?: Record<string, string>} = {}) => {
+  const call = async (method: 'GET' | 'POST' | 'DELETE', url: string, options: {as?: string; body?: object | string; headers?: Record<string, string>; legacyClient?: boolean} = {}) => {
     const response = await app.inject({
       method,
       url,
       payload: options.body,
       headers: {
+        ...(!options.legacyClient?{'X-Quotum-View-Version':'2'}:{}),
         ...(method==='POST'&&url.endsWith('/view')?{'If-Match':'"'+directory.viewRevision(url.split('/')[3])+'"'}:{}),
         ...(typeof options.body === 'string' ? {'content-type': 'application/json'} : {}),
         ...(options.as && cookies.get(options.as) ? {cookie: cookies.get(options.as)!} : {}),
@@ -292,11 +294,11 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   assert.deepEqual(shared.sources.map((s: any) => [s.id, s.owners]), [[source, ['Bob']]]);
   assert.deepEqual((await call('GET', `/api/boards/${team}/shares`, {as: 'alice'})).body.shared, [{source, provider: 'codex', sharedBy: 'Bob', mine: false}]);
 
-  store.db.prepare('INSERT OR REPLACE INTO views (board_id,payload,updated_by,updated_at) VALUES (?, ?, ?, ?)').run(team, JSON.stringify({order: ['history'], sizes: {history: 3}}), 'alice', Date.now());
+  store.db.prepare('INSERT OR REPLACE INTO views (board_id,payload,updated_by,updated_at) VALUES (?, ?, ?, ?)').run(team, JSON.stringify(migrateAnalytics({order: ['history'], sizes: {history: 3}},store.sources(team))), 'alice', Date.now());
   const old = (await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view;
-  assert.deepEqual(old, {...EMPTY, order: ['history'], sizes: {history: 3}}, 'stored legacy views are returned for the page to translate');
-  assert.deepEqual(shared.view, {...EMPTY,hidden:['activity','history','forecast']}, 'new boards start with their analytics off');
-  const view = {...EMPTY, layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}, [`source:${source}`]: {x: 0, y: 0, w: 3}}}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], shown: ['agents'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}, unplanned: [source], colors: {[source]: '#1fa89c'}, columns: {agents: ['machine', 'origin']}, shownColumns: {agents: ['state']}};
+  assert.deepEqual(old, migrateAnalytics({order: ['history'], sizes: {history: 3}},store.sources(team)), 'migration is shared by every reader');
+  assert.deepEqual(shared.view.shown, ['quota-history','quota-table'], 'applicable analytics are placed when the first source appears');
+  const view = {...EMPTY, layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}, [`source:${source}`]: {x: 0, y: 0, w: 3}}}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], shown: ['agents','quota-history','quota-table'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}, unplanned: [source], colors: {[source]: '#1fa89c'}, columns: {agents: ['machine', 'origin']}, shownColumns: {agents: ['state']}};
   assert.deepEqual((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: view})).body.view, view);
   assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view, view);
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'bob', body: EMPTY})).status, 403, 'a member only looks');
@@ -308,7 +310,7 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   assert.deepEqual((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: older})).body.view.shownColumns, {});
   for (const layout of [
     {columns: 12, places: {}},
-    ...[{x: 1, y: 0, w: 3}, {x: 0, y: 0, w: 5}, {x: 4, y: 0, w: 3}, {x: 0, y: -1, w: 3}, {x: 0, y: 1.5, w: 3}, {x: 0, y: 100000, w: 3}, {x: 0, y: 0, w: 3, z: 1}].map(p => ({columns: 6, places: {history: p}})),
+    ...[{x: 1, y: 0, w: 3}, {x: 0, y: 0, w: 5}, {x: 4, y: 0, w: 3}, {x: 0, y: -1, w: 3}, {x: 0, y: 1.5, w: 3}, {x: 0, y: 100004, w: 3}, {x: 0, y: 0, w: 3, z: 1}].map(p => ({columns: 6, places: {history: p}})),
     ...[0, -1, 1.5, MAX_ROWS + 1, null, '7', true].map(h => ({columns: 6, places: {history: {x: 0, y: 0, w: 3, h}}})),
     {columns: 6, places: {history: {x: 0, y: 0, w: 3, h: 7, z: 1}}},
   ]) assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...view, layout}})).status, 400, JSON.stringify(layout));
@@ -352,14 +354,14 @@ test('a migrated view can save new neighbours after 400 retained places, within 
     sizes: Object.fromEntries(Array.from({length: 200}, (_, i) => [`source:s${i}`, 4])),
   };
   assert.ok(Buffer.byteLength(JSON.stringify(legacy)) < 16 * 1024, 'the old route could store this view');
-  store.db.prepare('INSERT OR REPLACE INTO views (board_id,payload,updated_by,updated_at) VALUES (?, ?, ?, ?)').run(board, JSON.stringify(legacy), 'alice', Date.now());
+  store.db.prepare('INSERT OR REPLACE INTO views (board_id,payload,updated_by,updated_at) VALUES (?, ?, ?, ?)').run(board, JSON.stringify(migrateAnalytics(legacy,[])), 'alice', Date.now());
   const old = (await call('GET', `/api/overview?board=${board}`, {as: 'alice'})).body.view;
   const ids = ['source:s0', 'source:new'];
   const migrated = legacyLayout(old, {cards: ids, analytics: []}, []);
-  assert.equal(Object.keys(migrated.layout.places).length, 400);
+  assert.equal(Object.keys(migrated.layout.places).length, 403);
   const origin = settle(ordered(migrated.layout, ids).map(item => ({...item, h: 7})), 6);
   const changed = withPlaces(migrated, placesOf(widened(origin, 'source:s0', 4, 6)));
-  assert.equal(Object.keys(changed.layout.places).length, 401);
+  assert.equal(Object.keys(changed.layout.places).length, 404);
   assert.deepEqual(changed.layout.places['source:s0'], {x: 0, y: 0, w: 4});
   assert.deepEqual(changed.layout.places['source:new'], {x: 2, y: 7, w: 3}, 'the neighbour moves down, not sideways');
   assert.ok(Object.keys(migrated.layout.places).every(id => Object.hasOwn(changed.layout.places, id)), 'all retained settings survive');
@@ -375,7 +377,7 @@ test('a migrated view can save new neighbours after 400 retained places, within 
   assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: tooManyNames})).status, 400, 'other maps keep their count limits');
 });
 
-test('a full view request fits the browser keepalive byte budget', async t => {
+test('a full view request has a small UTF-8 migration reserve above the keepalive limit', async t => {
   const {app, call, person} = await hub();
   t.after(() => app.close());
   const board = await person('alice');
@@ -383,16 +385,16 @@ test('a full view request fits the browser keepalive byte budget', async t => {
   const places = Object.fromEntries(Array.from({length: 50}, (_, i) => [`source:${i}`, {x: 0, y: i * 10, w: 6, h: i % 2 ? MAX_ROWS : 1}]));
   for (const unit of ['x', 'я']) {
     const empty = {...EMPTY, layout: {columns: 6, places}, padding: ''};
-    const room = 65536 - Buffer.byteLength(JSON.stringify(empty));
+    const room = 69632 - Buffer.byteLength(JSON.stringify(empty));
     const unitBytes = Buffer.byteLength(unit);
     // An ignored field fills the request without changing any validated view settings.
     const exact = {...empty, padding: unit.repeat(Math.floor(room / unitBytes)) + 'x'.repeat(room % unitBytes)};
-    assert.equal(Buffer.byteLength(JSON.stringify(exact)), 65536);
+    assert.equal(Buffer.byteLength(JSON.stringify(exact)), 69632);
     const saved = await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: exact});
     assert.equal(saved.status, 200);
     assert.deepEqual(saved.body.view.layout.places, places);
     const over = {...exact, padding: exact.padding + 'x'};
-    assert.equal(Buffer.byteLength(JSON.stringify(over)), 65537);
+    assert.equal(Buffer.byteLength(JSON.stringify(over)), 69633);
     assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: over})).status, 413);
   }
 });
@@ -1061,4 +1063,19 @@ test('changes from another origin, unknown hosts and other methods are refused',
     assert.equal((await call('GET', '/device')).status, 200, 'client pages are served by the single-page client');
   }
   assert.equal((await call('GET', '/api/nothing')).status, 404);
+});
+
+
+test('view writes require an independent current writer header even when an old page echoes v2',async t=>{
+  const {app,call,person,store}=await hub();t.after(()=>app.close());const board=await person('alice');
+  const current=(await call('GET','/api/overview?board='+board,{as:'alice'})).body.view;
+  const before=store.db.prepare('SELECT * FROM views WHERE board_id=?').get(board);
+  for(const body of [current,{...current,version:1},{...current,layout:{columns:6,places:{history:{x:0,y:0,w:6}}}}]) {
+    const reply=await call('POST',`/api/boards/${board}/view`,{as:'alice',body,legacyClient:true});
+    assert.equal(reply.status,428);assert.equal(reply.body.error,'view_reload_required');
+    assert.deepEqual(store.db.prepare('SELECT * FROM views WHERE board_id=?').get(board),before);
+  }
+  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:3}})).status,400);
+  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:1}})).status,428);
+  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:current,headers:{'If-Match':'"0"'}})).status,409);
 });

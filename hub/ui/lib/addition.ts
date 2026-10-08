@@ -1,3 +1,6 @@
+import {VIEW_VERSION_HEADER} from '../../server/domain/view';
+import type {WidgetId} from '../../server/domain/widgets';
+export type {WidgetId} from '../../server/domain/widgets';
 import {createContext, useContext, useEffect, useRef, useState} from 'react';
 import type {Key} from '../i18n';
 import type {Board} from './session';
@@ -13,12 +16,13 @@ export type Candidate = {
   visible: boolean;
   action: 'add' | 'show';
 };
-export type WidgetId = 'agents' | 'activity' | 'history' | 'forecast';
 export const LABELS: Record<WidgetId, Key> = {
   agents: 'agents.title',
   activity: 'activity.title',
-  history: 'widgets.history',
-  forecast: 'forecast.title',
+  'quota-history': 'widgets.quotaHistory',
+  'budget-history': 'widgets.budgetHistory',
+  'quota-table': 'widgets.quotaTable',
+  'budget-table': 'widgets.budgetTable',
 };
 export type Demo = {
   keys: {
@@ -37,19 +41,20 @@ export type Catalogue = {
 };
 export type Item =
   | {kind: 'sources'; sourceIds: string[]}
-  | {kind: 'widget'; widgetId: WidgetId}
+  | {kind: 'widget'; widgetId: WidgetId | 'history' | 'forecast'}
   | {kind: 'connection'; provider: string; account?: {kind: 'new'} | {kind: 'existing'; id: string}}
   | {kind: 'replace'; credentialId: string; provider?: string};
 export type Operation = {
   id: string;
   boardId: string | null;
   item: Item;
+  widgetIds?: WidgetId[];
   createdAt: number;
   state: 'ready' | 'verifying' | 'needs_input' | 'complete' | 'failed' | 'expired';
   current?: {
     boardAccessible: boolean | null;
     sources?: {id: string; placement: string}[];
-    widget?: {id: string; placement: string};
+    widgets?: {id: string; placement: string}[];
     credential?: {exists: boolean; revisionMatches: boolean};
   };
   error?: string;
@@ -117,14 +122,14 @@ export function useAddition() {
       if (boardId) await flushView(boardId);
       if (!currentScope()) return;
       let reserved = current.current;
-      if (!reserved) reserved = await call<Operation>('POST', '/api/additions', {requestId: request.current, boardId, item});
+      if (!reserved) reserved = await call<Operation>('POST', '/api/additions', {requestId: request.current, boardId, item}, 12_000, undefined, {[VIEW_VERSION_HEADER]: '2'});
       if (!currentScope()) return;
       if (own === generation.current) accept(reserved);
       const next = await call<Operation>(
         'POST',
         '/api/additions/' + reserved.id + '/run',
         secret === undefined ? {} : {secret, ...options},
-        30_000,
+        30_000, undefined, {[VIEW_VERSION_HEADER]: '2'},
       );
       if (!currentScope() || own !== generation.current) return;
       accept(next);

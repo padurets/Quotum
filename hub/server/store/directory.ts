@@ -1,3 +1,5 @@
+import {analyticsResources} from './analyticsView.js';
+import {reconcileAnalytics} from '../domain/analyticsView.js';
 import type {DatabaseSync} from 'node:sqlite';
 import {newId, secretHash} from '../domain/auth.js';
 import {EMPTY_VIEW, type View} from '../domain/view.js';
@@ -104,7 +106,7 @@ export class Directory {
       this.db.prepare('INSERT INTO users VALUES (?, ?, ?, ?, ?)').run(id, email, name, passwordHash, now);
       this.db.prepare('INSERT INTO boards VALUES (?, ?, 1, ?, ?)').run(board, '', id, now);
       this.db.prepare('INSERT INTO members VALUES (?, ?, ?, ?)').run(board, id, 'owner', now);
-      this.saveView(board, {...EMPTY_VIEW, hidden: ['activity', 'history', 'forecast']}, id, now);
+      this.saveView(board, {...EMPTY_VIEW, hidden: ['activity']}, id, now);
       return this.user(id)!;
     });
   }
@@ -166,26 +168,35 @@ export class Directory {
 
   // ---------- views ----------
 
-  /** How a board is arranged; the default until its owner changes anything. */
-  view(boardId: string): View {
-    const row = this.db.prepare('SELECT payload FROM views WHERE board_id = ?').get(boardId) as {payload: string} | undefined;
-    // A view saved before a field existed gets that field's default.
-    return row ? {...EMPTY_VIEW, ...(JSON.parse(row.payload) as Partial<View>)} : EMPTY_VIEW;
+  /** The view and revision are reconciled together, before any reader sees either. */
+  viewState(boardId: string): {view: View; revision: number} {
+    return this.transaction(() => {
+      const row = this.db.prepare('SELECT payload,revision,updated_by FROM views WHERE board_id=?').get(boardId) as {payload: string; revision: number; updated_by: string} | undefined;
+      const saved: View = row ? {...EMPTY_VIEW, ...JSON.parse(row.payload)} : EMPTY_VIEW;
+      const view = reconcileAnalytics(saved, analyticsResources(this.db, boardId));
+      let revision = row?.revision ?? 0;
+      if (view !== saved) {
+        if (!Number.isSafeInteger(++revision)) throw new Error('View revision exhausted');
+        const owner = row?.updated_by ?? (this.db.prepare('SELECT created_by FROM boards WHERE id=?').get(boardId) as {created_by: string}).created_by;
+        this.db.prepare('INSERT INTO views(board_id,payload,updated_by,updated_at,revision) VALUES(?,?,?,?,?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision').run(boardId, JSON.stringify(view), owner, Date.now(), revision);
+        tell(this.observer, o => o.touchBoards([boardId]));
+      }
+      return {view, revision};
+    });
   }
+  view(boardId: string): View {return this.viewState(boardId).view;}
+  viewRevision(boardId: string): number {return this.viewState(boardId).revision;}
 
   saveView(boardId: string, view: View, by: string, now: number) {
     return this.transaction(() => {
-      const revision = this.viewRevision(boardId);
-      if (JSON.stringify(this.view(boardId)) === JSON.stringify(view)) return revision;
-      if (!Number.isSafeInteger(revision + 1)) throw new Error('View revision exhausted');
-      this.db.prepare('INSERT INTO views (board_id, payload, updated_by, updated_at, revision) VALUES (?, ?, ?, ?, ?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload, updated_by=excluded.updated_by, updated_at=excluded.updated_at, revision=excluded.revision').run(boardId, JSON.stringify(view), by, now, revision + 1);
+      const current = this.viewState(boardId);
+      if (JSON.stringify(current.view) === JSON.stringify(view)) return current.revision;
+      const revision = current.revision + 1;
+      if (!Number.isSafeInteger(revision)) throw new Error('View revision exhausted');
+      this.db.prepare('INSERT INTO views (board_id, payload, updated_by, updated_at, revision) VALUES (?, ?, ?, ?, ?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload, updated_by=excluded.updated_by, updated_at=excluded.updated_at, revision=excluded.revision').run(boardId, JSON.stringify(view), by, now, revision);
       tell(this.observer, o => o.touchBoards([boardId]));
-      return revision + 1;
+      return revision;
     });
-  }
-
-  viewRevision(boardId: string): number {
-    return (this.db.prepare('SELECT revision FROM views WHERE board_id=?').get(boardId) as {revision: number} | undefined)?.revision ?? 0;
   }
 
   connectionsRevision(userId: string): number {
@@ -254,7 +265,7 @@ export class Directory {
     this.transaction(() => {
       this.db.prepare('INSERT INTO boards VALUES (?, ?, 0, ?, ?)').run(id, name, userId, now);
       this.db.prepare('INSERT INTO members VALUES (?, ?, ?, ?)').run(id, userId, 'owner', now);
-      this.saveView(id, {...EMPTY_VIEW, hidden: ['activity', 'history', 'forecast']}, userId, now);
+      this.saveView(id, {...EMPTY_VIEW, hidden: ['activity']}, userId, now);
     });
     tell(this.observer, o => o.touchUser(userId));
     return {id, name, personal: false, role: 'owner'};

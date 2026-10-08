@@ -185,7 +185,7 @@ async function hub(options: Partial<EventsOptions> = {}, clock?: Clock) {
       url,
       payload: options.body,
       headers: {
-        ...(method==='POST'&&url.endsWith('/view')?{'If-Match':'"'+directory.viewRevision(url.split('/')[3])+'"'}:{}),
+        ...(method==='POST'&&url.endsWith('/view')?{'X-Quotum-View-Version':'2','If-Match':'"'+directory.viewRevision(url.split('/')[3])+'"'}:{}),
         ...(options.as && cookies.get(options.as) ? {cookie: cookies.get(options.as)!} : {}),
         ...(options.token ? {authorization: `Bearer ${options.token}`} : {}),
         ...options.headers,

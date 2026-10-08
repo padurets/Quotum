@@ -1,3 +1,4 @@
+import {widgetVisible} from '../../server/domain/widgets';
 import {useEffect, useRef, useState, type FormEvent} from 'react';
 import {t} from '../i18n';
 import {ApiError, call} from '../lib/http';
@@ -32,18 +33,19 @@ export function Completion({
     view = useServerView(),
     currentBoard = useBoardId();
   const path = usePath();
-  const widget = operation.item.kind === 'widget' ? operation.item.widgetId : null;
+  const widgets = operation.item.kind === 'widget' ? operation.widgetIds ?? [operation.item.widgetId] : [];
+  const widget = widgets[0] ?? null;
   const visible =
     !personal &&
     currentBoard === board?.id &&
     view &&
     (widget
-      ? !isHidden(view, widget) && (lineup.length > 0 || view.enabledWhenEmpty?.includes(widget))
+      ? widgets.every(id => widgetVisible(view, id, lineup.length))
       : operation.result?.sourceIds.every(id => lineup.includes(id) && !isHidden(view, cardId(id))));
   const source = operation.result?.sourceIds[0];
   const changed =
     operation.current?.sources?.some(item => item.placement !== 'visible') ||
-    (operation.current?.widget && operation.current.widget.placement !== 'visible') ||
+    operation.current?.widgets?.some(widget => widget.placement !== 'visible') ||
     (operation.current?.credential && !operation.current.credential.exists);
   const focusId = source ? cardId(source) : widget;
   const focus = () => {

@@ -1,3 +1,4 @@
+import {flushLargeViews} from './view';
 import {useSyncExternalStore} from 'react';
 
 const listeners = new Set<() => void>();
@@ -6,6 +7,14 @@ const changed = () => { for (const listener of [...listeners]) listener(); };
 
 /** All client navigation, including chart ranges, publishes the same location. */
 export function navigate(path: string, replace = false) {
+  const target = path.split('?')[0];
+  if (target === '/compact' || target === '/device' || target.startsWith('/invite/')) {
+    void flushLargeViews().then(() => commitNavigation(path, replace)).catch(() => {});
+    return;
+  }
+  commitNavigation(path, replace);
+}
+function commitNavigation(path: string, replace: boolean) {
   if (replace) history.replaceState(null, '', path);
   else history.pushState(null, '', path);
   window.dispatchEvent(new PopStateEvent('popstate'));

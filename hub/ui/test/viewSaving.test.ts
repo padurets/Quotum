@@ -1,3 +1,5 @@
+import * as viewContract from '../../server/domain/view';
+import * as widgets from '../../server/domain/widgets';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -8,13 +10,19 @@ import type {Arrange} from '../lib/view';
 import type {View} from '../lib/types';
 import {preparationFixture} from './preparationFixture';
 
-const EMPTY:View={layout:{columns:6,places:{}},names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{},enabledWhenEmpty:[]};
+const EMPTY:View={version:2,layout:{columns:6,places:{}},names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{},enabledWhenEmpty:[]};
 const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
-function fixture() {
+function fixture(platform?: 'electron'|'tauri') {
   const hooks=preparationFixture(),reads:{url:string;view:View;headers:Record<string,string>;resolve:(value:unknown)=>void;reject:(error:unknown)=>void}[]=[],events=new Map<string,()=>void>();
   const memo=(read:()=>unknown,deps:unknown[])=>{const box=hooks.useRef(undefined) as {current?:{deps:unknown[];value:unknown}};if(!box.current||deps.some((value,i)=>!Object.is(value,box.current!.deps[i])))box.current={deps,value:read()};return box.current.value;};
   const cleanups=new Set<()=>void>();
-  const context={exports:{} as {useView:(id:string,view:View,owner:boolean,revision:number)=>Arrange;flushView:(id:string)=>Promise<void>},setTimeout:()=>0,clearTimeout:()=>{},window:{addEventListener:(name:string,fn:()=>void)=>events.set(name,fn),removeEventListener:(name:string)=>events.delete(name)},fetch:()=>Promise.resolve({}),require:(name:string)=>{
+  const appContext={exports:{} as {inApp:()=>boolean},...(platform==='electron'?{__QUOTUM__:{invoke:()=>{}}}:platform==='tauri'?{__TAURI__:{core:{invoke:()=>{}}}}:{}),require:()=>({})};
+  runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/app.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,appContext);
+  const keepalives:{body:string;headers:Record<string,string>}[]=[];
+  const context={TextEncoder,AbortController,exports:{} as {useView:(id:string,view:View,owner:boolean,revision:number)=>Arrange;flushView:(id:string)=>Promise<void>;flushLargeViews:()=>Promise<void>},setTimeout:()=>0,clearTimeout:()=>{},window:{addEventListener:(name:string,fn:()=>void)=>events.set(name,fn),removeEventListener:(name:string)=>events.delete(name)},fetch:(_url:string,options:{body:string;headers:Record<string,string>})=>{keepalives.push(options);return Promise.resolve({});},require:(name:string)=>{
+    if(name==='./app')return appContext.exports;
+    if(name.endsWith('/domain/view'))return viewContract;
+    if(name.endsWith('/domain/widgets'))return widgets;
     if(name==='react')return {useRef:hooks.useRef,useState:hooks.useState,useEffect:(effect:()=>void|(()=>void),deps:unknown[])=>hooks.useLayoutEffect(()=>{const cleanup=effect();if(cleanup)cleanups.add(cleanup);return cleanup;},deps),useMemo:memo,useCallback:(fn:unknown,deps:unknown[])=>memo(()=>fn,deps)};
     if(name==='./http')return {ApiError,call:(_method:string,url:string,view:View,_timeout:number,_signal:unknown,headers:Record<string,string>)=>new Promise((resolve,reject)=>reads.push({url,view,headers,resolve,reject}))};
     if(name==='./plan')return {DEFAULT_PLAN:[],isValidPlan:()=>true};
@@ -24,7 +32,7 @@ function fixture() {
   }};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/view.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const render=(id='board',view=EMPTY,revision=4)=>{hooks.begin();const result=context.exports.useView(id,view,true,revision);hooks.commit();return result;};
-  return {render,reads,flush:context.exports.flushView,unmount:()=>{for(const cleanup of cleanups)cleanup();cleanups.clear();}};
+  return {render,reads,events,keepalives,leave:context.exports.flushLargeViews,flush:context.exports.flushView,unmount:()=>{for(const cleanup of cleanups)cleanup();cleanups.clear();}};
 }
 
 test('queued changes serialize and use their own committed revision',async()=>{
@@ -74,4 +82,38 @@ test('ending the owner shell prevents an unsent serial successor from moving to 
   h.render().update(view=>({...view,names:{source:'second'}}));h.unmount();
   h.reads[0].resolve({view:h.reads[0].view,revision:5});await saving;assert.equal(h.reads.length,1);
   await h.flush('board');assert.equal(h.reads.length,1);
+});
+
+const oversized={...EMPTY,names:Object.fromEntries(Array.from({length:200},(_,i)=>['name'+i,'é'.repeat(60)])),layout:{columns:6,places:Object.fromEntries(Array.from({length:1200},(_,i)=>['source:'+i,{x:0,y:i,w:3}]))}};
+test('oversized UTF-8 drafts save immediately in one serial queue and protect browser closing until acknowledged',async()=>{
+  const h=fixture();h.render().update(()=>oversized);
+  assert.ok(new TextEncoder().encode(JSON.stringify(oversized)).byteLength>65536);
+  assert.equal(h.reads.length,1);assert.equal(h.reads[0].headers['X-Quotum-View-Version'],'2');
+  assert.equal(h.events.has('beforeunload'),true);
+  h.events.get('pagehide')!();assert.equal(h.keepalives.length,0);
+  h.render().update(()=>({...EMPTY,names:{s:'latest small draft'}}));
+  assert.equal(h.reads.length,1);assert.equal(h.events.has('beforeunload'),true);
+  let left=false;const leaving=h.leave().then(()=>{left=true;});
+  h.reads[0].resolve({view:oversized,revision:5});await settle();
+  assert.equal(left,false);assert.equal(h.reads.length,2);assert.equal(h.events.has('beforeunload'),true);
+  h.reads[1].resolve({view:h.reads[1].view,revision:6});await leaving;
+  assert.equal(left,true);assert.equal(h.events.has('beforeunload'),false);h.unmount();
+});
+test('failed large saves prevent saver-destroying browser navigation until retry or explicit discard',async()=>{
+  const h=fixture();h.render().update(()=>oversized);
+  h.reads[0].reject(new Error('offline'));await settle();
+  assert.equal(h.events.has('beforeunload'),true);await assert.rejects(h.leave(),/offline/);
+  h.render().dismissSave!('board');await h.leave();assert.equal(h.events.has('beforeunload'),false);h.unmount();
+});
+test('both native bridges retain immediate ordinary autosave without registering a browser close warning',async()=>{
+  for(const platform of ['electron','tauri'] as const){const h=fixture(platform);h.render().update(()=>oversized);
+    assert.equal(h.reads.length,1);assert.equal(h.events.has('beforeunload'),false);
+    await h.leave();h.reads[0].reject(new Error('offline'));await settle();
+    assert.equal(h.events.has('beforeunload'),false);assert.equal(h.render().saveFailures!.length,1);h.unmount();
+  }
+});
+test('ordinary pagehide saves carry the writer version and clean boards have no close prompt',()=>{
+  const h=fixture();h.render().update(view=>({...view,names:{s:'small'}}));
+  assert.equal(h.reads.length,0);assert.equal(h.events.has('beforeunload'),false);
+  h.events.get('pagehide')!();assert.equal(h.keepalives.length,1);assert.equal(h.keepalives[0].headers['X-Quotum-View-Version'],'2');h.unmount();
 });

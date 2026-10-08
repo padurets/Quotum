@@ -73,6 +73,12 @@ export async function additionRoutes(app: FastifyInstance, hub: Hub, guards: Gua
     const user=guards.user(request,reply);if(!user)return reply;
     const input=fields(request.body,['requestId','boardId','item']);
     if(!uuid(input.requestId)||input.boardId!==null&&!boardId(input.boardId))throw new AdditionError('addition_invalid');
+    if ((input.item as {kind?:unknown}|null)?.kind==='widget') {
+      if (input.boardId===null) throw new AdditionError('addition_invalid');
+      const access=guards.board(request,reply,input.boardId as string); if(!access)return reply;
+      if(access.board.role!=='owner')throw new AdditionError('addition_permission');
+      if(request.headers['x-quotum-view-version']!=='2')return reply.code(428).send({error:'view_reload_required'});
+    }
     return additions.reserve(user.id,input.requestId,input.boardId as string|null,itemOf(input.item));
   });
   app.get<{Params:{id:string}}>('/api/additions/:id',(request,reply)=>{
@@ -89,6 +95,7 @@ export async function additionRoutes(app: FastifyInstance, hub: Hub, guards: Gua
   app.post<{Params:{id:string}}>('/api/additions/:id/run',{bodyLimit:32*1024},async(request,reply)=>{
     const user=guards.user(request,reply);if(!user)return reply;
     if(!uuid(request.params.id))throw new AdditionError('addition_not_found');
+    if(additions.isWidget(user.id,request.params.id)&&request.headers['x-quotum-view-version']!=='2')return reply.code(428).send({error:'view_reload_required'});
     const input=fields(request.body,[],['secret','allowUnknownExpiry','sameAccount','accountName']),operation=additions.get(user.id,request.params.id);
     if(['allowUnknownExpiry','sameAccount'].some(key=>input[key]!==undefined&&typeof input[key]!=='boolean'))throw new AdditionError('addition_invalid');
     if(input.accountName!==undefined&&(typeof input.accountName!=='string'||input.accountName.length>480||operation.item.kind!=='connection'||operation.item.account?.kind!=='new'))throw new AdditionError('addition_invalid');
