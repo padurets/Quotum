@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {follow,followPan, HistoryStore} from '../lib/history';
+import {HistoryPool} from '../lib/historyPool';
 import {Pan} from '../lib/pan';
 import {covered} from '../lib/historyPlot';
 import {HistoryTile} from '../lib/historyTiles';
@@ -21,7 +22,7 @@ const NOW = Date.parse('2026-09-26T12:23:00Z');
 const flush = async () => {for (let i = 0; i < 5; i++) await Promise.resolve();};
 const empty = (from: number, to: number): Chunk => ({from, to, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []});
 const pending = (h: ReturnType<typeof harness>) => h.reads.filter(r => !r.settled && !r.signal?.aborted);
-function harness(budget?: number, preparations?: Preparations) {
+function harness(budget?: number, preparations?: Preparations, scope?: 'quota'|'budget', pool?: HistoryPool) {
   let now = NOW;
   let elapsed = 0;
   let dropped = 0;
@@ -45,7 +46,7 @@ function harness(budget?: number, preparations?: Preparations) {
     setTimeout: (run, ms) => {const id = {}; timers.set(id, {at: now + ms, run}); return id;},
     clearTimeout: id => {timers.delete(id);},
     dropTimeRange: () => {dropped++;},
-  }, budget);
+  }, budget, scope, pool);
   const advance = async (ms: number) => {
     const end = now + ms;
     for (;;) {
@@ -1198,4 +1199,52 @@ test('a custom 31-day range keeps its grid and exact accounting through a pan an
   h.store.pan({token: 2, length, ...origin, direction: 1}); await flush();
   h.store.choose('30d', origin); h.store.endPan(true); await flush(); assert.equal(h.reads.length, count);
   h.store.close();
+});
+
+test('two scoped readers share transport slots, prioritize both visible ranges and release cancelled owners', async () => {
+  const pool=new HistoryPool(),q=harness(undefined,undefined,'quota',pool),b=harness(undefined,undefined,'budget',pool);
+  b.store.setMeters({unit:'USD',ids:[['s','balance']]});
+  await Promise.all([q.start(),b.start()]);
+  assert.equal(pool.activeFlights,2);assert.equal(q.reads.length,1);assert.equal(b.reads.length,1);
+  q.store.choose('7d',null);q.store.choose('30d',null);await flush();
+  assert.equal(pool.activeFlights,2);assert.equal(q.reads.length,1,'the same family cannot take another foreground slot');
+  await q.reads[0].answer();await q.advance(300);
+  assert.equal(q.reads.at(-1)!.to-q.reads.at(-1)!.from>24*H,true);
+  b.store.close();assert.equal(b.reads[0].signal?.aborted,true);
+  await b.reads[0].answer();assert.equal(b.store.get().history,null);
+  q.store.close();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+});
+
+test('an incoming family cannot evict the other visible frame or publish an oversized response',async()=>{
+  const pool=new HistoryPool(40_000),q=harness(undefined,undefined,'quota',pool),b=harness(undefined,undefined,'budget',pool);
+  b.store.setMeters({unit:'USD',ids:[['s','balance']]});
+  await q.start();await q.reads[0].answer();const retained=q.store.get().history;
+  assert.ok(retained);await b.start();
+  const read=b.reads[0],chunks:Chunk[]=[];
+  for(let from=read.from;from<read.to;){const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell));
+    chunks.push({...empty(from,to),meterSeries:Array.from({length:24},(_,i)=>({source:'s',meter:'m'+i,kind:'balance' as const,unit:'USD',semantics:null,cells:[[0,'1000000000000000000000000000000000000','0','0',0]]}))});from=to;}
+  await read.answer({chunks});
+  assert.equal(b.store.get().error,'history_limit');assert.equal(b.store.get().history,null);
+  assert.equal(q.store.get().history,retained);assert.ok(pool.estimatedBytes<=pool.budget);assert.equal(pool.activeFlights,0);
+  b.store.setMeters({unit:'USD',ids:[]});await flush();
+  assert.equal(b.store.get().error,undefined);assert.ok(b.store.get().history);assert.equal(b.reads.length,1,'empty selection completes locally');
+  q.store.close();b.store.close();
+});
+
+test('scoped failures preserve the shared range except an explicit unreadable-range response',async()=>{
+  const pool=new HistoryPool(),q=harness(undefined,undefined,'quota',pool),b=harness(undefined,undefined,'budget',pool);
+  b.store.setMeters({unit:'USD',ids:[['s','balance']]});
+  const range={from:NOW-4*H,to:NOW-3*H};q.store.choose('24h',range);b.store.choose('24h',range);
+  await Promise.all([q.start(),b.start()]);await q.reads[0].answer();const retained=q.store.get().history;
+  await b.reads[0].fail(new ApiError(400,'invalid_request'));
+  assert.equal(b.dropped(),0);assert.equal(b.store.get().error,'history_failed');assert.equal(q.store.get().history,retained);
+  b.store.retry();await flush();await b.reads[1].fail(new ApiError(400,'history_range_invalid'));assert.equal(b.dropped(),1);
+  q.store.lineup([]);assert.equal(q.store.get().history,null,'removed sources disappear before their replacement answer');
+  q.store.close();b.store.close();
+});
+
+test('empty budget selection is a complete frame without transport or retry loops',async()=>{
+  const b=harness(undefined,undefined,'budget',new HistoryPool());
+  b.store.setMeters({unit:'USD',ids:[]});await b.start();assert.ok(b.store.get().history);assert.equal(b.store.get().loading,false);
+  b.store.news(NOW);b.store.choose('7d',null);await flush();assert.equal(b.reads.length,0);assert.equal(b.store.get().history?.range,'7d');b.store.close();
 });

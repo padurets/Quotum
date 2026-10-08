@@ -1,4 +1,5 @@
-import {QUOTA_IDS} from '../../server/domain/meters';
+import {providerOf,quotaMeter} from '../../server/domain/providers';
+const quotaIds=(provider:string)=>{const descriptor=providerOf(provider);return descriptor&&'quotaMeters' in descriptor?descriptor.quotaMeters:[];};
 import {MAX_METERS,selectionOf,composeMetersPrepared,type MeterHistory,type MeterSelection} from '../../server/domain/meterHistory';
 import type {Card,History,Kind,View,Win} from './types';
 import type {CapCell,Line,PlotLine} from './lines';
@@ -15,11 +16,12 @@ import {ordered} from '../../server/domain/prepare';
 /** Subscription periods are independent of the provider's stored measurement unit. */
 export function quotaPeriods(source:Pick<Card,'provider'|'windows'>):Pick<Win,'id'|'kind'|'label'|'minutes'>[] {
   if(!hasSubscriptionCaps(source.provider))return source.windows;
-  return QUOTA_IDS.map((id,i)=>({id,kind:i===0?'session':'weekly',label:null,minutes:i===0?300:10080}));
+  return [...source.windows,...quotaIds(source.provider).map((id,i)=>({id,kind:i===0?'session':'weekly',label:null,minutes:i===0?300:10080} as Pick<Win,'id'|'kind'|'label'|'minutes'>))];
 }
 
 export function quotaRemaining(source:Card,id:string):number|null {
-  if(!hasSubscriptionCaps(source.provider))return source.windows.find(w=>w.id===id)?.remaining??null;
+  const native=source.windows.find(w=>w.id===id);if(native)return native.remaining;
+  if(!hasSubscriptionCaps(source.provider))return null;
   const meter=source.meters?.find(m=>m.id===id),used=meter?capPercent(meter):null;
   return used===null?null:100-used;
 }
@@ -28,12 +30,12 @@ export function quotaRemaining(source:Card,id:string):number|null {
 export function subscriptionSelection(cards:readonly Card[],view:Pick<View,'hidden'|'windows'>):MeterSelection|undefined {
   const shown=cards.filter(c=>hasSubscriptionCaps(c.provider)&&!view.hidden.includes(cardId(c.id)));
   if(!shown.length)return undefined;
-  const unit=shown.flatMap(c=>c.meters??[]).find(m=>m.kind==='cap')?.unit??'credits:zai';
+  const unit=shown.flatMap(c=>(c.meters??[]).filter(m=>quotaMeter(providerOf(c.provider),m.id))).find(m=>m.kind==='cap')?.unit??'credits:zai';
   const ids=subscriptionIds(shown,view);
   if(!ids.length)return undefined;
   return selectionOf(ids.slice(0,MAX_METERS),unit);
 }
-const subscriptionIds=(cards:readonly Card[],view:Pick<View,'hidden'|'windows'>)=>cards.filter(c=>hasSubscriptionCaps(c.provider)&&!view.hidden.includes(cardId(c.id))).flatMap(c=>QUOTA_IDS.filter(id=>!view.windows.includes(windowKey(c.id,id))).map(id=>[c.id,id] as [string,string]));
+const subscriptionIds=(cards:readonly Card[],view:Pick<View,'hidden'|'windows'>)=>cards.filter(c=>hasSubscriptionCaps(c.provider)&&!view.hidden.includes(cardId(c.id))).flatMap(c=>quotaIds(c.provider).filter(id=>!view.windows.includes(windowKey(c.id,id))).map(id=>[c.id,id] as [string,string]));
 export const subscriptionOverflow=(cards:readonly Card[],view:Pick<View,'hidden'|'windows'>)=>Math.max(0,subscriptionIds(cards,view).length-MAX_METERS);
 
 const leftPercent=(left:string,limit:string|null|undefined):number|null=>{

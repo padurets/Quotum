@@ -7,7 +7,7 @@ import {catalogue} from '../../server/domain/providers';
  */
 export const PROVIDERS: Record<string, {name: string; color: string}> = Object.fromEntries(catalogue.map(p => [p.id, {name: p.name, color: p.color}]));
 
-export const hasSubscriptionCaps=(id:string)=>catalogue.some(p=>p.id===id&&p.funding==='subscription'&&p.meterKinds.some(kind=>kind==='cap'));
+export const hasSubscriptionCaps=(id:string)=>catalogue.some(p=>p.id===id&&'quotaMeters' in p&&p.quotaMeters.length>0);
 
 /** The colour of a series whose provider has none. */
 export const FALLBACK_COLOR = '#8b90b5';

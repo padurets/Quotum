@@ -193,7 +193,6 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
     if (!READ_CELLS.includes(cell) || !Number.isFinite(from) || !Number.isFinite(askedTo) || from % cell || (askedTo <= now && askedTo % cell)) return reply.code(400).send({error: 'invalid_request'});
     const to = Math.min(Math.ceil(askedTo / cell) * cell, cellStart(now + CLOCK_TOLERANCE_MS, cell) + cell);
     const oldest = tileStart(tileOf(now - config.retention.sampleDays * 86_400_000, cell), cell);
-    if (to <= from || from < oldest) return reply.code(400).send({error: scope ? 'history_range_invalid' : 'invalid_request'});
     if (to % cell || tileOf(to - 1, cell) - tileOf(from, cell) + 1 > MAX_READ_TILES) return reply.code(400).send({error: 'invalid_request'});
     const board = access.board.id;
     const shown = store.shown(board, directory.view(board).hidden);
@@ -209,6 +208,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
       const sources=new Map(store.sources(board).map(source=>[source.id,providerOf(source.provider)]));
       if(meters.ids.some(([source,id])=>!(scope==='quota'?quotaMeter:budgetMeter)(sources.get(source),id)))return reply.code(400).send({error:'invalid_request'});
     }
+    if (to <= from || from < oldest) return reply.code(400).send({error: scope ? 'history_range_invalid' : 'invalid_request'});
     let chunks: string[];
     try {chunks=history.read(board, cell, from, to, now, shown, meters, scope);}
     catch(error){if(error instanceof HistoryLimit)return reply.code(413).send({error:'history_limit'});throw error;}

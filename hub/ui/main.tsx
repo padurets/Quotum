@@ -12,7 +12,7 @@ import {legacyLayout, withArranged} from './lib/grid';
 import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles, useViewRevision} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
-import {loader as history} from './lib/history';
+import {historyReaders as history} from './lib/history';
 import {UNAUTHORIZED} from './lib/http';
 import {t, useLocale} from './i18n';
 import {Compact} from './components/Compact';
