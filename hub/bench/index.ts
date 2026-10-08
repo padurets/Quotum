@@ -433,7 +433,7 @@ async function currencyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cd
   const observation=(await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard)).sources.find(row=>row.id===source)!.successAt!;
   await cdp.evaluate(`(async () => {
     const end = Date.now() + ${SHOWN_WITHIN};
-    while (document.querySelector('.history.is-loading') || document.querySelector('.history .chart > svg')?.dataset.drawReady !== 'true' || !__quotumBench.seriesChanged(${JSON.stringify(source+' balance')}, ${JSON.stringify(cellStart(observation,cellOf(86_400_000))+':112800000')})) {
+    while (document.querySelector('.history.is-loading') || document.querySelector('.history .chart > svg')?.dataset.drawReady !== 'true' || document.querySelector(${JSON.stringify('[data-series="'+source+' balance"]')})?.getAttribute('data-last') !== ${JSON.stringify(cellStart(observation,cellOf(86_400_000))+':112800000')}) {
       if (Date.now() > end) throw new Error('personal currency history did not recover');
       await new Promise(requestAnimationFrame);
     }
