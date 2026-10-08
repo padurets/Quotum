@@ -47,7 +47,7 @@ export class HistoryPool {
     }
   }
 
-  /** Staged growth is reserved before publication; another family's visible tiles stay pinned. */
+  /** Staged growth is reserved before each yield; another family's visible tiles stay pinned. */
   reserve(flight: Flight, bytes: number) {
     const previous = this.reservations.get(flight) ?? 0;
     this.reservations.set(flight, bytes);

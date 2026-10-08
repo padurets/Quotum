@@ -51,31 +51,28 @@ export class MeterTile {
   merge(from:number,to:number,series:readonly MeterSeriesCells[]) {drain(this.mergePrepared(from,to,series));}
   *mergePrepared(from:number,to:number,series:readonly MeterSeriesCells[]):Preparation<void> {
     const first=(from-this.from)/this.cell,last=(to-this.from)/this.cell;
-    const rows=new Map<string,Map<number,Uint8Array>>();
     for(const [key,packed] of this.series) {
       const cells=new Map<number,Uint8Array>();
-      for(const [i,bytes] of packed.cells){if(i<first||i>=last)cells.set(i,bytes);yield;}
-      rows.set(key,cells);
+      let size=0;
+      for(const [i,bytes] of packed.cells){if(i<first||i>=last){cells.set(i,bytes);size+=bytes.byteLength+128;}yield;}
+      this.series.set(key,{...packed,cells,bytes:size});
     }
     for(const s of series) {
       const key=meterIdentity(s);
-      const cells=rows.get(key)??new Map<number,Uint8Array>();
-      rows.set(key,cells);
+      let packed=this.series.get(key);
+      if(!packed){packed={series:{source:s.source,meter:s.meter,kind:s.kind,unit:s.unit,accounting:s.accounting,role:s.role,pointMode:s.pointMode},cells:new Map(),bytes:0};this.series.set(key,packed);}
       let semantics=s.semantics;
       for(const row of s.cells) {
         const before=semantics;
         semantics=row[5]?.semantics??semantics;
         const index=first+row[0];
-        cells.set(index,yield* pack({row:[index,...row.slice(1)] as MeterCell,before,semantics}));
+        const bytes=yield* pack({row:[index,...row.slice(1)] as MeterCell,before,semantics});
+        // Count each packed cell while the rest of this private tile is still yielding.
+        packed.bytes+=bytes.byteLength+128-(packed.cells.has(index)?packed.cells.get(index)!.byteLength+128:0);
+        packed.cells.set(index,bytes);
       }
-      if(!this.series.has(key))this.series.set(key,{series:{source:s.source,meter:s.meter,kind:s.kind,unit:s.unit,accounting:s.accounting,role:s.role,pointMode:s.pointMode},cells:new Map(),bytes:0});
     }
-    for(const [key,cells] of rows) {
-      if(!cells.size){this.series.delete(key);continue;}
-      let bytes=0;
-      for(const packed of cells.values()){bytes+=packed.byteLength+128;yield;}
-      this.series.set(key,{...this.series.get(key)!,cells,bytes});
-    }
+    for(const [key,packed] of this.series)if(!packed.cells.size)this.series.delete(key);
   }
   chunk(from:number,to:number):MeterSeriesCells[] {return drain(this.chunkPrepared(from,to));}
   *chunkPrepared(from:number,to:number):Preparation<MeterSeriesCells[]> {

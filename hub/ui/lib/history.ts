@@ -418,9 +418,9 @@ export class HistoryStore {
     if ([...this.flights].some(f => f.epoch === this.epoch && f.target === target.key && f.cell === target.cell)) return;
     const bad = this.bad(target);
     if (!bad.length) return;
-    const first = this.tile(bad[0], target.cell);
+    const first = this.grids.get(target.cell)?.get(tileOf(bad[0], target.cell));
     // Cold reads omit the unseen head. Entering a held tile's head fills it once.
-    const from = first.readTo === first.readFrom ? bad[0] : bad[0] < first.readFrom ? first.from : first.validTo;
+    const from = !first || first.readTo === first.readFrom ? bad[0] : bad[0] < first.readFrom ? first.from : first.validTo;
     const to = Math.min(tileEnd(tileOf(bad.at(-1)!, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
     this.read(target, from, to, 'visible');
   }
@@ -559,11 +559,11 @@ export class HistoryStore {
       from = Math.min(from, next); to = Math.max(to, next + target.cell);
       last = next;
     }
-    const first = this.tile(from, target.cell), end = this.tile(to - target.cell, target.cell);
+    const tiles = this.grids.get(target.cell), first = tiles?.get(tileOf(from, target.cell)), end = tiles?.get(tileOf(to - target.cell, target.cell));
     // A skipped part of a held tile must connect to its existing fresh prefix.
     // Empty tiles have no unseen head to fill, and fresh cells are never crossed.
-    if (first.readTo > first.readFrom && from >= first.readFrom) from = Math.min(from, first.validTo);
-    if (end.readTo > end.readFrom && to < end.readFrom) to = end.readFrom;
+    if (first && first.readTo > first.readFrom && from >= first.readFrom) from = Math.min(from, first.validTo);
+    if (end && end.readTo > end.readFrom && to < end.readFrom) to = end.readFrom;
     if (this.interest?.direction && !this.aheadStopped && !this.inheritedExtra && this.estimatedBytes < this.budget) {
       const direction = this.interest.direction;
       const buffer = this.bufferCells(target);
@@ -615,7 +615,7 @@ export class HistoryStore {
     if(this.pool)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
   }
 
-  private abort(flight: Flight) {this.preparations?.cancel(flight); this.responses.delete(flight); for (const [key, owner] of this.reservations) if (owner === flight) this.reservations.delete(key); this.flights.delete(flight); flight.controller.abort(); this.pool?.release(flight);}
+  private abort(flight: Flight) {this.preparations?.cancel(flight); this.releaseResponse(flight); flight.controller.abort();}
   private abortFlights() {for (const flight of [...this.flights]) this.abort(flight);}
   private setPlot(plot: PlotBuffer | null) {
     if(plot&&this.meters&&this.meta) {
@@ -660,8 +660,8 @@ export class HistoryStore {
       // A late inherited slice cannot create a bounding interval across an unread
       // gap. Discard the whole answer and let the planner connect the current base.
       if (response.answer.chunks.some(chunk => {
-        const base = this.tile(chunk.from, flight.cell);
-        return base.writeSeq <= flight.seq && base.readTo > base.readFrom && (chunk.to < base.readFrom || chunk.from > base.readTo);
+        const base = this.grids.get(flight.cell)?.get(tileOf(chunk.from, flight.cell));
+        return base && base.writeSeq <= flight.seq && base.readTo > base.readFrom && (chunk.to < base.readFrom || chunk.from > base.readTo);
       })) {this.abort(flight); this.schedule(); continue;}
       for (const key of response.keys) this.reservations.set(key, flight);
       response.started = true;
@@ -675,7 +675,13 @@ export class HistoryStore {
           if (base.writeSeq > flight.seq) continue;
           let pin = pins.get(base);
           if (!pin) {pin = {seq: base.writeSeq, from: base.readFrom, to: base.readTo, staged: base, chunks: []}; pins.set(base, pin);}
-          pin.staged = yield* pin.staged.staged(chunk, response.answer.known);
+          const otherGrowth = [...pins].reduce((sum, [other, value]) => sum + (other === base ? 0 : Math.max(0, value.staged.bytes - other.bytes)), 0);
+          const admit = (bytes: number) => !store.pool || store.pool.reserve(flight, otherGrowth + Math.max(0, bytes - base.bytes));
+          // Include new empty tile headers before preparation can yield, too.
+          if (!admit(pin.staged.bytes)) {response.limited = true; completed = true; return;}
+          const staged = yield* pin.staged.staged(chunk, response.answer.known, admit);
+          if (!staged) {response.limited = true; completed = true; return;}
+          pin.staged = staged;
           pin.chunks.push(chunk);
           if(store.pool&&!store.pool.reserve(flight,[...pins].reduce((sum,[base,pin])=>sum+Math.max(0,pin.staged.bytes-base.bytes),0))) {
             response.limited=true;completed=true;return;
@@ -725,7 +731,11 @@ export class HistoryStore {
 
   private releaseResponse(flight: Flight) {
     this.responses.delete(flight); this.flights.delete(flight); this.pool?.release(flight);
-    for (const [key, owner] of this.reservations) if (owner === flight) this.reservations.delete(key);
+    for (const [key, owner] of this.reservations) if (owner === flight) {
+      this.reservations.delete(key);
+      const [cell, n] = key.split(':').map(Number), tiles = this.grids.get(cell);
+      if (tiles?.get(n)?.writeSeq === 0) tiles.delete(n);
+    }
   }
 
   private failed(flight: Flight, error: unknown) {

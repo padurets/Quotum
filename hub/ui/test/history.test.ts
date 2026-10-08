@@ -1231,6 +1231,77 @@ test('an incoming family cannot evict the other visible frame or publish an over
   q.store.close();b.store.close();
 });
 
+test('every preparation slice accounts for private tile growth, including cancellation and rejection',async()=>{
+  const prototype = HistoryTile.prototype as unknown as {mergePrepared(chunk: Chunk, known: HistoryAnswer['known']): Generator<void, void>};
+  const original = prototype.mergePrepared;
+  for (const outcome of ['complete', 'limit', 'cancel'] as const) {
+    const pool = new HistoryPool(outcome === 'complete' ? 1_000_000 : 400_000);
+    const q = harness(undefined, undefined, 'quota', pool), b = cooperativeHarness(pool, 'budget');
+    const quotaSources = Array.from({length: 16}, (_, i) => `q${i}`), moneySources = Array.from({length: 32}, (_, i) => `s${i}`);
+    const known = {work: 0, sources: Object.fromEntries([...quotaSources, ...moneySources].map(source => [source, 0]))};
+    const chunks = (read: typeof q.reads[number], money: boolean) => {
+      const result: Chunk[] = [], cut = Math.min(read.to, cellStart(NOW + CLOCK_TOLERANCE_MS, read.cell) + read.cell);
+      for (let from = read.from; from < cut;) {
+        const to = Math.min(cut, tileEnd(tileOf(from, read.cell), read.cell));
+        result.push({...empty(from, to), ...(money ? {meterSeries: moneySources.map(source => ({source, meter: 'balance', kind: 'balance' as const, unit: 'USD', semantics: null,
+          cells: Array.from({length: (to - from) / read.cell}, (_, i): NonNullable<Chunk['meterSeries']>[number]['cells'][number] => [i, '10000000', '0', '0', read.cell]),
+        }))} : {series: quotaSources.flatMap(source => ['session', 'weekly'].map(window => ({source, window, hold: read.cell, open: 80, cells: [[0, 80, 0, 0] as [number, number, number, number]]})))})});
+        from = to;
+      }
+      return result;
+    };
+    const candidates = new Map<HistoryTile, HistoryTile>();
+    prototype.mergePrepared = function* (this: HistoryTile, chunk, metadata) {
+      const base = b.internals.grids.get(this.cell)?.get(tileOf(this.from, this.cell)) as HistoryTile | undefined;
+      if (base) candidates.set(base, this);
+      yield* original.call(this, chunk, metadata);
+    };
+    try {
+      q.store.choose('1h', null); q.store.open('b'); q.store.hello('run');
+      q.store.snapshot(quotaSources, quotaSources.flatMap(source => ['session', 'weekly'].map(window => `${source} ${window}`)));
+      await flush(); await q.reads[0].answer({known, chunks: chunks(q.reads[0], false)});
+      const retained = q.store.get().history; assert.equal(retained?.series.length, 32);
+      b.store.choose('1h', null); b.store.setMeters({unit: 'USD', ids: moneySources.map(source => [source, 'balance'])});
+      b.store.open('b'); b.store.hello('run'); b.store.snapshot(moneySources); await flush();
+      await b.reads[0].answer({known, chunks: chunks(b.reads[0], true)});
+      let slices = 0, growingSlices = 0, canceled = false;
+      while (b.tasks.length) {
+        b.tick(); slices++;
+        const retainedBytes = q.store.estimatedBytes + b.store.estimatedBytes;
+        const growth = b.internals.responses.size ? [...candidates].reduce((sum, [base, copy]) => sum + Math.max(0, copy.bytes - base.bytes), 0) : 0;
+        assert.ok(pool.estimatedBytes >= retainedBytes + growth, `${outcome}: a yielded private tile must have a reservation`);
+        assert.ok(pool.estimatedBytes <= pool.budget, `${outcome}: shared estimate exceeded the budget`);
+        assert.equal(q.store.get().history, retained, 'the other family keeps its complete frame');
+        if (growth) growingSlices++;
+        if (outcome === 'cancel' && growth && !canceled) {
+          b.store.close(); canceled = true;
+          assert.equal(pool.estimatedBytes, q.store.estimatedBytes, 'cancel releases private growth and empty headers');
+        }
+        await flush();
+      }
+      assert.ok(slices >= (outcome === 'cancel' ? 1 : 3) && growingSlices > 0, `${outcome}: the test observes actual partially prepared tiles`);
+      assert.equal(pool.activeFlights, 0);
+      if (outcome === 'limit') {assert.equal(b.store.get().error, 'history_limit'); assert.equal(b.store.get().history, null);}
+      if (outcome === 'complete') {assert.equal(b.store.get().error, undefined); assert.equal(b.store.get().history?.meterSeries?.length, 32);}
+      if (outcome === 'cancel') assert.ok(canceled);
+    } finally {prototype.mergePrepared = original; q.store.close(); b.store.close();}
+  }
+});
+
+test('an incoming empty tile header is admitted before yielding and discarded if it cannot fit',async()=>{
+  const pool = new HistoryPool(2_544), q = harness(undefined, undefined, 'quota', pool), b = cooperativeHarness(pool, 'budget');
+  q.store.choose('1h', null); b.store.choose('1h', null); b.store.setMeters({unit: 'USD', ids: [['s', 'balance']]});
+  try {
+    await q.start(); await q.reads[0].answer();
+    const retained = q.store.get().history; assert.ok(retained); assert.equal(pool.estimatedBytes, pool.budget);
+    await b.start(); assert.equal(pool.estimatedBytes, pool.budget, 'planning a read does not allocate a tile');
+    await b.reads[0].answer(); assert.equal(pool.estimatedBytes, pool.budget, 'a queued answer does not allocate a tile');
+    while (b.tasks.length) {b.tick(); assert.ok(pool.estimatedBytes <= pool.budget); await flush();}
+    assert.equal(b.store.get().error, 'history_limit'); assert.equal(b.store.estimatedBytes, 0);
+    assert.equal(q.store.get().history, retained); assert.equal(pool.activeFlights, 0);
+  } finally {q.store.close(); b.store.close();}
+});
+
 test('scoped failures preserve the shared range except an explicit unreadable-range response',async()=>{
   const pool=new HistoryPool(),q=harness(undefined,undefined,'quota',pool),b=harness(undefined,undefined,'budget',pool);
   b.store.setMeters({unit:'USD',ids:[['s','balance']]});

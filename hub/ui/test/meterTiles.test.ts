@@ -17,6 +17,15 @@ test('staging a money update keeps the published exact tile unchanged',()=>{
   assert.ok(staged.bytes>0);
 });
 
+test('a packed monetary cell enters the estimate before preparation reads the next cell',()=>{
+  const tile=new MeterTile(0,60_000);
+  let nextRead=false;
+  const cells:MeterSeriesCells['cells']=[[0,'10000000','0','0',60_000],[1,'9000000','0','0',60_000]];
+  Object.defineProperty(cells,1,{get(){nextRead=true;assert.ok(tile.bytes>256,'new packed bytes cannot wait for the whole series');return [1,'9000000','0','0',60_000];}});
+  tile.merge(0,120_000,[{source:'s',meter:'balance',kind:'balance',unit:'USD',semantics:null,cells}]);
+  assert.ok(nextRead);assert.equal(tile.chunk(0,120_000)[0].cells.length,2);
+});
+
 test('money tile packing preserves bigint values, original intervals, partial headers and replacement semantics',()=>{
   const before={limit:'10000000',resetAt:1_000_000,minutes:1440,scope:'monthly',label:'old'};
   const after={...before,limit:'20000000',label:'new'};
