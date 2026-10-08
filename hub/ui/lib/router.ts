@@ -6,16 +6,32 @@ const address = () => typeof location === 'undefined' ? '/' : location.pathname 
 const changed = () => { for (const listener of [...listeners]) listener(); };
 let guard:((proceed:()=>void)=>void)|null=null;
 let position=0,synthetic=false,allowedPop=false;
+let navigation=0;
 let restored:(()=>void)|null=null;
 const historyPosition=()=>typeof history.state?.quotumPosition==='number'?history.state.quotumPosition as number:null;
+const leavesView=(path:string)=>{
+  const target=path.split('?')[0];
+  return target==='/compact'||target==='/device'||target.startsWith('/invite/');
+};
+const leave=(path:string,go:()=>void)=>{
+  if(leavesView(path))void flushLargeViews().then(go).catch(()=>{});
+  else go();
+};
 const popped=()=>{
   if(synthetic)return changed();
   const next=historyPosition();
   if(restored){const done=restored;restored=null;done();return;}
   if(allowedPop){allowedPop=false;position=next??position;changed();return;}
-  if(guard&&next!==null&&next!==position){
+  const attempt=++navigation;
+  const target=address();
+  if((guard||leavesView(target))&&next!==null&&next!==position){
     const delta=position-next,ask=guard;
-    restored=()=>ask(()=>{allowedPop=true;history.go(-delta);});history.go(delta);return;
+    // Keep the dashboard and its saver mounted until every queued edit is saved.
+    // Restoration also keeps a failed save on the exact original history entry.
+    restored=()=>{
+      const proceed=()=>leave(target,()=>{if(attempt!==navigation)return;allowedPop=true;history.go(-delta);});
+      if(ask)ask(proceed);else proceed();
+    };history.go(delta);return;
   }
   position=next??position;changed();
 };
@@ -27,17 +43,14 @@ export function guardNavigation(ask:(proceed:()=>void)=>void) {
 
 /** All client navigation, including chart ranges, publishes the same location. */
 export function navigate(path: string, replace = false) {
+  const attempt=++navigation;
   const go=()=>{
+    if(attempt!==navigation)return;
     if (replace) history.replaceState({...history.state,quotumPosition:position}, '', path);
     else history.pushState({quotumPosition:++position}, '', path);
     synthetic=true;try{window.dispatchEvent(new PopStateEvent('popstate'));}finally{synthetic=false;}
   };
-  const proceed=()=>{
-    const target=path.split('?')[0];
-    if(target==='/compact'||target==='/device'||target.startsWith('/invite/')) {
-      void flushLargeViews().then(go).catch(()=>{});
-    } else go();
-  };
+  const proceed=()=>leave(path,go);
   if(guard&&path!==address())guard(proceed);else proceed();
 }
 

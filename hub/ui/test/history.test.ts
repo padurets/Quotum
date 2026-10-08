@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {follow,followPan, HistoryStore} from '../lib/history';
+import {follow,followPan, historyBegins, HistoryStore} from '../lib/history';
 import {HistoryPool} from '../lib/historyPool';
 import {Pan} from '../lib/pan';
 import {covered} from '../lib/historyPlot';
@@ -1299,4 +1299,33 @@ test('cross-family eviction resumes a pending complete projection without anothe
   assert.equal(h.store.get().history?.range,`${final.from}-${final.to}`);
   assert.equal(h.reads.length,2,'eviction of unrelated cached cells requires no data reread');
   pool.release(incoming);h.store.close();
+});
+
+
+test('navigation uses fresh boundary metadata from either reader and discards previous contexts', async () => {
+  const quota = harness(undefined, undefined, 'quota'), budget = harness(undefined, undefined, 'budget');
+  const readers = [quota, budget], snapshot = NOW - 2 * H;
+  const begins = (board = 'b', initial = snapshot) => historyBegins(board, initial, readers.map(h => h.store.getBoundary()));
+  let changes = 0;
+  const stops = readers.map(h => h.store.subscribeBoundary(() => changes++));
+  try {
+    for (const h of readers) {h.store.open('b'); h.store.hello('run'); h.store.snapshot(['s'], ['s w'], snapshot);}
+    await flush();
+    assert.equal(begins(), snapshot);
+    await quota.reads[0].answer({historyStart: snapshot});
+    await budget.reads[0].answer({now: NOW + 1, historyStart: NOW - 48 * H});
+    assert.equal(begins(), NOW - 48 * H, 'budget-only backfill supersedes the initial quota answer and snapshot');
+    quota.store.news(0); await flush();
+    await pending(quota)[0].answer({now: NOW + 2, historyStart: NOW - 72 * H});
+    assert.equal(begins(), NOW - 72 * H, 'quota backfill also expands navigation');
+    budget.store.news(0); await flush();
+    await pending(budget)[0].answer({now: NOW + 3, historyStart: NOW - 24 * H});
+    assert.equal(begins(), NOW - 24 * H, 'fresh retention metadata can move the boundary forward');
+    assert.equal(begins('other', NOW), NOW, 'another board cannot borrow old metadata before its readers switch');
+    for (const h of readers) h.store.snapshot(['s'], ['s w'], NOW - H);
+    assert.equal(begins('b', NOW - H), NOW - H, 'a new snapshot invalidates older answers');
+    for (const h of readers) {h.store.open('other'); h.store.hello('next-run');}
+    assert.ok(readers.every(h => h.store.getBoundary() === null));
+    assert.ok(changes >= 8, 'metadata wakes navigation independently of complete totals');
+  } finally {for (const stop of stops) stop(); for (const h of readers) h.store.close();}
 });

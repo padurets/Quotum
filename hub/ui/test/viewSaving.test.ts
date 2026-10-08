@@ -117,3 +117,45 @@ test('ordinary pagehide saves carry the writer version and clean boards have no 
   assert.equal(h.reads.length,0);assert.equal(h.events.has('beforeunload'),false);
   h.events.get('pagehide')!();assert.equal(h.keepalives.length,1);assert.equal(h.keepalives[0].headers['X-Quotum-View-Version'],'2');h.unmount();
 });
+
+test('native Back and Forward retain the saver through dirty confirmation, failure and every serial successor', async () => {
+  for (const delta of [-1, 1]) {
+    const h = fixture(), events = new EventTarget();
+    const entries = (delta < 0 ? ['/device', '/?board=board'] : ['/?board=board', '/device']).map((path, index) => ({url: new URL(path, 'http://fixture.example'), state: {quotumPosition: index}}));
+    let index = delta < 0 ? 1 : 0, changes = 0, proceed: (() => void) | undefined;
+    const original = index;
+    const context = {exports: {} as {onLocation: (fn: () => void) => () => void; guardNavigation: (fn: (go: () => void) => void) => () => void},
+      get location() {return entries[index].url;}, window: events,
+      history: {get state() {return entries[index].state;}, replaceState(state: {quotumPosition: number}, _title: string, path: string) {entries[index] = {state, url: new URL(path, entries[index].url)};}, go(step: number) {index += step; events.dispatchEvent(new Event('popstate'));}},
+      require: (name: string) => name === './view' ? {flushLargeViews: h.leave} : {},
+    };
+    runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/router.ts', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS}}).outputText, context);
+    const router = context.exports, stop = router.onLocation(() => {changes++; if (context.location.pathname === '/device') h.unmount();});
+    const unguard = router.guardNavigation(go => {proceed = go;});
+    try {
+      h.render().update(() => oversized);
+      h.render().update(view => ({...view, names: {...view.names, latest: 'second edit'}}));
+      context.history.go(delta);
+      assert.equal(index, original); assert.equal(changes, 0); assert.equal(h.events.has('beforeunload'), true);
+      assert.ok(proceed, 'currency draft confirmation happens on the restored entry');
+      proceed!();
+      h.reads[0].reject(new Error('offline')); await settle();
+      assert.equal(index, original); assert.equal(changes, 0); assert.equal(h.events.has('beforeunload'), true);
+      unguard();
+      const retry = h.render().retrySave!('board');
+      h.render().update(view => ({...view, names: {...view.names, latest: 'third edit'}}));
+      context.history.go(delta);
+      assert.equal(index, original, 'unguarded Back/Forward also waits for the actual saver');
+      h.reads[1].resolve({view: h.reads[1].view, revision: 5}); await settle();
+      assert.equal(changes, 0); assert.equal(h.reads.length, 3);
+      assert.equal(h.reads[2].view.names.latest, 'third edit');
+      assert.equal(h.reads[2].headers['If-Match'], '"5"');
+      context.history.go(delta);
+      assert.equal(index, original, 'repeated Back/Forward still waits on the same queue');
+      h.reads[2].resolve({view: h.reads[2].view, revision: 6}); await retry; await settle();
+      assert.equal(index, original + delta); assert.equal(changes, 1);
+      assert.equal(entries.length, 2, 'resuming traversal never creates a replacement history entry');
+      assert.equal(h.events.has('beforeunload'), false);
+    } finally {unguard(); stop(); h.unmount();}
+  }
+});

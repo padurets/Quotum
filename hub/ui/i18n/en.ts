@@ -562,6 +562,7 @@ export const en = {
   'history.forecast': 'Forecast',
   'history.planHint': 'The plan is set in each subscription widget’s settings',
   'history.loading': 'Loading history…',
+  'analytics.retainedRange': 'Showing data for {range}',
   'history.quotaOverflow': 'Some limit series are omitted: {count}. Hide unused sources or periods to show them.',
   'history.settings': 'Chart settings',
   'chart.panHint': 'Swipe sideways or hold Shift with the wheel or a drag to move through time. Release Shift to finish scrolling. Drag without Shift to select a range.',

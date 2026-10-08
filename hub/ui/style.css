@@ -556,7 +556,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .chart { position: relative; margin-top: 18px; }
 /* Dimmed while the next period loads. Not the chart itself: that would lay its tooltip under the next widget. */
 .panel .chart > svg, .panel .plot-layer, .panel .plot-overlay, .panel .table-wrap { transition: opacity .2s; }
-.panel.is-loading .chart > svg, .panel.is-loading .plot-layer, .panel.is-loading .plot-overlay, .panel.is-loading .table-wrap { opacity: .5; }
+.panel.is-loading .chart > svg, .panel.is-loading .plot-layer, .panel.is-loading .plot-overlay, .panel.is-loading .table-wrap, .panel.is-loading .analytics-compact { opacity: .5; }
 .panel-loading, .panel-empty { margin: 18px 0 0; min-height: 96px; display: grid; place-items: center; color: var(--text-3); font-size: 13px; }
 .chart > svg { display: block; width: 100%; touch-action: pan-y; overflow: visible; }
 .chart > svg { position: relative; z-index: 1; pointer-events: none; }

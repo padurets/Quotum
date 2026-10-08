@@ -364,7 +364,10 @@ one already running. CI runs it on every push; run it when you change the dashbo
 and have Chrome.
 
 The completed measurement phase's React/DOM observer is disconnected before native
-panning. Panning keeps its own movement and mutation checks; resetting the measurement
+panning. Native wheel and Shift-drag start separately from the subscription limit and budget
+charts at both periods. Each input owner starts with fresh readers, captures its own
+events and must move all three plots within the same budgets.
+Panning keeps its own movement and mutation checks; resetting the measurement
 probe resumes full observation for money updates. Money-view controls wait for a
 populated, committed drawing and stable layout before switching, then require the
 line to remain present and inside its scale on every frame until the new view commits.

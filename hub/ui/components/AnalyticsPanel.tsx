@@ -2,17 +2,23 @@
 import type {ReactNode, Ref} from 'react';
 import type {Shown} from '../lib/history';
 import {HistoryFailure} from './HistoryFailure';
+import {t} from '../i18n';
+import {usePref} from '../lib/prefs';
+import {timeRangeKey, timeRangeLabel, useTimeRange} from '../lib/timeRange';
 
 /** The same heading and reader state for every analytics widget. */
 export function AnalyticsPanel({ref, className, title, settings, history, loading, error, retry, chart, children}: {
   ref?: Ref<HTMLElement>; className: string; title: string; settings?: ReactNode;
   history: Shown['history']; loading: boolean; error: Shown['error']; retry: () => void; chart?: boolean; children: ReactNode;
 }) {
+  const selected = useTimeRange(), period = usePref('range');
+  const retained = history && history.range !== (selected ? timeRangeKey(selected) : period);
   return <section ref={ref} className={`panel ${className}${loading ? ' is-loading' : ''}`} aria-label={title} aria-busy={loading} data-history-range={history?.range} data-time={chart ? 'chart' : undefined}>
     <div className="panel-head">
       <h2 className="panel-heading">{title}</h2>
       {settings}
     </div>
+    {retained && <p className="analytics-note history-retained" role="status">{t('analytics.retainedRange', {range: timeRangeLabel({from: history.since, to: history.to})})}</p>}
     <HistoryFailure error={error} retry={retry}/>
     {children}
   </section>;

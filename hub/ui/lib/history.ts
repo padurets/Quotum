@@ -3,7 +3,7 @@ import type {HistoryScope} from '../../server/domain/history';
 import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, ACTIVITY} from '../../server/domain/widgets';
 import {useSyncExternalStore} from 'react';
 import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type HistoryReply, type Target} from '../../server/domain/history';
-import {page, useHistoryStart, type PageEvent, type PageState} from './board';
+import {page, type PageEvent, type PageState} from './board';
 import {hubNow} from './clock';
 import {HistoryTile} from './historyTiles';
 import {ApiError, call, UNAUTHORIZED} from './http';
@@ -37,6 +37,7 @@ export type HistoryEnv = {
   preparations?: Preparations | null;
 };
 export type Shown = {history: History | null; loading: boolean;error?:'history_limit'|'history_failed'};
+type HistoryBoundary = {board: string; at: number; start: number};
 type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead'};
 type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean; limited?: boolean};
 type TilePin = {tile: HistoryTile; seq: number; from: number; to: number};
@@ -62,6 +63,14 @@ export class HistoryStore {
   private meta: HistoryBasis | null = null;
   private metaAt: number | null = null;
   private historyStart = 0;
+  private boundary: HistoryBoundary | null = null;
+  private readonly boundaryListeners = new Set<() => void>();
+  getBoundary = () => this.boundary;
+  subscribeBoundary = (listener: () => void) => {this.boundaryListeners.add(listener); return () => void this.boundaryListeners.delete(listener);};
+  private setBoundary(value: HistoryBoundary | null) {
+    this.boundary = value;
+    for (const listener of this.boundaryListeners) listener();
+  }
   private cutTo: number | null = null;
   private readonly grids = new Map<number, Map<number, HistoryTile>>();
   private readonly flights = new Set<Flight>();
@@ -128,6 +137,7 @@ export class HistoryStore {
     this.cancelProjection();
     this.epoch++;
     this.board = null;
+    this.setBoundary(null);
     this.ready = false;
     this.historyLimit=false;this.readError=false;
     this.run = null;
@@ -154,12 +164,14 @@ export class HistoryStore {
   hello(run: string) {
     if (run === this.run) return;
     this.run = run;
+    this.setBoundary(null);
     this.invalidate();
     this.ready = false;
   }
 
   snapshot(lineup: string[], windows: Iterable<string> = this.windows, historyStart = 0) {
     this.historyStart=historyStart;
+    this.setBoundary(null);
     if(this.removesSource(lineup)){this.shown=null;this.grids.clear();}
     this.lineupKey = keyOf(lineup);
     this.setWindows(windows);
@@ -698,6 +710,7 @@ export class HistoryStore {
           this.metaSeq = flight.seq;
           this.meta = {run: answer.run, now: answer.now, historyStart: answer.historyStart, known: answer.known, ...(answer.meta ? {meta: answer.meta} : {})};
           this.metaAt = flight.startedAt;
+          this.setBoundary({board: this.board!, at: answer.now, start: answer.historyStart});
           const to = answer.chunks.at(-1)?.to;
           if (flight.newsSeq === this.newsSeq && to !== undefined && to > answer.now + CLOCK_TOLERANCE_MS) this.cutTo = Math.min(this.cutTo ?? to, to);
         }
@@ -897,9 +910,19 @@ export function useHistory(): Shown {return useSyncExternalStore(quotaHistory.su
 export function useBudgetHistory(): Shown {return useSyncExternalStore(budgetHistory.subscribe, budgetHistory.get, budgetHistory.get);}
 export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
 export function useBudgetHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(budgetHistory.subscribePlot, budgetHistory.getPlot, budgetHistory.getPlot);}
-const answeredStart = () => quotaHistory.get().history?.historyStart ?? null;
-export function useHistoryBegins(): number {
-  const answered = useSyncExternalStore(quotaHistory.subscribe, answeredStart, answeredStart);
-  const snapshot = useHistoryStart();
-  return snapshot ?? answered ?? 0;
+/** A fresh answer from either resource family supersedes the board's initial snapshot. */
+export function historyBegins(board: string | null, snapshot: number | null, answers: readonly (HistoryBoundary | null)[]): number {
+  const current = answers.filter((answer): answer is HistoryBoundary => !!answer && answer.board === board);
+  const newest = Math.max(...current.map(answer => answer.at));
+  return current.length ? Math.min(...current.filter(answer => answer.at === newest).map(answer => answer.start)) : snapshot ?? 0;
 }
+const subscribeHistoryBegins = (listener: () => void) => {
+  const stops = [page.subscribe(listener), quotaHistory.subscribeBoundary(listener), budgetHistory.subscribeBoundary(listener)];
+  return () => stops.forEach(stop => stop());
+};
+const readHistoryBegins = () => {
+  const board = page.get().board;
+  return historyBegins(board?.id ?? null, board?.historyStart ?? null, [quotaHistory.getBoundary(), budgetHistory.getBoundary()]);
+};
+/** Reading fresh metadata only renders navigation when its numeric boundary changes. */
+export function useHistoryBegins(): number {return useSyncExternalStore(subscribeHistoryBegins, readHistoryBegins, readHistoryBegins);}

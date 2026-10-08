@@ -1114,7 +1114,9 @@ only to the quota pair. Each of the four analytics widgets has independent place
 visibility and table columns. Budget series are chosen in the budget chart settings
 and shared with its table, even while the chart is hidden. Each
 analytics panel uses the same heading and reader-error component. The selected
-period appears once in the shared analytics controls. The
+period appears once in the shared analytics controls. While a different range is loading
+or has failed, retained results name the interval they actually cover; this status
+disappears when the selected answer arrives. The
 limit and budget tables share their column controls, cells and responsive renderer;
 when their selected columns no longer fit, both become labelled rows. Their own
 data models provide the values and column widths, including clock-driven cells.
@@ -1187,7 +1189,8 @@ a stale runtime cannot save a version it merely echoed from a snapshot. The ordi
 body limit is 76 KiB UTF-8. Up to the aggregate browser keepalive limit of 64 KiB, saves
 retain their debounce. Larger drafts start ordinary serialized saves immediately; a
 browser close warning stays until acknowledgment or explicit discard, and navigation
-that destroys the saver waits. Native shells keep immediate autosave with no additional
+that destroys the saver waits, including native browser Back/Forward. A failed save
+retains the exact history entry; a successful queue resumes the original traversal. Native shells keep immediate autosave with no additional
 close flow. Places have no separate count limit.
 The board's view comes with its events; the owner's changes show at once and are saved
 about half a second later, one request per burst (a drag, typing a plan), and stay on
@@ -1272,7 +1275,9 @@ The history transport reuses unchanged `historyStart` and `known` through an opa
 metadata token scoped to the board, resource family and hub instance. Each flight keeps the metadata
 it offered, so out-of-order replies cannot borrow a newer or another board's values.
 The server still checks access and computes the current scope on every read; older
-readers continue to receive complete metadata.
+readers continue to receive complete metadata. Time navigation uses the newest accepted
+boundary from either reader, falling back to the current board snapshot before an answer
+arrives. Board changes, new snapshots and hub restarts discard previous boundary evidence.
 Numeric preparation runs outside React rendering through one cancellable MessageChannel
 scheduler. Its shared generators yield between small cell, session, group, event and point
 operations. UI slices target one millisecond and check the deadline after at most sixteen

@@ -112,9 +112,9 @@ Codex         api                  idle     started 25m ago · editor
 - **A weekly spending plan.** By default you spend 30 / 25 / 15 / 15 / 10 / 5% on the
   six days after the reset and nothing on the seventh. Each subscription can have its
   own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
-- **Separate quota and budget history and tables**, each movable, resizable and
+- **Separate subscription limit and budget charts and metrics**, each movable, resizable and
   hideable. They share one time interval with agent activity; weekly/session switches
-  affect only quotas. Budget history opens with balances, with spending in its settings.
+  affect only subscription limits. Budget history opens with balances, with spending in its settings.
 - **A chart of the weekly or the 5-hour windows** over the last hour up to the last 30
   days. Ahead of now it draws the plan, where each window is going (a weekly one nearly
   flat over the hours its subscription usually spends nothing) and the next resets, as

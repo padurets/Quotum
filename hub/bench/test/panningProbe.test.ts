@@ -6,9 +6,9 @@ import {panningProblems, type PanReading} from '../panningBudget';
 
 // Run the production browser probe with the browser's ordered RAF queue.
 const source = readFileSync(new URL('../panning.ts', import.meta.url), 'utf8');
-const probe = source.match(/await cdp\.evaluate\(`(\(\(\) => \{\n\s*const root=document\.querySelector\('\.history \.chart>svg'\);[\s\S]+?\}\)\(\))`\);/)![1];
+const probe = source.match(/await cdp\.evaluate\(`(\(\(\) => \{\n\s*const initiator=[\s\S]+?\}\)\(\))`\);/)![1];
 
-function fixture() {
+function fixture(initiator: 'quota'|'budget' = 'quota') {
   let time = 0;
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
   const schedule = (callback: (stamp: number) => void) => {callbacks.push(callback); return callbacks.length;};
@@ -28,7 +28,7 @@ function fixture() {
       dataset: {axisEnd: '0'},
       querySelector: (selector: string) => slides === budgetLayer ? budgetLayer : slides === historyLayer ? historyLayer : selector === '.plot-clip.is-band' ? activityClip : selector === '.plot-clip.is-band .plot-move' ? activityLayer : activityTicks,
       querySelectorAll: () => slides === historyLayer ? [historyLayer] : [activityTicks, activityLayer, activityEdge],
-      addEventListener: (name: string, fn: (event: object) => void) => listeners.set(name, fn), removeEventListener: () => {},
+      addEventListener: (name: string, fn: (event: object) => void) => listeners.set((slides === budgetLayer ? 'budget' : 'quota') + ':' + name, fn), removeEventListener: () => {},
     },
   });
   const historySvg = svg(historyLayer), activitySvg = svg(activityLayer), budgetSvg = svg(budgetLayer);
@@ -44,12 +44,12 @@ function fixture() {
     DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);if(value?.startsWith('scaleX'))this.e*=this.a;}},
     window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: () => {}},
   };
-  runInNewContext(probe, context);
+  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)), context);
   const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {pending: object[]}}).__quotumPan;
   const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}) => {
     time = delivered;
     const event = {type: 'wheel', cancelable: true, deltaX: 12, deltaMode, shiftKey: false, timeStamp: stamp};
-    listeners.get('wheel')!(event); handled(); bubble.get('wheel')!(event);
+    listeners.get(initiator + ':wheel')!(event); handled(); bubble.get('wheel')!(event);
   };
   const update = (i: number, at: number, moves = true, synchronized = true, proportional = true, historyMoves = true, edgeMoves = true) => {
     time = at;
@@ -63,7 +63,7 @@ function fixture() {
   };
   const frame = (at: number) => {time = at; return callbacks.splice(0);};
   const runFrame = (at: number) => frame(at).forEach(callback => callback(at));
-  return {reading, wheel, update, frame, runFrame, requestFrame: context.window.requestAnimationFrame, context, historySvg, activitySvg, budgetSvg, budgetLayer, historyLayer, activityLayer, activityClip};
+  return {reading, wheel, listeners, bubble, update, frame, runFrame, requestFrame: context.window.requestAnimationFrame, context, historySvg, activitySvg, budgetSvg, budgetLayer, historyLayer, activityLayer, activityClip};
 }
 
 test('the probe includes clipping transforms and rejects a missing inverse on the real data layer', () => {
@@ -91,7 +91,7 @@ function run(moves: boolean, synchronized: boolean, proportional = true, history
     f.requestFrame(() => f.update(i, i * 16.7, moves, synchronized, proportional, historyMoves, edgeMoves));
     f.runFrame(i * 16.7);
   }
-  return {...f.reading, period: '24h', series: 12, budgetSeries: 12, charts: 3, rate: 4, expectedPushes: 0, coldReads: 1};
+  return {...f.reading, initiator: 'quota', period: '24h', series: 12, budgetSeries: 12, charts: 3, rate: 4, expectedPushes: 0, coldReads: 1};
 }
 
 test('the actual probe measures input only after all three charts move on the same time frame', () => {
@@ -211,7 +211,7 @@ test('the actual probe rejects a wrong frozen SVG scale or a changed domain behi
       f.requestFrame(() => {f.update(i, i * 16.7); if (wrong === 'svg') f.historyLayer.slides.style.transform = 'scaleX(2)'; else f.activitySvg.dataset.drawFrom = '40';});
       f.runFrame(i * 16.7);
     }
-    const reading = {...f.reading, period: '24h', series: 12, budgetSeries: 12, charts: 3, rate: 4, expectedPushes: 0, coldReads: 1};
+    const reading = {...f.reading, initiator: 'quota' as const, period: '24h', series: 12, budgetSeries: 12, charts: 3, rate: 4, expectedPushes: 0, coldReads: 1};
     assert.ok(panningProblems(reading).some(problem => problem.includes('all three charts')), wrong);
     assert.equal(f.reading.latency.length, 0, 'a reached HTML offset alone cannot credit the wrong composed drawing');
   }
@@ -226,4 +226,22 @@ test('a coherent numeric model and SVG matrix replacement preserves the shown ti
   const count = f.reading.updated;
   f.requestFrame(() => {}); f.runFrame(33.4);
   assert.equal(f.reading.updated, count, 'the inner projection swap itself is not a movement frame');
+});
+
+
+test('budget input is captured on its own chart and cannot pass without its native update', () => {
+  for (const gesture of ['wheel', 'drag']) for (const handled of [true, false]) {
+    const f = fixture('budget');
+    assert.ok(f.listeners.has('budget:wheel'));
+    assert.ok(!f.listeners.has('quota:wheel'), 'a follower cannot capture the initiator input');
+    if (gesture === 'wheel') f.wheel(0, 0);
+    else {
+      for (const event of [{type: 'pointerdown', clientX: 100, buttons: 1, timeStamp: 0}, {type: 'pointermove', clientX: 88, buttons: 1, timeStamp: 0}]) {
+        f.listeners.get('budget:' + event.type)!(event); f.bubble.get(event.type)!(event);
+      }
+    }
+    f.requestFrame(() => {if (handled) f.update(1, 16.7);}); f.runFrame(16.7);
+    assert.equal(f.reading.inputs, 1);
+    assert.equal(f.reading.latency.length, handled ? 1 : 0, gesture + ' needs an actual movement');
+  }
 });
