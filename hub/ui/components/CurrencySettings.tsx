@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useId,useRef,useState,type ReactNode} from 'react';
+import {useCallback,useEffect,useId,useLayoutEffect,useRef,useState,type ReactNode} from 'react';
 import {Archive,MoreHorizontal,Pencil} from 'lucide-react';
 import type {CurrencyDefinition,CurrencyManagement,CurrencyRateHistory,ManagedCurrency,RateSnapshot} from '../../server/domain/currency';
 import {t,useLocale} from '../i18n';
@@ -14,7 +14,7 @@ import {CurrencyChoice,CurrencySelect,DefinitionForm,RateForm,currencyLabel,pers
 type Leave=(go:()=>void)=>void;
 const restoreCurrency=(id:string)=>{
   const row=document.querySelector<HTMLElement>(`[data-currency-id="${id}"]`);
-  return row?.getClientRects().length?row:document.querySelector<HTMLElement>('.currency-overview button');
+  return row?.getClientRects().length?row:document.querySelector<HTMLElement>('.currency-overview button')??document.querySelector<HTMLElement>('.currency-tabs input:checked');
 };
 function CurrencyMenu({label,disabled,children}:{label:string;disabled?:boolean;children:(close:()=>void)=>ReactNode}) {
   const [open,setOpen]=useState(false);
@@ -101,9 +101,13 @@ function CurrencyDetails({data,item,refresh,dirty,leave}:{data:CurrencyManagemen
 
 function CurrencyRow({data,item,refresh,dirty,leave,onOpen}:{data:CurrencyManagement;item:CurrencyManagement['personal'][number];refresh:Refresh;dirty:Dirty;leave:Leave;onOpen:()=>void}) {
   const [archive,setArchive]=useState(false),save=useSave(data.registryRevision,false,refresh,dirty),archived=item.archivedAt!==null;
+  const row=useRef<HTMLLIElement>(null);
+  useLayoutEffect(()=>{const element=row.current;return ()=>{
+    if(element?.contains(document.activeElement))document.querySelector<HTMLElement>('.currency-tabs input:checked')?.focus({preventScroll:true});
+  };},[]);
   const definition=item.definition,selected=data.selected===definition.id;
   const duplicate=data.personal.some(row=>row.definition.id!==definition.id&&row.definition.name===definition.name&&row.definition.symbol===definition.symbol);
-  return <li className="settings-list-row popover-row">
+  return <li className="settings-list-row popover-row" ref={row}>
     <button className="currency-open" data-currency-id={definition.id} type="button" aria-label={definition.name} aria-haspopup="dialog" onClick={()=>leave(onOpen)}>
       <span className="settings-item-main"><span className="currency-identity"><span className="currency-name">{definition.name}</span>{selected&&<span className="currency-state is-selected">{t('currencies.selected')}</span>}</span><small>{definition.symbol}{duplicate?' — '+definition.id.slice(-6):''}</small></span>
       <span className="settings-item-detail currency-overview-rates">{archived?<span>{stamp(item.archivedAt!)}</span>:item.pairs.map(pair=><span key={pair.base} className="currency-equation">{pair.rate?`1 ${pair.base} = ${rateText(pair.rate)} ${definition.symbol}`:`${pair.base} — ${t('currencies.stopped')}`}</span>)}</span>

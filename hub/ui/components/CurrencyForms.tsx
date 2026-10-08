@@ -3,7 +3,7 @@ import type {CurrencyDefinition,CurrencyManagement,ManagedCurrency} from '../../
 import {ChevronDown} from 'lucide-react';
 import {t,useLocale} from '../i18n';
 import {ApiError,call} from '../lib/http';
-import {currencyRate} from '../lib/currencySettings';
+import {currencyRate,rateText} from '../lib/currencySettings';
 import {ErrorLine,Field} from './Kit';
 import {Popover} from './Popover';
 
@@ -34,37 +34,42 @@ function useDirty(dirty:Dirty,value:boolean,discard?:()=>void) {
   const key=useId(),latest=useRef(discard);latest.current=discard;useEffect(()=>{dirty(key,value,()=>latest.current?.());return ()=>dirty(key,false);},[dirty,key,value]);
 }
 
-/** A retry keeps the exact receipt, payload and revision after an unconfirmed response. */
+/** Retry unconfirmed writes verbatim; acknowledged outcomes need only an authoritative refresh. */
 export function useSave(revision:string,changed:boolean,refresh:Refresh,dirty:Dirty,discard?:()=>void) {
-  const [busy,setBusy]=useState(false),[uncertain,setUncertain]=useState(false),[error,setError]=useState<unknown>(null),[saved,setSaved]=useState(false);
-  const baseline=useRef(revision),alive=useRef(true),sending=useRef(false),generation=useRef(0),request=useRef<{url:string;body:Record<string,unknown>;done:(value:unknown)=>void}|null>(null);
+  type Outcome={kind:'saved';value:unknown}|{kind:'conflict';error:ApiError};
+  const [busy,setBusy]=useState(false),[recovery,setRecovery]=useState<'unconfirmed'|'saved'|'conflict'|null>(null),[error,setError]=useState<unknown>(null),[saved,setSaved]=useState(false);
+  const baseline=useRef(revision),alive=useRef(true),sending=useRef(false),generation=useRef(0),request=useRef<{url:string;body:Record<string,unknown>;done:(value:unknown)=>void;outcome?:Outcome}|null>(null);
   if(!changed&&!request.current)baseline.current=revision;
   useEffect(()=>{alive.current=true;return ()=>{alive.current=false;};},[]);
-  useDirty(dirty,changed||busy||uncertain,()=>{
+  useDirty(dirty,changed||busy||recovery!==null,()=>{
     // Discard abandons this form's response, not a command already received by the server.
-    generation.current++;request.current=null;sending.current=false;setBusy(false);setUncertain(false);setError(null);setSaved(false);discard?.();
+    generation.current++;request.current=null;sending.current=false;setBusy(false);setRecovery(null);setError(null);setSaved(false);discard?.();
   });
   const submit=async()=>{
     const current=request.current;if(!current||sending.current)return;const token=++generation.current;sending.current=true;setBusy(true);setError(null);setSaved(false);
     try {
-      const value=await call<unknown>('POST',current.url,current.body);
+      if(!current.outcome)try{current.outcome={kind:'saved',value:await call<unknown>('POST',current.url,current.body)};}
+      catch(failure){if(failure instanceof ApiError&&failure.status===409)current.outcome={kind:'conflict',error:failure};else throw failure;}
       if(!alive.current||token!==generation.current)return;
-      await refresh().then(data=>{if(token===generation.current)baseline.current=data.registryRevision;}).catch(()=>{});
-      if(!alive.current||token!==generation.current)return;request.current=null;setUncertain(false);current.done(value);setSaved(true);
+      const data=await refresh();
+      if(!alive.current||token!==generation.current)return;baseline.current=data.registryRevision;request.current=null;setRecovery(null);
+      if(current.outcome.kind==='conflict')setError(current.outcome.error);
+      else{current.done(current.outcome.value);setSaved(true);}
     }catch(failure){
       if(!alive.current||token!==generation.current)return;
-      if(failure instanceof ApiError&&failure.status<500){request.current=null;setUncertain(false);setError(failure);if(failure.status===409)await refresh().then(data=>{if(token===generation.current)baseline.current=data.registryRevision;}).catch(()=>{});}
-      else{setUncertain(true);setError(null);}
+      if(current.outcome)setRecovery(current.outcome.kind);
+      else if(failure instanceof ApiError&&failure.status<500){request.current=null;setRecovery(null);setError(failure);}
+      else setRecovery('unconfirmed');
     }finally{if(token===generation.current){sending.current=false;if(alive.current)setBusy(false);}}
   };
   const send=(url:string,body:Record<string,unknown>,done:(value:unknown)=>void=()=>{})=>{
     if(request.current||sending.current)return;request.current={url,body:{...body,expectedRevision:baseline.current,requestId:crypto.randomUUID()},done};void submit();
   };
-  return {send,conflict:error instanceof ApiError&&error.status===409,disabled:busy||uncertain,notice:<>
+  return {send,conflict:error instanceof ApiError&&error.status===409,disabled:busy||recovery!==null,notice:<>
     {busy&&<p role="status">{t('currencies.saving')}</p>}
     {saved&&!changed&&!busy&&!error&&<p role="status">{t('currencies.saved')}</p>}
     <ErrorLine error={error} />
-    {uncertain&&<div role="alert"><p>{t('currencies.unconfirmed')}</p><button type="button" className="button" disabled={busy} onClick={()=>void submit()}>{t('currencies.retry')}</button></div>}
+    {recovery&&<div role="alert"><p>{t(recovery==='saved'?'currencies.savedRefresh':recovery==='conflict'?'currencies.conflictRefresh':'currencies.unconfirmed')}</p><button type="button" className="button" disabled={busy} onClick={()=>void submit()}>{t('currencies.retry')}</button></div>}
   </>};
 }
 
@@ -119,6 +124,7 @@ export function RateForm({data,item,refresh,dirty,seed,onDone,onCancel}:{data:Cu
   const locale=useLocale(),form=useRef<HTMLFormElement>(null),when=useId();
   const [base,setBase]=useState(seed?.base??'USD'),[rate,setRate]=useState(seed?.rate??''),[date,setDate]=useState(''),[past,setPast]=useState(false),[error,setError]=useState<unknown>(null);
   const edited=rate!==(seed?.rate??'')||past||base!==(seed?.base??'USD'),save=useSave(data.registryRevision,edited,refresh,dirty,()=>{setRate(seed?.rate??'');setDate('');setPast(false);setBase(seed?.base??'USD');setError(null);});
+  const current=data.personal.find(row=>row.definition.id===item.definition.id)?.pairs.find(pair=>pair.base===base);
   useEffect(()=>{form.current?.querySelector<HTMLInputElement>('input[inputmode="decimal"]')?.focus({preventScroll:true});},[]);
   return <form className="dialog-form currency-form" ref={form} onSubmit={event=>{
     event.preventDefault();setError(null);try{const at=past?new Date(date).getTime():undefined;if(at!==undefined&&(!Number.isSafeInteger(at)||at>Date.now()))throw new Error();save.send('/api/currencies/'+item.definition.id+'/rates',{base,rate:currencyRate(rate,locale),...(at===undefined?{}:{date:at})},onDone);}catch{setError(new ApiError(400,'invalid_currency'));}
@@ -129,6 +135,8 @@ export function RateForm({data,item,refresh,dirty,seed,onDone,onCancel}:{data:Cu
       {past&&<Field label={t('currencies.localDate')} type="datetime-local" required value={date} onChange={event=>setDate(event.target.value)} />}
       <p className="dialog-text">{t('currencies.rateBrief')}</p><details className="currency-disclosure"><summary>{t('currencies.details')}</summary><p className="dialog-text">{t('currencies.rateHelp')}</p></details>
       <div className="button-row currency-actions"><button type="button" className="button" onClick={onCancel}>{t('common.cancel')}</button><button className="button primary" disabled={!rate}>{t('account.save')}</button></div>
-    </fieldset><ErrorLine error={error} />{save.notice}
+    </fieldset>
+    {save.conflict&&<p className="dialog-text">{t('currencies.current',{currency:current?.rate?`1 ${base} = ${rateText(current.rate)} ${item.definition.symbol}`:`${base} — ${t(current?'currencies.stopped':'currencies.noPair')}`})}</p>}
+    <ErrorLine error={error} />{save.notice}
   </form>;
 }
