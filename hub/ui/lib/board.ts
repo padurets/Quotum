@@ -1,3 +1,4 @@
+import {budgetVisible} from './money';
 import {defaultCurrencyContext,DEFAULT_CURRENCY,type CurrencyContext} from '../../server/domain/currency';
 import {useMemo} from 'react';
 import type {AppState} from './app';
@@ -299,7 +300,7 @@ export const useVisibleLimits = () => usePage(s => {
   if (!b) return NONE;
   return b.lineup.filter(id => {
     const card=b.cards[id],periods=card?quotaPeriods(card):[];
-    return !b.view.hidden.includes(`source:${id}`)&&(!periods.length||periods.some(w=>!b.view.windows.includes(`${id}/${w.id}`)));
+    return !b.view.hidden.includes(`source:${id}`)&&(!!card&&budgetVisible(card)||!periods.length||periods.some(w=>!b.view.windows.includes(`${id}/${w.id}`)));
   });
 }, shallowEqual);
 export const useLineup = () => usePage(s => s.board?.lineup ?? NONE);
@@ -316,7 +317,7 @@ export function useCurrencyContext(source?:string):CurrencyContext {
   const revision=usePage(s=>source?undefined:currencyContextOf(s).revision);
   return useMemo(()=>({target,definitions,sources:source?{[source]:bindings}:{},...(revision?{revision}:{})}),[target,definitions,source,bindings,revision]);
 }
-export const useMoneyUnits=()=>usePage(s=>[...new Set(Object.values(s.board?.cards??{}).filter(c=>providerOf(c.provider)?.funding==='wallet').flatMap(c=>c.meters?.map(m=>/^[A-Z]{3}$/.test(m.unit)?DEFAULT_CURRENCY:m.unit)??[]))].sort(),shallowEqual);
+export const useMoneyUnits=()=>usePage(s=>[...new Set(Object.values(s.board?.cards??{}).filter(budgetVisible).flatMap(c=>c.meters?.map(m=>/^[A-Z]{3}$/.test(m.unit)||m.unit==='credits:codex'?DEFAULT_CURRENCY:m.unit)??[]))].sort(),shallowEqual);
 /** The cards of these sources, in their order; the same list while each card is. */
 export const useCards = (ids: string[]) => usePage(s => ids.flatMap(id => s.board?.cards[id] ?? []), shallowEqual);
 export const useSessions = (id: string) => usePage(s => s.board?.sessions[id] ?? NONE);

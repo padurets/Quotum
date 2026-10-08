@@ -11,7 +11,7 @@ import {Store} from '../../server/store/store';
 import {deepSeekMeasurement} from '../../server/connectors/deepseek';
 import {ApiError} from '../lib/http';
 import * as providers from '../../server/domain/providers';
-import {referenceBalance,balanceGroups,balanceRoleLabel,keyName} from '../lib/money';
+import {referenceBalance,budgetVisible,balanceGroups,balanceRoleLabel,keyName} from '../lib/money';
 import type {Named} from '../lib/board';
 import type {KeyPage} from '../lib/moneyKeys';
 import type {Meter} from '../../server/domain/meters';
@@ -42,7 +42,7 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
     if(name.endsWith('/http'))return {ApiError,call};
     if(name.endsWith('/moneySelection'))return {moneySelection,archivedKeyGroups,keyMeter};
     if(name.endsWith('/prefs'))return {usePrefs:()=>prefs,setPrefs:(patch:typeof prefs)=>{prefs=patch;}};
-    if(name.endsWith('/money'))return {keyName,balanceRoleLabel,balanceGroups,referenceBalance};
+    if(name.endsWith('/money'))return {keyName,balanceRoleLabel,balanceGroups,referenceBalance,budgetVisible};
     if(name.endsWith('/providers'))return providers;
     if(name==='../../server/domain/currency')return currency;
     if(name.endsWith('/meterHistory'))return {MAX_METERS:32};

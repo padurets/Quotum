@@ -53,20 +53,20 @@ export class DeviceOnboarding {
     if(row.status!=='ready'||row.token_id&&row.token_id!==token)throw new AdditionError('addition_conflict');
     this.store.db.prepare('UPDATE device_onboarding SET token_id=? WHERE id=?').run(token,id);
   }
-  select(owner:string,id:string,deviceId:string,sourceIds:string[],requestId:string) {
+  select(owner:string,id:string,deviceId:string,sourceIds:string[],requestId:string,includeBudget:string[]=[] ) {
     return this.directory.transaction(()=>{
       const row=this.row(owner,id),ids=[...new Set(sourceIds)].sort();
       if(row.addition_id) {
         if(row.device_id!==deviceId||row.source_ids!==JSON.stringify(ids))throw new AdditionError('addition_conflict');
         // The same selection keeps the same receipt after close, expiry or later device revocation.
-        const operation=this.additions.reserve(owner,requestId,row.board_id,{kind:'sources',sourceIds:ids});
+        const operation=this.additions.reserve(owner,requestId,row.board_id,{kind:'sources',sourceIds:ids,includeBudget});
         if(operation.id!==row.addition_id)throw new AdditionError('addition_conflict');
         return operation;
       }
       this.allowed(row);
       const device=this.directory.deviceById(deviceId),delivered=this.store.deviceSources(owner).filter(source=>source.device===deviceId).map(source=>source.source);
       if(device?.userId!==owner||!this.directory.deviceLive(deviceId)||row.code_id&&row.device_id!==deviceId||ids.some(source=>!delivered.includes(source)))throw new AdditionError('addition_permission');
-      const operation=this.additions.reserve(owner,requestId,row.board_id,{kind:'sources',sourceIds:ids});
+      const operation=this.additions.reserve(owner,requestId,row.board_id,{kind:'sources',sourceIds:ids,includeBudget});
       const binding=this.store.db.prepare('SELECT onboarding_id,state FROM board_additions WHERE id=?').get(operation.id) as {onboarding_id:string|null;state:string};
       if(binding.onboarding_id&&binding.onboarding_id!==id||binding.state==='complete')throw new AdditionError('addition_conflict');
       this.store.db.prepare("UPDATE device_onboarding SET device_id=?,source_ids=?,addition_id=?,status='selected' WHERE id=?").run(deviceId,JSON.stringify(ids),operation.id,id);

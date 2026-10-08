@@ -40,7 +40,7 @@ export type Catalogue = {
   demo?: Demo;
 };
 export type Item =
-  | {kind: 'sources'; sourceIds: string[]}
+  | {kind: 'sources'; sourceIds: string[];includeBudget?:string[]}
   | {kind: 'widget'; widgetId: WidgetId | 'history' | 'forecast'}
   | {kind: 'connection'; provider: string; account?: {kind: 'new'} | {kind: 'existing'; id: string}}
   | {kind: 'replace'; credentialId: string; provider?: string};

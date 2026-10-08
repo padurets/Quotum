@@ -1,3 +1,4 @@
+import {budgetVisible} from '../lib/money';
 import {memo, useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import type {Card, Win} from '../lib/types';
 import {MEASURE_INTERVAL, windowKey, type MeasureIntervalMs} from '../lib/types';
@@ -453,9 +454,9 @@ function CardTray({source}: {source: Card}) {
   const resets = useResetsFor(source.provider);
   const access = useSourceAccess(source.id);
   const quotaIssue=source.quota&&!source.quota.complete;
-  const news=providerOf(source.provider)?.funding==='wallet'||source.balanceStatus||access||quotaIssue?<><BalanceMark source={source}/>{access&&<AccessMark id={source.id}/>}
+  const news=providerOf(source.provider)?.funding==='wallet'||source.balanceStatus||source.creditBalance||access||quotaIssue?<><BalanceMark source={source}/>{access&&<AccessMark id={source.id}/>}
     {quotaIssue&&<QuotaMark source={source}/>}</>:null;
-  return <Tray resets={resets} news={news} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
+  return <Tray resets={resets} news={news} current={!!source.resets?.available&&<FreeResets resets={source.resets} observation={source.resources?.resets}/>} sessions={sessions} />;
 }
 
 /**
@@ -488,11 +489,11 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
       </div>
 
       <div className="limits">
-        {caps?<QuotaCard source={source} ids={shownPeriods.map(w=>w.id)}/>:source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
+        {caps?<QuotaCard source={source} ids={shownPeriods.map(w=>w.id)}/>:budgetVisible(source)&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
         {visible.map(w => (
           <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
         ))}
-        {!caps && !source.windows.length && !source.meters && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
+        {!caps && !source.windows.length && !budgetVisible(source) && !source.meters && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
         {!!periods.length && !shownPeriods.length && <AllHidden source={source} arrange={arrange} />}
       </div>
       <CardTray source={source} />

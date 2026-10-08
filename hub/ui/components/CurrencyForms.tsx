@@ -11,6 +11,7 @@ export type Refresh=()=>Promise<CurrencyManagement>;
 export type Dirty=(key:string,value:boolean,discard?:()=>void)=>void;
 export const personal=(id:string)=>id.startsWith('personal:');
 export const currencyLabel=(definition:CurrencyDefinition,locale:string,items:CurrencyDefinition[]=[])=>{
+  if(definition.kind==='provider-credit')return t('money.codexCredits');
   if(!personal(definition.id))return `${definition.id} — ${new Intl.DisplayNames([locale],{type:'currency'}).of(definition.id)??definition.name}`;
   const duplicate=items.some(item=>item.id!==definition.id&&item.name===definition.name&&item.symbol===definition.symbol);
   return `${definition.name} (${definition.symbol})${duplicate?' — '+definition.id.slice(-6):''}`;
@@ -83,10 +84,10 @@ export function CurrencySelect({items,value,onChange,title,compact=false}:{items
 }
 
 /** The same direction for both the initial ratio and every later price. */
-function RateFields({standards,base,rate,symbol,onBase,onRate}:{standards:CurrencyDefinition[];base:string;rate:string;symbol:string;onBase:(id:string)=>void;onRate:(value:string)=>void}) {
+function RateFields({standards,base,rate,symbol,onBase,onRate,inverse=false}:{inverse?:boolean;standards:CurrencyDefinition[];base:string;rate:string;symbol:string;onBase:(id:string)=>void;onRate:(value:string)=>void}) {
   return <div className="currency-ratio" role="group" aria-label={t('currencies.rate')}>
-    <span>1</span><CurrencySelect items={standards} value={base} title={t('currencies.base')} onChange={onBase} compact />
-    <span>=</span><div className="field"><input aria-label={t('currencies.rate')} inputMode="decimal" value={rate} required placeholder="0" onChange={event=>onRate(event.target.value)} /></div><span className="currency-unit">{symbol||'…'}</span>
+    <span>1</span>{inverse?<span>{symbol}</span>:<CurrencySelect items={standards} value={base} title={t('currencies.base')} onChange={onBase} compact />}
+    <span>=</span><div className="field"><input aria-label={t('currencies.rate')} inputMode="decimal" value={rate} required placeholder="0" onChange={event=>onRate(event.target.value)} /></div><span className="currency-unit">{inverse?base:symbol||'…'}</span>
   </div>;
 }
 
@@ -124,19 +125,21 @@ export function RateForm({data,item,refresh,dirty,seed,onDone,onCancel}:{data:Cu
   const locale=useLocale(),form=useRef<HTMLFormElement>(null),when=useId();
   const [base,setBase]=useState(seed?.base??'USD'),[rate,setRate]=useState(seed?.rate??''),[date,setDate]=useState(''),[past,setPast]=useState(false),[error,setError]=useState<unknown>(null);
   const edited=rate!==(seed?.rate??'')||past||base!==(seed?.base??'USD'),save=useSave(data.registryRevision,edited,refresh,dirty,()=>{setRate(seed?.rate??'');setDate('');setPast(false);setBase(seed?.base??'USD');setError(null);});
-  const current=data.personal.find(row=>row.definition.id===item.definition.id)?.pairs.find(pair=>pair.base===base);
+  const builtin=item.definition.kind==='provider-credit';
+  const current=[...data.personal,...data.builtins??[]].find(row=>row.definition.id===item.definition.id)?.pairs.find(pair=>pair.base===base);
   useEffect(()=>{form.current?.querySelector<HTMLInputElement>('input[inputmode="decimal"]')?.focus({preventScroll:true});},[]);
   return <form className="dialog-form currency-form" ref={form} onSubmit={event=>{
-    event.preventDefault();setError(null);try{const at=past?new Date(date).getTime():undefined;if(at!==undefined&&(!Number.isSafeInteger(at)||at>Date.now()))throw new Error();save.send('/api/currencies/'+item.definition.id+'/rates',{base,rate:currencyRate(rate,locale),...(at===undefined?{}:{date:at})},onDone);}catch{setError(new ApiError(400,'invalid_currency'));}
+    event.preventDefault();setError(null);try{const at=past?new Date(date).getTime():undefined;if(at!==undefined&&(!Number.isSafeInteger(at)||at>Date.now()))throw new Error();save.send('/api/currencies/'+item.definition.id+'/rates',{base,rate:currencyRate(rate,locale),...(builtin?{direction:'basePerUnit'}:{}),...(at===undefined?{}:{date:at})},onDone);}catch{setError(new ApiError(400,'invalid_currency'));}
   }}>
     <fieldset className="currency-fields" disabled={save.disabled||item.archivedAt!==null}>
-      <RateFields standards={data.standards} base={base} rate={rate} symbol={item.definition.symbol} onBase={setBase} onRate={setRate} />
+      <RateFields inverse={builtin} standards={data.standards} base={base} rate={rate} symbol={builtin?t('money.codexCredits'):item.definition.symbol} onBase={setBase} onRate={setRate} />
       <div className="field"><label htmlFor={when}>{t('currencies.effective')}</label><select id={when} value={past?'past':'now'} onChange={event=>setPast(event.target.value==='past')}><option value="now">{t('currencies.fromNow')}</option><option value="past">{t('currencies.fromPast')}</option></select></div>
       {past&&<Field label={t('currencies.localDate')} type="datetime-local" required value={date} onChange={event=>setDate(event.target.value)} />}
+      {builtin&&<p className="dialog-text">{t('currencies.creditHelp')}</p>}
       <p className="dialog-text">{t('currencies.rateBrief')}</p><details className="currency-disclosure"><summary>{t('currencies.details')}</summary><p className="dialog-text">{t('currencies.rateHelp')}</p></details>
       <div className="button-row currency-actions"><button type="button" className="button" onClick={onCancel}>{t('common.cancel')}</button><button className="button primary" disabled={!rate}>{t('account.save')}</button></div>
     </fieldset>
-    {save.conflict&&<p className="dialog-text">{t('currencies.current',{currency:current?.rate?`1 ${base} = ${rateText(current.rate)} ${item.definition.symbol}`:`${base} — ${t(current?'currencies.stopped':'currencies.noPair')}`})}</p>}
+    {save.conflict&&<p className="dialog-text">{t('currencies.current',{currency:current?.rate?builtin?`1 ${t('money.codexCredits')} = ${rateText(current.rate)} ${base}`:`1 ${base} = ${rateText(current.rate)} ${item.definition.symbol}`:`${base} — ${t(current?'currencies.stopped':'currencies.noPair')}`})}</p>}
     <ErrorLine error={error} />{save.notice}
   </form>;
 }

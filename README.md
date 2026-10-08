@@ -107,6 +107,12 @@ Codex         api                  idle     started 25m ago · editor
   in the panel. Credit belongs to the current subscription and is unknown without a
   reliable session ID; a dash keeps that distinct from known zero. Terminals, editors
   and the Codex app alike.
+- **Purchased Codex credits.** Additional funds appear on the subscription card and
+  compact view, independently of quota limits and free resets. The initial estimate is
+  0.04 USD per credit; Currencies lets you set a personal USD-per-credit rate or restore
+  the default. Open the amount for the exact native value and measurement time.
+  Shared boards require separate permission to show funds and subsequent history.
+  Credit changes do not imply spending or top-ups.
 - **Free resets.** When a provider grants resets of the limits (Codex does now and
   then), the card shows how many you have and until when.
 - **A weekly spending plan.** By default you spend 30 / 25 / 15 / 15 / 10 / 5% on the

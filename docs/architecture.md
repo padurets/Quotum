@@ -60,7 +60,7 @@ directly. These are the client interfaces used by the agent:
 | Provider | Interface | Notes |
 |---|---|---|
 | Claude Code | `claude -p --input-format stream-json …`, control request `get_usage` (the Agent SDK protocol) | No MCP servers, hooks, plugins, skills or saved session. Claude Code caches the answer for 60 s. |
-| Codex | `codex app-server`, JSON-RPC `account/rateLimits/read` (the protocol of the IDE extensions) | Plan, per-model limits, account id. |
+| Codex | `codex app-server`, JSON-RPC `account/rateLimits/read` (the protocol of the IDE extensions) | Plan, per-model limits, free resets, purchased credits, account id. |
 | Antigravity | `agy -p /usage --output-format json` (agy 1.1.11+) | The agent sends agy's log to its own file; otherwise agy writes a new log file on every run. |
 
 What follows from this:
@@ -632,7 +632,8 @@ spending is positive usage movement and a top-up is positive credits movement.
 The account pair keeps the time its response arrived. Each key page has its own
 observation time for counters, period totals and cap resets, even when a traversal
 crosses a UTC boundary. One atomic store write preserves those independent times.
-Readings use signed integer millionths, with sparse value/semantic changes and
+Money readings use signed integer millionths; native Codex credits carry their own
+exact coefficient and scale. Both have sparse value/semantic changes and
 continuous observation spans. Unchanged heartbeats extend freshness without another
 reading. Retention keeps one predecessor to distinguish a late increase from a reset.
 Safe provider context has its own sparse history alongside that ledger: DeepSeek funds
@@ -654,6 +655,32 @@ A valid null limit explicitly ends the current cap, including in a partial round
 Invalid money leaves stay distinct from null. The ledger retains the last confirmed
 span endpoint as evidence through archival and retention; reappearance uses that
 heartbeat time as its spending anchor.
+
+Codex reports purchased credits on its existing subscription source. Windows, free
+resets and credit status have independent strictly newer observation watermarks; a
+separate monotonic delivery baseline drives cadence and survives restart. Deferred
+runtime acknowledgements run only after the mixed database transaction commits.
+Native credit amounts use exact coefficient/scale values, with scale stored per reading
+and retained in packed history and conversion provenance. Finite availability ends
+exclusively on missing, invalid or unlimited observations; equal-value recovery starts
+a new span. No credit change implies spending, top-ups or quota forecasts.
+
+The shared currency layer defines `credits:codex` and an offline public default of
+0.04 USD per credit. Personal rate events can override or restore that default using
+the existing revision/receipt contract, without changing successful historical bindings.
+One chosen credit/USD leg precedes the ordinary display-currency path, rounded once.
+The builtin is managed in Currencies, immutable and unavailable as a display target.
+No provider-specific conversion or synthetic USD meter is needed in the adapter.
+
+Financial authority is per shared placement. Old and new Codex shares default off;
+wallet shares retain unrestricted retained history. Member-holders explicitly grant
+finance with a revision-checked command; owner status alone is insufficient. Enablement
+records an admission cutoff, and its first finite heartbeat forces one durable numeric
+anchor. History filters evidence before conversion, independently of retention/crop
+geometry. Current last-known values preserve their original time. Projection, events,
+history and currency context use the same grant; revision changes invalidate both
+native tiles and client generations. See the dashboard and ingest specs for the wire
+fields, exact decimal bounds and privacy contract.
 
 DeepSeek reports totals, granted credits and topped-up balances separately for CNY
 and USD. Stable catalogue descriptors identify total and component roles. Its

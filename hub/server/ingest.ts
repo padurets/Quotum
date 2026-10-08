@@ -1,6 +1,7 @@
 import type {Attention} from './attention.js';
 import {secretKind} from './domain/auth.js';
 import {CLOCK_TOLERANCE_MS, Invalid, parseBatch, parseCheckin, parseSessions, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
+import {deliveryOf} from './domain/quota.js';
 import {Forecasts} from './forecasts.js';
 import {Sessions} from './sessions.js';
 import {ACTIVE_WITHIN_MS, type Cadence, type Signals, type Why} from './cadence.js';
@@ -8,7 +9,7 @@ import type {Duty} from './duty.js';
 import {clientProviders as providers, type Provider} from './domain/providers.js';
 import type {Device, Directory, Token} from './store/directory.js';
 import type {Store} from './store/store.js';
-import {tell, type Touches} from './touches.js';
+import {afterCommit, tell, type Touches} from './touches.js';
 
 export type IngestResult = {accepted: number; duplicates: number; failures: number; device: {id: string}};
 
@@ -98,22 +99,21 @@ export class Ingest {
         touched.add(source);
         this.store.hold(source, device.userId, now);
         this.store.seenDevice(device.id, snapshot.provider, source, now);
-        const {successAt} = this.store.state(source);
-        // Resent after a lost answer, or already delivered by another device of the same account.
-        if (successAt !== null && observedAt <= successAt) {
-          result.duplicates++;
-          continue;
-        }
-        this.cadence.settleRefresh(account, this.refreshDuty(account), now);
-        this.cadence.refreshResult(account, device.id, observedAt, true, now);
+        const previous = this.store.state(source);
         const measurement = {...toMeasurement(snapshot), observedAt};
-        attention?.record(this.store.state(source), measurement, now);
-        this.store.record(source, measurement);
-        result.accepted++;
-        this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now);
-        // A delivery can hand duty to its device: the request of the one before ends now, not when next read.
-        this.cadence.settleRefresh(account, this.refreshDuty(account), now);
-        this.cadence.delivered(account, device.id, snapshot.windows, observedAt, snapshot.staleAfterMs, this.signals(source, account, now).inUse, now);
+        const recorded = this.store.record(source, measurement);
+        if (recorded.accepted) result.accepted++; else result.duplicates++;
+        if (recorded.windows) attention?.record(previous, measurement, now);
+        afterCommit(() => {
+          this.cadence.settleRefresh(account, this.refreshDuty(account), now);
+          if (recorded.delivery) {
+            this.cadence.refreshResult(account, device.id, observedAt, true, now);
+            this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now);
+          } else this.duty.acknowledge(account, device.id, observedAt);
+          this.cadence.settleRefresh(account, this.refreshDuty(account), now);
+          if (recorded.accepted) this.cadence.delivered(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,snapshot.staleAfterMs,this.signals(source,account,now).inUse,now);
+          else this.cadence.acknowledge(account,device.id,observedAt);
+        });
       }
 
       for (const failure of batch.failures) {
@@ -121,7 +121,9 @@ export class Ingest {
         const source = this.store.deviceSource(device.id, failure.provider);
         // The device waits out its failures, whether or not another device measures the subscription fine.
         const key = this.cadence.measuredBy(device.id, failure.provider) ?? (source && this.store.account(source));
-        if (key) {
+        const known=key&&this.store.findSource(failure.provider,key);
+        const failureFloor=known?deliveryOf(this.store.state(known))?.at??-Infinity:-Infinity;
+        if (key&&at>failureFloor) afterCommit(() => {
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
           if (this.cadence.failed(key, device.id, failure.error, at)) {
             this.duty.failed(key, device.id, at);
@@ -129,7 +131,7 @@ export class Ingest {
             this.cadence.refreshResult(key, device.id, at, false, now);
           }
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-        }
+        });
         const paused = key && this.store.findSource(failure.provider, key);
         if (paused) touched.add(paused);
         if (source) touched.add(source);
@@ -137,12 +139,14 @@ export class Ingest {
         if (!source) continue;
         const state = this.store.state(source);
         // Another device may measure the same account fine; only a source gone quiet shows the problem.
-        if (state.successAt !== null && state.staleAfterMs !== null && at - state.successAt <= state.staleAfterMs) continue;
+        const delivery = deliveryOf(state);
+        if (delivery && at - delivery.at <= delivery.staleAfterMs) continue;
         this.store.fail(source, failure.error);
         result.failures++;
       }
       // Heard from, the device is not silent: nor are the subscriptions it holds, those its
       // measurements just handed it included, and delivers nothing for now.
+      afterCommit(() => {
       const held = this.cadence.keysOf([device.id]).filter(key => this.duty.holder(key) === device.id);
       for (const key of held) this.cadence.settleRefresh(key, this.refreshDuty(key), now);
       this.cadence.heard(device.id, held, now);
@@ -150,6 +154,7 @@ export class Ingest {
       // Waiting protection uses the whole batch's accepted data and bounded evidence of contact.
       for (const source of touched) this.protect(source, this.store.account(source)!, now);
       tell(this.observer, o => o.touchSources([...touched]));
+      });
       return result;
     });
     attention?.committed();
@@ -238,7 +243,7 @@ export class Ingest {
 
   requestRefresh(source: string, now: number) {
     const key = this.store.account(source)!;
-    const result = this.cadence.requestRefresh(key, this.refreshDuty(key), this.store.state(source).successAt, now);
+    const result = this.cadence.requestRefresh(key, this.refreshDuty(key), deliveryOf(this.store.state(source))?.at ?? null, now);
     tell(this.observer, o => o.touchSources([source]));
     return result;
   }
@@ -261,14 +266,17 @@ export class Ingest {
   private restoreFixed(source: string | null, key: string, now: number) {
     if (source === null || this.store.measureInterval(source) === null) return;
     const state = this.store.state(source);
-    if (state.successAt !== null && state.staleAfterMs !== null) this.cadence.restore(key, state.successAt, state.staleAfterMs, state.windows, now);
+    const delivery = deliveryOf(state);
+    if (delivery) this.cadence.restore(key, delivery.at, delivery.staleAfterMs, state.successAt === null ? null : state.windows, now);
   }
 
   /** What the hub knows of a subscription now: its windows, and whether it is in use on any machine. */
   private signals(source: string | null, key: string, now: number): Signals {
     const activeAt = this.duty.activeAt(key);
+    const state = source ? this.store.state(source) : null;
+    const fresh = state?.successAt != null && state.staleAfterMs != null && now-state.successAt <= state.staleAfterMs && (!state.resources?.windows || state.resources.windows.status === 'observed');
     return {
-      windows: source ? this.store.state(source).windows : [],
+      windows: fresh ? state!.windows : [],
       measureIntervalMs: source ? this.store.measureInterval(source) : null,
       inUse: (source !== null && this.live.working(source, now)) || (activeAt !== null && now - activeAt <= ACTIVE_WITHIN_MS),
     };

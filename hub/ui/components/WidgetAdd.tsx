@@ -38,7 +38,9 @@ function AdditionRow({
   hidden,
   visible,
   onStart,
+  budgetChoice=false,
 }: {
+  budgetChoice?:boolean;
   board: Board;
   id: string;
   item: Item;
@@ -51,6 +53,7 @@ function AdditionRow({
   onStart: () => void;
 }) {
   const addition = useAddition();
+  const [includeBudget,setIncludeBudget]=useState(false);
   const seenVisible = useRef(false);
   if (visible) seenVisible.current = true;
   const operation = addition.operation;
@@ -71,7 +74,7 @@ function AdditionRow({
       addition.reset();
       seenVisible.current = false;
     }
-    void addition.submit(board.id, item);
+    void addition.submit(board.id, item.kind==='sources'&&budgetChoice&&includeBudget?{...item,includeBudget:item.sourceIds}:item);
   };
   return (
     <div className="catalogue-entry" hidden={hidden} data-addition={id}>
@@ -81,6 +84,7 @@ function AdditionRow({
           <b title={label}>{label}</b>
           <small>{kind}</small>
           {publish && <small className="catalogue-disclosure">{t('add.shareInline')}</small>}
+          {budgetChoice&&<label title={t('shares.budgetHelp')}><input type="checkbox" checked={includeBudget} disabled={pending||!!operation} onChange={event=>setIncludeBudget(event.target.checked)}/>{t('shares.includeBudget')}</label>}
         </span>
         <button
           type="button"
@@ -286,6 +290,7 @@ export function WidgetCatalogue({
                     label={source.label}
                     kind={t(widgetKind('', source.provider))}
                     icon={<img src={logoOf(source.provider)} alt="" />}
+                    budgetChoice={!board.personal&&!source.onBoard&&source.provider==='codex'}
                     publish={!board.personal && !source.onBoard}
                     hidden={!sourceMatches(source)}
                     visible={visible(cardId(source.id))}

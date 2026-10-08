@@ -254,12 +254,12 @@ export class Cadence {
   private readonly measured = new Map<string, string>();
 
   /** Fixed schedules survive restart through the accepted data, without simulating a delivery. */
-  restore(key: string, at: number, staleAfterMs: number, windows: Win[], now: number) {
+  restore(key: string, at: number, staleAfterMs: number, windows: Win[] | null, now: number) {
     const pace = this.pace(key, now);
     if (pace.lastAt !== null) return;
     pace.lastAt = at;
     pace.promiseAt = at + Math.ceil(Math.max(MIN_INTERVAL_MS, (staleAfterMs - 60_000) / 1.2));
-    pace.signature = signatureOf(windows.map(w => ({id: w.id, usedPercent: w.used})));
+    pace.signature = windows === null ? null : signatureOf(windows.map(w => ({id: w.id, usedPercent: w.used})));
   }
 
   /** A waiting plan protects duty until a fixed due time, never from the time of a read or retry. */
@@ -273,8 +273,9 @@ export class Cadence {
   }
 
   /** A measurement of subscription `key` was accepted; `busy` is whether it is in use as it arrives. */
-  delivered(key: string, device: string, windows: {id: string; usedPercent: number}[], observedAt: number, staleAfterMs: number, busy: boolean, now: number) {
+  delivered(key: string, device: string, windows: {id: string; usedPercent: number}[] | null, observedAt: number, staleAfterMs: number, busy: boolean, now: number) {
     const pace = this.pace(key, now);
+    if (windows !== null) {
     const signature = signatureOf(windows);
     if (pace.signature === null) {
       pace.stretch = 1;
@@ -285,13 +286,21 @@ export class Cadence {
     }
     if (pace.changed || busy) pace.busyAt = now;
     pace.signature = signature;
+    }
     // Never later than this measurement goes stale, whoever took it and however it was asked for.
     // Whole milliseconds: the times the hub answers with are whole numbers (spec).
+    if (observedAt > (pace.lastAt ?? -Infinity)) {
     pace.promiseAt = observedAt + Math.ceil(Math.max(MIN_INTERVAL_MS, (staleAfterMs - 60_000) / 1.2));
     pace.lastAt = observedAt;
+    }
     this.answeredBy(pace, device, observedAt);
     const pause = this.pauses.get(pauseKey(key, device));
     if (pause && observedAt > pause.at) this.pauses.delete(pauseKey(key, device));
+  }
+
+  acknowledge(key: string, device: string, at: number) {
+    const pace = this.paces.get(key);
+    if (pace) this.answeredBy(pace, device, at);
   }
 
   /** The subscription a device was last told to measure for a provider: its failures are about that one. */

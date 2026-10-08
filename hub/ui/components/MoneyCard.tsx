@@ -8,6 +8,7 @@ import {
   amountUnitLabel,
   capName,
   budgetView,
+  budgetVisible,
   balanceGroups,
   balanceRoleLabel,
   money,
@@ -324,11 +325,15 @@ export function MoneyCard({
   const {keys, meters, error} = useShownKeys(source, view, board);
   const {remaining, limits} = budgetView(source, keys, meters, context),
     groups = remaining.values;
+  const credit=source.provider==='codex', status=source.creditBalance;
+  const now=useClock(now=>status&&now<=status.at+status.staleAfterMs?status.at+status.staleAfterMs+1:null);
+  const statusText=creditBalanceText(source,now);
+  const native=source.meters?.find(m=>m.id==='balance:credits'&&!m.conversion);
   const displayUnavailable =
     !groups.length && (source.currencyUnavailable || balanceGroups(source).some((g) => !g.total.stale));
   const composition = groups.filter((group) => group.components.length || group.approximate);
   const proof = groups[0]?.total.conversion;
-  const referenceRate = proof && (proof.steps ?? [proof.rate]).find((r) => r.source !== 'manual');
+  const referenceRate = proof && (proof.steps ?? [proof.rate]).find((r) => r.source !== 'manual' && r.source !== 'codex-default');
   const quoted = referenceRate && new Date(referenceRate.date);
   const quoteDate = quoted
     ? day(new Date(quoted.getUTCFullYear(), quoted.getUTCMonth(), quoted.getUTCDate()).getTime())
@@ -337,26 +342,28 @@ export function MoneyCard({
     ? [
         ...new Set(
           (proof.steps ?? [proof.rate]).map((r) =>
-            r.source === 'manual' ? t('money.personalRate') : r.source.toUpperCase(),
+            r.source === 'manual' ? t('money.personalRate') : r.source === 'codex-default' ? t('money.defaultEstimate') : r.source.toUpperCase(),
           ),
         ),
       ].join(', ')
     : '';
   const conversion = proof
     ? t(!referenceRate ? 'money.fixedEstimate' : 'money.currencyEstimate', {
-        amount: money(proof.original.amount, proof.original.unit, true, context),
+        amount: money(proof.original.amount, proof.original.unit, true, context, proof.original.scale),
         source: rateSources,
         date: quoteDate,
       })
     : '';
   const breakdown = (
     <div className="money-breakdown">
+      {credit&&proof&&<p>{(proof.steps??[proof.rate]).filter(leg=>leg.base==='credits:codex').map(leg=><span className="currency-equation" key={leg.id}>1 {t('money.codexCredits')} = {money(leg.to,'USD',true,context)}</span>)}</p>}
+      {credit&&native&&<section><p>{money(native.amount,native.unit,true,context,native.scale)}</p><p>{stamp(native.at)}</p>{(statusText||native.stale)&&<p>{t('money.lastKnown')}</p>}{conversion&&<p className="popover-note">{conversion}</p>}</section>}
       {composition.map(({total, components, approximate}) => (
         <section key={total.id}>
           <div
             className={`money-breakdown-total${total.stale ? ' is-stale' : ''}`}
             title={[
-              money(total.amount, total.unit, true, context),
+              money(total.amount, total.unit, true, context, total.scale),
               stamp(total.at),
               total.stale ? t('money.stale') : '',
             ]
@@ -366,7 +373,7 @@ export function MoneyCard({
             <strong>{currencySymbol(total.unit, context)}</strong>
             <span>
               {approximate ? '≈ ' : ''}
-              {money(total.amount, total.unit, false, context)}
+              {money(total.amount, total.unit, false, context, total.scale)}
             </span>
           </div>
           {components.map(({meter, role}) => (
@@ -374,7 +381,7 @@ export function MoneyCard({
               key={meter.id}
               className={meter.stale ? 'is-stale' : ''}
               title={[
-                money(meter.amount, meter.unit, true, context),
+                money(meter.amount, meter.unit, true, context, meter.scale),
                 stamp(meter.at),
                 meter.stale ? t('money.stale') : '',
               ]
@@ -384,7 +391,7 @@ export function MoneyCard({
               <span>{balanceRoleLabel(role)}</span>
               <span>
                 {approximate ? '≈ ' : ''}
-                {money(meter.amount, meter.unit, false, context)}
+                {money(meter.amount, meter.unit, false, context, meter.scale)}
               </span>
             </div>
           ))}
@@ -396,9 +403,9 @@ export function MoneyCard({
   return (
     <div className="money-body">
       <div className="money-balance">
-        <span>{t('money.accountBalance')}</span>
+        <span>{t(credit?'money.additionalFunds':'money.accountBalance')}</span>
         <div className="money-balance-values">
-          {!groups.length ? (
+          {statusText ? (native?<Popover label={t('money.breakdown')} trigger={<span className="limit-value money-balance-status">{statusText}</span>} triggerClass="money-balance-trigger" up>{breakdown}</Popover>:<span className="limit-value money-balance-status">{statusText}</span>) : !groups.length ? (
             <span
               className="limit-value"
               title={
@@ -411,7 +418,7 @@ export function MoneyCard({
             </span>
           ) : (
             groups.map(({total, approximate}) => {
-              const formatted = money(total.amount, total.unit, false, context),
+              const formatted = money(total.amount, total.unit, false, context, total.scale),
                 symbol = currencySymbol(total.unit, context),
                 amount = formatted.slice(0, -symbol.length - 1);
               const value = (
@@ -420,7 +427,7 @@ export function MoneyCard({
                   className={`limit-value${total.stale ? ' is-stale' : ''}`}
                   data-money={total.amount}
                   title={[
-                    money(total.amount, total.unit, true, context),
+                    money(total.amount, total.unit, true, context, total.scale),
                     stamp(total.at),
                     approximate ? conversion : '',
                     total.stale ? t('money.stale') : '',
@@ -433,7 +440,7 @@ export function MoneyCard({
                   <small>{symbol}</small>
                 </span>
               );
-              return composition.length ? (
+              return composition.length || credit ? (
                 <Popover
                   key={total.id}
                   label={`${t('money.breakdown')}: ${approximate ? '≈ ' : ''}${formatted}`}
@@ -459,16 +466,33 @@ export function MoneyCard({
     </div>
   );
 }
+/** Status is independent of the last numeric value and its quota windows. */
+function creditBalanceText(source:Card,now:number):string|null {
+  if(source.provider!=='codex')return null;
+  const status=source.creditBalance;
+  if(!status)return t('money.notReported');
+  if(now>status.at+status.staleAfterMs)return t('money.stale');
+  switch(status.status){
+    case 'finite':return null;
+    case 'unlimited':return t('money.unlimited');
+    case 'invalid':return t('money.invalidBalance');
+    case 'unsupported':return t('money.unsupportedBalance');
+    default:return t('money.balanceUnavailable');
+  }
+}
 /** Safe supplier facts use the existing news mark, with their own freshness. */
 export function BalanceMark({source}: {source: Card}) {
   const context = useCurrencyContext(source.id),
     unavailable =
       !budgetView(source, [], source.meters ?? [], context).remaining.values.length &&
       (source.currencyUnavailable || balanceGroups(source).some((g) => !g.total.stale));
-  const status = source.balanceStatus;
+  const status = source.balanceStatus,credit=source.creditBalance;
   const now = useClock((now) =>
-    status && now <= status.at + status.staleAfterMs ? status.at + status.staleAfterMs + 1 : null,
+    earliest(status && now <= status.at + status.staleAfterMs ? status.at + status.staleAfterMs + 1 : null,credit&&now<=credit.at+credit.staleAfterMs?credit.at+credit.staleAfterMs+1:null),
   );
+  if(!budgetVisible(source))return null;
+  const creditText=creditBalanceText(source,now);
+  if(source.provider==='codex'&&creditText&&credit?.status!=='unlimited')return <span data-time="balance-status"><StatusMark label={creditText} tone="warn" trigger={<WarningIcon/>}><p>{creditText}</p>{credit&&<p>{stamp(credit.at)}</p>}</StatusMark></span>;
   if (!unavailable && (!status || (status.isAvailable && !status.partial))) return null;
   const lines = [
     ...(unavailable ? [t('money.noDisplayBalance', {currency: context.target.symbol})] : []),

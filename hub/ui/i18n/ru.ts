@@ -2,6 +2,20 @@ import type {Catalog} from './index';
 
 /** Русский. Разница двух долей лимита тоже в «%»: всё здесь — доля лимита. */
 export const ru = {
+  'money.codexCredits': 'Кредиты Codex',
+  'money.additionalFunds': 'Дополнительные средства',
+  'money.defaultEstimate': 'Стандартная оценка',
+  'money.unlimited': 'Без ограничений',
+  'money.notReported': 'Не сообщается',
+  'money.invalidBalance': 'Некорректный ответ о балансе',
+  'money.unsupportedBalance': 'Баланс не поддерживается',
+  'money.lastKnown': 'Последний известный баланс',
+  'currencies.builtins': 'Кредитные единицы',
+  'currencies.restoreDefault': 'Восстановить стандартный курс',
+  'currencies.creditHelp': 'Это оценка стоимости кредитов, а не цена покупки. Новый курс применяется со следующего замера; исторические оценки сохраняются.',
+  'shares.includeBudget': 'Включить финансовые данные',
+  'shares.budgetHelp': 'Открывает текущий баланс и историю со следующего замера. Повторное включение начинает новый период истории.',
+  'api.share_conflict': 'Настройка доступа изменилась. Проверьте её и повторите действие.',
   "currencies.details": "Подробнее о курсах",
   "currencies.referenceRates": "Справочные курсы и точность",
   "currencies.initialRate": "Начальный курс",

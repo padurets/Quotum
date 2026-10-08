@@ -8,7 +8,7 @@ import {supportsQuota, supportsBudget} from '../domain/providers.js';
 import {STEPS, migrate} from '../store/schema.js';
 import {Directory} from '../store/directory.js';
 
-const quota = {id: 'q', provider: 'codex'}, budget = {id: 'b', provider: 'deepseek'};
+const quota = {id: 'q', provider: 'claude'}, budget = {id: 'b', provider: 'deepseek'};
 const legacy = () => {const {version, ...view} = EMPTY_VIEW; return structuredClone(view);};
 
 test('migration splits visible families, preserves exact anchors and is idempotent', () => {
@@ -95,7 +95,7 @@ for (const version of [16,18]) test(`schema ${version} conversion is atomic, fre
   const db = new DatabaseSync(':memory:');
   try {
     for (const step of STEPS.slice(0,version)) db.exec(step);
-    db.exec(`PRAGMA user_version=${version}; INSERT INTO boards VALUES('board','',1,'owner',0); INSERT INTO sources(id,provider,account,created_at) VALUES('q','codex','account',0); INSERT INTO holders VALUES('q','owner',0)`);
+    db.exec(`PRAGMA user_version=${version}; INSERT INTO boards VALUES('board','',1,'owner',0); INSERT INTO sources(id,provider,account,created_at) VALUES('q','claude','account',0); INSERT INTO holders VALUES('q','owner',0)`);
     db.prepare('INSERT INTO views VALUES(?,?,?,?,?)').run('board',JSON.stringify(legacy()),'owner',0,7);
     db.prepare('INSERT INTO board_additions(id,owner_id,request_id,board_id,item,state,created_at,updated_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?)').run('receipt','owner','request','board',JSON.stringify({kind:'widget',widgetId:'history'}),'complete',0,0,100);
     migrate(db,1);

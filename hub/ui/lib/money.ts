@@ -1,28 +1,29 @@
 import {DEFAULT_CURRENCY,defaultCurrencyContext,currencySymbol,type CurrencyContext} from '../../server/domain/currency';
 import {displayMeter,convertedRemaining} from '../../server/domain/currencyPresentation';
-import {monetaryOf,providerOf} from '../../server/domain/providers';
+import {monetaryOf,providerOf,supportsBudget} from '../../server/domain/providers';
 import type {Card} from './types';
 import type {Meter,KeyPart} from '../../server/domain/meters';
 import type {SourceAccess} from '../../server/secrets/credentials';
 import {countdownChangesAt} from './format';
 import {formatLocale, t} from '../i18n';
 
-export const unitLabel=(unit:string)=>unit==='credits:zai'?t('quota.zaiCredits'):unit;
+export const budgetVisible=(source:Pick<Card,'provider'|'budget'>)=>source.budget?.enabled!==false&&supportsBudget(providerOf(source.provider));
+export const unitLabel=(unit:string)=>unit==='credits:codex'?t('money.codexCredits'):unit==='credits:zai'?t('quota.zaiCredits'):unit;
 export const amountUnitLabel=(unit:string)=>unit==='credits:zai'?t('quota.credits'):unitLabel(unit);
 export const capName=(meter:Pick<Meter,'id'|'scope'|'label'>)=>meter.id==='quota:credit:5h'?t('kind.title.session'):meter.id==='quota:credit:week'?t('kind.title.weekly'):meter.label??meter.id;
 export const amountText=(value:string|null|undefined,unit:string,exact=false)=>{const formatted=money(value,unit,exact);return value==null?formatted:formatted.slice(0,-amountUnitLabel(unit).length-1);};
 
 /** Display rounding never feeds the ledger, including values above Number precision. */
-export function money(value:string|null|undefined,unit=DEFAULT_CURRENCY,exact=false,context:CurrencyContext=defaultCurrencyContext):string {
+export function money(value:string|null|undefined,unit=DEFAULT_CURRENCY,exact=false,context:CurrencyContext=defaultCurrencyContext,nativeScale=6):string {
   if(value==null)return '—';
   const raw=BigInt(value),negative=raw<0n,absolute=negative?-raw:raw;
   const precision=context.definitions.find(d=>d.id===unit)?.fractionDigits??2;
-  const digits=exact||unit.startsWith('credits:')||absolute>0n&&absolute<10n**BigInt(6-precision)?6:precision;
-  const divisor=10n**BigInt(6-digits),rounded=(absolute+divisor/2n)/divisor,scale=10n**BigInt(digits);
+  const digits=exact||unit.startsWith('credits:')||absolute>0n&&nativeScale>precision&&absolute<10n**BigInt(nativeScale-precision)?nativeScale:precision;
+  const shift=nativeScale-digits,divisor=10n**BigInt(Math.max(0,shift)),rounded=shift>=0?(absolute+divisor/2n)/divisor:absolute*10n**BigInt(-shift),scale=10n**BigInt(digits);
   const whole=new Intl.NumberFormat(formatLocale(),{maximumFractionDigits:0}).format(rounded/scale);
   const separator=new Intl.NumberFormat(formatLocale()).formatToParts(1.1).find(p=>p.type==='decimal')?.value??'.';
   let fraction=digits?(rounded%scale).toString().padStart(digits,'0'):'';
-  if(digits===6&&!exact)fraction=fraction.replace(/0+$/,'');
+  if(digits===nativeScale&&!exact)fraction=fraction.replace(/0+$/,'');
   return `${negative?'−':''}${whole}${fraction?separator+fraction:''} ${unit.startsWith('credits:')?amountUnitLabel(unit):currencySymbol(unit,context)}`;
 }
 export const keyName=(key:Pick<KeyPart,'id'|'name'>)=>key.name??key.id;

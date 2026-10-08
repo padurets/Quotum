@@ -936,6 +936,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-balance { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 12px; }
 .money-balance > span:first-child { color: var(--text-3); }
 .money-balance-trigger.text-button { height: auto; min-width: 0; max-width: 100%; padding: 0; border: 0; border-radius: 0; background: none; font-size: inherit; cursor: pointer; }
+.money-balance .money-balance-status { font-size: 16px; line-height: 1.3; letter-spacing: 0; }
 .money-balance .picker { margin-left: 0; }
 .money-balance-values { display: grid; gap: 6px; min-width: 0; max-width: 100%; margin-left: auto; text-align: right; }
 .money-balance .limit-value { max-width: 100%; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }

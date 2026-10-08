@@ -3,9 +3,9 @@ import {EMPTY_VIEW, type View} from './view.js';
 import {providerOf, supportsBudget, supportsQuota} from './providers.js';
 import {ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, BUDGET_HISTORY, BUDGET_TABLE, QUOTA_WIDGETS, BUDGET_WIDGETS, showWidgets} from './widgets.js';
 
-export type AnalyticsResources = {id: string; provider: string}[];
+export type AnalyticsResources = {id: string; provider: string;budget?:{enabled:boolean}}[];
 type LegacyView = Omit<View, 'version' | 'layout'> & {version?: 1; layout?: View['layout']};
-const families = (resources: AnalyticsResources) => ({quota: resources.some(s => supportsQuota(providerOf(s.provider))), budget: resources.some(s => supportsBudget(providerOf(s.provider)))});
+const families = (resources: AnalyticsResources) => ({quota: resources.some(s => supportsQuota(providerOf(s.provider))), budget: resources.some(s => s.budget?.enabled!==false&&supportsBudget(providerOf(s.provider)))});
 const legacyIds = ['history', 'forecast'];
 
 /** The server applies defaults once; hidden and placed widgets never depend on a reader. */

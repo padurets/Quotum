@@ -1,5 +1,6 @@
 import type {Provider} from './sources.js';
 import type {BalanceStatus, KeyPart, Meter, MeterMeasurement, QuotaStatus} from './meters.js';
+import type {CreditBalance, CreditBalanceState, Delivery, ResourceObservation, ResourceStatuses} from './resources.js';
 
 /** A window's length as the agent classifies it (spec: Window `kind`). */
 export type Kind = 'session' | 'weekly' | 'other';
@@ -31,6 +32,8 @@ export type WindowMeasurement = {
   staleAfterMs: number;
   /** Null when the client does not report free resets. */
   resets: FreeResets | null;
+  resourceStatus?: ResourceStatuses;
+  balances?: CreditBalance[];
 };
 export type Measurement = WindowMeasurement | MeterMeasurement;
 
@@ -58,7 +61,14 @@ export type SourceState = {
   quota?: QuotaStatus;
   keys?: KeyPart[];
   inventory?: {complete: boolean; observed: number; missing: number; error: string | null};
+  creditBalance?: CreditBalanceState;
+  resources?: {windows?: ResourceObservation; resets?: ResourceObservation};
+  /** Private transport progress; never a financial observation in board projections. */
+  delivery?: Delivery;
 };
+
+export const deliveryOf = (state: SourceState): Delivery | null => state.delivery ??
+  (state.successAt !== null && state.staleAfterMs !== null ? {at: state.successAt, staleAfterMs: state.staleAfterMs} : null);
 
 export type Edge = {
   valid: boolean;

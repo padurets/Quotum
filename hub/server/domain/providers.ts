@@ -3,7 +3,7 @@ export const QUOTA_IDS = ['quota:credit:5h', 'quota:credit:week'] as const;
 /** Public provider capabilities, shared by the hub, dashboard and background reader. */
 export const catalogue = [
   {id: 'claude', name: 'Claude', color: '#de7b5b', logoAsset: 'claude', order: 0, measuredBy: 'client', funding:'subscription', meterKinds: ['window'], resets: true, clientId: 'claude'},
-  {id: 'codex', name: 'Codex', color: '#6897f0', logoAsset: 'codex', order: 1, measuredBy: 'client', funding:'subscription', meterKinds: ['window'], resets: true, clientId: 'codex'},
+  {id: 'codex', name: 'Codex', color: '#6897f0', logoAsset: 'codex', order: 1, measuredBy: 'client', funding:'subscription', meterKinds: ['window', 'balance'], resets: true, clientId: 'codex', monetary:{spending:'unavailable',topups:'unavailable',balances:[{meterId:'balance:credits',unit:'credits:codex',role:'total'}]}},
   {id: 'antigravity', name: 'Antigravity', color: '#d271b3', logoAsset: 'antigravity', order: 2, measuredBy: 'client', funding:'subscription', meterKinds: ['window'], resets: false, clientId: 'antigravity'},
   {id: 'openrouter', name: 'OpenRouter', color: '#c8ff00', logoAsset: 'openrouter', order: 3, measuredBy: 'hub', meterKinds: ['counter', 'balance', 'cap'], resets: false, connectorId: 'openrouter',funding:'wallet', monetary:{spending:'counter',topups:'counter',balances:[{meterId:'balance',unit:'USD',role:'total'}]}},
   {id:'deepseek',name:'DeepSeek',color:'#4d6bfe',logoAsset:'deepseek',order:4,measuredBy:'hub',meterKinds:['balance'],resets:false,connectorId:'deepseek',funding:'wallet',monetary:{spending:'unavailable',topups:'unavailable',balances:[
@@ -25,8 +25,8 @@ export const monetaryOf=(provider:string)=>{const p=providerOf(provider);return 
 export const balanceDescriptor=(provider:string,meter:string)=>monetaryOf(provider)?.balances.find(b=>b.meterId===meter)??null;
 
 /** Analytics belong to resources: a provider can support both families. */
-export type ResourceDescriptor = {meterKinds: readonly string[]; quotaMeters?: readonly string[]; monetary?: unknown};
+export type ResourceDescriptor = {id?:string;meterKinds: readonly string[]; quotaMeters?: readonly string[]; monetary?: unknown};
 export const supportsQuota = (provider: ResourceDescriptor | undefined) => !!provider && (provider.meterKinds.includes('window') || !!provider.quotaMeters?.length);
 export const supportsBudget = (provider: ResourceDescriptor | undefined) => !!provider?.monetary;
 export const quotaMeter = (provider: ResourceDescriptor | undefined, id: string) => provider?.quotaMeters?.includes(id) ?? false;
-export const budgetMeter = (provider: ResourceDescriptor | undefined, id: string) => supportsBudget(provider) && !quotaMeter(provider, id);
+export const budgetMeter = (provider: ResourceDescriptor | undefined, id: string) => supportsBudget(provider) && !quotaMeter(provider, id) && (provider?.id!=='codex'||id==='balance:credits');

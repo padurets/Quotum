@@ -357,7 +357,11 @@ impl HubSink {
                     size = (size * 2).min(CHUNK);
                 }
                 Err(Trouble::Rejected(_)) if count > 1 => size = count / 2,
-                Err(Trouble::Rejected(reason)) => {
+                Err(Trouble::Rejected(mut reason)) => {
+                    if matches!(chunk.first(), Some(Item::Snapshot(s)) if s.provider == Provider::Codex && s.windows.is_empty() && s.resource_status.is_some())
+                    {
+                        reason.push_str("; this Codex resource observation needs a hub with credit-balance support");
+                    }
                     self.spool.pop_front();
                     dropped = Some((dropped.map_or(0, |(n, _)| n) + 1, reason));
                 }
@@ -848,6 +852,29 @@ pub(crate) mod tests {
 
     fn failed(detail: &str) -> Outcome {
         Err(Failure::new(Provider::Codex, ErrorKind::Failed, detail))
+    }
+
+    #[test]
+    fn rich_credit_observations_survive_the_disk_spool_and_name_an_old_hub_rejection() {
+        let (url, seen) = hub(|_, _| json(400, json!({"error":"invalid_batch","detail":"snapshots.0.windows"})));
+        let (mut sink, log) = sink(&url, "codex-credits");
+        let snapshot: crate::model::Snapshot = serde_json::from_value(json!({
+            "provider":"codex", "account":"aaaaaaaaaaaaaaaaaaaaaaaa", "plan":"pro",
+            "observedAt":"2026-10-01T00:00:00Z", "via":"codex/app-server", "staleAfterMs":60000,
+            "windows":[], "resourceStatus":{"windows":"missing","resets":"missing"},
+            "balances":[{"id":"balance:credits","unit":"credits:codex","status":"finite","amount":"1234.5678912","hasCredits":false}]
+        })).unwrap();
+        sink.spool.push_back(Item::Snapshot(snapshot));
+        sink.save_spool();
+        let text = fs::read_to_string(&sink.spool_file).unwrap();
+        sink.spool = text.lines().map(|line| serde_json::from_str::<Item>(line).unwrap()).collect();
+        sink.send(true);
+        assert!(sink.spool.is_empty());
+        assert_eq!(seen.lock().unwrap()[0].1["snapshots"][0]["balances"][0]["amount"], "1234.5678912");
+        let message = log.lock().unwrap().join("\n");
+        assert!(message.contains("needs a hub with credit-balance support"));
+        assert!(!message.contains("1234.5678912"));
+        let _ = fs::remove_file(&sink.spool_file);
     }
 
     #[test]

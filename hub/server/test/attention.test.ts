@@ -164,7 +164,7 @@ test('a reset deadline updates desktop quality even when the card stays the same
   const h = setup(t);
   h.deliver([[T, 80]]);
   const source = h.store.states(h.board)[0];
-  h.store.record(source.id, {observedAt: T, plan: 'pro', staleAfterMs: 204_000, resets: null, windows: [{...sample(80), resetAt: T + 1000}]});
+  h.store.record(source.id, {observedAt: T + 1, plan: 'pro', staleAfterMs: 204_000, resets: null, windows: [{...sample(80), resetAt: T + 1000}]});
   h.open();
   h.frames.length = 0;
   h.time(T + 1001);

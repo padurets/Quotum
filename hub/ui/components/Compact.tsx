@@ -1,3 +1,4 @@
+import {budgetVisible} from '../lib/money';
 import {memo, useEffect, useRef} from 'react';
 import {useBoard} from '../lib/session';
 import {useApp, useBoardId, useCard, useConnection, useVisibleLimits, useServerView, useSessions, useTitle} from '../lib/board';
@@ -24,7 +25,7 @@ const Row = memo(function Row({id}: {id: string}) {
   if (!card || !view) return null;
   const windows = card.windows.filter(w => !isWindowHidden(view, id, w.id));
   const periods=quotaPeriods(card),shownPeriods=periods.filter(w=>!isWindowHidden(view,id,w.id));
-  if (periods.length && !shownPeriods.length) return null;
+  if (periods.length && !shownPeriods.length && !budgetVisible(card)) return null;
   const working = t('desktop.working', {count: sessions.filter(s => s.working).length});
   return <section className="card compact-card">
     <div className="card-head">
@@ -33,8 +34,9 @@ const Row = memo(function Row({id}: {id: string}) {
       </div>
       {sessions.length > 0 && <small className="compact-agents" title={t('desktop.total', {count: sessions.length})}>{working}</small>}
     </div>
-    {hasSubscriptionCaps(card.provider)?<QuotaCard source={card} ids={shownPeriods.map(w=>w.id)} compact/>:card.meters?<MoneyCard source={card} board={board??''} view={view} compact/>:!windows.length&&<p className="compact-quality">{t('desktop.unavailable')}</p>}
+    {hasSubscriptionCaps(card.provider)?<QuotaCard source={card} ids={shownPeriods.map(w=>w.id)} compact/>:!budgetVisible(card)&&!windows.length&&<p className="compact-quality">{t('desktop.unavailable')}</p>}
     {windows.map(w => <PercentLimit key={w.id} name={windowName(w)} remaining={w.remaining} reset={<ResetLine w={w} short/>} compact/>)}
+    {budgetVisible(card)&&<MoneyCard source={card} board={board??''} view={view} compact/>}
   </section>;
 });
 

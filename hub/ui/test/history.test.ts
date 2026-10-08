@@ -1400,3 +1400,16 @@ test('navigation uses fresh boundary metadata from either reader and discards pr
     assert.ok(changes >= 8, 'metadata wakes navigation independently of complete totals');
   } finally {for (const stop of stops) stop(); for (const h of readers) h.store.close();}
 });
+
+
+test('a financial grant revision clears warm history and rejects a response from the previous grant',async()=>{
+  const b=harness(undefined,undefined,'budget');
+  const selection={unit:'USD',ids:[['s','balance:credits'] as [string,string]],displayCurrency:'USD',resourceRevision:'grant-one'};
+  b.store.setMeters(selection);await b.start();const pending=b.reads[0];
+  b.store.setMeters({...selection,resourceRevision:'grant-two'});await flush();
+  assert.equal(pending.signal?.aborted,true);assert.equal(b.store.get().history,null);
+  await pending.answer();assert.equal(b.store.get().history,null);
+  const current=b.reads.at(-1)!;assert.notEqual(current,pending);await current.answer();assert.ok(b.store.get().history);
+  b.store.setMeters({...selection,ids:[],resourceRevision:'revoked'});await flush();
+  assert.equal(b.store.get().history?.meterSeries?.length??0,0);b.store.close();
+});

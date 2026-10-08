@@ -7,6 +7,20 @@ import type {Message} from './types';
  * monetary measurements keep their explicit units and never become window percentages.
  */
 export const en = {
+  'money.codexCredits': 'Codex credits',
+  'money.additionalFunds': 'Additional funds',
+  'money.defaultEstimate': 'Standard estimate',
+  'money.unlimited': 'Unlimited',
+  'money.notReported': 'Not reported',
+  'money.invalidBalance': 'Invalid balance response',
+  'money.unsupportedBalance': 'Balance is not supported',
+  'money.lastKnown': 'Last known balance',
+  'currencies.builtins': 'Credit units',
+  'currencies.restoreDefault': 'Restore standard rate',
+  'currencies.creditHelp': 'This estimates credit value, not purchase cost. New rates apply from the next measurement; historical estimates stay unchanged.',
+  'shares.includeBudget': 'Include financial data',
+  'shares.budgetHelp': 'Shares the current balance and history from the next measurement. Enabling again starts a new history period.',
+  'api.share_conflict': 'Sharing changed. Review the current setting and try again.',
   "currencies.details": "More about rates",
   "currencies.referenceRates": "Reference rates and precision",
   "currencies.initialRate": "Initial rate",

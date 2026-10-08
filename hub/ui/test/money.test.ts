@@ -88,3 +88,15 @@ test('source access is an independent private slice and disappears with its line
   assert.equal(next.board?.cards,before.board?.cards);assert.equal(next.boards,before.boards);assert.equal(next.board?.sourceAccess?.one,own);
   const gone=reduce(next,{type:'hub',event:{type:'lineup',data:{sources:[]}}});assert.deepEqual(gone.board?.sourceAccess,{});
 });
+
+
+test('mixed credits select one native meter through USD context and grant metadata changes selection identity',()=>{
+  const source:Card={...card('codex'),provider:'codex',meters:[{...meter('balance:credits','12345678912'),unit:'credits:codex',scale:7}],budget:{enabled:true,since:10,anchor:20,revision:'first'}};
+  const selection=moneySelection([source],[],readMoney({})).selection!;
+  assert.deepEqual(selection.ids,[['codex','balance:credits']]);assert.equal(selection.displayCurrency,'USD');
+  assert.notEqual(JSON.stringify(moneySelection([{...source,budget:{...source.budget!,anchor:30}}],[],readMoney({})).selection),JSON.stringify(selection));
+  assert.deepEqual(moneySelection([{...source,budget:{...source.budget!,enabled:false}}],[],readMoney({})).selection?.ids,[]);
+  assert.deepEqual(moneySelection([source],['source:codex'],readMoney({})).selection?.ids,[]);
+  for(const locale of ['en','ru'] as const){setLocale(locale);const exact=money('12345678912','credits:codex',true,undefined,7);assert.match(exact,/5678912/);assert.ok(!exact.includes('12345678'));}
+  setLocale('en');
+});

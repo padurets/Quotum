@@ -207,6 +207,8 @@ pub fn from_responses(init: &Value, usage: &Value, observed_at: Millis) -> Outco
         stale_after_ms: 0,
         windows,
         resets: free_resets(&limits["cedar_ember"]),
+        resource_status: None,
+        balances: None,
     })
 }
 

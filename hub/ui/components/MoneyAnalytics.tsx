@@ -27,7 +27,7 @@ import {usePanning} from '../lib/pan';
 import {composeMetersPrepared} from '../../server/domain/meterHistory';
 
 function nameOf(series:MeterHistory,title:string,context:import('../../server/domain/currency').CurrencyContext) {
-  if(series.role)return [title,t(`money.${series.role}`),series.semantics?.conversion?`≈ ${series.semantics.conversion.original.unit} → ${currencySymbol(series.unit,context)} (${series.semantics.conversion.rate.source==='manual'?t('money.personalRate'):series.semantics.conversion.rate.source.toUpperCase()})`:series.semantics?.label].filter(Boolean).join(' — ');
+  if(series.role)return [title,t(`money.${series.role}`),series.semantics?.conversion?`≈ ${series.semantics.conversion.original.unit} → ${currencySymbol(series.unit,context)} (${series.semantics.conversion.rate.source==='manual'?t('money.personalRate'):series.semantics.conversion.rate.source==='codex-default'?t('money.defaultEstimate'):series.semantics.conversion.rate.source.toUpperCase()})`:series.semantics?.label].filter(Boolean).join(' — ');
   const detail=series.meterId==='balance'?'':series.kind==='cap'?capName({id:series.meterId,scope:series.semantics?.scope??null,label:series.semantics?.label??null}):series.semantics?.label??series.meterId;
   return [title,detail,series.kind==='cap'?t('money.cap'):series.meterId==='balance'?'':t('money.usage')].filter(Boolean).join(' — ');
 }
