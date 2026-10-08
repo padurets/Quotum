@@ -112,7 +112,7 @@ test('actual ledger, packed cells, money preparation, chart geometry and raw rea
     const saved=original[0];
     assert.equal(moneyPointAt(saved,120_000),undefined);assert.equal(moneyPointAt(saved,120_010)?.value,'110000000');
     assert.equal(moneyPointAt(saved,65_000),undefined);assert.equal(moneyPointAt(saved,180_000)?.value,'110000000');assert.equal(moneyPointAt(saved,180_001)?.value,'105000000');
-    const moneySource=readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8'),start=moneySource.indexOf('  const prepared=usePrepared(');
+    const moneySource=readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8'),start=moneySource.indexOf('  const modelContext=');
     const region=moneySource.slice(start,moneySource.indexOf('  const model=prepared.value',start));
     const moneyContext={context:defaultCurrencyContext,original,history:{meterSeries:original},strip:null,unit:'CNY',prefs:{money:{view:'balance'},muted:{}},sources:[{id,title:'Fixture',provider:'deepseek'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[['s','balance']]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof original;lines:Line[]}};
     runInNewContext(ts.transpileModule(region+'\nglobalThis.model=prepared.value;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,moneyContext);
