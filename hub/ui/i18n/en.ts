@@ -392,7 +392,7 @@ export const en = {
   "analytics.noSelection": "No series selected. Choose them in the chart settings.",
   'funds.subscriptions': 'Subscriptions',
   'funds.allSubscriptions': 'All subscriptions',
-  'widgets.subscriptionFunds': 'Subscription extra funds',
+  'widgets.subscriptionFunds': 'Subscription extra funds trends',
   'analytics.noFunds': 'No subscriptions with extra funds on this board',
   'widgets.budgetHistory': 'Budget trends',
   'widgets.budgetTable': 'Budget metrics',

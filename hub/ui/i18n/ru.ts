@@ -387,7 +387,7 @@ export const ru = {
   "analytics.noSelection": "Ряды не выбраны. Выберите их в настройках графика.",
   'funds.subscriptions': 'Подписки',
   'funds.allSubscriptions': 'Все подписки',
-  'widgets.subscriptionFunds': 'Дополнительные средства подписок',
+  'widgets.subscriptionFunds': 'Динамика дополнительных средств подписок',
   'analytics.noFunds': 'На этой доске нет подписок с дополнительными средствами',
   'widgets.budgetHistory': 'Динамика бюджета',
   'widgets.budgetTable': 'Показатели бюджета',

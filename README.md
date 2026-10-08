@@ -112,7 +112,7 @@ Codex         api                  idle     started 25m ago · editor
   The initial estimate is 0.04 USD per credit; Currencies lets you set a personal
   USD-per-credit rate or restore the default. Hover over the amount for the exact
   native balance; open it for the rate and measurement time.
-  **Subscription extra funds** shows balance history in its own widget, with its own
+  **Subscription extra funds trends** shows balance history in its own widget, with its own
   subscription selection. It also appears in the board's **+** menu. Wallet budgets
   keep their separate chart and table.
   Shared boards require separate permission to show funds and subsequent history.
