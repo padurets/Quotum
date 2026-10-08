@@ -479,7 +479,7 @@ function FundsMark({source,groups,context,native,rateSources,quoteDate,displayUn
   const values=groups.map(({total,approximate})=>({total,text:(approximate?'≈ ':'')+money(total.amount,total.unit,false,context,total.scale)}));
   if(!values.length&&!native&&!unlimited)return null;
   const nativeText=native&&money(native.amount,native.unit,true,context,native.scale);
-  const label=[t('money.additionalFunds'),unlimited?t('money.unlimited'):values.length?values.map(value=>value.text).join('\n'):nativeText,stale?t('money.lastKnown'):null].filter(Boolean).join('\n');
+  const label=[t('money.additionalFunds'),unlimited?t('money.unlimited'):nativeText,stale?t('money.lastKnown'):null].filter(Boolean).join('\n');
   const proof=groups[0]?.total.conversion,creditRate=proof&&(proof.steps??[proof.rate]).find(leg=>leg.base==='credits:codex');
   return <span className="funds-tray"><StatusMark label={label} className="funds-mark" tone={stale||displayUnavailable?'warn':undefined} align="right" trigger={<>
     <svg className="tray-icon" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M20 8V5H6a3 3 0 0 0 0 6h14v9H6a3 3 0 0 1-3-3V8m17 3h1v5h-5v-5h4m-1 2.5h.01"/></svg>

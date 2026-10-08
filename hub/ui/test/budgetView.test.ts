@@ -63,6 +63,11 @@ test('subscription footer keeps the last known balance in its warning tone, like
       assert.match(draw(source),/data-money="0"/,'a reported zero is a value');
       assert.ok(!draw(source).includes('data-time='),'live amounts remain data mutations in the performance probe');
       assert.ok(draw({...source,creditBalance:{...source.creditBalance,status:'unlimited'}}).includes('∞'));
+      const precise=draw({...source,meters:[{...source.meters![0],amount:'12345678912',scale:7}]});
+      const tooltip=precise.match(/\btitle="([^"]*)"/)![1];
+      assert.ok(tooltip.includes(money.money('12345678912','credits:codex',true,shownCurrency,7)));
+      assert.ok(!tooltip.includes('USD'),'the hover tooltip shows the exact native balance, not the converted amount');
+      assert.ok(precise.includes('data-money="49382716"'),'the footer keeps its converted amount');
       for(const status of ['missing','invalid','unsupported'] as const) {
         const html=draw({...source,creditBalance:{...source.creditBalance,status}});
         assert.match(html,/tray-pill is-warn/);

@@ -110,8 +110,8 @@ Codex         api                  idle     started 25m ago · editor
 - **Purchased Codex credits.** Additional funds appear in the subscription's footer,
   beside free resets, with the same compact amount and disclosure in the compact view.
   The initial estimate is 0.04 USD per credit; Currencies lets you set a personal
-  USD-per-credit rate or restore the default. Open the amount for the exact native
-  value and measurement time.
+  USD-per-credit rate or restore the default. Hover over the amount for the exact
+  native balance; open it for the rate and measurement time.
   **Subscription extra funds** shows balance history in its own widget, with its own
   subscription selection. It also appears in the board's **+** menu. Wallet budgets
   keep their separate chart and table.
