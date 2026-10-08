@@ -128,7 +128,15 @@ export function CurrencySettings() {
   const revision=useCurrencyRegistryRevision(),generation=useRef(0),alive=useRef(true),drafts=useRef(new Map<string,()=>void>()),[hasDraft,setHasDraft]=useState(false);
   const dirty=useCallback<Dirty>((key,value,discard)=>{if(value)drafts.current.set(key,discard??(()=>{}));else drafts.current.delete(key);setHasDraft(drafts.current.size>0);},[]);
   const leave=useCallback((go:()=>void)=>{if(drafts.current.size)setConfirm({go});else go();},[]);
-  const refresh=useCallback(async()=>{const token=++generation.current;try{const answer=await call<CurrencyManagement>('GET','/api/currencies/manage');if(alive.current&&token===generation.current){setData(answer);setError(null);}return answer;}catch(failure){if(alive.current&&token===generation.current)setError(failure);throw failure;}},[]);
+  const refresh=useCallback(async()=>{const token=++generation.current;try{
+    const answer=await call<CurrencyManagement>('GET','/api/currencies/manage');
+    if(alive.current){
+      // A save's confirmed read must survive a parallel failed refresh without replacing newer data.
+      setData(current=>!current||BigInt(answer.registryRevision)>=BigInt(current.registryRevision)?answer:current);
+      if(token===generation.current)setError(null);
+    }
+    return answer;
+  }catch(failure){if(alive.current&&token===generation.current)setError(failure);throw failure;}},[]);
   useEffect(()=>{alive.current=true;const read=()=>{if(document.visibilityState!=='hidden')void refresh().catch(()=>{});};read();window.addEventListener('focus',read);document.addEventListener('visibilitychange',read);return ()=>{alive.current=false;generation.current++;window.removeEventListener('focus',read);document.removeEventListener('visibilitychange',read);};},[refresh]);
   useEffect(()=>{if(revision!==undefined&&data&&revision!==data.registryRevision)void refresh().catch(()=>{});},[revision,refresh]);
   useEffect(()=>guardNavigation(leave),[leave]);
