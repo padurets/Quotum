@@ -768,8 +768,8 @@ a current USD valuation; this does not alter provider `balanceStatus` or key hea
 
 Native observations commit before currency-service reads. Quotes have no credential or
 account inputs. Failure retains original measurements and leaves USD unknown or stale,
-never zero. Existing events carry these additive fields; no currency settings form or native
-bridge command is added. Original foreign-currency history stays available through the
+never zero. Existing events carry these additive fields; currency settings use authenticated
+hub routes in web and local mode, without a native bridge command. Original foreign-currency history stays available through the
 measurement API, and existing development-layout converted history is retained.
 
 Reader snapshots may include `currencies`, and a private `currencies` event updates it:
@@ -779,6 +779,7 @@ Reader snapshots may include `currencies`, and a private `currencies` event upda
   target: {id, name, symbol, fractionDigits},
   definitions: [{id, name, symbol, fractionDigits}],
   revision?: string,
+  registryRevision?: string,
   sources: {[sourceId]: [{from, at, anchor: string | null, steps: RateLeg[]}]}
 }
 ```
@@ -815,10 +816,58 @@ Authenticated registry operations, also available in local mode:
 - `POST /api/currencies/:id/rates`: `{base, rate, date?}` adds an owner-only fixed-rate
   version, effective at `date` or the current time. Future dates are rejected.
 
-The hub issues personal identities. Names or symbols never identify or merge currencies.
-Private operations use existing authentication and origin guards; errors carry only
-`invalid_currency` or `currency_not_found`. These operations support the future settings
-section without introducing provider-specific widgets or currency controls.
+- `GET /api/currencies/manage`: `{registryRevision, selected, standards, personal, maxActive}`.
+  Standards are the server-issued ISO catalogue. Each personal entry is
+  `{definition, archivedAt: number | null}`, including archived definitions; maxActive is 64.
+- `GET /api/currencies/:id/history?before=<cursor>&limit=<1..64>`: retained personal
+  definition, archivedAt, current `pairs`, paginated `changes` and `nextCursor`.
+  A change carries `{sequence, base, effectiveAt, recordedAt, kind: 'rate' | 'stop',
+  quote: RateSnapshot | null, nominal}`. Pages run newest sequence first; the opaque
+  cursor is scoped to this owner and currency. Current pairs are independent of paging.
+- `POST /api/currencies/:id`: `{name, symbol, fractionDigits, ...mutation}` updates
+  metadata without changing identity, the nominal ratio or any recorded amounts.
+- `POST /api/currencies/:id/archive`: `{replacement?, ...mutation}` archives a personal
+  definition. If selected, an explicit different active replacement is required; both
+  changes commit atomically. Archived definitions cannot be selected or edited.
+- `POST /api/currencies/:id/restore`: `{...mutation}` restores availability without
+  selecting the currency or cancelling any rate stops.
+- `POST /api/currencies/:id/rates/:quoteId/archive`: `{base, ...mutation}` stops the
+  current version of this personal pair at server time. A superseded quote conflicts.
+
+`mutation` is `{expectedRevision: string, requestId: UUID}`. New lifecycle routes require
+both fields. The existing create, select and rate routes accept them additively and keep
+their prior success shapes. Every private write increments the owner's registry revision
+once; public rates do not. An owner-scoped receipt is checked before CAS: the same request
+and payload return its original success, while reusing an ID with another payload returns
+`409 mutation_conflict`. Receipts are retained seven days. An expired request with a stale
+revision conflicts instead of creating a duplicate. Legacy writes still validate lifecycle
+and update revisions. Settings reload management after success; a source-free command
+response must not replace the board's complete currency context.
+
+Private routes use existing session and origin guards. Errors include `400 invalid_currency`,
+`400 currency_limit`, `404 currency_not_found`, and `409 currency_conflict`,
+`currency_selected`, `currency_archived` or `mutation_conflict`. Display selection keeps
+its existing `400 invalid_currency` for inaccessible targets. Foreign personal IDs are
+unavailable. Standard definitions and public quotes are read-only. Management details,
+archived definitions, full ISO lists, receipts and version lists never enter shared SSE.
+The private event includes registryRevision and active personal definitions only.
+
+Rates are immutable. The latest effective pair event wins, with sequence breaking equal
+UTC millisecond timestamps. A stop closes that pair without falling back to an older price.
+A later rate resumes it; a correction backdated before the stop does not resume it now.
+Other configured active pairs can still supply a path. The owner-wide private path revision
+refreshes missing history even for a standard target reached through a personal bridge;
+metadata-only edits do not change that revision. Successful historical assignments never
+change. Rate/preference changes cannot create spending, top-ups or native measurements.
+
+Unavailable real observation anchors are retryable, not immutable negative assignments.
+They terminate the previous displayed interval at the actual observation, not at the rate
+stop. A later rate may recover that anchor only if its effective interval covers it.
+Observation cells retain disjoint intervals with `observations[]`, even with only two
+segments. Positive ranges coalesce only across continuous eligibility, without swallowing
+missing anchors. Retention preserves pair decisions at retained native anchors even for
+readers without prior assignments. Retained versions are not an unlimited audit log.
+The hub issues personal identities; names and symbols never identify or merge currencies.
 
 A frame that cannot fit losslessly in the history budget returns `413 history_limit`.
 

@@ -150,6 +150,23 @@ test('board additions append to the integrated currency layout without rewriting
     for(const table of ['sources','holders','shares'])assert.deepEqual(db.prepare('SELECT * FROM '+table).all(),before[table]);
     const credential=db.prepare('SELECT * FROM credentials').get()!;assert.equal(credential.access_revision,0);delete credential.access_revision;assert.deepEqual([credential],before.credentials);
     assert.deepEqual({...db.prepare('SELECT payload,revision,updated_by,updated_at FROM views').get()},{payload,revision:0,updated_by:'owner',updated_at:1});
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,16);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,17);
+  }finally{db.close();}
+});
+
+test('currency lifecycle upgrade backfills stable pair ordering without changing quotes or pins',()=>{
+  const db=new DatabaseSync(':memory:');try {
+    for(const step of STEPS.slice(0,16))db.exec(step);db.exec('PRAGMA user_version=16');
+    db.exec("INSERT INTO users VALUES ('owner','currency-upgrade@example.com','Owner','fixture',1)");
+    const id='personal:'+'a'.repeat(24);
+    db.prepare('INSERT INTO currency_definitions VALUES (?,?,?,?,?,?,?)').run(id,'owner','Points','PT',2,null,'initial');
+    const insert=db.prepare('INSERT INTO exchange_rates VALUES (?,?,?,?,?,?)');
+    for(const [quote,date,fetched,rate] of [['initial',0,1,'2000000'],['revised',0,2,'3000000'],['dated',20,30,'4000000']] as const)insert.run(quote,'manual',date,fetched,JSON.stringify({source:'manual',base:'USD',date,fetchedAt:fetched,validUntil:null,rates:{USD:'1000000',[id]:rate}}),'owner');
+    db.prepare('INSERT INTO currency_bindings VALUES (?,?,?,?,?,?,?,?)').run('owner','source','USD',id,10,15,'','[{"id":"initial","from":"1000000","to":"2000000"}]');
+    const quotes=db.prepare('SELECT * FROM exchange_rates ORDER BY id').all(),pins=db.prepare('SELECT * FROM currency_bindings').all();
+    migrate(db,100);migrate(db,101);
+    assert.deepEqual(db.prepare('SELECT * FROM exchange_rates ORDER BY id').all(),quotes);assert.deepEqual(db.prepare('SELECT * FROM currency_bindings').all(),pins);
+    assert.deepEqual(db.prepare('SELECT quote_id FROM currency_rate_changes ORDER BY sequence').all().map(row=>row.quote_id),['initial','revised','dated']);
+    assert.equal(db.prepare("SELECT count(*) n FROM currency_rate_changes WHERE kind='stop'").get()?.n,0);
   }finally{db.close();}
 });

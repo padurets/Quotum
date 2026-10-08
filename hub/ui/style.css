@@ -1117,3 +1117,13 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-breakdown > section > div { display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
 .money-breakdown-total { padding-bottom: 4px; color: var(--text); }
 .money-balance .is-stale,.money-breakdown .is-stale {opacity:.6;}
+
+.currency-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.currency-fields:disabled { opacity: .65; }
+.currency-actions { flex-wrap: wrap; }
+.currency-choice .picker { min-width: 0; }
+.currency-choice .picker > button { max-width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.currency-choice .popover-row { white-space: normal; overflow-wrap: anywhere; }
+.currency-choice .popover-scroll { --least: 120px; }
+.currency-details > .button { align-self: flex-start; }
+.currency-equation { overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }

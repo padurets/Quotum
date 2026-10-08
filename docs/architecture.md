@@ -682,8 +682,11 @@ initial USD reference and display policy once. A persisted preference selects ea
 reader's display currency independently of the shared board. Standard currency identities
 are ISO codes; personal definitions use opaque `personal:<24 hex digits>` identities,
 with owner-only names, symbols and display precision. Percentage quotas and non-monetary
-counters keep their units. The settings section has no currency forms yet; authenticated
-currency operations already use the common registry and preference.
+counters keep their units. Personal Settings → Currencies manages this same registry
+and preference on the web and in the local desktop hub. Standard definitions and public
+reference rates are read-only. Personal metadata can be edited without changing identity.
+Archiving the selected currency requires an explicit active replacement in one transaction;
+restoring a currency does not select it or resume stopped rate pairs.
 Standard display precision comes from the runtime's currency metadata; personal
 definitions carry their owner's explicit precision.
 
@@ -692,7 +695,11 @@ validity. Source adapters own transport and supplier validation. The current pub
 adapter is the fixed credential-free ECB XML read, with bounded bytes, timeout and no
 redirects. Public snapshots are shared; fixed personal rates belong to their owner.
 An initial personal ratio defines a timeless nominal unit, rather than a historical
-provider observation. Later dated versions preserve prior assignments. Exact BigInt
+provider observation. Later dated versions preserve prior assignments. An append-only pair timeline selects
+the latest effective rate or stop, with a stable sequence for equal dates. A stop prevents
+older prices of that pair from becoming eligible again; another explicitly configured
+active pair may still provide a path. Initial ratios and immutable quote payloads survive
+archival. Backdated corrections apply only to points without a successful assignment. Exact BigInt
 arithmetic composes supported paths and rounds once, including conversion from the
 original CNY amount rather than a rounded USD intermediary. Neither provider keys nor
 account identifiers reach reference-data readers.
@@ -716,10 +723,22 @@ Unused private rate versions follow the same retention policy as public referenc
 The initial nominal definition, a predecessor for each rate pair, and every quote
 needed by retained assignments remain. Bindings serving a retained native predecessor
 survive even when the binding itself ends before retention.
+Timeline retention also keeps the rate or stop decision at every retained native
+observation anchor, including points with no reader assignment yet. Retryable unavailable
+observations preserve actual heartbeat boundaries across packing: a missing observation
+ends the previous displayed interval, while a later permitted rate can recover that exact
+anchor. Equal successful paths coalesce only across continuous eligible intervals.
 The definition pins its initial quote explicitly; later zero-date versions are ordinary
 retained rate updates, rather than additional permanent definitions.
 
-Reader snapshots and the private `currencies` event carry one target definition and
+Management writes use an owner registry revision and optional replay receipts; settings
+always send both. One transaction validates CAS, writes changes and records the result.
+Receipts last seven days; a stale expired request cannot pass CAS. Notifications and
+cache invalidation occur after commit. Private path revisions are owner-wide, so a
+standard selected target using a personal bridge also refreshes missing history. Metadata
+edits change the registry revision without forcing monetary history reloads.
+
+Reader snapshots and the private `currencies` event carry the registry revision, one target definition and
 source-specific bindings. Personal definitions and rates never enter shared card or
 history caches. The page preserves each source's binding slice so another source's
 measurement does not render its card. Dashboard, compact, key allowances and money

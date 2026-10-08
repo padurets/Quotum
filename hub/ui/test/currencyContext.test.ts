@@ -89,7 +89,7 @@ test('reader preferences and sparse pinned paths survive restart and later quote
     const c=personal(h,h.alice.id,'AP');store.currencies.select(h.alice.id,c.id);
     const initial=store.currencies.binding(h.alice.id,'USD',c.id,at)!;
     store.currencies.binding(h.alice.id,'USD',c.id,at+1000);assert.equal(store.db.prepare('SELECT count(*) n FROM currency_bindings').get()?.n,1);
-    store.currencies.save({source:'manual',base:'USD',date:at+2000,fetchedAt:at+2000,validUntil:null,rates:{USD:'1000000',[c.id]:'3000000'}},h.alice.id);
+    store.currencies.setRate(h.alice.id,c.id,'USD','3000000',at+2000,at+2000);
     assert.deepEqual(store.currencies.binding(h.alice.id,'USD',c.id,at),initial);assert.equal(convertBy('1000000',store.currencies.binding(h.alice.id,'USD',c.id,at+3000)!), '3000000');
     store.close();store=new Store(file,at+4000);assert.equal(store.currencies.preference(h.alice.id).id,c.id);assert.deepEqual(store.currencies.binding(h.alice.id,'USD',c.id,at),initial);
     store.currencies.prune(at+4000);assert.ok(store.currencies.get(initial[0].id,h.alice.id));

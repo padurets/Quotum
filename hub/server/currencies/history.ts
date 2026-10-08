@@ -17,12 +17,13 @@ export function displayHistory(chunks:readonly Chunk[],currencies:CurrencyStore,
       const proof=input?.conversion,boundAt=Math.max(bindings.observationAt(series.source,series.unit,at)??0,proof?bindings.observationAt(series.source,proof.original.unit,at)??0:0),reportedAt=nativeAt?.(series.source,series.meter,at);
       const quoteAt=Math.max(proof?.original.at??0,reportedAt??0,boundAt)||at,anchor=proof?.rate.id??null;
       const key=JSON.stringify([value,quoteAt,anchor]),cached=views.get(input)?.get(key);if(cached)return cached;
-      const path=bindings.binding(series.source,series.unit,quoteAt,anchor);if(!path)return null;
+      const observed=quoteAt===reportedAt||quoteAt===proof?.original.at||quoteAt===boundAt;
+      const path=bindings.binding(series.source,series.unit,quoteAt,anchor,observed);if(!path)return null;
       const amounts=new Map<string,string>();
       const convert=(amount:string)=>{const cached=amounts.get(amount);if(cached!==undefined)return cached;const result=convertBy(amount,path);amounts.set(amount,result);return result;};
       let amount=convert(value),conversion:Conversion|undefined,original=false;
       if(proof&&convertBy(proof.original.amount,proof.steps??[proof.rate])===value) {
-        const rootPath=bindings.binding(series.source,proof.original.unit,quoteAt,proof.rate.id);
+        const rootPath=bindings.binding(series.source,proof.original.unit,quoteAt,proof.rate.id,observed);
         if(rootPath) {
           original=true;amount=convertBy(proof.original.amount,rootPath);
           if(rootPath.length)conversion={original:{...proof.original,at:quoteAt},rate:rootPath.at(-1)!,...(rootPath.length>1?{steps:rootPath}:{})};
@@ -39,7 +40,7 @@ export function displayHistory(chunks:readonly Chunk[],currencies:CurrencyStore,
       try {
         if(series.pointMode==='observation') {
           const start=grid+(row[5]?.pointOffsetMs??0),end=row[5]?.validUntil??grid+cell,openingAt=grid+(row[5]?.openOffsetMs??0),observations:MeterObservation[]=[];
-          const segments=[...(row[5]?.open!=null&&openingAt<start?[{from:openingAt,to:start,value:row[5].open,semantics:row[5].openSemantics??semantics}]:[]),{from:start,to:end,value:row[1],semantics}];
+          const segments=row[5]?.observations?.map(point=>({from:point.at,to:point.validUntil,value:point.value,semantics:point.semantics??semantics}))??[...(row[5]?.open!=null&&openingAt<start?[{from:openingAt,to:start,value:row[5].open,semantics:row[5].openSemantics??semantics}]:[]),{from:start,to:end,value:row[1],semantics}];
           for(const segment of segments) {
             const proof=segment.semantics?.conversion,unit=proof?.original.unit??series.unit,anchor=proof?.rate.id??null;
             const latest=nativeAt?.(series.source,series.meter,segment.to-1);
@@ -51,9 +52,9 @@ export function displayHistory(chunks:readonly Chunk[],currencies:CurrencyStore,
             }
           }
           if(!observations.length)return [];
-          const first=observations[0],last=observations.at(-1)!,metadata=last.semantics??null,encoded=JSON.stringify(metadata),{semantics:_semantics,openSemantics:_opening,...rest}=row[5]??{};
+          const first=observations[0],last=observations.at(-1)!,metadata=last.semantics??null,encoded=JSON.stringify(metadata),{semantics:_semantics,openSemantics:_opening,observations:_observations,openOffsetMs:_offset,...rest}=row[5]??{};
           const extra={...rest,pointOffsetMs:last.at-grid,validUntil:last.validUntil,open:observations.length>1||first.at===grid?first.value:null,...(first.at>grid?{openOffsetMs:first.at-grid}:{}),...(encoded!==previousMetadata?{semantics:metadata??undefined}:{}),...(observations.length>1&&JSON.stringify(first.semantics??null)!==encoded?{openSemantics:first.semantics??undefined}:{})} as NonNullable<typeof row[5]>;
-          if(observations.length>2){for(const point of observations)if(JSON.stringify(point.semantics??null)===encoded)delete point.semantics;extra.observations=observations;}
+          if(observations.length>2||observations.some((point,index)=>index>0&&observations[index-1].validUntil<point.at)){for(const point of observations)if(JSON.stringify(point.semantics??null)===encoded)delete point.semantics;extra.observations=observations;}
           previousMetadata=encoded;
           return [[row[0],last.value,null,null,row[4],extra] as typeof row];
         }
