@@ -1,3 +1,4 @@
+import type {ReactNode} from 'react';
 import {QUOTA_IDS} from '../../server/domain/meters';
 import type {Card, View} from '../lib/types';
 import type {KeyPart, Meter} from '../../server/domain/meters';
@@ -325,9 +326,7 @@ export function MoneyCard({
   const {keys, meters, error} = useShownKeys(source, view, board);
   const {remaining, limits} = budgetView(source, keys, meters, context),
     groups = remaining.values;
-  const credit=source.provider==='codex', status=source.creditBalance;
-  const now=useClock(now=>status&&now<=status.at+status.staleAfterMs?status.at+status.staleAfterMs+1:null);
-  const statusText=creditBalanceText(source,now);
+  const credit=source.provider==='codex';
   const native=source.meters?.find(m=>m.id==='balance:credits'&&!m.conversion);
   const displayUnavailable =
     !groups.length && (source.currencyUnavailable || balanceGroups(source).some((g) => !g.total.stale));
@@ -357,7 +356,7 @@ export function MoneyCard({
   const breakdown = (
     <div className="money-breakdown">
       {credit&&proof&&<p>{(proof.steps??[proof.rate]).filter(leg=>leg.base==='credits:codex').map(leg=><span className="currency-equation" key={leg.id}>1 {t('money.codexCredits')} = {money(leg.to,'USD',true,context)}</span>)}</p>}
-      {credit&&native&&<section><p>{money(native.amount,native.unit,true,context,native.scale)}</p><p>{stamp(native.at)}</p>{(statusText||native.stale)&&<p>{t('money.lastKnown')}</p>}{conversion&&<p className="popover-note">{conversion}</p>}</section>}
+      {credit&&native&&<section><p>{money(native.amount,native.unit,true,context,native.scale)}</p><p>{stamp(native.at)}</p><CreditLastKnown source={source}/>{!composition.length&&conversion&&<p className="popover-note">{conversion}</p>}</section>}
       {composition.map(({total, components, approximate}) => (
         <section key={total.id}>
           <div
@@ -405,7 +404,8 @@ export function MoneyCard({
       <div className="money-balance">
         <span>{t(credit?'money.additionalFunds':'money.accountBalance')}</span>
         <div className="money-balance-values">
-          {statusText ? (native?<Popover label={t('money.breakdown')} trigger={<span className="limit-value money-balance-status">{statusText}</span>} triggerClass="money-balance-trigger" up>{breakdown}</Popover>:<span className="limit-value money-balance-status">{statusText}</span>) : !groups.length ? (
+          <CreditBalanceValue source={source} breakdown={breakdown}>
+          {!groups.length ? (
             <span
               className="limit-value"
               title={
@@ -455,6 +455,7 @@ export function MoneyCard({
               );
             })
           )}
+          </CreditBalanceValue>
         </div>
       </div>
       <div className="limits money-limits">
@@ -465,6 +466,24 @@ export function MoneyCard({
       <ErrorLine error={error} />
     </div>
   );
+}
+function creditChangesAt(source: Card, now: number) {
+  const status = source.creditBalance;
+  return status && now <= status.at + status.staleAfterMs ? status.at + status.staleAfterMs + 1 : null;
+}
+function CreditBalanceValue({source, breakdown, children}: {source: Card; breakdown: ReactNode; children: ReactNode}) {
+  const now = useClock(now => creditChangesAt(source, now));
+  const status = creditBalanceText(source, now);
+  if (!status) return children;
+  const value = <span data-time="credit-status" className="limit-value money-balance-status">{status}</span>;
+  return source.meters?.some(m => m.id === 'balance:credits' && !m.conversion)
+    ? <Popover label={t('money.breakdown')} trigger={value} triggerClass="money-balance-trigger" up>{breakdown}</Popover>
+    : value;
+}
+function CreditLastKnown({source}: {source: Card}) {
+  const now = useClock(now => creditChangesAt(source, now));
+  return creditBalanceText(source, now) || source.meters?.some(m => m.id === 'balance:credits' && m.stale)
+    ? <p data-time="credit-last-known">{t('money.lastKnown')}</p> : null;
 }
 /** Status is independent of the last numeric value and its quota windows. */
 function creditBalanceText(source:Card,now:number):string|null {
@@ -477,7 +496,7 @@ function creditBalanceText(source:Card,now:number):string|null {
     case 'unlimited':return t('money.unlimited');
     case 'invalid':return t('money.invalidBalance');
     case 'unsupported':return t('money.unsupportedBalance');
-    default:return t('money.balanceUnavailable');
+    default:return t('money.creditUnavailable');
   }
 }
 /** Safe supplier facts use the existing news mark, with their own freshness. */

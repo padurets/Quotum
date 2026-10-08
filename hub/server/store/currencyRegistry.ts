@@ -134,7 +134,7 @@ export abstract class CurrencyRegistry {
     if(before){try{const value=JSON.parse(Buffer.from(before,'base64url').toString()) as unknown[];
       if(value.length!==3||value[0]!==owner||value[1]!==id||!Number.isSafeInteger(value[2])||Number(value[2])<1)throw new Error();sequence=Number(value[2]);
     }catch{throw new Error('invalid_currency');}}
-    const convert=(change:RateChangeRow):CurrencyRateChange=>({sequence:change.owner_sequence,base:change.base,effectiveAt:change.effective_at,recordedAt:change.recorded_at,kind:change.kind,quote:change.quote_id?this.get(change.quote_id,owner):null,nominal:change.quote_id===row?.initial_quote_id||!!change.quote_id&&this.get(change.quote_id,owner)?.source==='codex-default'});
+    const convert=(change:RateChangeRow):CurrencyRateChange=>({sequence:change.owner_sequence,base:change.base,effectiveAt:change.effective_at,recordedAt:change.recorded_at,kind:change.kind,quote:change.quote_id?this.get(change.quote_id,owner):null,nominal:change.quote_id===row?.initial_quote_id});
     const rows=this.db.prepare('SELECT * FROM currency_rate_changes WHERE owner_id=? AND currency_id=? AND owner_sequence<? ORDER BY owner_sequence DESC LIMIT ?').all(owner,id,sequence,limit+1) as RateChangeRow[];
     const pairs=this.db.prepare('SELECT * FROM (SELECT *,row_number() OVER (PARTITION BY base ORDER BY effective_at DESC,sequence DESC) position FROM currency_rate_changes WHERE owner_id=? AND currency_id=? AND effective_at<=?) WHERE position=1 ORDER BY base').all(owner,id,now) as RateChangeRow[];
     const initial=builtin?this.save(codexDefault(now)):null;

@@ -83,11 +83,12 @@ export function CurrencySelect({items,value,onChange,title,compact=false}:{items
   </select></div>;
 }
 
-/** The same direction for both the initial ratio and every later price. */
+/** Personal currencies quote units per base; provider credits quote their unit price. */
 function RateFields({standards,base,rate,symbol,onBase,onRate,inverse=false}:{inverse?:boolean;standards:CurrencyDefinition[];base:string;rate:string;symbol:string;onBase:(id:string)=>void;onRate:(value:string)=>void}) {
-  return <div className="currency-ratio" role="group" aria-label={t('currencies.rate')}>
+  const label=t(inverse?'currencies.creditRate':'currencies.rate');
+  return <div className="currency-ratio" role="group" aria-label={label}>
     <span>1</span>{inverse?<span>{symbol}</span>:<CurrencySelect items={standards} value={base} title={t('currencies.base')} onChange={onBase} compact />}
-    <span>=</span><div className="field"><input aria-label={t('currencies.rate')} inputMode="decimal" value={rate} required placeholder="0" onChange={event=>onRate(event.target.value)} /></div><span className="currency-unit">{inverse?base:symbol||'…'}</span>
+    <span>=</span><div className="field"><input aria-label={label} inputMode="decimal" value={rate} required placeholder="0" onChange={event=>onRate(event.target.value)} /></div><span className="currency-unit">{inverse?base:symbol||'…'}</span>
   </div>;
 }
 

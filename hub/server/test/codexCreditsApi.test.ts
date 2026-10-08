@@ -69,7 +69,8 @@ test('builtin credit rate writes use CAS receipts, keep history and cannot becom
   assert.equal((await h.call(h.bob.id,'POST',path+'/rates',{...body,rate:'50000',requestId:randomUUID()})).statusCode,409);
   const after=(await h.call(h.bob.id,'GET','/api/currencies/manage')).json();assert.equal(after.personal.length,0);assert.equal(after.builtins[0].pairs[0].rate,'30000');
   h.advance(1000);assert.equal((await h.call(h.bob.id,'POST',path+'/rates/default',{expectedRevision:after.registryRevision,requestId:randomUUID()})).statusCode,200);
-  assert.equal((await h.call(h.bob.id,'GET',path+'/history')).json().changes.length,2);
+  const restored=(await h.call(h.bob.id,'GET',path+'/history')).json();
+  assert.equal(restored.changes.length,2);assert.equal(restored.changes[0].nominal,false);assert.equal(restored.changes[0].effectiveAt,Date.now());
   assert.equal((await h.call(h.alice.id,'GET',path+'/history')).json().changes.length,0);
   assert.equal((await h.call(h.bob.id,'POST','/api/currencies/display',{currency:'credits:codex'})).statusCode,400);
 });

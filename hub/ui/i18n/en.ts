@@ -14,6 +14,8 @@ export const en = {
   'money.notReported': 'Not reported',
   'money.invalidBalance': 'Invalid balance response',
   'money.unsupportedBalance': 'Balance is not supported',
+  'money.creditUnavailable': 'Balance unavailable',
+  'currencies.creditRate': 'USD per Codex credit',
   'money.lastKnown': 'Last known balance',
   'currencies.builtins': 'Credit units',
   'currencies.restoreDefault': 'Restore standard rate',

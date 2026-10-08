@@ -9,6 +9,8 @@ export const ru = {
   'money.notReported': 'Не сообщается',
   'money.invalidBalance': 'Некорректный ответ о балансе',
   'money.unsupportedBalance': 'Баланс не поддерживается',
+  'money.creditUnavailable': 'Баланс недоступен',
+  'currencies.creditRate': 'USD за кредит Codex',
   'money.lastKnown': 'Последний известный баланс',
   'currencies.builtins': 'Кредитные единицы',
   'currencies.restoreDefault': 'Восстановить стандартный курс',
