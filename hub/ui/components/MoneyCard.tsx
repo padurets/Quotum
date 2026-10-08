@@ -355,7 +355,7 @@ export function MoneyCard({
     : '';
   const breakdown = (
     <div className="money-breakdown">
-      {credit&&proof&&<p>{(proof.steps??[proof.rate]).filter(leg=>leg.base==='credits:codex').map(leg=><span className="currency-equation" key={leg.id}>1 {t('money.codexCredits')} = {money(leg.to,'USD',true,context)}</span>)}</p>}
+      {credit&&proof&&<p>{(proof.steps??[proof.rate]).filter(leg=>leg.base==='credits:codex').map(leg=><span className="currency-equation" key={leg.id}>1 {t('money.codexCredit')} = {money(leg.to,'USD',true,context)}</span>)}</p>}
       {credit&&native&&<section><p>{money(native.amount,native.unit,true,context,native.scale)}</p><p>{stamp(native.at)}</p><CreditLastKnown source={source}/>{!composition.length&&conversion&&<p className="popover-note">{conversion}</p>}</section>}
       {composition.map(({total, components, approximate}) => (
         <section key={total.id}>

@@ -133,14 +133,14 @@ export function RateForm({data,item,refresh,dirty,seed,onDone,onCancel}:{data:Cu
     event.preventDefault();setError(null);try{const at=past?new Date(date).getTime():undefined;if(at!==undefined&&(!Number.isSafeInteger(at)||at>Date.now()))throw new Error();save.send('/api/currencies/'+item.definition.id+'/rates',{base,rate:currencyRate(rate,locale),...(builtin?{direction:'basePerUnit'}:{}),...(at===undefined?{}:{date:at})},onDone);}catch{setError(new ApiError(400,'invalid_currency'));}
   }}>
     <fieldset className="currency-fields" disabled={save.disabled||item.archivedAt!==null}>
-      <RateFields inverse={builtin} standards={data.standards} base={base} rate={rate} symbol={builtin?t('money.codexCredits'):item.definition.symbol} onBase={setBase} onRate={setRate} />
+      <RateFields inverse={builtin} standards={data.standards} base={base} rate={rate} symbol={builtin?t('money.codexCredit'):item.definition.symbol} onBase={setBase} onRate={setRate} />
       <div className="field"><label htmlFor={when}>{t('currencies.effective')}</label><select id={when} value={past?'past':'now'} onChange={event=>setPast(event.target.value==='past')}><option value="now">{t('currencies.fromNow')}</option><option value="past">{t('currencies.fromPast')}</option></select></div>
       {past&&<Field label={t('currencies.localDate')} type="datetime-local" required value={date} onChange={event=>setDate(event.target.value)} />}
       {builtin&&<p className="dialog-text">{t('currencies.creditHelp')}</p>}
       <p className="dialog-text">{t('currencies.rateBrief')}</p><details className="currency-disclosure"><summary>{t('currencies.details')}</summary><p className="dialog-text">{t('currencies.rateHelp')}</p></details>
       <div className="button-row currency-actions"><button type="button" className="button" onClick={onCancel}>{t('common.cancel')}</button><button className="button primary" disabled={!rate}>{t('account.save')}</button></div>
     </fieldset>
-    {save.conflict&&<p className="dialog-text">{t('currencies.current',{currency:current?.rate?builtin?`1 ${t('money.codexCredits')} = ${rateText(current.rate)} ${base}`:`1 ${base} = ${rateText(current.rate)} ${item.definition.symbol}`:`${base} — ${t(current?'currencies.stopped':'currencies.noPair')}`})}</p>}
+    {save.conflict&&<p className="dialog-text">{t('currencies.current',{currency:current?.rate?builtin?`1 ${t('money.codexCredit')} = ${rateText(current.rate)} ${base}`:`1 ${base} = ${rateText(current.rate)} ${item.definition.symbol}`:`${base} — ${t(current?'currencies.stopped':'currencies.noPair')}`})}</p>}
     <ErrorLine error={error} />{save.notice}
   </form>;
 }

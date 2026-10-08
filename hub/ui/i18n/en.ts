@@ -8,6 +8,8 @@ import type {Message} from './types';
  */
 export const en = {
   'money.codexCredits': 'Codex credits',
+  'money.codexCredit': 'Codex credit',
+  'money.codexCreditUnit': 'Codex credits',
   'money.additionalFunds': 'Additional funds',
   'money.defaultEstimate': 'Standard estimate',
   'money.unlimited': 'Unlimited',

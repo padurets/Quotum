@@ -70,7 +70,7 @@ function CurrencyDetails({data,item,refresh,dirty,leave}:{data:CurrencyManagemen
   useEffect(()=>{if(!editor&&focus.current){if(focus.current.isConnected)focus.current.focus({preventScroll:true});else body.current?.querySelector<HTMLButtonElement>('button')?.focus({preventScroll:true});focus.current=null;}},[editor]);
   const open=(next:NonNullable<typeof editor>)=>leave(()=>{focus.current=document.activeElement as HTMLElement;setNotice(false);setTab('settings');setEditor(next);});
   const close=()=>setEditor(null),done=()=>{close();setNotice(true);},archived=item.archivedAt!==null,builtin=item.definition.kind==='provider-credit';
-  const symbol=builtin?t('money.codexCredits'):item.definition.symbol;
+  const symbol=builtin?t('money.codexCredit'):item.definition.symbol;
   const rate=(seed:RateSeed|null)=>open({kind:'rate',seed,key:++serial.current});
   return <div className="currency-details" ref={body}>
     <Segmented options={[['settings',t('currencies.settings')],['history',t('currencies.versions')]]} value={tab} radioName={tabs} label={t('currencies.sections')} onChange={next=>{if(next!==tab)leave(()=>{close();setTab(next);});}} />
@@ -115,7 +115,7 @@ function CurrencyRow({data,item,refresh,dirty,leave,onOpen}:{data:CurrencyManage
   return <li className="settings-list-row popover-row" ref={row}>
     <button className="currency-open" data-currency-id={definition.id} type="button" aria-label={definition.name} aria-haspopup="dialog" onClick={()=>leave(onOpen)}>
       <span className="settings-item-main"><span className="currency-identity"><span className="currency-name">{definition.name}</span>{selected&&<span className="currency-state is-selected">{t('currencies.selected')}</span>}</span><small>{definition.symbol}{duplicate?' — '+definition.id.slice(-6):''}</small></span>
-      <span className="settings-item-detail currency-overview-rates">{archived?<span>{stamp(item.archivedAt!)}</span>:item.pairs.map(pair=><span key={pair.base} className="currency-equation">{pair.rate?pair.direction==='basePerUnit'?`1 ${t('money.codexCredits')} = ${rateText(pair.rate)} ${pair.base}`:`1 ${pair.base} = ${rateText(pair.rate)} ${definition.symbol}`:`${pair.base} — ${t('currencies.stopped')}`}</span>)}</span>
+      <span className="settings-item-detail currency-overview-rates">{archived?<span>{stamp(item.archivedAt!)}</span>:item.pairs.map(pair=><span key={pair.base} className="currency-equation">{pair.rate?pair.direction==='basePerUnit'?`1 ${t('money.codexCredit')} = ${rateText(pair.rate)} ${pair.base}`:`1 ${pair.base} = ${rateText(pair.rate)} ${definition.symbol}`:`${pair.base} — ${t('currencies.stopped')}`}</span>)}</span>
     </button>
     <div className="settings-item-actions"><CurrencyMenu label={t('currencies.namedActions',{name:definition.name})} disabled={save.disabled}>{dismiss=><>
       <button type="button" className="popover-row" onClick={()=>{dismiss();leave(onOpen);}}>{t('currencies.configure')}</button>

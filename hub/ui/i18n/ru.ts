@@ -3,6 +3,8 @@ import type {Catalog} from './index';
 /** Русский. Разница двух долей лимита тоже в «%»: всё здесь — доля лимита. */
 export const ru = {
   'money.codexCredits': 'Кредиты Codex',
+  'money.codexCredit': 'кредит Codex',
+  'money.codexCreditUnit': 'кред. Codex',
   'money.additionalFunds': 'Дополнительные средства',
   'money.defaultEstimate': 'Стандартная оценка',
   'money.unlimited': 'Без ограничений',
