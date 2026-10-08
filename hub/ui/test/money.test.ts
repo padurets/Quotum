@@ -70,7 +70,7 @@ test('explicit card scales outside the bounded preview survive saving, reload an
   assert.equal(keyShown(withKeyShown(saved,source,'sixth',false),source,'sixth',preview),false);
 });
 test('money display preserves micro-spending, negatives and integers beyond Number precision in both locales',()=>{
-  for(const locale of ['en','ru'] as const){setLocale(locale);assert.match(money('1'),/0[.,]000001 USD/);assert.match(money('-1'),/−0[.,]000001/);assert.match(money('0'),/0[.,]00/);assert.ok(money('9007199254740993','USD',true).endsWith('740993 USD'));assert.match(money('999999'),/1[.,]00/);}
+  for(const locale of ['en','ru','en'] as const){setLocale(locale);const separator=locale==='en'?'.':',';assert.equal(money('1'),`0${separator}000001 USD`);assert.match(money('-1'),/−0[.,]000001/);assert.match(money('0'),/0[.,]00/);assert.ok(money('9007199254740993','USD',true).endsWith('740993 USD'));assert.match(money('999999'),/1[.,]00/);}
   assert.equal(capPercent({...meter('cap','1'),kind:'cap',limit:'0'}),null);setLocale('en');
 });
 test('money defaults select only balances, bound overflow and preserve explicit archived details on lineup growth',()=>{

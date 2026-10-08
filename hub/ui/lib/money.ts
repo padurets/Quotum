@@ -13,6 +13,8 @@ export const amountUnitLabel=(unit:string)=>unit==='credits:codex'?t('money.code
 export const capName=(meter:Pick<Meter,'id'|'scope'|'label'>)=>meter.id==='quota:credit:5h'?t('kind.title.session'):meter.id==='quota:credit:week'?t('kind.title.weekly'):meter.label??meter.id;
 export const amountText=(value:string|null|undefined,unit:string,exact=false)=>{const formatted=money(value,unit,exact);return value==null?formatted:formatted.slice(0,-amountUnitLabel(unit).length-1);};
 
+const numberFormats=new Map<string,{whole:Intl.NumberFormat;separator:string}>();
+
 /** Display rounding never feeds the ledger, including values above Number precision. */
 export function money(value:string|null|undefined,unit=DEFAULT_CURRENCY,exact=false,context:CurrencyContext=defaultCurrencyContext,nativeScale=6):string {
   if(value==null)return '—';
@@ -20,8 +22,13 @@ export function money(value:string|null|undefined,unit=DEFAULT_CURRENCY,exact=fa
   const precision=context.definitions.find(d=>d.id===unit)?.fractionDigits??2;
   const digits=exact||unit.startsWith('credits:')||absolute>0n&&nativeScale>precision&&absolute<10n**BigInt(nativeScale-precision)?nativeScale:precision;
   const shift=nativeScale-digits,divisor=10n**BigInt(Math.max(0,shift)),rounded=shift>=0?(absolute+divisor/2n)/divisor:absolute*10n**BigInt(-shift),scale=10n**BigInt(digits);
-  const whole=new Intl.NumberFormat(formatLocale(),{maximumFractionDigits:0}).format(rounded/scale);
-  const separator=new Intl.NumberFormat(formatLocale()).formatToParts(1.1).find(p=>p.type==='decimal')?.value??'.';
+  const locale=formatLocale();
+  let format=numberFormats.get(locale);
+  if(!format) {
+    format={whole:new Intl.NumberFormat(locale,{maximumFractionDigits:0}),separator:new Intl.NumberFormat(locale).formatToParts(1.1).find(p=>p.type==='decimal')?.value??'.'};
+    numberFormats.set(locale,format);
+  }
+  const whole=format.whole.format(rounded/scale),separator=format.separator;
   let fraction=digits?(rounded%scale).toString().padStart(digits,'0'):'';
   if(digits===nativeScale&&!exact)fraction=fraction.replace(/0+$/,'');
   return `${negative?'−':''}${whole}${fraction?separator+fraction:''} ${unit.startsWith('credits:')?amountUnitLabel(unit):currencySymbol(unit,context)}`;
