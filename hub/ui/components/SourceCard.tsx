@@ -4,7 +4,7 @@ import {MEASURE_INTERVAL, windowKey, type MeasureIntervalMs} from '../lib/types'
 import {countdown, countdownChangesAt, earliest, num, stamp} from '../lib/format';
 import {cadenceChangesAt, cadenceOf, dotChangesAt, dotOf, errorText, problemOf, resetLineChangesAt, windowName} from '../lib/quota';
 import {t, useLocale} from '../i18n';
-import {DEFAULT_PLAN, isValidPlan, planAt, planChangesAt, planNote, planTotal, type WeeklyPlan} from '../lib/plan';
+import {DEFAULT_PLAN, isValidPlan, planMark, planMarkChangesAt, planNote, planNoteChangesAt, planTotal, type WeeklyPlan} from '../lib/plan';
 import {logoOf} from './logos';
 import {MeterBar,PercentLimit,ResetText} from './Meter';
 import {KeyScaleSettings} from './KeyScaleSettings';
@@ -26,9 +26,8 @@ import {quotaPeriods,quotaRemaining} from '../lib/subscription';
 
 /** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
 function PlanMark({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
-  const now = useClock(now => planChangesAt(w, measuredAt, now, weekly));
-  const plan = planAt(w, measuredAt, now, weekly);
-  const pace = plan && !plan.done ? Math.round(plan.remaining) : null;
+  const now = useClock(now => planMarkChangesAt(w, measuredAt, now, weekly));
+  const pace = planMark(w, measuredAt, now, weekly);
   return (
     <b
       className="pace"
@@ -42,7 +41,7 @@ function PlanMark({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; w
 
 /** How far ahead of the plan or behind it the limit is, when that is worth a word. */
 function PlanNote({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
-  const now = useClock(now => planChangesAt(w, measuredAt, now, weekly));
+  const now = useClock(now => planNoteChangesAt(w, measuredAt, now, weekly));
   const note = planNote(w, measuredAt, now, weekly);
   if (note?.key === 'ahead') {
     return (

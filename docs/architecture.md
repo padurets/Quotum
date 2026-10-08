@@ -1190,8 +1190,12 @@ body limit is 76 KiB UTF-8. Up to the aggregate browser keepalive limit of 64 Ki
 retain their debounce. Larger drafts start ordinary serialized saves immediately; a
 browser close warning stays until acknowledgment or explicit discard, and navigation
 that destroys the saver waits, including native browser Back/Forward. A failed save
-retains the exact history entry; a successful queue resumes the original traversal. Native shells keep immediate autosave with no additional
-close flow. Places have no separate count limit.
+retains the exact history entry; a successful queue resumes the original traversal.
+The router publishes only the accepted address to path, board and time-range readers.
+Restoration and replay acknowledge their expected history entry, so repeated native
+traversals and unrelated React renders cannot expose a transient destination to the saver.
+Native shells keep immediate autosave with no additional close flow. Places have no
+separate count limit.
 The board's view comes with its events; the owner's changes show at once and are saved
 about half a second later, one request per burst (a drag, typing a plan), and stay on
 screen until the hub tells the view it saved. Saves carry `If-Match` with the persistent

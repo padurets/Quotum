@@ -31,7 +31,8 @@ test('Back restores its own board and range after settings instead of rewriting 
   const previous = Object.getOwnPropertyDescriptors(globalThis);
   const events = new EventTarget();
   let url = new URL('http://fixture.example/?board=A&from=1800000000000&to=1800003600000');
-  const history = {pushState: (_state: unknown, _title: string, href: string) => {url = new URL(href, url);}, replaceState: (_state: unknown, _title: string, href: string) => {url = new URL(href, url);}};
+  let state: unknown = null;
+  const history = {get state() {return state;}, pushState: (next: unknown, _title: string, href: string) => {state = next; url = new URL(href, url);}, replaceState: (next: unknown, _title: string, href: string) => {state = next; url = new URL(href, url);}};
   Object.defineProperties(globalThis, {location: {configurable: true, get: () => url}, history: {configurable: true, value: history}, window: {configurable: true, value: events}, PopStateEvent: {configurable: true, value: Event}});
   let changes = 0;
   const stop = onLocation(() => changes++), stopRange = onTimeRange(() => {});

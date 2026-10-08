@@ -3,7 +3,7 @@ import {t} from '../i18n';
 import {page, useBoards} from './board';
 import {call, UNAUTHORIZED} from './http';
 import {SessionReader} from './sessionReader';
-import {navigate, useSelectedBoard} from './router';
+import {navigate, routeLocation, useSelectedBoard} from './router';
 
 export type User = {id: string; email: string; name: string};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
@@ -89,7 +89,7 @@ export function rememberBoard(id: string) {
 
 function remembered(): string | null {
   try {
-    return new URLSearchParams(location.search).get('board') ?? localStorage.getItem(BOARD_KEY);
+    return new URLSearchParams(routeLocation().search).get('board') ?? localStorage.getItem(BOARD_KEY);
   } catch {
     return null;
   }

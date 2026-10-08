@@ -104,6 +104,39 @@ export function planNote(w: Win, measuredAt: number | null, now: number, plan: W
   return null;
 }
 
+/** The card's whole-percent mark, absent after the plan ends. */
+export function planMark(w: Win, measuredAt: number | null, now: number, plan: WeeklyPlan | null = DEFAULT_PLAN): number | null {
+  const point = planAt(w, measuredAt, now, plan);
+  return point && !point.done ? Math.round(point.remaining) : null;
+}
+
+/** A card leaf follows only its own reading, not the table's gap or another leaf. */
+function cardPlanChangesAt(w: Win, measuredAt: number | null, now: number, plan: WeeklyPlan | null, read: (at: number) => string | number | null): number | null {
+  const point = planAt(w, measuredAt, now, plan);
+  if (!point || point.done) return null;
+  const seen = read(now), end = point.deadline;
+  // The hidden note can become visible during the window and hide again at its end.
+  // Search within the active plan first, where its rounded value moves one way.
+  let [same, other] = [now, end - 1];
+  if (read(other) === seen) return read(end) === seen ? null : end;
+  while (other - same > 1) {
+    const middle = Math.floor((same + other) / 2);
+    if (read(middle) === seen) same = middle; else other = middle;
+  }
+  return other;
+}
+
+export function planMarkChangesAt(w: Win, measuredAt: number | null, now: number, plan: WeeklyPlan | null = DEFAULT_PLAN): number | null {
+  return cardPlanChangesAt(w, measuredAt, now, plan, at => planMark(w, measuredAt, at, plan));
+}
+
+export function planNoteChangesAt(w: Win, measuredAt: number | null, now: number, plan: WeeklyPlan | null = DEFAULT_PLAN): number | null {
+  return cardPlanChangesAt(w, measuredAt, now, plan, at => {
+    const note = planNote(w, measuredAt, at, plan);
+    return note ? `${note.key} ${Math.round(note.value)} ${note.weekly}` : null;
+  });
+}
+
 /**
  * What of a limit's plan shows anywhere at `now`: the plan's remaining in whole percent
  * (the mark on the card and its hint), the gap to it in whole points either way, whether

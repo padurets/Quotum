@@ -127,12 +127,9 @@ export function ago(time: number | null, now: number) {
 /** Calendar boundaries in the reader's zone, including days with a clock change. */
 function activityDays(now: number) {
   const day = new Date(now);
-  day.setHours(0, 0, 0, 0);
-  const today = day.getTime();
-  day.setDate(day.getDate() - 1);
-  const yesterday = day.getTime();
-  day.setDate(day.getDate() + 2);
-  return {today, yesterday, tomorrow: day.getTime()};
+  // A missing midnight may normalize to 01:00; do not carry that hour to another day.
+  const start = (offset: number) => new Date(day.getFullYear(), day.getMonth(), day.getDate() + offset).getTime();
+  return {today: start(0), yesterday: start(-1), tomorrow: start(1)};
 }
 
 /** Recent work stays relative today, reads yesterday for that calendar day, then a timestamp. */

@@ -57,6 +57,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
   const selection=moneySelection(sources,arrange.view.hidden,prefs.money,context).selection;
   const noSelection=!(selection?.ids.length);
   const noResources=!sources.some(source=>supportsBudget(providerOf(source.provider))&&!arrange.view.hidden.includes('source:'+source.id));
+  const modelContext=JSON.stringify([board,history?.board,unit,selection?.ids]);
   const prepared=usePrepared(function* () {
     const entries:MeterHistory[]=[],visible:MeterHistory[]=[];
     let low:bigint|null=null,high:bigint|null=null;
@@ -83,7 +84,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
       lines.push({sourceId:series.sourceId,windowId:series.meterId,key:moneyIdentity(series),name:nameOf(series,card?.title??series.sourceId,context),provider:card?.provider??'',kind:'other',label:series.semantics?.label??null,minutes:null,color:colorOf(arrange.view,series.sourceId,card?.provider??''),dash:series.kind==='cap'?'7 5':'',current:scaled(series.end??'0'),consumed:0,coveredMs:series.coveredMs,remainingAtStart:series.start===null?null:scaled(series.start),remainingAtEnd:series.end===null?null:scaled(series.end),pointMode:series.pointMode,staleAfterMs:86_400_000,points,work:null,...(series.kind==='cap'?{capCells:series.points.flatMap(p=>p.knownFrom!==undefined&&p.knownUntil!==undefined?[{at:p.at,from:p.knownFrom,to:p.knownUntil,value:scaled(p.value)}]:[])}:{})});yield;
     }
     return {entries,lines,origin,span,pad,strip};
-  },[history,strip,prefs.muted,unit,prefs.money.view,sources,arrange.view,locale,context],JSON.stringify([board,history?.board,unit,selection?.ids]));
+  },[history,strip,prefs.muted,unit,prefs.money.view,sources,arrange.view,locale,context],modelContext);
   const model=prepared.value,entries=model?.entries??[],lines=model?.lines??[];
   const baseNavigation=axisNavigation(board,selected,prefs),navigation={...baseNavigation,context:JSON.stringify([baseNavigation.context,unit,prefs.money.view])};
   const axis=useMemo(()=>{
@@ -107,7 +108,7 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
     </Popover>}>
     <SelectionNotice/>
     {prefs.money.view==='spending'&&original.some(s=>s.spent===null)&&<AnalyticsNote title={t('money.noSpending')}>{t('money.unsupportedSpending',{count:new Set(original.filter(s=>s.spent===null).map(s=>s.sourceId)).size})}</AnalyticsNote>}
-    <Chart lines={lines} axis={axis} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered||!!error)} empty={error?null:!history?t('history.loading'):noResources?t('analytics.noBudget'):noSelection?t('analytics.noSelection'):entries.length&&!lines.length?t('analytics.allMuted'):prefs.money.view==='spending'&&original.some(s=>s.spent===null)?t('money.noSpending'):t('money.unknown')} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={JSON.stringify([board,unit])}/>
+    <Chart lines={lines} axis={axis} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered||!!error)} empty={error?null:!history?t('history.loading'):noResources?t('analytics.noBudget'):noSelection?t('analytics.noSelection'):entries.length&&!lines.length?t('analytics.allMuted'):prefs.money.view==='spending'&&original.some(s=>s.spent===null)?t('money.noSpending'):t('money.unknown')} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={modelContext}/>
     <div className="legend">{original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId),total=prefs.money.view==='spending'&&s.kind!=='cap'&&history?moneyTotal(s,history.since,history.to):null,value=total?total.amount:s.end;return <SeriesLegendItem key={key} name={nameOf(s,card?.title??s.sourceId,context)} color={colorOf(arrange.view,s.sourceId,card?.provider??'')} dash={s.kind==='cap'?'7 5':undefined} muted={!!prefs.muted[key]} onToggle={()=>setMuted(key,!prefs.muted[key])}><b title={total?.unknown?t('money.unknown'):total?.partial?t('money.partial'):undefined}>{s.spent===null&&prefs.money.view==='spending'?t('money.unavailable'):money(value,s.unit,false,context)}{total?.partial&&s.spent!==null&&<small className="money-partial">*</small>}</b></SeriesLegendItem>;})}</div>
   </AnalyticsPanel>;
 }

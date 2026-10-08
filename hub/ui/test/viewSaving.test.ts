@@ -159,3 +159,42 @@ test('native Back and Forward retain the saver through dirty confirmation, failu
     } finally {unguard(); stop(); h.unmount();}
   }
 });
+
+test('queued native traversals and intermediate renders retain the committed route and every large edit', async () => {
+  for (const direction of [-1, 1]) {
+    const h = fixture(), events = new EventTarget(), queue: (() => void)[] = [];
+    const paths = ['/device', '/compact', '/?board=board&from=10&to=20', '/compact', '/device'];
+    const entries = paths.map((path, position) => ({url: new URL(path, 'http://fixture.example'), state: {quotumPosition: position}}));
+    let index = 2, changes = 0;
+    const context = {exports: {} as {onLocation: (fn: () => void) => () => void; usePath: () => string; useLocation: () => string; selectedBoard: () => string; settingsHref: (path: string) => string}, URLSearchParams,
+      get location() {return entries[index].url;}, window: events,
+      history: {get state() {return entries[index].state;}, replaceState(state: {quotumPosition: number}, _title: string, path: string) {entries[index] = {state, url: new URL(path, entries[index].url)};}, go(step: number) {const target = index + step; queue.push(() => {index = target; events.dispatchEvent(new Event('popstate'));});}},
+      require: (name: string) => name === './view' ? {flushLargeViews: h.leave} : {useSyncExternalStore: (_subscribe: unknown, snapshot: () => unknown) => snapshot()},
+    };
+    runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/router.ts', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS}}).outputText, context);
+    const router = context.exports, stop = router.onLocation(() => {changes++; if (router.usePath() !== '/') h.unmount();});
+    const unchanged = () => {
+      assert.equal(router.usePath(), '/'); assert.equal(router.useLocation(), paths[2]);
+      assert.equal(router.selectedBoard(), 'board');
+      assert.equal(router.settingsHref('/settings'), '/settings?board=board&from=10&to=20');
+      assert.equal(changes, 0); assert.equal(h.events.has('beforeunload'), true);
+    };
+    const drain = () => {for (let i = 0; queue.length && i < 20; i++) {queue.shift()!(); unchanged();} assert.equal(queue.length, 0);};
+    try {
+      h.render().update(() => oversized);
+      h.render().update(view => ({...view, names: {...view.names, latest: 'second edit'}}));
+      // User traversals were already queued before our restoration request.
+      for (let i = 0; i < 2; i++) queue.push(() => {index += direction; events.dispatchEvent(new Event('popstate'));});
+      drain(); assert.equal(index, 2, 'only the original entry acknowledges restoration');
+      h.reads[0].reject(new Error('offline')); await settle(); unchanged();
+      const retry = h.render().retrySave!('board');
+      h.render().update(view => ({...view, names: {...view.names, latest: 'third edit'}}));
+      context.history.go(direction); drain();
+      h.reads[1].resolve({view: h.reads[1].view, revision: 5}); await settle(); unchanged();
+      assert.equal(h.reads.length, 3); assert.equal(h.reads[2].view.names.latest, 'third edit');
+      h.reads[2].resolve({view: h.reads[2].view, revision: 6}); await retry; await settle();
+      while (queue.length) queue.shift()!();
+      assert.equal(index, 2 + direction); assert.equal(changes, 1); assert.equal(entries.length, 5);
+    } finally {stop(); h.unmount();}
+  }
+});

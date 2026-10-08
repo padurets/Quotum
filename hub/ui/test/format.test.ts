@@ -2,6 +2,7 @@ import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {setLocale} from '../i18n';
 import {recentActivity, recentActivityChangesAt, stamp} from '../lib/format';
+import {PageClock} from '../lib/clock';
 
 // Athens and Cairo are as far from UTC today (30 September 2026) and in winter, but their
 // clocks change on other days, so a time in spring reads otherwise in each.
@@ -42,6 +43,30 @@ test('last activity crosses local midnight and both clock changes without assumi
     const at = Date.UTC(2026, 9, 7, 23, 55), now = Date.UTC(2026, 9, 8, 0, 5);
     moveTo('UTC');assert.equal(recentActivity(at, now), 'yesterday');
     moveTo('America/New_York');assert.equal(recentActivity(at, now), '10m ago');
+  });
+});
+
+test('a skipped midnight does not shift yesterday or the next clock wake into another hour', t => {
+  travelling(t, moveTo => {
+    for (const [zone, month, date] of [['America/Santiago', 8, 6], ['America/Havana', 2, 8], ['Africa/Cairo', 3, 24]] as const) {
+      moveTo(zone);
+      const morning = new Date(2026, month, date - 1, 0, 30).getTime();
+      const at = new Date(2026, month, date - 1, 12).getTime();
+      const next = new Date(2026, month, date + 1).getTime();
+      let now = new Date(2026, month, date, 23, 59).getTime(), wakes = 0;
+      assert.equal(new Date(2026, month, date).getHours(), 1, zone);
+      assert.equal(recentActivity(morning, now), 'yesterday', zone);
+      const clock = new PageClock({now: () => now, setTimeout: () => 0, clearTimeout: () => {}, visible: () => true});
+      const watch = clock.watch();
+      let label = recentActivity(at, now);
+      const stop = clock.subscribe(watch, () => {wakes++; label = recentActivity(at, clock.hubNow());});
+      clock.due(watch, recentActivityChangesAt(at, now), now);
+      assert.equal(watch.due, next, zone);
+      now = next - 1; clock.wakeDue(); assert.equal(wakes, 0);
+      now = next; clock.wakeDue(); assert.equal(wakes, 1, zone);
+      assert.equal(label, stamp(at)); assert.equal(recentActivityChangesAt(at, now), null);
+      stop();
+    }
   });
 });
 
