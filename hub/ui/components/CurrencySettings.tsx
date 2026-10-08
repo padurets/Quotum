@@ -44,8 +44,9 @@ function useSave(revision:string,changed:boolean,refresh:Refresh,dirty:Dirty,dis
     const current=request.current;if(!current||sending.current)return;sending.current=true;setBusy(true);setError(null);setSaved(false);
     try {
       const value=await call<unknown>('POST',current.url,current.body);
-      if(!alive.current)return;request.current=null;setUncertain(false);current.done(value);setSaved(true);
+      if(!alive.current)return;
       await refresh().then(data=>{baseline.current=data.registryRevision;}).catch(()=>{});
+      if(!alive.current)return;request.current=null;setUncertain(false);current.done(value);setSaved(true);
     }catch(failure){
       if(!alive.current)return;
       if(failure instanceof ApiError&&failure.status<500){request.current=null;setUncertain(false);setError(failure);if(failure.status===409)await refresh().then(data=>{baseline.current=data.registryRevision;}).catch(()=>{});}
@@ -77,7 +78,7 @@ function DisplayCurrency({data,refresh,dirty}:{data:CurrencyManagement;refresh:R
       <div className="button-row is-start currency-actions"><button className="button" disabled={save.disabled||!edited}>{t('account.save')}</button>{edited&&<button type="button" className="button" disabled={save.disabled} onClick={()=>{setChoice(data.selected);setEdited(false);}}>{t('common.cancel')}</button>}</div>
       {save.notice}
     </form>
-    {detail&&<div className="dialog-text"><p>{t('currencies.precisionValue',{digits:detail.definition.fractionDigits})}</p>{detail.rates.length?detail.rates.slice(0,3).map(quote=><p key={quote.id}>{quote.source.toUpperCase()}<br />{stamp(quote.date)}<br />1 {quote.base} = {rateText(quote.rates[choice])} {choice}</p>):<p>{t('currencies.noPublicRate')}</p>}</div>}
+    {detail&&detail.definition.id===choice&&<div className="dialog-text"><p>{t('currencies.precisionValue',{digits:detail.definition.fractionDigits})}</p>{detail.rates.length?detail.rates.slice(0,3).map(quote=><p key={quote.id}>{quote.source.toUpperCase()}<br />{stamp(quote.date)}<br />1 {quote.base} = {rateText(quote.rates[detail.definition.id])} {detail.definition.id}</p>):<p>{t('currencies.noPublicRate')}</p>}</div>}
     <ErrorLine error={error} />
   </section>;
 }
