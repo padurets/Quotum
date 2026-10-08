@@ -1,4 +1,4 @@
-import {useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode} from 'react';
+import {useCallback, useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode} from 'react';
 import {barsOf, coverOf, crampedOf, roomOf, shiftOf, sideOf} from '../lib/place';
 import {settler} from '../lib/settle';
 import {X} from 'lucide-react';
@@ -40,6 +40,11 @@ export function Popover({
   const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const panelRef = useCallback((element: HTMLDivElement | null) => {
+    // A form can close its panel directly. Return focus before its focused control is removed.
+    if (!element && panel.current?.contains(document.activeElement)) button.current?.focus({preventScroll: true});
+    panel.current = element;
+  }, []);
   // A panel never scrolls the page, lengthens it nor widens it: it opens whole in the window,
   // under the bars stuck at its top, on the side of its button that `sideOf` picks, cut to the
   // room there and scrolling inside, and moves sideways as far as keeps it on the screen (from a
@@ -282,7 +287,7 @@ export function Popover({
           style={width !== undefined || side?.cap != null ? {...(width !== undefined ? {width, maxWidth: 'calc(100vw - 32px)'} : {}), ...(side?.cap != null ? {maxHeight: side.cap} : {})} : undefined}
           role="dialog"
           aria-label={label}
-          ref={panel}
+          ref={panelRef}
         >
           {children}
         </div>
@@ -301,10 +306,7 @@ export function PopoverHeading({children, detail, onClose}: {children: ReactNode
         className="icon-button"
         aria-label={t('common.close')}
         title={t('common.close')}
-        onClick={event => {
-          event.currentTarget.closest('.picker')?.querySelector<HTMLButtonElement>(':scope > button')?.focus({preventScroll: true});
-          onClose();
-        }}
+        onClick={onClose}
       >
         <X size={14} aria-hidden="true" />
       </button>

@@ -1,7 +1,7 @@
 import {useEffect, useRef, useState, type FormEvent} from 'react';
 import {t} from '../i18n';
 import {ApiError, call} from '../lib/http';
-import {navigate, settingsHref} from '../lib/router';
+import {boardHref, navigate, settingsHref, usePath} from '../lib/router';
 import {boardTitle, type Board} from '../lib/session';
 import {useBoardId, useConnectionsRevision, useLineup, useServerView} from '../lib/board';
 import {cardId, flushView, isHidden} from '../lib/view';
@@ -31,6 +31,7 @@ export function Completion({
   const lineup = useLineup(),
     view = useServerView(),
     currentBoard = useBoardId();
+  const path = usePath();
   const widget = operation.item.kind === 'widget' ? operation.item.widgetId : null;
   const visible =
     !personal &&
@@ -47,8 +48,8 @@ export function Completion({
   const focusId = source ? cardId(source) : widget;
   const focus = () => {
     onClose();
-    if (personal || !visible) navigate('/?board=' + encodeURIComponent(board?.id ?? ''));
-    else if (focusId)
+    if (personal || !visible || !['/', '/local'].includes(path)) navigate(boardHref(board?.id ?? ''));
+    if (!personal && visible && focusId)
       requestAnimationFrame(() => {
         const element = document.querySelector<HTMLElement>(`[data-widget="${focusId}"]`);
         if (element) {

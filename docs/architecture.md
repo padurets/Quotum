@@ -306,6 +306,9 @@ These controls remain available on settings pages for the selected board. Changi
 boards preserves their space in the header while source status loads inside the menu.
 The board's event connection stays open across settings navigation; history reads and
 chart preparation pause until the dashboard returns, with live invalidations retained.
+The brand link returns to the selected board and its range through the shared router.
+A completed connection opened from settings navigates to its destination before focusing
+the card; visibility in the live store alone does not mean that its widget is on screen.
 Add names the destination board and lists eligible absent or hidden widgets with their
 type. One Add action provides or restores the selected widget; a source being shared
 discloses access to its measurements and history in its row before submission.

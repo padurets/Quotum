@@ -1,5 +1,5 @@
 import {chooseLocale} from '../lib/app';
-import {useLayoutEffect, useId, useRef, useState, type InputHTMLAttributes, type ReactNode} from 'react';
+import {useLayoutEffect, useId, useRef, useState, type InputHTMLAttributes, type MouseEventHandler, type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
 import {LOCALES, t, useLocale, type Locale} from '../i18n';
 import {messageOf} from '../lib/http';
@@ -221,7 +221,7 @@ export function Logo() {
 }
 
 /** The logo and the name; a link home where there is somewhere to go back to. */
-export function Brand({href}: {href?: string}) {
+export function Brand({href, onClick}: {href?: string; onClick?: MouseEventHandler<HTMLAnchorElement>}) {
   const content = (
     <>
       <Logo />
@@ -229,7 +229,7 @@ export function Brand({href}: {href?: string}) {
     </>
   );
   return href ? (
-    <a className="brand" href={href} aria-label={SERVICE}>
+    <a className="brand" href={href} onClick={onClick} aria-label={SERVICE}>
       {content}
     </a>
   ) : (

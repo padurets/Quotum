@@ -44,3 +44,11 @@ export function settingsHref(path: string, boardId?: string) {
   for (const key of ['from', 'to']) if (params.has(key)) query.set(key, params.get(key)!);
   return path + (query.size ? '?' + query : '');
 }
+
+/** Returning to the selected board keeps its range; another destination starts live. */
+export function boardHref(boardId: string) {
+  const selected = selectedBoard();
+  return selected === null || selected === boardId
+    ? settingsHref('/', boardId)
+    : '/?board=' + encodeURIComponent(boardId);
+}

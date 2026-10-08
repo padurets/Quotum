@@ -163,7 +163,7 @@ Codex         api                  idle     started 25m ago · editor
   it; a board's owner alone cannot. A device's own interval remains its minimum and
   can make measurements less frequent. Refresh and error pauses still apply.
 - **Fresh limits on demand.** Choose **Refresh data** in a card's menu, or **Refresh all
-  data** in the header's **Widgets** menu for every visible card on the board. Opening
+  data** in the header's **Board controls** menu for every visible card on the board. Opening
   the menu shows the last measurement and errors; refreshing needs an explicit click.
   A circular loader by the
   logo shows that the card is waiting for fresh numbers. Refresh respects the device's
@@ -354,7 +354,7 @@ Only holders may refresh the source.
 
 ## Connecting OpenRouter
 
-On the chosen board, open **Add** in the header, then **Connect** → **OpenRouter**.
+On the chosen board, open **Add widget** (+) in the header, then **Connect** → **OpenRouter**.
 Create a dedicated OpenRouter management key in
 [OpenRouter management-key settings](https://openrouter.ai/settings/management-keys)
 and paste it into the password field. **Connect and add** verifies it, saves your access
@@ -366,7 +366,8 @@ operations. A new server creates its encryption key in separate persistent stora
 can decrypt saved access. See [SECURITY.md](SECURITY.md) for the protection and limits.
 
 The avatar opens full settings pages for your profile, connections, devices, projects
-and interface. Board settings belong to the selected board. Add lists only absent or
+and interface. The Quotum logo returns to the selected board and its time range.
+Board settings belong to the selected board. Add lists only absent or
 hidden widgets you may add; the lock switches between free arrangement and a locked
 layout. Connecting from **Settings → My connections** keeps access personal until you
 explicitly choose a board. Existing access is reused; replacing its key is a separate

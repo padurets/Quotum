@@ -7,9 +7,21 @@ import {Brand, ErrorLine, Field, Modal} from './Kit';
 import {Popover, PopoverHeading} from './Popover';
 import {ChevronDown, Settings as SettingsIcon} from 'lucide-react';
 import {t} from '../i18n';
+import {boardHref, navigate, useLocation} from '../lib/router';
 
 /** The connection lost this long (by the hub's clock) is said in the header. */
 const OFFLINE_AFTER = 45_000;
+
+/** Only this link follows range changes; the board controls need not render for them. */
+function BoardHome({board}: {board: Board | null}) {
+  useLocation();
+  const href = board ? boardHref(board.id) : '/';
+  return <Brand href={href} onClick={event => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigate(href);
+  }} />;
+}
 
 /** Deleting a shared board: its name typed out, since nothing of it can come back. */
 export function DeleteBoard({board, onClose}: {board: Board; onClose: () => void}) {
@@ -178,7 +190,7 @@ export function Header({
   return (
     <header className="topbar">
       <div className="topbar-inner">
-        <Brand href="/" />
+        <BoardHome board={board} />
         <div className="status">
           {(!local || actions) && (
             <div className="board-controls" role="group" aria-label={board ? boardTitle(board) : t('boards.title')}>
