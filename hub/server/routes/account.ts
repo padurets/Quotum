@@ -391,6 +391,8 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       agent: device.agent,
       via: device.byCode ? 'code' : 'token',
       lastSeenAt: device.lastSeenAt,
+      clients: directory.deviceClients(device.id),
+      sessions: hub.ingest.live.deviceSessions(user.id, device.id, Date.now()),
       sources: delivered.filter(d => d.device === device.id).map(({provider, source, seenAt}) => ({provider, source, seenAt})),
       failures: failures.filter(f => f.device === device.id).map(({provider, error, detail, at}) => ({provider, error, detail, at})),
     }));

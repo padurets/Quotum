@@ -108,6 +108,11 @@ and platform smoke checks still apply.
   work; named account selection adds no second identity or consent mechanism. Reuse
   persisted source bindings without recomputing their identity. Private account labels
   and owner IDs never enter shared projections.
+- **Clients and collectors are independent.** The client catalogue owns discovery and
+  activity; only explicitly mapped collectors measure subscriptions. Preserve legacy
+  session order and cap priority. Unknown or unheld work belongs only to the owner's
+  personal board and devices, never shared projections or source activity signals.
+  Evidence metadata never changes producer identity or retrospectively attributes work.
 - **The provider catalogue defines authority.** Known hub-measured providers are
   dropped from agent snapshots, failures and sessions before their other fields are
   parsed. Check-in replies preserve those elements' positions and tell the agent to

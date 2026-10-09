@@ -38,7 +38,7 @@ test('the actual empty activity result keeps its time axis and legend container 
     Totals: () => null, ActivitySettings: () => null, LegendItem: () => null,
     shownMs: 0, since: null, from: range.from, to: range.to, setTimeRange: () => {}, by: 'project', selected: range,
     timeRangeKey: (value: typeof range) => `${value.from}-${value.to}`, prefs: {muted: {}, range: '24h'}, groups: [], titles: {}, shownSources: ['s'],
-    groupName: (identity: {name: string}) => identity.name, mutedKey: (_by: string, key: string) => key,
+    personal: false, groupName: (identity: {name: string}) => identity.name, mutedKey: (_by: string, key: string) => key,
     prepared: {ready: true}, presentation: {identities: [], shown: [], strip: null}, strip: null as object | null, panning: null as number | null,
     draw: null as unknown as () => React.ReactNode,
   };

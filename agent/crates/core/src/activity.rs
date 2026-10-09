@@ -19,17 +19,20 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
-use crate::model::{Millis, Provider};
+use crate::clients::ClientId;
+use crate::model::Millis;
 
 /// How much of one CPU core a client spends while working, at least. An idle client
 /// waits for input and spends little (measured: Claude Code 1–3%, redrawing its screen;
 /// Codex under 1%; Antigravity 1–2%); a working one streams, redraws its progress and runs
 /// tools (Claude Code 10–25%, Codex 5–10%, Antigravity far more, in bursts).
-fn working_share(provider: Provider) -> f64 {
-    match provider {
-        Provider::Claude => 0.06,
-        Provider::Codex => 0.03,
-        Provider::Antigravity => 0.04,
+fn working_share(client: ClientId) -> f64 {
+    match client {
+        ClientId::Claude => 0.06,
+        ClientId::Codex => 0.03,
+        ClientId::Antigravity => 0.04,
+        // Native OpenCode redraws at 3–5% while idle, with fifteen-second bursts above 8%.
+        ClientId::OpenCode => 0.10,
     }
 }
 /// A shorter look than this cannot tell working from idle.
@@ -41,7 +44,7 @@ const HOLD_MS: u128 = 60_000;
 /// A running client: a coding agent's session on this machine.
 #[derive(Clone, PartialEq)]
 pub struct Session {
-    pub provider: Provider,
+    pub client: ClientId,
     pub pid: u32,
     pub(crate) native_birth: Option<Vec<u8>>,
     pub started_at: Millis,
@@ -98,6 +101,10 @@ pub enum Role {
     Unavailable,
     Service,
     Runtime,
+    /// A proven local default invocation.
+    Local,
+    /// A runtime whose placement is shared even inside an editor.
+    Shared,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,6 +173,90 @@ fn codex_role(mut input: impl Read) -> Role {
         Ok(_) => Role::Unknown,
         Err(_) => Role::Unavailable,
     }
+}
+
+#[cfg(target_os = "linux")]
+fn invocation_role(name: &str, input: impl Read) -> Role {
+    if client_of(name) == Some(ClientId::OpenCode) { opencode_role(input) } else { codex_role(input) }
+}
+
+/// Read fixed command names only. A value-bearing option or an unknown prefix stops
+/// the reader before its value; it never establishes local placement authority.
+#[cfg(any(target_os = "linux", test))]
+fn opencode_role(mut input: impl Read) -> Role {
+    let mut byte = [0];
+    let mut ended = false;
+    for _ in 0..2048 {
+        if input.read_exact(&mut byte).is_err() {
+            return Role::Unavailable;
+        }
+        if byte[0] == 0 {
+            ended = true;
+            break;
+        }
+    }
+    if !ended {
+        return Role::Unavailable;
+    }
+    const WORDS: &[&[u8]] = &[
+        b"--version\0",
+        b"-v\0",
+        b"--help\0",
+        b"-h\0",
+        b"completion\0",
+        b"mcp\0",
+        b"generate\0",
+        b"console\0",
+        b"providers\0",
+        b"auth\0",
+        b"upgrade\0",
+        b"uninstall\0",
+        b"models\0",
+        b"stats\0",
+        b"export\0",
+        b"import\0",
+        b"session\0",
+        b"db\0",
+        b"plugin\0",
+        b"plug\0",
+        b"serve\0",
+        b"web\0",
+        b"acp\0",
+        b"agent\0",
+        b"debug\0",
+        b"--pure\0",
+        b"--print-logs\0",
+    ];
+    for _ in 0..16 {
+        match input.read_exact(&mut byte) {
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Role::Local,
+            Err(_) => return Role::Unavailable,
+            Ok(()) => (),
+        }
+        let mut word = byte.as_slice().chain(&mut input);
+        match invocation_word(&mut word, WORDS) {
+            Ok(Some(0..=19)) => return Role::Service,
+            Ok(Some(20..=22)) => return Role::Shared,
+            Ok(Some(23)) => {
+                return match invocation_word(&mut input, &[b"list\0"]) {
+                    Ok(Some(0)) => Role::Service,
+                    Err(_) => Role::Unavailable,
+                    _ => Role::Unknown,
+                };
+            }
+            Ok(Some(24)) => {
+                return match invocation_word(&mut input, &[b"paths\0", b"info\0", b"wait\0"]) {
+                    Ok(Some(_)) => Role::Service,
+                    Err(_) => Role::Unavailable,
+                    _ => Role::Unknown,
+                };
+            }
+            Ok(Some(25..=26)) => continue,
+            Err(_) => return Role::Unavailable,
+            _ => return Role::Unknown,
+        }
+    }
+    Role::Unknown
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -263,7 +354,7 @@ struct Counters {
 struct Scope {
     owner: Option<ProcessKey>,
     name: String,
-    provider: Option<Provider>,
+    client: Option<ClientId>,
     image: Option<(u64, u64)>,
     role: Role,
 }
@@ -282,6 +373,7 @@ pub struct Activity {
     places: HashMap<(u32, Vec<u8>), (PathBuf, Place)>,
     /// Whether sessions are placed at all: with project names turned off, no folder is looked at.
     placing: bool,
+    tracked: HashSet<ClientId>,
     /// Shared authority and unsafe reaping survive reparenting and missing metadata.
     lifetimes: HashMap<ProcessKey, Lifetime>,
     /// Changing ownership invalidates a delta and hold computed from the old tree.
@@ -317,12 +409,64 @@ impl Activity {
             last: HashMap::new(),
             places: HashMap::new(),
             placing,
+            tracked: ClientId::ALL.into_iter().collect(),
             lifetimes: HashMap::new(),
             bases: HashMap::new(),
             scopes: HashMap::new(),
             pending_unsafe: HashSet::new(),
             counters: HashMap::new(),
         }
+    }
+
+    pub fn track(&mut self, clients: &[ClientId]) {
+        self.tracked = clients.iter().copied().collect();
+    }
+
+    /// A currently running native image, as a fallback for catalogue discovery.
+    pub fn client_paths(&self) -> std::collections::BTreeMap<ClientId, PathBuf> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::MetadataExt;
+            self.client_paths_with(&sys::stat, &|pid| {
+                let path = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+                let image = path.metadata().ok()?;
+                Some((path, (image.dev(), image.ino())))
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        std::collections::BTreeMap::new()
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    fn client_paths_with(
+        &self,
+        process: &impl Fn(u32) -> Option<Proc>,
+        image_path: &impl Fn(u32) -> Option<(PathBuf, (u64, u64))>,
+    ) -> std::collections::BTreeMap<ClientId, PathBuf> {
+        let mut found = std::collections::BTreeMap::new();
+        for (key, scope) in &self.scopes {
+            let Some(client) = scope.client.filter(|c| self.tracked.contains(c)) else {
+                continue;
+            };
+            let Some(image) = scope.image.filter(|_| client_of(&scope.name) == Some(client)) else {
+                continue;
+            };
+            let Some(before) = process(key.0) else { continue };
+            // A birth survives exec. Discovery must still belong to the native image
+            // we observed, including while its executable path is being resolved.
+            if before.native_birth.is_none()
+                || before.key().as_ref() != Some(key)
+                || before.name != scope.name
+                || before.image != Some(image)
+            {
+                continue;
+            }
+            let Some((path, path_image)) = image_path(key.0) else { continue };
+            if path_image == image && process(key.0).is_some_and(|after| before.same_process(&after)) {
+                found.entry(client).or_insert(path);
+            }
+        }
+        found
     }
 
     pub fn look(&mut self) -> Vec<Session> {
@@ -416,7 +560,7 @@ impl Activity {
                 let image = self.lifetimes.get(&key)?.image;
                 Some((
                     key,
-                    Scope { owner: None, name: p.name.clone(), provider: provider_of(&p.name), image, role: p.role },
+                    Scope { owner: None, name: p.name.clone(), client: client_of(&p.name), image, role: p.role },
                 ))
             })
             .collect();
@@ -446,7 +590,7 @@ impl Activity {
     ) -> Vec<Session> {
         let by_pid: HashMap<_, _> = procs.iter().map(|p| (p.pid, p)).collect();
         let mut relevant = HashSet::new();
-        for p in procs.iter().filter(|p| provider_of(&p.name).is_some() && mine(p.pid)) {
+        for p in procs.iter().filter(|p| client_of(&p.name).is_some() && mine(p.pid)) {
             relevant.insert(p.pid);
             relevant.extend(ancestors(p.pid, &by_pid));
         }
@@ -454,7 +598,7 @@ impl Activity {
         let mut tree: Vec<_> = relevant
             .iter()
             .copied()
-            .filter(|pid| by_pid.get(pid).is_some_and(|p| provider_of(&p.name).is_some()))
+            .filter(|pid| by_pid.get(pid).is_some_and(|p| client_of(&p.name).is_some()))
             .collect();
         let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
         for p in procs {
@@ -507,7 +651,10 @@ impl Activity {
         let available: HashSet<_> = validated.iter().map(|p| p.pid).collect();
         let unproven: HashSet<_> = procs
             .iter()
-            .filter(|p| p.role == Role::Runtime || validated.iter().any(|q| q.pid == p.pid && q.role == Role::Runtime))
+            .filter(|p| {
+                matches!(p.role, Role::Runtime | Role::Local)
+                    || validated.iter().any(|q| q.pid == p.pid && matches!(q.role, Role::Runtime | Role::Local))
+            })
             .filter(|p| {
                 for pid in ancestors(p.pid, &by_pid) {
                     if !available.contains(&pid) {
@@ -519,7 +666,7 @@ impl Activity {
                     if remote_node(&parent.name) && paths.get(&pid).is_none_or(Option::is_none) {
                         return true;
                     }
-                    if provider_of(&parent.name).is_some() || origin(&[parent], &checked_exe) != Origin::Terminal {
+                    if client_of(&parent.name).is_some() || origin(&[parent], &checked_exe) != Origin::Terminal {
                         // Hosts above a proven owner cannot revoke its authority.
                         return false;
                     }
@@ -622,9 +769,9 @@ impl Activity {
         let mut changed = HashSet::new();
         for (key, scope) in &scopes {
             let Some(before) = self.scopes.get(key) else { continue };
-            let changed_authority = (before.provider.is_some() || scope.provider.is_some())
+            let changed_authority = (before.client.is_some() || scope.client.is_some())
                 && (before.name != scope.name
-                    || before.provider != scope.provider
+                    || before.client != scope.client
                     || before.image.zip(scope.image).is_some_and(|(a, b)| a != b)
                     || (scope.role != Role::Unavailable && before.role != scope.role));
             if before.owner != scope.owner || changed_authority {
@@ -729,7 +876,7 @@ impl Activity {
             counter.assignments.extend(assignments);
             counter.subjects.retain(|key, _| self.lifetimes.contains_key(key) || counter.pending.contains_key(key));
             counter.assignments.retain(|key, _| self.lifetimes.contains_key(key));
-            let next = judged(before, counter.total, now, wall, working_share(f.provider));
+            let next = judged(before, counter.total, now, wall, working_share(f.client));
             let started_at = root.times.unwrap().started;
             let working = if complete { next.working } else { None };
             let last_worked = next.last_worked(started_at, wall);
@@ -738,13 +885,13 @@ impl Activity {
                 bases.insert(key.clone(), basis);
                 counters.insert(key.clone(), counter);
             }
-            if f.authority != Authority::Owned {
+            if f.authority != Authority::Owned || !self.tracked.contains(&f.client) {
                 self.places.remove(&key);
             } else {
                 folders.push((key.clone(), f.pid));
             }
             result.push(Session {
-                provider: f.provider,
+                client: f.client,
                 pid: f.pid,
                 native_birth: root.native_birth.clone(),
                 started_at,
@@ -880,14 +1027,8 @@ fn judged(before: Option<&Seen>, cpu: u64, now: Instant, wall: Millis, share: f6
 /// The client a program name belongs to: `claude`, `codex` and `agy` as they are named,
 /// in lower case. The windows of desktop apps are named in capitals (`Claude`, `Codex`)
 /// and are not sessions: the client an app starts for its chats is.
-fn provider_of(name: &str) -> Option<Provider> {
-    match name.strip_suffix(".exe").unwrap_or(name) {
-        "claude" => Some(Provider::Claude),
-        "codex" => Some(Provider::Codex),
-        // `antigravity` is the editor, not the client.
-        "agy" => Some(Provider::Antigravity),
-        _ => None,
-    }
+fn client_of(name: &str) -> Option<ClientId> {
+    ClientId::by_process_name(name)
 }
 
 /// The sessions among `procs`. Not sessions: clients started by the agent itself to
@@ -924,23 +1065,23 @@ fn sessions_with(
     }
     let mut boundaries: HashSet<u32> =
         procs.iter().filter(|p| p.role == Role::Service).map(|p| p.pid).chain(shared.iter().copied()).collect();
-    for p in procs.iter().filter(|p| p.role == Role::Runtime) {
+    for p in procs.iter().filter(|p| matches!(p.role, Role::Runtime | Role::Shared)) {
         let above = ancestors(p.pid, &by_pid);
-        let owner = above.iter().filter_map(|pid| by_pid.get(pid)).find(|p| provider_of(&p.name).is_some());
+        let owner = above.iter().filter_map(|pid| by_pid.get(pid)).find(|p| client_of(&p.name).is_some());
         if owner.is_some_and(|owner| p.sid.zip(owner.sid).is_some_and(|(a, b)| a != b)) {
             boundaries.insert(p.pid);
         }
     }
-    let client = |p: &Proc| (p.role != Role::Service).then(|| provider_of(&p.name)).flatten();
+    let eligible = |p: &Proc| (p.role != Role::Service).then(|| client_of(&p.name)).flatten();
     let mut found = HashMap::new();
     let mut uncertain = unproven.clone();
     // Newly found unowned/shared roots are barriers in this very observation,
-    // including for other-provider descendants. Each pass only adds a boundary.
+    // including for other-client descendants. Each pass only adds a boundary.
     loop {
         found.clear();
         let mut added = false;
         for p in procs {
-            let Some(provider) = client(p) else { continue };
+            let Some(client) = eligible(p) else { continue };
             let ancestry = ancestors(p.pid, &by_pid);
             let above: Vec<&Proc> = ancestry.iter().filter_map(|pid| by_pid.get(pid).copied()).collect();
             if p.pid == own || is_quotum(&p.name) || ancestry.contains(&own) || above.iter().any(|p| is_quotum(&p.name))
@@ -952,14 +1093,18 @@ fn sessions_with(
             let owner = above
                 .iter()
                 .take_while(|p| !boundaries.contains(&p.pid) && !uncertain.contains(&p.pid))
-                .find_map(|p| client(p));
-            if !separated && !incomplete && owner == Some(provider) {
+                .find_map(|p| eligible(p));
+            if !separated
+                && !incomplete
+                && owner == Some(client)
+                && (client != ClientId::OpenCode || p.role == Role::Local)
+            {
                 continue;
             }
             let origin = origin(&above, exe);
-            let authority = if separated {
+            let authority = if p.role == Role::Shared || separated {
                 Authority::Shared
-            } else if incomplete {
+            } else if incomplete || (client == ClientId::OpenCode && p.role != Role::Local) {
                 Authority::Unproven
             } else if p.role == Role::Runtime && owner.is_none() && origin == Origin::Terminal {
                 Authority::Shared
@@ -971,7 +1116,7 @@ fn sessions_with(
                 Authority::Unproven => added |= uncertain.insert(p.pid),
                 Authority::Owned => (),
             }
-            found.insert(p.pid, (provider, origin, authority));
+            found.insert(p.pid, (client, origin, authority));
         }
         if !added {
             break;
@@ -979,7 +1124,7 @@ fn sessions_with(
     }
     let mut list: Vec<_> = found
         .iter()
-        .map(|(&pid, &(provider, origin, authority))| {
+        .map(|(&pid, &(client, origin, authority))| {
             let mut tree = vec![pid];
             let mut at = 0;
             while at < tree.len() && tree.len() < 4096 {
@@ -994,17 +1139,17 @@ fn sessions_with(
                 }
                 at += 1;
             }
-            Found { provider, pid, origin, tree, authority }
+            Found { client, pid, origin, tree, authority }
         })
         .collect();
-    list.sort_by_key(|f| (f.provider, f.pid));
+    list.sort_by_key(|f| (f.client, f.pid));
     list
 }
 
 /// A process session and its owned CPU tree. Shared roots have no placement authority.
 #[derive(Debug, PartialEq)]
 pub struct Found {
-    pub provider: Provider,
+    pub client: ClientId,
     pub pid: u32,
     pub origin: Origin,
     pub tree: Vec<u32>,
@@ -1023,7 +1168,7 @@ fn remote_node(name: &str) -> bool {
 }
 
 /// Where a client runs, from the programs above it: an editor, the desktop app of its
-/// provider, or else a terminal (a shell, a multiplexer, ssh). An editor's server on a
+/// client, or else a terminal (a shell, a multiplexer, ssh). An editor's server on a
 /// remote machine (VS Code over SSH, Cursor, code-server) is a Node.js found by its path:
 /// named `node`, or `MainThread` on Linux since Node 24 (the name of its main thread).
 fn origin(above: &[&Proc], exe: &dyn Fn(u32) -> Option<String>) -> Origin {
@@ -1050,7 +1195,7 @@ fn origin(above: &[&Proc], exe: &dyn Fn(u32) -> Option<String>) -> Origin {
             if EDITORS.contains(&name.as_str()) || HELPERS.iter().any(|helper| name.starts_with(helper)) || server() {
                 Some(Origin::Editor)
             } else if ["chatgpt", "codex", "claude"].contains(&name.as_str()) && bare != name {
-                // A capitalised name of a provider: its desktop app (a client of the same name is lower case).
+                // A capitalised name of a client: its desktop app (a client of the same name is lower case).
                 Some(Origin::App)
             } else {
                 None
@@ -1299,7 +1444,7 @@ mod sys {
 
     /// A process from /proc/<pid>/stat: its name, parent, start and the CPU time it and its
     /// finished children have spent, in milliseconds.
-    fn stat(pid: u32) -> Option<Proc> {
+    pub(super) fn stat(pid: u32) -> Option<Proc> {
         let text = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         // The name is in parentheses and may itself hold spaces and parentheses.
         let (open, close) = (text.find('(')?, text.rfind(')')?);
@@ -1334,14 +1479,16 @@ mod sys {
             .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok())
             .filter_map(stat)
             .filter_map(|p| {
-                if super::provider_of(&p.name) != Some(crate::model::Provider::Codex)
-                    || !mine(p.pid)
+                if !matches!(
+                    super::client_of(&p.name),
+                    Some(crate::clients::ClientId::Codex | crate::clients::ClientId::OpenCode)
+                ) || !mine(p.pid)
                     || p.times.is_none()
                 {
                     return Some(p);
                 }
                 let role = fs::File::open(format!("/proc/{}/cmdline", p.pid))
-                    .map(super::codex_role)
+                    .map(|input| super::invocation_role(&p.name, input))
                     .unwrap_or(Role::Unavailable);
                 // The role must belong to the process we listed, even if it exited and its
                 // pid was reused during the read. Never cache a role by pid alone.
@@ -1356,8 +1503,14 @@ mod sys {
         if !listed.same_process(&before) {
             return None;
         }
-        let role = if super::provider_of(&before.name) == Some(crate::model::Provider::Codex) && mine(before.pid) {
-            fs::File::open(format!("/proc/{}/cmdline", before.pid)).map(super::codex_role).unwrap_or(Role::Unavailable)
+        let role = if matches!(
+            super::client_of(&before.name),
+            Some(crate::clients::ClientId::Codex | crate::clients::ClientId::OpenCode)
+        ) && mine(before.pid)
+        {
+            fs::File::open(format!("/proc/{}/cmdline", before.pid))
+                .map(|input| super::invocation_role(&before.name, input))
+                .unwrap_or(Role::Unavailable)
         } else {
             Role::Unknown
         };
@@ -1485,7 +1638,7 @@ mod sys {
                 // A second native read belongs only to our candidate clients, not to
                 // every process on the machine. Re-read their names inside that token.
                 let native_birth =
-                    (super::provider_of(&name).is_some() && bsd.pbi_uid == own).then(|| birth(pid as u32)).flatten();
+                    (super::client_of(&name).is_some() && bsd.pbi_uid == own).then(|| birth(pid as u32)).flatten();
                 if native_birth.is_some() {
                     let checked: libc::proc_bsdinfo = info(pid as u32, libc::PROC_PIDTBSDINFO)?;
                     if bsd.pbi_ppid != checked.pbi_ppid
@@ -1676,7 +1829,7 @@ mod sys {
                     image: None,
                     name: name.clone(),
                     times: None,
-                    native_birth: super::provider_of(&name)
+                    native_birth: super::client_of(&name)
                         .filter(|_| mine(entry.th32ProcessID))
                         .and_then(|_| named_birth(entry.th32ProcessID, &name)),
                     role: Role::Unknown,
@@ -1901,8 +2054,8 @@ mod tests {
         }
     }
 
-    fn found(procs: &[Proc]) -> Vec<(Provider, u32, Vec<u32>)> {
-        sessions(procs, 900, &|_| None).into_iter().map(|f| (f.provider, f.pid, f.tree)).collect()
+    fn found(procs: &[Proc]) -> Vec<(ClientId, u32, Vec<u32>)> {
+        sessions(procs, 900, &|_| None).into_iter().map(|f| (f.client, f.pid, f.tree)).collect()
     }
 
     fn origins(procs: &[Proc]) -> Vec<(u32, Origin)> {
@@ -1911,6 +2064,59 @@ mod tests {
 
     fn codex(pid: u32, parent: u32, invocation: &[u8]) -> Proc {
         Proc { role: codex_role(invocation), ..p(pid, parent, "codex") }
+    }
+
+    #[test]
+    fn running_discovery_stays_with_the_observed_native_image() {
+        let listed = Proc {
+            times: Some(Times { started: 100, own: 0, reaped: 0 }),
+            native_birth: Some(vec![1]),
+            image: Some((2, 3)),
+            role: Role::Local,
+            ..p(7, 1, "opencode")
+        };
+        let mut activity = Activity::new("/fixture-home".into(), false);
+        let path = PathBuf::from("/fixture/opencode");
+        let image_path = |_: u32| Some((path.clone(), (2, 3)));
+        let read = |_: u32| Some(listed.clone());
+        assert!(activity.client_paths_with(&read, &image_path).is_empty());
+        activity.observe(
+            std::slice::from_ref(&listed),
+            900,
+            Instant::now(),
+            100,
+            &|p| Some(p.clone()),
+            &|_| None,
+            &|_| None,
+            &|_| true,
+        );
+        assert_eq!(activity.client_paths_with(&read, &image_path).get(&ClientId::OpenCode), Some(&path));
+        for changed in [
+            Proc { name: "other".into(), image: Some((2, 4)), ..listed.clone() },
+            Proc { image: Some((2, 4)), ..listed.clone() },
+            Proc { image: None, ..listed.clone() },
+            Proc { native_birth: Some(vec![2]), ..listed.clone() },
+        ] {
+            assert!(activity.client_paths_with(&|_| Some(changed.clone()), &image_path).is_empty());
+            let reads = std::cell::Cell::new(0);
+            assert!(
+                activity
+                    .client_paths_with(
+                        &|_| {
+                            let first = reads.replace(reads.get() + 1) == 0;
+                            Some(if first { listed.clone() } else { changed.clone() })
+                        },
+                        &image_path,
+                    )
+                    .is_empty(),
+                "a replacement during path resolution is not a discovery"
+            );
+        }
+        assert!(activity.client_paths_with(&read, &|_| Some((path.clone(), (2, 4)))).is_empty());
+        assert!(activity.client_paths_with(&|_| None, &image_path).is_empty());
+        assert!(activity.client_paths_with(&read, &|_| None).is_empty());
+        activity.track(&[]);
+        assert!(activity.client_paths_with(&read, &image_path).is_empty());
     }
 
     #[test]
@@ -1935,9 +2141,9 @@ mod tests {
             })
             .sum();
         let now = Instant::now();
-        let first = judged(None, 0, now, 0, working_share(Provider::Codex));
+        let first = judged(None, 0, now, 0, working_share(ClientId::Codex));
         let next =
-            judged(Some(&first), cpu, now + std::time::Duration::from_secs(15), 15_000, working_share(Provider::Codex));
+            judged(Some(&first), cpu, now + std::time::Duration::from_secs(15), 15_000, working_share(ClientId::Codex));
         assert_eq!(next.working, Some(false), "foreign tools must not activate the idle launcher");
     }
 
@@ -1967,10 +2173,10 @@ mod tests {
         assert_eq!(
             found(&procs),
             vec![
-                (Provider::Codex, 11, vec![11, 12]),
-                (Provider::Codex, 30, vec![30, 31]),
-                (Provider::Codex, 41, vec![41]),
-                (Provider::Codex, 51, vec![51]),
+                (ClientId::Codex, 11, vec![11, 12]),
+                (ClientId::Codex, 30, vec![30, 31]),
+                (ClientId::Codex, 41, vec![41]),
+                (ClientId::Codex, 51, vec![51]),
             ]
         );
     }
@@ -1994,7 +2200,7 @@ mod tests {
         ] {
             let proc = codex(10, 1, invocation);
             assert_eq!(proc.role, Role::Unknown);
-            assert_eq!(found(&[proc]), vec![(Provider::Codex, 10, vec![10])]);
+            assert_eq!(found(&[proc]), vec![(ClientId::Codex, 10, vec![10])]);
         }
         let long = vec![b'x'; 2048];
         assert_eq!(codex_role(long.as_slice()), Role::Unavailable);
@@ -2051,9 +2257,9 @@ mod tests {
         assert_eq!(
             found(&procs),
             vec![
-                (Provider::Claude, 11, vec![11, 12, 13]),
-                (Provider::Codex, 20, vec![20]),
-                (Provider::Antigravity, 30, vec![30])
+                (ClientId::Claude, 11, vec![11, 12, 13]),
+                (ClientId::Codex, 20, vec![20]),
+                (ClientId::Antigravity, 30, vec![30])
             ]
         );
     }
@@ -2068,19 +2274,19 @@ mod tests {
     #[test]
     fn a_launcher_and_the_client_it_runs_are_one_session() {
         let procs = [p(1, 0, "init"), p(10, 1, "codex"), p(11, 10, "codex"), p(12, 11, "bash")];
-        assert_eq!(found(&procs), vec![(Provider::Codex, 10, vec![10, 11, 12])]);
+        assert_eq!(found(&procs), vec![(ClientId::Codex, 10, vec![10, 11, 12])]);
     }
 
     #[test]
     fn a_client_started_by_another_kind_is_its_own_session() {
         let procs = [p(1, 0, "init"), p(10, 1, "claude"), p(11, 10, "codex"), p(12, 11, "bash")];
-        assert_eq!(found(&procs), vec![(Provider::Claude, 10, vec![10]), (Provider::Codex, 11, vec![11, 12])]);
+        assert_eq!(found(&procs), vec![(ClientId::Claude, 10, vec![10]), (ClientId::Codex, 11, vec![11, 12])]);
     }
 
     #[test]
     fn stale_parents_in_a_cycle_end_the_walk() {
         let procs = [p(10, 11, "sh"), p(11, 10, "sh"), p(12, 11, "claude")];
-        assert_eq!(found(&procs), vec![(Provider::Claude, 12, vec![12])]);
+        assert_eq!(found(&procs), vec![(ClientId::Claude, 12, vec![12])]);
     }
 
     /// Codex on one Linux machine: in terminals, in VS Code windows and in the desktop app.
@@ -2429,6 +2635,7 @@ mod tests {
             last: HashMap::new(),
             places: HashMap::new(),
             placing: true,
+            tracked: ClientId::ALL.into_iter().collect(),
             lifetimes: HashMap::new(),
             bases: HashMap::new(),
             scopes: HashMap::new(),
@@ -2576,6 +2783,29 @@ mod tests {
         assert_eq!(pause.working, Some(true));
         let quiet = judged(Some(&pause), 2_520, at(80), 80_000, 0.05);
         assert_eq!(quiet.working, Some(false));
+    }
+
+    #[test]
+    fn opencode_idle_redraws_stay_idle_and_owned_cpu_keeps_the_existing_hold() {
+        use std::time::Duration;
+        let start = Instant::now();
+        let share = working_share(ClientId::OpenCode);
+        let mut seen = judged(None, 0, start, 0, share);
+        let mut cpu = 0;
+        // Independent native idle runs at fifteen-second intervals, including redraw bursts.
+        for (index, percent) in [3.99, 3.72, 4.72, 5.78, 5.04, 4.05, 3.59, 8.44, 3.72].into_iter().enumerate() {
+            cpu += (15_000.0 * percent / 100.0) as u64;
+            let ms = (index as u64 + 1) * 15_000;
+            seen = judged(Some(&seen), cpu, start + Duration::from_millis(ms), ms as Millis, share);
+            assert_eq!(seen.working, Some(false), "an idle redraw must not start a work hold");
+        }
+        let busy_at = start + Duration::from_secs(150);
+        let busy = judged(Some(&seen), cpu + 3_000, busy_at, 150_000, share);
+        assert_eq!(busy.working, Some(true), "an owned tree spending twenty percent still works");
+        let pause = judged(Some(&busy), cpu + 4_000, busy_at + Duration::from_secs(30), 180_000, share);
+        assert_eq!(pause.working, Some(true));
+        let idle = judged(Some(&pause), cpu + 5_050, busy_at + Duration::from_secs(60), 210_000, share);
+        assert_eq!(idle.working, Some(false));
     }
 
     #[test]

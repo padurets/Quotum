@@ -110,6 +110,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   const anyHost = hosts.has('*');
   const history = new HistoryTiles(store);
   const events = hub.events ?? new Events(hub);
+  events.onClientHistory = (user, since) => history.touchClient(user, since);
   events.onHistory = (source, since, scopes) => history.touch(source, since, scopes);
   events.attach();
   hub.credentials!.setObserver(events);
@@ -228,7 +229,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
       chunks=transformed.map(chunk=>JSON.stringify(chunk));
       if(chunks.reduce((sum,json)=>sum+Buffer.byteLength(json),0)>16*1024*1024)return reply.code(413).send({error:'history_limit'});
     }
-    const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown)};
+    const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown, scope === 'budget' ? null : store.privateOwner(board))};
     const tag = request.query.meta === undefined ? undefined : history.metadata(board, basis, scope);
     const meta = JSON.stringify(tag && request.query.meta === tag ? {now, run: events.epoch, meta: tag} : {now, ...basis, ...(tag ? {meta: tag} : {})});
 

@@ -73,7 +73,7 @@ function* activityOf(chunk: Chunk, cell: number): Preparation<Map<number, PlotBa
   if (saved && saved.from === chunk.from && saved.cell === cell) return saved.rows;
   const sessions: {ref: string; keys: Record<ActivityDimension, string>; names: Record<ActivityDimension, string | null>}[] = [];
   for (const [ref, source, project, device] of activity.sessions) {
-    sessions.push({ref, keys: {source, project: JSON.stringify(project), device}, names: {source: null, project, device: activity.devices[device] ?? null}}); yield;
+    sessions.push({ref, keys: {source: source ?? 'unknown', project: JSON.stringify(project), device}, names: {source: null, project, device: activity.devices[device] ?? null}}); yield;
   }
   const rows = new Map<number, PlotBar>();
   for (const [i, active, members] of activity.cells) {

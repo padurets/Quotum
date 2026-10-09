@@ -15,6 +15,7 @@ import {seedDeepSeek} from './deepseek.js';
 import {seedQuotas} from './quotas.js';
 import {seedMoney} from './money.js';
 import {seedCodexCredits} from './codexCredits.js';
+import {seedClients} from './clients.js';
 import {seedCurrencies} from './currencies.js';
 import {Directory} from '../server/store/directory.js';
 
@@ -167,6 +168,11 @@ export class Demo {
       QUOTUM_ALLOWED_HOSTS: address.hosts,
       QUOTUM_SECRET_KEY:Buffer.alloc(32,31).toString('base64url'),
     });
+    if (set.id === 'clients') {
+      // With no quota samples, the synthetic work needs its historical database start.
+      const seeded = new Store(path.join(this.dir, 'quotum.sqlite'), this.start + earliest(set));
+      seeded.close();
+    }
     const hub = (this.hub = spawn(process.execPath, ['--import','tsx',path.join(path.dirname(fileURLToPath(import.meta.url)),'hub.ts')], {cwd: this.options.hubRoot ?? HUB, env, stdio: ['ignore', 'pipe', 'pipe']}));
     hub.stdout!.on('data', chunk => this.output.add(chunk));
     hub.stderr!.on('data', chunk => this.output.add(chunk));
@@ -186,6 +192,7 @@ export class Demo {
     const store = new Store(path.join(this.dir, 'quotum.sqlite'));
     try {
       seedWork(store, stand);
+      if(set.id==='clients')await seedClients(store,new Directory(store.db),stand);
       if(this.options.money!==false&&(set.id==='all'||set.id==='money'||set.id==='analytics')){await seedMoney(store,new Directory(store.db),stand);await seedDeepSeek(store,new Directory(store.db),stand);seedCurrencies(store,stand);seedCodexCredits(store,new Directory(store.db),stand);}
       if(this.options.money!==false&&(set.id==='all'||set.id==='quotas'||set.id==='analytics'))await seedQuotas(store,new Directory(store.db),stand);
     } finally {

@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState, type FormEvent} from 'react';
+import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
 import {stamp} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
 import {errorText} from '../lib/quota';
@@ -8,7 +8,9 @@ import {CopyField, ErrorLine, Field, Modal} from './Kit';
 import {rich, t} from '../i18n';
 import {Ago} from './Time';
 import {ConnectionRow} from './Connections';
-import {useConnectionsRevision} from '../lib/board';
+import {clientName} from '../../server/domain/clients';
+import type {LiveSession} from '../lib/types';
+import {useConnectionsRevision, useDevicesRevision} from '../lib/board';
 
 export type Device = {
   id: string;
@@ -21,6 +23,8 @@ export type Device = {
   via: 'code' | 'token';
   lastSeenAt: number | null;
   sources: {provider: string; source: string; seenAt: number}[];
+  clients?: {clientId: string; version: string | null; seenAt: number}[];
+  sessions?: (LiveSession & {source: string | null})[];
   failures: {provider: string; error: string; detail: string | null; at: number}[];
 };
 type Token = {id: string; name: string; hint: string; createdAt: number; lastUsedAt: number | null};
@@ -49,13 +53,24 @@ function Agents({device}: {device: Device}) {
 
 /** The reader's devices; on the desktop app's board, its one machine, which cannot be disconnected (it is the app's own agent). */
 export function Devices({local}: {local: boolean}) {
+  const [detailsId, setDetails] = useState<string | null>(null);
+  const revision = useConnectionsRevision();
+  const presence = useDevicesRevision();
+  const request = useRef(0);
   const [devices, setDevices] = useState<Device[] | null>(null);
+  const details = devices?.find(device=>device.id===detailsId) ?? null;
   const [renaming,setRenaming]=useState<Device|null>(null),[name,setName]=useState('');
   const [error, setError] = useState<unknown>(null);
   const load = useCallback(() => {
-    call<Device[]>('GET', '/api/devices').then(setDevices, setError);
+    const current = ++request.current;
+    call<Device[]>('GET', '/api/devices').then(value => {
+      if (current !== request.current) return;
+      setDevices(value); setError(null);
+    }, failure => {if (current === request.current) setError(failure);});
   }, []);
-  useEffect(load, [load]);
+  useEffect(load, [load, revision]);
+  useEffect(() => {if (detailsId !== null) load();}, [load, detailsId, presence]);
+  useEffect(() => () => {++request.current;}, []);
 
   const revoke = async (device: Device) => {
     if (!confirm(t('devices.confirmRevoke', {name: device.name}))) return;
@@ -79,8 +94,16 @@ export function Devices({local}: {local: boolean}) {
       icon={<svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><rect x="2" y="3" width="12" height="8" rx="1.5"/><path d="M5.5 13.5h5M8 11v2.5"/></svg>}
       detail={<><span>{device.os}</span><span className="connection-detail"><Agents device={device}/></span></>}
       status={<span title={device.lastSeenAt?stamp(device.lastSeenAt):undefined}>{device.lastSeenAt?<Ago at={device.lastSeenAt}/>:t('connect.unused')}</span>}
-      actions={<><button className="popover-row" onClick={()=>{setError(null);setName(device.name);setRenaming(device);}}><span>{t('connections.rename')}</span></button>{!local&&<button className="popover-row danger" onClick={()=>void revoke(device)}><span>{t('devices.revoke')}</span></button>}</>}
+      actions={<><button className="popover-row" onClick={()=>setDetails(device.id)}><span>{t('devices.clients')}</span></button><button className="popover-row" onClick={()=>{setError(null);setName(device.name);setRenaming(device);}}><span>{t('connections.rename')}</span></button>{!local&&<button className="popover-row danger" onClick={()=>void revoke(device)}><span>{t('devices.revoke')}</span></button>}</>}
     />)}
+    {details&&<Modal title={t('devices.clientsOn',{name:details.name})} onClose={()=>setDetails(null)}>
+      <div className="settings-section"><h3>{t('devices.clients')}</h3><ul className="settings-list">
+        {(details.clients ?? []).map(client=><li className="settings-list-row popover-row" key={client.clientId}><span className="settings-item-main"><b>{clientName(client.clientId)}</b></span><span className="settings-item-detail">{client.version ?? t('devices.versionUnknown')}</span></li>)}
+      </ul></div>
+      <div className="settings-section"><h3>{t('agents.title')}</h3><ul className="settings-list">
+        {(details.sessions ?? []).map((session,i)=><li className="settings-list-row popover-row" key={i}><span className="settings-item-main"><b>{clientName(session.clientId ?? 'unknown')}</b><small>{session.project ?? t('agents.noProject')}</small></span><span className="settings-item-detail">{session.source ? PROVIDERS[session.source.split(':')[0]]?.name ?? session.source : t('agents.unknownSource')}</span></li>)}
+      </ul></div>
+    </Modal>}
     {renaming&&<Modal title={t('devices.rename',{name:renaming.name})} onClose={()=>setRenaming(null)}>
       <form className="dialog-form" onSubmit={rename}><Field label={t('devices.nameLabel')} value={name} maxLength={80} placeholder={renaming.reported} autoFocus onChange={e=>setName(e.target.value)}/><ErrorLine error={error}/><div className="button-row"><button className="button" type="button" onClick={()=>setRenaming(null)}>{t('common.cancel')}</button><button className="button primary">{t('boards.save')}</button></div></form>
     </Modal>}

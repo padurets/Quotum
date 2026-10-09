@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::{Adapter, Context, locate, process_failure, version_in};
+use super::{Collector, Context, locate, process_failure, version_in};
 use crate::model::{BalanceStatus, CreditBalance, ResourceStatus, ResourceStatuses};
 use crate::model::{ErrorKind, Failure, Kind, Millis, Outcome, Provider, Resets, Snapshot, Window, now_ms, pseudonym};
 use crate::process::Client;
@@ -19,34 +19,9 @@ const PLAN_LIMIT: &str = "codex";
 
 pub struct Codex;
 
-impl Adapter for Codex {
+impl Collector for Codex {
     fn provider(&self) -> Provider {
         P
-    }
-
-    fn program(&self) -> &'static str {
-        "codex"
-    }
-
-    fn install_dirs(&self, home: &Path) -> Vec<PathBuf> {
-        // And where the installer of the command-line client puts it on Windows.
-        let installer = dirs::data_local_dir().filter(|_| cfg!(windows));
-        let installer = installer.map(|local| local.join("Programs").join("OpenAI").join("Codex").join("bin"));
-        std::iter::once(home.join(".codex/bin")).chain(installer).collect()
-    }
-
-    /// The clients the Codex app and the editor extensions carry: whoever uses only those
-    /// has no command-line client to install.
-    fn fallback_dirs(&self, home: &Path) -> Vec<PathBuf> {
-        let mut found = Vec::new();
-        if cfg!(target_os = "linux") {
-            found.push(PathBuf::from("/usr/lib/chatgpt/resources"));
-        }
-        if cfg!(windows) {
-            found.extend(dirs::data_local_dir().map(|local| app_clients(&local)).unwrap_or_default());
-        }
-        found.extend(extension_clients(home));
-        found
     }
 
     fn measure(&mut self, ctx: &Context) -> Outcome {
@@ -79,7 +54,7 @@ impl Adapter for Codex {
 
 /// The directories holding the client of the Codex extension (`openai.chatgpt-<version>-<platform>`)
 /// in VS Code, its server and its forks, the newest version first.
-fn extension_clients(home: &Path) -> Vec<PathBuf> {
+pub(crate) fn extension_clients(home: &Path) -> Vec<PathBuf> {
     let version = |dir: &Path| -> Vec<u32> {
         let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default();
         let version = name.trim_start_matches("openai.chatgpt-").split('-').next().unwrap_or_default();
@@ -105,7 +80,7 @@ fn extension_clients(home: &Path) -> Vec<PathBuf> {
 /// (installed from the web, or from the Store): each place, then the directories in it
 /// (`bin\\<hash>`), the newest first. Not the app's own package in WindowsApps: nobody
 /// but the app may start what is there.
-fn app_clients(local: &Path) -> Vec<PathBuf> {
+pub(crate) fn app_clients(local: &Path) -> Vec<PathBuf> {
     let places = [
         local.join("OpenAI").join("Codex").join("bin"),
         local

@@ -399,7 +399,7 @@ of running agents for five minutes after its last request, then forgets it.
 | Field | Meaning |
 |---|---|
 | `provider` | As in a snapshot. |
-| `account`, `accountName` | The subscription, as in a check-in, as far as the agent knows it. Without them the hub takes the subscription this machine last delivered for that provider; the reference agent leaves out a session of a client that names its account while it does not know which one that is (signed in anew since it measured). Either way, only a subscription the device's person holds (their devices measured it). |
+| `account`, `accountName` | The subscription, as in a check-in, as far as the agent knows it. Without them the hub takes the subscription this machine last delivered for that provider; the reference agent leaves out a session of a client that names its account while it does not know which one that is (signed in anew since it measured). Unknown or unheld attribution is retained privately. |
 | `origin` | Where it runs: `terminal`, `editor` (a client an editor runs, one per window) or `app` (a provider's desktop app, one client for all its chats). |
 | `project` | The project it works in, never a path. The reference agent leaves project and folder absent for a proven shared runtime or one without a proven client/window owner; an inherited working directory is not project authority. For an owned session: the name of the git repository its folder is in (for a worktree, of the repository it belongs to), else the name of the folder. Absent when the folder that names it (the repository's main folder, else the folder itself) is the home folder, above it or temporary. A repository is looked for in the folder and the folders above it, stopping before the home folder (neither it nor anything above it is looked at), and on macOS not in or through the folders the system guards (Desktop, Documents, Downloads, iCloud Drive, other volumes): there the project is the folder. Paths are checked as git writes them; a chain of links made by hand may still lead there. The hub counts time under this name, and boards show it. A longer name than 120 characters is cut, not refused. |
 | `folder` | The name of the folder it works in, when that is not `project` (a subfolder or a worktree), and the folder is not the home folder, above it or temporary. Boards show it under the project in the lists of running agents, so agents of one project stay apart; where the agent tells none and its person renamed the project, the name reported for the project is shown there instead. Cut like `project`. |
@@ -416,8 +416,7 @@ in a worktree, the `.git` file leads to the main repository's git folder through
 At most 200 sessions (the reference agent keeps the working ones first, then those that
 worked most recently, then the newest), in at most 512 KiB. Without `lastWorkedAt`,
 working ones come first, then the newest. Clocks are as in a batch. `200` with `{"accepted": n}`:
-sessions of a subscription the hub does not know, or the person does not hold, are left
-out. Errors are as for check-ins; a hub without this request answers `404` with
+all accepted sessions are retained; unknown or unheld attribution is private as described below. Errors are as for check-ins; a hub without this request answers `404` with
 `{"error": "not_found"}`, and the agent asks it again an hour later (it may have been
 upgraded). A `404` without that body comes from something in front of the hub and is
 tried again like any failure.
@@ -462,6 +461,64 @@ On upgrade or downgrade with a clock rollback, each namespace clips new credit a
 a snapshot of the other namespace's retained device-wide end, taken before any writes.
 This conservatively may undercount parallel processes until that end, rather than
 crediting the same period twice. Existing work is never rewritten or reconstructed.
+
+### Coding clients independent of collectors
+
+The client catalogue is `claude`, `codex`, `antigravity`, `opencode`. Only the first
+three have subscription collectors; OpenCode never appears in snapshots, failures or
+check-ins. Tracking is controlled independently by `[clients.<id>] enabled`; turning
+measurement off does not turn tracking off. `sessions = false` disables all reporting
+of sessions and inventory. `[clients.<id>] path` takes precedence over the legacy
+provider path. `route` reserves consent for future route observations; this agent does
+not classify routes. Unknown configuration IDs are warned about and ignored.
+
+`POST /v1/sessions` accepts these additive fields:
+
+- Legacy `sessions` may include `clientId` and `route`. The hub derives the canonical
+  client from `provider`, ignoring mismatches. Required legacy fields retain strict
+  validation. Legacy session IDs retain their existing validation and identity.
+- `clientSessions` has the same origin, names, dates, working and optional session ID,
+  but requires `clientId` instead of `provider`, and has an optional `source` object
+  `{provider, account?, accountName?}`. Absent, invalid or null source means unknown;
+  this array never uses the machine's previous source binding. Hub-measured providers
+  cannot supply an agent's source attribution.
+- `clients` replaces the device's installed inventory, with at most 64 accepted entries
+  `{clientId, version?: string|null}`. An omitted or malformed whole field preserves
+  inventory, and `[]` clears it. Duplicate IDs keep the first accepted entry. Version
+  is a bounded token, never raw stdout, stderr or an executable path.
+
+Client IDs are lower-case ASCII identifiers of one to 64 characters, beginning with a
+letter, followed by letters, digits, `_` or `-`. Unknown valid IDs are safely preserved.
+Malformed supplemental entries are skipped independently. Malformed optional names,
+last-work times, IDs or provenance become unknown; duplicate IDs across the two arrays
+are skipped in the supplemental array. Malformed new fields do not reject valid legacy
+sessions. The combined limit is 200 accepted sessions, with legacy entries first.
+
+The reference agent preserves the released legacy subset, order, fields and cap policy.
+OpenCode, clients whose collector is disabled, and clients signed in anew since their
+last measurement use only the remaining supplemental capacity. Legacy overflow is not
+moved into the supplemental array. Older hubs ignore new fields and retain the legacy
+subset. Every packet replaces both live lists, including when either list is absent.
+
+Optional route provenance is `{class: "subscription"|"api"|"unknown",
+by: "session"|"machine", host?: string, provider?: string}`. Only session evidence may
+carry a lower-case DNS host without port, scheme, credentials, path, query or fragment.
+Invalid provenance is ignored. These fields do not resolve or change source attribution.
+Stored account evidence (`login`, `inferred`, `legacy`) and route evidence are metadata,
+not process identity. Stronger evidence replaces weaker; equal-strength route conflicts
+become unknown with identifying details removed. Updates never split a work context.
+
+Accepted work with no known source is stored with a null source. A known source the
+owner does not hold remains stored internally but is projected as unknown. Only the
+owner's personal board and authenticated device view include these sessions and work;
+shared boards exclude them even for the owner. They cannot affect a source's working
+state, measuring cadence, forecasts or attention. Held work under a hidden card retains
+its existing filter. No placeholder source, holding or duty is created.
+
+Ledger contexts include the client and a nullable source while keeping released row IDs,
+producer IDs, legacy ordinals and intervals. Stable high water is scoped to device,
+client and producer; released cross-namespace floors remain in effect. Changing source
+creates a context for the same producer without rewriting previous credit.
 
 ## Connecting with a one-time code
 
@@ -573,3 +630,22 @@ ID is kept only in the hub's work ledger; no producer ID, raw native token, PID,
 metadata or salt appears in board state, history, errors or logs.
 
 The measuring-frequency preference is kept on the hub. It adds no information to agent traffic.
+
+### Client discovery privacy
+
+Inventory uses configured paths and the catalogue's local install locations. Version
+probes run only when executable identity changes, with neutral working directory, closed
+stdin, discarded stderr and no inherited `QUOTUM_*` variables. Raw stdout is bounded
+before allocation to 16 KiB; the five-second budget covers successful exit as well as EOF.
+Failure stops and reaps the process group. No client credentials or provider APIs are read.
+
+OpenCode discovery recognizes native `opencode` / `opencode.exe`, not a generic node or
+bun host. On Linux a fixed allowlist consumes a bounded invocation prefix to identify the
+default local TUI, proven maintenance commands, or shared `serve`, `web` and `acp` runtimes.
+It stops before option values or free text. Unknown commands, value-bearing options,
+attach/run/remote invocations and unavailable metadata prove no local project authority.
+Shared and unproven roots have no project or folder. Proven maintenance is excluded from
+sessions and from ancestor CPU; unsafe reaping uses the existing birth-scoped rules.
+On macOS and Windows this invocation proof is unavailable: native OpenCode presence is
+reported without project attribution. Node/bun installs are outside detection capability.
+No prompts, transcripts, tool output, configuration endpoints or model requests are used.

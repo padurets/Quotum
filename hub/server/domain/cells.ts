@@ -25,7 +25,7 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
   }
   const firstTile = tileOf(from, cell);
   const chunkOf = (at: number) => chunks[tileOf(at, cell) - firstTile];
-  const bySource = new Map<string, Stretch[]>();
+  const bySource = new Map<string | null, Stretch[]>();
   for (const stretch of stretches) {
     if (!bySource.has(stretch.source)) bySource.set(stretch.source, []);
     bySource.get(stretch.source)!.push(stretch);
@@ -99,7 +99,7 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
     const row: (typeof chunk.activity.cells)[number] = [(at - chunk.from) / cell, active, [...sessions].map(([id, {ms}]) => ms === active ? indexes.get(id)! : [indexes.get(id)!, ms]), []];
     const dimensions = ['s', 'p', 'd'] as const;
     for (const dim of dimensions) {
-      const keyOf = (s: Stretch) => dim === 's' ? s.source : dim === 'p' ? JSON.stringify(s.project) : s.device;
+      const keyOf = (s: Stretch) => dim === 's' ? s.source ?? 'unknown' : dim === 'p' ? JSON.stringify(s.project) : s.device;
       const grouped = new Map<string, Stretch[]>();
       for (const s of spans) {
         const key = keyOf(s);

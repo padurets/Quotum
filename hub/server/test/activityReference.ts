@@ -20,7 +20,7 @@ export function activity(stretches: Stretch[], known: Span, cellMs: number, devi
   // Each stretch's group in each dimension, by index.
   const projectKeys = new Map<string | null, string>();
   const keyOf: Record<Dimension, (s: Stretch) => string> = {
-    source: s => s.source,
+    source: s => s.source ?? 'unknown',
     project: s => projectKeys.get(s.project) ?? projectKeys.set(s.project, JSON.stringify(s.project)).get(s.project)!,
     device: s => s.device,
   };

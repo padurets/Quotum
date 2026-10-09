@@ -20,6 +20,7 @@ function setup() {
   const [ann, bob] = [person('ann'), person('bob')];
   const machine = (user: string, name: string) =>
     directory.saveDevice({userId: user, machine: {id: `${name}-0123456789`, name, os: 'linux', arch: 'x86_64'}, agent: 'quotum/0.4.0', tokenId: null}, start).id;
+  for (const user of [ann, bob]) for (const source of ['codex:1', 'claude:1']) store.hold(source, user, start);
   return {store, live: new Sessions(store), ann, bob, laptop: machine(ann, 'laptop'), server: machine(bob, 'server')};
 }
 
@@ -115,7 +116,7 @@ test('each session keeps when it worked; agent time adds up by any group, and th
     },
     'two agents at once count twice',
   );
-  const bySource = agentTime(stretches, s => s.source);
+  const bySource = agentTime(stretches, s => s.source ?? 'unknown');
   assert.equal(bySource.get('codex:1'), [...byProject].filter(([key]) => key.startsWith('codex:1')).reduce((sum, [, ms]) => sum + ms, 0), 'the parts add up to the whole');
   const codex = stretches.filter(s => s.source === 'codex:1');
   assert.equal(workTime(codex), (240 + 2 * credit) * second, "the server's two minutes fall within the laptop's");
@@ -277,7 +278,7 @@ test('agents alike in everything, started together, are each credited', () => {
     ['quotum', null, 0, 120],
     ['quotum', null, 0, 120],
   ]);
-  assert.equal(agentTime(stretches, s => s.source).get('codex:1'), 4 * minute);
+  assert.equal(agentTime(stretches, s => s.source ?? 'unknown').get('codex:1'), 4 * minute);
   assert.equal(workTime(stretches), 2 * minute);
   store.close();
 });
@@ -329,7 +330,7 @@ test('a machine gone quiet is credited for a short while, whether or not it is s
     if (swept) live.sweep(start + 10 * minute);
     live.report(laptop, ann, [session(laptop)], start + 60 * minute);
     live.report(laptop, ann, [], start + 61 * minute);
-    assert.equal(agentTime(all(store), s => s.source).get('codex:1'), CREDIT_MS + minute, swept ? 'swept' : 'reported again');
+    assert.equal(agentTime(all(store), s => s.source ?? 'unknown').get('codex:1'), CREDIT_MS + minute, swept ? 'swept' : 'reported again');
     store.close();
   }
 });
@@ -345,7 +346,7 @@ test("a board shows the sessions of those on it who measure the subscription, ea
     [
       [laptop, 'core', 'quotum.feat'],
       [server, 'quotum', null],
-    ].sort((a, b) => a[0]!.localeCompare(b[0]!)),
+    ],
     "Ann's name for her project; Bob's as his machine reports it",
   );
   // In the project's own folder the agent tells no folder: renamed, the reported name shows where it works.

@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use quotum_core::activity::{Activity, Origin, Session};
+use quotum_core::clients::ClientId;
 use quotum_core::config::{Config, Credentials, Hub, Paths, home, machine};
 use quotum_core::holder::{Running, Stopped};
 use quotum_core::model::{Batch, ErrorKind, INGEST_VERSION, Kind, Millis, Outcome, Provider, Window, now_ms};
@@ -37,7 +38,7 @@ struct Cli {
     /// Print JSON in the hub's ingest format instead of a table.
     #[arg(long, global = true)]
     json: bool,
-    /// Only these providers, comma-separated: claude, codex, antigravity.
+    /// Only these clients, comma-separated: claude, codex, antigravity, opencode.
     #[arg(long, global = true, value_delimiter = ',')]
     only: Vec<String>,
 }
@@ -98,9 +99,9 @@ fn main() -> ExitCode {
     }
     let mut only = Vec::new();
     for name in &cli.only {
-        match Provider::parse(name.trim()) {
+        match ClientId::parse(name.trim()) {
             Some(p) => only.push(p),
-            None => return fail(&format!("unknown provider `{name}` (claude, codex, antigravity)")),
+            None => return fail(&format!("unknown client `{name}` (claude, codex, antigravity, opencode)")),
         }
     }
     let paths = Paths::resolve();
@@ -108,6 +109,9 @@ fn main() -> ExitCode {
         Ok(config) => config,
         Err(e) => return fail(&e),
     };
+    for id in config.unknown_clients() {
+        log(&format!("warning: unknown client `{id}` is ignored"));
+    }
     if config.owner.is_some() {
         log(&format!(
             "note: `owner` in {} is no longer used: a machine belongs to the person whose token it uses",
@@ -334,12 +338,20 @@ fn tail(file: &Path, lines: usize) -> String {
     all[all.len().saturating_sub(lines)..].join("\n")
 }
 
-fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCode {
+fn status(config: Config, paths: Paths, only: &[ClientId], json: bool) -> ExitCode {
     let machine = json.then(|| machine(&paths, &config));
     let connected = Credentials::load(&paths).filter(|_| config.hub.is_none());
     let (running, waiting) = (paths.running(), paths.waiting());
     let paths_log = Some(paths.log_file());
     // Measured once here: nothing asks this stop.
+    let tracking = config.sessions();
+    let placing = config.projects();
+    let selected: Vec<_> = ClientId::ALL
+        .into_iter()
+        .filter(|c| tracking && config.tracks(*c) && (only.is_empty() || only.contains(c)))
+        .collect();
+    let installed =
+        quotum_core::clients::Inventory::default().look(&config, &selected, &home(), &paths.work, &Stop::new());
     let mut runner = Runner::new(config, paths, only, Stop::new());
     let style = Style::detect();
     let mut outcomes = Vec::new();
@@ -348,7 +360,11 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
     }
     // The agents running here are looked at before and after measuring: the CPU time they
     // spent meanwhile tells which of them work, with no wait of its own.
-    let mut activity = (!json).then(|| Activity::new(home(), true));
+    let mut activity = (!json && tracking).then(|| {
+        let mut a = Activity::new(home(), placing);
+        a.track(&selected);
+        a
+    });
     if let Some(activity) = activity.as_mut() {
         activity.look();
     }
@@ -360,7 +376,10 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
         outcomes.push(outcome.clone());
     });
     if let Some(activity) = activity.as_mut() {
-        print_sessions(&activity.look(), &style);
+        print_sessions(
+            &activity.look().into_iter().filter(|s| selected.contains(&s.client)).collect::<Vec<_>>(),
+            &style,
+        );
     }
     if let (false, Some(credentials)) = (json, &connected) {
         println!("\n{}", style.dim(&format!("connected {}", connected_to(credentials))));
@@ -393,7 +412,9 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
             snapshots: snapshots.into_iter().filter_map(Result::ok).collect(),
             failures: failures.into_iter().filter_map(Result::err).collect(),
         };
-        println!("{}", serde_json::to_string_pretty(&batch).unwrap_or_default());
+        let mut value = serde_json::to_value(batch).unwrap();
+        value["clients"] = serde_json::to_value(&installed).unwrap();
+        println!("{}", serde_json::to_string_pretty(&value).unwrap_or_default());
     }
     ExitCode::SUCCESS
 }
@@ -401,7 +422,7 @@ fn status(config: Config, paths: Paths, only: &[Provider], json: bool) -> ExitCo
 /// `quotum run`: measures on the schedule and delivers, for as long as it holds the machine;
 /// it makes way for the desktop app when asked, and measures again once the app quits.
 /// The settings are read each time it takes the machine: they may have changed meanwhile.
-fn run(paths: Paths, only: &[Provider], overrides: Option<Hub>) -> ExitCode {
+fn run(paths: Paths, only: &[ClientId], overrides: Option<Hub>) -> ExitCode {
     // Before anything else: a signal while it waits for the app ends the wait.
     stop::on_signals();
     let mut prepare = |stop: &Stop| -> Result<Prepared, String> {
@@ -424,9 +445,10 @@ fn run(paths: Paths, only: &[Provider], overrides: Option<Hub>) -> ExitCode {
                 Box::new(Discard)
             }
         };
+        let tracking = config.sessions();
         let mut runner = Runner::new(config, paths.clone(), only, stop.clone());
-        if runner.providers().is_empty() {
-            return Err("every provider is disabled".into());
+        if runner.providers().is_empty() && (!tracking || runner.clients().is_empty()) {
+            return Err("every collector and client is disabled".into());
         }
         let job = move || runner.run(sink.as_mut(), logged());
         Ok(Prepared { job: Box::new(job), hub: hub.map(|hub| hub.url) })
@@ -616,6 +638,19 @@ fn show_config(config: &Config, paths: &Paths) -> ExitCode {
             client.map(|p| p.display().to_string()).unwrap_or_else(|| "not found".into())
         );
     }
+    for client in ClientId::ALL {
+        println!(
+            "client {:<12} tracking {}, route {}, path {}",
+            client.id(),
+            if config.tracks(client) { "on" } else { "off" },
+            if config.clients.get(client.id()).and_then(|c| c.route).unwrap_or(true) { "on" } else { "off" },
+            config
+                .client_program(client)
+                .map(|p| p.display().to_string())
+                .or_else(|| client.find(&home).map(|p| p.display().to_string()))
+                .unwrap_or_else(|| "not found".into())
+        );
+    }
     ExitCode::SUCCESS
 }
 
@@ -716,7 +751,7 @@ fn print_sessions(sessions: &[Session], style: &Style) {
             other => format!(" · {}", other.id()),
         };
         let started = style.dim(&format!("started {} ago{origin}", until(now_ms() - session.started_at)));
-        println!("{:<14}{place:<20} {state}  {started}", session.provider.name());
+        println!("{:<14}{place:<20} {state}  {started}", session.client.name());
     }
 }
 

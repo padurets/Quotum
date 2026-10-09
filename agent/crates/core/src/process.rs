@@ -6,7 +6,7 @@ use std::cmp::Reverse;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -29,6 +29,7 @@ pub enum ProcError {
     Stopped,
     /// Output ended (the process exited) before the expected message.
     Closed,
+    OutputLimit,
     Io(std::io::Error),
 }
 
@@ -39,6 +40,7 @@ impl std::fmt::Display for ProcError {
             ProcError::Timeout => f.write_str("timed out"),
             ProcError::Stopped => f.write_str("stopped"),
             ProcError::Closed => f.write_str("exited early"),
+            ProcError::OutputLimit => f.write_str("output limit exceeded"),
             ProcError::Io(e) => write!(f, "{e}"),
         }
     }
@@ -215,6 +217,7 @@ pub struct Client {
     job: Option<job::Job>,
     stdin: Option<ChildStdin>,
     lines: Receiver<String>,
+    bytes: Option<Receiver<Result<Vec<u8>, ProcError>>>,
     deadline: Instant,
 }
 
@@ -226,6 +229,18 @@ impl Client {
         cwd: &Path,
         timeout: Duration,
         stop: &Stop,
+    ) -> Result<Client, ProcError> {
+        Self::spawn_reader(program, args, env, cwd, timeout, stop, None)
+    }
+
+    fn spawn_reader<S: AsRef<OsStr>>(
+        program: &Path,
+        args: &[S],
+        env: &[(&str, &str)],
+        cwd: &Path,
+        timeout: Duration,
+        stop: &Stop,
+        limit: Option<usize>,
     ) -> Result<Client, ProcError> {
         let mut command = Command::new(program);
         command
@@ -254,14 +269,35 @@ impl Client {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().ok_or(ProcError::Closed)?;
         let (sender, lines) = mpsc::channel();
-        thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                if sender.send(line).is_err() {
-                    break;
+        let bytes = if let Some(limit) = limit {
+            let (sender, bytes) = mpsc::sync_channel(1);
+            thread::spawn(move || {
+                let mut stdout = stdout;
+                let mut retained = Vec::with_capacity(limit);
+                let mut chunk = [0; 1024];
+                let result = loop {
+                    match stdout.read(&mut chunk) {
+                        Ok(0) => break Ok(retained),
+                        Ok(n) if retained.len() + n > limit => break Err(ProcError::OutputLimit),
+                        Ok(n) => retained.extend_from_slice(&chunk[..n]),
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(e) => break Err(ProcError::Io(e)),
+                    }
+                };
+                let _ = sender.send(result);
+            });
+            Some(bytes)
+        } else {
+            thread::spawn(move || {
+                for line in BufReader::new(stdout).lines() {
+                    let Ok(line) = line else { break };
+                    if sender.send(line).is_err() {
+                        break;
+                    }
                 }
-            }
-        });
+            });
+            None
+        };
         Ok(Client {
             child,
             stop: stop.clone(),
@@ -269,8 +305,45 @@ impl Client {
             job,
             stdin,
             lines,
+            bytes,
             deadline: Instant::now() + timeout,
         })
+    }
+
+    /// Inventory reads are bounded before any line allocation or reader queue. Success
+    /// requires both EOF and the terminal exit; dropping a failed probe reaps its tree.
+    pub fn version_output(program: &Path, cwd: &Path, stop: &Stop) -> Result<Vec<u8>, ProcError> {
+        let mut client =
+            Self::spawn_reader(program, &["--version"], &[], cwd, Duration::from_secs(5), stop, Some(16 * 1024))?;
+        client.stdin = None;
+        let bytes = client.bytes.take().ok_or(ProcError::Closed)?;
+        let mut output = None;
+        loop {
+            if stop.requested() {
+                return Err(ProcError::Stopped);
+            }
+            let left = client.deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(ProcError::Timeout);
+            }
+            if output.is_none() {
+                match bytes.recv_timeout(left.min(STOP_CHECK)) {
+                    Ok(result) => output = Some(result?),
+                    Err(RecvTimeoutError::Timeout) => (),
+                    Err(RecvTimeoutError::Disconnected) => return Err(ProcError::Closed),
+                }
+            }
+            if let Some(status) = client.child.try_wait().map_err(ProcError::Io)? {
+                if !status.success() {
+                    return Err(ProcError::Closed);
+                }
+                if let Some(output) = output {
+                    return Ok(output);
+                }
+            } else if output.is_some() {
+                thread::sleep(left.min(Duration::from_millis(20)));
+            }
+        }
     }
 
     /// Writes one JSON message as a line.
@@ -526,6 +599,31 @@ mod tests {
 
     fn get<'a>(env: &'a [(OsString, OsString)], name: &str) -> Option<&'a OsStr> {
         env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_os_str())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inventory_output_is_bounded_before_line_allocation_and_reaps_failed_probes() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = env::temp_dir().join(format!("quotum-version-{}", crate::config::random_hex()));
+        fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("version");
+        for script in
+            ["head -c 20000 /dev/zero", "yes version | head -c 20000", "echo 1.2.3; sleep 30", "exec 1>&-; sleep 30"]
+        {
+            fs::write(&program, format!("#!/bin/sh\necho $$ > pid\n{script}\n")).unwrap();
+            fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+            let started = Instant::now();
+            let output = Client::version_output(&program, &dir, &Stop::new());
+            assert!(matches!(output, Err(ProcError::OutputLimit | ProcError::Timeout)), "{output:?}");
+            assert!(started.elapsed() < Duration::from_secs(6));
+            let pid = fs::read_to_string(dir.join("pid")).unwrap().trim().parse::<i32>().unwrap();
+            // SAFETY: signal 0 only checks our stand-in process.
+            assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "probe must be reaped");
+        }
+        fs::write(&program, "#!/bin/sh\necho 1.2.3\n").unwrap();
+        assert_eq!(Client::version_output(&program, &dir, &Stop::new()).unwrap(), b"1.2.3\n");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[cfg(unix)]

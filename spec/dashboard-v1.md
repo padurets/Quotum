@@ -210,6 +210,7 @@ change as it was.
 | `board` | `{board: {id, name, personal}}` | The board was renamed. |
 | `view` | `{view, revision}` | The board's view was saved. The monotonic revision belongs to this board. |
 | `connections` | `{revision}` | Only this reader's connection structure or access health changed; no private IDs or labels. Successful measurements and unchanged device heartbeats do not increment it. |
+| `devices` | `{}` | Only this reader's current device sessions changed. Invalidate an open Devices disclosure; no session fields, IDs, counts or names are sent. |
 | `lineup` | `{sources: string[]}` | The board's sources, in order, changed. |
 | `card` | a card | A source's state changed. |
 | `sessions` | `{id, sessions}` | The agents running on a source, on the machines of its people on this board, changed. |
@@ -366,7 +367,7 @@ retention period. The hub credits machines that went quiet before reading the ce
   now: number,
   run: string, // this start of the hub, the same as hello.epoch
   historyStart: number,
-  known: {work: number, sources: Record<string, number>},
+  known: {own?: number, work: number, sources: Record<string, number>},
   meta?: string, // opaque metadata token, only when the request opts in
   chunks: Chunk[]
 }
@@ -382,7 +383,10 @@ captured when that request started, requiring both its token and `run` to match;
 it never borrows a later reply's metadata. Requests without `meta` keep the full
 answer shape, and a full answer is accepted without a token.
 
-`known.work` is when the hub began keeping work. `known.sources` gives when each shown
+`known.work` is when the hub began keeping work. A personal board's quota/activity
+history also includes `known.own`, the lower bound for its owner's private work,
+independently of the selected subscriptions. Shared and financial history omit it.
+`known.sources` gives when each shown
 subscription came to the board; hidden cards are absent. The chunks cover the cut
 `[from, to)` whole, including empty cells, in time order, cut at tile edges. A whole tile
 ending no later than now is closed. Closed tiles are cached under their board, grid and
@@ -403,7 +407,7 @@ type Chunk = {
     }][];
   }[];
   activity: {
-    sessions: [ref: string, source: string, project: string | null, device: string][];
+    sessions: [ref: string, source: string | null, project: string | null, device: string][];
     devices: Record<string, string>;
     cells: [index: number, active: number,
       sessions: (number | [sessionIndex: number, agentMs: number])[],
@@ -1197,3 +1201,42 @@ disclosure adds the timestamp and rate provenance. A stale amount stays visible 
 the warning colour as the last known balance. Subscription extra funds trends shows
 credit history separately from wallet budgets. Spending and top-ups are unavailable
 for credits, and quota analytics remain percentage-based.
+
+
+## Private machine clients
+
+Only the owner's personal snapshot has `ownSessions`, an array of running sessions
+without a currently held source. Each session includes `clientId`, machine ID/name,
+origin, project/folder, start, last work, working and credited `workedMs`; it contains no
+producer ID, raw source attribution or provenance. Shared snapshots omit this field.
+The private `ownSessions` event is `{sessions: [...]}` and replaces this slice only.
+Normal source `sessions` also carry `clientId` and retain their visibility rules.
+
+A personal `history` event may include `ownSince`, independently of `sources`, `since`
+and scoped `changes`. The quota/activity reader invalidates from this cutoff even when
+no sources are selected; budget and subscription funds readers ignore it. Private and
+source history coalesce into one frame using their earliest independent cutoffs. No
+synthetic source ID is used. Closed history tiles invalidate on private credit even
+without watchers. Names, ownership and visibility changes invalidate from zero; quiet
+presence expires on the usual five-minute deadline. Shared streams never receive this
+private slice or cutoff, including when the owner is a member.
+
+Personal quota history includes activity without cards. Unknown and unheld work uses a
+null source in activity cells and the reserved `unknown` source group; it produces no
+quota series, spending correlation or forecast. A held source under a hidden card keeps
+its existing exclusion. The Agents and Agent activity widgets can be placed through
+Add widget on empty or budget-only boards; explicit hiding remains authoritative.
+
+`GET /api/devices` adds owner-private `clients` entries (`clientId`, nullable `version`,
+`seenAt`) and current `sessions` with the safe board fields plus a held source ID or null.
+Device revocation removes inventory and current presence. Inventory changes use the
+existing connection revision. The account-private `devices` hint reaches the device
+owner on any board, including a shared board, when current device presence changes or
+expires. Other readers receive no hint. It carries no private board data and changes no
+connection revision. An open Devices disclosure reads the owner API on this hint, on
+reconnect and on opening; closed disclosures do not read on presence hints. Clients and
+measuring settings are separate in desktop
+`app_state`: `clients` has `id`, `enabled`, reserved `route` consent and nullable `path`;
+`app_save_settings` accepts client enabled/route patches without a new bridge command.
+With every collector disabled and tracking enabled, the agent state is `tracking`;
+`idle` means both measurement and client tracking are off.

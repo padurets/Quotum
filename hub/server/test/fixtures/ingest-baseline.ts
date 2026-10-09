@@ -1,12 +1,10 @@
-import {clientFor, validClientId} from './clients.js';
-import {providers, type Provider} from './sources.js';
-import {providerOf, type ClientProvider} from './providers.js';
-import type {FreeResets, Kind, WindowMeasurement, Win} from './quota.js';
-import {exactDecimal, scalarDecimal} from './amount.js';
-import type {CreditBalance, ResourceStatuses} from './resources.js';
+// Frozen ingest parser from 072af2b; only type aliases are adapted.
+import {providers, providerOf, type Provider, type ClientProvider, exactDecimal, scalarDecimal} from './ingest-baseline-runtime.js';
+import type {FreeResets, Kind, WindowMeasurement, Win} from '../../domain/quota.js';
+import type {CreditBalance, ResourceStatuses} from '../../domain/resources.js';
 
 /** Clocks within this of the hub's are taken as they are; beyond it, agent times are shifted. */
-export {CLOCK_TOLERANCE_MS} from './history.js';
+export const CLOCK_TOLERANCE_MS = 30_000;
 
 /**
  * Ingest format v1 (spec/ingest-v1.md): what an agent sends. Parsing is strict; a
@@ -311,8 +309,6 @@ export type Origin = (typeof ORIGINS)[number];
 export type AgentSession = {
   sessionId: string | null;
   provider: ClientProvider;
-  clientId?: string;
-  route?: SessionRoute | null;
   account: string | null;
   accountName: string | null;
   origin: Origin;
@@ -326,25 +322,7 @@ export type AgentSession = {
 };
 
 /** Every coding agent running on a machine right now. */
-export type SessionRoute = {class: 'subscription' | 'api' | 'unknown'; by: 'session' | 'machine'; host: string | null; provider: string | null};
-export type ClientSession = Omit<AgentSession, 'provider' | 'account' | 'accountName'> & {
-  clientId: string;
-  source: {provider: ClientProvider; account: string | null; accountName: string | null} | null;
-};
-export type DeviceClient = {clientId: string; version: string | null};
-export type SessionReport = AgentSender & {sentAt: number; sessions: AgentSession[]; clientSessions: ClientSession[]; clients: DeviceClient[] | null};
-
-function soft<T>(read: () => T): T | null {
-  try { return read(); } catch (error) { if (error instanceof Invalid) return null; throw error; }
-}
-
-function sessionRoute(value: unknown): SessionRoute | null {
-  if (!isObject(value) || (value.by !== 'session' && value.by !== 'machine')) return null;
-  const kind = value.class === 'subscription' || value.class === 'api' ? value.class : 'unknown';
-  const host = value.by === 'session' && typeof value.host === 'string' && value.host.length <= 253 && value.host.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) ? value.host : null;
-  return {class: kind, by: value.by, host, provider: value.by === 'session' && validClientId(value.provider) ? value.provider : null};
-}
-
+export type SessionReport = AgentSender & {sentAt: number; sessions: AgentSession[]};
 
 export function parseSessions(body: unknown): SessionReport {
   const sender = parseSender(body);
@@ -362,8 +340,6 @@ export function parseSessions(body: unknown): SessionReport {
     return {
       sessionId,
       provider: provider(value.provider) as ClientProvider,
-      clientId: clientFor(provider(value.provider) as ClientProvider),
-      route: sessionRoute(value.route),
       account: account(value.account),
       accountName: text(value.accountName, 'accountName', true),
       origin: value.origin as Origin,
@@ -374,38 +350,5 @@ export function parseSessions(body: unknown): SessionReport {
       working: value.working,
     };
   });
-  const clientSessions: ClientSession[] = [];
-  if (Array.isArray(input.clientSessions)) for (const value of input.clientSessions) {
-    if (sessions.length + clientSessions.length >= 200) break;
-    if (!isObject(value) || !validClientId(value.clientId) || !(ORIGINS as readonly unknown[]).includes(value.origin) || typeof value.working !== 'boolean') continue;
-    const startedAt = soft(() => time(value.startedAt, 'startedAt'));
-    if (startedAt === null) continue;
-    const sessionId = typeof value.sessionId === 'string' && /^[0-9a-f]{32}$/.test(value.sessionId) ? value.sessionId : null;
-    if (sessionId !== null && ids.has(sessionId)) continue;
-    if (sessionId !== null) ids.add(sessionId);
-    const source = isObject(value.source) ? soft(() => {
-      const candidate = value.source as Obj;
-      const id = provider(candidate.provider);
-      if (providerOf(id)?.measuredBy !== 'client') return null;
-      return {provider: id as ClientProvider, account: account(candidate.account), accountName: text(candidate.accountName, 'accountName', true)};
-    }) : null;
-    clientSessions.push({clientId: value.clientId, sessionId, source, route: sessionRoute(value.route),
-      origin: value.origin as Origin, working: value.working, startedAt,
-      project: soft(() => cut(value.project, 'project')), folder: soft(() => cut(value.folder, 'folder')),
-      lastWorkedAt: soft(() => time(value.lastWorkedAt, 'lastWorkedAt', true)),
-    });
-  }
-  let inventory: DeviceClient[] | null = null;
-  if (Array.isArray(input.clients)) {
-    inventory = [];
-    const seen = new Set<string>();
-    for (const value of input.clients) {
-      if (inventory.length >= 64) break;
-      if (!isObject(value) || !validClientId(value.clientId) || seen.has(value.clientId)) continue;
-      seen.add(value.clientId);
-      const version = typeof value.version === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9.+_-]{0,63}$/.test(value.version) ? value.version : null;
-      inventory.push({clientId: value.clientId, version});
-    }
-  }
-  return {...sender, sentAt: time(input.sentAt, 'sentAt')!, sessions, clientSessions, clients: inventory};
+  return {...sender, sentAt: time(input.sentAt, 'sentAt')!, sessions};
 }

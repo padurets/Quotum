@@ -41,7 +41,7 @@ export type SeriesCells = {source: string; window: string; hold: number; open: n
 export type SessionCell = number | [number, number];
 export type GroupCell = [dimension: 's' | 'p' | 'd', key: string, activeMs: number];
 export type ActivityCells<Ref = string> = {
-  sessions: [ref: Ref, source: string, project: string | null, device: string][];
+  sessions: [ref: Ref, source: string | null, project: string | null, device: string][];
   devices: Record<string, string>;
   cells: [index: number, active: number, sessions: SessionCell[], groups: GroupCell[]][];
 };
@@ -54,7 +54,7 @@ export type Chunk<Ref = string> = {
   resets: [string, string, number][];
   grants: [string, number, number][];
 };
-export type HistoryMeta = {now: number; historyStart: number; known: {work: number; sources: Record<string, number>}; meta?: string};
+export type HistoryMeta = {now: number; historyStart: number; known: {own?: number; work: number; sources: Record<string, number>}; meta?: string};
 export type HistoryAnswer = HistoryMeta & {run: string; chunks: Chunk[]};
 export type HistoryBasis = HistoryMeta & {run: string};
 export type HistoryReply = HistoryAnswer | {now: number; run: string; meta: string; chunks: Chunk[]};
@@ -198,7 +198,7 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
         total.refs.add(ref);
         total.agent += ms;
         agentMs += ms;
-        const keys = {source, project: JSON.stringify(project), device};
+        const keys = {source: source ?? 'unknown', project: JSON.stringify(project), device};
         const names = {source: null, project, device: chunk.activity.devices[device] ?? null};
         for (const dim of DIMENSIONS) {
           yield;
@@ -262,7 +262,7 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
   const resets = yield* resetEventsPrepared(chunksInOrder, windows, since, (k1 + 1) * cell);
   const grants: SourceEvent[] = [];
   for (const chunk of chunksInOrder) for (const [sourceId, at, count] of chunk.grants) {if (inFrame(at)) grants.push({sourceId, at, kind: 'resets_granted', count}); yield;}
-  const activitySince = Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []));
+  const activitySince = Math.max(meta.known.own ?? meta.known.work, ...(meta.known.own === undefined && Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []));
   const knownFrom = Math.max(since, activitySince);
   const groups = {} as Record<Dimension, ActivityGroup[]>;
   for (const dim of DIMENSIONS) {

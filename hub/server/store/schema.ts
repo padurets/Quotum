@@ -320,6 +320,35 @@ export const STEPS = [
   UPDATE shares SET budget_since=0,budget_anchor_at=0 WHERE source_id IN (SELECT id FROM sources WHERE provider IN ('openrouter','deepseek'));
   CREATE INDEX shares_budget_pending ON shares(source_id,budget_since) WHERE budget_anchor_at IS NULL AND budget_since IS NOT NULL;
   `,
+  // 21 — coding clients have optional funding, independent process identities and inventory.
+  `
+  ALTER TABLE agent_sessions RENAME TO agent_sessions_before_clients;
+  CREATE TABLE agent_sessions (
+    id INTEGER PRIMARY KEY, device_id TEXT NOT NULL, client TEXT NOT NULL CHECK(length(client)>0),
+    source_id TEXT, origin TEXT NOT NULL, started_at INTEGER NOT NULL,
+    project TEXT NOT NULL, folder TEXT NOT NULL, ordinal INTEGER NOT NULL, producer_id TEXT,
+    account_by TEXT CHECK(account_by IN ('login','inferred','legacy')),
+    route_class TEXT CHECK(route_class IN ('subscription','api','unknown')),
+    route_by TEXT CHECK(route_by IN ('session','machine')), route_host TEXT, route_provider TEXT);
+  INSERT INTO agent_sessions (id,device_id,client,source_id,origin,started_at,project,folder,ordinal,producer_id,account_by)
+    SELECT s.id,s.device_id,
+      COALESCE((SELECT provider FROM sources WHERE id=s.source_id),
+        CASE WHEN instr(s.source_id,':') BETWEEN 2 AND 65 AND substr(s.source_id,1,1) GLOB '[a-z]' AND substr(s.source_id,1,instr(s.source_id,':')-1) NOT GLOB '*[^a-z0-9_-]*' THEN substr(s.source_id,1,instr(s.source_id,':')-1) ELSE 'unknown' END),
+      s.source_id,s.origin,s.started_at,s.project,s.folder,s.ordinal,s.producer_id,'legacy'
+    FROM agent_sessions_before_clients s;
+  DROP TABLE agent_sessions_before_clients;
+  CREATE UNIQUE INDEX agent_sessions_legacy_key ON agent_sessions
+    (device_id,client,COALESCE(source_id,''),started_at,origin,project,folder,ordinal) WHERE producer_id IS NULL;
+  CREATE UNIQUE INDEX agent_sessions_stable_key ON agent_sessions
+    (device_id,client,producer_id,COALESCE(source_id,''),origin,project,folder) WHERE producer_id IS NOT NULL;
+  CREATE INDEX agent_sessions_by_project ON agent_sessions(device_id,project,source_id,client);
+  CREATE TABLE device_clients (device_id TEXT NOT NULL,client TEXT NOT NULL,version TEXT,seen_at INTEGER NOT NULL,
+    PRIMARY KEY(device_id,client)) WITHOUT ROWID;
+  CREATE TRIGGER device_clients_revoked AFTER UPDATE OF revoked_at ON devices WHEN NEW.revoked_at IS NOT NULL BEGIN
+    DELETE FROM device_clients WHERE device_id=NEW.id;
+  END;
+  `,
+
 ];
 
 export const SCHEMA_VERSION = STEPS.length;
