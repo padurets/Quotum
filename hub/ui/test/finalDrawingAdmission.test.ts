@@ -16,7 +16,7 @@ test('actual chart consumers reserve final drawing readiness for the complete ta
       selected: selected as typeof selected | null, prefs: {range: '24h', kind: 'weekly'}, history: {board: 'b', range: 'old'},
       panning: null as number | null, prepared: {ready: true}, loading: false,
       model: {visible: [], plans: [], forecasts: [], markers: [], cellMs: 60_000, strip: null}, lines: [],
-      presentation: {shown: [], identities: [], strip: null}, frame: {live: false}, activity: {}, EMPTY_ACTIVITY: {},
+      presentation: {shown: [], identities: [], strip: null}, frame: {live: false}, activity: {}, drawnActivity: {}, drawing: {since: 0}, EMPTY_ACTIVITY: {},
       from: selected.from, to: selected.to, measured: selected.to, now: selected.to, wantedTo: selected.to, strip: null,
       navigation: {}, since: null, plot: 200, onBase: () => {}, setTimeRange: () => {}, by: 'source', emptyFrame: null, empty: null, t: () => '',
       render: null as unknown as () => React.ReactElement<{prepared: boolean; from: number}>,
