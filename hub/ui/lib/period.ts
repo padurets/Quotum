@@ -214,7 +214,12 @@ class BoardPeriod {
         const relevant=included&&(selection.mode==='live'||hub.data.since<selection.to);
         if(relevant){
           if(selection.mode==='range')this.valuesNeeded=true;
-          for(const scope of PERIOD_SCOPES)if(!hub.data.changes||hub.data.changes.some(c=>sources.includes(c.source)&&c.scope===(scope==='funds'?'budget':scope)&&(selection.mode==='live'||c.since<selection.to)))this.dirtyScopes.add(scope);
+          for(const scope of PERIOD_SCOPES){
+            const visible=(scope==='quota'?[ACTIVITY,...QUOTA_WIDGETS]:scope==='funds'?[SUBSCRIPTION_FUNDS]:BUDGET_WIDGETS).some(id=>widgetVisible(board.view,id,board.lineup.length));
+            if(!visible)continue;
+            const selected=scope==='quota'?new Set(sources):new Set(moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,scope==='funds'?prefs().funds:prefs().money,board.currencies,scope==='funds'?'funds':'budget').selection?.ids.map(([id])=>id));
+            if(hub.data.changes?hub.data.changes.some(c=>selected.has(c.source)&&c.scope===(scope==='funds'?'budget':scope)&&(selection.mode==='live'||c.since<selection.to)):hub.data.sources.some(id=>selected.has(id)))this.dirtyScopes.add(scope);
+          }
           const work=hub.data.changes?.some(c=>sources.includes(c.source)&&c.workSince!==undefined)??true;if(work)this.workNeeded=wantsWork;this.revision++;this.transport.change();
         }
       }

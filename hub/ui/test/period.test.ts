@@ -54,6 +54,26 @@ test('a complete temporal index distinguishes equal totals, changes ranking and 
   assert.deepEqual(fixed.advance(range,30).rows,fixed.advance(range,10_000).rows);
 });
 
+test('monetary evidence refreshes only the selected resource family',()=>{
+  const board={id:'b',lineup:['wallet','credit','unselected'],view:{hidden:[]},cards:{wallet:{id:'wallet'},credit:{id:'credit'},unselected:{id:'unselected'}}},state={board};
+  const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event:unknown):void;dirtyScopes:Set<string>}},
+    hubNow:()=>5_000_000,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    PeriodTransport:class{change(){}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
+    evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    timeRange:()=>null,prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),
+    moneySelection:(_cards:unknown,_hidden:unknown,_prefs:unknown,_currency:unknown,family:string)=>({selection:{ids:[[family==='funds'?'credit':'wallet','balance']]}}),
+    PERIOD_SCOPES:['quota','budget','funds'],widgetVisible:()=>true,QUOTA_WIDGETS:['history'],BUDGET_WIDGETS:['budget'],SUBSCRIPTION_FUNDS:'funds',AGENTS:'agents',ACTIVITY:'activity',noSessions:[],noValue:{},
+  };
+  const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8'),body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const period=new context.exports.BoardPeriod();period.activate(true);
+  for(const [source,scope] of [['credit','funds'],['wallet','budget'],['unselected',null]] as const){
+    period.dirtyScopes.clear();
+    period.changed({type:'hub',event:{type:'history',data:{sources:[source],since:4_000_000,changes:[{source,scope:'budget',since:4_000_000}]}}});
+    assert.deepEqual([...period.dirtyScopes],scope?[scope]:[]);
+  }
+});
+
 test('one collection combines all three history sections and the roster, including their shared budget',async()=>{
   const pool=new HistoryPool(),sent:PeriodRequest[]=[];
   const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'live',periodMs:3_600_000},evaluatedAt:5_000_000,sessions:{}}};
