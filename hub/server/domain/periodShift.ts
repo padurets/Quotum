@@ -70,7 +70,7 @@ export function shiftBoundaries(range:PeriodRange,from:number,to:number,cells:re
   reserve(256);
   const result=new Set([from,to]);
   const add=(at:number)=>{if(Number.isSafeInteger(at)&&at>from&&at<to&&!result.has(at)){reserve(64);result.add(at);}};
-  for(const edge of [range.from,range.to])for(const cell of cells)for(let at=(Math.floor((edge+from)/cell)+1)*cell;at<edge+to;at+=cell)add(at-edge);
+  for(const edge of [range.from,range.to])for(const cell of cells)for(let at=Math.floor((edge+from)/cell)*cell;at<edge+to;at+=cell){add(at-edge);add(at+1-edge);}
   for(const at of anchors)for(const edge of [range.from,range.to]){add(at-edge);add(at+1-edge);}
   return [...result].sort((a,b)=>a-b);
 }
