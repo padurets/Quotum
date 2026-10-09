@@ -20,6 +20,15 @@ jobs:
         with:
           node-version: 24
       - run: make dev-test
+        env:
+          QUOTUM_TEST_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-dev-diagnostics
+      - name: Dev fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dev-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quotum-dev-diagnostics
+          if-no-files-found: warn
 
   hub:
     runs-on: ubuntu-latest

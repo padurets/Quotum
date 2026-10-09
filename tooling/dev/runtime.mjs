@@ -162,7 +162,7 @@ export async function stop(ctx, final = false) {
   else saveJson(ctx.record, {...state, status: 'stopped', supervisor: null, hub: null, access: {status: 'backend stopped; publication retained'}});
 }
 
-export async function start(ctx, c, port, built) {
+export async function start(ctx, c, port, built, observeFailure) {
   if (!(await portFree(port))) throw Object.assign(new Error(`Port ${port} has a foreign listener; no process was adopted or killed.`), {code: 'PORT_BUSY'});
   assertConfig(ctx.root, savedConfig(c), port);
   const instance = randomUUID();
@@ -217,6 +217,9 @@ export async function start(ctx, c, port, built) {
   } catch (error) {
     // An unregistered supervisor cannot start; registered ownership survives caller death.
     await sleep(100);
+    // Tests capture the original journal before stop replaces ownership and readiness.
+    // Observation is synchronous and cannot prevent cleanup or replace its original error.
+    try { observeFailure?.(error, readJson(ctx.record)); } catch {}
     await stop(ctx);
     throw error;
   } finally {

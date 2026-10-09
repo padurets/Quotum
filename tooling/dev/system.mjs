@@ -136,5 +136,10 @@ export function listenerOwned(pid, port) {
       })) return true;
     }
     return false;
-  } catch (error) { if (['ENOENT', 'ESRCH'].includes(error.code)) return false; throw error; }
+  } catch (error) {
+    // Linux can deny /proc network reads while a process releases its namespace.
+    // This proves no listener ownership; the child's close still classifies startup.
+    if (['ENOENT', 'ESRCH', 'EACCES'].includes(error.code)) return false;
+    throw error;
+  }
 }
