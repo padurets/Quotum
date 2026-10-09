@@ -232,6 +232,8 @@ export class HistoryStore {
   choose(period: string, selected: TimeRange | null) {
     const key = selected ? timeRangeKey(selected) : period;
     if (key === (this.selected ? timeRangeKey(this.selected) : this.period)) return;
+    this.preparations?.cancel(this.composeOwner);
+    this.composeIdentity = '';
     this.period = period;
     this.historyLimit=false;this.readError=false;
     this.selected = selected;

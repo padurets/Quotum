@@ -820,6 +820,26 @@ for (const scope of ['quota', 'budget'] as const) for (const started of [false, 
   });
 }
 
+for (const scope of ['quota', 'budget'] as const) {
+  test(`${scope}: returning from an unread range resumes cancelled cached composition`, async () => {
+    const h = cooperativeHarness(undefined, scope);
+    try {
+      await h.start(); await h.reads[0].answer(); await h.finish();
+      const cached = {from: NOW - 23 * H, to: NOW - H};
+      h.store.choose('24h', cached); await flush(); h.tick();
+      assert.ok(h.tasks.length, 'the cached composition has not published yet');
+      const reads = h.reads.length;
+      h.store.choose('24h', {from: NOW - 72 * H, to: NOW - 48 * H}); await flush(); h.tick(); await h.advance(400);
+      assert.equal(h.reads.length, reads + 1, 'only the unread range starts transport');
+      h.store.choose('24h', cached); await flush(); await h.finish();
+      assert.equal(h.store.get().history?.range, `${cached.from}-${cached.to}`);
+      assert.equal(h.store.get().loading, false);
+      assert.equal(h.reads.length, reads + 1, 'cached composition cannot depend on the unrelated reply');
+      assert.equal(h.preparations.size, 0);
+    } finally {h.store.close();}
+  });
+}
+
 test('a sliced whole response publishes no live tile, boundaries or history before its atomic commit', async () => {
   const h = cooperativeHarness(); await h.start();
   await h.reads[0].answer();
