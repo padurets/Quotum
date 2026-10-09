@@ -134,7 +134,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
     signal?.removeEventListener('abort', cancel);
     console.error('bench: Chrome ready ' + JSON.stringify(snapshot()));
     return {endpoint, owned: true, close, launchReport: snapshot,
-      diagnostics: async pids => ({processes: child.pid && child.exitCode === null && child.signalCode === null ? await nativeProcesses(child.pid, pids) : []})};
+      diagnostics: async (pids, _candidate, signal) => ({processes: child.pid && child.exitCode === null && child.signalCode === null ? await nativeProcesses(child.pid, pids, signal) : []})};
   } catch (error) {
     const original = snapshot();
     let cleanup = 'closed';

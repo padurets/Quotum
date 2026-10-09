@@ -151,7 +151,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
       const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, future);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null;
       try {
-        observer=await observeReversal(cdp,browser,false);
+        observer=await observeReversal(cdp,browser);
         const phase = `${name}/cold`; bodies.phase = phase; proxy.phase(phase, latency);
         const scroll = (distance: number,stage:string) => {
           cdp.at(`${bodies.phase}/${stage}`);
@@ -223,14 +223,14 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
     const step = async <T>(value: string, run: () => Promise<T>) => {
       stage = value; cdp.at(`${name}/${stage}`);
       console.error(`bench: ${name}: ${stage}`);
-      return diagnostic && observer ? observer.watch(value, run) : run();
+      return observer ? observer.watch(value, run) : run();
     };
     const until = async (predicate: () => boolean | Promise<boolean>) => {const end = Date.now() + 10_000; while (!await predicate()) {if (bodies.errors.length) throw bodies.errors[0]; if (Date.now() > end) throw new Error(`${name}: lifecycle boundary not reached`); await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,10))');}};
     const key = (type: string, name: string, code: number, modifiers: number) => cdp.send('Input.dispatchKeyEvent', {type, key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers});
     const wheel = (pixels: number) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: pixels, deltaY: 0, modifiers: 8});
     try {
       // The canonical failing page is observed without changing V8 before input.
-      observer=mode==='reversal'?await observeReversal(cdp,browser,profileBeforeInput):null;
+      observer=await observeReversal(cdp,browser,{mode:diagnostic?'diagnostic':'canonical',profileBeforeInput,closeTarget:close});
       bodies.phase = phase; proxy.phase(phase, mode === 'after-delivery' ? 0 : 400);
       await step('shift down', () => key('keyDown', 'Shift', 16, 8));
       await step('first wheel', () => wheel(-geometry.width * .1));
@@ -240,7 +240,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
         await step('reverse wheel', () => wheel(geometry.width * .1));
         await step('first cancellation', () => until(() => reads()[0]?.canceled === true));
         await step('reversal frame', () => cdp.evaluate('new Promise(requestAnimationFrame)'));
-        await step('repeat wheel', () => !diagnostic&&observer?observer.watch('repeat wheel',()=>wheel(-geometry.width * .1)):wheel(-geometry.width * .1));
+        await step('repeat wheel', () => wheel(-geometry.width * .1));
         await step('repeat delivery', () => until(() => reads().length >= 2 && reads().slice(1).some(r => r.count?.complete)));
         await step('shift up', () => key('keyUp', 'Shift', 16, 0));
         await step('drawings settled', settled);
@@ -265,7 +265,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
     } catch (error) {
       console.error(`bench: ${name}: failed at ${stage}; HTTP ${JSON.stringify({active: bodies.activeCount, pending: bodies.pending.size, reads: reads().map(r => ({from: r.from, to: r.to, canceled: r.canceled, complete: r.count?.complete}))})}`);
       cdp.at(`${name}/failure state`);
-      const state = await cdp.evaluate('({visibility:document.visibilityState,ready:document.readyState,charts:[...document.querySelectorAll(".chart>svg")].map(svg=>({...svg.dataset})),selected:new URLSearchParams(location.search).has("from")})').catch(cause => String(cause));
+      const state = cdp.snapshot();
       console.error(`bench: ${name}: failure state ${JSON.stringify(state)}`);
       throw error;
     } finally {

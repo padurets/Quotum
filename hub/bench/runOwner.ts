@@ -3,6 +3,7 @@ import {deadline} from './deadline.js';
 
 /** One run owns startup, pending tab creation and every auxiliary resource before awaiting it. */
 export class RunOwner {
+  constructor(readonly evidence?: {save(name: string, value: unknown): void}) {}
   private readonly cancellation = new AbortController();
   readonly signal = this.cancellation.signal;
   private readonly pending = new Set<Promise<unknown>>();

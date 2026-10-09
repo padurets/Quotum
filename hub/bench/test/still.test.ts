@@ -3,11 +3,30 @@ import assert from 'node:assert/strict';
 import {FADE_FOR, PULSE_FOR} from '../../ui/lib/quota.js';
 import {hourShift} from '../../server/forecasts.js';
 import type {Snapshot} from '../../server/projection.js';
-import {DOT_STILL_AFTER, foreseenAt, MARGIN_MS, overviewCards, SETTLE_MS, stillProblems, warmUntil} from '../still.js';
+import {DOT_STILL_AFTER, foreseenAt, idlePhaseProblems, idleWindow, MARGIN_MS, overviewCards, SETTLE_MS, stillProblems, warmUntil, type IdlePhase} from '../still.js';
 import {scriptPerSecond, tally} from '../report.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
+
+test('both idle durations include exactly one centred cell transition at every warmup phase', () => {
+  const cell = 5 * MIN;
+  for (const seconds of [120, 300]) for (let ready = 0; ready < 2 * cell; ready += 1000) {
+    const planned = idleWindow(ready, seconds, cell);
+    assert.ok(planned.from >= ready && planned.from - ready < cell);
+    assert.equal(planned.to - planned.from, seconds * 1000);
+    assert.equal(Math.floor(planned.to / cell) - Math.floor(planned.from / cell), 1);
+    assert.equal(planned.boundary - planned.from, seconds * 500);
+  }
+});
+
+test('idle phase rejects missing coverage, extra grid movement and clock discontinuity', () => {
+  const phase: IdlePhase = {from: 240000, to: 360000, monotonicFrom: 1000, monotonicTo: 121000, cellMs: 300000, starts: [0,0,0], ends: [1,1,1], transitions: [1,1,1]};
+  assert.deepEqual(idlePhaseProblems(phase, 300000), []);
+  for (const changed of [{transitions: [0,0,0]}, {transitions: [1,2,1]}, {starts: []}, {ends: [1,1,0]}, {from: 310000}, {monotonicTo: 124000}]) {
+    assert.ok(idlePhaseProblems({...phase, ...changed}, 300000).length);
+  }
+});
 
 test('the page is counted once every dot has faded out, and not before it settled', () => {
   const opened = 10 * HOUR;

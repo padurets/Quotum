@@ -81,6 +81,22 @@ test('closing CDP rejects pending commands even without a socket close event', a
   cdp.close(); await Promise.all([first, second]);
 });
 
+test('cancelled CDP waiters ignore late replies and retain safe failure identity without parameters', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const socket = new Socket(), cdp = connection(socket), controller = new AbortController();
+  const cancelled = assert.rejects(cdp.send('Runtime.evaluate', {expression: 'secret-canary'}, controller.signal), /cancelled/);
+  controller.abort(); await cancelled;
+  assert.deepEqual(cdp.snapshot().pending, []);
+  socket.answer(1, {result: {value: 'late'}});
+  cdp.at('quota/24h/wheel');
+  const timed = assert.rejects(cdp.send('Input.dispatchMouseEvent', {x: 123}), /no browser response/);
+  t.mock.timers.tick(30_000); await timed;
+  assert.equal(cdp.snapshot().failure?.method, 'Input.dispatchMouseEvent');
+  assert.equal(cdp.snapshot().failure?.context, 'quota/24h/wheel');
+  assert.doesNotMatch(JSON.stringify(cdp.snapshot()), /secret-canary|expression|"x"/);
+  cdp.close();
+});
+
 test('a DevTools connection timeout closes only the tab it just created in an attached browser', async t => {
   t.mock.timers.enable({apis:['setTimeout']});
   const calls:string[]=[],sockets:EventTarget[]=[];

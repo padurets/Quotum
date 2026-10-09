@@ -35,6 +35,14 @@ lost target-creation replies as failures. A profile is retained when exit cannot
 confirmed. Attached browsers and their existing tabs remain outside that ownership.
 Launch diagnostics contain version, timing, process identity and classified stream
 counters; arbitrary browser output and command arguments are omitted.
+`QUOTUM_BENCH_DIAGNOSTICS_DIR` keeps a unique run manifest and completed phase reports
+before cleanup, including when a later phase fails. CI retains these artifacts for
+every attempt. The `make bench` wrapper forwards this setting without loading preview
+configuration. A pending CDP command still has its 30-second deadline; the canonical
+observer does not pause JavaScript or start a profiler while waiting. On failure it
+collects bounded liveness and command identity, without recording command parameters.
+Debugger intervention belongs to an explicitly diagnostic replay, with mandatory
+resume and owned-target cleanup, and cannot provide a passing canonical result.
 The observer credits input after its coalesced position reaches the actual data layers
 in the production RAF. Stationary input-free gaps are excluded; delayed pending input
 remains measurable. A last input committed on release waits for the final geometry and
@@ -371,6 +379,12 @@ focus in the card's menu and fails otherwise. It needs Chrome:
 `QUOTUM_CHROME`, `google-chrome` or `chromium` on `PATH`, or `--cdp http://host:port` to
 one already running. CI runs it on every push; run it when you change the dashboard
 and have Chrome.
+
+Idle measurement starts at a planned grid phase after warmup and includes one real
+five-minute cell transition in each chart. Waiting for that phase can add up to five
+minutes. Reports retain planned and observed bounds, transition counts and actual
+performance duration; missing coverage is a failure and the 0.3 ms/s budget includes
+the transition's work.
 
 The completed measurement phase's React/DOM observer is disconnected before native
 panning. Native wheel and Shift-drag start separately from the subscription limit and budget

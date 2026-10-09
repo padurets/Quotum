@@ -11,7 +11,10 @@ import type {RunOwner} from './runOwner.js';
 export class Cdp {
   private next = 1;
   private context = '';
-  private readonly waiting = new Map<number, {resolve: (value: never) => void; reject: (error: Error) => void; method: string; timer: ReturnType<typeof setTimeout>}>();
+  private lastAck: {id: number; method: string; at: number} | null = null;
+  private lastEvent: {method: string; at: number} | null = null;
+  private failure: {id: number; method: string; context: string; started: number; deadline: number; elapsedMs: number} | null = null;
+  private readonly waiting = new Map<number, {resolve: (value: never) => void; reject: (error: Error) => void; method: string; started: number; timer: ReturnType<typeof setTimeout>; clean(): void}>();
   private readonly listeners = new Map<string, ((params: never) => void)[]>();
 
   private constructor(private readonly socket: WebSocket,readonly endpoint:string|null=null) {
@@ -20,10 +23,11 @@ export class Cdp {
       if (message.id !== undefined) {
         const call = this.waiting.get(message.id);
         this.waiting.delete(message.id);
-        if (call) clearTimeout(call.timer);
+        if (call) {call.clean(); this.lastAck = {id: message.id, method: call.method, at: performance.now()};}
         if (message.error) call?.reject(new Error(`${call.method}: ${message.error.message}`));
         else call?.resolve(message.result as never);
       } else if (message.method) {
+        this.lastEvent = {method: message.method, at: performance.now()};
         for (const listener of this.listeners.get(message.method) ?? []) listener(message.params as never);
       }
     });
@@ -49,20 +53,32 @@ export class Cdp {
   /** The current scenario boundary, without request parameters such as cookies. */
   at(context: string) {this.context = context;}
 
-  send<T = unknown>(method: string, params: object = {}): Promise<T> {
+  snapshot() {
+    return {context: this.context, socketState: this.socket.readyState, lastAck: this.lastAck, lastEvent: this.lastEvent, failure: this.failure,
+      pending: [...this.waiting].map(([id, call]) => ({id, method: call.method, started: call.started, deadline: call.started + 30_000}))};
+  }
+
+  send<T = unknown>(method: string, params: object = {}, signal?: AbortSignal): Promise<T> {
     // A browser gone meanwhile (it crashed, or was closed) answers nothing: said at once, not waited for.
     if (this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error(`${method}: the browser closed the connection`));
+    if (signal?.aborted) return Promise.reject(new Error(`${method}: command cancelled`));
     const id = this.next++;
     return new Promise<T>((resolve, reject) => {
       const context = this.context;
+      const started = performance.now();
+      const clean = () => {clearTimeout(timer); signal?.removeEventListener('abort', cancelled);};
+      const cancelled = () => {clean(); this.waiting.delete(id); reject(new Error(`${method}: command cancelled`));};
       // A page promise can stop advancing while its DevTools socket stays open.
       const timer = setTimeout(() => {
         this.waiting.delete(id);
+        clean();
+        this.failure = {id, method, context, started, deadline: started + 30_000, elapsedMs: performance.now() - started};
         reject(new Error(`${context ? `${context}: ` : ''}${method}: no browser response in 30 s`));
       }, 30_000);
-      this.waiting.set(id, {resolve: resolve as (value: never) => void, reject, method, timer});
+      this.waiting.set(id, {resolve: resolve as (value: never) => void, reject, method, started, timer, clean});
+      signal?.addEventListener('abort', cancelled, {once: true});
       try {this.socket.send(JSON.stringify({id, method, params}));}
-      catch (error) {clearTimeout(timer); this.waiting.delete(id); reject(error);}
+      catch (error) {clean(); this.waiting.delete(id); reject(error);}
     });
   }
 
@@ -75,12 +91,12 @@ export class Cdp {
   }
 
   /** The value of an expression in the page, awaited when it is a promise. */
-  async evaluate<T>(expression: string): Promise<T> {
+  async evaluate<T>(expression: string, signal?: AbortSignal): Promise<T> {
     const answer = await this.send<{result: {value: T}; exceptionDetails?: {text: string; exception?: {description?: string}}}>('Runtime.evaluate', {
       expression,
       returnByValue: true,
       awaitPromise: true,
-    });
+    }, signal);
     if (answer.exceptionDetails) throw new Error(`in the page: ${answer.exceptionDetails.exception?.description ?? answer.exceptionDetails.text}`);
     return answer.result.value;
   }
@@ -92,7 +108,7 @@ export class Cdp {
   }
 
   private rejectWaiting() {
-    for (const call of this.waiting.values()) {clearTimeout(call.timer); call.reject(new Error(`${call.method}: the browser closed the connection`));}
+    for (const call of this.waiting.values()) {call.clean(); call.reject(new Error(`${call.method}: the browser closed the connection`));}
     this.waiting.clear();
   }
 }
@@ -118,15 +134,17 @@ export function findChrome(env: NodeJS.ProcessEnv): string | null {
 }
 
 /** A browser the benchmark drives: the DevTools endpoint (`http://host:port`) and how to let go of it. */
-export type Browser = {endpoint: string; owned?: boolean; owner?: RunOwner; launchReport?(): unknown; close(): Promise<void>; diagnostics?(pids:number[],candidate?:number):Promise<unknown>};
+export type Browser = {endpoint: string; owned?: boolean; owner?: RunOwner; launchReport?(): unknown; close(): Promise<void>; diagnostics?(pids:number[],candidate?:number,signal?:AbortSignal):Promise<unknown>};
 
 /** Only a launched browser's descendants may expose native thread state. */
-export async function nativeProcesses(owner:number,pids:number[]){
-  const status=async(pid:number)=>readFile(`/proc/${pid}/status`,'utf8').catch(()=> '');
+export async function nativeProcesses(owner:number,pids:number[],signal?:AbortSignal){
+  const status=async(pid:number)=>readFile(`/proc/${pid}/status`,{encoding:'utf8',signal}).catch(()=> '');
   const processes=[];
-  for(const pid of pids){
+  for(const pid of pids.slice(0,32)){
+    if(signal?.aborted)break;
     let ancestor=pid,owned=false;
     for(let depth=0;depth<16&&ancestor>1;depth++){
+      if(signal?.aborted)break;
       if(ancestor===owner){owned=true;break;}
       ancestor=Number((await status(ancestor)).match(/^PPid:\s+(\d+)/m)?.[1]??0);
     }
@@ -134,8 +152,9 @@ export async function nativeProcesses(owner:number,pids:number[]){
     const state=(await status(pid)).split('\n').filter(line=>/^(Name|State|VmRSS|Threads):/.test(line));
     const threads=[];
     for(const id of (await readdir(`/proc/${pid}/task`).catch(()=>[])).slice(0,50)){
-      const text=await readFile(`/proc/${pid}/task/${id}/status`,'utf8').catch(()=> '');
-      const wait=await readFile(`/proc/${pid}/task/${id}/wchan`,'utf8').catch(()=> 'unavailable');
+      if(signal?.aborted)break;
+      const text=await readFile(`/proc/${pid}/task/${id}/status`,{encoding:'utf8',signal}).catch(()=> '');
+      const wait=await readFile(`/proc/${pid}/task/${id}/wchan`,{encoding:'utf8',signal}).catch(()=> 'unavailable');
       threads.push({id:Number(id),state:text.split('\n').filter(line=>/^(Name|State):/.test(line)),wait});
     }
     processes.push({pid,state,threads});

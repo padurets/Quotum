@@ -16,7 +16,7 @@ import {chartProblems, HISTORY_BYTES_PER_MEASUREMENT, idleProblems, measuredProb
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
-import {overviewCards, stillProblems, warmUntil} from './still.js';
+import {idlePhaseProblems, idlePhaseScript, idleWindow, overviewCards, stillProblems, warmUntil, type IdlePhase} from './still.js';
 import {hear, type Heard} from './stream.js';
 import {frequencyKeys, moneyView, selectMoney} from './controls.js';
 import {panning} from './panning.js';
@@ -25,6 +25,7 @@ import {profilePanning} from './panningProfile.js';
 import {historyTraffic} from './historyTraffic.js';
 import {diagnoseReversal} from './historyTrafficBrowser.js';
 import {RunOwner} from './runOwner.js';
+import {Evidence} from './evidence.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -115,27 +116,37 @@ async function metrics(cdp: Cdp): Promise<Metrics> {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  const evidence = new Evidence();
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
-  const address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
-  await prepare(address);
-  const chrome = options.cdp ? null : findChrome(process.env);
-  if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
+  let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
+  try {
+    address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
+    await prepare(address);
+    chrome = options.cdp ? null : findChrome(process.env);
+    if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
+  } catch (error) {
+    evidence.finish('failed', {stage: 'preparation', status: 'no-browser-created'});
+    throw error;
+  }
   const seconds = options.ci ? IDLE.ci : IDLE.full;
 
   let browser: Browser | undefined;
   let tab: Awaited<ReturnType<typeof openTab>> | undefined;
   let heard: Heard | undefined;
-  const owner = new RunOwner();
+  const owner = new RunOwner(evidence);
+  let cancelled = false;
   let finishing: Promise<void> | undefined;
   const finish = (code: number): Promise<void> => finishing ??= (async () => {
     heard?.close();
+    evidence.begin('cleanup');
     try {await owner.close();} catch (error) {code = 1; say(String(error));}
-    await demo.stop();
+    try {await demo.stop();} catch {code = 1; say('demo cleanup failed');}
+    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
     process.exit(code);
   })();
   const set = panningSet(SETS[0]);
   const demo = new Demo({set, scene: set.scene, still: true, idleAgents: true,money:false, address, onExit: () => void finish(1)});
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => void finish(1));
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => {cancelled = true; void finish(1);});
 
   try {
     say(`a still hub of the ${set.id} set at ${address.base}`);
@@ -147,6 +158,7 @@ async function main() {
     heard = await hear(address.base, ana.cookie, board);
 
     browser = await owner.start(signal => options.cdp ? Promise.resolve(attachedChrome(options.cdp)) : launchChrome(chrome!, !process.env.CI, signal));
+    evidence.save('browser', browser.launchReport?.() ?? {mode: 'attached'});
     if(process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1'){
       say('diagnostic native replay only; this does not run the canonical benchmark');
       await diagnoseReversal(browser,address.base,ana.cookie,24);
@@ -171,34 +183,55 @@ async function main() {
       await sleep(250);
     }
     const opened = Date.now();
+    evidence.begin('warmup');
     const warm = warmUntil(await overview(), opened);
     say(`the board is open; it settles for ${Math.round((warm - Date.now()) / 1000)} s`);
     await sleep(warm - Date.now());
     if (heard.counts().history) throw new Stop('The stand credited agent work during warmup; its agents must be idle.');
 
+    const cellMs = cellOf(86_400_000);
+    const planned = idleWindow(Date.now(), seconds, cellMs);
+    evidence.save('idle-plan', planned);
+    say(`waiting ${Math.round((planned.from-Date.now())/1000)} s to include one real chart-cell transition`);
+    await sleep(planned.from-Date.now());
     const from = Date.now();
     const to = from + seconds * 1000;
     const moving = stillProblems(await overview(), from, to);
     if (moving.length) throw new Stop(`The stand does not stand still over the window, so its numbers would not be of an idle board: ${moving.join('; ')}.`);
 
     say(`watching the idle page for ${seconds} s`);
+    evidence.begin('idle');
     await cdp.evaluate('__quotumBench.reset()');
+    await cdp.evaluate(idlePhaseScript(cellMs));
     heard.reset();
     requests.counting = true;
     const before = await metrics(cdp);
+    const firstReading = await cdp.evaluate<Reading>('__quotumBench.read()');
     await sleep(to - Date.now());
+    const lastReading = await cdp.evaluate<Reading>('__quotumBench.read()');
     const after = await metrics(cdp);
     requests.counting = false;
     const events = heard.counts();
     const reading = await cdp.evaluate<Reading>('__quotumBench.read()');
-    const cellMs = cellOf(86_400_000);
-    const scriptMsPerSecond = round(scriptPerSecond(before, after, reading.instrumentMs, seconds));
+    const phase = await cdp.evaluate<IdlePhase>('(()=>{const p=__quotumIdlePhase.read();__quotumIdlePhase.stop();return p;})()');
+    const actualSeconds = after.Timestamp - before.Timestamp;
+    const phaseProblems = idlePhaseProblems(phase, planned.boundary);
+    if (firstReading.commits || firstReading.mutations.length) phaseProblems.push('idle work crossed the opening measurement boundary');
+    if (reading.commits !== lastReading.commits || JSON.stringify(reading.mutations) !== JSON.stringify(lastReading.mutations)) phaseProblems.push('idle work crossed the closing measurement boundary');
+    if (!Number.isFinite(actualSeconds) || actualSeconds <= 0) phaseProblems.push('idle performance duration unavailable');
+    const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
     const idle = {from, to, cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
+    evidence.save('idle', {...idle, planned, phase, actualSeconds, phaseProblems});
 
+    evidence.begin('measurements');
     const measured = await measure(stand, cdp);
+    evidence.save('measured', measured);
+    evidence.begin('work');
     const worked = await work(demo, stand, cdp);
+    evidence.save('work', worked);
     const problems = [
       ...idleProblems(idle),
+      ...phaseProblems,
       ...worked.problems,
       ...chartProblems(measured.chartLatencies),
       ...(measured.historyBytes <= HISTORY_BYTES_PER_MEASUREMENT ? [] : [`history read ${measured.historyBytes} bytes per measurement, above budget`]),
@@ -218,15 +251,18 @@ async function main() {
     // DOM for the finished measurement phase would add unrelated work to every frame.
     await cdp.evaluate('__quotumBench.pause()');
     say('checking native continuous wheel and Shift-drag from quota and budget at 24h and 30d, CPU ×4');
+    evidence.begin('panning');
     const panned = await panning(cdp);
+    evidence.save('panning', panned);
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95))})), problems: panned.problems})}`);
     // Capture any movement failure before the later phases change the selection.
-    if (panned.problems.length) {
+    if (panned.problems.length && browser.owned) {
       try {await profilePanning(cdp);}
       catch (error) {say(`panning diagnostic failed: ${(error as Error).message}`);}
     }
     say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
+    evidence.begin('history-traffic');
     const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
     let traffic:Awaited<ReturnType<typeof historyTraffic>>;
     try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser);}
@@ -238,20 +274,23 @@ async function main() {
       throw error;
     }
     problems.push(...traffic.problems);
+    evidence.save('history-traffic', traffic);
     if(process.env.QUOTUM_BENCH_REVERSAL_PROBE==='1')await diagnoseReversal(browser,address.base,ana.cookie,12);
+    evidence.begin('money');
     const monetary=await moneyPhase(demo,stand,cdp);
+    evidence.save('money', monetary);
     problems.push(...monetary.problems);
     const result = {
       set: set.id,
       idle: {
-        seconds,
+        seconds: actualSeconds, plannedSeconds: seconds, planned, phase, phaseProblems,
         requests: {count: requests.count, bytes: requests.bytes, byPath: requests.byPath},
         events,
         renders: {commits: reading.commits, ...tally(reading.renders)},
         mutations: tally(reading.mutations),
         scriptMsPerSecond,
-        instrumentMsPerSecond: round(reading.instrumentMs / seconds),
-        taskMsPerSecond: round((delta(before, after, 'TaskDuration') * 1000) / seconds),
+        instrumentMsPerSecond: round(reading.instrumentMs / actualSeconds),
+        taskMsPerSecond: round((delta(before, after, 'TaskDuration') * 1000) / actualSeconds),
         layouts: delta(before, after, 'LayoutCount'),
         recalcStyles: delta(before, after, 'RecalcStyleCount'),
       },
@@ -277,10 +316,12 @@ async function main() {
       problems,
     };
     console.log(JSON.stringify(result, null, 2));
+    evidence.save('result', result);
     if (problems.length) say(`over budget:\n- ${problems.join('\n- ')}`);
     await finish(problems.length ? 1 : 0);
   } catch (error) {
     if (finishing) return;
+    evidence.save('failure', {status: 'failed', kind: error instanceof Stop ? 'fixture' : 'runtime'});
     await demo.settled();
     console.error(error instanceof Stop ? error.message : `The benchmark failed: ${(error as Error).stack ?? error}`);
     await finish(error instanceof Stop ? 2 : 1);
