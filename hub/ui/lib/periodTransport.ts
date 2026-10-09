@@ -99,12 +99,18 @@ export class PeriodTransport implements HistoryMember {
 /** Charge transport staging before decoding; all consumers use the same retained budget. */
 export async function fetchPeriod(board:string,body:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean):Promise<PeriodReply> {
   const response=await fetch(`/api/boards/${encodeURIComponent(board)}/period`,{method:'POST',cache:'no-store',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.any([signal,AbortSignal.timeout(12_000)])});
-  const reader=response.body?.getReader();if(!reader)throw new Error('empty_period_reply');
-  const parts:Uint8Array[]=[];let bytes=0;
+  if(!response.body)throw new Error('empty_period_reply');
+  // The native response consumer finishes Chromium's network record. A bounded
+  // clone drains first, while the original branch retains the bytes for parsing.
+  const reader=response.clone().body!.getReader();let bytes=0;
   try {
-    for(;;){const item=await reader.read();if(item.done)break;bytes+=item.value.byteLength;if(bytes>7*1024*1024||!reserve(bytes*3)){await reader.cancel();throw new ApiError(413,'history_limit');}parts.push(item.value);}
-    const buffer=new Uint8Array(bytes);let at=0;for(const part of parts){buffer.set(part,at);at+=part.byteLength;}
-    const parsed=JSON.parse(new TextDecoder().decode(buffer));
+    for(;;){
+      const item=await reader.read();if(item.done)break;bytes+=item.value.byteLength;
+      if(bytes>7*1024*1024||!reserve(bytes*3)){
+        await Promise.all([reader.cancel(),response.body.cancel()]);throw new ApiError(413,'history_limit');
+      }
+    }
+    const parsed=await response.json();
     if(!response.ok)throw new ApiError(response.status,parsed.error??'history_failed');
     return parsed as PeriodReply;
   }finally{reader.releaseLock();}

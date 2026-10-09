@@ -4,7 +4,7 @@ import {PeriodAccounting} from '../lib/periodAccounting.js';
 import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/domain/periodTape.js';
 import {drain} from '../lib/prepare.js';
 import {PeriodIndex} from '../lib/periodIndex.js';
-import {PeriodTransport,type PeriodIntent} from '../lib/periodTransport.js';
+import {PeriodTransport,fetchPeriod,type PeriodIntent} from '../lib/periodTransport.js';
 import {HistoryPool} from '../lib/historyPool.js';
 import {packWorkPrepared,mergeWorkPrepared,packWork,type WorkTrace} from '../../server/domain/periodWork.js';
 import {PeriodActivity} from '../lib/periodActivity.js';
@@ -69,6 +69,25 @@ test('one collection combines all three history sections and the roster, includi
   await transport.read('quota',{cell:'1',from:'60',to:'120'});await settle();
   assert.equal(sent.length,2);assert.equal(sent[1].quota?.evidence,'skip','later chart tiles do not rebuild completed period evidence');
   assert.equal(sent[1].sessions,undefined);
+});
+
+test('the native period body is consumed only after every byte has entered the shared reservation',async t=>{
+  const body={basis:{run:'r'},values:{state:'complete',value:[{label:'Balance €',amount:'9007199254740993000001'}]}},text=JSON.stringify(body),data=new TextEncoder().encode(text);
+  let reserved=0,consumed=false;
+  const response=new Response(new ReadableStream({start(controller){controller.enqueue(data.slice(0,17));controller.enqueue(data.slice(17));controller.close();}}));
+  const json=response.json.bind(response);t.mock.method(response,'json',()=>{assert.equal(reserved,data.length*3);consumed=true;return json();});
+  t.mock.method(globalThis,'fetch',async()=>response);
+  const result=await fetchPeriod('b',{version:1,selection:{mode:'live',periodMs:60_000},evaluatedAt:1},new AbortController().signal,bytes=>{reserved=bytes;return true;});
+  assert.deepEqual(result,body);assert.equal(consumed,true);assert.equal(response.bodyUsed,true);
+});
+
+test('a denied period reservation cancels both stream branches without parsing or hanging', {timeout:2000},async t=>{
+  let canceled=false,parsed=false;
+  const response=new Response(new ReadableStream({pull(controller){controller.enqueue(new Uint8Array(1024));},cancel(){canceled=true;}},{highWaterMark:0}));
+  t.mock.method(response,'json',async()=>{parsed=true;throw new Error('must not parse');});
+  t.mock.method(globalThis,'fetch',async()=>response);
+  await assert.rejects(fetchPeriod('b',{version:1,selection:{mode:'live',periodMs:60_000},evaluatedAt:1},new AbortController().signal,()=>false),{code:'history_limit'});
+  assert.equal(canceled,true);assert.equal(parsed,false);
 });
 
 test('a stale A response cannot publish after A to B to A or after new evidence during its flight',async()=>{
