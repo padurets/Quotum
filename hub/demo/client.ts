@@ -128,6 +128,7 @@ export class Agent {
   private clientSessions: object[] = [];
   private clients: object[] | undefined;
   trackClients(sessions: object[], clients: object[]) { this.clientSessions = sessions; this.clients = clients; }
+  get clientSessionCount() { return this.clientSessions.length; }
 
   static readonly VERSION = 'quotum-demo/1';
 

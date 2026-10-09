@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {ALWAYS, MIN, lastOn, machineInfo, sessionsAt, type Agent, type DemoSet, type Machine, type Wave} from '../model.js';
 import {Person} from '../client.js';
-import {seedWork, type Stand} from '../setup.js';
+import {Live, seedWork, type Stand} from '../setup.js';
 import {parseSessions} from '../../server/domain/ingest.js';
 import {Sessions} from '../../server/sessions.js';
 import {Directory} from '../../server/store/directory.js';
@@ -99,4 +99,17 @@ test('seeded parallel stable and legacy work equals chronological reports in eit
       }
     }
   }
+});
+
+
+test('demo heartbeats count the supplemental clients alongside the legacy list', async () => {
+  const machine: Machine = {kind: 'machine', id: 'machine', expect: []};
+  const set: DemoSet = {id:'clients',about:'',scene:'',entries:[machine]};
+  let reports = 0;
+  const agent = {clientSessionCount:1,sessions:async (sessions: object[]) => {reports++; return {accepted:sessions.length+1};}};
+  const stand = {set,start:10_000,agents:new Map([['machine',agent]])} as unknown as Stand;
+  const live = new Live(stand,()=>60_000);
+  await live.reportOne(machine,0,10_000);
+  await live.reportOne(machine,15_000,25_000);
+  assert.equal(reports,2);
 });
