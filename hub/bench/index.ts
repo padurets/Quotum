@@ -147,6 +147,24 @@ async function main() {
       say('diagnostic replay completed; canonical benchmark was not run');
       await finish(0);return;
     }
+    // The unchanged traffic matrix runs while the seeded measurements age. Its
+    // temporary pages close before the idle board opens or any script budget starts.
+    let traffic:Awaited<ReturnType<typeof historyTraffic>>|undefined;
+    if(!panDiagnostic&&!idleDiagnostic){
+      say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
+      evidence.begin('history-traffic');
+      const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
+      try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser, evidence);}
+      catch(error){
+        if(/browser\/(?:1|30)d\/reversal/.test(String(error))){
+          say('replaying the failed reversal with page and browser diagnostics; the original failure remains');
+          try{await diagnoseReversal(browser,address.base,ana.cookie);}catch(diagnostic){say('reversal replay failed: '+String(diagnostic));}
+        }
+        throw error;
+      }
+      evidence.save('history-traffic', traffic);
+      if(process.env.QUOTUM_BENCH_REVERSAL_PROBE==='1')await diagnoseReversal(browser,address.base,ana.cookie,12);
+    }
     tab = await openTab(browser);
     const {cdp} = tab;
     const requests = new Requests(cdp);
@@ -169,7 +187,13 @@ async function main() {
       say('diagnostic panning '+panDiagnostic+'; canonical benchmark is not run');
       await cdp.evaluate('__quotumBench.pause()');
       const result = panDiagnostic === 'pairs' ? await panningPairs(cdp, browser, evidence) : await tracePanning(cdp, browser, evidence);
-      evidence.save('diagnostic-panning-result', result);
+      evidence.save('diagnostic-panning-result', 'attempts' in result ? result : {
+        mode:'diagnostic',problems:result.problems.map(reason=>({reason})),
+        reports:result.reports.map(report=>({initiator:report.initiator,period:report.period,
+          frameP95:percentile(report.frames,.95),frameP99:percentile(report.frames,.99),inputP95:percentile(report.latency,.95),
+          frames:report.frames.length,inputs:report.inputs,credited:report.latency.length,
+          omitted:report.timeline?.omitted??0,cost:report.cost})),
+      });
       say('diagnostic panning completed; all outcomes remain in artifacts');
       await finish('attempts' in result && result.attempts.some(attempt => attempt.status === 'failed') ? 1 : 0); return;
     }
@@ -255,21 +279,8 @@ async function main() {
     evidence.save('panning', panned);
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95))})), problems: panned.problems})}`);
-    say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
-    evidence.begin('history-traffic');
-    const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
-    let traffic:Awaited<ReturnType<typeof historyTraffic>>;
-    try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser, evidence);}
-    catch(error){
-      if(/browser\/(?:1|30)d\/reversal/.test(String(error))){
-        say('replaying the failed reversal with page and browser diagnostics; the original failure remains');
-        try{await diagnoseReversal(browser,address.base,ana.cookie);}catch(diagnostic){say('reversal replay failed: '+String(diagnostic));}
-      }
-      throw error;
-    }
+    if(!traffic)throw new Stop('canonical history traffic readings unavailable');
     problems.push(...traffic.problems);
-    evidence.save('history-traffic', traffic);
-    if(process.env.QUOTUM_BENCH_REVERSAL_PROBE==='1')await diagnoseReversal(browser,address.base,ana.cookie,12);
     evidence.begin('credits');
     const credits=await creditPhase(demo,stand,cdp);
     evidence.save('credits', credits);

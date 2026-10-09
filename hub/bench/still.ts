@@ -6,12 +6,14 @@ import {STILL_FOR} from '../demo/setup.js';
 
 const HOUR = 3_600_000;
 
-/** Keep one real grid transition at the centre of the existing idle duration. */
+/** Keep one real grid transition inside the existing duration, away from endpoint clock wakes. */
 export function idleWindow(readyAt: number, seconds: number, cellMs: number) {
   const duration = seconds * 1000;
   if (!Number.isFinite(readyAt) || duration <= 0 || duration > cellMs) throw new Error('invalid idle phase');
-  const boundary = Math.ceil((readyAt + duration / 2) / cellMs) * cellMs;
-  return {from: boundary - duration / 2, to: boundary + duration / 2, boundary, cellMs, expectedTransitions: 1};
+  // Centring a 120 s window exactly makes both CDP snapshots race a minute tick.
+  const lead=duration/2+5_000;
+  const boundary = Math.ceil((readyAt + lead) / cellMs) * cellMs;
+  return {from: boundary - lead, to: boundary - lead + duration, boundary, cellMs, expectedTransitions: 1};
 }
 
 export type IdlePhase = {from: number; to: number; monotonicFrom: number; monotonicTo: number; cellMs: number; starts: number[]; ends: number[]; transitions: number[]};

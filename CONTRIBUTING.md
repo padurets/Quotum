@@ -403,9 +403,11 @@ focus in the card's menu and fails otherwise. It needs Chrome:
 one already running. CI runs it on every push; run it when you change the dashboard
 and have Chrome.
 
-Idle measurement starts at a planned grid phase after warmup and includes one real
-five-minute cell transition in each chart. Waiting for that phase can add up to five
-minutes. Reports retain planned and observed bounds, transition counts and actual
+The history traffic matrix runs first, while the seeded measurements age, and closes
+its temporary pages before the idle board opens. The same warmup requirements still
+apply. Idle measurement starts at a planned grid phase with its endpoints away from
+minute ticks and includes one real five-minute cell transition in each chart.
+Reports retain planned and observed bounds, transition counts and actual
 performance duration; missing coverage is a failure and the 0.3 ms/s budget includes
 the transition's work.
 

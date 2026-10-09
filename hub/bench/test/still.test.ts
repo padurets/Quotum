@@ -9,14 +9,15 @@ import {scriptPerSecond, tally} from '../report.js';
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 
-test('both idle durations include exactly one centred cell transition at every warmup phase', () => {
+test('both idle durations include one cell transition and avoid minute ticks at their endpoints', () => {
   const cell = 5 * MIN;
   for (const seconds of [120, 300]) for (let ready = 0; ready < 2 * cell; ready += 1000) {
     const planned = idleWindow(ready, seconds, cell);
     assert.ok(planned.from >= ready && planned.from - ready < cell);
     assert.equal(planned.to - planned.from, seconds * 1000);
     assert.equal(Math.floor(planned.to / cell) - Math.floor(planned.from / cell), 1);
-    assert.equal(planned.boundary - planned.from, seconds * 500);
+    assert.equal(planned.boundary - planned.from, seconds * 500+5_000);
+    for(const bound of [planned.from,planned.to])assert.ok(Math.min(bound%MIN,MIN-bound%MIN)>=5_000);
   }
 });
 
