@@ -29,7 +29,7 @@ import {Evidence} from './evidence.js';
 import {Requests} from './requests.js';
 export {Requests} from './requests.js';
 import {doubledIdle} from './idleDiagnostic.js';
-import {panningPairs, tracePanning} from './panningDiagnostic.js';
+import {panningPairs, tracePanning, traceControls} from './panningDiagnostic.js';
 import {ChromeLaunchError} from './chrome.js';
 import {creditSnapshot} from './credits.js';
 import {startupTrials} from './startupDiagnostic.js';
@@ -202,6 +202,7 @@ async function main() {
           frames:report.frames.length,inputs:report.inputs,credited:report.latency.length,
           omitted:report.timeline?.omitted??0,cost:report.cost})),
       });
+      if(panDiagnostic==='trace')await traceControls(browser,evidence);
       say('diagnostic panning completed; all outcomes remain in artifacts');
       await finish('attempts' in result && result.attempts.some(attempt => attempt.status === 'failed') ? 1 : 0); return;
     }

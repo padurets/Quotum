@@ -1,4 +1,5 @@
-import type {Browser, Cdp} from './cdp.js';
+import {openTab, type Browser, type Cdp} from './cdp.js';
+import {threadCpuBounds} from './traceCpu.js';
 import {deadline} from './deadline.js';
 import {percentile} from './budget.js';
 import {panning} from './panning.js';
@@ -38,9 +39,11 @@ export async function panningPairs(cdp: Cdp, browser: Browser, evidence: Evidenc
   return {mode:'diagnostic',order:ORDER,attempts};
 }
 
-const TRACE_NAMES = new Set(['RunTask','ThreadControllerImpl::RunTask','FunctionCall','EventDispatch','UpdateLayoutTree','Layout','PrePaint','Paint','CompositeLayers','MinorGC','MajorGC','V8.GCScavenger','V8.GCCompactor','FireAnimationFrame','RequestAnimationFrame','UpdateLayerTree','Commit','ActivateLayerTree','DrawFrame','RasterTask','BeginFrame','BeginMainThreadFrame']);
-type TraceEvent={name:string;ph:string;ts?:number;dur?:number;pid?:number;tid?:number};
-type SafeTrace={name:string;phase:string;ts?:number;duration?:number;pid?:number;tid?:number};
+const TRACE_NAMES = new Set(['RunTask','ThreadControllerImpl::RunTask','FunctionCall','EventDispatch','UpdateLayoutTree','Layout','PrePaint','Paint','CompositeLayers','MinorGC','MajorGC','V8.GCScavenger','V8.GCCompactor','FireAnimationFrame','RequestAnimationFrame','UpdateLayerTree','Commit','ActivateLayerTree','DrawFrame','RasterTask','BeginFrame','BeginMainThreadFrame','EvaluateScript','TimerFire','TimeStamp']);
+type TraceEvent={name:string;ph:string;ts?:unknown;dur?:unknown;tts?:unknown;tdur?:unknown;pid?:unknown;tid?:unknown;args?:{data?:{message?:unknown}}};
+export type SafeTrace={name:string;phase:string;ts?:number;duration?:number;threadTs?:number;threadDuration?:number;pid?:number;tid?:number;stage?:string};
+const CLOCK_MARKERS = new Set(['quotum-trace-clock-start','quotum-trace-clock-end','quotum-trace-control-start','quotum-trace-control-end']);
+const numeric = (value:unknown) => typeof value==='number'&&Number.isFinite(value)&&value>=0?value:undefined;
 
 /** Tracing belongs only to a new diagnostic interval in this run's own browser. */
 type TraceEvidence={save(name:string,value:unknown):void;saveTrace?(name:string,value:unknown):void};
@@ -74,7 +77,9 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
   const collected=(message:{value:TraceEvent[]})=>{
     for(const event of message.value) {
       if(!TRACE_NAMES.has(event.name)||!['B','E','X','I'].includes(event.ph))continue;
-      const safe={name:event.name,phase:event.ph,ts:event.ts,duration:event.dur,pid:event.pid,tid:event.tid};
+      const stage=event.name==='TimeStamp'&&typeof event.args?.data?.message==='string'&&CLOCK_MARKERS.has(event.args.data.message)?event.args.data.message:undefined;
+      if(event.name==='TimeStamp'&&!stage)continue;
+      const safe:SafeTrace={name:event.name,phase:event.ph,ts:numeric(event.ts),duration:numeric(event.dur),threadTs:numeric(event.tts),threadDuration:numeric(event.tdur),pid:numeric(event.pid),tid:numeric(event.tid),stage};
       const size=Buffer.byteLength(JSON.stringify(safe));
       if(events.length>=100_000 || bytes+size>32*1024*1024){omitted++;continue;}
       bytes+=size;events.push(safe);
@@ -83,25 +88,73 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
   const complete=()=>{ended=true;};
   cdp.on('Tracing.dataCollected',collected);cdp.on('Tracing.tracingComplete',complete);
   let active=false;
+  const clocks:unknown[]=[];
+  const clock=async(stage:'start'|'end',signal:AbortSignal)=>{
+    const before=await metrics(cdp,signal);
+    const page=await cdp.evaluate(`(()=>{const now=performance.now();console.timeStamp('quotum-trace-clock-${stage}');return {now,after:performance.now(),timeOrigin:performance.timeOrigin};})()`,signal);
+    const after=await metrics(cdp,signal);
+    clocks.push({stage,before:before.Timestamp,page,after:after.Timestamp});
+    evidence?.save('trace-clock',{clocks});
+  };
   try {
     active=true;
     await deadline(5000,async signal=>{
       await cdp.send('Tracing.start',{categories:'devtools.timeline,v8,blink,cc',transferMode:'ReportEvents'},signal);
-      const clockBefore=await metrics(cdp,signal),pageClock=await cdp.evaluate('({now:performance.now(),timeOrigin:performance.timeOrigin})',signal),clockAfter=await metrics(cdp,signal);
-      evidence?.save('trace-clock',{before:clockBefore.Timestamp,page:pageClock,after:clockAfter.Timestamp});
+      await clock('start',signal);
     },browser.owner?.signal);
     return await run();
   } finally {
     let cleanup='complete';
     if(active)try {
       await deadline(5000,async signal=>{
+        // A failed clock probe must not prevent ending the trace.
+        try {await deadline(1000,endSignal=>clock('end',endSignal),signal);} catch {/* Missing end calibration remains visible in clocks. */}
         await cdp.send('Tracing.end',{},signal);
         while(!ended){signal.throwIfAborted();await new Promise(resolve=>setTimeout(resolve,20));}
       });
     } catch {cleanup='incomplete';browser.owner?.failures.push('trace cleanup unconfirmed');}
     cdp.off('Tracing.dataCollected',collected);cdp.off('Tracing.tracingComplete',complete);
-    const report={mode:'diagnostic',status:omitted||!ended?'insufficient-evidence':'complete',scheduler:'unavailable',omitted,bytes,cleanup,events};
+    const report={mode:'diagnostic',status:omitted||!ended?'insufficient-evidence':'complete',scheduler:'unavailable',threadClock:{status:events.some(event=>event.threadTs!==undefined)?'available':'unavailable'},omitted,bytes,cleanup,events};
     if(evidence?.saveTrace)evidence.saveTrace('trace',report);else evidence?.save('trace',report);
     if(cleanup==='incomplete')try {await deadline(8000,()=>browser.close());}catch {browser.owner?.failures.push('diagnostic browser cleanup unconfirmed');}
   }
+}
+
+/** Separate controls run after panning, on an empty owned tab and without CPU throttling. */
+export async function traceControls(browser: Browser, evidence: TraceEvidence) {
+  if(!browser.owned)throw new Error('trace controls require an owned synthetic browser');
+  const tab=await openTab(browser),intervals:{kind:string;from:number;to:number}[]=[];
+  let trace:SafeTrace[]=[],complete=false;
+  try {
+    await tab.cdp.send('Performance.enable');
+    await traceInterval(tab.cdp,browser,async()=>{
+      for(const kind of ['busy','timer','busy']) {
+        const interval=await tab.cdp.evaluate<{from:number;to:number}>(`(async()=>{
+          await new Promise(requestAnimationFrame);
+          const from=performance.now();
+          console.timeStamp('quotum-trace-control-start');
+          ${kind==='busy'?'while(performance.now()-from<100){}':'await new Promise(resolve=>setTimeout(resolve,100));'}
+          console.timeStamp('quotum-trace-control-end');
+          const to=performance.now();
+          await new Promise(requestAnimationFrame);
+          return {from,to};
+        })()`);
+        intervals.push({kind,...interval});
+      }
+    },{
+      save:(name,value)=>evidence.save('control-'+name,value),
+      saveTrace:(name,value)=>{const report=value as {events:SafeTrace[];status:string};trace=report.events;complete=report.status==='complete';if(evidence.saveTrace)evidence.saveTrace('control-'+name,value);else evidence.save('control-'+name,value);},
+    });
+    // Controls use their exact trace markers; page timestamps are retained independently.
+    const markers=trace.filter(event=>event.stage?.startsWith('quotum-trace-control-')).sort((a,b)=>(a.ts??0)-(b.ts??0));
+    const reports=intervals.map((interval,index)=>{
+      const start=markers[index*2],end=markers[index*2+1];
+      const aligned=start?.stage==='quotum-trace-control-start'&&end?.stage==='quotum-trace-control-end'
+        &&start.ts!==undefined&&end.ts!==undefined&&start.pid!==undefined&&start.tid!==undefined&&start.pid===end.pid&&start.tid===end.tid;
+      return {...interval,...(aligned?threadCpuBounds(trace,start.pid!,start.tid!,start.ts!,end.ts!):{status:'missing-thread-clock'})};
+    });
+    const valid=complete&&markers.length===6&&reports.length===3&&reports.every(report=>report.status==='bounded'&&('cpuLowerMs' in report)&&(report.kind==='busy'?report.cpuLowerMs!>40:report.cpuUpperMs!<20));
+    evidence.save('trace-controls',{mode:'diagnostic',status:valid?'passed':'insufficient-evidence',intervals:reports});
+    if(!valid)throw new Error('thread-clock controls did not distinguish execution from timer waiting');
+  } finally {await tab.close();}
 }

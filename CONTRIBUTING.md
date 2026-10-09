@@ -35,7 +35,13 @@ these diagnostic runs cannot satisfy the canonical gate. The optional
 label) records an owned synthetic browser's new intervals with numeric
 script/layout/paint/GC events, bounded to 32 MiB per scenario. This is opt-in. Trace data
 never contains script sources, arguments, arbitrary URLs or user text. Missing
-scheduler evidence and truncated timelines remain explicit. An input's final
+scheduler evidence and truncated timelines remain explicit. Trace events retain both
+elapsed and thread CPU time where Chrome supplies them, with start/end page clock
+markers. CPU time includes Chrome's Linux throttling spin and is not a JavaScript
+cost estimate. Separate fixed busy/timer/busy controls run afterwards on an empty
+owned tab; missing thread clocks cannot pass those controls. CPU bounds use observed
+thread-clock endpoints, never interpolation across missing samples. Off-CPU time
+alone does not distinguish scheduler delay from deliberate sleep or a lock wait. An input's final
 geometry must still commit before it can be credited.
 `QUOTUM_BENCH_DIAGNOSE_IDLE=double` (the `benchmark-idle-diagnostics` PR
 label) checks one idle board, then two independent live copies over the same

@@ -17,13 +17,14 @@ function fixture() {
 test('a trace retains only allowed numeric events from its own original interval', async()=>{
   const f=fixture();
   const result=await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
-    f.listeners.get('Tracing.dataCollected')?.({value:[{name:'Paint',ph:'X',ts:1,dur:2,pid:3,tid:4,args:{cookie:'private-canary',url:'private-canary'}},{name:'private-canary',ph:'X',ts:5}]});
+    f.listeners.get('Tracing.dataCollected')?.({value:[{name:'Paint',ph:'X',ts:1,dur:2,tts:100,tdur:1,pid:3,tid:4,args:{cookie:'private-canary',url:'private-canary'}},{name:'private-canary',ph:'X',ts:5}]});
     return 17;
   },f.evidence);
   assert.equal(result,17);assert.equal(f.listeners.size,0);
   const text=JSON.stringify(f.files.get('trace'));
   assert.ok(text.includes('Paint')&&!text.includes('private-canary')&&!text.includes('cookie'));
-  assert.deepEqual(f.sent,['Tracing.start','Performance.getMetrics','Performance.getMetrics','Tracing.end']);
+  assert.deepEqual(f.sent,['Tracing.start','Performance.getMetrics','Performance.getMetrics','Performance.getMetrics','Performance.getMetrics','Tracing.end']);
+  assert.deepEqual((f.files.get('trace') as {events:{threadTs:number;threadDuration:number}[]}).events.map(event=>[event.threadTs,event.threadDuration]),[[100,1]]);
 });
 
 test('a failing trace interval stops collection and preserves the original error', async()=>{
@@ -70,4 +71,18 @@ test('native trace limits and clocks belong to each original scenario, with clea
   const first=f.files.get('trace-1-trace') as {events:{ts:number}[]};
   const second=f.files.get('trace-2-trace') as {events:{ts:number}[]};
   assert.deepEqual(first.events.map(event=>event.ts),[1]);assert.deepEqual(second.events.map(event=>event.ts),[2]);
+});
+
+test('trace clocks reject payload strings and arbitrary console timestamps', async()=>{
+  const f=fixture();
+  await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
+    f.listeners.get('Tracing.dataCollected')?.({value:[
+      {name:'Paint',ph:'X',ts:'private-canary',dur:NaN,tts:'private-canary',tdur:-1},
+      {name:'TimeStamp',ph:'I',ts:123,pid:3,tid:4,args:{data:{message:'quotum-trace-clock-start',url:'private-canary'}}},
+      {name:'TimeStamp',ph:'I',ts:124,args:{data:{message:'private-canary'}}},
+    ]});
+  },f.evidence);
+  const trace=f.files.get('trace') as {events:unknown[]};
+  assert.equal(trace.events.length,2);assert.doesNotMatch(JSON.stringify(trace),/private-canary|url/);
+  assert.deepEqual(trace.events[1],{name:'TimeStamp',phase:'I',ts:123,duration:undefined,threadTs:undefined,threadDuration:undefined,pid:3,tid:4,stage:'quotum-trace-clock-start'});
 });
