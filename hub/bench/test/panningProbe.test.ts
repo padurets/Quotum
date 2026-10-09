@@ -182,6 +182,28 @@ test('the probe measures a delayed HTML or SVG fold and cannot credit final inpu
   }
 });
 
+test('diagnostic phases retain pending animation time without manufacturing moving frames', () => {
+  const f = fixture('quota', true);
+  for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg]) delete svg.dataset.panEnd;
+  const animation = {playState: 'running', pending: true, currentTime: 0, startTime: null as number | null};
+  f.historyLayer.getAnimations = () => [animation];
+  f.historyLayer.style.transform = 'translateX(40px) scaleX(.6)';
+  f.runFrame(10); f.runFrame(40); f.runFrame(70);
+  assert.equal(f.reading.updated, 0, 'a pending animation is observed, not counted as movement');
+  animation.pending = false; animation.startTime = 70; animation.currentTime = 10;
+  f.historyLayer.style.transform = 'translateX(30px) scaleX(.7)'; f.runFrame(80);
+  animation.currentTime = 30;
+  f.historyLayer.style.transform = 'translateX(20px) scaleX(.8)'; f.runFrame(100);
+  animation.playState = 'finished'; f.historyLayer.style.transform = 'none'; f.runFrame(230);
+  const entries = JSON.parse(JSON.stringify(f.reading.timeline.read().entries));
+  assert.deepEqual(entries.filter((entry: {kind: string}) => entry.kind === 'presentation-phase').map(({id: _id, ...entry}: Record<string, unknown>) => entry), [
+    {at: 10, kind: 'presentation-phase', phase: 'fold', frameId: 10, pending: true, owner: 'html', currentTime: 0, startTime: null},
+    {at: 80, kind: 'presentation-phase', phase: 'fold', frameId: 80, pending: false, owner: 'html', currentTime: 10, startTime: 70},
+    {at: 230, kind: 'presentation-phase', phase: 'idle', frameId: 230, pending: false, owner: null, currentTime: null, startTime: null},
+  ]);
+  assert.deepEqual(Array.from(f.reading.frames), [20], 'phase records do not change the moving-frame budget');
+});
+
 test('causal input positions preserve the line and page wheel units', () => {
   for (const [mode, units] of [1, 16, 400].entries()) {
     const f = fixture();

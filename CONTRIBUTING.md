@@ -37,7 +37,10 @@ script/layout/paint/GC events, bounded to 32 MiB per scenario. This is opt-in. T
 never contains script sources, arguments, arbitrary URLs or user text. Missing
 scheduler evidence and truncated timelines remain explicit. Trace events retain both
 elapsed and thread CPU time where Chrome supplies them, with start/end page clock
-markers. CPU time includes Chrome's Linux throttling spin and is not a JavaScript
+markers. The opt-in timeline also records observed animation phases, including pending
+start and the first sample after completion. These observations bound the phase;
+they do not replace actual moving frames or prove physical presentation. CPU time
+includes Chrome's Linux throttling spin and is not a JavaScript
 cost estimate. Separate fixed busy/timer/busy controls run afterwards on an empty
 owned tab, first without throttling and then at fourfold throttle. The unthrottled
 controls must distinguish execution from timer waiting; both sets retain their
