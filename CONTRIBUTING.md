@@ -104,6 +104,9 @@ owned UI and tray threads during a pause, with timestamps delimiting that interv
 It starts before the pause and is stopped only after the UI resumes; startup and stop
 each wait at most two seconds. A stuck observer cannot delay resume. Wait-chain
 artifacts exclude lock names and foreign thread identities, and retain partial samples.
+A successful WCT call with only its root thread is inconclusive: unsupported waits
+can hide their dependencies. It does not establish responsiveness or exclude a lock
+dependency; native window checks still establish responsiveness independently.
 A manual run of the Desktop workflow takes `ui-runs`, how many times
 the UI smoke runs on the installed app and on the portable one each.
 The queued-close check runs with the main window open and with only the compact
