@@ -1527,6 +1527,7 @@ mod sys {
         stat(pid)?.times
     }
 
+    #[cfg(test)]
     pub fn birth(pid: u32) -> Option<Vec<u8>> {
         stat(pid)?.native_birth
     }
