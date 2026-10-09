@@ -273,7 +273,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
       await step('proxy settled', () => proxy.settled(phase));
       const attempts = reads(); assert.ok(attempts.every(r => r.count?.id));
       const totals = bodyTotals(attempts.map(r => ({count: r.count!, transfer: transferFor(r.count!, proxy.transfers)})));
-      for (const read of attempts) if (read.answer) stableHistory(read.answer, seed, cell);
+      for (const read of attempts) if (read.answer) stableHistory(read.answer, seed, cell, read.to);
       const state = await step('read final state', () => cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; selected: boolean; attempts: Record<string, {aborted: boolean}>}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,selected:new URLSearchParams(location.search).has("from"),attempts:__quotumHistoryAttempts})'));
       assert.equal(state.tokens.length, 1); assert.ok(state.poses.some(p => p.end < p.origin));
       assert.equal(state.pushes, mode === 'reversal' ? 1 : 0); assert.equal(state.selected, mode === 'reversal');

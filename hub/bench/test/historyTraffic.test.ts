@@ -144,6 +144,20 @@ test('a cutoff crossing is a retryable invalid cohort, while changed known metad
   assert.throws(() => stableHistory({...seed, known: {work: 1, sources: {s: 0}}}, seed, 60_000), error => !(error instanceof HistoryCutChanged));
 });
 
+test('past-only cancellation reads survive an unrelated live cutoff while changed coverage still fails', () => {
+  // A real reversal seeded at 08:39:29.593 read yesterday at 08:39:30.840.
+  const seed = {run: 'r', now: 1791535169593, known: {work: 0, sources: {s: 0}}};
+  const answer = {...seed, now: 1791535170840}, cell = 300_000;
+  stableHistory(answer, seed, cell, 1791448500000);
+  const boundary = 1791535200000;
+  stableHistory(answer, seed, cell, boundary);
+  assert.throws(() => stableHistory(answer, seed, cell, boundary + 1), HistoryCutChanged);
+  assert.throws(() => stableHistory(answer, seed, cell, boundary + cell), HistoryCutChanged);
+  assert.throws(() => stableHistory(answer, seed, cell), HistoryCutChanged);
+  assert.throws(() => stableHistory({...answer, run: 'new'}, seed, cell, 1791448500000));
+  assert.throws(() => stableHistory({...answer, known: {...seed.known, work: 1}}, seed, cell, 1791448500000));
+});
+
 test('native history gestures use CDP integer speed while retaining the requested movement and cadence', () => {
   for (const fraction of [.5, .04]) {
     const geometry = {x: 250, y: 200, width: 1001}, distance = geometry.width * fraction;
