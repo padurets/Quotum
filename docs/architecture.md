@@ -1715,7 +1715,7 @@ only while that same process still holds the machine; one that does not name its
 process is left alone, and the question says taking over failed. `quotum` tells who
 measures, and `quotum stop` ends a waiting `quotum` but never the app.
 
-**Its settings** are in the board's settings panel, only in the app's window: which
+**Its settings** are in Account settings, under Application, only in the app's window: which
 providers are measured and how often, a name for the Antigravity account, whether
 running agents are shown, start at login, the version and *Quit*. They are `quotum`'s
 settings: a change is written to `config.toml` at once, keeping comments, symbolic links
