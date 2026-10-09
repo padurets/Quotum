@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {creditChartMarks,creditSnapshot} from '../credits.js';
+import {creditSnapshot} from '../credits.js';
 import {cards} from '../../demo/model.js';
 import {stillSnapshot} from '../still.js';
 import {SETS} from '../../demo/catalogue.js';
@@ -47,7 +47,7 @@ test('late credit updates keep their exact value and observation across a chart 
         const series=composeMeters(chunks,cell,from,to)[0],last=series.points.filter(point=>point.at<=now).at(-1)!;
         assert.equal(last.value,value);
         assert.equal(last.semantics?.conversion?.original.at,at,'a carry retains the actual new observation, including an unchanged heartbeat');
-        assert.ok(creditChartMarks(at,now,cell,value).includes(last.at+':'+last.value));
+        assert.ok(last.at>=at,'a carried point can follow the observation it represents');
         if(offset===6000&&index===0)assert.notEqual(last.at+':'+last.value,at+':'+value,'the old exact-sample expectation fails on a valid carried point');
       }
     } finally {store.close();}

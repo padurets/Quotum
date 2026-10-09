@@ -291,7 +291,7 @@ export const Chart = memo(function Chart({
   onSelect?: (range: TimeRange) => void;
   plot?: number;
   onBase?: (height: number) => void;
-  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;detail?:(key:string,at:number)=>ReactNode};
+  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;observedAt?:(key:string,at:number)=>number|undefined;detail?:(key:string,at:number)=>ReactNode};
   stepped?:boolean;
   strip?: PlotBuffer | null;
   prepared?: boolean;
@@ -325,7 +325,8 @@ export const Chart = memo(function Chart({
       let latest: string | undefined;
       let lastAt:number|undefined;
       for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; lastAt=at; yield;}
-      if(lastAt!==undefined&&valueAxis?.rawValue)latest=`${lastAt}:${valueAxis.rawValue(line.key,lastAt)}`;
+      // A carried balance can receive a new observation without changing its outline.
+      if(lastAt!==undefined&&valueAxis?.rawValue)latest=`${valueAxis.observedAt?.(line.key,lastAt)??lastAt}:${valueAxis.rawValue(line.key,lastAt)}`;
       if(line.pointMode==='observation') {
         const observed=yield* observationRunsPrepared(line.points,incomingStrip?.from??drawFrom,incomingStrip?.to??basis.to,drawNow);
         const runs:[number,number][][]=[];
