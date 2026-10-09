@@ -1119,8 +1119,8 @@ test('every change a reader sees is told: what each request touches reaches the 
       ['sessions'],
       [],
     ],
-    ['a project renamed', () => h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}}), ['sessions'], ['sessions'], []],
-    ['a project given its name back', () => h.call('POST', '/api/projects/restore', {as: 'alice', body: {reported: ['quotum']}}), ['sessions'], ['sessions'], []],
+    ['a project renamed', () => h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}}), ['sessions', 'history'], ['sessions'], []],
+    ['a project given its name back', () => h.call('POST', '/api/projects/restore', {as: 'alice', body: {reported: ['quotum']}}), ['sessions', 'history'], ['sessions'], []],
     ['a view saved', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}}), [], ['view'], []],
     ['a height chosen', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 9}}}}}), [], ['view'], []],
     ['the height given back to the content', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}}), [], ['view'], []],
@@ -1128,8 +1128,8 @@ test('every change a reader sees is told: what each request touches reaches the 
     ['a board made', () => h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Solo'}}), ['boards'], ['boards'], []],
     ['a name changed', () => h.call('POST', '/api/account', {as: 'alice', body: {name: 'Alicia'}}), ['card'], ['card'], []],
     ['a source taken off', () => h.call('DELETE', `/api/boards/${team}/shares/${source}`, {as: 'alice'}), [], ['lineup', 'mine'], []],
-    ['a device renamed', () => h.call('POST', `/api/devices/${devices[0].id}`, {as: 'alice', body: {name: 'Book'}}), ['connections'], ['connections'], []],
-    ['a device disconnected', () => h.call('DELETE', `/api/devices/${devices[0].id}`, {as: 'alice'}), ['lineup', 'mine', 'connections'], ['connections'], []],
+    ['a device renamed', () => h.call('POST', `/api/devices/${devices[0].id}`, {as: 'alice', body: {name: 'Book'}}), ['sessions', 'connections'], ['connections'], []],
+    ['a device disconnected', () => h.call('DELETE', `/api/devices/${devices[0].id}`, {as: 'alice'}), ['lineup', 'mine', 'connections', 'history'], ['connections'], []],
   ];
   for (const [what, act, onOwn, onShared, onBobs] of rows) {
     const done = await act();
@@ -1155,7 +1155,7 @@ test('all of a board’s history is news when whose agents’ work it shows, or 
   const laptop = (await h.call('GET', '/api/devices', {as: 'alice'})).body[0].id;
   const s = await reading(h, 'alice', board);
   t.after(s.close);
-  const all = {sources: [source], since: 0, changes: [{source,scope:'quota',since:0}]};
+  const all = {sources: [source], since: 0, ownSince: 0, changes: [{source,scope:'quota',since:0}]};
   const history = async () => (await s.within()).filter(e => e.type === 'history').map(e => e.data);
 
   await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: {}}, hidden: [`source:${source}`]}});

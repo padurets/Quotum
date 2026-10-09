@@ -53,7 +53,7 @@ is one implementation of them.
 
 ## Measuring
 
-The agent's adapters ask each coding agent's own client, never provider endpoints.
+The agent's collectors ask each coding agent's own client, never provider endpoints.
 The hub's read-only connectors measure z.ai subscriptions and OpenRouter budgets
 directly. These are the client interfaces used by the agent:
 
@@ -1759,3 +1759,28 @@ installing a newer package; it has no automatic updater yet.
 7. ~~The desktop app for Windows and Linux: the agent, its own hub and board,
    tray and settings, built and tested by CI.~~ Next: automatic updates, then
    macOS.
+
+
+### Coding clients and private work
+
+The Rust client catalogue owns executable discovery and process tracking independently
+of quota collectors. Claude Code, Codex and Antigravity map explicitly to their existing
+collectors; OpenCode has no collector. Client enabled/path settings apply to discovery
+and activity; collector enabled settings apply only to measuring. A runner with no
+collectors keeps reporting clients while session reporting is enabled.
+
+Legacy sessions retain their released subset and cap priority. Supplemental sessions
+carry work that cannot enter that subset. Schema 21 adds a client namespace, nullable
+source and evidence metadata to session contexts, preserving ledger row/producer IDs
+and every work interval; device inventory is stored separately. Evidence is neither a
+resolver nor identity. Source-less and unheld work is private to the machine owner's
+personal board. Current holdings normalize private source references at read time;
+shared projections and source activity signals require a current holding.
+
+Private ownSessions and ownSince events update the corresponding page slices and
+quota/activity history without card or financial updates. Closed tiles invalidate even
+without readers. Empty boards use the same explicit Add widget flow and saved visibility.
+OpenCode native local TUI attribution is proven only by bounded Linux invocation metadata;
+shared or unproven invocations and other operating systems have no project authority.
+Version transport bounds bytes before line parsing and waits for both EOF and successful
+exit within five seconds. It never retains raw output or reads client secrets.

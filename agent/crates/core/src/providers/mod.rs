@@ -4,7 +4,7 @@
 
 mod antigravity;
 mod claude;
-mod codex;
+pub(crate) mod codex;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,7 @@ pub use claude::Claude;
 pub use codex::Codex;
 
 use crate::model::{ErrorKind, Failure, Outcome, Provider};
-use crate::process::{Client, ProcError, find_program, usual_dirs};
+use crate::process::{Client, ProcError};
 use crate::stop::Stop;
 
 /// Everything an adapter needs from the agent for one measurement.
@@ -32,16 +32,8 @@ pub struct Context<'a> {
     pub stop: &'a Stop,
 }
 
-pub trait Adapter: Send {
+pub trait Collector: Send {
     fn provider(&self) -> Provider;
-    /// Executable name of the client.
-    fn program(&self) -> &'static str;
-    /// The client's own install locations, besides PATH and [`usual_dirs`].
-    fn install_dirs(&self, home: &Path) -> Vec<PathBuf>;
-    /// Where a copy of the client may be found when no installed one is: looked in last.
-    fn fallback_dirs(&self, _home: &Path) -> Vec<PathBuf> {
-        Vec::new()
-    }
     fn measure(&mut self, ctx: &Context) -> Outcome;
     /// Files and directories that change when someone uses the agent on this machine.
     fn activity_paths(&self, home: &Path) -> Vec<PathBuf>;
@@ -59,7 +51,7 @@ pub trait Adapter: Send {
     }
 }
 
-pub fn adapter(provider: Provider) -> Box<dyn Adapter> {
+pub fn adapter(provider: Provider) -> Box<dyn Collector> {
     match provider {
         Provider::Claude => Box::new(Claude::default()),
         Provider::Codex => Box::new(Codex),
@@ -69,21 +61,22 @@ pub fn adapter(provider: Provider) -> Box<dyn Adapter> {
 
 /// The adapter's client: on PATH, in its own install locations, where installers and
 /// package managers put programs, or else a copy another program carries.
-pub fn find_client(adapter: &dyn Adapter, home: &Path) -> Option<PathBuf> {
-    find_program(adapter.program(), &client_dirs(adapter, home))
+pub fn find_client(adapter: &dyn Collector, home: &Path) -> Option<PathBuf> {
+    crate::clients::ClientId::from(adapter.provider()).find(home)
 }
 
 /// Where a client is looked for after PATH, in order.
-fn client_dirs(adapter: &dyn Adapter, home: &Path) -> Vec<PathBuf> {
-    [adapter.install_dirs(home), usual_dirs(home), adapter.fallback_dirs(home)].concat()
+#[cfg(test)]
+fn client_dirs(adapter: &dyn Collector, home: &Path) -> Vec<PathBuf> {
+    crate::clients::ClientId::from(adapter.provider()).directories(home)
 }
 
-pub(crate) fn locate(adapter: &dyn Adapter, ctx: &Context) -> Result<PathBuf, Failure> {
+pub(crate) fn locate(adapter: &dyn Collector, ctx: &Context) -> Result<PathBuf, Failure> {
     if let Some(path) = ctx.program {
         return Ok(path.to_path_buf());
     }
     find_client(adapter, ctx.home).ok_or_else(|| {
-        let program = adapter.program();
+        let program = crate::clients::ClientId::from(adapter.provider()).program();
         let detail = format!("`{program}` is neither on PATH nor in the usual install directories");
         Failure::new(adapter.provider(), ErrorKind::NotInstalled, detail)
     })
@@ -95,6 +88,7 @@ pub(crate) fn process_failure(provider: Provider, error: ProcError) -> Failure {
         ProcError::Timeout => Failure::new(provider, ErrorKind::Timeout, ""),
         ProcError::Stopped => Failure::new(provider, ErrorKind::Failed, "the agent is stopping"),
         ProcError::Closed => Failure::new(provider, ErrorKind::Failed, "the client exited before answering"),
+        ProcError::OutputLimit => Failure::new(provider, ErrorKind::Failed, "the client output exceeded its limit"),
         ProcError::Io(e) => Failure::new(provider, ErrorKind::Failed, e.to_string()),
     }
 }

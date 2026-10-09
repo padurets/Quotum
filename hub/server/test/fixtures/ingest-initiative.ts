@@ -1,12 +1,9 @@
-import {clientFor, validClientId} from './clients.js';
-import {providers, type Provider} from './sources.js';
-import {providerOf, type ClientProvider} from './providers.js';
-import type {FreeResets, Kind, WindowMeasurement, Win} from './quota.js';
-import {exactDecimal, scalarDecimal} from './amount.js';
-import type {CreditBalance, ResourceStatuses} from './resources.js';
+// Frozen ingest parser from 22d2737; only import paths and the Measurement type alias are adapted.
+import {providers, type Provider} from '../../domain/sources.js';
+import type {FreeResets, Kind, WindowMeasurement as Measurement, Win} from '../../domain/quota.js';
 
 /** Clocks within this of the hub's are taken as they are; beyond it, agent times are shifted. */
-export {CLOCK_TOLERANCE_MS} from './history.js';
+export const CLOCK_TOLERANCE_MS = 30_000;
 
 /**
  * Ingest format v1 (spec/ingest-v1.md): what an agent sends. Parsing is strict; a
@@ -22,7 +19,7 @@ export type AgentWindow = {
 };
 
 export type AgentSnapshot = {
-  provider: ClientProvider;
+  provider: Provider;
   account: string | null;
   /** A name the owner gave a subscription whose client does not identify it. */
   accountName: string | null;
@@ -33,11 +30,9 @@ export type AgentSnapshot = {
   staleAfterMs: number;
   windows: AgentWindow[];
   resets: FreeResets | null;
-  resourceStatus?: ResourceStatuses;
-  balances?: CreditBalance[];
 };
 
-export type AgentFailure = {provider: ClientProvider; observedAt: number; error: string; detail: string | null};
+export type AgentFailure = {provider: Provider; observedAt: number; error: string; detail: string | null};
 
 export type AgentBatch = {
   version: 1;
@@ -101,12 +96,6 @@ function provider(value: unknown): Provider {
   return value as Provider;
 }
 
-/** Read authority before any provider-specific fields, preserving strict client parsing. */
-function clientItem(value: unknown, what: string): value is Obj & {provider: ClientProvider} {
-  if (!isObject(value)) throw new Invalid(what);
-  return providerOf(provider(value.provider))!.measuredBy === 'client';
-}
-
 function list(value: unknown, what: string, max: number): unknown[] {
   // An optional field may be left out or null (the spec); either way the list is empty.
   if (value === undefined || value === null) return [];
@@ -156,36 +145,10 @@ function parseSnapshot(value: unknown): AgentSnapshot {
   const stale = value.staleAfterMs;
   if (!Number.isInteger(stale) || (stale as number) <= 0 || (stale as number) > LIMITS.staleAfterMs) throw new Invalid('staleAfterMs');
   const windows = list(value.windows, 'windows', LIMITS.windows).map(parseWindow);
-  const providerId = provider(value.provider) as ClientProvider, identity = account(value.account);
-  const resets = parseResets(value.resets);
-  let resourceStatus: ResourceStatuses | undefined, balances: CreditBalance[] | undefined;
-  if (value.resourceStatus !== undefined) {
-    const statuses = value.resourceStatus;
-    if (providerId !== 'codex' || !identity || !isObject(statuses) ||
-      (typeof statuses.windows !== 'string' || !['observed','missing','unsupported','invalid'].includes(statuses.windows)) ||
-      (typeof statuses.resets !== 'string' || !['observed','missing','unsupported','invalid'].includes(statuses.resets))) throw new Invalid('resourceStatus');
-    resourceStatus = statuses as ResourceStatuses;
-    if ((statuses.windows === 'observed') !== (windows.length > 0) || (statuses.resets === 'observed') !== (resets !== null)) throw new Invalid('resourceStatus');
-  }
-  if (!windows.length && !resourceStatus) throw new Invalid('windows');
-  if (value.balances !== undefined) {
-    if (providerId !== 'codex' || !identity || !Array.isArray(value.balances) || value.balances.length > 1) throw new Invalid('balances');
-    balances = value.balances.map((balance): CreditBalance => {
-      if (!isObject(balance) || balance.id !== 'balance:credits' || balance.unit !== 'credits:codex' ||
-        (typeof balance.status !== 'string' || !['finite','unlimited','missing','unsupported','invalid'].includes(balance.status)) ||
-        (balance.hasCredits !== undefined && typeof balance.hasCredits !== 'boolean')) throw new Invalid('balances');
-      let amount: string | undefined;
-      if (balance.status === 'finite') {
-        if (typeof balance.amount !== 'string') throw new Invalid('balance amount');
-        try {amount = scalarDecimal(exactDecimal(balance.amount));} catch {throw new Invalid('balance amount');}
-      } else if (balance.amount !== undefined) throw new Invalid('balance amount');
-      return {id:'balance:credits', unit:'credits:codex', status:balance.status as CreditBalance['status'],
-        ...(amount === undefined ? {} : {amount}), ...(balance.hasCredits === undefined ? {} : {hasCredits:balance.hasCredits as boolean})};
-    });
-  }
+  if (!windows.length) throw new Invalid('windows');
   return {
-    provider: providerId,
-    account: identity,
+    provider: provider(value.provider),
+    account: account(value.account),
     accountName: text(value.accountName, 'accountName', true),
     plan: text(value.plan, 'plan', true),
     observedAt: time(value.observedAt, 'observedAt')!,
@@ -193,9 +156,7 @@ function parseSnapshot(value: unknown): AgentSnapshot {
     client: text(value.client, 'client', true),
     staleAfterMs: stale as number,
     windows,
-    resets,
-    ...(resourceStatus ? {resourceStatus} : {}),
-    ...(balances ? {balances} : {}),
+    resets: parseResets(value.resets),
   };
 }
 
@@ -203,7 +164,7 @@ function parseFailure(value: unknown): AgentFailure {
   if (!isObject(value)) throw new Invalid('failure');
   if (!(AGENT_ERRORS as readonly unknown[]).includes(value.error)) throw new Invalid('error');
   return {
-    provider: provider(value.provider) as ClientProvider,
+    provider: provider(value.provider),
     observedAt: time(value.observedAt, 'observedAt')!,
     error: value.error as string,
     detail: typeof value.detail === 'string' ? value.detail.slice(0, 200) : null,
@@ -239,8 +200,8 @@ export function parseBatch(body: unknown): AgentBatch {
     version: 1,
     ...sender,
     sentAt: time(input.sentAt, 'sentAt')!,
-    snapshots: list(input.snapshots, 'snapshots', LIMITS.items).filter(value => clientItem(value, 'snapshot')).map(parseSnapshot),
-    failures: list(input.failures, 'failures', LIMITS.items).filter(value => clientItem(value, 'failure')).map(parseFailure),
+    snapshots: list(input.snapshots, 'snapshots', LIMITS.items).map(parseSnapshot),
+    failures: list(input.failures, 'failures', LIMITS.items).map(parseFailure),
   };
 }
 
@@ -249,26 +210,21 @@ export function parseBatch(body: unknown): AgentBatch {
  * `paced`: the device follows the hub's pace; `minIntervalMs`: the most often it agrees
  * to measure a subscription.
  */
-type ClientSubscription = {provider: ClientProvider; account: string | null; accountName: string | null; active: boolean; minIntervalMs: number | null};
-type HubSubscription = {provider: Exclude<Provider, ClientProvider>; measuredBy: 'hub'};
 export type Checkin = AgentSender & {
   paced: boolean;
-  subscriptions: (ClientSubscription | HubSubscription)[];
+  subscriptions: {provider: Provider; account: string | null; accountName: string | null; active: boolean; minIntervalMs: number | null}[];
 };
 
 export function parseCheckin(body: unknown): Checkin {
   const sender = parseSender(body);
   const paced = (body as Obj).paced ?? false;
   if (typeof paced !== 'boolean') throw new Invalid('paced');
-  const subscriptions = list((body as Obj).subscriptions, 'subscriptions', 16).map((value): ClientSubscription | HubSubscription => {
-    if (!isObject(value)) throw new Invalid('subscription');
-    const id = provider(value.provider);
-    if (providerOf(id)!.measuredBy === 'hub') return {provider: id as HubSubscription['provider'], measuredBy: 'hub'};
+  const subscriptions = list((body as Obj).subscriptions, 'subscriptions', 16).map(value => {
     if (!isObject(value) || typeof (value.active ?? false) !== 'boolean') throw new Invalid('subscription');
     const least = value.minIntervalMs ?? null;
     if (least !== null && (!Number.isInteger(least) || (least as number) < 60_000 || (least as number) > 86_400_000)) throw new Invalid('minIntervalMs');
     return {
-      provider: id as ClientProvider,
+      provider: provider(value.provider),
       account: account(value.account),
       accountName: text(value.accountName, 'accountName', true),
       active: value.active === true,
@@ -284,13 +240,13 @@ export function parseCheckin(body: unknown): Checkin {
  * device's person's own (optionally one of several, by the name they gave it), never
  * the machine's.
  */
-export function subscriptionKey(snapshot: {account: string | null; accountName: string | null; provider: Provider}, userId: string): string {
+export function subscriptionKey(snapshot: Pick<AgentSnapshot, 'account' | 'accountName' | 'provider'>, userId: string): string {
   if (snapshot.account) return snapshot.account;
   const name = snapshot.accountName ? `/${snapshot.accountName.trim().toLowerCase()}` : '';
   return `user:${userId}/${snapshot.provider}${name}`;
 }
 
-export function toMeasurement(snapshot: AgentSnapshot): WindowMeasurement {
+export function toMeasurement(snapshot: AgentSnapshot): Measurement {
   const windows: Win[] = snapshot.windows.map(w => ({
     id: w.id,
     kind: w.kind,
@@ -300,8 +256,7 @@ export function toMeasurement(snapshot: AgentSnapshot): WindowMeasurement {
     resetAt: w.resetsAt,
     minutes: w.minutes,
   }));
-  return {observedAt: snapshot.observedAt, plan: snapshot.plan ?? '', windows, staleAfterMs: snapshot.staleAfterMs, resets: snapshot.resets,
-    ...(snapshot.resourceStatus ? {resourceStatus:snapshot.resourceStatus} : {}), ...(snapshot.balances ? {balances:snapshot.balances} : {})};
+  return {observedAt: snapshot.observedAt, plan: snapshot.plan ?? '', windows, staleAfterMs: snapshot.staleAfterMs, resets: snapshot.resets};
 }
 
 /** Where an agent's session runs (spec: Reporting running agents). */
@@ -309,10 +264,7 @@ export const ORIGINS = ['terminal', 'editor', 'app'] as const;
 export type Origin = (typeof ORIGINS)[number];
 
 export type AgentSession = {
-  sessionId: string | null;
-  provider: ClientProvider;
-  clientId?: string;
-  route?: SessionRoute | null;
+  provider: Provider;
   account: string | null;
   accountName: string | null;
   origin: Origin;
@@ -326,44 +278,17 @@ export type AgentSession = {
 };
 
 /** Every coding agent running on a machine right now. */
-export type SessionRoute = {class: 'subscription' | 'api' | 'unknown'; by: 'session' | 'machine'; host: string | null; provider: string | null};
-export type ClientSession = Omit<AgentSession, 'provider' | 'account' | 'accountName'> & {
-  clientId: string;
-  source: {provider: ClientProvider; account: string | null; accountName: string | null} | null;
-};
-export type DeviceClient = {clientId: string; version: string | null};
-export type SessionReport = AgentSender & {sentAt: number; sessions: AgentSession[]; clientSessions: ClientSession[]; clients: DeviceClient[] | null};
-
-function soft<T>(read: () => T): T | null {
-  try { return read(); } catch (error) { if (error instanceof Invalid) return null; throw error; }
-}
-
-function sessionRoute(value: unknown): SessionRoute | null {
-  if (!isObject(value) || (value.by !== 'session' && value.by !== 'machine')) return null;
-  const kind = value.class === 'subscription' || value.class === 'api' ? value.class : 'unknown';
-  const host = value.by === 'session' && typeof value.host === 'string' && value.host.length <= 253 && value.host.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) ? value.host : null;
-  return {class: kind, by: value.by, host, provider: value.by === 'session' && validClientId(value.provider) ? value.provider : null};
-}
-
+export type SessionReport = AgentSender & {sentAt: number; sessions: AgentSession[]};
 
 export function parseSessions(body: unknown): SessionReport {
   const sender = parseSender(body);
   const input = body as Obj;
-  const ids = new Set<string>();
-  const sessions = list(input.sessions, 'sessions', 200).filter(value => clientItem(value, 'session')).map(value => {
+  const sessions = list(input.sessions, 'sessions', 200).map(value => {
     if (!isObject(value)) throw new Invalid('session');
-    const sessionId = value.sessionId ?? null;
-    if (sessionId !== null) {
-      if (typeof sessionId !== 'string' || !/^[0-9a-f]{32}$/.test(sessionId) || ids.has(sessionId)) throw new Invalid('sessionId');
-      ids.add(sessionId);
-    }
     if (!(ORIGINS as readonly unknown[]).includes(value.origin)) throw new Invalid('origin');
     if (typeof value.working !== 'boolean') throw new Invalid('working');
     return {
-      sessionId,
-      provider: provider(value.provider) as ClientProvider,
-      clientId: clientFor(provider(value.provider) as ClientProvider),
-      route: sessionRoute(value.route),
+      provider: provider(value.provider),
       account: account(value.account),
       accountName: text(value.accountName, 'accountName', true),
       origin: value.origin as Origin,
@@ -374,38 +299,5 @@ export function parseSessions(body: unknown): SessionReport {
       working: value.working,
     };
   });
-  const clientSessions: ClientSession[] = [];
-  if (Array.isArray(input.clientSessions)) for (const value of input.clientSessions) {
-    if (sessions.length + clientSessions.length >= 200) break;
-    if (!isObject(value) || !validClientId(value.clientId) || !(ORIGINS as readonly unknown[]).includes(value.origin) || typeof value.working !== 'boolean') continue;
-    const startedAt = soft(() => time(value.startedAt, 'startedAt'));
-    if (startedAt === null) continue;
-    const sessionId = typeof value.sessionId === 'string' && /^[0-9a-f]{32}$/.test(value.sessionId) ? value.sessionId : null;
-    if (sessionId !== null && ids.has(sessionId)) continue;
-    if (sessionId !== null) ids.add(sessionId);
-    const source = isObject(value.source) ? soft(() => {
-      const candidate = value.source as Obj;
-      const id = provider(candidate.provider);
-      if (providerOf(id)?.measuredBy !== 'client') return null;
-      return {provider: id as ClientProvider, account: account(candidate.account), accountName: text(candidate.accountName, 'accountName', true)};
-    }) : null;
-    clientSessions.push({clientId: value.clientId, sessionId, source, route: sessionRoute(value.route),
-      origin: value.origin as Origin, working: value.working, startedAt,
-      project: soft(() => cut(value.project, 'project')), folder: soft(() => cut(value.folder, 'folder')),
-      lastWorkedAt: soft(() => time(value.lastWorkedAt, 'lastWorkedAt', true)),
-    });
-  }
-  let inventory: DeviceClient[] | null = null;
-  if (Array.isArray(input.clients)) {
-    inventory = [];
-    const seen = new Set<string>();
-    for (const value of input.clients) {
-      if (inventory.length >= 64) break;
-      if (!isObject(value) || !validClientId(value.clientId) || seen.has(value.clientId)) continue;
-      seen.add(value.clientId);
-      const version = typeof value.version === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9.+_-]{0,63}$/.test(value.version) ? value.version : null;
-      inventory.push({clientId: value.clientId, version});
-    }
-  }
-  return {...sender, sentAt: time(input.sentAt, 'sentAt')!, sessions, clientSessions, clients: inventory};
+  return {...sender, sentAt: time(input.sentAt, 'sentAt')!, sessions};
 }

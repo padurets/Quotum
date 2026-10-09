@@ -199,6 +199,23 @@ export class Directory {
     });
   }
 
+  deviceClients(device: string): (import('../domain/ingest.js').DeviceClient & {seenAt: number})[] {
+    return this.db.prepare('SELECT client AS clientId,version,seen_at AS seenAt FROM device_clients WHERE device_id=? ORDER BY client').all(device) as (import('../domain/ingest.js').DeviceClient & {seenAt: number})[];
+  }
+
+  saveDeviceClients(device: string, user: string, clients: import('../domain/ingest.js').DeviceClient[], now: number) {
+    const before = this.deviceClients(device).map(({clientId, version}) => ({clientId, version}));
+    const next = [...clients].sort((a, b) => a.clientId.localeCompare(b.clientId));
+    const changed = JSON.stringify(before) !== JSON.stringify(next);
+    this.db.prepare('DELETE FROM device_clients WHERE device_id=?').run(device);
+    const insert = this.db.prepare('INSERT INTO device_clients VALUES (?,?,?,?)');
+    for (const client of next) insert.run(device, client.clientId, client.version, now);
+    if (changed) {
+      this.db.prepare('INSERT INTO account_revisions(user_id,revision) VALUES (?,1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1').run(user);
+      tell(this.observer, o => o.touchUser(user));
+    }
+  }
+
   connectionsRevision(userId: string): number {
     return (this.db.prepare('SELECT revision FROM account_revisions WHERE user_id=?').get(userId) as {revision: number} | undefined)?.revision ?? 0;
   }

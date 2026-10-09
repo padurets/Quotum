@@ -15,6 +15,7 @@ import {seedDeepSeek} from './deepseek.js';
 import {seedQuotas} from './quotas.js';
 import {seedMoney} from './money.js';
 import {seedCodexCredits} from './codexCredits.js';
+import {seedClients} from './clients.js';
 import {seedCurrencies} from './currencies.js';
 import {Directory} from '../server/store/directory.js';
 
@@ -186,6 +187,7 @@ export class Demo {
     const store = new Store(path.join(this.dir, 'quotum.sqlite'));
     try {
       seedWork(store, stand);
+      if(set.id==='clients')await seedClients(store,new Directory(store.db),stand);
       if(this.options.money!==false&&(set.id==='all'||set.id==='money'||set.id==='analytics')){await seedMoney(store,new Directory(store.db),stand);await seedDeepSeek(store,new Directory(store.db),stand);seedCurrencies(store,stand);seedCodexCredits(store,new Directory(store.db),stand);}
       if(this.options.money!==false&&(set.id==='all'||set.id==='quotas'||set.id==='analytics'))await seedQuotas(store,new Directory(store.db),stand);
     } finally {

@@ -8,7 +8,7 @@ import type {Origin} from './ingest.js';
  */
 export type Stretch = {
   session: number;
-  source: string;
+  source: string | null;
   device: string;
   user: string;
   origin: Origin;

@@ -25,7 +25,7 @@ export const sinceChangesAt = (from: number, now: number) => (now - from < 60_00
 /** A source of the board as the list of agents names it, with its agents. */
 export type AgentSource = {id: string; provider: string; title?: string; sessions: LiveSession[]};
 /** A running agent in the board's table, with the card whose subscription it spends. */
-export type AgentRow = {source: AgentSource; session: LiveSession};
+export type AgentRow = {source: AgentSource | null; session: LiveSession};
 
 /** What a row can be about besides time: the ones the list gathers its agents by. */
 export const DIMENSIONS = ['project', 'machine', 'subscription'] as const;
@@ -83,7 +83,7 @@ export function groupsOf(rows: AgentRow[], by: AgentsBy): AgentGroup[] {
     const [key, name] =
       by === 'project' ? [JSON.stringify(row.session.project), row.session.project]
       : by === 'machine' ? [row.session.device.id, row.session.device.name]
-      : by === 'subscription' ? [row.source.id, sourceLabel(row.source)]
+      : by === 'subscription' ? [row.source?.id ?? 'unknown', agentSourceLabel(row.source)]
       : [String(i), row.session.project];
     const group = groups.get(key);
     if (group) group.rows.push(row);
@@ -124,12 +124,12 @@ export function machinesOf(sessions: LiveSession[]): {id: string; name: string; 
   return [...machines.values()];
 }
 
-const rowActivity = (a: AgentRow, b: AgentRow) => byActivity(a.session, b.session) || a.source.id.localeCompare(b.source.id);
+const rowActivity = (a: AgentRow, b: AgentRow) => byActivity(a.session, b.session) || (a.source?.id ?? '').localeCompare(b.source?.id ?? '');
 
 /** Every agent on the cards shown, by activity; when empty, whether hiding cards caused it. */
-export function agentRows(sources: AgentSource[], view: View): {rows: AgentRow[]; empty: 'none' | 'noneShown' | null} {
+export function agentRows(sources: AgentSource[], view: View, own: LiveSession[] = []): {rows: AgentRow[]; empty: 'none' | 'noneShown' | null} {
   const shown = sources.filter(source => !isHidden(view, cardId(source.id)));
-  const rows = shown.flatMap(source => source.sessions.map(session => ({source, session}))).sort(rowActivity);
+  const rows: AgentRow[] = [...shown.flatMap(source => source.sessions.map(session => ({source, session}))), ...own.map(session => ({source: null, session}))].sort(rowActivity);
   if (rows.length) return {rows, empty: null};
   return {rows, empty: sources.some(source => source.sessions.length && !shown.includes(source)) ? 'noneShown' : 'none'};
 }
@@ -170,7 +170,7 @@ export function sortedGroups(groups: AgentGroup[], sort: AgentsSort, columns: re
   const text = (a: string, b: string) => a.localeCompare(b, formatLocale());
   const name = ({rows: [row]}: AgentGroup) =>
     column === 'project' ? row.session.project ?? ''
-      : column === 'machine' ? row.session.device.name : sourceLabel(row.source);
+      : column === 'machine' ? row.session.device.name : agentSourceLabel(row.source);
   const nameless = (group: AgentGroup) => column === 'project' && group.name === null;
   return [...groups].sort((a, b) => {
     const activity = at.get(a)! - at.get(b)!;
@@ -217,3 +217,5 @@ export function agentsFit({shell, rows, footer, border, budget}: {shell: number;
   }
   return {shown, hidden: rows.length - shown, min, natural};
 }
+
+export const agentSourceLabel = (source: AgentSource | null) => source ? sourceLabel(source) : t('agents.unknownSource');

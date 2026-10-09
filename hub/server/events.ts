@@ -127,6 +127,7 @@ export function clientScript(root = config.clientRoot): string | null {
 
 export class Events implements Touches {
   /** The history cache hears every touch, also when no board is watched. */
+  onClientHistory: ((user: string, since: number) => void) | null = null;
   onHistory: ((source: string, since: number, scopes?: readonly HistoryScope[]) => void) | null = null;
   /** When this start of the hub began, base 36: a page tells a restart by it. */
   readonly epoch: string;
@@ -144,6 +145,10 @@ export class Events implements Touches {
   private readonly dirtySources = new Map<string, Set<string>>();
   private readonly dirtyUsers = new Set<string>();
   private dirtyHub = false;
+  private readonly dirtyClientUsers = new Set<string>();
+  private readonly ownHistories = new Map<string, number>();
+  private readonly ownSessions = new Map<string, {json: string; changesAt: number | null}>();
+  private ownDeadline: {at: number; cancel: () => void} | null = null;
   private readonly histories = new Map<string, Map<string, HistoryChange>>();
   private stopFlush: (() => void) | null = null;
 
@@ -261,6 +266,17 @@ export class Events implements Touches {
     this.schedule();
   }
 
+  touchClientSessions(user: string) {
+    if ([...this.subscribers.values()].some(s => s.user === user && this.parts.store.privateOwner(s.board) === user)) this.dirtyClientUsers.add(user);
+    this.schedule();
+  }
+
+  clientHistory(user: string, since: number) {
+    try { this.onClientHistory?.(user, since); } catch (error) { trouble(error); }
+    if ([...this.subscribers.values()].some(s => s.user === user && this.parts.store.privateOwner(s.board) === user)) this.ownHistories.set(user, Math.min(this.ownHistories.get(user) ?? since, since));
+    this.schedule();
+  }
+
   touchHub() {
     if (this.subscribers.size) this.dirtyHub = true;
     this.schedule();
@@ -309,7 +325,7 @@ export class Events implements Touches {
 
   private schedule() {
     if (this.stopFlush || this.closed) return;
-    if (!this.dirtyBoards.size && !this.dirtySources.size && !this.dirtyUsers.size && !this.dirtyHub && !this.histories.size) return;
+    if (!this.dirtyBoards.size && !this.dirtySources.size && !this.dirtyUsers.size && !this.dirtyHub && !this.histories.size && !this.dirtyClientUsers.size && !this.ownHistories.size) return;
     this.stopFlush = this.later(this.options.smoothMs, () => {
       this.stopFlush = null;
       this.flush();
@@ -332,11 +348,15 @@ export class Events implements Touches {
     const sources = new Map(this.dirtySources);
     const users = new Set(this.dirtyUsers);
     const histories = new Map(this.histories);
+    const clientUsers = new Set(this.dirtyClientUsers);
+    const ownHistories = new Map(this.ownHistories);
     const hubTouched = this.dirtyHub;
     this.dirtyBoards.clear();
     this.dirtySources.clear();
     this.dirtyUsers.clear();
     this.histories.clear();
+    this.dirtyClientUsers.clear();
+    this.ownHistories.clear();
     this.dirtyHub = false;
 
     const heads = new Map<string, Frame[]>();
@@ -349,7 +369,7 @@ export class Events implements Touches {
       if (!watched) continue;
       try {
         if (whole.has(id) || sources.has(id)) {
-          const head = this.refresh(watched, whole.has(id), sources.get(id) ?? new Set(), now, lineups, histories);
+          const head = this.refresh(watched, whole.has(id), sources.get(id) ?? new Set(), now, lineups, histories, ownHistories);
           if (!head) continue;
           heads.set(id, head);
         }
@@ -395,6 +415,7 @@ export class Events implements Touches {
     const currencies=new Map<string,Frame[]>();
     const lists = new Map<string, Frame[]>();
     const connectionFrames = new Map<string, Frame[]>();
+    const clientFramesByKey = new Map<string, Frame[]>();
     for (const watched of this.watched.values()) {
       const financialKey=financialKeys.get(watched.id)??this.parts.store.financialKey(watched.id);
       for (const sub of watched.subscribers) {
@@ -426,7 +447,19 @@ export class Events implements Touches {
             this.boardLists.delete(sub.user);
           }
         }
-        let frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...(tails.get(watched.id) ?? []), ...news];
+        let clientFrames: Frame[] = [];
+        if (clientUsers.has(sub.user) || whole.has(watched.id) || users.has(sub.user) || sources.has(watched.id)) {
+          try { const key = sub.user+'\n'+watched.id; if (!clientFramesByKey.has(key)) clientFramesByKey.set(key, this.refreshOwnSessions(sub.user, watched.id, now)); clientFrames = clientFramesByKey.get(key)!; }
+          catch (error) { trouble(error); failed.users.add(sub.user); this.ownSessions.delete(sub.user+'\n'+watched.id); }
+        }
+        let historyFrames = tails.get(watched.id) ?? [];
+        const ownSince = this.parts.store.privateOwner(watched.id) === sub.user ? ownHistories.get(sub.user) : undefined;
+        if (ownSince !== undefined) {
+          const ordinary = historyFrames.find(frame => frame.type === 'history');
+          const value = ordinary ? JSON.parse(ordinary.data) as {sources: string[]; since: number; changes?: HistoryChange[]} : {sources: [], since: ownSince};
+          historyFrames = [...historyFrames.filter(frame => frame.type !== 'history'), frame('history', {...value, since: Math.min(value.since, ownSince), ownSince})];
+        }
+        let frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...clientFrames, ...historyFrames, ...news];
         if (sub.fresh) continue;
         if(!frames.length&&!sub.desktop)continue;
         try {
@@ -470,6 +503,7 @@ export class Events implements Touches {
     now: number,
     lineups: Map<string, BoardSource[]>,
     histories: Map<string, Map<string, HistoryChange>>,
+    ownHistories: Map<string, number>,
   ): Frame[] | null {
     const {projection} = this;
     const lineup = projection.lineup(watched.id);
@@ -504,6 +538,8 @@ export class Events implements Touches {
       if (watched.work !== null && watched.work !== work) {
         let pending=histories.get(watched.id);if(!pending)histories.set(watched.id,(pending=new Map()));
         for(const source of ids)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0});
+        const owner = this.parts.store.privateOwner(watched.id);
+        if (owner) {ownHistories.set(owner, 0); this.onClientHistory?.(owner, 0);}
       }
       watched.work = work;
     }
@@ -579,6 +615,30 @@ export class Events implements Touches {
     this.hub = {key, json, value};
     this.armHub(changesAt, now);
     return news ? [{type: 'resets', data: json}] : [];
+  }
+
+  private refreshOwnSessions(user: string, board: string, now: number): Frame[] {
+    const part = this.projection.ownSessions(user, board, now);
+    if (!part) return [];
+    const key = user+'\n'+board;
+    const json = JSON.stringify({sessions: part.value});
+    const changed = this.ownSessions.get(key)?.json !== json;
+    this.ownSessions.set(key, {json, changesAt: part.changesAt});
+    this.armOwn(now);
+    return changed ? [{type: 'ownSessions', data: json}] : [];
+  }
+
+  private armOwn(now: number) {
+    const at = earliest(...[...this.ownSessions.values()].map(value => value.changesAt));
+    if (this.ownDeadline?.at === at) return;
+    this.ownDeadline?.cancel();
+    this.ownDeadline = null;
+    if (at === null) return;
+    this.ownDeadline = {at, cancel: this.later(Math.max(1000, at-now), () => {
+      this.ownDeadline = null;
+      for (const [key, value] of this.ownSessions) if (value.changesAt !== null && value.changesAt <= this.clock.now()) this.touchClientSessions(key.split('\n')[0]);
+      this.schedule();
+    })};
   }
 
   // ---------- time ----------
@@ -708,6 +768,7 @@ export class Events implements Touches {
         viewRevision: value('viewRevision'),
         historyStart: this.parts.store.historyStart(now),
         sources: watched.lineup.map(id => value(`card:${id}`)),
+        ...(this.parts.store.privateOwner(reader.board) === reader.user ? {ownSessions: this.projection.ownSessions(reader.user, reader.board, now)!.value} : {}),
         sessions: Object.fromEntries(watched.lineup.map(id => [id, value(`sessions:${id}`)])),
         cadence: Object.fromEntries(watched.lineup.map(id => [id, value(`cadence:${id}`)])),
         refresh: Object.fromEntries(watched.lineup.map(id => [id, value(`refresh:${id}`)])),
@@ -776,7 +837,7 @@ export class Events implements Touches {
     const watched = this.watched.get(sub.board);
     watched?.subscribers.delete(sub);
     const all = [...this.subscribers.values()];
-    if (!all.some(s => s.user === sub.user && s.board === sub.board)) {this.mines.delete(`${sub.user}\n${sub.board}`);this.sourceAccess.delete(sub.user+'\n'+sub.board);this.currencyContexts.delete(sub.user+'\n'+sub.board);}
+    if (!all.some(s => s.user === sub.user && s.board === sub.board)) {this.mines.delete(`${sub.user}\n${sub.board}`);this.sourceAccess.delete(sub.user+'\n'+sub.board);this.currencyContexts.delete(sub.user+'\n'+sub.board);this.ownSessions.delete(sub.user+'\n'+sub.board);this.armOwn(this.clock.now());}
     if (!all.some(s => s.user === sub.user)) {this.boardLists.delete(sub.user);this.connections.delete(sub.user);}
     if (watched && !watched.subscribers.size) {
       watched.deadline?.cancel();
@@ -907,6 +968,9 @@ export class Events implements Touches {
   /** The hub stops: every reader hears `bye restart` and is let go; nothing is worked out any more. */
   close() {
     this.closed = true;
+    this.ownDeadline?.cancel();
+    this.ownDeadline = null;
+
     this.stopFlush?.();
     this.stopFlush = null;
     for (const sub of [...this.subscribers.values()]) this.end(sub, 'restart');

@@ -307,20 +307,25 @@ export class Ingest {
     return this.directory.transaction(() => {
       const device = this.device(credential, report, now);
       const name = device.label ?? device.name;
-      const sessions = report.sessions.flatMap(({provider, account, accountName, ...session}) => {
-        const source =
-          account || accountName
-            ? this.store.findSource(provider, subscriptionKey({provider, account, accountName}, device.userId))
-            : this.store.deviceSource(device.id, provider);
-        // Only a subscription the device's person holds: naming someone else's account shows nothing on it.
-        if (!source || !this.store.holds(device.userId, source)) return [];
+      const legacy = report.sessions.map(({provider, account, accountName, ...session}) => {
+        const source = account || accountName ? this.store.findSource(provider, subscriptionKey({provider, account, accountName}, device.userId)) : this.store.deviceSource(device.id, provider);
+        return {...session, clientId: session.clientId ?? provider, source,
+          accountBy: account ? 'login' as const : source ? 'inferred' as const : null};
+      });
+      const supplemental = report.clientSessions.map(({source, ...session}) => ({...session,
+        source: source ? this.store.findSource(source.provider, subscriptionKey(source, device.userId)) : null,
+        accountBy: source?.account ? 'login' as const : null,
+      }));
+      const sessions = [...legacy, ...supplemental].map(session => {
         const startedAt = Math.min(now, session.startedAt + skew);
         const lastWorkedAt = session.lastWorkedAt === null ? null : Math.max(startedAt, Math.min(now, session.lastWorkedAt + skew));
-        return [{...session, startedAt, sentStartedAt: session.startedAt, lastWorkedAt, source, device: {id: device.id, name}}];
+        return {...session, startedAt, sentStartedAt: session.startedAt, lastWorkedAt, device: {id: device.id, name}};
       });
-      const before = this.live.sourcesOf(device.id);
+      if (report.clients !== null) this.directory.saveDeviceClients(device.id, device.userId, report.clients, now);
+
+      const before = this.live.sourcesOf(device.id).filter(source => this.store.holds(device.userId, source));
       this.live.report(device.id, device.userId, sessions, now);
-      tell(this.observer, o => o.touchSources([...new Set([...before, ...sessions.map(s => s.source)])]));
+      tell(this.observer, o => o.touchSources([...new Set([...before, ...sessions.flatMap(s => s.source && this.store.holds(device.userId, s.source) ? [s.source] : [])])]));
       return {accepted: sessions.length};
     });
   }

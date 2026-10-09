@@ -10,7 +10,7 @@ use std::time::SystemTime;
 
 use serde_json::{Value, json};
 
-use super::{Adapter, Context, VersionCache, locate, process_failure};
+use super::{Collector, Context, VersionCache, locate, process_failure};
 use crate::model::{
     ErrorKind, Failure, Millis, Outcome, Provider, Resets, SESSION_MINUTES, Snapshot, WEEK_MINUTES, Window, now_ms,
     parse_time, pseudonym,
@@ -48,17 +48,9 @@ pub struct Claude {
     account: Mutex<Option<(SystemTime, Option<String>)>>,
 }
 
-impl Adapter for Claude {
+impl Collector for Claude {
     fn provider(&self) -> Provider {
         P
-    }
-
-    fn program(&self) -> &'static str {
-        "claude"
-    }
-
-    fn install_dirs(&self, home: &Path) -> Vec<PathBuf> {
-        vec![home.join(".claude/local")]
     }
 
     fn measure(&mut self, ctx: &Context) -> Outcome {

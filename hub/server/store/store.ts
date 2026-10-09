@@ -1,3 +1,4 @@
+import {mergeEvidence, type SessionEvidence} from '../domain/sessionEvidence.js';
 import type {HistoryScope} from '../domain/history.js';
 import {createHash, randomBytes} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
@@ -8,7 +9,7 @@ import {cellsOf, workFrom, type CellSamples} from '../domain/cells.js';
 import {tileOf, type Chunk, type HistoryMeta} from '../domain/history.js';
 import type {MeasureIntervalMs} from '../domain/frequency.js';
 import type {PlanChange, SeriesSample} from '../domain/forecast.js';
-import type {Origin} from '../domain/ingest.js';
+import type {Origin, SessionRoute} from '../domain/ingest.js';
 import type {Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
 import {afterCommit, transaction, tell, type Touches} from '../touches.js';
@@ -24,7 +25,7 @@ import {CurrencyStore} from './currencies.js';
 import {importLegacyCurrencies} from './legacyCurrencies.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
-export type WorkContext = {source: string; origin: Origin; startedAt: number; project: string; folder: string};
+export type WorkContext = SessionEvidence & {client?: string; source: string | null; origin: Origin; startedAt: number; project: string; folder: string};
 export type WorkKey = WorkContext & {identity: {kind: 'legacy'; ordinal: number} | {kind: 'stable'; sessionId: string}};
 
 /**
@@ -188,9 +189,27 @@ export class Store {
     const people = JSON.stringify([...new Set([...shown.values()].flatMap(s => s.holders.map(h => h.user)))].sort());
     const sources = JSON.stringify([...shown.keys()]);
     const names = this.db.prepare(WORK_NAMES).get(people, sources, people, sources) as {names: string};
-    const key = JSON.stringify([this.agentWorkSince(), this.sources(board).map(s => s.id), [...shown].map(([id, s]) => [id, s.since, s.holders]), names.names]);
+    const owner = this.privateOwner(board);
+    const privateNames = owner === null ? null : this.db.prepare(
+      "SELECT json_group_array(json(value)) AS names FROM (" +
+      "SELECT json_array(d.id,COALESCE(d.label,d.name),s.project,n.name) AS value FROM devices d JOIN agent_sessions s ON s.device_id=d.id" +
+      " LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project WHERE d.user_id=? AND (s.source_id IS NULL OR NOT EXISTS(SELECT 1 FROM holders h WHERE h.user_id=d.user_id AND h.source_id=s.source_id)) GROUP BY d.id,s.project ORDER BY d.id,s.project)"
+    ).get(owner);
+    const holdings = owner === null ? null : this.held(owner).map(s => s.id).sort();
+    const key = JSON.stringify([this.agentWorkSince(), this.sources(board).map(s => s.id), [...shown].map(([id, s]) => [id, s.since, s.holders]), names.names, privateNames, holdings]);
     return createHash('sha256').update(key).digest('base64url').slice(0, 16);
   }
+
+  privateOwner(board: string): string | null {
+    const row = this.db.prepare('SELECT created_by AS owner FROM boards WHERE id=? AND personal=1').get(board) as {owner: string} | undefined;
+    return row?.owner ?? null;
+  }
+
+  displaySource(owner: string, source: string | null): string | null {
+    return source !== null && this.holds(owner, source) ? source : null;
+  }
+
+  clientSessionsChanged(user: string) { tell(this.observer, o => o.touchClientSessions?.(user)); }
 
   holds(userId: string, source: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM holders WHERE user_id = ? AND source_id = ?').get(userId, source);
@@ -234,6 +253,8 @@ export class Store {
       tell(this.observer, o => {
         o.touchBoards(this.boardsOf(source));
         o.touchUser(userId);
+        o.touchClientSessions?.(userId);
+        o.clientHistory?.(userId, 0);
       });
     }
   }
@@ -242,7 +263,7 @@ export class Store {
     const boards=this.boardsOf(source);
     if(!this.db.prepare('DELETE FROM holders WHERE source_id=? AND user_id=?').run(source,userId).changes)return;
     for(const {board_id} of this.db.prepare('SELECT board_id FROM shares WHERE source_id=?').all(source) as {board_id:string}[])this.unshareOrphans(board_id);
-    tell(this.observer,o=>{o.touchBoards(boards);o.touchUser(userId);});
+    tell(this.observer,o=>{o.touchBoards(boards);o.touchUser(userId);o.touchClientSessions?.(userId);o.clientHistory?.(userId,0);});
   }
 
   /**
@@ -265,6 +286,8 @@ export class Store {
       tell(this.observer, o => {
         o.touchBoards(shown);
         o.touchUser(userId);
+        o.touchClientSessions?.(userId);
+        o.clientHistory?.(userId, 0);
       });
       const shared = this.db.prepare('SELECT board_id FROM shares WHERE source_id = ?').all(source) as {board_id: string}[];
       for (const {board_id: board} of shared) this.unshareOrphans(board);
@@ -502,8 +525,8 @@ export class Store {
   }
 
   /** The board's known work thresholds, independent of the tiles read. */
-  historyKnown(shown: Shown): HistoryMeta['known'] {
-    return {work: this.agentWorkSince(), sources: Object.fromEntries([...shown].map(([id, value]) => [id, value.since]))};
+  historyKnown(shown: Shown, owner: string | null = null): HistoryMeta['known'] {
+    return {...(owner ? {own: this.agentWorkSince()} : {}), work: this.agentWorkSince(), sources: Object.fromEntries([...shown].map(([id, value]) => [id, value.since]))};
   }
 
   /** Complete cells of every measured window, read once through a run of missing tiles. */
@@ -547,14 +570,16 @@ export class Store {
       const rows = read.all(id, w, to, from, id, w, from) as unknown as [number, number, number | null, number][];
       groups.push({source: id, window: w, samples: this.quotaAvailability(id, rows.map(([at, used, resetAt, staleAfterMs]) => ({at, used, resetAt, staleAfterMs})))});
     }
-    const known = this.historyKnown(shown);
+    const owner = this.privateOwner(board);
+    const known = this.historyKnown(shown, owner);
     const readFrom = workFrom(groups, from);
     const holders = new Map([...shown].map(([source, value]) => [source, new Map(value.holders.map(h => [h.user, Math.max(h.from, value.since, known.work)]))]));
     const stretches: Stretch[] = [];
-    for (const s of shown.size ? this.agentWork(readFrom, Math.min(to, now), [...shown.keys()]) : []) {
-      const after = holders.get(s.source)?.get(s.user);
+    for (const s of shown.size || owner ? this.agentWork(readFrom, Math.min(to, now), [...shown.keys()], owner) : []) {
+      const privateWork = owner === s.user && this.displaySource(owner, s.source) === null;
+      const after = privateWork ? known.work : s.source === null ? undefined : holders.get(s.source)?.get(s.user);
       if (after === undefined || s.to <= after) continue;
-      stretches.push(s.from < after ? {...s, from: after} : s);
+      stretches.push({...s, source: privateWork ? null : s.source, from: Math.max(s.from, after)});
     }
     const devices = Object.fromEntries((this.db.prepare('SELECT id, COALESCE(label, name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?))')
       .all(JSON.stringify([...new Set(stretches.map(s => s.device))])) as {id: string; name: string}[]).map(d => [d.id, d.name]));
@@ -674,18 +699,18 @@ export class Store {
   creditWork(device: string, from: number, until: number, keys: WorkKey[]) {
     if (until <= from || !keys.length) return;
     const add = this.db.prepare(
-      'INSERT INTO agent_sessions (device_id, source_id, origin, started_at, project, folder, ordinal, producer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
+      'INSERT INTO agent_sessions (device_id, client, source_id, origin, started_at, project, folder, ordinal, producer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
     );
     const legacy = this.db.prepare(
-      'SELECT id FROM agent_sessions WHERE device_id = ? AND source_id = ? AND started_at = ? AND origin = ? AND project = ? AND folder = ? AND ordinal = ? AND producer_id IS NULL',
+      "SELECT id FROM agent_sessions WHERE device_id = ? AND client = ? AND COALESCE(source_id,'') = COALESCE(?,'') AND source_id IS ? AND started_at = ? AND origin = ? AND project = ? AND folder = ? AND ordinal = ? AND producer_id IS NULL",
     );
     const stable = this.db.prepare(
-      'SELECT id FROM agent_sessions WHERE device_id = ? AND producer_id = ? AND source_id = ? AND origin = ? AND project = ? AND folder = ?',
+      "SELECT id FROM agent_sessions WHERE device_id = ? AND client = ? AND producer_id = ? AND COALESCE(source_id,'') = COALESCE(?,'') AND source_id IS ? AND origin = ? AND project = ? AND folder = ?",
     );
     // Each contextual row has non-overlapping stretches, so its last start ends latest.
     const latest = this.db.prepare('SELECT to_at AS at FROM agent_work WHERE session_id = ? ORDER BY from_at DESC LIMIT 1');
     const highWater = this.db.prepare(
-      'SELECT max((SELECT to_at FROM agent_work WHERE session_id = s.id ORDER BY from_at DESC LIMIT 1)) AS at FROM agent_sessions s WHERE device_id = ? AND producer_id = ?',
+      'SELECT max((SELECT to_at FROM agent_work WHERE session_id = s.id ORDER BY from_at DESC LIMIT 1)) AS at FROM agent_sessions s WHERE device_id = ? AND client = ? AND producer_id = ?',
     );
     const floors = this.db.prepare(
       'SELECT producer_id IS NULL AS legacy, max((SELECT to_at FROM agent_work WHERE session_id = s.id ORDER BY from_at DESC LIMIT 1)) AS at FROM agent_sessions s WHERE device_id = ? GROUP BY producer_id IS NULL',
@@ -693,23 +718,32 @@ export class Store {
     const extend = this.db.prepare('UPDATE agent_work SET to_at = ? WHERE session_id = ? AND to_at = ?');
     const begin = this.db.prepare('INSERT INTO agent_work VALUES (?, ?, ?) ON CONFLICT (session_id, from_at) DO UPDATE SET to_at = max(to_at, excluded.to_at)');
     const credited = new Map<string, number>();
+    const privateCredit = new Map<string, number>();
+    const owner = (this.db.prepare('SELECT user_id AS user FROM devices WHERE id=?').get(device) as {user: string} | undefined)?.user;
+    const evidence = this.db.prepare('SELECT account_by AS accountBy,route_class AS class,route_by AS by,route_host AS host,route_provider AS provider FROM agent_sessions WHERE id=?');
+    const saveEvidence = this.db.prepare('UPDATE agent_sessions SET account_by=?,route_class=?,route_by=?,route_host=?,route_provider=? WHERE id=?');
     this.db.exec('SAVEPOINT credit');
     try {
       // Snapshot before writes: mixed packets must not clip one namespace against the
       // other namespace's parallel credit from this same call.
       const opposite = new Map((floors.all(device) as {legacy: number; at: number | null}[]).map(row => [row.legacy, row.at ?? from]));
-      for (const {source, origin, startedAt, project, folder, identity} of keys) {
+      for (const {source, client: suppliedClient, origin, startedAt, project, folder, identity, accountBy, route} of keys) {
+        const client = suppliedClient ?? source?.split(':')[0] ?? 'unknown';
         const producer = identity.kind === 'stable' ? identity.sessionId : null;
         const ordinal = identity.kind === 'legacy' ? identity.ordinal : 0;
-        add.run(device, source, origin, startedAt, project, folder, ordinal, producer);
+        add.run(device, client, source, origin, startedAt, project, folder, ordinal, producer);
         const {id} = (producer === null
-          ? legacy.get(device, source, startedAt, origin, project, folder, ordinal)
-          : stable.get(device, producer, source, origin, project, folder)) as {id: number};
-        const own = producer === null ? latest.get(id) : highWater.get(device, producer);
+          ? legacy.get(device, client, source, source, startedAt, origin, project, folder, ordinal)
+          : stable.get(device, client, producer, source, source, origin, project, folder)) as {id: number};
+        const row = evidence.get(id) as {accountBy: SessionEvidence['accountBy']; class: SessionRoute['class'] | null; by: SessionRoute['by'] | null; host: string | null; provider: string | null};
+        const merged = mergeEvidence({accountBy: row.accountBy, route: row.by ? {class: row.class!, by: row.by, host: row.host, provider: row.provider} : null}, {accountBy, route});
+        saveEvidence.run(merged.accountBy, merged.route?.class ?? null, merged.route?.by ?? null, merged.route?.host ?? null, merged.route?.provider ?? null, id);
+        const own = producer === null ? latest.get(id) : highWater.get(device, client, producer);
         const start = Math.max(from, (own as {at: number | null} | undefined)?.at ?? from, opposite.get(producer === null ? 0 : 1) ?? from);
         if (until <= start) continue;
         if (!extend.run(until, id, start).changes) begin.run(id, start, until);
-        credited.set(source, Math.min(credited.get(source) ?? start, start));
+        if (source !== null && owner && this.holds(owner, source)) credited.set(source, Math.min(credited.get(source) ?? start, start));
+        else if (owner) privateCredit.set(owner, Math.min(privateCredit.get(owner) ?? start, start));
       }
       this.db.exec('RELEASE credit');
     } catch (error) {
@@ -718,6 +752,7 @@ export class Store {
       throw error;
     }
     for (const [source, start] of credited) tell(this.observer, o => o.history(source, start, ['quota']));
+    for (const [user, start] of privateCredit) tell(this.observer, o => o.clientHistory?.(user, start));
   }
 
   /** Retained credit of an identified session on its current subscription; legacy identity is unknown. */
@@ -725,23 +760,23 @@ export class Store {
     if (!keys.length) return [];
     const read = this.db.prepare(
       'SELECT COALESCE(sum(w.to_at - w.from_at), 0) AS ms FROM agent_sessions s JOIN agent_work w ON w.session_id = s.id' +
-        ' WHERE s.device_id = ? AND s.producer_id = ? AND s.source_id = ?',
+        ' WHERE s.device_id = ? AND s.client = ? AND s.producer_id = ? AND s.source_id IS ?',
     );
-    return keys.map(({source, identity}) => identity.kind === 'legacy' ? null : (read.get(device, identity.sessionId, source) as {ms: number}).ms);
+    return keys.map(({source, client, identity}) => identity.kind === 'legacy' ? null : (read.get(device, client ?? source?.split(':')[0] ?? 'unknown', identity.sessionId, source) as {ms: number}).ms);
   }
 
   /** Every stretch agents worked within [from, to), of the given subscriptions or all, projects named as their people corrected them. */
-  agentWork(from: number, to: number, sources?: string[]): Stretch[] {
+  agentWork(from: number, to: number, sources?: string[], owner: string | null = null): Stretch[] {
     // A month of a busy board is tens of thousands of rows, read as arrays: half the time of objects. The
     // index on time, even for the order: else a day would go through every stretch the hub keeps.
     const read = this.db.prepare(
       'SELECT w.session_id, max(w.from_at, ?), min(w.to_at, ?) FROM agent_work w INDEXED BY agent_work_by_end JOIN agent_sessions s ON s.id = w.session_id' +
         ' WHERE w.to_at > ? AND w.from_at < ?' +
-        (sources ? ' AND s.source_id IN (SELECT value FROM json_each(?))' : '') +
+        (sources ? ' AND (s.source_id IN (SELECT value FROM json_each(?)) OR (? IS NOT NULL AND EXISTS(SELECT 1 FROM devices d WHERE d.id=s.device_id AND d.user_id=? AND (s.source_id IS NULL OR NOT EXISTS(SELECT 1 FROM holders h WHERE h.user_id=d.user_id AND h.source_id=s.source_id)))))' : '') +
         ' ORDER BY w.session_id, w.from_at',
     );
     read.setReturnArrays(true);
-    const rows = read.all(from, to, from, to, ...(sources ? [JSON.stringify(sources)] : [])) as unknown as [number, number, number][];
+    const rows = read.all(from, to, from, to, ...(sources ? [JSON.stringify(sources), owner, owner] : [])) as unknown as [number, number, number][];
     // What is said of a session is read once rather than with each of its stretches: that takes most of the time.
     const sessions = new Map(
       (
@@ -803,6 +838,8 @@ export class Store {
   private renamed(user: string) {
     const held = this.held(user).map(s => s.id);
     tell(this.observer, o => {
+      o.touchClientSessions?.(user);
+      o.clientHistory?.(user, 0);
       o.touchSources(held);
       o.touchBoards([...new Set(held.flatMap(id => this.boardsOf(id)))]);
     });

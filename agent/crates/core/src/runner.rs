@@ -5,9 +5,13 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::activity::Activity;
+use crate::clients::{ClientId, Inventory};
 use crate::config::{Config, Paths, home, jitter};
-use crate::model::{ErrorKind, Millis, Outcome, Provider, RunningSession, STALE_LIMIT_MS, now_ms};
-use crate::providers::{Adapter, Context, adapter, find_client, last_activity};
+use crate::model::{
+    ClientSession, ClientSource, ErrorKind, Millis, Outcome, Provider, RunningSession, STALE_LIMIT_MS, SessionReport,
+    now_ms,
+};
+use crate::providers::{Collector, Context, adapter, find_client, last_activity};
 use crate::schedule::Schedule;
 use crate::sink::{Ask, Directive, Sink};
 use crate::stop::Stop;
@@ -28,15 +32,20 @@ const REPORT_EVERY: Duration = Duration::from_secs(120);
 struct Watch {
     activity: Activity,
     looked: Option<Instant>,
-    reported: Option<(Instant, Vec<RunningSession>)>,
+    reported: Option<(Instant, SessionReport)>,
+    inventory: Inventory,
 }
 
 impl Watch {
     /// Whether `now` is a new list to send: the first one, a change, or one repeated in time.
-    fn worth_sending(&self, sessions: &[RunningSession]) -> bool {
+    fn worth_sending(&self, report: &SessionReport) -> bool {
         match &self.reported {
             None => true,
-            Some((at, before)) => before != sessions || (!sessions.is_empty() && at.elapsed() >= REPORT_EVERY),
+            Some((at, before)) => {
+                before != report
+                    || ((!report.sessions.is_empty() || !report.client_sessions.is_empty())
+                        && at.elapsed() >= REPORT_EVERY)
+            }
         }
     }
 }
@@ -66,32 +75,40 @@ pub struct Runner {
     config: Config,
     paths: Paths,
     home: PathBuf,
-    adapters: Vec<Box<dyn Adapter>>,
+    adapters: Vec<Box<dyn Collector>>,
+    clients: Vec<ClientId>,
     /// Ends this run, a measurement under way included.
     stop: Stop,
 }
 
 impl Runner {
-    /// Adapters for the enabled providers, cheapest first: Codex, Claude, Antigravity.
-    pub fn new(config: Config, paths: Paths, only: &[Provider], stop: Stop) -> Runner {
+    /// Collectors for the enabled providers, cheapest first: Codex, Claude, Antigravity.
+    pub fn new(config: Config, paths: Paths, only: &[ClientId], stop: Stop) -> Runner {
         let order = [Provider::Codex, Provider::Claude, Provider::Antigravity];
         let adapters = order
             .into_iter()
-            .filter(|p| config.enabled(*p) && (only.is_empty() || only.contains(p)))
+            .filter(|p| config.enabled(*p) && (only.is_empty() || only.contains(&ClientId::from(*p))))
             .map(adapter)
             .collect();
-        Runner::with_adapters(config, paths, adapters, home(), stop)
+        let mut runner = Runner::with_adapters(config, paths, adapters, home(), stop);
+        runner.clients.retain(|c| only.is_empty() || only.contains(c));
+        runner
     }
 
     /// A runner of the given adapters, in the order they are measured, with `home` as the user's.
     pub fn with_adapters(
         config: Config,
         paths: Paths,
-        adapters: Vec<Box<dyn Adapter>>,
+        adapters: Vec<Box<dyn Collector>>,
         home: PathBuf,
         stop: Stop,
     ) -> Runner {
-        Runner { config, paths, home, adapters, stop }
+        let clients = ClientId::ALL.into_iter().filter(|c| config.tracks(*c)).collect();
+        Runner { config, paths, home, adapters, clients, stop }
+    }
+
+    pub fn clients(&self) -> &[ClientId] {
+        &self.clients
     }
 
     pub fn providers(&self) -> Vec<Provider> {
@@ -162,7 +179,12 @@ impl Runner {
             activity: Activity::new(self.home.clone(), self.config.projects()),
             looked: None,
             reported: None,
+            inventory: Inventory::default(),
         });
+
+        if let Some(watch) = &mut watch {
+            watch.activity.track(&self.clients);
+        }
 
         while !self.stop.requested() {
             if let Some(reason) = sink.refused() {
@@ -181,10 +203,18 @@ impl Runner {
                 let seen = watch.activity.look();
                 // The first look cannot tell working from idle: the list goes out from the second.
                 if !first {
-                    let sessions = self.running(seen, &accounts, &identity_paths);
+                    let mut report = self.report(seen, &accounts, &identity_paths);
+                    report.clients = watch.inventory.look_running(
+                        &self.config,
+                        &self.clients,
+                        &self.home,
+                        &self.paths.work,
+                        &self.stop,
+                        &watch.activity.client_paths(),
+                    );
                     // A list the hub did not take goes out again at the next look.
-                    if watch.worth_sending(&sessions) && sink.sessions(&sessions) {
-                        watch.reported = Some((Instant::now(), sessions));
+                    if watch.worth_sending(&report) && sink.report(&report) {
+                        watch.reported = Some((Instant::now(), report));
                     }
                 }
             }
@@ -242,7 +272,7 @@ impl Runner {
             let now = now_ms();
             let due = schedule.asks(now);
             if due.is_empty() {
-                let (_, due) = schedule.next()?;
+                let due = schedule.next().map(|(_, due)| due).unwrap_or(now + TICK.as_millis() as Millis);
                 let wait = due - now_ms();
                 if wait > 0 {
                     thread::sleep(Duration::from_millis(wait as u64).min(TICK));
@@ -308,32 +338,57 @@ impl Runner {
 impl Runner {
     /// The coding agents seen running, as the hub is told: of the providers measured here,
     /// each with its subscription as far as it is known, the project's name only if allowed.
+    #[cfg(test)]
     fn running(
         &self,
         seen: Vec<crate::activity::Session>,
         accounts: &[Option<(Option<String>, Option<SystemTime>)>],
         identity_paths: &[Vec<PathBuf>],
     ) -> Vec<RunningSession> {
+        self.running_with(seen, &self.current_accounts(accounts, identity_paths))
+    }
+
+    fn current_accounts(
+        &self,
+        accounts: &[Option<(Option<String>, Option<SystemTime>)>],
+        identity_paths: &[Vec<PathBuf>],
+    ) -> Vec<Option<Option<String>>> {
+        self.adapters
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                if a.identifies_account() {
+                    current_account(a.local_account(&self.home), &accounts[i], last_activity(&identity_paths[i]))
+                } else {
+                    Some(None)
+                }
+            })
+            .collect()
+    }
+
+    fn running_with(
+        &self,
+        seen: Vec<crate::activity::Session>,
+        contexts: &[Option<Option<String>>],
+    ) -> Vec<RunningSession> {
         let salt = crate::session_identity::salt(&self.paths);
         let sessions = seen
             .into_iter()
+            .filter(|session| self.clients.contains(&session.client))
             .filter_map(|session| {
-                let index = self.adapters.iter().position(|a| a.provider() == session.provider)?;
+                let index = self.adapters.iter().position(|a| Some(a.provider()) == session.client.collector())?;
                 let adapter = &self.adapters[index];
                 let (account, account_name) = if adapter.identifies_account() {
-                    let signed_in = last_activity(&identity_paths[index]);
-                    // Not known (signed in anew since measured): left out rather than filed
-                    // under whatever the hub last saw from this machine.
-                    (current_account(adapter.local_account(&self.home), &accounts[index], signed_in)?, None)
+                    (contexts[index].clone()?, None)
                 } else {
-                    (None, self.config.account_name(session.provider).map(str::to_string))
+                    (None, self.config.account_name(session.client.collector()?).map(str::to_string))
                 };
                 let (project, folder) = names(session.project, session.folder, self.config.projects());
                 Some(RunningSession {
                     session_id: session.native_birth.as_deref().and_then(|native| {
-                        salt.as_ref().map(|salt| crate::session_identity::identify(salt, session.provider, native))
+                        salt.as_ref().map(|salt| crate::session_identity::identify(salt, session.client, native))
                     }),
-                    provider: session.provider,
+                    provider: session.client.collector()?,
                     account,
                     account_name,
                     origin: session.origin.id(),
@@ -346,6 +401,63 @@ impl Runner {
             })
             .collect();
         capped(sessions)
+    }
+
+    fn report(
+        &self,
+        seen: Vec<crate::activity::Session>,
+        accounts: &[Option<(Option<String>, Option<SystemTime>)>],
+        identity_paths: &[Vec<PathBuf>],
+    ) -> SessionReport {
+        let contexts = self.current_accounts(accounts, identity_paths);
+        let sessions = self.running_with(seen.clone(), &contexts);
+        let salt = crate::session_identity::salt(&self.paths);
+        let mut supplemental = Vec::new();
+        for session in seen.into_iter().filter(|s| self.clients.contains(&s.client)) {
+            let collector = session.client.collector();
+            let index = self.adapters.iter().position(|a| Some(a.provider()) == collector);
+            if let Some(index) = index {
+                if contexts[index].is_some() {
+                    // Includes all legacy candidates, even those clipped by the legacy cap.
+                    continue;
+                }
+            }
+            // Disabled collectors can provide positive local login evidence, but never
+            // an account inferred from an earlier measurement or the hub's device binding.
+            let source = if index.is_none() {
+                collector.and_then(|p| {
+                    adapter(p).local_account(&self.home).map(|account| ClientSource {
+                        provider: p,
+                        account: Some(account),
+                        account_name: None,
+                    })
+                })
+            } else {
+                None
+            };
+            let (project, folder) = names(session.project, session.folder, self.config.projects());
+            supplemental.push(ClientSession {
+                client_id: session.client,
+                session_id: session.native_birth.as_deref().and_then(|native| {
+                    salt.as_ref().map(|salt| crate::session_identity::identify(salt, session.client, native))
+                }),
+                source,
+                origin: session.origin.id(),
+                project,
+                folder,
+                started_at: session.started_at,
+                last_worked_at: session.last_worked,
+                working: session.working == Some(true),
+            });
+        }
+        let left = MAX_SESSIONS - sessions.len();
+        if supplemental.len() > left {
+            supplemental.sort_by_key(|s| {
+                std::cmp::Reverse((s.working, if s.working { None } else { s.last_worked_at }, s.started_at))
+            });
+            supplemental.truncate(left);
+        }
+        SessionReport { sessions, client_sessions: supplemental, clients: Vec::new() }
     }
 }
 
@@ -430,11 +542,11 @@ mod tests {
         let salt = "0123456789abcdef0123456789abcdef";
         std::fs::write(state.join("session-salt"), salt).unwrap();
         let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state: state.clone() };
-        let runner = Runner::new(Config::default(), paths, &[Provider::Codex], Stop::new());
+        let runner = Runner::new(Config::default(), paths, &[ClientId::Codex], Stop::new());
         let observed = crate::activity::attribution::corrected_sessions();
         let expected: Vec<_> = observed
             .iter()
-            .map(|s| crate::session_identity::identify(salt, s.provider, s.native_birth.as_deref().unwrap()))
+            .map(|s| crate::session_identity::identify(salt, s.client, s.native_birth.as_deref().unwrap()))
             .collect();
         let accounts = [Some((Some("4b7e0c1d2e3f4a5b6c7d8e9f".into()), None))];
         let reported = runner.running(observed.clone(), &accounts, &[Vec::new()]);
@@ -455,7 +567,7 @@ mod tests {
         // The report fixture is shared with the hub's future-credit acceptance test.
         let state = std::env::temp_dir().join(format!("quotum-attribution-wire-{}", std::process::id()));
         let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
-        let runner = Runner::new(Config::default(), paths, &[Provider::Codex], Stop::new());
+        let runner = Runner::new(Config::default(), paths, &[ClientId::Codex], Stop::new());
         let observed = crate::activity::attribution::corrected_sessions();
         let reported =
             runner.running(observed, &[Some((Some("4b7e0c1d2e3f4a5b6c7d8e9f".into()), None))], &[Vec::new()]);
@@ -465,9 +577,73 @@ mod tests {
         request["sentAt"] = serde_json::json!(crate::model::ts::format(1_790_000_015_000));
         let expected: serde_json::Value =
             serde_json::from_str(include_str!("../tests/fixtures/shared-runtime-report.json")).unwrap();
-        assert_eq!(request["sessions"], expected["sessions"]);
+        assert_eq!(crate::sink::tests::legacy_sessions(&request["sessions"]), expected["sessions"]);
         assert_eq!(request["machine"], expected["machine"]);
         assert_eq!(request["version"], expected["version"]);
+    }
+
+    #[test]
+    fn client_report_preserves_legacy_priority_and_delivers_unknown_work() {
+        let state = std::env::temp_dir().join(format!("quotum-client-report-{}", std::process::id()));
+        let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
+        let mut config = Config::default();
+        config
+            .providers
+            .insert(Provider::Claude, crate::config::ProviderSettings { enabled: Some(false), ..Default::default() });
+        let mut runner = Runner::new(config, paths, &[], Stop::new());
+        runner.home = std::env::temp_dir().join("quotum-client-report-no-home");
+        let mut observed = crate::activity::attribution::corrected_sessions();
+        let mut opencode = observed[0].clone();
+        opencode.client = ClientId::OpenCode;
+        let mut disabled = opencode.clone();
+        disabled.client = ClientId::Claude;
+        observed.extend([opencode, disabled]);
+        let contexts = vec![Some((Some("4b7e0c1d2e3f4a5b6c7d8e9f".into()), None)), None];
+        let paths = vec![Vec::new(), Vec::new()];
+        let legacy = runner.running(observed.clone(), &contexts, &paths);
+        let report = runner.report(observed, &contexts, &paths);
+        assert_eq!(report.sessions, legacy);
+        assert_eq!(report.client_sessions.len(), 2);
+        assert_eq!(report.client_sessions[0].client_id, ClientId::OpenCode);
+        assert_eq!(report.client_sessions[0].source, None);
+        let wire = crate::sink::tests::capture_report(&report);
+        assert_eq!(wire["clientSessions"][0]["clientId"], "opencode");
+        assert_eq!(wire["sessions"][0]["clientId"], "codex");
+        let many = (0..201)
+            .map(|i| {
+                let mut s = crate::activity::attribution::corrected_sessions()[0].clone();
+                s.started_at += i;
+                s
+            })
+            .chain([{
+                let mut s = crate::activity::attribution::corrected_sessions()[0].clone();
+                s.client = ClientId::OpenCode;
+                s
+            }])
+            .collect();
+        let full = runner.report(many, &contexts, &paths);
+        assert_eq!(full.sessions.len(), 200);
+        assert!(full.client_sessions.is_empty());
+    }
+
+    #[test]
+    fn a_changed_sign_in_leaves_the_legacy_subset_and_preserves_private_work() {
+        let dir = std::env::temp_dir().join(format!("quotum-client-sign-in-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let identity = dir.join("identity");
+        std::fs::write(&identity, "stand-in metadata").unwrap();
+        let paths = Paths { config: dir.join("config.toml"), work: dir.join("work"), state: dir.clone() };
+        let mut runner = Runner::new(Config::default(), paths, &[ClientId::Codex], Stop::new());
+        runner.home = dir.clone();
+        let measured = [Some((Some("4b7e0c1d2e3f4a5b6c7d8e9f".into()), None))];
+        let sessions = crate::activity::attribution::corrected_sessions();
+        assert_eq!(runner.report(sessions.clone(), &measured, &[Vec::new()]).sessions.len(), 3);
+        let changed = runner.report(sessions.clone(), &measured, &[vec![identity]]);
+        assert!(changed.sessions.is_empty());
+        assert_eq!(changed.client_sessions.len(), sessions.len());
+        assert!(changed.client_sessions.iter().all(|s| s.source.is_none()));
+        assert_eq!(changed.client_sessions[1].working, sessions[1].working == Some(true));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -541,25 +717,33 @@ mod tests {
             last_worked_at: None,
             working,
         };
-        let mut watch =
-            Watch { activity: Activity::new(PathBuf::from("/nowhere"), true), looked: None, reported: None };
-        assert!(watch.worth_sending(&[]), "the first, even empty: the hub may still hold an older one");
-        watch.reported = Some((Instant::now(), vec![session(true)]));
-        assert!(!watch.worth_sending(&[session(true)]));
-        assert!(watch.worth_sending(&[session(false)]));
-        assert!(watch.worth_sending(&[]), "none runs any more");
+        let report = |sessions: Vec<RunningSession>| SessionReport { sessions, ..SessionReport::default() };
+        let mut watch = Watch {
+            activity: Activity::new(PathBuf::from("/nowhere"), true),
+            looked: None,
+            reported: None,
+            inventory: Inventory::default(),
+        };
+        assert!(
+            watch.worth_sending(&SessionReport::default()),
+            "the first, even empty: the hub may still hold an older one"
+        );
+        watch.reported = Some((Instant::now(), report(vec![session(true)])));
+        assert!(!watch.worth_sending(&report(vec![session(true)])));
+        assert!(watch.worth_sending(&report(vec![session(false)])));
+        assert!(watch.worth_sending(&SessionReport::default()), "none runs any more");
         let mut idle = session(false);
         idle.last_worked_at = Some(15_000);
-        watch.reported = Some((Instant::now(), vec![idle.clone()]));
-        assert!(!watch.worth_sending(&[idle.clone()]), "a remembered date stays equal on later idle looks");
+        watch.reported = Some((Instant::now(), report(vec![idle.clone()])));
+        assert!(!watch.worth_sending(&report(vec![idle.clone()])), "a remembered date stays equal on later idle looks");
         idle.last_worked_at = None;
-        assert!(watch.worth_sending(&[idle.clone()]), "a clock correction can send one changed list");
-        watch.reported = Some((Instant::now(), vec![idle.clone()]));
-        assert!(!watch.worth_sending(&[idle]), "then idle dates stay unknown until new work");
-        watch.reported = Some((Instant::now() - REPORT_EVERY, vec![session(true)]));
-        assert!(watch.worth_sending(&[session(true)]), "in time, so the hub keeps it");
-        watch.reported = Some((Instant::now() - REPORT_EVERY, vec![]));
-        assert!(!watch.worth_sending(&[]), "an empty list said once is enough");
+        assert!(watch.worth_sending(&report(vec![idle.clone()])), "a clock correction can send one changed list");
+        watch.reported = Some((Instant::now(), report(vec![idle.clone()])));
+        assert!(!watch.worth_sending(&report(vec![idle])), "then idle dates stay unknown until new work");
+        watch.reported = Some((Instant::now() - REPORT_EVERY, report(vec![session(true)])));
+        assert!(watch.worth_sending(&report(vec![session(true)])), "in time, so the hub keeps it");
+        watch.reported = Some((Instant::now() - REPORT_EVERY, report(vec![])));
+        assert!(!watch.worth_sending(&SessionReport::default()), "an empty list said once is enough");
     }
 
     #[test]
@@ -601,7 +785,7 @@ mod tests {
         let config: Config = toml::from_str(&format!("[providers.antigravity]\npath = {:?}", client)).unwrap();
         let state = std::env::temp_dir().join("quotum-runner-refused");
         let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
-        let mut runner = Runner::new(config, paths, &[Provider::Antigravity], Stop::new());
+        let mut runner = Runner::new(config, paths, &[ClientId::Antigravity], Stop::new());
         let mut sink = Refusing::default();
         let mut events = 0;
         assert_eq!(runner.run(&mut sink, |_| events += 1).as_deref(), Some("removed"));
@@ -635,7 +819,7 @@ mod tests {
         let config: Config = toml::from_str("[providers.antigravity]\npath = \"/nonexistent/agy\"").unwrap();
         let state = std::env::temp_dir().join("quotum-runner-missing");
         let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
-        let mut runner = Runner::new(config, paths, &[Provider::Antigravity], Stop::new());
+        let mut runner = Runner::new(config, paths, &[ClientId::Antigravity], Stop::new());
         let mut sink = Counting::default();
         assert_eq!(runner.run(&mut sink, |_| {}).as_deref(), Some("done"));
         assert_eq!(sink.checkins, 0, "no duty is claimed for a client this machine lacks");
@@ -659,7 +843,7 @@ mod tests {
         let config: Config = toml::from_str("[providers.antigravity]\npath = \"/nonexistent/agy\"").unwrap();
         let state = std::env::temp_dir().join(name);
         let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
-        Runner::new(config, paths, &[Provider::Antigravity], stop)
+        Runner::new(config, paths, &[ClientId::Antigravity], stop)
     }
 
     #[test]
@@ -693,15 +877,9 @@ mod tests {
         activity: Vec<PathBuf>,
     }
 
-    impl Adapter for Scripted {
+    impl Collector for Scripted {
         fn provider(&self) -> Provider {
             Provider::Antigravity
-        }
-        fn program(&self) -> &'static str {
-            "scripted"
-        }
-        fn install_dirs(&self, _: &std::path::Path) -> Vec<PathBuf> {
-            Vec::new()
         }
         fn measure(&mut self, _: &Context) -> Outcome {
             self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -768,7 +946,7 @@ mod tests {
         let state = std::env::temp_dir().join("quotum-runner-paced");
         let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
         let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let adapter: Box<dyn Adapter> = Box::new(Scripted { outcome, runs: runs.clone(), activity: Vec::new() });
+        let adapter: Box<dyn Collector> = Box::new(Scripted { outcome, runs: runs.clone(), activity: Vec::new() });
         let stop = Stop::new();
         let mut runner = Runner::with_adapters(config, paths, vec![adapter], std::env::temp_dir(), stop.clone());
         let timer = stop.clone();
@@ -838,7 +1016,8 @@ mod tests {
         let config: Config = toml::from_str(&settings).unwrap();
         let paths = Paths { config: dir.join("config.toml"), work: dir.join("work"), state: dir.clone() };
         let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let adapter: Box<dyn Adapter> = Box::new(Scripted { outcome: snapshot, runs, activity: vec![history.clone()] });
+        let adapter: Box<dyn Collector> =
+            Box::new(Scripted { outcome: snapshot, runs, activity: vec![history.clone()] });
         let stop = Stop::new();
         let mut runner = Runner::with_adapters(config, paths, vec![adapter], dir.clone(), stop.clone());
         let timer = stop.clone();

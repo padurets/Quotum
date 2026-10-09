@@ -158,6 +158,43 @@ pub struct RunningSession {
     pub working: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientSource {
+    pub provider: Provider,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientSession {
+    pub client_id: crate::clients::ClientId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<ClientSource>,
+    pub origin: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    #[serde(with = "ts")]
+    pub started_at: Millis,
+    #[serde(skip_serializing_if = "Option::is_none", with = "ts::option")]
+    pub last_worked_at: Option<Millis>,
+    pub working: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SessionReport {
+    pub sessions: Vec<RunningSession>,
+    pub client_sessions: Vec<ClientSession>,
+    pub clients: Vec<crate::clients::InstalledClient>,
+}
+
 /// A successful measurement of one provider account on one machine.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

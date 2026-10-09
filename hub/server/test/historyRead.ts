@@ -10,5 +10,5 @@ export function readHistory(store: Store, board: string, from: number, cell: num
   const shown = options.shown ?? store.shown(board, []);
   const chunks: Chunk[] = store.cells(board, cell, start, to, {now, shown}).map(chunk => ({...chunk, activity: {...chunk.activity, sessions: chunk.activity.sessions.map(([id, ...rest]) => [String(id), ...rest])}}));
   const windows = new Set(store.states(board).flatMap(s => s.windows.map(w => `${s.id} ${w.id}`)));
-  return compose(chunks, {now, historyStart: store.historyStart(now), known: store.historyKnown(shown)}, {cell, k0: start / cell, k1: to / cell - 1, length: to - start, live: options.to === undefined, key: '', now}, windows);
+  return compose(chunks, {now, historyStart: store.historyStart(now), known: store.historyKnown(shown, store.privateOwner(board))}, {cell, k0: start / cell, k1: to / cell - 1, length: to - start, live: options.to === undefined, key: '', now}, windows);
 }

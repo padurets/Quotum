@@ -1197,3 +1197,37 @@ disclosure adds the timestamp and rate provenance. A stale amount stays visible 
 the warning colour as the last known balance. Subscription extra funds trends shows
 credit history separately from wallet budgets. Spending and top-ups are unavailable
 for credits, and quota analytics remain percentage-based.
+
+
+## Private machine clients
+
+Only the owner's personal snapshot has `ownSessions`, an array of running sessions
+without a currently held source. Each session includes `clientId`, machine ID/name,
+origin, project/folder, start, last work, working and credited `workedMs`; it contains no
+producer ID, raw source attribution or provenance. Shared snapshots omit this field.
+The private `ownSessions` event is `{sessions: [...]}` and replaces this slice only.
+Normal source `sessions` also carry `clientId` and retain their visibility rules.
+
+A personal `history` event may include `ownSince`, independently of `sources`, `since`
+and scoped `changes`. The quota/activity reader invalidates from this cutoff even when
+no sources are selected; budget and subscription funds readers ignore it. Private and
+source history coalesce into one frame using their earliest independent cutoffs. No
+synthetic source ID is used. Closed history tiles invalidate on private credit even
+without watchers. Names, ownership and visibility changes invalidate from zero; quiet
+presence expires on the usual five-minute deadline. Shared streams never receive this
+private slice or cutoff, including when the owner is a member.
+
+Personal quota history includes activity without cards. Unknown and unheld work uses a
+null source in activity cells and the reserved `unknown` source group; it produces no
+quota series, spending correlation or forecast. A held source under a hidden card keeps
+its existing exclusion. The Agents and Agent activity widgets can be placed through
+Add widget on empty or budget-only boards; explicit hiding remains authoritative.
+
+`GET /api/devices` adds owner-private `clients` entries (`clientId`, nullable `version`,
+`seenAt`) and current `sessions` with the safe board fields plus a held source ID or null.
+Device revocation removes inventory and current presence. Inventory changes use the
+existing connection revision. Clients and measuring settings are separate in desktop
+`app_state`: `clients` has `id`, `enabled`, reserved `route` consent and nullable `path`;
+`app_save_settings` accepts client enabled/route patches without a new bridge command.
+With every collector disabled and tracking enabled, the agent state is `tracking`;
+`idle` means both measurement and client tracking are off.

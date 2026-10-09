@@ -201,9 +201,11 @@ async function main() {
 
     const measured = await measure(stand, cdp);
     const worked = await work(demo, stand, cdp);
+    const privateWork = await workPrivate(demo, stand, cdp);
     const problems = [
       ...idleProblems(idle),
       ...worked.problems,
+      ...privateWork.problems,
       ...chartProblems(measured.chartLatencies),
       ...(measured.historyBytes <= HISTORY_BYTES_PER_MEASUREMENT ? [] : [`history read ${measured.historyBytes} bytes per measurement, above budget`]),
       ...measuredProblems({
@@ -274,6 +276,7 @@ async function main() {
         mutations: tally(measured.reading.mutations).outsideBy,
       },
       work: worked.reports,
+      privateWork: privateWork.reports,
       money:monetary,
       credits,
       historyTraffic: traffic,
@@ -552,6 +555,25 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
     problems.push(...renderProblems({card: source, renders: reading.renders, mutations: reading.mutations, from, to: Date.now()}));
   }
   return {reports, problems};
+}
+
+async function workPrivate(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
+  say('checking private client credit without card, header or financial renders');
+  const agent=stand.agents.get('laptop')!,start=Date.now();
+  const session={clientId:'opencode',sessionId:'d'.repeat(32),source:null,origin:'terminal',project:'Private benchmark',startedAt:new Date(start).toISOString(),working:true};
+  agent.trackClients([session],[]);await demo.nextReport('laptop');await sleep(1000);
+  const reports:{at:number;reads:number;bytes:number}[]=[],problems:string[]=[];
+  for(let i=0;i<3;i++) {
+    await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
+    if(i===2)agent.trackClients([{...session,working:false}],[]);
+    const at=await demo.nextReport('laptop');await sleep(1000);await drain(requests);requests.counting=false;
+    const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.byPath['/api/history']??0,bytes=requests.bytesByPath['/api/history']??0;
+    reports.push({at,reads,bytes});
+    if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`private work read history ${reads} times, ${bytes} bytes`);
+    problems.push(...renderProblems({card:'private-client-no-card',renders:reading.renders,mutations:reading.mutations,from,to:Date.now()}));
+  }
+  agent.trackClients([],[]);await demo.nextReport('laptop');
+  return {reports,problems};
 }
 
 /** Run as the command, not imported. */
