@@ -1355,3 +1355,199 @@ fn first_raw_shared_proof_keeps_reaping_unsafe_after_newer_eligibility() {
         );
     }
 }
+
+// Expected categories come from OpenCode's pinned command registry and handlers,
+// not the detector table (v1.18.35, 53d1eabb61e21162157817bf677da0a4ad3332e3).
+const OPENCODE_COMMANDS: &[(&str, Role)] = &[
+    ("completion", Role::Service),
+    ("mcp", Role::Service),
+    ("", Role::Local),
+    ("attach", Role::Unknown),
+    ("run", Role::Unknown),
+    ("generate", Role::Service),
+    ("debug", Role::Unavailable),
+    ("console", Role::Service),
+    ("providers", Role::Service),
+    ("auth", Role::Service),
+    ("agent", Role::Unavailable),
+    ("upgrade", Role::Service),
+    ("uninstall", Role::Service),
+    ("serve", Role::Shared),
+    ("web", Role::Shared),
+    ("models", Role::Service),
+    ("stats", Role::Service),
+    ("export", Role::Service),
+    ("import", Role::Service),
+    ("github", Role::Unknown),
+    ("pr", Role::Unknown),
+    ("session", Role::Service),
+    ("plugin", Role::Service),
+    ("plug", Role::Service),
+    ("db", Role::Service),
+    ("acp", Role::Shared),
+    ("agent list", Role::Service),
+    ("agent create", Role::Unknown),
+    ("debug paths", Role::Service),
+    ("debug info", Role::Service),
+    ("debug wait", Role::Service),
+    ("debug agent", Role::Unknown),
+];
+
+fn invocation(command: &str) -> Vec<u8> {
+    let mut bytes = b"opencode\0".to_vec();
+    for word in command.split_whitespace() {
+        bytes.extend_from_slice(word.as_bytes());
+        bytes.push(0);
+    }
+    bytes
+}
+
+#[test]
+fn opencode_registry_and_handler_semantics_keep_ambiguous_work() {
+    for &(command, expected) in OPENCODE_COMMANDS {
+        let input = invocation(command);
+        assert_eq!(opencode_role(input.as_slice()), expected, "{command}");
+        if !command.is_empty() {
+            let input = invocation(&format!("--pure --print-logs {command}"));
+            assert_eq!(opencode_role(input.as_slice()), expected, "boolean prefix {command}");
+        }
+    }
+}
+
+#[test]
+fn opencode_reads_stop_before_values_and_preserve_partial_work() {
+    for command in ["run", "attach", "--log-level", "--unknown", "--pure=false", "agent create", "debug agent"] {
+        let mut input = invocation(command);
+        let limit = input.len();
+        input.extend_from_slice(b"private-value\0--help\0--tool\0");
+        let mut cursor = std::io::Cursor::new(input);
+        assert_eq!(opencode_role(&mut cursor), Role::Unknown, "{command}");
+        assert!(cursor.position() as usize <= limit, "value read for {command}");
+    }
+    for command in ["--version", "-v", "--help", "-h", "mcp", "plug", "agent list", "debug paths"] {
+        let input = invocation(command);
+        assert_eq!(opencode_role(input.as_slice()), Role::Service);
+        for end in 0..input.len() {
+            assert_ne!(opencode_role(&input[..end]), Role::Service, "partial {command}");
+        }
+    }
+}
+
+#[test]
+fn opencode_shared_and_unproven_placement_is_independent_of_editor_origin() {
+    for role in [Role::Shared, Role::Unknown, Role::Unavailable] {
+        for parent in ["bash", "code"] {
+            let rows = [proc(40, 1, parent, Role::Unknown), proc(41, 40, "opencode", role)];
+            let mut a = activity();
+            let start = Instant::now();
+            let observe = |a: &mut Activity, rows: &[Proc], secs| {
+                a.observe(
+                    rows,
+                    900,
+                    start + Duration::from_secs(secs),
+                    WALL + secs as i64 * 1000,
+                    &|p| Some(p.clone()),
+                    &|_| panic!("ambiguous cwd"),
+                    &|_| None,
+                    &|_| true,
+                )
+            };
+            observe(&mut a, &rows, 0);
+            let mut busy = rows.clone();
+            cpu(&mut busy, 41, 1500, 0);
+            let sessions = observe(&mut a, &busy, 15);
+            assert_eq!(sessions.len(), 1);
+            assert_eq!(sessions[0].working, Some(true));
+            assert_eq!((&sessions[0].project, &sessions[0].folder), (&None, &None));
+        }
+    }
+}
+
+#[test]
+fn local_opencode_requires_checked_ancestry_before_reading_projects() {
+    for scenario in ["missing-parent", "unreadable-parent", "unknown-remote-path"] {
+        let mut a = activity();
+        let start = Instant::now();
+        let mut rows = vec![proc(41, 40, "opencode", Role::Local), proc(42, 41, "claude", Role::Unknown)];
+        if scenario != "missing-parent" {
+            rows.push(proc(40, 1, if scenario == "unreadable-parent" { "code" } else { "node" }, Role::Unknown));
+        }
+        let observe = |a: &mut Activity, rows: &[Proc], secs, proven| {
+            a.observe(
+                rows,
+                900,
+                start + Duration::from_secs(secs),
+                WALL + secs as Millis * 1000,
+                &|p| (proven || scenario != "unreadable-parent" || p.pid != 40).then(|| p.clone()),
+                &|_| {
+                    assert!(proven, "{scenario}: unproven ancestry must not authorize cwd");
+                    Some(PathBuf::from("/fixture-home/project-a"))
+                },
+                &|_| proven.then(|| "/usr/bin/node".into()),
+                &|_| true,
+            )
+        };
+        observe(&mut a, &rows, 0, false);
+        cpu(&mut rows, 41, 1500, 0);
+        cpu(&mut rows, 42, 1500, 0);
+        let busy = observe(&mut a, &rows, 15, false);
+        assert_eq!(busy.len(), 2);
+        for pid in [41, 42] {
+            assert_eq!(session(&busy, pid).working, Some(true), "observed CPU remains visible");
+            assert_eq!((&session(&busy, pid).project, &session(&busy, pid).folder), (&None, &None));
+        }
+        if scenario == "missing-parent" {
+            rows.push(proc(40, 1, "bash", Role::Unknown));
+        }
+        let recovered = observe(&mut a, &rows, 30, true);
+        assert!(recovered.iter().all(|s| s.project.as_deref() == Some("project-a")), "{scenario}");
+    }
+}
+
+#[test]
+fn opencode_maintenance_does_not_credit_claude_live_or_reaped_cpu() {
+    for &(command, role) in OPENCODE_COMMANDS.iter().filter(|(_, role)| *role == Role::Service) {
+        for tracked in [ClientId::ALL.to_vec(), vec![ClientId::Claude]] {
+            let mut a = activity();
+            a.track(&tracked);
+            let start = Instant::now();
+            let mut rows = vec![
+                proc(10, 1, "claude", Role::Unknown),
+                proc(11, 10, "opencode", role),
+                proc(13, 11, "bash", Role::Unknown),
+            ];
+            sample(&mut a, &rows, start, 0);
+            cpu(&mut rows, 11, 800, 0);
+            cpu(&mut rows, 13, 1400, 0);
+            let live = sample(&mut a, &rows, start, 15);
+            assert_eq!(live.len(), 1, "{command}");
+            assert_eq!(live[0].working, Some(false), "live {command}");
+            rows.truncate(1);
+            cpu(&mut rows, 10, 0, 2200);
+            let reaped = sample(&mut a, &rows, start, 30);
+            assert_eq!(reaped[0].working, Some(false), "reaped {command}");
+        }
+    }
+}
+
+#[test]
+fn disabled_tracking_keeps_boundaries_without_reading_folders() {
+    let mut a = activity();
+    a.track(&[ClientId::Claude]);
+    let rows = [proc(10, 1, "claude", Role::Unknown), proc(11, 10, "opencode", Role::Local)];
+    let observed = a.observe(
+        &rows,
+        900,
+        Instant::now(),
+        WALL,
+        &|p| Some(p.clone()),
+        &|pid| {
+            assert_eq!(pid, 10);
+            None
+        },
+        &|_| None,
+        &|_| true,
+    );
+    assert_eq!(observed.len(), 2);
+    assert_eq!(observed[1].project, None);
+}

@@ -58,6 +58,7 @@ pub struct AppState {
     pub secret_key: crate::keys::PublicState,
     pub agent: agent::State,
     pub providers: Vec<agent::Provided>,
+    pub clients: Vec<agent::Tracked>,
     pub sessions: bool,
     pub autostart: bool,
     pub config_path: String,
@@ -72,12 +73,13 @@ pub struct AppState {
 }
 
 fn state_of(shell: &Arc<Shell>) -> AppState {
-    let (agent, providers, sessions) = agent::snapshot(shell);
+    let (agent, providers, clients, sessions) = agent::snapshot(shell);
     let (notifications, locale) = shell.desktop_settings();
     AppState {
         secret_key: shell.secret_keys.state(),
         agent,
         providers,
+        clients,
         sessions,
         autostart: autostart::is_enabled(shell),
         config_path: shell.paths.config.display().to_string(),

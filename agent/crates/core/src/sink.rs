@@ -14,7 +14,7 @@ use ureq::{Body, ResponseExt};
 use crate::config::Hub;
 use crate::model::{
     Batch, ErrorKind, Failure, INGEST_VERSION, Machine, Millis, Outcome, Provider, RunningSession, STALE_LIMIT_MS,
-    Snapshot, now_ms, parse_time, ts,
+    SessionReport, Snapshot, now_ms, parse_time, ts,
 };
 
 /// One subscription this device could measure now, as a check-in asks about it.
@@ -68,6 +68,10 @@ pub trait Sink {
     /// Tells the hub which coding agents run on this machine now (all of them); whether it took the list.
     fn sessions(&mut self, _sessions: &[RunningSession]) -> bool {
         false
+    }
+
+    fn report(&mut self, report: &SessionReport) -> bool {
+        self.sessions(&report.sessions)
     }
 
     /// Why the hub will never take anything from this device again, once it said so.
@@ -493,6 +497,10 @@ impl Sink for HubSink {
     /// agent: its own `not_found`, not a proxy's 404) is asked again in an hour, when it
     /// may have been upgraded.
     fn sessions(&mut self, sessions: &[RunningSession]) -> bool {
+        Sink::report(self, &SessionReport { sessions: sessions.to_vec(), ..SessionReport::default() })
+    }
+
+    fn report(&mut self, report: &SessionReport) -> bool {
         if !self.takes_sessions() || self.sessions_retry_at.is_some_and(|at| Instant::now() < at) {
             return false;
         }
@@ -501,7 +509,13 @@ impl Sink for HubSink {
             "agent": AGENT,
             "machine": self.machine,
             "sentAt": ts::format(now_ms()),
-            "sessions": sessions,
+            "sessions": report.sessions.iter().map(|s| {
+                let mut value = serde_json::to_value(s).expect("session serialization");
+                value["clientId"] = serde_json::json!(crate::clients::ClientId::from(s.provider));
+                value
+            }).collect::<Vec<_>>(),
+            "clientSessions": report.client_sessions,
+            "clients": report.clients,
         });
         let url = format!("{}/v1/sessions", self.base);
         let answer = self
@@ -515,6 +529,10 @@ impl Sink for HubSink {
         let (status, older) = match answer {
             Ok(mut response) => {
                 let status = response.status().as_u16();
+                let refusal = if status == 403 { trouble(&mut response) } else { None };
+                if let Some(Trouble::Refused(reason)) = refusal {
+                    self.refused = Some(reason);
+                }
                 let older = status == 404
                     && not_the_hub(&response).is_none()
                     && response.body_mut().read_json::<Value>().is_ok_and(|body| body["error"] == "not_found");
@@ -652,6 +670,24 @@ pub(crate) mod tests {
         let sink =
             HubSink::new(&hub, machine, spool, Box::new(move |line: &str| log.lock().unwrap().push(line.into())));
         (sink, lines)
+    }
+
+    pub(crate) fn legacy_sessions(value: &Value) -> Value {
+        let mut sessions = value.clone();
+        for item in sessions.as_array_mut().unwrap() {
+            item.as_object_mut().unwrap().remove("clientId");
+            item.as_object_mut().unwrap().remove("route");
+        }
+        sessions
+    }
+
+    pub(crate) fn capture_report(report: &SessionReport) -> Value {
+        let (url, seen) = hub(|_, _| json(200, json!({"accepted": 3})));
+        let (mut sender, _) = sink(&url, "client-report");
+        assert!(Sink::report(&mut sender, report));
+        let (path, body) = seen.lock().unwrap()[0].clone();
+        assert_eq!(path, "/v1/sessions");
+        body
     }
 
     pub(crate) fn capture_sessions(sessions: &[RunningSession]) -> Value {
@@ -993,7 +1029,7 @@ pub(crate) mod tests {
         let (path, body) = seen.lock().unwrap()[0].clone();
         assert_eq!(path, "/v1/sessions");
         assert_eq!(
-            body["sessions"],
+            legacy_sessions(&body["sessions"]),
             json!([
                 {"provider": "codex", "account": "4b7e0c1d2e3f4a5b6c7d8e9f", "origin": "terminal", "project": "quotum", "folder": "quotum.feat-18-desktop-app", "startedAt": "2026-09-21T14:13:20Z", "working": true},
                 {"provider": "codex", "account": "4b7e0c1d2e3f4a5b6c7d8e9f", "origin": "terminal", "startedAt": "2026-09-21T14:13:20Z", "working": false}
@@ -1046,6 +1082,29 @@ pub(crate) mod tests {
         assert!(!proxied.sessions(&[]));
         assert!(proxied.takes_sessions());
         assert!(proxied.sessions_retry_at.is_some());
+    }
+
+    #[test]
+    fn sessions_alone_stop_a_removed_or_conflicting_device_and_retry_other_failures() {
+        for code in ["device_revoked", "device_conflict", "forbidden"] {
+            let (url, seen) = hub(move |_, _| json(403, json!({"error": code})));
+            let (mut sender, _) = sink(&url, &format!("session-{code}"));
+            assert!(!Sink::report(&mut sender, &SessionReport::default()));
+            assert_eq!(sender.refused().is_some(), code != "forbidden", "{code}");
+            if code != "forbidden" {
+                assert!(!sender.takes_sessions());
+                assert!(!Sink::report(&mut sender, &SessionReport::default()));
+                assert_eq!(seen.lock().unwrap().len(), 1, "permanent refusal sends nothing further");
+            } else {
+                assert!(sender.takes_sessions());
+                assert!(sender.sessions_retry_at.is_some());
+            }
+        }
+        let (url, _) = hub(|_, _| (403, "content-type: text/html\r\n", "<html>proxy login</html>".into()));
+        let (mut sender, _) = sink(&url, "session-proxy-refusal");
+        assert!(!Sink::report(&mut sender, &SessionReport::default()));
+        assert!(sender.refused().is_none());
+        assert!(sender.sessions_retry_at.is_some());
     }
 
     #[test]

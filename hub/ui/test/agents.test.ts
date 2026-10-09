@@ -20,6 +20,7 @@ import {
   type AgentRow,
   type AgentSource,
 } from '../lib/agents';
+import {EMPTY_VIEW as EMPTY} from '../../server/domain/view';
 import type {LiveSession, View} from '../lib/types';
 import {setLocale} from '../i18n';
 
@@ -72,7 +73,7 @@ test('card groups and their tray marks follow each machine’s first session; th
   assert.deepEqual(groups.map(m => m.name), ['workstation', 'laptop']);
   assert.deepEqual(groups.map(m => m.sessions.map(s => s.project)), [['old working', 'recent work'], ['earlier work', 'new unknown']]);
   const sources = ['z', 'a'].map((id): AgentSource => ({id, provider: 'codex', sessions: [session('same')]}));
-  assert.deepEqual(agentRows(sources, {hidden: []} as unknown as View).rows.map(r => r.source.id), ['a', 'z']);
+  assert.deepEqual(agentRows(sources, {hidden: []} as unknown as View).rows.map(r => r.source!.id), ['a', 'z']);
 });
 
 test('agents gather by project, machine or subscription in the order of their most active agent, with what they share added up', () => {
@@ -206,4 +207,13 @@ test('unknown agent-hours propagate to groups and sort last in both directions',
   assert.equal(groups[0].workedMs, null);
   assert.deepEqual(projects(sort(groups, 'worked')), ['zero', 'known', 'mixed', 'unknown']);
   assert.deepEqual(projects(sort(groups, 'worked', true)), ['known', 'zero', 'mixed', 'unknown']);
+});
+
+test('own client rows remain available without cards while hidden held sessions keep their filter',()=>{
+  const own={device:{id:'d',name:'Laptop'},clientId:'opencode',origin:'terminal' as const,project:'Quotum',folder:null,startedAt:0,lastWorkedAt:null,working:true,workedMs:60_000};
+  const view={...EMPTY,hidden:['source:held']};
+  const result=agentRows([{id:'held',provider:'codex',sessions:[own]}],view,[own]);
+  assert.equal(result.rows.length,1);assert.equal(result.rows[0].source,null);
+  const grouped=groupsOf(result.rows,'subscription');assert.equal(grouped[0].key,'unknown');
+  assert.equal(agentRows([],view,[own]).rows.length,1);
 });

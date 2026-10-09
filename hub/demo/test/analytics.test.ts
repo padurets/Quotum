@@ -54,3 +54,28 @@ test('mixed analytics catalogue keeps both resource families, exact amounts and 
     for(const scene of ANALYTICS_SCENES)for(const code of scene.expect)assert.ok(seen.has(code),scene.id+': '+code);
   }finally{store.close();}
 });
+
+test('client scenes show private work and inventory with no quota cards and never on shared boards',async()=>{
+  const {seedClients}=await import('../clients.js'),{CLIENT_SCENES}=await import('../catalogue.js');
+  const {Ingest}=await import('../../server/ingest.js'),{Duty}=await import('../../server/duty.js'),{Cadence}=await import('../../server/cadence.js');
+  const {readHistory}=await import('../../server/test/historyRead.js');
+  const {newSecret}=await import('../../server/domain/auth.js');
+  const start=Date.parse('2026-09-22T12:00:00Z'),store=new Store(':memory:',start-2*3_600_000),directory=new Directory(store.db),seen=new Set<string>();
+  try {
+    const owner=directory.createUser('clients@example.com','Reader','x',start),board=directory.boards(owner.id)[0].id,shared=directory.createBoard('Shared',owner.id,start).id;
+    const ingest=new Ingest(store,directory,new Duty(),new Cadence()),token=newSecret('qt_m');directory.createToken(token,'hint',owner.id,'fixture',start);
+    const credential=ingest.authenticate('Bearer '+token) as import('../../server/ingest.js').Credential;
+    const machine={id:'laptop-0123456789',name:'Laptop',os:'linux',arch:'x86_64'};
+    let clientSessions:object[]=[],clients:object[]=[];
+    const agent={machine,trackClients:(s:object[],c:object[])=>{clientSessions=s;clients=c;},sessions:async(sessions:object[],now:number)=>ingest.sessions(credential,{version:1,agent:'fixture',machine,sentAt:new Date(now).toISOString(),sessions,clientSessions,clients},now)};
+    const stand={start,people:new Map([['ana',{id:owner.id,personalBoard:board}]]),agents:new Map([['laptop',agent]])} as unknown as Stand;
+    await seedClients(store,directory,stand);
+    const history=readHistory(store,board,start-2*3_600_000,60_000,{to:start});
+    assert.equal(history.activity.agentMs,2*3_600_000);seen.add('private-work');
+    assert.deepEqual(history.activity.by.source.map(g=>g.key),['unknown']);seen.add('unknown-source');
+    assert.equal(directory.deviceClients(directory.devices(owner.id)[0].id).length,2);seen.add('inventory');
+    assert.equal(store.sources(board).length,0);assert.ok(['agents','activity'].every(id=>widgetVisible(directory.view(board),id,0)));seen.add('empty-widgets');
+    assert.equal(readHistory(store,shared,start-2*3_600_000,60_000,{to:start}).activity.agentMs,0);seen.add('shared-exclusion');
+    for(const scene of CLIENT_SCENES)for(const code of scene.expect)assert.ok(seen.has(code),scene.id+': '+code);
+  }finally{store.close();}
+});

@@ -1633,4 +1633,12 @@ const activity: DemoSet = {
 const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures'};
 const analytics:DemoSet={...all,id:'analytics',about:'Quota and wallet analytics with a separate subscription-funds chart, native quotas, z.ai, OpenRouter and DeepSeek'};
 const quotas:DemoSet={...all,id:'quotas',about:'Personal z.ai subscription quotas in credits, unknown resets and partial readings'};
-export const SETS: DemoSet[] = [all, showcase, activity,money,quotas,analytics, ONBOARDING];
+export const CLIENT_SCENES = [
+  {id:'unknown',expect:['private-work','unknown-source','inventory','empty-widgets','shared-exclusion']},
+] as const;
+const machineClients: DemoSet = {id:'clients',about:'OpenCode work and installed clients on an empty personal board',scene:'quiet',workHistoryMs:2*HOUR,entries:[
+  {kind:'person',id:'ana',name:'Ana',agents:true,expect:[{state:'widgets'}],look:['Unknown source in Agents and Agent activity; installed OpenCode with version in Devices']},
+  {kind:'machine',id:'laptop',expect:[{name:'Laptop'}]},
+  {kind:'board',id:'team',name:'Shared clients',owner:'ana',members:[],expect:[{state:'onboarding'}]},
+]};
+export const SETS: DemoSet[] = [all, showcase, activity,money,quotas,analytics, machineClients, ONBOARDING];

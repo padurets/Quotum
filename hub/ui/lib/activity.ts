@@ -16,7 +16,7 @@ export const OTHER_COLOR = 'var(--other)';
  * in the tooltip and switched off and on in the legend.
  */
 export function groupColors(groups: ActivityGroup[], by: ActivityDimension, view: View, providerOf: (source: string) => string): string[] {
-  return groups.map((group, rank) => (by === 'source' ? colorOf(view, group.key, providerOf(group.key)) : (CATEGORY_COLORS[rank] ?? OTHER_COLOR)));
+  return groups.map((group, rank) => (by === 'source' ? group.key === 'unknown' ? OTHER_COLOR : colorOf(view, group.key, providerOf(group.key)) : (CATEGORY_COLORS[rank] ?? OTHER_COLOR)));
 }
 
 /**
@@ -44,9 +44,9 @@ export function activityScale(busiest: number): ActivityScale {
  */
 export type ActivityEmpty = {key: 'loading' | 'noSources' | 'none'} | {key: 'knownFrom' | 'noneSince'; at: number} | null;
 
-export function activityEmpty(history: Pick<History, 'since' | 'activity'> | null, shownSources: number): ActivityEmpty {
+export function activityEmpty(history: Pick<History, 'since' | 'activity'> | null, shownSources: number, personal = false): ActivityEmpty {
   if (!history) return {key: 'loading'};
-  if (!shownSources) return {key: 'noSources'};
+  if (!shownSources && !personal) return {key: 'noSources'};
   const {activity} = history;
   if (!activity.known) return {key: 'knownFrom', at: activity.since};
   if (activity.activeMs) return null;

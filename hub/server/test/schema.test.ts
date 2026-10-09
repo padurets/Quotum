@@ -24,6 +24,17 @@ const RELEASED = [
   '559b6e3b19e7c77db182ef425a747de69a2ebe2ddc7c69169616d2746d98bcc6', // 0.6
   '90c23490c93cd2088d4f97f52a579161ea62c476b91469a39e18af1952cdb7bb', // 0.6
   '383d526454a7ae7d0c38b7847e43255c4af60ff8bcceeb478baed4e11b6eac04', // 0.6
+  '977e810f34cba9fb6c5774f89edd11e918f15376c8979795be2ac4e72db52f07', // 0.7
+  'e7cb09c9c37e5d1095e71d713c2e7b378d2f67fa5ebb8b0c3aedc7a78cb5e9b9', // 0.7
+  '3b86ba00d52469c2cc0526df8fef2be35b788fbfd75254e526654da319c4f2c1', // 0.7
+  '3462b3e197deb9f67bc1ff67f1c7b926b13f7dc966c8a8ca2a4b66fe34ba8305', // 0.7
+  '35088adae77f67915193590cc15fa7a4b2d2554d0ec71b7a067dcc8015066aa6', // 0.7
+  'f871e8078d0e3ee57f783201cf47c518643eb9f4b21293a4393957c859e2f8e3', // 0.7
+  '8926d768166db825d4610fdbee22bf5681a6a44f56250c905c52789cedb66873', // 0.7
+  'e6f545f3c89467d2a9001e201d0c7617c120951b2d44bc2bb1ec692a14264459', // 0.7
+  'b0c1b4b2223ca37cfe45a6bbc59036b0a4f64ac05908d344f903a4b0fe663fc6', // 0.7
+  'c290ec9435336ada28e76004d7b3a071ffbcc541c5ba385f6f0290b1516c7118', // 0.7
+  'b4ae9c2c749fcff165b0da116a55a018573aef239a49782a430646ec185d8a3b', // 0.7
 ];
 
 test('released layout steps never change; new ones come after them', () => {
@@ -68,8 +79,8 @@ test('identity migration preserves exact legacy session IDs, keys and intervals'
   assert.deepEqual(store.db.prepare('SELECT id, device_id, source_id, origin, started_at, project, folder, ordinal FROM agent_sessions ORDER BY id').all(), sessions);
   assert.deepEqual(store.db.prepare('SELECT * FROM agent_work ORDER BY session_id, from_at').all(), work);
   assert.deepEqual(store.db.prepare('SELECT producer_id FROM agent_sessions').all().map(row => row.producer_id), [null, null]);
-  assert.match(String(store.db.prepare("EXPLAIN QUERY PLAN SELECT id FROM agent_sessions WHERE device_id='device' AND source_id='codex:1' AND started_at=123 AND origin='terminal' AND project='P' AND folder='wt' AND ordinal=3 AND producer_id IS NULL").get()!.detail), /agent_sessions_legacy_key/);
-  assert.match(String(store.db.prepare("EXPLAIN QUERY PLAN SELECT id FROM agent_sessions WHERE device_id='device' AND producer_id='abc' AND source_id='codex:1' AND origin='terminal' AND project='P' AND folder='wt'").get()!.detail), /agent_sessions_stable_key/);
+  assert.match(String(store.db.prepare("EXPLAIN QUERY PLAN SELECT id FROM agent_sessions WHERE device_id='device' AND client='codex' AND COALESCE(source_id,'')='codex:1' AND source_id='codex:1' AND started_at=123 AND origin='terminal' AND project='P' AND folder='wt' AND ordinal=3 AND producer_id IS NULL").get()!.detail), /agent_sessions_legacy_key/);
+  assert.match(String(store.db.prepare("EXPLAIN QUERY PLAN SELECT id FROM agent_sessions WHERE device_id='device' AND client='codex' AND producer_id='abc' AND COALESCE(source_id,'')='codex:1' AND source_id='codex:1' AND origin='terminal' AND project='P' AND folder='wt'").get()!.detail), /agent_sessions_stable_key/);
   store.close();
 });
 
@@ -82,7 +93,7 @@ test('money storage upgrades the stable-session layout without changing its iden
     db.exec('INSERT INTO agent_work VALUES (42, 1000, 2000)');
     const sessions=db.prepare('SELECT * FROM agent_sessions').all(),work=db.prepare('SELECT * FROM agent_work').all();
     migrate(db,3000);
-    assert.deepEqual(db.prepare('SELECT * FROM agent_sessions').all(),sessions);
+    assert.deepEqual(db.prepare('SELECT id,device_id,source_id,origin,started_at,project,folder,ordinal,producer_id FROM agent_sessions').all(),sessions);
     assert.deepEqual(db.prepare('SELECT * FROM agent_work').all(),work);
     assert.equal(db.prepare('PRAGMA user_version').get()?.user_version,SCHEMA_VERSION);
     for(const name of ['readings','meter_spans','meter_contexts'])assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
@@ -157,7 +168,7 @@ test('board additions append to the integrated currency layout while analytics m
     const view=JSON.parse(String(saved.payload)); assert.equal(view.version,2);
     assert.deepEqual(view.names,{legacy:'Kept'}); assert.deepEqual(view.unknown,{kept:true});
     assert.deepEqual(view.hidden,['source:deepseek:123456789abc']);
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,20);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,21);
   }finally{db.close();}
 });
 
@@ -190,5 +201,25 @@ test('public rate sequences migrate per owner and never reuse pruned numbers aft
     assert.equal(c.rateHistory('a',id,undefined).changes[0].sequence,3);
     const reopened=new CurrencyStore(db);reopened.setRate('a',id,'USD','3000000',120,120);
     assert.deepEqual(reopened.rateHistory('a',id,undefined).changes.map(change=>change.sequence),[4,3]);
+  }finally{db.close();}
+});
+
+test('client migration preserves the schema-20 ledger and null-source contexts remain unique per client',()=>{
+  const db=new DatabaseSync(':memory:');
+  try {
+    for(const step of STEPS.slice(0,20))db.exec(step);db.exec('PRAGMA user_version=20');
+    db.exec("INSERT INTO agent_sessions VALUES (42,'device','codex:1','terminal',123,'P','wt',0,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),(53,'device','not safe:1','app',124,'','',1,NULL)");
+    db.exec('INSERT INTO agent_work VALUES (42,1000,2000),(42,3000,4000),(53,1500,3500)');
+    const work=db.prepare('SELECT * FROM agent_work ORDER BY session_id,from_at').all();
+    migrate(db,5000);
+    assert.deepEqual(db.prepare('SELECT id,client,producer_id,account_by FROM agent_sessions ORDER BY id').all().map(r=>({...r})),[
+      {id:42,client:'codex',producer_id:'a'.repeat(32),account_by:'legacy'}, {id:53,client:'unknown',producer_id:null,account_by:'legacy'}]);
+    assert.deepEqual(db.prepare('SELECT * FROM agent_work ORDER BY session_id,from_at').all(),work);
+    const add=db.prepare("INSERT INTO agent_sessions(device_id,client,source_id,origin,started_at,project,folder,ordinal,producer_id) VALUES('device',?,NULL,'terminal',123,'P','wt',0,?)");
+    for(const producer of [null,'b'.repeat(32)]) {
+      add.run('opencode',producer); assert.throws(()=>add.run('opencode',producer),/UNIQUE/);
+      add.run('future-client',producer);
+    }
+    const rows=db.prepare('SELECT count(*) AS n FROM agent_sessions').get();migrate(db,6000);assert.deepEqual(db.prepare('SELECT count(*) AS n FROM agent_sessions').get(),rows);
   }finally{db.close();}
 });

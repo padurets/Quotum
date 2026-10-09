@@ -182,7 +182,7 @@ mod tests {
             let mut prepare = |stop: &Stop| {
                 let config = Config::load(&paths.config)?;
                 let _ = read.send(config.clone());
-                let mut runner = Runner::new(config, paths.clone(), &[Provider::Antigravity], stop.clone());
+                let mut runner = Runner::new(config, paths.clone(), &[Provider::Antigravity.into()], stop.clone());
                 Ok(Prepared { job: Box::new(move || runner.run(&mut Discard, |_| {})), hub: None })
             };
             let _ = done.send(run(&paths, &QUICK, &log, &mut prepare));

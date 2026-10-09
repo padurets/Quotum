@@ -45,7 +45,7 @@ test('the owned proxy measures a real fixed-codec HTTP body without changing JSO
   } finally {await proxy.close(); await new Promise<void>(resolve => upstream.close(() => resolve()));}
 });
 
-import {HistoryBodies, historyReadSelection, historyScroll} from '../historyTrafficBrowser';
+import {HistoryBodies, historyReadSelection, historyScroll, stableHistoryReads} from '../historyTrafficBrowser';
 import {readUnion} from '../historyTrafficBudget';
 
 test('traffic references preserve each resource selection instead of merging equal time cells', () => {
@@ -60,6 +60,17 @@ test('traffic references preserve each resource selection instead of merging equ
     const other = new URL(uri); other.searchParams.set(key, value);
     assert.notEqual(historyReadSelection(other), selection, `${key} is part of the reference identity`);
   }
+});
+
+test('cancelled resource cohorts keep private quota bounds separate from financial metadata', () => {
+  const quota = {run: 'r', now: 0, known: {work: 0, own: 100, sources: {s: 0}}};
+  const money = {run: 'r', now: 0, known: {work: 0, sources: {s: 0}}};
+  const seeds = new Map([['quota', {answer: quota}], ['budget', {answer: money}], ['funds', {answer: money}]]);
+  const reads = [{selection: 'quota', answer: quota}, {selection: 'budget', answer: money}, {selection: 'funds', answer: money}, {selection: 'quota'}];
+  stableHistoryReads(reads, seeds, 60_000);
+  assert.throws(() => stableHistoryReads([{selection: 'quota', answer: money}], seeds, 60_000));
+  assert.throws(() => stableHistoryReads([{selection: 'budget', answer: {...money, known: {...money.known, work: 1}}}], seeds, 60_000));
+  assert.throws(() => stableHistoryReads([{selection: 'other', answer: money}], seeds, 60_000));
 });
 
 test('the browser observer expands late metadata while counting only each actual response body', async () => {
@@ -149,9 +160,12 @@ test('past-only cancellation reads survive an unrelated live cutoff while change
   const seed = {run: 'r', now: 1791535169593, known: {work: 0, sources: {s: 0}}};
   const answer = {...seed, now: 1791535170840}, cell = 300_000;
   stableHistory(answer, seed, cell, 1791448500000);
+  const seeds = new Map([['quota', {answer: seed}]]);
+  stableHistoryReads([{selection: 'quota', answer, to: 1791448500000}], seeds, cell);
   const boundary = 1791535200000;
   stableHistory(answer, seed, cell, boundary);
   assert.throws(() => stableHistory(answer, seed, cell, boundary + 1), HistoryCutChanged);
+  assert.throws(() => stableHistoryReads([{selection: 'quota', answer, to: boundary + 1}], seeds, cell), HistoryCutChanged);
   assert.throws(() => stableHistory(answer, seed, cell, boundary + cell), HistoryCutChanged);
   assert.throws(() => stableHistory(answer, seed, cell), HistoryCutChanged);
   assert.throws(() => stableHistory({...answer, run: 'new'}, seed, cell, 1791448500000));

@@ -54,6 +54,7 @@ export type Snapshot = Omit<BoardPart, 'lineup'> & {
   historyStart: number;
   sources: Card[];
   sessions: Record<string, BoardSession[]>;
+  ownSessions?: BoardSession[];
   cadence: Record<string, Cadence>;
   refresh: Record<string, Refresh>;
   forecast: Record<string, ForecastPart>;
@@ -216,6 +217,11 @@ export class Projection {
     return {value: {...this.hub.resets.snapshot(), past}, changesAt: oldest === null ? null : oldest + kept + 1};
   }
 
+  ownSessions(user: string, board: string, now: number): Timed<BoardSession[]> | null {
+    if (this.hub.store.privateOwner(board) !== user) return null;
+    return {value: this.hub.ingest.live.own(user, board, now), changesAt: this.hub.ingest.live.ownChangesAt(user, board, now)};
+  }
+
   /** The board as the reader sees it now; null once it is gone. */
   snapshot(user: string, board: string, now: number): Snapshot | null {
     const lineup = this.lineup(board);
@@ -232,6 +238,7 @@ export class Projection {
       viewRevision: part.viewRevision,
       historyStart: this.hub.store.historyStart(now),
       sources: sources.map(s => s.card),
+      ...(this.hub.store.privateOwner(board) === user ? {ownSessions: this.ownSessions(user, board, now)!.value} : {}),
       sessions: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].sessions])),
       cadence: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].cadence])),
       refresh: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].refresh])),

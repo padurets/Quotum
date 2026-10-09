@@ -2,6 +2,7 @@
 //! their own command-line clients, schedules the measurements and delivers them.
 
 pub mod activity;
+pub mod clients;
 pub mod config;
 pub mod holder;
 pub mod model;

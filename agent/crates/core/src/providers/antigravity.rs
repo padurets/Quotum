@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Adapter, Context, VersionCache, locate, process_failure, version_tuple};
+use super::{Collector, Context, VersionCache, locate, process_failure, version_tuple};
 use crate::model::{
     ErrorKind, Failure, Kind, Millis, Outcome, Provider, SESSION_MINUTES, Snapshot, WEEK_MINUTES, Window, now_ms,
     parse_time,
@@ -29,18 +29,9 @@ pub struct Antigravity {
     off: Option<String>,
 }
 
-impl Adapter for Antigravity {
+impl Collector for Antigravity {
     fn provider(&self) -> Provider {
         P
-    }
-
-    fn program(&self) -> &'static str {
-        "agy"
-    }
-
-    fn install_dirs(&self, home: &Path) -> Vec<PathBuf> {
-        let installer = dirs::data_local_dir().filter(|_| cfg!(windows)).map(|local| local.join("agy").join("bin"));
-        installer.into_iter().chain(std::iter::once(home.join(".gemini/antigravity-cli/bin"))).collect()
     }
 
     fn measure(&mut self, ctx: &Context) -> Outcome {

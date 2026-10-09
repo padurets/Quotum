@@ -35,6 +35,7 @@ export type Snapshot = {
   connectionsRevision?: number;
   historyStart: number;
   sources: Card[];
+  ownSessions?: LiveSession[];
   sessions: Record<string, LiveSession[]>;
   cadence: Record<string, Pace>;
   refresh: Record<string, Refresh>;
@@ -46,6 +47,7 @@ export type Snapshot = {
 
 /** What the hub tells, as the page applies it; `hello` also tells history the hub's run; `ping` and `bye` are the connection's own (live.ts). */
 export type HubEvent =
+  | {type: 'devices'; data: Record<string, never>}
   | {type: 'hello'; data: {epoch: string}}
   | {type: 'snapshot'; data: Snapshot}
   | {type: 'board'; data: {board: BoardMeta}}
@@ -53,6 +55,7 @@ export type HubEvent =
   | {type: 'connections'; data: {revision: number}}
   | {type: 'lineup'; data: {sources: string[]}}
   | {type: 'card'; data: Card}
+  | {type: 'ownSessions'; data: {sessions: LiveSession[]}}
   | {type: 'sessions'; data: {id: string; sessions: LiveSession[]}}
   | {type: 'cadence'; data: {id: string; cadence: Pace}}
   | {type: 'refresh'; data: {id: string; refresh: Refresh}}
@@ -61,7 +64,7 @@ export type HubEvent =
   | {type:'sourceAccess';data:Record<string,SourceAccess>}
   | {type:'currencies';data:CurrencyContext}
   | {type: 'boards'; data: {boards: Board[]}}
-  | {type: 'history'; data: {sources: string[]; since: number; changes?: import('../../server/domain/history').HistoryChange[]}}
+  | {type: 'history'; data: {sources: string[]; since: number; ownSince?: number; changes?: import('../../server/domain/history').HistoryChange[]}}
   | {type: 'resets'; data: HubResets};
 
 export type ConnectionStatus = 'connecting' | 'live' | 'polling' | 'retrying' | 'paused';
@@ -77,6 +80,7 @@ export type BoardState = {
   historyStart: number;
   lineup: string[];
   cards: Record<string, Card>;
+  ownSessions?: LiveSession[];
   sessions: Record<string, LiveSession[]>;
   cadence: Record<string, Pace>;
   refresh: Record<string, Refresh>;
@@ -85,6 +89,8 @@ export type BoardState = {
 };
 
 export type PageState = {
+  /** Owner-device invalidation; snapshots also refresh a disclosure after reconnecting. */
+  devicesRevision?: number;
   connection: {status: ConnectionStatus; lostAt: number | null};
   /** The reader's boards with their role on each; null until a session is taken. */
   boards: Board[] | null;
@@ -163,6 +169,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
     ),
     cards: keepEach(old?.cards, Object.fromEntries(data.sources.map(card => [card.id, card]))),
     sessions: keepEach(old?.sessions, Object.fromEntries(Object.entries(data.sessions).map(([id, sessions]) => [id, normalizedSessions(sessions)]))),
+    ownSessions: keep(old?.ownSessions, normalizedSessions(data.board.personal ? data.ownSessions ?? [] : [])),
     cadence: keepEach(old?.cadence, data.cadence),
     refresh: keepEach(old?.refresh, data.refresh),
     forecast: keepEach(old?.forecast, data.forecast),
@@ -172,6 +179,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
   };
   return {
     ...state,
+    devicesRevision: (state.devicesRevision ?? 0)+1,
     board: old && shallowEqual(old, board) ? old : board,
     boards: keep(state.boards ?? undefined, data.boards),
     resets: withResets(state.resets, data.resets),
@@ -193,6 +201,8 @@ function set<K extends 'cards' | 'sessions' | 'cadence' | 'refresh' | 'forecast'
 
 function hub(state: PageState, event: HubEvent): PageState {
   switch (event.type) {
+    case 'devices':
+      return {...state, devicesRevision: (state.devicesRevision ?? 0)+1};
     case 'snapshot':
       return snapshot(state, event.data);
     case 'board':
@@ -222,6 +232,12 @@ function hub(state: PageState, event: HubEvent): PageState {
       });
     case 'card':
       return patch(state, board => set(board, 'cards', event.data.id, event.data));
+    case 'ownSessions':
+      return patch(state, board => {
+        if (!board.meta.personal) return board;
+        const ownSessions = keep(board.ownSessions, normalizedSessions(event.data.sessions));
+        return ownSessions === board.ownSessions ? board : {...board, ownSessions};
+      });
     case 'sessions':
       return patch(state, board => set(board, 'sessions', event.data.id, normalizedSessions(event.data.sessions)));
     case 'cadence':
@@ -293,6 +309,7 @@ export const useRole = () => usePage(s => s.boards?.find(b => b.id === s.board?.
 export const useServerView = () => usePage(s => s.board?.view ?? null);
 export const useViewRevision = () => usePage(s => s.board?.viewRevision ?? 0);
 export const useConnectionsRevision = () => usePage(s => s.board?.connectionsRevision ?? 0);
+export const useDevicesRevision = () => usePage(s => s.devicesRevision ?? 0);
 export const useHistoryStart = () => usePage(s => s.board?.historyStart ?? null);
 /** Membership only: changing a figure never re-renders the compact list itself. */
 export const useVisibleLimits = () => usePage(s => {
@@ -408,3 +425,6 @@ export function usePastResets(): PastResets {
   const past = usePage(s => s.resets?.past ?? NO_PAST);
   return shown ? past : NO_PAST;
 }
+
+export const useOwnSessions = () => usePage(s => s.board?.ownSessions ?? NONE);
+export const usePersonalBoard = () => usePage(s => s.board?.meta.personal ?? false);

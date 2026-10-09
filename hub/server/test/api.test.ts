@@ -968,7 +968,7 @@ test('agents report the coding agents running on their machines; the cards of th
   const duplicate = await report([{...codex, sessionId: 'a'.repeat(32)}, {...unknown, sessionId: 'a'.repeat(32)}]);
   assert.deepEqual([duplicate.status, duplicate.body], [400, {error: 'invalid_request', detail: 'sessionId'}]);
   const answer = await report([codex, unknown, guessed]);
-  assert.deepEqual([answer.status, answer.body], [200, {accepted: 2}], 'a subscription the hub does not know is left out');
+  assert.deepEqual([answer.status, answer.body], [200, {accepted: 3}], 'a subscription the hub does not know is kept privately');
   const shown = async () => {
     const board = (await call('GET', '/api/overview', {as: 'alice'})).body;
     return board.sessions[board.sources[0].id];
@@ -978,7 +978,7 @@ test('agents report the coding agents running on their machines; the cards of th
   assert.equal(first.workedMs, null, 'legacy time is unknown, not a guessed zero');
   assert.equal(second.lastWorkedAt, null, 'an older agent omits the date');
   assert.equal(second.origin, 'editor', 'without an account: the subscription this machine delivers');
-  assert.deepEqual(Object.keys(first).sort(), ['device', 'folder', 'lastWorkedAt', 'origin', 'project', 'startedAt', 'workedMs', 'working'], 'nothing of how the hub tells sessions apart');
+  assert.deepEqual(Object.keys(first).sort(), ['clientId', 'device', 'folder', 'lastWorkedAt', 'origin', 'project', 'startedAt', 'workedMs', 'working'], 'nothing of how the hub tells sessions apart');
   assert.equal((await report([{...codex, sessionId: 'a'.repeat(32)}])).status, 200);
   const [identified] = await shown();
   assert.equal(identified.workedMs, 0, 'valid ID starts with known zero, without guessed legacy credit');
@@ -1012,7 +1012,11 @@ test('agents report the coding agents running on their machines; the cards of th
     body: {version: 1, agent: 'quotum/0.3.0', machine: machine('bobs-laptop-0123456789'), sentAt: iso(Date.now()), sessions: [codex]},
     headers: {authorization: `Bearer ${bobs}`},
   });
-  assert.equal(borrowed.body.accepted, 0, "naming someone else's account shows nothing on it");
+  assert.equal(borrowed.body.accepted, 1, "unheld work is accepted for its owner's private view");
+  const bobsOverview = (await call('GET', '/api/overview', {as: 'bob'})).body;
+  assert.deepEqual(bobsOverview.sources, []);
+  assert.equal(bobsOverview.ownSessions.length, 1);
+  assert.equal(Object.hasOwn(bobsOverview.ownSessions[0], 'source'), false, 'raw unheld attribution stays private to storage');
 
   const invalidTime = await report([{...guessed, lastWorkedAt: 'never'}]);
   assert.deepEqual([invalidTime.status, invalidTime.body], [400, {error: 'invalid_request', detail: 'lastWorkedAt'}]);

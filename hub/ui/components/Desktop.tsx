@@ -287,6 +287,10 @@ export function Measuring({state, onState}: {state: AppState; onState: (state: A
         </SwitchRow>
       </div>
       <SaveError saving={saving} field="sessions" />
+      {(state.clients ?? []).map(client => <div className="drawer-switch" key={client.id}>
+        <SwitchRow on={client.enabled} onChange={enabled => void save({clients: {[client.id]: {enabled}}}, `client.${client.id}`)}>{t('measure.trackClient', {name: client.id === 'opencode' ? 'OpenCode' : PROVIDERS[client.id]?.name ?? client.id})}</SwitchRow>
+        <SaveError saving={saving} field={`client.${client.id}`} />
+      </div>)}
       {idle && <p className="drawer-note">{t('measure.idle')}</p>}
     </section>
   );
