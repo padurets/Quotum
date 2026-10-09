@@ -74,14 +74,19 @@ run also pauses only its own app UI thread and checks that the native loader sta
 responsive, rounded and cancellable before WebView2 finishes. The thread is always
 resumed. Each run starts from a fresh WebView2 profile, as the first start on a machine does: the one
 in `%LOCALAPPDATA%\com.padurets.quotum\EBWebView` is set aside and put back afterwards.
-With `-Diagnostics <dir>` it keeps its report (the times of every close and reopen), the
-app's logs and the app's processes there. CI uploads them when the UI smoke fails and in
-every manual run; a manual run of the Desktop workflow takes `ui-runs`, how many times
+With `-Diagnostics <dir>` it keeps bounded stage readings, owned process identities
+and a manifest with the source and package hashes. CI uploads these on every run;
+raw application logs and command lines are excluded. A failed handoff also requests
+an owned-thread wait chain in a separate worker bounded to two seconds.
+A manual run of the Desktop workflow takes `ui-runs`, how many times
 the UI smoke runs on the installed app and on the portable one each.
 The queued-close check runs with the main window open and with only the compact
 panel: a delayed close must neither lose the latest open nor crash the last WebView.
 The handoff check also pauses the app UI just after accepting a main-window request,
-then opens the tray panel. That newer panel must keep focus; an obsolete main creation
+then opens the tray panel. Its cross-process dispatch has a shared three-second
+preflight/acceptance deadline; a timeout leaves acceptance unknown and never pauses
+the UI. The native probe's accepted, rejected, unresponsive and late-response cases
+run through `desktop/smoke/test-window-probe.ps1`. That newer panel must keep focus; an obsolete main creation
 must leave no hidden WebView after it is cancelled.
 
 Run `node --test desktop/electron/policy.test.cjs` for the Linux bridge/navigation
@@ -473,7 +478,10 @@ it. On X11/XWayland, the native loading surface appears before Chromium starts;
 check Escape and outside clicks during loading too. Neither loading nor ready panel
 belongs in the taskbar. `QUOTUM_TEST_PANEL=1 xvfb-run -a sh desktop/smoke/tray.sh <app>`
 checks the native handoff and cancellation with its own suspended browser on a
-private bus, with providers disabled. Check a click outside followed by a new tray
+private bus, with providers disabled. It verifies the controller ancestry and process
+birth before using a pidfd for pause/resume. `QUOTUM_SMOKE_DIAGNOSTICS_DIR` saves
+bounded native window and process timelines before temporary data is removed.
+Check a click outside followed by a new tray
 click too, so the blur from the same press cannot reopen it or consume a different
 gesture.
 On Wayland, also open *Limits* from the tray menu before any direct tray click,
