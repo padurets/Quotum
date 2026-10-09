@@ -25,6 +25,12 @@ export class Cdp {
         const call = this.waiting.get(message.id);
         this.waiting.delete(message.id);
         if (call) {call.clean(); this.lastAck = {id: message.id, method: call.method, at: performance.now()};}
+        // Page exceptions are successful protocol replies but failed evaluations.
+        // Save their command before the caller starts cleanup, without page text.
+        if (call?.method === 'Runtime.evaluate' && (message.result as {exceptionDetails?: unknown} | undefined)?.exceptionDetails) {
+          this.failure ??= {id: message.id, method: call.method, context: call.context, started: call.started, deadline: call.started + 30_000,
+            elapsedMs: performance.now() - call.started, reason: 'a page evaluation failed'};
+        }
         if (message.error) call?.reject(new Error(`${call.method}: ${message.error.message}`));
         else call?.resolve(message.result as never);
       } else if (message.method) {
@@ -80,7 +86,7 @@ export class Cdp {
       const timer = setTimeout(() => {
         this.waiting.delete(id);
         clean();
-        this.failure = {id, method, context, started, deadline: started + 30_000, elapsedMs: performance.now() - started};
+        this.failure ??= {id, method, context, started, deadline: started + 30_000, elapsedMs: performance.now() - started};
         reject(new Error(`${context ? `${context}: ` : ''}${method}: no browser response in 30 s`));
       }, 30_000);
       this.waiting.set(id, {resolve: resolve as (value: never) => void, reject, method, context, started, timer, clean});
@@ -122,7 +128,7 @@ export class Cdp {
   private rejectWaiting(reason = 'the browser closed the connection') {
     for (const [id, call] of this.waiting) {
       call.clean();
-      if (this.terminal) this.failure = {id, method: call.method, context: call.context, started: call.started, deadline: call.started + 30_000, elapsedMs: performance.now() - call.started, reason};
+      if (this.terminal) this.failure ??= {id, method: call.method, context: call.context, started: call.started, deadline: call.started + 30_000, elapsedMs: performance.now() - call.started, reason};
       call.reject(new Error(`${call.context ? `${call.context}: ` : ''}${call.method}: ${reason}`));
     }
     this.waiting.clear();

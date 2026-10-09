@@ -51,6 +51,43 @@ class Socket extends EventTarget {
 }
 const connection = (socket: Socket) => new (Cdp as unknown as new (socket: unknown) => Cdp)(socket);
 
+test('a page exception keeps its original command through later cleanup failures without retaining page text', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const socket = new Socket(), cdp = connection(socket);
+  t.after(() => cdp.close());
+  cdp.at('panning/quota/30d/setup');
+  const failed = assert.rejects(cdp.evaluate('private-expression-canary'), /private-page-error-canary/);
+  cdp.at('cleanup');
+  socket.answer(1, {result: {type: 'object'}, exceptionDetails: {text: 'private-page-error-canary', exception: {description: 'private-page-error-canary'}}});
+  await failed;
+  const original = cdp.snapshot().failure;
+  assert.ok(original);
+  assert.equal(original?.id, 1);
+  assert.equal(original?.method, 'Runtime.evaluate');
+  assert.equal(original?.context, 'panning/quota/30d/setup');
+  assert.equal(original?.reason, 'a page evaluation failed');
+  assert.ok(Number.isFinite(original.elapsedMs));
+  const cleanup = assert.rejects(cdp.send('Emulation.clearDeviceMetricsOverride'), /no browser response/);
+  t.mock.timers.tick(30_000); await cleanup;
+  const crash = assert.rejects(cdp.send('Performance.getMetrics'), /renderer crashed/);
+  socket.emit('Inspector.targetCrashed'); await crash;
+  assert.deepEqual(cdp.snapshot().failure, original);
+  assert.equal(cdp.snapshot().terminal?.method, 'Inspector.targetCrashed');
+  assert.deepEqual(cdp.snapshot().pending, []);
+  assert.equal(socket.commands.length, 3);
+  assert.doesNotMatch(JSON.stringify(cdp.snapshot()), /private-expression-canary|private-page-error-canary|description|expression/);
+});
+
+test('an exceptionDetails field returned as ordinary page data is not a failed evaluation', async () => {
+  const socket = new Socket(), cdp = connection(socket);
+  try {
+    const result = cdp.evaluate('ordinary page data');
+    socket.answer(1, {result: {value: {exceptionDetails: 'ordinary page data'}}});
+    assert.deepEqual(await result, {exceptionDetails: 'ordinary page data'});
+    assert.equal(cdp.snapshot().failure, null);
+  } finally {cdp.close();}
+});
+
 for (const [event, reason] of [['Inspector.targetCrashed', 'the renderer crashed'], ['Inspector.detached', 'the browser detached the target']]) {
   test(`${event} rejects open-socket waiters and prevents cleanup commands from hiding the cause`, async t => {
     t.mock.timers.enable({apis: ['setTimeout']});
