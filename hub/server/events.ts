@@ -418,6 +418,14 @@ export class Events implements Touches {
     const connectionFrames = new Map<string, Frame[]>();
     const clientFramesByKey = new Map<string, Frame[]>();
     const deviceFramesByUser = new Map<string, Frame[]>();
+    // Work out account presence before sending any board, so recovery reaches every owner reader.
+    for (const watched of this.watched.values()) for (const sub of watched.subscribers) {
+      if (deviceFramesByUser.has(sub.user) || !(clientUsers.has(sub.user) || whole.has(watched.id) || users.has(sub.user) || sources.has(watched.id))) continue;
+      let frames: Frame[] = [];
+      try { frames = this.refreshDeviceSessions(sub.user, now); }
+      catch (error) { trouble(error); failed.users.add(sub.user); this.deviceSessions.delete(sub.user); }
+      deviceFramesByUser.set(sub.user, frames);
+    }
     for (const watched of this.watched.values()) {
       const financialKey=financialKeys.get(watched.id)??this.parts.store.financialKey(watched.id);
       for (const sub of watched.subscribers) {
@@ -454,10 +462,9 @@ export class Events implements Touches {
           try {
             const key = sub.user+'\n'+watched.id;
             if (!clientFramesByKey.has(key)) clientFramesByKey.set(key, this.refreshOwnSessions(sub.user, watched.id, now));
-            if (!deviceFramesByUser.has(sub.user)) deviceFramesByUser.set(sub.user, this.refreshDeviceSessions(sub.user, now));
-            clientFrames = [...clientFramesByKey.get(key)!, ...deviceFramesByUser.get(sub.user)!];
+            clientFrames = clientFramesByKey.get(key)!;
           }
-          catch (error) { trouble(error); failed.users.add(sub.user); this.ownSessions.delete(sub.user+'\n'+watched.id); this.deviceSessions.delete(sub.user); }
+          catch (error) { trouble(error); failed.users.add(sub.user); this.ownSessions.delete(sub.user+'\n'+watched.id); }
         }
         let historyFrames = tails.get(watched.id) ?? [];
         const ownSince = this.parts.store.privateOwner(watched.id) === sub.user ? ownHistories.get(sub.user) : undefined;
@@ -466,7 +473,7 @@ export class Events implements Touches {
           const value = ordinary ? JSON.parse(ordinary.data) as {sources: string[]; since: number; changes?: HistoryChange[]} : {sources: [], since: ownSince};
           historyFrames = [...historyFrames.filter(frame => frame.type !== 'history'), frame('history', {...value, since: Math.min(value.since, ownSince), ownSince})];
         }
-        let frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...clientFrames, ...historyFrames, ...news];
+        let frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...clientFrames, ...(deviceFramesByUser.get(sub.user) ?? []), ...historyFrames, ...news];
         if (sub.fresh) continue;
         if(!frames.length&&!sub.desktop)continue;
         try {
@@ -656,7 +663,7 @@ export class Events implements Touches {
     this.deviceSessions.set(user, {json, changesAt: live.devicesChangesAt(user, now)});
     this.armOwn(now);
     // This account hint carries no board data, IDs, session counts or project names.
-    return before && before.json !== json ? [frame('devices', {})] : [];
+    return before?.json !== json ? [frame('devices', {})] : [];
   }
 
   // ---------- time ----------
