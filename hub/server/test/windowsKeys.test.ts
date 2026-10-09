@@ -22,7 +22,7 @@ test('Windows registry bootstrap is private, durable and never replaces a missin
   const store=new Store(path.join(data,'hub.sqlite')),id=reserveManagedId(store.db);
   t.after(()=>{cleanup(id);store.close();rmSync(root,{recursive:true,force:true});});
   const first=readInputs({},data,false),report=startSecrets(store.db,first);
-  assert.equal(report.outcome,'created');assert.ok(first.current);assert.equal(reserveManagedId(store.db),id);
+  assert.equal(report.outcome,'created',JSON.stringify({outcome:report.outcome,reason:report.reason}));assert.ok(first.current);assert.equal(reserveManagedId(store.db),id);
   assert.equal(startSecrets(store.db,readInputs({},data,false)).current,report.current);
   assert.equal(managedRegistry(id,false).fingerprint,report.current);
   cleanup(id);
