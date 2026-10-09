@@ -9,7 +9,7 @@ import {observeReversal} from './reversalDiagnostic';
 
 const DAY = 86_400_000;
 type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
-type Read = {sections?:ResourceRead[];selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
+type Read = {sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
 
@@ -52,13 +52,22 @@ export class HistoryBodies {
     cdp.on<{requestId: string; request: {url: string;postData?:string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
       const url = new URL(event.request.url); if (!accountingPath(url.pathname)) return;
       const read: Read = {selection: historyReadSelection(url), id: event.requestId, phase: this.phase, from: Number(url.searchParams.get('from')), to: Number(url.searchParams.get('to')), cell: Number(url.searchParams.get('cell')), lower: 0, before: Promise.all([...this.pending]), attemptId: lowerHeaders(event.request.headers ?? {})[HISTORY_ATTEMPT_HEADER]};
-      if(url.pathname!=='/api/history'){
-        const body=JSON.parse(event.request.postData??'{}') as PeriodRequest;
-        read.sections=[];
-        for(const scope of PERIOD_SCOPES)if(body[scope]&&body[scope]!.cells!=='skip'){const query=new URL('/api/history',url);query.search=new URLSearchParams({board:decodeURIComponent(url.pathname.split('/')[3]),scope:scope==='funds'?'budget':scope,...body[scope]}).toString();read.sections.push({scope,selection:historyReadSelection(query),from:Number(body[scope]!.from),to:Number(body[scope]!.to),cell:Number(body[scope]!.cell)});}
-        if(read.sections[0])Object.assign(read,read.sections[0]);
-      }
       this.active.set(read.id, read); this.reads.push(read);
+      if(url.pathname!=='/api/history'){
+        read.sections=[];
+        const classify=(postData:string)=>{
+          const body=JSON.parse(postData) as PeriodRequest;
+          for(const scope of PERIOD_SCOPES)if(body[scope]&&body[scope]!.cells!=='skip'){const query=new URL('/api/history',url);query.search=new URLSearchParams({board:decodeURIComponent(url.pathname.split('/')[3]),scope:scope==='funds'?'budget':scope,...body[scope]}).toString();read.sections!.push({scope,selection:historyReadSelection(query),from:Number(body[scope]!.from),to:Number(body[scope]!.to),cell:Number(body[scope]!.cell)});}
+          if(read.sections![0])Object.assign(read,read.sections![0]);
+        };
+        if(event.request.postData!==undefined){try{classify(event.request.postData);}catch(error){this.errors.push(error);}}
+        else {
+          // Chrome may omit the inline POST body. Its absence says nothing
+          // about the requested resources, even if the response finishes first.
+          const work=cdp.send<{postData:string}>('Network.getRequestPostData',{requestId:read.id}).then(result=>classify(result.postData)).catch(error=>{this.errors.push(error);});
+          read.request=work;this.pending.add(work);void work.then(()=>this.pending.delete(work));
+        }
+      }
     });
     cdp.on<{requestId: string; headers: Record<string, string>}>('Network.requestWillBeSentExtraInfo', event => {
       const read = this.reads.find(r => r.id === event.requestId), id = lowerHeaders(event.headers)[HISTORY_ATTEMPT_HEADER];
@@ -78,7 +87,7 @@ export class HistoryBodies {
         const decoded = result.base64Encoded ? Buffer.from(result.body, 'base64') : Buffer.from(result.body);
         // DevTools can finish fetching an earlier full body after the page has
         // already used its metadata to start this request. Count the raw body.
-        await read.before;
+        await read.before;await read.request;
         const raw=JSON.parse(decoded.toString()) as HistoryReply|PeriodReply;
         const parts=read.sections??[read];
         for(const part of parts){
@@ -141,7 +150,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number}>(`(() => {const svg=document.querySelector(${JSON.stringify(future ? '.history .chart>svg' : '.activity .chart>svg')});svg.scrollIntoView({block:'center'});const r=svg.getBoundingClientRect(),left=${future ? 40 : 48};return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-left-12)/svg.viewBox.baseVal.width,series:document.querySelectorAll('.history .series[d]:not([d=""])').length};})()`);
     assert.ok(geometry.series >= 12, `${name}: fewer than twelve actual series`);
     const seedReads = bodies.resources.filter(read => read.phase === seedPhase && read.count?.complete);
-    assert.ok(seedReads.length); const cell = seedReads[0].cell;
+    assert.ok(seedReads.length,`${name}: no complete seed resources: ${JSON.stringify(bodies.reads.map(read=>({phase:read.phase,resources:read.sections?.length,cell:read.cell,complete:read.count?.complete,canceled:read.canceled})))}`); const cell = seedReads[0].cell;
     const seeds = new Map<string, {answer: NonNullable<Read['answer']>; initial: Set<number>}>();
     for (const read of seedReads) {
       let group = seeds.get(read.selection);

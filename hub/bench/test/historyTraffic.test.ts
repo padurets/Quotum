@@ -256,3 +256,33 @@ test('composite bodies count once while both resource selections and standalone 
   assert.equal(observer.reads.length,3);assert.equal(observer.resources.length,2,'evidence bytes count without pretending cached cells were reread');
   assert.equal(observer.reads[2].count?.decoded,Buffer.byteLength(JSON.stringify(raw)));assert.deepEqual(observer.errors,[]);
 });
+
+test('composite resource classification waits for an omitted POST body even after the response arrives',async()=>{
+  const listeners=new Map<string,(event:never)=>void>();
+  const history={run:'r',now:1,historyStart:0,known:{work:0,sources:{}},chunks:[{from:0,to:60}]};
+  const raw=JSON.stringify({basis:{},quota:{state:'complete',value:history}});
+  let finish!:(value:{postData:string})=>void;
+  const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:<T>(method:string)=>
+    (method==='Network.getRequestPostData'?new Promise<{postData:string}>(resolve=>{finish=resolve;}):Promise.resolve({body:raw,base64Encoded:false})) as Promise<T>};
+  const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
+  emit('Network.requestWillBeSent',{requestId:'omitted',request:{url:'http://localhost/api/boards/b/period'}});
+  assert.equal(observer.reads.length,1);assert.equal(observer.activeCount,1);assert.equal(observer.pending.size,1);
+  emit('Network.loadingFinished',{requestId:'omitted'});await Promise.resolve();
+  assert.equal(observer.reads[0].count,undefined,'a response cannot settle before its resource selection is known');
+  finish({postData:JSON.stringify({quota:{cell:'1',from:'0',to:'60'}})});
+  await Promise.all([...observer.pending]);
+  assert.deepEqual(observer.errors,[]);assert.equal(observer.reads.length,1);assert.equal(observer.resources.length,1);
+  assert.equal(new URLSearchParams(observer.resources[0].selection).get('scope'),'quota');
+  assert.deepEqual(observer.resources[0].chunks,[[0,60]]);assert.equal(observer.resources[0].count?.decoded,Buffer.byteLength(raw));
+});
+
+test('a missing POST body that Chrome cannot recover fails observation and retains the canceled attempt',async()=>{
+  const listeners=new Map<string,(event:never)=>void>(),missing=new Error('POST data unavailable');
+  const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:<T>()=>Promise.reject<T>(missing)};
+  const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
+  emit('Network.requestWillBeSent',{requestId:'missing',request:{url:'http://localhost/api/boards/b/period'}});
+  emit('Network.loadingFailed',{requestId:'missing',canceled:true});
+  await Promise.all([...observer.pending]);
+  assert.deepEqual(observer.errors,[missing]);assert.equal(observer.reads.length,1);assert.equal(observer.reads[0].canceled,true);
+  assert.equal(observer.reads[0].count?.complete,false);assert.equal(observer.activeCount,0);
+});
