@@ -7,7 +7,7 @@ import {setPrefs, usePrefs} from './lib/prefs';
 import {showBoard} from './lib/timeRange';
 import {navigate, settingsHref, usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, QUOTA_TABLE, QUOTA_HISTORY, BUDGET_HISTORY, BUDGET_TABLE, isHidden, useView} from './lib/view';
+import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, QUOTA_TABLE, QUOTA_HISTORY, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE, isHidden, useView} from './lib/view';
 import {withArranged} from './lib/grid';
 import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles, useViewRevision} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
@@ -138,6 +138,7 @@ function Dashboard({
     content: <AgentsPanel arrange={arrange} />,
   });
   const panels = new Map<string, Widget>([
+    [SUBSCRIPTION_FUNDS,{id:SUBSCRIPTION_FUNDS,name:t('widgets.subscriptionFunds'),content:<MoneyHistory arrange={arrange} family="funds"/>}],
     [BUDGET_HISTORY,{id:BUDGET_HISTORY,name:t('widgets.budgetHistory'),content:<MoneyHistory arrange={arrange}/>}],
     [BUDGET_TABLE,{id:BUDGET_TABLE,name:t('widgets.budgetTable'),content:<MoneyTable arrange={arrange}/>}],
     [

@@ -39,10 +39,10 @@ function hub(t: TestContext) {
   const ask = (at: number, minimum = MIN, name = 'laptop', active = false, paced = true) => ingest.checkin(credential, {
     ...agent(name), paced, subscriptions: [{provider: 'codex', account: ACCOUNT, active, minIntervalMs: minimum}],
   }, T + at).subscriptions[0];
-  const deliver = (at: number, options: {observed?: number; stale?: number; name?: string; used?: number; failure?: string; reset?: number} = {}) => ingest.accept(credential, {
+  const deliver = (at: number, options: {observed?: number; stale?: number; name?: string; used?: number; failure?: string; reset?: number; credits?:string;windowless?:boolean} = {}) => ingest.accept(credential, {
     ...agent(options.name ?? 'laptop'), sentAt: iso(at),
     snapshots: options.failure ? [] : [{provider: 'codex', account: ACCOUNT, observedAt: iso(options.observed ?? at), via: 'codex/app-server', staleAfterMs: options.stale ?? 348_000,
-      windows: [{id: 'weekly', kind: 'weekly', usedPercent: options.used ?? 50, ...(options.reset === undefined ? {} : {resetsAt: iso(options.reset)})}]}],
+      windows: options.windowless?[]:[{id: 'weekly', kind: 'weekly', usedPercent: options.used ?? 50, ...(options.reset === undefined ? {} : {resetsAt: iso(options.reset)})}],...(options.windowless?{resourceStatus:{windows:'missing',resets:'missing'}}:{}),...(options.credits===undefined?{}:{balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount:options.credits}]})}],
     failures: options.failure ? [{provider: 'codex', error: options.failure, observedAt: iso(options.observed ?? at)}] : [],
   }, T + at);
   const source = () => store.findSource('codex', ACCOUNT)!;
@@ -414,4 +414,53 @@ test('a failed first fixed measurement retries after its pause and minimum witho
     assert.equal(h.ask(89_999).measure, false, 'an unanswered first command retains its retry delay');
     assert.equal(h.ask(90_000).measure, true);
   }
+});
+
+
+test('windowless Codex delivery restores fixed cadence after restart without a quota success',t=>{
+  const h=hub(t);h.ask(0);h.deliver(0,{windowless:true,credits:'2500'});h.frequency(900_000);
+  assert.equal(h.store.state(h.source()).successAt,null);
+  assert.equal(h.store.state(h.source()).delivery?.at,T);
+  const restarted=new Ingest(h.store,h.directory,new Duty(),new Cadence());
+  const check=(at:number)=>restarted.checkin(h.credential,{...h.agent('laptop'),paced:true,subscriptions:[{provider:'codex',account:ACCOUNT,active:false}]},T+at).subscriptions[0];
+  assert.equal(check(5*MIN).measure,false);assert.equal(check(15*MIN).measure,true);
+});
+
+test('late independent funds preserve the newer fixed plan and old failures cannot pause it',t=>{
+  const h=hub(t);h.ask(0);h.deliver(0);h.frequency(900_000);
+  h.deliver(2*MIN);const before=h.ingest.nextMeasurement(h.source(),ACCOUNT,T+3*MIN).value;
+  const accepted=h.deliver(3*MIN,{observed:MIN,windowless:true,credits:'1.23'});
+  assert.equal(accepted.accepted,1);assert.equal(h.store.state(h.source()).delivery?.at,T+2*MIN);
+  assert.deepEqual(h.ingest.nextMeasurement(h.source(),ACCOUNT,T+3*MIN).value,before);
+  h.deliver(3*MIN,{observed:MIN,failure:'failed'});
+  assert.deepEqual(h.ingest.nextMeasurement(h.source(),ACCOUNT,T+3*MIN).value,before);
+  const restarted=new Ingest(h.store,h.directory,new Duty(),new Cadence());
+  restarted.accept(h.credential,{...h.agent('laptop'),sentAt:iso(3*MIN),snapshots:[],failures:[{provider:'codex',error:'not_logged_in',observedAt:iso(MIN)}]},T+3*MIN);
+  assert.equal(restarted.checkin(h.credential,{...h.agent('laptop'),paced:true,subscriptions:[{provider:'codex',account:ACCOUNT,active:false}]},T+17*MIN).subscriptions[0].measure,true);
+});
+
+test('nonadvancing accepted credits clear only their sender\'s older pause', t => {
+  for (const sender of ['laptop', 'server']) for (const observed of [50_000, 90_000]) {
+    const h = hub(t);
+    h.ask(0); h.deliver(0);
+    h.deliver(MIN, {failure:'timeout'});
+    h.deliver(150_000, {name:'server'});
+    assert.equal(h.cadence.pausedUntil(ACCOUNT,h.device(),T+160_000),T+3*MIN);
+    assert.equal(h.deliver(160_000, {name:sender,observed,windowless:true,credits:'1.23'}).accepted,1);
+    const cleared = sender === 'laptop' && observed > MIN;
+    assert.equal(h.cadence.pausedUntil(ACCOUNT,h.device(),T+160_000),cleared ? null : T+3*MIN);
+    assert.deepEqual(h.store.state(h.source()).delivery,{at:T+150_000,staleAfterMs:348_000});
+  }
+});
+
+test('duplicate quota data and independent credits do not stretch Auto speed', t => {
+  const h = hub(t);
+  h.ask(0); h.deliver(0);
+  h.deliver(MIN); h.ask(MIN);
+  const expected = {next:T+5*MIN,why:'idle'};
+  assert.deepEqual(h.ingest.nextMeasurement(h.source(),ACCOUNT,T+MIN).value,expected);
+  assert.equal(h.deliver(MIN+15_000,{observed:MIN}).duplicates,1);
+  assert.deepEqual(h.ingest.nextMeasurement(h.source(),ACCOUNT,T+MIN+15_000).value,expected);
+  assert.equal(h.deliver(MIN+30_000,{observed:MIN,credits:'1.23'}).accepted,1);
+  assert.deepEqual(h.ingest.nextMeasurement(h.source(),ACCOUNT,T+MIN+30_000).value,expected);
 });

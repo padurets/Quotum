@@ -6,6 +6,7 @@ import {
   type ResetLabel,
   type ResetStatus,
 } from '../lib/resets';
+import type {ResourceObservation} from '../../server/domain/resources';
 import type {FreeResets as Free} from '../lib/types';
 import {useClock} from '../lib/clock';
 import {rich, t} from '../i18n';
@@ -164,11 +165,15 @@ const TicketIcon = () => (
  * has now. A ticket, so it never reads as the news of a reset for everyone. Its panel is
  * a table, a row per time they expire; its name says the same a line a row.
  */
-export function FreeResets({resets}: {resets: Free}) {
+export function FreeResets({resets,observation}: {resets: Free;observation?:ResourceObservation}) {
+  const deadline=observation?(observation.valueAt??observation.at)+(observation.valueStaleAfterMs??observation.staleAfterMs):null;
+  const now=useClock(now=>deadline!==null&&now<=deadline?deadline+1:null);
+  const stale=observation&&(observation.status!=='observed'||now>deadline!);
   const count = t('card.freeResets', {count: resets.available});
   const groups = freeResetExpiry(resets);
   const label = [
     count,
+    ...(stale?[t('money.stale')]:[]),
     ...groups.map((g) =>
       g.expiresAt !== null
         ? t('card.freeResetsBy', {count: g.count, date: stamp(g.expiresAt)})
@@ -181,7 +186,8 @@ export function FreeResets({resets}: {resets: Free}) {
     count: g.count,
   }));
   return (
-    <StatusMark
+    <span data-time="free-resets"><StatusMark
+      tone={stale?'warn':undefined}
       label={label}
       align="right"
       trigger={
@@ -193,6 +199,7 @@ export function FreeResets({resets}: {resets: Free}) {
     >
       <div className="tray-panel-head">
         <p className="tray-panel-lead">{count}</p>
+        {stale&&<p>{t('money.stale')}</p>}{observation?.valueAt!==undefined&&<p>{stamp(observation.valueAt)}</p>}
       </div>
       <dl className="tray-panel-table">
         <div className="tray-panel-table-head" aria-hidden="true">
@@ -206,6 +213,6 @@ export function FreeResets({resets}: {resets: Free}) {
           </div>
         ))}
       </dl>
-    </StatusMark>
+    </StatusMark></span>
   );
 }

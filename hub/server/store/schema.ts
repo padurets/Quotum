@@ -310,6 +310,16 @@ export const STEPS = [
   `,
   // 19 — independently placed quota and budget analytics, with frozen addition targets.
   `ALTER TABLE board_additions ADD COLUMN widget_targets TEXT;`,
+  // 20 — exact native credit coefficients and explicit financial consent on mixed sources.
+  `
+  ALTER TABLE readings ADD COLUMN amount_scale INTEGER NOT NULL DEFAULT 6 CHECK(amount_scale BETWEEN 0 AND 18);
+  ALTER TABLE shares ADD COLUMN budget_since INTEGER;
+  ALTER TABLE shares ADD COLUMN budget_anchor_at INTEGER;
+  ALTER TABLE shares ADD COLUMN budget_revision TEXT NOT NULL DEFAULT '';
+  UPDATE shares SET budget_revision=lower(hex(randomblob(16)));
+  UPDATE shares SET budget_since=0,budget_anchor_at=0 WHERE source_id IN (SELECT id FROM sources WHERE provider IN ('openrouter','deepseek'));
+  CREATE INDEX shares_budget_pending ON shares(source_id,budget_since) WHERE budget_anchor_at IS NULL AND budget_since IS NOT NULL;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

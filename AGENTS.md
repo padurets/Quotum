@@ -47,14 +47,16 @@ one system, say so.
 against its budget (`hub/bench/budget.ts`). An idle board has neither measurements nor
 working agents: it asks the hub nothing and renders only what shows time. Every
 measurement reaches its card and chart, 95 of 100 within a second, reading only new
-history cells and rendering no other card nor the header. A machine report crediting
+history cells and rendering no other card nor the header. A mixed Codex subscription's
+credit changes and unchanged-value heartbeats update its card and funds history while
+quota and wallet analytics remain unchanged. A machine report crediting
 work makes at most one small history read and renders only its card, agents and
 analytics. Run it when you change the dashboard and have Chrome (`QUOTUM_CHROME`, one
 on `PATH`, or `--cdp` to one already running); CI fails over budget. After the readings,
 it also checks consecutive measuring-frequency saves with native arrow keys and fails
 if saving loses focus.
-Native horizontal wheel and Shift-drag scenarios start separately from the limit and budget
-charts, moving all three charts at 24h and 30d
+Native horizontal wheel and Shift-drag scenarios start separately from the limit, budget
+and subscription-funds charts, moving all four charts at 24h and 30d
 with at least twelve real series per resource family and CPU throttled fourfold, including an unread edge,
 strip rebuilding, reversal and return to live. Moving-frame p95/p99 must stay within
 34/50 ms and input-to-updated-frame p95 within 34 ms; callbacks without actual chart
@@ -189,7 +191,16 @@ and platform smoke checks still apply.
 - **Budget widgets share one semantic presentation.** Dashboard and compact use the
   same budget view and renderer: one Available balance, supported scoped allowances
   separately, and balance composition in the existing disclosure. Accounting totals
-  belong in analytics. Never add card rows just because a provider returns more fields;
+  belong in analytics. A subscription's additional funds belong in its footer beside
+  free resets, as a compact amount with a disclosure, in both dashboard and compact.
+  Their history belongs in the separate subscription-funds widget; wallet budget charts
+  and tables exclude subscription funds. It shares the money renderer and time axis,
+  with its own series selection and visibility.
+  They never add a balance row to the subscription's main body.
+  Keep the last known amount visible in the warning tone when stale, just like free
+  resets; do not replace it with a warning icon or add another status mark. Its
+  disclosure uses the shared tray heading and detail table.
+  Never add card rows just because a provider returns more fields;
   each extra field needs a defined purpose, while safe financial observations are saved
   at capture for later analytics. Only reported caps have scales, and lifetime credits
   never become a wallet's percentage denominator. Totals, components and currency

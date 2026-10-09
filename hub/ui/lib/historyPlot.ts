@@ -15,7 +15,7 @@ function* pointsOf(block: PlotBlock, offset: number): Preparation<PlotSeries['po
   let points = offsets.get(offset);
   if (!points) {
     points = [];
-    for (const [at, low, segment] of block.points) {points.push([at, low, segment + offset]); yield;}
+    for (const [at, low, segment, , validUntil] of block.points) {points.push(validUntil === undefined ? [at, low, segment + offset] : [at, low, segment + offset, validUntil]); yield;}
     offsets.set(offset, points);
     if (offsets.size > 2) offsets.delete(offsets.keys().next().value!);
   }
@@ -25,11 +25,12 @@ function* blockOf(values: SeriesCells, chunk: Chunk, cell: number, from: number,
   let saved = decoded.get(values);
   if (!saved || saved.from !== chunk.from || saved.cell !== cell) {
     let segment = 1;
-    const points: [number, number, number, number][] = [];
+    const points: PlotBlock['points'][number][] = [];
     for (let index = 0; index < values.cells.length; index++) {
       const [i, low, , , extra] = values.cells[index];
       if (index && extra?.g) segment++;
-      points.push([chunk.from + i * cell, low, segment, extra?.h ?? values.hold]); yield;
+      const at = chunk.from + i * cell, hold = extra?.h ?? values.hold;
+      points.push(extra?.u === undefined ? [at, low, segment, hold] : [at, low, segment, hold, extra.u]); yield;
     }
     saved = {from: chunk.from, cell, full: {from: chunk.from, to: chunk.to, gap: !!values.cells[0]?.[4]?.g, points}, cuts: new Map()};
     decoded.set(values, saved);
@@ -107,7 +108,7 @@ export function covered(coverage: Coverage, from: number, to: number): boolean {
 /** Decodes plot data without computing frame totals, ranks or sets for every dimension. */
 export function* plotPrepared(chunks: readonly Chunk[], meta: HistoryMeta, target: Target, coverage: Coverage, windows: ReadonlySet<string>, token: number, epoch: number, version: number): Preparation<PlotBuffer> {
   const from = target.k0 * target.cell, to = (target.k1 + 1) * target.cell;
-  const series = new Map<string, {line: PlotSeries; parts: PlotSeries['points'][]; last: number; segment: number}>();
+  const series = new Map<string, {line: PlotSeries; parts: PlotSeries['points'][]; last: number; lastUntil?: number; segment: number}>();
   const activityCells = new Map<number, PlotBar>();
   const events: SourceEvent[] = yield* resetEventsPrepared(chunks, windows, from, to);
   for (const chunk of chunks) {
@@ -118,7 +119,7 @@ export function* plotPrepared(chunks: readonly Chunk[], meta: HistoryMeta, targe
       const block = yield* blockOf(values, chunk, target.cell, from, to);
       const first = block.points[0];
       if (!first) continue;
-      const join = !!row && !block.gap && covered(coverage, row.last, first[0] + target.cell);
+      const join = !!row && !block.gap && first[0] < (row.lastUntil ?? Infinity) && covered(coverage, row.last, first[0] + target.cell);
       if (!row) {row = {line: {sourceId: values.source, windowId: values.window, points: [], staleAfterMs: first[3], blocks: []}, parts: [], last: first[0], segment: 1}; series.set(key, row);}
       else if (!join) row.segment++;
       row.line.blocks!.push({block, join});
@@ -127,6 +128,7 @@ export function* plotPrepared(chunks: readonly Chunk[], meta: HistoryMeta, targe
       const last = block.points.at(-1)!;
       row.line.staleAfterMs = last[3];
       row.last = last[0];
+      row.lastUntil = last[4];
       row.segment = last[2] + offset;
     }
     for (const [at, row] of yield* activityOf(chunk, target.cell)) {

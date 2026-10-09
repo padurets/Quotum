@@ -148,7 +148,7 @@ test('every account of a provider is a source of its own, with a stable id', () 
   assert.equal(store.source('codex', 'a1b2c3d4e5f6a1b2c3d4e5f6', start), states[0].id);
 });
 
-test('free resets the client reports are kept with the source until it stops reporting them', () => {
+test('free resets retain their last observation when the client stops reporting them', () => {
   const {store, ingest, board, token} = setup();
   const expiresAt = start + 30 * 86_400_000;
   ingest.accept(token, batch([snapshot(start, 5, {resets: {available: 1}})]), start);
@@ -161,7 +161,8 @@ test('free resets the client reports are kept with the source until it stops rep
   );
   assert.deepEqual(only(store, board, 'codex').resets, {available: 4, expiring: [{count: 1, expiresAt}, {count: 2, expiresAt: later}, {count: 1, expiresAt: null}]});
   ingest.accept(token, batch([snapshot(start + 120_000, 5)]), start + 120_000);
-  assert.equal(only(store, board, 'codex').resets, null);
+  assert.equal(only(store, board, 'codex').resets?.available, 4);
+  assert.equal(only(store, board, 'codex').resources?.resets?.at, start + 60_000);
 });
 
 test('one account measured by several devices is one source', () => {

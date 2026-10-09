@@ -98,8 +98,59 @@ The envelope, array limits, object shape and unknown-provider checks remain stri
 | `via` | How the value was obtained (`claude-code/get_usage`, `codex/app-server`, `agy/usage`). |
 | `client` | Version of the agent's client that answered. |
 | `staleAfterMs` | How long this measurement stays representative. The agent promises the next measurement of this provider before then; a later one is a gap. At most 24 h. |
-| `windows` | At least one window. |
+| `windows` | At least one window, except an identified Codex resource observation below. |
 | `resets` | Free resets of the limits the account holds, if the client reports them: `{"available": 3, "expiring": [{"count": 1, "expiresAt": "2026-10-03T09:00:00Z"}, {"count": 2}]}`. `available`: how many, at most 1000. `expiring` (optional): the available resets by when they expire, soonest first, one group per time; a group without `expiresAt` (or with `null`) expires at a time the client does not give, and comes last. Each `count` is at least 1, the counts add up to `available` at most (a client may give only how many), and there are at most 50 groups. Only reported, never used. |
+
+#### Independent Codex resources
+
+An identified Codex snapshot may include `resourceStatus` with both `windows` and
+`resets`, each `observed`, `missing`, `unsupported` or `invalid`. `observed` requires
+its numerical payload; the other statuses exclude it. An empty `windows` array is
+valid only with these explicit statuses and a valid supplier account pseudonym.
+A status-only observation is accepted without creating a successful quota measurement.
+
+`balances` is optional and contains at most one entry:
+
+```json
+{"id":"balance:credits","unit":"credits:codex","status":"finite","amount":"1234.5678912","hasCredits":true}
+```
+
+Its status is `finite`, `unlimited`, `missing`, `unsupported` or `invalid`. Only
+`finite` has an amount. `hasCredits` is an optional supplier boolean independent of
+the amount and of permission to spend. Zero and negative amounts are valid.
+Amounts are plain decimal strings, at most 128 characters, without exponent notation,
+leading plus or redundant integer zeros. Trailing fractional zeros are normalized;
+the remaining scale is at most 18 and the signed coefficient's magnitude at most
+9223372036854775807. No floating-point conversion or preliminary rounding is allowed.
+These extensions require provider `codex` and the current reply's stable account ID.
+
+The account's `rateLimitsByLimitId.codex` is authoritative when present, including
+null credits. Otherwise the single `rateLimits` is eligible only if its limit ID is
+`codex`, absent or null. Mirrors and per-model buckets never add funds. An unlimited
+flag overrides the amount; absent credits or a null balance mean missing. Malformed
+credit data affects that resource; an RPC failure remains a measurement failure.
+
+Quota windows, free resets and purchased credits have independent strictly newer
+watermarks; equal timestamps keep the first observation. An omitted legacy resource
+is unobserved, retaining its value and original freshness. Explicit missing resets
+retain their last count without inferring a grant on recovery. Missing, invalid and
+unsupported quota observations end availability exclusively at their timestamp while
+preserving the last reported values and their original freshness. History, forecasts
+and quota alerts cannot infer consumption across that gap; recovery establishes a new
+baseline without a threshold-crossing alert. Missing, invalid, unsupported and
+unlimited credit observations end finite availability exclusively at their timestamp;
+returning to the same finite amount begins a new span. Credits never generate spending,
+top-ups, quota forecasts or quota alerts.
+
+Delivery has a separate monotonic timestamp and promise. A late resource update can
+be accepted without moving cadence or duty backwards. A current authorized device may
+acknowledge its outstanding command without replacing that delivery baseline or lease.
+Accepted quota evidence updates change detection independently of transport progress.
+After restart, fixed schedules restore the persisted baseline; late or equal resource
+observations do not postpone Auto's immediate first measurement.
+A fresh balance alone does not refresh quota windows. Older hubs may reject windowless
+rich snapshots; the agent splits and drops rejected observations with a compatibility
+diagnostic, without manufacturing a window or a zero balance.
 
 #### Stable account ids
 
@@ -144,8 +195,9 @@ given), never per machine. The same keys decide duty in check-ins.
 ## Response
 
 `200` with `{"accepted": n, "duplicates": n, "failures": n, "device": {"id": …}}`.
-A snapshot the hub already has (same account, not newer than the last one) counts as a
-duplicate, so resending a batch after a lost answer is safe.
+A snapshot with no newer resource observation counts as a duplicate. A late snapshot
+with a newer independent resource counts once as accepted, so resending after a lost
+answer is safe.
 
 | Status | Meaning | Agent behaviour |
 |---|---|---|
@@ -427,6 +479,13 @@ The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
    A code gives one token; `slow_down` asks to poll 5 s less often.
 
 ## Privacy
+
+Codex credit observations add only a native amount, its status and the optional
+`hasCredits` flag under the existing account pseudonym. No purchase history, provider
+account ID, credentials or model request is involved. Personal boards show funds;
+existing and new shared Codex placements require separate explicit financial consent.
+Quota sharing alone does not expose amounts, financial states, history or conversion
+bindings. Revocation removes that access, and re-enabling begins a new history period.
 
 Dropped hub-provider elements are not stored and grant no visibility. Only the hub
 can measure a source of such a provider, including DeepSeek balances; the agent contract sends no provider secret or declared account identity.

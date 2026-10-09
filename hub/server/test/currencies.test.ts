@@ -108,7 +108,7 @@ test('provider capture commits before a blocked currency read; accounts share on
     const first=service.update(a),second=service.update(b);
     assert.equal(store.state(a).meters?.length,3);assert.equal(store.meters.readings(a,'balance:CNY',0,at+1)[0].amount,'110000000');assert.equal(calls,1);
     release(rates());await Promise.all([first,second]);
-    assert.equal(store.db.prepare('SELECT count(*) n FROM exchange_rates').get()?.n,1);
+    assert.equal(store.db.prepare("SELECT count(*) n FROM exchange_rates WHERE source<>'codex-default'").get()?.n,1);
     assert.equal(store.currencies.project(a,store.state(a).meters![0],'USD',at)?.conversion?.rate.id,store.currencies.project(b,store.state(b).meters![0],'USD',at)?.conversion?.rate.id);
     await service.stop();store.close();store=new Store(file,at+1000);
     service=new Currencies(store,async()=>{throw new Error('must use persisted cache');},()=>at+1000);service.start();
@@ -160,7 +160,7 @@ test('the valuation store reuses the same quote across providers and currencies 
     const first=store.currencies.project(a,cny,'USD',at)!,second=store.currencies.project(b,gbp,'USD',at)!;
     assert.equal(first.conversion?.rate.id,second.conversion?.rate.id);assert.equal(second.amount,'137500000');assert.equal(second.scope,'wallet-scope');assert.equal(second.label,'Wallet');
     assert.equal(second.conversion?.original.unit,'GBP');assert.ok(!JSON.stringify(second).includes('cnyPerEur'));
-    assert.equal(store.db.prepare('SELECT count(*) n FROM exchange_rates').get()?.n,1);
+    assert.equal(store.db.prepare("SELECT count(*) n FROM exchange_rates WHERE source<>'codex-default'").get()?.n,1);
   }finally{store.close();}
 });
 

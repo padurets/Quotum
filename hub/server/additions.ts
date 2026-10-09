@@ -10,7 +10,7 @@ import {cardId, providerNames} from './domain/presentation.js';
 const DAY = 86_400_000, LEASE = 30_000;
 export {WIDGETS, widgetVisible, type WidgetId} from './domain/widgets.js';
 import {WIDGETS, widgetVisible, widgetHidden as hidden, showWidgets as shown, type WidgetId} from './domain/widgets.js';
-export type AdditionItem = {kind: 'sources'; sourceIds: string[]} | {kind: 'widget'; widgetId: WidgetId} |
+export type AdditionItem = {kind: 'sources'; sourceIds: string[]; includeBudget?: string[]} | {kind: 'widget'; widgetId: WidgetId} |
   {kind: 'connection'; provider: string; account?:{kind:'new'}|{kind:'existing';id:string}} | {kind: 'replace'; credentialId: string; provider?: string; sourceId?: string; expectedRevision?: number};
 type Result = {sourceIds: string[]; credentialId?: string; connection?: 'created' | 'reused'; expiresAt?: number | null; expiryKind?:import('./connectors/registry.js').ExpiryKind;
   placement?: 'added' | 'already_visible' | 'personal'; viewRevision?: number; credentialRevision?: number; appliedAt: number; maintenance?: 'pending' | 'ok'; replacementRequired?: boolean};
@@ -71,7 +71,9 @@ export class BoardAdditions {
     if (item.kind === 'sources') {
       if (!board) throw new AdditionError('addition_invalid');
       const sourceIds = [...new Set(item.sourceIds)].sort(); this.eligible(owner, board, sourceIds);
-      return {kind: 'sources', sourceIds};
+      const includeBudget=[...new Set(item.includeBudget??[])].sort();
+      if(includeBudget.some(id=>!sourceIds.includes(id)||!this.store.holds(owner,id)||this.store.state(id).provider!=='codex'))throw new AdditionError('addition_invalid');
+      return {kind: 'sources', sourceIds,...(includeBudget.length?{includeBudget}:{})};
     }
     if (item.kind === 'widget') {
       if (!board || board.role !== 'owner') throw new AdditionError('addition_permission');
@@ -98,7 +100,7 @@ export class BoardAdditions {
       const previous = this.store.db.prepare('SELECT * FROM board_additions WHERE owner_id=? AND request_id=?').get(owner, requestId) as Row | undefined;
       if (previous) {
         const saved = JSON.parse(previous.item) as AdditionItem;
-        const normalized = item.kind === 'sources' ? {...item, sourceIds: [...new Set(item.sourceIds)].sort()} : item.kind==='connection'?{kind:item.kind,provider:item.provider,...(item.account?{account:item.account.kind==='new'?{kind:'new'}:item.account.kind==='existing'&&UUID.test(item.account.id)?{kind:'existing',id:item.account.id}:(()=>{throw new AdditionError('addition_invalid');})()}:{})}:item;
+        const normalized = item.kind === 'sources' ? {kind:item.kind,sourceIds:[...new Set(item.sourceIds)].sort(),...(item.includeBudget?.length?{includeBudget:[...new Set(item.includeBudget)].sort()}:{})} : item.kind==='connection'?{kind:item.kind,provider:item.provider,...(item.account?{account:item.account.kind==='new'?{kind:'new'}:item.account.kind==='existing'&&UUID.test(item.account.id)?{kind:'existing',id:item.account.id}:(()=>{throw new AdditionError('addition_invalid');})()}:{})}:item;
         const binding = saved.kind === 'replace' ? {kind: saved.kind, credentialId: saved.credentialId} : saved;
         if (previous.board_id !== boardId || JSON.stringify(binding) !== JSON.stringify(normalized)) throw new AdditionError('addition_conflict');
         return this.answer(previous);
@@ -211,7 +213,7 @@ export class BoardAdditions {
           const view=this.directory.view(board.id),existing=this.store.sources(board.id);
           const ids=item.kind==='widget'?this.targets(row):result.sourceIds.map(cardId);
           const already=item.kind==='widget'?ids.every(id=>widgetVisible(view,id,existing.length)):result.sourceIds.every(id=>existing.some(source=>source.id===id)&&!hidden(view,cardId(id)));
-          if(!board.personal)for(const source of result.sourceIds)if(this.store.holds(owner,source))this.store.share(board.id,source,owner,now);
+          if(!board.personal)for(const source of result.sourceIds)if(this.store.holds(owner,source))this.store.share(board.id,source,owner,now,item.kind==='sources'&&item.includeBudget?.includes(source)===true);
           result.viewRevision=this.directory.saveView(board.id,shown(this.directory.view(board.id),ids),owner,now);
           result.placement=already?'already_visible':'added';
         } else result.placement='personal';

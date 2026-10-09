@@ -25,7 +25,7 @@ export type Place = {closest(selector: string): Place | null};
  * The parts of the page work is counted by, the nearest first: a label that shows time, a
  * card, the header, the list of agents, the analytics. Anything else is the page.
  */
-export const NODES = '[data-time], [data-card], header.topbar, section.agents-panel, section.analytics';
+export const NODES = '[data-time], [data-card], header.topbar, section.agents-panel, section.forecast, section.budget-table, section.analytics';
 
 /**
  * The components that rendered in a commit, found as React DevTools finds them: walking
@@ -73,7 +73,7 @@ export function nodeOf(fiber: Fiber, selector: string): Place | null {
  * One part of the page and how many times it rendered or changed. `time`: it shows time,
  * and `kind` is what (its `data-time`: a label, a cell of the table, the chart).
  */
-export type Counted = {node: string; time: boolean; kind: string | null; region: string; count: number};
+export type Counted = {node: string; time: boolean; kind: string | null; region: string; count: number; widget?:'quota'|'budget'|'funds'|'activity'};
 
 /** What the probe counted since its last `reset`. */
 export type Reading = {
@@ -90,7 +90,7 @@ export type Reading = {
 
 /**
  * Installs the probe as `window.__quotumBench`: `reset()`, `pause()`, `read()`, and for one card at a
- * time `forgetCards()` and `cardChanged(id)`. Runs in the page, before React loads, with
+ * time `forgetCards()`, `cardChanged(id)` and `moneyChanged(id, amount)`. Runs in the page, before React loads, with
  * `rendered` and `nodeOf` passed in. Pausing disconnects measurement instrumentation;
  * resetting begins a fresh, fully observed phase.
  */
@@ -99,13 +99,14 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     closest(selector: string): Element | null;
     hasAttribute(name: string): boolean;
     getAttribute(name: string): string | null;
+    querySelectorAll(selector: string): Iterable<Element>;
     tagName: string;
     className: unknown;
   };
   const page = globalThis as unknown as {
     __REACT_DEVTOOLS_GLOBAL_HOOK__: object;
-    __quotumBench: {reset(): void; pause(): void; read(): Reading; forgetCards(): void; cardChanged(id: string): number | null; seriesChanged(key: string, last: string): number | null};
-    MutationObserver: new (callback: (records: {target: {nodeType: number; parentElement: Element | null}}[]) => void) => {
+    __quotumBench: {reset(): void; pause(): void; read(): Reading; forgetCards(): void; cardChanged(id: string): number | null; moneyChanged(id: string, amount: string): number | null; seriesChanged(key: string, last: string): number | null};
+    MutationObserver: new (callback: (records: {type: string; attributeName?: string | null; target: {nodeType: number; parentElement: Element | null}; addedNodes?: Iterable<{nodeType: number}>}[]) => void) => {
       observe(target: unknown, options: object): void;
       disconnect(): void;
     };
@@ -119,6 +120,7 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
   let renders = new Map<Element | null, number>();
   let mutations = new Map<Element | null, number>();
   let cardChanged: Record<string, number> = {};
+  let moneyChanged: Record<string, number> = {};
   let seriesChanged: Record<string, number> = {};
   const names = new WeakMap<Element, number>();
   let named = 0;
@@ -148,6 +150,7 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
       time: !!node?.hasAttribute('data-time'),
       kind: node?.getAttribute('data-time') ?? null,
       region: regionOf(node),
+      ...(node?.closest('section.history, section.forecast')?{widget:'quota' as const}:node?.closest('section.budget-history, section.budget-table')?{widget:'budget' as const}:node?.closest('section.subscription-funds')?{widget:'funds' as const}:node?.closest('section.activity')?{widget:'activity' as const}:{}),
       count,
     }));
 
@@ -176,13 +179,32 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     const began = clock.now();
     const nodes = new Set<Element | null>();
     const at = clock.timeOrigin + clock.now();
+    const changedSeries = (series: Element | null | undefined) => {
+      if (!series) return;
+      const key = `${series.getAttribute('data-series')}\n${series.getAttribute('data-last')}`;
+      seriesChanged[key] ??= at;
+    };
+    const changedMoney = (value: Element | null | undefined) => {
+      const amount = value?.getAttribute('data-money'), card = value?.closest('[data-card]')?.getAttribute('data-card');
+      if (card && amount !== null && amount !== undefined) moneyChanged[`${card}\n${amount}`] ??= at;
+    };
     for (const record of records) {
       const element = record.target.nodeType === 1 ? (record.target as unknown as Element) : record.target.parentElement;
       nodes.add(element ? element.closest(selector) : null);
-      const series = element?.closest('[data-series]');
-      if (series) {
-        const key = `${series.getAttribute('data-series')}\n${series.getAttribute('data-last')}`;
-        seriesChanged[key] ??= at;
+      changedSeries(element?.closest('[data-series]'));
+      // A financial value can live inside a tray that also shows time. Only its
+      // value mutations prove a balance update; a clock or status change cannot.
+      if (record.type === 'characterData' || record.type === 'childList' || record.attributeName === 'data-money') changedMoney(element?.closest('[data-money]'));
+      // Mounted subtrees arrive with their attributes already set. Their mutation
+      // targets the parent, so looking only above it misses the new values.
+      for (const node of record.addedNodes ?? []) if (node.nodeType === 1) {
+        const added = node as unknown as Element;
+        changedSeries(added.closest('[data-series]'));
+        if (added.hasAttribute('data-money')) changedMoney(added);
+        for (const value of added.querySelectorAll('[data-series], [data-money]')) {
+          if (value.hasAttribute('data-series')) changedSeries(value);
+          if (value.hasAttribute('data-money')) changedMoney(value);
+        }
       }
     }
     bump(mutations, nodes);
@@ -206,15 +228,18 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
       renders = new Map();
       mutations = new Map();
       cardChanged = {};
+      moneyChanged = {};
       seriesChanged = {};
     },
     pause() {recording = false; observer.disconnect();},
     read: () => ({instrumentMs, commits, renders: listed(renders), mutations: listed(mutations), cardChanged}),
     forgetCards() {
       cardChanged = {};
+      moneyChanged = {};
       seriesChanged = {};
     },
     cardChanged: id => cardChanged[id] ?? null,
+    moneyChanged: (id, amount) => moneyChanged[`${id}\n${amount}`] ?? null,
     seriesChanged: (key, last) => seriesChanged[`${key}\n${last}`] ?? null,
   };
 }

@@ -68,7 +68,7 @@ export function useTimeAxis({
   onSelect?: (range: TimeRange) => void;
   ready?: boolean;
   rawPointer?:boolean;
-  /** Cap bounds can start or end inside a grid cell. */
+  /** Explicit quota and monetary bounds can end inside a grid cell. */
   precise?: boolean;
   navigation?: AxisNavigation;
 }) {

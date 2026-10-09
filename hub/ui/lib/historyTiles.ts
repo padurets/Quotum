@@ -5,7 +5,7 @@ import {MeterTile} from './meterTiles';
 
 const FIELDS = 11;
 const HEAD = 248; // 61 uint32 offsets, padded to a float64 boundary.
-type PackedSeries = {source: string; window: string; values: Float64Array};
+type PackedSeries = {source: string; window: string; values: Float64Array; ends?: Float64Array};
 type Session = Chunk['activity']['sessions'][number];
 type Group = ['s' | 'p' | 'd', string];
 
@@ -45,7 +45,7 @@ export class HistoryTile {
     const copy = new HistoryTile(this.from, this.cell);
     copy.readFrom = this.readFrom; copy.readTo = this.readTo; copy.validTo = this.validTo;
     copy.writeSeq = this.writeSeq; copy.shownAt = this.shownAt;
-    for (const [key, series] of this.series) {copy.series.set(key, series); copy.seriesBytes += series.values.byteLength + 256; yield;}
+    for (const [key, series] of this.series) {copy.series.set(key, series); copy.seriesBytes += series.values.byteLength + (series.ends?.byteLength ?? 0) + 256; yield;}
     for (const session of this.sessions) {copy.sessions.push(session); yield;}
     for (const group of this.groups) {copy.groups.push(group); yield;}
     for (const key in this.devices) {copy.devices[key] = this.devices[key]; yield;}
@@ -77,9 +77,10 @@ export class HistoryTile {
     const last = (chunk.to - this.from) / this.cell;
     for (const [key, s] of this.series) {
       const values = new Float64Array(s.values.length);
+      const ends = s.ends?.slice();
       for (let i = 0; i < values.length; i += FIELDS) {values.set(s.values.subarray(i, i + FIELDS), i); yield;}
-      for (let i = first; i < last; i++) {values.fill(NaN, i * FIELDS, (i + 1) * FIELDS); yield;}
-      this.series.set(key, {...s, values});
+      for (let i = first; i < last; i++) {values.fill(NaN, i * FIELDS, (i + 1) * FIELDS); if (ends) ends[i] = NaN; yield;}
+      this.series.set(key, {...s, values, ends});
     }
     for (const s of chunk.series) {
       const key = `${s.source} ${s.window}`;
@@ -95,12 +96,16 @@ export class HistoryTile {
         yield;
         const i = (v.at - this.from) / this.cell * FIELDS;
         packed.values.set([v.low, v.first, v.last, v.open ?? NaN, +v.gap, v.hold, v.spent, v.covered, ...v.work], i);
+        if (v.validUntil !== undefined) {
+          if (!packed.ends) {packed.ends = new Float64Array(TILE_CELLS).fill(NaN); this.seriesBytes += packed.ends.byteLength;}
+          packed.ends[i / FIELDS] = v.validUntil;
+        }
       }
     }
     for (const [key, s] of this.series) {
       let kept = false;
       for (let i = 0; i < s.values.length; i += FIELDS) {yield; if (!Number.isNaN(s.values[i])) {kept = true; break;}}
-      if (!kept) {this.series.delete(key); this.seriesBytes -= s.values.byteLength + 256;}
+      if (!kept) {this.series.delete(key); this.seriesBytes -= s.values.byteLength + (s.ends?.byteLength ?? 0) + 256;}
     }
     const rows = yield* this.activityRowsPrepared();
     const translated: number[] = [];
@@ -212,7 +217,8 @@ export class HistoryTile {
           yield;
           const at = i * FIELDS;
           if (Number.isNaN(s.values[at])) continue;
-          cells.push([i - first, s.values[at], 0, 0, {g: s.values[at + 4] ? 1 : undefined, h: s.values[at + 5]}]);
+          const end = s.ends?.[i];
+          cells.push([i - first, s.values[at], 0, 0, {g: s.values[at + 4] ? 1 : undefined, h: s.values[at + 5], ...(end !== undefined && !Number.isNaN(end) ? {u:end} : {})}]);
         }
         if (cells.length) chunk.series.push({source: s.source, window: s.window, hold: 0, open: null, cells});
         continue;
@@ -223,7 +229,8 @@ export class HistoryTile {
         const at = i * FIELDS;
         if (Number.isNaN(s.values[at])) continue;
         const v = s.values.subarray(at, at + FIELDS);
-        cells.push({at: this.from + i * this.cell, low: v[0], first: v[1], last: v[2], open: Number.isNaN(v[3]) ? null : v[3], gap: !!v[4], hold: v[5], spent: v[6], covered: v[7], work: [v[8], v[9], v[10]]});
+        const end = s.ends?.[i];
+        cells.push({at: this.from + i * this.cell, low: v[0], first: v[1], last: v[2], open: Number.isNaN(v[3]) ? null : v[3], gap: !!v[4], hold: v[5], spent: v[6], covered: v[7], work: [v[8], v[9], v[10]], ...(end !== undefined && !Number.isNaN(end) ? {validUntil:end} : {})});
       }
       if (cells.length) chunk.series.push(yield* encodeCellsPrepared(s.source, s.window, this.readFrom, this.cell, Math.max(known.work, known.sources[s.source] ?? Infinity), cells));
     }

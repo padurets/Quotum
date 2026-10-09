@@ -18,6 +18,7 @@ export type Horizon = 'auto' | '1d' | '3d' | '7d';
  */
 export type Prefs = {
   money:MoneyPrefs;
+  funds:MoneyPrefs;
   /** Series switched off in the chart legend. */
   muted: Record<string, true>;
   range: string;
@@ -42,7 +43,7 @@ export type Prefs = {
 const KEY = 'quotum.prefs';
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
 export const ACTIVITY_BY: ActivityDimension[] = ['source', 'project', 'device'];
-const DEFAULTS: Prefs = {money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
+const DEFAULTS: Prefs = {funds:DEFAULT_MONEY,money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
 
 function read(): Prefs {
   try {
@@ -54,7 +55,7 @@ function read(): Prefs {
     if (!HORIZONS.includes(stored.horizon)) stored.horizon = DEFAULTS.horizon;
     if (!ACTIVITY_BY.includes(stored.activityBy)) stored.activityBy = DEFAULTS.activityBy;
     const {muted, range, kind, horizon, showPlan, showForecast, showResets, locked, activityBy} = stored;
-    return {money:readMoney(stored.money),muted, range, kind, horizon, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort), agentsBy: readAgentsBy(stored.agentsBy), activityBy};
+    return {funds:{...readMoney(stored.funds),view:'balance'},money:readMoney(stored.money),muted, range, kind, horizon, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort), agentsBy: readAgentsBy(stored.agentsBy), activityBy};
   } catch {
     return DEFAULTS;
   }

@@ -15,9 +15,10 @@ export function fields(value: unknown, required: string[], optional: string[] = 
 function itemOf(value: unknown): AdditionItem {
   const kind=(value as {kind?:unknown}|null)?.kind;
   if(kind==='sources') {
-    const input=fields(value,['kind','sourceIds']);
+    const input=fields(value,['kind','sourceIds'],['includeBudget']);
     if(!Array.isArray(input.sourceIds)||input.sourceIds.length<1||input.sourceIds.length>100||!input.sourceIds.every(sourceId))throw new AdditionError('addition_invalid');
-    return {kind,sourceIds:input.sourceIds};
+    if(input.includeBudget!==undefined&&(!Array.isArray(input.includeBudget)||input.includeBudget.length>100||!input.includeBudget.every(sourceId)))throw new AdditionError('addition_invalid');
+    return {kind,sourceIds:input.sourceIds,...(input.includeBudget?{includeBudget:input.includeBudget as string[]}:{})};
   }
   if(kind==='widget') {
     const input=fields(value,['kind','widgetId']);
@@ -128,9 +129,10 @@ export async function additionRoutes(app: FastifyInstance, hub: Hub, guards: Gua
     });
     app.post<{Params:{id:string}}>('/api/device-onboarding/:id/selection',(request,reply)=>{
       const user=guards.user(request,reply);if(!user)return reply;
-      const input=fields(request.body,['requestId','deviceId','sourceIds']);
+      const input=fields(request.body,['requestId','deviceId','sourceIds'],['includeBudget']);
       if(!uuid(request.params.id)||!uuid(input.requestId)||!boardId(input.deviceId)||!Array.isArray(input.sourceIds)||input.sourceIds.length<1||input.sourceIds.length>100||!input.sourceIds.every(sourceId))throw new AdditionError('addition_invalid');
-      return onboarding.select(user.id,request.params.id,input.deviceId,input.sourceIds,input.requestId);
+      if(input.includeBudget!==undefined&&(!Array.isArray(input.includeBudget)||input.includeBudget.length>100||!input.includeBudget.every(sourceId)))throw new AdditionError('addition_invalid');
+      return onboarding.select(user.id,request.params.id,input.deviceId,input.sourceIds,input.requestId,input.includeBudget as string[]|undefined);
     });
   }
 }

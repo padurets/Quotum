@@ -5,6 +5,7 @@ import {composeMeters, type MeterSeriesCells} from '../../server/domain/meterHis
 import {HistoryTile} from '../lib/historyTiles';
 import {drain,Preparations} from '../lib/prepare';
 import type {Chunk} from '../../server/domain/history';
+import type {MeterSemantics} from '../../server/domain/meters';
 
 test('staging a money update keeps the published exact tile unchanged',()=>{
   const cell=60_000,known={work:0,sources:{s:0}},tile=new HistoryTile(0,cell);
@@ -56,4 +57,40 @@ test('a dense monetary cell yields before reading all intervals and cancellation
   tasks.shift()!();assert.equal(small,true);assert.equal(ready,false);
   scheduler.cancel(owner);while(tasks.length)tasks.shift()!();
   assert.equal(ready,false);assert.deepEqual(tile.chunk(known),before);
+});
+
+const cell = 60_000;
+const rate = {id:'default',source:'codex-default',base:'credits:codex',date:0,fetchedAt:100,from:'1000000',to:'40000'};
+const semantics = (at:number,amount:string,steps=false):MeterSemantics => ({limit:null,resetAt:null,minutes:null,scope:null,label:null,scale:6,
+  conversion:{original:{meterId:'balance:credits',unit:'credits:codex',amount,scale:10,at},rate,...(steps?{steps:[rate,{...rate,id:'manual',source:'manual',base:'USD',to:'2000000'}]}:{})}});
+const series = (cells:MeterSeriesCells['cells']):MeterSeriesCells => ({source:'s',meter:'balance:credits',kind:'balance',unit:'USD',role:'total',accounting:{spending:'unavailable',topups:'unavailable'},pointMode:'observation',semantics:semantics(0,'12345678912345'),cells});
+const compose = (values:MeterSeriesCells[]) => composeMeters([{from:0,meterSeries:values}],cell,0,3*cell);
+
+test('interned cell metadata preserves openings, observations, exact provenance and exceptional intervals across copy-on-write replacement',()=>{
+  const a=semantics(0,'12345678912345'),b=semantics(70000,'12345678912346',true),c=semantics(100000,'-0000012345');
+  const input=series([[0,'49382716',null,null,cell,{pointOffsetMs:1,validUntil:cell,semantics:a}],
+    [1,'98765432',null,null,cell,{pointOffsetMs:40000,validUntil:2*cell,open:'49382716',openSemantics:a,semantics:b,
+      observations:[{at:60000,value:'49382716',validUntil:70000,semantics:a},{at:70000,value:'98765432',validUntil:80000,semantics:b},{at:100000,value:'-5',validUntil:120000,semantics:c}],
+      steps:[{from:100,to:90000,amount:'1234567890123456789',evidence:'gap'}],topupSteps:[{from:90000,to:100000,amount:'1',evidence:'continuous'}]}],
+    [2,'98765432',null,null,cell,{pointOffsetMs:0,validUntil:3*cell}]]);
+  const tile=new MeterTile(0,cell);tile.merge(0,3*cell,[input]);
+  const original=tile.chunk(0,3*cell),bytes=tile.bytes;
+  assert.deepEqual(compose(original),compose([input]));
+  const copy=drain(tile.clonePrepared());
+  copy.merge(cell,2*cell,[]);
+  assert.deepEqual(tile.chunk(0,3*cell),original);assert.equal(tile.bytes,bytes);
+  assert.equal(copy.chunk(cell,2*cell).length,0);
+  assert.deepEqual(copy.chunk(2*cell,3*cell)[0].cells[0][5]?.semantics,b,'the successor retains the removed predecessor semantics');
+  for(let i=0;i<100;i++)copy.merge(cell,2*cell,[series([[0,String(i),null,null,cell,{semantics:semantics(cell+i,String(i),true)}]])]);
+  const fresh=new MeterTile(0,cell);fresh.merge(0,3*cell,copy.chunk(0,3*cell));
+  assert.ok(copy.bytes<fresh.bytes+512,'replaced metadata and nested rate references are released');
+  copy.merge(0,3*cell,[]);assert.equal(copy.bytes,0,'an empty replacement releases the whole dictionary');
+  assert.deepEqual(tile.chunk(0,3*cell),original,'discarding a staged version never releases the published dictionary');
+});
+
+test('many converted observations share rate provenance while preserving every original anchor',()=>{
+  const input=series(Array.from({length:60},(_,i)=>[i,String(100000000-i),null,null,cell,{semantics:semantics(i*cell,String(25000000000000-i)),pointOffsetMs:0,validUntil:(i+1)*cell}]));
+  const tile=new MeterTile(0,cell);tile.merge(0,60*cell,[input]);
+  assert.deepEqual(composeMeters([{from:0,meterSeries:tile.chunk(0,60*cell)}],cell,0,60*cell),composeMeters([{from:0,meterSeries:[input]}],cell,0,60*cell));
+  assert.ok(tile.bytes<80_000,'one tile retains shared metadata instead of several full copies per cell');
 });

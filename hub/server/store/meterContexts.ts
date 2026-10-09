@@ -2,10 +2,12 @@ import type {DatabaseSync} from 'node:sqlite';
 import {utcPeriods,type BalanceStatus,type KeyPart,type MeterMeasurement} from '../domain/meters.js';
 import {amount} from '../domain/amount.js';
 import {secretCode} from '../secrets/crypto.js';
+import type {CreditBalanceState} from '../domain/resources.js';
 import type {SourceState} from '../domain/quota.js';
 
 type Periods={day:string|null;week:string|null;month:string|null};
 export type MeterContextValue =
+  | ({type:'credit-balance'} & Omit<CreditBalanceState, 'at'|'staleAfterMs'>)
   | {type:'funds';isAvailable:boolean;partial:boolean;issues:BalanceStatus['issues']}
   | {type:'inventory';complete:boolean;error:string|null;keys:string[];uncapped:string[]}
   | {type:'key';id:string;unit:string|null;name:string|null;disabled:boolean;expiresAt:number|null;includeByok:boolean;createdAt:number|null;updatedAt:number|null;periodFrom:{day:number;week:number;month:number};periods:Periods;byokUsage:Periods&{total:string|null}};
@@ -23,6 +25,7 @@ export class MeterContexts {
       const state=JSON.parse(row.payload) as SourceState;
       const units=new Map((state.meters??[]).map(m=>[m.id,m.unit]));
       if(state.balanceStatus)this.funds(row.source_id,state.balanceStatus);
+      if(state.creditBalance)this.credit(row.source_id,state.creditBalance);
       for(const key of state.keys??[])this.key(row.source_id,key,units.get(`key:${key.id}:usage`)??null);
     }
   }
@@ -39,12 +42,18 @@ export class MeterContexts {
 
   observe(source:string,provider:string,measurement:MeterMeasurement,status:BalanceStatus|undefined) {
     if(status)this.funds(source,status);
+    if(measurement.creditBalance)this.credit(source,measurement.creditBalance);
     if(provider==='openrouter'||measurement.keys.length) {
       const inventoryAt=Math.max(measurement.observedAt,measurement.inventoryAt??measurement.observedAt,...measurement.keys.map(k=>k.at));
       this.record(source,'inventory',inventoryAt,measurement.staleAfterMs,{type:'inventory',complete:measurement.inventoryComplete,error:secretCode(measurement.inventoryError),keys:measurement.keys.map(k=>k.id).sort(),uncapped:[...(measurement.uncapped??[])].sort()});
     }
     const units=new Map(measurement.meters.map(m=>[m.id,m.unit]));
     for(const key of measurement.keys)this.key(source,key,units.get(`key:${key.id}:usage`)??null);
+  }
+
+  private credit(source:string, status:CreditBalanceState) {
+    const {at,staleAfterMs,...value}=status;
+    this.record(source,'credit-balance',at,staleAfterMs,{type:'credit-balance',...value});
   }
 
   private funds(source:string,status:BalanceStatus) {

@@ -19,10 +19,15 @@ export class Attention {
       invalidations.set(JSON.stringify([sourceId, windowId]), {sourceId, windowId, at});
     };
     return {
+      unavailable: (source: SourceState, at: number) => {
+        live.delete(source.id);
+        for (const window of source.windows) invalidate(source.id, window.id, at);
+        for (let i = candidates.length - 1; i >= 0; i--) if (candidates[i].sourceId === source.id) candidates.splice(i, 1);
+      },
       record: (source: SourceState, measurement: Measurement, now: number) => {
         const postStart = measurement.observedAt >= this.startedAt;
         const fresh = postStart && now - measurement.observedAt <= 60_000;
-        const observing = live.has(source.id) && fresh && source.error === null;
+        const observing = live.has(source.id) && fresh && source.error === null && (!source.resources?.windows || source.resources.windows.status === 'observed');
         for (const old of source.windows) {
           if (!measurement.windows.some(w => w.id === old.id)) invalidate(source.id, old.id, measurement.observedAt);
         }

@@ -2,14 +2,14 @@ import type {Chunk} from '../domain/history.js';
 import type {MeterSemantics} from '../domain/meters.js';
 import type {MeterObservation} from '../domain/meterHistory.js';
 import type {CurrencyStore} from '../store/currencies.js';
-import {convertBy,isCurrency,type Conversion} from '../domain/currency.js';
+import {convertBy,isConvertible,type Conversion} from '../domain/currency.js';
 
 /** Transform the already-accounted native cells; FX changes never become spending. */
 export function displayHistory(chunks:readonly Chunk[],currencies:CurrencyStore,owner:string,target:string,cell:number,nativeAt?:(source:string,meter:string,until:number)=>number|null):Chunk[] {
   const from=Math.min(...chunks.map(c=>c.from)),to=Math.max(...chunks.map(c=>c.to??c.from+((c.meterSeries??[]).reduce((n,s)=>Math.max(n,...s.cells.map(r=>r[0]+1)),0))*cell));
   const bindings=currencies.history(owner,target,from,to);
   const result=chunks.map(chunk=>({...chunk,meterSeries:chunk.meterSeries?.map(series=>{
-    if(!isCurrency(series.unit))return series;
+    if(!isConvertible(series.unit))return series;
     let semantics=series.semantics,previousMetadata='null';
     type Presented={amount:string;metadata:MeterSemantics|null;encoded:string;convert:(amount:string)=>string};
     const views=new Map<MeterSemantics|null,Map<string,Presented>>();
@@ -20,17 +20,17 @@ export function displayHistory(chunks:readonly Chunk[],currencies:CurrencyStore,
       const observed=quoteAt===reportedAt||quoteAt===proof?.original.at||quoteAt===boundAt;
       const path=bindings.binding(series.source,series.unit,quoteAt,anchor,observed);if(!path)return null;
       const amounts=new Map<string,string>();
-      const convert=(amount:string)=>{const cached=amounts.get(amount);if(cached!==undefined)return cached;const result=convertBy(amount,path);amounts.set(amount,result);return result;};
+      const convert=(amount:string)=>{const cached=amounts.get(amount);if(cached!==undefined)return cached;const result=convertBy(amount,path,input?.scale);amounts.set(amount,result);return result;};
       let amount=convert(value),conversion:Conversion|undefined,original=false;
-      if(proof&&convertBy(proof.original.amount,proof.steps??[proof.rate])===value) {
+      if(proof&&convertBy(proof.original.amount,proof.steps??[proof.rate],proof.original.scale)===value) {
         const rootPath=bindings.binding(series.source,proof.original.unit,quoteAt,proof.rate.id,observed);
         if(rootPath) {
-          original=true;amount=convertBy(proof.original.amount,rootPath);
+          original=true;amount=convertBy(proof.original.amount,rootPath,proof.original.scale);
           if(rootPath.length)conversion={original:{...proof.original,at:quoteAt},rate:rootPath.at(-1)!,...(rootPath.length>1?{steps:rootPath}:{})};
         }
       }
-      if(!original&&path.length)conversion={original:{meterId:series.meter,amount:value,unit:series.unit,at:quoteAt},rate:path.at(-1)!,...(path.length>1?{steps:path}:{})};
-      const metadata:MeterSemantics|null=input?{...input,limit:input.limit===null?null:convert(input.limit),...(conversion?{conversion}:{conversion:undefined})}:null;
+      if(!original&&path.length)conversion={original:{meterId:series.meter,amount:value,unit:series.unit,at:quoteAt,...(input?.scale===undefined?{}:{scale:input.scale})},rate:path.at(-1)!,...(path.length>1?{steps:path}:{})};
+      const metadata:MeterSemantics|null=input?{...input,...(input.scale===undefined?{}:{scale:6}),limit:input.limit===null?null:convert(input.limit),...(conversion?{conversion}:{conversion:undefined})}:null;
       const shown={amount,metadata,encoded:JSON.stringify(metadata),convert};
       let saved=views.get(input);if(!saved)views.set(input,(saved=new Map()));saved.set(key,shown);return shown;
     };

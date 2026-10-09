@@ -16,17 +16,18 @@ export function seedPanningBudgets(file:string,stand:Stand) {
   const store=new Store(file),directory=new Directory(store.db),owner=[...stand.people.values()][0],now=stand.start;
   try {
     store.db.exec('BEGIN');
-    for(let index=0;index<12;index++) {
-      const source=store.source('openrouter',`benchmark-wallet-${index}`,now-75*DAY);
+    for(let index=0;index<24;index++) {
+      const source=store.source(index>=12?'codex':'openrouter',`benchmark-wallet-${index}`,now-75*DAY);
       store.hold(source,owner.id,now-75*DAY);
       for(let at=now-75*DAY;at<=now;at+=3*3_600_000) {
         const elapsed=Math.floor((at-(now-75*DAY))/(3*3_600_000));
         const base={at,staleAfterMs:6*3_600_000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null};
         const meters:Meter[]=[{...base,id:'credits',kind:'counter',unit:'USD',amount:String((2000+index*10)*1_000_000)},
           {...base,id:'usage',kind:'counter',unit:'USD',amount:String((elapsed+index)*100_000)}];
-        store.record(source,{type:'meters',observedAt:at,staleAfterMs:6*3_600_000,meters,keys:[],inventoryComplete:true,inventoryError:null});
+        if(index>=12)store.record(source,{observedAt:at,staleAfterMs:6*3_600_000,plan:'pro',resets:null,windows:[],balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount:String(2500+index*10-elapsed)}]});
+        else store.record(source,{type:'meters',observedAt:at,staleAfterMs:6*3_600_000,meters,keys:[],inventoryComplete:true,inventoryError:null});
       }
-      const view=directory.view(owner.personalBoard);view.names[source]=`Budget ${index+1}`;directory.saveView(owner.personalBoard,view,owner.id,now);
+      const view=directory.view(owner.personalBoard);view.names[source]=index>=12?`Subscription funds ${index-11}`:`Budget ${index+1}`;directory.saveView(owner.personalBoard,view,owner.id,now);
     }
     store.db.exec('COMMIT');
   }catch(error){store.db.exec('ROLLBACK');throw error;}finally{store.close();}

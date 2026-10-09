@@ -184,6 +184,48 @@ pub struct Snapshot {
     /// Free resets of the limits the account holds, when the client reports them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets: Option<Resets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_status: Option<ResourceStatuses>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balances: Option<Vec<CreditBalance>>,
+}
+
+/// Independent observations do not make retained values fresh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceStatus {
+    Observed,
+    Missing,
+    Unsupported,
+    Invalid,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceStatuses {
+    pub windows: ResourceStatus,
+    pub resets: ResourceStatus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BalanceStatus {
+    Finite,
+    Unlimited,
+    Missing,
+    Unsupported,
+    Invalid,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreditBalance {
+    pub id: String,
+    pub unit: String,
+    pub status: BalanceStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_credits: Option<bool>,
 }
 
 /// Free resets of the plan's limits (providers grant them now and then): how many can be
@@ -436,6 +478,8 @@ mod tests {
                 window("spark", Some(0), Some(" Spark ")),
             ],
             resets: Some(Resets::new(5_000, (0..60).map(|i| (100, Some(i))))),
+            resource_status: None,
+            balances: None,
         };
         snapshot.tidy();
         assert_eq!((snapshot.account_name, snapshot.client), (None, None));
@@ -463,6 +507,8 @@ mod tests {
             windows: vec![Window::new("weekly", Some(WEEK_MINUTES), None, 10.0, None)],
             // Every one within how many there are, but a group for each.
             resets: Some(Resets::new(60, (0..60).map(|i| (1, Some(i))))),
+            resource_status: None,
+            balances: None,
         };
         snapshot.tidy();
         let expiring = snapshot.resets.unwrap().expiring;
@@ -485,6 +531,8 @@ mod tests {
             stale_after_ms: 300_000,
             windows: vec![Window::new("weekly", Some(WEEK_MINUTES), None, 8.0, Some(ms))],
             resets: Some(Resets::new(3, [(1, Some(ms)), (1, None)])),
+            resource_status: None,
+            balances: None,
         };
         let json = serde_json::to_value(&snapshot).unwrap();
         assert_eq!(json["observedAt"], "2026-09-22T20:20:00.77Z");

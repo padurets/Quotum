@@ -55,7 +55,7 @@ export type Stand = {
 const BATCH = 500;
 
 /** How long a still stand's last measurements hold from its start: longer than any run of the benchmark. */
-const STILL_FOR = 3 * HOUR;
+export const STILL_FOR = 3 * HOUR;
 
 /**
  * Brings a set up on a fresh hub through its public requests, as people and agents would:

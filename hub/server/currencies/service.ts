@@ -1,6 +1,6 @@
 import type {Store} from '../store/store.js';
 import {balanceDescriptor,monetaryOf} from '../domain/providers.js';
-import {DEFAULT_CURRENCY,isCurrency,ratesCover,type RateSnapshot} from '../domain/currency.js';
+import {DEFAULT_CURRENCY,isCurrency,isConvertible,ratesCover,type RateSnapshot} from '../domain/currency.js';
 import type {Meter} from '../domain/meters.js';
 import {DEFAULT_RATE_SOURCE,rateSources,type RatesReader} from './sources.js';
 
@@ -16,9 +16,9 @@ export class Currencies {
   constructor(private readonly store:Store,private readonly read:RatesReader=rateSources.get(DEFAULT_RATE_SOURCE)!,private readonly now=Date.now){}
   start() {
     if(this.running)return;this.running=true;
-    this.unsubscribe=this.store.onMonetaryRecord(source=>{
+    this.unsubscribe=this.store.onMonetaryRecord((source,state)=>{
       // Capture every accepted anchor before deferred reference fetching can coalesce reports.
-      const points=(this.store.state(source).meters??[]).map(m=>({unit:m.unit,at:m.at}));
+      const points=(state.meters??[]).map(m=>({unit:m.unit,at:m.at}));
       for(const owner of this.store.currencyReaders(source))this.store.currencies.context(owner,{[source]:points});
       this.schedule(source);
     });
@@ -67,7 +67,7 @@ export class Currencies {
     if(!this.running)return;
     const initial=this.family(source);if(!initial)return;
     const readers=this.store.currencyReaders(source),points=initial.state.meters??[];
-    const needsRates=readers.some(owner=>points.some(m=>isCurrency(m.unit)&&!this.store.currencies.binding(owner,m.unit,this.store.currencies.preference(owner).id,m.at,null,source)));
+    const needsRates=readers.some(owner=>points.some(m=>isConvertible(m.unit)&&!this.store.currencies.binding(owner,m.unit,this.store.currencies.preference(owner).id,m.at,null,source)));
     if(needsRates)await this.rates();
     let quote=initial.meters.length?this.store.currencies.latest(initial.meters[0].at):null;
     if(initial.meters.length&&(!quote||this.now()-this.store.currencies.checked()>=12*3_600_000))await this.rates();

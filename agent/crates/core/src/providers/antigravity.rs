@@ -188,6 +188,8 @@ pub fn from_output(output: &str, observed_at: Millis) -> Outcome {
         stale_after_ms: 0,
         windows,
         resets: None,
+        resource_status: None,
+        balances: None,
     })
 }
 

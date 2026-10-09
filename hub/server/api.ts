@@ -121,7 +121,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
     if (request.method === 'GET' || request.method === 'HEAD') return;
     const path = request.url.split('?')[0];
     const api = path.startsWith('/api/');
-    const allowed = (request.method === 'POST' && (api || path.startsWith('/v1/'))) || (request.method === 'DELETE' && api);
+    const allowed = (request.method === 'POST' && (api || path.startsWith('/v1/'))) || ((request.method === 'DELETE' || request.method === 'PUT') && api);
     if (!allowed) return reply.code(405).send({error: 'method_not_allowed'});
     // Cookie-authenticated changes are accepted only from pages of this hub.
     const origin = request.headers.origin;
@@ -201,6 +201,8 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
       try {meters=selectionOf(JSON.parse(request.query.meters??''),request.query.unit);} catch {return reply.code(400).send({error:'invalid_request'});}
       // A shared hidden source is not a history capability, even when its id is known.
       if (meters.ids.some(([source])=>!shown.has(source))) return reply.code(404).send({error:'not_found'});
+      const financial=new Map(store.sources(board).map(s=>[s.id,s]));
+      if(meters.ids.some(([source,id])=>{const s=financial.get(source);return s?.budget?.enabled===false && budgetMeter(providerOf(s.provider),id);} ))return reply.code(404).send({error:'not_found'});
       if(request.query.currency!==undefined)meters={...meters,nativeCurrencies:true};
     }
     if(scope==='budget'&&!meters || scope==='quota'&&request.query.currency!==undefined)return reply.code(400).send({error:'invalid_request'});
@@ -217,9 +219,10 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
       try {store.currencies.definition(access.user.id,request.query.currency);}catch{return reply.code(404).send({error:'currency_not_found'});}
       if(store.currencies.preference(access.user.id).id!==request.query.currency)return reply.code(409).send({error:'currency_changed'});
       const observed=new Map<string,number[]>();
+      const grants=new Map(store.sources(board).map(s=>[s.id,s.provider==='codex'?s.budget?.anchor??Infinity:0]));
       const transformed=displayHistory(chunks.map(json=>JSON.parse(json) as Chunk),store.currencies,access.user.id,request.query.currency,cell,(source,meter,until)=>{
         const id=meter==='balance'?'usage':meter,key=source+'\n'+id;let times=observed.get(key);
-        if(!times){const rows=store.meters.readings(source,id,from,to),spans=store.meters.spans(source,id,from,to);times=[...rows.map(r=>r.at),...spans.map(s=>s.to)].sort((a,b)=>a-b);observed.set(key,times);}
+        if(!times){const rows=store.meters.readings(source,id,from,to),spans=store.meters.spans(source,id,from,to);times=[...rows.map(r=>r.at),...spans.flatMap(s=>id==='balance:credits'?[s.from,s.to]:[s.to])].filter(at=>at>=(grants.get(source)??Infinity)).sort((a,b)=>a-b);observed.set(key,times);}
         let low=0,high=times.length;while(low<high){const middle=(low+high)>>>1;if(times[middle]<=until)low=middle+1;else high=middle;}return low?times[low-1]:null;
       });
       chunks=transformed.map(chunk=>JSON.stringify(chunk));

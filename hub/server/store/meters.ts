@@ -8,7 +8,7 @@ import {meterCells, type MeterGroup, type MeterSelection, type MeterSeriesCells}
 import type {CurrencyStore} from './currencies.js';
 import {conversionOrigin} from '../domain/currency.js';
 
-type ReadingRow = {meter_id: string; at: bigint; previous_at: bigint | null; kind: Meter['kind']; unit: string; amount: bigint; limit_amount: bigint | null; reset_at: bigint | null; minutes: bigint | null; scope: string | null; label: string | null; stale_after_ms: bigint};
+type ReadingRow = {meter_id: string; at: bigint; previous_at: bigint | null; kind: Meter['kind']; unit: string; amount: bigint; amount_scale: bigint; limit_amount: bigint | null; reset_at: bigint | null; minutes: bigint | null; scope: string | null; label: string | null; stale_after_ms: bigint};
 const numberOf = (value: bigint | null) => value === null ? null : Number(value);
 const keyMeter = (id: string) => /^key:([0-9a-f]{12}):(?:usage|cap)$/.exec(id)?.[1] ?? null;
 
@@ -22,7 +22,7 @@ export class MeterStore {
     const ids = new Set<string>();
     const keyTimes = new Map(measurement.keys.map(key => [key.id, key.at]));
     let since = Infinity;
-    if(measurement.balanceStatus)for(const old of previous.meters??[])if(balanceDescriptor(previous.provider,old.id)&&!measurement.meters.some(m=>m.id===old.id)) {
+    if(measurement.balanceStatus || measurement.creditBalance)for(const old of previous.meters??[])if(balanceDescriptor(previous.provider,old.id)&&!measurement.meters.some(m=>m.id===old.id)) {
       const result=this.db.prepare('UPDATE meter_spans SET interrupted_at=? WHERE source_id=? AND meter_id=? AND interrupted_at IS NULL AND from_at=(SELECT max(from_at) FROM meter_spans WHERE source_id=? AND meter_id=?)').run(measurement.observedAt,source,old.id,source,old.id);
       if(result.changes){since=Math.min(since,measurement.observedAt);}
     }
@@ -35,10 +35,12 @@ export class MeterStore {
       const old = current.get(meter.id);
       if (old && old.at >= meter.at) continue;
       const last = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source, meter.id) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null;hold_until:number|null} | undefined;
-      if (!old || !sameMeter(old, meter)) {
-        this.db.prepare('INSERT INTO readings (source_id,meter_id,at,previous_at,kind,unit,amount,limit_amount,reset_at,minutes,scope,label,stale_after_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
-          .run(source, meter.id, meter.at, old?.at ?? last?.to_at ?? null, meter.kind, meter.unit, amount(meter.amount), meter.limit === null ? null : amount(meter.limit), meter.resetAt, meter.minutes, meter.scope, meter.label, meter.staleAfterMs);
+      const admission = previous.provider === 'codex' && meter.id === 'balance:credits' && !!this.db.prepare('SELECT 1 FROM shares WHERE source_id=? AND budget_anchor_at IS NULL AND budget_since<=? LIMIT 1').get(source, meter.at);
+      if (!old || !sameMeter(old, meter) || admission) {
+        this.db.prepare('INSERT INTO readings (source_id,meter_id,at,previous_at,kind,unit,amount,limit_amount,reset_at,minutes,scope,label,stale_after_ms,amount_scale) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .run(source, meter.id, meter.at, old?.at ?? last?.to_at ?? null, meter.kind, meter.unit, amount(meter.amount), meter.limit === null ? null : amount(meter.limit), meter.resetAt, meter.minutes, meter.scope, meter.label, meter.staleAfterMs, meter.scale ?? 6);
       }
+      if (admission) this.db.prepare('UPDATE shares SET budget_anchor_at=? WHERE source_id=? AND budget_anchor_at IS NULL AND budget_since<=?').run(meter.at, source, meter.at);
       if (last && last.interrupted_at===null && last.hold_until===null && old && meter.at - last.to_at <= last.stale_after_ms && old.kind === meter.kind && old.unit === meter.unit) {
         this.db.prepare('UPDATE meter_spans SET to_at=?,stale_after_ms=? WHERE source_id=? AND meter_id=? AND from_at=?').run(meter.at, meter.staleAfterMs, source, meter.id, last.from_at);
       } else this.db.prepare('INSERT INTO meter_spans (source_id,meter_id,from_at,to_at,stale_after_ms) VALUES (?,?,?,?,?)').run(source, meter.id, meter.at, meter.at, meter.staleAfterMs);
@@ -72,15 +74,16 @@ export class MeterStore {
     const balanceStatus=balanceStatusOf(previous.provider,previous.meters??[],measurement);
     this.contexts.observe(source,previous.provider,measurement,balanceStatus);
     const state: SourceState = {
-      ...previous, windows: [], resets: null,
+      ...previous,
       ...(measurement.plan !== undefined ? {plan: measurement.plan} : {}),
       ...(measurement.quota ? {quota: measurement.quota} : {}),
-      successAt: accountSuccess ? measurement.observedAt : previous.successAt,
-      staleAfterMs: accountSuccess ? measurement.staleAfterMs : previous.staleAfterMs,
-      error: accountSuccess||balanceStatus ? null : previous.error,
+      successAt: accountSuccess && previous.provider !== 'codex' ? measurement.observedAt : previous.successAt,
+      staleAfterMs: accountSuccess && previous.provider !== 'codex' ? measurement.staleAfterMs : previous.staleAfterMs,
+      error: previous.provider === 'codex' ? previous.error : accountSuccess||balanceStatus ? null : previous.error,
+      ...(measurement.creditBalance ? {creditBalance:measurement.creditBalance} : {}),
       ...(balanceStatus?{balanceStatus}:{}),
       meters: [...current.values()], keys: [...keys.values()].sort((a,b) => (a.name ?? '').localeCompare(b.name ?? '') || a.id.localeCompare(b.id)),
-      ...(measurement.quota ? {} : {inventory: {complete: measurement.inventoryComplete, observed: observed.size, missing: [...keys.values()].filter(k => k.presence === 'missing').length, error: measurement.inventoryError}}),
+      ...(measurement.quota || previous.provider === 'codex' ? {} : {inventory: {complete: measurement.inventoryComplete, observed: observed.size, missing: [...keys.values()].filter(k => k.presence === 'missing').length, error: measurement.inventoryError}}),
     };
     this.db.prepare('INSERT OR REPLACE INTO state VALUES (?,?)').run(source, JSON.stringify(state));
     return {state, since:Number.isFinite(since)?since:null};
@@ -102,7 +105,7 @@ export class MeterStore {
   readings(source: string, meter: string, from: number, to: number): Reading[] {
     const query = this.db.prepare('SELECT * FROM readings WHERE source_id=? AND meter_id=? AND at<? AND at>=coalesce((SELECT max(at) FROM readings WHERE source_id=? AND meter_id=? AND at<?),?) ORDER BY at');
     query.setReadBigInts(true);
-    return (query.all(source, meter, to, source, meter, from, from) as ReadingRow[]).map(r => ({id: r.meter_id, at: Number(r.at), previousAt: numberOf(r.previous_at), kind: r.kind, unit: r.unit, amount: r.amount.toString(), limit: r.limit_amount?.toString() ?? null, resetAt: numberOf(r.reset_at), minutes: numberOf(r.minutes), scope: r.scope, label: r.label, staleAfterMs: Number(r.stale_after_ms)}));
+    return (query.all(source, meter, to, source, meter, from, from) as ReadingRow[]).map(r => ({id: r.meter_id, at: Number(r.at), previousAt: numberOf(r.previous_at), kind: r.kind, unit: r.unit, amount: r.amount.toString(), ...(r.unit === 'credits:codex' ? {scale:Number(r.amount_scale)} : {}), limit: r.limit_amount?.toString() ?? null, resetAt: numberOf(r.reset_at), minutes: numberOf(r.minutes), scope: r.scope, label: r.label, staleAfterMs: Number(r.stale_after_ms)}));
   }
 
   spans(source: string, meter: string, from: number, to: number): MeterSpan[] {
@@ -145,7 +148,7 @@ export class MeterStore {
     // current meter has been archived and its changed reading is much older.
     changed = this.db.prepare('DELETE FROM meter_spans WHERE min(coalesce(interrupted_at,9223372036854775807),coalesce(hold_until,9223372036854775807),to_at+stale_after_ms+1)<=? AND from_at<(SELECT max(from_at) FROM meter_spans s WHERE s.source_id=meter_spans.source_id AND s.meter_id=meter_spans.meter_id)').run(cutoff).changes > 0 || changed;
     // Preserve a crossing span's continuity without making its old head visible.
-    changed = this.db.prepare('UPDATE meter_spans SET from_at=? WHERE from_at<? AND to_at>=?').run(cutoff, cutoff, cutoff).changes > 0 || changed;
+    changed = this.db.prepare("UPDATE meter_spans SET from_at=? WHERE from_at<? AND to_at>=? AND meter_id<>'balance:credits'").run(cutoff, cutoff, cutoff).changes > 0 || changed;
     return changed;
   }
 }

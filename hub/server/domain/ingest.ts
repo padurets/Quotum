@@ -1,6 +1,8 @@
 import {providers, type Provider} from './sources.js';
 import {providerOf, type ClientProvider} from './providers.js';
 import type {FreeResets, Kind, WindowMeasurement, Win} from './quota.js';
+import {exactDecimal, scalarDecimal} from './amount.js';
+import type {CreditBalance, ResourceStatuses} from './resources.js';
 
 /** Clocks within this of the hub's are taken as they are; beyond it, agent times are shifted. */
 export {CLOCK_TOLERANCE_MS} from './history.js';
@@ -30,6 +32,8 @@ export type AgentSnapshot = {
   staleAfterMs: number;
   windows: AgentWindow[];
   resets: FreeResets | null;
+  resourceStatus?: ResourceStatuses;
+  balances?: CreditBalance[];
 };
 
 export type AgentFailure = {provider: ClientProvider; observedAt: number; error: string; detail: string | null};
@@ -151,10 +155,36 @@ function parseSnapshot(value: unknown): AgentSnapshot {
   const stale = value.staleAfterMs;
   if (!Number.isInteger(stale) || (stale as number) <= 0 || (stale as number) > LIMITS.staleAfterMs) throw new Invalid('staleAfterMs');
   const windows = list(value.windows, 'windows', LIMITS.windows).map(parseWindow);
-  if (!windows.length) throw new Invalid('windows');
+  const providerId = provider(value.provider) as ClientProvider, identity = account(value.account);
+  const resets = parseResets(value.resets);
+  let resourceStatus: ResourceStatuses | undefined, balances: CreditBalance[] | undefined;
+  if (value.resourceStatus !== undefined) {
+    const statuses = value.resourceStatus;
+    if (providerId !== 'codex' || !identity || !isObject(statuses) ||
+      (typeof statuses.windows !== 'string' || !['observed','missing','unsupported','invalid'].includes(statuses.windows)) ||
+      (typeof statuses.resets !== 'string' || !['observed','missing','unsupported','invalid'].includes(statuses.resets))) throw new Invalid('resourceStatus');
+    resourceStatus = statuses as ResourceStatuses;
+    if ((statuses.windows === 'observed') !== (windows.length > 0) || (statuses.resets === 'observed') !== (resets !== null)) throw new Invalid('resourceStatus');
+  }
+  if (!windows.length && !resourceStatus) throw new Invalid('windows');
+  if (value.balances !== undefined) {
+    if (providerId !== 'codex' || !identity || !Array.isArray(value.balances) || value.balances.length > 1) throw new Invalid('balances');
+    balances = value.balances.map((balance): CreditBalance => {
+      if (!isObject(balance) || balance.id !== 'balance:credits' || balance.unit !== 'credits:codex' ||
+        (typeof balance.status !== 'string' || !['finite','unlimited','missing','unsupported','invalid'].includes(balance.status)) ||
+        (balance.hasCredits !== undefined && typeof balance.hasCredits !== 'boolean')) throw new Invalid('balances');
+      let amount: string | undefined;
+      if (balance.status === 'finite') {
+        if (typeof balance.amount !== 'string') throw new Invalid('balance amount');
+        try {amount = scalarDecimal(exactDecimal(balance.amount));} catch {throw new Invalid('balance amount');}
+      } else if (balance.amount !== undefined) throw new Invalid('balance amount');
+      return {id:'balance:credits', unit:'credits:codex', status:balance.status as CreditBalance['status'],
+        ...(amount === undefined ? {} : {amount}), ...(balance.hasCredits === undefined ? {} : {hasCredits:balance.hasCredits as boolean})};
+    });
+  }
   return {
-    provider: provider(value.provider) as ClientProvider,
-    account: account(value.account),
+    provider: providerId,
+    account: identity,
     accountName: text(value.accountName, 'accountName', true),
     plan: text(value.plan, 'plan', true),
     observedAt: time(value.observedAt, 'observedAt')!,
@@ -162,7 +192,9 @@ function parseSnapshot(value: unknown): AgentSnapshot {
     client: text(value.client, 'client', true),
     staleAfterMs: stale as number,
     windows,
-    resets: parseResets(value.resets),
+    resets,
+    ...(resourceStatus ? {resourceStatus} : {}),
+    ...(balances ? {balances} : {}),
   };
 }
 
@@ -267,7 +299,8 @@ export function toMeasurement(snapshot: AgentSnapshot): WindowMeasurement {
     resetAt: w.resetsAt,
     minutes: w.minutes,
   }));
-  return {observedAt: snapshot.observedAt, plan: snapshot.plan ?? '', windows, staleAfterMs: snapshot.staleAfterMs, resets: snapshot.resets};
+  return {observedAt: snapshot.observedAt, plan: snapshot.plan ?? '', windows, staleAfterMs: snapshot.staleAfterMs, resets: snapshot.resets,
+    ...(snapshot.resourceStatus ? {resourceStatus:snapshot.resourceStatus} : {}), ...(snapshot.balances ? {balances:snapshot.balances} : {})};
 }
 
 /** Where an agent's session runs (spec: Reporting running agents). */

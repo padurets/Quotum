@@ -82,7 +82,7 @@ only the board owner may show another member's hidden card or add a standard wid
 `{kind:"sources", sourceIds:[...]}`, `{kind:"widget", widgetId}`,
 `{kind:"connection", provider, account?: {kind:"new"} | {kind:"existing", id}}`, or `{kind:"replace", credentialId}`.
 Source selections contain one to 100 unique IDs. Standard widgets are `agents`,
-`activity`, `quota-history`, `budget-history`, `quota-table`, `budget-table`. Replacement is personal; the server captures its
+`activity`, `quota-history`, `subscription-funds`, `budget-history`, `quota-table`, `budget-table`. Replacement is personal; the server captures its
 provider, source and access revision. Reusing a request ID with another destination or
 selection returns `409 addition_conflict`. No secret goes into reservation or storage.
 
@@ -142,8 +142,10 @@ is `409 view_conflict` with the authorized current `{view, revision}`.
 Success returns `{view, revision}`. Semantic changes increment revision; no-op saves
 do not. Snapshots and view events carry that revision.
 
-The standard widgets are `agents`, `activity`, `quota-history`, `budget-history`,
-`quota-table` and `budget-table`. Each analytics replacement in `shown` is placed;
+The standard widgets are `agents`, `activity`, `quota-history`, `subscription-funds`, `budget-history`,
+`quota-table` and `budget-table`. `subscription-funds` shows additional balances of
+subscriptions. The budget pair shows wallets only. These widgets share monetary
+history transport but keep independent selections and visibility. Each analytics replacement in `shown` is placed;
 `hidden` takes precedence. Unplaced analytics become placed once their resource
 capabilities appear, independently of filters, latest errors or zero balances. Placed
 widgets remain when resources leave. `enabledWhenEmpty` applies only to explicit
@@ -396,7 +398,7 @@ type Chunk = {
   series: {
     source: string; window: string; hold: number; open: number | null;
     cells: [index: number, low: number, spent: number, covered: number, extra?: {
-      f?: number; l?: number; o?: number | null; g?: 1; h?: number;
+      f?: number; l?: number; o?: number | null; g?: 1; h?: number; u?: number;
       w?: [spent: number, covered: number, duringWork: number];
     }][];
   }[];
@@ -439,7 +441,17 @@ Only differences from these decoded defaults are written:
 | `open` (`o`) | series `open` in its first measured cell, then the preceding measured cell's `last` |
 | break (`g`) | 0 |
 | `hold` (`h`) | series `hold` |
+| availability end (`u`) | no explicit bound; an exclusive Unix-millisecond cutoff after an unavailable quota observation, limited by the sample's own freshness end |
 | work (`w`) | `[spent, 0, 0]` at or after the subscription's known threshold, `[0, 0, 0]` before |
+
+A reported availability end limits drawing and readout without changing the original
+measurement's freshness promise. A bounded readout uses the precise pointer timestamp
+against that sample's deadline, not a later sample's freshness promise. Recovery begins
+a new segment: neither spending nor forecast evidence crosses an explicit unavailable
+observation. An aggregate cell recovering after an unavailable start is unavailable for
+drawing and readout (`g=1`, `u=cell start`), even if the gap began in an earlier cell.
+Recovery exactly at a cell boundary starts an ordinary new cell. Spending totals still
+include only proven steps; the aggregate does not invent intra-cell sample positions.
 
 A field is omitted only when its rounded value equals the decoded default. `f` is
 omitted while `open` is not null. The subscription's known threshold is
@@ -634,9 +646,10 @@ Both resource types use the same segmented meter; balances have no percentage me
 
 A hub-measured card may also carry `meters`, `keys` (a preview of at most five),
 `keysCount`, `inventory` and `spending`. A meter is `{id, kind, unit, amount, limit,
-resetAt, minutes, scope, label, at, staleAfterMs, stale}`. Kind is `counter`, `balance`
+resetAt, minutes, scope, label, at, staleAfterMs, stale, scale?}`. Kind is `counter`, `balance`
 or `cap`; a cap's amount is used, its remaining is limit minus amount. A zero limit
-has no percentage. All unit-valued amount fields are canonical decimal strings of whole millionths,
+has no percentage. Unless an explicit scale is present (native Codex credits),
+unit-valued amount fields are canonical decimal strings of whole millionths,
 quantized once from the supplier's original decimal token, with nearest rounding and
 halfway values away from zero. They use signed 64-bit SQLite integers; totals use exact
 integer arithmetic and never combine units. A balance has no 100%.
@@ -1117,3 +1130,70 @@ their source changes; they never poll. Membership and source visibility still ap
 Chart settings show current and selected archived keys through the same pages of at
 most ten keys. Selected current keys on other pages are not duplicated. An open page
 reloads after a successful source measurement.
+
+## Mixed Codex subscription and credit balance
+
+Codex keeps one source/card with independent quota, reset and financial observations.
+Authorized cards add `creditBalance: {id, unit, status, hasCredits?, at, staleAfterMs}`,
+`resources: {windows?, resets?}` (each `{status, at, staleAfterMs}`; resets also retain `valueAt` and `valueStaleAfterMs` for the last reported count), and a native
+`balance:credits` meter in `credits:codex`. Its `amount` is an exact signed integer
+coefficient with per-value `scale` (0–18); absent scale means 6 for existing money.
+Meter semantics and history retain scale; composed summaries carry `startScale` and
+`endScale`. Conversion originals retain amount, scale and actual observation time.
+Packed observation cells preserve all exclusive gaps and scale changes, including
+within one cell. Retention and a requested crop do not change a sample's origin.
+
+`budget: {enabled, since, anchor, revision}` describes financial authority on a board.
+Personal boards allow it. Shared Codex sources default to disabled; existing wallet
+providers retain complete historical access (`since=anchor=0`). Disabled finance
+removes amounts, credit statuses, flags, histories and currency bindings from every
+board projection and event. Quotas and free resets remain visible. `GET /api/boards/:board/shares`
+includes `budget`; a member who holds the source may use
+`PUT /api/boards/:board/shares/:source/budget` with `{enabled, expectedRevision}`.
+A stale revision returns 409 `share_conflict`; repeating the current desired state
+with the current revision is a no-op. Board ownership alone cannot grant funds.
+Enablement sets `since` and clears `anchor`; the first accepted finite observation
+at or after it stores the anchor and one durable reading even for an unchanged value.
+Current last-known funds may predate consent and keep their actual timestamp, but
+history admits no earlier evidence. Re-enabling starts over. Source addition items
+may include `includeBudget: [sourceId, ...]`, a frozen, explicit subset of the selected
+Codex sources included in the request's idempotency identity. Device selection alone
+never grants financial access.
+
+Native history cache identity includes the financial revision, cutoff and anchor.
+Clients include those fields in their selection generation and discard revoked data
+and late responses. Both scoped and legacy history endpoints enforce the same authority
+before currency conversion, without substituting crop boundaries for admission.
+Before delivering a prepared batch, the hub rechecks its financial authority. A
+mismatch rebuilds the current snapshot, including the reader's currency context.
+Poll leases also retain the authority of their last delivered dataset: an intervening
+grant revision discards undelivered frames and returns a fresh snapshot, including
+after a disable/re-enable cycle. Normal SSE updates keep the delta protocol; current
+card grant metadata changes the client's financial history generation. Financial
+invalidations exclude disabled or unadmitted grants and cannot precede the current
+admission anchor.
+
+`credits:codex` is an immutable builtin currency definition with `kind: provider-credit`.
+It is convertible but cannot be selected as a display currency and uses none of the 64
+personal definition slots. Currency management includes `builtins`. Its public immutable
+`codex-default` quote is based on credits, dated 0 with unlimited validity, and has
+rates `credits:codex=1000000`, `USD=40000`: one credit is estimated at 0.04 USD.
+It is independent of the latest public FX quote and requires no network request.
+The existing rate endpoint accepts `direction: basePerUnit` for an exact USD-per-credit
+personal override; omitted direction retains the legacy `unitPerBase` contract.
+Builtin updates require the ordinary revision and request receipt. A POST to
+`/api/currencies/credits:codex/rates/default` appends a default-restoration event,
+preserving old overrides and successful observation bindings. Overrides are private.
+
+Valuation uses an existing binding first, otherwise exactly one current credit/USD
+rate followed by the shared USD/display path (at most three legs), with one final
+rounding. USD selection follows this contract too. There is no synthetic USD meter
+for Codex: subscription-funds analytics select the native meter and request `currency=USD`
+when appropriate. Provider history and spending do not change with exchange rates.
+Cards and compact rows show Additional funds in the subscription footer beside free
+resets, using the shared money renderer; unlimited, missing, unsupported, invalid, stale
+and confirmed zero remain distinct. Hovering shows the exact native balance; the
+disclosure adds the timestamp and rate provenance. A stale amount stays visible in
+the warning colour as the last known balance. Subscription extra funds trends shows
+credit history separately from wallet budgets. Spending and top-ups are unavailable
+for credits, and quota analytics remain percentage-based.

@@ -292,7 +292,9 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   assert.equal((await call('POST', `/api/boards/${team}/shares`, {as: 'bob', body: {source}})).status, 200);
   const shared = (await call('GET', `/api/overview?board=${team}`, {as: 'alice'})).body;
   assert.deepEqual(shared.sources.map((s: any) => [s.id, s.owners]), [[source, ['Bob']]]);
-  assert.deepEqual((await call('GET', `/api/boards/${team}/shares`, {as: 'alice'})).body.shared, [{source, provider: 'codex', sharedBy: 'Bob', mine: false}]);
+  const shares=(await call('GET', `/api/boards/${team}/shares`, {as: 'alice'})).body.shared;
+  assert.deepEqual(shares.map(({budget,...share}:any)=>share), [{source, provider: 'codex', sharedBy: 'Bob', mine: false}]);
+  assert.equal(shares[0].budget.enabled,false);
 
   store.db.prepare('INSERT OR REPLACE INTO views (board_id,payload,updated_by,updated_at) VALUES (?, ?, ?, ?)').run(team, JSON.stringify(migrateAnalytics({order: ['history'], sizes: {history: 3}},store.sources(team))), 'alice', Date.now());
   const old = (await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view;

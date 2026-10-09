@@ -1,8 +1,16 @@
 import {hourShift} from '../server/forecasts.js';
 import type {Snapshot} from '../server/projection.js';
 import {FADE_FOR, PULSE_FOR} from '../ui/lib/quota.js';
+import {snapshot, type Card} from '../demo/model.js';
+import {STILL_FOR} from '../demo/setup.js';
 
 const HOUR = 3_600_000;
+
+/** Later measurements keep the seeded still stand's deadline, so they cannot expire in another phase. */
+export function stillSnapshot(card: Card, start: number, observedAt: number) {
+  const t = observedAt - start;
+  return {...snapshot(card, start, t, STILL_FOR), staleAfterMs: STILL_FOR - t};
+}
 
 /**
  * What the benchmark reads of a card to tell whether the board stands still, with its
