@@ -191,12 +191,21 @@ export class Store {
     const names = this.db.prepare(WORK_NAMES).get(people, sources, people, sources) as {names: string};
     const owner = this.privateOwner(board);
     const privateNames = owner === null ? null : this.db.prepare(
-      "SELECT json_group_array(json(value)) AS names FROM (" +
-      "SELECT json_array(d.id,COALESCE(d.label,d.name),s.project,n.name) AS value FROM devices d JOIN agent_sessions s ON s.device_id=d.id" +
-      " LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project WHERE d.user_id=? AND (s.source_id IS NULL OR NOT EXISTS(SELECT 1 FROM holders h WHERE h.user_id=d.user_id AND h.source_id=s.source_id)) GROUP BY d.id,s.project ORDER BY d.id,s.project)"
-    ).get(owner);
+      'SELECT json_group_array(json(name)) AS names FROM (' +
+      'SELECT json_array(n.user_id,n.reported,n.name) AS name FROM project_names n WHERE n.user_id=?' +
+      ' AND EXISTS (SELECT 1 FROM devices d JOIN agent_sessions s ON s.device_id=d.id WHERE d.user_id=n.user_id AND s.project=n.reported' +
+      ' AND (s.source_id IS NULL OR NOT EXISTS(SELECT 1 FROM holders h WHERE h.user_id=d.user_id AND h.source_id=s.source_id)))' +
+      ' UNION ALL SELECT json_array(d.id,COALESCE(d.label,d.name)) FROM devices d WHERE d.user_id=?' +
+      ' AND EXISTS (SELECT 1 FROM agent_sessions s WHERE s.device_id=d.id' +
+      ' AND (s.source_id IS NULL OR NOT EXISTS(SELECT 1 FROM holders h WHERE h.user_id=d.user_id AND h.source_id=s.source_id))) ORDER BY 1)'
+    ).get(owner, owner) as {names: string} | null;
+    // Held and private work share names. A new reported project adds data, not a rename
+    // dependency or a second machine entry that would reload every historical cell.
+    const nameKey = privateNames === null ? names.names : [...new Set(
+      [...JSON.parse(names.names) as string[][], ...JSON.parse(privateNames.names) as string[][]].map(name => JSON.stringify(name))
+    )].sort();
     const holdings = owner === null ? null : this.held(owner).map(s => s.id).sort();
-    const key = JSON.stringify([this.agentWorkSince(), this.sources(board).map(s => s.id), [...shown].map(([id, s]) => [id, s.since, s.holders]), names.names, privateNames, holdings]);
+    const key = JSON.stringify([this.agentWorkSince(), this.sources(board).map(s => s.id), [...shown].map(([id, s]) => [id, s.since, s.holders]), nameKey, holdings]);
     return createHash('sha256').update(key).digest('base64url').slice(0, 16);
   }
 

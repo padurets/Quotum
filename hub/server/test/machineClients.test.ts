@@ -97,6 +97,46 @@ test('private events coalesce across subscribers and closed history tiles invali
   assert.ok(!frames[2].some(f=>f.type==='ownSessions'||f.type==='history'));
 });
 
+test('a new private project keeps closed tiles warm and board rechecks incremental; renames refresh history', t => {
+  const h = setup(), hour = 60*60_000;
+  h.ingest.sessions(h.credential, {...report, sessions: [], clientSessions: []}, at);
+  const device = h.directory.devices(h.owner.id)[0].id;
+  const source = h.store.source('codex', 'owned-account', at);
+  h.store.hold(source, h.owner.id, at);
+  h.store.creditWork(device, at, at+15_000, [{source, origin: 'terminal', startedAt: at, project: 'Legacy', folder: '', identity: {kind: 'legacy', ordinal: 0}}]);
+  const clock = {now: () => at+3*hour, after: (_ms: number, _run: () => void) => () => {}};
+  const events = new Events({store: h.store, directory: h.directory, ingest: h.ingest, resets: new ResetFeed(undefined, () => {})}, undefined, clock);
+  events.attach(); const tiles = new HistoryTiles(h.store); events.onClientHistory = (user, since) => tiles.touchClient(user, since);
+  t.after(() => {events.close(); h.store.close();});
+  const frames: Frame[] = [];
+  h.directory.createSession('incremental-reader', h.owner.id, at, 4*hour);
+  events.open({user: h.owner.id, secret: 'incremental-reader', board: h.board, kind: 'stream', send: batch => frames.push(...batch), end: () => {}});
+  events.flush(); frames.splice(0);
+  const shown = h.store.shown(h.board, []), before = h.store.workKey(h.board, shown);
+  let reads = 0; const cells = h.store.cells.bind(h.store);
+  h.store.cells = (...args) => {reads++; return cells(...args);};
+  const read = () => tiles.read(h.board, 60_000, at, at+hour, clock.now(), shown);
+  read(); assert.equal(reads, 1);
+  const privateKey = {client: 'opencode', source: null, origin: 'terminal' as const, startedAt: at+2*hour, project: 'New private project', folder: '', identity: {kind: 'stable' as const, sessionId: 'e'.repeat(32)}};
+  h.store.creditWork(device, at+2*hour, at+2*hour+15_000, [privateKey]);
+  events.flush();
+  assert.equal(JSON.parse(frames.find(f => f.type === 'history')!.data).ownSince, at+2*hour);
+  assert.equal(h.store.workKey(h.board, shown), before, 'a new reported project is data, not a name change');
+  read(); assert.equal(reads, 1, 'credit after a closed tile does not recount its quota or work');
+  frames.splice(0);
+  // Periodic rechecks use this same full-board refresh after the report's tail event.
+  events.touchBoards([h.board]); events.flush();
+  assert.ok(!frames.some(f => f.type === 'history'), 'a recheck cannot turn private credit into a full history reload');
+  h.store.nameProjects(h.owner.id, ['New private project'], 'Renamed project');
+  events.flush();
+  assert.notEqual(h.store.workKey(h.board, shown), before);
+  assert.equal(JSON.parse(frames.find(f => f.type === 'history')!.data).ownSince, 0);
+  frames.splice(0);
+  h.directory.renameDevice(h.owner.id, device, 'Renamed laptop'); events.flush();
+  assert.equal(JSON.parse(frames.find(f => f.type === 'history')!.data).ownSince, 0);
+  assert.equal(JSON.parse(read()[0]).activity.devices[device], 'Renamed laptop');
+});
+
 test('evidence strengthens without splitting work and equal-strength conflict loses unsafe details', () => {
   const first = {accountBy: 'inferred' as const, route: {class:'api' as const, by:'machine' as const, host:null,provider:null}};
   const strong = mergeEvidence(first, {accountBy:'login',route:{class:'subscription',by:'session',host:'example.com',provider:'codex'}});
