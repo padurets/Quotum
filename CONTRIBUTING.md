@@ -47,6 +47,12 @@ cannot replace CI.
 The owned headless browser uses one raster worker: concurrent software raster jobs
 in Chrome 154 can leave a tile unfinished and deadlock an input frame's commit.
 An attached CDP browser retains its own launch settings.
+The optional `benchmark-startup-diagnostics` PR label runs a fixed first/repeat launch
+pair on three runners after the same benchmark fixture preparation. Each launch keeps
+the 20-second deadline and a fresh profile. Numeric process, scheduler, I/O and pressure
+counters are sampled separately from performance gates; missing counters and sampling
+cost remain explicit. All six outcomes are retained, and a repeat success never replaces
+a first failure. These diagnostics cannot satisfy the canonical benchmark.
 An owned browser is ready only when its private `DevToolsActivePort` and a bounded
 loopback `/json/version` reply identify the same browser. Its stderr announcement
 is optional. Startup stays bounded at 20 seconds; cancellation drains pending tab

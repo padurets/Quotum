@@ -75,7 +75,7 @@ function activePort(profile: string): {port: number; browserPath: string} | null
   } finally {closeSync(fd);}
 }
 
-export async function launchChrome(file: string, sandbox: boolean, signal?: AbortSignal): Promise<Browser> {
+export async function launchChrome(file: string, sandbox: boolean, signal?: AbortSignal, progress?: (report: LaunchReport) => void): Promise<Browser> {
   if (signal?.aborted) throw new Error('Chrome startup cancelled');
   const profile = mkdtempSync(path.join(os.tmpdir(), 'quotum-bench-chrome-'));
   const group = process.platform !== 'win32';
@@ -85,11 +85,11 @@ export async function launchChrome(file: string, sandbox: boolean, signal?: Abor
       stdio: ['ignore', 'pipe', 'pipe'], detached: group,
     });
   } catch (error) {rmSync(profile, {recursive: true, force: true}); throw error;}
-  return launchedChrome(child, profile, group, signal, file);
+  return launchedChrome(child, profile, group, signal, file, progress);
 }
 
 /** Ownership begins before the first readiness await, including failed spawn and cancellation. */
-export async function launchedChrome(child: ChildProcess, profile: string, group = false, signal?: AbortSignal, executable = 'stand-in'): Promise<Browser> {
+export async function launchedChrome(child: ChildProcess, profile: string, group = false, signal?: AbortSignal, executable = 'stand-in', progress?: (report: LaunchReport) => void): Promise<Browser> {
   const started = performance.now(), processOwner = browserProcess(child, group);
   const stdout = safeStream(), stderr = safeStream();
   child.stdout?.on('data', stdout.add); child.stderr?.on('data', stderr.add);
@@ -121,6 +121,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
     if (state.cleanup.status !== 'closed') throw new Error('Chrome cleanup unconfirmed; owned profile retained');
   })();
   try {
+    progress?.(snapshot());
     const endpoint = await deadline(20_000, async pending => {
       let failure: Failure = 'no-port';
       while (true) {
@@ -131,6 +132,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
         try {published = activePort(profile); failure = published ? 'endpoint-unreachable' : 'no-port';}
         catch {failure = 'invalid-port';}
         state.failure = failure; state.stage = published ? 'port' : 'spawn';
+        progress?.(snapshot());
         if (published) {
           state.port=published.port;
           const candidate = `http://127.0.0.1:${published.port}`;
@@ -150,6 +152,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
             state.version = typeof reply.Browser === 'string' && /^[a-zA-Z][a-zA-Z0-9 -]{0,40}\/[a-zA-Z0-9.-]{1,64}$/.test(reply.Browser) ? reply.Browser : 'unavailable';
             delete probe.reason;
             state.stage = 'ready'; state.readyMs = Math.round(performance.now() - started); delete state.failure;
+            progress?.(snapshot());
             return candidate;
           } catch {
             const reason=probe.reason??'cancelled-or-deadline';
@@ -169,6 +172,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
       diagnostics: async (pids, _candidate, signal) => ({processes: child.pid && child.exitCode === null && child.signalCode === null ? await nativeProcesses(child.pid, pids, signal) : []})};
   } catch (error) {
     const original = snapshot();
+    progress?.(original);
     try {await close();} catch { /* The report retains unconfirmed cleanup. */ }
     throw new ChromeLaunchError({...original,cleanup:state.cleanup},startup.signal.aborted ? (error as Error).message : 'DevTools was not ready in 20 s');
   } finally {signal?.removeEventListener('abort', cancel);}

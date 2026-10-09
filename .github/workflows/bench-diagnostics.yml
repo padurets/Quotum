@@ -13,6 +13,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  browser-startup:
+    if: contains(github.event.pull_request.labels.*.name, 'benchmark-startup-diagnostics')
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+        env:
+          QUOTUM_BENCH_DIAGNOSE_STARTUP: '1'
+          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-startup
+      - name: Startup interval evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: startup-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
+          path: ${{ runner.temp }}/quotum-startup
+          if-no-files-found: warn
+
   paired-panning:
     if: contains(github.event.pull_request.labels.*.name, 'benchmark-diagnostics')
     runs-on: ubuntu-latest
