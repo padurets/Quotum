@@ -241,9 +241,9 @@ async function main() {
       const baselineProblems=[...phaseProblems,...idleProblems(idle)];
       if(baselineProblems.length)throw new Stop('idle sensitivity baseline failed: '+baselineProblems.join('; '));
       say('checking sensitivity with two independent copies of the same idle board');
-      const control=await doubledIdle(browser,cdp,address.base,seconds,cellMs,evidence,heard);
+      const control=await doubledIdle(browser,cdp,address.base,seconds,cellMs,evidence,heard,scriptMsPerSecond);
       say(`idle double control: ${JSON.stringify(control)}`);
-      await finish(control.detected?0:1);return;
+      await finish(control.growthDetected?0:1);return;
     }
 
     evidence.begin('measurements');

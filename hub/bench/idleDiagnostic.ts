@@ -10,8 +10,19 @@ import type {Heard} from './stream.js';
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
 const metrics = async (cdp: Cdp): Promise<Metrics> => Object.fromEntries((await cdp.send<{metrics: {name: string; value: number}[]}>('Performance.getMetrics')).metrics.map(m => [m.name, m.value]));
 
+/** Sensitivity is measured growth; crossing the absolute idle budget is reported separately. */
+export function idleSensitivity(baselineScriptMsPerSecond:number,copies:readonly number[],phaseValid:boolean) {
+  const valid=phaseValid&&copies.length===2&&Number.isFinite(baselineScriptMsPerSecond)&&baselineScriptMsPerSecond>0&&copies.every(cost=>Number.isFinite(cost)&&cost>=0);
+  const scriptMsPerSecond=copies.reduce((sum,cost)=>sum+cost,0);
+  return {baselineScriptMsPerSecond,scriptMsPerSecond,valid,
+    increaseMsPerSecond:valid?scriptMsPerSecond-baselineScriptMsPerSecond:null,
+    ratio:valid?scriptMsPerSecond/baselineScriptMsPerSecond:null,
+    growthDetected:valid&&scriptMsPerSecond>baselineScriptMsPerSecond,
+    overBudget:valid&&scriptMsPerSecond>IDLE_SCRIPT_MS_PER_SECOND,threshold:IDLE_SCRIPT_MS_PER_SECOND};
+}
+
 /** Two independent live boards execute the same clock work; no measured cost is multiplied. */
-export async function doubledIdle(browser: Browser, primary: Cdp, base: string, seconds: number, cellMs: number, evidence: Evidence, heard: Heard) {
+export async function doubledIdle(browser: Browser, primary: Cdp, base: string, seconds: number, cellMs: number, evidence: Evidence, heard: Heard, baselineScriptMsPerSecond:number) {
   if (!browser.owned) throw new Error('idle sensitivity requires an owned synthetic browser');
   const extra = await openTab(browser);
   try {
@@ -47,10 +58,9 @@ export async function doubledIdle(browser: Browser, primary: Cdp, base: string, 
       return {id: index, cards: starts[index].cards, seconds, scriptMsPerSecond, phase, events,
         problems: [...idlePhaseProblems(phase, planned.boundary), ...idleProblems(idle)]};
     }));
-    const scriptMsPerSecond = reports.reduce((sum, report) => sum + report.scriptMsPerSecond, 0);
-    const valid = reports.every(report => report.cards === reports[0].cards && report.cards > 0 && !report.problems.length && Number.isFinite(report.scriptMsPerSecond));
-    const result = {mode: 'diagnostic', mechanism: 'two independent live boards', reports, scriptMsPerSecond,
-      valid, detected: valid && scriptMsPerSecond > IDLE_SCRIPT_MS_PER_SECOND, threshold: IDLE_SCRIPT_MS_PER_SECOND};
+    const phaseValid = reports.every(report => report.cards === reports[0].cards && report.cards > 0 && !report.problems.length);
+    const result = {mode: 'diagnostic', mechanism: 'two independent live boards', reports,
+      ...idleSensitivity(baselineScriptMsPerSecond,reports.map(report=>report.scriptMsPerSecond),phaseValid)};
     evidence.save('idle-double', result);
     return result;
   } finally {await extra.close();}
