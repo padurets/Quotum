@@ -44,7 +44,11 @@ compositor pipeline stages and interval-local numeric track identities, with rep
 frame sequences, animation flags, main-frame duration breakdowns and raster layer/source
 frame numbers. Raw opaque IDs and arbitrary arguments are omitted. A raster source
 frame number is not a pipeline sequence; concurrent events alone do not establish a
-dependency. Missing identities and unsupported fields remain unavailable. CPU time
+dependency. Missing identities and unsupported fields remain unavailable. Collection
+counts and handler duration, the original five-second drain stage and the end-command
+acknowledgement distinguish incomplete trace delivery from a scenario failure. An
+unconfirmed drain closes only its owned browser and stops the diagnostic; it preserves
+any earlier scenario failure. CPU time
 includes Chrome's Linux throttling spin and is not a JavaScript
 cost estimate. Separate fixed busy/timer/busy controls run afterwards on an empty
 owned tab, first without throttling and then at fourfold throttle. The unthrottled

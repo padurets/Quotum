@@ -70,8 +70,11 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
   if(!browser.owned)throw new Error('browser-wide tracing requires an owned synthetic browser');
   const events:SafeTrace[]=[];
   const sanitize=traceSanitizer();
-  let omitted=0,bytes=0,ended=false;
+  let omitted=0,bytes=0,ended=false,succeeded=false;
+  const collection={chunks:0,sourceEvents:0,handlerMs:0,maxHandlerMs:0};
   const collected=(message:{value:Parameters<typeof sanitize>[0][]})=>{
+    const started=performance.now();
+    collection.chunks++;collection.sourceEvents+=message.value.length;
     for(const event of message.value) {
       const safe=sanitize(event);
       if(!safe)continue;
@@ -79,6 +82,8 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
       if(events.length>=100_000 || bytes+size>32*1024*1024){omitted++;continue;}
       bytes+=size;events.push(safe);
     }
+    const elapsed=performance.now()-started;
+    collection.handlerMs+=elapsed;collection.maxHandlerMs=Math.max(collection.maxHandlerMs,elapsed);
   };
   const complete=()=>{ended=true;};
   cdp.on('Tracing.dataCollected',collected);cdp.on('Tracing.tracingComplete',complete);
@@ -97,21 +102,33 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
       await cdp.send('Tracing.start',{categories:'toplevel,devtools.timeline,v8,blink,cc',transferMode:'ReportEvents'},signal);
       await clock('start',signal);
     },browser.owner?.signal);
-    return await run();
+    const result=await run();succeeded=true;return result;
   } finally {
     let cleanup='complete';
+    const drain:{stage:string;elapsedMs:number;endAckMs?:number;command?:ReturnType<Cdp['snapshot']>}={stage:'inactive',elapsedMs:0};
+    const started=performance.now();
     if(active)try {
       await deadline(5000,async signal=>{
+        drain.stage='clock';
         // A failed clock probe must not prevent ending the trace.
         try {await deadline(1000,endSignal=>clock('end',endSignal),signal);} catch {/* Missing end calibration remains visible in clocks. */}
+        drain.stage='end-command';
+        const sent=performance.now();
         await cdp.send('Tracing.end',{},signal);
+        drain.endAckMs=performance.now()-sent;drain.stage='events';
         while(!ended){signal.throwIfAborted();await new Promise(resolve=>setTimeout(resolve,20));}
+        drain.stage='complete';
       });
     } catch {cleanup='incomplete';browser.owner?.failures.push('trace cleanup unconfirmed');}
+    drain.elapsedMs=performance.now()-started;
+    if(cleanup==='incomplete'&&typeof cdp.snapshot==='function')drain.command=cdp.snapshot();
     cdp.off('Tracing.dataCollected',collected);cdp.off('Tracing.tracingComplete',complete);
-    const report={mode:'diagnostic',status:omitted||!ended?'insufficient-evidence':'complete',scheduler:'unavailable',threadClock:{status:events.some(event=>event.threadTs!==undefined)?'available':'unavailable'},omitted,bytes,cleanup,events};
+    const report={mode:'diagnostic',status:omitted||!ended?'insufficient-evidence':'complete',scheduler:'unavailable',threadClock:{status:events.some(event=>event.threadTs!==undefined)?'available':'unavailable'},omitted,bytes,cleanup,collection,drain,events};
     if(evidence?.saveTrace)evidence.saveTrace('trace',report);else evidence?.save('trace',report);
     if(cleanup==='incomplete')try {await deadline(8000,()=>browser.close());}catch {browser.owner?.failures.push('diagnostic browser cleanup unconfirmed');}
+    // Stop at the failed drain instead of issuing another command to a browser
+    // that cleanup just closed. A scenario's original failure still takes precedence.
+    if(cleanup==='incomplete'&&succeeded)throw new Error('diagnostic trace drain failed at '+drain.stage);
   }
 }
 

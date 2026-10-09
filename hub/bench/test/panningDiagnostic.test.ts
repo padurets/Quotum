@@ -36,6 +36,30 @@ test('a failing trace interval stops collection and preserves the original error
   assert.ok(f.files.has('trace'));
 });
 
+for(const fails of [false,true])test(`an unconfirmed trace drain closes its browser and preserves ${fails?'the scenario failure':'the drain failure'}`, async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=fixture(),original=f.cdp.send.bind(f.cdp),error=new Error('original scenario failed');
+  let reached=()=>{},closed=0;
+  const stopping=new Promise<void>(resolve=>{reached=resolve;});
+  f.cdp.send=(async(method:string,params:object,signal?:AbortSignal)=>{
+    if(method!=='Tracing.end')return original(method,params,signal);
+    f.sent.push(method);reached();return {};
+  }) as Cdp['send'];
+  const outcome=assert.rejects(traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{closed++;}},async()=>{
+    f.listeners.get('Tracing.dataCollected')?.({value:[{name:'Paint',ph:'X',ts:1,dur:2},{name:'private-canary',ph:'X',args:{cookie:'private-canary'}}]});
+    if(fails)throw error;
+    return 17;
+  },f.evidence),value=>fails?value===error:value instanceof Error&&value.message==='diagnostic trace drain failed at events');
+  await stopping;await new Promise<void>(resolve=>queueMicrotask(resolve));
+  t.mock.timers.tick(5000);await outcome;
+  assert.equal(closed,1);assert.equal(f.listeners.size,0);assert.equal(f.sent.at(-1),'Tracing.end');
+  const report=f.files.get('trace') as {status:string;cleanup:string;drain:{stage:string;endAckMs:number};collection:{chunks:number;sourceEvents:number};events:SafeTrace[]};
+  assert.equal(report.status,'insufficient-evidence');assert.equal(report.cleanup,'incomplete');
+  assert.equal(report.drain.stage,'events');assert.ok(report.drain.endAckMs>=0);
+  assert.equal(report.collection.chunks,1);assert.equal(report.collection.sourceEvents,2);
+  assert.equal(report.events.length,1);assert.doesNotMatch(JSON.stringify(safeEvidence(report)),/private-canary/);
+});
+
 test('an attached browser never receives browser-wide tracing', async()=>{
   const f=fixture();
   await assert.rejects(traceInterval(f.cdp,{endpoint:'fixture',close:async()=>{}},async()=>{}),/owned synthetic/);
