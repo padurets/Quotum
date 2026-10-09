@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {spawn, spawnSync} from 'node:child_process';
+import childProcess, {spawn, spawnSync} from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
 import {existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
@@ -18,6 +19,22 @@ function cleanup(id:string) {
   spawnSync(executable,['-NoLogo','-NoProfile','-NonInteractive','-Command',"Remove-Item -LiteralPath 'Registry::HKEY_CURRENT_USER\\Software\\Quotum\\HubKeys\\v1\\"+id+"' -Recurse -Force -ErrorAction SilentlyContinue"],{stdio:'ignore',timeout:10_000,windowsHide:true});
 }
 test('Windows registry bootstrap is private, durable and never replaces a missing established store',windows,t=>{
+  // Observe the original helper call, including a cold failure; never print its frame or stderr.
+  const nativeSpawn=childProcess.spawnSync,attempts:unknown[]=[];
+  t.mock.method(childProcess,'spawnSync',(...args:Parameters<typeof nativeSpawn>)=>{
+    const started=performance.now(),result=nativeSpawn(...args);
+    if(Array.isArray(args[1])&&args[1].some(value=>typeof value==='string'&&value.endsWith('windows.ps1'))){
+      const output=result.stdout,header=Buffer.isBuffer(output)&&output.length>=5&&output.subarray(0,4).equals(Buffer.from('QKR1'));
+      const code=(result.error as NodeJS.ErrnoException|undefined)?.code;
+      attempts.push({ms:performance.now()-started,status:result.status,
+        failure:code===undefined?null:['ETIMEDOUT','ENOENT','EACCES','ENOBUFS'].includes(code)?code:'other',
+        outputBytes:Buffer.isBuffer(output)?output.length:0,header,
+        helperStatus:header&&output[4]<=3?output[4]:null});
+    }
+    return result;
+  });
+  syncBuiltinESMExports();
+  t.after(()=>{t.mock.restoreAll();syncBuiltinESMExports();t.diagnostic(JSON.stringify({attempts}));});
   const root=mkdtempSync(path.join(tmpdir(),'quotum-registry-')),data=path.join(root,'data');mkdirSync(data);
   const store=new Store(path.join(data,'hub.sqlite')),id=reserveManagedId(store.db);
   t.after(()=>{cleanup(id);store.close();rmSync(root,{recursive:true,force:true});});
