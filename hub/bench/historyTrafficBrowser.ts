@@ -32,8 +32,8 @@ export function historyPageScript(period: string) {
       const path=new URL(uri,location.href).pathname;if(path!='/api/history'&&!/^\\/api\\/boards\\/[^/]+\\/period(?:\\/sessions)?$/.test(path))return original(resource,init);
       const id=${JSON.stringify(prefix)}+':'+(++serial),headers=new Headers(init.headers||(resource instanceof Request?resource.headers:undefined)),signal=init.signal||(resource instanceof Request?resource.signal:undefined);
       headers.set(${JSON.stringify(HISTORY_ATTEMPT_HEADER)},id);
-      const attempt=attempts[id]={aborted:!!signal?.aborted};signal?.addEventListener('abort',()=>{attempt.aborted=true;},{once:true});
-      return original(resource,{...init,headers});
+      const started=performance.now(),attempt=attempts[id]={aborted:!!signal?.aborted};signal?.addEventListener('abort',()=>{attempt.aborted=true;attempt.abortedAt=performance.now()-started;attempt.reason=signal.reason?.name;},{once:true});
+      return original(resource,{...init,headers}).then(response=>{attempt.headersAt=performance.now()-started;return response;},error=>{attempt.failedAt=performance.now()-started;attempt.error=error.name;throw error;});
     };
   })()`;
 }
@@ -145,7 +145,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
           await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,250))');
           if (!bodies.activeCount && !bodies.pending.size) return;
         }
-        if (Date.now() > deadline) throw new Error(`${name}: full drawings or terminal HTTP did not settle: ${JSON.stringify(bodies.reads.map(read=>({phase:read.phase,resources:read.sections?.map(section=>section.scope),complete:read.count?.complete,canceled:read.canceled})))}`);
+        if (Date.now() > deadline) throw new Error(`${name}: full drawings or terminal HTTP did not settle: ${JSON.stringify({reads:bodies.reads.map(read=>({id:read.attemptId,phase:read.phase,resources:read.sections?.map(section=>section.scope),complete:read.count?.complete,canceled:read.canceled})),attempts:await cdp.evaluate('window.__quotumHistoryAttempts'),transfers:proxy.transfers.filter(t=>t.phase===seedPhase)})}`);
         await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,20))');
       }
     };

@@ -223,7 +223,7 @@ import {historyPageScript} from '../historyTrafficBrowser';
 test('the browser fixture tags each fetch before IO and keeps cancellation identity without response headers', async () => {
   const calls: {resource: unknown; init: RequestInit}[] = [];
   const window = {fetch: async (resource: unknown, init: RequestInit) => {calls.push({resource, init}); return {};}, __quotumHistoryAttempts: {} as Record<string, {aborted: boolean}>};
-  runInNewContext(historyPageScript('24h'), {window, location: {href: 'http://localhost:8080/'}, localStorage: {setItem: () => {}}, URL, Headers, Request});
+  runInNewContext(historyPageScript('24h'), {window, location: {href: 'http://localhost:8080/'}, localStorage: {setItem: () => {}}, URL, Headers, Request, performance});
   const headers = new Headers({Accept: 'application/json'}), controller = new AbortController();
   await window.fetch('/api/history?cell=1&from=0&to=60', {headers, signal: controller.signal, credentials: 'same-origin'});
   await window.fetch('/api/history?cell=1&from=0&to=60', {headers});
