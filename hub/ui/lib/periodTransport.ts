@@ -55,12 +55,13 @@ export class PeriodTransport implements HistoryMember {
     this.flights.add(flight);
     const body:PeriodRequest={...intent.request,...(!extras?{values:undefined,sessions:undefined,quota:undefined,budget:undefined,funds:undefined}:{}),...Object.fromEntries(demands.map(d=>[d.scope,{...d.query}]))};
     const pendingBaseline=(['quota','funds','budget'] as const).filter(scope=>body[scope]&&!this.baselineParts.has(scope));
-    const splitBaseline=baseline&&extras&&intent.request.selection.mode==='live';
+    const splitBaseline=baseline&&extras&&(intent.request.selection.mode==='live'||pendingBaseline.length>1||this.baselineParts.size>0);
     const deferredBaseline=splitBaseline&&pendingBaseline.length>1;
     if(splitBaseline){
-      // A cold month's evidence is independent by family. Keep its largest decoded
+      // Cold evidence is independent by family. Keep its largest decoded
       // bodies separate; changed measurements and work still share the warm read.
       for(const scope of PERIOD_SCOPES)if(scope!==pendingBaseline[0])delete body[scope];
+      if(intent.request.selection.mode==='range'&&pendingBaseline.length>1)delete body.values;
       for(const part of ['values','sessions'] as const)if(this.baselineParts.has(part))delete body[part];
     }
     for(const scope of PERIOD_SCOPES){const query=body[scope];if(query)query.evidence??=!extras?'skip':this.cursors.get(cursorKey(scope,query));}

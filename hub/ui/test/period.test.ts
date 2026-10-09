@@ -109,6 +109,23 @@ test('a failed cold family reports its error while the other baselines still com
   assert.deepEqual(sent,['quota','funds','budget']);assert.equal(received[1].funds?.state,'error');assert.equal(received[2].budget?.state,'complete');
 });
 
+test('fixed families stage separately and card states join the final bounded baseline',async()=>{
+  const pool=new HistoryPool(3072),sent:PeriodRequest[]=[];pool.register({estimatedBytes:1024,evictionCandidates:()=>[]});
+  const query={cell:'7200000',from:'0',to:'2592000000',cells:'skip' as const};
+  const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'range',from:0,to:2592000000},evaluatedAt:2592000000,quota:query,budget:query,funds:query,sessions:{},values:['s']}};
+  const basis={run:'r',revision:'1',evaluatedAt:2592000000,evidenceCut:2592000000,range:{from:0,to:2592000000}};
+  const transport=new PeriodTransport(pool,()=>intent,()=>{},async(_board,body,_signal,reserve)=>{
+    assert.equal(pool.estimatedBytes,1024,'the preceding decoded baseline is released');sent.push(body);
+    const scopes=(['quota','budget','funds'] as const).filter(scope=>body[scope]);
+    assert.ok(reserve(scopes.length*1024+(body.values?512:0)),'staging keeps the earlier complete frame');
+    return {basis,...Object.fromEntries(scopes.map(scope=>[scope,{state:'complete',basis,value:{run:'r',now:2592000000,historyStart:0,known:{work:0,sources:{}},chunks:[]}}]))};
+  });
+  transport.change();for(let i=0;i<6;i++)await settle();
+  assert.equal(sent.length,3);assert.ok(sent[0].quota&&sent[0].sessions);assert.ok(sent[1].funds);assert.ok(sent[2].budget);
+  assert.deepEqual(sent.map(body=>body.values),[undefined,undefined,['s']]);
+  assert.deepEqual(sent.map(body=>!!body.sessions),[true,false,false]);assert.equal(pool.estimatedBytes,1024);
+});
+
 
 test('presence expires at the confirmation deadline even when neither accounting boundary crosses work',()=>{
   const trace:WorkTrace={anchor:0,knownFrom:0,refs:[{...ref('a'),currentPresence:{working:true,through:100,workingThrough:50,startedAt:0}}],spans:[[0,0,10]]};
