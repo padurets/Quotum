@@ -90,10 +90,10 @@ export function Devices({local}: {local: boolean}) {
     />)}
     {details&&<Modal title={t('devices.clientsOn',{name:details.name})} onClose={()=>setDetails(null)}>
       <div className="settings-section"><h3>{t('devices.clients')}</h3><ul className="settings-list">
-        {(details.clients ?? []).map(client=><li key={client.clientId}><span>{clientName(client.clientId)}</span><span>{client.version ?? t('devices.versionUnknown')}</span></li>)}
+        {(details.clients ?? []).map(client=><li className="settings-list-row popover-row" key={client.clientId}><span className="settings-item-main"><b>{clientName(client.clientId)}</b></span><span className="settings-item-detail">{client.version ?? t('devices.versionUnknown')}</span></li>)}
       </ul></div>
       <div className="settings-section"><h3>{t('agents.title')}</h3><ul className="settings-list">
-        {(details.sessions ?? []).map((session,i)=><li key={i}><span>{clientName(session.clientId ?? 'unknown')}<small>{session.project ?? t('agents.noProject')}</small></span><span>{session.source ? PROVIDERS[session.source.split(':')[0]]?.name ?? session.source : t('agents.unknownSource')}</span></li>)}
+        {(details.sessions ?? []).map((session,i)=><li className="settings-list-row popover-row" key={i}><span className="settings-item-main"><b>{clientName(session.clientId ?? 'unknown')}</b><small>{session.project ?? t('agents.noProject')}</small></span><span className="settings-item-detail">{session.source ? PROVIDERS[session.source.split(':')[0]]?.name ?? session.source : t('agents.unknownSource')}</span></li>)}
       </ul></div>
     </Modal>}
     {renaming&&<Modal title={t('devices.rename',{name:renaming.name})} onClose={()=>setRenaming(null)}>
