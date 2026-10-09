@@ -3,7 +3,7 @@ import type {HistoryTiles} from './history.js';
 import type {Shown, WorkRead} from './store/store.js';
 import type {Stretch} from './domain/work.js';
 import type {PeriodRange} from './domain/period.js';
-import type {WorkTrace} from './domain/periodWork.js';
+import {packWork,type WorkTrace} from './domain/periodWork.js';
 
 /** A composite read extracts work once for charts and the temporal index. */
 export function sharedWork(hub:Hub,shown:Shown,range:PeriodRange,reserve:(bytes:number)=>void):WorkRead {
@@ -21,7 +21,7 @@ export function sharedWork(hub:Hub,shown:Shown,range:PeriodRange,reserve:(bytes:
       }
       kept={from:start,to:end,rows};
     }
-    return kept.rows.flatMap(s=>s.to>from&&s.from<to?[{...s,from:Math.max(from,s.from),to:Math.min(to,s.to)}]:[]);
+    return kept.rows.flatMap(s=>s.to>from&&s.from<to?[s.from>=from&&s.to<=to?s:{...s,from:Math.max(from,s.from),to:Math.min(to,s.to)}]:[]);
   };
 }
 
@@ -45,5 +45,6 @@ export function periodWork(hub:Hub,history:HistoryTiles,board:string,shown:Shown
     if(last&&last[0]===index&&last[2]>=start)last[2]=Math.max(last[2],end);
     else {reserve(48);trace.spans.push([index,start,end]);}
   }
-  return trace;
+  if(trace.spans.length<128)return trace;
+  const packed=packWork(trace);reserve(packed.packed!.blocks.length*16+packed.packed!.patterns.reduce((n,p)=>n+p.length*16,0));return packed;
 }

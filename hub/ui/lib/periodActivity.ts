@@ -1,53 +1,30 @@
-import {drain,ordered,type Preparation} from '../../server/domain/prepare';
+import {drain,type Preparation} from '../../server/domain/prepare';
 import type {Activity,ActivityDimension,ActivityGroup} from './types';
 import type {PeriodRange} from '../../server/domain/period';
 import type {WorkedSession,WorkTrace} from '../../server/domain/periodWork';
+import {PeriodCurves,type WorkTimeline} from './periodCurves';
 
-/** One sweep prepares both agent duration and the union; clock reads are binary searches. */
-class WorkCurve {
-  private readonly times:number[]=[];
-  private readonly agents:number[]=[];
-  private readonly active:number[]=[];
-  private readonly slopes:number[]=[];
-  constructor(spans:readonly [number,number][],deferred=false) {if(!deferred)drain(this.build(spans));}
-  static *prepare(spans:readonly [number,number][]):Preparation<WorkCurve>{const value=new WorkCurve(spans,true);yield* value.build(spans);return value;}
-  private *build(spans:readonly [number,number][]):Preparation<void> {
-    const changes=new Map<number,number>();
-    for(const [a,b] of spans){changes.set(a,(changes.get(a)??0)+1);changes.set(b,(changes.get(b)??0)-1);yield;}
-    let previous=0,slope=0,agent=0,active=0;
-    for(const [at,delta] of yield* ordered(changes,(a,b)=>a[0]-b[0])){agent+=(at-previous)*slope;if(slope)active+=at-previous;slope+=delta;this.times.push(at);this.agents.push(agent);this.active.push(active);this.slopes.push(slope);previous=at;yield;}
-  }
-  private at(at:number,active:boolean) {
-    let a=0,b=this.times.length;while(a<b){const m=(a+b)>>>1;if(this.times[m]<=at)a=m+1;else b=m;}
-    const i=a-1;if(i<0)return 0;
-    return (active?this.active[i]:this.agents[i])+(at-this.times[i])*(active?Number(this.slopes[i]>0):this.slopes[i]);
-  }
-  read(range:PeriodRange,active=false){return this.at(range.to,active)-this.at(range.from,active);}
-}
-type Group={name:string|null;curve:WorkCurve;agentMs:number;agents:number};
+type Group={name:string|null;curve:WorkTimeline;agentMs:number;agents:number};
 const dimensions:ActivityDimension[]=['source','project','device'];
 const keys=(row:WorkTrace['refs'][number])=>({source:row.source,project:JSON.stringify(row.project),device:row.device.id});
 
 export class PeriodActivity {
-  private all!:WorkCurve;
+  private all!:WorkTimeline;
   private readonly groups:Record<ActivityDimension,Map<string,Group>>={source:new Map(),project:new Map(),device:new Map()};
-  private readonly contexts=new Map<string,WorkCurve>();
+  private readonly contexts=new Map<string,WorkTimeline>();
   private previous=new Map<string,WorkedSession>();
   private cut=0;
-  constructor(readonly trace:WorkTrace,deferred=false) {if(!deferred)drain(this.build());}
-  static *prepare(trace:WorkTrace):Preparation<PeriodActivity>{const value=new PeriodActivity(trace,true);yield* value.build();return value;}
+  constructor(readonly trace:WorkTrace,private curves?:PeriodCurves,deferred=false) {if(!deferred)drain(this.build());}
+  static *prepare(trace:WorkTrace,curves?:PeriodCurves):Preparation<PeriodActivity>{const value=new PeriodActivity(trace,curves,true);yield* value.build();return value;}
   private *build():Preparation<void> {
-    const trace=this.trace;
-    const all:[number,number][]=[];
-    const contexts=new Map<number,[number,number][]>();
-    const groups:Record<ActivityDimension,Map<string,[number,number][]>>={source:new Map(),project:new Map(),device:new Map()};
-    for(const [id,a,b] of trace.spans){const span:[number,number]=[trace.anchor+a,trace.anchor+b];all.push(span);let own=contexts.get(id);if(!own)contexts.set(id,own=[]);own.push(span);const groupKeys=keys(trace.refs[id]);for(const by of dimensions){let spans=groups[by].get(groupKeys[by]);if(!spans)groups[by].set(groupKeys[by],spans=[]);spans.push(span);}yield;}
-    this.all=yield* WorkCurve.prepare(all);
-    this.cut=trace.cut??all.reduce((end,span)=>Math.max(end,span[1]),trace.anchor);
-    for(const [id,spans] of contexts)this.contexts.set(trace.refs[id].ref,yield* WorkCurve.prepare(spans));
+    const trace=this.trace,curves=this.curves??(yield*PeriodCurves.prepare(trace));
+    this.all=curves.all;
+    this.cut=trace.cut??curves.all.last(Infinity);
+    for(let id=0;id<trace.refs.length;id++){this.contexts.set(trace.refs[id].ref,curves.contexts[id]);yield;}
     const devices=new Map(trace.refs.map(r=>[r.device.id,r.device.name]));
-    for(const by of dimensions)for(const [key,spans] of groups[by])this.groups[by].set(key,{name:by==='source'?null:by==='project'?JSON.parse(key):devices.get(key)??key,curve:yield* WorkCurve.prepare(spans),agentMs:0,agents:0});
+    for(const by of dimensions)for(const [key,curve] of curves.groups[by]){this.groups[by].set(key,{name:by==='source'?null:by==='project'?JSON.parse(key):devices.get(key)??key,curve,agentMs:0,agents:0});yield;}
   }
+
   update(rows:WorkedSession[]) {
     const next=new Map(rows.map(row=>[row.ref,row]));
     for(const ref of new Set([...this.previous.keys(),...next.keys()])) {

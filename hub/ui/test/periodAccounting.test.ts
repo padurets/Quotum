@@ -6,6 +6,18 @@ import {PeriodIndex} from '../lib/periodIndex.js';
 import {packSamples,type PeriodTape} from '../../server/domain/periodTape.js';
 import type {History} from '../lib/types.js';
 import type {Reading} from '../../server/domain/meters.js';
+import {packWork,workedSessions,type WorkTrace} from '../../server/domain/periodWork.js';
+import {union} from '../../server/domain/work.js';
+
+test('shared work curves match exact session sums and concurrent unions across hour boundaries',()=>{
+  const refs=Array.from({length:5},(_,i)=>({ref:String(i),source:String(i%2),device:{id:String(i%3),name:'Laptop'},origin:'terminal' as const,project:i%2?'P':null,folder:null,startedAt:0}));
+  const trace:WorkTrace={anchor:0,cut:3*3_600_000,knownFrom:0,refs,spans:[]};
+  for(let id=0;id<refs.length;id++)for(let n=0;n<43;n++){const from=n*237_117+id*913;trace.spans.push([id,from,from+111_023+id*7]);}
+  const packed=packWork(trace),index=new PeriodIndex(packed),activity=new PeriodActivity(packed,index.curves);
+  for(let from=0;from<9_000_000;from+=173_113){const range={from,to:from+899_997},expected=workedSessions(trace,range,range.to),rows=index.advance(range,range.to).rows;activity.update(rows);const shown=activity.project(blank.activity,range);assert.deepEqual(rows,expected);assert.equal(shown.agentMs,expected.reduce((n,r)=>n+r.workedMs,0));const active=union(trace.spans.map(([,a,b])=>({from:Math.max(a,from),to:Math.min(b,range.to)})).filter(s=>s.to>s.from)).reduce((n,[a,b])=>n+b-a,0);assert.equal(shown.activeMs,active);}
+  const atStart=index.advance({from:0,to:237_117},237_117).rows.find(r=>r.ref==='0')!;
+  assert.equal(atStart.lastWorkedAt,111_023,'an interval starting at the exclusive end contributes no last-work evidence');
+});
 
 const blank:History={range:'1h',live:true,since:0,to:60_000,cellMs:60_000,historyStart:0,events:[],series:[],activity:{since:0,known:{from:0,to:60_000},barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
 const tape=():PeriodTape=>({from:0,cut:60_000,replaceFrom:0,cursor:'cursor',quota:[],money:[]});

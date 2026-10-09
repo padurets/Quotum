@@ -1295,7 +1295,14 @@ one authorized work extraction within a composite read.
 
 Retained work traces and measurement tapes provide exact boundaries beside the shared
 interior cells. Work prefixes and interval unions compute clipped session duration,
-active time and agent-hours. Monetary steps remain exact integers; a partially
+active time and agent-hours. Hour blocks share identical work patterns without losing
+gaps or millisecond boundaries; the roster, activity and quota accounting share their
+curves. Numeric columns use constant values or exact integer offsets where possible,
+with 64-bit values for fractions and wider ranges. Changed series rebuild only their own
+prefixes. A new interval releases old raw evidence while widgets keep their last complete
+presentation. Cold drawing cells and resource evidence are read separately, and preparation
+replaces scratch reservations as each retained index is completed.
+Monetary steps remain exact integers; a partially
 intersected spending step is uncertain, never divided by elapsed time. The page clock
 advances live boundaries locally through already received evidence, without a request
 or invented work after the evidence cut. Fixed past accounting does not tick. These

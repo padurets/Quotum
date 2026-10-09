@@ -403,8 +403,10 @@ carry `workFrom`, the source's authorized work boundary. An absent work section 
 not project zero work or a fictional date; work columns remain unavailable until it arrives. Its `from` and `cut` delimit
 retained evidence; `replaceFrom` and optional `replaceTo` delimit the interval replaced
 by a delta. Each native series stores `samples` as a flat numeric array of five-value rows:
-`[at, used, resetAt, staleAfterMs, validUntil]`. Both optional deadlines use `-1`
-for absence; zero is a real timestamp. The encoding preserves every sample and its
+`[at, used, resetAt, staleAfterMs, validUntil]`. With `samplesEncoding:"delta"`,
+all fields except `used` are exact differences from the previous row. The initial
+values are `at=0`, `resetAt=-1`, `staleAfterMs=0`, `validUntil=-1`. Both optional
+deadlines use `-1` for absence after decoding; zero is a real timestamp. The encoding preserves every sample and its
 exclusive validity bound. Metadata is separate from repeated samples. A complete initial tape allows
 a live left boundary to move through its entire retained interval without further IO.
 New evidence extends or replaces that interval; a clock tick does not fetch history.
@@ -435,11 +437,19 @@ Session evidence is a complete temporal index:
     currentPresence?: {working: boolean; through: number; workingThrough: number; startedAt: number};
   }[];
   spans: [refIndex: number, fromOffset: number, toOffset: number][];
+  packed?: {
+    patterns: number[][]; // flat pairs of exact offsets within an hour
+    blocks: number[];    // flat triples: refIndex, UTC hour since epoch, patternIndex
+  };
   replaceFrom?: number; replaceTo?: number;
 }
 ```
 
-Offsets are exact milliseconds from `anchor`. Only credited intervals intersecting the
+Dense evidence uses `packed` with empty `spans`. Each block's hour is multiplied by
+3,600,000, then its pattern's millisecond pairs give the original credited intervals.
+Repeated patterns share storage; gaps and boundary fragments are never approximated.
+Both representations have identical replacement and projection semantics.
+Offsets in `spans` are exact milliseconds from `anchor`. Only credited intervals intersecting the
 requested evidence are included, clipped by capture, retention, membership and sharing
 cutoffs. No current list or duration total substitutes for those intervals. Clients
 intersect them with the selected accounting range, retain only positive-work contexts,

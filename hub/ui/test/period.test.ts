@@ -1,12 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {PeriodAccounting} from '../lib/periodAccounting.js';
-import {mergeTapePrepared} from '../../server/domain/periodTape.js';
+import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/domain/periodTape.js';
 import {drain} from '../lib/prepare.js';
 import {PeriodIndex} from '../lib/periodIndex.js';
 import {PeriodTransport,type PeriodIntent} from '../lib/periodTransport.js';
 import {HistoryPool} from '../lib/historyPool.js';
-import type {WorkTrace} from '../../server/domain/periodWork.js';
+import {packWorkPrepared,mergeWorkPrepared,packWork,type WorkTrace} from '../../server/domain/periodWork.js';
+import {PeriodActivity} from '../lib/periodActivity.js';
 import type {PeriodReply,PeriodRequest} from '../../server/domain/periodRead.js';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
@@ -77,6 +78,32 @@ test('a stale A response cannot publish after A to B to A or after new evidence 
   transport.change();await settle();pending[2](answer);await settle();assert.deepEqual(applied,[3]);
 });
 
+test('a cold drawing releases its decoded response before the exact baseline starts',async()=>{
+  const pool=new HistoryPool(),sent:PeriodRequest[]=[],basis={run:'r',revision:'1',evaluatedAt:5_000_000,evidenceCut:5_000_000,range:{from:1_400_000,to:5_000_000}};
+  const query={cell:'1',from:'0',to:'60',cells:'skip' as const};
+  const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'live',periodMs:3_600_000},evaluatedAt:5_000_000,quota:query,sessions:{}}};
+  const transport=new PeriodTransport(pool,()=>intent,()=>{},async(_board,body,_signal,reserve)=>{
+    assert.equal(pool.estimatedBytes,0,'a prior decoded body cannot overlap the baseline');assert.equal(reserve(1024),true);sent.push(body);
+    return {basis,quota:{state:'complete',basis,value:{run:'r',now:5_000_000,historyStart:0,known:{work:0,sources:{}},chunks:[]}}};
+  });
+  transport.change();await transport.read('quota',{cell:'1',from:'0',to:'60'});await settle();
+  assert.equal(sent.length,2);assert.equal(sent[0].quota?.evidence,'skip');assert.equal(sent[0].sessions,undefined);
+  assert.equal(sent[1].quota?.cells,'skip');assert.ok(sent[1].sessions);assert.equal(pool.estimatedBytes,0);
+});
+
+test('a failed cold family reports its error while the other baselines still complete',async()=>{
+  const pool=new HistoryPool(),sent:string[]=[],received:PeriodReply[]=[];
+  const query={cell:'1',from:'0',to:'60',cells:'skip' as const};
+  const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'live',periodMs:3_600_000},evaluatedAt:5_000_000,quota:query,budget:query,funds:query}};
+  const basis={run:'r',revision:'1',evaluatedAt:5_000_000,evidenceCut:5_000_000,range:{from:1_400_000,to:5_000_000}};
+  const transport=new PeriodTransport(pool,()=>intent,reply=>{received.push(reply);},async(_board,body)=>{
+    const scope=body.quota?'quota':body.funds?'funds':'budget';sent.push(scope);if(scope==='funds')throw new Error('network failed');
+    return {basis,[scope]:{state:'complete',basis,value:{run:'r',now:5_000_000,historyStart:0,known:{work:0,sources:{}},chunks:[]}}};
+  });
+  transport.change();for(let i=0;i<4;i++)await settle();
+  assert.deepEqual(sent,['quota','funds','budget']);assert.equal(received[1].funds?.state,'error');assert.equal(received[2].budget?.state,'complete');
+});
+
 
 test('presence expires at the confirmation deadline even when neither accounting boundary crosses work',()=>{
   const trace:WorkTrace={anchor:0,knownFrom:0,refs:[{...ref('a'),currentPresence:{working:true,through:100,workingThrough:50,startedAt:0}}],spans:[[0,0,10]]};
@@ -93,7 +120,7 @@ test('a sibling chart reply cannot cancel the coordinator preparation of histori
     hubNow:()=>5_000_000,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},preparations:()=>null,
     prepareAsync:(_owner:unknown,work:Parameters<typeof drain>[0])=>new Promise(resolve=>pending.push(()=>resolve(drain(work)))),
-    evaluatedRange,periodKey,PeriodAccounting,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
     prefs:()=>({range:'1h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
@@ -113,11 +140,12 @@ test('a sibling chart reply cannot cancel the coordinator preparation of histori
 
 test('a dense retained month adopts its decoded reservation within the shared memory budget',async()=>{
   const pool=new HistoryPool(),flight={role:'visible' as const};
+  pool.register({estimatedBytes:6*1024*1024,evictionCandidates:()=>[]});
   const context={exports:{} as {BoardPeriod:new()=>{receive(reply:PeriodReply,intent:PeriodIntent,reserve:(bytes:number)=>boolean):Promise<void>;estimatedBytes:number}},
     hubNow:()=>2_700_000_000,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
-    evaluatedRange,periodKey,PeriodAccounting,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
     prefs:()=>({range:'30d'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
@@ -125,16 +153,20 @@ test('a dense retained month adopts its decoded reservation within the shared me
   runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const period=new context.exports.BoardPeriod(),selection={mode:'range' as const,from:0,to:2_700_000_000};
   const basis={run:'r',revision:'1',evaluatedAt:selection.to,evidenceCut:selection.to,range:selection};
-  const samples=Array.from({length:4500},(_,i)=>[i*600000,(i%100)+.125,-1,600000,-1]).flat();
-  const reply:PeriodReply={basis,quota:{state:'complete',basis,value:{run:'r',now:selection.to,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:0,cut:selection.to,replaceFrom:0,cursor:'a',money:[],quota:Array.from({length:12},(_,i)=>({source:String(i),window:'w',samples:[...samples]}))}}}};
+  const samples=Array.from({length:9000},(_,i)=>[i?300000:0,(i%100)+.125,0,i?0:600000,0]).flat();
+  const reply:PeriodReply={basis,quota:{state:'complete',basis,value:{run:'r',now:selection.to,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:0,cut:selection.to,replaceFrom:0,cursor:'a',money:[],quota:Array.from({length:12},(_,i)=>({source:String(i),window:'w',samplesEncoding:'delta',samples:[...samples]}))}}}};
+  const trace:WorkTrace={anchor:0,cut:selection.to,knownFrom:0,refs:Array.from({length:20},(_,i)=>({...ref(String(i)),source:String(i%12)})),spans:[]};
+  for(let id=0;id<trace.refs.length;id++)for(let at=0;at<selection.to;at+=1_200_000)trace.spans.push([id,at+id*1000,at+id*1000+600_000]);
+  reply.sessions={state:'complete',basis,value:{...packWork(trace),cursor:'work'}};
   assert.equal(pool.reserve(flight,JSON.stringify(reply).length*3),true);
   await period.receive(reply,{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:selection.to}},bytes=>pool.reserve(flight,bytes));
   assert.equal(reply.quota!.state,'complete','lossless evidence must fit without dropping the period');
-  assert.ok(period.estimatedBytes>5*1024*1024);assert.ok(pool.estimatedBytes<=15*1024*1024);
+  assert.equal(reply.quota!.state==='complete'&&reply.quota!.value.tape!.quota.reduce((n,s)=>n+s.samples.length/5,0),108000);assert.ok(pool.estimatedBytes<=15*1024*1024);
   pool.release(flight);
   const delta:PeriodReply={basis,quota:{state:'complete',basis,value:{run:'r',now:selection.to,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:0,cut:selection.to,replaceFrom:2_699_000_000,cursor:'b',money:[],quota:[{source:'0',window:'w',samples:[2_699_400_000,12.5,-1,600000,-1]}]}}}};
   assert.equal(pool.reserve(flight,JSON.stringify(delta).length*3),true);
   await period.receive(delta,{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:selection.to}},bytes=>pool.reserve(flight,bytes));
   assert.equal(delta.quota!.state,'complete','the next observation must rebuild exact prefixes while the old presentation stays available');
+  assert.equal(reply.sessions!.state,'complete','the complete month of credited intervals shares the same ceiling');
   assert.ok(pool.estimatedBytes<=15*1024*1024);pool.release(flight);
 });

@@ -6,7 +6,7 @@ import {prepareAsync,preparations,type Preparation} from './prepare';
 import {useSyncExternalStore} from 'react';
 import {evaluatedRange,periodKey,type PeriodBasis,type PeriodSelection} from '../../server/domain/period';
 import type {PeriodValues} from '../../server/domain/periodValues';
-import {mergeWorkPrepared,type WorkedSession,type WorkTrace} from '../../server/domain/periodWork';
+import {mergeWorkPrepared,packWorkPrepared,type WorkedSession,type WorkTrace} from '../../server/domain/periodWork';
 import type {PeriodReply} from '../../server/domain/periodRead';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
 import {PeriodTransport,fetchPeriod,type PeriodIntent} from './periodTransport';
@@ -20,7 +20,7 @@ import {onTimeRange,timeRange} from './timeRange';
 import {pan} from './pan';
 import {sameJson} from './store';
 import {UNAUTHORIZED} from './http';
-import {mergeTapePrepared,type PeriodTape} from '../../server/domain/periodTape';
+import {retainSamplesPrepared,sampleBytes,mergeTapePrepared,type PeriodTape} from '../../server/domain/periodTape';
 import {PeriodAccounting} from './periodAccounting';
 import {PeriodActivity} from './periodActivity';
 import type {History} from '../../server/domain/history';
@@ -129,6 +129,14 @@ class BoardPeriod {
       if(selection.mode==='range')for(const id of sources){const saved=cached?.values.get(id);this.setValue(id,saved?{...saved,basis:saved.basis?{...saved.basis,range:{from:selection.from,to:selection.to}}:null}:{...this.getValue(id),loading:true,error:null});}
       else {for(const id of this.values.keys())this.setValue(id,noValue);this.values.clear();}
       const range=evaluatedRange(selection,hubNow());
+      const outside=(from:number,to:number,live:boolean)=>range.from<from||range.to>to&&!(selection.mode==='live'&&live&&this.liveEvidence);
+      if([...this.tapes.values()].some(t=>outside(t.tape.from,t.tape.cut,t.selection.mode==='live'))||this.work.value&&outside(this.work.value.anchor,this.work.value.cut??0,this.workSelection.mode==='live')) {
+        // Widgets retain their last complete projection. Release its raw evidence
+        // before reading a new interval, so panning cannot accumulate visited months.
+        preparations()?.cancel(this.preparationOwner);this.tapes.clear();this.cursor=undefined;this.index=null;this.activity=null;this.work={...this.work,value:null};this.liveEvidence=false;this.transport.forgetEvidence();
+        this.bytes=JSON.stringify([...this.values.values()]).length*3+JSON.stringify(this.workRows).length*3;
+        clock.due(this.watch,null,hubNow());
+      }
       this.workNeeded=wantsWork&&(!this.work.value||range.from<this.work.value.anchor||range.to>(this.work.value.cut??0)&&!this.liveEvidence);
       if(!this.workNeeded&&this.work.basis){this.workSelection=selection;this.workRangeKey=selection.mode==='range'?periodKey(selection):prefs().range;this.tick(false);}
       for(const tape of this.tapes.values())if(range.from>=tape.tape.from&&(range.to<=tape.tape.cut||this.liveEvidence)){tape.selection=selection;tape.rangeKey=selection.mode==='range'?periodKey(selection):prefs().range;}
@@ -156,6 +164,7 @@ class BoardPeriod {
   }
   private async applyReply(reply:PeriodReply,intent:PeriodIntent,transferred?:(bytes:number)=>boolean) {
     if(intent.generation!==this.generation||intent.revision!==this.revision)return;
+    if(!reply.values&&!reply.sessions&&!PERIOD_SCOPES.some(scope=>reply[scope]?.state==='complete'?reply[scope].value.tape:reply[scope]?.state==='error'&&intent.request[scope]?.evidence!=='skip'))return;
     const changed=new Set<PeriodScope>();
     const staging={role:'visible' as const};
     // Decoding has released its byte buffers. Reuse its reservation for the
@@ -164,33 +173,51 @@ class BoardPeriod {
     const release=()=>{if(transferred)transferred(cellsBytes);else historyPool.release(staging);};
     // Keep the previous complete presentation if the new evidence cannot fit.
     // Charge decoded dictionaries and all derived prefixes before building them.
-    const workBytes=(trace:WorkTrace|null)=>trace?JSON.stringify(trace).length*2+trace.spans.length*640+trace.refs.length*768:0;
-    const tapeBytes=(tape:PeriodTape)=>JSON.stringify({...tape,quota:tape.quota.map(s=>({...s,samples:[]}))}).length*2+tape.quota.reduce((n,s)=>n+s.samples.length*8+s.samples.length/5*72,0)+tape.money.reduce((n,s)=>n+s.readings.length*256+s.spans.length*192,0);
+    const workBytes=(trace:WorkTrace|null,curves?:number)=>trace?JSON.stringify({...trace,spans:[],packed:undefined}).length*2+(trace.packed?trace.packed.blocks.length*8+trace.packed.patterns.reduce((n,p)=>n+p.length*8+32,0)+(curves??trace.packed.blocks.length/3*144+trace.packed.patterns.reduce((n,p)=>n+p.length*128,0)):trace.spans.length*640)+trace.refs.length*768:0;
+    const tapeBytes=(tape:PeriodTape,wire=false)=>JSON.stringify({...tape,quota:tape.quota.map(s=>({...s,samples:[]})),money:tape.money.map(s=>({...s,readings:[],spans:[],...(s.paired?{paired:{readings:[],spans:[]}}:{})}))}).length*2+tape.quota.reduce((n,s)=>n+(wire&&!('columns' in s.samples)?s.samples.length*8:sampleBytes(s.samples,s.samplesEncoding==='delta')),0)+tape.money.reduce((n,s)=>n+[...s.readings,...s.paired?.readings??[]].reduce((bytes,r)=>bytes+256+2*((r.amount?.length??0)+(r.unit?.length??0)+(r.label?.length??0)+(r.scope?.length??0)+(r.limit?.length??0)),0)+(s.spans.length+(s.paired?.spans.length??0))*192,0);
     const cellsBytes=PERIOD_SCOPES.reduce((bytes,scope)=>{const part=reply[scope];if(part?.state!=='complete')return bytes;const {tape:_,...cells}=part.value;return bytes+JSON.stringify(cells).length*3;},0);
-    let projected=cellsBytes;
-    const admit=(bytes:number)=>{if(!reserve(projected+bytes))return false;projected+=bytes;return true;};
-    const prefixes=(tape:PeriodTape|undefined)=>tape?tape.quota.reduce((n,s)=>n+s.samples.length/5*128,0)+tape.money.reduce((n,s)=>n+s.readings.length*192+s.spans.length*96,0):0;
-    for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part?.state==='complete'&&part.value.tape&&!admit(tapeBytes(part.value.tape)+prefixes(part.value.tape)+prefixes(this.tapes.get(scope)?.tape)))reply[scope]={state:'error',error:'history_limit'};}
-    const workPreparation=workBytes(this.work.value)+(reply.quota?.state==='complete'&&reply.quota.value.tape?0:prefixes(this.tapes.get('quota')?.tape));
-    if(reply.sessions&&reply.sessions.state!=='error'&&!admit(workBytes(reply.sessions.value)+workPreparation))reply.sessions={state:'error',error:'history_limit'};
-    if(reply.values?.state==='complete'&&!admit(JSON.stringify(reply.values.value).length*6))reply.values={state:'error',error:'history_limit'};
-    const priorWork=this.work.value,priorTapes=new Map(this.tapes);
+    const staged=new Map<string,number>(),limited=new Error('history_limit');
+    const charge=(key:string,bytes:number)=>{const prior=staged.get(key)??0;staged.set(key,bytes);if(!reserve(cellsBytes+[...staged.values()].reduce((a,b)=>a+b,0))){staged.set(key,prior);throw limited;}};
+    const discard=(key:string)=>{staged.delete(key);reserve(cellsBytes+[...staged.values()].reduce((a,b)=>a+b,0));};
+    const ownTape=(tape:PeriodTape,prior?:PeriodTape)=>({...tape,quota:tape.quota.filter(row=>!prior?.quota.includes(row)),money:tape.money.filter(row=>!prior?.money.includes(row))});
+    const failScope=(scope:PeriodScope)=>{reply[scope]={state:'error',error:'history_limit'};discard(scope);};
+    for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part?.state==='complete'&&part.value.tape)try{charge(scope,tapeBytes(part.value.tape,true));}catch(error){if(error!==limited)throw error;failScope(scope);}}
+    if(reply.sessions&&reply.sessions.state!=='error')try{charge('work',workBytes(reply.sessions.value,0));}catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};}
+    if(reply.values?.state==='complete')try{charge('values',JSON.stringify(reply.values.value).length*6);}catch(error){if(error!==limited)throw error;reply.values={state:'error',error:'history_limit'};}
+    const priorWork=this.work.value,priorIndex=this.index,priorTapes=new Map(this.tapes);
     function* build():Preparation<{work:WorkTrace|null;index:PeriodIndex|null;activity:PeriodActivity|null;tapes:typeof priorTapes}> {
+      const incomingTapes=new Map<PeriodScope,PeriodTape>();
+      // Compact each decoded column before allocating work or accounting indexes.
+      // Progress replaces reservations as scratch buffers become unreachable.
+      for(const scope of PERIOD_SCOPES){const part=reply[scope],incoming=part?.state==='complete'?part.value.tape:undefined;if(!incoming)continue;
+        const old=priorTapes.get(scope),queryKey=JSON.stringify([intent.request[scope]?.meters,intent.request[scope]?.unit,intent.request[scope]?.currency]),previous=old?.queryKey===queryKey?old.tape:undefined;
+        try{
+          for(const series of incoming.quota){charge(scope,tapeBytes(incoming,true)+series.samples.length/5*40);series.samples=yield*retainSamplesPrepared(series.samples,series.samplesEncoding==='delta');delete series.samplesEncoding;charge(scope,tapeBytes(incoming,true));yield;}
+          const replacement=previous?.quota.filter(s=>incoming.quota.some(row=>row.source===s.source&&row.window===s.window)).reduce((n,s)=>n+s.samples.length/5*88,0)??0;
+          charge(scope,tapeBytes(incoming)+replacement);
+          const tape=yield*mergeTapePrepared(previous,incoming);incomingTapes.set(scope,tape);if(part?.state==='complete')part.value.tape=tape;charge(scope,tapeBytes(ownTape(tape,previous)));
+        }catch(error){if(error!==limited)throw error;incomingTapes.delete(scope);failScope(scope);}
+      }
+      let work=priorWork,index:PeriodIndex|null=null,activity:PeriodActivity|null=null;
       const part=reply.sessions;
-      const work=part&&part.state!=='error'?(part.state==='delta'&&priorWork?yield* mergeWorkPrepared(priorWork,part.value):part.value):priorWork;
-      yield;
-      const index=part&&part.state!=='error'&&work?yield* PeriodIndex.prepare(work):null;
-      const activity=part&&part.state!=='error'&&work?yield* PeriodActivity.prepare(work):null;
+      if(part&&part.state!=='error')try{
+        charge('work',workBytes(part.value)+(part.state==='delta'?workBytes(priorWork):0));
+        work=part.state==='delta'&&priorWork?yield*mergeWorkPrepared(priorWork,part.value):part.value;
+        if(!work.packed)work=yield*packWorkPrepared(work);
+        charge('work',workBytes(work));index=yield*PeriodIndex.prepare(work);activity=yield*PeriodActivity.prepare(work,index.curves);charge('work',workBytes(work,index.curves.bytes));
+      }catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};work=priorWork;index=null;activity=null;discard('work');}
+      const workPart=reply.sessions,changedWork=new Set(workPart&&workPart.state!=='error'?[...workPart.value.refs,...(workPart.state==='complete'?priorWork?.refs??[]:[])].map(ref=>ref.source):[]);
       const tapes=new Map(priorTapes);
       for(const scope of PERIOD_SCOPES){
-        const part=reply[scope],old=tapes.get(scope),incoming=part?.state==='complete'?part.value.tape:undefined;
+        const old=tapes.get(scope),incoming=incomingTapes.get(scope);
         if(!incoming&&!(scope==='quota'&&old&&index))continue;
-        const queryKey=JSON.stringify([intent.request[scope]?.meters,intent.request[scope]?.unit,intent.request[scope]?.currency]);
-        if(incoming)for(const series of incoming.quota){series.samples=new Float64Array(series.samples);yield;}
-        const tape=incoming?yield* mergeTapePrepared(old?.queryKey===queryKey?old.tape:undefined,incoming):old!.tape;
-        const accounting=yield* PeriodAccounting.prepare(tape,work);
-        if(incoming){changed.add(scope);tapes.set(scope,{tape,accounting,generation:intent.generation,selection:intent.request.selection,rangeKey:intent.request.selection.mode==='range'?periodKey(intent.request.selection):prefs().range,queryKey});}
-        else tapes.set(scope,{...old!,accounting});
+        const queryKey=JSON.stringify([intent.request[scope]?.meters,intent.request[scope]?.unit,intent.request[scope]?.currency]),tape=incoming??old!.tape;
+        const base=staged.get(scope)??0;
+        try{
+          const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves??priorIndex?.curves,old?.accounting,changedWork,bytes=>charge(scope,base+bytes));
+          if(incoming){changed.add(scope);tapes.set(scope,{tape,accounting,generation:intent.generation,selection:intent.request.selection,rangeKey:intent.request.selection.mode==='range'?periodKey(intent.request.selection):prefs().range,queryKey});}
+          else tapes.set(scope,{...old!,accounting});
+        }catch(error){if(error!==limited)throw error;incomingTapes.delete(scope);failScope(scope);}
       }
       return {work,index,activity,tapes};
     }
@@ -217,7 +244,7 @@ class BoardPeriod {
         this.tick(false);
       }
     }
-    this.bytes=JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape),0);
+    this.bytes=JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.quotaBytes,0);
     release();
     this.publishProjection([...changed]);
     this.scheduleClock();

@@ -15,6 +15,8 @@ export class PeriodTransport implements HistoryMember {
   private readonly flights=new Set<Flight>();
   private completed='';
   private failed='';
+  private baselineKey='';
+  private readonly baselineParts=new Set<string>();
   private readonly cursors=new Map<string,string>();
   constructor(private readonly pool:HistoryPool,private readonly intent:()=>PeriodIntent|null,private readonly receive:(reply:PeriodReply,intent:PeriodIntent,reserve?:(bytes:number)=>boolean)=>void|Promise<void>,
     private readonly send:(board:string,body:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean)=>Promise<PeriodReply>,private readonly accessLost:()=>void=()=>{}) {}
@@ -22,6 +24,7 @@ export class PeriodTransport implements HistoryMember {
   evictionCandidates(){return [];}
   private key(intent:PeriodIntent){return `${intent.generation}:${intent.revision}`;}
   change(){this.schedule();}
+  forgetEvidence(){this.cursors.clear();}
   reset(){this.completed=this.failed='';this.cursors.clear();for(const flight of this.flights)this.abort(flight);for(const demand of this.queue)demand.reject(aborted());this.queue=[];}
   retry(){this.failed='';this.schedule();}
   read(scope:PeriodScope,query:HistoryQuery,signal?:AbortSignal):Promise<HistoryReply> {
@@ -37,15 +40,27 @@ export class PeriodTransport implements HistoryMember {
   private flush() {
     const intent=this.intent();if(!intent)return;
     const key=this.key(intent);
-    const extras=(!!intent.request.values||!!intent.request.sessions||!!intent.request.quota||!!intent.request.budget||!!intent.request.funds)&&key!==this.completed&&key!==this.failed&&![...this.flights].some(f=>f.extras&&this.key(f.intent)===key);
+    if(this.baselineKey!==key){this.baselineKey=key;this.baselineParts.clear();}
+    const cursorKey=(scope:PeriodScope,query:HistoryQuery)=>JSON.stringify([intent.board,scope,query.meters,query.unit,query.currency]);
+    const baseline=PERIOD_SCOPES.some(scope=>intent.request[scope]&&!this.cursors.has(cursorKey(scope,intent.request[scope]!)));
+    // First retain the bounded drawing cells, then its exact evidence. Their full
+    // decoded bodies must not coexist while either is still waiting for preparation.
+    const extras=(!baseline||!this.queue.length&&!this.flights.size)&&(!!intent.request.values||!!intent.request.sessions||!!intent.request.quota||!!intent.request.budget||!!intent.request.funds)&&key!==this.completed&&key!==this.failed&&![...this.flights].some(f=>f.extras&&this.key(f.intent)===key);
     if(!this.queue.length&&!extras)return;
     const demands:Demand[]=[];
     for(const scope of PERIOD_SCOPES){const index=this.queue.findIndex(d=>d.scope===scope&&!d.signal?.aborted);if(index!==-1)demands.push(this.queue.splice(index,1)[0]);}
     const flight:Flight={role:'visible',intent,controller:new AbortController(),demands,ownSlot:!demands.length,extras};
     this.flights.add(flight);
-    const cursorKey=(scope:PeriodScope,query:HistoryQuery)=>JSON.stringify([intent.board,scope,query.meters,query.unit,query.currency]);
     const body:PeriodRequest={...intent.request,...(!extras?{values:undefined,sessions:undefined,quota:undefined,budget:undefined,funds:undefined}:{}),...Object.fromEntries(demands.map(d=>[d.scope,{...d.query}]))};
-    for(const scope of PERIOD_SCOPES){const query=body[scope];if(query)query.evidence??=this.cursors.get(cursorKey(scope,query));}
+    const pendingBaseline=(['quota','funds','budget'] as const).filter(scope=>body[scope]&&!this.baselineParts.has(scope));
+    const deferredBaseline=baseline&&extras&&pendingBaseline.length>1;
+    if(baseline&&extras){
+      // A cold month's evidence is independent by family. Keep its largest decoded
+      // bodies separate; changed measurements and work still share the warm read.
+      for(const scope of PERIOD_SCOPES)if(scope!==pendingBaseline[0])delete body[scope];
+      for(const part of ['values','sessions'] as const)if(this.baselineParts.has(part))delete body[part];
+    }
+    for(const scope of PERIOD_SCOPES){const query=body[scope];if(query)query.evidence??=baseline&&!extras?'skip':this.cursors.get(cursorKey(scope,query));}
     const appliedIntent={...intent,request:body};
     const start=()=>{
       if(flight.controller.signal.aborted)return;
@@ -56,7 +71,7 @@ export class PeriodTransport implements HistoryMember {
         if(current?.generation===intent.generation&&current.revision===intent.revision) {
           await this.receive(reply,appliedIntent,bytes=>this.pool.reserve(flight,bytes));
           const latest=this.intent();
-          if(latest?.generation===intent.generation&&latest.revision===intent.revision){if(extras)this.completed=key;
+          if(latest?.generation===intent.generation&&latest.revision===intent.revision){if(extras){if(!deferredBaseline)this.completed=key;if(baseline)for(const part of [...PERIOD_SCOPES,'values','sessions'] as const)if(body[part])this.baselineParts.add(part);}
           for(const scope of PERIOD_SCOPES){const part=reply[scope],query=body[scope];if(query&&part?.state==='complete'&&part.value.tape)this.cursors.set(cursorKey(scope,query),part.value.tape.cursor);}}
         }
         for(const demand of demands) {
@@ -64,8 +79,13 @@ export class PeriodTransport implements HistoryMember {
           if(part?.state==='complete'){const {tape:_tape,...value}=part.value;demand.resolve(value);}
           else demand.reject(new ApiError(part?.state==='error'&&part.error==='history_limit'?413:400,part?.state==='error'?part.error:'history_failed'));
         }
-      }).catch(error=>{if(error instanceof ApiError&&[401,403,404].includes(error.status))this.accessLost();if(extras)this.failed=key;for(const demand of demands)demand.reject(error);if(extras){const current=this.intent();if(current?.generation===intent.generation&&current.revision===intent.revision)this.receive({basis:{run:'',revision:'',evaluatedAt:intent.request.evaluatedAt,evidenceCut:0,range:{from:0,to:0}},...(body.values?{values:{state:'error',error:error instanceof ApiError&&error.code==='history_limit'?'history_limit':'unavailable'}}:{}),...(body.sessions?{sessions:{state:'error',error:error instanceof ApiError&&error.code==='history_limit'?'history_limit':'unavailable'}}:{})},intent);}})
-        .finally(()=>{this.pool.release(flight);this.flights.delete(flight);const next=this.intent();if(this.queue.length||next&&this.key(next)!==key)this.schedule();});
+      }).catch(error=>{
+        if(error instanceof ApiError&&[401,403,404].includes(error.status))this.accessLost();
+        if(extras){if(!deferredBaseline)this.failed=key;if(baseline&&this.baselineKey===key)for(const part of [...PERIOD_SCOPES,'values','sessions'] as const)if(body[part])this.baselineParts.add(part);}
+        for(const demand of demands)demand.reject(error);
+        if(extras){const current=this.intent();if(current?.generation===intent.generation&&current.revision===intent.revision){const section={state:'error' as const,error:error instanceof ApiError&&error.code==='history_limit'?'history_limit' as const:'unavailable' as const};this.receive({basis:{run:'',revision:'',evaluatedAt:intent.request.evaluatedAt,evidenceCut:0,range:{from:0,to:0}},...Object.fromEntries(PERIOD_SCOPES.filter(scope=>body[scope]).map(scope=>[scope,section])),...(body.values?{values:section}:{}),...(body.sessions?{sessions:section}:{})},appliedIntent);}}
+      })
+        .finally(()=>{this.pool.release(flight);this.flights.delete(flight);this.schedule();});
     };
     if(flight.ownSlot)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
     if(this.queue.length)this.schedule();

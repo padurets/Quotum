@@ -92,8 +92,8 @@ export class PeriodReader {
     const response:PeriodReply={basis};
     const reservation=this.history.reservation();
     let replyBytes=0,sharedBytes=0;
-    const reserve=(bytes:number)=>{if(replyBytes+sharedBytes+bytes>12*1024*1024)throw new HistoryLimit();reservation.add(bytes);replyBytes+=bytes;};
-    const shared=sharedWork(this.hub,shown,{from:request.sessions?replaceFrom:cut,to:request.sessions?workFrontier.to:cut},bytes=>{if(replyBytes+sharedBytes+bytes>12*1024*1024)throw new HistoryLimit();reservation.add(bytes);sharedBytes+=bytes;});
+    const reserve=(bytes:number)=>{reservation.add(bytes);replyBytes+=bytes;};
+    const shared=sharedWork(this.hub,shown,{from:request.sessions?replaceFrom:cut,to:request.sessions?workFrontier.to:cut},bytes=>{reservation.add(bytes);sharedBytes+=bytes;});
     const work:NonNullable<Parameters<typeof readHistory>[6]>=(from,to)=>{const before=sharedBytes;try{return shared(from,to);}catch(error){reservation.remove(sharedBytes-before);sharedBytes=before;throw error;}};
     const section=<T>(read:()=>T):PeriodSection<T>=>{
       const before=replyBytes;
@@ -120,7 +120,7 @@ export class PeriodReader {
         const changed=new Set(changes.map(c=>c.source)),extendsRange=!!delta&&range.from<previous.from;
         const tapeShown=delta&&!extendsRange?new Map([...shown].filter(([id])=>changed.has(id))):shown;
         const cursor=this.encode({identity:tapeIdentity,revision:this.revision,from:patch.coveredFrom,cut:patch.coveredTo});
-        const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut);
+        const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut,bytes=>{reservation.remove(bytes);replyBytes-=bytes;});
         return {...value,tape:{...tape,cut:patch.coveredTo,...(delta?{replaceTo:patch.to}:{})}};
       });
       if(request.values)response.values=section(()=>periodValues(store,store.sources(board).filter(s=>request.values!.includes(s.id)),user,cut,reserve));

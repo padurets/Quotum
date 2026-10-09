@@ -1,4 +1,4 @@
-import {sampleAt,sampleCount} from '../domain/periodTape.js';
+import {decodeSamples,sampleAt,sampleCount} from '../domain/periodTape.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Store} from '../store/store.js';
@@ -158,7 +158,7 @@ test('quota unavailability ends both historical values and exact tape coverage a
   const response=await h.read(request);assert.equal(response.statusCode,200,response.body);
   const reply=response.json<PeriodReply>();if(reply.values?.state!=='complete'||reply.quota?.state!=='complete')throw new Error('period');
   const value=reply.values.value[0].windows[0];assert.equal(value.remaining,83);assert.equal(value.validUntil,boundary);assert.equal(value.stale,true);
-  assert.equal(sampleAt(reply.quota.value.tape!.quota[0].samples,0)!.validUntil,boundary);
+  assert.equal(sampleAt(decodeSamples(reply.quota.value.tape!.quota[0].samples),0)!.validUntil,boundary);
   const before=periodValues(h.store,h.store.sources(h.board),h.user.id,boundary-1,()=>{})[0];
   assert.equal(before.windows[0].stale,false);assert.equal(before.validFor!.to,boundary);
 });

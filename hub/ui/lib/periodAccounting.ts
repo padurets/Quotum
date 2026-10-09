@@ -2,15 +2,16 @@ import type {PeriodValues} from '../../server/domain/periodValues';
 import {drain,type Preparation} from '../../server/domain/prepare';
 import {edge} from '../../server/domain/quota';
 import type {History,HistorySeries} from '../../server/domain/history';
-import {sampleAt,sampleCount,type MoneyTape,type PeriodTape} from '../../server/domain/periodTape';
+import {sampleAt,sampleCount,numberAt,numberBytes,numberColumn,lowerNumber,type Numbers,type MoneyTape,type PeriodTape} from '../../server/domain/periodTape';
 import type {MeterHistory} from '../../server/domain/meterHistory';
 import {meterStep,plottedAmount,type ExceptionalStep,type MeterSpan,type Reading} from '../../server/domain/meters';
 import {convertBy} from '../../server/domain/currency';
 import type {PeriodRange} from '../../server/domain/period';
 import type {WorkTrace} from '../../server/domain/periodWork';
 import {union} from '../../server/domain/work';
+import {PeriodCurves,type WorkTimeline} from './periodCurves';
 
-const lower=(values:ArrayLike<number>,at:number)=>{let a=0,b=values.length;while(a<b){const m=(a+b)>>>1;if(values[m]<at)a=m+1;else b=m;}return a;};
+const lower=lowerNumber;
 class Intervals {
   readonly from:number[]=[];
   readonly to:number[]=[];
@@ -21,32 +22,42 @@ class Intervals {
 }
 type QuotaSummary=Pick<HistorySeries,'consumed'|'coveredMs'|'remainingAtStart'|'remainingAtEnd'|'work'>;
 class QuotaIndex {
-  readonly times:Float64Array;
-  private readonly ends:Float64Array;
-  private readonly starts:Float64Array;
-  private readonly spent:Float64Array;
-  private readonly covered:Float64Array;
-  private readonly worked:Float64Array;
-  private readonly during:Float64Array;
-  constructor(private readonly series:PeriodTape['quota'][number],private readonly activity:Intervals,private readonly agent:Intervals[],private readonly known:number,deferred=false) {
+  readonly times:Numbers;
+  private deadlines:Numbers=new Float64Array(0);
+  private spent:Numbers=new Float64Array(0);
+  private covered:Numbers=new Float64Array(0);
+  private worked:Numbers=new Float64Array(0);
+  private during:Numbers=new Float64Array(0);
+  constructor(readonly series:PeriodTape['quota'][number],private readonly activity:WorkTimeline|undefined,private readonly known:number,deferred=false) {
     const count=sampleCount(series.samples);
-    this.times=new Float64Array(count);this.starts=new Float64Array(Math.max(0,count-1)).fill(Infinity);this.ends=new Float64Array(Math.max(0,count-1)).fill(Infinity);
-    this.spent=new Float64Array(count);this.covered=new Float64Array(count);this.worked=new Float64Array(count);this.during=new Float64Array(count);
+    this.times='columns' in series.samples?series.samples.columns[0]:new Float64Array(count);
     if(!deferred)drain(this.build());
   }
-  static *prepare(series:PeriodTape['quota'][number],activity:Intervals,agent:Intervals[],known:number):Preparation<QuotaIndex>{const value=new QuotaIndex(series,activity,agent,known,true);yield*value.build();return value;}
+  static *prepare(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number):Preparation<QuotaIndex>{const value=new QuotaIndex(series,activity,known,true);yield*value.build();return value;}
   private *build():Preparation<void>{
     const series=this.series,{activity,known}=this;
-    for(let i=0;i<sampleCount(series.samples);i++){this.times[i]=sampleAt(series.samples,i)!.at;yield;}
-    let position=0;
+    const deadlines=new Float64Array(sampleCount(series.samples));
+    for(let i=0;i<sampleCount(series.samples);i++){const sample=sampleAt(series.samples,i)!;if(this.times instanceof Float64Array)this.times[i]=sample.at;deadlines[i]=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity);yield;}
+    const sorted=yield*sortedNumbers(deadlines);this.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
+    const spent=new Float64Array(sampleCount(series.samples)),covered=new Float64Array(spent.length),worked=new Float64Array(spent.length),during=new Float64Array(spent.length);
     for(let i=1;i<sampleCount(series.samples);i++) {
-      yield;const a=sampleAt(series.samples,i-1)!,b=sampleAt(series.samples,i)!,step=edge(a,b);if(!step.valid)continue;
-      const work=activity.in({from:a.at,to:b.at});
-      this.starts[position]=a.at;this.ends[position]=b.at;
-      this.spent[position+1]=this.spent[position]+step.delta;this.covered[position+1]=this.covered[position]+b.at-a.at;
-      this.worked[position+1]=this.worked[position]+(a.at>=known?work:0);this.during[position+1]=this.during[position]+(a.at>=known&&work>0?step.delta:0);position++;
+      yield;spent[i]=spent[i-1];covered[i]=covered[i-1];worked[i]=worked[i-1];during[i]=during[i-1];
+      const a=sampleAt(series.samples,i-1)!,b=sampleAt(series.samples,i)!,step=edge(a,b);if(!step.valid)continue;
+      const work=activity?.read({from:a.at,to:b.at},true)??0;
+      spent[i]+=step.delta;covered[i]+=b.at-a.at;
+      worked[i]+=a.at>=known?work:0;during[i]+=a.at>=known&&work>0?step.delta:0;
     }
+    this.spent=yield*numberColumn(spent.length,i=>spent[i]);this.covered=yield*numberColumn(covered.length,i=>covered[i]);
+    this.worked=yield*numberColumn(worked.length,i=>worked[i]);this.during=yield*numberColumn(during.length,i=>during[i]);
   }
+
+  get bytes(){return [this.deadlines,this.spent,this.covered,this.worked,this.during].reduce((n,c)=>n+numberBytes(c),0)+(this.times instanceof Float64Array?numberBytes(this.times):0);}
+  changesAt(now:number,period:number){
+    const from=now-period,last=sampleAt(this.series.samples,sampleCount(this.series.samples)-1);
+    const deadline=last?Math.min(last.at+last.staleAfterMs+1,last.resetAt??Infinity,last.validUntil??Infinity):Infinity;
+    return Math.min((numberAt(this.times,lower(this.times,from))??Infinity)+1+period,(numberAt(this.deadlines,lower(this.deadlines,from+1))??Infinity)+period,deadline>now?deadline:Infinity);
+  }
+
   plot(range:PeriodRange,cell:number,previous:HistorySeries['points']):HistorySeries['points'] {
     const leftEnd=(Math.floor(range.from/cell)+1)*cell,rightStart=Math.floor((range.to-1)/cell)*cell;
     const points=previous.filter(([at])=>at>=leftEnd&&at<rightStart).map(([at,value,segment,validUntil])=>[at,value,segment,validUntil??at+cell] as HistorySeries['points'][number]);
@@ -58,7 +69,7 @@ class QuotaIndex {
     for(const [from,to] of leftEnd>=rightStart?[[range.from,range.to]]:[[range.from,leftEnd],[rightStart,range.to]]) {
       const first=Math.max(0,lower(this.times,from+1)-1),end=lower(this.times,to);
       for(let i=first;i<end;i++) {
-        const sample=sampleAt(this.series.samples,i)!,until=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity,this.times[i+1]??Infinity,to),at=Math.max(from,sample.at);
+        const sample=sampleAt(this.series.samples,i)!,until=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity,numberAt(this.times,i+1)??Infinity,to),at=Math.max(from,sample.at);
         if(until>at)points.push([at,100-sample.used,i+1,until]);
       }
     }
@@ -66,13 +77,13 @@ class QuotaIndex {
   }
 
   at(range:PeriodRange):QuotaSummary {
-    const lo=lower(this.starts,range.from),hi=lower(this.ends,range.to),last=sampleAt(this.series.samples,lower(this.times,range.to)-1);
+    const lo=lower(this.times,range.from),hi=Math.max(0,lower(this.times,range.to)-1),last=sampleAt(this.series.samples,lower(this.times,range.to)-1);
     const first=sampleAt(this.series.samples,lower(this.times,range.from+1)-1);
     const valid=(sample:typeof first,at:number)=>sample&&at<Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity)?100-sample.used:null;
-    const sum=(values:Float64Array)=>hi>lo?values[hi]-values[lo]:0;
+    const sum=(values:Numbers)=>hi>lo?numberAt(values,hi)!-numberAt(values,lo)!:0;
     const workRange={from:Math.max(range.from,this.known),to:range.to};
-    const workLo=lower(this.starts,workRange.from);
-    return {consumed:sum(this.spent),coveredMs:sum(this.covered),remainingAtStart:valid(first,range.from),remainingAtEnd:valid(last,range.to),work:Number.isFinite(this.known)?{from:workRange.from,ms:workRange.to>workRange.from?this.activity.in(workRange):null,agentMs:workRange.to>workRange.from?this.agent.reduce((n,trace)=>n+trace.in(workRange),0):0,consumed:hi>workLo?this.spent[hi]-this.spent[workLo]:0,coveredMs:sum(this.worked),duringWork:sum(this.during)}:null};
+    const workLo=lower(this.times,workRange.from);
+    return {consumed:sum(this.spent),coveredMs:sum(this.covered),remainingAtStart:valid(first,range.from),remainingAtEnd:valid(last,range.to),work:Number.isFinite(this.known)?{from:workRange.from,ms:workRange.to>workRange.from?this.activity?.read(workRange,true)??0:null,agentMs:workRange.to>workRange.from?this.activity?.read(workRange)??0:0,consumed:hi>workLo?numberAt(this.spent,hi)!-numberAt(this.spent,workLo)!:0,coveredMs:sum(this.worked),duringWork:sum(this.during)}:null};
   }
 }
 
@@ -113,7 +124,7 @@ class MoneyIndex {
   private topup!:AmountIndex;
   private coverage!:Intervals;
   private pairedTimes:number[]=[];
-  constructor(private readonly group:MoneyTape,deferred=false) {if(!deferred)drain(this.build());}
+  constructor(readonly group:MoneyTape,deferred=false) {if(!deferred)drain(this.build());}
   static *prepare(group:MoneyTape):Preparation<MoneyIndex>{const value=new MoneyIndex(group,true);yield*value.build();return value;}
   private *build():Preparation<void>{
     const group=this.group;
@@ -186,37 +197,35 @@ function* sortedNumbers(input:Float64Array):Preparation<Float64Array> {
 export class PeriodAccounting {
   private readonly quota=new Map<string,QuotaIndex>();
   private readonly money=new Map<string,MoneyIndex>();
-  private readonly sampleTimes=new Map<string,Float64Array>();
-  private boundaries:Float64Array=new Float64Array(0);
-  private deadlines:number[]=[];
-  constructor(readonly tape:PeriodTape,work:WorkTrace|null,deferred=false) {if(!deferred)drain(this.build(work));}
-  static *prepare(tape:PeriodTape,work:WorkTrace|null):Preparation<PeriodAccounting>{const value=new PeriodAccounting(tape,work,true);yield*value.build(work);return value;}
-  private *build(work:WorkTrace|null):Preparation<void>{
+  private readonly sampleTimes=new Map<string,Numbers>();
+  constructor(readonly tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,deferred=false) {if(!deferred)drain(this.build(work,curves));}
+  static *prepare(tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void):Preparation<PeriodAccounting>{const value=new PeriodAccounting(tape,work,curves,true);yield*value.build(work,curves,prior,changedWork,progress);return value;}
+  private *build(work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void):Preparation<void>{
     const tape=this.tape;
-    const boundaries=new Float64Array(tape.quota.reduce((n,s)=>n+sampleCount(s.samples)*2,0)),deadlines:number[]=[];let at=0;
-    for(const series of tape.quota){for(let i=0;i<sampleCount(series.samples);i++){const s=sampleAt(series.samples,i)!;boundaries[at++]=s.at+1;boundaries[at++]=Math.min(s.at+s.staleAfterMs+1,s.resetAt??Infinity,s.validUntil??Infinity);yield;}const last=sampleAt(series.samples,sampleCount(series.samples)-1);if(last)deadlines.push(Math.min(last.at+last.staleAfterMs+1,last.resetAt??Infinity,last.validUntil??Infinity));}
-    this.boundaries=yield* sortedNumbers(boundaries);this.deadlines=deadlines.sort((a,b)=>a-b);
-    const sources=new Map<string,Map<number,[number,number][]>>();
-    for(const [id,a,b] of work?.spans??[]){const source=work!.refs[id].source;let refs=sources.get(source);if(!refs)sources.set(source,refs=new Map());let spans=refs.get(id);if(!spans)refs.set(id,spans=[]);spans.push([work!.anchor+a,work!.anchor+b]);yield;}
+    const workCurves=curves??(work?yield*PeriodCurves.prepare(work):undefined);
+    let preparedBytes=0;
     for(const series of tape.quota) {
-      const traces=[...(sources.get(series.source)?.values()??[])],all=traces.flat();
-      const activity=new Intervals(union(all.map(([from,to])=>({from,to}))));
-      const key=series.source+'\n'+series.window,index=yield* QuotaIndex.prepare(series,activity,traces.map(s=>new Intervals(s)),Math.max(work?.knownFrom??Infinity,series.workFrom??0));
+      const activity=workCurves?.groups.source.get(series.source);
+      const key=series.source+'\n'+series.window,old=prior?.quota.get(key),reuse=old?.series===series&&!changedWork.has(series.source);
+      if(!reuse)progress?.(preparedBytes+sampleCount(series.samples)*88+1024);
+      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,Math.max(work?.knownFrom??Infinity,series.workFrom??0));
+      if(!reuse){preparedBytes+=index.bytes;progress?.(preparedBytes);}
       this.quota.set(key,index);this.sampleTimes.set(key,index.times);
     }
-    for(const group of tape.money)this.money.set(group.source+'\n'+group.meter+'\n'+(group.displayUnit??group.readings[0]?.unit),yield* MoneyIndex.prepare(group));
+    for(const group of tape.money){const key=group.source+'\n'+group.meter+'\n'+(group.displayUnit??group.readings[0]?.unit),old=prior?.money.get(key);this.money.set(key,old?.group===group?old:yield*MoneyIndex.prepare(group));}
   }
+  get quotaBytes(){return [...this.quota.values()].reduce((n,index)=>n+index.bytes,0);}
   project(history:History,range:PeriodRange,values?:ReadonlyMap<string,PeriodValues>):History {
     if(range.from<this.tape.from)return history;
     const previous=new Map(history.series.map(s=>[s.sourceId+'\n'+s.windowId,s]));
     const series:HistorySeries[]=[];
     const batches=new Map<string,number>();
-    if(!history.live)for(const row of this.tape.quota){const times=this.sampleTimes.get(row.source+'\n'+row.window)!;const at=times[lower(times,range.to)-1];if(at!==undefined)batches.set(row.source,Math.max(batches.get(row.source)??0,at));}
+    if(!history.live)for(const row of this.tape.quota){const times=this.sampleTimes.get(row.source+'\n'+row.window)!;const at=numberAt(times,lower(times,range.to)-1);if(at!==undefined)batches.set(row.source,Math.max(batches.get(row.source)??0,at));}
     for(const row of this.tape.quota) {
       const key=row.source+'\n'+row.window,index=this.quota.get(key)!;
       const times=this.sampleTimes.get(key)!,membership=values?.get(row.source),descriptor=row.descriptors?.filter(d=>d.at<range.to).at(-1);
       const windowValue=membership?.windows.find(w=>w.id===row.window)??descriptor?.value;
-      if(!history.live&&(membership?!membership.windows.some(w=>w.id===row.window):row.descriptors?times[lower(times,range.to)-1]!==batches.get(row.source):row.member===false))continue;
+      if(!history.live&&(membership?!membership.windows.some(w=>w.id===row.window):row.descriptors?numberAt(times,lower(times,range.to)-1)!==batches.get(row.source):row.member===false))continue;
       const old=previous.get(key);if(!old&&history.live)continue;
       const summary=index.at(range),points=!history.live?index.plot(range,history.cellMs,old?.points??[]):old!.points;
       series.push({...old,sourceId:row.source,windowId:row.window,staleAfterMs:sampleAt(row.samples,sampleCount(row.samples)-1)?.staleAfterMs??0,...summary,points,...(!history.live?{pointMode:'observation' as const,windowValue:windowValue??row.windowValue}:{})});
@@ -225,7 +234,7 @@ export class PeriodAccounting {
   }
   changesAt(now:number,period:number):number|null {
     const from=now-period;if(from>=this.tape.cut)return null;
-    let next=Math.min((this.boundaries[lower(this.boundaries,from+1)]??Infinity)+period,this.deadlines[lower(this.deadlines,now+1)]??Infinity);
+    let next=Infinity;for(const index of this.quota.values())next=Math.min(next,index.changesAt(now,period));
     if(this.tape.money.length)next=Math.min(next,Math.floor(now/60_000)*60_000+60_000);
     return Number.isFinite(next)?next:null;
   }
