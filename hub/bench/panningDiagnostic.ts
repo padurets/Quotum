@@ -46,7 +46,7 @@ type TraceEvidence={save(name:string,value:unknown):void;saveTrace?(name:string,
 export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceEvidence, run=panning) {
   let active:Promise<unknown>|undefined,release=()=>{},interval=0;
   const stop=async()=>{if(active){release();const pending=active;active=undefined;await pending;}};
-  const measured={on:cdp.on.bind(cdp),off:cdp.off.bind(cdp),evaluate:cdp.evaluate.bind(cdp),
+  const measured={on:cdp.on.bind(cdp),off:cdp.off.bind(cdp),evaluate:cdp.evaluate.bind(cdp),at:cdp.at?.bind(cdp),
     send:async<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>=>{
       const rate=(params as {rate?:number}).rate;
       if(method==='Emulation.setCPUThrottlingRate'&&rate===4){

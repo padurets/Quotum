@@ -46,9 +46,55 @@ class Socket extends EventTarget {
   readonly commands: {id: number; method: string}[] = [];
   send(value: string) {this.commands.push(JSON.parse(value));}
   answer(id: number, result: unknown) {this.dispatchEvent(new MessageEvent('message', {data: JSON.stringify({id, result})}));}
+  emit(method: string, params: object = {}) {this.dispatchEvent(new MessageEvent('message', {data: JSON.stringify({method, params})}));}
   close() {this.readyState = WebSocket.CLOSED;}
 }
 const connection = (socket: Socket) => new (Cdp as unknown as new (socket: unknown) => Cdp)(socket);
+
+for (const [event, reason] of [['Inspector.targetCrashed', 'the renderer crashed'], ['Inspector.detached', 'the browser detached the target']]) {
+  test(`${event} rejects open-socket waiters and prevents cleanup commands from hiding the cause`, async t => {
+    t.mock.timers.enable({apis: ['setTimeout']});
+    const socket = new Socket(), cdp = connection(socket);
+    t.after(() => cdp.close());
+    cdp.at('quota/24h/return');
+    const pending = [cdp.evaluate('private-canary'), cdp.send('Input.dispatchMouseEvent', {x: 123})]
+      .map(promise => promise.then(() => 'unexpected success', error => String(error.message)));
+    cdp.at('cleanup');
+    socket.emit(event, {reason: 'private-detach-canary'});
+    // The original deadlines do not advance; the event itself must settle both calls.
+    await new Promise(resolve => setImmediate(resolve));
+    for (const promise of pending) assert.match(await Promise.race([promise, Promise.resolve('still waiting')]), new RegExp('quota/24h/return: .*: ' + reason));
+    assert.deepEqual(cdp.snapshot().pending, []);
+    assert.equal(cdp.snapshot().failure?.context, 'quota/24h/return');
+    assert.equal(cdp.snapshot().failure?.reason, reason);
+    assert.equal(cdp.snapshot().terminal?.method, event);
+    const after = cdp.send('Emulation.setCPUThrottlingRate', {rate: 1}).then(() => 'unexpected success', error => String(error.message));
+    await Promise.resolve();
+    assert.match(await Promise.race([after, Promise.resolve('still waiting')]), new RegExp(reason));
+    assert.equal(socket.commands.length, 2);
+    t.mock.timers.tick(30_000);
+    assert.equal(cdp.snapshot().failure?.reason, reason);
+    assert.doesNotMatch(JSON.stringify(cdp.snapshot()), /private-canary|private-detach-canary|expression|"x"/);
+  });
+}
+
+test('a crash reload event permits new work without reviving old commands or retrying them', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const socket = new Socket(), cdp = connection(socket);
+  t.after(() => cdp.close());
+  const original = cdp.send('Performance.getMetrics').then(() => 'unexpected success', error => String(error.message));
+  socket.emit('Inspector.targetCrashed');
+  await Promise.resolve();
+  assert.match(await Promise.race([original, Promise.resolve('still waiting')]), /renderer crashed/);
+  socket.emit('Inspector.targetReloadedAfterCrash');
+  const next = cdp.send('Performance.getMetrics');
+  socket.answer(1, {metrics: ['stale']});
+  socket.answer(2, {metrics: ['new']});
+  assert.deepEqual(await next, {metrics: ['new']});
+  assert.equal(cdp.snapshot().terminal, null);
+  assert.equal(cdp.snapshot().failure?.reason, 'the renderer crashed');
+  assert.deepEqual(socket.commands.map(command => command.id), [1, 2]);
+});
 
 test('a silent open browser has a Node deadline even when the page RAF never advances', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});

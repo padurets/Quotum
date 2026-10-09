@@ -27,6 +27,9 @@ frequency-focus checks retain their budgets. Mixed Codex subscriptions also exer
 changed credit balances and unchanged-value heartbeats: each updates its own card and
 funds history without waking quota or wallet analytics. No browser means the check
 was not run.
+DevTools commands keep their thirty-second response deadline. An explicit renderer
+crash or target-detach event fails pending commands immediately, even if the socket
+stays open, and retains the original failure before cleanup. It does not retry work.
 `QUOTUM_BENCH_DIAGNOSE_PANNING=pairs` runs a fixed OFF/ON, ON/OFF, OFF/ON
 experiment for bounded input/frame/history correlation. Every result is retained;
 these diagnostic runs cannot satisfy the canonical gate. The optional

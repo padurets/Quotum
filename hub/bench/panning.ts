@@ -6,7 +6,8 @@ import {reload} from './reload.js';
 import {panMetrics, panCost} from './panningMetrics.js';
 
 /** Native input against the real charts; the temporary layout brings all four into view. */
-export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), evidence?: {timeline?: boolean; save(name: string, value: unknown): void}) {
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'> & Partial<Pick<Cdp, 'at'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), evidence?: {timeline?: boolean; save(name: string, value: unknown): void}) {
+  cdp.at?.('panning/setup');
   const wait = (ms: number) => cdp.evaluate(`new Promise(resolve => setTimeout(resolve, ${ms}))`);
   const key = (down: boolean, name: string, code: number) => cdp.send('Input.dispatchKeyEvent', {type: down ? 'keyDown' : 'keyUp', key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers: down && name === 'Shift' ? 8 : 0});
   const mouse = (type: string, x: number, y: number, modifiers = 0) => cdp.send('Input.dispatchMouseEvent', {type, x, y, modifiers, button: type === 'mouseMoved' && !modifiers ? 'none' : 'left', buttons: type === 'mousePressed' || type === 'mouseMoved' && modifiers ? 1 : 0, clickCount: type === 'mouseMoved' ? undefined : 1});
@@ -21,10 +22,12 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
   const originalHorizon = await cdp.evaluate<string>(`JSON.parse(localStorage.getItem('quotum.prefs')||'{}').horizon||'auto'`);
   let interception = false, failed = false;
   let scenario: {initiator: string; period?: string} | undefined;
+  const at = (stage: string) => cdp.at?.(['panning', scenario?.initiator, scenario?.period, stage].filter(Boolean).join('/'));
   await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 1600, deviceScaleFactor: 1, mobile: false});
   try {
     for (const initiator of ['quota', 'budget', 'funds'] as const) {
       scenario = {initiator};
+      at('load');
       // A newly opened board gives each input owner an independently unread edge.
       await reload(cdp);
       await cdp.evaluate(`(async()=>{window.__quotumBench?.pause();const until=Date.now()+15000;while(!['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))){if(Date.now()>until)throw new Error('panning charts did not open');await new Promise(r=>setTimeout(r,20));}})()`);
@@ -41,6 +44,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
     await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     for (const [period, index] of [['24h', 4], ['30d', 8]] as const) {
       scenario = {initiator, period};
+      at('setup');
       await click('.period .picker > button');
       await click('.period .popover .popover-row', index);
       await settled();
@@ -194,6 +198,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       const wheel = (dx: number, shift = false) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: dx, deltaY: 0, modifiers: shift ? 8 : 0});
       const sent: Promise<unknown>[] = [];
       const costStart = evidence?.timeline !== undefined ? await panMetrics(cdp) : undefined;
+      at('wheel');
       await cdp.evaluate('window.__quotumPan.feeding=true');
       // The browser generates native wheel input without a CDP IPC per delta.
       const scroll = (distance: number, reverse = 0) => cdp.send('Input.synthesizeScrollGesture', {x: geometry.x, y: geometry.y, xDistance: distance, xOverscroll: reverse, yDistance: 0, speed: 720, gestureSourceType: 'mouse', preventFling: true});
@@ -204,6 +209,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       interception = false;
       await settled();
       // Shift-drag keeps capture when the pointer leaves the SVG, without extra inertia.
+      at('drag');
       await cdp.evaluate(`window.__quotumPan.segment='drag'`);
       await key(true, 'Shift', 16);
       await mouse('mousePressed', geometry.x, geometry.y, 8);
@@ -217,6 +223,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       await key(false, 'Shift', 16);
       await settled();
       // Native Shift deltaX returns to live, then Back/Forward restore complete gestures.
+      at('return');
       sent.length = 0;
       await cdp.evaluate(`window.__quotumPan.segment='return'`);
       const returnBefore = await cdp.evaluate<unknown>('window.__quotumPan.returnSnapshot()');
@@ -232,6 +239,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       await wait(240); await settled();
       await cdp.evaluate('window.__quotumPan.returnAfter=window.__quotumPan.returnSnapshot()');
       const costEnd = costStart ? await panMetrics(cdp) : undefined;
+      at('report');
       const report = await cdp.evaluate<PanReading>(`(() => {
         const p=window.__quotumPan;p.cleanup();
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
@@ -241,6 +249,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       if(costStart&&costEnd)report.cost=panCost(costStart,costEnd);
       reports.push(report);
       evidence?.save('panning-'+initiator+'-'+period,report);
+      at('postconditions');
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
       const live = await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`);
       if (!live) {
@@ -303,6 +312,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
     } catch {evidence.save('panning-partial', {status: 'unavailable', ...scenario});}
     throw error;
   } finally {
+    at('cleanup');
     if (failed) {
       // A dead renderer must not replace the failed scenario with a cleanup timeout.
       try {

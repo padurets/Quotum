@@ -13,8 +13,9 @@ export class Cdp {
   private context = '';
   private lastAck: {id: number; method: string; at: number} | null = null;
   private lastEvent: {method: string; at: number} | null = null;
-  private failure: {id: number; method: string; context: string; started: number; deadline: number; elapsedMs: number} | null = null;
-  private readonly waiting = new Map<number, {resolve: (value: never) => void; reject: (error: Error) => void; method: string; started: number; timer: ReturnType<typeof setTimeout>; clean(): void}>();
+  private terminal: {method: 'Inspector.targetCrashed' | 'Inspector.detached'; at: number} | null = null;
+  private failure: {id: number; method: string; context: string; started: number; deadline: number; elapsedMs: number; reason?: string} | null = null;
+  private readonly waiting = new Map<number, {resolve: (value: never) => void; reject: (error: Error) => void; method: string; context: string; started: number; timer: ReturnType<typeof setTimeout>; clean(): void}>();
   private readonly listeners = new Map<string, ((params: never) => void)[]>();
 
   private constructor(private readonly socket: WebSocket,readonly endpoint:string|null=null) {
@@ -28,6 +29,12 @@ export class Cdp {
         else call?.resolve(message.result as never);
       } else if (message.method) {
         this.lastEvent = {method: message.method, at: performance.now()};
+        // A renderer can die while its DevTools socket remains open.
+        // Retain that failure before cleanup sends more commands to the target.
+        if (message.method === 'Inspector.targetCrashed' || message.method === 'Inspector.detached') {
+          this.terminal = {method: message.method, at: this.lastEvent.at};
+          this.rejectWaiting(this.terminalReason());
+        } else if (message.method === 'Inspector.targetReloadedAfterCrash' && this.terminal?.method === 'Inspector.targetCrashed') this.terminal = null;
         for (const listener of this.listeners.get(message.method) ?? []) listener(message.params as never);
       }
     });
@@ -54,13 +61,14 @@ export class Cdp {
   at(context: string) {this.context = context;}
 
   snapshot() {
-    return {context: this.context, socketState: this.socket.readyState, lastAck: this.lastAck, lastEvent: this.lastEvent, failure: this.failure,
+    return {context: this.context, socketState: this.socket.readyState, lastAck: this.lastAck, lastEvent: this.lastEvent, terminal: this.terminal, failure: this.failure,
       pending: [...this.waiting].map(([id, call]) => ({id, method: call.method, started: call.started, deadline: call.started + 30_000}))};
   }
 
   send<T = unknown>(method: string, params: object = {}, signal?: AbortSignal): Promise<T> {
     // A browser gone meanwhile (it crashed, or was closed) answers nothing: said at once, not waited for.
     if (this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new Error(`${method}: the browser closed the connection`));
+    if (this.terminal) return Promise.reject(new Error(`${method}: ${this.terminalReason()}`));
     if (signal?.aborted) return Promise.reject(new Error(`${method}: command cancelled`));
     const id = this.next++;
     return new Promise<T>((resolve, reject) => {
@@ -75,7 +83,7 @@ export class Cdp {
         this.failure = {id, method, context, started, deadline: started + 30_000, elapsedMs: performance.now() - started};
         reject(new Error(`${context ? `${context}: ` : ''}${method}: no browser response in 30 s`));
       }, 30_000);
-      this.waiting.set(id, {resolve: resolve as (value: never) => void, reject, method, started, timer, clean});
+      this.waiting.set(id, {resolve: resolve as (value: never) => void, reject, method, context, started, timer, clean});
       signal?.addEventListener('abort', cancelled, {once: true});
       try {this.socket.send(JSON.stringify({id, method, params}));}
       catch (error) {clean(); this.waiting.delete(id); reject(error);}
@@ -107,8 +115,16 @@ export class Cdp {
     this.socket.close();
   }
 
-  private rejectWaiting() {
-    for (const call of this.waiting.values()) {call.clean(); call.reject(new Error(`${call.method}: the browser closed the connection`));}
+  private terminalReason() {
+    return this.terminal?.method === 'Inspector.targetCrashed' ? 'the renderer crashed' : 'the browser detached the target';
+  }
+
+  private rejectWaiting(reason = 'the browser closed the connection') {
+    for (const [id, call] of this.waiting) {
+      call.clean();
+      if (this.terminal) this.failure = {id, method: call.method, context: call.context, started: call.started, deadline: call.started + 30_000, elapsedMs: performance.now() - call.started, reason};
+      call.reject(new Error(`${call.context ? `${call.context}: ` : ''}${call.method}: ${reason}`));
+    }
     this.waiting.clear();
   }
 }
