@@ -430,11 +430,13 @@ const Stacks = memo(function Stacks({
   const painted = useRef('');
   const paintEdges = () => {
     if (!bandClip.current) return;
-    if ((!strip && !currentActivity) || !mask.current || !edges.current) {
+    const draft = pan.get();
+    // Until a gesture has a strip, the retained answer moves as a whole. Its
+    // old accounting endpoints cannot clip the newly exposed viewport.
+    if ((!strip && (!currentActivity || draft || axis.held)) || !mask.current || !edges.current) {
       clipPlot(bandClip.current, left * scale, (width - right) * scale, width * scale);
       return;
     }
-    const draft = pan.get();
     const visual = axis.visualGeometry();
     const range = strip && (draft || axis.held) ? {from: visual.from, to: visual.from + (draft?.length ?? strip.length)} : {from, to};
     const target = strip ? targetOf(strip.length, draft?.now ?? to, 'edge', range) : null;

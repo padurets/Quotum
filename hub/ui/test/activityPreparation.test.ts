@@ -18,12 +18,13 @@ test('the actual activity edge painter advances clipped bars without preparing t
   const start = source.indexOf('  const paintEdges = () => {');
   const region = source.slice(start, source.indexOf('  // Input uses the committed groups', start));
   const attributes = new Map<string, string>(), path = new Map<string, string>();
+  const clips: number[][] = []; let draft: {token: number} | null = null;
   const node = (values: Map<string, string>) => ({getAttribute: (name: string) => values.get(name), setAttribute: (name: string, value: string) => values.set(name, value)});
   const context = {bandClip: {current: {}}, mask: {current: node(attributes)}, edges: {current: {querySelectorAll: () => [node(path)]}},
     currentActivity: {}, activity: {by: {source: [{key: 's', cells: [[0, 25_000], [60_000, 60_000], [120_000, 5_000]]}]}},
     strip: null, groups: [{group: {key: 's'}}], from: 15_000, to: 135_000, by: 'source', barMs: 60_000, vertical: {max: 60_000}, height: 100, perMs: 0.001,
     left: 0, right: 0, width: 120, scale: 1, x: (at: number) => at / 1000, y: (ms: number) => 100 - ms / 1000,
-    axis: {held: false, visualGeometry: () => ({})}, pan: {get: () => null}, painted: {current: ''}, clipPlot: () => {}, cellStart,
+    axis: {held: false, visualGeometry: () => ({})}, pan: {get: () => draft}, painted: {current: ''}, clipPlot: (_node: unknown, ...bounds: number[]) => clips.push(bounds), cellStart,
     paint: null as unknown as () => void,
   };
   runInNewContext(ts.transpileModule(region + '\nglobalThis.paint=paintEdges;', {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
@@ -34,6 +35,14 @@ test('the actual activity edge painter advances clipped bars without preparing t
   context.activity = {by: {source: [{key: 's', cells: [[0, 10_000], [60_000, 60_000], [120_000, 5_000]]}]}};
   context.paint();
   assert.equal(path.get('d'), 'M0.5,90.0H59.5V100.0H0.5ZM120.5,95.0H179.5V100.0H120.5Z', 'only the exact boundary height changes');
+  const retained = path.get('d');
+  for (const released of [false, true]) {
+    draft = released ? null : {token: 1}; context.axis.held = released;
+    context.from = 1_000_000; context.to = 1_120_000; clips.length = 0;
+    context.paint();
+    assert.deepEqual(clips, [[0, 120, 120]], 'an unread moving frame keeps the retained drawing visible until its strip arrives');
+    assert.equal(path.get('d'), retained, 'the previous boundaries do not pretend to describe the gesture');
+  }
 });
 
 test('actual Activity generators hold one coherent model and produce exact stacks after interrupted preparation', () => {
