@@ -31,7 +31,7 @@ export function periodValues(store:Store, sources:readonly {id:string;provider:s
     UNION ALL SELECT to_at+1 FROM meter_contexts WHERE source_id=:source
     UNION ALL SELECT to_at+stale_after_ms+1 FROM meter_contexts WHERE source_id=:source
   ) SELECT coalesce(max(CASE WHEN at<=:edge THEN at END),0) AS start,
-    coalesce(min(CASE WHEN at>:edge THEN at END),:edge+1) AS end FROM changes`);
+    coalesce(min(CASE WHEN at>:edge THEN at END),9007199254740991) AS end FROM changes`);
   const result:PeriodValues[]=[];
   for(const {id,provider,budget} of sources) {
     const anchor=provider==='codex'?(budget?.enabled?budget.anchor??Infinity:Infinity):0;

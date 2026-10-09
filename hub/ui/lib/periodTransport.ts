@@ -3,7 +3,7 @@ import {PERIOD_SCOPES,type PeriodScope,type HistoryQuery,type PeriodRequest,type
 import {ApiError} from './http';
 import type {HistoryPool,HistoryMember} from './historyPool';
 
-export type PeriodIntent={board:string;generation:number;revision:number;request:PeriodRequest};
+export type PeriodIntent={board:string;generation:number;revision:number;proofEpoch?:number;request:PeriodRequest};
 type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;resolve(value:HistoryReply):void;reject(error:unknown):void};
 type Flight={role:'visible';intent:PeriodIntent;controller:AbortController;demands:Demand[];ownSlot:boolean;extras:boolean};
 const aborted=()=>new DOMException('Aborted','AbortError');

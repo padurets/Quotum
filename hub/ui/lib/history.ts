@@ -551,13 +551,16 @@ export class HistoryStore {
     // Serialize writes to a tile, including disjoint slices: writeSeq belongs to a tile.
     const blocked = (at: number) => [...this.flights].some(f => f.cell === target.cell && tileOf(at, target.cell) >= tileOf(f.from, f.cell) && tileOf(at, target.cell) <= tileOf(f.to - 1, f.cell));
     const backwards = this.interest?.direction === -1;
+    // The shared pool also retains exact period evidence. Decode one input tile
+    // at a time, including after a fast gesture skips across several tiles.
+    const readTiles = this.pool ? 1 : MAX_READ_TILES;
     if (backwards) bad.reverse();
     const at = bad.find(at => !blocked(at));
     if (at === undefined) return;
     let from = at, to = at + target.cell, last = at;
     for (const next of bad) {
       if (backwards ? next >= at : next <= at) continue;
-      if (Math.abs(next - last) !== target.cell || Math.abs(tileOf(next, target.cell) - tileOf(at, target.cell)) >= MAX_READ_TILES || blocked(next)) break;
+      if (Math.abs(next - last) !== target.cell || Math.abs(tileOf(next, target.cell) - tileOf(at, target.cell)) >= readTiles || blocked(next)) break;
       from = Math.min(from, next); to = Math.max(to, next + target.cell);
       last = next;
     }
@@ -576,7 +579,7 @@ export class HistoryStore {
       const upper = this.cutTo ?? (Math.floor((Math.max(this.env.now(), this.meta?.now ?? 0) + CLOCK_TOLERANCE_MS) / target.cell) + 1) * target.cell;
       for (let n = 0; n < buffer; n++) {
         const extra = direction < 0 ? from - target.cell : to;
-        if (extra < lower || extra >= upper || blocked(extra) || tileOf(Math.max(to, extra + target.cell) - 1, target.cell) - tileOf(Math.min(from, extra), target.cell) >= MAX_READ_TILES) break;
+        if (extra < lower || extra >= upper || blocked(extra) || tileOf(Math.max(to, extra + target.cell) - 1, target.cell) - tileOf(Math.min(from, extra), target.cell) >= readTiles) break;
         const tile = this.grids.get(target.cell)?.get(tileOf(extra, target.cell));
         if (tile && tile.readTo > tile.readFrom && (extra >= tile.readFrom && extra < tile.validTo || Math.min(tile.to, Math.max(to, extra + target.cell)) < tile.readFrom || Math.max(tile.from, Math.min(from, extra)) > tile.readTo)) break;
         // A large foreground run may end before the viewport edge. Its extension

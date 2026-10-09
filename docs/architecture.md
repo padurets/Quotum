@@ -1304,9 +1304,15 @@ ledger; the server and browser share the accounting implementation in `server/do
 The interior drawing still uses cached history cells. Complete live indexes and fixed
 summaries can move into the shared LRU when a different interval is selected. Returning
 to a retained target reuses it; new evidence or authority changes invalidate those entries.
+Fixed summaries also describe exact duration and timestamp changes up to the next
+observation, work, availability or grid boundary. A repeated gesture can reuse that
+proof when its endpoints advance slightly with the clock. Amounts and spending steps
+stay unchanged within the proven interval; crossing its exclusive end requires new evidence.
 Widgets keep their last complete presentation during replacement, including native panning.
 Cold drawing cells and resource evidence are read separately, and preparation
-replaces scratch reservations as each retained index is completed.
+replaces scratch reservations as each retained index is completed. Shared pan readers
+decode one input tile at a time so an unread month cannot displace the complete period
+with one large transport body.
 Monetary steps remain exact integers; a partially
 intersected spending step is uncertain, never divided by elapsed time. The page clock
 advances live boundaries locally through already received evidence, without a request

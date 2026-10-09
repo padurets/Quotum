@@ -10,7 +10,7 @@ export type WorkRef = {
 /** Offsets are exact milliseconds, with one shared origin and no repeated context metadata. */
 export const WORK_BLOCK_MS=3_600_000;
 export type WorkBlocks={patterns:number[][];blocks:number[]};
-export type WorkTrace = {anchor:number;cut?:number;knownFrom:number;refs:WorkRef[];spans:[number,number,number][];packed?:WorkBlocks;fixed?:{range:PeriodRange;totals:[number,number,number][];activity:import('./history.js').History['activity']}};
+export type WorkTrace = {anchor:number;cut?:number;knownFrom:number;refs:WorkRef[];spans:[number,number,number][];packed?:WorkBlocks;fixed?:{range:PeriodRange;shift?:import('./periodShift.js').PeriodShift;totals:[number,number,number][];activity:import('./history.js').History['activity']}};
 export type WorkDelta = WorkTrace & {replaceFrom:number;replaceTo?:number};
 export type WorkedSession = WorkRef & {workedMs:number;lastWorkedAt:number;working:boolean};
 

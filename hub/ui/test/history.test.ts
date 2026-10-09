@@ -1183,6 +1183,26 @@ test('a seven-day look-ahead reads a long visible miss in capped batches and nev
   h.store.close();
 });
 
+test('a shared month reader completes a distant gesture one tile at a time without rereading its return', async () => {
+  const h = harness(undefined, undefined, 'budget', new HistoryPool()), length = 30 * 24 * H;
+  h.store.choose('30d', null); await h.start(); await h.reads[0].answer();
+  const origin = {from: NOW - length, to: NOW}, range = {from: NOW - 2 * length, to: NOW - length};
+  const offset = h.reads.length;
+  h.store.pan({token: 1, length, ...range, direction: -1}); await flush();
+  for (let n = 0; n < 30 && pending(h).length; n++) for (const r of pending(h)) {
+    assert.equal(tileOf(r.from, r.cell), tileOf(r.to - 1, r.cell), 'decoded staging is bounded by one shared input tile');
+    await r.answer();
+  }
+  assert.ok(h.reads.length > offset + 1); assert.equal(pending(h).length, 0);
+  h.store.choose('30d', range); h.store.endPan(true); await flush();
+  assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`);
+  const count = h.reads.length;
+  h.store.pan({token: 2, length, ...origin, direction: 1}); await flush();
+  h.store.choose('30d', null); h.store.endPan(true); await flush();
+  assert.equal(h.store.get().history?.range, '30d'); assert.equal(h.reads.length, count);
+  h.store.close();
+});
+
 test('a custom 31-day range keeps its grid and exact accounting through a pan and cached return', async () => {
   const length = 31 * 24 * H, h = harness(), origin = {from: NOW - length, to: NOW};
   h.store.choose('30d', origin); await h.start(); await h.reads[0].answer();

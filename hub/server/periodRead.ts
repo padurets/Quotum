@@ -108,8 +108,9 @@ export class PeriodReader {
         throw error;
       }
     };
+    const cell=cellOf(range.to-range.from),fixedRange={from:Math.floor(range.from/cell)*cell,to:Math.min(Math.ceil(range.to/cell)*cell,now)};
     let completeWork:ReturnType<typeof periodWork>|undefined;
-    const retainedWork=()=>completeWork??=periodWork(this.hub,this.history,board,shown,{from:range.from,to:cut},work,now,reserve);
+    const retainedWork=()=>completeWork??=periodWork(this.hub,this.history,board,shown,fixedRange,work,now,reserve);
     const temporary=<T>(read:()=>T)=>{const before=replyBytes;try{return read();}finally{reservation.remove(replyBytes-before);replyBytes=before;}};
     try {
       for(const scope of PERIOD_SCOPES)if(request[scope])response[scope]=section(()=>{
@@ -128,7 +129,7 @@ export class PeriodReader {
         if(selection.mode==='range'){
           const work=scope==='quota'?retainedWork():null;
           const release=(bytes:number)=>{reservation.remove(bytes);replyBytes-=bytes;};
-          const tape=temporary(()=>fixedTape(periodTape(store,board,tapeShown,user,historyScope,query,{from:range.from,to:cut},cursor,range.from,reserve,cut,release),work,range,Number(query.cell),reserve,release));
+          const tape=temporary(()=>fixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release),work,range,Number(query.cell),reserve,release));
           reserve(Buffer.byteLength(JSON.stringify(tape))*3);return {...value,tape};
         }
         const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut,bytes=>{reservation.remove(bytes);replyBytes-=bytes;});
@@ -136,11 +137,12 @@ export class PeriodReader {
       });
       if(request.values)response.values=section(()=>periodValues(store,store.sources(board).filter(s=>request.values!.includes(s.id)),user,cut,reserve));
       if(request.sessions) {
-        const cursor=this.encode({identity,revision:this.revision,from:workFrontier.coveredFrom,cut:workFrontier.coveredTo});
+        const covered=selection.mode==='range'?fixedRange:{from:workFrontier.coveredFrom,to:workFrontier.coveredTo};
+        const cursor=this.encode({identity,revision:this.revision,from:covered.from,cut:covered.to});
         const part=section(()=>{
           const value=selection.mode==='range'?temporary(()=>fixedWork(retainedWork(),range,cellOf(range.to-range.from),now,reserve)):periodWork(this.hub,this.history,board,shown,{from:replaceFrom,to:workFrontier.to},work,now,reserve);
           if(selection.mode==='range')reserve(Buffer.byteLength(JSON.stringify(value))*3);
-          return {...value,cut:workFrontier.coveredTo,cursor};
+          return {...value,cut:covered.to,cursor};
         });
         response.sessions=delta&&part.state==='complete'?{state:'delta',basis,value:{...part.value,replaceFrom,replaceTo:workFrontier.to}}:part;
       }

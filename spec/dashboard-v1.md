@@ -457,6 +457,7 @@ Session evidence is a complete temporal index:
     range: {from: number; to: number};
     totals: [refIndex: number, workedMs: number, lastWorkedAt: number][];
     activity: Activity; // exact totals, groups and boundary bars
+    shift?: {until: number; steps: [path: (string | number)[], perMs: number][]};
   };
   replaceFrom?: number; replaceTo?: number;
 }
@@ -470,7 +471,15 @@ Fixed selections instead return `fixed` with empty `spans` and no `packed` ledge
 Every positive-work context remains in the summary. Interior activity bars reuse
 the history cells; boundary bars and group totals are exact. Fixed summaries are
 complete replacements, and changing their interval requires another summary or a
-matching cached result. Only optional current presence can expire locally.
+matching cached result. An optional `shift`, also available on a fixed measurement
+tape, proves reuse when both endpoints advance by the same number of milliseconds
+and the new `to` is below `until`. Its paths address numeric fields of that fixed
+summary; each changes by `perMs` times the endpoint advance. The reader bounds the
+proof by observations, work endpoints, validity deadlines, evidence cut and cell
+edges. Only exact clipped timestamps and durations move; monetary amounts are
+never interpolated. Paths and proof bytes share the retained history budget.
+Outside that interval a new summary is required. Only optional current presence
+can expire locally while a fixed selection remains unchanged.
 Offsets in `spans` are exact milliseconds from `anchor`. Only credited intervals intersecting the
 requested evidence are included, clipped by capture, retention, membership and sharing
 cutoffs. No current list or duration total substitutes for those intervals. Clients
