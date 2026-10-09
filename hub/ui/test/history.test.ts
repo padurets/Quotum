@@ -788,6 +788,38 @@ function cooperativeHarness(pool?: HistoryPool, scope?: 'quota'|'budget') {
   return {...h, tasks, tick, finish, internals, preparations};
 }
 
+for (const scope of ['quota', 'budget'] as const) for (const started of [false, true]) {
+  test(`${scope}: returning a pan to its origin resumes ${started ? 'partly prepared' : 'queued'} live totals`, async () => {
+    const h = cooperativeHarness(undefined, scope);
+    let selected: {from: number; to: number} | null = null;
+    const frames: (() => void)[] = [];
+    const gesture = new Pan({now: h.now, commit: range => {selected = range; h.store.choose('24h', range);}, requestFrame: run => {frames.push(run); return run;}, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}});
+    const stop = followPan(h.store, gesture, () => selected);
+    try {
+      await h.start(); await h.reads[0].answer(); await h.finish();
+      const range = {from: NOW - 23 * H, to: NOW - H};
+      h.store.choose('24h', range); await flush(); await h.finish();
+      assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`);
+      const reads = h.reads.length;
+      h.store.choose('24h', null); await flush();
+      assert.ok(h.tasks.length, 'the cached live answer is awaiting cooperative composition');
+      if (started) {h.tick(); assert.ok(h.tasks.length, 'composition has yielded before publication');}
+      const token = gesture.begin({source: Symbol('chart'), input: 'pointer', selected, length: 24 * H, now: NOW, historyStart: 0, span: 24 * H, width: 1000})!;
+      gesture.move(token, -1); frames.shift()!();
+      await flush(); h.tick();
+      assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`, 'active input retains the prior complete totals');
+      gesture.move(token, 1); frames.shift()!();
+      assert.equal(gesture.finish(token), undefined, 'returning to the origin commits no new range');
+      await flush(); await h.finish();
+      assert.equal(h.store.get().history?.range, '24h', 'an interrupted identity must not suppress its replacement job');
+      assert.equal(h.store.get().loading, false);
+      assert.equal(h.store.getPlot(), null, 'returning to the gesture origin retires the temporary strip');
+      assert.equal(h.reads.length, reads, 'a cached return requires no replacement HTTP request');
+      assert.equal(h.preparations.size, 0);
+    } finally {stop();h.store.close();}
+  });
+}
+
 test('a sliced whole response publishes no live tile, boundaries or history before its atomic commit', async () => {
   const h = cooperativeHarness(); await h.start();
   await h.reads[0].answer();

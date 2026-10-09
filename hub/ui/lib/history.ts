@@ -255,6 +255,11 @@ export class HistoryStore {
   /** Geometry changes do not choose a committed target or compose its totals. */
   pan(interest: PlotInterest) {
     const previous = this.interest;
+    if (!previous) {
+      // Active input invalidates composition; its identity must leave with the job.
+      this.preparations?.cancel(this.composeOwner);
+      this.composeIdentity = '';
+    }
     this.interest = interest;
     this.panReads = true;
     this.plotPending = true;
