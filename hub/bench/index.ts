@@ -24,6 +24,7 @@ import {seedPanningBudgets,panningSet} from './fixture.js';
 import {profilePanning} from './panningProfile.js';
 import {historyTraffic} from './historyTraffic.js';
 import {diagnoseReversal} from './historyTrafficBrowser.js';
+import {RunOwner} from './runOwner.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -124,16 +125,14 @@ async function main() {
   let browser: Browser | undefined;
   let tab: Awaited<ReturnType<typeof openTab>> | undefined;
   let heard: Heard | undefined;
-  let finished = false;
-  const finish = async (code: number) => {
-    if (finished) return;
-    finished = true;
+  const owner = new RunOwner();
+  let finishing: Promise<void> | undefined;
+  const finish = (code: number): Promise<void> => finishing ??= (async () => {
     heard?.close();
-    await tab?.close().catch(() => undefined);
-    await browser?.close().catch(() => undefined);
+    try {await owner.close();} catch (error) {code = 1; say(String(error));}
     await demo.stop();
     process.exit(code);
-  };
+  })();
   const set = panningSet(SETS[0]);
   const demo = new Demo({set, scene: set.scene, still: true, idleAgents: true,money:false, address, onExit: () => void finish(1)});
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => void finish(1));
@@ -147,7 +146,7 @@ async function main() {
     const overview = () => overviewCards(path => ana.get<Snapshot>(path), board);
     heard = await hear(address.base, ana.cookie, board);
 
-    browser = options.cdp ? attachedChrome(options.cdp) : await launchChrome(chrome!, !process.env.CI);
+    browser = await owner.start(signal => options.cdp ? Promise.resolve(attachedChrome(options.cdp)) : launchChrome(chrome!, !process.env.CI, signal));
     if(process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1'){
       say('diagnostic native replay only; this does not run the canonical benchmark');
       await diagnoseReversal(browser,address.base,ana.cookie,24);
@@ -281,7 +280,7 @@ async function main() {
     if (problems.length) say(`over budget:\n- ${problems.join('\n- ')}`);
     await finish(problems.length ? 1 : 0);
   } catch (error) {
-    if (finished) return;
+    if (finishing) return;
     await demo.settled();
     console.error(error instanceof Stop ? error.message : `The benchmark failed: ${(error as Error).stack ?? error}`);
     await finish(error instanceof Stop ? 2 : 1);

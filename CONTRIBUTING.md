@@ -26,6 +26,15 @@ frequency-focus checks retain their budgets. No browser means the check was not 
 The owned headless browser uses one raster worker: concurrent software raster jobs
 in Chrome 154 can leave a tile unfinished and deadlock an input frame's commit.
 An attached CDP browser retains its own launch settings.
+An owned browser is ready only when its private `DevToolsActivePort` and a bounded
+loopback `/json/version` reply identify the same browser. Its stderr announcement
+is optional. Startup stays bounded at 20 seconds; cancellation drains pending tab
+creation and closes every identified benchmark target, including auxiliary tabs.
+Cleanup escalates only the owned process group and reports unconfirmed exits or
+lost target-creation replies as failures. A profile is retained when exit cannot be
+confirmed. Attached browsers and their existing tabs remain outside that ownership.
+Launch diagnostics contain version, timing, process identity and classified stream
+counters; arbitrary browser output and command arguments are omitted.
 The observer credits input after its coalesced position reaches the actual data layers
 in the production RAF. Stationary input-free gaps are excluded; delayed pending input
 remains measurable. A last input committed on release waits for the final geometry and

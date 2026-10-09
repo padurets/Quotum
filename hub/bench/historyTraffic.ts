@@ -18,7 +18,7 @@ const gridsOf = (store: HistoryStore) => (store as unknown as {grids: Map<number
 /** Controlled traffic uses the production gesture, loader and actual HTTP parser;
  * native presentation is measured separately on the unchanged browser route. */
 export async function historyTraffic(upstream: string, cookie: string, board: string, windows: string[], browser?: Browser) {
-  const proxy = await historyProxy(upstream), reports = [], invalidated = [], problems: string[] = [];
+  const proxy = await historyProxy(upstream, browser?.owner), reports = [], invalidated = [], problems: string[] = [];
   try {
     for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
       for (let take = 1; take <= 3; take++) {

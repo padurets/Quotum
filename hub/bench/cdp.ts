@@ -1,8 +1,8 @@
-import {spawn,execFile, type ChildProcess} from 'node:child_process';
-import {accessSync, constants, mkdtempSync, rmSync} from 'node:fs';
-import os from 'node:os';
+import {accessSync, constants} from 'node:fs';
 import path from 'node:path';
 import {readFile,readdir} from 'node:fs/promises';
+import {deadline, devtoolsJson} from './deadline.js';
+import type {RunOwner} from './runOwner.js';
 
 /**
  * Just enough of the Chrome DevTools Protocol for the benchmark, over the WebSocket built
@@ -30,12 +30,19 @@ export class Cdp {
     socket.addEventListener('close', () => this.rejectWaiting());
   }
 
-  static connect(url: string): Promise<Cdp> {
+  static connect(url: string, signal?: AbortSignal): Promise<Cdp> {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {reject(signal.reason); return;}
       const socket = new WebSocket(url);
-      const timer = setTimeout(() => {socket.close(); reject(new Error('the browser did not open its DevTools connection in 30 s'));}, 30_000);
-      socket.addEventListener('open', () => {clearTimeout(timer); resolve(new Cdp(socket,url));}, {once: true});
-      socket.addEventListener('error', () => {clearTimeout(timer); reject(new Error(`cannot reach the browser at ${url}`));}, {once: true});
+      const clean = () => {clearTimeout(timer); signal?.removeEventListener('abort', cancelled); socket.removeEventListener('open', opened); socket.removeEventListener('error', failed);};
+      const fail = (error: Error) => {clean(); socket.close(); reject(error);};
+      const timer = setTimeout(() => fail(new Error('the browser did not open its DevTools connection in 30 s')), 30_000);
+      const cancelled = () => fail(new Error('DevTools connection cancelled'));
+      const opened = () => {clean(); resolve(new Cdp(socket, url));};
+      const failed = () => fail(new Error('cannot reach the browser DevTools connection'));
+      socket.addEventListener('open', opened, {once: true});
+      socket.addEventListener('error', failed, {once: true});
+      signal?.addEventListener('abort', cancelled, {once: true});
     });
   }
 
@@ -63,6 +70,10 @@ export class Cdp {
     this.listeners.set(method, [...(this.listeners.get(method) ?? []), listener as (params: never) => void]);
   }
 
+  off<T>(method: string, listener: (params: T) => void) {
+    this.listeners.set(method, (this.listeners.get(method) ?? []).filter(value => value !== listener));
+  }
+
   /** The value of an expression in the page, awaited when it is a promise. */
   async evaluate<T>(expression: string): Promise<T> {
     const answer = await this.send<{result: {value: T}; exceptionDetails?: {text: string; exception?: {description?: string}}}>('Runtime.evaluate', {
@@ -76,6 +87,7 @@ export class Cdp {
 
   close() {
     this.rejectWaiting();
+    this.listeners.clear();
     this.socket.close();
   }
 
@@ -84,24 +96,6 @@ export class Cdp {
     this.waiting.clear();
   }
 }
-
-/** Flags that make a headless tab behave as a visible one in front: no throttled timers, no extras that ask the network. */
-const FLAGS = [
-  '--headless=new',
-  // Parallel software raster jobs can strand a pending tile in Chrome 154,
-  // leaving the next input frame blocked in LayerTreeHost's commit wait.
-  '--num-raster-threads=1',
-  '--no-first-run',
-  '--no-default-browser-check',
-  '--disable-background-networking',
-  '--disable-background-timer-throttling',
-  '--disable-backgrounding-occluded-windows',
-  '--disable-renderer-backgrounding',
-  '--disable-component-update',
-  '--disable-extensions',
-  '--disable-sync',
-  '--mute-audio',
-];
 
 /** Chrome's own names on Linux, as the runners of CI and distributions install it. */
 const CHROMES = ['google-chrome', 'chromium', 'chromium-browser'];
@@ -124,7 +118,7 @@ export function findChrome(env: NodeJS.ProcessEnv): string | null {
 }
 
 /** A browser the benchmark drives: the DevTools endpoint (`http://host:port`) and how to let go of it. */
-export type Browser = {endpoint: string; close(): Promise<void>; diagnostics?(pids:number[],candidate?:number):Promise<unknown>};
+export type Browser = {endpoint: string; owned?: boolean; owner?: RunOwner; launchReport?(): unknown; close(): Promise<void>; diagnostics?(pids:number[],candidate?:number):Promise<unknown>};
 
 /** Only a launched browser's descendants may expose native thread state. */
 export async function nativeProcesses(owner:number,pids:number[]){
@@ -149,73 +143,49 @@ export async function nativeProcesses(owner:number,pids:number[]){
   return processes;
 }
 
-/** Starts a headless Chrome of its own, with a throwaway profile; `sandbox: false` where the system forbids it (CI). */
-export async function launchChrome(file: string, sandbox: boolean): Promise<Browser> {
-  const profile = mkdtempSync(path.join(os.tmpdir(), 'quotum-bench-chrome-'));
-  const chrome: ChildProcess = spawn(file, [...FLAGS, ...(sandbox ? [] : ['--no-sandbox']), '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], {
-    stdio: ['ignore', 'ignore', 'pipe'],
-  });
-  let output = '';
-  const endpoint = await new Promise<string>((resolve, reject) => {
-    const late = setTimeout(() => reject(new Error(`Chrome did not start in 20 s:\n${output}`)), 20_000);
-    chrome.stderr!.on('data', chunk => {
-      output = (output + chunk.toString()).slice(-4_000);
-      const found = output.match(/DevTools listening on ws:\/\/([^/\s]+)\//);
-      if (found) {
-        clearTimeout(late);
-        resolve(`http://${found[1]}`);
-      }
-    });
-    chrome.once('exit', code => {
-      clearTimeout(late);
-      reject(new Error(`Chrome exited (${code}) before it listened:\n${output}`));
-    });
-  });
-  return {
-    endpoint,
-    async diagnostics(pids:number[],candidate?:number){
-      const processes=chrome.exitCode===null&&chrome.signalCode===null?await nativeProcesses(chrome.pid!,pids):[];
-      let stack:unknown;
-      if(process.env.QUOTUM_BENCH_NATIVE_STACKS==='1'&&processes.some(p=>p.pid===candidate)){
-        // Arguments, locals, init scripts and symbol downloads are deliberately excluded.
-        stack=await new Promise(resolve=>execFile('sudo',['-n','gdb','--readnever','--batch','--nx',
-          '-iex','set auto-load off','-iex','set debuginfod enabled off',
-          '-iex','set print frame-arguments none','-iex','set print entry-values no',
-          '-p',String(candidate),'-ex','thread apply all bt 16','-ex','detach'],
-          {timeout:20000,killSignal:'SIGKILL',maxBuffer:262144},(error,stdout,stderr)=>resolve({candidate,error:error?.code,stdout:stdout.slice(-48000),stderr:stderr.slice(-4000)})));
-      }
-      return {stderr:output,processes,stack};
-    },
-    async close() {
-      if (chrome.exitCode === null && chrome.signalCode === null) {
-        const exited = new Promise(resolve => chrome.once('exit', resolve));
-        chrome.kill('SIGTERM');
-        const hard = setTimeout(() => chrome.kill('SIGKILL'), 5_000);
-        await exited;
-        clearTimeout(hard);
-      }
-      rmSync(profile, {recursive: true, force: true, maxRetries: 5});
-    },
-  };
-}
+export {launchChrome, launchedChrome} from './chrome.js';
 
 /** A Chrome someone else started (`--cdp http://host:port`): the benchmark only opens and closes its own tab there. */
 export const attachedChrome = (endpoint: string): Browser => ({endpoint: endpoint.replace(/\/+$/, ''), close: async () => {}});
 
 /** A new tab of the browser, and its connection. */
-export async function openTab(browser: Browser): Promise<{cdp: Cdp; close(): Promise<void>}> {
-  const response = await fetch(`${browser.endpoint}/json/new?about:blank`, {method: 'PUT', signal: AbortSignal.timeout(10_000)});
-  if (!response.ok) throw new Error(`the browser at ${browser.endpoint} opened no tab: HTTP ${response.status}`);
-  const tab = (await response.json()) as {id: string; webSocketDebuggerUrl: string};
-  const closeTab = () => fetch(`${browser.endpoint}/json/close/${tab.id}`, {signal: AbortSignal.timeout(5_000)}).catch(() => undefined);
-  let cdp: Cdp;
-  try {cdp = await Cdp.connect(tab.webSocketDebuggerUrl);}
-  catch (error) {await closeTab(); throw error;}
-  return {
-    cdp,
-    async close() {
-      cdp.close();
-      await closeTab();
-    },
+export function openTab(browser: Browser): Promise<{cdp: Cdp; close(): Promise<void>}> {
+  const work = async () => {
+    const signal = browser.owner?.signal;
+    signal?.throwIfAborted();
+    const create = new AbortController();
+    let late: ReturnType<typeof setTimeout> | undefined;
+    // Cancellation keeps the create response alive briefly to recover and close its exact ID.
+    const cancelled = () => {late = setTimeout(() => create.abort(), 5_000);};
+    signal?.addEventListener('abort', cancelled, {once: true});
+    let tab: {id: string; webSocketDebuggerUrl: string};
+    try {
+      tab = await deadline(10_000, pending => devtoolsJson(`${browser.endpoint}/json/new?about:blank`, pending, 'PUT'), create.signal) as typeof tab;
+      if (!tab || typeof tab.id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(tab.id)) throw new Error('DevTools returned no target identity');
+    } catch {
+      browser.owner?.failures.push('tab creation outcome unknown');
+      throw new Error('tab creation outcome unknown; no foreign targets were closed');
+    } finally {clearTimeout(late); signal?.removeEventListener('abort', cancelled);}
+    let cdp: Cdp | undefined;
+    const abortConnection = () => cdp?.close();
+    let closing: Promise<void> | undefined;
+    const closeTab = () => closing ??= (async () => {
+      signal?.removeEventListener('abort', abortConnection); cdp?.close();
+      await deadline(5_000, async pending => {
+        const response = await fetch(`${browser.endpoint}/json/close/${tab.id}`, {signal: pending, redirect: 'error'});
+        await response.body?.cancel();
+        if (!response.ok) throw new Error('DevTools could not close the owned target');
+      });
+    })();
+    const close = browser.owner?.resource(closeTab) ?? closeTab;
+    try {
+      signal?.throwIfAborted();
+      if (typeof tab.webSocketDebuggerUrl !== 'string' || !/^wss?:\/\//.test(tab.webSocketDebuggerUrl)) throw new Error('DevTools returned no target connection');
+      cdp = await Cdp.connect(tab.webSocketDebuggerUrl, signal);
+      signal?.addEventListener('abort', abortConnection, {once: true});
+      signal?.throwIfAborted();
+      return {cdp, close};
+    } catch (error) {try {await close();} catch {browser.owner?.failures.push('owned target cleanup failed');} throw error;}
   };
+  return browser.owner ? browser.owner.operation(work) : work();
 }
