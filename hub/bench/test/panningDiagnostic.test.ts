@@ -2,6 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {traceInterval, tracePanning} from '../panningDiagnostic.js';
 import type {Cdp} from '../cdp.js';
+import {safeEvidence} from '../evidence.js';
+import type {SafeTrace} from '../traceEvents.js';
 
 function fixture() {
   const listeners=new Map<string,(value:unknown)=>void>(),sent:string[]=[],files=new Map<string,unknown>();
@@ -85,4 +87,50 @@ test('trace clocks reject payload strings and arbitrary console timestamps', asy
   const trace=f.files.get('trace') as {events:unknown[]};
   assert.equal(trace.events.length,2);assert.doesNotMatch(JSON.stringify(trace),/private-canary|url/);
   assert.deepEqual(trace.events[1],{name:'TimeStamp',phase:'I',ts:123,duration:undefined,threadTs:undefined,threadDuration:undefined,pid:3,tid:4,stage:'quotum-trace-clock-start'});
+});
+
+test('recorded commit and activation stages stay paired after exported trace sanitization', async()=>{
+  const f=fixture();
+  await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
+    // A real owned Electron control waited 72.682 ms between commit and activation.
+    f.listeners.get('Tracing.dataCollected')?.({value:[
+      {name:'PipelineReporter',ph:'b',pid:91,tid:10,ts:6343538,id2:{local:'0x1'},args:{frame_reporter:{frame_source:4294967296,frame_sequence:2,layer_tree_host_id:1,state:'STATE_PRESENTED_ALL',has_main_animation:false,has_compositor_animation:false}}},
+      {name:'EndCommitToActivation',ph:'b',pid:91,tid:10,ts:6361328,id2:{local:'0x1'}},
+      {name:'RasterTask',ph:'X',pid:91,tid:7,ts:6396884,dur:17574,args:{tileData:{layerId:6,sourceFrameNumber:1,tileId:{id_ref:'private-canary'}}}},
+      {name:'PipelineReporter',ph:'b',pid:92,tid:10,ts:6361328,id2:{local:'0x1'},args:{frame_reporter:{frame_sequence:99}}},
+      {name:'EndCommitToActivation',ph:'b',pid:92,tid:10,ts:6361328,id2:{local:'0x1'}},
+      {name:'EndCommitToActivation',ph:'e',pid:92,tid:10,ts:6362328,id2:{local:'0x1'}},
+      {name:'EndCommitToActivation',ph:'e',pid:91,tid:10,ts:6434010,id2:{local:'0x1'}},
+      {name:'Activation',ph:'b',pid:91,tid:10,ts:6434010,id2:{local:'0x1'}},
+      {name:'Activation',ph:'e',pid:91,tid:10,ts:6434093,id2:{local:'0x1'}},
+      {name:'PipelineReporter',ph:'e',pid:91,tid:10,ts:6436700,id2:{local:'0x1'}},
+    ]});
+  },f.evidence);
+  const trace=safeEvidence(f.files.get('trace')) as {events:SafeTrace[]};
+  const frame=trace.events.find(event=>event.name==='PipelineReporter'&&event.pid===91)!;
+  assert.deepEqual(frame.frame,{source:4294967296,sequence:2,hostId:1,state:'STATE_PRESENTED_ALL',mainAnimation:false,compositorAnimation:false});
+  assert.equal(typeof frame.trackId,'number');
+  const stages=trace.events.filter(event=>event.trackId===frame.trackId&&event.name==='EndCommitToActivation');
+  assert.deepEqual(stages.map(event=>event.phase),['b','e']);
+  assert.equal((stages[1].ts!-stages[0].ts!)/1000,72.682);
+  assert.notEqual(trace.events.find(event=>event.pid===92)!.trackId,frame.trackId);
+  assert.deepEqual(trace.events.find(event=>event.name==='RasterTask')!.tile,{layerId:6,sourceFrame:1});
+  assert.doesNotMatch(JSON.stringify(trace),/private-canary|id_ref|0x1/);
+});
+
+test('compositor fields reject arbitrary text, opaque IDs and invalid duration sentinels', async()=>{
+  const f=fixture();
+  await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
+    f.listeners.get('Tracing.dataCollected')?.({value:[
+      {name:'PipelineReporter',ph:'b',pid:1,id2:{local:'private-canary'},args:{frame_reporter:{state:'private-canary',frame_sequence:'private-canary',frame_source:Number.MAX_SAFE_INTEGER+1,layer_tree_host_id:-1,has_main_animation:'private-canary',surface_frame_trace_id:'private-canary'}}},
+      {name:'SendBeginMainFrameToCommit',ph:'b',pid:1,id2:{local:'0x2'},args:{send_begin_mainframe_to_commit_breakdown:{animate_us:660,paint_us:487,begin_main_sent_to_started_us:18446739443733190000,layout_update_us:-1,style_update_us:'private-canary',private:'private-canary'}}},
+      {name:'KeyframeModel',ph:'b',pid:1,id2:{local:'0x3'},args:{Name:'private-canary'}},
+      {name:'RasterTask',ph:'X',args:{tileData:{layerId:'private-canary',sourceFrameNumber:-1,tileId:{id_ref:'private-canary'}}}},
+    ]});
+  },f.evidence);
+  const trace=JSON.parse(JSON.stringify(safeEvidence(f.files.get('trace')))) as {events:SafeTrace[]};
+  assert.deepEqual(trace.events[0].frame,{});assert.equal(trace.events[0].trackId,undefined);
+  assert.deepEqual(trace.events[1].breakdown,{animate_us:660,paint_us:487});
+  assert.deepEqual(trace.events[3].tile,{});
+  assert.doesNotMatch(JSON.stringify(trace),/private-canary|surface_frame_trace_id|id2|"Name"|184467/);
 });

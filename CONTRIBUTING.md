@@ -39,7 +39,12 @@ scheduler evidence and truncated timelines remain explicit. Trace events retain 
 elapsed and thread CPU time where Chrome supplies them, with start/end page clock
 markers. The opt-in timeline also records observed animation phases, including pending
 start and the first sample after completion. These observations bound the phase;
-they do not replace actual moving frames or prove physical presentation. CPU time
+they do not replace actual moving frames or prove physical presentation. Traces retain
+compositor pipeline stages and interval-local numeric track identities, with reported
+frame sequences, animation flags, main-frame duration breakdowns and raster layer/source
+frame numbers. Raw opaque IDs and arbitrary arguments are omitted. A raster source
+frame number is not a pipeline sequence; concurrent events alone do not establish a
+dependency. Missing identities and unsupported fields remain unavailable. CPU time
 includes Chrome's Linux throttling spin and is not a JavaScript
 cost estimate. Separate fixed busy/timer/busy controls run afterwards on an empty
 owned tab, first without throttling and then at fourfold throttle. The unthrottled

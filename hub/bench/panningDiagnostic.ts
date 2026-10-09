@@ -4,6 +4,8 @@ import {deadline} from './deadline.js';
 import {percentile} from './budget.js';
 import {panning} from './panning.js';
 import type {Evidence} from './evidence.js';
+import {traceSanitizer, type SafeTrace} from './traceEvents.js';
+export type {SafeTrace} from './traceEvents.js';
 
 const ORDER = [false, true, true, false, false, true];
 const metrics = async (cdp: Cdp, signal?: AbortSignal) => {
@@ -39,12 +41,6 @@ export async function panningPairs(cdp: Cdp, browser: Browser, evidence: Evidenc
   return {mode:'diagnostic',order:ORDER,attempts};
 }
 
-const TRACE_NAMES = new Set(['RunTask','ThreadControllerImpl::RunTask','FunctionCall','EventDispatch','UpdateLayoutTree','Layout','PrePaint','Paint','CompositeLayers','MinorGC','MajorGC','V8.GCScavenger','V8.GCCompactor','FireAnimationFrame','RequestAnimationFrame','UpdateLayerTree','Commit','ActivateLayerTree','DrawFrame','RasterTask','BeginFrame','BeginMainThreadFrame','EvaluateScript','TimerFire','TimeStamp']);
-type TraceEvent={name:string;ph:string;ts?:unknown;dur?:unknown;tts?:unknown;tdur?:unknown;pid?:unknown;tid?:unknown;args?:{data?:{message?:unknown}}};
-export type SafeTrace={name:string;phase:string;ts?:number;duration?:number;threadTs?:number;threadDuration?:number;pid?:number;tid?:number;stage?:string};
-const CLOCK_MARKERS = new Set(['quotum-trace-clock-start','quotum-trace-clock-end','quotum-trace-control-start','quotum-trace-control-end']);
-const numeric = (value:unknown) => typeof value==='number'&&Number.isFinite(value)&&value>=0?value:undefined;
-
 /** Tracing belongs only to a new diagnostic interval in this run's own browser. */
 type TraceEvidence={save(name:string,value:unknown):void;saveTrace?(name:string,value:unknown):void};
 export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceEvidence, run=panning) {
@@ -73,13 +69,12 @@ export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceE
 export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promise<T>, evidence?: TraceEvidence) {
   if(!browser.owned)throw new Error('browser-wide tracing requires an owned synthetic browser');
   const events:SafeTrace[]=[];
+  const sanitize=traceSanitizer();
   let omitted=0,bytes=0,ended=false;
-  const collected=(message:{value:TraceEvent[]})=>{
+  const collected=(message:{value:Parameters<typeof sanitize>[0][]})=>{
     for(const event of message.value) {
-      if(!TRACE_NAMES.has(event.name)||!['B','E','X','I'].includes(event.ph))continue;
-      const stage=event.name==='TimeStamp'&&typeof event.args?.data?.message==='string'&&CLOCK_MARKERS.has(event.args.data.message)?event.args.data.message:undefined;
-      if(event.name==='TimeStamp'&&!stage)continue;
-      const safe:SafeTrace={name:event.name,phase:event.ph,ts:numeric(event.ts),duration:numeric(event.dur),threadTs:numeric(event.tts),threadDuration:numeric(event.tdur),pid:numeric(event.pid),tid:numeric(event.tid),stage};
+      const safe=sanitize(event);
+      if(!safe)continue;
       const size=Buffer.byteLength(JSON.stringify(safe));
       if(events.length>=100_000 || bytes+size>32*1024*1024){omitted++;continue;}
       bytes+=size;events.push(safe);
