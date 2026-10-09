@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {chartProblems, creditRenderProblems, IDLE_SCRIPT_MS_PER_SECOND, idleProblems, LATENCY_P95_MS, measuredProblems, percentile, renderProblems, type Idle, type Measured} from '../budget.js';
+import {chartProblems, creditRenderProblems, IDLE_SCRIPT_MS_PER_SECOND, idleProblems, LATENCY_P95_MS, measuredProblems, percentile, privateWorkRenderProblems, renderProblems, type Idle, type Measured} from '../budget.js';
 import type {Counted} from '../probe.js';
 
 const MIN = 60_000;
@@ -27,6 +27,19 @@ test('Codex credit changes cannot hide unrelated quota or wallet drawing work be
     assert.match(creditRenderProblems({...reading,renders:[...reading.renders,unrelated]}).join('\n'),new RegExp(`rendered ${widget}`));
     assert.match(creditRenderProblems({...reading,mutations:[unrelated]}).join('\n'),new RegExp(`changed ${widget}`));
     assert.deepEqual(creditRenderProblems({...reading,from:5*MIN-1,to:5*MIN+1,renders:[unrelated],mutations:[]}),[],'a real cell-clock transition remains allowed');
+  }
+});
+
+test('private CPU credit cannot redraw financial widgets except at their actual cell clock',()=>{
+  const reading={renders:[part('agents',null,1),{...part('analytics','chart',1),widget:'activity' as const}],mutations:[],from:MIN,to:MIN+1000,cellMs:5*MIN};
+  assert.deepEqual(privateWorkRenderProblems(reading),[]);
+  for(const widget of ['budget','funds'] as const) {
+    const chart={...part('analytics','chart',1),widget};
+    assert.match(privateWorkRenderProblems({...reading,renders:[chart]}).join('\n'),new RegExp(`rendered ${widget}`));
+    assert.match(privateWorkRenderProblems({...reading,mutations:[chart]}).join('\n'),new RegExp(`changed ${widget}`));
+    assert.deepEqual(privateWorkRenderProblems({...reading,from:5*MIN-1,to:5*MIN+1,renders:[chart]}),[]);
+    assert.ok(privateWorkRenderProblems({...reading,from:5*MIN-1,to:5*MIN+1,renders:[{...chart,count:2}]}).length);
+    assert.ok(privateWorkRenderProblems({...reading,from:5*MIN-1,to:5*MIN+1,renders:[{...part('analytics',null,1),widget}]}).length);
   }
 });
 
