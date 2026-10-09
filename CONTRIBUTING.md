@@ -99,8 +99,11 @@ resumed. Each run starts from a fresh WebView2 profile, as the first start on a 
 in `%LOCALAPPDATA%\com.padurets.quotum\EBWebView` is set aside and put back afterwards.
 With `-Diagnostics <dir>` it keeps bounded stage readings, owned process identities
 and a manifest with the source and package hashes. CI uploads these on every run;
-raw application logs and command lines are excluded. A failed handoff also requests
-an owned-thread wait chain in a separate worker bounded to two seconds.
+raw application logs and command lines are excluded. A separate observer samples the
+owned UI and tray threads during a pause, with timestamps delimiting that interval.
+It starts before the pause and is stopped only after the UI resumes; startup and stop
+each wait at most two seconds. A stuck observer cannot delay resume. Wait-chain
+artifacts exclude lock names and foreign thread identities, and retain partial samples.
 A manual run of the Desktop workflow takes `ui-runs`, how many times
 the UI smoke runs on the installed app and on the portable one each.
 The queued-close check runs with the main window open and with only the compact

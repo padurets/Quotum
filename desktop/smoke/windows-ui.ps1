@@ -36,6 +36,7 @@ if (-not ('QuotumWindowProbe' -as [type])) {
 }
 # Installed and portable smoke can share one PowerShell process and its static types.
 [QuotumWindowProbe]::ResetDispatch()
+. (Join-Path $PSScriptRoot 'wait-observer.ps1')
 
 $manifest=[ordered]@{schemaVersion=1;status='running';sha=((& git rev-parse HEAD).Trim());run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT;platform='windows';packageHash=(Get-FileHash -LiteralPath $appPath -Algorithm SHA256).Hash;files=@();errors=@()}
 function Save-Manifest {
@@ -49,13 +50,20 @@ function Save-Manifest {
 Save-Manifest
 $timelineClock=[Diagnostics.Stopwatch]::StartNew()
 $timeline=New-Object 'System.Collections.Generic.List[object]'
+$waitObservers=New-Object 'System.Collections.Generic.List[object]'
+function Prepare-WaitObserver {
+  if(-not $Diagnostics){return $null}
+  $observer=Start-WaitObserver $process
+  $waitObservers.Add($observer)
+  return $observer
+}
 function Save-Stage([string]$Stage,[IntPtr]$Window=[IntPtr]::Zero,[Nullable[bool]]$Resumed=$null) {
   try {
     if($timeline.Count -ge 1000){$manifest.errors=@('timeline truncated');Save-Manifest;return}
     $reading=[QuotumWindowProbe]::LastDispatch
     # Copy mutable dispatch fields now; a later resume must not rewrite earlier stages.
     $dispatch=if($reading){[ordered]@{Stage=$reading.Stage;Acceptance=$reading.Acceptance;Window=$reading.Window;ElapsedMs=$reading.ElapsedMs;Process=$reading.Process;Thread=$reading.Thread;Paused=$reading.Paused;ResumeAttempted=$reading.ResumeAttempted;Resumed=$reading.Resumed}}else{$null}
-    $entry=[ordered]@{stage=$Stage;ms=$timelineClock.Elapsed.TotalMilliseconds;dispatch=$dispatch}
+    $entry=[ordered]@{stage=$Stage;ms=$timelineClock.Elapsed.TotalMilliseconds;utcTicks=[DateTime]::UtcNow.Ticks;dispatch=$dispatch}
     if($null -ne $Resumed){$entry.resumed=$Resumed}
     if($process){$entry.window=[QuotumWindowProbe]::Snapshot($Window,$process.Id)}
     $timeline.Add($entry)
@@ -68,29 +76,12 @@ function Save-Stage([string]$Stage,[IntPtr]$Window=[IntPtr]::Zero,[Nullable[bool
 }
 Save-Stage 'initial'
 
-function Save-WaitChain {
-  if(-not $Diagnostics -or -not $process -or $process.HasExited){return}
-  $reading=[QuotumWindowProbe]::LastDispatch
-  if(-not $reading -or -not $reading.Thread){return}
-  $probe=$null
-  $answer='{"status":"unavailable"}'
-  try {
-    $start=New-Object Diagnostics.ProcessStartInfo
-    $start.FileName=(Get-Process -Id $PID).Path;$start.UseShellExecute=$false
-    $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
-    foreach($argument in @('-NoProfile','-File',(Join-Path $PSScriptRoot 'windows-waitchain.ps1'),'-Owner',[string]$process.Id,'-Birth',[string]$process.StartTime.ToUniversalTime().Ticks,'-Thread',[string]$reading.Thread)){$start.ArgumentList.Add($argument)}
-    $probe=[Diagnostics.Process]::Start($start)
-    $output=$probe.StandardOutput.ReadToEndAsync();$discard=$probe.StandardError.ReadToEndAsync()
-    if($probe.WaitForExit(2000) -and $output.IsCompleted -and $probe.ExitCode -eq 0 -and $output.Result.Length -le 16384){
-      $decoded=ConvertFrom-Json -InputObject $output.Result
-      if($decoded.status){$answer=$output.Result}
-    }
-    else {$answer='{"status":"timeout"}'}
-  } catch {$answer='{"status":"unavailable"}'}
-  finally {
-    if($probe){if(-not $probe.HasExited){$probe.Kill();$null=$probe.WaitForExit(500)};$probe.Dispose()}
-  }
-  try {[IO.File]::WriteAllText((Join-Path $Diagnostics 'wait-chain.json'),$answer)} catch {Write-Warning 'Wait-chain artifact unavailable'}
+function Save-ObservedPause($Observer,[string]$Kind,$From,$To,$Resumed) {
+  $observed=Stop-WaitObserver $Observer
+  if(-not $Diagnostics){return}
+  $observed.pause=@{from=$From;to=$To;resumed=$Resumed}
+  try {[IO.File]::WriteAllText((Join-Path $Diagnostics ('wait-chain-'+$Kind+'.json')),(ConvertTo-Json -InputObject $observed -Depth 9))} catch {Write-Warning 'Wait-chain artifact unavailable'}
+  if(-not $observed.stopped){$manifest.errors+=@('wait observer cleanup unconfirmed');Save-Manifest;throw 'Wait observer cleanup unconfirmed'}
 }
 
 function Wait-Window {
@@ -181,47 +172,59 @@ function Test-QueuedPanelReopen([IntPtr]$Except) {
 }
 
 function Test-MainPanelHandoff([IntPtr]$Main) {
-  if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot open panel before main handoff'}
-  $deadline=(Get-Date).AddSeconds(15)
-  do {$old=[QuotumWindowProbe]::FindOther($process.Id,$Main);if($old -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
-  if($old -eq [IntPtr]::Zero){throw 'No initial panel before main handoff'}
-  $paused=$null
+  $observer=Prepare-WaitObserver
   try {
-    $paused=[QuotumWindowProbe]::MainRequestThenPause($process.Id,$appPath)
-    Save-Stage 'main-accepted-paused' $Main
-    if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot supersede the pending main request'}
-    $deadline=(Get-Date).AddSeconds(3)
-    do {$loader=[QuotumWindowProbe]::Loading($process.Id);if($loader -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 10}while((Get-Date) -lt $deadline)
-    Save-Stage 'main-handoff-loader' $loader
-    if($loader -eq [IntPtr]::Zero){throw 'Main handoff: loader missing within 3s'}
-    if(-not [QuotumWindowProbe]::Responsive($loader)){throw 'Main handoff: loader unresponsive'}
-  } finally {
-    try {if($paused){$paused.Dispose()}} finally {Save-Stage 'main-handoff-resume' $Main $(if($paused){$paused.Resumed}else{$null})}
-  }
-  Start-Sleep -Seconds 2
-  $deadline=(Get-Date).AddSeconds(15)
-  do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$Main);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
-  if($process.HasExited){throw "Old main request crashed the controller: $($process.ExitCode)"}
-  Save-Stage 'main-handoff-panel' $panel
-  if($panel -eq [IntPtr]::Zero){throw 'Main handoff: panel missing within 15s'}
-  if(-not [QuotumWindowProbe]::Rounded($panel)){throw 'Main handoff: panel shape wrong'}
-  if(-not [QuotumWindowProbe]::Responsive($panel)){throw 'Main handoff: panel unresponsive'}
-  Start-Sleep -Seconds 1
-  Save-Stage 'main-handoff-focus' $panel
-  if(-not [QuotumWindowProbe]::Foreground($panel)){throw 'Main handoff: panel lost foreground'}
-  if([QuotumWindowProbe]::Loading($process.Id) -ne [IntPtr]::Zero){throw 'Main handoff: loader not retired'}
-  [QuotumWindowProbe]::Escape($panel,$process.Id)
-  $deadline=(Get-Date).AddSeconds(5)
-  while([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
-  if([QuotumWindowProbe]::IsWindowVisible($panel)){throw 'Cannot close panel after main handoff'}
-  if($Main -eq [IntPtr]::Zero){
-    $deadline=(Get-Date).AddSeconds(10)
-    do {
-      $browsersLeft=@(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'"|Where-Object {$_.ParentProcessId -eq $process.Id})
-      if(-not $browsersLeft.Count){break};Start-Sleep -Milliseconds 100
-    }while((Get-Date) -lt $deadline)
-    if($browsersLeft.Count -or [QuotumWindowProbe]::Find($process.Id) -ne [IntPtr]::Zero){throw 'Cancelled main creation retained a window or WebView'}
-  }
+    if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot open panel before main handoff'}
+    $deadline=(Get-Date).AddSeconds(15)
+    do {$old=[QuotumWindowProbe]::FindOther($process.Id,$Main);if($old -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
+    if($old -eq [IntPtr]::Zero){throw 'No initial panel before main handoff'}
+    $pauseFrom=$null;$resumeFrom=$null
+    $paused=$null
+    try {
+      $paused=[QuotumWindowProbe]::MainRequestThenPause($process.Id,$appPath)
+      $pauseFrom=[DateTime]::UtcNow.Ticks
+      $tray=[QuotumWindowProbe]::Snapshot([QuotumWindowProbe]::Tray($process.Id),$process.Id)
+      Watch-OwnedThreads $observer @([QuotumWindowProbe]::LastDispatch.Thread,$tray.Thread)
+      Save-Stage 'main-accepted-paused' $Main
+      if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot supersede the pending main request'}
+      $deadline=(Get-Date).AddSeconds(3)
+      do {$loader=[QuotumWindowProbe]::Loading($process.Id);if($loader -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 10}while((Get-Date) -lt $deadline)
+      Save-Stage 'main-handoff-loader' $loader
+      if($loader -eq [IntPtr]::Zero){throw 'Main handoff: loader missing within 3s'}
+      if(-not [QuotumWindowProbe]::Responsive($loader)){throw 'Main handoff: loader unresponsive'}
+    } finally {
+      $resumeFrom=[DateTime]::UtcNow.Ticks
+      try {if($paused){$paused.Dispose()}} finally {
+        Save-Stage 'main-handoff-resume' $Main $(if($paused){$paused.Resumed}else{$null})
+        $kind=if($Main -eq [IntPtr]::Zero){'only-panel'}else{'with-main'}
+        Save-ObservedPause $observer $kind $pauseFrom $resumeFrom $(if($paused){$paused.Resumed}else{$null})
+      }
+    }
+    Start-Sleep -Seconds 2
+    $deadline=(Get-Date).AddSeconds(15)
+    do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$Main);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
+    if($process.HasExited){throw "Old main request crashed the controller: $($process.ExitCode)"}
+    Save-Stage 'main-handoff-panel' $panel
+    if($panel -eq [IntPtr]::Zero){throw 'Main handoff: panel missing within 15s'}
+    if(-not [QuotumWindowProbe]::Rounded($panel)){throw 'Main handoff: panel shape wrong'}
+    if(-not [QuotumWindowProbe]::Responsive($panel)){throw 'Main handoff: panel unresponsive'}
+    Start-Sleep -Seconds 1
+    Save-Stage 'main-handoff-focus' $panel
+    if(-not [QuotumWindowProbe]::Foreground($panel)){throw 'Main handoff: panel lost foreground'}
+    if([QuotumWindowProbe]::Loading($process.Id) -ne [IntPtr]::Zero){throw 'Main handoff: loader not retired'}
+    [QuotumWindowProbe]::Escape($panel,$process.Id)
+    $deadline=(Get-Date).AddSeconds(5)
+    while([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
+    if([QuotumWindowProbe]::IsWindowVisible($panel)){throw 'Cannot close panel after main handoff'}
+    if($Main -eq [IntPtr]::Zero){
+      $deadline=(Get-Date).AddSeconds(10)
+      do {
+        $browsersLeft=@(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'"|Where-Object {$_.ParentProcessId -eq $process.Id})
+        if(-not $browsersLeft.Count){break};Start-Sleep -Milliseconds 100
+      }while((Get-Date) -lt $deadline)
+      if($browsersLeft.Count -or [QuotumWindowProbe]::Find($process.Id) -ne [IntPtr]::Zero){throw 'Cancelled main creation retained a window or WebView'}
+    }
+  } finally {if($observer -and $observer.Process){Save-ObservedPause $observer 'handoff-setup' $null $null $null}}
 }
 
 try {
@@ -353,6 +356,9 @@ try {
   $result.queuedPanelReopen=$true
   $result.queuedPanelReopenWithoutMain=$true
   $result.mainPanelHandoff=$true
+  # Prepare both workers before creating/minimizing the main window. Observation
+  # must not insert a warm-up between the native acknowledgement and its pause.
+  $loadingObservers=@((Prepare-WaitObserver),(Prepare-WaitObserver))
   $second=Start-Process -FilePath $appPath -PassThru
   $null=$second.Handle
   if(-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0){throw 'Could not reopen main after the last-WebView check'}
@@ -364,9 +370,15 @@ try {
   while(-not [QuotumWindowProbe]::IsIconic($window) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
   if(-not [QuotumWindowProbe]::IsIconic($window)){throw 'Could not put the test UI thread in the background'}
   foreach($cancel in @($false,$true)) {
-    $paused=[QuotumWindowProbe]::PauseUi($window,$process.Id)
-    Save-Stage 'ui-paused' $window
+    $observer=$loadingObservers[[int]$cancel]
+    $paused=$null;$pauseFrom=$null
     try {
+      $paused=[QuotumWindowProbe]::PauseUi($window,$process.Id)
+      $pauseFrom=[DateTime]::UtcNow.Ticks
+      $ui=[QuotumWindowProbe]::Snapshot($window,$process.Id)
+      $tray=[QuotumWindowProbe]::Snapshot([QuotumWindowProbe]::Tray($process.Id),$process.Id)
+      Watch-OwnedThreads $observer @($ui.Thread,$tray.Thread)
+      Save-Stage 'ui-paused' $window
       $loadingClock=[Diagnostics.Stopwatch]::StartNew()
       if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot ask for the loading panel'}
       $loader=[IntPtr]::Zero
@@ -384,7 +396,12 @@ try {
       }
     } finally {
       $resumed=$false
-      try {[QuotumWindowProbe]::ResumeUi($paused);$resumed=$true} finally {Save-Stage 'ui-resume' $window $resumed}
+      $resumeFrom=[DateTime]::UtcNow.Ticks
+      try {if($paused){[QuotumWindowProbe]::ResumeUi($paused);$resumed=$true}} finally {
+        Save-Stage 'ui-resume' $window $resumed
+        $kind=if($cancel){'cancel-loading'}else{'ready-loading'}
+        Save-ObservedPause $observer $kind $pauseFrom $resumeFrom $resumed
+      }
     }
     if($cancel){
       Start-Sleep -Seconds 1
@@ -410,13 +427,15 @@ try {
   $result.passed = $true
 } catch {
   Save-Stage 'failed'
-  Save-WaitChain
   $result.error = $_.Exception.Message
   $failed = $true
   throw
 } finally {
   # Every step on its own: none may take the report, the diagnostics or the restoration of
   # the runner's files with it.
+  foreach($observer in $waitObservers){
+    if($observer.Process){Invoke-Step 'ending wait observer' {if(-not (Stop-WaitObserver $observer).stopped){throw 'Wait observer cleanup unconfirmed'}}}
+  }
   $listed = @(Invoke-Step 'listing processes' {
     Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate
   })

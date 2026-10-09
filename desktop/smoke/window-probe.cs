@@ -172,7 +172,7 @@ public static class QuotumWindowProbe {
     return reading;
   }
   public static bool Foreground(IntPtr window) { return GetForegroundWindow()==window; }
-  public static bool OpenPanel(int process) {
+  public static IntPtr Tray(int process) {
     IntPtr tray=IntPtr.Zero;
     EnumWindows((window,data) => {
       uint owner; GetWindowThreadProcessId(window,out owner);
@@ -181,6 +181,10 @@ public static class QuotumWindowProbe {
       if(name.ToString()!="QuotumTray") return true;
       tray=window; return false;
     },IntPtr.Zero);
+    return tray;
+  }
+  public static bool OpenPanel(int process) {
+    var tray=Tray(process);
     // The Shell icon's version-4 NIN_SELECT callback (icon 1).
     return tray!=IntPtr.Zero && PostMessage(tray,0x8002,IntPtr.Zero,new IntPtr(0x10400));
   }

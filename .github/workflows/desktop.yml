@@ -85,7 +85,9 @@ jobs:
           python3 desktop/smoke/test_native_evidence.py
       - name: Native window probe tests
         if: runner.os == 'Windows'
-        run: ./desktop/smoke/test-window-probe.ps1
+        run: |
+          ./desktop/smoke/test-window-probe.ps1
+          ./desktop/smoke/test-wait-observer.ps1
       - name: Commit and version
         shell: bash
         run: |
