@@ -1,6 +1,7 @@
 import {cellOf, cellStart} from '../server/domain/history.js';
 import {createServer} from 'node:net';
 import {DatabaseSync} from 'node:sqlite';
+import {createHash} from 'node:crypto';
 import {realpathSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {MONEY_KEY} from '../demo/money.js';
@@ -282,7 +283,7 @@ async function main() {
     if(!traffic)throw new Stop('canonical history traffic readings unavailable');
     problems.push(...traffic.problems);
     evidence.begin('credits');
-    const credits=await creditPhase(demo,stand,cdp);
+    const credits=await creditPhase(demo,stand,cdp,evidence);
     evidence.save('credits', credits);
     problems.push(...credits.problems);
     evidence.begin('money');
@@ -389,7 +390,7 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
 }
 
 /** Mixed-source credit updates retain quota drawings and only read their own financial tail. */
-async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp) {
+async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,evidence:Evidence) {
   say('checking Codex balance changes and unchanged credit heartbeats independently of quota and wallet analytics');
   const owner=stand.people.get(people(stand.set)[0].id)!,overview=await owner.get<Snapshot>('/api/overview');
   const card=cards(stand.set).find(card=>card.provider==='codex'&&overview.sources.some(source=>source.id===stand.sources.get(card.id)&&source.windows.length))!;
@@ -406,9 +407,20 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
   const ledger=new DatabaseSync(path.join(demo.dir,'quotum.sqlite'),{readOnly:true});
   const rows=()=>Number(ledger.prepare('SELECT count(*) n FROM readings WHERE source_id=? AND meter_id=?').get(source,'balance:credits')?.n);
   const coverage=()=>Number(ledger.prepare('SELECT max(to_at) at FROM meter_spans WHERE source_id=? AND meter_id=?').get(source,'balance:credits')?.at);
+  const drawing=async()=>{
+    const {paths,...state}=await cdp.evaluate<{present:boolean;at:number|null;value:number|null;ready:boolean;paths:string[]}>(`(() => {
+      const line=[...document.querySelectorAll('[data-series]')].find(node=>node.getAttribute('data-series')===${JSON.stringify(source+' balance:credits')});
+      const mark=/^(\\d+):(-?\\d+)$/.exec(line?.getAttribute('data-last')??'');
+      return {present:!!line,at:mark?Number(mark[1]):null,value:mark?Number(mark[2]):null,
+        ready:line?.closest('.chart')?.querySelector('svg')?.dataset.drawReady==='true',
+        paths:[...(line?.querySelectorAll('path')??[])].map(path=>path.getAttribute('d')??'')};
+    })()`);
+    return {...state,paths:paths.length,geometryHash:createHash('sha256').update(JSON.stringify(paths)).digest('hex')};
+  };
   const problems:string[]=[],updates:{amount:string;heartbeat:boolean;cardMs:number|null;chartMs:number|null;historyRequests:number;historyBytes:number;ledgerRowsUnchanged:boolean;coverageAdvanced:boolean}[]=[];
   try {
     for(const [index,amount] of ['2499','2498','2498','2498'].entries()) {
+      const before=await drawing();
       await cdp.evaluate('__quotumBench.reset()');
       const beforeRows=rows(),beforeCoverage=coverage(),at=quotaAt-20_000+index*2000,sent=Date.now(),heartbeat=index>=2,requests=new Requests(cdp);requests.counting=true;
       await deliver(amount,at);
@@ -428,6 +440,9 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
       const balance=await cdp.evaluate<string|null>(`document.querySelector('[data-card="${source}"] [data-money]')?.getAttribute('data-money')??null`);
       const point={amount,heartbeat,cardMs:changed===null?null:changed-sent,chartMs:chart===null?null:chart-sent,historyRequests:requests.history.length,historyBytes,ledgerRowsUnchanged:rows()===beforeRows,coverageAdvanced:coverage()>beforeCoverage};
       updates.push(point);
+      const after=await drawing();
+      evidence.save(`credit-update-${index+1}`,{index,observedAt:at,sent,to,expectedValue:Number(value),cellStart:cellStart(to,cellOf(86_400_000)),before,after,...point,reading});
+      if(chart===null)say(`missing credit update: ${JSON.stringify({index,observedAt:at,sent,to,before,after,heartbeat})}`);
       problems.push(...chartProblems([chart===null?Infinity:chart-sent]),...creditRenderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from:sent,to,cellMs:cellOf(86_400_000)}));
       if(!heartbeat)problems.push(...measuredProblems({card:source,latencies:[changed===null?Infinity:changed-sent],renders:reading.renders,mutations:reading.mutations,from:sent,to}));
       if(balance!==value||!point.coverageAdvanced||heartbeat&&!point.ledgerRowsUnchanged)problems.push('Codex heartbeat lost coverage, changed the ledger or displayed the wrong amount');
