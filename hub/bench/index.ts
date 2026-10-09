@@ -29,6 +29,7 @@ import {Requests} from './requests.js';
 export {Requests} from './requests.js';
 import {doubledIdle} from './idleDiagnostic.js';
 import {panningPairs, tracePanning} from './panningDiagnostic.js';
+import {ChromeLaunchError} from './chrome.js';
 import {creditSnapshot} from './credits.js';
 
 /**
@@ -216,7 +217,7 @@ async function main() {
       const baselineProblems=[...phaseProblems,...idleProblems(idle)];
       if(baselineProblems.length)throw new Stop('idle sensitivity baseline failed: '+baselineProblems.join('; '));
       say('checking sensitivity with two independent copies of the same idle board');
-      const control=await doubledIdle(browser,cdp,address.base,seconds,cellMs,evidence);
+      const control=await doubledIdle(browser,cdp,address.base,seconds,cellMs,evidence,heard);
       say(`idle double control: ${JSON.stringify(control)}`);
       await finish(control.detected?0:1);return;
     }
@@ -320,6 +321,7 @@ async function main() {
   } catch (error) {
     if (finishing) return;
     evidence.save('failure', {status: 'failed', kind: error instanceof Stop ? 'fixture' : 'runtime'});
+    if(error instanceof ChromeLaunchError)evidence.save('browser',error.report);
     await demo.settled();
     console.error(error instanceof Stop ? error.message : `The benchmark failed: ${(error as Error).stack ?? error}`);
     await finish(error instanceof Stop ? 2 : 1);

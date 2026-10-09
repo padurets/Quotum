@@ -6,7 +6,7 @@ import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {launchedChrome, launchChrome, safeStream} from '../chrome.js';
+import {ChromeLaunchError, launchedChrome, launchChrome, probeFailure, safeStream} from '../chrome.js';
 
 const until = async (ready: () => boolean) => {
   const deadline = Date.now() + 4_000;
@@ -23,6 +23,7 @@ function fixture(t: TestContext, mode = 'ready') {
     if (mode === 'exit') process.exit(7);
     if (mode === 'term-ignore') process.on('SIGTERM', () => {});
     const server = http.createServer((req, res) => {
+      if (mode === 'headers-hang') return;
       if (mode === 'body-hang') {res.writeHead(200);res.write('{');return;}
       if (mode === 'oversize') {res.end('x'.repeat(17000));return;}
       if (mode === 'redirect') {res.writeHead(302, {location:'http://127.0.0.1:1/private'});res.end();return;}
@@ -72,12 +73,22 @@ test('pre-aborted startup creates no process', async () => {
   await assert.rejects(launchChrome('/nonexistent/quotum-test-chrome', true, AbortSignal.abort()), /cancelled/);
 });
 
-for (const mode of ['no-port', 'invalid', 'mismatch', 'redirect', 'body-hang', 'oversize']) {
+for (const mode of ['no-port', 'invalid', 'mismatch', 'redirect', 'headers-hang', 'body-hang', 'oversize']) {
   test(`cancelled ${mode} startup never grants readiness and closes its owned endpoint`, async t => {
     const {profile, launch} = fixture(t, mode), controller = new AbortController();
     let ready = false;
     const pending = launch(controller.signal).then(browser => {ready = true; return browser.close();});
-    const failed = assert.rejects(pending, /cancelled/);
+    const failed = assert.rejects(pending, (error:unknown) => {
+      assert.ok(error instanceof ChromeLaunchError);
+      assert.equal(error.report.failure,'cancelled');
+      assert.equal(error.report.cleanup?.status,'closed');
+      if(mode==='headers-hang'||mode==='body-hang') {
+        assert.equal(error.report.probes?.stage,mode==='headers-hang'?'headers':'body');
+        assert.ok(error.report.probes!.attempts>0);
+        assert.ok(error.report.port!>0);
+      }
+      return true;
+    });
     await until(() => existsSync(profile + '/started'));
     const port = readFileSync(profile + '/started', 'utf8');
     await new Promise(resolve => setTimeout(resolve, 150));
@@ -95,6 +106,13 @@ test('an owned worker that survives its parent receives escalation and cannot re
   assert.equal(existsSync(profile), false);
   const stat = (() => {try {return readFileSync(`/proc/${worker}/stat`, 'utf8');} catch {return '';}})();
   assert.ok(!stat || /\) Z /.test(stat), 'worker exited, even if the platform has not reaped its zombie yet');
+});
+
+test('probe failure categories never copy a raw network error or its cause',()=>{
+  assert.equal(probeFailure({message:'private path',cause:{code:'ECONNREFUSED',message:'secret-canary'}},false),'ECONNREFUSED');
+  assert.equal(probeFailure({cause:{code:'secret-canary'}},false),'unavailable');
+  assert.equal(probeFailure(new SyntaxError('secret-canary'),false),'invalid-json');
+  assert.equal(probeFailure(new Error('secret-canary'),true),'cancelled-or-deadline');
 });
 
 test('stream evidence omits secrets, private paths and arbitrary text while counting truncation', () => {

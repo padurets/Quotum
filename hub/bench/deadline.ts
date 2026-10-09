@@ -22,8 +22,10 @@ export async function deadline<T>(ms: number, work: (signal: AbortSignal) => Pro
 }
 
 /** DevTools replies are small. Bound headers and the entire body with the same cancellation. */
-export async function devtoolsJson(url: string, signal: AbortSignal, method = 'GET'): Promise<unknown> {
+export async function devtoolsJson(url: string, signal: AbortSignal, method = 'GET', progress?: (stage: 'headers'|'body'|'parse', status?: number) => void): Promise<unknown> {
+  progress?.('headers');
   const response = await fetch(url, {method, signal, redirect: 'error'});
+  progress?.('body',response.status);
   if (!response.ok) {await response.body?.cancel(); throw new Error(`DevTools HTTP ${response.status}`);}
   const reader = response.body?.getReader();
   if (!reader) throw new Error('DevTools empty reply');
@@ -38,6 +40,7 @@ export async function devtoolsJson(url: string, signal: AbortSignal, method = 'G
       if (size > 16_384) throw new Error('DevTools reply exceeds 16 KiB');
       chunks.push(part.value);
     }
+    progress?.('parse',response.status);
     return JSON.parse(Buffer.concat(chunks).toString()) as unknown;
   } finally {await reader.cancel().catch(() => {}); reader.releaseLock();}
 }

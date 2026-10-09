@@ -5,12 +5,13 @@ import {idleProblems, IDLE_SCRIPT_MS_PER_SECOND} from './budget.js';
 import {scriptPerSecond, type Metrics} from './report.js';
 import {idleWindow, idlePhaseScript, idlePhaseProblems, type IdlePhase} from './still.js';
 import type {Evidence} from './evidence.js';
+import type {Heard} from './stream.js';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
 const metrics = async (cdp: Cdp): Promise<Metrics> => Object.fromEntries((await cdp.send<{metrics: {name: string; value: number}[]}>('Performance.getMetrics')).metrics.map(m => [m.name, m.value]));
 
 /** Two independent live boards execute the same clock work; no measured cost is multiplied. */
-export async function doubledIdle(browser: Browser, primary: Cdp, base: string, seconds: number, cellMs: number, evidence: Evidence) {
+export async function doubledIdle(browser: Browser, primary: Cdp, base: string, seconds: number, cellMs: number, evidence: Evidence, heard: Heard) {
   if (!browser.owned) throw new Error('idle sensitivity requires an owned synthetic browser');
   const extra = await openTab(browser);
   try {
@@ -28,20 +29,22 @@ export async function doubledIdle(browser: Browser, primary: Cdp, base: string, 
     evidence.begin('diagnostic-double-idle'); evidence.save('idle-double-plan', planned);
     await sleep(planned.from - Date.now());
     const pages = [primary, cdp].map(page => ({page, requests: new Requests(page)}));
+    heard.reset();
     const starts = await Promise.all(pages.map(async ({page, requests}) => {
       await page.evaluate('__quotumBench.reset()'); await page.evaluate(idlePhaseScript(cellMs));
       requests.counting = true;
       return {before: await metrics(page), from: Date.now(), cards: await page.evaluate<number>('document.querySelectorAll(".card").length')};
     }));
     await sleep(planned.to - Date.now());
+    const events = heard.counts();
     const reports = await Promise.all(pages.map(async ({page, requests}, index) => {
       const reading = await page.evaluate<Reading>('__quotumBench.read()'), after = await metrics(page);
       requests.counting = false;
       const phase = await page.evaluate<IdlePhase>('(()=>{const p=__quotumIdlePhase.read();__quotumIdlePhase.stop();return p;})()');
       const seconds = after.Timestamp - starts[index].before.Timestamp;
       const scriptMsPerSecond = scriptPerSecond(starts[index].before, after, reading.instrumentMs, seconds);
-      const idle = {from: starts[index].from, to: Date.now(), cellMs, requests, events: {}, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
-      return {id: index, cards: starts[index].cards, seconds, scriptMsPerSecond, phase,
+      const idle = {from: starts[index].from, to: Date.now(), cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
+      return {id: index, cards: starts[index].cards, seconds, scriptMsPerSecond, phase, events,
         problems: [...idlePhaseProblems(phase, planned.boundary), ...idleProblems(idle)]};
     }));
     const scriptMsPerSecond = reports.reduce((sum, report) => sum + report.scriptMsPerSecond, 0);

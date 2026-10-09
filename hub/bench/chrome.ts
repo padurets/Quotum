@@ -22,7 +22,25 @@ export type LaunchReport = {
   exit?: {code: number | null; signal: NodeJS.Signals | null}; spawnCode?: string;
   stdout: ReturnType<ReturnType<typeof safeStream>['read']>; stderr: ReturnType<ReturnType<typeof safeStream>['read']>;
   cleanup?: ProcessCleanup;
+  port?: number;
+  probes?: {attempts: number; stage: string; status?: number; reason?: string; elapsedMs: number; failures: Record<string,number>};
+  processes?: {pid: number; group: number; session: number; birth: string; state: string}[];
 };
+
+export class ChromeLaunchError extends Error {
+  constructor(readonly report: LaunchReport, reason: string) {
+    super('Chrome startup failed: '+JSON.stringify({...report,reason}));
+  }
+}
+
+/** HTTP errors may contain URLs or system paths; only these fixed categories are evidence. */
+export function probeFailure(error: unknown, aborted: boolean) {
+  if(aborted)return 'cancelled-or-deadline';
+  const code=(error as {cause?:{code?:unknown}})?.cause?.code;
+  if(typeof code==='string'&&['ECONNREFUSED','ECONNRESET','EPIPE','ETIMEDOUT','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT'].includes(code))return code;
+  if(error instanceof SyntaxError)return 'invalid-json';
+  return 'unavailable';
+}
 
 /** Emit known diagnostics as fixed labels, never arbitrary browser output or paths. */
 export function safeStream() {
@@ -107,25 +125,37 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
       let failure: Failure = 'no-port';
       while (true) {
         pending.throwIfAborted();
-        await processOwner.observe();
+        state.processes=(await processOwner.observe()).slice(0,32);
         pending.throwIfAborted();
         let published: ReturnType<typeof activePort> = null;
         try {published = activePort(profile); failure = published ? 'endpoint-unreachable' : 'no-port';}
         catch {failure = 'invalid-port';}
         state.failure = failure; state.stage = published ? 'port' : 'spawn';
         if (published) {
+          state.port=published.port;
           const candidate = `http://127.0.0.1:${published.port}`;
+          const probeStarted=performance.now();
+          const probe=state.probes={attempts:(state.probes?.attempts??0)+1,stage:'headers',elapsedMs:0,failures:state.probes?.failures??{}} as NonNullable<LaunchReport['probes']>;
           try {
-            const reply = await deadline(1_000, probe => devtoolsJson(candidate + '/json/version', probe), pending) as {Browser?: unknown; webSocketDebuggerUrl?: unknown};
+            const reply = await deadline(1_000, async signal => {
+              try {return await devtoolsJson(candidate + '/json/version', signal, 'GET',(stage,status)=>{probe.stage=stage;probe.status=status;});}
+              catch(error){probe.reason=probeFailure(error,signal.aborted);throw error;}
+            }, pending) as {Browser?: unknown; webSocketDebuggerUrl?: unknown};
             failure = 'invalid-reply'; state.failure = failure; state.stage = 'reply';
+            probe.reason='invalid-endpoint';
             const url = new URL(typeof reply.webSocketDebuggerUrl === 'string' ? reply.webSocketDebuggerUrl : '');
             if (url.protocol !== 'ws:' || url.port !== String(published.port) || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
               || url.pathname !== published.browserPath || url.username || url.password || url.search || url.hash) throw new Error('mismatched DevTools endpoint');
             pending.throwIfAborted();
             state.version = typeof reply.Browser === 'string' && /^[a-zA-Z][a-zA-Z0-9 -]{0,40}\/[a-zA-Z0-9.-]{1,64}$/.test(reply.Browser) ? reply.Browser : 'unavailable';
+            delete probe.reason;
             state.stage = 'ready'; state.readyMs = Math.round(performance.now() - started); delete state.failure;
             return candidate;
-          } catch {pending.throwIfAborted();}
+          } catch {
+            const reason=probe.reason??'cancelled-or-deadline';
+            probe.failures[reason]=(probe.failures[reason]??0)+1;
+            pending.throwIfAborted();
+          } finally {probe.elapsedMs=Math.round(performance.now()-probeStarted);}
         }
         await deadline(150, pending => new Promise<void>((resolve, reject) => {
           const timer = setTimeout(resolve, 100);
@@ -139,8 +169,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
       diagnostics: async (pids, _candidate, signal) => ({processes: child.pid && child.exitCode === null && child.signalCode === null ? await nativeProcesses(child.pid, pids, signal) : []})};
   } catch (error) {
     const original = snapshot();
-    let cleanup = 'closed';
-    try {await close();} catch {cleanup = 'unconfirmed';}
-    throw new Error('Chrome startup failed: ' + JSON.stringify({...original, cleanup, reason: startup.signal.aborted ? (error as Error).message : 'DevTools was not ready in 20 s'}));
+    try {await close();} catch { /* The report retains unconfirmed cleanup. */ }
+    throw new ChromeLaunchError({...original,cleanup:state.cleanup},startup.signal.aborted ? (error as Error).message : 'DevTools was not ready in 20 s');
   } finally {signal?.removeEventListener('abort', cancel);}
 }
