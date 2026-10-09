@@ -39,9 +39,14 @@ scheduler evidence and truncated timelines remain explicit. Trace events retain 
 elapsed and thread CPU time where Chrome supplies them, with start/end page clock
 markers. CPU time includes Chrome's Linux throttling spin and is not a JavaScript
 cost estimate. Separate fixed busy/timer/busy controls run afterwards on an empty
-owned tab; missing thread clocks cannot pass those controls. CPU bounds use observed
-thread-clock endpoints, never interpolation across missing samples. Off-CPU time
-alone does not distinguish scheduler delay from deliberate sleep or a lock wait. An input's final
+owned tab, first without throttling and then at fourfold throttle. The unthrottled
+controls must distinguish execution from timer waiting; both sets retain their
+readings. Missing thread clocks cannot pass. Cumulative CPU differences use observed
+anchors inside and outside each interval, never interpolation across missing samples.
+Wall and CPU clocks are sampled independently: reported CPU can exceed elapsed time,
+and that excess remains visible instead of being clipped. These are counter readings,
+not exact on/off-CPU intervals. Off-CPU time alone cannot distinguish scheduler delay
+from deliberate sleep or a lock wait. An input's final
 geometry must still commit before it can be credited.
 `QUOTUM_BENCH_DIAGNOSE_IDLE=double` (the `benchmark-idle-diagnostics` PR
 label) checks one idle board, then two independent live copies over the same

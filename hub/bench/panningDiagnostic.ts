@@ -1,5 +1,5 @@
 import {openTab, type Browser, type Cdp} from './cdp.js';
-import {threadCpuBounds} from './traceCpu.js';
+import {threadCpuWindow} from './traceCpu.js';
 import {deadline} from './deadline.js';
 import {percentile} from './budget.js';
 import {panning} from './panning.js';
@@ -99,7 +99,7 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
   try {
     active=true;
     await deadline(5000,async signal=>{
-      await cdp.send('Tracing.start',{categories:'devtools.timeline,v8,blink,cc',transferMode:'ReportEvents'},signal);
+      await cdp.send('Tracing.start',{categories:'toplevel,devtools.timeline,v8,blink,cc',transferMode:'ReportEvents'},signal);
       await clock('start',signal);
     },browser.owner?.signal);
     return await run();
@@ -120,27 +120,32 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
   }
 }
 
-/** Separate controls run after panning, on an empty owned tab and without CPU throttling. */
+/** Fixed controls run after panning on an empty owned tab, at each measured throttle. */
 export async function traceControls(browser: Browser, evidence: TraceEvidence) {
   if(!browser.owned)throw new Error('trace controls require an owned synthetic browser');
-  const tab=await openTab(browser),intervals:{kind:string;from:number;to:number}[]=[];
+  const tab=await openTab(browser),intervals:{kind:string;rate:number;from:number;to:number}[]=[];
   let trace:SafeTrace[]=[],complete=false;
   try {
     await tab.cdp.send('Performance.enable');
     await traceInterval(tab.cdp,browser,async()=>{
-      for(const kind of ['busy','timer','busy']) {
-        const interval=await tab.cdp.evaluate<{from:number;to:number}>(`(async()=>{
-          await new Promise(requestAnimationFrame);
-          const from=performance.now();
-          console.timeStamp('quotum-trace-control-start');
-          ${kind==='busy'?'while(performance.now()-from<100){}':'await new Promise(resolve=>setTimeout(resolve,100));'}
-          console.timeStamp('quotum-trace-control-end');
-          const to=performance.now();
-          await new Promise(requestAnimationFrame);
-          return {from,to};
-        })()`);
-        intervals.push({kind,...interval});
+      for(const rate of [1,4]) {
+        await tab.cdp.send('Emulation.setCPUThrottlingRate',{rate});
+        for(const kind of ['busy','timer','busy']) {
+          const interval=await tab.cdp.evaluate<{from:number;to:number}>(`(async()=>{
+            await new Promise(requestAnimationFrame);
+            const from=performance.now();
+            console.timeStamp('quotum-trace-control-start');
+            ${kind==='busy'?'while(performance.now()-from<100){}':'await new Promise(resolve=>setTimeout(resolve,100));'}
+            console.timeStamp('quotum-trace-control-end');
+            const to=performance.now();
+            await new Promise(requestAnimationFrame);
+            return {from,to};
+          })()`);
+          intervals.push({kind,rate,...interval});
+          evidence.save('trace-control-intervals',{mode:'diagnostic',intervals});
+        }
       }
+      await tab.cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
     },{
       save:(name,value)=>evidence.save('control-'+name,value),
       saveTrace:(name,value)=>{const report=value as {events:SafeTrace[];status:string};trace=report.events;complete=report.status==='complete';if(evidence.saveTrace)evidence.saveTrace('control-'+name,value);else evidence.save('control-'+name,value);},
@@ -151,9 +156,10 @@ export async function traceControls(browser: Browser, evidence: TraceEvidence) {
       const start=markers[index*2],end=markers[index*2+1];
       const aligned=start?.stage==='quotum-trace-control-start'&&end?.stage==='quotum-trace-control-end'
         &&start.ts!==undefined&&end.ts!==undefined&&start.pid!==undefined&&start.tid!==undefined&&start.pid===end.pid&&start.tid===end.tid;
-      return {...interval,...(aligned?threadCpuBounds(trace,start.pid!,start.tid!,start.ts!,end.ts!):{status:'missing-thread-clock'})};
+      return {...interval,...(aligned?threadCpuWindow(trace,start.pid!,start.tid!,start.ts!,end.ts!):{status:'missing-thread-clock'})};
     });
-    const valid=complete&&markers.length===6&&reports.length===3&&reports.every(report=>report.status==='bounded'&&('cpuLowerMs' in report)&&(report.kind==='busy'?report.cpuLowerMs!>40:report.cpuUpperMs!<20));
+    const valid=complete&&markers.length===12&&reports.length===6&&reports.every(report=>report.status==='observed')
+      &&reports.filter(report=>report.rate===1).every(report=>('cpuInsideMs' in report)&&(report.kind==='busy'?report.cpuInsideMs!>40:report.cpuOutsideMs!<20));
     evidence.save('trace-controls',{mode:'diagnostic',status:valid?'passed':'insufficient-evidence',intervals:reports});
     if(!valid)throw new Error('thread-clock controls did not distinguish execution from timer waiting');
   } finally {await tab.close();}
