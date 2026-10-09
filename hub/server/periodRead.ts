@@ -129,7 +129,7 @@ export class PeriodReader {
         const cursor=this.encode({identity:tapeIdentity,revision:this.revision,from:patch.coveredFrom,cut:patch.coveredTo});
         if(selection.mode==='range'){
           const work=scope==='quota'?retainedWork():null;
-          const tape=temporary(()=>fixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release),work,range,Number(query.cell),reserve,release));
+          const tape=temporary(()=>fixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release,true),work,range,Number(query.cell),reserve,release));
           reserve(Buffer.byteLength(JSON.stringify(tape))*3);return {...value,tape};
         }
         const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut,bytes=>{reservation.remove(bytes);replyBytes-=bytes;});

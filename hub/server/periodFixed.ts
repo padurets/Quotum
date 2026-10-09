@@ -14,7 +14,7 @@ import type {History} from './domain/history.js';
 /** A fixed interval needs exact totals and boundary geometry, not a rolling ledger. */
 export function fixedTape(tape:PeriodTape,work:WorkTrace|null,range:PeriodRange,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void=()=>{}):PeriodTape {
   reserve(JSON.stringify(tape.money).length*3);
-  for(const series of tape.quota){reserve(sampleCount(series.samples)*40);if(series.samplesEncoding==='delta')series.samples=decodeSamples(series.samples);delete series.samplesEncoding;}
+  for(const series of tape.quota)if(series.samplesEncoding==='delta'){reserve(sampleCount(series.samples)*40);series.samples=decodeSamples(series.samples);delete series.samplesEncoding;}
   if(work)reserve(work.spans.length*640+(work.packed?work.packed.blocks.length*64+work.packed.patterns.reduce((n,p)=>n+p.length*128,0):0));
   const curves=work?new PeriodCurves(work):undefined;
   let scratch=0;

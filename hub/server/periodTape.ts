@@ -1,13 +1,13 @@
 import type {CellSamples} from './domain/cells.js';
 import type {Store,Shown} from './store/store.js';
 import type {PeriodRange} from './domain/period.js';
-import {encodeSamples,bindRate,type PeriodTape,type MoneyTape} from './domain/periodTape.js';
+import {encodeSamples,decodeSamples,sampleBytes,bindRate,type PeriodTape,type MoneyTape} from './domain/periodTape.js';
 import type {HistoryScope} from './domain/history.js';
 import {selectionOf} from './domain/meterHistory.js';
 import type {HistoryQuery} from './domain/periodRead.js';
 import {isConvertible} from './domain/currency.js';
 
-export function periodTape(store:Store,board:string,shown:Shown,user:string,scope:HistoryScope,query:HistoryQuery,range:PeriodRange,cursor:string,replaceFrom:number,reserve:(bytes:number)=>void,membershipAt=range.to,release:(bytes:number)=>void=()=>{}):PeriodTape {
+export function periodTape(store:Store,board:string,shown:Shown,user:string,scope:HistoryScope,query:HistoryQuery,range:PeriodRange,cursor:string,replaceFrom:number,reserve:(bytes:number)=>void,membershipAt=range.to,release:(bytes:number)=>void=()=>{},compact=false):PeriodTape {
   const tape:PeriodTape={from:range.from,cut:range.to,cursor,replaceFrom,quota:[],money:[]};
   if(replaceFrom>=range.to)return tape;
   if(scope==='quota') {
@@ -24,7 +24,16 @@ export function periodTape(store:Store,board:string,shown:Shown,user:string,scop
         const previous=descriptors.at(-1)?.value;
         if(!previous||previous.kind!==kind||previous.label!==label||previous.minutes!==minutes){reserve(128+(label?.length??0)*2);descriptors.push({at,value:{id:window,kind,label,minutes}});}
       }
-      if(samples.length){const row=descriptor.get(id,membershipAt,id,window,membershipAt);if(!row){release(transient);continue;}reserve(192+String(row.label??'').length*2+samples.length*80);tape.quota.push({source:id,window,workFrom:shown.get(id)!.since,samplesEncoding:'delta',samples:encodeSamples(store.quotaAvailability(id,samples,true,temporary)),descriptors,member:!!row.member,windowValue:{id:window,kind:row.kind as 'session'|'weekly'|'other',label:row.label as string|null,minutes:row.minutes as number|null}});}
+      if(samples.length){
+        const row=descriptor.get(id,membershipAt,id,window,membershipAt);if(!row){release(transient);continue;}
+        reserve(192+String(row.label??'').length*2);
+        // Fixed summaries consume columns locally. Retain their exact buffers,
+        // releasing the wire rows before reading the next source's history.
+        if(compact)temporary(samples.length*120);else reserve(samples.length*80);
+        const encoded=encodeSamples(store.quotaAvailability(id,samples,true,temporary)),retained=compact?decodeSamples(encoded):encoded;
+        if(compact)reserve(sampleBytes(retained));
+        tape.quota.push({source:id,window,workFrom:shown.get(id)!.since,...(!compact?{samplesEncoding:'delta' as const}:{}),samples:retained,descriptors,member:!!row.member,windowValue:{id:window,kind:row.kind as 'session'|'weekly'|'other',label:row.label as string|null,minutes:row.minutes as number|null}});
+      }
       release(transient);
     }
   }

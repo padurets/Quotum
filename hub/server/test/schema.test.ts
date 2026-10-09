@@ -169,7 +169,21 @@ test('board additions append to the integrated currency layout while analytics m
     const view=decodeView(JSON.parse(String(saved.payload)))!; assert.equal(view.version,3);
     assert.deepEqual(view.names,{legacy:'Kept'});
     assert.deepEqual(view.hidden,['source:deepseek:123456789abc']);
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,21);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,22);
+  }finally{db.close();}
+});
+
+test('historical batch lookup upgrades without changing retained observations',()=>{
+  const db=new DatabaseSync(':memory:');try {
+    for(const step of STEPS.slice(0,21))db.exec(step);db.exec('PRAGMA user_version=21');
+    const insert=db.prepare("INSERT INTO samples VALUES ('source',?,?,'weekly',NULL,?,NULL,10080,60000)");
+    for(const [window,at,used] of [['a',10,90],['b',10,20],['a',20,5],['c',20,15],['a',30,12]] as const)insert.run(window,at,used);
+    const before=db.prepare('SELECT * FROM samples ORDER BY source_id,window_id,at').all();
+    migrate(db,40);migrate(db,41);
+    assert.deepEqual(db.prepare('SELECT * FROM samples ORDER BY source_id,window_id,at').all(),before);
+    const query='SELECT window_id,used FROM samples WHERE source_id=? AND at=(SELECT max(at) FROM samples WHERE source_id=? AND at<?) ORDER BY window_id';
+    assert.deepEqual(db.prepare(query).all('source','source',30).map(row=>[row.window_id,row.used]),[['a',5],['c',15]]);
+    assert.match(db.prepare('EXPLAIN QUERY PLAN '+query).all('source','source',30).map(row=>row.detail).join('\n'),/samples_by_source_time/);
   }finally{db.close();}
 });
 

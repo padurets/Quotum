@@ -322,6 +322,8 @@ export const STEPS = [
   `,
   // 21 — a single grid, stored through the lossless compact view codec below.
   `SELECT 1;`,
+  // 22 — historical cards find the last native batch without scanning every window.
+  `CREATE INDEX samples_by_source_time ON samples(source_id,at);`,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;
