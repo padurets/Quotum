@@ -170,3 +170,24 @@ test('a dense retained month adopts its decoded reservation within the shared me
   assert.equal(reply.sessions!.state,'complete','the complete month of credited intervals shares the same ceiling');
   assert.ok(pool.estimatedBytes<=15*1024*1024);pool.release(flight);
 });
+
+test('an empty replacement period clears the previous roster and card disclosures',async()=>{
+  const context={exports:{} as {BoardPeriod:new()=>{active:boolean;receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;get():{rows:unknown[]};getSource(id:string):unknown[]}},
+    hubNow:()=>5_000_000,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},preparations:()=>null,
+    prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
+    evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),prefs:()=>({range:'1h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
+  };
+  const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const period=new context.exports.BoardPeriod();period.active=true;
+  for(const populated of [true,false,true]){
+    const selection={mode:'range' as const,from:populated?1_400_000:0,to:populated?5_000_000:1_400_000};
+    const basis={run:'r',revision:'1',evaluatedAt:5_000_000,evidenceCut:5_000_000,range:selection};
+    const value={anchor:selection.from,cut:selection.to,knownFrom:selection.from,refs:populated?[ref('a')]:[],spans:populated?[[0,0,60_000] as [number,number,number]]:[],cursor:'work'};
+    await period.receive({basis,sessions:{state:'complete',basis,value}},{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:5_000_000}});
+    assert.equal(period.get().rows.length,Number(populated));assert.equal(period.getSource(ref('a').source).length,Number(populated));
+  }
+});

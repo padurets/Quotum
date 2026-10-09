@@ -690,7 +690,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
       </div>
       <PeriodStatus {...period}/>
       {empty ? (
-        <p className="panel-empty">{t(`agents.${empty}`)}</p>
+        !period.loading&&!period.error&&period.basis&&<p className="panel-empty">{t(`agents.${empty}`)}</p>
       ) : (
         <AgentsRows
           groups={ordered.slice(0, count)}

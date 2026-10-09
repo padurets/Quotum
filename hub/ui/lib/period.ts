@@ -254,7 +254,7 @@ class BoardPeriod {
     if(!this.index||!this.work.basis){this.evaluatedAt=hubNow();this.publishProjection([...this.tapes].filter(([,t])=>t.selection.mode==='live').map(([scope])=>scope));this.scheduleClock();return;}
     const now=this.evaluatedAt=hubNow(),range=evaluatedRange(this.workSelection,now),projected=this.index.advance(range,now);
     if(projected.limited){this.work={...this.work,error:'history_range_invalid'};this.publishWork();clock.due(this.watch,null,now);return;}
-    if(projected.changed) {
+    if(projected.changed||this.workState.value!==this.work.value) {
       this.workRows=projected.rows;
       this.activity?.update(this.workRows);
       const next=new Map<string,WorkedSession[]>();
