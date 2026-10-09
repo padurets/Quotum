@@ -93,18 +93,21 @@ public static class QuotumWindowProbe {
   [StructLayout(LayoutKind.Sequential)] struct CopyData { public UIntPtr Kind; public uint Size; public IntPtr Data; }
   public sealed class PauseGuard : IDisposable {
     internal IntPtr Handle;
+    internal DispatchReading Reading;
     public bool Resumed { get; private set; }
     public void Dispose() {
       if(Handle==IntPtr.Zero)return;
       var handle=Handle;Handle=IntPtr.Zero;
+      if(Reading!=null){Reading.ResumeAttempted=true;Reading.Stage="resuming";}
       ResumeUi(handle);Resumed=true;
+      if(Reading!=null){Reading.Resumed=true;Reading.Stage="resumed";}
     }
   }
   public sealed class DispatchReading {
     public string Stage="find-target", Acceptance="not-sent";
     public long Window, ElapsedMs;
     public uint Process, Thread;
-    public bool Paused;
+    public bool Paused, ResumeAttempted, Resumed;
   }
   public static DispatchReading LastDispatch { get; private set; }
   public static PauseGuard MainRequestThenPause(int process,string exe) {
@@ -146,6 +149,7 @@ public static class QuotumWindowProbe {
       } finally {if(message!=IntPtr.Zero)Marshal.FreeHGlobal(message);Marshal.FreeHGlobal(dataBuffer);}
       if(clock.ElapsedMilliseconds>=3000)throw new Exception("Main dispatch: deadline elapsed before pause");
       reading.Stage="pause";
+      guard.Reading=reading;
       guard.Handle=PauseUi(target,process,reading.Thread);
       reading.Paused=true;reading.Stage="paused";
       return guard;

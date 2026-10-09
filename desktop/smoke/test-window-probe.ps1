@@ -37,6 +37,7 @@ try {
       $expected=switch($case){accepted {'accepted'} rejected {'rejected'} late {'unknown'} unresponsive {'not-sent'}}
       if($reading.Acceptance -ne $expected -or $reading.Paused -ne ($case -eq 'accepted')){throw "Incorrect acceptance/pause: $case"}
       if($case -eq 'accepted' -and (-not $guard.Resumed -or -not [QuotumWindowProbe]::Responsive($window))){throw 'Exception did not resume the owned UI'}
+      if($reading.ResumeAttempted -ne ($case -eq 'accepted') -or $reading.Resumed -ne ($case -eq 'accepted')){throw 'Resume evidence disagrees with the actual native thread'}
       if($case -eq 'late'){
         $until=(Get-Date).AddSeconds(4)
         while(-not (Test-Path $delivered) -and (Get-Date) -lt $until){Start-Sleep -Milliseconds 20}

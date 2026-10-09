@@ -47,10 +47,14 @@ function Save-Manifest {
 Save-Manifest
 $timelineClock=[Diagnostics.Stopwatch]::StartNew()
 $timeline=New-Object 'System.Collections.Generic.List[object]'
-function Save-Stage([string]$Stage,[IntPtr]$Window=[IntPtr]::Zero) {
+function Save-Stage([string]$Stage,[IntPtr]$Window=[IntPtr]::Zero,[Nullable[bool]]$Resumed=$null) {
   try {
     if($timeline.Count -ge 1000){$manifest.errors=@('timeline truncated');Save-Manifest;return}
-    $entry=[ordered]@{stage=$Stage;ms=$timelineClock.Elapsed.TotalMilliseconds;dispatch=[QuotumWindowProbe]::LastDispatch}
+    $reading=[QuotumWindowProbe]::LastDispatch
+    # Copy mutable dispatch fields now; a later resume must not rewrite earlier stages.
+    $dispatch=if($reading){[ordered]@{Stage=$reading.Stage;Acceptance=$reading.Acceptance;Window=$reading.Window;ElapsedMs=$reading.ElapsedMs;Process=$reading.Process;Thread=$reading.Thread;Paused=$reading.Paused;ResumeAttempted=$reading.ResumeAttempted;Resumed=$reading.Resumed}}else{$null}
+    $entry=[ordered]@{stage=$Stage;ms=$timelineClock.Elapsed.TotalMilliseconds;dispatch=$dispatch}
+    if($null -ne $Resumed){$entry.resumed=$Resumed}
     if($process){$entry.window=[QuotumWindowProbe]::Snapshot($Window,$process.Id)}
     $timeline.Add($entry)
     if($Diagnostics){
@@ -150,13 +154,17 @@ function Test-QueuedPanelReopen([IntPtr]$Except) {
   if($process.HasExited){throw "Controller exited during queued reopen: $($process.ExitCode)"}
   if($panel -eq [IntPtr]::Zero){throw 'No panel for queued-close check'}
   $paused=[QuotumWindowProbe]::PauseUi($panel,$process.Id)
+  Save-Stage 'queued-panel-paused' $panel
   try {
     [void][QuotumWindowProbe]::PostMessage($panel,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
     if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot toggle queued panel closed'}
     Start-Sleep -Milliseconds 100
     if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot request panel reopen'}
     Start-Sleep -Milliseconds 100
-  } finally { [QuotumWindowProbe]::ResumeUi($paused) }
+  } finally {
+    $resumed=$false
+    try {[QuotumWindowProbe]::ResumeUi($paused);$resumed=$true} finally {Save-Stage 'queued-panel-resume' $panel $resumed}
+  }
   $deadline=(Get-Date).AddSeconds(15)
   Start-Sleep -Seconds 2
   do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$Except);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
@@ -185,7 +193,9 @@ function Test-MainPanelHandoff([IntPtr]$Main) {
     Save-Stage 'main-handoff-loader' $loader
     if($loader -eq [IntPtr]::Zero){throw 'Main handoff: loader missing within 3s'}
     if(-not [QuotumWindowProbe]::Responsive($loader)){throw 'Main handoff: loader unresponsive'}
-  } finally {if($paused){$paused.Dispose()}; Save-Stage 'main-handoff-resumed' $Main}
+  } finally {
+    try {if($paused){$paused.Dispose()}} finally {Save-Stage 'main-handoff-resume' $Main $(if($paused){$paused.Resumed}else{$null})}
+  }
   Start-Sleep -Seconds 2
   $deadline=(Get-Date).AddSeconds(15)
   do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$Main);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
@@ -353,6 +363,7 @@ try {
   if(-not [QuotumWindowProbe]::IsIconic($window)){throw 'Could not put the test UI thread in the background'}
   foreach($cancel in @($false,$true)) {
     $paused=[QuotumWindowProbe]::PauseUi($window,$process.Id)
+    Save-Stage 'ui-paused' $window
     try {
       $loadingClock=[Diagnostics.Stopwatch]::StartNew()
       if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot ask for the loading panel'}
@@ -369,7 +380,10 @@ try {
         while([QuotumWindowProbe]::IsWindowVisible($loader) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 10}
         if([QuotumWindowProbe]::IsWindowVisible($loader)){throw 'Escape could not cancel native loading'}
       }
-    } finally { [QuotumWindowProbe]::ResumeUi($paused) }
+    } finally {
+      $resumed=$false
+      try {[QuotumWindowProbe]::ResumeUi($paused);$resumed=$true} finally {Save-Stage 'ui-resume' $window $resumed}
+    }
     if($cancel){
       Start-Sleep -Seconds 1
       if([QuotumWindowProbe]::FindOther($process.Id,$window) -ne [IntPtr]::Zero){throw 'Cancelled loading opened a panel later'}
