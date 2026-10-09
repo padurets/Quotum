@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState, type FormEvent} from 'react';
+import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
 import {stamp} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
 import {errorText} from '../lib/quota';
@@ -10,7 +10,7 @@ import {Ago} from './Time';
 import {ConnectionRow} from './Connections';
 import {clientName} from '../../server/domain/clients';
 import type {LiveSession} from '../lib/types';
-import {useConnectionsRevision} from '../lib/board';
+import {useConnectionsRevision, useDevicesRevision} from '../lib/board';
 
 export type Device = {
   id: string;
@@ -55,14 +55,22 @@ function Agents({device}: {device: Device}) {
 export function Devices({local}: {local: boolean}) {
   const [detailsId, setDetails] = useState<string | null>(null);
   const revision = useConnectionsRevision();
+  const presence = useDevicesRevision();
+  const request = useRef(0);
   const [devices, setDevices] = useState<Device[] | null>(null);
   const details = devices?.find(device=>device.id===detailsId) ?? null;
   const [renaming,setRenaming]=useState<Device|null>(null),[name,setName]=useState('');
   const [error, setError] = useState<unknown>(null);
   const load = useCallback(() => {
-    call<Device[]>('GET', '/api/devices').then(setDevices, setError);
+    const current = ++request.current;
+    call<Device[]>('GET', '/api/devices').then(value => {
+      if (current !== request.current) return;
+      setDevices(value); setError(null);
+    }, failure => {if (current === request.current) setError(failure);});
   }, []);
   useEffect(load, [load, revision]);
+  useEffect(() => {if (detailsId !== null) load();}, [load, detailsId, presence]);
+  useEffect(() => () => {++request.current;}, []);
 
   const revoke = async (device: Device) => {
     if (!confirm(t('devices.confirmRevoke', {name: device.name}))) return;

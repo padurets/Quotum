@@ -47,6 +47,7 @@ export type Snapshot = {
 
 /** What the hub tells, as the page applies it; `hello` also tells history the hub's run; `ping` and `bye` are the connection's own (live.ts). */
 export type HubEvent =
+  | {type: 'devices'; data: Record<string, never>}
   | {type: 'hello'; data: {epoch: string}}
   | {type: 'snapshot'; data: Snapshot}
   | {type: 'board'; data: {board: BoardMeta}}
@@ -88,6 +89,8 @@ export type BoardState = {
 };
 
 export type PageState = {
+  /** Owner-device invalidation; snapshots also refresh a disclosure after reconnecting. */
+  devicesRevision?: number;
   connection: {status: ConnectionStatus; lostAt: number | null};
   /** The reader's boards with their role on each; null until a session is taken. */
   boards: Board[] | null;
@@ -176,6 +179,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
   };
   return {
     ...state,
+    devicesRevision: (state.devicesRevision ?? 0)+1,
     board: old && shallowEqual(old, board) ? old : board,
     boards: keep(state.boards ?? undefined, data.boards),
     resets: withResets(state.resets, data.resets),
@@ -197,6 +201,8 @@ function set<K extends 'cards' | 'sessions' | 'cadence' | 'refresh' | 'forecast'
 
 function hub(state: PageState, event: HubEvent): PageState {
   switch (event.type) {
+    case 'devices':
+      return {...state, devicesRevision: (state.devicesRevision ?? 0)+1};
     case 'snapshot':
       return snapshot(state, event.data);
     case 'board':
@@ -303,6 +309,7 @@ export const useRole = () => usePage(s => s.boards?.find(b => b.id === s.board?.
 export const useServerView = () => usePage(s => s.board?.view ?? null);
 export const useViewRevision = () => usePage(s => s.board?.viewRevision ?? 0);
 export const useConnectionsRevision = () => usePage(s => s.board?.connectionsRevision ?? 0);
+export const useDevicesRevision = () => usePage(s => s.devicesRevision ?? 0);
 export const useHistoryStart = () => usePage(s => s.board?.historyStart ?? null);
 /** Membership only: changing a figure never re-renders the compact list itself. */
 export const useVisibleLimits = () => usePage(s => {

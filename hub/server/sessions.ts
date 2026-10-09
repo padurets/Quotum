@@ -185,6 +185,18 @@ export class Sessions {
     return machine.sessions.map((session, i) => ({...present(session, worked[i]), source: this.store.displaySource(user, session.source)}));
   }
 
+  /** Owner-device presence is independent of the board currently open, including hidden sources. */
+  devices(user: string, now: number) {
+    return [...this.machines].filter(([, machine]) => machine.user === user && now-machine.at <= KEEP_MS)
+      .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      .map(([device]) => ({device, sessions: this.deviceSessions(user, device, now)}));
+  }
+
+  devicesChangesAt(user: string, now: number): number | null {
+    const deadlines = [...this.machines.values()].filter(m => m.user === user && now-m.at <= KEEP_MS).map(m => m.at+KEEP_MS+1);
+    return deadlines.length ? Math.min(...deadlines) : null;
+  }
+
   ownChangesAt(user: string, board: string, now: number): number | null {
     if (this.store.privateOwner(board) !== user) return null;
     const deadlines = [...this.machines.values()].filter(m => m.user === user && now - m.at <= KEEP_MS && m.sessions.some(s => this.store.displaySource(user, s.source) === null)).map(m => m.at + KEEP_MS + 1);

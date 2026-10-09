@@ -205,7 +205,7 @@ export class Directory {
 
   saveDeviceClients(device: string, user: string, clients: import('../domain/ingest.js').DeviceClient[], now: number) {
     const before = this.deviceClients(device).map(({clientId, version}) => ({clientId, version}));
-    const next = [...clients].sort((a, b) => a.clientId.localeCompare(b.clientId));
+    const next = [...clients].sort((a, b) => a.clientId < b.clientId ? -1 : a.clientId > b.clientId ? 1 : 0);
     const changed = JSON.stringify(before) !== JSON.stringify(next);
     this.db.prepare('DELETE FROM device_clients WHERE device_id=?').run(device);
     const insert = this.db.prepare('INSERT INTO device_clients VALUES (?,?,?,?)');

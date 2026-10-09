@@ -118,6 +118,16 @@ test('a snapshot is the board; the same snapshot again keeps every slice as it w
   same(first, changed, ['s2']);
 });
 
+test('owner device hints and reconnect snapshots invalidate disclosures without changing board slices', () => {
+  const first=run(hub({type:'snapshot',data:snapshot()}));
+  const hinted=reduce(first,hub({type:'devices',data:{}}));
+  assert.equal(hinted.devicesRevision,(first.devicesRevision??0)+1);
+  assert.equal(hinted.board,first.board);same(first,hinted);
+  const reconnected=reduce(hinted,hub({type:'snapshot',data:snapshot()}));
+  assert.equal(reconnected.devicesRevision,(hinted.devicesRevision??0)+1);
+  assert.equal(reconnected.board,hinted.board);same(hinted,reconnected);
+});
+
 test('an older snapshot or view response cannot overwrite a newer board revision', () => {
   const latest={...snapshot().view,hidden:['history']};
   const state=run(hub({type:'snapshot',data:snapshot({view:latest,viewRevision:8,connectionsRevision:6})}));

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {parseSessions} from '../domain/ingest.js';
+import {parseSessions, subscriptionKey} from '../domain/ingest.js';
 import {parseSessions as initiative} from './fixtures/ingest-initiative.js';
 import {parseSessions as baseline} from './fixtures/ingest-baseline.js';
 import {Store} from '../store/store.js';
@@ -144,6 +144,94 @@ test('evidence strengthens without splitting work and equal-strength conflict lo
   const conflict = mergeEvidence(strong,{route:{class:'api',by:'session',host:'other.example',provider:'codex'}});
   assert.deepEqual(conflict.route,{class:'unknown',by:'session',host:null,provider:null});
   assert.deepEqual(mergeEvidence(conflict,first),conflict);
+});
+
+test('explicit account names and supplemental source evidence differ from device inference and missing evidence', t => {
+  const h=setup(); t.after(()=>h.store.close());
+  h.ingest.sessions(h.credential,{...report,sessions:[],clientSessions:[]},at);
+  const device=h.directory.devices(h.owner.id)[0].id;
+  const source=h.store.source('antigravity',subscriptionKey({provider:'antigravity',account:null,accountName:'work'},h.owner.id),at);
+  h.store.seenDevice(device,'antigravity',source,at);
+  const common={origin:'terminal',project:'Quotum',startedAt:iso(at),working:true};
+  const packet={...report,sessions:[
+    {...common,provider:'antigravity',accountName:'work',sessionId:'1'.repeat(32)},
+    {...common,provider:'antigravity',sessionId:'2'.repeat(32)},
+    {...common,provider:'antigravity',accountName:'new',sessionId:'3'.repeat(32)},
+  ],clientSessions:[
+    {...common,clientId:'antigravity',source:{provider:'antigravity',accountName:'work'},sessionId:'4'.repeat(32)},
+    {...common,clientId:'antigravity',source:{provider:'antigravity'},sessionId:'5'.repeat(32)},
+    {...common,clientId:'antigravity',source:null,sessionId:'6'.repeat(32)},
+  ]};
+  h.ingest.sessions(h.credential,packet,at);
+  h.ingest.sessions(h.credential,{...packet,sentAt:iso(at+60_000)},at+60_000);
+  const rows=h.store.db.prepare('SELECT source_id,account_by FROM agent_sessions ORDER BY producer_id').all();
+  assert.deepEqual(rows.map(row=>({...row})),[
+    {source_id:source,account_by:'login'}, {source_id:source,account_by:'inferred'}, {source_id:null,account_by:'login'},
+    {source_id:source,account_by:'login'}, {source_id:null,account_by:'login'}, {source_id:null,account_by:null},
+  ]);
+  assert.equal(h.store.agentWork(at,at+60_000).length,6,'provenance changes no session identity or credit');
+});
+
+test('unchanged inventory uses one collation, updates seenAt and sends no connections event', t => {
+  const h=setup(),clock={now:()=>at,after:()=>()=>{}};
+  const events=new Events({store:h.store,directory:h.directory,ingest:h.ingest,resets:new ResetFeed(undefined,()=>{})},undefined,clock);
+  events.attach(); t.after(()=>{events.close();h.store.close();});
+  const clients=[{clientId:'future-x',version:'1.0'},{clientId:'future_x',version:'1.0'}];
+  const packet={...report,sessions:[],clientSessions:[],clients};
+  h.ingest.sessions(h.credential,packet,at);
+  const device=h.directory.devices(h.owner.id)[0].id,revision=h.directory.connectionsRevision(h.owner.id),frames:Frame[]=[];
+  h.directory.createSession('inventory',h.owner.id,at,1_000_000);
+  events.open({user:h.owner.id,secret:'inventory',board:h.board,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});
+  frames.splice(0);
+  for(let i=1;i<=3;i++) {
+    h.ingest.sessions(h.credential,{...packet,clients:i%2?[...clients].reverse():clients,sentAt:iso(at+i*15_000)},at+i*15_000);
+    events.flush();
+    assert.equal(h.directory.connectionsRevision(h.owner.id),revision);
+    assert.ok(h.directory.deviceClients(device).every(client=>client.seenAt===at+i*15_000));
+    assert.ok(!frames.some(frame=>frame.type==='connections'));
+  }
+  h.ingest.sessions(h.credential,{...packet,clients:[clients[0],{...clients[1],version:'2.0'}]},at+60_000);
+  events.flush();
+  assert.equal(h.directory.connectionsRevision(h.owner.id),revision+1);
+  assert.equal(frames.filter(frame=>frame.type==='connections').length,1);
+});
+
+test('device presence hints reach only the owner on every board and expire held-hidden sessions', t => {
+  const h=setup();let now=at;
+  const timers=new Set<{at:number;run:()=>void}>();
+  const clock={now:()=>now,after:(ms:number,run:()=>void)=>{const timer={at:now+ms,run};timers.add(timer);return()=>{timers.delete(timer);};}};
+  const events=new Events({store:h.store,directory:h.directory,ingest:h.ingest,resets:new ResetFeed(undefined,()=>{})},undefined,clock);
+  events.attach();t.after(()=>{events.close();h.store.close();});
+  const source=h.store.source('codex','f'.repeat(24),at);h.store.hold(source,h.owner.id,at);h.store.share(h.board,source,h.owner.id,at);
+  h.directory.saveView(h.board,{...h.directory.view(h.board),hidden:[`source:${source}`]},h.owner.id,at);
+  h.store.db.prepare('INSERT INTO members VALUES (?,?,?,?)').run(h.shared,h.other.id,'member',at);
+  h.ingest.sessions(h.credential,{...report,sessions:[],clientSessions:[]},at);
+  const device=h.directory.devices(h.owner.id)[0].id,revision=h.directory.connectionsRevision(h.owner.id),frames:Frame[][]=[[],[],[]];
+  for(const [i,user,board] of [[0,h.owner.id,h.board],[1,h.owner.id,h.shared],[2,h.other.id,h.shared]] as const) {
+    h.directory.createSession('presence-'+i,user,at,1_000_000);
+    events.open({user,secret:'presence-'+i,board,kind:'stream',send:batch=>frames[i].push(...batch),end:()=>{}});
+  }
+  frames.forEach(list=>list.splice(0));
+  const packet={...report,sessions:[],clientSessions:[{...session,working:false},{...session,clientId:'codex',sessionId:'c'.repeat(32),working:false,source:{provider:'codex',account:'f'.repeat(24)}}]};
+  const changed=()=>{
+    events.flush();
+    for(const i of [0,1]) assert.deepEqual(frames[i].filter(frame=>frame.type==='devices').map(frame=>JSON.parse(frame.data)),[{}]);
+    assert.ok(!frames[2].some(frame=>frame.type==='devices'||frame.type==='ownSessions'));
+    assert.ok(!frames[1].some(frame=>frame.type==='ownSessions'));
+    assert.equal(h.directory.connectionsRevision(h.owner.id),revision);
+    frames.forEach(list=>list.splice(0));
+  };
+  h.ingest.sessions(h.credential,packet,now);changed();
+  assert.equal(h.ingest.live.deviceSessions(h.owner.id,device,now).length,2);
+  now+=15_000;h.ingest.sessions(h.credential,{...packet,sentAt:iso(now)},now);events.flush();
+  assert.ok(frames.every(list=>!list.some(frame=>frame.type==='devices')),'same idle heartbeat only extends expiry');
+  frames.forEach(list=>list.splice(0));
+  now+=15_000;h.ingest.sessions(h.credential,{...packet,clientSessions:[],sentAt:iso(now)},now);changed();
+  assert.deepEqual(h.ingest.live.deviceSessions(h.owner.id,device,now),[]);
+  now+=15_000;h.ingest.sessions(h.credential,{...packet,clientSessions:packet.clientSessions.slice(1),sentAt:iso(now)},now);changed();
+  now+=KEEP_MS+1;
+  for(const timer of [...timers].filter(timer=>timer.at<=now))timer.run();
+  changed();assert.deepEqual(h.ingest.live.deviceSessions(h.owner.id,device,now),[]);
 });
 
 test('private presence expires without a quota card, while shared streams receive no private frame', t => {

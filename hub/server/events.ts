@@ -148,6 +148,7 @@ export class Events implements Touches {
   private readonly dirtyClientUsers = new Set<string>();
   private readonly ownHistories = new Map<string, number>();
   private readonly ownSessions = new Map<string, {json: string; changesAt: number | null}>();
+  private readonly deviceSessions = new Map<string, {json: string; changesAt: number | null}>();
   private ownDeadline: {at: number; cancel: () => void} | null = null;
   private readonly histories = new Map<string, Map<string, HistoryChange>>();
   private stopFlush: (() => void) | null = null;
@@ -267,7 +268,7 @@ export class Events implements Touches {
   }
 
   touchClientSessions(user: string) {
-    if ([...this.subscribers.values()].some(s => s.user === user && this.parts.store.privateOwner(s.board) === user)) this.dirtyClientUsers.add(user);
+    if ([...this.subscribers.values()].some(s => s.user === user)) this.dirtyClientUsers.add(user);
     this.schedule();
   }
 
@@ -416,6 +417,7 @@ export class Events implements Touches {
     const lists = new Map<string, Frame[]>();
     const connectionFrames = new Map<string, Frame[]>();
     const clientFramesByKey = new Map<string, Frame[]>();
+    const deviceFramesByUser = new Map<string, Frame[]>();
     for (const watched of this.watched.values()) {
       const financialKey=financialKeys.get(watched.id)??this.parts.store.financialKey(watched.id);
       for (const sub of watched.subscribers) {
@@ -449,8 +451,13 @@ export class Events implements Touches {
         }
         let clientFrames: Frame[] = [];
         if (clientUsers.has(sub.user) || whole.has(watched.id) || users.has(sub.user) || sources.has(watched.id)) {
-          try { const key = sub.user+'\n'+watched.id; if (!clientFramesByKey.has(key)) clientFramesByKey.set(key, this.refreshOwnSessions(sub.user, watched.id, now)); clientFrames = clientFramesByKey.get(key)!; }
-          catch (error) { trouble(error); failed.users.add(sub.user); this.ownSessions.delete(sub.user+'\n'+watched.id); }
+          try {
+            const key = sub.user+'\n'+watched.id;
+            if (!clientFramesByKey.has(key)) clientFramesByKey.set(key, this.refreshOwnSessions(sub.user, watched.id, now));
+            if (!deviceFramesByUser.has(sub.user)) deviceFramesByUser.set(sub.user, this.refreshDeviceSessions(sub.user, now));
+            clientFrames = [...clientFramesByKey.get(key)!, ...deviceFramesByUser.get(sub.user)!];
+          }
+          catch (error) { trouble(error); failed.users.add(sub.user); this.ownSessions.delete(sub.user+'\n'+watched.id); this.deviceSessions.delete(sub.user); }
         }
         let historyFrames = tails.get(watched.id) ?? [];
         const ownSince = this.parts.store.privateOwner(watched.id) === sub.user ? ownHistories.get(sub.user) : undefined;
@@ -629,7 +636,7 @@ export class Events implements Touches {
   }
 
   private armOwn(now: number) {
-    const at = earliest(...[...this.ownSessions.values()].map(value => value.changesAt));
+    const at = earliest(...[...this.ownSessions.values(), ...this.deviceSessions.values()].map(value => value.changesAt));
     if (this.ownDeadline?.at === at) return;
     this.ownDeadline?.cancel();
     this.ownDeadline = null;
@@ -637,8 +644,19 @@ export class Events implements Touches {
     this.ownDeadline = {at, cancel: this.later(Math.max(1000, at-now), () => {
       this.ownDeadline = null;
       for (const [key, value] of this.ownSessions) if (value.changesAt !== null && value.changesAt <= this.clock.now()) this.touchClientSessions(key.split('\n')[0]);
+      for (const [user, value] of this.deviceSessions) if (value.changesAt !== null && value.changesAt <= this.clock.now()) this.touchClientSessions(user);
       this.schedule();
     })};
+  }
+
+  private refreshDeviceSessions(user: string, now: number): Frame[] {
+    const live = this.parts.ingest.live;
+    const json = JSON.stringify(live.devices(user, now));
+    const before = this.deviceSessions.get(user);
+    this.deviceSessions.set(user, {json, changesAt: live.devicesChangesAt(user, now)});
+    this.armOwn(now);
+    // This account hint carries no board data, IDs, session counts or project names.
+    return before && before.json !== json ? [frame('devices', {})] : [];
   }
 
   // ---------- time ----------
@@ -838,7 +856,7 @@ export class Events implements Touches {
     watched?.subscribers.delete(sub);
     const all = [...this.subscribers.values()];
     if (!all.some(s => s.user === sub.user && s.board === sub.board)) {this.mines.delete(`${sub.user}\n${sub.board}`);this.sourceAccess.delete(sub.user+'\n'+sub.board);this.currencyContexts.delete(sub.user+'\n'+sub.board);this.ownSessions.delete(sub.user+'\n'+sub.board);this.armOwn(this.clock.now());}
-    if (!all.some(s => s.user === sub.user)) {this.boardLists.delete(sub.user);this.connections.delete(sub.user);}
+    if (!all.some(s => s.user === sub.user)) {this.boardLists.delete(sub.user);this.connections.delete(sub.user);this.deviceSessions.delete(sub.user);this.armOwn(this.clock.now());}
     if (watched && !watched.subscribers.size) {
       watched.deadline?.cancel();
       watched.stopRecheck();

@@ -210,6 +210,7 @@ change as it was.
 | `board` | `{board: {id, name, personal}}` | The board was renamed. |
 | `view` | `{view, revision}` | The board's view was saved. The monotonic revision belongs to this board. |
 | `connections` | `{revision}` | Only this reader's connection structure or access health changed; no private IDs or labels. Successful measurements and unchanged device heartbeats do not increment it. |
+| `devices` | `{}` | Only this reader's current device sessions changed. Invalidate an open Devices disclosure; no session fields, IDs, counts or names are sent. |
 | `lineup` | `{sources: string[]}` | The board's sources, in order, changed. |
 | `card` | a card | A source's state changed. |
 | `sessions` | `{id, sessions}` | The agents running on a source, on the machines of its people on this board, changed. |
@@ -1226,7 +1227,12 @@ Add widget on empty or budget-only boards; explicit hiding remains authoritative
 `GET /api/devices` adds owner-private `clients` entries (`clientId`, nullable `version`,
 `seenAt`) and current `sessions` with the safe board fields plus a held source ID or null.
 Device revocation removes inventory and current presence. Inventory changes use the
-existing connection revision. Clients and measuring settings are separate in desktop
+existing connection revision. The account-private `devices` hint reaches the device
+owner on any board, including a shared board, when current device presence changes or
+expires. Other readers receive no hint. It carries no private board data and changes no
+connection revision. An open Devices disclosure reads the owner API on this hint, on
+reconnect and on opening; closed disclosures do not read on presence hints. Clients and
+measuring settings are separate in desktop
 `app_state`: `clients` has `id`, `enabled`, reserved `route` consent and nullable `path`;
 `app_save_settings` accepts client enabled/route patches without a new bridge command.
 With every collector disabled and tracking enabled, the agent state is `tracking`;

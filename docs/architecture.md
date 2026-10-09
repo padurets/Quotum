@@ -213,6 +213,10 @@ shared projections and source activity signals require a current holding.
 Private ownSessions and ownSince events update the corresponding page slices and
 quota/activity history without card or financial updates. Closed tiles invalidate even
 without readers. Empty boards use the same explicit Add widget flow and saved visibility.
+An account-private devices hint invalidates an open owner-device disclosure on any
+board without sending session data; opening or reconnecting also reads the owner API.
+The same presence deadline clears the disclosure even when its only sessions use held,
+hidden sources. Unchanged inventory and presence do not change connection revisions.
 OpenCode native local TUI attribution is proven only by bounded Linux invocation metadata;
 shared or unproven invocations and other operating systems have no project authority.
 Version transport bounds bytes before line parsing and waits for both EOF and successful

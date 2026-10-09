@@ -299,7 +299,7 @@ export class Ingest {
   /**
    * Which coding agents run on a device now. A session is filed under the subscription
    * it names, else under the one this device last delivered for its provider; one the
-   * hub does not know, or its person does not hold, is left out.
+   * hub does not know, or its person does not hold, remains private to that person.
    */
   sessions(credential: Credential, body: unknown, now = Date.now()): {accepted: number} {
     const report = parseSessions(body);
@@ -310,11 +310,11 @@ export class Ingest {
       const legacy = report.sessions.map(({provider, account, accountName, ...session}) => {
         const source = account || accountName ? this.store.findSource(provider, subscriptionKey({provider, account, accountName}, device.userId)) : this.store.deviceSource(device.id, provider);
         return {...session, clientId: session.clientId ?? provider, source,
-          accountBy: account ? 'login' as const : source ? 'inferred' as const : null};
+          accountBy: account || accountName ? 'login' as const : source ? 'inferred' as const : null};
       });
       const supplemental = report.clientSessions.map(({source, ...session}) => ({...session,
         source: source ? this.store.findSource(source.provider, subscriptionKey(source, device.userId)) : null,
-        accountBy: source?.account ? 'login' as const : null,
+        accountBy: source ? 'login' as const : null,
       }));
       const sessions = [...legacy, ...supplemental].map(session => {
         const startedAt = Math.min(now, session.startedAt + skew);

@@ -504,9 +504,13 @@ test('what changes with time alone goes out when it does, with nothing told to t
     h.clock.now(),
   );
   h.clock.advance(200);
-  assert.equal((await s.next()).data.sessions.length, 1);
+  const started = await s.within(300);
+  assert.equal(started.find(event => event.type === 'sessions')?.data.sessions.length, 1);
+  assert.deepEqual(started.find(event => event.type === 'devices')?.data, {});
   h.clock.advance(5 * MIN + S);
-  assert.deepEqual((await s.next()).data.sessions, []);
+  const expired = await s.within(300);
+  assert.deepEqual(expired.find(event => event.type === 'sessions')?.data.sessions, []);
+  assert.deepEqual(expired.find(event => event.type === 'devices')?.data, {});
 
   // A holder following the pace: its plan shows while it asks, and goes when it falls silent.
   h.ingest.checkin(h.credential, {...h.agent, paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active: false}]}, h.clock.now());
@@ -1115,12 +1119,12 @@ test('every change a reader sees is told: what each request touches reaches the 
     [
       'a list of agents',
       () => h.call('POST', '/v1/sessions', {token: secret, body: {...agent, sentAt: iso(Date.now()), sessions: [session]}}),
-      ['sessions'],
-      ['sessions'],
+      ['sessions', 'devices'],
+      ['sessions', 'devices'],
       [],
     ],
-    ['a project renamed', () => h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}}), ['sessions', 'history'], ['sessions'], []],
-    ['a project given its name back', () => h.call('POST', '/api/projects/restore', {as: 'alice', body: {reported: ['quotum']}}), ['sessions', 'history'], ['sessions'], []],
+    ['a project renamed', () => h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}}), ['sessions', 'devices', 'history'], ['sessions', 'devices'], []],
+    ['a project given its name back', () => h.call('POST', '/api/projects/restore', {as: 'alice', body: {reported: ['quotum']}}), ['sessions', 'devices', 'history'], ['sessions', 'devices'], []],
     ['a view saved', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}}), [], ['view'], []],
     ['a height chosen', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 9}}}}}), [], ['view'], []],
     ['the height given back to the content', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}}), [], ['view'], []],
@@ -1128,8 +1132,8 @@ test('every change a reader sees is told: what each request touches reaches the 
     ['a board made', () => h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Solo'}}), ['boards'], ['boards'], []],
     ['a name changed', () => h.call('POST', '/api/account', {as: 'alice', body: {name: 'Alicia'}}), ['card'], ['card'], []],
     ['a source taken off', () => h.call('DELETE', `/api/boards/${team}/shares/${source}`, {as: 'alice'}), [], ['lineup', 'mine'], []],
-    ['a device renamed', () => h.call('POST', `/api/devices/${devices[0].id}`, {as: 'alice', body: {name: 'Book'}}), ['sessions', 'connections'], ['connections'], []],
-    ['a device disconnected', () => h.call('DELETE', `/api/devices/${devices[0].id}`, {as: 'alice'}), ['lineup', 'mine', 'connections', 'history'], ['connections'], []],
+    ['a device renamed', () => h.call('POST', `/api/devices/${devices[0].id}`, {as: 'alice', body: {name: 'Book'}}), ['sessions', 'connections', 'devices'], ['connections', 'devices'], []],
+    ['a device disconnected', () => h.call('DELETE', `/api/devices/${devices[0].id}`, {as: 'alice'}), ['lineup', 'mine', 'connections', 'devices', 'history'], ['connections', 'devices'], []],
   ];
   for (const [what, act, onOwn, onShared, onBobs] of rows) {
     const done = await act();
@@ -1223,9 +1227,9 @@ test('what each change of data touches reaches the boards it shows on: people jo
       ['connections'],
       [],
     ],
-    ['the machine that told of agents is disconnected', () => h.call('DELETE', `/api/devices/${laptop}`, {as: 'alice'}), ['sessions', 'refresh', 'connections'], ['connections'], []],
-    ['a machine tells of its agents', () => agents('desk', [session]), ['sessions'], [], []],
-    ['and then of none', () => agents('desk', []), ['sessions'], [], []],
+    ['the machine that told of agents is disconnected', () => h.call('DELETE', `/api/devices/${laptop}`, {as: 'alice'}), ['sessions', 'refresh', 'connections', 'devices'], ['connections', 'devices'], []],
+    ['a machine tells of its agents', () => agents('desk', [session]), ['sessions', 'devices'], ['devices'], []],
+    ['and then of none', () => agents('desk', []), ['sessions', 'devices'], ['devices'], []],
     ['the trackers asked', () => h.resets.round(), ['resets'], ['resets'], ['resets']],
   ];
   for (const [what, act, onOwn, onShared, onCarols] of rows) {
