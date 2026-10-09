@@ -44,6 +44,8 @@ try {
         if(-not (Test-Path $delivered) -or [IO.File]::ReadAllText($delivered) -ne 'valid'){throw 'Timed-out receiver lost its marshalled payload'}
       }
       Write-Host ($reading | ConvertTo-Json -Compress)
+      [QuotumWindowProbe]::ResetDispatch()
+      if($null -ne [QuotumWindowProbe]::LastDispatch){throw 'A new smoke run inherited the previous dispatch'}
     } finally {
       if($guard){$guard.Dispose()}
       if(-not $receiver.HasExited){$receiver.Kill();if(-not $receiver.WaitForExit(5000)){throw 'Receiver cleanup failed'}}

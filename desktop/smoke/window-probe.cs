@@ -110,6 +110,7 @@ public static class QuotumWindowProbe {
     public bool Paused, ResumeAttempted, Resumed;
   }
   public static DispatchReading LastDispatch { get; private set; }
+  public static void ResetDispatch() { LastDispatch=null; }
   public static PauseGuard MainRequestThenPause(int process,string exe) {
     var clock=Stopwatch.StartNew();
     var reading=new DispatchReading();LastDispatch=reading;

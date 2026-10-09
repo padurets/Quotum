@@ -16,6 +16,7 @@ const until = async (ready: () => boolean) => {
 
 function fixture(t: TestContext, mode = 'ready') {
   const profile = mkdtempSync(path.join(os.tmpdir(), 'quotum-chrome-test-'));
+  const workers=new Set<number>();
   // This is a real process with real pipes and a real listening socket, not an installed browser.
   const script = `
     const fs = require('node:fs'), http = require('node:http'), cp = require('node:child_process');
@@ -43,13 +44,17 @@ function fixture(t: TestContext, mode = 'ready') {
   t.mock.method(console, 'error', () => {});
   t.after(() => {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    if (existsSync(profile + '/worker')) {
-      const pid = Number(readFileSync(profile + '/worker', 'utf8'));
+    if (existsSync(profile + '/worker')) workers.add(Number(readFileSync(profile + '/worker', 'utf8')));
+    for(const pid of workers){
       try {process.kill(pid, 'SIGKILL');} catch {}
     }
     rmSync(profile, {recursive: true, force: true});
   });
-  return {profile, child, launch: (signal?: AbortSignal) => launchedChrome(child, profile, process.platform !== 'win32', signal)};
+  return {profile, child, launch: async(signal?: AbortSignal) => {
+    const browser=await launchedChrome(child, profile, process.platform !== 'win32', signal);
+    if(existsSync(profile+'/worker'))workers.add(Number(readFileSync(profile+'/worker','utf8')));
+    return browser;
+  }};
 }
 
 test('silent real DevTools readiness and idempotent cleanup close the endpoint and profile', async t => {
@@ -111,7 +116,6 @@ test('an owned worker that survives its parent receives escalation and cannot re
 test('an escaped owned worker cannot authorize another group signal or a successful cleanup', {skip:process.platform!=='linux'},async t=>{
   const {profile,launch}=fixture(t,'escaped-worker');
   const browser=await launch(),worker=Number(readFileSync(profile+'/worker','utf8'));
-  t.after(()=>{try{process.kill(worker,'SIGKILL');}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')throw error;}});
   await assert.rejects(browser.close(),/cleanup unconfirmed/);
   assert.equal(existsSync(profile),true,'the profile stays while an observed owner remains alive');
   process.kill(worker,0);

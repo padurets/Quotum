@@ -34,6 +34,8 @@ $closedAt = @{}
 if (-not ('QuotumWindowProbe' -as [type])) {
   Add-Type -Path (Join-Path $PSScriptRoot 'window-probe.cs')
 }
+# Installed and portable smoke can share one PowerShell process and its static types.
+[QuotumWindowProbe]::ResetDispatch()
 
 $manifest=[ordered]@{schemaVersion=1;status='running';sha=((& git rev-parse HEAD).Trim());run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT;platform='windows';packageHash=(Get-FileHash -LiteralPath $appPath -Algorithm SHA256).Hash;files=@();errors=@()}
 function Save-Manifest {
