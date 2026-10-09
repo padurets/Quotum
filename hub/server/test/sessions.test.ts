@@ -346,7 +346,7 @@ test("a board shows the sessions of those on it who measure the subscription, ea
     [
       [laptop, 'core', 'quotum.feat'],
       [server, 'quotum', null],
-    ].sort((a, b) => a[0]!.localeCompare(b[0]!)),
+    ],
     "Ann's name for her project; Bob's as his machine reports it",
   );
   // In the project's own folder the agent tells no folder: renamed, the reported name shows where it works.
