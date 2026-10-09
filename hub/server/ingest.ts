@@ -106,19 +106,14 @@ export class Ingest {
         if (recorded.windows) attention?.record(previous, measurement, now);
         if (recorded.unavailable) attention?.unavailable(previous, observedAt);
         afterCommit(() => {
-          // A late resource may be the first delivery after restart. Its accepted
-          // value must not seed runtime transport behind the persisted baseline.
-          if (recorded.accepted && !recorded.delivery) {
-            const delivery = deliveryOf(previous);
-            if (delivery) this.cadence.restore(account, delivery.at, delivery.staleAfterMs, previous.successAt === null ? null : previous.windows, now);
-          }
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
           if (recorded.delivery) {
             this.cadence.refreshResult(account, device.id, observedAt, true, now);
             this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now);
           } else this.duty.acknowledge(account, device.id, observedAt);
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
-          if (recorded.accepted) this.cadence.delivered(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,snapshot.staleAfterMs,this.signals(source,account,now).inUse,now);
+          if (recorded.delivery) this.cadence.delivered(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,snapshot.staleAfterMs,this.signals(source,account,now).inUse,now);
+          else if (recorded.accepted) this.cadence.observed(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,this.signals(source,account,now).inUse,now);
           else this.cadence.acknowledge(account,device.id,observedAt);
         });
       }

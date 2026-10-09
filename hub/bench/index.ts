@@ -361,7 +361,7 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
   const ledger=new DatabaseSync(path.join(demo.dir,'quotum.sqlite'),{readOnly:true});
   const rows=()=>Number(ledger.prepare('SELECT count(*) n FROM readings WHERE source_id=? AND meter_id=?').get(source,'balance:credits')?.n);
   const coverage=()=>Number(ledger.prepare('SELECT max(to_at) at FROM meter_spans WHERE source_id=? AND meter_id=?').get(source,'balance:credits')?.at);
-  const problems:string[]=[],updates:{amount:string;heartbeat:boolean;chartMs:number|null;historyRequests:number;historyBytes:number;ledgerRowsUnchanged:boolean;coverageAdvanced:boolean}[]=[];
+  const problems:string[]=[],updates:{amount:string;heartbeat:boolean;cardMs:number|null;chartMs:number|null;historyRequests:number;historyBytes:number;ledgerRowsUnchanged:boolean;coverageAdvanced:boolean}[]=[];
   try {
     for(const [index,amount] of ['2499','2498','2498','2498'].entries()) {
       await cdp.evaluate('__quotumBench.reset()');
@@ -371,13 +371,13 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
       let chart:number|null=null,changed:number|null=null;
       while(Date.now()<sent+SHOWN_WITHIN&&(chart===null||!heartbeat&&changed===null)) {
         chart=await cdp.evaluate<number|null>(`__quotumBench.seriesChanged(${JSON.stringify(source+' balance:credits')},${JSON.stringify(last)})`);
-        changed=await cdp.evaluate<number|null>(`__quotumBench.cardChanged(${JSON.stringify(source)})`);
+        changed=await cdp.evaluate<number|null>(`__quotumBench.moneyChanged(${JSON.stringify(source)},${JSON.stringify(value)})`);
         if(chart===null||!heartbeat&&changed===null)await sleep(20);
       }
       await drain(requests);await sleep(100);requests.counting=false;
       const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),to=Date.now(),historyBytes=requests.bytesByPath['/api/history']??0;
       const balance=await cdp.evaluate<string|null>(`document.querySelector('[data-card="${source}"] [data-money]')?.getAttribute('data-money')??null`);
-      const point={amount,heartbeat,chartMs:chart===null?null:chart-sent,historyRequests:requests.history.length,historyBytes,ledgerRowsUnchanged:rows()===beforeRows,coverageAdvanced:coverage()>beforeCoverage};
+      const point={amount,heartbeat,cardMs:changed===null?null:changed-sent,chartMs:chart===null?null:chart-sent,historyRequests:requests.history.length,historyBytes,ledgerRowsUnchanged:rows()===beforeRows,coverageAdvanced:coverage()>beforeCoverage};
       updates.push(point);
       problems.push(...chartProblems([chart===null?Infinity:chart-sent]),...creditRenderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from:sent,to,cellMs:cellOf(86_400_000)}));
       if(!heartbeat)problems.push(...measuredProblems({card:source,latencies:[changed===null?Infinity:changed-sent],renders:reading.renders,mutations:reading.mutations,from:sent,to}));

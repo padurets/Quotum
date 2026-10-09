@@ -272,26 +272,32 @@ export class Cadence {
     return {until: this.ordinary(pace, now, signals, floorOf(capability.minIntervalMs)).at + MIN_INTERVAL_MS, extend: now - capability.heardAt <= SILENT_AFTER_MS};
   }
 
-  /** A measurement of subscription `key` was accepted; `busy` is whether it is in use as it arrives. */
+  /** An accepted measurement advances the shared delivery clock and its freshness promise. */
   delivered(key: string, device: string, windows: {id: string; usedPercent: number}[] | null, observedAt: number, staleAfterMs: number, busy: boolean, now: number) {
+    this.observed(key, device, windows, observedAt, busy, now);
     const pace = this.pace(key, now);
-    if (windows !== null) {
-    const signature = signatureOf(windows);
-    if (pace.signature === null) {
-      pace.stretch = 1;
-      pace.changed = false;
-    } else {
-      pace.changed = signature !== pace.signature;
-      pace.stretch = pace.changed || busy ? 1 : Math.min(pace.stretch * 2, 8);
-    }
-    if (pace.changed || busy) pace.busyAt = now;
-    pace.signature = signature;
-    }
     // Never later than this measurement goes stale, whoever took it and however it was asked for.
     // Whole milliseconds: the times the hub answers with are whole numbers (spec).
     if (observedAt > (pace.lastAt ?? -Infinity)) {
-    pace.promiseAt = observedAt + Math.ceil(Math.max(MIN_INTERVAL_MS, (staleAfterMs - 60_000) / 1.2));
-    pace.lastAt = observedAt;
+      pace.promiseAt = observedAt + Math.ceil(Math.max(MIN_INTERVAL_MS, (staleAfterMs - 60_000) / 1.2));
+      pace.lastAt = observedAt;
+    }
+  }
+
+  /** Accepted resource evidence changes the quota pace and answers its device, without seeding a delivery clock. */
+  observed(key: string, device: string, windows: {id: string; usedPercent: number}[] | null, observedAt: number, busy: boolean, now: number) {
+    const pace = this.pace(key, now);
+    if (windows !== null) {
+      const signature = signatureOf(windows);
+      if (pace.signature === null) {
+        pace.stretch = 1;
+        pace.changed = false;
+      } else {
+        pace.changed = signature !== pace.signature;
+        pace.stretch = pace.changed || busy ? 1 : Math.min(pace.stretch * 2, 8);
+      }
+      if (pace.changed || busy) pace.busyAt = now;
+      pace.signature = signature;
     }
     this.answeredBy(pace, device, observedAt);
     const pause = this.pauses.get(pauseKey(key, device));

@@ -49,11 +49,14 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
       current.low = Math.min(current.low, 100 - b.used);
       current.last = 100 - b.used;
       current.hold = b.staleAfterMs;
-      // A coarse cell cannot locate both sides of an explicit gap. Keep its
-      // proven accounting, but do not draw a value across its unavailable part.
-      const interrupted = !!a && b.at >= (a.validUntil ?? Infinity) && cellStart(a.at, cell) === at;
+      // Recovery cannot fill the unavailable beginning of its coarse cell, even
+      // when the preceding numerical sample belongs to an earlier cell.
+      const interrupted = !!a && b.at >= (a.validUntil ?? Infinity) && b.at > at;
       current.gap ||= interrupted;
-      current.validUntil = interrupted || (current.validUntil !== undefined && current.validUntil <= at) ? at : b.validUntil;
+      // The original TTL is inclusive; the packed bound is exclusive and cannot
+      // inherit a later sample's cadence. Natural TTL gaps keep their cell semantics.
+      const until = b.validUntil === undefined ? undefined : Math.min(b.validUntil,b.at+b.staleAfterMs+1);
+      current.validUntil = interrupted || (current.validUntil !== undefined && current.validUntil <= at) ? at : until;
       if (a && step?.valid) {
         current.spent += step.delta;
         current.covered += b.at - a.at;

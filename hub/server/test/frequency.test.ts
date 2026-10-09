@@ -438,3 +438,29 @@ test('late independent funds preserve the newer fixed plan and old failures cann
   restarted.accept(h.credential,{...h.agent('laptop'),sentAt:iso(3*MIN),snapshots:[],failures:[{provider:'codex',error:'not_logged_in',observedAt:iso(MIN)}]},T+3*MIN);
   assert.equal(restarted.checkin(h.credential,{...h.agent('laptop'),paced:true,subscriptions:[{provider:'codex',account:ACCOUNT,active:false}]},T+17*MIN).subscriptions[0].measure,true);
 });
+
+test('nonadvancing accepted credits clear only their sender\'s older pause', t => {
+  for (const sender of ['laptop', 'server']) for (const observed of [50_000, 90_000]) {
+    const h = hub(t);
+    h.ask(0); h.deliver(0);
+    h.deliver(MIN, {failure:'timeout'});
+    h.deliver(150_000, {name:'server'});
+    assert.equal(h.cadence.pausedUntil(ACCOUNT,h.device(),T+160_000),T+3*MIN);
+    assert.equal(h.deliver(160_000, {name:sender,observed,windowless:true,credits:'1.23'}).accepted,1);
+    const cleared = sender === 'laptop' && observed > MIN;
+    assert.equal(h.cadence.pausedUntil(ACCOUNT,h.device(),T+160_000),cleared ? null : T+3*MIN);
+    assert.deepEqual(h.store.state(h.source()).delivery,{at:T+150_000,staleAfterMs:348_000});
+  }
+});
+
+test('duplicate quota data and independent credits do not stretch Auto speed', t => {
+  const h = hub(t);
+  h.ask(0); h.deliver(0);
+  h.deliver(MIN); h.ask(MIN);
+  const expected = {next:T+5*MIN,why:'idle'};
+  assert.deepEqual(h.ingest.nextMeasurement(h.source(),ACCOUNT,T+MIN).value,expected);
+  assert.equal(h.deliver(MIN+15_000,{observed:MIN}).duplicates,1);
+  assert.deepEqual(h.ingest.nextMeasurement(h.source(),ACCOUNT,T+MIN+15_000).value,expected);
+  assert.equal(h.deliver(MIN+30_000,{observed:MIN,credits:'1.23'}).accepted,1);
+  assert.deepEqual(h.ingest.nextMeasurement(h.source(),ACCOUNT,T+MIN+30_000).value,expected);
+});

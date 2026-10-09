@@ -69,7 +69,8 @@ test('reset grant continuity depends only on reset status and its own promise', 
   assert.equal(store.db.prepare("SELECT count(*) n FROM events WHERE kind='resets_granted'").get()?.n,0);
 });
 
-test('late resources arriving before the first restarted check-in retain persisted transport cadence', t => {
+for (const mode of ['Auto','fixed']) for (const resource of ['none','duplicate','late credits','equal credits','late resets','fresh credits']) {
+test(`${mode} restart with ${resource} before the first check-in retains its delivery policy`, t => {
   const store = new Store(':memory:',T), directory = new Directory(store.db);
   t.after(() => store.close());
   const user = directory.createUser('fixture@example.com','Fixture','x',T), secret = newSecret('qt_m');
@@ -80,14 +81,58 @@ test('late resources arriving before the first restarted check-in retain persist
   const deliver = (now: number, at: number, extra = {}) => ingest.accept(credential,batch(T+now,[snapshot(T+at,{staleAfterMs:420_000,...extra})]),T+now);
   ask(0); deliver(0,0);
   const source = store.findSource('codex',account)!;
-  store.setMeasureInterval(source,300_000); ingest.frequencyChanged(source,T);
+  if (mode === 'fixed') {
+    store.setMeasureInterval(source,300_000);
+    ingest.frequencyChanged(source,T);
+  }
   deliver(1_800_000,1_800_000);
-  ingest = new Ingest(store,directory,new Duty(),new Cadence());
-  const result = deliver(1_860_000,1_500_000,{...missing(),balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount:'2500'}]});
-  assert.equal(result.accepted,1);
-  assert.equal(ask(1_860_000).measure,false);
-  assert.deepEqual(ingest.nextMeasurement(source,account,T+1_860_000).value,{next:T+2_100_000,why:'fixed'});
-  assert.deepEqual(store.state(source).delivery,{at:T+1_800_000,staleAfterMs:420_000});
+  const duty = new Duty();
+  ingest = new Ingest(store,directory,duty,new Cadence());
+  const fresh = resource === 'fresh credits';
+  const baseline = fresh ? 1_850_000 : 1_800_000;
+  if (resource !== 'none') {
+    const at = resource === 'equal credits' ? 1_800_000 : fresh ? 1_850_000 : 1_500_000;
+    const extra = resource.endsWith('credits')
+      ? {...missing(),balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount:'2500'}]}
+      : resource === 'late resets' ? {resets:{available:2}} : {};
+    const result = deliver(1_860_000,at,extra);
+    assert.deepEqual([result.accepted,result.duplicates],resource === 'duplicate' ? [0,1] : [1,0]);
+    if (resource.endsWith('credits')) assert.equal(store.state(source).creditBalance?.at,T+at);
+    if (resource === 'late resets') assert.equal(store.state(source).resources?.resets?.at,T+at);
+  }
+  if (!fresh) assert.equal(duty.holder(account),null,'nonadvancing evidence claims no delivery lease');
+  assert.deepEqual(store.state(source).delivery,{at:T+baseline,staleAfterMs:420_000});
+  assert.equal(store.state(source).successAt,T+1_800_000,'independent resources do not refresh quota data');
+  assert.equal(ask(1_860_000).measure,mode === 'Auto' && !fresh);
+  assert.deepEqual(ingest.nextMeasurement(source,account,T+1_860_000).value,
+    mode === 'fixed' ? {next:T+baseline+300_000,why:'fixed'} : fresh ? {next:T+baseline+120_000,why:'idle'} : null);
+});
+}
+
+test('nonadvancing resources acknowledge only their sender\'s recent command without satisfying refresh or renewing duty', t => {
+  for (const sameDevice of [false,true]) for (const observed of [-10_001,0]) {
+    const store = new Store(':memory:',T), directory = new Directory(store.db);
+    t.after(() => store.close());
+    const user = directory.createUser('fixture@example.com','Fixture','x',T), secret = newSecret('qt_m');
+    directory.createToken(secret,'fixture',user.id,'fixture',T);
+    let ingest = new Ingest(store,directory,new Duty(),new Cadence());
+    const credential = ingest.authenticate(`Bearer ${secret}`) as Credential;
+    ingest.accept(credential,batch(T,[snapshot(T)]),T);
+    const source = store.findSource('codex',account)!;
+    const duty = new Duty();
+    ingest = new Ingest(store,directory,duty,new Cadence());
+    const ask = (at: number) => ingest.checkin(credential,{...agent,paced:true,subscriptions:[{provider:'codex',account,active:false}]},T+at).subscriptions[0];
+    assert.equal(ask(20_000).measure,true);
+    assert.equal(ingest.requestRefresh(source,T+21_000).status,'accepted');
+    const lease = duty.until(account);
+    const late = batch(T+25_000,[snapshot(T+observed,{...missing(),staleAfterMs:24*HOUR,balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount:'2500'}]})]);
+    if (!sameDevice) late.machine = {...agent.machine,id:'other-machine-0123456789'};
+    assert.equal(ingest.accept(credential,late,T+25_000).accepted,1);
+    assert.deepEqual(store.state(source).delivery,{at:T,staleAfterMs:HOUR});
+    assert.equal(duty.until(account),lease,'an accepted resource retains the existing lease');
+    assert.equal(ingest.refresh(source,T+25_000).value.request?.status,'waiting','refresh still requires a newer delivery');
+    assert.equal(ask(110_000).measure,!(sameDevice && observed === 0),'only an eligible acknowledgement ends the unanswered retry');
+  }
 });
 
 test('unavailable windows invalidate attention and recovery becomes a silent baseline', t => {

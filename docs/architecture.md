@@ -668,15 +668,22 @@ native balance. The separate Subscription extra funds trends widget plots credit
 history in the display currency alongside the subscription limit chart. Wallet budget
 charts and tables exclude subscription funds.
 Windows, free resets and credit status have independent strictly newer observation
-watermarks; a separate monotonic delivery baseline drives cadence and survives restart. Deferred
-runtime acknowledgements run only after the mixed database transaction commits.
+watermarks; a separate monotonic delivery baseline drives cadence and survives restart.
+Accepted late resources acknowledge eligible commands without advancing that baseline.
+New quota evidence can update Auto's change detection independently of transport progress.
+Fixed schedules restore their persisted baseline; Auto still measures immediately after
+restart until a genuinely newer delivery arrives. Deferred runtime acknowledgements run
+only after the mixed database transaction commits.
 An explicit unavailable quota observation persists an availability barrier separately
 from the original samples and their freshness promises. Native quota history, forecast
 evidence and alert baselines break there; recovery starts a new segment without an
 inferred spend or a threshold-crossing alert. Packed quota cells carry an exclusive
-availability end for both drawing and readout.
-A coarse cell containing both a gap and recovery remains unavailable as a whole for
-drawing and readout, while its totals retain only proven consumption steps.
+availability end for both drawing and readout, limited by that sample's own freshness.
+Bounded native readouts use the precise pointer time and retain that deadline even if
+later samples have a different freshness promise.
+A coarse cell recovering after an unavailable start remains unavailable as a whole for
+drawing and readout, including when the gap began in an earlier cell. Recovery exactly
+on a cell boundary starts an ordinary new cell. Totals retain only proven consumption steps.
 Native credit amounts use exact coefficient/scale values, with scale stored per reading
 and retained in packed history and conversion provenance. Finite availability ends
 exclusively on missing, invalid, unsupported or unlimited observations; equal-value recovery starts

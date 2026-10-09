@@ -145,6 +145,9 @@ top-ups, quota forecasts or quota alerts.
 Delivery has a separate monotonic timestamp and promise. A late resource update can
 be accepted without moving cadence or duty backwards. A current authorized device may
 acknowledge its outstanding command without replacing that delivery baseline or lease.
+Accepted quota evidence updates change detection independently of transport progress.
+After restart, fixed schedules restore the persisted baseline; late or equal resource
+observations do not postpone Auto's immediate first measurement.
 A fresh balance alone does not refresh quota windows. Older hubs may reject windowless
 rich snapshots; the agent splits and drops rejected observations with a compatibility
 diagnostic, without manufacturing a window or a zero balance.

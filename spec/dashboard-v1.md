@@ -441,14 +441,16 @@ Only differences from these decoded defaults are written:
 | `open` (`o`) | series `open` in its first measured cell, then the preceding measured cell's `last` |
 | break (`g`) | 0 |
 | `hold` (`h`) | series `hold` |
-| availability end (`u`) | no explicit bound; an exclusive Unix-millisecond cutoff after an unavailable quota observation |
+| availability end (`u`) | no explicit bound; an exclusive Unix-millisecond cutoff after an unavailable quota observation, limited by the sample's own freshness end |
 | work (`w`) | `[spent, 0, 0]` at or after the subscription's known threshold, `[0, 0, 0]` before |
 
 A reported availability end limits drawing and readout without changing the original
-measurement's freshness promise. Recovery begins a new segment: neither spending nor
-forecast evidence crosses an explicit unavailable observation.
-If an unavailable observation and recovery fall within one aggregate cell, that cell
-is unavailable for drawing and readout (`g=1`, `u=cell start`). Its spending totals still
+measurement's freshness promise. A bounded readout uses the precise pointer timestamp
+against that sample's deadline, not a later sample's freshness promise. Recovery begins
+a new segment: neither spending nor forecast evidence crosses an explicit unavailable
+observation. An aggregate cell recovering after an unavailable start is unavailable for
+drawing and readout (`g=1`, `u=cell start`), even if the gap began in an earlier cell.
+Recovery exactly at a cell boundary starts an ordinary new cell. Spending totals still
 include only proven steps; the aggregate does not invent intra-cell sample positions.
 
 A field is omitted only when its rounded value equals the decoded default. `f` is

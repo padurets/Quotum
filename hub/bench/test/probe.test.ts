@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {NODES, nodeOf, probeScript, rendered, type Fiber, type Reading} from '../probe.js';
+import {measuredProblems} from '../budget.js';
 
 /** A stand-in element: its tag, classes and attributes, and `closest` for the simple selectors the probe uses. */
 class Element {
@@ -31,7 +32,8 @@ class Element {
     return null;
   }
   querySelectorAll(selector: string): Element[] {
-    return this.children.flatMap(child => [...(child.matches(selector) ? [child] : []), ...child.querySelectorAll(selector)]);
+    const selectors = selector.split(',').map(s => s.trim());
+    return this.children.flatMap(child => [...(selectors.some(s => child.matches(s)) ? [child] : []), ...child.querySelectorAll(selector)]);
   }
 }
 
@@ -88,7 +90,7 @@ test("a component's work is counted in the part of the page its first element is
 
 /** Runs the probe as the browser gets it, in a context of its own with a stand-in DOM. */
 function page() {
-  type Mutation = {target: unknown; addedNodes?: unknown[]};
+  type Mutation = {type?: string; attributeName?: string; target: unknown; addedNodes?: unknown[]};
   let observer: ((records: Mutation[]) => void) | undefined;
   let observing = false;
   const context: Record<string, unknown> = {
@@ -104,11 +106,12 @@ function page() {
   };
   vm.runInNewContext(probeScript(), context);
   const hook = context.__REACT_DEVTOOLS_GLOBAL_HOOK__ as {supportsFiber: boolean; onCommitFiberRoot(id: number, root: {current: Fiber}): void};
-  const probed = context.__quotumBench as {reset(): void; pause(): void; read(): Reading; seriesChanged(key: string, last: string): number | null; forgetCards(): void};
+  const probed = context.__quotumBench as {reset(): void; pause(): void; read(): Reading; moneyChanged(id: string, amount: string): number | null; seriesChanged(key: string, last: string): number | null; forgetCards(): void};
   // What the page answers comes over as JSON, as Runtime.evaluate returns it.
-  const bench = {reset: () => probed.reset(), pause: () => probed.pause(), read: (): Reading => JSON.parse(JSON.stringify(probed.read())), seriesChanged: (key: string, last: string) => probed.seriesChanged(key, last), forget: () => probed.forgetCards()};
+  const bench = {reset: () => probed.reset(), pause: () => probed.pause(), read: (): Reading => JSON.parse(JSON.stringify(probed.read())), moneyChanged: (id: string, amount: string) => probed.moneyChanged(id, amount), seriesChanged: (key: string, last: string) => probed.seriesChanged(key, last), forget: () => probed.forgetCards()};
   return {hook, bench, observing: () => observing, mutate: (...targets: unknown[]) => observer!(targets.map(target => ({target}))),
-    insert: (target: Element, ...addedNodes: unknown[]) => observer!([{target, addedNodes}])};
+    record: (...records: Mutation[]) => observer!(records),
+    insert: (target: Element, ...addedNodes: unknown[]) => observer!([{type: 'childList', target, addedNodes}])};
 }
 
 test('the live probe distinguishes subscription funds, quota and wallets inside shared analytics',()=>{
@@ -190,6 +193,76 @@ test('the first plotted point counts when React inserts a ready series or its wh
   bench.forget();
   insert(region, svg, {nodeType: 3});
   assert.ok(Number.isFinite(bench.seriesChanged('s1 weekly', '60000:79')), 'a new ancestor carries its plotted descendants');
+});
+
+test('the probe observes the exact changed financial value inside a timed card tray', () => {
+  const {bench, record, hook} = page();
+  const card = el('article', null, {'data-card': 'codex:fixture'}, 'card');
+  const tray = el('footer', card, {'data-time': 'tray'}, 'card-foot');
+  const trigger = el('button', el('span', tray, {}, 'funds-tray'), {}, 'tray-pill funds-mark');
+  const attributes = {'data-money': '100000000'};
+  const value = el('b', trigger, attributes, 'funds-value');
+  assert.equal(bench.moneyChanged('codex:fixture', '100000000'), null, 'an existing value is not new evidence');
+  // A store update renders the memoized SourceCard and its timed money child.
+  const funds = fiber(FUNCTION, {flags: PERFORMED, was: fiber(FUNCTION), children: [fiber(HOST, {stateNode: trigger})]});
+  const source = fiber(MEMO, {flags: PERFORMED, was: fiber(MEMO), children: [fiber(HOST, {stateNode: card, children: [funds]})]});
+  hook.onCommitFiberRoot(1, {current: fiber(ROOT, {was: fiber(ROOT), children: [source]})});
+  attributes['data-money'] = '99960000';
+  record({type: 'attributes', attributeName: 'data-money', target: value});
+  const first = bench.moneyChanged('codex:fixture', '99960000');
+  assert.ok(typeof first === 'number' && Number.isFinite(first));
+  assert.equal(bench.moneyChanged('codex:fixture', '100000000'), null, 'the old amount cannot satisfy the next measurement');
+  assert.equal(bench.moneyChanged('codex:other', '99960000'), null, 'the evidence belongs to its card');
+  record({type: 'characterData', target: {nodeType: 3, parentElement: value}});
+  assert.equal(bench.moneyChanged('codex:fixture', '99960000'), first, 'keep the first observed commit');
+  assert.deepEqual(bench.read().cardChanged, {}, 'generic clock exclusion remains intact');
+  assert.deepEqual(bench.read().mutations.map(row => [row.region, row.time, row.kind]), [['card:codex:fixture', true, 'tray']]);
+  const reading = bench.read(), measurement = {card: 'codex:fixture', ...reading, latencies: [0], from: first!, to: first! + 1};
+  assert.deepEqual(measuredProblems(measurement), [], 'finite amount evidence still passes through the full card render budget');
+  assert.ok(measuredProblems({...measurement, renders: reading.renders.filter(row => row.time)}).some(problem => problem.includes('the card rendered 0 times')),
+    'a missing parent render cannot be hidden by the new latency evidence');
+  bench.forget();
+  assert.equal(bench.moneyChanged('codex:fixture', '99960000'), null);
+  record({type: 'characterData', target: {nodeType: 3, parentElement: value}});
+  assert.ok(bench.moneyChanged('codex:fixture', '99960000') !== null, 'text changes within the amount are observed too');
+  bench.reset();
+  assert.equal(bench.moneyChanged('codex:fixture', '99960000'), null);
+  bench.pause();
+  record({type: 'attributes', attributeName: 'data-money', target: value});
+  assert.equal(bench.moneyChanged('codex:fixture', '99960000'), null, 'a late callback cannot revive a paused observer');
+});
+
+test('clock, status and other-card changes cannot stand in for the requested financial value', () => {
+  const {bench, record, insert} = page();
+  const card = el('article', null, {'data-card': 'codex:fixture'}, 'card');
+  const tray = el('footer', card, {'data-time': 'tray'}, 'card-foot');
+  const value = el('b', tray, {'data-money': '99960000'}, 'funds-value');
+  const time = el('span', tray, {'data-time': 'ago'});
+  record({type: 'characterData', target: {nodeType: 3, parentElement: time}},
+    {type: 'attributes', attributeName: 'class', target: tray},
+    {type: 'attributes', attributeName: 'class', target: value});
+  insert(tray, el('span', tray, {'data-time': 'ago'}));
+  const otherValue = el('b', el('article', null, {'data-card': 'codex:other'}), {'data-money': '99960000'});
+  record({type: 'attributes', attributeName: 'data-money', target: otherValue});
+  record({type: 'attributes', attributeName: 'data-money', target: el('b', null, {'data-money': '99960000'})});
+  assert.equal(bench.moneyChanged('codex:fixture', '99960000'), null);
+  assert.ok(bench.moneyChanged('codex:other', '99960000') !== null);
+  assert.equal(bench.moneyChanged('codex:other', '99920000'), null);
+});
+
+test('inserted financial values are observed in their card without scanning unchanged siblings', () => {
+  const {bench, insert} = page();
+  const card = el('article', null, {'data-card': 'codex:fixture'});
+  const tray = el('footer', card, {'data-time': 'tray'});
+  const existing = el('b', tray, {'data-money': '100000000'});
+  const mark = el('span', tray), value = el('b', mark, {'data-money': '99960000'});
+  insert(mark, value);
+  assert.ok(bench.moneyChanged('codex:fixture', '99960000') !== null);
+  assert.equal(bench.moneyChanged('codex:fixture', '100000000'), null);
+  bench.forget();
+  insert(tray, mark);
+  assert.ok(bench.moneyChanged('codex:fixture', '99960000') !== null, 'a ready subtree carries its value');
+  assert.equal(bench.moneyChanged('codex:fixture', existing.getAttribute('data-money')!), null);
 });
 
 test('the probe counts DOM changes by part once per callback, and notes when a card first changed outside what shows time', () => {

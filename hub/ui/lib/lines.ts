@@ -16,6 +16,18 @@ type LineName = Pick<Win, 'kind' | 'label' | 'minutes'> & {provider: string; key
 export type PlotLine = PlotSeries & LineName;
 export type Line = HistorySeries & LineName & {pointMode?:'cell'|'observation';capCells?:readonly CapCell[]};
 
+const boundedPoints = new WeakMap<PlotSeries['points'], boolean>();
+/** Published points are immutable; pointer motion never rescans a native history. */
+export function preciseReadout(line: Pick<PlotSeries,'pointMode'|'capCells'|'points'>): boolean {
+  if (line.pointMode === 'observation' || line.capCells) return true;
+  let bounded = boundedPoints.get(line.points);
+  if (bounded === undefined) {
+    bounded = line.points.some(point => point[3] !== undefined);
+    boundedPoints.set(line.points, bounded);
+  }
+  return bounded;
+}
+
 /**
  * The board's series of one kind of window that have data in the period. Only what the
  * cards show: a window the source no longer reports (its history outlives it), one
@@ -78,7 +90,7 @@ export function valueIn(points: Line['points'], cell: number, now: number, holdM
   // An unread interval may contain a newer measurement or a break in this line.
   if (coverage && !covered(coverage, at, cell + 1)) return undefined;
   if(pointMode==='observation')return Number.isSafeInteger(validUntil)&&cell<validUntil!?value:undefined;
-  if (validUntil !== undefined) return readAt < validUntil && cell - at <= holdMs ? value : undefined;
+  if (validUntil !== undefined) return readAt < validUntil ? value : undefined;
   const next = points[found + 1];
   if (at === cell) return value;
   return next ? (next[2] === segment ? value : undefined) : cell - at <= holdMs ? value : undefined;
