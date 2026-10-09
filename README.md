@@ -632,7 +632,8 @@ show that private work. `[clients.<id>] enabled = false` disables one client's t
 overrides its legacy provider path. Native OpenCode local project attribution is
 available on Linux; shared or unproven invocations, and macOS/Windows, report presence
 without a project. Generic Node/bun hosts are not detected. Version probes are bounded
-and never read credentials or make model requests.
+and never read credentials or make model requests. Working states estimate process CPU
+activity; they are not provider reports of model work.
 
 ### Hub
 

@@ -31,7 +31,8 @@ fn working_share(client: ClientId) -> f64 {
         ClientId::Claude => 0.06,
         ClientId::Codex => 0.03,
         ClientId::Antigravity => 0.04,
-        ClientId::OpenCode => 0.03,
+        // Native OpenCode redraws at 3–5% while idle, with fifteen-second bursts above 8%.
+        ClientId::OpenCode => 0.10,
     }
 }
 /// A shorter look than this cannot tell working from idle.
@@ -2703,6 +2704,29 @@ mod tests {
         assert_eq!(pause.working, Some(true));
         let quiet = judged(Some(&pause), 2_520, at(80), 80_000, 0.05);
         assert_eq!(quiet.working, Some(false));
+    }
+
+    #[test]
+    fn opencode_idle_redraws_stay_idle_and_owned_cpu_keeps_the_existing_hold() {
+        use std::time::Duration;
+        let start = Instant::now();
+        let share = working_share(ClientId::OpenCode);
+        let mut seen = judged(None, 0, start, 0, share);
+        let mut cpu = 0;
+        // Independent native idle runs at fifteen-second intervals, including redraw bursts.
+        for (index, percent) in [3.99, 3.72, 4.72, 5.78, 5.04, 4.05, 3.59, 8.44, 3.72].into_iter().enumerate() {
+            cpu += (15_000.0 * percent / 100.0) as u64;
+            let ms = (index as u64 + 1) * 15_000;
+            seen = judged(Some(&seen), cpu, start + Duration::from_millis(ms), ms as Millis, share);
+            assert_eq!(seen.working, Some(false), "an idle redraw must not start a work hold");
+        }
+        let busy_at = start + Duration::from_secs(150);
+        let busy = judged(Some(&seen), cpu + 3_000, busy_at, 150_000, share);
+        assert_eq!(busy.working, Some(true), "an owned tree spending twenty percent still works");
+        let pause = judged(Some(&busy), cpu + 4_000, busy_at + Duration::from_secs(30), 180_000, share);
+        assert_eq!(pause.working, Some(true));
+        let idle = judged(Some(&pause), cpu + 5_050, busy_at + Duration::from_secs(60), 210_000, share);
+        assert_eq!(idle.working, Some(false));
     }
 
     #[test]
