@@ -137,10 +137,12 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
         const sample=(stamp,afterCallback=false)=>{
           if(!probe.running)return;
           const now=performance.now(),demand=probe.pending.length,layers=owners(),active=!!root.dataset.panEnd;
-          let foldAnimation=null;
-          const foldOwner=active?null:[layers[0],layers[0].querySelector('.slides')].find(layer=>{foldAnimation=layer.getAnimations().find(a=>a.playState==='running');return !!foldAnimation;}),folding=!!foldOwner;
+          const folds=active?[]:layers.map(layer=>{
+            for(const owner of [layer,layer.querySelector('.slides')]){const animation=owner.getAnimations().find(a=>a.playState==='running');if(animation)return{owner,animation};}
+            return null;
+          }),folding=folds.some(Boolean),folded=folds[driver]?driver:folds.findIndex(Boolean),fold=folds[folded],foldAnimation=fold?.animation??null;
           probe.sizeStable&&=charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
-          const matrices=layers.map((layer,i)=>{const transform=active?layer.style.transform:folding&&i===0?getComputedStyle(foldOwner).transform:'none',matrix=matrixOf(transform);return folding&&foldOwner!==layers[0]?{a:matrix.a,e:matrix.e*scales[i]}:matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
+          const matrices=layers.map((layer,i)=>{const owner=folds[i]?.owner,transform=active?layer.style.transform:owner?getComputedStyle(owner).transform:'none',matrix=matrixOf(transform);return owner&&owner!==layer?{a:matrix.a,e:matrix.e*scales[i]}:matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
           const nextPhase=active?'pan':folding?'fold':'idle';
           // Keep the observed pending start as well as moving frames in opt-in
           // evidence. A smooth moving portion alone cannot prove a short fold.
@@ -148,7 +150,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
             const pending=!!foldAnimation?.pending;
             if(nextPhase!==phase||foldAnimation!==observedAnimation||pending!==observedPending){
               const number=value=>typeof value==='number'&&Number.isFinite(value)?value:null;
-              timeline.add('presentation-phase',{phase:nextPhase,frameId:stamp,pending,htmlOwner:folding?foldOwner===layers[0]:null,currentTime:number(foldAnimation?.currentTime),startTime:number(foldAnimation?.startTime)});
+              timeline.add('presentation-phase',{phase:nextPhase,frameId:stamp,chart:folding?folded:null,pending,htmlOwner:folding?fold.owner===layers[folded]:null,currentTime:number(foldAnimation?.currentTime),startTime:number(foldAnimation?.startTime)});
               observedAnimation=foldAnimation;observedPending=pending;
             }
           }
@@ -156,8 +158,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
           if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?charts.map(svg=>(Number(svg.dataset.panBase||0))+':1'):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
           const moved=current.map((value,i)=>value!==previous[i]);
           if(active){probe.synchronized&&=charts.every((svg,i)=>{const shown=gesture?.shown[i],actual=presentation(svg,layers[i],i,gesture?.origin),delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrices[i].e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(actual.x)&&Math.abs(actual.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(actual.perMs/shown.perMs-1)<1e-6&&Math.abs(actual.x-(shown.x-delta*shown.perMs))<.1;})&&[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack')).every(layer=>Math.abs(matrixOf(layer.style.transform).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
-          // Each input reaches all four plots. Activity has no future, so only the
-          // remaining-share chart must move during the final future fold.
+          // Every input reaches all four plots; their finishing animations can
+          // end separately, so an idle quota plot cannot hide a moving follower.
           if(active&&probe.synchronized&&(moved.every(Boolean)||afterCallback)){
             // Coalesced input reaches its final position together. A newer event
             // cannot be credited by the artwork of an earlier event.
@@ -165,7 +167,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
             for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i];if(input.gesture===gesture&&Math.abs(input.gesture.baseline+input.pixels-matrices[driver].e)<.1)reached=i;}
             if(reached>=0)consume(reached+1,now,stamp);
           }
-          if(active&&moved.every(Boolean)||folding&&moved[0]){
+          if(active&&moved.every(Boolean)||folding&&moved.some(Boolean)){
             if(stamp!==lastFrame){if(timeline)timeline.add('frame',{frameId:stamp,from:probe.last,to:now,segment:folding?'fold':probe.segment,pending:demand,pose:matrices.map(value=>[value.a,value.e]),requests:[...probe.flights.keys()]});probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:demand,requests:probe.flights.size});}probe.last=now;lastFrame=stamp;}
           }
           if(!active&&!folding&&probe.pending.length&&charts.every(svg=>svg.dataset.drawReady==='true'&&!svg.classList.contains('is-panning'))){

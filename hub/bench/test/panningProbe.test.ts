@@ -183,6 +183,46 @@ test('the probe measures a delayed HTML or SVG fold and cannot credit final inpu
   }
 });
 
+test('budget and funds folds cannot be skipped or credited early by an idle quota plot', () => {
+  for (const initiator of ['quota', 'budget', 'funds'] as const) for (const family of ['budget', 'funds'] as const) for (const html of [true, false]) {
+    const f = fixture(initiator); f.wheel(0, 0);
+    for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg]) {
+      delete svg.dataset.panEnd; svg.parentElement.dataset.axisEnd = '12';
+    }
+    f.context.location.search = '?from=0&to=12';
+    const layer = family === 'budget' ? f.budgetLayer : f.fundsLayer;
+    const moving = html ? layer : layer.slides;
+    moving.getAnimations = () => [{playState: 'running'}];
+    moving.style.transform = 'translateX(40px) scaleX(.6)'; f.runFrame(10); f.runFrame(20);
+    assert.equal(f.reading.latency.length, 0, 'quota metadata cannot credit another plot that is still moving');
+    assert.equal(f.reading.updated, 0, 'a running but stationary animation creates no frames');
+    moving.style.transform = 'translateX(30px) scaleX(.7)'; f.runFrame(30);
+    moving.style.transform = 'translateX(10px) scaleX(.9)'; f.runFrame(110);
+    assert.deepEqual(Array.from(f.reading.frames), [80], 'the resource fold keeps its full delayed movement interval');
+    assert.equal(f.reading.latency.length, 0);
+    moving.getAnimations = () => []; moving.style.transform = 'none'; f.runFrame(120);
+    assert.deepEqual(Array.from(f.reading.latency), [120]);
+  }
+});
+
+test('the fold interval remains open until the last data plot finishes its animation', () => {
+  const f = fixture(); f.wheel(0, 0);
+  for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg]) {
+    delete svg.dataset.panEnd; svg.parentElement.dataset.axisEnd = '12';
+  }
+  f.context.location.search = '?from=0&to=12';
+  f.historyLayer.getAnimations = f.fundsLayer.getAnimations = () => [{playState: 'running'}];
+  f.historyLayer.style.transform = f.fundsLayer.style.transform = 'translateX(40px)'; f.runFrame(10);
+  f.historyLayer.style.transform = f.fundsLayer.style.transform = 'translateX(30px)'; f.runFrame(30);
+  f.historyLayer.getAnimations = () => []; f.historyLayer.style.transform = 'none'; f.runFrame(40);
+  assert.equal(f.reading.latency.length, 0, 'finishing quota cannot hide the unfinished funds layer');
+  f.fundsLayer.style.transform = 'translateX(20px)'; f.runFrame(60);
+  f.fundsLayer.style.transform = 'translateX(10px)'; f.runFrame(140);
+  assert.ok(f.reading.frames.includes(80), 'the delayed tail belongs to the moving-frame budget');
+  f.fundsLayer.getAnimations = () => []; f.fundsLayer.style.transform = 'none'; f.runFrame(150);
+  assert.deepEqual(Array.from(f.reading.latency), [150]);
+});
+
 test('diagnostic phases retain pending animation time without manufacturing moving frames', () => {
   const f = fixture('quota', true);
   for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg]) delete svg.dataset.panEnd;
@@ -198,9 +238,9 @@ test('diagnostic phases retain pending animation time without manufacturing movi
   animation.playState = 'finished'; f.historyLayer.style.transform = 'none'; f.runFrame(230);
   const entries = JSON.parse(JSON.stringify(safeEvidence(f.reading.timeline.read().entries)));
   assert.deepEqual(entries.filter((entry: {kind: string}) => entry.kind === 'presentation-phase').map(({id: _id, ...entry}: Record<string, unknown>) => entry), [
-    {at: 10, kind: 'presentation-phase', phase: 'fold', frameId: 10, pending: true, htmlOwner: true, currentTime: 0, startTime: null},
-    {at: 80, kind: 'presentation-phase', phase: 'fold', frameId: 80, pending: false, htmlOwner: true, currentTime: 10, startTime: 70},
-    {at: 230, kind: 'presentation-phase', phase: 'idle', frameId: 230, pending: false, htmlOwner: null, currentTime: null, startTime: null},
+    {at: 10, kind: 'presentation-phase', phase: 'fold', frameId: 10, chart: 0, pending: true, htmlOwner: true, currentTime: 0, startTime: null},
+    {at: 80, kind: 'presentation-phase', phase: 'fold', frameId: 80, chart: 0, pending: false, htmlOwner: true, currentTime: 10, startTime: 70},
+    {at: 230, kind: 'presentation-phase', phase: 'idle', frameId: 230, chart: null, pending: false, htmlOwner: null, currentTime: null, startTime: null},
   ]);
   assert.deepEqual(Array.from(f.reading.frames), [20], 'phase records do not change the moving-frame budget');
 });

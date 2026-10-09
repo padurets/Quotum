@@ -32,6 +32,9 @@ crash or target-detach event fails pending commands immediately, even if the soc
 stays open, and retains the original failure before cleanup. It does not retry work.
 Page-evaluation exceptions retain their original command and scenario too, without
 page text or source. Later cleanup timeouts or crashes cannot replace the first failure.
+Gesture-completion frames follow each data plot's actual HTML or SVG animation,
+including a budget or funds plot that finishes after quota. The last input remains
+uncredited until every data plot has finished and its final geometry has committed.
 `QUOTUM_BENCH_DIAGNOSE_PANNING=pairs` runs a fixed OFF/ON, ON/OFF, OFF/ON
 experiment for bounded input/frame/history correlation. Every result is retained;
 these diagnostic runs cannot satisfy the canonical gate. The optional
