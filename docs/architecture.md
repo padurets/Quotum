@@ -1308,13 +1308,17 @@ summaries can move into the shared LRU when a different interval is selected. Re
 to a retained target reuses it; new evidence or authority changes invalidate those entries.
 Fixed summaries also describe exact duration and timestamp changes between
 observation, work, availability and grid boundaries. Nearby endpoint cells use sparse
-changes between those intervals and an immutable starting summary. A repeated gesture
+changes between those intervals and an immutable starting summary. The initial reply
+borrows that base from its requested projection; shifted copies retain it. A card
+whose validity already spans the neighboring positions needs no extra sequence. Nearby integer
+timestamps use exact deltas; fractional readings and money retain their original values. A repeated gesture
 can reuse the proof even when native input moves an endpoint to the other side of a
 boundary. Card states retain their own observation and availability intervals. Amounts
 and spending steps are replaced exactly at changes, never interpolated. Positions
 outside the retained proof require new evidence.
 Widgets keep their last complete presentation during replacement, including native panning.
-Cold drawing cells and resource evidence are read separately, and preparation
+Cold drawing cells and resource evidence are read separately; live ledgers are split
+by resource family, while compact fixed summaries share one response. Preparation
 replaces scratch reservations as each retained index is completed. Shared pan readers
 decode one input tile at a time, as do coarse cold reads, so an unread month cannot displace the complete period
 with one large transport body.

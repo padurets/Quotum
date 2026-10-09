@@ -106,3 +106,13 @@ test('boundary array changes retain unchanged exact points instead of repeating 
   for(const offset of [29,0,10,19,20,9]){const {shift:_,...actual}=shifted(fixed,{from:offset,to:1000+offset})!;assert.deepEqual(actual,read(offset));}
   assert.equal(JSON.stringify(fixed),before,'array edits never mutate the immutable starting proof');
 });
+
+test('integer patches compress nearby timestamps without rounding amounts or fractional readings',async()=>{
+  const {ValueChanges,applyValueChanges}=await import('../domain/valueChanges.js');
+  const first={at:1_790_000_000_000,amount:'900719925474099312345',value:.125,edge:-Number.MAX_SAFE_INTEGER};
+  const next={at:first.at+60_000,amount:'900719925474099312346',value:.375,edge:Number.MAX_SAFE_INTEGER};
+  const changes=new ValueChanges(()=>{}),patch=changes.between(first,next),copy=structuredClone(first);
+  assert.ok(patch.some(p=>p.length===3&&p[1]===60_000));
+  applyValueChanges(copy,changes.paths,JSON.parse(JSON.stringify(patch)));assert.deepEqual(copy,next);
+  const reverse=changes.between(next,first);applyValueChanges(copy,changes.paths,reverse);assert.deepEqual(copy,first);
+});

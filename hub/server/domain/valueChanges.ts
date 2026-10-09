@@ -1,5 +1,5 @@
 export type ValuePath=(string|number)[];
-export type ValueChange=[number,unknown]|[number]|[number,number,number,unknown[]];
+export type ValueChange=[number,unknown]|[number]|[number,number,0]|[number,number,number,unknown[]];
 
 /** Exact JSON changes preserve strings, absent fields and entering or leaving array entries. */
 export class ValueChanges {
@@ -9,6 +9,9 @@ export class ValueChanges {
   pathId(path:ValuePath){const key=JSON.stringify(path),old=this.ids.get(key);if(old!==undefined)return old;this.reserve(key.length*6+96);const id=this.paths.length;this.ids.set(key,id);this.paths.push(path);return id;}
   between(before:unknown,after:unknown,path:ValuePath=[],output:ValueChange[]=[]):ValueChange[] {
     if(Object.is(before,after))return output;
+    if(typeof before==='number'&&typeof after==='number'&&Number.isSafeInteger(before)&&Number.isSafeInteger(after)&&Number.isSafeInteger(after-before)&&String(after-before).length+2<String(after).length){
+      output.push([this.pathId(path),after-before,0]);return output;
+    }
     if(Array.isArray(before)&&Array.isArray(after)&&before.length!==after.length){
       // Boundary points enter or leave while the other exact points stay unchanged.
       let first=0,last=0;const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
@@ -34,5 +37,5 @@ export function valueLeaf(value:unknown,path:ValuePath):[Record<string|number,un
   return [part,path.at(-1)!];
 }
 export function applyValueChanges(value:unknown,paths:ValuePath[],changes:ValueChange[]) {
-  for(const change of changes){const [parent,key]=valueLeaf(value,paths[change[0]]);if(change.length===1)delete parent[key];else if(change.length===4)(parent[key] as unknown[]).splice(change[1],change[2],...structuredClone(change[3]));else parent[key]=structuredClone(change[1]);}
+  for(const change of changes){const [parent,key]=valueLeaf(value,paths[change[0]]);if(change.length===1)delete parent[key];else if(change.length===4)(parent[key] as unknown[]).splice(change[1],change[2],...structuredClone(change[3]));else if(change.length===3)parent[key]=(parent[key] as number)+change[1];else parent[key]=structuredClone(change[1]);}
 }

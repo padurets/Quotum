@@ -435,10 +435,12 @@ Expired evidence remains visible as stale; an absent predecessor remains unknown
 An optional `validFor: {from,to}` gives the half-open interval of right-edge positions
 with identical values, including membership, anchors and stale state. It is scoped to
 the same authority and evidence revision. Fixed values may also carry `states`:
-a full `start` projection, shared `paths` and `[from,to,changes]` pieces. Changes use
-the exact replacement, deletion and array splice operations of fixed shift windows.
+an optional full `start` projection, shared `paths` and `[from,to,changes]` pieces. Changes use
+the exact replacement, deletion, integer delta and array splice operations of fixed shift windows.
 Each piece retains its own `validFor` interval, including actual observations and
-availability changes. Replay starts from the immutable first projection; no numeric
+availability changes. Without `start`, replay starts from the value carrying the sequence;
+the first patch reaches the first interval. A restored value retains that immutable
+starting projection for subsequent replays. No numeric
 interpolation or nested state sequences occur. Candidate lookup checks intervals
 without allocating a replay; staging accounts for copies before they are built.
 Current errors, credentials, actions, forecasts
@@ -468,11 +470,12 @@ Session evidence is a complete temporal index:
       until: number;
       steps: [path: (string | number)[], perMs: number][];
       window?: {
-        start: object; // complete fixed summary at the first piece, without shift
+        start?: object; // immutable replay base, without shift; otherwise the carrying summary
         paths: (string | number)[][];
         slopes: [pathIndex: number, perMs: number][][];
         pieces: [fromEnd: number, untilEnd: number, slopesIndex: number,
           changes: ([pathIndex: number, value: unknown] | [pathIndex: number] |
+            [pathIndex: number, delta: number, add: 0] |
             [pathIndex: number, start: number, remove: number, insert: unknown[]])[]][];
       };
     };
@@ -498,9 +501,12 @@ edges. Only exact clipped timestamps and durations move; monetary amounts are
 never interpolated. Paths and proof bytes share the retained history budget.
 An optional `window` instead proves positions in neighboring endpoint cells, in
 either direction with the same duration. Its ordered pieces cover half-open intervals
-of right-edge positions. Replay begins at the immutable `start` summary: advance
+of right-edge positions. Replay begins at the immutable `start` summary, or the carrying
+summary when `start` is absent. A restored summary retains this base for repeated moves. Advance
 numeric fields using the preceding piece's slopes, then apply the next piece's exact
-changes. A one-element change deletes that field; a four-element change splices
+changes. A one-element change deletes that field. A three-element change
+`[pathId, delta, 0]` adds an exact safe-integer delta to a safe-integer field;
+fractional values and monetary strings still use exact replacements. A four-element change splices
 the addressed array at `start`, removing `remove` elements and inserting `insert`.
 Unchanged prefixes and suffixes remain exact. Within a covered piece, advance
 using its own slopes. Gaps have no proof. Cell, observation and deadline boundaries

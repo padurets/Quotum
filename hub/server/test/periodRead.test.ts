@@ -79,9 +79,13 @@ test('sparse card states preserve optional fields and unchanged key context in e
   const packed=withValueStates(values[40],values,()=>{});
   assert.ok(JSON.stringify(packed).length<JSON.stringify(values).length/2);
   const roundtrip=JSON.parse(JSON.stringify(packed));
+  let restored=roundtrip;
   for(const to of [7999,0,4199,100,7899,1,4099]){
     const {states:_states,...value}=periodValueAt(roundtrip,to)!;
     assert.deepEqual(value,values[Math.floor(to/100)]);
+    restored=periodValueAt(restored,to)!;
+    const {states:_retained,...repeated}=restored;
+    assert.deepEqual(repeated,value,'a moved value keeps its original replay base');
   }
   assert.equal(periodValueAt(roundtrip,8000),undefined);
   assert.equal(periodValueAt(roundtrip,-1),undefined);

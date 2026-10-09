@@ -2,7 +2,7 @@ import type {PeriodRange} from './period.js';
 import {ValueChanges,applyValueChanges,valueLeaf,type ValuePath as Path,type ValueChange as Change} from './valueChanges.js';
 
 /** Between evidence boundaries only exact durations and clipped timestamps move. */
-type ShiftWindow={start:Fixed;paths:Path[];slopes:[number,number][][];pieces:[number,number,number,Change[]][]};
+type ShiftWindow={start?:Fixed;paths:Path[];slopes:[number,number][][];pieces:[number,number,number,Change[]][]};
 export type PeriodShift={until:number;steps:[Path,number][];window?:ShiftWindow};
 type Fixed={range:PeriodRange;shift?:PeriodShift};
 
@@ -41,7 +41,9 @@ export function shifted<T extends Fixed>(fixed:T,range:PeriodRange):T|null {
   const offset=range.to-fixed.range.to;
   if(offset===0)return fixed;
   if(fixed.shift!.window){
-    const {start,paths,slopes,pieces}=fixed.shift!.window,copy={...structuredClone(start),shift:fixed.shift} as T;
+    const {shift,...base}=fixed,{paths,slopes,pieces}=shift!.window!,start=shift!.window!.start??base;
+    const retained=shift!.window!.start?shift!:{...shift!,window:{...shift!.window!,start}};
+    const copy={...structuredClone(start),shift:retained} as T;
     let at=start.range.to,previous:[number,number][]=[];
     for(const [from,to,slope,changes] of pieces){
       advance(copy,paths,previous,from-at);applyValueChanges(copy,paths,changes);
@@ -73,8 +75,10 @@ export function shiftBoundaries(range:PeriodRange,from:number,to:number,cells:re
 /** Sparse changes preserve full values across boundaries; only proven integer slopes interpolate. */
 export function withShiftWindow<T extends Fixed>(base:T,read:(offset:number)=>T,boundaries:readonly number[],reserve:(bytes:number)=>void):T&{shift:PeriodShift} {
   const start=read(boundaries[0]);reserve(JSON.stringify(start).length*6+128);
-  const changes=new ValueChanges(reserve),window:ShiftWindow={start,paths:changes.paths,slopes:[],pieces:[]},slopes=new Map<string,number>();
-  let previous=start,at=start.range.to,steps:[number,number][]=[];
+  const changes=new ValueChanges(reserve),window:ShiftWindow={paths:changes.paths,slopes:[],pieces:[]},slopes=new Map<string,number>();
+  // The first patch starts from the requested summary already carried by the reply.
+  // A shifted copy retains that immutable base for all later replays.
+  let previous=base,at=base.range.to,steps:[number,number][]=[];
   for(let i=0;i+1<boundaries.length;i++){
     const offset=boundaries[i],distance=boundaries[i+1]-offset,target=i===0?start:offset===0?base:read(offset);
     const prediction=structuredClone(previous);advance(prediction,window.paths,steps,target.range.to-at);

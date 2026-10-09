@@ -13,6 +13,8 @@ type ContextRow = {from_at:number;to_at:number;stale_after_ms:number;payload:str
 export function nearbyPeriodValues(store:Store,sources:readonly {id:string;provider:string;budget?:BudgetAccess}[],user:string,to:number,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void):PeriodValues[] {
   const values=periodValues(store,sources,user,to,reserve),until=Math.min(Date.now()+1,to+cell+1);
   for(let i=0;i<values.length;i++){
+    const interval=values[i].validFor!;
+    if(interval.from<=Math.max(0,to-cell)&&interval.to>=until)continue;
     let held=0,scratch=0,previous=0;
     function* nearby(){
       try{
