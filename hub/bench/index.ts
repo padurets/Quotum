@@ -30,6 +30,7 @@ import {Requests} from './requests.js';
 export {Requests} from './requests.js';
 import {doubledIdle} from './idleDiagnostic.js';
 import {panningPairs, tracePanning, traceControls} from './panningDiagnostic.js';
+import {profilePanning, profileControls} from './cpuProfile.js';
 import {ChromeLaunchError} from './chrome.js';
 import {creditSnapshot} from './credits.js';
 import {startupTrials} from './startupDiagnostic.js';
@@ -106,7 +107,7 @@ async function main() {
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
     if (startupDiagnostic && (startupDiagnostic !== '1' || options.cdp || panDiagnostic || idleDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup diagnostic mode');
     if (idleDiagnostic && (idleDiagnostic !== 'double' || panDiagnostic)) throw new Stop('Unknown or conflicting idle diagnostic mode');
-    if (panDiagnostic && !['pairs', 'trace'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
+    if (panDiagnostic && !['pairs', 'trace', 'cpu'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
     await prepare(address);
     chrome = options.cdp ? null : findChrome(process.env);
     if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
@@ -194,7 +195,7 @@ async function main() {
       evidence.begin('diagnostic-panning-'+panDiagnostic);
       say('diagnostic panning '+panDiagnostic+'; canonical benchmark is not run');
       await cdp.evaluate('__quotumBench.pause()');
-      const result = panDiagnostic === 'pairs' ? await panningPairs(cdp, browser, evidence) : await tracePanning(cdp, browser, evidence);
+      const result = panDiagnostic === 'pairs' ? await panningPairs(cdp, browser, evidence) : panDiagnostic === 'cpu' ? await profilePanning(cdp, browser, evidence) : await tracePanning(cdp, browser, evidence);
       evidence.save('diagnostic-panning-result', 'attempts' in result ? result : {
         mode:'diagnostic',problems:result.problems.map(reason=>({reason})),
         reports:result.reports.map(report=>({initiator:report.initiator,period:report.period,
@@ -203,6 +204,7 @@ async function main() {
           omitted:report.timeline?.omitted??0,cost:report.cost})),
       });
       if(panDiagnostic==='trace')await traceControls(browser,evidence);
+      if(panDiagnostic==='cpu')await profileControls(browser,evidence);
       say('diagnostic panning completed; all outcomes remain in artifacts');
       await finish('attempts' in result && result.attempts.some(attempt => attempt.status === 'failed') ? 1 : 0); return;
     }

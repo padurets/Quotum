@@ -76,6 +76,19 @@ and that excess remains visible instead of being clipped. These are counter read
 not exact on/off-CPU intervals. Off-CPU time alone cannot distinguish scheduler delay
 from deliberate sleep or a lock wait. An input's final
 geometry must still commit before it can be credited.
+`QUOTUM_BENCH_DIAGNOSE_PANNING=cpu` (the `benchmark-cpu-diagnostics` PR label)
+samples JavaScript stacks during each of the six original native scenarios in an owned
+synthetic browser. It retains only numeric sample graphs, public bundle positions and
+fixed browser operation names, bounded to 100,000 entries and 32 MiB per scenario.
+Profiler setup and stop keep five-second deadlines; an unconfirmed stop closes its
+owned browser and preserves an earlier scenario failure. Page clock brackets retain
+alignment uncertainty. Sample widths include throttling and are not thread CPU time;
+sampling overhead remains unqualified. V8's signed sample deltas and their original
+order are retained; timestamps are never clipped. Fixed busy/timer/busy controls at
+rates 1 and 4 follow on an empty owned tab. The unthrottled controls must distinguish function samples
+from timer waiting; contradictory or missing calibration cannot pass. This is a
+diagnostic result and cannot satisfy the canonical gate. If both CPU and trace labels
+are present, the existing diagnostic job runs the CPU mode.
 `QUOTUM_BENCH_DIAGNOSE_IDLE=double` (the `benchmark-idle-diagnostics` PR
 label) checks one idle board, then two independent live copies over the same
 real cell transition. The sum of their measured script costs must exceed the
