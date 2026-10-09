@@ -35,6 +35,9 @@ page text or source. Later cleanup timeouts or crashes cannot replace the first 
 Gesture-completion frames follow each data plot's actual HTML or SVG animation,
 including a budget or funds plot that finishes after quota. The last input remains
 uncredited until every data plot has finished and its final geometry has committed.
+If the original settle wait fails, its captured panel state survives cleanup as
+bounded numeric timestamps and readiness/loading/movement flags. No page text is
+retained, and extracting that evidence sends no additional browser command.
 `QUOTUM_BENCH_DIAGNOSE_PANNING=pairs` runs a fixed OFF/ON, ON/OFF, OFF/ON
 experiment for bounded input/frame/history correlation. Every result is retained;
 these diagnostic runs cannot satisfy the canonical gate. The optional
