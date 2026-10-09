@@ -2,13 +2,14 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
+import {panEvidenceScript} from '../panEvidence.js';
 import {panningProblems, type PanReading} from '../panningBudget';
 
 // Run the production browser probe with the browser's ordered RAF queue.
 const source = readFileSync(new URL('../panning.ts', import.meta.url), 'utf8');
 const probe = source.match(/await cdp\.evaluate\(`(\(\(\) => \{\n\s*const initiator=[\s\S]+?\}\)\(\))`\);/)![1];
 
-function fixture(initiator: 'quota'|'budget'|'funds' = 'quota') {
+function fixture(initiator: 'quota'|'budget'|'funds' = 'quota', timeline = false) {
   let time = 0;
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
   const schedule = (callback: (stamp: number) => void) => {callbacks.push(callback); return callbacks.length;};
@@ -45,8 +46,8 @@ function fixture(initiator: 'quota'|'budget'|'funds' = 'quota') {
     DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);if(value?.startsWith('scaleX'))this.e*=this.a;}},
     window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: () => {}},
   };
-  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)), context);
-  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {pending: object[]}}).__quotumPan;
+  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${panEvidenceScript(evidence?.timeline === true)}', panEvidenceScript(timeline)), context);
+  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {pending: object[]; timeline: {read(): {entries: {kind: string; inputId?: number; frameId?: number}[]}}}}).__quotumPan;
   const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}) => {
     time = delivered;
     const event = {type: 'wheel', cancelable: true, deltaX: 12, deltaMode, shiftKey: false, timeStamp: stamp};
@@ -255,4 +256,20 @@ test('funds input requires its own data layer to move with the other charts',()=
   assert.equal(f.reading.latency.length,0);assert.equal(f.reading.synchronized,false);
   const ready=fixture('funds');ready.wheel(0,0);ready.requestFrame(()=>ready.update(1,16.7));ready.runFrame(16.7);
   assert.equal(ready.reading.latency.length,1);assert.equal(ready.reading.chartUpdates[3],1);
+});
+
+
+test('original input/frame correlation retains delayed input and final-geometry failures', () => {
+  const f=fixture('quota',true);
+  f.wheel(10,30);f.wheel(20,31);
+  f.requestFrame(()=>f.update(1,32));f.runFrame(31);
+  let entries=f.reading.timeline.read().entries;
+  assert.equal(entries.filter(entry=>entry.kind==='credit').length,1);
+  assert.equal(entries.find(entry=>entry.kind==='credit')?.inputId,1);
+  f.requestFrame(()=>f.update(2,60));f.runFrame(59);
+  entries=f.reading.timeline.read().entries;
+  const credits=entries.filter(entry=>entry.kind==='credit');
+  assert.equal(credits.length,2);
+  assert.notEqual(credits[0].frameId,credits[1].frameId);
+  assert.equal(f.reading.latency[1],40);
 });

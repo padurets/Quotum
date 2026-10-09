@@ -24,10 +24,10 @@ fs.writeFileSync(path.join(process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR,'canary.json
 `, {mode: 0o755});
   execFileSync(process.execPath, [path.join(scripts, 'checks.mjs'), 'bench'], {cwd: root, timeout: 10_000,
     env: {...isolatedEnv(), PATH: path.join(root, 'bin') + path.delimiter + process.env.PATH,
-      QUOTUM_BENCH_DIAGNOSTICS_DIR: dir, QUOTUM_BENCH_DIAGNOSE_NATIVE: '1', QUOTUM_CHROME: 'fixture-chrome',
+      QUOTUM_BENCH_DIAGNOSTICS_DIR: dir, QUOTUM_BENCH_DIAGNOSE_NATIVE: '1', QUOTUM_BENCH_DIAGNOSE_PANNING: 'pairs', QUOTUM_CHROME: 'fixture-chrome',
       QUOTUM_PUBLIC_URL: 'private-canary', QUOTUM_PORT: '12345', QUOTUM_DATA_DIR: 'private-canary', QUOTUM_LOCAL_KEY: 'private-canary', QUOTUM_SECRET_KEY_FILE: 'private-canary', DEV_MODE: 'hub', DEV_ACCESS: 'coder'},
   });
   assert.deepEqual(JSON.parse(readFileSync(path.join(dir, 'canary.json'), 'utf8')), {
-    QUOTUM_CHROME: 'fixture-chrome', QUOTUM_BENCH_DIAGNOSTICS_DIR: dir, QUOTUM_BENCH_DIAGNOSE_NATIVE: '1',
+    QUOTUM_CHROME: 'fixture-chrome', QUOTUM_BENCH_DIAGNOSTICS_DIR: dir, QUOTUM_BENCH_DIAGNOSE_NATIVE: '1', QUOTUM_BENCH_DIAGNOSE_PANNING: 'pairs',
   });
 });

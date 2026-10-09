@@ -1,0 +1,44 @@
+name: Benchmark diagnostics
+
+# Opt-in evidence experiments have separate outcomes from the required benchmark.
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-diagnostics-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  paired-panning:
+    if: contains(github.event.pull_request.labels.*.name, 'benchmark-diagnostics')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+        env:
+          QUOTUM_BENCH_DIAGNOSE_PANNING: pairs
+          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-panning-pairs
+      - name: Paired evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: panning-pairs-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quotum-panning-pairs
+          if-no-files-found: warn

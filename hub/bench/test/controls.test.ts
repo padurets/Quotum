@@ -40,6 +40,7 @@ function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
   };
   const cdp = {
     on: (_method: string, callback: () => void) => {loaded = callback;},
+    off: () => {loaded = () => {};},
     send: async (method: string) => {if (method === 'Page.reload') loaded();},
     evaluate: async (source: string) => runInNewContext(source, context),
   } as unknown as Cdp;

@@ -1,4 +1,5 @@
 import type {Cdp} from './cdp.js';
+import {reload} from './reload.js';
 
 /** A saved radio remains focused, so the next native arrow can save another choice. */
 export async function frequencyKeys(cdp: Cdp) {
@@ -42,12 +43,7 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'bud
     prefs.muted = {};
     localStorage.setItem('quotum.prefs', JSON.stringify(prefs));
   })()`);
-  const loaded = new Promise<void>((resolve, reject) => {
-    const late = setTimeout(() => reject(new Error('money view reload did not finish')), 5000);
-    cdp.on('Page.loadEventFired', () => {clearTimeout(late); resolve();});
-  });
-  await cdp.send('Page.reload');
-  await loaded;
+  await reload(cdp);
   await cdp.evaluate(`(async () => {
     const end = Date.now() + 5000;
     let previous = '', stable = 0;

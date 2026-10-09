@@ -26,6 +26,7 @@ import {historyTraffic} from './historyTraffic.js';
 import {diagnoseReversal} from './historyTrafficBrowser.js';
 import {RunOwner} from './runOwner.js';
 import {Evidence} from './evidence.js';
+import {panningPairs, tracePanning} from './panningDiagnostic.js';
 import {creditSnapshot} from './credits.js';
 
 /**
@@ -120,10 +121,12 @@ async function metrics(cdp: Cdp): Promise<Metrics> {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const evidence = new Evidence();
+  const panDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_PANNING;
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
   try {
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
+    if (panDiagnostic && !['pairs', 'trace'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
     await prepare(address);
     chrome = options.cdp ? null : findChrome(process.env);
     if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
@@ -144,7 +147,7 @@ async function main() {
     evidence.begin('cleanup');
     try {await owner.close();} catch (error) {code = 1; say(String(error));}
     try {await demo.stop();} catch {code = 1; say('demo cleanup failed');}
-    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
+    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
     process.exit(code);
   })();
   const set = panningSet(SETS[0]);
@@ -184,6 +187,15 @@ async function main() {
     while ((await cdp.evaluate<number>(`document.querySelectorAll('.card:not(.is-loading)').length`)) === 0) {
       if (Date.now() > shownBy) throw new Stop(`The board showed no cards in ${SHOWN_MS / 1000} s.`);
       await sleep(250);
+    }
+    if (panDiagnostic) {
+      evidence.begin('diagnostic-panning-'+panDiagnostic);
+      say('diagnostic panning '+panDiagnostic+'; canonical benchmark is not run');
+      await cdp.evaluate('__quotumBench.pause()');
+      const result = panDiagnostic === 'pairs' ? await panningPairs(cdp, browser, evidence) : await tracePanning(cdp, browser, evidence);
+      evidence.save('diagnostic-panning-result', result);
+      say('diagnostic panning completed; all outcomes remain in artifacts');
+      await finish('attempts' in result && result.attempts.some(attempt => attempt.status === 'failed') ? 1 : 0); return;
     }
     const opened = Date.now();
     evidence.begin('warmup');
@@ -255,13 +267,13 @@ async function main() {
     await cdp.evaluate('__quotumBench.pause()');
     say('checking native continuous wheel and Shift-drag from quota, budget and subscription funds at 24h and 30d, CPU ×4');
     evidence.begin('panning');
-    const panned = await panning(cdp);
+    const panned = await panning(cdp, undefined, evidence);
     evidence.save('panning', panned);
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95))})), problems: panned.problems})}`);
     // Capture any movement failure before the later phases change the selection.
     if (panned.problems.length && browser.owned) {
-      try {await profilePanning(cdp);}
+      try {await profilePanning(cdp, browser, evidence);}
       catch (error) {say(`panning diagnostic failed: ${(error as Error).message}`);}
     }
     say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');

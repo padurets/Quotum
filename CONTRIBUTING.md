@@ -27,6 +27,15 @@ frequency-focus checks retain their budgets. Mixed Codex subscriptions also exer
 changed credit balances and unchanged-value heartbeats: each updates its own card and
 funds history without waking quota or wallet analytics. No browser means the check
 was not run.
+`QUOTUM_BENCH_DIAGNOSE_PANNING=pairs` runs a fixed OFF/ON, ON/OFF, OFF/ON
+experiment for bounded input/frame/history correlation. Every result is retained;
+these diagnostic runs cannot satisfy the canonical gate. The optional
+`benchmark-diagnostics` PR label requests the same experiment in a separate CI job.
+`QUOTUM_BENCH_DIAGNOSE_PANNING=trace` records an owned synthetic browser's new
+interval with numeric script/layout/paint/GC events, bounded to 32 MiB. Trace data
+never contains script sources, arguments, arbitrary URLs or user text. Missing
+scheduler evidence and truncated timelines remain explicit. An input's final
+geometry must still commit before it can be credited.
 The owned headless browser uses one raster worker: concurrent software raster jobs
 in Chrome 154 can leave a tile unfinished and deadlock an input frame's commit.
 An attached CDP browser retains its own launch settings.

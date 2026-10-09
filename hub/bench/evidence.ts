@@ -6,10 +6,10 @@ import path from 'node:path';
 
 const LIMIT = 1024 * 1024;
 const forbidden = /cookie|authorization|password|secret|credential|commandLine|expression|scriptSource|environment|stdout|stderr|stack/i;
-const labels = new Set(['status', 'stage', 'mode', 'method', 'scenario', 'phase', 'kind', 'event', 'name', 'period', 'initiator', 'segment', 'version', 'executable', 'platform', 'failure', 'reason', 'context', 'node', 'region', 'coding', 'type', 'state', 'birth', 'signal', 'spawnCode', 'native', 'cleanup', 'collection', 'livenessStatus', 'page']);
+const labels = new Set(['status', 'stage', 'mode', 'method', 'scenario', 'phase', 'kind', 'event', 'name', 'period', 'initiator', 'segment', 'version', 'executable', 'platform', 'failure', 'reason', 'context', 'node', 'region', 'coding', 'type', 'state', 'birth', 'signal', 'spawnCode', 'native', 'cleanup', 'collection', 'livenessStatus', 'page', 'scheduler']);
 
 /** Diagnostic payloads are numeric evidence and synthetic identifiers, never arbitrary text. */
-export function safeEvidence(value: unknown, key = '', depth = 0): unknown {
+export function safeEvidence(value: unknown, key = '', depth = 0, entryLimit = 10_000): unknown {
   if (depth > 24) return '[depth limit]';
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
   if (typeof value === 'string') {
@@ -18,12 +18,12 @@ export function safeEvidence(value: unknown, key = '', depth = 0): unknown {
     return value;
   }
   if (Array.isArray(value)) {
-    const entries = value.slice(0, 10_000).map(item => safeEvidence(item, key, depth + 1));
-    return value.length > 10_000 ? {entries, omittedEntries: value.length - 10_000} : entries;
+    const entries = value.slice(0, entryLimit).map(item => safeEvidence(item, key, depth + 1, entryLimit));
+    return value.length > entryLimit ? {entries, omittedEntries: value.length - entryLimit} : entries;
   }
   if (typeof value !== 'object') return undefined;
   return Object.fromEntries(Object.entries(value).filter(([name]) => !forbidden.test(name)).slice(0, 10_000)
-    .map(([name, field]) => [name.length <= 160 && !/https?:|\\|\/home\//.test(name) ? name : '[key omitted]', safeEvidence(field, name, depth + 1)]));
+    .map(([name, field]) => [name.length <= 160 && !/https?:|\\|\/home\//.test(name) ? name : '[key omitted]', safeEvidence(field, name, depth + 1, entryLimit)]));
 }
 
 function git(value: string): string | null {
@@ -62,12 +62,14 @@ export class Evidence {
   }
 
   begin(phase: string) {if (phase === 'cleanup') this.completedPhase = this.phase; this.phase = phase; this.manifest();}
-  save(name: string, value: unknown) {
+  save(name: string, value: unknown) {this.saveBounded(name, value, LIMIT, 10_000);}
+  saveTrace(name: string, value: unknown) {this.saveBounded(name, value, 32 * LIMIT, 100_000);}
+  private saveBounded(name: string, value: unknown, limit: number, entries: number) {
     if (!this.directory) return;
     if (!/^[a-zA-Z0-9_-]+$/.test(name)) {this.errors.push('invalid evidence name'); this.manifest(); return;}
     try {
-      let text = JSON.stringify(safeEvidence(value));
-      const originalBytes = Buffer.byteLength(text), truncated = originalBytes > LIMIT;
+      let text = JSON.stringify(safeEvidence(value, '', 0, entries));
+      const originalBytes = Buffer.byteLength(text), truncated = originalBytes > limit;
       if (truncated) text = JSON.stringify({status: 'insufficient-evidence', reason: 'summary limit', originalBytes});
       const file = name + '.json';
       this.write(file, text);
