@@ -112,6 +112,11 @@ export class HistoryBodies {
   }
 }
 
+/** A complete drawing can precede a queued cell read backed by its period evidence. */
+export function hasSeededHistory(reads:readonly Read[],phase:string){
+  return PERIOD_SCOPES.every(scope=>reads.some(read=>read.phase===phase&&read.count?.complete&&read.sections?.some(section=>section.scope===scope)));
+}
+
 /** CDP's speed is an integer; keep the named cold gesture near 750 ms. */
 export function historyScroll(geometry: {x: number; y: number; width: number}, fraction: number, distance: number) {
   if (![geometry.x, geometry.y, geometry.width, fraction, distance].every(Number.isFinite) || geometry.width <= 0 || fraction <= 0) throw new Error('invalid history gesture geometry');
@@ -132,19 +137,19 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     const split = cookie.indexOf('='); await cdp.send('Network.setCookie', {name: cookie.slice(0, split), value: cookie.slice(split + 1), url: proxy.url, httpOnly: true, sameSite: 'Lax'});
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: historyPageScript(length === DAY ? '24h' : '30d')});
     await cdp.send('Page.navigate', {url: proxy.url});
-    const settled = async () => {
+    const settled = async (seed = false) => {
       const deadline = Date.now() + 20_000;
       for (;;) {
         if (bodies.errors.length) throw bodies.errors[0];
-        if (!bodies.activeCount && !bodies.pending.size && await cdp.evaluate<boolean>(`['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning')`)) {
+        if ((!seed||hasSeededHistory(bodies.reads,seedPhase))&&!bodies.activeCount && !bodies.pending.size && await cdp.evaluate<boolean>(`['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning')`)) {
           await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,250))');
           if (!bodies.activeCount && !bodies.pending.size) return;
         }
-        if (Date.now() > deadline) throw new Error(`${name}: full drawings or terminal HTTP did not settle`);
+        if (Date.now() > deadline) throw new Error(`${name}: full drawings or terminal HTTP did not settle: ${JSON.stringify(bodies.reads.map(read=>({phase:read.phase,resources:read.sections?.map(section=>section.scope),complete:read.count?.complete,canceled:read.canceled})))}`);
         await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,20))');
       }
     };
-    await settled();
+    await settled(true);
     await cdp.evaluate(`(() => {const style=document.createElement('style');style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important;--fill:0px!important}.widget:not(:has(.history,.activity)){display:none!important}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:260px!important}.activity .chart>svg{height:180px!important}.legend{max-height:40px;overflow:auto}';document.head.append(style);document.querySelector('.analytics-head').scrollIntoView();})()`);
     await settled();
     const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number}>(`(() => {const svg=document.querySelector(${JSON.stringify(future ? '.history .chart>svg' : '.activity .chart>svg')});svg.scrollIntoView({block:'center'});const r=svg.getBoundingClientRect(),left=${future ? 40 : 48};return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-left-12)/svg.viewBox.baseVal.width,series:document.querySelectorAll('.history .series[d]:not([d=""])').length};})()`);

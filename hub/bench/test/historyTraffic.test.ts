@@ -34,7 +34,7 @@ test('the owned proxy measures a real fixed-codec HTTP body without changing JSO
   } finally {await proxy.close(); await new Promise<void>(resolve => upstream.close(() => resolve()));}
 });
 
-import {HistoryBodies, historyReadSelection, historyScroll} from '../historyTrafficBrowser';
+import {HistoryBodies, hasSeededHistory, historyReadSelection, historyScroll} from '../historyTrafficBrowser';
 import {readUnion} from '../historyTrafficBudget';
 
 test('traffic references preserve each resource selection instead of merging equal time cells', () => {
@@ -238,7 +238,7 @@ test('the browser fixture tags each fetch before IO and keeps cancellation ident
 test('composite bodies count once while both resource selections and standalone detail attempts remain visible',async()=>{
   const listeners=new Map<string,(event:never)=>void>();
   const history={run:'r',now:1,historyStart:0,known:{work:0,sources:{}},chunks:[{from:0,to:60}]};
-  const raw={basis:{},quota:{state:'complete',value:history},budget:{state:'complete',value:history},sessions:{state:'complete',value:{refs:[]}}};
+  const raw={basis:{},quota:{state:'complete',value:history},budget:{state:'complete',value:history},funds:{state:'complete',value:history},sessions:{state:'complete',value:{refs:[]}}};
   const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:async<T>()=>({body:JSON.stringify(raw),base64Encoded:false} as T)};
   const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
   const query={cell:'1',from:'0',to:'60',evidence:'cursor'};
@@ -255,6 +255,11 @@ test('composite bodies count once while both resource selections and standalone 
   emit('Network.loadingFinished',{requestId:'evidence'});await Promise.all([...observer.pending]);
   assert.equal(observer.reads.length,3);assert.equal(observer.resources.length,2,'evidence bytes count without pretending cached cells were reread');
   assert.equal(observer.reads[2].count?.decoded,Buffer.byteLength(JSON.stringify(raw)));assert.deepEqual(observer.errors,[]);
+  assert.equal(hasSeededHistory(observer.reads,'seed'),false,'evidence and two complete families cannot stand in for the third cell seed');
+  emit('Network.requestWillBeSent',{requestId:'funds',request:{url:'http://localhost/api/boards/b/period',postData:JSON.stringify({funds:query})}});
+  assert.equal(hasSeededHistory(observer.reads,'seed'),false,'the queued family must finish its physical read');
+  emit('Network.loadingFinished',{requestId:'funds'});await Promise.all([...observer.pending]);
+  assert.equal(hasSeededHistory(observer.reads,'seed'),true);assert.equal(hasSeededHistory(observer.reads,'different phase'),false);
 });
 
 test('composite resource classification waits for an omitted POST body even after the response arrives',async()=>{
