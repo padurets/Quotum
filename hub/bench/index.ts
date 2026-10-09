@@ -21,7 +21,6 @@ import {hear, type Heard} from './stream.js';
 import {frequencyKeys, moneyView, selectMoney} from './controls.js';
 import {panning} from './panning.js';
 import {seedPanningBudgets,panningSet} from './fixture.js';
-import {profilePanning} from './panningProfile.js';
 import {historyTraffic} from './historyTraffic.js';
 import {diagnoseReversal} from './historyTrafficBrowser.js';
 import {RunOwner} from './runOwner.js';
@@ -255,11 +254,6 @@ async function main() {
     evidence.save('panning', panned);
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95))})), problems: panned.problems})}`);
-    // Capture any movement failure before the later phases change the selection.
-    if (panned.problems.length && browser.owned) {
-      try {await profilePanning(cdp, browser, evidence);}
-      catch (error) {say(`panning diagnostic failed: ${(error as Error).message}`);}
-    }
     say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
     evidence.begin('history-traffic');
     const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);

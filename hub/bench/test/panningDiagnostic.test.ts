@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {traceInterval} from '../panningDiagnostic.js';
+import {traceInterval, tracePanning} from '../panningDiagnostic.js';
 import type {Cdp} from '../cdp.js';
 
 function fixture() {
@@ -51,4 +51,23 @@ test('a lost trace-start reply still stops the possibly active trace with its ow
   t.mock.timers.tick(5000);
   await outcome;
   assert.equal(cancelled,true);assert.equal(f.sent.at(-1),'Tracing.end');assert.equal(f.listeners.size,0);
+});
+
+test('native trace limits and clocks belong to each original scenario, with cleanup after a later failure', async()=>{
+  const f=fixture(),error=new Error('second scenario failed');
+  await assert.rejects(tracePanning(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},f.evidence,async cdp=>{
+    for(const id of [1,2]){
+      await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});
+      f.listeners.get('Tracing.dataCollected')?.({value:[{name:'Paint',ph:'X',ts:id,dur:1}]});
+      if(id===2)throw error;
+      await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
+    }
+    return {reports:[],problems:[]};
+  }),value=>value===error);
+  assert.equal(f.sent.filter(method=>method==='Tracing.start').length,2);
+  assert.equal(f.sent.filter(method=>method==='Tracing.end').length,2);
+  assert.equal(f.listeners.size,0);
+  const first=f.files.get('trace-1-trace') as {events:{ts:number}[]};
+  const second=f.files.get('trace-2-trace') as {events:{ts:number}[]};
+  assert.deepEqual(first.events.map(event=>event.ts),[1]);assert.deepEqual(second.events.map(event=>event.ts),[2]);
 });

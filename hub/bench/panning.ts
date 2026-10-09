@@ -3,6 +3,7 @@ import {panningProblems, type PanReading} from './panningBudget.js';
 import {panEvidenceScript} from './panEvidence.js';
 import {deadline} from './deadline.js';
 import {reload} from './reload.js';
+import {panMetrics, panCost} from './panningMetrics.js';
 
 /** Native input against the real charts; the temporary layout brings all four into view. */
 export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), evidence?: {timeline?: boolean; save(name: string, value: unknown): void}) {
@@ -180,6 +181,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       interception = true;
       const wheel = (dx: number, shift = false) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: dx, deltaY: 0, modifiers: shift ? 8 : 0});
       const sent: Promise<unknown>[] = [];
+      const costStart = evidence?.timeline !== undefined ? await panMetrics(cdp) : undefined;
       await cdp.evaluate('window.__quotumPan.feeding=true');
       // The browser generates native wheel input without a CDP IPC per delta.
       const scroll = (distance: number, reverse = 0) => cdp.send('Input.synthesizeScrollGesture', {x: geometry.x, y: geometry.y, xDistance: distance, xOverscroll: reverse, yDistance: 0, speed: 720, gestureSourceType: 'mouse', preventFling: true});
@@ -217,12 +219,14 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       await cdp.evaluate('window.__quotumPan.feeding=false');
       await wait(240); await settled();
       await cdp.evaluate('window.__quotumPan.returnAfter=window.__quotumPan.returnSnapshot()');
+      const costEnd = costStart ? await panMetrics(cdp) : undefined;
       const report = await cdp.evaluate<PanReading>(`(() => {
         const p=window.__quotumPan;p.cleanup();
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
         return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,segments,outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34),timeline:p.timeline?.read()};
       })()`);
       report.initiator = initiator; report.period = period; report.series = geometry.series; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
+      if(costStart&&costEnd)report.cost=panCost(costStart,costEnd);
       reports.push(report);
       evidence?.save('panning-'+initiator+'-'+period,report);
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});

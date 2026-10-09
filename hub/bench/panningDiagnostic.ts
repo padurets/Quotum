@@ -19,12 +19,15 @@ export async function panningPairs(cdp: Cdp, browser: Browser, evidence: Evidenc
     evidence.begin('panning-pair-'+index);
     const partial={timeline,save:(name:string,value:unknown)=>evidence.save('pair-'+index+'-'+name,value)};
     try {
-      const before=await metrics(cdp);
-      const result=await panning(cdp,undefined,partial),after=await metrics(cdp);
-      attempts.push({id:index,timeline,status:result.problems.length?'over-budget':'passed',problems:result.problems,
-        scriptMs:(after.ScriptDuration-before.ScriptDuration)*1000,taskMs:(after.TaskDuration-before.TaskDuration)*1000,
-        elapsedSeconds:after.Timestamp-before.Timestamp,
+      const result=await panning(cdp,undefined,partial);
+      const valid=result.reports.length===6&&result.reports.every(report=>report.cost?.valid);
+      attempts.push({id:index,timeline,status:result.problems.length?'over-budget':'passed',problems:result.problems.map(reason=>({reason})),
+        metricsStatus:valid?'complete':'insufficient-evidence',
+        scriptMs:valid?result.reports.reduce((sum,report)=>sum+report.cost!.scriptMs,0):null,
+        taskMs:valid?result.reports.reduce((sum,report)=>sum+report.cost!.taskMs,0):null,
+        elapsedSeconds:valid?result.reports.reduce((sum,report)=>sum+report.cost!.seconds,0):null,
         reports:result.reports.map(report=>({initiator:report.initiator,period:report.period,
+          cost:report.cost,
           frameP95:percentile(report.frames,.95),frameP99:percentile(report.frames,.99),inputP95:percentile(report.latency,.95),
           frames:report.frames.length,inputs:report.inputs,credited:report.latency.length,omitted:report.timeline?.omitted??0}))});
     } catch {
@@ -41,8 +44,27 @@ type SafeTrace={name:string;phase:string;ts?:number;duration?:number;pid?:number
 
 /** Tracing belongs only to a new diagnostic interval in this run's own browser. */
 type TraceEvidence={save(name:string,value:unknown):void;saveTrace?(name:string,value:unknown):void};
-export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceEvidence) {
-  return traceInterval(cdp,browser,()=>panning(cdp,undefined,{timeline:true,save:(name,value)=>evidence?.save('trace-'+name,value)}),evidence);
+export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceEvidence, run=panning) {
+  let active:Promise<unknown>|undefined,release=()=>{},interval=0;
+  const stop=async()=>{if(active){release();const pending=active;active=undefined;await pending;}};
+  const measured={on:cdp.on.bind(cdp),off:cdp.off.bind(cdp),evaluate:cdp.evaluate.bind(cdp),
+    send:async<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>=>{
+      const rate=(params as {rate?:number}).rate;
+      if(method==='Emulation.setCPUThrottlingRate'&&rate===4){
+        await stop();
+        const id=++interval;
+        let ready=()=>{};
+        const started=new Promise<void>(resolve=>{ready=resolve;});
+        active=traceInterval(cdp,browser,()=>{ready();return new Promise(resolve=>{release=()=>resolve(undefined);});},{
+          save:(name,value)=>evidence?.save('trace-'+id+'-'+name,value),
+          saveTrace:(name,value)=>evidence?.saveTrace?evidence.saveTrace('trace-'+id+'-'+name,value):evidence?.save('trace-'+id+'-'+name,value),
+        });
+        await Promise.race([started,active]);
+      } else if(method==='Emulation.setCPUThrottlingRate'&&rate===1)await stop();
+      return cdp.send<T>(method,params,signal);
+    }};
+  try {return await run(measured,undefined,{timeline:true,save:(name,value)=>evidence?.save('trace-'+name,value)});}
+  finally {await stop();}
 }
 
 export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promise<T>, evidence?: TraceEvidence) {
