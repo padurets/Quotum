@@ -28,7 +28,7 @@ test('the actual spending generator keeps visible quantities invariant under ove
     const raw=crossing?{...cells,cells:[[1,'10000000','0','1000000',60000,{steps:[{from:10000,to:60001,amount:'1000000',evidence:'continuous'}]}]] as MeterSeriesCells['cells']}:cells;
     const chunks=[{from:0,meterSeries:[raw]}],original=composeMeters(chunks,60000,60000,180000);
     const draw=(strip:unknown)=>{
-      const context={family:'budget',settings:{view:'spending'},context:defaultCurrencyContext,strip,original,history:{meterSeries:original},unit:'USD',prefs:{money:{view:'spending'},muted:{}},sources:[{id:'s',title:'Fixture',provider:'openrouter'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[['s','balance']]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof original}};
+      const context={family:'budget',settings:{view:'spending'},context:defaultCurrencyContext,strip,original,history:{meterSeries:original},drawing:{meterSeries:original},unit:'USD',prefs:{money:{view:'spending'},muted:{}},sources:[{id:'s',title:'Fixture',provider:'openrouter'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[['s','balance']]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof original}};
       runInNewContext(ts.transpileModule(region+'\nglobalThis.model=prepared.value;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
       return JSON.stringify(context.model.entries[0].points.filter(p=>p.at>=60000&&p.at<180000).map(p=>[p.at,p.value]));
     };
@@ -74,7 +74,7 @@ test('MoneyHistory passes resource retirement through to the prepared Chart whil
       'react/jsx-runtime': jsx, react: {useRef: outer.useRef, useMemo: memo},
       '../../server/domain/providers': providers, '../../server/domain/currency': currency, '../../server/domain/meterHistory': {composeMetersPrepared},
       '../lib/board': {useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
-      '../lib/history': {useBudgetHistory: () => ({history, loading: !history}), useBudgetHistoryPlot: () => null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
+      '../lib/history': {useBudgetHistory: () => ({history, drawing: history, loading: !history}), useBudgetHistoryPlot: () => null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
       '../lib/prefs': {usePrefs: () => prefs}, '../lib/moneySelection': {moneySelection}, '../lib/moneyView': moneyView, '../lib/money': money,
       '../lib/view': {colorOf: () => '#fff'}, '../lib/periods': {frameOf: () => ({from: 0, to: 120000, live: true}), measuredTo: () => 60000},
       '../lib/timeRange': {useTimeRange: () => null}, '../lib/clock': {useClock: () => 60000}, '../lib/pan': {usePanning: () => null},

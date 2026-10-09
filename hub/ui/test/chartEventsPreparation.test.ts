@@ -38,7 +38,7 @@ test('the actual History marker producer reaches a bounded checkpoint before sca
   const start = source.indexOf('    for (const {event, lines: shown} of yield* chartEventsPrepared(');
   assert.ok(start >= 0);
   const region = source.slice(start, source.indexOf('    for (const {provider, reset, line}', start));
-  const context = {chartEventsPrepared, strip: {events, from: 0}, history: null, visible, from: 0, sources: [], sourceLabel: () => '', markers: [] as unknown[], t: () => '', produce: null as unknown as () => Generator<void, void, void>};
+  const context = {chartEventsPrepared, strip: {events, from: 0}, history: null, drawing: null, visible, from: 0, sources: [], sourceLabel: () => '', markers: [] as unknown[], t: () => '', produce: null as unknown as () => Generator<void, void, void>};
   runInNewContext(ts.transpileModule(`function* produce(){${region}}\nglobalThis.produce=produce;`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
   const work = context.produce();
   assert.equal(work.next().done, false); assert.ok(comparisons <= 1);

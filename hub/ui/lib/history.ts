@@ -932,14 +932,14 @@ if (typeof window !== 'undefined') {
   };
   onPrefs(chosen);onTimeRange(chosen);chosen();
 }
-function usePeriodHistory(loader:HistoryStore,rolling=false):Shown {
+function usePeriodHistory(loader:HistoryStore,rolling=false):Shown&{drawing:History|null} {
   const shown=useSyncExternalStore(loader.subscribe,loader.get,loader.get);
   const panning=usePanning();
   const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>boardPeriod.getProjectionRevision(loader===fundsHistory?'funds':loader.scope??'quota'));
   const now=useClock(at=>rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at):null,[shown,revision,panning]);
   const retained=useRef<{board:string;history:History}|null>(null);
   const gesture=useRef<{active:boolean;target:string|null}>({active:false,target:null});
-  return useMemo(()=>{
+  const result=useMemo(()=>{
     const board=page.get().board?.id??'';if(retained.current?.board!==board)retained.current=null;
     const selected=timeRange(),target=board+':'+(selected?timeRangeKey(selected):prefs().range);
     if(panning!==null){gesture.current.active=true;gesture.current.target=null;}
@@ -954,9 +954,13 @@ function usePeriodHistory(loader:HistoryStore,rolling=false):Shown {
     if(!state.ready)return {...shown,history:retained.current?.history??null,loading:!folding&&!state.error&&!shown.error,error:state.error??shown.error};
     const history=boardPeriod.project(shown.history,scope,now);retained.current={board,history};if(!shown.loading)gesture.current.target=null;return {...shown,history,loading:folding?false:shown.loading};
   },[shown,revision,loader,panning,now]);
+  // Rolling totals change with the endpoints; their unchanged drawing evidence
+  // must not restart line and stack preparation on the same clock wake.
+  const drawing=useMemo(()=>result.history,[shown,revision,loader,panning]);
+  return {...result,drawing};
 }
-export function useHistory(rolling=false): Shown {return usePeriodHistory(quotaHistory,rolling);}
-export function useBudgetHistory(family:MoneyFamily='budget',rolling=false): Shown {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling);}
+export function useHistory(rolling=false) {return usePeriodHistory(quotaHistory,rolling);}
+export function useBudgetHistory(family:MoneyFamily='budget',rolling=false) {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling);}
 export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
 export function useBudgetHistoryPlot(family: MoneyFamily = 'budget'): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribePlot, reader.getPlot, reader.getPlot);}
 /** A fresh answer from either resource family supersedes the board's initial snapshot. */

@@ -207,7 +207,7 @@ const Totals = memo(function Totals({activity, shownMs, since}: {activity: Activ
  * render it. The unknown part of the period is hatched rather than drawn as idle.
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
-  const {history, loading,error} = useHistory(true);
+  const {history,drawing,loading,error} = useHistory(true);
   const strip = useHistoryPlot();
   const registry = useRef<{token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
   const panel = useRef<HTMLElement>(null);
@@ -231,17 +231,17 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const frame = frameOf(selected, prefs, now, historyStart);
   const from = frame.from;
   const to = measuredTo(frame, history, selected, prefs.range);
-  const activity = history?.activity ?? null;
+  const activity = history?.activity ?? null,drawnActivity=drawing?.activity??null;
   // What the groups look like changes with the answer, the board and the legend, not with time: the same objects as the clock moves the frame.
   const {groups, colors, shown} = useMemo(() => {
-    const groups = activity?.by[by] ?? [];
+    const groups = drawnActivity?.by[by] ?? [];
     const colors = groupColors(groups, by, arrange.view, source => titles[source]?.provider ?? '');
     const names = groups.map(group => groupName(group, by, titles));
     const muted = groups.map(group => !!prefs.muted[mutedKey(by, group.key)]);
     const shown = groups.flatMap((group, i) => (muted[i] ? [] : [{group, color: colors[i], name: names[i]}]));
     return {groups, colors, names, muted, shown};
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activity, by, arrange.view, titles, prefs.muted, locale]);
+  }, [drawnActivity, by, arrange.view, titles, prefs.muted, locale]);
   const prepared = usePrepared(function* () {
     const data = new Map<string, PlotGroup>();
     const found = new Map<string, Pick<PlotGroup, 'key' | 'name'>>();
@@ -259,7 +259,8 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${history?.board}:${by}`);
   const presentation = prepared.value ?? {identities: [], shown: [], strip: null};
   useLayoutEffect(() => {if (prepared.value) registry.current = prepared.value.registry;}, [prepared.value]);
-  const shownMs = useMemo(() => shown.reduce((sum, {group}) => sum + group.agentMs, 0), [shown]);
+  const currentGroups=activity?.by[by]??[];
+  const shownMs = useMemo(() => currentGroups.reduce((sum,group) => sum+(prefs.muted[mutedKey(by,group.key)]?0:group.agentMs), 0), [currentGroups,by,prefs.muted]);
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
@@ -282,8 +283,9 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
       <Totals activity={activity} shownMs={shownMs} since={since} />
       <>
           <Stacks
-            activity={activity ?? EMPTY_ACTIVITY}
-            origin={history?.since ?? from}
+            activity={drawnActivity ?? EMPTY_ACTIVITY}
+            currentActivity={activity ?? EMPTY_ACTIVITY}
+            origin={drawing?.since ?? from}
             groups={emptyFrame ? [] : presentation.shown}
             from={from}
             to={to}
@@ -300,7 +302,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
           />
           <div className="legend">
             {(emptyFrame ? [] : presentation.identities).map(identity => (
-              <LegendItem key={identity.key} groupKey={identity.key} by={by} group={groups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} />
+              <LegendItem key={identity.key} groupKey={identity.key} by={by} group={currentGroups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} />
             ))}
           </div>
       </>
@@ -321,6 +323,7 @@ const EMPTY_CELLS: PlotGroup['cells'] = [];
 
 const Stacks = memo(function Stacks({
   activity: incomingActivity,
+  currentActivity,
   origin: incomingOrigin,
   groups: incomingGroups,
   from,
@@ -337,6 +340,8 @@ const Stacks = memo(function Stacks({
   empty,
 }: {
   activity: ActivityData;
+  /** Exact boundary bars and readout advance without rebuilding interior stacks. */
+  currentActivity?: ActivityData;
   /** Where the answer begins: the bars are drawn from there, so their numbers stay small however old the hub. */
   origin: number;
   /** The groups switched on in the legend, bottom to top, each with its colour and name. */
@@ -402,7 +407,7 @@ const Stacks = memo(function Stacks({
   }, [...inputs, requested.from, requested.to, requested.end], `${by}:${width}:${height}`, incomingReady);
   const model = prepared.value;
   const basis = model?.basis ?? axis.basis;
-  const groups = model?.groups ?? [], strip = model?.strip ?? null, activity = model?.activity ?? incomingActivity;
+  const groups = model?.groups ?? [], strip = model?.strip ?? null, activity = currentActivity ?? model?.activity ?? incomingActivity;
   const barMs = model?.barMs ?? incomingActivity.barMs;
   const vertical = model?.vertical ?? activityScale(0);
   const paths = model?.paths ?? [], perMs = model?.perMs ?? (width - left - right) / Math.max(MINUTE, basis.to - basis.from), pathOrigin = model?.pathOrigin ?? basis.from;
@@ -425,15 +430,15 @@ const Stacks = memo(function Stacks({
   const painted = useRef('');
   const paintEdges = () => {
     if (!bandClip.current) return;
-    if (!strip || !mask.current || !edges.current) {
+    if ((!strip && !currentActivity) || !mask.current || !edges.current) {
       clipPlot(bandClip.current, left * scale, (width - right) * scale, width * scale);
       return;
     }
     const draft = pan.get();
     const visual = axis.visualGeometry();
-    const range = draft || axis.held ? {from: visual.from, to: visual.from + (draft?.length ?? strip.length)} : {from, to};
-    const target = targetOf(strip.length, draft?.now ?? to, 'edge', range);
-    const start = target.k0 * strip.cell, end = (target.k1 + 1) * strip.cell;
+    const range = strip && (draft || axis.held) ? {from: visual.from, to: visual.from + (draft?.length ?? strip.length)} : {from, to};
+    const target = strip ? targetOf(strip.length, draft?.now ?? to, 'edge', range) : null;
+    const start = strip && target ? target.k0 * strip.cell : from, end = strip && target ? (target.k1 + 1) * strip.cell : to;
     const firstFull = Math.ceil(start / barMs) * barMs, lastFull = Math.floor(end / barMs) * barMs;
     if (draft || axis.held) {
       const a = Math.max(left, Math.min(width - right, axis.screenX(firstFull)));
@@ -447,19 +452,19 @@ const Stacks = memo(function Stacks({
       if (mask.current.getAttribute('x') !== maskX) mask.current.setAttribute('x', maskX);
       if (mask.current.getAttribute('width') !== maskWidth) mask.current.setAttribute('width', maskWidth);
     }
-    const key = `${target.k0}:${target.k1}:${strip.version}:${vertical.max}:${height}:${perMs}:${groups.map(g => g.group.key).join(',')}`;
+    const key = `${start}:${end}:${strip?.version}:${vertical.max}:${height}:${perMs}:${groups.map(g => g.group.key).join(',')}`;
     if (key === painted.current) return;
     painted.current = key;
     const starts = [...new Set([cellStart(start, barMs), cellStart(end - 1, barMs)])].filter(at => at < firstFull || at >= lastFull);
     const paths = groups.map(() => '');
     for (const at of starts) {
-      const bar = plotBar(strip, at, target, by);
-      if (!bar) continue;
+      const bar = strip && target ? plotBar(strip, at, target, by) : null;
+      if (strip && !bar) continue;
       let total = 0;
       const gap = perMs * barMs >= 8 ? 0.5 : 0;
       const a = x(at) + gap, b = x(at + barMs) - gap;
       groups.forEach(({group}, i) => {
-        const ms = bar.groups.get(group.key)?.ms ?? 0;
+        const ms = strip ? bar?.groups.get(group.key)?.ms ?? 0 : activity.by[by].find(g => g.key === group.key)?.cells.find(([start]) => start === at)?.[1] ?? 0;
         if (!ms) return;
         const low = total;
         total += ms;
@@ -477,7 +482,7 @@ const Stacks = memo(function Stacks({
   const bar = hover === null ? null : strip ? partialBar ? [hover, partialBar.activeMs, partialBar.agentMs, partialBar.agents] : null : activity.cells.find(([start]) => start === hover);
   // What the hovered bar draws: over one whose groups are all switched off, nothing tells of it, as over an empty one.
   const parts =
-    hover === null ? [] : groups.flatMap(({group, color, name}) => strip ? partialBar?.groups.has(group.key) ? [{key: group.key, color, name, ms: partialBar.groups.get(group.key)!.ms}] : [] : group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
+    hover === null ? [] : groups.flatMap(({group, color, name}) => strip ? partialBar?.groups.has(group.key) ? [{key: group.key, color, name, ms: partialBar.groups.get(group.key)!.ms}] : [] : (currentActivity ? activity.by[by].find(g => g.key === group.key)?.cells ?? [] : group.cells).filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
   const shownMs = parts.reduce((sum, part) => sum + part.ms, 0);
   const hoverX = hover === null ? 0 : axis.screenX(Math.max(from, Math.min(to, hover + barMs / 2)));
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: true, bottom: height * scale});
@@ -535,7 +540,7 @@ const Stacks = memo(function Stacks({
         )}
       </PlotLayer>
       <PlotLayer width={width} height={height} scale={scale} left={left} right={right} clipRef={bandClip} top={top} bottom={bottom}>
-        <g clipPath={strip && !active ? `url(#${CSS.escape(innerClip)})` : undefined}>
+        <g clipPath={(strip || currentActivity) && !active ? `url(#${CSS.escape(innerClip)})` : undefined}>
           <g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
             {groups.map(({group, color}, i) => (
               <path key={group.key} d={paths[i]} fill={color} className="activity-stack" />
@@ -543,7 +548,7 @@ const Stacks = memo(function Stacks({
           </g>
         </g>
       </PlotLayer>
-      {strip && (
+      {(strip || currentActivity) && (
         <PlotLayer width={width} height={height} scale={scale} left={left} right={right}>
           <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" />)}</g>
         </PlotLayer>

@@ -48,7 +48,7 @@ type MoneyColumn = typeof MONEY_COLUMNS[number]['id'];
 const pointAt=(series:MeterHistory,at:number,cell=60000)=>series.pointMode==='observation'?moneyPointAt(series,at):meterPointIn(series,at,cell);
 
 export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:MoneyFamily}) {
-  const context=useCurrencyContext(),board=useBoardId(),locale=useLocale(),{history,loading,error}=useBudgetHistory(family,true),prefs=usePrefs(),sources=useNamed(arrange.view.names,family);
+  const context=useCurrencyContext(),board=useBoardId(),locale=useLocale(),{history,drawing,loading,error}=useBudgetHistory(family,true),prefs=usePrefs(),sources=useNamed(arrange.view.names,family);
   const funds=family==='funds',settings=funds?prefs.funds:prefs.money,reader=funds?fundsHistory:budgetHistory;
   const strip=useBudgetHistoryPlot(family),panning=usePanning();
   const selected=useTimeRange(),start=useHistoryBegins(),panel=useRef<HTMLElement>(null),{plot,onBase}=usePlot(panel);
@@ -63,7 +63,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const prepared=usePrepared(function* () {
     const entries:MeterHistory[]=[],visible:MeterHistory[]=[];
     let low:bigint|null=null,high:bigint|null=null;
-    const plotted=strip?.meterChunks?yield* composeMetersPrepared(strip.meterChunks,strip.cell,strip.from,strip.to,strip.meterFrame):original;
+    const plotted=strip?.meterChunks?yield* composeMetersPrepared(strip.meterChunks,strip.cell,strip.from,strip.to,strip.meterFrame):drawing?.meterSeries?.filter(s=>s.unit===unit)??[];
     for(const source of plotted) {
       if(source.unit!==unit)continue;
       let entry=source;
@@ -86,7 +86,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
       lines.push({sourceId:series.sourceId,windowId:series.meterId,key:moneyIdentity(series),name:nameOf(series,card?.title??series.sourceId,context,family),provider:card?.provider??'',kind:'other',label:series.semantics?.label??null,minutes:null,color:colorOf(arrange.view,series.sourceId,card?.provider??''),dash:series.kind==='cap'?'7 5':'',current:scaled(series.end??'0'),consumed:0,coveredMs:series.coveredMs,remainingAtStart:series.start===null?null:scaled(series.start),remainingAtEnd:series.end===null?null:scaled(series.end),pointMode:series.pointMode,staleAfterMs:86_400_000,points,work:null,...(series.kind==='cap'?{capCells:series.points.flatMap(p=>p.knownFrom!==undefined&&p.knownUntil!==undefined?[{at:p.at,from:p.knownFrom,to:p.knownUntil,value:scaled(p.value)}]:[])}:{})});yield;
     }
     return {entries,lines,origin,span,pad,strip};
-  },[history,strip,prefs.muted,unit,settings.view,sources,arrange.view,locale,context],modelContext);
+  },[drawing,strip,prefs.muted,unit,settings.view,sources,arrange.view,locale,context],modelContext);
   const model=prepared.value,entries=model?.entries??[],lines=model?.lines??[];
   const baseNavigation=axisNavigation(board,selected,prefs),navigation={...baseNavigation,context:JSON.stringify([baseNavigation.context,unit,settings.view])};
   const axis=useMemo(()=>{

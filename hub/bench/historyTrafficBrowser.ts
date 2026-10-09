@@ -228,6 +228,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         const physicalTotals=bodyTotals(physical.map(read=>({count:read.count!,transfer:transferFor(read.count!,proxy.transfers)})));
         const aggregate={name:name+'/all-accounting',attempts:physical.length,...physicalTotals,referenceDecoded:families.reduce((n,f)=>n+f.referenceDecoded,0),referenceEncoded:families.reduce((n,f)=>n+f.referenceEncoded,0),ratios:fraction===.5};
         problems.push(...trafficProblems(aggregate));reports.push(aggregate);
+        console.error(`bench: ${aggregate.name}: ${JSON.stringify(aggregate)}`);
         const warmPhase = `${name}/warm`; bodies.phase = warmPhase; proxy.phase(warmPhase);
         // A selected chart has no future, so its return uses the captured time delta.
         await scroll(-(pose.poses[0].origin - pose.to) / length * geometry.width,'cached return'); await settled();

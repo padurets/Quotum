@@ -65,7 +65,7 @@ function HistorySettings({arrange, planAvailable, forecastAvailable}: {arrange: 
  * forecast's line goes when the table no longer says where its window leads.
  */
 const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange}) {
-  const {history, loading,error} = useHistory(true);
+  const {history,drawing,loading,error} = useHistory(true);
   const strip = useHistoryPlot();
   const registry = useRef<{token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
   const panel = useRef<HTMLElement>(null);
@@ -109,7 +109,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const from = frame.from;
   const measured = measuredTo(frame, history, selected, prefs.range);
   const prepared = usePrepared(function* () {
-    const answered = yield* subscriptionLinesPrepared(history, sources, view, prefs.kind);
+    const answered = yield* subscriptionLinesPrepared(drawing, sources, view, prefs.kind);
     let lines: PlotLine[] = answered;
     let nextRegistry: typeof registry.current = null;
     if (strip) {
@@ -150,7 +150,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
       if (seen.has(key)) continue;
       seen.add(key); markers.push({key, at: resetAt, until: resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
     }
-    for (const {event, lines: shown} of yield* chartEventsPrepared(strip?.events ?? history?.events ?? [], visible, strip?.from ?? from)) {
+    for (const {event, lines: shown} of yield* chartEventsPrepared(strip?.events ?? drawing?.events ?? [], visible, strip?.from ?? from)) {
       const source = sources.find(s => s.id === event.sourceId), name = source ? sourceLabel(source) : shown[0].provider;
       markers.push({key: `${event.kind}-${event.sourceId}-${event.at}`, at: event.at, label: event.kind === 'early_reset' ? t('chart.earlyReset', {source: name}) : t('chart.resetsGranted', {count: event.count, source: name}), color: shown[0].color, past: true}); yield;
     }
@@ -172,7 +172,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
       if (points.length) forecasts.push({key: line.key, name: line.name, color: line.color, dash: line.dash, points, zero: drawn.zero, at: drawn.at, until: drawn.until}); yield;
     }
     return {futureFacts: ahead.map(a => ({zero: a.drawn.zero, until: a.drawn.until})), hints, lines, visible, markers, plans: [...plans.values()], forecasts, to, from, measured, now: strip ? now : measured, cellMs: strip?.cell ?? history?.cellMs ?? 60_000, strip, frame, planAvailable, forecastAvailable, planShown, forecastShown, moments: [...chartMoments(markers, ahead.map(a => a.drawn), to), ...[...plans.values()].map(plan => plan.until!)], registry: nextRegistry};
-  }, [history, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, navigationKey(navigation)], `${history?.board}:${prefs.kind}`);
+  }, [drawing, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, navigationKey(navigation)], `${history?.board}:${prefs.kind}`);
   const model = prepared.value;
   useLayoutEffect(() => {if (model) registry.current = model.registry;}, [model]);
   const lines = model?.lines ?? [];
