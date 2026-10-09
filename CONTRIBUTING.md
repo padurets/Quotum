@@ -73,6 +73,10 @@ lost target-creation replies as failures. A profile is retained when exit cannot
 confirmed. Attached browsers and their existing tabs remain outside that ownership.
 Launch diagnostics contain version, timing, process identity and classified stream
 counters; arbitrary browser output and command arguments are omitted.
+On Linux, the existing ownership reads also retain bounded root-process fault and CPU
+tick samples during startup, and the first observed port publication time. No extra
+process reads or sampling timers are added. These counters are not a scheduler trace;
+missing samples and unsupported counters stay explicit.
 `QUOTUM_BENCH_DIAGNOSTICS_DIR` keeps a unique run manifest and completed phase reports
 before cleanup, including when a later phase fails. CI retains these artifacts for
 every attempt. The `make bench` wrapper forwards this setting without loading preview

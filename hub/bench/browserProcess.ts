@@ -1,23 +1,29 @@
 import type {ChildProcess} from 'node:child_process';
 import {readFile, readdir} from 'node:fs/promises';
 
-type Identity = {pid: number; parent: number; group: number; session: number; birth: string; state: string};
+export type ProcessIdentity = {pid: number; parent: number; group: number; session: number; birth: string; state: string;
+  minorFaults: number | null; majorFaults: number | null; userTicks: number | null; systemTicks: number | null; blockIoTicks: number | null};
 const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
-async function identity(pid: number): Promise<Identity | null> {
-  const stat = await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => '');
-  const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-  return fields.length > 19 ? {pid, state: fields[0], parent: Number(fields[1]), group: Number(fields[2]), session: Number(fields[3]), birth: fields[19]} : null;
+/** Reuse the ownership read for counters; names and arbitrary fields never leave this parser. */
+export function processIdentity(pid: number, stat: string): ProcessIdentity | null {
+  const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+  if (fields.length <= 19 || !/^[RSDZTtXxKWPI]$/.test(fields[0]) || ![1,2,3,19].every(i => /^\d+$/.test(fields[i]))) return null;
+  const counter = (i: number) => /^\d+$/.test(fields[i] ?? '') && Number.isSafeInteger(Number(fields[i])) ? Number(fields[i]) : null;
+  return {pid, state: fields[0], parent: Number(fields[1]), group: Number(fields[2]), session: Number(fields[3]), birth: fields[19],
+    minorFaults: counter(7), majorFaults: counter(9), userTicks: counter(11), systemTicks: counter(12), blockIoTicks: counter(39)};
 }
 
+const identity = async (pid: number) => processIdentity(pid, await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => ''));
+
 /** Only numeric identities are read. No command lines, process-name matching, or foreign signals. */
-async function processes(): Promise<Identity[]> {
+async function processes(): Promise<ProcessIdentity[]> {
   const entries = await readdir('/proc');
-  const result: Identity[] = [];
+  const result: ProcessIdentity[] = [];
   // Limit concurrent reads on a shared machine.
   for (let from = 0; from < entries.length; from += 64) {
     const batch = await Promise.all(entries.slice(from, from + 64).filter(value => /^\d+$/.test(value)).map(value => identity(Number(value))));
-    result.push(...batch.filter((value): value is Identity => value !== null));
+    result.push(...batch.filter((value): value is ProcessIdentity => value !== null));
   }
   return result;
 }

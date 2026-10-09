@@ -65,6 +65,13 @@ test('silent real DevTools readiness and idempotent cleanup close the endpoint a
   const {profile, launch} = fixture(t);
   const browser = await launch();
   assert.equal((browser.launchReport!() as {version: string}).version, 'Chrome/fixture');
+  if(process.platform==='linux'){
+    const report=browser.launchReport!() as LaunchReport;
+    assert.equal(report.startupSamples?.status,'available');
+    assert.equal(report.startupSamples?.omitted,0);
+    assert.ok(report.startupSamples!.samples.every(sample=>sample.pid===report.pid&&sample.userTicks!==null&&sample.majorFaults!==null));
+    assert.ok(report.portMs!<=report.readyMs!);
+  }
   assert.equal((await fetch(browser.endpoint + '/json/version')).status, 200);
   await browser.close(); await browser.close();
   assert.equal(existsSync(profile), false);

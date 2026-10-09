@@ -2,7 +2,7 @@ import {spawn, type ChildProcess} from 'node:child_process';
 import {closeSync, constants, fstatSync, mkdtempSync, openSync, readSync, rmSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {browserProcess, type ProcessCleanup} from './browserProcess.js';
+import {browserProcess, type ProcessCleanup, type ProcessIdentity} from './browserProcess.js';
 import {deadline, devtoolsJson} from './deadline.js';
 import {nativeProcesses, type Browser} from './cdp.js';
 
@@ -23,8 +23,10 @@ export type LaunchReport = {
   stdout: ReturnType<ReturnType<typeof safeStream>['read']>; stderr: ReturnType<ReturnType<typeof safeStream>['read']>;
   cleanup?: ProcessCleanup;
   port?: number;
+  portMs?: number;
   probes?: {attempts: number; stage: string; status?: number; reason?: string; elapsedMs: number; failures: Record<string,number>};
-  processes?: {pid: number; group: number; session: number; birth: string; state: string}[];
+  processes?: ProcessIdentity[];
+  startupSamples?: {status: 'available' | 'unavailable'; omitted: number; samples: (ProcessIdentity & {elapsedMs: number})[]};
 };
 
 export class ChromeLaunchError extends Error {
@@ -95,6 +97,8 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
   child.stdout?.on('data', stdout.add); child.stderr?.on('data', stderr.add);
   const state: LaunchReport = {executable: path.basename(executable).replace(/[^a-zA-Z0-9._-]/g, '_'), platform: process.platform, pid: child.pid,
     ownedGroup: group, stage: 'spawn', elapsedMs: 0, stdout: stdout.read(), stderr: stderr.read()};
+  const samples: NonNullable<LaunchReport['startupSamples']> = state.startupSamples = {status: 'unavailable', omitted: 0, samples: []};
+  let sampledAt = -Infinity;
   const snapshot = () => ({...state, elapsedMs: Math.round(performance.now() - started), stdout: stdout.read(), stderr: stderr.read()});
   const startup = new AbortController();
   const cancel = () => {state.failure = 'cancelled'; startup.abort(new Error('Chrome startup cancelled'));};
@@ -126,8 +130,15 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
       let failure: Failure = 'no-port';
       while (true) {
         pending.throwIfAborted();
-        state.processes=(await processOwner.observe()).slice(0,32);
+        const processes=await processOwner.observe();
         pending.throwIfAborted();
+        state.processes=processes.slice(0,32);
+        const root=state.processes.find(process=>process.pid===child.pid),elapsedMs=Math.round(performance.now()-started);
+        // No extra proc reads or sampling timer: this is the same ownership observation.
+        if(root&&elapsedMs-sampledAt>=500){
+          sampledAt=elapsedMs;samples.status='available';
+          if(samples.samples.length<48)samples.samples.push({...root,elapsedMs});else samples.omitted++;
+        }
         let published: ReturnType<typeof activePort> = null;
         try {published = activePort(profile); failure = published ? 'endpoint-unreachable' : 'no-port';}
         catch {failure = 'invalid-port';}
@@ -135,6 +146,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
         progress?.(snapshot());
         if (published) {
           state.port=published.port;
+          state.portMs??=Math.round(performance.now()-started);
           const candidate = `http://127.0.0.1:${published.port}`;
           const probeStarted=performance.now();
           const probe=state.probes={attempts:(state.probes?.attempts??0)+1,stage:'headers',elapsedMs:0,failures:state.probes?.failures??{}} as NonNullable<LaunchReport['probes']>;
