@@ -2,7 +2,7 @@ import type {PeriodValues} from '../../server/domain/periodValues';
 import {drain,ordered,type Preparation} from '../../server/domain/prepare';
 import {edge} from '../../server/domain/quota';
 import type {History,HistorySeries} from '../../server/domain/history';
-import type {MoneyTape,PeriodTape} from '../../server/domain/periodTape';
+import {sampleAt,sampleCount,type MoneyTape,type PeriodTape} from '../../server/domain/periodTape';
 import type {MeterHistory} from '../../server/domain/meterHistory';
 import {meterStep,plottedAmount,type ExceptionalStep,type MeterSpan,type Reading} from '../../server/domain/meters';
 import {convertBy} from '../../server/domain/currency';
@@ -32,9 +32,9 @@ class QuotaIndex {
   static *prepare(series:PeriodTape['quota'][number],activity:Intervals,agent:Intervals[],known:number):Preparation<QuotaIndex>{const value=new QuotaIndex(series,activity,agent,known,true);yield*value.build();return value;}
   private *build():Preparation<void>{
     const series=this.series,{activity,known}=this;
-    for(const s of series.samples){this.times.push(s.at);yield;}
-    for(let i=1;i<series.samples.length;i++) {
-      yield;const a=series.samples[i-1],b=series.samples[i],step=edge(a,b);if(!step.valid)continue;
+    for(let i=0;i<sampleCount(series.samples);i++){this.times.push(sampleAt(series.samples,i)!.at);yield;}
+    for(let i=1;i<sampleCount(series.samples);i++) {
+      yield;const a=sampleAt(series.samples,i-1)!,b=sampleAt(series.samples,i)!,step=edge(a,b);if(!step.valid)continue;
       const work=activity.in({from:a.at,to:b.at});
       this.starts.push(a.at);this.ends.push(b.at);this.spent.push(this.spent.at(-1)!+step.delta);this.covered.push(this.covered.at(-1)!+b.at-a.at);
       this.worked.push(this.worked.at(-1)!+(a.at>=known?work:0));this.during.push(this.during.at(-1)!+(a.at>=known&&work>0?step.delta:0));
@@ -45,13 +45,13 @@ class QuotaIndex {
     const points=previous.filter(([at])=>at>=leftEnd&&at<rightStart).map(([at,value,segment,validUntil])=>[at,value,segment,validUntil??at+cell] as HistorySeries['points'][number]);
     if(!previous.length){
       const cells=new Map<number,HistorySeries['points'][number]>();
-      for(let i=lower(this.times,leftEnd);i<lower(this.times,rightStart);i++){const s=this.series.samples[i],at=Math.floor(s.at/cell)*cell,old=cells.get(at),value=100-s.used;if(!old||value<old[1])cells.set(at,[at,value,i+1,Math.min(at+cell,s.at+s.staleAfterMs+1,s.resetAt??Infinity,s.validUntil??Infinity)]);}
+      for(let i=lower(this.times,leftEnd);i<lower(this.times,rightStart);i++){const s=sampleAt(this.series.samples,i)!,at=Math.floor(s.at/cell)*cell,old=cells.get(at),value=100-s.used;if(!old||value<old[1])cells.set(at,[at,value,i+1,Math.min(at+cell,s.at+s.staleAfterMs+1,s.resetAt??Infinity,s.validUntil??Infinity)]);}
       points.push(...cells.values());
     }
     for(const [from,to] of leftEnd>=rightStart?[[range.from,range.to]]:[[range.from,leftEnd],[rightStart,range.to]]) {
       const first=Math.max(0,lower(this.times,from+1)-1),end=lower(this.times,to);
       for(let i=first;i<end;i++) {
-        const sample=this.series.samples[i],until=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity,this.times[i+1]??Infinity,to),at=Math.max(from,sample.at);
+        const sample=sampleAt(this.series.samples,i)!,until=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity,this.times[i+1]??Infinity,to),at=Math.max(from,sample.at);
         if(until>at)points.push([at,100-sample.used,i+1,until]);
       }
     }
@@ -59,8 +59,8 @@ class QuotaIndex {
   }
 
   at(range:PeriodRange):QuotaSummary {
-    const lo=lower(this.starts,range.from),hi=lower(this.ends,range.to),last=this.series.samples[lower(this.times,range.to)-1];
-    const first=this.series.samples[lower(this.times,range.from+1)-1];
+    const lo=lower(this.starts,range.from),hi=lower(this.ends,range.to),last=sampleAt(this.series.samples,lower(this.times,range.to)-1);
+    const first=sampleAt(this.series.samples,lower(this.times,range.from+1)-1);
     const valid=(sample:typeof first,at:number)=>sample&&at<Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity)?100-sample.used:null;
     const sum=(values:number[])=>hi>lo?values[hi]-values[lo]:0;
     const workRange={from:Math.max(range.from,this.known),to:range.to};
@@ -174,12 +174,12 @@ export class PeriodAccounting {
   private *build(work:WorkTrace|null):Preparation<void>{
     const tape=this.tape;
     const boundaries=new Set<number>(),deadlines:number[]=[];
-    for(const series of tape.quota){for(const s of series.samples){boundaries.add(s.at+1);boundaries.add(Math.min(s.at+s.staleAfterMs+1,s.resetAt??Infinity,s.validUntil??Infinity));yield;}const last=series.samples.at(-1);if(last)deadlines.push(Math.min(last.at+last.staleAfterMs+1,last.resetAt??Infinity,last.validUntil??Infinity));}
+    for(const series of tape.quota){for(let i=0;i<sampleCount(series.samples);i++){const s=sampleAt(series.samples,i)!;boundaries.add(s.at+1);boundaries.add(Math.min(s.at+s.staleAfterMs+1,s.resetAt??Infinity,s.validUntil??Infinity));yield;}const last=sampleAt(series.samples,sampleCount(series.samples)-1);if(last)deadlines.push(Math.min(last.at+last.staleAfterMs+1,last.resetAt??Infinity,last.validUntil??Infinity));}
     this.boundaries=yield* ordered([...boundaries].filter(Number.isFinite),(a,b)=>a-b);this.deadlines=deadlines.sort((a,b)=>a-b);
     const sources=new Map<string,Map<number,[number,number][]>>();
     for(const [id,a,b] of work?.spans??[]){const source=work!.refs[id].source;let refs=sources.get(source);if(!refs)sources.set(source,refs=new Map());let spans=refs.get(id);if(!spans)refs.set(id,spans=[]);spans.push([work!.anchor+a,work!.anchor+b]);yield;}
     for(const series of tape.quota) {
-      this.sampleTimes.set(series.source+'\n'+series.window,series.samples.map(s=>s.at));
+      this.sampleTimes.set(series.source+'\n'+series.window,series.samples.filter((_,i)=>i%5===0));
       const traces=[...(sources.get(series.source)?.values()??[])],all=traces.flat();
       const activity=new Intervals(union(all.map(([from,to])=>({from,to}))));
       this.quota.set(series.source+'\n'+series.window,yield* QuotaIndex.prepare(series,activity,traces.map(s=>new Intervals(s)),Math.max(work?.knownFrom??Infinity,series.workFrom??0)));
@@ -199,7 +199,7 @@ export class PeriodAccounting {
       if(!history.live&&(membership?!membership.windows.some(w=>w.id===row.window):row.descriptors?times[lower(times,range.to)-1]!==batches.get(row.source):row.member===false))continue;
       const old=previous.get(key);if(!old&&history.live)continue;
       const summary=index.at(range),points=!history.live?index.plot(range,history.cellMs,old?.points??[]):old!.points;
-      series.push({...old,sourceId:row.source,windowId:row.window,staleAfterMs:row.samples.at(-1)?.staleAfterMs??0,...summary,points,...(!history.live?{pointMode:'observation' as const,windowValue:windowValue??row.windowValue}:{})});
+      series.push({...old,sourceId:row.source,windowId:row.window,staleAfterMs:sampleAt(row.samples,sampleCount(row.samples)-1)?.staleAfterMs??0,...summary,points,...(!history.live?{pointMode:'observation' as const,windowValue:windowValue??row.windowValue}:{})});
     }
     return {...history,exact:true,since:range.from,to:range.to,series,meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};
   }

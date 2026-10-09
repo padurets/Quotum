@@ -16,7 +16,7 @@ export class PeriodTransport implements HistoryMember {
   private completed='';
   private failed='';
   private readonly cursors=new Map<string,string>();
-  constructor(private readonly pool:HistoryPool,private readonly intent:()=>PeriodIntent|null,private readonly receive:(reply:PeriodReply,intent:PeriodIntent)=>void|Promise<void>,
+  constructor(private readonly pool:HistoryPool,private readonly intent:()=>PeriodIntent|null,private readonly receive:(reply:PeriodReply,intent:PeriodIntent,reserve?:(bytes:number)=>boolean)=>void|Promise<void>,
     private readonly send:(board:string,body:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean)=>Promise<PeriodReply>,private readonly accessLost:()=>void=()=>{}) {}
   get estimatedBytes(){return 0;}
   evictionCandidates(){return [];}
@@ -54,7 +54,7 @@ export class PeriodTransport implements HistoryMember {
         // A→B→A is three generations. Equal target text does not revive the first response.
         const current=this.intent();
         if(current?.generation===intent.generation&&current.revision===intent.revision) {
-          await this.receive(reply,appliedIntent);
+          await this.receive(reply,appliedIntent,bytes=>this.pool.reserve(flight,bytes));
           const latest=this.intent();
           if(latest?.generation===intent.generation&&latest.revision===intent.revision){if(extras)this.completed=key;
           for(const scope of PERIOD_SCOPES){const part=reply[scope],query=body[scope];if(query&&part?.state==='complete'&&part.value.tape)this.cursors.set(cursorKey(scope,query),part.value.tape.cursor);}}

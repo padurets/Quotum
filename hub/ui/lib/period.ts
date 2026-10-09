@@ -64,7 +64,7 @@ class BoardPeriod {
   private workState={...this.work,rows:this.workRows};
   private readonly watch=clock.watch();
   private bytes=0;
-  readonly transport=new PeriodTransport(historyPool,()=>this.intent(),(reply,intent)=>this.receive(reply,intent),fetchPeriod,()=>{page.dispatch({type:'board-close'});if(typeof window!=='undefined')window.dispatchEvent(new Event(UNAUTHORIZED));});
+  readonly transport=new PeriodTransport(historyPool,()=>this.intent(),(reply,intent,reserve)=>this.receive(reply,intent,reserve),fetchPeriod,()=>{page.dispatch({type:'board-close'});if(typeof window!=='undefined')window.dispatchEvent(new Event(UNAUTHORIZED));});
   constructor(){historyPool.register(this);clock.subscribe(this.watch,()=>this.tick());}
   get estimatedBytes(){return this.bytes+[...this.valueCache.values()].reduce((sum,c)=>sum+c.bytes,0);}
   evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}}));}
@@ -148,23 +148,28 @@ class BoardPeriod {
       }
     }
   }
-  private receive(reply:PeriodReply,intent:PeriodIntent) {
+  private receive(reply:PeriodReply,intent:PeriodIntent,reserve?:(bytes:number)=>boolean) {
     // Sibling resource replies share one retained projection. Let each commit before
     // taking the next snapshot, so a later chart cannot cancel values or sessions.
-    const next=this.receiving.then(()=>this.applyReply(reply,intent));
+    const next=this.receiving.then(()=>this.applyReply(reply,intent,reserve));
     this.receiving=next.catch(()=>{});return next;
   }
-  private async applyReply(reply:PeriodReply,intent:PeriodIntent) {
+  private async applyReply(reply:PeriodReply,intent:PeriodIntent,transferred?:(bytes:number)=>boolean) {
     if(intent.generation!==this.generation||intent.revision!==this.revision)return;
     const changed=new Set<PeriodScope>();
     const staging={role:'visible' as const};
+    // Decoding has released its byte buffers. Reuse its reservation for the
+    // same reply's retained evidence and prefixes, instead of charging it twice.
+    const reserve=transferred??((bytes:number)=>historyPool.reserve(staging,bytes));
+    const release=()=>{if(transferred)transferred(cellsBytes);else historyPool.release(staging);};
     // Keep the previous complete presentation if the new evidence cannot fit.
     // Charge decoded dictionaries and all derived prefixes before building them.
     const workBytes=(trace:WorkTrace|null)=>trace?JSON.stringify(trace).length*2+trace.spans.length*640+trace.refs.length*768:0;
-    const tapeBytes=(tape:PeriodTape)=>JSON.stringify(tape).length*2+tape.quota.reduce((n,s)=>n+s.samples.length*192,0)+tape.money.reduce((n,s)=>n+s.readings.length*256+s.spans.length*192,0);
-    let projected=0;
-    const admit=(bytes:number)=>{if(!historyPool.reserve(staging,projected+bytes))return false;projected+=bytes;return true;};
-    const prefixes=(tape:PeriodTape|undefined)=>tape?tape.quota.reduce((n,s)=>n+s.samples.length*128,0)+tape.money.reduce((n,s)=>n+s.readings.length*192+s.spans.length*96,0):0;
+    const tapeBytes=(tape:PeriodTape)=>JSON.stringify({...tape,quota:tape.quota.map(s=>({...s,samples:[]}))}).length*2+tape.quota.reduce((n,s)=>n+s.samples.length*16+s.samples.length/5*128,0)+tape.money.reduce((n,s)=>n+s.readings.length*256+s.spans.length*192,0);
+    const cellsBytes=PERIOD_SCOPES.reduce((bytes,scope)=>{const part=reply[scope];if(part?.state!=='complete')return bytes;const {tape:_,...cells}=part.value;return bytes+JSON.stringify(cells).length*3;},0);
+    let projected=cellsBytes;
+    const admit=(bytes:number)=>{if(!reserve(projected+bytes))return false;projected+=bytes;return true;};
+    const prefixes=(tape:PeriodTape|undefined)=>tape?tape.quota.reduce((n,s)=>n+s.samples.length/5*128,0)+tape.money.reduce((n,s)=>n+s.readings.length*192+s.spans.length*96,0):0;
     for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part?.state==='complete'&&part.value.tape&&!admit(tapeBytes(part.value.tape)+prefixes(this.tapes.get(scope)?.tape)))reply[scope]={state:'error',error:'history_limit'};}
     const workPreparation=workBytes(this.work.value)+(reply.quota?.state==='complete'&&reply.quota.value.tape?0:prefixes(this.tapes.get('quota')?.tape));
     if(reply.sessions&&reply.sessions.state!=='error'&&!admit(workBytes(reply.sessions.value)+workPreparation))reply.sessions={state:'error',error:'history_limit'};
@@ -189,8 +194,8 @@ class BoardPeriod {
       return {work,index,activity,tapes};
     }
     const valid=()=>intent.generation===this.generation&&intent.revision===this.revision;
-    const prepared=await prepareAsync(this.preparationOwner,build(),valid).catch(error=>{historyPool.release(staging);throw error;});
-    if(!prepared||!valid()){historyPool.release(staging);return;}
+    const prepared=await prepareAsync(this.preparationOwner,build(),valid).catch(error=>{release();throw error;});
+    if(!prepared||!valid()){release();return;}
     for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part){if(part.state==='error')this.projectionErrors[scope]=part.error==='history_limit'?'history_limit':'history_failed';else delete this.projectionErrors[scope];changed.add(scope);}}
     this.evaluatedAt=hubNow();this.tapes.clear();for(const [scope,tape] of prepared.tapes)this.tapes.set(scope,tape);
     if(reply.values) {
@@ -212,7 +217,7 @@ class BoardPeriod {
       }
     }
     this.bytes=JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape),0);
-    historyPool.release(staging);
+    release();
     this.publishProjection([...changed]);
     this.scheduleClock();
   }

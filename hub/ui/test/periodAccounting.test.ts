@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import {PeriodAccounting} from '../lib/periodAccounting.js';
 import {PeriodActivity} from '../lib/periodActivity.js';
 import {PeriodIndex} from '../lib/periodIndex.js';
-import type {PeriodTape} from '../../server/domain/periodTape.js';
+import {packSamples,type PeriodTape} from '../../server/domain/periodTape.js';
 import type {History} from '../lib/types.js';
 import type {Reading} from '../../server/domain/meters.js';
 
 const blank:History={range:'1h',live:true,since:0,to:60_000,cellMs:60_000,historyStart:0,events:[],series:[],activity:{since:0,known:{from:0,to:60_000},barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
 const tape=():PeriodTape=>({from:0,cut:60_000,replaceFrom:0,cursor:'cursor',quota:[],money:[]});
 test('exact endpoints exclude later samples of the same cell and stop validity at reset',()=>{
-  const evidence=tape();evidence.quota=[{source:'s',window:'w',samples:[{at:0,used:10,resetAt:50_000,staleAfterMs:60_000},{at:20_000,used:25,resetAt:50_000,staleAfterMs:60_000},{at:40_000,used:90,resetAt:50_000,staleAfterMs:60_000}]}];
+  const evidence=tape();evidence.quota=[{source:'s',window:'w',samples:packSamples([{at:0,used:10,resetAt:50_000,staleAfterMs:60_000},{at:20_000,used:25,resetAt:50_000,staleAfterMs:60_000},{at:40_000,used:90,resetAt:50_000,staleAfterMs:60_000}])}];
   const frame={...blank,series:[{sourceId:'s',windowId:'w',consumed:80,coveredMs:40_000,remainingAtStart:90,remainingAtEnd:10,staleAfterMs:60_000,points:[[0,10,1] as [number,number,number]],work:null}]};
   const accounting=new PeriodAccounting(evidence,null);
   const selected=accounting.project(frame,{from:0,to:30_000}).series[0];
@@ -48,7 +48,7 @@ test('the roster and activity share exact rolling duration, union, counts and bo
 
 test('fixed boundary geometry keeps the old native window and cap allowance inside a coarse cell',()=>{
   const evidence=tape();
-  evidence.quota=[{source:'s',window:'gone',member:true,windowValue:{id:'gone',kind:'weekly',label:'Retained',minutes:10080},samples:[{at:0,used:10,resetAt:null,staleAfterMs:60_000},{at:40_000,used:90,resetAt:null,staleAfterMs:60_000}]}];
+  evidence.quota=[{source:'s',window:'gone',member:true,windowValue:{id:'gone',kind:'weekly',label:'Retained',minutes:10080},samples:packSamples([{at:0,used:10,resetAt:null,staleAfterMs:60_000},{at:40_000,used:90,resetAt:null,staleAfterMs:60_000}])}];
   const accounting=new PeriodAccounting(evidence,null),shown=accounting.project({...blank,live:false},{from:10_000,to:30_000});
   assert.equal(shown.series[0].windowValue?.label,'Retained');assert.equal(shown.series[0].remainingAtEnd,90);
   assert.deepEqual(shown.series[0].points,[[10_000,90,1,30_000]]);
@@ -70,7 +70,7 @@ test('credit heartbeats keep exact coefficients and their own valuation without 
 
 
 test('quota evidence can precede work without fabricating dates, and keeps the source sharing boundary',()=>{
-  const evidence=tape();evidence.quota=[{source:'s',window:'w',workFrom:20000,samples:[{at:0,used:10,resetAt:null,staleAfterMs:60000},{at:30000,used:20,resetAt:null,staleAfterMs:60000}]}];
+  const evidence=tape();evidence.quota=[{source:'s',window:'w',workFrom:20000,samples:packSamples([{at:0,used:10,resetAt:null,staleAfterMs:60000},{at:30000,used:20,resetAt:null,staleAfterMs:60000}])}];
   const frame={...blank,live:false};
   const pending=new PeriodAccounting(evidence,null).project(frame,{from:0,to:40000});
   assert.equal(pending.series[0].remainingAtEnd,80);assert.equal(pending.series[0].work,null,'measurement-only replies cannot create a work date');

@@ -1,6 +1,7 @@
+import type {CellSamples} from './domain/cells.js';
 import type {Store,Shown} from './store/store.js';
 import type {PeriodRange} from './domain/period.js';
-import type {PeriodTape,MoneyTape} from './domain/periodTape.js';
+import {packSamples,type PeriodTape,type MoneyTape} from './domain/periodTape.js';
 import type {HistoryScope} from './domain/history.js';
 import {selectionOf} from './domain/meterHistory.js';
 import type {HistoryQuery} from './domain/periodRead.js';
@@ -15,14 +16,14 @@ export function periodTape(store:Store,board:string,shown:Shown,user:string,scop
     const read=store.db.prepare('SELECT at,used,reset_at,stale_after_ms,kind,label,minutes FROM samples WHERE source_id=? AND window_id=? AND at<? AND at>=coalesce((SELECT max(at) FROM samples WHERE source_id=? AND window_id=? AND at<?),?) ORDER BY at');
     read.setReturnArrays(true);
     for(const id of shown.keys())for(const raw of windows.iterate(id,range.to)) {
-      const window=String(raw.window_id),samples:PeriodTape['quota'][number]['samples']=[];
+      const window=String(raw.window_id),samples:CellSamples['samples']=[];
       const descriptors:NonNullable<PeriodTape['quota'][number]['descriptors']>=[];
       for(const raw of read.iterate(id,window,range.to,id,window,replaceFrom,replaceFrom)) {
         reserve(96);const [at,used,resetAt,staleAfterMs,kind,label,minutes]=raw as unknown as [number,number,number|null,number,'session'|'weekly'|'other',string|null,number|null];samples.push({at,used,resetAt,staleAfterMs});
         const previous=descriptors.at(-1)?.value;
         if(!previous||previous.kind!==kind||previous.label!==label||previous.minutes!==minutes){reserve(128+(label?.length??0)*2);descriptors.push({at,value:{id:window,kind,label,minutes}});}
       }
-      if(samples.length){const row=descriptor.get(id,membershipAt,id,window,membershipAt);if(!row)continue;reserve(192+String(row.label??'').length*2);tape.quota.push({source:id,window,workFrom:shown.get(id)!.since,samples:store.quotaAvailability(id,samples,true,reserve),descriptors,member:!!row.member,windowValue:{id:window,kind:row.kind as 'session'|'weekly'|'other',label:row.label as string|null,minutes:row.minutes as number|null}});}
+      if(samples.length){const row=descriptor.get(id,membershipAt,id,window,membershipAt);if(!row)continue;reserve(192+String(row.label??'').length*2+samples.length*80);tape.quota.push({source:id,window,workFrom:shown.get(id)!.since,samples:packSamples(store.quotaAvailability(id,samples,true,reserve)),descriptors,member:!!row.member,windowValue:{id:window,kind:row.kind as 'session'|'weekly'|'other',label:row.label as string|null,minutes:row.minutes as number|null}});}
     }
   }
   if(query.meters) {

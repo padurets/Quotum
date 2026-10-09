@@ -1,3 +1,4 @@
+import {sampleAt,sampleCount} from '../domain/periodTape.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Store} from '../store/store.js';
@@ -57,7 +58,7 @@ test('a cached cell range can read exact evidence without extracting any cell or
   let work=0;const original=h.store.agentWork.bind(h.store);t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{work++;return original(...args);});
   const response=await h.read({version:1,selection:{mode:'range',from:now-H,to:now-1},evaluatedAt:now,quota:{cell:String(M),from:String(now-H),to:String(now),cells:'skip'}});
   assert.equal(response.statusCode,200,response.body);const part=response.json<PeriodReply>().quota!;if(part.state!=='complete')throw new Error('quota');
-  assert.deepEqual(part.value.chunks,[]);assert.equal(part.value.tape?.quota[0].samples.at(-1)?.used,17);assert.equal(work,0);
+  assert.deepEqual(part.value.chunks,[]);assert.equal(sampleAt(part.value.tape!.quota[0].samples,sampleCount(part.value.tape!.quota[0].samples)-1)?.used,17);assert.equal(work,0);
 });
 
 test('an oversized section does not discard siblings or retain its failed reservation',async t=>{
@@ -157,7 +158,7 @@ test('quota unavailability ends both historical values and exact tape coverage a
   const response=await h.read(request);assert.equal(response.statusCode,200,response.body);
   const reply=response.json<PeriodReply>();if(reply.values?.state!=='complete'||reply.quota?.state!=='complete')throw new Error('period');
   const value=reply.values.value[0].windows[0];assert.equal(value.remaining,83);assert.equal(value.validUntil,boundary);assert.equal(value.stale,true);
-  assert.equal(reply.quota.value.tape!.quota[0].samples[0].validUntil,boundary);
+  assert.equal(sampleAt(reply.quota.value.tape!.quota[0].samples,0)!.validUntil,boundary);
   const before=periodValues(h.store,h.store.sources(h.board),h.user.id,boundary-1,()=>{})[0];
   assert.equal(before.windows[0].stale,false);assert.equal(before.validFor!.to,boundary);
 });

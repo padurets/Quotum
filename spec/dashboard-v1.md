@@ -402,7 +402,10 @@ spans, original allowances and recorded currency bindings. Native quota series a
 carry `workFrom`, the source's authorized work boundary. An absent work section does
 not project zero work or a fictional date; work columns remain unavailable until it arrives. Its `from` and `cut` delimit
 retained evidence; `replaceFrom` and optional `replaceTo` delimit the interval replaced
-by a delta. Metadata is separate from repeated samples. A complete initial tape allows
+by a delta. Each native series stores `samples` as a flat numeric array of five-value rows:
+`[at, used, resetAt, staleAfterMs, validUntil]`. Both optional deadlines use `-1`
+for absence; zero is a real timestamp. The encoding preserves every sample and its
+exclusive validity bound. Metadata is separate from repeated samples. A complete initial tape allows
 a live left boundary to move through its entire retained interval without further IO.
 New evidence extends or replaces that interval; a clock tick does not fetch history.
 Partial spending steps keep their uncertainty instead of becoming proportional amounts.

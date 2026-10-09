@@ -109,3 +109,27 @@ test('a sibling chart reply cannot cancel the coordinator preparation of histori
   assert.equal(pending.length,1);pending.shift()!();await second;
   assert.equal(period.getValue('s').value,value,'the sibling starts from the committed values');
 });
+
+
+test('a dense retained month adopts its decoded reservation within the shared memory budget',async()=>{
+  const pool=new HistoryPool(),flight={role:'visible' as const};
+  const context={exports:{} as {BoardPeriod:new()=>{receive(reply:PeriodReply,intent:PeriodIntent,reserve:(bytes:number)=>boolean):Promise<void>;estimatedBytes:number}},
+    hubNow:()=>2_700_000_000,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},preparations:()=>null,
+    prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
+    evaluatedRange,periodKey,PeriodAccounting,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    prefs:()=>({range:'30d'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
+  };
+  const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const period=new context.exports.BoardPeriod(),selection={mode:'range' as const,from:0,to:2_700_000_000};
+  const basis={run:'r',revision:'1',evaluatedAt:selection.to,evidenceCut:selection.to,range:selection};
+  const samples=Array.from({length:4500},(_,i)=>[i*600000,(i%100)+.125,-1,600000,-1]).flat();
+  const reply:PeriodReply={basis,quota:{state:'complete',basis,value:{run:'r',now:selection.to,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:0,cut:selection.to,replaceFrom:0,cursor:'a',money:[],quota:Array.from({length:12},(_,i)=>({source:String(i),window:'w',samples:[...samples]}))}}}};
+  assert.equal(pool.reserve(flight,JSON.stringify(reply).length*3),true);
+  await period.receive(reply,{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:selection.to}},bytes=>pool.reserve(flight,bytes));
+  assert.equal(reply.quota!.state,'complete','lossless evidence must fit without dropping the period');
+  assert.ok(period.estimatedBytes>10*1024*1024);assert.ok(pool.estimatedBytes<=15*1024*1024);
+  pool.release(flight);
+});
