@@ -1,6 +1,8 @@
 import {hourShift} from '../server/forecasts.js';
 import type {Snapshot} from '../server/projection.js';
 import {FADE_FOR, PULSE_FOR} from '../ui/lib/quota.js';
+import {snapshot, type Card} from '../demo/model.js';
+import {STILL_FOR} from '../demo/setup.js';
 
 const HOUR = 3_600_000;
 
@@ -17,23 +19,29 @@ export function idlePhaseProblems(phase: IdlePhase, boundary: number): string[] 
   const errors: string[] = [];
   if (!(phase.from < boundary && boundary < phase.to) || Math.floor(phase.to / phase.cellMs) - Math.floor(phase.from / phase.cellMs) !== 1) errors.push('idle phase did not span exactly one grid boundary');
   if (Math.abs((phase.to - phase.from) - (phase.monotonicTo - phase.monotonicFrom)) > 1000) errors.push('idle phase clock changed during measurement');
-  if (phase.transitions.length !== 3 || phase.transitions.some(count => count !== 1)) errors.push('idle phase did not observe one transition in each chart');
-  if (phase.starts.length !== 3 || phase.ends.length !== 3 || phase.starts.some(value => value !== Math.floor(phase.from / phase.cellMs)) || phase.ends.some(value => value !== Math.floor(phase.to / phase.cellMs))) errors.push('idle chart grid disagrees with the measurement clock');
+  if (phase.transitions.length !== 4 || phase.transitions.some(count => count !== 1)) errors.push('idle phase did not observe one transition in each chart');
+  if (phase.starts.length !== 4 || phase.ends.length !== 4 || phase.starts.some(value => value !== Math.floor(phase.from / phase.cellMs)) || phase.ends.some(value => value !== Math.floor(phase.to / phase.cellMs))) errors.push('idle chart grid disagrees with the measurement clock');
   return errors;
 }
 
 /** Observe production axis changes; no timer or artificial clock drives the page. */
 export function idlePhaseScript(cellMs: number): string {
   return `(() => {
-    const axes = ['.history','.activity','.budget-history'].map(panel => document.querySelector(panel+' [data-axis-end]'));
-    if(axes.some(axis=>!axis))throw new Error('idle phase requires all three chart axes');
+    const axes = ['.history','.activity','.budget-history','.subscription-funds'].map(panel => document.querySelector(panel+' [data-axis-end]'));
+    if(axes.some(axis=>!axis))throw new Error('idle phase requires all four chart axes');
     const cell = axis => Math.floor(Number(axis.dataset.axisEnd)/${cellMs});
-    const starts=axes.map(cell),last=[...starts],transitions=[0,0,0];
+    const starts=axes.map(cell),last=[...starts],transitions=axes.map(()=>0);
     const from=Date.now(),monotonicFrom=performance.now();
     const observer=new MutationObserver(()=>{axes.forEach((axis,i)=>{const next=cell(axis);if(next!==last[i]){transitions[i]++;last[i]=next;}});});
     for(const axis of axes)observer.observe(axis,{attributes:true,attributeFilter:['data-axis-end']});
     window.__quotumIdlePhase={read:()=>({from,to:Date.now(),monotonicFrom,monotonicTo:performance.now(),cellMs:${cellMs},starts,ends:axes.map(cell),transitions:[...transitions]}),stop:()=>observer.disconnect()};
   })()`;
+}
+
+/** Later measurements keep the seeded still stand's deadline, so they cannot expire in another phase. */
+export function stillSnapshot(card: Card, start: number, observedAt: number) {
+  const t = observedAt - start;
+  return {...snapshot(card, start, t, STILL_FOR), staleAfterMs: STILL_FOR - t};
 }
 
 /**

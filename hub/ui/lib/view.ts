@@ -6,8 +6,8 @@ import {type View} from './types';
 import {FALLBACK_COLOR, PROVIDERS} from './providers';
 
 import {EMPTY_VIEW as EMPTY, VIEW_VERSION_HEADER, VIEW_KEEPALIVE_LIMIT} from '../../server/domain/view';
-import {widgetHidden, splitWidget, ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, BUDGET_HISTORY, BUDGET_TABLE} from '../../server/domain/widgets';
-export {ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, BUDGET_HISTORY, BUDGET_TABLE};
+import {widgetHidden, splitWidget, ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE} from '../../server/domain/widgets';
+export {ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE};
 import {cardId, windowKey} from '../../server/domain/presentation';
 export {cardId, isWindowHidden, keyShown} from '../../server/domain/presentation';
 export const isOffByDefault = (id: string) => id === AGENTS || splitWidget(id);

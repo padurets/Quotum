@@ -174,6 +174,7 @@ export class Forecasts {
     if (entry.failed) return null;
     const f = entry.forecast;
     const at = state.successAt!;
+    if (this.store.quotaInterrupted(source, entry.seen, at)) return 'gap';
     const left = 100 - window.used;
     const begun = window.used > 0 || started(window, at);
     // Silent: it speaks at the first sample that brings an hour of history, whatever the minute.
@@ -192,7 +193,7 @@ export class Forecasts {
     // The first sample after the anchor came an hour or more later (a laptop asleep, the app started in the morning).
     if (f.anchor) {
       const [anchor, next] = this.store.sampleAndNext(source, window.id, f.anchor.at);
-      if (anchor && next && next.at - anchor.at > Math.max(HOUR, anchor.staleAfterMs)) return 'gap';
+      if (anchor && next && (next.at >= (anchor.validUntil ?? Infinity) || next.at - anchor.at > Math.max(HOUR, anchor.staleAfterMs))) return 'gap';
     }
     return null;
   }

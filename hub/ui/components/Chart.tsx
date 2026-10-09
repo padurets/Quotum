@@ -1,7 +1,7 @@
 import {Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
-import type {PlotBlock, PlotLine as Line} from '../lib/lines';
+import {preciseReadout, type PlotBlock, type PlotLine as Line} from '../lib/lines';
 import {useClock} from '../lib/clock';
 import {gapText, gapTone, readout as readCell, runOutPast, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
@@ -302,7 +302,7 @@ export const Chart = memo(function Chart({
 }) {
   const left = valueAxis?76:40;
   const right = 12;
-  const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady, precise: incomingLines.some(line=>!!line.capCells||line.pointMode==='observation'), navigation});
+  const axis = useTimeAxis({from: desiredFrom, to: desiredTo, end: desiredNow, cellMs, left, right, onSelect, ready: incomingReady, precise: incomingLines.some(preciseReadout), navigation});
   const {box, svg, width, scale, drag, timeAt, handlers, panning} = axis;
   const base = plotHeight(width);
   const height = plot === undefined ? base : Math.max(base, plot / scale);
@@ -351,10 +351,11 @@ export const Chart = memo(function Chart({
             let segment = -1, previousX = -Infinity;
             const runs: [number, number][][] = [];
             let end: [number, number] | null = null;
-            for (const [at, remaining, group] of block.points) {
+            for (const [at, remaining, group, , validUntil] of block.points) {
               yield;
               if (at > drawNow) break;
-              const px = bx(at), py = y(remaining);
+              if (validUntil !== undefined && validUntil <= at) {segment = -1; continue;}
+              const px = validUntil === undefined ? bx(at) : x(Math.min(drawNow, at + cellMs / 2, validUntil)), py = y(remaining);
               if (group === segment && px - previousX < .5) continue;
               if (group !== segment) runs.push([]);
               runs.at(-1)!.push([px, py]); segment = group; previousX = px; end = [px, py];
@@ -370,11 +371,12 @@ export const Chart = memo(function Chart({
       } else {
         const runs: [number, number][][] = [];
         let segment = -1, previousX = -1;
-        for (const [at, remaining, group] of line.points) {
+        for (const [at, remaining, group, validUntil] of line.points) {
           yield;
           if (at + cellMs < (incomingStrip?.from ?? drawFrom)) continue;
           if (at > drawNow) break;
-          const px = bx(at), py = y(remaining);
+          if (validUntil !== undefined && validUntil <= at) {segment = -1; continue;}
+          const px = validUntil === undefined ? bx(at) : x(Math.min(drawNow, at + cellMs / 2, validUntil)), py = y(remaining);
           if (group !== segment) {runs.push([]); segment = group;}
           else if (px - previousX < .5) continue;
           runs.at(-1)!.push([px, py]); previousX = px;
@@ -515,8 +517,8 @@ export const Chart = memo(function Chart({
     stackTop,
   );
   // A cell ahead of now is read at its middle; the one holding now, at now.
-  const observationHover=lines.some(l=>l.pointMode==='observation'||!!l.capCells);
-  const rowTime=(line:Line)=>line.pointMode==='observation'||line.capCells?pointedAt!:hover!;
+  const observationHover=lines.some(preciseReadout);
+  const rowTime=(line:Line)=>preciseReadout(line)?pointedAt!:hover!;
   const hoverX = hover === null ? 0 : hover > now ? axis.screenX(Math.min(to, hover + cellMs / 2)) : observationHover?axis.screenX(pointedAt!):bx(hover);
   // On a narrow chart it spans the chart's width under the plot; a marker's time stands over its label and does not rise.
   const narrow = width < 560;
@@ -687,7 +689,7 @@ export const Chart = memo(function Chart({
           <g className="crosshair">
             <rect x={axis.screenX(hover)} width={bandWidth} y={top} height={height - top - bottom} className="hover-band" />
             <line x1={hoverX} x2={hoverX} y1={top} y2={height - bottom} />
-            {rows.map(row => row.value !== null && <circle key={row.line.key} cx={row.line.pointMode==='observation'||row.line.capCells?hoverX:bx(hover!)} cy={y(row.value)} r={4} fill={row.line.color} />)}
+            {rows.map(row => row.value !== null && <circle key={row.line.key} cx={preciseReadout(row.line)?hoverX:bx(hover!)} cy={y(row.value)} r={4} fill={row.line.color} />)}
           </g>
         )}
       </PlotOverlay>

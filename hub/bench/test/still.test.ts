@@ -21,7 +21,7 @@ test('both idle durations include exactly one centred cell transition at every w
 });
 
 test('idle phase rejects missing coverage, extra grid movement and clock discontinuity', () => {
-  const phase: IdlePhase = {from: 240000, to: 360000, monotonicFrom: 1000, monotonicTo: 121000, cellMs: 300000, starts: [0,0,0], ends: [1,1,1], transitions: [1,1,1]};
+  const phase: IdlePhase = {from: 240000, to: 360000, monotonicFrom: 1000, monotonicTo: 121000, cellMs: 300000, starts: [0,0,0,0], ends: [1,1,1,1], transitions: [1,1,1,1]};
   assert.deepEqual(idlePhaseProblems(phase, 300000), []);
   for (const changed of [{transitions: [0,0,0]}, {transitions: [1,2,1]}, {starts: []}, {ends: [1,1,0]}, {from: 310000}, {monotonicTo: 124000}]) {
     assert.ok(idlePhaseProblems({...phase, ...changed}, 300000).length);

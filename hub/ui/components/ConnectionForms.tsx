@@ -526,6 +526,7 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
     [selected, setSelected] = useState<string[]>([]),
     [error, setError] = useState<unknown>(null);
   const [available, setAvailable] = useState<string[]>([]);
+  const [financial,setFinancial]=useState<string[]>([]);
   type Intent = {
     id: string;
     boardId: string;
@@ -570,7 +571,7 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
       setSelected(next.sourceIds);
       if (next.additionId) {
         const operation = await call<Operation>('GET', '/api/additions/' + next.additionId);
-        if (mounted.current) addition.restore(operation);
+        if (mounted.current) {addition.restore(operation);setFinancial(operation.item.kind==='sources'?operation.item.includeBudget??[]:[]);}
       }
     } catch (failure) {
       if (mounted.current) setError(failure);
@@ -616,6 +617,7 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
             requestId: selectionId.current,
             deviceId: device,
             sourceIds: selected,
+            includeBudget:financial.filter(id=>selected.includes(id)),
           });
       if (!mounted.current) return;
       addition.restore(operation);
@@ -744,6 +746,7 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
             ))}
         </fieldset>
       )}
+      {!board.personal&&chosen?.sources.some(source=>source.provider==='codex'&&selected.includes(source.source))&&<fieldset className="source-selection" disabled={selecting||addition.busy||!!intent?.additionId}><legend>{t('shares.includeBudget')}</legend><p className="dialog-text">{t('shares.budgetHelp')}</p>{chosen.sources.filter(source=>source.provider==='codex'&&selected.includes(source.source)).map(source=><label key={source.source}><input type="checkbox" checked={financial.includes(source.source)} onChange={event=>setFinancial(ids=>event.target.checked?[...ids,source.source]:ids.filter(id=>id!==source.source))}/><span>{PROVIDERS[source.provider]?.name??source.provider}</span></label>)}</fieldset>}
       <ErrorLine error={error ?? addition.error} />
       <p className="drawer-note">{t('add.futureSources')}</p>
       {intent && (

@@ -3,7 +3,7 @@ type Candidate = {bytes: number; shownAt: number; drop(): void};
 export type HistoryMember = {readonly estimatedBytes: number; evictionCandidates(): Candidate[]};
 type Waiting = {owner: HistoryMember; flight: Flight; start(): void; cancel(): void};
 
-/** Both resource families share the board's transport slots and retained tile budget. */
+/** All history readers share the board's transport slots and retained tile budget. */
 export class HistoryPool {
   private readonly members = new Set<HistoryMember>();
   private readonly active = new Map<Flight, Waiting>();

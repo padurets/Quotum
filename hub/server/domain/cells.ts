@@ -4,7 +4,7 @@ import {edge} from './quota.js';
 import {overlap, union, workTime, type Stretch} from './work.js';
 
 /** A window read once through a run of missing tiles, including its preceding sample. */
-export type CellSamples = {source: string; window: string; samples: {at: number; used: number; resetAt: number | null; staleAfterMs: number}[]};
+export type CellSamples = {source: string; window: string; samples: {at: number; used: number; resetAt: number | null; staleAfterMs: number; validUntil?: number}[]};
 
 /** The earliest proven incoming step needs work before the first cell too. */
 export function workFrom(groups: CellSamples[], from: number): number {
@@ -43,12 +43,20 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
       const at = cellStart(b.at, cell);
       if (!current || current.at !== at) {
         const open = a && step?.reason !== 'gap' && (step?.reason !== 'reset' || (a.resetAt !== null && a.resetAt > at)) ? 100 - a.used : null;
-        current = {at, low: 100 - b.used, first: 100 - b.used, last: 100 - b.used, open, gap: !!a && at - cellStart(a.at, cell) > Math.max(cell, a.staleAfterMs), hold: b.staleAfterMs, spent: 0, covered: 0, work: [0, 0, 0]};
+        current = {at, low: 100 - b.used, first: 100 - b.used, last: 100 - b.used, open, gap: !!a && (b.at >= (a.validUntil ?? Infinity) || at - cellStart(a.at, cell) > Math.max(cell, a.staleAfterMs)), hold: b.staleAfterMs, spent: 0, covered: 0, work: [0, 0, 0]};
         values[tileOf(at, cell) - firstTile].push(current);
       }
       current.low = Math.min(current.low, 100 - b.used);
       current.last = 100 - b.used;
       current.hold = b.staleAfterMs;
+      // Recovery cannot fill the unavailable beginning of its coarse cell, even
+      // when the preceding numerical sample belongs to an earlier cell.
+      const interrupted = !!a && b.at >= (a.validUntil ?? Infinity) && b.at > at;
+      current.gap ||= interrupted;
+      // The original TTL is inclusive; the packed bound is exclusive and cannot
+      // inherit a later sample's cadence. Natural TTL gaps keep their cell semantics.
+      const until = b.validUntil === undefined ? undefined : Math.min(b.validUntil,b.at+b.staleAfterMs+1);
+      current.validUntil = interrupted || (current.validUntil !== undefined && current.validUntil <= at) ? at : until;
       if (a && step?.valid) {
         current.spent += step.delta;
         current.covered += b.at - a.at;
@@ -59,7 +67,7 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
           if (covered > 0) current.work[2] += step.delta;
         }
       }
-      if (a && earlyReset(a, b)) chunkOf(b.at).resets.push([group.source, group.window, b.at]);
+      if (a && b.at < (a.validUntil ?? Infinity) && earlyReset(a, b)) chunkOf(b.at).resets.push([group.source, group.window, b.at]);
     }
     values.forEach((list, i) => {if (list.length) chunks[i].series.push(encodeCells(group.source, group.window, chunks[i].from, cell, since, list));});
   }

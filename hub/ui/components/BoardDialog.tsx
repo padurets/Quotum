@@ -6,9 +6,10 @@ import {useTitles} from '../lib/board';
 import {logoOf} from './logos';
 import {CopyField, ErrorLine} from './Kit';
 import {t} from '../i18n';
+import type {BudgetAccess} from '../../server/domain/resources';
 
 type Shares = {
-  shared: {source: string; provider: string; sharedBy: string; mine: boolean}[];
+  shared: {source: string; provider: string; sharedBy: string; mine: boolean;budget?:BudgetAccess}[];
   mine: {source: string; provider: string; shared: boolean; devices: string[]; accountLabel?: string}[];
 };
 type Member = {id: string; name: string; email: string; role: 'owner' | 'member'};
@@ -26,9 +27,13 @@ export function SharesTab({board}: {board: Board}) {
   const [shares, setShares] = useState<Shares | null>(null);
   const [error, setError] = useState<unknown>(null);
   const generation = useRef(0);
+  const budgetRequest = useRef<object|null>(null);
+  const [pending,setPending]=useState<string|null>(null);
   const failed = (failure: unknown) => {
     if (failure instanceof ApiError && [401, 403, 404].includes(failure.status)) {
       generation.current++;
+      budgetRequest.current=null;
+      setPending(null);
       setShares(null);
       rereadSession();
     }
@@ -41,7 +46,7 @@ export function SharesTab({board}: {board: Board}) {
       failure => {if (own === generation.current) failed(failure);},
     );
   }, [board.id]);
-  useEffect(() => {setShares(null); load(); return () => {generation.current++;};}, [load]);
+  useEffect(() => {setShares(null);setPending(null); load(); return () => {generation.current++;budgetRequest.current=null;};}, [load]);
 
   const change = async (source: string, share: boolean) => {
     setError(null);
@@ -54,11 +59,19 @@ export function SharesTab({board}: {board: Board}) {
     }
   };
 
+  const budget=async(source:string,enabled:boolean,expectedRevision:string)=>{
+    if(budgetRequest.current)return;
+    const own={};budgetRequest.current=own;setPending(source);setError(null);
+    try{await call('PUT',`/api/boards/${encodeURIComponent(board.id)}/shares/${encodeURIComponent(source)}/budget`,{enabled,expectedRevision});}
+    catch(failure){if(budgetRequest.current===own)failed(failure);}
+    finally{if(budgetRequest.current===own){budgetRequest.current=null;setPending(null);load();}}
+  };
   if (!shares) return <ErrorLine error={error} />;
   return (
     <>
       <section className="settings-section">
         <h2>{t('boardSettings.data')}</h2>
+        {shares.shared.some(s=>s.mine&&s.provider==='codex')&&<p className="dialog-text">{t('shares.budgetHelp')}</p>}
         {shares.shared.length ? (
           <ul className="settings-list">
             {shares.shared.map(s => (
@@ -69,6 +82,7 @@ export function SharesTab({board}: {board: Board}) {
                 </span>
                 <small className="settings-item-detail">{s.sharedBy && t('shares.sharedBy', {name: s.sharedBy})}</small>
                 <div className="settings-item-actions">
+                  {s.mine&&s.provider==='codex'&&s.budget&&<label title={t('shares.budgetHelp')}><input type="checkbox" checked={s.budget.enabled} disabled={pending!==null} onChange={event=>void budget(s.source,event.target.checked,s.budget!.revision)}/>{t('shares.includeBudget')}</label>}
                   {(board.role === 'owner' || s.mine) && (
                     <button type="button" className="button" onClick={() => change(s.source, false)}>
                       {t('shares.remove')}

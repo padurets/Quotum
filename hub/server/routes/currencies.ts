@@ -40,9 +40,10 @@ export function currencyRoutes(app:FastifyInstance,hub:Hub,guards:Guards) {
     if(body.replacement!==undefined&&typeof body.replacement!=='string')throw new Error('invalid_currency');return store.archive(owner,request.params.id,body.replacement as string|undefined,Date.now());
   }));
   app.post<{Params:{id:string}}>('/api/currencies/:id/restore',(request,reply)=>command(request,reply,true,200,owner=>store.restore(owner,request.params.id)));
-  app.post<{Params:{id:string}}>('/api/currencies/:id/rates',(request,reply)=>command(request,reply,false,200,(owner,body)=>{
-    if(typeof body.base!=='string'||typeof body.rate!=='string'||body.date!==undefined&&typeof body.date!=='number')throw new Error('invalid_currency');const now=Date.now();return store.setRate(owner,request.params.id,body.base,body.rate,(body.date as number|undefined)??now,now);
+  app.post<{Params:{id:string}}>('/api/currencies/:id/rates',(request,reply)=>command(request,reply,request.params.id==='credits:codex',200,(owner,body)=>{
+    if(typeof body.base!=='string'||typeof body.rate!=='string'||body.date!==undefined&&typeof body.date!=='number'||body.direction!==undefined&&body.direction!=='unitPerBase'&&body.direction!=='basePerUnit')throw new Error('invalid_currency');const now=Date.now();return store.setRate(owner,request.params.id,body.base,body.rate,(body.date as number|undefined)??now,now,body.direction as 'unitPerBase'|'basePerUnit'|undefined);
   }));
+  app.post<{Params:{id:string}}>('/api/currencies/:id/rates/default',(request,reply)=>command(request,reply,true,200,owner=>store.defaultRate(owner,request.params.id,Date.now())));
   app.post<{Params:{id:string;quoteId:string}}>('/api/currencies/:id/rates/:quoteId/archive',(request,reply)=>command(request,reply,true,200,(owner,body)=>{
     if(typeof body.base!=='string')throw new Error('invalid_currency');return store.stopRate(owner,request.params.id,body.base,request.params.quoteId,Date.now());
   }));

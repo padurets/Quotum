@@ -1,6 +1,7 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {legacyWidgetTargets, migrateAnalytics, type AnalyticsResources} from '../domain/analyticsView.js';
 import {providers} from '../domain/providers.js';
+import {budgetAccess} from '../domain/resources.js';
 
 /** Membership alone determines relevance, even while a supplier has no accepted samples. */
 export function analyticsResources(db: DatabaseSync, board: string): AnalyticsResources {
@@ -8,8 +9,8 @@ export function analyticsResources(db: DatabaseSync, board: string): AnalyticsRe
   if (!owner) return [];
   const rows = owner.personal
     ? db.prepare('SELECT s.id,s.provider FROM holders h JOIN sources s ON s.id=h.source_id WHERE h.user_id=? ORDER BY h.since,s.rowid').all(owner.created_by)
-    : db.prepare('SELECT s.id,s.provider FROM shares h JOIN sources s ON s.id=h.source_id WHERE h.board_id=? ORDER BY h.shared_at,s.rowid').all(board);
-  return (rows as AnalyticsResources).sort((a,b) => providers.indexOf(a.provider as typeof providers[number]) - providers.indexOf(b.provider as typeof providers[number]));
+    : db.prepare('SELECT s.id,s.provider,h.budget_since,h.budget_anchor_at,h.budget_revision FROM shares h JOIN sources s ON s.id=h.source_id WHERE h.board_id=? ORDER BY h.shared_at,s.rowid').all(board);
+  return (rows as {id:string;provider:string;budget_since:number|null;budget_anchor_at:number|null;budget_revision:string}[]).map(row=>({id:row.id,provider:row.provider,budget:budgetAccess(row.provider,!!owner.personal,row)})).sort((a,b) => providers.indexOf(a.provider as typeof providers[number]) - providers.indexOf(b.provider as typeof providers[number]));
 }
 
 /** Called inside the schema transaction, before the upgraded database can be served. */
@@ -23,7 +24,7 @@ export function migrateAnalyticsViews(db: DatabaseSync, now: number) {
     const receipts = db.prepare("SELECT id,item FROM board_additions WHERE board_id=? AND json_extract(item,'$.kind')='widget'").all(board.id) as {id: string; item: string}[];
     for (const receipt of receipts) {
       const item = JSON.parse(receipt.item) as {widgetId: string};
-      const targets = legacyWidgetTargets(item.widgetId, resources, !resources.length);
+      const targets = legacyWidgetTargets(item.widgetId, resources.map(source=>source.provider==='codex'?{...source,budget:{enabled:false}}:source), !resources.length);
       db.prepare('UPDATE board_additions SET widget_targets=? WHERE id=?').run(JSON.stringify(targets), receipt.id);
     }
   }

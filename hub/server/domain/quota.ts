@@ -1,5 +1,6 @@
 import type {Provider} from './sources.js';
 import type {BalanceStatus, KeyPart, Meter, MeterMeasurement, QuotaStatus} from './meters.js';
+import type {CreditBalance, CreditBalanceState, Delivery, ResourceObservation, ResourceStatuses} from './resources.js';
 
 /** A window's length as the agent classifies it (spec: Window `kind`). */
 export type Kind = 'session' | 'weekly' | 'other';
@@ -31,6 +32,8 @@ export type WindowMeasurement = {
   staleAfterMs: number;
   /** Null when the client does not report free resets. */
   resets: FreeResets | null;
+  resourceStatus?: ResourceStatuses;
+  balances?: CreditBalance[];
 };
 export type Measurement = WindowMeasurement | MeterMeasurement;
 
@@ -40,6 +43,8 @@ export type Sample = Win & {
   provider: Provider;
   at: number;
   staleAfterMs: number;
+  /** An explicit unavailable observation ends this sample's availability exclusively. */
+  validUntil?: number;
 };
 
 /** What a card shows: the last measurement of a source and how the latest attempt went. */
@@ -58,7 +63,14 @@ export type SourceState = {
   quota?: QuotaStatus;
   keys?: KeyPart[];
   inventory?: {complete: boolean; observed: number; missing: number; error: string | null};
+  creditBalance?: CreditBalanceState;
+  resources?: {windows?: ResourceObservation; resets?: ResourceObservation};
+  /** Private transport progress; never a financial observation in board projections. */
+  delivery?: Delivery;
 };
+
+export const deliveryOf = (state: SourceState): Delivery | null => state.delivery ??
+  (state.successAt !== null && state.staleAfterMs !== null ? {at: state.successAt, staleAfterMs: state.staleAfterMs} : null);
 
 export type Edge = {
   valid: boolean;
@@ -72,10 +84,10 @@ const RESET_TOLERANCE = 60_000;
  * Whether consumption between two consecutive samples of one window is provable.
  * Only positive movement inside one uninterrupted reset window counts.
  */
-export function edge(a: Pick<Sample, 'at' | 'used' | 'resetAt' | 'staleAfterMs'>, b: Pick<Sample, 'at' | 'used' | 'resetAt' | 'staleAfterMs'>): Edge {
+export function edge(a: Pick<Sample, 'at' | 'used' | 'resetAt' | 'staleAfterMs' | 'validUntil'>, b: Pick<Sample, 'at' | 'used' | 'resetAt' | 'staleAfterMs'>): Edge {
   const no = (reason: Edge['reason']): Edge => ({valid: false, delta: 0, reason});
   const elapsed = b.at - a.at;
-  if (elapsed <= 0 || elapsed > a.staleAfterMs) return no('gap');
+  if (elapsed <= 0 || elapsed > a.staleAfterMs || b.at >= (a.validUntil ?? Infinity)) return no('gap');
 
   if (a.resetAt === null || b.resetAt === null) {
     return Math.abs(b.used - a.used) < 0.05 ? {valid: true, delta: 0, reason: 'continuous'} : no('unknown-reset');

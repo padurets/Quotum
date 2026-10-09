@@ -1,5 +1,10 @@
-/** All stored amounts are whole millionths, bounded by signed SQLite INTEGER. */
+/** Stored coefficients are bounded by signed SQLite INTEGER; money uses scale six. */
 export const AMOUNT_MAX = (1n << 63n) - 1n;
+export type Scalar = {amount: string; scale: number};
+export const amountScale = (scale = 6): number => {
+  if (!Number.isInteger(scale) || scale < 0 || scale > 18) throw new Error('invalid_scale');
+  return scale;
+};
 export type Unit = string;
 const INTEGER = /^-?(?:0|[1-9][0-9]*)$/;
 export const isUnit = (value: unknown): value is Unit => typeof value === 'string' && /^(?:[A-Z]{3}|credits:[a-z][a-z0-9_-]{0,31}|requests)$/.test(value);
@@ -9,6 +14,24 @@ export function amount(value: string): bigint {
   const result = BigInt(value);
   if (result < -AMOUNT_MAX || result > AMOUNT_MAX) throw new Error('amount_overflow');
   return result;
+}
+
+/** Native decimal observations keep every significant digit, without rounding. */
+export function exactDecimal(value: string): Scalar {
+  if (value.length > 128 || !/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(value)) throw new Error('invalid_amount');
+  const negative = value.startsWith('-');
+  const [whole, fraction = ''] = (negative ? value.slice(1) : value).split('.');
+  const decimals = fraction.replace(/0+$/, '');
+  const scale = amountScale(decimals.length);
+  const coefficient = BigInt(whole + decimals) * (negative ? -1n : 1n);
+  const normalized = amount(coefficient.toString()).toString();
+  return {amount: normalized, scale: normalized === '0' ? 0 : scale};
+}
+
+export function scalarDecimal(value: {amount: string; scale?: number}): string {
+  const coefficient = amount(value.amount), scale = amountScale(value.scale);
+  const digits = (coefficient < 0n ? -coefficient : coefficient).toString().padStart(scale + 1, '0');
+  return (coefficient < 0n ? '-' : '') + (scale ? digits.slice(0, -scale) + '.' + digits.slice(-scale) : digits);
 }
 
 /** Parse the original JSON token once, with nearest rounding and ties away from zero. */

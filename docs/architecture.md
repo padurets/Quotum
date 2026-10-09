@@ -60,7 +60,7 @@ directly. These are the client interfaces used by the agent:
 | Provider | Interface | Notes |
 |---|---|---|
 | Claude Code | `claude -p --input-format stream-json …`, control request `get_usage` (the Agent SDK protocol) | No MCP servers, hooks, plugins, skills or saved session. Claude Code caches the answer for 60 s. |
-| Codex | `codex app-server`, JSON-RPC `account/rateLimits/read` (the protocol of the IDE extensions) | Plan, per-model limits, account id. |
+| Codex | `codex app-server`, JSON-RPC `account/rateLimits/read` (the protocol of the IDE extensions) | Plan, per-model limits, free resets, purchased credits, account id. |
 | Antigravity | `agy -p /usage --output-format json` (agy 1.1.11+) | The agent sends agy's log to its own file; otherwise agy writes a new log file on every run. |
 
 What follows from this:
@@ -632,7 +632,8 @@ spending is positive usage movement and a top-up is positive credits movement.
 The account pair keeps the time its response arrived. Each key page has its own
 observation time for counters, period totals and cap resets, even when a traversal
 crosses a UTC boundary. One atomic store write preserves those independent times.
-Readings use signed integer millionths, with sparse value/semantic changes and
+Money readings use signed integer millionths; native Codex credits carry their own
+exact coefficient and scale. Both have sparse value/semantic changes and
 continuous observation spans. Unchanged heartbeats extend freshness without another
 reading. Retention keeps one predecessor to distinguish a late increase from a reset.
 Safe provider context has its own sparse history alongside that ledger: DeepSeek funds
@@ -654,6 +655,61 @@ A valid null limit explicitly ends the current cap, including in a partial round
 Invalid money leaves stay distinct from null. The ledger retains the last confirmed
 span endpoint as evidence through archival and retention; reappearance uses that
 heartbeat time as its spending anchor.
+
+Codex reports purchased credits on its existing subscription source. Dashboard and
+compact show additional funds as a footer mark, with exact amounts and conversion
+details in its disclosure; the subscription body keeps its percentage limits.
+Clients that have never reported credits get no empty footer mark. A confirmed zero
+is numeric; a missing, invalid or stale reading keeps the last known amount visible
+in the same warning colour as stale free resets. It remains one balance informer,
+with no separate warning icon. Its disclosure uses the tray's shared heading and
+detail table for native credits, measurement time and rate. Hovering shows the exact
+native balance. The separate Subscription extra funds trends widget plots credit
+history in the display currency alongside the subscription limit chart. Wallet budget
+charts and tables exclude subscription funds.
+Windows, free resets and credit status have independent strictly newer observation
+watermarks; a separate monotonic delivery baseline drives cadence and survives restart.
+Accepted late resources acknowledge eligible commands without advancing that baseline.
+New quota evidence can update Auto's change detection independently of transport progress.
+Fixed schedules restore their persisted baseline; Auto still measures immediately after
+restart until a genuinely newer delivery arrives. Deferred runtime acknowledgements run
+only after the mixed database transaction commits.
+An explicit unavailable quota observation persists an availability barrier separately
+from the original samples and their freshness promises. Native quota history, forecast
+evidence and alert baselines break there; recovery starts a new segment without an
+inferred spend or a threshold-crossing alert. Packed quota cells carry an exclusive
+availability end for both drawing and readout, limited by that sample's own freshness.
+Bounded native readouts use the precise pointer time and retain that deadline even if
+later samples have a different freshness promise.
+A coarse cell recovering after an unavailable start remains unavailable as a whole for
+drawing and readout, including when the gap began in an earlier cell. Recovery exactly
+on a cell boundary starts an ordinary new cell. Totals retain only proven consumption steps.
+Native credit amounts use exact coefficient/scale values, with scale stored per reading
+and retained in packed history and conversion provenance. Finite availability ends
+exclusively on missing, invalid, unsupported or unlimited observations; equal-value recovery starts
+a new span. No credit change implies spending, top-ups or quota forecasts.
+
+The shared currency layer defines `credits:codex` and an offline public default of
+0.04 USD per credit. Personal rate events can override or restore that default using
+the existing revision/receipt contract, without changing successful historical bindings.
+One chosen credit/USD leg precedes the ordinary display-currency path, rounded once.
+The builtin is managed in Currencies, immutable and unavailable as a display target.
+No provider-specific conversion or synthetic USD meter is needed in the adapter.
+
+Financial authority is per shared placement. Old and new Codex shares default off;
+wallet shares retain unrestricted retained history. Member-holders explicitly grant
+finance with a revision-checked command; owner status alone is insufficient. Enablement
+records an admission cutoff, and its first finite heartbeat forces one durable numeric
+anchor. History filters evidence before conversion, independently of retention/crop
+geometry. Current last-known values preserve their original time. Projection, events,
+history and currency context use the same grant; revision changes invalidate both
+native tiles and client generations. See the dashboard and ingest specs for the wire
+fields, exact decimal bounds and privacy contract.
+Event delivery rechecks the prepared batch's financial authority before sending. A
+mismatch rebuilds its snapshot and private currency context. A changed revision also
+discards undelivered poll frames, including across a disable/re-enable cycle. Normal
+SSE changes keep the delta protocol; grant metadata invalidates client history.
+History invalidations expose only admitted resource scopes and anchors.
 
 DeepSeek reports totals, granted credits and topped-up balances separately for CNY
 and USD. Stable catalogue descriptors identify total and component roles. Its
@@ -1080,7 +1136,9 @@ history's grid at a time; a label past the chart's right edge counts down on its
 a forecast's line goes at the moment the table says it runs out, or at the reset; in the
 table, the plan, where the pace leads and the active hours left each read otherwise at
 their own moment. History is read when the hub tells of measurements or credited agent
-work. Quota/activity and budget use separate readers, caches and scoped invalidations.
+work. Quota/activity, wallet budgets and additional subscription funds use separate readers,
+caches and selections. The two monetary readers share the budget history protocol;
+selected source IDs isolate their invalidations.
 Budget reads never query native quota or agent-work history, and money never enters
 quota forecasts. Legacy unscoped history replies retain their combined contract.
 The page makes cells from `since` stale and reads only those its frame needs,
@@ -1108,11 +1166,13 @@ when it was measured and, while the hub sets the pace, when the next measurement
 and why, each a line of its own.
 A board has two areas: the cards (and the list of running agents, when turned on),
 which are about now and show every window, and under
-them the analytics: agent activity, quota history and table, and budget history and
-table. All use the period in the analytics head; the weekly/session switch applies
-only to the quota pair. Each of the four analytics widgets has independent placement,
+them the analytics: agent activity, quota history and table, additional subscription
+funds history, and wallet budget history and table. All use the period in the analytics head; the weekly/session switch applies
+only to the quota pair. Each analytics widget has independent placement,
 visibility and table columns. Budget series are chosen in the budget chart settings
-and shared with its table, even while the chart is hidden. Each
+and shared with its table, even while the chart is hidden. Subscription funds have
+their own balance-only chart and subscription selection. They never appear in wallet
+budget charts or tables; both monetary charts reuse the same renderer. Each
 analytics panel uses the same heading and reader-error component. The selected
 period appears once in the shared analytics controls. While a different range is loading
 or has failed, retained results name the interval they actually cover; this status
@@ -1125,7 +1185,7 @@ Each widget fills the fewest whole rows that contain its content, with any spare
 above a card's tray or at the bottom of a panel, unless the owner chose a height for it
 (`h`, in rows). A chosen height is a request, not what shows: a card or the table never
 gets shorter than its content, and grows past the chosen rows while its content needs
-more, back to them when it needs less, without the view changing. All three charts give a
+more, back to them when it needs less, without the view changing. All four charts give a
 chosen height to their plot, never drawing it lower than they do by themselves, their
 heads, totals and legends whole. The Agent sessions widget gathers them by project (one name
 across people, as agent activity counts it), machine or subscription, each viewer for
@@ -1207,22 +1267,22 @@ Failed saves keep their unsent intent and a notice throughout settings navigatio
 with an explicit retry carrying the captured revision. Ending the authenticated shell
 drops unsent successors; a submitted Add continues when only its form closes, while an
 owner-scope change prevents further phases. No timer polls for those results.
-New empty boards keep the four analytics widgets pending. Resource capabilities place
-the matching pair on first use. An explicit Add also places an empty widget; placement
+New empty boards keep analytics widgets pending. Resource capabilities place
+the quota or wallet pair and the subscription-funds chart independently on first use. An explicit Add also places an empty widget; placement
 is sticky after its last source or series disappears. Explicit hidden intent wins.
 `enabledWhenEmpty` applies to agents and activity; analytics placement lives in `shown`.
 What
 is only about how one person looks (the analytics' period and window type, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents table's sort order, the chosen board and language) stays in their browser.
-Quota history, budget history and agent activity read and move along time alike
+Quota history, budget history, subscription-funds history and agent activity read and move along time alike
 (`ui/components/timeAxis.ts`), each with its legend under it. A time range selected on
 any of them becomes the analytics' period; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
 ‹ and › beside the period move the analytics by half their length: back, to a range in
 the past held in the address like a dragged one; forward, up to now, where the chosen
 period comes back. A horizontal touchpad swipe, Shift with the wheel, or Shift with a
-mouse or pen drag moves all three charts continuously. A page-local transaction captures
+mouse or pen drag moves all four charts continuously. A page-local transaction captures
 each chart's scale in CSS pixels and applies the same time delta on animation frames;
 plain dragging still selects a range and touch retains its hold-to-select gesture.
 Prepared SVG artwork moves in composited HTML surfaces behind a stationary clip;
@@ -1289,7 +1349,7 @@ generator advances; server and synchronous readers drain those same generators. 
 keeps only its latest job. Tile responses use private COW staging and publish their
 tiles, read bounds and metadata together. At most two responses are admitted for
 HTTP and processing together, including raw answers waiting for a tile reservation.
-Quota and budget readers share that pool and a 15 MiB retained-tile and staged-growth
+Quota, budget and subscription-funds readers share that pool and a 15 MiB retained-tile and staged-growth
 budget. Global eviction considers only nonvisible, unreserved tiles; an incoming frame
 that cannot fit fails losslessly without evicting the other reader's visible frame. Flights and reservations remain owned until commit or
 discard. Completed projections pin the current tile entry and its write sequence.
@@ -1306,7 +1366,7 @@ also requires the complete history answer for the requested range, so a partial
 strip cannot start the fold before that answer replaces it.
 User navigation owns the requested projection separately from drawing readiness.
 Back, a preset or a horizon change retires an older held pose and its pending RAF or
-fold; all three charts immediately place their retained data in the requested projection.
+fold; all four charts immediately place their retained data in the requested projection.
 Ready data keeps that projection when it replaces the borrowed model. Borrowed data
 keeps its own coverage and time domain, so future points are clipped rather than
 clamped into an edge and a requested past frame shows no old future labels.

@@ -125,3 +125,14 @@ export function renderProblems({card, renders, mutations, from, to}: Omit<Measur
   found.push(...tooOften(renders.filter(elsewhere), from, to, Infinity, 'rendered'), ...tooOften(mutations.filter(elsewhere), from, to, Infinity, 'changed'));
   return found;
 }
+
+/** A subscription balance may update its own funds chart, never quota or wallet work. */
+export function creditRenderProblems({card,renders,mutations,from,to,cellMs}:Omit<Measured,'latencies'>&{cellMs:number}):string[] {
+  const found=renderProblems({card,renders,mutations,from,to});
+  const ticks=Math.floor(to/cellMs)-Math.floor(from/cellMs);
+  for(const [what,parts] of [['rendered',renders],['changed',mutations]] as const)for(const part of parts) {
+    if(!part.widget||part.widget==='funds'||part.time&&part.kind!=='chart')continue;
+    if(part.count>(part.kind==='chart'?ticks:0))found.push(`subscription credit ${what} ${part.widget} ${part.node} ×${part.count}`);
+  }
+  return found;
+}
