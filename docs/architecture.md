@@ -1315,7 +1315,11 @@ band; a counter-translation keeps its artwork in place. The clip boundaries use
 compositor transforms while the SVG's coordinate system stays unchanged. Two short
 edge bars in their own SVG are recomputed when the draft crosses a cell; moving within
 a cell only translates the prepared artwork
-and updates its clip. The final 160 ms fold stays inside SVG to preserve stroke widths.
+and updates its clip. The final 160 ms fold animates the existing HTML surface over
+the final SVG projection, avoiding repainting dotted plan strokes on every frame.
+Only during this fold may horizontal scaling change stroke thickness; completion or
+interruption restores the SVG's non-scaling strokes. Ordinary 220 ms navigation slides
+still animate inside SVG.
 A temporary shared registry keeps plot and
 legend colors and dashes consistent, adding new groups with a pending total. Visible
 missing cells are read immediately in contiguous batches of at most eight tiles.
@@ -1358,7 +1362,7 @@ Each chart replaces one typed drawing model whole after preparation, then publis
 its geometry and painters after the DOM commits. Input keeps the displayed model and
 its composed SVG matrix and CSS offset until that handoff. Finishing a gesture commits
 the address immediately and presents its last pending delta on RAF; the final pose
-stays held until the matching drawing model is ready. The SVG fold and CSS offset
+stays held until the matching drawing model is ready. The surface fold and CSS offset
 reset then start from the same displayed coordinates. A new gesture samples that
 actual presentation, including an interrupted fold, separately from its URL origin.
 Partial plots continue to publish during the gesture. Its final drawing readiness

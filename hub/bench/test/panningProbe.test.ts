@@ -13,7 +13,7 @@ function fixture(initiator: 'quota'|'budget'|'funds' = 'quota', timeline = false
   let time = 0;
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
   const schedule = (callback: (stamp: number) => void) => {callbacks.push(callback); return callbacks.length;};
-  const layer = (data = false) => {const slides = {style: {transform: 'none'}, getAnimations: () => []}; return {style: {transform: 'none'}, slides, querySelector: (selector: string) => selector === '.activity-stack' ? data ? {} : null : slides};};
+  const layer = (data = false) => {const slides = {style: {transform: 'none'}, getAnimations: (): {playState: string}[] => []}; return {style: {transform: 'none'}, getAnimations: (): {playState: string}[] => [], slides, querySelector: (selector: string) => selector === '.activity-stack' ? data ? {} : null : slides};};
   const fundsLayer = layer(), budgetLayer = layer(), historyLayer = layer(), activityLayer = layer(true), activityTicks = layer(), activityEdge = layer(true);
   const restoreClip = {style: {transform: 'none'}, firstElementChild: activityLayer};
   const endClip = {style: {transform: 'none'}, firstElementChild: restoreClip};
@@ -40,7 +40,7 @@ function fixture(initiator: 'quota'|'budget'|'funds' = 'quota', timeline = false
   const context = {
     performance: {now: () => time, timeOrigin: 0}, URL, URLSearchParams, location: {href: 'https://example.test/', search: ''},
     document: {body: {}, querySelector: (selector: string) => selector.startsWith('.history') ? historySvg : selector.startsWith('.budget-history') ? budgetSvg : selector.startsWith('.subscription-funds') ? fundsSvg : activitySvg},
-    history: {pushState: () => {}}, getComputedStyle: () => ({opacity: '1', transform: 'none'}),
+    history: {pushState: () => {}}, getComputedStyle: (node: {style: {transform: string}}) => ({opacity: '1', transform: node.style.transform}),
     requestAnimationFrame: schedule, cancelAnimationFrame: () => {},
     MutationObserver: class {observe() {} disconnect() {}},
     DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);if(value?.startsWith('scaleX'))this.e*=this.a;}},
@@ -157,6 +157,29 @@ test('unpainted final input is credited only after its geometry commits', () => 
   f.activitySvg.parentElement.dataset.axisEnd = f.budgetSvg.parentElement.dataset.axisEnd = f.fundsSvg.parentElement.dataset.axisEnd = '12'; f.runFrame(50.1);
   assert.equal(f.reading.latency[0], 50.1);
   assert.equal(f.reading.updated, 0, 'final metadata cannot manufacture moving frames');
+});
+
+test('the probe measures a delayed HTML or SVG fold and cannot credit final input while it is moving', () => {
+  for (const html of [true, false]) {
+    const f = fixture(); f.wheel(0, 0);
+    for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg]) {
+      delete svg.dataset.panEnd;
+      svg.parentElement.dataset.axisEnd = '12';
+    }
+    f.context.location.search = '?from=0&to=12';
+    const moving = html ? f.historyLayer : f.historyLayer.slides;
+    moving.getAnimations = () => [{playState: 'running'}];
+    moving.style.transform = 'translateX(40px) scaleX(.6)'; f.runFrame(10);
+    f.runFrame(20);
+    assert.equal(f.reading.updated, 0, 'an animation without actual movement creates no frames');
+    moving.style.transform = 'translateX(30px) scaleX(.7)'; f.runFrame(30);
+    moving.style.transform = 'translateX(10px) scaleX(.9)'; f.runFrame(110);
+    assert.equal(f.reading.updated, 2);
+    assert.deepEqual(Array.from(f.reading.frames), [80], 'a slow fold remains in the original moving-frame budget');
+    assert.equal(f.reading.latency.length, 0, 'final geometry alone cannot credit an unfinished animation');
+    moving.getAnimations = () => []; moving.style.transform = 'none'; f.runFrame(120);
+    assert.deepEqual(Array.from(f.reading.latency), [120]);
+  }
 });
 
 test('causal input positions preserve the line and page wheel units', () => {

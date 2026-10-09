@@ -5,6 +5,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {Pan} from '../lib/pan';
 import {navigationAt, navigationKey} from '../lib/axisNavigation';
+import {axisPresentationFixture} from './axisPresentationFixture';
 
 const offsetIs = (transform: string, expected: number, message?: string) => assert.ok(Math.abs(Number(transform.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0) - expected) < 1e-9, message);
 
@@ -92,7 +93,7 @@ test('the actual cursor follows shared Shift state after visibility-only cancell
 
 test('starting from a settled axis avoids a style flush but samples an interrupted fold', () => {
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('  const visualGeometry = ');
+  const start = source.indexOf('  const readPose = ');
   const body = source.slice(start, source.indexOf('  const geometry = ', start)) + '\nglobalThis.read=visualGeometry;';
   let reads = 0;
   const layer = {getAnimations: () => {throw new Error('animation lookup must not flush styles');}};
@@ -145,7 +146,7 @@ test('the actual drawing commit holds pending geometry and starts its final fold
   const inverse = (px: number) => (((px - initial.offset) / scale - initial.b) / initial.a - left) / inner * 2 * H;
   const delta = -.25 * H, visual = {from: inverse(left * scale) + delta, to: inverse((width - right) * scale) + delta, end: H + delta};
   const selected = {from: visual.from, to: visual.from + H};
-  const layers = [{style: {transform: 'held'}}], slides = [{style: {transform: 'frozen'}}];
+  const layers = [{style: {transform: 'held'}}], slides = [{style: {transform: 'frozen'}, closest: () => layers[0]}];
   const frames: Keyframe[][] = [];
   const pose = {current: {...initial, offset: initial.offset - delta / (visual.to - visual.from) * inner * scale}};
   const known = H / 2;
@@ -171,13 +172,13 @@ test('the actual drawing commit holds pending geometry and starts its final fold
   context.commit(next, true);
   assert.equal(context.finished.current, null); assert.equal(layers[0].style.transform, ''); assert.equal(frames.length, 1);
   const matrix = String(frames[0][0].transform).match(/translateX\(([-.\de+]+)px\) scaleX\(([-.\de+]+)\)/)!;
-  const after = scale * (Number(matrix[2]) * (left + (known - next.from) / (next.to - next.from) * inner) + Number(matrix[1]));
+  const after = Number(matrix[2]) * scale * (pose.current.a * (left + (known - next.from) / (next.to - next.from) * inner) + pose.current.b) + Number(matrix[1]);
   assert.ok(Math.abs(after - before) < 1e-9, 'numeric model, SVG matrix and HTML reset must preserve a known time’s pixel');
 });
 
 test('sampling and freezing an owned fold keeps its matrix after cancelling the animation', () => {
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('  const freezeSlides = '), body = source.slice(start, source.indexOf('  const geometry = ', start));
+  const start = source.indexOf('  const readPose = '), body = source.slice(start, source.indexOf('  const geometry = ', start));
   const layer = {style: {transform: ''}}, other = {style: {transform: ''}}, animations = {current: new Map([[layer, {}]])};
   const pose = {current: {a: 1, b: 0, offset: 17}};
   const context = {box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose,
@@ -187,6 +188,61 @@ test('sampling and freezing an owned fold keeps its matrix after cancelling the 
   assert.equal(animations.current.size, 0); assert.equal(pose.current.offset, 17);
   assert.equal(layer.style.transform, 'translateX(21px) scaleX(0.6)');
   assert.equal(other.style.transform, layer.style.transform, 'every drawing layer keeps the same sampled SVG pose');
+});
+
+test('an interrupted HTML fold composes its CSS matrix with the final SVG pose before restoring strokes', () => {
+  const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
+  const body = source.slice(source.indexOf('  const readPose = '), source.indexOf('  const geometry = '));
+  for (const scale of [.5, .731, 1]) {
+    const owner = {}, layer = {style: {transform: ''}}, other = {style: {transform: ''}};
+    const pose = {current: {a: 1.25, b: -31, offset: 0}}, base = {from: 0, to: 3_600_000, end: 3_000_000};
+    let canceled = false;
+    const animation = {effect: {target: owner}};
+    const animations = {current: new Map([[layer, animation]])};
+    const context = {drawing: {current: base}, box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose,
+      scale, width: 600, left: 40, right: 20,
+      getComputedStyle: (target: object) => {assert.equal(target, owner); return {transform: 'matrix(.63,0,0,1,27,0)'};},
+      DOMMatrix: class {a = .63; e = 27;}, cancelSlides: () => {canceled = true; animations.current.clear();},
+      read: null as unknown as () => {from: number; to: number}, freeze: null as unknown as () => void};
+    runInNewContext(ts.transpileModule(`${body}\nglobalThis.read=visualGeometry;globalThis.freeze=freezeSlides;`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
+    const at = 1_000_000, drawn = 40 + at / base.to * 540;
+    const before = .63 * scale * (1.25 * drawn - 31) + 27;
+    const visible = context.read();
+    assert.ok(Math.abs(scale * (40 + (at - visible.from) / (visible.to - visible.from) * 540) - before) < 1e-9);
+    context.freeze();
+    assert.equal(canceled, true); assert.equal(animations.current.size, 0);
+    assert.ok(Math.abs(scale * (pose.current.a * drawn + pose.current.b) - before) < 1e-9);
+    assert.equal(other.style.transform, layer.style.transform);
+    assert.deepEqual(context.read(), visible, 'freezing cannot change the displayed time domain');
+  }
+});
+
+test('only gesture completion scales the HTML surface; ordinary navigation retains SVG animation', () => {
+  const base = {from: 0, to: 7_200_000, end: 3_600_000}, navigation = {context: 'test', range: 'range'};
+  const f = axisPresentationFixture(base, navigation, 600, .731);
+  const visual = {...base, from: -600_000};
+  f.context.finished.current = {visual, navigation, stop: {range: null, canceled: false}};
+  f.context.wanted.current.projection = {from: 600_000, to: 4_200_000, end: 4_200_000};
+  f.context.commit(base, true);
+  assert.equal(f.animations.length, 2);
+  for (const [i, animation] of f.animations.entries()) {
+    assert.equal(animation.owner, f.layers[i]); assert.equal(animation.options.duration, 160);
+    assert.equal(animation.frames.at(-1)?.transform, 'none');
+    assert.equal(f.slides[i].style.transform, 'translateX(-130px) scaleX(2)');
+    const matrix = String(animation.frames[0].transform).match(/translateX\(([-.\de+]+)px\) scaleX\(([-.\de+]+)\)/)!;
+    const at = 1_000_000;
+    const shown = Number(matrix[2]) * f.point(at) + Number(matrix[1]);
+    const expected = .731 * (40 + (at - visual.from) / (visual.to - visual.from) * 540);
+    assert.ok(Math.abs(shown - expected) < 1e-9, 'the HTML frame composes with a nonidentity final SVG projection');
+  }
+  const ordinary = axisPresentationFixture({...base, end: base.to}, navigation);
+  const next = {from: 1_800_000, to: 9_000_000, end: 9_000_000};
+  ordinary.context.wanted.current.projection = next;
+  ordinary.context.commit(next, true);
+  for (const [i, animation] of ordinary.animations.entries()) {
+    assert.equal(animation.owner, ordinary.slides[i]); assert.equal(animation.options.duration, 220);
+  }
+  assert.equal(ordinary.animations.length, 2);
 });
 
 test('the actual last-input RAF uses the gesture CSS scale rather than the mount-time axis closure', () => {

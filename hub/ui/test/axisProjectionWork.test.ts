@@ -6,7 +6,7 @@ import ts from 'typescript';
 
 test('actual projection helpers read only authored pose between animations and still sample an owned animation', () => {
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('  const visualGeometry = '), geometry = source.slice(start, source.indexOf('  const freezeSlides = ', start));
+  const start = source.indexOf('  const readPose = '), geometry = source.slice(start, source.indexOf('  const freezeSlides = ', start));
   const screenX = source.slice(source.indexOf('screenX: (at: number) => ')).split(', get held')[0].replace('screenX: ', '');
   for (const span of [0, 3_600_000]) {
     let lookups = 0, computed = 0;
