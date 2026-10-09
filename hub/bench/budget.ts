@@ -136,3 +136,14 @@ export function creditRenderProblems({card,renders,mutations,from,to,cellMs}:Omi
   }
   return found;
 }
+
+/** Private CPU work has no card or financial balance to update. */
+export function privateWorkRenderProblems({renders,mutations,from,to,cellMs}:Omit<Measured,'latencies'|'card'>&{cellMs:number}):string[] {
+  const found=renderProblems({card:'private-client-no-card',renders,mutations,from,to});
+  const ticks=Math.floor(to/cellMs)-Math.floor(from/cellMs);
+  for(const [what,parts] of [['rendered',renders],['changed',mutations]] as const)for(const part of parts) {
+    if(!['budget','funds'].includes(part.widget??'')||part.time&&part.kind!=='chart')continue;
+    if(part.count>(part.kind==='chart'?ticks:0))found.push(`private work ${what} ${part.widget} ${part.node} ×${part.count}`);
+  }
+  return found;
+}

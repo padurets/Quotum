@@ -888,7 +888,8 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
       else if (hub.type === 'history') {
         const selected=scope==='budget'?new Set(selectedMeters(state,scope,family)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
         const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source));
-        if(changes?.length)loader.news(Math.min(...changes.map(change=>change.since)));
+        const ownSince = scope === 'quota' && state.board?.meta.personal ? hub.data.ownSince : undefined;
+        if(changes?.length || ownSince !== undefined)loader.news(Math.min(...(changes ?? []).map(change=>change.since), ownSince ?? Infinity));
         else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since);
       }
     }

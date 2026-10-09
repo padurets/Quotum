@@ -607,7 +607,7 @@ export function historyTimes(set: DemoSet, card: Card): {t: number; step: number
 }
 
 /** The earliest measurement a set seeds: where the chart's history begins. */
-export const earliest = (set: DemoSet) => Math.min(...cards(set).flatMap(card => historyTimes(set, card).slice(0, 1).map(s => s.t)));
+export const earliest = (set: DemoSet) => cards(set).length ? Math.min(...cards(set).flatMap(card => historyTimes(set, card).slice(0, 1).map(s => s.t))) : -(set.workHistoryMs ?? 0);
 
 /** How far back the demo's hub has kept how agents worked: before it, that is not known. */
 export const WORK_SINCE = -10 * DAY;

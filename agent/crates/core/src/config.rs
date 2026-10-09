@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::clients::ClientId;
 use crate::model::{Machine, Provider, TEXT_LIMIT, clean_text, now_ms};
 use crate::schedule::{DEFAULT_INTERVAL_MS, MIN_INTERVAL_MS};
 
@@ -28,6 +29,8 @@ pub struct Config {
     pub hub: Option<Hub>,
     pub machine: MachineSettings,
     pub providers: BTreeMap<Provider, ProviderSettings>,
+    #[serde(deserialize_with = "client_settings")]
+    pub clients: BTreeMap<String, ClientSettings>,
     /// Whom the machine measured for, before 0.2. A machine now belongs to the person
     /// whose token it uses; the key is still read so an older file keeps working.
     #[serde(skip_serializing)]
@@ -71,6 +74,31 @@ pub struct ProviderSettings {
     /// A name for this subscription when the client does not identify the account
     /// (Antigravity), to tell two subscriptions of one owner apart.
     pub account: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ClientSettings {
+    pub enabled: Option<bool>,
+    pub route: Option<bool>,
+    pub path: Option<PathBuf>,
+}
+
+fn client_settings<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, ClientSettings>, D::Error> {
+    let values = BTreeMap::<String, toml::Value>::deserialize(deserializer)?;
+    values
+        .into_iter()
+        .map(|(id, value)| {
+            let settings = if ClientId::ALL.iter().any(|c| c.id() == id) {
+                value.try_into().map_err(serde::de::Error::custom)?
+            } else {
+                ClientSettings::default()
+            };
+            Ok((id, settings))
+        })
+        .collect()
 }
 
 impl Config {
@@ -179,7 +207,22 @@ impl Config {
     }
 
     pub fn program(&self, provider: Provider) -> Option<&Path> {
-        self.providers.get(&provider).and_then(|p| p.path.as_deref())
+        self.client_program(provider.into())
+    }
+
+    pub fn tracks(&self, client: ClientId) -> bool {
+        self.clients.get(client.id()).and_then(|c| c.enabled).unwrap_or(true)
+    }
+
+    pub fn client_program(&self, client: ClientId) -> Option<&Path> {
+        self.clients
+            .get(client.id())
+            .and_then(|c| c.path.as_deref())
+            .or_else(|| client.collector().and_then(|p| self.providers.get(&p)).and_then(|p| p.path.as_deref()))
+    }
+
+    pub fn unknown_clients(&self) -> impl Iterator<Item = &str> {
+        self.clients.keys().map(String::as_str).filter(|id| !ClientId::ALL.iter().any(|c| c.id() == *id))
     }
 
     pub fn account_name(&self, provider: Provider) -> Option<&str> {
@@ -378,6 +421,33 @@ fn hostname() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_tracking_and_collectors_are_independent_and_paths_prefer_clients() {
+        let config = Config::parse(
+            r#"
+            [providers.codex]
+            enabled = false
+            path = "old-codex"
+            [clients.codex]
+            path = "new-codex"
+            [clients.claude]
+            enabled = false
+            [clients.future]
+            enabled = false
+        "#,
+        )
+        .unwrap();
+        assert!(!config.enabled(Provider::Codex));
+        assert!(config.tracks(ClientId::Codex));
+        assert!(!config.tracks(ClientId::Claude));
+        assert!(config.enabled(Provider::Claude));
+        assert_eq!(config.program(Provider::Codex), Some(Path::new("new-codex")));
+        assert_eq!(config.unknown_clients().collect::<Vec<_>>(), vec!["future"]);
+        assert!(Config::parse("[clients.opencode]\nwrong = true").is_err());
+        assert!(Config::parse("[clients.opencode]\nenabled = 'yes'").is_err());
+        assert!(Config::parse("wrong = true").is_err());
+    }
 
     #[test]
     fn a_missing_file_means_defaults() {

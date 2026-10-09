@@ -413,8 +413,10 @@ export class Live {
   async reportOne(machine: Machine, t: number, now: number) {
     if (!awake(machine, t)) return;
     const sessions = this.reportSessions(machine, sessionsAt(this.stand.set, machine, this.stand.start, t));
-    const {accepted} = await this.stand.agents.get(machine.id)!.sessions(sessions, now);
-    if (accepted !== sessions.length) throw new Error(`machine ${machine.id}: the hub filed ${accepted} of its ${sessions.length} running agents`);
+    const agent = this.stand.agents.get(machine.id)!;
+    const {accepted} = await agent.sessions(sessions, now);
+    const expected = sessions.length + agent.clientSessionCount;
+    if (accepted !== expected) throw new Error(`machine ${machine.id}: the hub filed ${accepted} of its ${expected} running agents`);
     this.reported(machine, now);
   }
 }

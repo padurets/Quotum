@@ -41,7 +41,7 @@ test('the session panel retains its snapshot when only a presence label expires'
 
 test('returning from settings resumes the actual period coordinator after preferences changed while hidden',()=>{
   let reads=0;
-  const board={id:'board',lineup:[],view:{hidden:[]}},state={board};
+  const board={meta:{personal:true},id:'board',lineup:[],view:{hidden:[]}},state={board};
   const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed():void}},
     hubNow:()=>5_000_000,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{change(){reads++;}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
@@ -74,8 +74,8 @@ test('a complete temporal index distinguishes equal totals, changes ranking and 
 });
 
 test('monetary evidence refreshes only the selected resource family',()=>{
-  const board={id:'b',lineup:['wallet','credit','unselected'],view:{hidden:[]},cards:{wallet:{id:'wallet'},credit:{id:'credit'},unselected:{id:'unselected'}}},state={board};
-  const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event:unknown):void;dirtyScopes:Set<string>}},
+  const board={meta:{personal:true},id:'b',lineup:['wallet','credit','unselected'],view:{hidden:[]},cards:{wallet:{id:'wallet'},credit:{id:'credit'},unselected:{id:'unselected'}}},state={board};
+  const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event:unknown):void;dirtyScopes:Set<string>;workNeeded:boolean;valuesNeeded:boolean}},
     hubNow:()=>5_000_000,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{change(){}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
@@ -91,6 +91,24 @@ test('monetary evidence refreshes only the selected resource family',()=>{
     period.changed({type:'hub',event:{type:'history',data:{sources:[source],since:4_000_000,changes:[{source,scope:'budget',since:4_000_000}]}}});
     assert.deepEqual([...period.dirtyScopes],scope?[scope]:[]);
   }
+  period.dirtyScopes.clear();period.workNeeded=false;period.valuesNeeded=false;
+  const privateEvent={type:'hub',event:{type:'history',data:{sources:[],since:4_000_000,ownSince:4_000_000,changes:[]}}};
+  period.changed(privateEvent);
+  assert.deepEqual([...period.dirtyScopes],['quota']);assert.equal(period.workNeeded,true);assert.equal(period.valuesNeeded,false);
+  board.meta.personal=false;period.dirtyScopes.clear();period.workNeeded=false;
+  period.changed(privateEvent);
+  assert.deepEqual([...period.dirtyScopes],[]);assert.equal(period.workNeeded,false,'private history cannot wake a shared-board reader');
+});
+
+test('private work uses the unknown activity group without attributing quota consumption',()=>{
+  const trace:WorkTrace={anchor:0,knownFrom:0,refs:[{...ref('private'),source:null,clientId:'opencode'},ref('held')],spans:[[0,5,25],[1,10,20]]};
+  const range={from:7,to:22},index=new PeriodIndex(trace),rows=index.advance(range,30).rows,activity=new PeriodActivity(trace,index.curves);
+  activity.update(rows);
+  const blank={since:0,known:null,barMs:60,activeMs:0,agentMs:0,agents:0,cells:[] as [number,number,number,number][],by:{source:[],project:[],device:[]}};
+  const result=activity.project(blank,range);
+  assert.equal(result.agentMs,25);assert.equal(result.activeMs,15);
+  assert.deepEqual(result.by.source.map(g=>[g.key,g.agentMs]),[['unknown',15],['s',10]]);
+  assert.equal(index.curves.groups.source.get('s')!.read(range),10);
 });
 
 test('one collection combines all three history sections and the roster, including their shared budget',async()=>{
@@ -298,7 +316,7 @@ test('rolling work stays exact while clock ticks leave chart and table revisions
 
 test('complete live and fixed targets share the LRU and cached return performs no read',async()=>{
   let selected:{from:number;to:number}|null=null,reads=0,stagedRestores=0;
-  const board={id:'b',lineup:['s'],view:{hidden:[]},cards:{s:{budget:false}}},state={board};
+  const board={meta:{personal:true},id:'b',lineup:['s'],view:{hidden:[]},cards:{s:{budget:false}}},state={board};
   const pool=new HistoryPool();
   const send=async(_board:string,body:PeriodRequest):Promise<PeriodReply>=>{
     reads++;const range=evaluatedRange(body.selection,5_000_000),basis={run:'r',revision:'1',evaluatedAt:5_000_000,evidenceCut:range.to,range};

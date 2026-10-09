@@ -35,6 +35,44 @@ async function fixture() {
   return {store,directory,hub,app,user,board,source,device,read,credit,details};
 }
 
+test('private client periods retain exact work, client identity and late changes only on the personal board',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const foreign=h.store.source('codex','f'.repeat(24),now-H),shared=h.directory.createBoard('Shared',h.user.id,now-H).id;
+  const contexts=[{client:'opencode',source:null},{client:'codex',source:foreign}];
+  const keys=contexts.map(context=>({...context,origin:'terminal' as const,startedAt:now-H,project:'Private',folder:'private-folder',identity:{kind:'stable' as const,sessionId:'same-producer'}}));
+  h.store.creditWork(h.device,now-3*M,now-2*M,keys);
+  h.hub.ingest.live.report(h.device,h.user.id,contexts.map(({client,source})=>({clientId:client,source,sessionId:'same-producer',device:{id:h.device,name:'Laptop'},origin:'terminal',startedAt:now-H,sentStartedAt:now-H,project:'Private',folder:'private-folder',lastWorkedAt:now-M,working:client==='opencode'})),now);
+  const selection={mode:'live' as const,periodMs:H},quota={cell:String(M),from:String(now-4*M),to:String(now)};
+  const body={version:1 as const,selection,evaluatedAt:now,sessions:{},quota};
+  let reads=0;const original=h.store.agentWork.bind(h.store);
+  t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{reads++;return original(...args);});
+  const reply=(await h.read(body)).json<PeriodReply>();assert.equal(reads,1,'cells and the roster share their private work read');
+  if(reply.sessions?.state!=='complete'||reply.quota?.state!=='complete')throw new Error('incomplete period');
+  const rows=workedSessions(reply.sessions.value,reply.basis.range,now);
+  assert.deepEqual(rows.map(r=>[r.clientId,r.source,r.workedMs,r.currentPresence?.working]),[['opencode',null,M,true],['codex',null,M,false]]);
+  assert.equal(new Set(rows.map(r=>r.ref)).size,2,'client namespaces never share presence or identity');
+  assert.ok('known' in reply.quota.value&&reply.quota.value.known.own!==undefined);
+  const wire=JSON.stringify(reply);assert.ok(!wire.includes(foreign)&&!wire.includes('same-producer'));
+  const cutoff=now-150_000;
+  const fixed=(await h.read({...body,selection:{mode:'range',from:now-H,to:cutoff}})).json<PeriodReply>();
+  if(fixed.sessions?.state!=='complete')throw new Error('incomplete fixed period');
+  assert.deepEqual(workedSessions(fixed.sessions.value,fixed.basis.range,now).map(r=>r.workedMs),[30_000,30_000]);
+  assert.deepEqual(fixed.sessions.value.fixed?.activity.by.source.map(g=>g.key),['unknown']);
+  const other=(await h.read(body,shared)).json<PeriodReply>();
+  if(other.sessions?.state!=='complete'||other.quota?.state!=='complete')throw new Error('incomplete shared period');
+  assert.deepEqual(other.sessions.value.refs,[]);assert.ok('known' in other.quota.value);assert.equal(other.quota.value.known.own,undefined);
+  h.store.creditWork(h.device,now-M,now-30_000,keys);
+  const delta=(await h.read({...body,sessions:{cursor:reply.sessions.value.cursor}})).json<PeriodReply>();
+  if(delta.sessions?.state!=='delta')throw new Error('missing private delta');
+  assert.equal(delta.sessions.value.replaceFrom,now-M,'private credit invalidates the retained frontier');
+  assert.deepEqual(workedSessions(mergeWork(reply.sessions.value,delta.sessions.value),delta.basis.range,now).map(r=>r.workedMs),[90_000,90_000]);
+  h.store.hold(foreign,h.user.id,now);const view=h.directory.view(h.board);
+  h.directory.saveView(h.board,{...view,hidden:[...view.hidden,'source:'+foreign]},h.user.id,now);
+  const hidden=(await h.read(body)).json<PeriodReply>();
+  if(hidden.sessions?.state!=='complete')throw new Error('incomplete hidden period');
+  assert.deepEqual(hidden.sessions.value.refs.map(r=>r.clientId),['opencode'],'a held hidden source is excluded instead of becoming private');
+});
+
 test('converted credit changes and heartbeats retain one bounded exact period tail',async t=>{
   const current=now+12345;t.mock.method(Date,'now',()=>current);
   const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
@@ -151,7 +189,7 @@ test('a chart-only past tile reads only its work, and extraction replacement rel
   const second=read(now-2*H,now);
   assert.equal(second.length,2);assert.equal(peak,used,'replacement does not retain the former extraction');
   read(now-90*M,now-M);assert.equal(peak,used,'contained reads reuse the extraction');
-  const final=used;t.mock.method(h.store,'agentWork',(_from:number,_to:number,_sources?:string[],reserve?:(bytes:number)=>void)=>{reserve?.(64);throw new HistoryLimit();});
+  const final=used;t.mock.method(h.store,'agentWork',(_from:number,_to:number,_sources?:string[],_owner?:string|null,reserve?:(bytes:number)=>void)=>{reserve?.(64);throw new HistoryLimit();});
   assert.throws(()=>read(now-3*H,now),HistoryLimit);assert.equal(used,0);assert.equal(peak,final);
 });
 

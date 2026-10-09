@@ -16,10 +16,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
+use quotum_core::clients::ClientId;
 use quotum_core::config::{Config, Hub, IntervalSource, Paths, home, machine};
 use quotum_core::holder::{Holder, LockError, RunLock, Running};
 use quotum_core::model::{Millis, Outcome, Provider, now_ms};
-use quotum_core::providers::{adapter, find_client};
 use quotum_core::runner::{Event, Runner};
 use quotum_core::sink::HubSink;
 use quotum_core::stop::{How, Stop};
@@ -38,7 +38,9 @@ pub enum State {
     Starting,
     TakingOver,
     Measuring,
-    /// Every provider is off: holding the machine, measuring nothing.
+    /// Collectors are off, but client activity is still reported.
+    Tracking,
+    /// Collectors and client activity are off: holding the machine, doing nothing.
     Idle,
     /// `quotum` holds the machine; `error` says why taking over failed, if it did.
     Held {
@@ -104,7 +106,7 @@ pub struct Agent {
     pub config: Config,
     /// config.toml as it was when read (modified, length): a change starts the agent again.
     seen: Option<(Option<SystemTime>, u64)>,
-    pub clients: BTreeMap<Provider, Option<PathBuf>>,
+    pub clients: BTreeMap<ClientId, Option<PathBuf>>,
     pub last: Lasts,
     /// Numbers the saves: only the last of several quick ones restarts the agent.
     saves: u64,
@@ -191,11 +193,11 @@ fn stat(paths: &Paths) -> Option<(Option<SystemTime>, u64)> {
     fs::metadata(&paths.config).ok().map(|m| (m.modified().ok(), m.len()))
 }
 
-fn clients(config: &Config) -> BTreeMap<Provider, Option<PathBuf>> {
+fn clients(config: &Config) -> BTreeMap<ClientId, Option<PathBuf>> {
     let home = home();
-    Provider::ALL
+    ClientId::ALL
         .into_iter()
-        .map(|p| (p, config.program(p).map(PathBuf::from).or_else(|| find_client(adapter(p).as_ref(), &home))))
+        .map(|p| (p, config.client_program(p).map(PathBuf::from).or_else(|| p.find(&home))))
         .collect()
 }
 
@@ -277,9 +279,21 @@ fn begin(shell: &Arc<Shell>) {
     match loaded {
         Ok(config) => {
             agent.clients = clients(&config);
-            let idle = Provider::ALL.iter().all(|p| !config.enabled(*p));
+            for id in config.unknown_clients() {
+                shell.agent_log.line(&format!("warning: unknown client `{id}` is ignored"));
+            }
+
+            let measuring = Provider::ALL.iter().any(|p| config.enabled(*p));
+            let tracking = config.sessions() && quotum_core::clients::ClientId::ALL.iter().any(|c| config.tracks(*c));
+            let idle = !measuring && !tracking;
             agent.config = config;
-            agent.state = if idle { State::Idle } else { State::Measuring };
+            agent.state = if measuring {
+                State::Measuring
+            } else if tracking {
+                State::Tracking
+            } else {
+                State::Idle
+            };
             drop(agent);
             shell.wake();
             if !idle {
@@ -431,7 +445,7 @@ pub fn hub_ready(shell: &Arc<Shell>) {
     let resume = {
         let agent = shell.agent();
         agent.holds()
-            && matches!(agent.state, State::Measuring)
+            && matches!(agent.state, State::Measuring | State::Tracking)
             && agent.run.as_ref().is_none_or(|run| run.generation != current)
     };
     if resume {
@@ -516,7 +530,9 @@ pub fn tick(shell: &Arc<Shell>) {
             }
             Err(_) => {}
         },
-        State::Measuring | State::Idle | State::Failed { cause: Cause::Config, .. } if shell.agent().holds() => {
+        State::Measuring | State::Tracking | State::Idle | State::Failed { cause: Cause::Config, .. }
+            if shell.agent().holds() =>
+        {
             let panicked = {
                 let mut agent = shell.agent();
                 match &agent.run {
@@ -572,7 +588,10 @@ pub fn save_settings(shell: &Arc<Shell>, patch: &Patch) -> Result<(), String> {
             let agent = shell.agent();
             agent.saves == number
                 && agent.holds()
-                && matches!(agent.state, State::Measuring | State::Idle | State::Failed { cause: Cause::Config, .. })
+                && matches!(
+                    agent.state,
+                    State::Measuring | State::Tracking | State::Idle | State::Failed { cause: Cause::Config, .. }
+                )
         };
         if current {
             restart(&shell);
@@ -618,7 +637,15 @@ pub struct Provided {
     pub last: Option<Last>,
 }
 
-pub fn snapshot(shell: &Arc<Shell>) -> (State, Vec<Provided>, bool) {
+#[derive(Serialize)]
+pub struct Tracked {
+    pub id: &'static str,
+    pub enabled: bool,
+    pub route: bool,
+    pub path: Option<String>,
+}
+
+pub fn snapshot(shell: &Arc<Shell>) -> (State, Vec<Provided>, Vec<Tracked>, bool) {
     let agent = shell.agent();
     let last = agent.last.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let providers = Provider::ALL
@@ -631,11 +658,20 @@ pub fn snapshot(shell: &Arc<Shell>) -> (State, Vec<Provided>, bool) {
             inherited_s: agent.config.global_interval().map(|(ms, _)| ms / 1000),
             inherited_from: agent.config.global_interval().map(|(_, source)| source_id(source)),
             account: agent.config.account_name(p).map(str::to_string),
-            client: agent.clients.get(&p).cloned().flatten().map(|c| c.display().to_string()),
+            client: agent.clients.get(&ClientId::from(p)).cloned().flatten().map(|c| c.display().to_string()),
             last: last.get(&p).cloned(),
         })
         .collect();
-    (agent.state.clone(), providers, agent.config.sessions())
+    let clients = ClientId::ALL
+        .into_iter()
+        .map(|id| Tracked {
+            id: id.id(),
+            enabled: agent.config.tracks(id),
+            route: agent.config.clients.get(id.id()).and_then(|c| c.route).unwrap_or(true),
+            path: agent.clients.get(&id).cloned().flatten().map(|p| p.display().to_string()),
+        })
+        .collect();
+    (agent.state.clone(), providers, clients, agent.config.sessions())
 }
 
 /// Where an interval is set, as the board names it.

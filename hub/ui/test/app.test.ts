@@ -263,6 +263,7 @@ test('an empty board promises numbers only while the agent measures', () => {
   assert.equal(onboardingText(undefined), 'local.onboardingMeasuring', 'in a browser: the app measures');
   assert.equal(onboardingText({state: 'starting'}), 'local.onboardingMeasuring');
   assert.equal(onboardingText({state: 'measuring'}), 'local.onboardingMeasuring');
+  assert.equal(onboardingText({state: 'tracking'}), 'local.onboardingTracking');
   assert.equal(onboardingText({state: 'idle'}), 'local.onboardingIdle');
   assert.equal(onboardingText({state: 'held', holder: {yields: false}}), 'local.onboardingWaiting');
   assert.equal(onboardingText({state: 'failed', cause: 'panic', error: 'x'}), 'local.onboardingWaiting');

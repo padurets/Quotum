@@ -6,7 +6,7 @@ import type {MeterSelection} from './domain/meterHistory.js';
 
 export class HistoryLimit extends Error { constructor() {super('history_limit');} }
 
-type Kept = {scope?: HistoryScope; workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
+type Kept = {owner: string | null;scope?: HistoryScope; workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
 
 /** JSON permits shorter exact integer spellings (300000 is 3e5); names stay untouched. */
 export function compactJSON(value: unknown, replacer?: (this: unknown, key: string, value: unknown) => unknown): string {
@@ -54,6 +54,10 @@ export class HistoryTiles {
     for (const [key, tile] of this.kept) if ((!tile.scope || !scopes || scopes.includes(tile.scope)) && tile.sources.has(source) && tileEnd(tile.tile, tile.cell) > since) this.drop(key);
   }
 
+  touchClient(user: string, since: number) {
+    for (const [key, tile] of this.kept) if (tile.owner === user && (!tile.scope || tile.scope === 'quota') && tileEnd(tile.tile, tile.cell) > since) this.drop(key);
+  }
+
   private drop(key: string) {
     const tile = this.kept.get(key);
     if (tile) this.bytes -= tile.bytes;
@@ -97,7 +101,7 @@ export class HistoryTiles {
         if (part.eligible) {
           this.drop(part.key);
           const bytes = Buffer.byteLength(json);
-          this.kept.set(part.key, {scope, workKey, sources, cell, tile: part.tile, json, bytes});
+          this.kept.set(part.key, {owner: this.store.privateOwner(board), scope, workKey, sources, cell, tile: part.tile, json, bytes});
           this.bytes += bytes;
           while (this.bytes + this.reserved > this.budget && this.kept.size) this.drop(this.kept.keys().next().value!);
         }

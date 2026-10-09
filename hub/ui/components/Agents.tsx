@@ -2,7 +2,8 @@ import {boardPeriod,usePeriodSessions} from '../lib/period';
 import {PeriodStatus} from './PeriodStatus';
 import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject} from 'react';
 import type {LiveSession} from '../lib/types';
-import {sourceLabel} from '../lib/quota';
+import {clientName} from '../../server/domain/clients';
+import {agentSourceLabel} from '../lib/agents';
 import {AGENTS, colorOf, columnShown, withColumn, withHidden, type Arrange} from '../lib/view';
 import {
   AGENT_WIDTHS,
@@ -63,7 +64,7 @@ function SessionState({session,still=false}:{session:LiveSession;still?:boolean}
 }
 
 /** A cut name in full on hover: the project, and the folder on a line of its own. */
-const placeOf = (session: LiveSession) => [session.project, folderOf(session)].filter(Boolean).join('\n') || undefined;
+const placeOf = (session: LiveSession) => [session.clientId ? clientName(session.clientId) : null, session.project, folderOf(session)].filter(Boolean).join('\n') || undefined;
 
 const TerminalIcon = () => (
   <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
@@ -189,7 +190,7 @@ export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy
 const projectName = (project: string | null) => project ?? t('agents.noProject');
 
 /** How a row is drawn: laid out unseen to be measured (`still`: nothing that moves on, nothing to press), its marks each in its card's colour. */
-type Context = {still: boolean; color: (source: AgentSource) => CSSProperties};
+type Context = {still: boolean; color: (source: AgentSource | null) => CSSProperties};
 
 /** Credited time is unknown without a reliable producer identity. */
 function WorkTime({ms,refs=[],still=false,labeled=false}: {ms:number|null;refs?:string[];still?:boolean;labeled?:boolean}) {
@@ -241,7 +242,7 @@ function LastActivity({group, still}: {group: AgentGroup; still: boolean}) {
 
 /** A dimension shown in a row: shared by the group, or belonging to its one agent. */
 const dimensionName = ({rows: [row]}: AgentGroup, column: Dimension) =>
-  column === 'project' ? projectName(row.session.project) : column === 'machine' ? row.session.device.name : sourceLabel(row.source);
+  column === 'project' ? projectName(row.session.project) : column === 'machine' ? row.session.device.name : agentSourceLabel(row.source);
 
 const isDimension = (column: AgentColumn): column is Dimension => (DIMENSIONS as readonly AgentColumn[]).includes(column);
 
@@ -574,7 +575,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     // Duration and presence labels have their own clock. Only their visible
     // sorts can reorder the panel or its open detail dialog as time passes.
     if(agentsSort?.column!=='worked'&&agentsSort?.column!=='running')return null;
-    const entries=rows.flatMap(session=>titles[session.source]&&!view.hidden.includes('source:'+session.source)?[{session,source:{id:session.source,...titles[session.source],sessions:[]}}]:[]).sort((a,b)=>byActivity(a.session,b.session)||a.source.id.localeCompare(b.source.id));
+    const entries=rows.flatMap((session):AgentRow[]=>session.source===null?[{session,source:null}]:titles[session.source]&&!view.hidden.includes('source:'+session.source)?[{session,source:{id:session.source,...titles[session.source],sessions:[]}}]:[]).sort((a,b)=>byActivity(a.session,b.session)||(a.source?.id??'').localeCompare(b.source?.id??''));
     const order=(rows:AgentRow[],by:AgentsBy,inGroup:boolean)=>{
       const {name,columns}=arrangement(inGroup),shown=[name,...columns];
       return visibleAgentsSort(agentsSort,shown)?sortedGroups(groupsOf(rows,by),agentsSort,shown).map(group=>group.key):null;
@@ -582,7 +583,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     return [order(entries,agentsBy,false),open&&agentsBy!=='none'?groupsOf(entries,agentsBy).map(group=>[group.key,order(group.rows,'none',true)]):null];
   });
   const sources = useMemo(
-    () => {const bySource=new Map<string,LiveSession[]>();for(const row of period.rows){let rows=bySource.get(row.source);if(!rows)bySource.set(row.source,rows=[]);rows.push(row);}return lineup.flatMap((id):AgentSource[]=>titles[id]?[{id,provider:titles[id].provider,title:titles[id].title,sessions:bySource.get(id)??[]}]:[]);},
+    () => {const bySource=new Map<string,LiveSession[]>();for(const row of period.rows){if(row.source===null)continue;let rows=bySource.get(row.source);if(!rows)bySource.set(row.source,rows=[]);rows.push(row);}return lineup.flatMap((id):AgentSource[]=>titles[id]?[{id,provider:titles[id].provider,title:titles[id].title,sessions:bySource.get(id)??[]}]:[]);},
     [lineup, period.rows, titles],
   );
   const sizing = useSizing();
@@ -595,7 +596,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   /** How many of the rows fit a height chosen for the widget, as last measured. */
   const [fit, setFit] = useState<number | null>(null);
   // Only what the board shows: a subscription whose card is hidden is left out here too.
-  const {rows, empty} = agentRows(sources, arrange.view);
+  const {rows, empty} = agentRows(sources, arrange.view,period.rows.filter(row=>row.source===null));
   const working = rows.filter(row => row.session.working).length;
   const groups = groupsOf(rows, agentsBy);
   const {name, columns} = arrangement(false);
@@ -603,7 +604,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const shown = [name, ...columns];
   const active = visibleAgentsSort(agentsSort, shown);
   const ordered = sortedGroups(groups, active, shown);
-  const color = useCallback((source: AgentSource) => ({'--card-color': colorOf(view, source.id, source.provider)}) as CSSProperties, [view]);
+  const color = useCallback((source: AgentSource | null) => ({'--card-color': source ? colorOf(view, source.id, source.provider) : 'var(--other)'}) as CSSProperties, [view]);
   const sortBy = useCallback((from: AgentsSort, column: AgentColumn, cycle = true) => setPrefs({agentsSort: nextAgentsSort(from, column, cycle)}), []);
   const sorting: Sorting = {active, headers: shown.map(id => ({id, title: COLUMNS[id].title})), sortBy: (column, cycle) => sortBy(active, column, cycle)};
   const single = agentsBy === 'none';

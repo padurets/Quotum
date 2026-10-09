@@ -243,16 +243,17 @@ class BoardPeriod {
       }else if(hub.type==='history') {
         const included=hub.data.sources.some(id=>sources.includes(id));
         if(included){this.proofEpoch++;this.valueCache.clear();}
-        const relevant=included&&(selection.mode==='live'||hub.data.since<selection.to);
+        const own=board.meta.personal&&hub.data.ownSince!==undefined&&(selection.mode==='live'||hub.data.ownSince<selection.to);
+        const relevant=included&&(selection.mode==='live'||hub.data.since<selection.to)||own;
         if(relevant){
-          if(selection.mode==='range')this.valuesNeeded=true;
+          if(included&&selection.mode==='range')this.valuesNeeded=true;
           for(const scope of PERIOD_SCOPES){
             const visible=(scope==='quota'?[ACTIVITY,...QUOTA_WIDGETS]:scope==='funds'?[SUBSCRIPTION_FUNDS]:BUDGET_WIDGETS).some(id=>widgetVisible(board.view,id,board.lineup.length));
             if(!visible)continue;
             const selected=scope==='quota'?new Set(sources):new Set(moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,scope==='funds'?prefs().funds:prefs().money,board.currencies,scope==='funds'?'funds':'budget').selection?.ids.map(([id])=>id));
-            if(hub.data.changes?hub.data.changes.some(c=>selected.has(c.source)&&c.scope===(scope==='funds'?'budget':scope)&&(selection.mode==='live'||c.since<selection.to)):hub.data.sources.some(id=>selected.has(id)))this.dirtyScopes.add(scope);
+            if(scope==='quota'&&own||(hub.data.changes?hub.data.changes.some(c=>selected.has(c.source)&&c.scope===(scope==='funds'?'budget':scope)&&(selection.mode==='live'||c.since<selection.to)):hub.data.sources.some(id=>selected.has(id))))this.dirtyScopes.add(scope);
           }
-          const work=hub.data.changes?.some(c=>sources.includes(c.source)&&c.workSince!==undefined)??true;if(work)this.workNeeded=wantsWork;this.revision++;this.transport.change();
+          const work=hub.data.changes?.some(c=>sources.includes(c.source)&&c.workSince!==undefined)??true;if(work||own)this.workNeeded=wantsWork;this.revision++;this.transport.change();
         }
       }
     }
@@ -315,7 +316,7 @@ class BoardPeriod {
         if(!work.packed&&!work.fixed)work=yield*packWorkPrepared(work);
         charge('work',workBytes(work));index=yield*PeriodIndex.prepare(work);activity=yield*PeriodActivity.prepare(work,index.curves);charge('work',workBytes(work,index.curves.bytes));
       }catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};work=priorWork;index=null;activity=null;discard('work');}
-      const workPart=reply.sessions,changedWork=new Set(workPart&&workPart.state!=='error'?[...workPart.value.refs,...(workPart.state==='complete'?priorWork?.refs??[]:[])].map(ref=>ref.source):[]);
+      const workPart=reply.sessions,changedWork=new Set(workPart&&workPart.state!=='error'?[...workPart.value.refs,...(workPart.state==='complete'?priorWork?.refs??[]:[])].flatMap(ref=>ref.source?[ref.source]:[]):[]);
       const tapes=new Map(priorTapes);
       for(const scope of PERIOD_SCOPES){
         const old=tapes.get(scope),incoming=incomingTapes.get(scope);
@@ -371,7 +372,7 @@ class BoardPeriod {
       this.workRows=projected.rows;
       this.activity?.update(this.workRows);
       const next=new Map<string,WorkedSession[]>();
-      for(const row of this.workRows){let list=next.get(row.source);if(!list)next.set(row.source,list=[]);list.push(row);}
+      for(const row of this.workRows){if(row.source===null)continue;let list=next.get(row.source);if(!list)next.set(row.source,list=[]);list.push(row);}
       const old=this.rowsBySource;this.rowsBySource=next;
       for(const id of new Set([...old.keys(),...next.keys()])) {
         if(sameJson(old.get(id)??[],next.get(id)??[])){if(old.has(id))next.set(id,old.get(id)!);continue;}

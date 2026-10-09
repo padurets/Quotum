@@ -8,7 +8,7 @@ import {PeriodCurves,type WorkTimeline} from './periodCurves.js';
 
 type Group={name:string|null;curve:WorkTimeline;agentMs:number;agents:number};
 const dimensions:ActivityDimension[]=['source','project','device'];
-const keys=(row:WorkTrace['refs'][number])=>({source:row.source,project:JSON.stringify(row.project),device:row.device.id});
+const keys=(row:WorkTrace['refs'][number])=>({source:row.source??'unknown',project:JSON.stringify(row.project),device:row.device.id});
 
 export class PeriodActivity {
   private all!:WorkTimeline;

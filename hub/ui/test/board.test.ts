@@ -118,6 +118,16 @@ test('a snapshot is the board; the same snapshot again keeps every slice as it w
   same(first, changed, ['s2']);
 });
 
+test('owner device hints and reconnect snapshots invalidate disclosures without changing board slices', () => {
+  const first=run(hub({type:'snapshot',data:snapshot()}));
+  const hinted=reduce(first,hub({type:'devices',data:{}}));
+  assert.equal(hinted.devicesRevision,(first.devicesRevision??0)+1);
+  assert.equal(hinted.board,first.board);same(first,hinted);
+  const reconnected=reduce(hinted,hub({type:'snapshot',data:snapshot()}));
+  assert.equal(reconnected.devicesRevision,(hinted.devicesRevision??0)+1);
+  assert.equal(reconnected.board,hinted.board);same(hinted,reconnected);
+});
+
 test('an older snapshot or view response cannot overwrite a newer board revision', () => {
   const latest={...snapshot().view,hidden:['history']};
   const state=run(hub({type:'snapshot',data:snapshot({view:latest,viewRevision:8,connectionsRevision:6})}));
@@ -300,4 +310,17 @@ test('snapshot and session events normalize old or invalid credit before retaini
     assert.equal(bad.board!.sessions.s1[0].workedMs, null);
     assert.equal(bad.board!.cards, updated.board!.cards);
   }
+});
+
+test('private sessions replace only their slice, clear on shared snapshots and survive older personal hubs',()=>{
+  const privateSession={...session,clientId:'opencode'};
+  const first=run(hub({type:'snapshot',data:snapshot({ownSessions:[privateSession]})}));
+  const next=reduce(first,hub({type:'ownSessions',data:{sessions:[{...privateSession,workedMs:60_000}]}}));
+  assert.equal(next.board!.cards,first.board!.cards);assert.equal(next.board!.sessions,first.board!.sessions);
+  assert.notEqual(next.board!.ownSessions,first.board!.ownSessions);
+  assert.equal(reduce(next,hub({type:'ownSessions',data:{sessions:next.board!.ownSessions!}})),next);
+  const shared=reduce(next,hub({type:'snapshot',data:snapshot({board:{id:'team',name:'Team',personal:false},ownSessions:[privateSession]})}));
+  assert.deepEqual(shared.board!.ownSessions,[]);
+  assert.equal(reduce(shared,hub({type:'ownSessions',data:{sessions:[privateSession]}})),shared);
+  assert.deepEqual(run(hub({type:'snapshot',data:snapshot()})).board!.ownSessions,[]);
 });

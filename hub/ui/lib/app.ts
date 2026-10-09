@@ -6,11 +6,12 @@ import {setLocale, type Key, type Locale} from '../i18n';
  * is no bridge, and nothing that needs one is shown. The shapes follow desktop/src/ipc.rs.
  */
 
+export type ClientId = 'claude' | 'codex' | 'antigravity' | 'opencode';
 export type ProviderId = 'claude' | 'codex' | 'antigravity';
 export type Holder = {pid?: number; hub?: string; yields: boolean};
 export type Cause = 'config' | 'lock' | 'panic';
 export type AgentState =
-  | {state: 'starting' | 'taking_over' | 'measuring' | 'idle'}
+  | {state: 'starting' | 'taking_over' | 'measuring' | 'tracking' | 'idle'}
   | {state: 'held'; holder: Holder; error?: string}
   | {state: 'failed'; cause: Cause; error: string};
 export type Measured = {at: number; ok: boolean; error?: string; detail?: string};
@@ -38,6 +39,7 @@ export type AppState = {
   seq: number;
   agent: AgentState;
   providers: ProviderSettings[];
+  clients?: {id: ClientId; enabled: boolean; route: boolean; path: string | null}[];
   sessions: boolean;
   autostart: boolean;
   configPath: string;
@@ -50,7 +52,7 @@ export type AppState = {
   notificationDelivery?: 'available' | 'unavailable' | 'unknown';
 };
 /** `intervalS: null` takes the provider's own interval out of the file. */
-export type Patch = {providers?: Partial<Record<ProviderId, {enabled?: boolean; intervalS?: number | null; account?: string}>>; sessions?: boolean};
+export type Patch = {clients?: Partial<Record<ClientId, {enabled?: boolean; route?: boolean}>>; providers?: Partial<Record<ProviderId, {enabled?: boolean; intervalS?: number | null; account?: string}>>; sessions?: boolean};
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 /** The app's window: Electron's preload on Linux, Tauri's API on Windows. */
@@ -222,6 +224,8 @@ export function onboardingText(agent: AgentState | undefined): Key {
     case 'starting':
     case 'measuring':
       return 'local.onboardingMeasuring';
+    case 'tracking':
+      return 'local.onboardingTracking';
     case 'idle':
       return 'local.onboardingIdle';
     default:

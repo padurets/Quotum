@@ -3,7 +3,7 @@ import type {Origin} from './ingest.js';
 import type {PeriodRange} from './period.js';
 
 export type WorkRef = {
-  ref:string;source:string;device:{id:string;name:string};origin:Origin;
+  ref:string;source:string|null;clientId?:string;device:{id:string;name:string};origin:Origin;
   project:string|null;folder:string|null;startedAt:number;
   currentPresence?:{working:boolean;through:number;workingThrough?:number;startedAt:number};
 };

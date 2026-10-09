@@ -126,6 +126,11 @@ export class Agent {
     private readonly token: string,
   ) {}
 
+  private clientSessions: object[] = [];
+  private clients: object[] | undefined;
+  trackClients(sessions: object[], clients: object[]) { this.clientSessions = sessions; this.clients = clients; }
+  get clientSessionCount() { return this.clientSessions.length; }
+
   static readonly VERSION = 'quotum-demo/1';
 
   /** Connects a machine with a one-time code that `person` approves, as `quotum connect` does. */
@@ -151,7 +156,7 @@ export class Agent {
 
   /** Tells the hub the machine's whole list of running agents, as of now. */
   async sessions(sessions: object[], now: number) {
-    const body = {version: 1, agent: Agent.VERSION, machine: this.machine, sentAt: new Date(now).toISOString(), sessions};
+    const body = {version: 1, agent: Agent.VERSION, machine: this.machine, sentAt: new Date(now).toISOString(), sessions, clientSessions: this.clientSessions, ...(this.clients ? {clients: this.clients} : {})};
     return (await call<{accepted: number}>(this.base, 'POST', '/v1/sessions', {body, token: this.token})).body;
   }
 }

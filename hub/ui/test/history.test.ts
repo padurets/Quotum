@@ -1487,3 +1487,18 @@ test('subscription funds read independently from wallet budgets and retire on fi
     assert.equal(b.reads.length,1);assert.deepEqual(prefs().money,DEFAULT_MONEY);
   }finally{stopB();stopF();b.store.close();f.store.close();setPrefs(before);}
 });
+
+test('private cutoffs reread empty personal activity while financial readers and shared boards stay unchanged',async()=>{
+  const q=harness(undefined,undefined,'quota'),b=harness(undefined,undefined,'budget'),page=createStore(reduce,INITIAL);
+  const stopQ=follow(q.store,page),stopB=follow(b.store,page);
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:{...EMPTY_VIEW,enabledWhenEmpty:['activity']},historyStart:0,sources:[],sessions:{},ownSessions:[],cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
+  try {
+    page.dispatch({type:'board-open',id:'b'});page.dispatch({type:'hub',event:{type:'hello',data:{epoch:'run'}}});page.dispatch({type:'hub',event:{type:'snapshot',data:snapshot}});await flush();
+    await q.reads[0].answer();const financial=b.reads.length;
+    page.dispatch({type:'hub',event:{type:'history',data:{sources:[],since:NOW,ownSince:NOW}}});await flush();
+    assert.equal(q.reads.length,2);assert.equal(b.reads.length,financial);await q.reads[1].answer();
+    page.dispatch({type:'hub',event:{type:'snapshot',data:{...snapshot,board:{...snapshot.board,personal:false}}}});await flush();
+    const before=q.reads.length;page.dispatch({type:'hub',event:{type:'history',data:{sources:[],since:0,ownSince:0}}});await flush();
+    assert.equal(q.reads.length,before);
+  }finally{stopQ();stopB();q.store.close();b.store.close();}
+});

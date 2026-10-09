@@ -47,13 +47,14 @@ test('all builtin shown subsets and 204 other ids survive the compact codec', ()
   assert.deepEqual(decodeView([3,[['0',3]],0])?.layout.places['0'],{x:0,y:0,w:6});
 });
 
-test('the largest sparse accepted v2 retains its owner fields through real storage migration', () => {
+for(const version of [19,21])test(`the largest sparse accepted v2 retains its owner fields through layout ${version} migration`, () => {
   const input = {version:2,layout:{columns:6,places:{}},names:Object.fromEntries(Array.from({length:200},(_,i)=>['source:'+String(i).padStart(12,'0'),'я'.repeat(60)])),windows:[...Array.from({length:399},(_,i)=>'я'.repeat(58)+String(i).padStart(3,'0')),'a'.repeat(73)]};
   assert.equal(bytes(input),VIEW_BODY_LIMIT); assert.ok(parseSplitView(input));
   const db = new DatabaseSync(':memory:');
   try {
-    for (const step of STEPS.slice(0,19)) db.exec(step);
-    db.exec("PRAGMA user_version=19; INSERT INTO boards VALUES('b','',1,'u',0); INSERT INTO sources(id,provider,account,created_at) VALUES('A','codex','a',0); INSERT INTO holders VALUES('A','u',0); INSERT INTO sources(id,provider,account,created_at) VALUES('C','deepseek','c',0); INSERT INTO holders VALUES('C','u',0)");
+    for (const step of STEPS.slice(0,version)) db.exec(step);
+    db.exec(`PRAGMA user_version=${version}`);
+    db.exec("INSERT INTO boards VALUES('b','',1,'u',0); INSERT INTO sources(id,provider,account,created_at) VALUES('A','codex','a',0); INSERT INTO holders VALUES('A','u',0); INSERT INTO sources(id,provider,account,created_at) VALUES('C','deepseek','c',0); INSERT INTO holders VALUES('C','u',0)");
     db.prepare('INSERT INTO views VALUES(?,?,?,?,?)').run('b',JSON.stringify(parseSplitView(input)),'u',0,7);
     migrate(db,1);
     const directory=new Directory(db), state=directory.viewState('b');

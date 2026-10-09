@@ -65,7 +65,7 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
       chunks=transformed.map(chunk=>JSON.stringify(chunk));
       if(chunks.reduce((sum,json)=>sum+Buffer.byteLength(json),0)>16*1024*1024)fail(413, 'history_limit');
     }
-    const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown)};
+    const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown,scope==='budget'?null:store.privateOwner(board))};
     const tag = query.meta === undefined ? undefined : history.metadata(board, basis, scope);
     const meta = JSON.stringify(tag && query.meta === tag ? {now, run: events.epoch, meta: tag} : {now, ...basis, ...(tag ? {meta: tag} : {})});
 

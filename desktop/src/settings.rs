@@ -8,6 +8,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use quotum_core::clients::ClientId;
 use quotum_core::config::Config;
 use quotum_core::model::Provider;
 use serde::{Deserialize, Deserializer};
@@ -19,6 +20,8 @@ use toml_edit::{DocumentMut, Item, Table, value};
 pub struct Patch {
     #[serde(default)]
     pub providers: BTreeMap<Provider, ProviderPatch>,
+    #[serde(default)]
+    pub clients: BTreeMap<ClientId, ClientPatch>,
     pub sessions: Option<bool>,
 }
 
@@ -32,6 +35,13 @@ pub struct ProviderPatch {
     pub interval_s: Option<Option<u64>>,
     /// The name of the subscription (Antigravity); empty removes it.
     pub account: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ClientPatch {
+    pub enabled: Option<bool>,
+    pub route: Option<bool>,
 }
 
 /// A field that is there, `null` included: told apart from one left out (`#[serde(default)]`).
@@ -82,6 +92,25 @@ pub fn apply(text: &str, patch: &Patch) -> Result<String, String> {
             }
             Some(name) => table["account"] = value(name),
             None => {}
+        }
+    }
+    for (client, change) in &patch.clients {
+        if *change == ClientPatch::default() {
+            continue;
+        }
+        if doc.get("clients").is_none() {
+            let mut table = Table::new();
+            table.set_implicit(true);
+            doc.insert("clients", Item::Table(table));
+        }
+        if doc["clients"].get(client.id()).is_none() {
+            doc["clients"][client.id()] = Item::Table(Table::new());
+        }
+        if let Some(enabled) = change.enabled {
+            doc["clients"][client.id()]["enabled"] = value(enabled);
+        }
+        if let Some(route) = change.route {
+            doc["clients"][client.id()]["route"] = value(route);
         }
     }
     let text = doc.to_string();
@@ -315,6 +344,21 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn client_controls_preserve_provider_settings_paths_and_unknown_sections() {
+        let text = "# local settings\n[providers.codex]\nenabled = false\npath = '/opt/codex'\n[clients.opencode]\npath = '/opt/opencode'\nroute = false\n[clients.future]\ncustom = 'keep'\n";
+        let change = patch(r#"{"clients":{"opencode":{"enabled":false},"codex":{"enabled":true}}}"#);
+        let saved = apply(text, &change).unwrap();
+        let config = Config::parse(&saved).unwrap();
+        assert!(!config.enabled(Provider::Codex));
+        assert!(config.tracks(ClientId::Codex));
+        assert!(!config.tracks(ClientId::OpenCode));
+        assert_eq!(config.clients["opencode"].route, Some(false));
+        assert!(saved.contains("custom = 'keep'"));
+        assert!(saved.contains("# local settings"));
+        assert_eq!(config.client_program(ClientId::OpenCode), Some(Path::new("/opt/opencode")));
     }
 
     #[test]

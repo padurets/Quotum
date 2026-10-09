@@ -17,7 +17,7 @@ import {fixedTape,fixedWork} from './periodFixed.js';
 import {cellOf} from './domain/history.js';
 
 type Cursor = {identity:string;revision:number;from:number;cut:number};
-type Change = {revision:number;source:string;since:number};
+type Change = {revision:number;source:string;since:number;owner?:string};
 const object=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const number=(v:unknown):v is number=>Number.isSafeInteger(v)&&(v as number)>=0;
 
@@ -35,6 +35,10 @@ export class PeriodReader {
     else this.measurements.push({revision:this.revision,source,since,scopes:_scopes});
     if(this.workChanges.length>2048)this.floor=this.workChanges.shift()!.revision;
     if(this.measurements.length>2048)this.floor=Math.max(this.floor,this.measurements.shift()!.revision);
+  }
+  touchClient(owner:string,since:number) {
+    this.revision++;this.workChanges.push({revision:this.revision,source:'',owner,since});
+    if(this.workChanges.length>2048)this.floor=Math.max(this.floor,this.workChanges.shift()!.revision);
   }
   private tag(body:string){return createHmac('sha256',this.key).update(body).digest();}
   private encode(value:Cursor){const body=Buffer.from(JSON.stringify(value)).toString('base64url');return body+'.'+this.tag(body).toString('base64url');}
@@ -77,7 +81,7 @@ export class PeriodReader {
     if(request.quota||request.sessions)this.hub.ingest.live.sweep(now);
     const evaluatedAt=Math.min(request.evaluatedAt,now),range=evaluatedRange(selection,evaluatedAt);
     if(range.from<now-config.retention.sampleDays*86_400_000||range.from>=now)fail(400,'history_range_invalid');
-    const cut=Math.min(range.to,now),shown=store.shown(board,directory.view(board).hidden);
+    const cut=Math.min(range.to,now),shown=store.shown(board,directory.view(board).hidden),owner=store.privateOwner(board);
     if(request.values?.some(id=>!shown.has(id)))fail(404,'not_found');
     const identity=createHash('sha256').update(JSON.stringify([board,user,store.workKey(board,shown),store.retentionRevision,store.sources(board).map(s=>[s.id,s.budget])])).digest('base64url');
     const previous=this.decode(request.sessions?.cursor);
@@ -85,7 +89,7 @@ export class PeriodReader {
     const frontier=(before:Cursor|null,changes:Change[])=>{
       if(!before)return {from:range.from,to:cut,coveredFrom:range.from,coveredTo:cut};
       const coveredFrom=Math.min(range.from,before.from),coveredTo=Math.max(cut,before.cut);
-      const dirty=changes.filter(c=>c.revision>before.revision&&shown.has(c.source)&&c.since<coveredTo);
+      const dirty=changes.filter(c=>c.revision>before.revision&&(c.owner?c.owner===owner:shown.has(c.source))&&c.since<coveredTo);
       const from=Math.min(range.from<before.from?range.from:coveredTo,cut>before.cut?before.cut:coveredTo,...dirty.map(c=>c.since));
       const headOnly=range.from<before.from&&cut<=before.cut&&!dirty.length;
       return {from:Math.max(coveredFrom,from),to:headOnly?before.from:coveredTo,coveredFrom,coveredTo};
@@ -99,7 +103,7 @@ export class PeriodReader {
     const release=(bytes:number)=>{reservation.remove(bytes);replyBytes-=bytes;};
     const cell=cellOf(range.to-range.from),fixedRange={from:Math.max(0,Math.floor(range.from/cell)*cell-cell),to:Math.min(Math.ceil(range.to/cell)*cell+cell,now)};
     const workRange=selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip')?fixedRange:request.sessions?{from:replaceFrom,to:workFrontier.to}:null;
-    const work=sharedWork(this.hub,shown,workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes));
+    const work=sharedWork(this.hub,shown,workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner);
     const section=<T>(read:()=>T):PeriodSection<T>=>{
       const before=replyBytes;
       try {return {state:'complete',basis,value:read()};}

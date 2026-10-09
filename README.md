@@ -604,6 +604,11 @@ name = "work-laptop"    # the name the machine reports (default: host name); ren
 url = "https://quotum.example.com"
 token = "qt_m_…"
 
+[clients.opencode]
+enabled = true          # track independently of subscription measurement
+route = false           # reserved consent for route observations (not collected yet)
+# path = "/opt/opencode/bin/opencode"
+
 [providers.antigravity]
 interval = 300
 account = "work"        # tells two Antigravity subscriptions apart (agy doesn't say which one it is)
@@ -617,6 +622,18 @@ commands: `quotum --json` (one measurement in the ingest format), `quotum --only
 `quotum start` / `quotum stop`, `quotum disconnect`, `quotum update` (`--check` only
 says whether there is a newer release; `QUOTUM_RELEASES_URL` points it at a mirror). An
 agent running in the background keeps its version until it is started again.
+
+Coding clients are tracked independently of subscription measurement. OpenCode native
+CLI sessions and installed client versions appear in My connections → Devices. Work
+without a known held subscription remains on your personal Agents and Agent activity
+widgets, including on an empty board; add them through Add widget. Shared boards never
+show that private work. `[clients.<id>] enabled = false` disables one client's tracking;
+`[providers.<id>] enabled = false` disables only its measurements. A client's `path`
+overrides its legacy provider path. Native OpenCode local project attribution is
+available on Linux; shared or unproven invocations, and macOS/Windows, report presence
+without a project. Generic Node/bun hosts are not detected. Version probes are bounded
+and never read credentials or make model requests. Working states estimate process CPU
+activity; they are not provider reports of model work.
 
 ### Hub
 

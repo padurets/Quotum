@@ -15,6 +15,8 @@ export type Touches = {
   touchHub(): void;
   /** A source's history changed from `since`: a measurement or credited agent work. */
   history(source: string, since: number, scopes?: readonly HistoryScope[], work?: boolean): void;
+  touchClientSessions?(user: string): void;
+  clientHistory?(user: string, since: number): void;
   /** Some sessions of this person may have ended. */
   dropSessions(user: string): void;
   /** This person may be off this board. */

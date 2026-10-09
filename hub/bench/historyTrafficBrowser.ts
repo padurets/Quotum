@@ -21,6 +21,14 @@ export function historyReadSelection(url: URL) {
   return params.toString();
 }
 
+/** Private work bounds belong to quota history, so every response keeps its own seed. */
+export function stableHistoryReads(reads: readonly Pick<Read, 'selection' | 'answer'>[], seeds: ReadonlyMap<string, {answer: NonNullable<Read['answer']>}>, cell: number) {
+  for (const read of reads) {
+    const seed = seeds.get(read.selection); assert.ok(seed, 'the gesture must retain its seeded resource selection');
+    if (read.answer) stableHistory(read.answer, seed.answer, cell);
+  }
+}
+
 /** Identity is attached before fetch; cancellation need not receive response headers. */
 export function historyPageScript(period: string) {
   const prefix = `b${++pageSerial}`;
@@ -163,14 +171,13 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
       group.answer = read.answer!;
       for (const [from, to] of read.chunks!) for (let at = from; at < to; at += cell) group.initial.add(at);
     }
-    const seed = seedReads.find(read => new URLSearchParams(read.selection).get('scope') === 'quota')!.answer!;
     await cdp.evaluate(`(() => {
       const root=document.querySelector('.history .chart>svg'),originalPush=history.pushState;
       const p=window.__historyTraffic={tokens:[],poses:[],pushes:0,running:true,originalPush};
       history.pushState=function(...args){p.pushes++;return originalPush.apply(this,args);};
       const frame=()=>{if(!p.running)return;if(root.dataset.panEnd){const token=root.dataset.panToken;if(p.tokens.at(-1)!==token)p.tokens.push(token);const end=Number(root.dataset.panEnd),origin=Number(root.dataset.panOrigin);if(p.poses.at(-1)?.end!==end)p.poses.push({end,origin});}p.raf=requestAnimationFrame(frame);};p.raf=requestAnimationFrame(frame);
     })()`);
-    return {cdp, bodies, settled, geometry, seed, cell, seeds, close};
+    return {cdp, bodies, settled, geometry, cell, seeds, close};
   } catch (error) {await close(); throw error;}
 }
 
@@ -250,7 +257,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
     if(diagnostic&&(length!==DAY||mode!=='reversal'))continue;
     const name = `browser/${length / DAY}d/${mode}`;
     console.error(`bench: ${name}: opening seed page`);
-    const {cdp, bodies, settled, geometry, seed, seeds, cell, close} = await historyPage(browser, proxy, cookie, name, length, DAY);
+    const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, DAY);
     let observer:Awaited<ReturnType<typeof observeReversal>>|null=null;
     console.error(`bench: ${name}: seed page ready`);
     const phase = `${name}/gesture`, reads = () => bodies.reads.filter(r => r.phase === phase);
@@ -289,7 +296,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
       await step('proxy settled', () => proxy.settled(phase));
       const attempts = reads(); assert.ok(attempts.every(r => r.count?.id));
       const totals = bodyTotals(attempts.map(r => ({count: r.count!, transfer: transferFor(r.count!, proxy.transfers)})));
-      for (const read of bodies.resources.filter(r=>r.phase===phase))if(read.answer)stableHistory(read.answer,seeds.get(read.selection)?.answer??seed,cell);
+      stableHistoryReads(bodies.resources.filter(r=>r.phase===phase), seeds, cell);
       const state = await step('read final state', () => cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; selected: boolean; attempts: Record<string, {aborted: boolean}>}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,selected:new URLSearchParams(location.search).has("from"),attempts:__quotumHistoryAttempts})'));
       assert.equal(state.tokens.length, 1); assert.ok(state.poses.some(p => p.end < p.origin));
       assert.equal(state.pushes, mode === 'reversal' ? 1 : 0); assert.equal(state.selected, mode === 'reversal');
