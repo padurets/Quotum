@@ -17,6 +17,8 @@ import {periodValues,nearbyPeriodValues} from '../periodValues.js';
 import {periodValueAt,hasPeriodValue,withValueStates} from '../domain/periodValues.js';
 import {HistoryLimit} from '../history.js';
 import {sharedWork} from '../periodWork.js';
+import {expandPeriod,type PeriodWireReply} from '../domain/periodWire.js';
+import {HISTORY_BYTES_PER_MEASUREMENT} from '../../bench/budget.js';
 
 const M=60_000,H=60*M,now=1_800_000_000_000;
 async function fixture() {
@@ -32,6 +34,30 @@ async function fixture() {
   const details=(body:unknown)=>app.inject({method:'POST',url:`/api/boards/${board}/period/sessions`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body as object});
   return {store,directory,hub,app,user,board,source,device,read,credit,details};
 }
+
+test('converted credit changes and heartbeats retain one bounded exact period tail',async t=>{
+  const current=now+12345;t.mock.method(Date,'now',()=>current);
+  const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const query={cell:String(5*M),from:String(Math.floor((current-M)/(5*M))*5*M),to:String(Math.ceil(current/(5*M))*5*M),unit:'USD',currency:'USD',meters:JSON.stringify([[h.source,'balance:credits']])};
+  let evidence:string|undefined,meta='';
+  for(const [i,amount] of ['2500','2499','2498','2498','2498'].entries()){
+    const at=current-25000+i*2000;
+    h.store.record(h.source,{observedAt:at,staleAfterMs:H,plan:'pro',resets:null,windows:[],resourceStatus:{windows:'missing',resets:'missing'},balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount,hasCredits:true}]});
+    const response=await h.read({version:1,selection:{mode:'live',periodMs:24*H},evaluatedAt:current,funds:{...query,evidence,meta}});
+    assert.equal(response.statusCode,200,response.body);
+    const reply=expandPeriod(response.json<PeriodWireReply>()),part=reply.funds;if(part?.state!=='complete')throw new Error('funds');
+    const headers=`HTTP/1.1 ${response.statusCode} ${response.statusMessage}\r\n${Object.entries(response.headers).map(([key,value])=>`${key}: ${value}\r\n`).join('')}\r\n`;
+    const bytes=Buffer.byteLength(response.body)+Buffer.byteLength(headers);
+    assert.ok(bytes<=HISTORY_BYTES_PER_MEASUREMENT,`${i}: ${bytes} bytes including HTTP headers`);
+    const extra=part.value.chunks.flatMap(c=>c.meterSeries??[]).flatMap(s=>s.cells).at(-1)![5]!;
+    assert.equal(extra.semantics!.conversion!.original.amount,amount);
+    assert.equal(extra.semantics!.conversion!.original.at,at);
+    assert.equal(extra.semantics!.conversion!.rate.to,'40000');
+    assert.equal(part.value.tape!.money[0].readings.at(-1)!.amount,amount);
+    evidence=part.value.tape!.cursor;meta=part.value.meta??'';
+  }
+  assert.equal(h.store.db.prepare('SELECT count(*) n FROM readings WHERE source_id=?').get(h.source)?.n,3,'heartbeats do not invent ledger readings');
+});
 
 test('period values use the last batch strictly before the boundary and keep expired evidence',()=>{
   const store=new Store(':memory:',now-3*H);

@@ -3,6 +3,7 @@ import type {FastifyInstance} from 'fastify';
 import type {Guards,Hub} from './api.js';
 import type {Events} from './events.js';
 import {compactJSON, HistoryLimit, type HistoryTiles} from './history.js';
+import {periodDictionary} from './domain/periodWire.js';
 import {fail,readHistory,ReadError} from './historyRead.js';
 import {evaluatedRange,parsePeriod,type PeriodBasis,type PeriodSection} from './domain/period.js';
 import {PERIOD_SCOPES,type PeriodReply,type PeriodRequest} from './domain/periodRead.js';
@@ -149,7 +150,15 @@ export class PeriodReader {
         });
         response.sessions=delta&&part.state==='complete'?{state:'delta',basis,value:{...part.value,replaceFrom,replaceTo:workFrontier.to}}:part;
       }
-      return compactJSON(response);
+      const before=replyBytes;
+      try {
+        const dictionary=periodDictionary(response,reserve);
+        return compactJSON({...response,...(dictionary.moneySemantics.length?{moneySemantics:dictionary.moneySemantics}:{}),...(dictionary.rateLegs.length?{rateLegs:dictionary.rateLegs}:{})},dictionary.replacer);
+      } catch(error){
+        if(!(error instanceof HistoryLimit))throw error;
+        // Optional wire sharing cannot discard a section that already fits.
+        reservation.remove(replyBytes-before);replyBytes=before;return compactJSON(response);
+      }
     }finally{reservation.close();}
   }
 }

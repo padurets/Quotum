@@ -1,6 +1,7 @@
 import type {HistoryReply} from '../../server/domain/history';
 import {PERIOD_SCOPES,type PeriodScope,type HistoryQuery,type PeriodRequest,type PeriodReply} from '../../server/domain/periodRead';
 import {ApiError} from './http';
+import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire';
 import type {HistoryPool,HistoryMember} from './historyPool';
 
 export type PeriodIntent={board:string;generation:number;revision:number;proofEpoch?:number;request:PeriodRequest};
@@ -111,6 +112,6 @@ export async function fetchPeriod(board:string,body:PeriodRequest,signal:AbortSi
     }
     const parsed=await response.json();
     if(!response.ok)throw new ApiError(response.status,parsed.error??'history_failed');
-    return parsed as PeriodReply;
+    return expandPeriod(parsed as PeriodWireReply);
   }finally{reader.releaseLock();}
 }

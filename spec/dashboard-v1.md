@@ -396,6 +396,19 @@ not invalidate successful siblings. Authentication, invalid request shape and so
 capability failures are HTTP errors. Clients retain the last complete presentation
 under its own basis while a requested replacement is pending or failed.
 
+The optional top-level `moneySemantics` dictionary shares identical monetary cell
+semantics across the reply. Within each history section's `chunks[].meterSeries`,
+`semantics`, a cell extra's `semantics` or `openSemantics`, and an observation's
+`semantics` may be a zero-based index into that dictionary. Null remains unknown;
+an omitted property still inherits as specified below. Expand indices before using
+cells. Entries preserve the complete native amount, observation timestamp and
+conversion provenance; no rounding or combination of observations is implied.
+Within those monetary cell semantics (inline or in `moneySemantics`), a numeric
+`conversion.rate` indexes the optional top-level `rateLegs` dictionary. A rate entry
+retains every field of the original leg; `conversion.original` and additional `steps`
+remain unchanged. Both dictionaries are scoped to this one reply.
+Tapes, card values and the standalone history route retain their existing shape.
+
 Quota, wallet budget and subscription-funds values contain the compatible history reply below and, unless skipped,
 a `tape`. A tape contains exact native sample anchors and monetary readings, availability
 spans, original allowances and recorded currency bindings. Native quota series also

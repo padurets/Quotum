@@ -9,8 +9,8 @@ export class HistoryLimit extends Error { constructor() {super('history_limit');
 type Kept = {scope?: HistoryScope; workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
 
 /** JSON permits shorter exact integer spellings (300000 is 3e5); names stay untouched. */
-export function compactJSON(value: unknown): string {
-  return JSON.stringify(value).replace(/"(?:[^"\\]|\\.)*"|(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/g, (token, number: string | undefined) => {
+export function compactJSON(value: unknown, replacer?: (this: unknown, key: string, value: unknown) => unknown): string {
+  return JSON.stringify(value,replacer).replace(/"(?:[^"\\]|\\.)*"|(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/g, (token, number: string | undefined) => {
     if (!number || !/^-?\d+0{3,}$/.test(number)) return token;
     const end = number.match(/0+$/)![0].length;
     const shorter = `${number.slice(0, -end)}e${end}`;
