@@ -399,9 +399,10 @@ export const boardPeriod=new BoardPeriod();
 export function followPeriod(){const stop=page.listen((event,state)=>boardPeriod.changed(event,state));const choose=()=>boardPeriod.changed();const stops=[stop,onPrefs(choose),onTimeRange(choose)];choose();return()=>stops.forEach(stop=>stop());}
 export function usePeriodValues(id:string){return useSyncExternalStore(listener=>boardPeriod.subscribeValue(id,listener),()=>boardPeriod.getValue(id));}
 const roster=(rows:readonly WorkedSession[])=>rows.map(({workedMs:_,...row})=>row);
+const panelRoster=(rows:readonly WorkedSession[])=>rows.map(({workedMs:_,currentPresence:_presence,...row})=>row);
 export function usePeriodSessions(order:(rows:WorkedSession[])=>unknown=()=>null){
   const latest=useRef(order);latest.current=order;
-  const [read]=useState(()=>selector(boardPeriod,()=>({select:state=>state,equal:(a,b)=>a.value===b.value&&a.loading===b.loading&&a.error===b.error&&sameJson(roster(a.rows),roster(b.rows))&&sameJson(latest.current(a.rows),latest.current(b.rows))})));
+  const [read]=useState(()=>selector(boardPeriod,()=>({select:state=>state,equal:(a,b)=>a.value===b.value&&a.loading===b.loading&&a.error===b.error&&sameJson(panelRoster(a.rows),panelRoster(b.rows))&&sameJson(latest.current(a.rows),latest.current(b.rows))})));
   return useSyncExternalStore(boardPeriod.subscribe,read);
 }
 export function useSourcePeriodSessions(id:string){

@@ -18,6 +18,10 @@ import {
   groupsOf,
   machinesOf,
   nextAgentsSort,
+  runningFrom,
+  runningChangesAt,
+  sessionPresent,
+  sessionPresenceChangesAt,
   since,
   sortedGroups,
   visibleAgentsSort,
@@ -35,7 +39,7 @@ import {setPrefs, usePrefs} from '../lib/prefs';
 import {hubNow,useClock} from '../lib/clock';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
-import {RecentActivity, Since} from './Time';
+import {RecentActivity} from './Time';
 import {Modal} from './Kit';
 import {fillOf, pixels, useSizing} from './sizing';
 
@@ -50,8 +54,13 @@ function Mark({session, style}: {session: LiveSession; style?: CSSProperties}) {
 }
 
 /** What a session is doing, as the legend names its mark. */
-const stateOf = (session: LiveSession) =>
-  t(session.ref&&!session.currentPresence ? 'agents.retained' : session.working ? 'agents.working' : session.origin === 'terminal' ? 'agents.idle' : 'agents.window');
+const stateOf = (session: LiveSession,now=hubNow()) =>
+  t(!sessionPresent(session,now) ? 'agents.retained' : session.working ? 'agents.working' : session.origin === 'terminal' ? 'agents.idle' : 'agents.window');
+
+function SessionState({session,still=false}:{session:LiveSession;still?:boolean}){
+  const now=useClock(now=>still?null:sessionPresenceChangesAt(session,now));
+  return <span className="sr-only" data-time="presence">, {stateOf(session,now)}</span>;
+}
 
 /** A cut name in full on hover: the project, and the folder on a line of its own. */
 const placeOf = (session: LiveSession) => [session.project, folderOf(session)].filter(Boolean).join('\n') || undefined;
@@ -176,9 +185,6 @@ export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy
   );
 }
 
-/** A running time laid out only to be measured: as wide as it reads now, and never moving on. */
-const stillSince = (from: number, className?: string) => <span className={className}>{since(hubNow() - from)}</span>;
-
 /** A project as the list names it: agents of none are a group of their own. */
 const projectName = (project: string | null) => project ?? t('agents.noProject');
 
@@ -192,6 +198,12 @@ function WorkTime({ms,refs=[],still=false,labeled=false}: {ms:number|null;refs?:
   if (ms === null) return <span title={t('agents.workedUnknown')} aria-label={t('agents.workedUnknown')}>—</span>;
   const time = still?workHours(ms):read(now);
   return <span data-time="worked">{labeled ? t('agents.workedValue', {time}) : time}</span>;
+}
+
+/** A presence deadline changes this label, not the retained roster around it. */
+function RunningTime({group,still}:{group:AgentGroup;still:boolean}){
+  const now=useClock(now=>still?null:runningChangesAt(group.rows,now)),from=runningFrom(group.rows,now);
+  return <span data-time="since">{Number.isFinite(from)?since(now-from):'—'}</span>;
 }
 
 /** How many of a group's agents work, of how many, as a card's tray counts them, and a mark for each while they are few. */
@@ -241,7 +253,7 @@ const COLUMNS: Record<AgentColumn, {title: Key; hint?: Key; cell: (group: AgentG
   agents: {title: 'agents.agents', cell: (group, {color}) => <Tally group={group} color={color} />},
   worked: {title: 'agents.worked', hint: 'agents.workedHint', cell: (group,{still}) => <WorkTime ms={group.workedMs} refs={group.rows.flatMap(row=>row.session.ref?[row.session.ref]:[])} still={still}/>},
   activity: {title: 'agents.lastActivity', hint: 'agents.lastActivityHint', cell: (group, {still}) => <LastActivity group={group} still={still} />},
-  running: {title: 'agents.running', cell: (group, {still}) => (!Number.isFinite(group.startedAt)?'—':still ? stillSince(group.startedAt) : <Since from={group.startedAt} />)},
+  running: {title: 'agents.running', cell: (group, {still}) => <RunningTime group={group} still={still}/>},
 };
 
 /** A cut name in full on hover. */
@@ -382,7 +394,7 @@ function AgentsRows({
                     <span className="agents-project" title={placeOf(session)}>
                       <span>{projectName(session.project)}</span>
                       {folderOf(session) && <small>{folderOf(session)}</small>}
-                      <span className="sr-only">, {stateOf(session)}</span>
+                      <SessionState session={session} still={still}/>
                     </span>
                   </>
                 ) : (
@@ -436,7 +448,7 @@ function AgentsRows({
                     <Origin origin={session.origin} />
                     {projectName(session.project)}
                     {folderOf(session) && <small className="agents-folder">{folderOf(session)}</small>}
-                    <span className="sr-only">, {stateOf(session)}</span>
+                    <SessionState session={session} still={still}/>
                   </td>
                 ) : (
                   <td>{opener(group)}</td>
@@ -559,9 +571,9 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     [agentsBy, view],
   );
   const period=usePeriodSessions(rows=>{
-    // Duration labels have their own clock. Only a visible worked-time sort can
-    // make their changing totals reorder the panel or its open detail dialog.
-    if(agentsSort?.column!=='worked')return null;
+    // Duration and presence labels have their own clock. Only their visible
+    // sorts can reorder the panel or its open detail dialog as time passes.
+    if(agentsSort?.column!=='worked'&&agentsSort?.column!=='running')return null;
     const entries=rows.flatMap(session=>titles[session.source]&&!view.hidden.includes('source:'+session.source)?[{session,source:{id:session.source,...titles[session.source],sessions:[]}}]:[]).sort((a,b)=>byActivity(a.session,b.session)||a.source.id.localeCompare(b.source.id));
     const order=(rows:AgentRow[],by:AgentsBy,inGroup:boolean)=>{
       const {name,columns}=arrangement(inGroup),shown=[name,...columns];

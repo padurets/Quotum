@@ -14,6 +14,11 @@ import {
   nextAgentsSort,
   readAgentsBy,
   readAgentsSort,
+  runningFrom,
+  runningChangesAt,
+  sessionPresent,
+  sessionPresenceChangesAt,
+  since,
   sortedGroups,
   type AgentColumn,
   type AgentGroup,
@@ -41,6 +46,24 @@ const active = [
   session('new unknown', {startedAt: 500}),
   session('old unknown', {startedAt: 150}),
 ];
+
+test('retained presence and running labels stay equal until their own clock boundary',()=>{
+  const a=row('A',{ref:'a',currentPresence:{working:false,startedAt:0,through:75_000}});
+  const b=row('B',{ref:'b',currentPresence:{working:false,startedAt:10_000,through:100_000}});
+  assert.equal(sessionPresenceChangesAt(a.session,70_000),75_000);
+  assert.equal(sessionPresent(a.session,74_999),true);assert.equal(sessionPresent(a.session,75_000),false);
+  const rows=[a,b];
+  for(let now=0;now<120_000;){
+    const next=runningChangesAt(rows,now),from=runningFrom(rows,now);
+    const read=(at:number)=>{const start=runningFrom(rows,at);return Number.isFinite(start)?since(at-start):null;};
+    if(next===null){assert.equal(from,Infinity);break;}
+    assert.ok(next>now);assert.equal(read(next-1),read(now));
+    now=next;
+  }
+  assert.equal(runningFrom(rows,75_000),10_000);
+  assert.equal(runningFrom(rows,100_000),Infinity);
+  assert.equal(runningChangesAt(rows,100_000),null);
+});
 
 test('activity puts working first, then known work, then new sessions, without changing its input', () => {
   for (let i = 0; i < active.length; i++) {

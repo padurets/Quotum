@@ -17,9 +17,27 @@ import {fixedTape,fixedWork} from '../../server/periodFixed.js';
 import {hasPeriodValue,periodValueAt,withValueStates} from '../../server/domain/periodValues.js';
 import {canShift,shifted} from '../../server/domain/periodShift.js';
 import {periodTextChangesAt} from '../lib/periodClock.js';
+import {selector,sameJson} from '../lib/store.js';
 
 const ref=(id:string)=>({ref:id,source:'s',device:{id:'d',name:'Laptop'},origin:'terminal' as const,project:id,folder:null,startedAt:0});
 const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
+
+test('the session panel retains its snapshot when only a presence label expires',()=>{
+  const before={...ref('a'),workedMs:100,lastWorkedAt:100,working:false,currentPresence:{working:false,startedAt:0,through:200}};
+  let state={value:{},loading:false,error:null,rows:[before] as import('../../server/domain/periodWork').WorkedSession[]};
+  let read:()=>unknown=()=>null;
+  const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('const panelRoster='),source.indexOf('export function useSourcePeriodSessions'));
+  const context={exports:{} as {usePeriodSessions:()=>unknown},boardPeriod:{get:()=>state,subscribe:()=>()=>{}},selector,sameJson,
+    useRef:(current:unknown)=>({current}),useState:(make:()=>unknown)=>[make()],useSyncExternalStore:(_subscribe:unknown,get:()=>unknown)=>{read=get;return get();}};
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const initial=context.exports.usePeriodSessions();
+  const {currentPresence:_,...expired}=before;
+  state={...state,rows:[expired]};assert.equal(read(),initial,'the label owns its deadline');
+  state={...state,value:{},rows:[{...before,currentPresence:{...before.currentPresence,through:300}}]};
+  assert.notEqual(read(),initial,'new evidence refreshes the deadline even when the roster is unchanged');
+  state={...state,rows:[]};assert.notEqual(read(),initial,'a context leaving the period changes the actual roster');
+});
 
 test('returning from settings resumes the actual period coordinator after preferences changed while hidden',()=>{
   let reads=0;
