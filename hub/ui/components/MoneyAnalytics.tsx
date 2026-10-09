@@ -113,7 +113,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   </AnalyticsPanel>;
 }
 export function MoneyTable({arrange}:{arrange:Arrange}) {
-  const context=useCurrencyContext();useLocale();const {history,loading,error}=useBudgetHistory(),sources=useNamed(arrange.view.names,'budget'),prefs=usePrefs();
+  const context=useCurrencyContext(),locale=useLocale();const {history,loading,error}=useBudgetHistory(),sources=useNamed(arrange.view.names,'budget'),prefs=usePrefs();
   const unit=prefs.money.unit===DEFAULT_CURRENCY?context.target.id:prefs.money.unit??DEFAULT_CURRENCY;
   const entries=history?.meterSeries?.filter(s=>s.unit===unit)??[];
   const selection=moneySelection(sources,arrange.view.hidden,prefs.money,context).selection;
@@ -135,18 +135,20 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
     const at=(now:number):Cell=>{const {partial,content,...cell}=cellAt(s,id,now);return {...cell,content:<>{content}{partial&&<small className="money-partial">*</small>}</>};};
     return history?.live?{time:'money-'+id,changesAt:now=>boardPeriod.cellChangesAt('budget',now,at=>JSON.stringify(cellAt(s,id,at)),undefined,s.sourceId,history.range),at}:at(hubNow());
   };
+  // Retained rows stay mounted through pan-only panel updates; their cells own
+  // the clock and replan only when the table's data or display settings change.
+  const table=useMemo(()=><AnalyticsTable columns={columns}
+    rows={entries.map(series=>{
+      const source=sources.find(card=>card.id===series.sourceId);
+      return {key:moneyIdentity(series),name:nameOf(series,source?.title??series.sourceId,context),
+        color:colorOf(arrange.view,series.sourceId,source?.provider??''),
+        cells:{value:cellOf(series,'value'),spending:cellOf(series,'spending'),topup:cellOf(series,'topup')}};
+    })} name={t('money.key')} nameWidth={240} lead="value"/>,[history,unit,sources,context,arrange.view,locale]);
   return <AnalyticsPanel ref={panel} className="budget-table" title={t('widgets.budgetTable')} history={history} loading={loading} error={error} retry={budgetHistory.retry}
     settings={<TableSettings arrange={arrange} widget={BUDGET_TABLE} columns={definitions} visible={columns.map(column=>column.id)}/>}
   >
     <SelectionNotice/>
     {!history&&!error?<p className="panel-loading">{t('history.loading')}</p>:!entries.length&&!error?<p className="panel-empty">{t(empty)}</p>:null}
-    {entries.length>0&&<AnalyticsTable columns={columns}
-      rows={entries.map(series => {
-        const source = sources.find(card => card.id === series.sourceId);
-        return {key: moneyIdentity(series), name: nameOf(series, source?.title ?? series.sourceId, context),
-          color: colorOf(arrange.view, series.sourceId, source?.provider ?? ''),
-          cells: {value: cellOf(series, 'value'), spending: cellOf(series, 'spending'), topup: cellOf(series, 'topup')}};
-      })}
-      name={t('money.key')} nameWidth={240} lead="value"/>}
+    {entries.length>0&&table}
   </AnalyticsPanel>;
 }

@@ -177,6 +177,12 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
   };
 
   const definitions = modeColumns.map(id => ({id, title: heading(id, range), width: FORECAST_WIDTHS[id], hint: HEADINGS[id].hint ? t(HEADINGS[id].hint!) : undefined}));
+  // A pan phase changes the panel's presentation, not its retained rows. Reusing
+  // the table also keeps every clock cell from replanning its deadline on input.
+  const table=useMemo(()=><AnalyticsTable columns={definitions.filter(column=>columns.includes(column.id))}
+    rows={lines.map(line=>({key:line.key,name:line.name,color:line.color,cells:cellsOf(line)}))}
+    name={t('table.limit')} nameWidth={FORECAST_WIDTHS.limit} lead={range?'end':'now'}/>,
+    [lines,columns,range,sources,forecasts,news,history,view,locale]);
   return (
     <AnalyticsPanel ref={panel} className="forecast" title={t('forecast.title')} history={history} loading={loading} error={error} retry={quotaHistory.retry}
       settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}/>}
@@ -184,9 +190,7 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
       {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}
       {!history ? error ? null : <div className="panel-loading">{t('history.loading')}</div>
         : !lines.length ? <p className="panel-empty">{t('forecast.empty')}</p>
-        : <AnalyticsTable columns={definitions.filter(column => columns.includes(column.id))}
-            rows={lines.map(line => ({key: line.key, name: line.name, color: line.color, cells: cellsOf(line)}))}
-            name={t('table.limit')} nameWidth={FORECAST_WIDTHS.limit} lead={range ? 'end' : 'now'}/>
+        : table
       }
     </AnalyticsPanel>
   );

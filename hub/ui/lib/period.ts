@@ -293,7 +293,15 @@ class BoardPeriod {
       for(const scope of PERIOD_SCOPES){const part=reply[scope],incoming=part?.state==='complete'?part.value.tape:undefined;if(!incoming)continue;
         const old=priorTapes.get(scope),queryKey=JSON.stringify([intent.request[scope]?.meters,intent.request[scope]?.unit,intent.request[scope]?.currency]),previous=old?.queryKey===queryKey?old.tape:undefined;
         try{
-          for(const series of incoming.quota){charge(scope,tapeBytes(incoming,true)+series.samples.length/5*40);series.samples=yield*retainSamplesPrepared(series.samples,series.samplesEncoding==='delta');delete series.samplesEncoding;charge(scope,tapeBytes(incoming,true));yield;}
+          // Only this column changes ownership. Recounting every other series
+          // after each column makes a dense ledger's admission quadratic.
+          let incomingBytes=tapeBytes(incoming,true);
+          for(const series of incoming.quota){
+            const before=quotaTapeBytes(series,true);
+            charge(scope,incomingBytes+series.samples.length/5*40);
+            series.samples=yield*retainSamplesPrepared(series.samples,series.samplesEncoding==='delta');delete series.samplesEncoding;
+            incomingBytes+=quotaTapeBytes(series,true)-before;charge(scope,incomingBytes);yield;
+          }
           const replacement=previous?.quota.filter(s=>incoming.quota.some(row=>row.source===s.source&&row.window===s.window)).reduce((n,s)=>n+s.samples.length/5*88,0)??0;
           charge(scope,tapeBytes(incoming)+replacement);
           const tape=yield*mergeTapePrepared(previous,incoming);incomingTapes.set(scope,tape);if(part?.state==='complete')part.value.tape=tape;charge(scope,tapeBytes(ownTape(tape,previous)));
@@ -384,6 +392,7 @@ class BoardPeriod {
 }
 
 const workBytes=(trace:WorkTrace|null,curves?:number)=>trace?JSON.stringify({...trace,spans:[],packed:undefined}).length*2+(trace.packed?trace.packed.blocks.length*8+trace.packed.patterns.reduce((n,p)=>n+p.length*8+32,0)+(curves??trace.packed.blocks.length/3*144+trace.packed.patterns.reduce((n,p)=>n+p.length*128,0)):trace.spans.length*640)+trace.refs.length*768:0;
+const quotaTapeBytes=(series:PeriodTape['quota'][number],wire:boolean)=>JSON.stringify({...series,samples:[]}).length*2+(wire&&!('columns' in series.samples)?series.samples.length*8:sampleBytes(series.samples,series.samplesEncoding==='delta'));
 const tapeBytes=(tape:PeriodTape,wire=false)=>JSON.stringify({...tape,quota:tape.quota.map(s=>({...s,samples:[]})),money:tape.money.map(s=>({...s,readings:[],spans:[],...(s.paired?{paired:{readings:[],spans:[]}}:{})}))}).length*2+tape.quota.reduce((n,s)=>n+(wire&&!('columns' in s.samples)?s.samples.length*8:sampleBytes(s.samples,s.samplesEncoding==='delta')),0)+tape.money.reduce((n,s)=>n+[...s.readings,...s.paired?.readings??[]].reduce((bytes,r)=>bytes+256+2*((r.amount?.length??0)+(r.unit?.length??0)+(r.label?.length??0)+(r.scope?.length??0)+(r.limit?.length??0)),0)+(s.spans.length+(s.paired?.spans.length??0))*192,0);
 
 export const boardPeriod=new BoardPeriod();

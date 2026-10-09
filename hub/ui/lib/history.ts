@@ -281,6 +281,9 @@ export class HistoryStore {
 
   endPan(commit: boolean) {
     this.interest = null;
+    // Release keeps the last strip until the complete frame is ready. Rebuilding
+    // that strip would decode the same cells alongside the final composition.
+    this.preparations?.cancel(this.plotOwner);
     this.panReads = commit;
     this.cohort = '';
     this.optional.clear();
@@ -435,7 +438,7 @@ export class HistoryStore {
   }
 
   private publishPlot() {
-    if (!this.meta || !this.plotPending) return;
+    if (!this.meta || !this.plotPending || !this.interest) return;
     const visible = this.plotTarget();
     const half = visible.length / 2;
     if (!this.strip || this.strip.cell !== visible.cell || this.stripToken !== (this.interest?.token ?? this.stripToken) || visible.k0 * visible.cell < this.strip.k0 * visible.cell + half / 2 || (visible.k1 + 1) * visible.cell > (this.strip.k1 + 1) * visible.cell - half / 2) {

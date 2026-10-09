@@ -788,6 +788,24 @@ function cooperativeHarness(pool?: HistoryPool, scope?: 'quota'|'budget') {
   return {...h, tasks, tick, finish, internals, preparations};
 }
 
+test('release retains its last strip while preparing only the complete selected frame', async () => {
+  const h = cooperativeHarness(); await h.start(); await h.reads[0].answer(); await h.finish();
+  const range = {from: NOW - 36 * H, to: NOW - 12 * H};
+  h.store.pan({token: 1, length: 24 * H, ...range, direction: -1}); await flush(); await h.finish();
+  const strip = h.store.getPlot(); assert.ok(strip);
+  const changes: unknown[] = [];
+  const stop = h.store.subscribePlot(() => changes.push(h.store.getPlot()));
+  // Leave a newer strip queued when the gesture commits.
+  h.store.pan({token: 1, length: 24 * H, from: range.from - H, to: range.to - H, direction: -1}); await flush();
+  h.store.choose('24h', range); h.store.endPan(true); await flush();
+  assert.equal(h.store.getPlot(), strip);
+  for (let i = 0; i < 12 && pending(h).length; i++) {for (const read of pending(h)) await read.answer(); await h.finish();}
+  await h.finish();
+  assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`);
+  assert.deepEqual(changes, [null], 'arrivals replace the retained strip only with the complete frame');
+  stop(); h.store.close();
+});
+
 test('a sliced whole response publishes no live tile, boundaries or history before its atomic commit', async () => {
   const h = cooperativeHarness(); await h.start();
   await h.reads[0].answer();
