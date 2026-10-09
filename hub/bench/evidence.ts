@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const LIMIT = 1024 * 1024;
 const forbidden = /cookie|authorization|password|secret|credential|commandLine|expression|scriptSource|environment|stdout|stderr|stack/i;
-const labels = new Set(['status', 'stage', 'mode', 'method', 'scenario', 'phase', 'kind', 'event', 'name', 'period', 'initiator', 'segment', 'version', 'executable', 'platform', 'failure', 'reason', 'context', 'node', 'region', 'coding', 'type', 'state', 'birth', 'signal', 'spawnCode', 'native', 'cleanup', 'collection', 'livenessStatus', 'page', 'scheduler']);
+const labels = new Set(['status', 'stage', 'mode', 'method', 'scenario', 'phase', 'kind', 'event', 'name', 'period', 'initiator', 'segment', 'version', 'executable', 'platform', 'failure', 'reason', 'context', 'node', 'region', 'coding', 'type', 'state', 'birth', 'signal', 'spawnCode', 'native', 'cleanup', 'collection', 'livenessStatus', 'page', 'scheduler', 'byteVerdict', 'stagingDisposition', 'mechanism']);
 
 /** Diagnostic payloads are numeric evidence and synthetic identifiers, never arbitrary text. */
 export function safeEvidence(value: unknown, key = '', depth = 0, entryLimit = 10_000): unknown {

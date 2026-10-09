@@ -7,6 +7,7 @@ import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems
 import {HISTORY_CODEC, historyBody, historyProxy, type BodyCount} from './historyProxy';
 import {browserCancellationTraffic, browserHistoryTraffic} from './historyTrafficBrowser';
 import type {Browser} from './cdp';
+import type {Evidence} from './evidence';
 import {cancellationTraffic} from './historyCancellation';
 
 const DAY = 86_400_000;
@@ -17,7 +18,7 @@ const gridsOf = (store: HistoryStore) => (store as unknown as {grids: Map<number
 
 /** Controlled traffic uses the production gesture, loader and actual HTTP parser;
  * native presentation is measured separately on the unchanged browser route. */
-export async function historyTraffic(upstream: string, cookie: string, board: string, windows: string[], browser?: Browser) {
+export async function historyTraffic(upstream: string, cookie: string, board: string, windows: string[], browser?: Browser, evidence?: Pick<Evidence, 'save'>) {
   const proxy = await historyProxy(upstream, browser?.owner), reports = [], invalidated = [], problems: string[] = [];
   try {
     for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
@@ -67,6 +68,8 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
             if (Date.now() > deadline) throw new Error(`${name}: history did not complete`);
           }
         };
+        let status = 'failed';
+        evidence?.save('traffic-stage', {name, phase});
         try {
           proxy.phase(phase); store.choose('24h', selected); store.open(board); store.hello((await historyBody(`${proxy.url}/api/history?board=${encodeURIComponent(board)}&cell=300000&from=${cellStart(anchor - DAY, 300000)}&to=${cellStart(anchor, 300000) + 300000}`, cookie) as HistoryAnswer).run); store.snapshot([], windows);
           await settle();
@@ -115,16 +118,23 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
           const report = {name, attempts: attempts.filter(r => r.phase.endsWith('/cold')).length, maxAttempts: fraction === .04 ? 2 : future ? 7 : 5, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, warmAttempts: attempts.length - warmStart, bridgeCells: bridges.size, optionalUnvisitedCells: [...requested].filter(at => !visited.has(at) && !bridges.has(at)).length, peakFlights, freshOverlap, ownershipOverlap, series: final.series.length, range: final.range, requests: attempts.filter(r => r.phase.endsWith('/cold'))};
           reports.push(report); problems.push(...trafficProblems(report)); unsubscribe();
           console.error(`bench: ${name}: ${report.attempts} GETs, ${report.warmAttempts} warm GETs, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / referenceEncoded}`);
+          status = trafficProblems(report).length ? 'over-budget' : 'passed';
           break;
         } catch (error) {
           if (!(error instanceof HistoryCutChanged) || take === 3) throw new Error(`${name}: ${String(error)}`, {cause: error});
+          status = 'invalidated';
           invalidated.push({name, reason: error.message, attempts, bodies});
-        } finally {store.close(); await Promise.allSettled([...pending]);}
+        } finally {
+          evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name, status, phase, codec: HISTORY_CODEC,
+            attempts, bodies, reports: reports.filter(report=>report.name===name),
+            transfers: proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/'))});
+          store.close(); await Promise.allSettled([...pending]);
+        }
       }
     }
     const cancellations = await cancellationTraffic(proxy, cookie, board, windows);
-    const native = browser ? await browserHistoryTraffic(browser, proxy, cookie, board) : null;
-    const nativeCancellations = browser ? await browserCancellationTraffic(browser, proxy, cookie) : null;
+    const native = browser ? await browserHistoryTraffic(browser, proxy, cookie, board, evidence) : null;
+    const nativeCancellations = browser ? await browserCancellationTraffic(browser, proxy, cookie, false, false, evidence) : null;
     if (native) problems.push(...native.problems);
     return {codec: HISTORY_CODEC, reports, invalidated, cancellations, native, nativeCancellations, problems};
   } finally {await proxy.close();}

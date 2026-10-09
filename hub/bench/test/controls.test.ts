@@ -27,6 +27,7 @@ function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
   const context = {
     localStorage: {getItem: () => '{}', setItem: (_key: string, value: string) => {ids = JSON.parse(value).money.selected.USD;}},
     Date: {now: () => frame * 16},
+    performance: {now: () => frame * 16}, window: {},
     requestAnimationFrame: (callback: (stamp: number) => void) => queueMicrotask(() => callback(++frame * 16)),
     document: {
       querySelector: (selector: string) => selector === '.budget-history .chart > svg' ? root
@@ -73,4 +74,14 @@ test('waiting for a money view still rejects a lost line before preparation fini
 
 test('waiting for a money view still rejects geometry outside the current scale', async () => {
   await assert.rejects(moneyView(moneyPage('scale').cdp, 'wallet', 'capped', 'zero'), /outside its new scale/);
+});
+
+
+test('a missing money line retains its first absent frame and preceding preparation state', async () => {
+  const files=new Map<string,unknown>();
+  await assert.rejects(moneyView(moneyPage('blank').cdp,'wallet','capped','zero',{save:(name,value)=>{files.set(name,value);}}),/money line disappeared/);
+  const evidence=files.get('money-view-0') as {firstMissing:{paths:number;ready:boolean;frame:number};sourceId:string;before:{paths:number};after:unknown[]};
+  assert.equal(evidence.firstMissing.paths,0);assert.equal(evidence.firstMissing.ready,false);
+  assert.equal(evidence.firstMissing.frame,0);assert.equal(evidence.sourceId,'wallet');
+  assert.equal(evidence.before.paths,1);assert.equal(evidence.after.length,2);
 });

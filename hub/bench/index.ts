@@ -26,6 +26,9 @@ import {historyTraffic} from './historyTraffic.js';
 import {diagnoseReversal} from './historyTrafficBrowser.js';
 import {RunOwner} from './runOwner.js';
 import {Evidence} from './evidence.js';
+import {Requests} from './requests.js';
+export {Requests} from './requests.js';
+import {doubledIdle} from './idleDiagnostic.js';
 import {panningPairs, tracePanning} from './panningDiagnostic.js';
 import {creditSnapshot} from './credits.js';
 
@@ -47,8 +50,6 @@ const USAGE = 'Usage: npm run bench -- [--ci] [--cdp <http://host:port>]';
 const IDLE = {full: 300, ci: 120};
 /** How long the board may take to show its cards. */
 const SHOWN_MS = 30_000;
-/** The requests of a page, as Chrome types them: those it makes itself, not its images or styles. */
-const ASKED = new Set(['Fetch', 'XHR', 'EventSource', 'Document']);
 /** The card measured again and again: on Ana's personal board, measured by her laptop, with no plan. */
 const MEASURED = 'antigravity';
 /** How many times, and how far apart. */
@@ -86,33 +87,6 @@ function freePort(bind: string): Promise<number> {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
 const say = (text: string) => console.error(`bench: ${text}`);
 
-/** Counts what the page asks the hub while `counting`: the stream of events it opened before is not asked again, one opened meanwhile is. */
-export class Requests {
-  counting = false;
-  count = 0;
-  bytes = 0;
-  readonly byPath: Record<string, number> = {};
-  readonly bytesByPath: Record<string, number> = {};
-  readonly history: {scope:string|null;meters:string|null;from:number;to:number}[] = [];
-  private readonly ids = new Map<string, string>();
-  get historyPending() {return [...this.ids.values()].filter(path => path === '/api/history').length;}
-
-  constructor(cdp: Cdp) {
-    cdp.on<{requestId: string; type?: string; request: {url: string}}>('Network.requestWillBeSent', event => {
-      if (!this.counting || !ASKED.has(event.type ?? '')) return;
-      const url = new URL(event.request.url);
-      this.count++;
-      this.byPath[url.pathname] = (this.byPath[url.pathname] ?? 0) + 1;
-      if(url.pathname==='/api/history')this.history.push({scope:url.searchParams.get('scope'),meters:url.searchParams.get('meters'),from:Number(url.searchParams.get('from')),to:Number(url.searchParams.get('to'))});
-      this.ids.set(event.requestId, url.pathname);
-    });
-    cdp.on<{requestId: string; encodedDataLength: number}>('Network.loadingFinished', event => {
-      const path = this.ids.get(event.requestId);
-      if (path) {this.ids.delete(event.requestId); this.bytes += event.encodedDataLength; this.bytesByPath[path] = (this.bytesByPath[path] ?? 0) + event.encodedDataLength;}
-    });
-  }
-}
-
 async function metrics(cdp: Cdp): Promise<Metrics> {
   const {metrics} = await cdp.send<{metrics: {name: string; value: number}[]}>('Performance.getMetrics');
   return Object.fromEntries(metrics.map(m => [m.name, m.value]));
@@ -122,10 +96,12 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const evidence = new Evidence();
   const panDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_PANNING;
+  const idleDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE;
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
   try {
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
+    if (idleDiagnostic && (idleDiagnostic !== 'double' || panDiagnostic)) throw new Stop('Unknown or conflicting idle diagnostic mode');
     if (panDiagnostic && !['pairs', 'trace'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
     await prepare(address);
     chrome = options.cdp ? null : findChrome(process.env);
@@ -147,7 +123,7 @@ async function main() {
     evidence.begin('cleanup');
     try {await owner.close();} catch (error) {code = 1; say(String(error));}
     try {await demo.stop();} catch {code = 1; say('demo cleanup failed');}
-    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
+    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic || idleDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
     process.exit(code);
   })();
   const set = panningSet(SETS[0]);
@@ -237,6 +213,14 @@ async function main() {
     const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
     const idle = {from, to, cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
     evidence.save('idle', {...idle, planned, phase, actualSeconds, phaseProblems});
+    if (idleDiagnostic) {
+      const baselineProblems=[...phaseProblems,...idleProblems(idle)];
+      if(baselineProblems.length)throw new Stop('idle sensitivity baseline failed: '+baselineProblems.join('; '));
+      say('checking sensitivity with two independent copies of the same idle board');
+      const control=await doubledIdle(browser,cdp,address.base,seconds,cellMs,evidence);
+      say(`idle double control: ${JSON.stringify(control)}`);
+      await finish(control.detected?0:1);return;
+    }
 
     evidence.begin('measurements');
     const measured = await measure(stand, cdp);
@@ -280,7 +264,7 @@ async function main() {
     evidence.begin('history-traffic');
     const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
     let traffic:Awaited<ReturnType<typeof historyTraffic>>;
-    try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser);}
+    try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser, evidence);}
     catch(error){
       if(/browser\/(?:1|30)d\/reversal/.test(String(error))){
         say('replaying the failed reversal with page and browser diagnostics; the original failure remains');
@@ -296,7 +280,7 @@ async function main() {
     evidence.save('credits', credits);
     problems.push(...credits.problems);
     evidence.begin('money');
-    const monetary=await moneyPhase(demo,stand,cdp);
+    const monetary=await moneyPhase(demo,stand,cdp,evidence);
     evidence.save('money', monetary);
     problems.push(...monetary.problems);
     const result = {
@@ -443,7 +427,7 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
   return {source,updates,problems};
 }
 
-async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp) {
+async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,evidence?:Evidence) {
   const owner=stand.people.get(people(stand.set)[0].id)!;
   say('checking money updates, partial inventory, pagination, selection and unchanged observations');
   // The panning scenarios finish at 30d; this phase measures one-day cell updates.
@@ -532,7 +516,7 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
     cap=cappedState.sources.find(s=>s.id===cappedSource)?.meters?.find(m=>m.kind==='cap'&&m.limit==='0');
     if(!cap){if(Date.now()>cappedBy)throw new Stop('zero-cap money fixture did not appear');await sleep(20);}
   }
-  await moneyView(cdp,source,cappedSource,cap.id);
+  await moneyView(cdp,source,cappedSource,cap.id,evidence);
   return {count:latencies.length,p95Ms:Math.round(percentile(latencies,.95)),chartP95Ms:Math.round(percentile(chartLatencies,.95)),historyBytesPerMeasurement:bytes,heartbeat,currencies,problems};
 }
 

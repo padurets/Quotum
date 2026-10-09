@@ -42,3 +42,33 @@ jobs:
           name: panning-pairs-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/quotum-panning-pairs
           if-no-files-found: warn
+
+  idle-sensitivity:
+    if: contains(github.event.pull_request.labels.*.name, 'benchmark-idle-diagnostics')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+        env:
+          QUOTUM_BENCH_DIAGNOSE_IDLE: double
+          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-idle-control
+      - name: Idle sensitivity evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: idle-control-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quotum-idle-control
+          if-no-files-found: warn

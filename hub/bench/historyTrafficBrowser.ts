@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import type {Evidence} from './evidence';
 import {cellStart, expandHistory, type HistoryAnswer, type HistoryBasis, type HistoryReply} from '../server/domain/history';
 import {openTab, type Browser, type Cdp} from './cdp';
 import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
@@ -85,6 +87,14 @@ export class HistoryBodies {
   }
 }
 
+export function trafficReadEvidence(reads: readonly Read[]) {
+  const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  return reads.map(read=>({id:read.id,phase:read.phase,from:read.from,to:read.to,cell:read.cell,
+    lower:read.lower,coding:read.coding,length:read.length,attemptId:read.attemptId,transferId:read.transferId,
+    canceled:read.canceled,count:read.count,selectionHash:hash(read.selection),chunks:read.chunks,
+    run:read.answer?.run,now:read.answer?.now,knownHash:read.answer?.known===undefined?undefined:hash(read.answer.known)}));
+}
+
 /** CDP's speed is an integer; keep the named cold gesture near 750 ms. */
 export function historyScroll(geometry: {x: number; y: number; width: number}, fraction: number, distance: number) {
   if (![geometry.x, geometry.y, geometry.width, fraction, distance].every(Number.isFinite) || geometry.width <= 0 || fraction <= 0) throw new Error('invalid history gesture geometry');
@@ -143,13 +153,14 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
 }
 
 /** Separate tabs use the fixed-codec proxy; this never changes the native perf route. */
-export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string) {
+export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string, evidence?: Pick<Evidence, 'save'>) {
   const reports = [], invalidated = [], problems: string[] = [];
   for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
     for (let take = 1; take <= 3; take++) {
       const name = `browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
+      evidence?.save('traffic-stage', {name, stage: 'seed'});
       const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, future);
-      let observer:Awaited<ReturnType<typeof observeReversal>>|null=null;
+      let observer:Awaited<ReturnType<typeof observeReversal>>|null=null, status='failed';
       try {
         observer=await observeReversal(cdp,browser);
         const phase = `${name}/cold`; bodies.phase = phase; proxy.phase(phase, latency);
@@ -198,22 +209,30 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
           reports.push(report); problems.push(...trafficProblems(report));
           console.error(`bench: ${report.name}: ${report.attempts} GETs, ${warm.length} warm GETs, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / report.referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / report.referenceEncoded}`);
         }
+        status=reports.filter(report=>report.name.startsWith(name+'/')).some(report=>trafficProblems(report).length)?'over-budget':'passed';
         break;
       } catch (error) {
         if (!(error instanceof HistoryCutChanged) || take === 3) throw new Error(`${name}: ${String(error)}`, {cause: error});
+        status='invalidated';
         invalidated.push({name, reason: error.message, reads: bodies.reads.map(read => ({phase: read.phase, from: read.from, to: read.to, count: read.count}))});
-      } finally {await observer?.close();await close();}
+      } finally {
+        evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name,status,geometry,cell,
+          reads:trafficReadEvidence(bodies.reads),reports:reports.filter(report=>report.name.startsWith(name+'/')),
+          transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),command:cdp.snapshot()});
+        await observer?.close();await close();
+      }
     }
   }
   return {reports, invalidated, problems};
 }
 
 /** Native cancellation/reversal keeps one Shift-wheel token while responses are owned. */
-export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false,profileBeforeInput=false) {
+export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false,profileBeforeInput=false,evidence?:Pick<Evidence,'save'>) {
   const reports = [];
   for (const length of [DAY, 30 * DAY]) for (const mode of ['before-headers', 'after-delivery', 'reversal'] as const) {
     if(diagnostic&&(length!==DAY||mode!=='reversal'))continue;
     const name = `browser/${length / DAY}d/${mode}`;
+    evidence?.save('traffic-stage', {name,stage:'seed'});
     console.error(`bench: ${name}: opening seed page`);
     const {cdp, bodies, settled, geometry, seed, cell, close} = await historyPage(browser, proxy, cookie, name, length, DAY);
     let observer:Awaited<ReturnType<typeof observeReversal>>|null=null;
@@ -269,6 +288,9 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
       console.error(`bench: ${name}: failure state ${JSON.stringify(state)}`);
       throw error;
     } finally {
+      evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name,stage,
+        status:reports.some(report=>report.name===name)?'passed':'failed',reads:trafficReadEvidence(bodies.reads),
+        reports:reports.filter(report=>report.name===name),transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),command:cdp.snapshot()});
       await observer?.close();
       cdp.at(`${name}/release shift`);
       await key('keyUp', 'Shift', 16, 0).catch(() => {}); await close();

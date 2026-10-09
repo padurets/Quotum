@@ -4,6 +4,17 @@ import {createServer} from 'node:http';
 import {brotliCompressSync, constants} from 'node:zlib';
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from '../historyProxy';
 import {HistoryCutChanged, bodyBounds, bodyTotals, stableHistory, trafficProblems, transferFor} from '../historyTrafficBudget';
+import {trafficReadEvidence} from '../historyTrafficBrowser';
+
+test('traffic evidence retains attempted ranges and body uncertainty without selection text or payloads', () => {
+  const read={selection:'board=private-canary',id:'1',phase:'cold',from:0,to:60,cell:1,lower:12,
+    before:Promise.resolve(['private-canary']),payload:'private-canary',count:{complete:false,lower:12,coding:'br'}};
+  const [saved]=trafficReadEvidence([read]);
+  assert.doesNotMatch(JSON.stringify(saved),/private-canary|payload|before/);
+  assert.equal(saved.from,0);assert.equal(saved.to,60);assert.equal(saved.count?.complete,false);
+  assert.equal(saved.count?.lower,12);assert.equal(saved.selectionHash.length,64);
+  assert.notEqual(saved.selectionHash,trafficReadEvidence([{...read,selection:'board=another'}])[0].selectionHash);
+});
 
 const transfer: Transfer = {id: '1', phase: 'cold', cell: 1, from: 0, to: 60, started: 0, sent: true, finished: true, aborted: false, decoded: 100, encoded: 40};
 test('body budgets require actual matching coding and payload lengths, never transport totals', () => {

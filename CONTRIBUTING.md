@@ -36,6 +36,10 @@ interval with numeric script/layout/paint/GC events, bounded to 32 MiB. Trace da
 never contains script sources, arguments, arbitrary URLs or user text. Missing
 scheduler evidence and truncated timelines remain explicit. An input's final
 geometry must still commit before it can be credited.
+`QUOTUM_BENCH_DIAGNOSE_IDLE=double` (the `benchmark-idle-diagnostics` PR
+label) checks one idle board, then two independent live copies over the same
+real cell transition. It records each copy's script cost and checks their sum
+against the unchanged budget. This sensitivity experiment cannot replace CI.
 The owned headless browser uses one raster worker: concurrent software raster jobs
 in Chrome 154 can leave a tile unfinished and deadlock an input frame's commit.
 An attached CDP browser retains its own launch settings.
