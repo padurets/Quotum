@@ -33,7 +33,9 @@ these diagnostic runs cannot satisfy the canonical gate. The optional
 `benchmark-diagnostics` PR label requests the same experiment in a separate CI job.
 `QUOTUM_BENCH_DIAGNOSE_PANNING=trace` (the `benchmark-trace-diagnostics` PR
 label) records an owned synthetic browser's new intervals with numeric
-script/layout/paint/GC events, bounded to 32 MiB per scenario. This is opt-in. Trace data
+script/layout/paint/GC events from `cc` and `devtools.timeline`, bounded to 32 MiB per
+scenario. Broad task instrumentation is excluded from this diagnostic; its delivery
+can exceed the unchanged five-second drain. This is opt-in. Trace data
 never contains script sources, arguments, arbitrary URLs or user text. Missing
 scheduler evidence and truncated timelines remain explicit. Trace events retain both
 elapsed and thread CPU time where Chrome supplies them, with start/end page clock

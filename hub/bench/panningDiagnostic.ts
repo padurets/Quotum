@@ -99,7 +99,9 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
   try {
     active=true;
     await deadline(5000,async signal=>{
-      await cdp.send('Tracing.start',{categories:'toplevel,devtools.timeline,v8,blink,cc',transferMode:'ReportEvents'},signal);
+      // Broad task instrumentation can outgrow the unchanged drain deadline.
+      // Timeline and compositor events retain the measured work and thread clocks.
+      await cdp.send('Tracing.start',{categories:'cc,devtools.timeline',transferMode:'ReportEvents'},signal);
       await clock('start',signal);
     },browser.owner?.signal);
     const result=await run();succeeded=true;return result;

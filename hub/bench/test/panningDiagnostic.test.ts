@@ -6,14 +6,14 @@ import {safeEvidence} from '../evidence.js';
 import type {SafeTrace} from '../traceEvents.js';
 
 function fixture() {
-  const listeners=new Map<string,(value:unknown)=>void>(),sent:string[]=[],files=new Map<string,unknown>();
+  const listeners=new Map<string,(value:unknown)=>void>(),sent:string[]=[],files=new Map<string,unknown>(),starts:object[]=[];
   const cdp={
     on:(method:string,callback:(value:unknown)=>void)=>listeners.set(method,callback),
     off:(method:string)=>listeners.delete(method),
-    send:async(method:string)=>{sent.push(method);if(method==='Tracing.end')listeners.get('Tracing.tracingComplete')?.({});return {metrics:[{name:'Timestamp',value:42}]};},
+    send:async(method:string,params:object)=>{sent.push(method);if(method==='Tracing.start')starts.push(params);if(method==='Tracing.end')listeners.get('Tracing.tracingComplete')?.({});return {metrics:[{name:'Timestamp',value:42}]};},
     evaluate:async()=>({now:7,timeOrigin:35}),
   } as unknown as Cdp;
-  return {cdp,listeners,sent,files,evidence:{save:(name:string,value:unknown)=>files.set(name,value),saveTrace:(name:string,value:unknown)=>files.set(name,value)}};
+  return {cdp,listeners,sent,files,starts,evidence:{save:(name:string,value:unknown)=>files.set(name,value),saveTrace:(name:string,value:unknown)=>files.set(name,value)}};
 }
 
 test('a trace retains only allowed numeric events from its own original interval', async()=>{
@@ -26,6 +26,7 @@ test('a trace retains only allowed numeric events from its own original interval
   const text=JSON.stringify(f.files.get('trace'));
   assert.ok(text.includes('Paint')&&!text.includes('private-canary')&&!text.includes('cookie'));
   assert.deepEqual(f.sent,['Tracing.start','Performance.getMetrics','Performance.getMetrics','Performance.getMetrics','Performance.getMetrics','Tracing.end']);
+  assert.deepEqual(f.starts,[{categories:'cc,devtools.timeline',transferMode:'ReportEvents'}]);
   assert.deepEqual((f.files.get('trace') as {events:{threadTs:number;threadDuration:number}[]}).events.map(event=>[event.threadTs,event.threadDuration]),[[100,1]]);
 });
 
