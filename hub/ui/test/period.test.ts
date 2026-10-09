@@ -130,6 +130,11 @@ test('a dense retained month adopts its decoded reservation within the shared me
   assert.equal(pool.reserve(flight,JSON.stringify(reply).length*3),true);
   await period.receive(reply,{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:selection.to}},bytes=>pool.reserve(flight,bytes));
   assert.equal(reply.quota!.state,'complete','lossless evidence must fit without dropping the period');
-  assert.ok(period.estimatedBytes>10*1024*1024);assert.ok(pool.estimatedBytes<=15*1024*1024);
+  assert.ok(period.estimatedBytes>5*1024*1024);assert.ok(pool.estimatedBytes<=15*1024*1024);
   pool.release(flight);
+  const delta:PeriodReply={basis,quota:{state:'complete',basis,value:{run:'r',now:selection.to,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:0,cut:selection.to,replaceFrom:2_699_000_000,cursor:'b',money:[],quota:[{source:'0',window:'w',samples:[2_699_400_000,12.5,-1,600000,-1]}]}}}};
+  assert.equal(pool.reserve(flight,JSON.stringify(delta).length*3),true);
+  await period.receive(delta,{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:selection.to}},bytes=>pool.reserve(flight,bytes));
+  assert.equal(delta.quota!.state,'complete','the next observation must rebuild exact prefixes while the old presentation stays available');
+  assert.ok(pool.estimatedBytes<=15*1024*1024);pool.release(flight);
 });

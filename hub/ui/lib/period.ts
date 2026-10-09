@@ -165,12 +165,12 @@ class BoardPeriod {
     // Keep the previous complete presentation if the new evidence cannot fit.
     // Charge decoded dictionaries and all derived prefixes before building them.
     const workBytes=(trace:WorkTrace|null)=>trace?JSON.stringify(trace).length*2+trace.spans.length*640+trace.refs.length*768:0;
-    const tapeBytes=(tape:PeriodTape)=>JSON.stringify({...tape,quota:tape.quota.map(s=>({...s,samples:[]}))}).length*2+tape.quota.reduce((n,s)=>n+s.samples.length*16+s.samples.length/5*128,0)+tape.money.reduce((n,s)=>n+s.readings.length*256+s.spans.length*192,0);
+    const tapeBytes=(tape:PeriodTape)=>JSON.stringify({...tape,quota:tape.quota.map(s=>({...s,samples:[]}))}).length*2+tape.quota.reduce((n,s)=>n+s.samples.length*8+s.samples.length/5*72,0)+tape.money.reduce((n,s)=>n+s.readings.length*256+s.spans.length*192,0);
     const cellsBytes=PERIOD_SCOPES.reduce((bytes,scope)=>{const part=reply[scope];if(part?.state!=='complete')return bytes;const {tape:_,...cells}=part.value;return bytes+JSON.stringify(cells).length*3;},0);
     let projected=cellsBytes;
     const admit=(bytes:number)=>{if(!reserve(projected+bytes))return false;projected+=bytes;return true;};
     const prefixes=(tape:PeriodTape|undefined)=>tape?tape.quota.reduce((n,s)=>n+s.samples.length/5*128,0)+tape.money.reduce((n,s)=>n+s.readings.length*192+s.spans.length*96,0):0;
-    for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part?.state==='complete'&&part.value.tape&&!admit(tapeBytes(part.value.tape)+prefixes(this.tapes.get(scope)?.tape)))reply[scope]={state:'error',error:'history_limit'};}
+    for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part?.state==='complete'&&part.value.tape&&!admit(tapeBytes(part.value.tape)+prefixes(part.value.tape)+prefixes(this.tapes.get(scope)?.tape)))reply[scope]={state:'error',error:'history_limit'};}
     const workPreparation=workBytes(this.work.value)+(reply.quota?.state==='complete'&&reply.quota.value.tape?0:prefixes(this.tapes.get('quota')?.tape));
     if(reply.sessions&&reply.sessions.state!=='error'&&!admit(workBytes(reply.sessions.value)+workPreparation))reply.sessions={state:'error',error:'history_limit'};
     if(reply.values?.state==='complete'&&!admit(JSON.stringify(reply.values.value).length*6))reply.values={state:'error',error:'history_limit'};
@@ -186,6 +186,7 @@ class BoardPeriod {
         const part=reply[scope],old=tapes.get(scope),incoming=part?.state==='complete'?part.value.tape:undefined;
         if(!incoming&&!(scope==='quota'&&old&&index))continue;
         const queryKey=JSON.stringify([intent.request[scope]?.meters,intent.request[scope]?.unit,intent.request[scope]?.currency]);
+        if(incoming)for(const series of incoming.quota){series.samples=new Float64Array(series.samples);yield;}
         const tape=incoming?yield* mergeTapePrepared(old?.queryKey===queryKey?old.tape:undefined,incoming):old!.tape;
         const accounting=yield* PeriodAccounting.prepare(tape,work);
         if(incoming){changed.add(scope);tapes.set(scope,{tape,accounting,generation:intent.generation,selection:intent.request.selection,rangeKey:intent.request.selection.mode==='range'?periodKey(intent.request.selection):prefs().range,queryKey});}
