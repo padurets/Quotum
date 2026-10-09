@@ -72,13 +72,18 @@ class Evidence:
         except (OSError, subprocess.SubprocessError):
             self.sha = None
         self.errors = []
-        try:
-            with open(executable, 'rb') as source:
-                self.package = hashlib.file_digest(source, 'sha256').hexdigest()
-        except OSError:
-            self.package = None
+        self.package = None
         if self.directory:
             self.directory.mkdir(parents=True, exist_ok=True)
+        self.save()
+        try:
+            with open(executable, 'rb') as source:
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                    digest.update(chunk)
+                self.package = digest.hexdigest()
+        except OSError:
+            self.errors.append('package hash unavailable')
         self.save()
 
     def record(self, stage, **values):

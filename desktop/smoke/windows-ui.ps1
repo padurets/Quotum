@@ -75,7 +75,10 @@ function Save-WaitChain {
     foreach($argument in @('-NoProfile','-File',(Join-Path $PSScriptRoot 'windows-waitchain.ps1'),'-Owner',[string]$process.Id,'-Birth',[string]$process.StartTime.ToUniversalTime().Ticks,'-Thread',[string]$reading.Thread)){$start.ArgumentList.Add($argument)}
     $probe=[Diagnostics.Process]::Start($start)
     $output=$probe.StandardOutput.ReadToEndAsync();$discard=$probe.StandardError.ReadToEndAsync()
-    if($probe.WaitForExit(2000) -and $output.IsCompleted -and $output.Result.Length -le 16384){$answer=$output.Result}
+    if($probe.WaitForExit(2000) -and $output.IsCompleted -and $probe.ExitCode -eq 0 -and $output.Result.Length -le 16384){
+      $decoded=ConvertFrom-Json -InputObject $output.Result
+      if($decoded.status){$answer=$output.Result}
+    }
     else {$answer='{"status":"timeout"}'}
   } catch {$answer='{"status":"unavailable"}'}
   finally {

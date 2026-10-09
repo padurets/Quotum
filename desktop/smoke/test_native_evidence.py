@@ -1,13 +1,38 @@
 import os
+import hashlib
+import json
 from pathlib import Path
 import subprocess
 import sys
 import time
+import tempfile
 import unittest
-from native_evidence import identity, paused
+from unittest.mock import patch
+from native_evidence import Evidence, identity, paused
 
 
 class PauseTests(unittest.TestCase):
+    def test_partial_evidence_hashes_safe_events_before_cleanup(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            executable = root / 'fixture'
+            executable.write_bytes(b'fixture package')
+            with patch.dict(os.environ, {'QUOTUM_SMOKE_DIAGNOSTICS_DIR': str(root / 'evidence')}):
+                evidence = Evidence(executable)
+                self.assertEqual(evidence.package, hashlib.sha256(b'fixture package').hexdigest())
+                log = root / 'app/logs/hub.log'
+                log.parent.mkdir(parents=True)
+                log.write_text('private-canary\napp: Chromium starts (pid 123)\napp: panel 8 visible\n')
+                evidence.product(root)
+                manifest = json.loads((evidence.directory / 'manifest.json').read_text())
+                body = (evidence.directory / 'timeline.json').read_bytes()
+                self.assertEqual(manifest['status'], 'running')
+                self.assertEqual(manifest['files'][0]['sha256'], hashlib.sha256(body).hexdigest())
+                self.assertNotIn(b'private-canary', body)
+                self.assertIn(b'123', body)
+                evidence.finish('failed')
+                self.assertEqual(json.loads((evidence.directory / 'manifest.json').read_text())['status'], 'failed')
+
     def test_exception_after_stop_always_resumes_the_same_process(self):
         child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
         try:
