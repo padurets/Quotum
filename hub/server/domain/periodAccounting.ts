@@ -2,7 +2,7 @@ import type {PeriodValues} from './periodValues.js';
 import {drain,type Preparation} from './prepare.js';
 import {edge} from './quota.js';
 import type {History,HistorySeries} from './history.js';
-import {sampleAt,sampleCount,numberAt,numberBytes,numberColumn,lowerNumber,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
+import {sampleAt,sampleCount,numberAt,numberBytes,numberColumn,lowerNumber,rateAt,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
 import type {MeterHistory} from './meterHistory.js';
 import {meterStep,plottedAmount,semanticsOf,type ExceptionalStep,type MeterSpan,type Reading,type MeterSemantics} from './meters.js';
 import {convertBy} from './currency.js';
@@ -130,20 +130,20 @@ class MoneyIndex {
     const group=this.group;
     for(const r of group.readings){this.times.push(r.at);yield;}for(const r of group.paired?.readings??[]){this.pairedTimes.push(r.at);yield;}
     const convert=(amount:string,reading:Reading)=>this.convert(amount,reading);
-    this.spent=yield* AmountIndex.prepare(group.readings,group.spans,convert);
+    this.spent=yield* AmountIndex.prepare(group.accounting?.spending==='unavailable'?[]:group.readings,group.spans,convert);
     // Account credits are a monotonically increasing funding counter; balance-only
     // suppliers have no accounting authority and never reach this result.
-    this.topup=group.paired?yield* AmountIndex.prepare(group.paired.readings,group.paired.spans,convert):yield* AmountIndex.prepare(group.readings,group.spans,convert,true);
+    this.topup=group.accounting?.topups==='unavailable'?yield* AmountIndex.prepare([],[],convert):group.paired?yield* AmountIndex.prepare(group.paired.readings,group.paired.spans,convert):yield* AmountIndex.prepare(group.readings,group.spans,convert,true);
     this.coverage=new Intervals(union(group.spans.map(s=>({from:s.from,to:Math.min(s.to+s.staleAfterMs+1,s.holdUntil??Infinity,s.interruptedAt??Infinity)}))));
   }
   private convert(value:string,reading:Reading,at=reading.at) {
     if(!this.group.displayUnit||reading.unit===this.group.displayUnit)return value;
-    const rates=this.group.rates?.[reading.unit+'\n'+at];return rates?convertBy(value,rates,reading.scale):null;
+    const rates=rateAt(this.group,reading.unit+'\n'+at);return rates?convertBy(value,rates,reading.scale):null;
   }
   private semantics(reading:Reading,at=reading.at):MeterSemantics {
     const original=semanticsOf(reading),converted=this.group.displayUnit&&this.group.displayUnit!==reading.unit;
     if(!converted)return original;
-    const steps=this.group.rates?.[reading.unit+'\n'+at];
+    const steps=rateAt(this.group,reading.unit+'\n'+at);
     const credits=this.group.paired?.readings[lower(this.pairedTimes,at+1)-1];
     const native=credits?(BigInt(credits.amount)-BigInt(reading.amount)).toString():plottedAmount(reading);
     return {...original,scale:6,limit:reading.limit===null?null:this.convert(reading.limit,reading,at),...(steps?.length?{conversion:{original:{meterId:this.group.meter,amount:native,unit:reading.unit,at,...(reading.scale===undefined?{}:{scale:reading.scale}),limit:reading.limit},rate:steps[0],steps}}:{})};

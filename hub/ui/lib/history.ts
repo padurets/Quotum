@@ -783,12 +783,13 @@ export class HistoryStore {
   }
 
   evictionCandidates() {
-    const target=this.interest?this.plotTarget():this.target(),shown=this.shown;
+    const target=this.interest?this.plotTarget():this.target();
     const candidates:{bytes:number;shownAt:number;drop:()=>void}[]=[];
     for(const [cell,tiles] of this.grids)for(const [n,tile] of tiles){
       if(this.reservations.has(`${cell}:${n}`))continue;
       if(this.active&&cell===target.cell&&tile.to>target.k0*cell&&tile.from<=(target.k1)*cell)continue;
-      if(this.active&&shown&&cell===shown.cellMs&&tile.to>shown.since&&tile.from<shown.to)continue;
+      // The complete displayed frame owns its geometry. Its former input tiles
+      // can leave the cache while a different target is prepared.
       candidates.push({bytes:tile.bytes,shownAt:tile.shownAt,drop:()=>{
         tiles.delete(n);this.plotChunks.delete(`${cell}:${tile.from}`);this.version++;this.aheadStopped=true;
         // Another reader can evict this tile while our final projection is yielding.
@@ -927,15 +928,21 @@ function usePeriodHistory(loader:HistoryStore):Shown {
   const panning=usePanning();
   const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>boardPeriod.getProjectionRevision(loader===fundsHistory?'funds':loader.scope??'quota'));
   const retained=useRef<{board:string;history:History}|null>(null);
+  const gesture=useRef<{active:boolean;target:string|null}>({active:false,target:null});
   return useMemo(()=>{
     const board=page.get().board?.id??'';if(retained.current?.board!==board)retained.current=null;
+    const selected=timeRange(),target=board+':'+(selected?timeRangeKey(selected):prefs().range);
+    if(panning!==null){gesture.current.active=true;gesture.current.target=null;}
+    else if(gesture.current.active){gesture.current.active=false;gesture.current.target=target;}
+    if(gesture.current.target!==target)gesture.current.target=null;
+    const folding=gesture.current.target===target;
     // The data layers move through their strips during a gesture. Keep the last
     // complete accounting frame until release, including its full opacity.
     if(panning!==null&&retained.current)return {...shown,history:retained.current.history,loading:false};
     if(!shown.history)return shown;
     const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=boardPeriod.projectionState(shown.history,scope);
-    if(!state.ready)return {...shown,history:retained.current?.history??null,loading:!state.error&&!shown.error,error:state.error??shown.error};
-    const history=boardPeriod.project(shown.history,scope);retained.current={board,history};return {...shown,history};
+    if(!state.ready)return {...shown,history:retained.current?.history??null,loading:!folding&&!state.error&&!shown.error,error:state.error??shown.error};
+    const history=boardPeriod.project(shown.history,scope);retained.current={board,history};if(!shown.loading)gesture.current.target=null;return {...shown,history,loading:folding?false:shown.loading};
   },[shown,revision,loader,panning]);
 }
 export function useHistory(): Shown {return usePeriodHistory(quotaHistory);}

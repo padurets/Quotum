@@ -71,7 +71,15 @@ function* replaceSamples(before:SampleRows,after:SampleRows,from:number,to:numbe
   return yield*retainSamplesPrepared(result);
 }
 
-export type MoneyTape = MeterGroup & {displayUnit?:string;rates?:Record<string,RateLeg[]|null>};
+export type MoneyTape = MeterGroup & {displayUnit?:string;rates?:Record<string,RateLeg[]|null>;rateBindings?:{paths:(RateLeg[]|null)[];entries:Record<string,number>}};
+export function rateAt(group:MoneyTape,key:string){const index=group.rateBindings?.entries[key];return index===undefined?group.rates?.[key]:group.rateBindings!.paths[index];}
+/** Observation anchors keep their identity while repeated complete rate paths share storage. */
+export function bindRate(group:MoneyTape,key:string,path:RateLeg[]|null):number {
+  const bindings=group.rateBindings??={paths:[],entries:{}},text=JSON.stringify(path);
+  let index=bindings.paths.findIndex(value=>JSON.stringify(value)===text),bytes=key in bindings.entries?0:128+key.length*2;
+  if(index<0){index=bindings.paths.length;bindings.paths.push(path);bytes+=128+text.length*2;}
+  bindings.entries[key]=index;return bytes;
+}
 type WindowDescriptor=Pick<import('./quota.js').Win,'id'|'kind'|'label'|'minutes'>;
 /** A complete initial tape covers every future position of a live left edge without IO. */
 export type PeriodTape = {
@@ -103,7 +111,10 @@ export function* mergeTapePrepared(previous:PeriodTape|undefined,next:PeriodTape
       const spans=yield* replace(old.paired.spans,paired.spans,s=>s.to<next.replaceFrom||s.from>=(next.replaceTo??Infinity),s=>s.from);
       paired={readings,spans};
     }
-    money.set(key,{...series,readings,spans,...(paired?{paired}:{}),rates:{...old?.rates,...series.rates}});
+    const merged:MoneyTape={...series,readings,spans,...(paired?{paired}:{}),rates:undefined,rateBindings:undefined};
+    const keys=new Set([old,series].flatMap(part=>[...Object.keys(part?.rates??{}),...Object.keys(part?.rateBindings?.entries??{})]));
+    for(const key of keys){const path=rateAt(series,key);bindRate(merged,key,path===undefined?rateAt(old!,key)!:path);yield;}
+    money.set(key,merged);
   }
   return {...next,from:Math.min(previous.from,next.from),quota:[...quota.values()],money:[...money.values()]};
 }

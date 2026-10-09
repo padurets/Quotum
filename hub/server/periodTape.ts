@@ -1,7 +1,7 @@
 import type {CellSamples} from './domain/cells.js';
 import type {Store,Shown} from './store/store.js';
 import type {PeriodRange} from './domain/period.js';
-import {encodeSamples,type PeriodTape,type MoneyTape} from './domain/periodTape.js';
+import {encodeSamples,bindRate,type PeriodTape,type MoneyTape} from './domain/periodTape.js';
 import type {HistoryScope} from './domain/history.js';
 import {selectionOf} from './domain/meterHistory.js';
 import type {HistoryQuery} from './domain/periodRead.js';
@@ -37,16 +37,16 @@ export function periodTape(store:Store,board:string,shown:Shown,user:string,scop
       group.spans=group.spans.filter(s=>s.to+s.staleAfterMs+1>=replaceFrom);
       if(group.paired)group.paired.spans=group.paired.spans.filter(s=>s.to+s.staleAfterMs+1>=replaceFrom);
       if(bindings&&target) {
-        group.displayUnit=target;group.rates={};
+        group.displayUnit=target;group.rateBindings={paths:[],entries:{}};
         for(const reading of [...group.readings,...group.paired?.readings??[]])if(isConvertible(reading.unit)) {
           const steps=bindings.binding(group.source,reading.unit,reading.at);
-          reserve(256+(steps?JSON.stringify(steps).length*2:0));group.rates[reading.unit+'\n'+reading.at]=steps;
+          reserve(bindRate(group,reading.unit+'\n'+reading.at,steps));
 
         }
         if(group.meter==='balance:credits')for(const span of group.spans)for(const at of [span.from,span.to]) {
-          const key='credits:codex\n'+at;if(key in group.rates)continue;
+          const key='credits:codex\n'+at;if(key in group.rateBindings.entries)continue;
           const steps=bindings.binding(group.source,'credits:codex',at);
-          reserve(256+(steps?JSON.stringify(steps).length*2:0));group.rates[key]=steps;
+          reserve(bindRate(group,key,steps));
         }
       }
       tape.money.push(group);

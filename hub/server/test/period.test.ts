@@ -2,6 +2,25 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {evaluatedRange, intersectPeriod, parsePeriod, periodKey} from '../domain/period.js';
 import {packWork,mergeWork,workedSessions,type WorkTrace} from '../domain/periodWork.js';
+import {bindRate,rateAt,mergeTape,type MoneyTape,type PeriodTape} from '../domain/periodTape.js';
+
+test('rate dictionaries preserve every observation anchor and revision without repeating paths',()=>{
+  const group:MoneyTape={source:'s',meter:'balance:credits',readings:[],spans:[]};
+  const path=[{id:'one',base:'credits:codex',from:'1000000',to:'40000',source:'manual',date:0,fetchedAt:123}];
+  for(let at=0;at<100;at++)bindRate(group,'credits:codex\n'+at,path);
+  bindRate(group,'credits:codex\n100',null);
+  bindRate(group,'credits:codex\n99',[{...path[0],id:'two',to:'30000',fetchedAt:456}]);
+  assert.equal(group.rateBindings!.paths.length,3);
+  for(let at=0;at<99;at++)assert.deepEqual(rateAt(group,'credits:codex\n'+at),path);
+  assert.equal(rateAt(group,'credits:codex\n99')![0].fetchedAt,456);
+  assert.equal(rateAt(group,'credits:codex\n100'),null);assert.equal(rateAt(group,'credits:codex\n101'),undefined);
+  assert.ok(JSON.stringify(group.rateBindings).length<JSON.stringify(Object.fromEntries(Array.from({length:100},(_,at)=>['credits:codex\n'+at,path]))).length/3);
+  const before:PeriodTape={from:0,cut:100,replaceFrom:0,cursor:'a',quota:[],money:[group]},updated:MoneyTape={source:'s',meter:group.meter,readings:[],spans:[]};
+  bindRate(updated,'credits:codex\n100',path);
+  const next={...before,cut:101,replaceFrom:99,money:[updated]},merged=mergeTape(before,next);
+  assert.deepEqual(rateAt(merged.money[0],'credits:codex\n100'),path);assert.equal(rateAt(group,'credits:codex\n100'),null);
+  assert.deepEqual(mergeTape(merged,next),merged,'retry keeps the same compact dictionary and anchors');
+});
 
 test('work patterns preserve clipped hours, gaps, replacement and retry without expanding the ledger',()=>{
   const refs=['a','b'].map(ref=>({ref,source:'s',device:{id:'d',name:'Laptop'},origin:'terminal' as const,project:ref,folder:null,startedAt:0}));

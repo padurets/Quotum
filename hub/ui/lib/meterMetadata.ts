@@ -2,7 +2,7 @@ import type {Conversion, RateLeg} from '../../server/domain/currency';
 import type {MeterSemantics} from '../../server/domain/meters';
 import type {Preparation} from './prepare';
 
-type Encoded = Omit<MeterSemantics, 'conversion'> & {conversion?: Omit<Conversion, 'rate' | 'steps'> & {rate: number; steps?: number[]}};
+type Encoded = [semantics:number,conversion?:[original:number,amount:string,at:number,rate:number,steps?:number[]]];
 type Entry = {text: string; references: number; children: number[]; bytes: number};
 
 /** Cells share immutable semantics and rate legs; references belong to one tile version. */
@@ -41,9 +41,10 @@ export class MeterMetadata {
   retainSemantics(value: MeterSemantics | null, references: Set<number>): number | null {
     if (!value) return null;
     const children: number[] = [];
-    const leg = (value: RateLeg) => {const id = this.retain(value); children.push(id); return id;};
+    const keep = (value: unknown) => {const id = this.retain(value); children.push(id); return id;};
     const {conversion, ...semantics} = value;
-    const encoded: Encoded = {...semantics, ...(conversion ? {conversion: {original: conversion.original, rate: leg(conversion.rate), ...(conversion.steps ? {steps: conversion.steps.map(leg)} : {})}} : {})};
+    const encoded:Encoded=[keep(semantics)];
+    if(conversion){const {amount,at,...original}=conversion.original;encoded.push([keep(original),amount,at,keep(conversion.rate),...(conversion.steps?[conversion.steps.map(keep)]:[])] as NonNullable<Encoded[1]>);}
     const id = this.retain(encoded, children);
     if (references.has(id)) this.release(id); else references.add(id);
     return id;
@@ -53,7 +54,9 @@ export class MeterMetadata {
     if (id === null) return null;
     const encoded = JSON.parse(this.entries.get(id)!.text) as Encoded;
     const leg = (id: number) => JSON.parse(this.entries.get(id)!.text) as RateLeg;
-    const {conversion, ...semantics} = encoded;
-    return {...semantics, ...(conversion ? {conversion: {original: conversion.original, rate: leg(conversion.rate), ...(conversion.steps ? {steps: conversion.steps.map(leg)} : {})}} : {})};
+    const semantics=JSON.parse(this.entries.get(encoded[0])!.text) as Omit<MeterSemantics,'conversion'>,conversion=encoded[1];
+    if(!conversion)return semantics;
+    const [original,amount,at,rate,steps]=conversion;
+    return {...semantics,conversion:{original:{...JSON.parse(this.entries.get(original)!.text) as Omit<Conversion['original'],'amount'|'at'>,amount,at},rate:leg(rate),...(steps?{steps:steps.map(leg)}:{})}};
   }
 }

@@ -1231,6 +1231,17 @@ test('an incoming family cannot evict the other visible frame or publish an over
   q.store.close();b.store.close();
 });
 
+test('a replacement can evict the former frame inputs while its complete drawing stays visible',async()=>{
+  const pool=new HistoryPool(40_000),h=harness(undefined,undefined,'quota',pool);
+  await h.start();await h.reads[0].answer();const retained=h.store.get().history;assert.ok(retained);
+  h.store.choose('24h',{from:NOW-60*H,to:NOW-36*H});await flush();
+  assert.ok(h.store.evictionCandidates().length,'former input cells are no longer pinned by the displayed projection');
+  const incoming={role:'visible' as const};assert.ok(pool.reserve(incoming,pool.budget-pool.estimatedBytes+1));
+  assert.equal(h.store.get().history,retained);assert.ok(pool.estimatedBytes<=pool.budget);
+  pool.release(incoming);await h.reads[1].answer();assert.notEqual(h.store.get().history,retained);assert.equal(h.store.get().error,undefined);
+  h.store.close();
+});
+
 test('every preparation slice accounts for private tile growth, including cancellation and rejection',async()=>{
   const prototype = HistoryTile.prototype as unknown as {mergePrepared(chunk: Chunk, known: HistoryAnswer['known']): Generator<void, void>};
   const original = prototype.mergePrepared;

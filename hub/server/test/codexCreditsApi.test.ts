@@ -86,7 +86,7 @@ test('the shared period keeps exact credit scale and grant anchors in values, ce
   assert.equal((await period({funds:query})).statusCode,404);
   const enabled=(await h.grant(h.bob.id,true,off.revision)).json().budget;
   h.advance(1000);
-  assert.deepEqual((await period({funds:query})).json().funds.value.tape.money[0].readings,[]);
+  assert.deepEqual((await period({funds:query})).json().funds.value.tape.fixed.money,[]);
   const at=Date.now(),measurement=creditMeasurement('finite',at);
   measurement.balances![0].amount='2.500000000001';h.store.record(h.source,measurement);
   h.advance(1000);
@@ -95,9 +95,12 @@ test('the shared period keeps exact credit scale and grant anchors in values, ce
   assert.equal(native.amount,'2500000000001');assert.equal(native.scale,12);assert.equal(native.at,at);
   assert.equal(value.creditBalance.status,'finite');
   assert.equal(value.meters.find((m:any)=>m.conversion)?.amount,'100000');
-  assert.equal(reply.funds.value.tape.money[0].readings[0].at,at);
-  assert.equal(reply.funds.value.tape.money[0].readings[0].scale,12);
-  assert.ok(reply.funds.value.tape.money[0].rates['credits:codex\n'+at]);
+  const summary=reply.funds.value.tape.fixed.money[0];
+  assert.equal(summary.end,'100000');assert.equal(summary.endScale,6);
+  assert.equal(summary.semantics.conversion.original.at,at);
+  assert.equal(summary.semantics.conversion.original.scale,12);
+  assert.equal(summary.semantics.conversion.original.amount,'2500000000001');
+  assert.ok(summary.semantics.conversion.steps.length);
   const cursor=reply.funds.value.tape.cursor;
   const removed=(await h.grant(h.bob.id,false,enabled.revision)).json().budget;
   assert.equal((await period({funds:{...query,evidence:cursor}})).statusCode,404);
@@ -106,5 +109,5 @@ test('the shared period keeps exact credit scale and grant anchors in values, ce
   const renewed=(await period({funds:{...query,evidence:cursor}})).json();
   assert.deepEqual(renewed.values.value[0].meters,[]);
   assert.equal(renewed.funds.value.tape.replaceTo,undefined,'a new grant cannot reuse a former grant cursor');
-  assert.deepEqual(renewed.funds.value.tape.money[0].readings,[]);
+  assert.deepEqual(renewed.funds.value.tape.fixed.money,[]);
 });

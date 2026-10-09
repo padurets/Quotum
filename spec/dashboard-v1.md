@@ -411,6 +411,10 @@ exclusive validity bound. Metadata is separate from repeated samples. A complete
 a live left boundary to move through its entire retained interval without further IO.
 New evidence extends or replaces that interval; a clock tick does not fetch history.
 Partial spending steps keep their uncertainty instead of becoming proportional amounts.
+Monetary tapes store repeated recorded exchange paths once in
+`rateBindings: {paths, entries}`. Each `entries` key is the native unit, a newline and
+the exact observation timestamp; its value indexes `paths`. A null path means an
+unavailable conversion. Paths retain every rate leg and its recorded provenance.
 
 A fixed selection replaces the rolling tape with `fixed: {range, cell, quota, money}`.
 The quota and money arrays contain exact history-series totals and only the first and
