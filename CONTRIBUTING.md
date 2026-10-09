@@ -117,6 +117,11 @@ The observer credits input after its coalesced position reaches the actual data 
 in the production RAF. Stationary input-free gaps are excluded; delayed pending input
 remains measurable. A last input committed on release waits for the final geometry and
 fold. These RAF proxies do not establish physical presentation.
+The expected position respects the transaction's captured history and live bounds,
+discarding overscroll on each delta as the gesture does. Every input remains measured,
+including one that reaches an already displayed boundary without scheduling a new RAF;
+stationary boundaries add no movement samples. Only the same gesture's reached position
+can credit its input, so a new gesture cannot hide an unfinished previous gesture.
 
 **The desktop app** (`desktop/`) shares a Rust controller between Electron on Linux
 and Tauri/WebView2 on Windows. `node desktop/prepare.mjs` builds the hub, downloads

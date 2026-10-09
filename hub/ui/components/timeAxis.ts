@@ -197,6 +197,8 @@ export function useTimeAxis({
       element.dataset.panOrigin = String(frame.originEnd);
       element.dataset.panScale = String((visual.to - visual.from) / ((width - left - right) * scale));
       element.dataset.panBase = String(pose.current.offset);
+      element.dataset.panMinEnd = String(pan.oldestEnd);
+      element.dataset.panMaxEnd = String(pan.newestEnd);
       setFolding(false);
     }
     const origin = captured.current;
@@ -212,6 +214,8 @@ export function useTimeAxis({
       delete element.dataset.panOrigin;
       delete element.dataset.panScale;
       delete element.dataset.panBase;
+      delete element.dataset.panMinEnd;
+      delete element.dataset.panMaxEnd;
       element.classList.remove('is-grabbing');
       element.classList.toggle('is-panning', finished.current !== null || folding);
       captured.current = null;

@@ -43,6 +43,8 @@ test('the actual axis publishes committed HTML owners and applies the captured C
   commits.shift()!();
   offsetIs(old.style.transform, 27);
   assert.equal(Number(svg.current.dataset.panScale), H / 270);
+  assert.equal(Number(svg.current.dataset.panMinEnd), pan.oldestEnd);
+  assert.equal(Number(svg.current.dataset.panMaxEnd), pan.newestEnd);
   const committed = paintPan.current;
   publish();
   assert.equal(paintPan.current, committed, 'input before commit retains the displayed callback');
@@ -56,6 +58,8 @@ test('the actual axis publishes committed HTML owners and applies the captured C
   assert.equal(released, 1, 'capture is released by the chart box, which owns the input');
   offsetIs(next.style.transform, 27, 'logical stop holds the last pose until its replacement commits');
   assert.equal(svg.current.dataset.panEnd, undefined);
+  assert.equal(svg.current.dataset.panMinEnd, undefined);
+  assert.equal(svg.current.dataset.panMaxEnd, undefined);
   const continued = pan.begin({source: source.current, input: 'pointer', selected, length: H, now, historyStart: 0, span: H, width: 270})!;
   pan.move(continued, -54); frames.shift()!(); paintPan.current();
   offsetIs(next.style.transform, 81, 'a new gesture can move the committed artwork before another render commits');

@@ -49,9 +49,11 @@ function fixture(initiator: 'quota'|'budget'|'funds' = 'quota', timeline = false
   };
   runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${panEvidenceScript(evidence?.timeline === true)}', panEvidenceScript(timeline)), context);
   const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {pending: object[]; timeline: {read(): {entries: {kind: string; inputId?: number; frameId?: number}[]}}}}).__quotumPan;
-  const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}) => {
+  for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg]) Object.assign(svg.dataset, {panMinEnd: '-1000000000', panMaxEnd: '1000000000'});
+  const limits = (min: number, max: number) => {for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg]) Object.assign(svg.dataset, {panMinEnd: String(min), panMaxEnd: String(max)});};
+  const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}, deltaX = 12) => {
     time = delivered;
-    const event = {type: 'wheel', cancelable: true, deltaX: 12, deltaMode, shiftKey: false, timeStamp: stamp};
+    const event = {type: 'wheel', cancelable: true, deltaX, deltaMode, shiftKey: false, timeStamp: stamp};
     listeners.get(initiator + ':wheel')!(event); handled(); bubble.get('wheel')!(event);
   };
   const update = (i: number, at: number, moves = true, synchronized = true, proportional = true, historyMoves = true, edgeMoves = true) => {
@@ -67,8 +69,67 @@ function fixture(initiator: 'quota'|'budget'|'funds' = 'quota', timeline = false
   };
   const frame = (at: number) => {time = at; return callbacks.splice(0);};
   const runFrame = (at: number) => frame(at).forEach(callback => callback(at));
-  return {reading, wheel, listeners, bubble, update, frame, runFrame, requestFrame: context.window.requestAnimationFrame, context, historySvg, activitySvg, budgetSvg, fundsSvg, fundsLayer, budgetLayer, historyLayer, activityLayer, activityClip};
+  return {reading, wheel, limits, listeners, bubble, update, frame, runFrame, requestFrame: context.window.requestAnimationFrame, context, historySvg, activitySvg, budgetSvg, fundsSvg, fundsLayer, budgetLayer, historyLayer, activityLayer, activityClip};
 }
+
+test('the probe retains clamped input and credits its reached boundary without inventing movement', () => {
+  for (const initiator of ['quota', 'budget', 'funds'] as const) {
+    const f = fixture(initiator); f.limits(0, 18);
+    f.wheel(0, 0); f.requestFrame(() => f.update(1, 16)); f.runFrame(16);
+    f.wheel(20, 20); f.runFrame(24);
+    assert.equal(f.reading.latency.length, 1, 'the boundary cannot be credited before its data layers reach it');
+    f.requestFrame(() => f.update(1.5, 32)); f.runFrame(32);
+    assert.equal(f.reading.latency.length, 2, 'the accepted delta ends at the production boundary');
+    const updated = f.reading.updated;
+    f.wheel(40, 40); f.runFrame(48);
+    assert.equal(f.reading.inputs, 3); assert.equal(f.reading.latency.length, 3, 'the stationary clamped input is retained');
+    assert.equal(f.reading.updated, updated, 'the boundary creates no moving frame');
+    f.wheel(50, 50, 0, () => {}, -12); f.requestFrame(() => f.update(.5, 64)); f.runFrame(64);
+    assert.equal(f.reading.latency.length, 4, 'reversal begins at the accepted boundary, without accumulated overscroll');
+    assert.equal(f.reading.pending.length, 0);
+  }
+});
+
+test('a released clamped input still waits for every final drawing and animation', () => {
+  const f = fixture(); f.limits(0, 18); f.wheel(0, 0); f.wheel(1, 1);
+  for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg]) delete svg.dataset.panEnd;
+  f.context.location.search = '?from=0&to=18'; f.runFrame(10);
+  assert.equal(f.reading.latency.length, 0, 'the address cannot establish the clamped geometry');
+  for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg]) svg.parentElement.dataset.axisEnd = '18';
+  f.fundsSvg.dataset.drawReady = 'false'; f.runFrame(20); assert.equal(f.reading.latency.length, 0);
+  f.fundsSvg.dataset.drawReady = 'true'; f.fundsLayer.getAnimations = () => [{playState: 'running'}]; f.runFrame(30);
+  assert.equal(f.reading.latency.length, 0, 'a retained boundary input cannot bypass a running follower fold');
+  f.fundsLayer.getAnimations = () => []; f.runFrame(40);
+  assert.deepEqual(Array.from(f.reading.latency), [40, 39]); assert.equal(f.reading.inputs, 2);
+  assert.equal(f.reading.updated, 0, 'final metadata creates no moving samples');
+});
+
+test('clamped inputs cannot make a stationary scenario pass the movement budget', () => {
+  const f = fixture(); f.limits(0, 0);
+  for (let i = 0; i < 100; i++) {f.wheel(i * 16, i * 16); f.runFrame(i * 16 + 8);}
+  assert.equal(f.reading.inputs, 100); assert.equal(f.reading.latency.length, 100);
+  assert.equal(f.reading.updated, 0); assert.equal(f.reading.frames.length, 0);
+  const reading = {...f.reading, initiator: 'quota' as const, period: '24h', series: 12, budgetSeries: 12, fundsSeries: 12, charts: 4, rate: 4, expectedPushes: 0, coldReads: 1};
+  assert.ok(panningProblems(reading).some(problem => problem.includes('all four charts')));
+  assert.ok(panningProblems(reading).some(problem => problem.includes('every input')));
+});
+
+test('a new gesture cannot credit an unpainted input from the previous gesture', () => {
+  const f = fixture(); f.wheel(0, 0);
+  f.wheel(20, 20, 0, () => {
+    for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg]) {
+      Object.assign(svg.dataset, {panToken: '2', panOrigin: '100', panEnd: '100'});
+      svg.dataset.drawFrom = '100'; svg.dataset.drawTo = String(Number(svg.dataset.drawTo) + 100);
+    }
+  });
+  f.requestFrame(() => {f.update(1, 32);for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg]) svg.dataset.panEnd = '112';}); f.runFrame(32);
+  assert.deepEqual(Array.from(f.reading.latency), [12], 'the new data position proves only the new gesture');
+  assert.equal(f.reading.pending.length, 1); assert.equal(f.reading.inputs, 2, 'the old input remains visible as missing evidence');
+  for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg]) {delete svg.dataset.panEnd;svg.parentElement.dataset.axisEnd = '12';}
+  f.runFrame(48);
+  assert.deepEqual(Array.from(f.reading.latency), [12], 'later final geometry cannot borrow the earlier gesture either');
+  assert.equal(f.reading.pending.length, 1);
+});
 
 test('the probe includes clipping transforms and rejects a missing inverse on the real data layer', () => {
   for (const correct of [true, false]) {

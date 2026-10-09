@@ -81,12 +81,14 @@ test('bounds discard overscroll, so reversal moves on its first delta', () => {
   const s = setup();
   const token = s.pan.begin(s.start)!;
   s.pan.move(token, 500);
+  assert.equal(s.pan.newestEnd, s.now);
   s.pan.move(token, -1);
   s.paint();
   assert.equal(s.pan.get()!.to, s.now - DAY / 500);
   s.pan.move(token, -100_000);
   s.paint();
   const end = s.pan.get()!.to;
+  assert.equal(s.pan.oldestEnd, end);
   s.pan.move(token, 1);
   s.paint();
   assert.equal(s.pan.get()!.to, end + DAY / 500);
