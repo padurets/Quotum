@@ -161,6 +161,19 @@ test('a denied period reservation cancels both stream branches without parsing o
   assert.equal(canceled,true);assert.equal(parsed,false);
 });
 
+test('restored replay programs stay inside the shared transport reservation',async t=>{
+  const body={basis:{run:'r'},values:{state:'complete',value:[{id:'s',states:{pathEncoding:'prefix',paths:[[0,'validFor','from'],[1,'to']],pieces:[[1,2]],changes:[[[0,1]],[[0,2]]]}}]}};
+  const json=JSON.stringify(body),size=new TextEncoder().encode(json).length*3;
+  t.mock.method(globalThis,'fetch',async()=>new Response(json));
+  const request={version:1 as const,selection:{mode:'range' as const,from:0,to:1},evaluatedAt:1};
+  await assert.rejects(fetchPeriod('b',request,new AbortController().signal,bytes=>bytes<=size),{code:'history_limit'});
+  let peak=0;
+  const restored=await fetchPeriod('b',request,new AbortController().signal,bytes=>{peak=Math.max(peak,bytes);return true;});
+  assert.ok(peak>size);
+  if(restored.values?.state!=='complete')throw new Error('missing values');
+  assert.deepEqual(restored.values.value[0].states,{paths:[['validFor','from'],['validFor','to']],pieces:[[1,2,[[0,1],[1,2]]]]});
+});
+
 test('a stale A response cannot publish after A to B to A or after new evidence during its flight',async()=>{
   const pool=new HistoryPool(),pending:((reply:PeriodReply)=>void)[]=[],applied:number[]=[];
   let generation=1,revision=1;

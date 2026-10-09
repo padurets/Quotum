@@ -112,6 +112,7 @@ export async function fetchPeriod(board:string,body:PeriodRequest,signal:AbortSi
     }
     const parsed=await response.json();
     if(!response.ok)throw new ApiError(response.status,parsed.error??'history_failed');
-    return expandPeriod(parsed as PeriodWireReply);
+    let expanded=0;
+    return expandPeriod(parsed as PeriodWireReply,extra=>{expanded+=extra;if(!reserve(bytes*3+expanded))throw new ApiError(413,'history_limit');});
   }finally{reader.releaseLock();}
 }

@@ -1355,6 +1355,10 @@ can reuse the proof even when native input moves an endpoint to the other side o
 boundary. Card states retain their own observation and availability intervals. Amounts
 and spending steps are replaced exactly at changes, never interpolated. Positions
 outside the retained proof require new evidence.
+On the wire, replay programs group changes by field and share path prefixes. The
+browser charges restored path and patch containers before allocation, then restores
+the same exact edits for replay. This encoding never changes supplier evidence or
+interpolates fractional values.
 Widgets keep their last complete presentation during replacement, including native panning.
 Cold drawing cells and resource evidence are read separately; live ledgers are split
 by resource family, while compact fixed summaries share one response. Preparation

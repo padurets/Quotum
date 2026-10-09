@@ -1,6 +1,7 @@
 import {PERIOD_SCOPES,type PeriodReply} from './periodRead.js';
 import type {MeterSemantics} from './meters.js';
 import type {Conversion,RateLeg} from './currency.js';
+import {packPeriodSequences,expandPeriodSequences} from './periodSequenceWire.js';
 
 /** The dictionary applies only to monetary cell semantics, never to native evidence. */
 type WireSemantics=Omit<MeterSemantics,'conversion'>&{conversion?:Omit<Conversion,'rate'>&{rate:RateLeg|number}};
@@ -19,6 +20,7 @@ function* slots(reply:PeriodWireReply):Generator<Slot>{
 
 /** Share complete repeated semantics; their amounts, observation times and provenance stay exact. */
 export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void){
+  const sequences=packPeriodSequences(reply,reserve);
   type Entry={value:WireSemantics;count:number;index?:number};
   const entries=new Map<string,Entry>();
   const keys=new WeakMap<object,Partial<Record<'semantics'|'openSemantics',Entry>>>();
@@ -41,6 +43,7 @@ export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void)
   const moneySemantics:WireSemantics[]=[];
   for(const entry of entries.values())if(entry.count>1){entry.index=moneySemantics.length;moneySemantics.push(entry.value);}
   return {moneySemantics,rateLegs,replacer:function(this:unknown,key:string,value:unknown){
+    if(value&&typeof value==='object'&&sequences.has(value))return sequences.get(value);
     if(!this||typeof this!=='object'||key!=='semantics'&&key!=='openSemantics')return value;
     const entry=keys.get(this)?.[key];
     return entry?.index??entry?.value??value;
@@ -48,7 +51,8 @@ export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void)
 }
 
 /** Restore aliases in the already charged native JSON body without copying its cells. */
-export function expandPeriod(reply:PeriodWireReply):PeriodReply{
+export function expandPeriod(reply:PeriodWireReply,reserve:(bytes:number)=>void=()=>{}):PeriodReply{
+  expandPeriodSequences(reply as PeriodReply,reserve);
   const dictionary=reply.moneySemantics;
   if(dictionary||reply.rateLegs){
     for(const slot of slots(reply))for(const key of ['semantics','openSemantics'] as const){

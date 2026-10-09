@@ -4,6 +4,9 @@ import {periodDictionary,expandPeriod,type PeriodWireReply} from '../domain/peri
 import type {PeriodReply} from '../domain/periodRead.js';
 import type {MeterSemantics} from '../domain/meters.js';
 import {compactJSON} from '../history.js';
+import {withShiftWindow,shifted} from '../domain/periodShift.js';
+import {withValueStates,periodValueAt,type PeriodValues} from '../domain/periodValues.js';
+import {brotliCompressSync,constants} from 'node:zlib';
 
 test('period dictionaries preserve exact observations, null inheritance and recorded rate paths',()=>{
   const rate={id:'recorded',source:'manual',base:'credits:codex',from:'1000000',to:'40000',date:3,fetchedAt:4};
@@ -29,4 +32,40 @@ test('period dictionaries preserve exact observations, null inheritance and reco
   assert.throws(()=>expandPeriod(broken),/invalid_period_rate/);
   const missing=JSON.parse(json);missing.moneySemantics=[];
   assert.throws(()=>expandPeriod(missing),/invalid_period_semantics/);
+});
+
+test('field-grouped replay programs preserve exact fixed summaries and card states in both directions',()=>{
+  const read=(offset:number)=>({range:{from:1000+offset,to:2000+offset},cell:50,money:[],quota:Array.from({length:24},(_,i)=>({
+    sourceId:`s${i}`,windowId:'weekly',consumed:offset<10?i+.100000000000003:i+.200000000000007,coveredMs:1000-offset,
+    remainingAtStart:offset<30?null:0,remainingAtEnd:offset<10?1:2,
+    points:[...(offset<20?[[1000+offset,37.125,1,1020]]:[]),[1100,i+.25,2,1200],...(offset>=20?[[1900,42.125,3,2000+offset]]:[])],
+    ...(offset<10?{work:{from:1000+offset,ms:10}}:offset<30?{}:{work:{from:1030,ms:0}}),
+  }))});
+  const fixed=withShiftWindow(read(0),read,[-20,0,10,20,30,50],()=>{});
+  const value=(i:number):PeriodValues=>({id:'s',provider:'codex',windows:[],keys:[],validFor:{from:i*10,to:(i+1)*10},
+    meters:[{id:'balance:credits',kind:'balance',amount:`90071992547409931234${i}`,unit:'credits:codex',at:i*10,staleAfterMs:100,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null}]});
+  const states=withValueStates(value(2),Array.from({length:8},(_,i)=>value(i)),()=>{});
+  const basis={run:'r',revision:'1',evaluatedAt:3000,evidenceCut:3000,range:fixed.range};
+  const reply={basis,quota:{state:'complete',basis,value:{chunks:[],tape:{fixed}}},values:{state:'complete',basis,value:[states]}} as unknown as PeriodReply;
+  const before=JSON.stringify(reply);let serverBytes=0,clientBytes=0;
+  const dictionary=periodDictionary(reply,n=>{serverBytes+=n;});
+  const json=compactJSON(reply,dictionary.replacer);assert.ok(json.includes('"pathEncoding":"prefix"'));
+  const compressed=(s:string)=>brotliCompressSync(s,{params:{[constants.BROTLI_PARAM_QUALITY]:4}}).length;
+  assert.ok(compressed(json)<compressed(compactJSON(reply)),'the exact repeated programs must compress better');
+  const restored=expandPeriod(JSON.parse(json),n=>{clientBytes+=n;});assert.ok(clientBytes>0&&serverBytes>0);
+  if(restored.quota?.state!=='complete'||restored.values?.state!=='complete')throw new Error('missing sections');
+  let moved=restored.quota.value.tape!.fixed!;
+  for(const offset of [49,-20,20,0,9,10,29,30,19,1]){
+    moved=shifted(moved,{from:1000+offset,to:2000+offset})!;
+    const {shift:_,...actual}=moved;assert.deepEqual(actual,read(offset));
+  }
+  let card=restored.values.value[0];
+  for(const i of [7,0,2,5,1,6,3,4]){card=periodValueAt(card,i*10)!;const {states:_,...actual}=card;assert.deepEqual(actual,value(i));}
+  assert.equal(JSON.stringify(reply),before,'packing cannot mutate retained evidence');
+  assert.equal(expandPeriod(restored,()=>{throw new Error('already expanded');}),restored);
+  const denied=JSON.parse(json),unchanged=JSON.stringify(denied);
+  assert.throws(()=>expandPeriod(denied,()=>{throw new Error('denied');}),/denied/);
+  assert.equal(JSON.stringify(denied),unchanged,'allocation denial precedes the first expansion');
+  const malformed=JSON.parse(json);malformed.quota.value.tape.fixed.shift.window.paths[0][0]=100;
+  assert.throws(()=>expandPeriod(malformed),/invalid_period_sequence/);
 });

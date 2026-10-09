@@ -532,6 +532,16 @@ Unchanged prefixes and suffixes remain exact. Within a covered piece, advance
 using its own slopes. Gaps have no proof. Cell, observation and deadline boundaries
 are explicit pieces; monetary strings and changing arrays are replaced exactly.
 The immutable start also makes repeated moves independent of the previous position.
+Fixed shift windows and card `states` may use `pathEncoding:"prefix"` on the wire.
+Each `paths` entry is then `[sharedLength,...suffix]`, extending the preceding decoded
+path (initially empty). The last changes array is removed from each piece; a parallel
+`changes` array has one row per path. Each row contains the original operations with
+their first element replaced by the zero-based piece index. Restore those operations
+into their pieces before replay. Edits within a piece address disjoint fields: a parent
+replacement never accompanies a descendant edit. Restoring them in path order preserves
+the exact result, including deletions, nulls, splices and fractional values. Clients
+charge the additional path and operation containers before allocating them. The encoding
+is optional and scoped to a single response; it does not change proof coverage or evidence.
 These optional proofs and nearby value states share existing memory limits and may
 be omitted when they cannot fit. Outside proven positions a new summary is required.
 Only optional current presence
