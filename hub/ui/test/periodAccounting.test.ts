@@ -67,3 +67,17 @@ test('credit heartbeats keep exact coefficients and their own valuation without 
   assert.equal(after.end,'75000');assert.equal(after.spent,null);assert.equal(after.topup,null);
   assert.equal(after.points.find(p=>p.at===40000)?.value,'75000');
 });
+
+
+test('quota evidence can precede work without fabricating dates, and keeps the source sharing boundary',()=>{
+  const evidence=tape();evidence.quota=[{source:'s',window:'w',workFrom:20000,samples:[{at:0,used:10,resetAt:null,staleAfterMs:60000},{at:30000,used:20,resetAt:null,staleAfterMs:60000}]}];
+  const frame={...blank,live:false};
+  const pending=new PeriodAccounting(evidence,null).project(frame,{from:0,to:40000});
+  assert.equal(pending.series[0].remainingAtEnd,80);assert.equal(pending.series[0].work,null,'measurement-only replies cannot create a work date');
+  const refs=[{ref:'one',source:'s',device:{id:'d',name:'D'},origin:'terminal' as const,project:null,folder:null,startedAt:0}];
+  const accounting=new PeriodAccounting(evidence,{anchor:0,cut:60000,knownFrom:0,refs,spans:[[0,20000,30000]]});
+  const before=accounting.project(frame,{from:0,to:15000}).series[0].work!;
+  assert.equal(before.from,20000);assert.equal(before.ms,null,'work before sharing remains unknown');
+  const after=accounting.project(frame,{from:0,to:40000}).series[0].work!;
+  assert.equal(after.from,20000);assert.equal(after.ms,10000);
+});

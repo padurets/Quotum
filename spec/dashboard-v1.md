@@ -398,7 +398,9 @@ under its own basis while a requested replacement is pending or failed.
 
 Quota, wallet budget and subscription-funds values contain the compatible history reply below and, unless skipped,
 a `tape`. A tape contains exact native sample anchors and monetary readings, availability
-spans, original allowances and recorded currency bindings. Its `from` and `cut` delimit
+spans, original allowances and recorded currency bindings. Native quota series also
+carry `workFrom`, the source's authorized work boundary. An absent work section does
+not project zero work or a fictional date; work columns remain unavailable until it arrives. Its `from` and `cut` delimit
 retained evidence; `replaceFrom` and optional `replaceTo` delimit the interval replaced
 by a delta. Metadata is separate from repeated samples. A complete initial tape allows
 a live left boundary to move through its entire retained interval without further IO.

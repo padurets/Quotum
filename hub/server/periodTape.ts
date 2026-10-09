@@ -22,7 +22,7 @@ export function periodTape(store:Store,board:string,shown:Shown,user:string,scop
         const previous=descriptors.at(-1)?.value;
         if(!previous||previous.kind!==kind||previous.label!==label||previous.minutes!==minutes){reserve(128+(label?.length??0)*2);descriptors.push({at,value:{id:window,kind,label,minutes}});}
       }
-      if(samples.length){const row=descriptor.get(id,membershipAt,id,window,membershipAt);if(!row)continue;reserve(192+String(row.label??'').length*2);tape.quota.push({source:id,window,samples:store.quotaAvailability(id,samples,true,reserve),descriptors,member:!!row.member,windowValue:{id:window,kind:row.kind as 'session'|'weekly'|'other',label:row.label as string|null,minutes:row.minutes as number|null}});}
+      if(samples.length){const row=descriptor.get(id,membershipAt,id,window,membershipAt);if(!row)continue;reserve(192+String(row.label??'').length*2);tape.quota.push({source:id,window,workFrom:shown.get(id)!.since,samples:store.quotaAvailability(id,samples,true,reserve),descriptors,member:!!row.member,windowValue:{id:window,kind:row.kind as 'session'|'weekly'|'other',label:row.label as string|null,minutes:row.minutes as number|null}});}
     }
   }
   if(query.meters) {

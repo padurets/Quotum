@@ -517,7 +517,7 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
       </>:caps?<QuotaCard source={source} ids={shownPeriods.map(w=>w.id)}/>:budgetVisible(source)&&providerOf(source.provider)?.funding==='wallet'&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
       {visible.map(w=><Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>)}
       {noEvidence&&<div className="card-empty">{t('period.noEvidence')}</div>}
-      {!historical&&!caps&&!source.windows.length&&!source.meters&&<div className="card-empty">{errorText(source.error??'waiting')}</div>}
+      {!historical&&!caps&&!source.windows.length&&!budgetVisible(source)&&!source.meters&&<div className="card-empty">{errorText(source.error??'waiting')}</div>}
       {!!periods.length&&!shownPeriods.length&&<AllHidden source={source} arrange={arrange}/>}
       {historical&&<PeriodStatus {...reading}/>}
     </div>

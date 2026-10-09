@@ -8,7 +8,7 @@ type WindowDescriptor=Pick<import('./quota.js').Win,'id'|'kind'|'label'|'minutes
 /** A complete initial tape covers every future position of a live left edge without IO. */
 export type PeriodTape = {
   from:number;cut:number;replaceFrom:number;replaceTo?:number;cursor:string;
-  quota:(CellSamples&{member?:boolean;windowValue?:WindowDescriptor;descriptors?:{at:number;value:WindowDescriptor}[]})[];money:MoneyTape[];
+  quota:(CellSamples&{workFrom?:number;member?:boolean;windowValue?:WindowDescriptor;descriptors?:{at:number;value:WindowDescriptor}[]})[];money:MoneyTape[];
 };
 
 function* replace<T>(before:readonly T[],after:readonly T[],keep:(row:T)=>boolean,key:(row:T)=>number):Preparation<T[]> {

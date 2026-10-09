@@ -65,7 +65,7 @@ class QuotaIndex {
     const sum=(values:number[])=>hi>lo?values[hi]-values[lo]:0;
     const workRange={from:Math.max(range.from,this.known),to:range.to};
     const workLo=lower(this.starts,workRange.from);
-    return {consumed:sum(this.spent),coveredMs:sum(this.covered),remainingAtStart:valid(first,range.from),remainingAtEnd:valid(last,range.to),work:{from:workRange.from,ms:workRange.to>workRange.from?this.activity.in(workRange):null,agentMs:workRange.to>workRange.from?this.agent.reduce((n,trace)=>n+trace.in(workRange),0):0,consumed:hi>workLo?this.spent[hi]-this.spent[workLo]:0,coveredMs:sum(this.worked),duringWork:sum(this.during)}};
+    return {consumed:sum(this.spent),coveredMs:sum(this.covered),remainingAtStart:valid(first,range.from),remainingAtEnd:valid(last,range.to),work:Number.isFinite(this.known)?{from:workRange.from,ms:workRange.to>workRange.from?this.activity.in(workRange):null,agentMs:workRange.to>workRange.from?this.agent.reduce((n,trace)=>n+trace.in(workRange),0):0,consumed:hi>workLo?this.spent[hi]-this.spent[workLo]:0,coveredMs:sum(this.worked),duringWork:sum(this.during)}:null};
   }
 }
 
@@ -182,7 +182,7 @@ export class PeriodAccounting {
       this.sampleTimes.set(series.source+'\n'+series.window,series.samples.map(s=>s.at));
       const traces=[...(sources.get(series.source)?.values()??[])],all=traces.flat();
       const activity=new Intervals(union(all.map(([from,to])=>({from,to}))));
-      this.quota.set(series.source+'\n'+series.window,yield* QuotaIndex.prepare(series,activity,traces.map(s=>new Intervals(s)),work?.knownFrom??Infinity));
+      this.quota.set(series.source+'\n'+series.window,yield* QuotaIndex.prepare(series,activity,traces.map(s=>new Intervals(s)),Math.max(work?.knownFrom??Infinity,series.workFrom??0)));
     }
     for(const group of tape.money)this.money.set(group.source+'\n'+group.meter+'\n'+(group.displayUnit??group.readings[0]?.unit),yield* MoneyIndex.prepare(group));
   }

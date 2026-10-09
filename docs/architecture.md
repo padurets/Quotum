@@ -1284,7 +1284,7 @@ monetary values retain their original amounts, allowances and conversion evidenc
 Current operational status, connector failures, actions, forecasts and reset news remain
 live. Compact mode and native notifications also remain live.
 
-The board's period coordinator collects quota, budget, value and session demands into
+The board's period coordinator collects quota, wallet budget, subscription funds, value and session demands into
 one read-only `POST /api/boards/:board/period`. The old history route and the composite
 route call the same cell reader. Sections succeed or fail independently. A retained
 presentation keeps its own interval while a replacement loads or fails. Board, access,
