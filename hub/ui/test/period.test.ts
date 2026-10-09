@@ -1,5 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {PeriodAccounting} from '../lib/periodAccounting.js';
+import {mergeTapePrepared} from '../../server/domain/periodTape.js';
+import {drain} from '../lib/prepare.js';
 import {PeriodIndex} from '../lib/periodIndex.js';
 import {PeriodTransport,type PeriodIntent} from '../lib/periodTransport.js';
 import {HistoryPool} from '../lib/historyPool.js';
@@ -81,4 +84,28 @@ test('presence expires at the confirmation deadline even when neither accounting
   assert.equal(index.advance(range,30).rows[0].working,true);assert.equal(index.changesAt(30,100),50);
   const expired=index.advance(range,50);assert.equal(expired.changed,true);assert.equal(expired.rows[0].working,false);assert.equal(expired.rows[0].workedMs,10);
   assert.equal(index.presenceChangesAt(),100);assert.equal(index.advance(range,100).rows[0].currentPresence,undefined);
+});
+
+
+test('a sibling chart reply cannot cancel the coordinator preparation of historical card values',async()=>{
+  const pending:(()=>void)[]=[],value={id:'s',provider:'codex',windows:[],meters:[],keys:[]};
+  const context={exports:{} as {BoardPeriod:new()=>{receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;getValue(id:string):{value:unknown}}},
+    hubNow:()=>5_000_000,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},preparations:()=>null,
+    prepareAsync:(_owner:unknown,work:Parameters<typeof drain>[0])=>new Promise(resolve=>pending.push(()=>resolve(drain(work)))),
+    evaluatedRange,periodKey,PeriodAccounting,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    prefs:()=>({range:'1h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
+  };
+  const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
+  const body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const period=new context.exports.BoardPeriod(),selection={mode:'range' as const,from:1_400_000,to:5_000_000};
+  const basis={run:'r',revision:'1',evaluatedAt:5_000_000,evidenceCut:5_000_000,range:selection};
+  const intent:PeriodIntent={board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:5_000_000}};
+  const first=period.receive({basis,values:{state:'complete',basis,value:[value]}},intent);await settle();
+  const second=period.receive({basis,funds:{state:'complete',basis,value:{run:'r',now:5_000_000,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:1_400_000,cut:5_000_000,replaceFrom:1_400_000,cursor:'c',quota:[],money:[]}}}},intent);await settle();
+  assert.equal(pending.length,1,'only the first reply owns the preparation slot');
+  pending.shift()!();await first;await settle();assert.equal(period.getValue('s').value,value);
+  assert.equal(pending.length,1);pending.shift()!();await second;
+  assert.equal(period.getValue('s').value,value,'the sibling starts from the committed values');
 });

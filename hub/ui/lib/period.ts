@@ -32,6 +32,7 @@ const noValue=empty<PeriodValues>(),noSessions:WorkedSession[]=[];
 class BoardPeriod {
   private active=false;
   private readonly preparationOwner={};
+  private receiving=Promise.resolve();
   private generation=0;
   private revision=0;
   private evaluatedAt=hubNow();
@@ -147,7 +148,13 @@ class BoardPeriod {
       }
     }
   }
-  private async receive(reply:PeriodReply,intent:PeriodIntent) {
+  private receive(reply:PeriodReply,intent:PeriodIntent) {
+    // Sibling resource replies share one retained projection. Let each commit before
+    // taking the next snapshot, so a later chart cannot cancel values or sessions.
+    const next=this.receiving.then(()=>this.applyReply(reply,intent));
+    this.receiving=next.catch(()=>{});return next;
+  }
+  private async applyReply(reply:PeriodReply,intent:PeriodIntent) {
     if(intent.generation!==this.generation||intent.revision!==this.revision)return;
     const changed=new Set<PeriodScope>();
     const staging={role:'visible' as const};
