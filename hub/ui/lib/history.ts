@@ -17,7 +17,7 @@ import type {MeterSelection} from '../../server/domain/meterHistory';
 import type {MoneyFamily} from '../../server/domain/providers';
 import {moneySelection} from './moneySelection';
 import {subscriptionSelection} from './subscription';
-import {pan, type Pan} from './pan';
+import {pan,usePanning, type Pan} from './pan';
 import {plotPrepared, type Coverage, type PlotBuffer} from './historyPlot';
 
 import {prepare, preparations, type Preparation, type Preparations} from './prepare';
@@ -924,15 +924,19 @@ if (typeof window !== 'undefined') {
 }
 function usePeriodHistory(loader:HistoryStore):Shown {
   const shown=useSyncExternalStore(loader.subscribe,loader.get,loader.get);
+  const panning=usePanning();
   const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>boardPeriod.getProjectionRevision(loader===fundsHistory?'funds':loader.scope??'quota'));
   const retained=useRef<{board:string;history:History}|null>(null);
   return useMemo(()=>{
     const board=page.get().board?.id??'';if(retained.current?.board!==board)retained.current=null;
+    // The data layers move through their strips during a gesture. Keep the last
+    // complete accounting frame until release, including its full opacity.
+    if(panning!==null&&retained.current)return {...shown,history:retained.current.history,loading:false};
     if(!shown.history)return shown;
     const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=boardPeriod.projectionState(shown.history,scope);
     if(!state.ready)return {...shown,history:retained.current?.history??null,loading:!state.error&&!shown.error,error:state.error??shown.error};
     const history=boardPeriod.project(shown.history,scope);retained.current={board,history};return {...shown,history};
-  },[shown,revision,loader]);
+  },[shown,revision,loader,panning]);
 }
 export function useHistory(): Shown {return usePeriodHistory(quotaHistory);}
 export function useBudgetHistory(family:MoneyFamily='budget'): Shown {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory);}

@@ -136,7 +136,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
       }
     };
     await settled();
-    await cdp.evaluate(`(() => {const style=document.createElement('style');style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important}.widget:not(:has(.history,.activity)){display:none!important}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:260px!important}.activity .chart>svg{height:180px!important}.legend{max-height:40px;overflow:auto}';document.head.append(style);document.querySelector('.analytics-head').scrollIntoView();})()`);
+    await cdp.evaluate(`(() => {const style=document.createElement('style');style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important;--fill:0px!important}.widget:not(:has(.history,.activity)){display:none!important}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:260px!important}.activity .chart>svg{height:180px!important}.legend{max-height:40px;overflow:auto}';document.head.append(style);document.querySelector('.analytics-head').scrollIntoView();})()`);
     await settled();
     const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number}>(`(() => {const svg=document.querySelector(${JSON.stringify(future ? '.history .chart>svg' : '.activity .chart>svg')});svg.scrollIntoView({block:'center'});const r=svg.getBoundingClientRect(),left=${future ? 40 : 48};return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-left-12)/svg.viewBox.baseVal.width,series:document.querySelectorAll('.history .series[d]:not([d=""])').length};})()`);
     assert.ok(geometry.series >= 12, `${name}: fewer than twelve actual series`);
@@ -183,7 +183,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         await proxy.settled(phase);
         const families = [];
         for (const selection of new Set(cold.map(read => read.selection))) {
-          const group = seeds.get(selection); assert.ok(group, 'the gesture must retain its seeded resource selection');
+          const group = seeds.get(selection); assert.ok(group, 'the gesture must retain its seeded resource selection: '+JSON.stringify({selection,seeds:[...seeds.keys()]}));
           assert.equal(new URLSearchParams(selection).get('board'), board);
           const scope = new URLSearchParams(selection).get('scope'), reads = cold.filter(read => read.selection === selection);
           const requested = new Set<number>(), visited = new Set<number>(), ahead = scope === 'budget' ? 0 : DAY;

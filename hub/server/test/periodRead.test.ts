@@ -1,4 +1,3 @@
-import {decodeSamples,sampleAt,sampleCount} from '../domain/periodTape.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {Store} from '../store/store.js';
@@ -52,13 +51,13 @@ test('period values use the last batch strictly before the boundary and keep exp
   }finally{store.close();}
 });
 
-test('a cached cell range can read exact evidence without extracting any cell or work',async t=>{
+test('a cached cell range reads exact totals and boundaries without rebuilding cells',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   h.store.record(h.source,{observedAt:now-M,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:now+H}]});
   let work=0;const original=h.store.agentWork.bind(h.store);t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{work++;return original(...args);});
   const response=await h.read({version:1,selection:{mode:'range',from:now-H,to:now-1},evaluatedAt:now,quota:{cell:String(M),from:String(now-H),to:String(now),cells:'skip'}});
   assert.equal(response.statusCode,200,response.body);const part=response.json<PeriodReply>().quota!;if(part.state!=='complete')throw new Error('quota');
-  assert.deepEqual(part.value.chunks,[]);assert.equal(sampleAt(part.value.tape!.quota[0].samples,sampleCount(part.value.tape!.quota[0].samples)-1)?.used,17);assert.equal(work,0);
+  assert.deepEqual(part.value.chunks,[]);assert.deepEqual(part.value.tape!.quota,[]);assert.equal(part.value.tape!.fixed!.quota[0].remainingAtEnd,83);assert.equal(work,1);
 });
 
 test('an oversized section does not discard siblings or retain its failed reservation',async t=>{
@@ -125,7 +124,7 @@ test('period access is rechecked, malformed sections fail, and the legacy route 
 });
 
 
-test('an earlier range extends the complete index without rereading its existing tail or duplicating crossings',async t=>{
+test('a fixed range summarizes its own work without rewriting the retained live index',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   h.credit(now-2*H,now-30*M);
   const request:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,sessions:{}};
@@ -134,13 +133,12 @@ test('an earlier range extends the complete index without rereading its existing
   t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{ranges.push(args.slice(0,2) as number[]);return original(...args);});
   const past={mode:'range' as const,from:now-2*H,to:now-H};
   const extended=(await h.read({...request,selection:past,sessions:{cursor:initial.value.cursor}})).json<PeriodReply>().sessions!;
-  if(extended.state!=='delta')throw new Error('extension');
+  if(extended.state!=='complete')throw new Error('fixed range');
   assert.deepEqual(ranges,[[now-2*H,now-H]]);
-  const value=mergeWork(initial.value,extended.value);
-  assert.equal(value.anchor,now-2*H);assert.equal(value.cut,now);
+  const value=extended.value;
+  assert.equal(value.anchor,now-2*H);assert.equal(value.cut,now-H);assert.ok(value.fixed);assert.deepEqual(value.spans,[]);
   assert.equal(workedSessions(value,past,now)[0].workedMs,H);
-  assert.equal(workedSessions(value,{from:now-H,to:now},now)[0].workedMs,30*M);
-  assert.deepEqual(mergeWork(value,extended.value),value);
+  assert.equal(workedSessions(initial.value,{from:now-H,to:now},now)[0].workedMs,30*M);
   const detailRequest={version:1,selection:past,evaluatedAt:now,cursor:extended.value.cursor,refs:[value.refs[0].ref]};
   const detail=await h.details(detailRequest);assert.equal(detail.statusCode,200,detail.body);assert.equal(detail.json().sessions.value[0].workedMs,H);
   assert.equal((await h.details({...detailRequest,refs:Array(101).fill(value.refs[0].ref)})).statusCode,400);
@@ -158,7 +156,7 @@ test('quota unavailability ends both historical values and exact tape coverage a
   const response=await h.read(request);assert.equal(response.statusCode,200,response.body);
   const reply=response.json<PeriodReply>();if(reply.values?.state!=='complete'||reply.quota?.state!=='complete')throw new Error('period');
   const value=reply.values.value[0].windows[0];assert.equal(value.remaining,83);assert.equal(value.validUntil,boundary);assert.equal(value.stale,true);
-  assert.equal(sampleAt(decodeSamples(reply.quota.value.tape!.quota[0].samples),0)!.validUntil,boundary);
+  const summary=reply.quota.value.tape!.fixed!.quota[0];assert.equal(summary.remainingAtEnd,null);assert.equal(summary.points.at(-1)![3],boundary);
   const before=periodValues(h.store,h.store.sources(h.board),h.user.id,boundary-1,()=>{})[0];
   assert.equal(before.windows[0].stale,false);assert.equal(before.validFor!.to,boundary);
 });

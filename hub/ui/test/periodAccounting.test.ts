@@ -8,6 +8,7 @@ import type {History} from '../lib/types.js';
 import type {Reading} from '../../server/domain/meters.js';
 import {packWork,workedSessions,type WorkTrace} from '../../server/domain/periodWork.js';
 import {union} from '../../server/domain/work.js';
+import {fixedTape,fixedWork} from '../../server/periodFixed.js';
 
 test('shared work curves match exact session sums and concurrent unions across hour boundaries',()=>{
   const refs=Array.from({length:5},(_,i)=>({ref:String(i),source:String(i%2),device:{id:String(i%3),name:'Laptop'},origin:'terminal' as const,project:i%2?'P':null,folder:null,startedAt:0}));
@@ -78,6 +79,10 @@ test('credit heartbeats keep exact coefficients and their own valuation without 
   const after=accounting.project(frame,{from:0,to:50000}).meterSeries![0];
   assert.equal(after.end,'75000');assert.equal(after.spent,null);assert.equal(after.topup,null);
   assert.equal(after.points.find(p=>p.at===40000)?.value,'75000');
+  const summary=fixedTape(evidence,null,{from:0,to:50000},frame.cellMs,()=>{}).fixed!.money[0];
+  assert.equal(summary.end,'75000');assert.equal(summary.endScale,6);
+  assert.deepEqual(summary.semantics?.conversion?.original,{meterId:'balance:credits',amount:'2500000000001',unit:'credits:codex',at:40000,scale:12,limit:null});
+  assert.equal(summary.semantics?.conversion?.rate.to,'30000');
 });
 
 
@@ -92,4 +97,21 @@ test('quota evidence can precede work without fabricating dates, and keeps the s
   assert.equal(before.from,20000);assert.equal(before.ms,null,'work before sharing remains unknown');
   const after=accounting.project(frame,{from:0,to:40000}).series[0].work!;
   assert.equal(after.from,20000);assert.equal(after.ms,10000);
+});
+
+test('fixed summaries preserve exact totals, native credit precision and boundary geometry',()=>{
+  const evidence=tape(),range={from:123,to:49_999};
+  evidence.quota=[{source:'s',window:'w',samples:packSamples([{at:0,used:10.125,resetAt:null,staleAfterMs:60_000},{at:25_000,used:22.375,resetAt:null,staleAfterMs:60_000}])}];
+  evidence.money=[{source:'s',meter:'balance:credits',accounting:{spending:'unavailable',topups:'unavailable'},readings:[{id:'balance:credits',kind:'balance',unit:'credits:codex',amount:'2500000000001',scale:12,limit:null,at:0,previousAt:null,staleAfterMs:60_000,resetAt:null,minutes:null,scope:null,label:null}],spans:[{from:0,to:40_000,staleAfterMs:60_000}]}];
+  const trace:WorkTrace={anchor:0,cut:60_000,knownFrom:0,refs:[{ref:'r',source:'s',device:{id:'d',name:'D'},origin:'terminal',project:null,folder:null,startedAt:0}],spans:[[0,0,5000],[0,25_000,55_000]]};
+  const frame:History={...blank,live:false,cellMs:15_000,meterSeries:[{sourceId:'s',meterId:'balance:credits',kind:'balance',unit:'credits:codex',start:null,end:null,semantics:null,spent:null,topup:null,coveredMs:0,unlocated:[],topupUnlocated:[],points:[]}]};
+  frame.series=[{sourceId:'s',windowId:'w',consumed:0,coveredMs:0,remainingAtStart:null,remainingAtEnd:null,staleAfterMs:60000,work:null,points:[[15000,77.625,2,30000]]}];
+  const full=new PeriodAccounting(evidence,trace),summary=fixedTape(evidence,trace,range,frame.cellMs,()=>{}),compact=new PeriodAccounting(summary,null).project(frame,range),expected=full.project(frame,range);
+  assert.deepEqual(summary.fixed!.quota[0].points,[[123,89.875,1,15000],[45000,77.625,2,49999]],'only boundary geometry travels beside cached interior cells');
+  assert.deepEqual(compact.series,expected.series);assert.equal(compact.meterSeries![0].end,'2500000000001');assert.equal(compact.meterSeries![0].endScale,12);assert.equal(compact.meterSeries![0].points[0].semantics!.scale,12);
+  assert.deepEqual(compact.meterSeries![0].points,expected.meterSeries![0].points);assert.equal(compact.meterSeries![0].spent,null);assert.deepEqual(summary.quota,[]);assert.deepEqual(summary.money,[]);
+  const work=fixedWork(trace,range,frame.cellMs,60_000,()=>{});assert.deepEqual(workedSessions(work,range,60_000),workedSessions(trace,range,60_000));
+  const index=new PeriodIndex(work);assert.deepEqual(index.advance(range,60_000).rows,workedSessions(trace,range,60_000));assert.equal(index.advance({from:0,to:50_000},60_000).limited,true);
+  const activity=new PeriodActivity(work).project({...blank.activity,barMs:frame.cellMs,cells:[[0,5000,5000,1],[15000,5000,5000,1],[30000,15000,15000,1],[45000,10000,10000,1]]},range);
+  assert.equal(activity.agentMs,29_876);assert.equal(activity.activeMs,29_876);assert.equal(activity.agents,1);assert.equal(activity.cells.reduce((n,c)=>n+c[2],0),29876);
 });

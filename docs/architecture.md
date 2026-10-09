@@ -1299,8 +1299,13 @@ active time and agent-hours. Hour blocks share identical work patterns without l
 gaps or millisecond boundaries; the roster, activity and quota accounting share their
 curves. Numeric columns use constant values or exact integer offsets where possible,
 with 64-bit values for fractions and wider ranges. Changed series rebuild only their own
-prefixes. A new interval releases old raw evidence while widgets keep their last complete
-presentation. Cold drawing cells and resource evidence are read separately, and preparation
+prefixes. Fixed selections carry exact totals and boundary geometry instead of a rolling
+ledger; the server and browser share the accounting implementation in `server/domain`.
+The interior drawing still uses cached history cells. Complete live indexes and fixed
+summaries can move into the shared LRU when a different interval is selected. Returning
+to a retained target reuses it; new evidence or authority changes invalidate those entries.
+Widgets keep their last complete presentation during replacement, including native panning.
+Cold drawing cells and resource evidence are read separately, and preparation
 replaces scratch reservations as each retained index is completed.
 Monetary steps remain exact integers; a partially
 intersected spending step is uncertain, never divided by elapsed time. The page clock

@@ -10,11 +10,15 @@ export type WorkRef = {
 /** Offsets are exact milliseconds, with one shared origin and no repeated context metadata. */
 export const WORK_BLOCK_MS=3_600_000;
 export type WorkBlocks={patterns:number[][];blocks:number[]};
-export type WorkTrace = {anchor:number;cut?:number;knownFrom:number;refs:WorkRef[];spans:[number,number,number][];packed?:WorkBlocks};
+export type WorkTrace = {anchor:number;cut?:number;knownFrom:number;refs:WorkRef[];spans:[number,number,number][];packed?:WorkBlocks;fixed?:{range:PeriodRange;totals:[number,number,number][];activity:import('./history.js').History['activity']}};
 export type WorkDelta = WorkTrace & {replaceFrom:number;replaceTo?:number};
 export type WorkedSession = WorkRef & {workedMs:number;lastWorkedAt:number;working:boolean};
 
 export function workedSessions(trace:WorkTrace, range:PeriodRange, now:number):WorkedSession[] {
+  if(trace.fixed){
+    if(range.from!==trace.fixed.range.from||range.to!==trace.fixed.range.to)throw new Error('history_range_invalid');
+    return trace.fixed.totals.map(([id,workedMs,lastWorkedAt])=>{const {currentPresence:previous,...ref}=trace.refs[id],currentPresence=previous&&previous.through>now?previous:undefined,working=!!currentPresence&&currentPresence.working&&Math.min(currentPresence.through,currentPresence.workingThrough??Infinity)>now;return {...ref,workedMs,lastWorkedAt,working,...(currentPresence?{currentPresence}:{})};});
+  }
   const sums=new Map<number,{workedMs:number;lastWorkedAt:number}>();
   for(const [index,start,end] of workSpans(trace)) {
     const from=Math.max(range.from,trace.anchor+start),to=Math.min(range.to,trace.anchor+end);

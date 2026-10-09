@@ -76,6 +76,7 @@ type WindowDescriptor=Pick<import('./quota.js').Win,'id'|'kind'|'label'|'minutes
 /** A complete initial tape covers every future position of a live left edge without IO. */
 export type PeriodTape = {
   from:number;cut:number;replaceFrom:number;replaceTo?:number;cursor:string;
+  fixed?:{range:import('./period.js').PeriodRange;cell:number;quota:import('./history.js').HistorySeries[];money:import('./meterHistory.js').MeterHistory[]};
   quota:(Omit<CellSamples,'samples'>&{samples:SampleRows;samplesEncoding?:'delta';workFrom?:number;member?:boolean;windowValue?:WindowDescriptor;descriptors?:{at:number;value:WindowDescriptor}[]})[];money:MoneyTape[];
 };
 
@@ -88,7 +89,7 @@ function* replace<T>(before:readonly T[],after:readonly T[],keep:(row:T)=>boolea
 
 export const mergeTape=(previous:PeriodTape|undefined,next:PeriodTape)=>drain(mergeTapePrepared(previous,next));
 export function* mergeTapePrepared(previous:PeriodTape|undefined,next:PeriodTape):Preparation<PeriodTape> {
-  if(!previous||next.replaceFrom<=previous.from&&(next.replaceTo??Infinity)>=previous.cut)return next;
+  if(!previous||next.fixed||previous.fixed||next.replaceFrom<=previous.from&&(next.replaceTo??Infinity)>=previous.cut)return next;
   const quota=new Map(previous.quota.map(s=>[s.source+'\n'+s.window,s]));
   for(const series of next.quota){const key=series.source+'\n'+series.window,old=quota.get(key);const samples=yield* replaceSamples(old?.samples??[],series.samples,next.replaceFrom,next.replaceTo??Infinity);const descriptors=yield* replace(old?.descriptors??[],series.descriptors??[],s=>s.at<next.replaceFrom||s.at>=(next.replaceTo??Infinity),s=>s.at);quota.set(key,{...series,samples,...(descriptors.length?{descriptors}:{})});}
   const money=new Map(previous.money.map(s=>[s.source+'\n'+s.meter,s]));

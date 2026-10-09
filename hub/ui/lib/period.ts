@@ -64,10 +64,24 @@ class BoardPeriod {
   private workState={...this.work,rows:this.workRows};
   private readonly watch=clock.watch();
   private bytes=0;
+  private cacheKey='';
+  private readonly retained=new Map<string,{bytes:number;at:number;restore:()=>void}>();
   readonly transport=new PeriodTransport(historyPool,()=>this.intent(),(reply,intent,reserve)=>this.receive(reply,intent,reserve),fetchPeriod,()=>{page.dispatch({type:'board-close'});if(typeof window!=='undefined')window.dispatchEvent(new Event(UNAUTHORIZED));});
   constructor(){historyPool.register(this);clock.subscribe(this.watch,()=>this.tick());}
-  get estimatedBytes(){return this.bytes+[...this.valueCache.values()].reduce((sum,c)=>sum+c.bytes,0);}
-  evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}}));}
+  get estimatedBytes(){return this.bytes+[...this.valueCache.values(),...this.retained.values()].reduce((sum,c)=>sum+c.bytes,0);}
+  evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}})).concat([...this.retained].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.retained.delete(key);}})));}
+  private retainCurrent(){
+    if(!this.cacheKey)return;
+    const wanted=this.intent()?.request;
+    if(!wanted||this.work.loading||this.work.error||this.valuesNeeded||PERIOD_SCOPES.some(scope=>wanted[scope]||this.projectionErrors[scope]))return;
+    const tapes=new Map([...this.tapes].map(([scope,tape])=>[scope,{...tape}])),work=this.work,index=this.index,activity=this.activity,workSelection=this.workSelection,workRangeKey=this.workRangeKey,cursor=this.cursor,liveEvidence=this.liveEvidence,values=new Map(this.values),cursors=this.transport.evidence(),bytes=this.bytes;
+    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+256,at:hubNow(),restore:()=>{
+      this.tapes.clear();for(const [scope,tape] of tapes)this.tapes.set(scope,tape);
+      this.work=work;this.index=index;this.activity=activity;this.workSelection=workSelection;this.workRangeKey=workRangeKey;this.cursor=cursor;this.liveEvidence=liveEvidence;this.bytes=bytes;
+      for(const id of new Set([...this.values.keys(),...values.keys()]))this.setValue(id,values.get(id)??noValue);
+      this.transport.restoreEvidence(cursors);this.workNeeded=false;this.valuesNeeded=false;
+    }});
+  }
   get=()=>this.workState;
   getProjectionRevision=(scope:PeriodScope)=>this.projectionRevision[scope];
   subscribeProjection=(scope:PeriodScope,listener:()=>void)=>{this.projectionListeners[scope].add(listener);return()=>{this.projectionListeners[scope].delete(listener);};};
@@ -102,6 +116,7 @@ class BoardPeriod {
   private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
   private publishWork() {this.workState={...this.work,rows:this.workRows};for(const listener of this.listeners)listener();}
   private clear() {
+    this.retained.clear();this.cacheKey='';
     preparations()?.cancel(this.preparationOwner);this.transport.reset();this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.tapes.clear();delete this.projectionErrors.quota;delete this.projectionErrors.budget;delete this.projectionErrors.funds;this.valueCache.clear();this.liveEvidence=false;this.bytes=0;this.workRows=[];this.publishProjection();
     for(const id of this.values.keys())this.setValue(id,noValue);this.values.clear();
     const previous=this.rowsBySource;this.rowsBySource=new Map();for(const id of previous.keys())for(const listener of this.sourceListeners.get(id)??[])listener();
@@ -118,26 +133,31 @@ class BoardPeriod {
     const identity=JSON.stringify([board.id,periodKey(selection),sources,wantsWork,board.currencies?.target.id,board.currencies?.revision,board.currencies?.registryRevision,sources.map(id=>[id,board.cards[id]?.budget])]);
     const authority=JSON.stringify([board.id,sources,wantsWork,board.currencies?.target.id,board.currencies?.revision,board.currencies?.registryRevision,sources.map(id=>[id,board.cards[id]?.budget])]);
     if(authority!==this.authority){this.clear();this.authority=authority;}
+    if(event?.type==='hub'&&['history','hello','snapshot','mine','lineup'].includes(event.event.type))this.retained.clear();
+    const cacheKey=JSON.stringify([identity,prefs().money,prefs().funds,prefs().kind]);
+    if(cacheKey!==this.cacheKey){this.retainCurrent();this.cacheKey=cacheKey;}
     this.selection=selection;this.sourceIds=sources;this.wantsWork=wantsWork;
     if(identity!==this.identity) {
       const oldBoard=this.identity?JSON.parse(this.identity)[0]:null;
       this.identity=identity;this.generation++;this.revision++;
       if(oldBoard!==board.id||event?.type==='hub'&&['mine','lineup'].includes(event.event.type))this.clear();
+      this.cacheKey=cacheKey;
       let cached=this.valueCache.get(periodKey(selection));
       if(!cached&&selection.mode==='range')cached=[...this.valueCache.values()].find(c=>sources.every(id=>{const interval=c.values.get(id)?.value?.validFor;return interval&&interval.from<=selection.to&&selection.to<interval.to;}));
       this.valuesNeeded=selection.mode==='range'&&!cached;
       if(selection.mode==='range')for(const id of sources){const saved=cached?.values.get(id);this.setValue(id,saved?{...saved,basis:saved.basis?{...saved.basis,range:{from:selection.from,to:selection.to}}:null}:{...this.getValue(id),loading:true,error:null});}
       else {for(const id of this.values.keys())this.setValue(id,noValue);this.values.clear();}
       const range=evaluatedRange(selection,hubNow());
-      const outside=(from:number,to:number,live:boolean)=>range.from<from||range.to>to&&!(selection.mode==='live'&&live&&this.liveEvidence);
-      if([...this.tapes.values()].some(t=>outside(t.tape.from,t.tape.cut,t.selection.mode==='live'))||this.work.value&&outside(this.work.value.anchor,this.work.value.cut??0,this.workSelection.mode==='live')) {
-        // Widgets retain their last complete projection. Release its raw evidence
-        // before reading a new interval, so panning cannot accumulate visited months.
+      if(this.tapes.size||this.work.value) {
+        // Complete evidence belongs either to this target or to the shared LRU.
+        // A fixed target replaces its raw ledger with exact summaries and edges.
         preparations()?.cancel(this.preparationOwner);this.tapes.clear();this.cursor=undefined;this.index=null;this.activity=null;this.work={...this.work,value:null};this.liveEvidence=false;this.transport.forgetEvidence();
         this.bytes=JSON.stringify([...this.values.values()]).length*3+JSON.stringify(this.workRows).length*3;
         clock.due(this.watch,null,hubNow());
       }
       this.workNeeded=wantsWork&&(!this.work.value||range.from<this.work.value.anchor||range.to>(this.work.value.cut??0)&&!this.liveEvidence);
+      const retained=this.retained.get(cacheKey);
+      if(retained){this.retained.delete(cacheKey);retained.restore();this.tick(false);}
       if(!this.workNeeded&&this.work.basis){this.workSelection=selection;this.workRangeKey=selection.mode==='range'?periodKey(selection):prefs().range;this.tick(false);}
       for(const tape of this.tapes.values())if(range.from>=tape.tape.from&&(range.to<=tape.tape.cut||this.liveEvidence)){tape.selection=selection;tape.rangeKey=selection.mode==='range'?periodKey(selection):prefs().range;}
       this.work={...this.work,loading:this.workNeeded,error:null};this.publishWork();this.publishProjection();
@@ -203,7 +223,7 @@ class BoardPeriod {
       if(part&&part.state!=='error')try{
         charge('work',workBytes(part.value)+(part.state==='delta'?workBytes(priorWork):0));
         work=part.state==='delta'&&priorWork?yield*mergeWorkPrepared(priorWork,part.value):part.value;
-        if(!work.packed)work=yield*packWorkPrepared(work);
+        if(!work.packed&&!work.fixed)work=yield*packWorkPrepared(work);
         charge('work',workBytes(work));index=yield*PeriodIndex.prepare(work);activity=yield*PeriodActivity.prepare(work,index.curves);charge('work',workBytes(work,index.curves.bytes));
       }catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};work=priorWork;index=null;activity=null;discard('work');}
       const workPart=reply.sessions,changedWork=new Set(workPart&&workPart.state!=='error'?[...workPart.value.refs,...(workPart.state==='complete'?priorWork?.refs??[]:[])].map(ref=>ref.source):[]);

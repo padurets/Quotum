@@ -13,6 +13,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {evaluatedRange,periodKey} from '../../server/domain/period.js';
+import {fixedTape,fixedWork} from '../../server/periodFixed.js';
 
 const ref=(id:string)=>({ref:id,source:'s',device:{id:'d',name:'Laptop'},origin:'terminal' as const,project:id,folder:null,startedAt:0});
 const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
@@ -190,4 +191,33 @@ test('an empty replacement period clears the previous roster and card disclosure
     await period.receive({basis,sessions:{state:'complete',basis,value}},{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:5_000_000}});
     assert.equal(period.get().rows.length,Number(populated));assert.equal(period.getSource(ref('a').source).length,Number(populated));
   }
+});
+
+test('complete live and fixed targets share the LRU and cached return performs no read',async()=>{
+  let selected:{from:number;to:number}|null=null,reads=0;
+  const board={id:'b',lineup:['s'],view:{hidden:[]},cards:{s:{budget:false}}},state={board};
+  const pool=new HistoryPool();
+  const send=async(_board:string,body:PeriodRequest):Promise<PeriodReply>=>{
+    reads++;const range=evaluatedRange(body.selection,5_000_000),basis={run:'r',revision:'1',evaluatedAt:5_000_000,evidenceCut:range.to,range};
+    const work:WorkTrace={anchor:range.from,cut:range.to,knownFrom:0,refs:[ref('a')],spans:[[0,0,60_000]]};
+    const tape={from:range.from,cut:range.to,replaceFrom:range.from,cursor:'q',money:[],quota:[{source:'s',window:'w',samples:[range.from,10,-1,3_600_000,-1]}]};
+    return {basis,...(body.quota?{quota:{state:'complete',basis,value:{run:'r',now:5_000_000,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:body.selection.mode==='live'?tape:fixedTape(tape,work,range,60_000,()=>{})}}}:{}),
+      ...(body.sessions?{sessions:{state:'complete',basis,value:{...(body.selection.mode==='live'?work:fixedWork(work,range,60_000,5_000_000,()=>{})),cursor:'w'}}}:{}),
+      ...(body.values?{values:{state:'complete',basis,value:[{id:'s',provider:'codex',windows:[],meters:[],keys:[]}]}}:{})};
+  };
+  const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event?:unknown):void;get():{rows:{workedMs:number}[]};estimatedBytes:number}},
+    hubNow:()=>5_000_000,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>state},pan:{get:()=>null},preparations:()=>null,
+    prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,
+    empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),timeRange:()=>selected,prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),cellOf:()=>60_000,
+    widgetVisible:(_view:unknown,id:string)=>id==='history',subscriptionSelection:()=>null,PERIOD_SCOPES:['quota','budget','funds'],QUOTA_WIDGETS:['history'],BUDGET_WIDGETS:['budget'],SUBSCRIPTION_FUNDS:'funds',ACTIVITY:'activity',AGENTS:'agents',noSessions:[],noValue:{},
+  };
+  const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8'),body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const period=new context.exports.BoardPeriod(),flush=async()=>{for(let i=0;i<8;i++)await settle();};period.activate(true);await flush();
+  assert.equal(reads,1);assert.equal(period.get().rows[0].workedMs,60_000);
+  selected={from:0,to:1_400_000};period.changed();await flush();assert.equal(reads,2);assert.equal(period.get().rows[0].workedMs,60_000);
+  selected=null;period.changed();await flush();assert.equal(reads,2,'the live ledger is retained in the shared budget');
+  selected={from:0,to:1_400_000};period.changed();await flush();assert.equal(reads,2,'fixed summaries and exact edges are reusable');assert.ok(period.estimatedBytes>0);assert.ok(pool.estimatedBytes<15*1024*1024);
+  period.changed({type:'hub',event:{type:'history',data:{sources:['s'],since:4_000_000}}});await flush();assert.equal(reads,2,'later live work cannot rewrite this past target');
+  selected=null;period.changed();await flush();assert.equal(reads,3,'live evidence invalidated while hidden is refreshed on return');
 });

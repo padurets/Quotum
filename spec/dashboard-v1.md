@@ -412,6 +412,14 @@ a live left boundary to move through its entire retained interval without furthe
 New evidence extends or replaces that interval; a clock tick does not fetch history.
 Partial spending steps keep their uncertainty instead of becoming proportional amounts.
 
+A fixed selection replaces the rolling tape with `fixed: {range, cell, quota, money}`.
+The quota and money arrays contain exact history-series totals and only the first and
+last cells' observation geometry. Their interior cells come from the same history
+reader and cache. The ordinary `quota` and `money` tape arrays are empty. A summary
+applies only to its exact range and cell size; it cannot project another interval.
+The server and browser use the same accounting functions, including original scales,
+historical cap allowances, availability bounds and recorded currency provenance.
+
 Values are measurement-only projections: source id/provider, retained native windows,
 meters, keys and the observed `creditBalance` status when authorized. Native windows include `observedAt`, `validUntil` and `stale`.
 Membership is the last nonempty retained batch strictly before the right edge. A meter
@@ -441,6 +449,11 @@ Session evidence is a complete temporal index:
     patterns: number[][]; // flat pairs of exact offsets within an hour
     blocks: number[];    // flat triples: refIndex, UTC hour since epoch, patternIndex
   };
+  fixed?: {
+    range: {from: number; to: number};
+    totals: [refIndex: number, workedMs: number, lastWorkedAt: number][];
+    activity: Activity; // exact totals, groups and boundary bars
+  };
   replaceFrom?: number; replaceTo?: number;
 }
 ```
@@ -449,6 +462,11 @@ Dense evidence uses `packed` with empty `spans`. Each block's hour is multiplied
 3,600,000, then its pattern's millisecond pairs give the original credited intervals.
 Repeated patterns share storage; gaps and boundary fragments are never approximated.
 Both representations have identical replacement and projection semantics.
+Fixed selections instead return `fixed` with empty `spans` and no `packed` ledger.
+Every positive-work context remains in the summary. Interior activity bars reuse
+the history cells; boundary bars and group totals are exact. Fixed summaries are
+complete replacements, and changing their interval requires another summary or a
+matching cached result. Only optional current presence can expire locally.
 Offsets in `spans` are exact milliseconds from `anchor`. Only credited intervals intersecting the
 requested evidence are included, clipped by capture, retention, membership and sharing
 cutoffs. No current list or duration total substitutes for those intervals. Clients

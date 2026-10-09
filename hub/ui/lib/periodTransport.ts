@@ -25,6 +25,8 @@ export class PeriodTransport implements HistoryMember {
   private key(intent:PeriodIntent){return `${intent.generation}:${intent.revision}`;}
   change(){this.schedule();}
   forgetEvidence(){this.cursors.clear();}
+  evidence(){return new Map(this.cursors);}
+  restoreEvidence(cursors:ReadonlyMap<string,string>){this.cursors.clear();for(const [key,value] of cursors)this.cursors.set(key,value);}
   reset(){this.completed=this.failed='';this.cursors.clear();for(const flight of this.flights)this.abort(flight);for(const demand of this.queue)demand.reject(aborted());this.queue=[];}
   retry(){this.failed='';this.schedule();}
   read(scope:PeriodScope,query:HistoryQuery,signal?:AbortSignal):Promise<HistoryReply> {
@@ -53,8 +55,9 @@ export class PeriodTransport implements HistoryMember {
     this.flights.add(flight);
     const body:PeriodRequest={...intent.request,...(!extras?{values:undefined,sessions:undefined,quota:undefined,budget:undefined,funds:undefined}:{}),...Object.fromEntries(demands.map(d=>[d.scope,{...d.query}]))};
     const pendingBaseline=(['quota','funds','budget'] as const).filter(scope=>body[scope]&&!this.baselineParts.has(scope));
-    const deferredBaseline=baseline&&extras&&pendingBaseline.length>1;
-    if(baseline&&extras){
+    const splitBaseline=baseline&&extras&&intent.request.selection.mode==='live';
+    const deferredBaseline=splitBaseline&&pendingBaseline.length>1;
+    if(splitBaseline){
       // A cold month's evidence is independent by family. Keep its largest decoded
       // bodies separate; changed measurements and work still share the warm read.
       for(const scope of PERIOD_SCOPES)if(scope!==pendingBaseline[0])delete body[scope];

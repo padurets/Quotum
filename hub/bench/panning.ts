@@ -232,9 +232,9 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       await wheel(24, true); await wait(40);
       await key(false, 'Shift', 16); await wait(240);
       if (!(await cdp.evaluate<boolean>(`!document.querySelector('[data-pan-end]')&&!new URLSearchParams(location.search).has('from')`))) throw new Error('Shift-wheel return did not preserve live');
-      await cdp.evaluate(`history.back()`); await wait(300);
+      await cdp.evaluate(`history.back()`); await wait(300); await settled();
       if (!(await cdp.evaluate<boolean>(`new URLSearchParams(location.search).has('from')`))) throw new Error('Back did not restore the whole previous gesture');
-      await cdp.evaluate(`history.forward()`); await wait(300);
+      await cdp.evaluate(`history.forward()`); await wait(300); await settled();
       if (!(await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`))) throw new Error('Forward did not restore live');
       // A wheel does not blur a keyboard-focused legend. Its bubble must stay
       // hidden through ordinary panning, a latched drag and their final fold.
