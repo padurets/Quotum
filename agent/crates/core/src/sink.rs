@@ -529,6 +529,10 @@ impl Sink for HubSink {
         let (status, older) = match answer {
             Ok(mut response) => {
                 let status = response.status().as_u16();
+                let refusal = if status == 403 { trouble(&mut response) } else { None };
+                if let Some(Trouble::Refused(reason)) = refusal {
+                    self.refused = Some(reason);
+                }
                 let older = status == 404
                     && not_the_hub(&response).is_none()
                     && response.body_mut().read_json::<Value>().is_ok_and(|body| body["error"] == "not_found");
@@ -1078,6 +1082,29 @@ pub(crate) mod tests {
         assert!(!proxied.sessions(&[]));
         assert!(proxied.takes_sessions());
         assert!(proxied.sessions_retry_at.is_some());
+    }
+
+    #[test]
+    fn sessions_alone_stop_a_removed_or_conflicting_device_and_retry_other_failures() {
+        for code in ["device_revoked", "device_conflict", "forbidden"] {
+            let (url, seen) = hub(move |_, _| json(403, json!({"error": code})));
+            let (mut sender, _) = sink(&url, &format!("session-{code}"));
+            assert!(!Sink::report(&mut sender, &SessionReport::default()));
+            assert_eq!(sender.refused().is_some(), code != "forbidden", "{code}");
+            if code != "forbidden" {
+                assert!(!sender.takes_sessions());
+                assert!(!Sink::report(&mut sender, &SessionReport::default()));
+                assert_eq!(seen.lock().unwrap().len(), 1, "permanent refusal sends nothing further");
+            } else {
+                assert!(sender.takes_sessions());
+                assert!(sender.sessions_retry_at.is_some());
+            }
+        }
+        let (url, _) = hub(|_, _| (403, "content-type: text/html\r\n", "<html>proxy login</html>".into()));
+        let (mut sender, _) = sink(&url, "session-proxy-refusal");
+        assert!(!Sink::report(&mut sender, &SessionReport::default()));
+        assert!(sender.refused().is_none());
+        assert!(sender.sessions_retry_at.is_some());
     }
 
     #[test]

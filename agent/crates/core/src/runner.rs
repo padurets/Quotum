@@ -218,6 +218,9 @@ impl Runner {
                     }
                 }
             }
+            if let Some(reason) = sink.refused() {
+                return Some(reason.to_string());
+            }
             // A clock set back (by hand, or synced after a wrong start) would leave every
             // due time far ahead: move them back with it.
             let back = clock.went_back(now_ms());

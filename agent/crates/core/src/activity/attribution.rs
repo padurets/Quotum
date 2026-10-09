@@ -1464,6 +1464,47 @@ fn opencode_shared_and_unproven_placement_is_independent_of_editor_origin() {
 }
 
 #[test]
+fn local_opencode_requires_checked_ancestry_before_reading_projects() {
+    for scenario in ["missing-parent", "unreadable-parent", "unknown-remote-path"] {
+        let mut a = activity();
+        let start = Instant::now();
+        let mut rows = vec![proc(41, 40, "opencode", Role::Local), proc(42, 41, "claude", Role::Unknown)];
+        if scenario != "missing-parent" {
+            rows.push(proc(40, 1, if scenario == "unreadable-parent" { "code" } else { "node" }, Role::Unknown));
+        }
+        let observe = |a: &mut Activity, rows: &[Proc], secs, proven| {
+            a.observe(
+                rows,
+                900,
+                start + Duration::from_secs(secs),
+                WALL + secs as Millis * 1000,
+                &|p| (proven || scenario != "unreadable-parent" || p.pid != 40).then(|| p.clone()),
+                &|_| {
+                    assert!(proven, "{scenario}: unproven ancestry must not authorize cwd");
+                    Some(PathBuf::from("/fixture-home/project-a"))
+                },
+                &|_| proven.then(|| "/usr/bin/node".into()),
+                &|_| true,
+            )
+        };
+        observe(&mut a, &rows, 0, false);
+        cpu(&mut rows, 41, 1500, 0);
+        cpu(&mut rows, 42, 1500, 0);
+        let busy = observe(&mut a, &rows, 15, false);
+        assert_eq!(busy.len(), 2);
+        for pid in [41, 42] {
+            assert_eq!(session(&busy, pid).working, Some(true), "observed CPU remains visible");
+            assert_eq!((&session(&busy, pid).project, &session(&busy, pid).folder), (&None, &None));
+        }
+        if scenario == "missing-parent" {
+            rows.push(proc(40, 1, "bash", Role::Unknown));
+        }
+        let recovered = observe(&mut a, &rows, 30, true);
+        assert!(recovered.iter().all(|s| s.project.as_deref() == Some("project-a")), "{scenario}");
+    }
+}
+
+#[test]
 fn opencode_maintenance_does_not_credit_claude_live_or_reaped_cpu() {
     for &(command, role) in OPENCODE_COMMANDS.iter().filter(|(_, role)| *role == Role::Service) {
         for tracked in [ClientId::ALL.to_vec(), vec![ClientId::Claude]] {

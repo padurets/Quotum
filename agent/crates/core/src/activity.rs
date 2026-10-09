@@ -629,7 +629,10 @@ impl Activity {
         let available: HashSet<_> = validated.iter().map(|p| p.pid).collect();
         let unproven: HashSet<_> = procs
             .iter()
-            .filter(|p| p.role == Role::Runtime || validated.iter().any(|q| q.pid == p.pid && q.role == Role::Runtime))
+            .filter(|p| {
+                matches!(p.role, Role::Runtime | Role::Local)
+                    || validated.iter().any(|q| q.pid == p.pid && matches!(q.role, Role::Runtime | Role::Local))
+            })
             .filter(|p| {
                 for pid in ancestors(p.pid, &by_pid) {
                     if !available.contains(&pid) {
