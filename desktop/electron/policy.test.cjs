@@ -57,9 +57,9 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
     isDestroyed() { return this.destroyed; }
     isMinimized() { return this.minimized === true; }
     restore() { this.minimized = false; this.restores = (this.restores ?? 0) + 1; }
-    show() { this.visible = true; this.shows = (this.shows ?? 0) + 1; }
-    showInactive() { this.show(); }
-    focus() { this.focuses = (this.focuses ?? 0) + 1; }
+    show() { this.showInactive(); this.focus(); this.afterShow?.(); }
+    showInactive() { this.visible = true; this.shows = (this.shows ?? 0) + 1; }
+    focus() { this.focuses = (this.focuses ?? 0) + 1; this.focused = true; }
     close() {
       if (this.destroyed || this.closing) return;
       this.closing = true; this.emit('close'); this.emit('blur');
@@ -525,6 +525,29 @@ test('current main restores the same minimized window and focuses it once', asyn
   assert.equal(main.windows.length, 1);
   assert.equal(board.restores, 1);
   assert.equal(board.focuses, before + 1);
+});
+
+test('finishing a main show cannot reclaim focus taken by a newer native loader', async () => {
+  const main = await mainProcess({nativePanel: true, paintMain: false});
+  const board = main.windows[0];
+  // The native show has completed, but its caller has not resumed. The
+  // controller can present a loader while this browser process is stopped.
+  board.afterShow = () => { board.focused = false; };
+  board.emit('ready-to-show');
+  assert.equal(board.visible, true);
+  assert.equal(board.focuses, 1, 'show still focuses the requested main');
+  assert.equal(board.focused, false, 'no later focus steals the native loader');
+});
+
+test('revealing the current native panel focuses it only once', async () => {
+  const main = await mainProcess({nativePanel: true, role: 'compact'});
+  const panel = main.windows[0];
+  panel.emit('ready-to-show');
+  const ready = main.traffic.find(message => message.type === 'panel_ready');
+  main.deliver({type: 'panel_reveal', request: ready.request, instance: ready.instance});
+  assert.equal(panel.visible, true);
+  assert.equal(panel.focused, true);
+  assert.equal(panel.focuses, 1);
 });
 
 test('deferred native close cannot replay an obsolete reopen or ready callback', async () => {
