@@ -34,13 +34,15 @@ public static class QuotumWaitChain {
         if(session==IntPtr.Zero)return new {status="unavailable",error=Marshal.GetLastWin32Error()};
         try {
           uint count=16;bool cycle;var nodes=new Node[16];
-          // Inspect this process's critical sections without following foreign processes.
-          bool ok=GetThreadWaitChain(session,UIntPtr.Zero,4,thread,ref count,nodes,out cycle);
+          // The owned process is external to this observer; otherwise WCT stops at its first thread.
+          bool ok=GetThreadWaitChain(session,UIntPtr.Zero,1|4,thread,ref count,nodes,out cycle);
           int error=ok?0:Marshal.GetLastWin32Error();
           var safe=new List<object>();
-          // No object names, and no traversal or identities beyond the owned process.
+          // Export no object names and stop at the first thread beyond the owned process.
           if(ok || error==234 || error==565)for(int i=0;i<Math.Min(count,16);i++){
-            var node=nodes[i];safe.Add(new {type=node.Type,status=node.Status,
+            var node=nodes[i];
+            if(node.Type==8 && node.Process!=(uint)owner)break;
+            safe.Add(new {type=node.Type,status=node.Status,
               process=node.Type==8 && node.Process==(uint)owner?node.Process:0,
               thread=node.Type==8 && node.Process==(uint)owner?node.Thread:0});
           }
