@@ -18,16 +18,25 @@ public static class QuotumTestReceiver {
   [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref Message message);
   [DllImport("user32.dll")] static extern IntPtr DefWindowProc(IntPtr window,uint message,IntPtr w,IntPtr l);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern IntPtr CreateMutex(IntPtr attributes,bool owned,string name);
+  [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr handle,uint timeout);
+  [DllImport("kernel32.dll")] static extern bool ReleaseMutex(IntPtr handle);
   static Procedure callback;
   static void Publish(string file,string value) {
     File.WriteAllText(file+".tmp",value);File.Move(file+".tmp",file,true);
   }
   public static void Run(string mode,string ready,string delivered) {
     // The observer must see a real dependency on a suspended owner, not a later replay.
-    Mutex held=null;
-    if(mode=="wait-chain")held=new Mutex(true,"Local\\quotum-private-wait-canary-"+Guid.NewGuid().ToString("N"));
+    IntPtr held=IntPtr.Zero;
+    if(mode=="wait-chain"){
+      held=CreateMutex(IntPtr.Zero,true,"Local\\quotum-private-wait-canary-"+Guid.NewGuid().ToString("N"));
+      if(held==IntPtr.Zero)throw new Exception("Cannot create native mutex");
+    }
     callback=(window,message,w,l)=>{
-      if(message==0x8006 && held!=null){held.ReleaseMutex();return IntPtr.Zero;}
+      if(message==0x8006 && held!=IntPtr.Zero){
+        if(!ReleaseMutex(held))throw new Exception("Cannot release native mutex");
+        return IntPtr.Zero;
+      }
       if(message==0 && mode=="unresponsive")Thread.Sleep(5000);
       if(message==0x4a){
         if(mode=="late")Thread.Sleep(5000);
@@ -44,10 +53,12 @@ public static class QuotumTestReceiver {
     var handle=CreateWindowEx(0,cls.Name,"fixture",0,0,0,1,1,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero);
     if(handle==IntPtr.Zero)throw new Exception("Cannot create receiver");
     Publish(ready,handle.ToInt64().ToString());
-    if(held!=null){
+    if(held!=IntPtr.Zero){
       var waiter=new Thread(()=>{
         Publish(delivered,GetCurrentThreadId().ToString());
-        held.WaitOne();held.ReleaseMutex();Publish(delivered,"released");
+        if(WaitForSingleObject(held,0xffffffff)!=0)throw new Exception("Native mutex wait failed");
+        if(!ReleaseMutex(held))throw new Exception("Cannot release native mutex");
+        Publish(delivered,"released");
       });
       waiter.IsBackground=true;waiter.Start();
     }
