@@ -4,6 +4,7 @@ import type {Shown, WorkRead} from './store/store.js';
 import type {Stretch} from './domain/work.js';
 import type {PeriodRange} from './domain/period.js';
 import {packWork,type WorkTrace} from './domain/periodWork.js';
+import {workKnownFrom} from './domain/history.js';
 
 /** A composite read extracts work once for charts and the temporal index. */
 export function sharedWork(hub:Hub,shown:Shown,range:PeriodRange|null,reserve:(bytes:number)=>void,release:(bytes:number)=>void,owner:string|null=null):WorkRead {
@@ -31,8 +32,8 @@ export function sharedWork(hub:Hub,shown:Shown,range:PeriodRange|null,reserve:(b
 }
 
 export function periodWork(hub:Hub,history:HistoryTiles,board:string,shown:Shown,range:PeriodRange,work:WorkRead,now:number,reserve:(bytes:number)=>void):WorkTrace {
-  const known=hub.store.historyKnown(shown),anchor=range.from;
-  const trace:WorkTrace={anchor,cut:range.to,knownFrom:Math.max(known.work,hub.store.historyStart(now)),refs:[],spans:[]};
+  const known=hub.store.historyKnown(shown,hub.store.privateOwner(board)),anchor=range.from;
+  const trace:WorkTrace={anchor,cut:range.to,knownFrom:Math.max(workKnownFrom(known),hub.store.historyStart(now)),refs:[],spans:[]};
   const indices=new Map<number,number>();
   const device=hub.store.db.prepare('SELECT COALESCE(label,name) AS name FROM devices WHERE id=?');
   const context=hub.store.db.prepare('SELECT producer_id,client,source_id,project,folder FROM agent_sessions WHERE id=?');

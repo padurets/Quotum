@@ -55,6 +55,7 @@ export type Chunk<Ref = string> = {
   grants: [string, number, number][];
 };
 export type HistoryMeta = {now: number; historyStart: number; known: {own?: number; work: number; sources: Record<string, number>}; meta?: string};
+export const workKnownFrom = (known:HistoryMeta['known']) => Math.max(known.own??known.work,...(known.own===undefined&&Object.keys(known.sources).length?[Math.min(...Object.values(known.sources))]:[]));
 export type HistoryAnswer = HistoryMeta & {run: string; chunks: Chunk[]};
 export type HistoryBasis = HistoryMeta & {run: string};
 export type HistoryReply = (HistoryAnswer | {now: number; run: string; meta: string; chunks: Chunk[]}) & {tape?:import('./periodTape.js').PeriodTape};
@@ -265,7 +266,7 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
   const resets = yield* resetEventsPrepared(chunksInOrder, windows, since, (k1 + 1) * cell);
   const grants: SourceEvent[] = [];
   for (const chunk of chunksInOrder) for (const [sourceId, at, count] of chunk.grants) {if (inFrame(at)) grants.push({sourceId, at, kind: 'resets_granted', count}); yield;}
-  const activitySince = Math.max(meta.known.own ?? meta.known.work, ...(meta.known.own === undefined && Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []));
+  const activitySince = workKnownFrom(meta.known);
   const knownFrom = Math.max(since, activitySince);
   const groups = {} as Record<Dimension, ActivityGroup[]>;
   for (const dim of DIMENSIONS) {

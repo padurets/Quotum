@@ -18,6 +18,7 @@ import {hasPeriodValue,periodValueAt,withValueStates} from '../../server/domain/
 import {canShift,shifted} from '../../server/domain/periodShift.js';
 import {periodTextChangesAt} from '../lib/periodClock.js';
 import {selector,sameJson} from '../lib/store.js';
+import {activityEmpty} from '../lib/activity.js';
 
 const ref=(id:string)=>({ref:id,source:'s',device:{id:'d',name:'Laptop'},origin:'terminal' as const,project:id,folder:null,startedAt:0});
 const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
@@ -109,6 +110,19 @@ test('private work uses the unknown activity group without attributing quota con
   assert.equal(result.agentMs,25);assert.equal(result.activeMs,15);
   assert.deepEqual(result.by.source.map(g=>[g.key,g.agentMs]),[['unknown',15],['s',10]]);
   assert.equal(index.curves.groups.source.get('s')!.read(range),10);
+});
+
+test('an empty period preserves the actual knowledge boundary in live and fixed activity',()=>{
+  const trace:WorkTrace={anchor:0,cut:100,knownFrom:60,refs:[],spans:[]},range={from:10,to:40};
+  const blank={since:60,known:null,barMs:60,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}};
+  for(const evidence of [trace,fixedWork(trace,range,60,100,()=>{})]){
+    const projection=new PeriodActivity(evidence),activity=projection.project(blank,range);
+    assert.equal(activity.known,null);assert.equal(activity.since,60);
+    assert.deepEqual(activityEmpty({since:range.from,activity},0,true),{key:'knownFrom',at:60});
+  }
+  const later=new PeriodActivity(trace).project(blank,{from:70,to:90});
+  assert.deepEqual(later.known,{from:70,to:90});assert.equal(later.since,60);
+  assert.deepEqual(activityEmpty({since:70,activity:later},0,true),{key:'none'});
 });
 
 test('one collection combines all three history sections and the roster, including their shared budget',async()=>{

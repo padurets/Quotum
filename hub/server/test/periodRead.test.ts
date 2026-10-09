@@ -246,6 +246,19 @@ test('period access is rechecked, malformed sections fail, and the legacy route 
   assert.equal((await h.read(request)).statusCode,404);
 });
 
+test('fixed work keeps the board sharing boundary instead of declaring earlier time idle',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const shared=h.directory.createBoard('Shared',h.user.id,now-3*H).id;
+  h.store.share(shared,h.source,h.user.id,now-2*H);h.credit(now-3*H,now-H);
+  const selection={mode:'range' as const,from:now-3*H,to:now-150*M};
+  const reply=(await h.read({version:1,selection,evaluatedAt:now,sessions:{}},shared)).json<PeriodReply>();
+  if(reply.sessions?.state!=='complete')throw new Error('incomplete shared period');
+  assert.equal(reply.sessions.value.knownFrom,now-2*H);
+  assert.equal(reply.sessions.value.fixed?.activity.since,now-2*H);
+  assert.equal(reply.sessions.value.fixed?.activity.known,null);
+  assert.deepEqual(workedSessions(reply.sessions.value,selection,now),[]);
+});
+
 
 test('a fixed range summarizes its own work without rewriting the retained live index',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
