@@ -1299,10 +1299,16 @@ active time and agent-hours. Hour blocks share identical work patterns without l
 gaps or millisecond boundaries; the roster, activity and quota accounting share their
 curves. Numeric columns use constant values, piecewise integer progressions or exact integer offsets where possible,
 with 64-bit values for fractions and wider ranges. Changed series rebuild only their own
-prefixes. Fixed selections carry exact totals and boundary geometry instead of a rolling
+prefixes. Rolling numeric labels read those prefixes through the shared clock and wake
+when their formatted value changes. A duration update alone does not wake its roster or
+table; membership and ordering still do. Charts advance at their own grid boundaries.
+Fixed selections carry exact totals and boundary geometry instead of a rolling
 ledger; the server and browser share the accounting implementation in `server/domain`.
 The interior drawing still uses cached history cells. Neighboring card states keep exact sparse changes instead of repeated measurement objects.
 Their interval lookup allocates no replay; restored values share immutable proofs.
+The server reads each source's neighboring state boundaries once and finds native batches
+through a source/time index. Fixed summaries retain compact numeric columns while being
+built; temporary wire rows are released before the next source is read.
 Complete live indexes and fixed
 summaries can move into the shared LRU when a different interval is selected. Returning
 to a retained target reuses it; new evidence or authority changes invalidate those entries.

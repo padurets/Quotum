@@ -10,6 +10,7 @@ import {packWork,workedSessions,type WorkTrace} from '../../server/domain/period
 import {union} from '../../server/domain/work.js';
 import {fixedTape,fixedWork} from '../../server/periodFixed.js';
 import {shifted} from '../../server/domain/periodShift.js';
+import {periodTextChangesAt} from '../lib/periodClock.js';
 
 test('shared work curves match exact session sums and concurrent unions across hour boundaries',()=>{
   const refs=Array.from({length:5},(_,i)=>({ref:String(i),source:String(i%2),device:{id:String(i%3),name:'Laptop'},origin:'terminal' as const,project:i%2?'P':null,folder:null,startedAt:0}));
@@ -45,6 +46,18 @@ test('money uses exact native steps and historical allowance, including an insid
   const counter=new PeriodAccounting(evidence,null),cut=counter.project(frame,{from:10_000,to:30_000}).meterSeries![0];
   assert.equal(cut.spent,'0');assert.deepEqual(cut.unlocated.map(s=>s.amount),['9007199254740993']);
   assert.equal(counter.project(frame,{from:0,to:40_000}).meterSeries![0].spent,'9007199254740993');
+});
+
+test('rolling money clocks include historical resets and validity beyond the last evidence cut',()=>{
+  const value=(at:number,resetAt:number):Reading=>({id:'cap',kind:'cap',unit:'credits:zai',amount:'1',limit:'10',at,previousAt:null,staleAfterMs:60_000,resetAt,minutes:300,scope:null,label:null});
+  const evidence=tape();evidence.money=[{source:'s',meter:'cap',readings:[value(0,15_000),value(40_000,90_000)],spans:[{from:0,to:40_000,staleAfterMs:60_000}]}];
+  const accounting=new PeriodAccounting(evidence,null),period=100_000;
+  const at=(now:number)=>accounting.moneySummary('s','cap','credits:zai',{from:now-period,to:now})!.start;
+  for(const [now,due] of [[100_001,115_000],[160_001,190_000]]){
+    assert.equal(periodTextChangesAt(now,at=>accounting.changesAt(at,period,'s'),now=>String(at(now))),due);
+    assert.equal(at(now),'9');assert.equal(at(due-1),'9');assert.equal(at(due),null);
+  }
+  assert.equal(accounting.changesAt(100_001,period,'another'),null);
 });
 
 test('the roster and activity share exact rolling duration, union, counts and bounded edge bars',()=>{

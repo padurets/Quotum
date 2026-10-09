@@ -57,7 +57,7 @@ export class PeriodActivity {
       const old=new Map(activity.by[dimension].map(g=>[g.key,g]));
       for(const [key,group] of this.groups[dimension])if(group.agents) {
         const cells:ActivityGroup['cells']=(old.get(key)?.cells??[]).filter(([at])=>at<range.to&&at+activity.barMs>range.from).map(([at,ms])=>{const cut=part(at);return [at,cut.from===at&&cut.to===at+activity.barMs?ms:group.curve.read(cut)];});
-        by[dimension].push({key,name:group.name,agentMs:group.agentMs,activeMs:group.curve.read(range,true),agents:group.agents,cells});
+        by[dimension].push({key,name:group.name,agentMs:group.curve.read(range),activeMs:group.curve.read(range,true),agents:group.agents,cells});
       }
       by[dimension].sort((a,b)=>b.agentMs-a.agentMs||a.key.localeCompare(b.key));
     }

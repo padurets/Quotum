@@ -188,6 +188,19 @@ class MoneyIndex {
     const coveredMs=this.coverage.in(range);
     return {start:this.value(range.from,true),end:this.value(range.to),startScale:scale(first),endScale:scale(last),semantics,spent:authority?.spending==='unavailable'||!coveredMs?null:spent.value,topup:authority?.topups==='unavailable'||!coveredMs?null:topup.value,unlocated:authority?.spending==='unavailable'?[]:spent.unlocated,topupUnlocated:authority?.topups==='unavailable'?[]:topup.unlocated,coveredMs};
   }
+  changesAt(now:number,period:number) {
+    let next=Infinity;
+    const consider=(at:number)=>{for(const offset of [0,period])for(const edge of [at+offset,at+offset+1])if(edge>now)next=Math.min(next,edge);};
+    for(const times of [this.times,this.pairedTimes])for(const offset of [0,period]){
+      const i=lower(times,now-offset);if(i<times.length)consider(times[i]);
+      if(i+1<times.length)consider(times[i+1]);
+    }
+    for(const part of [this.group,...(this.group.paired?[this.group.paired]:[])]){
+      for(const span of part.spans){consider(span.from);consider(span.to);consider(Math.min(span.to+span.staleAfterMs+1,span.holdUntil??Infinity,span.interruptedAt??Infinity));}
+      for(const reading of part.readings){consider(reading.previousAt??Infinity);consider(reading.at+reading.staleAfterMs+1);consider(reading.resetAt??Infinity);}
+    }
+    return next;
+  }
 }
 
 /** Two fixed buffers keep cooperative sorting within the retained evidence budget. */
@@ -226,6 +239,8 @@ export class PeriodAccounting {
     for(const group of tape.money){const key=group.source+'\n'+group.meter+'\n'+(group.displayUnit??group.readings[0]?.unit),old=prior?.money.get(key);this.money.set(key,old?.group===group?old:yield*MoneyIndex.prepare(group));}
   }
   get quotaBytes(){return [...this.quota.values()].reduce((n,index)=>n+index.bytes,0);}
+  quotaSummary(source:string,window:string,range:PeriodRange){return this.quota.get(source+'\n'+window)?.at(range);}
+  moneySummary(source:string,meter:string,unit:string,range:PeriodRange){return this.money.get(source+'\n'+meter+'\n'+unit)?.at(range);}
   fixed(range:PeriodRange,cell:number):NonNullable<PeriodTape['fixed']> {
     const blank:History={range:'',live:false,since:range.from,to:range.to,cellMs:cell,historyStart:0,series:[],events:[],activity:{since:range.from,known:null,barMs:cell,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
     const quota=this.project(blank,range,undefined,true).series;
@@ -258,11 +273,10 @@ export class PeriodAccounting {
     }
     return {...history,exact:true,since:range.from,to:range.to,series,meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};
   }
-  changesAt(now:number,period:number):number|null {
+  changesAt(now:number,period:number,source?:string):number|null {
     if(this.tape.fixed)return null;
-    const from=now-period;if(from>=this.tape.cut)return null;
-    let next=Infinity;for(const index of this.quota.values())next=Math.min(next,index.changesAt(now,period));
-    if(this.tape.money.length)next=Math.min(next,Math.floor(now/60_000)*60_000+60_000);
+    let next=Infinity;for(const index of this.quota.values())if(!source||index.series.source===source)next=Math.min(next,index.changesAt(now,period));
+    for(const index of this.money.values())if(!source||index.group.source===source)next=Math.min(next,index.changesAt(now,period));
     return Number.isFinite(next)?next:null;
   }
 }

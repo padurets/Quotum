@@ -65,7 +65,7 @@ function HistorySettings({arrange, planAvailable, forecastAvailable}: {arrange: 
  * forecast's line goes when the table no longer says where its window leads.
  */
 const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange}) {
-  const {history, loading,error} = useHistory();
+  const {history, loading,error} = useHistory(true);
   const strip = useHistoryPlot();
   const registry = useRef<{token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
   const panel = useRef<HTMLElement>(null);

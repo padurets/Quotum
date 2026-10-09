@@ -1,4 +1,4 @@
-import {usePeriodSessions} from '../lib/period';
+import {boardPeriod,usePeriodSessions} from '../lib/period';
 import {PeriodStatus} from './PeriodStatus';
 import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject} from 'react';
 import type {LiveSession} from '../lib/types';
@@ -30,7 +30,7 @@ import {
 import {recentActivity, stamp, workHours} from '../lib/format';
 import {useLineup, useTitles} from '../lib/board';
 import {setPrefs, usePrefs} from '../lib/prefs';
-import {hubNow} from '../lib/clock';
+import {hubNow,useClock} from '../lib/clock';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {RecentActivity, Since} from './Time';
@@ -152,7 +152,7 @@ export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy
                 </span>
                 <span className="agents-age" title={t('agents.workedHint')}>
                   <span className="sr-only">{t('agents.worked')}: </span>
-                  <WorkTime ms={session.workedMs} />
+                  <WorkTime ms={session.workedMs} refs={session.ref?[session.ref]:[]} />
                 </span>
               </div>
             ))}
@@ -184,9 +184,11 @@ const projectName = (project: string | null) => project ?? t('agents.noProject')
 type Context = {still: boolean; color: (source: AgentSource) => CSSProperties};
 
 /** Credited time is unknown without a reliable producer identity. */
-function WorkTime({ms, labeled = false}: {ms: number | null; labeled?: boolean}) {
+function WorkTime({ms,refs=[],still=false,labeled=false}: {ms:number|null;refs?:string[];still?:boolean;labeled?:boolean}) {
+  const read=(now:number)=>{const value=boardPeriod.workedAt(refs,ms,now);return value===null?'—':workHours(value);};
+  const now=useClock(now=>still?null:boardPeriod.workedChangesAt(refs,now,read));
   if (ms === null) return <span title={t('agents.workedUnknown')} aria-label={t('agents.workedUnknown')}>—</span>;
-  const time = workHours(ms);
+  const time = still?workHours(ms):read(now);
   return <span data-time="worked">{labeled ? t('agents.workedValue', {time}) : time}</span>;
 }
 
@@ -235,7 +237,7 @@ const COLUMNS: Record<AgentColumn, {title: Key; hint?: Key; cell: (group: AgentG
   machine: {title: 'agents.machine', cell: group => dimensionName(group, 'machine')},
   subscription: {title: 'agents.subscription', cell: group => dimensionName(group, 'subscription')},
   agents: {title: 'agents.agents', cell: (group, {color}) => <Tally group={group} color={color} />},
-  worked: {title: 'agents.worked', hint: 'agents.workedHint', cell: group => <WorkTime ms={group.workedMs} />},
+  worked: {title: 'agents.worked', hint: 'agents.workedHint', cell: (group,{still}) => <WorkTime ms={group.workedMs} refs={group.rows.flatMap(row=>row.session.ref?[row.session.ref]:[])} still={still}/>},
   activity: {title: 'agents.lastActivity', hint: 'agents.lastActivityHint', cell: (group, {still}) => <LastActivity group={group} still={still} />},
   running: {title: 'agents.running', cell: (group, {still}) => (!Number.isFinite(group.startedAt)?'—':still ? stillSince(group.startedAt) : <Since from={group.startedAt} />)},
 };
@@ -391,7 +393,7 @@ function AgentsRows({
                   {details.map(column => (
                     <span key={column} title={fullOf(group, column)}>
                       <span className="sr-only">{t(COLUMNS[column].title)}: </span>
-                      {column === 'worked' ? <WorkTime ms={group.workedMs} labeled /> : COLUMNS[column].cell(group, context)}
+                      {column === 'worked' ? <WorkTime ms={group.workedMs} refs={group.rows.flatMap(row=>row.session.ref?[row.session.ref]:[])} still={still} labeled /> : COLUMNS[column].cell(group, context)}
                     </span>
                   ))}
                 </div>
@@ -542,8 +544,11 @@ function AgentsDialog({
 export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrange}) {
   useLocale();
   const lineup = useLineup();
-  const period=usePeriodSessions();
   const titles = useTitles(arrange.view.names);
+  const period=usePeriodSessions(rows=>{
+    const entries=rows.flatMap(session=>titles[session.source]?[{session,source:{id:session.source,...titles[session.source],sessions:[]}}]:[]);
+    return AGENTS_BY.map(by=>sortedGroups(groupsOf(entries,by),{column:'worked',descending:true},['worked']).map(group=>group.key));
+  });
   const sources = useMemo(
     () => {const bySource=new Map<string,LiveSession[]>();for(const row of period.rows){let rows=bySource.get(row.source);if(!rows)bySource.set(row.source,rows=[]);rows.push(row);}return lineup.flatMap((id):AgentSource[]=>titles[id]?[{id,provider:titles[id].provider,title:titles[id].title,sessions:bySource.get(id)??[]}]:[]);},
     [lineup, period.rows, titles],

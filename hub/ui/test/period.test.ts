@@ -16,6 +16,7 @@ import {evaluatedRange,periodKey} from '../../server/domain/period.js';
 import {fixedTape,fixedWork} from '../../server/periodFixed.js';
 import {hasPeriodValue,periodValueAt,withValueStates} from '../../server/domain/periodValues.js';
 import {canShift,shifted} from '../../server/domain/periodShift.js';
+import {periodTextChangesAt} from '../lib/periodClock.js';
 
 const ref=(id:string)=>({ref:id,source:'s',device:{id:'d',name:'Laptop'},origin:'terminal' as const,project:id,folder:null,startedAt:0});
 const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
@@ -252,6 +253,29 @@ test('an empty replacement period clears the previous roster and card disclosure
     await period.receive({basis,sessions:{state:'complete',basis,value}},{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:5_000_000}});
     assert.equal(period.get().rows.length,Number(populated));assert.equal(period.getSource(ref('a').source).length,Number(populated));
   }
+});
+
+test('rolling work stays exact while clock ticks leave chart and table revisions asleep',async()=>{
+  let now=5_000_000;
+  const context={exports:{} as {BoardPeriod:new()=>{active:boolean;receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;tick():void;get():{rows:{workedMs:number}[]};getProjectionRevision(scope:string):number;workedAt(refs:string[],fallback:number,now:number):number}},
+    hubNow:()=>now,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},preparations:()=>null,
+    prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
+    evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,periodTextChangesAt,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),prefs:()=>({range:'1h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
+  };
+  const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8'),body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const period=new context.exports.BoardPeriod();period.active=true;
+  const selection={mode:'live' as const,periodMs:3_600_000},range=evaluatedRange(selection,now),basis={run:'r',revision:'1',evaluatedAt:now,evidenceCut:now,range};
+  const value={anchor:range.from,cut:range.to,knownFrom:range.from,refs:[ref('a')],spans:[[0,0,120_000] as [number,number,number]],cursor:'work'};
+  await period.receive({basis,sessions:{state:'complete',basis,value}},{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:now}});
+  const revision=period.getProjectionRevision('quota');
+  now+=31_000;period.tick();
+  assert.equal(period.workedAt(['a'],0,now),89_000);assert.equal(period.get().rows[0].workedMs,89_000);
+  assert.equal(period.getProjectionRevision('quota'),revision);
+  now+=89_000;period.tick();assert.equal(period.get().rows.length,0,'membership still expires at the credited boundary');
+  assert.equal(period.getProjectionRevision('quota'),revision);
 });
 
 test('complete live and fixed targets share the LRU and cached return performs no read',async()=>{

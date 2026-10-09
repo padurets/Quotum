@@ -5,10 +5,10 @@ import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVI
 import {useMemo,useRef,useSyncExternalStore} from 'react';
 import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
 import {page, type PageEvent, type PageState} from './board';
-import {hubNow} from './clock';
+import {hubNow,useClock} from './clock';
 import {HistoryTile} from './historyTiles';
 import {ApiError, UNAUTHORIZED} from './http';
-import {periodOf} from './periods';
+import {periodOf,frameChangesAt} from './periods';
 import {onPrefs, prefs} from './prefs';
 import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
@@ -928,10 +928,11 @@ if (typeof window !== 'undefined') {
   };
   onPrefs(chosen);onTimeRange(chosen);chosen();
 }
-function usePeriodHistory(loader:HistoryStore):Shown {
+function usePeriodHistory(loader:HistoryStore,rolling=false):Shown {
   const shown=useSyncExternalStore(loader.subscribe,loader.get,loader.get);
   const panning=usePanning();
   const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>boardPeriod.getProjectionRevision(loader===fundsHistory?'funds':loader.scope??'quota'));
+  const now=useClock(at=>rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at):null,[shown,revision,panning]);
   const retained=useRef<{board:string;history:History}|null>(null);
   const gesture=useRef<{active:boolean;target:string|null}>({active:false,target:null});
   return useMemo(()=>{
@@ -947,11 +948,11 @@ function usePeriodHistory(loader:HistoryStore):Shown {
     if(!shown.history)return shown;
     const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=boardPeriod.projectionState(shown.history,scope);
     if(!state.ready)return {...shown,history:retained.current?.history??null,loading:!folding&&!state.error&&!shown.error,error:state.error??shown.error};
-    const history=boardPeriod.project(shown.history,scope);retained.current={board,history};if(!shown.loading)gesture.current.target=null;return {...shown,history,loading:folding?false:shown.loading};
-  },[shown,revision,loader,panning]);
+    const history=boardPeriod.project(shown.history,scope,now);retained.current={board,history};if(!shown.loading)gesture.current.target=null;return {...shown,history,loading:folding?false:shown.loading};
+  },[shown,revision,loader,panning,now]);
 }
-export function useHistory(): Shown {return usePeriodHistory(quotaHistory);}
-export function useBudgetHistory(family:MoneyFamily='budget'): Shown {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory);}
+export function useHistory(rolling=false): Shown {return usePeriodHistory(quotaHistory,rolling);}
+export function useBudgetHistory(family:MoneyFamily='budget',rolling=false): Shown {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling);}
 export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
 export function useBudgetHistoryPlot(family: MoneyFamily = 'budget'): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribePlot, reader.getPlot, reader.getPlot);}
 /** A fresh answer from either resource family supersedes the board's initial snapshot. */

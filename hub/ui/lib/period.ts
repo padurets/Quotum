@@ -3,7 +3,7 @@ import {subscriptionSelection} from './subscription';
 import {cellOf} from '../../server/domain/history';
 import {PERIOD_SCOPES,type PeriodScope,type HistoryQuery} from '../../server/domain/periodRead';
 import {prepareAsync,preparations,type Preparation} from './prepare';
-import {useSyncExternalStore} from 'react';
+import {useRef,useState,useSyncExternalStore} from 'react';
 import {evaluatedRange,periodKey,type PeriodBasis,type PeriodSelection} from '../../server/domain/period';
 import {hasPeriodValue,periodValueAt,type PeriodValues} from '../../server/domain/periodValues';
 import {mergeWorkPrepared,packWorkPrepared,type WorkedSession,type WorkTrace} from '../../server/domain/periodWork';
@@ -18,7 +18,10 @@ import {onPrefs,prefs} from './prefs';
 import {periodOf} from './periods';
 import {onTimeRange,timeRange} from './timeRange';
 import {pan} from './pan';
-import {sameJson} from './store';
+import {sameJson,selector} from './store';
+import {periodTextChangesAt} from './periodClock';
+import type {Line} from './lines';
+import type {MeterHistory} from './moneyView';
 import {UNAUTHORIZED} from './http';
 import {retainSamplesPrepared,sampleBytes,mergeTapePrepared,type PeriodTape} from '../../server/domain/periodTape';
 import {PeriodAccounting} from './periodAccounting';
@@ -112,15 +115,44 @@ class BoardPeriod {
   getProjectionRevision=(scope:PeriodScope)=>this.projectionRevision[scope];
   subscribeProjection=(scope:PeriodScope,listener:()=>void)=>{this.projectionListeners[scope].add(listener);return()=>{this.projectionListeners[scope].delete(listener);};};
   private publishProjection(scopes:readonly PeriodScope[]=PERIOD_SCOPES){for(const scope of scopes){this.projectionRevision[scope]++;for(const listener of this.projectionListeners[scope])listener();}}
-  project(history:History,scope:PeriodScope) {
-    const tape=this.tapes.get(scope),now=this.evaluatedAt;
+  project(history:History,scope:PeriodScope,now=this.evaluatedAt) {
+    const tape=this.tapes.get(scope);
     let result=history;
     if(tape?.rangeKey===history.range){const range=evaluatedRange(tape.selection,now),values=new Map<string,PeriodValues>();if(tape.selection.mode==='range')for(const [id,reading] of this.values)if(reading.value&&reading.basis?.range.to===range.to)values.set(id,reading.value);result=tape.accounting.project(history,range,values);}
-    if(scope==='quota'&&this.activity&&this.workRangeKey===history.range&&this.work.basis)result={...result,since:this.work.basis.range.from,to:this.work.basis.range.to,activity:this.activity.project(history.activity,this.work.basis.range)};
+    if(scope==='quota'&&this.activity&&this.workRangeKey===history.range&&this.work.basis){const range=evaluatedRange(this.workSelection,now);result={...result,since:range.from,to:range.to,activity:this.activity.project(history.activity,range)};}
     return result;
+  }
+  quotaAt(line:Line,now:number,rangeKey?:string):Line {
+    const tape=this.tapes.get('quota');if(!tape||tape.selection.mode!=='live'||rangeKey!==undefined&&tape.rangeKey!==rangeKey)return line;
+    const summary=tape.accounting.quotaSummary(line.sourceId,line.windowId,evaluatedRange(tape.selection,now));
+    return summary?{...line,...summary}:line;
+  }
+  moneyAt(series:MeterHistory,now:number,rangeKey?:string):MeterHistory {
+    const tape=this.tapes.get('budget');if(!tape||tape.selection.mode!=='live'||rangeKey!==undefined&&tape.rangeKey!==rangeKey)return series;
+    const summary=tape.accounting.moneySummary(series.sourceId,series.meterId,series.unit,evaluatedRange(tape.selection,now));
+    return summary?{...series,...summary}:series;
+  }
+  rangeAt(scope:PeriodScope,now:number,rangeKey?:string){const tape=this.tapes.get(scope);return tape&&(rangeKey===undefined||tape.rangeKey===rangeKey)?evaluatedRange(tape.selection,now):null;}
+  private workBoundary(now:number,refs?:readonly string[],source?:string) {
+    if(!this.index||this.workSelection.mode!=='live')return null;
+    let next=Infinity;const period=this.workSelection.periodMs;
+    for(const [i,curve] of this.index.curves.contexts.entries())if((!refs||refs.includes(this.index.trace.refs[i].ref))&&(!source||this.index.trace.refs[i].source===source))next=Math.min(next,curve.next(now-period)+period,curve.next(now));
+    return Number.isFinite(next)?next:null;
+  }
+  workedAt(refs:readonly string[],fallback:number|null,now:number) {
+    if(!refs.length||!this.index||this.workSelection.mode!=='live')return fallback;
+    const range=evaluatedRange(this.workSelection,now);
+    return this.index.trace.refs.reduce((sum,ref,i)=>sum+(refs.includes(ref.ref)?this.index!.curves.contexts[i].read(range):0),0);
+  }
+  workedChangesAt(refs:readonly string[],now:number,read:(now:number)=>string){return refs.length?periodTextChangesAt(now,at=>this.workBoundary(at,refs),read):null;}
+  cellChangesAt(scope:PeriodScope,now:number,read:(now:number)=>string,extra?:(now:number)=>number|null,source?:string,rangeKey?:string){
+    const tape=this.tapes.get(scope);if(!tape||tape.selection.mode!=='live'||rangeKey!==undefined&&tape.rangeKey!==rangeKey)return extra?.(now)??null;
+    const period=tape.selection.periodMs;
+    return periodTextChangesAt(now,at=>{const next=Math.min(tape.accounting.changesAt(at,period,source)??Infinity,scope==='quota'?this.workBoundary(at,undefined,source)??Infinity:Infinity,extra?.(at)??Infinity);return Number.isFinite(next)?next:null;},read);
   }
   projectionState(history:History,scope:PeriodScope){const tape=this.tapes.get(scope),range=evaluatedRange(this.selection,this.evaluatedAt);return {ready:!!tape&&tape.rangeKey===history.range&&range.from>=tape.tape.from&&(range.to<=tape.tape.cut||this.selection.mode==='live'&&this.liveEvidence),error:this.projectionErrors[scope]};}
   getSource=(id:string)=>this.rowsBySource.get(id)??noSessions;
+  getWorkEvidence=()=>this.work.value;
   getValue=(id:string)=>this.values.get(id)??noValue;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
@@ -324,7 +356,7 @@ class BoardPeriod {
   }
   private tick(fromClock=true) {
     if(!this.active)return;
-    if(!this.index||!this.work.basis){this.evaluatedAt=hubNow();this.publishProjection([...this.tapes].filter(([,t])=>t.selection.mode==='live').map(([scope])=>scope));this.scheduleClock();return;}
+    if(!this.index||!this.work.basis){this.evaluatedAt=hubNow();this.scheduleClock();return;}
     const now=this.evaluatedAt=hubNow(),range=evaluatedRange(this.workSelection,now),projected=this.index.advance(range,now);
     if(projected.limited){this.work={...this.work,error:'history_range_invalid'};this.publishWork();clock.due(this.watch,null,now);return;}
     if(projected.changed||this.workState.value!==this.work.value) {
@@ -340,14 +372,12 @@ class BoardPeriod {
     }
     this.work={...this.work,basis:{...this.work.basis,evaluatedAt:now,range}};
     if(projected.changed||this.workState.value!==this.work.value||this.workState.loading!==this.work.loading||this.workState.error!==this.work.error||this.workSelection.mode==='range'&&!sameJson(this.workState.basis?.range,range))this.publishWork();
-    this.publishProjection(['quota']);
-    if(fromClock)this.publishProjection(['budget','funds'].filter(scope=>this.tapes.get(scope as PeriodScope)?.selection.mode==='live') as PeriodScope[]);
+    if(!fromClock)this.publishProjection(['quota']);
     this.scheduleClock();
   }
   private scheduleClock(){
     const now=hubNow();
     let due=this.workSelection.mode==='live'?this.index?.changesAt(now,this.workSelection.periodMs)??null:this.index?.presenceChangesAt()??null;
-    for(const tape of this.tapes.values())if(tape.selection.mode==='live'){const at=tape.accounting.changesAt(now,tape.selection.periodMs);if(at!==null)due=Math.min(due??Infinity,at);}
     clock.due(this.watch,due!==null&&Number.isFinite(due)?due:null,now);
   }
   retry=()=>{this.revision++;this.workNeeded=this.wantsWork;this.valuesNeeded=this.selection.mode==='range';this.transport.retry();};
@@ -359,5 +389,14 @@ const tapeBytes=(tape:PeriodTape,wire=false)=>JSON.stringify({...tape,quota:tape
 export const boardPeriod=new BoardPeriod();
 export function followPeriod(){const stop=page.listen((event,state)=>boardPeriod.changed(event,state));const choose=()=>boardPeriod.changed();const stops=[stop,onPrefs(choose),onTimeRange(choose)];choose();return()=>stops.forEach(stop=>stop());}
 export function usePeriodValues(id:string){return useSyncExternalStore(listener=>boardPeriod.subscribeValue(id,listener),()=>boardPeriod.getValue(id));}
-export function usePeriodSessions(){return useSyncExternalStore(boardPeriod.subscribe,boardPeriod.get);}
-export function useSourcePeriodSessions(id:string){return useSyncExternalStore(listener=>boardPeriod.subscribeSource(id,listener),()=>boardPeriod.getSource(id));}
+const roster=(rows:readonly WorkedSession[])=>rows.map(({workedMs:_,...row})=>row);
+export function usePeriodSessions(order:(rows:WorkedSession[])=>unknown=()=>null){
+  const latest=useRef(order);latest.current=order;
+  const [read]=useState(()=>selector(boardPeriod,()=>({select:state=>state,equal:(a,b)=>a.value===b.value&&a.loading===b.loading&&a.error===b.error&&sameJson(roster(a.rows),roster(b.rows))&&sameJson(latest.current(a.rows),latest.current(b.rows))})));
+  return useSyncExternalStore(boardPeriod.subscribe,read);
+}
+export function useSourcePeriodSessions(id:string){
+  const current=useRef(id);current.current=id;
+  const [read]=useState(()=>selector({get:()=>({rows:boardPeriod.getSource(current.current),value:boardPeriod.getWorkEvidence()})},()=>({select:state=>state,equal:(a,b)=>a.value===b.value&&sameJson(roster(a.rows),roster(b.rows))})));
+  return useSyncExternalStore(listener=>boardPeriod.subscribeSource(id,listener),read).rows;
+}

@@ -206,7 +206,7 @@ const Totals = memo(function Totals({activity, shownMs, since}: {activity: Activ
  * render it. The unknown part of the period is hatched rather than drawn as idle.
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
-  const {history, loading,error} = useHistory();
+  const {history, loading,error} = useHistory(true);
   const strip = useHistoryPlot();
   const registry = useRef<{token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
   const panel = useRef<HTMLElement>(null);
