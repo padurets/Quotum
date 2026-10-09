@@ -1297,7 +1297,7 @@ Retained work traces and measurement tapes provide exact boundaries beside the s
 interior cells. Work prefixes and interval unions compute clipped session duration,
 active time and agent-hours. Hour blocks share identical work patterns without losing
 gaps or millisecond boundaries; the roster, activity and quota accounting share their
-curves. Numeric columns use constant values or exact integer offsets where possible,
+curves. Numeric columns use constant values, piecewise integer progressions or exact integer offsets where possible,
 with 64-bit values for fractions and wider ranges. Changed series rebuild only their own
 prefixes. Fixed selections carry exact totals and boundary geometry instead of a rolling
 ledger; the server and browser share the accounting implementation in `server/domain`.

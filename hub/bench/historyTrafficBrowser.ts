@@ -127,7 +127,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
       const deadline = Date.now() + 20_000;
       for (;;) {
         if (bodies.errors.length) throw bodies.errors[0];
-        if (!bodies.activeCount && !bodies.pending.size && await cdp.evaluate<boolean>(`!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning')`)) {
+        if (!bodies.activeCount && !bodies.pending.size && await cdp.evaluate<boolean>(`['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning')`)) {
           await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,250))');
           if (!bodies.activeCount && !bodies.pending.size) return;
         }

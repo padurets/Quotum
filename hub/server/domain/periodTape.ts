@@ -4,19 +4,46 @@ import type {RateLeg} from './currency.js';
 import {drain,ordered,type Preparation} from './prepare.js';
 
 export const SAMPLE_WIDTH=5;
-export type NumberColumn={length:number;base:number;values:Uint32Array|Float64Array|null};
+export type NumberColumn={length:number;base:number;values:Uint32Array|Float64Array|null;runs?:{ends:Uint32Array;bases:Float64Array;steps:Float64Array}};
 export type Numbers=ArrayLike<number>|NumberColumn;
 export type SampleRows=readonly number[]|Float64Array|{length:number;columns:NumberColumn[]};
-export const numberAt=(rows:Numbers,index:number):number|undefined=>index<0||index>=rows.length?undefined:'base' in rows?rows.base+(rows.values?.[index]??0):rows[index];
-export const numberBytes=(rows:Numbers)=>'base' in rows?(rows.values?.byteLength??0)+32:rows.length*8;
+export function numberAt(rows:Numbers,index:number):number|undefined {
+  if(index<0||index>=rows.length)return undefined;
+  if(!('base' in rows))return rows[index];
+  if(!rows.runs)return rows.base+(rows.values?.[index]??0);
+  const {ends,bases,steps}=rows.runs;let a=0,b=ends.length;
+  while(a<b){const middle=(a+b)>>>1;if(ends[middle]<=index)a=middle+1;else b=middle;}
+  return bases[a]+(index-(a?ends[a-1]:0))*steps[a];
+}
+export const numberBytes=(rows:Numbers)=>'base' in rows?(rows.runs?rows.runs.ends.byteLength+rows.runs.bases.byteLength+rows.runs.steps.byteLength+128:(rows.values?.byteLength??0)+32):rows.length*8;
 export const lowerNumber=(rows:Numbers,at:number)=>{let a=0,b=rows.length;while(a<b){const m=(a+b)>>>1;if(numberAt(rows,m)!<at)a=m+1;else b=m;}return a;};
 /** Integer offsets use four bytes only when the complete range is exactly representable. */
 export function* numberColumn(length:number,value:(i:number,pass:number)=>number):Preparation<NumberColumn>{
-  let min=Infinity,max=-Infinity,integers=true;
-  for(let i=0;i<length;i++){const n=value(i,0);min=Math.min(min,n);max=Math.max(max,n);integers&&=Number.isSafeInteger(n);yield;}
+  let min=Infinity,max=-Infinity,integers=true,count=0,start=0,base=0,step:number|undefined,previous=0;
+  for(let i=0;i<length;i++){
+    const n=value(i,0);min=Math.min(min,n);max=Math.max(max,n);integers&&=Number.isSafeInteger(n);
+    if(!i){base=n;count++;}else if(step===undefined){const delta=n-previous;if(Number.isSafeInteger(delta)&&previous+delta===n)step=delta;else{count++;base=n;start=i;}}
+    else if(!Number.isSafeInteger(step)||n!==base+(i-start)*step){count++;base=n;start=i;step=undefined;}
+    previous=n;if((i&63)===63)yield;
+  }
   if(!length||min===max)return {length,base:length?min:0,values:null};
-  const narrow=integers&&max-min<=0xffffffff,base=narrow?min:0,values=narrow?new Uint32Array(length):new Float64Array(length);
-  for(let i=0;i<length;i++){values[i]=value(i,1)-base;yield;}
+  const narrow=integers&&max-min<=0xffffffff;
+  // Long regular cadences and prefixes retain every integer, including breaks.
+  // Incompressible and fractional columns keep their original exact buffer.
+  if(integers&&count*20+128<length*(narrow?4:8)+32){
+    const ends=new Uint32Array(count),bases=new Float64Array(count),steps=new Float64Array(count);let run=0;
+    step=undefined;start=0;previous=0;
+    for(let i=0;i<length;i++){
+      const n=value(i,1);
+      if(!i)bases[0]=n;
+      else if(step===undefined){const delta=n-previous;if(Number.isSafeInteger(delta)&&previous+delta===n){step=delta;steps[run]=step;}else{ends[run++]=i;bases[run]=n;start=i;}}
+      else if(!Number.isSafeInteger(step)||n!==bases[run]+(i-start)*step){ends[run++]=i;bases[run]=n;start=i;step=undefined;}
+      previous=n;if((i&63)===63)yield;
+    }
+    ends[run]=length;return {length,base:0,values:null,runs:{ends,bases,steps}};
+  }
+  base=narrow?min:0;const values=narrow?new Uint32Array(length):new Float64Array(length);
+  for(let i=0;i<length;i++){values[i]=value(i,1)-base;if((i&63)===63)yield;}
   return {length,base,values};
 }
 type Sample=CellSamples['samples'][number];

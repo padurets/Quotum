@@ -67,3 +67,17 @@ test('numeric columns preserve fractions, wide deadlines and exact integer offse
     if(values[0]===1_790_000_000_000)assert.equal(numberBytes(column),32+values.length*4);
   }
 });
+
+test('piecewise integer columns retain every anchor across cadence changes and arbitrary suffixes',async()=>{
+  const {numberColumn,numberAt,numberBytes,lowerNumber}=await import('../domain/periodTape.js');
+  const {drain}=await import('../domain/prepare.js');
+  const regular=Array.from({length:10000},(_,i)=>1_790_000_000_000+Math.min(i,4000)*60000+Math.max(0,i-4000)*300000);
+  let seed=137;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed;};
+  const cases=[regular,[...regular,-Number.MAX_SAFE_INTEGER,Number.MAX_SAFE_INTEGER],regular.map(n=>n+.125),Array.from({length:10000},()=>random())];
+  for(let take=0;take<20;take++)cases.push(Array.from({length:1000},(_,i)=>i<500?i*3:random()%300));
+  for(const values of cases){
+    const column=drain(numberColumn(values.length,i=>values[i]));
+    assert.deepEqual(values.map((_,i)=>numberAt(column,i)),values);assert.equal(numberAt(column,-1),undefined);assert.equal(numberAt(column,values.length),undefined);
+    if(values===regular){assert.ok(numberBytes(column)<256);for(const i of [0,3999,4000,4001,9999]){assert.equal(lowerNumber(column,values[i]),i);assert.equal(lowerNumber(column,values[i]+1),i+1);}}
+  }
+});
