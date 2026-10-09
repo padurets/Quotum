@@ -1,9 +1,20 @@
 import {DAY, type DemoSet} from '../demo/model.js';
+import {STILL_FOR} from '../demo/setup.js';
 
 /** Twelve real sources continue beyond the 30d strip's rebuild and read-ahead edges. */
 export function panningSet(set: DemoSet): DemoSet {
   let count = 0;
-  return {...set, workHistoryMs: 75 * DAY, entries: set.entries.map(entry => entry.kind === 'card' && count++ < 12 ? {...entry, history: Math.max(entry.history, 75 * DAY), agents: entry.agents?.map(agent => ({...agent, since: Math.min(agent.since, -75 * DAY)}))} : entry)};
+  return {...set, workHistoryMs: 75 * DAY, entries: set.entries.map(entry => {
+    if (entry.kind !== 'card') return entry;
+    const extended = count++ < 12 ? {...entry, history: Math.max(entry.history, 75 * DAY), agents: entry.agents?.map(agent => ({...agent, since: Math.min(agent.since, -75 * DAY)}))} : entry;
+    // The demo has imminent resets. A still benchmark must survive warmup and
+    // alignment to the real grid without losing those quota series mid-window.
+    return {...extended, windows: entry.windows.map(at => (t: number) => {
+      const window = at(t);
+      return window.resetsAt !== null && window.resetsAt > 0 && window.resetsAt < STILL_FOR
+        ? {...window, resetsAt: STILL_FOR} : window;
+    })};
+  })};
 }
 
 import {Store} from '../server/store/store.js';

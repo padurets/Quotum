@@ -83,7 +83,9 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
   signal?.addEventListener('abort', cancel, {once: true});
   if (signal?.aborted) cancel();
   const exited = (code: number | null, signal: NodeJS.Signals | null) => {
-    state.exit = {code, signal}; state.failure = 'early-exit';
+    state.exit = {code, signal};
+    if (state.stage === 'ready' || stopping) return;
+    state.failure = 'early-exit';
     startup.abort(new Error('Chrome exited before DevTools was ready'));
   };
   const errored = (error: NodeJS.ErrnoException) => {

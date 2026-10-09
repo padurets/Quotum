@@ -51,6 +51,7 @@ export class Evidence {
   private readonly identity = {sha: git('HEAD'), tree: git('HEAD^{tree}'), dirty: dirty(), run: process.env.GITHUB_RUN_ID?.replace(/\D/g, ''), attempt: process.env.GITHUB_RUN_ATTEMPT?.replace(/\D/g, '')};
   private phase = 'startup';
   private status = 'running';
+  private completedPhase?: string;
 
   constructor(directory = process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR) {
     if (directory) {
@@ -60,7 +61,7 @@ export class Evidence {
     this.manifest();
   }
 
-  begin(phase: string) {this.phase = phase; this.manifest();}
+  begin(phase: string) {if (phase === 'cleanup') this.completedPhase = this.phase; this.phase = phase; this.manifest();}
   save(name: string, value: unknown) {
     if (!this.directory) return;
     if (!/^[a-zA-Z0-9_-]+$/.test(name)) {this.errors.push('invalid evidence name'); this.manifest(); return;}
@@ -86,7 +87,7 @@ export class Evidence {
   private manifest() {
     if (!this.directory) return;
     try {this.write('manifest.json', JSON.stringify({schemaVersion: 1, id: this.id, identity: this.identity, environment: this.environment,
-      phase: this.phase, status: this.status, elapsedMs: Math.round(performance.now() - this.started), files: this.files, errors: this.errors}));}
+      phase: this.phase, completedPhase: this.completedPhase, status: this.status, elapsedMs: Math.round(performance.now() - this.started), files: this.files, errors: this.errors}));}
     catch {if (!this.errors.includes('manifest write failed')) this.errors.push('manifest write failed');}
   }
 }
