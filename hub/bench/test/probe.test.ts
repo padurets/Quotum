@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {NODES, nodeOf, probeScript, rendered, type Fiber, type Reading} from '../probe.js';
 import {measuredProblems} from '../budget.js';
+import {creditChartMarks} from '../credits.js';
 
 /** A stand-in element: its tag, classes and attributes, and `closest` for the simple selectors the probe uses. */
 class Element {
@@ -113,6 +114,20 @@ function page() {
     record: (...records: Mutation[]) => observer!(records),
     insert: (target: Element, ...addedNodes: unknown[]) => observer!([{type: 'childList', target, addedNodes}])};
 }
+
+test('credit continuation marks still require a new DOM mutation of the right series and amount',()=>{
+  const {bench,mutate}=page(),observedAt=286000,now=306000,cell=300000;
+  const marks=creditChartMarks(observedAt,now,cell,'99960000');
+  const found=()=>marks.some(mark=>bench.seriesChanged('credit balance:credits',mark)!==null);
+  const draw=(key:string,last:string)=>mutate(el('path',el('g',null,{'data-series':key,'data-last':last})));
+  bench.reset();assert.equal(found(),false);
+  for(const [key,last] of [['another balance:credits','300000:99960000'],['credit balance:credits','300000:100000000'],['credit balance:credits','280000:99960000'],['credit balance:credits','600000:99960000']]) {
+    draw(key,last);assert.equal(found(),false);
+  }
+  draw('credit balance:credits','300000:99960000');assert.equal(found(),true);
+  bench.reset();assert.equal(found(),false,'a previous change cannot credit an unchanged heartbeat');
+  draw('credit balance:credits','300000:99960000');assert.equal(found(),true);
+});
 
 test('the live probe distinguishes subscription funds, quota and wallets inside shared analytics',()=>{
   const p=page(),analytics=el('section',null,{},'analytics');

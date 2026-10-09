@@ -30,7 +30,7 @@ export {Requests} from './requests.js';
 import {doubledIdle} from './idleDiagnostic.js';
 import {panningPairs, tracePanning} from './panningDiagnostic.js';
 import {ChromeLaunchError} from './chrome.js';
-import {creditSnapshot} from './credits.js';
+import {creditChartMarks,creditSnapshot} from './credits.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -412,10 +412,14 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
       await cdp.evaluate('__quotumBench.reset()');
       const beforeRows=rows(),beforeCoverage=coverage(),at=quotaAt-20_000+index*2000,sent=Date.now(),heartbeat=index>=2,requests=new Requests(cdp);requests.counting=true;
       await deliver(amount,at);
-      const value=String(BigInt(amount)*40_000n),last=at+':'+value;
+      const value=String(BigInt(amount)*40_000n);
       let chart:number|null=null,changed:number|null=null;
       while(Date.now()<sent+SHOWN_WITHIN&&(chart===null||!heartbeat&&changed===null)) {
-        chart=await cdp.evaluate<number|null>(`__quotumBench.seriesChanged(${JSON.stringify(source+' balance:credits')},${JSON.stringify(last)})`);
+        const marks=creditChartMarks(at,Date.now(),cellOf(86_400_000),value);
+        chart=await cdp.evaluate<number|null>(`(() => {
+          const changes=${JSON.stringify(marks)}.map(last=>__quotumBench.seriesChanged(${JSON.stringify(source+' balance:credits')},last)).filter(at=>at!==null);
+          return changes.length?Math.min(...changes):null;
+        })()`);
         changed=await cdp.evaluate<number|null>(`__quotumBench.moneyChanged(${JSON.stringify(source)},${JSON.stringify(value)})`);
         if(chart===null||!heartbeat&&changed===null)await sleep(20);
       }
