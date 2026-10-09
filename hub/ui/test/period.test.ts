@@ -65,6 +65,9 @@ test('one collection combines all three history sections and the roster, includi
   await Promise.all([quota,budget,funds]);await settle();
   assert.equal(sent.length,1);assert.ok(sent[0].quota);assert.ok(sent[0].budget);assert.ok(sent[0].funds);assert.ok(sent[0].sessions);assert.equal(applied,1);assert.equal(pool.estimatedBytes,0);
   transport.change();await settle();assert.equal(sent.length,1,'clock-like reevaluation alone creates no read');
+  await transport.read('quota',{cell:'1',from:'60',to:'120'});await settle();
+  assert.equal(sent.length,2);assert.equal(sent[1].quota?.evidence,'skip','later chart tiles do not rebuild completed period evidence');
+  assert.equal(sent[1].sessions,undefined);
 });
 
 test('a stale A response cannot publish after A to B to A or after new evidence during its flight',async()=>{

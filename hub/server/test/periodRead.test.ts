@@ -15,6 +15,7 @@ import {mergeWork,workedSessions} from '../domain/periodWork.js';
 import {deepSeekMeasurement} from '../connectors/deepseek.js';
 import {periodValues} from '../periodValues.js';
 import {HistoryLimit} from '../history.js';
+import {sharedWork} from '../periodWork.js';
 
 const M=60_000,H=60*M,now=1_800_000_000_000;
 async function fixture() {
@@ -68,6 +69,24 @@ test('an oversized section does not discard siblings or retain its failed reserv
   assert.equal(reply.quota?.state,'error');assert.equal(reply.sessions?.state,'error');assert.equal(reply.values?.state,'complete');
   limited.mock.restore();const next=(await h.read(request)).json<PeriodReply>();
   assert.equal(next.quota?.state,'complete');assert.equal(next.sessions?.state,'complete');assert.equal(next.values?.state,'complete');
+});
+
+test('a chart-only past tile reads only its work, and extraction replacement releases its reservation',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  h.credit(now-2*H,now-H);h.credit(now-30*M,now-M,'later');
+  const original=h.store.agentWork.bind(h.store),ranges:number[][]=[];
+  t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{ranges.push(args.slice(0,2) as number[]);return original(...args);});
+  const response=await h.read({version:1,selection:{mode:'range',from:now-2*H,to:now-M},evaluatedAt:now,quota:{cell:String(M),from:String(now-2*H),to:String(now-H),evidence:'skip'}});
+  assert.equal(response.json<PeriodReply>().quota?.state,'complete');assert.deepEqual(ranges,[[now-2*H,now-H]]);
+  let used=0,peak=0;
+  const read=sharedWork(h.hub,h.store.shown(h.board,[]),null,bytes=>{used+=bytes;peak=Math.max(peak,used);},bytes=>{used-=bytes;assert.ok(used>=0);});
+  const first=read(now-2*H,now-H),before=used;
+  assert.equal(first.length,1);assert.ok(before>0);
+  const second=read(now-2*H,now);
+  assert.equal(second.length,2);assert.equal(peak,used,'replacement does not retain the former extraction');
+  read(now-90*M,now-M);assert.equal(peak,used,'contained reads reuse the extraction');
+  const final=used;t.mock.method(h.store,'agentWork',(_from:number,_to:number,_sources?:string[],reserve?:(bytes:number)=>void)=>{reserve?.(64);throw new HistoryLimit();});
+  assert.throws(()=>read(now-3*H,now),HistoryLimit);assert.equal(used,0);assert.equal(peak,final);
 });
 
 test('money retains exact amounts, compressed anchors and accepted interruption',()=>{

@@ -93,10 +93,11 @@ export class PeriodReader {
     const basis:PeriodBasis={run:this.events.epoch,revision:String(this.revision),evaluatedAt,evidenceCut:cut,range};
     const response:PeriodReply={basis};
     const reservation=this.history.reservation();
-    let replyBytes=0,sharedBytes=0;
+    let replyBytes=0;
     const reserve=(bytes:number)=>{reservation.add(bytes);replyBytes+=bytes;};
-    const shared=sharedWork(this.hub,shown,{from:request.sessions?replaceFrom:cut,to:request.sessions?workFrontier.to:cut},bytes=>{reservation.add(bytes);sharedBytes+=bytes;});
-    const work:NonNullable<Parameters<typeof readHistory>[6]>=(from,to)=>{const before=sharedBytes;try{return shared(from,to);}catch(error){reservation.remove(sharedBytes-before);sharedBytes=before;throw error;}};
+    const cell=cellOf(range.to-range.from),fixedRange={from:Math.floor(range.from/cell)*cell,to:Math.min(Math.ceil(range.to/cell)*cell,now)};
+    const workRange=selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip')?fixedRange:request.sessions?{from:replaceFrom,to:workFrontier.to}:null;
+    const work=sharedWork(this.hub,shown,workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes));
     const section=<T>(read:()=>T):PeriodSection<T>=>{
       const before=replyBytes;
       try {return {state:'complete',basis,value:read()};}
@@ -108,7 +109,6 @@ export class PeriodReader {
         throw error;
       }
     };
-    const cell=cellOf(range.to-range.from),fixedRange={from:Math.floor(range.from/cell)*cell,to:Math.min(Math.ceil(range.to/cell)*cell,now)};
     let completeWork:ReturnType<typeof periodWork>|undefined;
     const retainedWork=()=>completeWork??=periodWork(this.hub,this.history,board,shown,fixedRange,work,now,reserve);
     const temporary=<T>(read:()=>T)=>{const before=replyBytes;try{return read();}finally{reservation.remove(replyBytes-before);replyBytes=before;}};

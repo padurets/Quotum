@@ -63,7 +63,7 @@ export class PeriodTransport implements HistoryMember {
       for(const scope of PERIOD_SCOPES)if(scope!==pendingBaseline[0])delete body[scope];
       for(const part of ['values','sessions'] as const)if(this.baselineParts.has(part))delete body[part];
     }
-    for(const scope of PERIOD_SCOPES){const query=body[scope];if(query)query.evidence??=baseline&&!extras?'skip':this.cursors.get(cursorKey(scope,query));}
+    for(const scope of PERIOD_SCOPES){const query=body[scope];if(query)query.evidence??=!extras?'skip':this.cursors.get(cursorKey(scope,query));}
     const appliedIntent={...intent,request:body};
     const start=()=>{
       if(flight.controller.signal.aborted)return;
