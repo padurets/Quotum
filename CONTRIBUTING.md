@@ -40,7 +40,10 @@ bounded numeric timestamps and readiness/loading/movement flags. No page text is
 retained, and extracting that evidence sends no additional browser command.
 `QUOTUM_BENCH_DIAGNOSE_PANNING=pairs` runs a fixed OFF/ON, ON/OFF, OFF/ON
 experiment for bounded input/frame/history correlation. Every result is retained;
-these diagnostic runs cannot satisfy the canonical gate. The optional
+these diagnostic runs cannot satisfy the canonical gate. Input traces retain only
+fixed native event types and numeric generation, compositor-delivery and main-handler
+stages; interval tracks may be reused by later inputs, so attribution also needs the
+original start/end timestamps. The optional
 `benchmark-diagnostics` PR label requests the same experiment in a separate CI job.
 `QUOTUM_BENCH_DIAGNOSE_PANNING=trace` (the `benchmark-trace-diagnostics` PR
 label) records an owned synthetic browser's new intervals with numeric

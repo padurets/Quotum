@@ -159,3 +159,50 @@ test('compositor fields reject arbitrary text, opaque IDs and invalid duration s
   assert.deepEqual(trace.events[3].tile,{});
   assert.doesNotMatch(JSON.stringify(trace),/private-canary|surface_frame_trace_id|id2|"Name"|184467/);
 });
+
+
+test('native wheel delivery and handler stages keep their interval tracks without retaining payload', async()=>{
+  const f=fixture();
+  await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
+    f.listeners.get('Tracing.dataCollected')?.({value:[
+      {name:'EventLatency',ph:'b',pid:225,tid:4,ts:4646715107488,id2:{local:'0xbeef'},args:{event_latency:{event_type:'MOUSE_WHEEL',latency_id:'private-canary',url:'private-canary'}}},
+      {name:'RendererCompositorToMain',ph:'b',pid:225,tid:4,ts:4646715107752,id2:{local:'0xbeef'}},
+      {name:'RendererCompositorToMain',ph:'e',pid:225,tid:4,ts:4646715124477,id2:{local:'0xbeef'}},
+      {name:'RendererMainProcessing',ph:'b',pid:225,tid:4,ts:4646715124477,id2:{local:'0xbeef'}},
+      {name:'RendererMainProcessing',ph:'e',pid:225,tid:4,ts:4646715228230,id2:{local:'0xbeef'}},
+      {name:'EventLatency',ph:'e',pid:225,tid:4,ts:4646715231768,id2:{local:'0xbeef'}},
+      {name:'EventLatency',ph:'b',pid:226,tid:4,ts:4646715107488,id2:{local:'0xbeef'},args:{event_latency:{event_type:'MOUSE_DRAGGED'}}},
+    ]});
+  },f.evidence);
+  const trace=JSON.parse(JSON.stringify(safeEvidence(f.files.get('trace')))) as {events:(SafeTrace&{input?:{type?:string}})[]};
+  assert.equal(trace.events.length,7);
+  assert.deepEqual(trace.events[0].input,{type:'MOUSE_WHEEL'});
+  assert.deepEqual(trace.events[6].input,{type:'MOUSE_DRAGGED'});
+  const track=trace.events[0].trackId;
+  assert.equal(typeof track,'number');
+  assert.ok(trace.events.slice(0,6).every(event=>event.trackId===track));
+  assert.notEqual(trace.events[6].trackId,track);
+  const processing=trace.events.filter(event=>event.name==='RendererMainProcessing');
+  assert.equal((processing[1].ts!-processing[0].ts!)/1000,103.753);
+  const queue=trace.events.filter(event=>event.name==='RendererCompositorToMain');
+  assert.equal((queue[1].ts!-queue[0].ts!)/1000,16.725);
+  assert.doesNotMatch(JSON.stringify(trace),/beef|private-canary|latency_id|url|id2/);
+});
+
+test('input traces reject unknown types, event names and identifiers rather than exporting native payload', async()=>{
+  const f=fixture();
+  await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
+    f.listeners.get('Tracing.dataCollected')?.({value:[
+      {name:'EventLatency',ph:'b',pid:1,ts:1,id2:{local:'private-canary'},args:{event_latency:{event_type:'private-canary',latency_id:123},data:{type:'MOUSE_WHEEL'}}},
+      {name:'EventLatency',ph:'b',pid:1,ts:'private-canary',args:{event_latency:{event_type:7},type:'MOUSE_WHEEL'}},
+      {name:'RendererCompositorQueueingDelay',ph:'b',pid:1,ts:2,id2:{local:'0x1'},args:{data:{url:'private-canary'}}},
+      {name:'RendererMainProcessing-private-canary',ph:'X',ts:3},
+    ]});
+  },f.evidence);
+  const trace=JSON.parse(JSON.stringify(safeEvidence(f.files.get('trace')))) as {events:(SafeTrace&{input?:{type?:string}})[]};
+  assert.equal(trace.events.length,3);
+  assert.deepEqual(trace.events[0].input,{});assert.equal(trace.events[0].trackId,undefined);
+  assert.deepEqual(trace.events[1].input,{});assert.equal(trace.events[1].ts,undefined);
+  assert.equal(trace.events[2].name,'RendererCompositorQueueingDelay');
+  assert.doesNotMatch(JSON.stringify(trace),/private-canary|latency_id|MOUSE_WHEEL|"data"|id2/);
+});
