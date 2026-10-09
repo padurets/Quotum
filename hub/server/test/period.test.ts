@@ -96,3 +96,13 @@ test('neighboring fixed summaries replay sparse boundary changes and exact slope
   const moved=shifted<typeof fixed>(fixed,{from:140,to:240})!;
   for(const offset of [-20,0,10,29,49]){const {shift:_,...actual}=shifted<typeof fixed>(moved,{from:100+offset,to:200+offset})!;assert.deepEqual(actual,read(offset),'repeated shifts start from the same immutable proof');}
 });
+
+test('boundary array changes retain unchanged exact points instead of repeating the whole series',async()=>{
+  const {withShiftWindow,shifted}=await import('../domain/periodShift.js');
+  const middle=Array.from({length:100},(_,i)=>[i,'900719925474099312345',i+.125]);
+  const read=(offset:number)=>({range:{from:offset,to:1000+offset},points:[...(offset<10?[[-1,'900719925474099312344',0]]:[]),...middle,...(offset>=20?[[101,'900719925474099312346',100.125]]:[])]});
+  const fixed=withShiftWindow(read(0),read,[0,10,20,30],()=>{}),before=JSON.stringify(fixed);
+  assert.ok(JSON.stringify(fixed.shift.window!.pieces).length<500,'adding and removing boundary points cannot retransmit the unchanged hundred points');
+  for(const offset of [29,0,10,19,20,9]){const {shift:_,...actual}=shifted(fixed,{from:offset,to:1000+offset})!;assert.deepEqual(actual,read(offset));}
+  assert.equal(JSON.stringify(fixed),before,'array edits never mutate the immutable starting proof');
+});

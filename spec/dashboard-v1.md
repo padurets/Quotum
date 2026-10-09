@@ -469,7 +469,8 @@ Session evidence is a complete temporal index:
         paths: (string | number)[][];
         slopes: [pathIndex: number, perMs: number][][];
         pieces: [fromEnd: number, untilEnd: number, slopesIndex: number,
-          changes: ([pathIndex: number, value: unknown] | [pathIndex: number])[]][];
+          changes: ([pathIndex: number, value: unknown] | [pathIndex: number] |
+            [pathIndex: number, start: number, remove: number, insert: unknown[]])[]][];
       };
     };
   };
@@ -496,7 +497,9 @@ An optional `window` instead proves positions in neighboring endpoint cells, in
 either direction with the same duration. Its ordered pieces cover half-open intervals
 of right-edge positions. Replay begins at the immutable `start` summary: advance
 numeric fields using the preceding piece's slopes, then apply the next piece's exact
-changes. A one-element change deletes that field. Within a covered piece, advance
+changes. A one-element change deletes that field; a four-element change splices
+the addressed array at `start`, removing `remove` elements and inserting `insert`.
+Unchanged prefixes and suffixes remain exact. Within a covered piece, advance
 using its own slopes. Gaps have no proof. Cell, observation and deadline boundaries
 are explicit pieces; monetary strings and changing arrays are replaced exactly.
 The immutable start also makes repeated moves independent of the previous position.
