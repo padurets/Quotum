@@ -12,5 +12,6 @@ export type PeriodValues = {
   keys:KeyPart[];
   creditBalance?:CreditBalanceState;
   validFor?:{from:number;to:number};
+  alternatives?:Omit<PeriodValues,'alternatives'>[];
   currencyUnavailable?:boolean;
 };

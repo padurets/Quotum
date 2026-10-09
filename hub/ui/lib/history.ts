@@ -423,7 +423,9 @@ export class HistoryStore {
     const first = this.grids.get(target.cell)?.get(tileOf(bad[0], target.cell));
     // Cold reads omit the unseen head. Entering a held tile's head fills it once.
     const from = !first || first.readTo === first.readFrom ? bad[0] : bad[0] < first.readFrom ? first.from : first.validTo;
-    const to = Math.min(tileEnd(tileOf(bad.at(-1)!, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
+    // Coarse cells contain days of raw observations; decode one tile at a time.
+    const last = this.pool && target.cell >= 3_600_000 ? from : bad.at(-1)!;
+    const to = Math.min(tileEnd(tileOf(last, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
     this.read(target, from, to, 'visible');
   }
 

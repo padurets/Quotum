@@ -1183,9 +1183,11 @@ test('a seven-day look-ahead reads a long visible miss in capped batches and nev
   h.store.close();
 });
 
-test('a shared month reader completes a distant gesture one tile at a time without rereading its return', async () => {
+test('a shared month reader bounds cold and gesture decoding to one tile without rereading its return', async () => {
   const h = harness(undefined, undefined, 'budget', new HistoryPool()), length = 30 * 24 * H;
-  h.store.choose('30d', null); await h.start(); await h.reads[0].answer();
+  h.store.choose('30d', null); await h.start();
+  for(let n=0;n<20&&pending(h).length;n++)for(const r of pending(h)){assert.equal(tileOf(r.from,r.cell),tileOf(r.to-1,r.cell));await r.answer();}
+  assert.equal(h.store.get().history?.range,'30d');
   const origin = {from: NOW - length, to: NOW}, range = {from: NOW - 2 * length, to: NOW - length};
   const offset = h.reads.length;
   h.store.pan({token: 1, length, ...range, direction: -1}); await flush();

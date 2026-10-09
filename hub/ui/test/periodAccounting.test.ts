@@ -117,22 +117,20 @@ test('fixed summaries preserve exact totals, native credit precision and boundar
   assert.equal(activity.agentMs,29_876);assert.equal(activity.activeMs,29_876);assert.equal(activity.agents,1);assert.equal(activity.cells.reduce((n,c)=>n+c[2],0),29876);
 });
 
-test('fixed reuse follows exact duration slopes and stops before any evidence or cell boundary',()=>{
+test('fixed reuse preserves exact totals across recorded evidence and cell boundaries',()=>{
   const evidence=tape(),range={from:123,to:49_123},cell=15_000;
   evidence.quota=[{source:'s',window:'w',samples:packSamples([{at:0,used:10.125,resetAt:55_000,staleAfterMs:60_000},{at:25_000,used:22.375,resetAt:55_000,staleAfterMs:60_000}])}];
   evidence.money=[{source:'s',meter:'credits',accounting:{spending:'counter',topups:'unavailable'},readings:[0,25_000,55_000].map((at,i)=>({id:'credits',kind:'counter' as const,unit:'credits:codex',amount:String(9007199254740993n+BigInt(i)),scale:12,limit:null,at,previousAt:i?at-25_000:null,staleAfterMs:60_000,resetAt:null,minutes:null,scope:null,label:null})),spans:[{from:0,to:60_000,staleAfterMs:60_000}]}];
   const trace:WorkTrace={anchor:0,cut:60_000,knownFrom:0,refs:[{ref:'r',source:'s',device:{id:'d',name:'D'},origin:'terminal',project:null,folder:null,startedAt:0}],spans:[[0,0,5000],[0,25_000,55_000]]};
   const compact=fixedTape(evidence,trace,range,cell,()=>{}).fixed!,work=fixedWork(trace,range,cell,60_000,()=>{}).fixed!;
   assert.ok(compact.shift);assert.ok(work.shift);
-  const until=Math.min(compact.shift.until,work.shift.until);
   const withoutProof=<T extends {shift?:unknown}>(value:T)=>{const {shift:_,...summary}=value;return summary;};
-  for(const offset of [1,17,1023,until-range.to-1]){
+  for(const offset of [-123,-1,1,17,1023,5000,5877,5878,6000,10876,10877]){
     const next={from:range.from+offset,to:range.to+offset};
     assert.deepEqual(withoutProof(shifted(compact,next)!),withoutProof(fixedTape(evidence,trace,next,cell,()=>{}).fixed!));
     const moved=shifted(work,next)!;
     assert.deepEqual(withoutProof(moved),withoutProof(fixedWork(trace,next,cell,60_000,()=>{}).fixed!));
     assert.deepEqual(workedSessions({...trace,spans:[],fixed:moved},next,60_000),workedSessions(trace,next,60_000));
   }
-  for(const fixed of [compact,work])assert.equal(shifted(fixed,{from:range.from+fixed.shift!.until-range.to,to:fixed.shift!.until}),null);
-  assert.equal(shifted(compact,{from:range.from-1,to:range.to-1}),null);
+  for(const fixed of [compact,work])for(const offset of [-124,10878])assert.equal(shifted(fixed,{from:range.from+offset,to:range.to+offset}),null);
 });

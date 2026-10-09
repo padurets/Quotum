@@ -208,9 +208,9 @@ test('complete live and fixed targets share the LRU and cached return performs n
     const tape={from:anchor,cut,replaceFrom:anchor,cursor:'q',money:[],quota:[{source:'s',window:'w',samples:[anchor,10,-1,3_600_000,-1]}]};
     return {basis,...(body.quota?{quota:{state:'complete',basis,value:{run:'r',now:5_000_000,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:body.selection.mode==='live'?tape:fixedTape(tape,work,range,60_000,()=>{})}}}:{}),
       ...(body.sessions?{sessions:{state:'complete',basis,value:{...(body.selection.mode==='live'?work:fixedWork(work,range,60_000,5_000_000,()=>{})),cursor:'w'}}}:{}),
-      ...(body.values?{values:{state:'complete',basis,value:[{id:'s',provider:'codex',windows:[],meters:[],keys:[],validFor:{from:0,to:9_000_000}}]}}:{})};
+      ...(body.values?{values:{state:'complete',basis,value:[{id:'s',provider:'codex',windows:[],meters:[],keys:[],validFor:{from:0,to:1_400_500},alternatives:[{id:'s',provider:'codex',windows:[],meters:[],keys:[],currencyUnavailable:true,validFor:{from:1_400_500,to:9_000_000}}]}]}}:{})};
   };
-  const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event?:unknown):void;get():{rows:{workedMs:number}[]};estimatedBytes:number}},
+  const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event?:unknown):void;get():{rows:{workedMs:number}[]};getValue(id:string):{value:{currencyUnavailable?:boolean}};estimatedBytes:number}},
     hubNow:()=>5_000_000,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>state},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,
     shifted:(fixed:Parameters<typeof shifted>[0],range:{from:number;to:number})=>{assert.ok(pool.estimatedBytes>period.estimatedBytes,'the copy is reserved before allocation');stagedRestores++;return shifted(fixed,range);},
@@ -224,6 +224,8 @@ test('complete live and fixed targets share the LRU and cached return performs n
   selected={from:123,to:1_400_123};period.changed();await flush();assert.equal(reads,2);assert.equal(period.get().rows[0].workedMs,59_877);
   selected=null;period.changed();await flush();assert.equal(reads,2,'the live ledger is retained in the shared budget');
   selected={from:900,to:1_400_900};period.changed();await flush();assert.equal(reads,2,'a repeated gesture can move its exact endpoints within proven evidence bounds');assert.equal(period.get().rows[0].workedMs,59_100);assert.ok(period.estimatedBytes>0);assert.ok(pool.estimatedBytes<15*1024*1024);
+  assert.equal(period.getValue('s').value.currencyUnavailable,true,'a changed value state is selected by its own exclusive bounds');
+  selected={from:300,to:1_400_300};period.changed();await flush();assert.equal(reads,2);assert.equal(period.getValue('s').value.currencyUnavailable,undefined);assert.equal(period.get().rows[0].workedMs,59_700);
   assert.ok(stagedRestores>=2);
   period.changed({type:'hub',event:{type:'history',data:{sources:['s'],since:4_000_000}}});await flush();assert.equal(reads,2,'later live work cannot rewrite this past target');
   selected={from:1800,to:1_401_800};period.changed();await flush();assert.equal(reads,3,'new evidence retires old forward-reuse proofs and cached value intervals');

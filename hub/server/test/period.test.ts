@@ -81,3 +81,18 @@ test('piecewise integer columns retain every anchor across cadence changes and a
     if(values===regular){assert.ok(numberBytes(column)<256);for(const i of [0,3999,4000,4001,9999]){assert.equal(lowerNumber(column,values[i]),i);assert.equal(lowerNumber(column,values[i]+1),i+1);}}
   }
 });
+
+test('neighboring fixed summaries replay sparse boundary changes and exact slopes in both directions',async()=>{
+  const {shiftBoundaries,withShiftWindow,shifted,canShift}=await import('../domain/periodShift.js');
+  const range={from:100,to:200},read=(offset:number)=>({range:{from:100+offset,to:200+offset},duration:Math.max(0,30-offset),amount:offset>=10?'9007199254740995':'9007199254740993',points:offset<20?[[100+offset,37.125]]:[],...(offset<30?{label:'Before'}:{other:'After'})});
+  const boundaries=shiftBoundaries(range,-20,50,[50],[210,220,230]);let reserved=0;
+  const fixed=withShiftWindow(read(0),read,boundaries,bytes=>{reserved+=bytes;});assert.ok(reserved>0);
+  for(let offset=-20;offset<50;offset++){
+    const target={from:100+offset,to:200+offset};assert.equal(canShift(fixed,target),true,String(offset));
+    const {shift:_,...actual}=shifted<typeof fixed>(fixed,target)!;assert.deepEqual(actual,read(offset));
+  }
+  assert.equal(canShift(fixed,{from:79,to:179}),false);assert.equal(canShift(fixed,{from:150,to:250}),false);
+  assert.equal(canShift(fixed,{from:100,to:201}),false);assert.deepEqual(fixed.amount,read(0).amount);
+  const moved=shifted<typeof fixed>(fixed,{from:140,to:240})!;
+  for(const offset of [-20,0,10,29,49]){const {shift:_,...actual}=shifted<typeof fixed>(moved,{from:100+offset,to:200+offset})!;assert.deepEqual(actual,read(offset),'repeated shifts start from the same immutable proof');}
+});

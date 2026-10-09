@@ -6,7 +6,8 @@ import {PeriodAccounting} from './domain/periodAccounting.js';
 import {PeriodIndex} from './domain/periodIndex.js';
 import {PeriodActivity} from './domain/periodActivity.js';
 import {workSpans,type WorkTrace} from './domain/periodWork.js';
-import {shiftLimit,withShift} from './domain/periodShift.js';
+import {shiftBoundaries,withShift,withShiftWindow} from './domain/periodShift.js';
+import {HistoryLimit} from './history.js';
 import {barOf} from './domain/work.js';
 import type {History} from './domain/history.js';
 
@@ -32,13 +33,13 @@ export function fixedTape(tape:PeriodTape,work:WorkTrace|null,range:PeriodRange,
     }
     if(work)yield*workAnchors(work);
   }
-  const fixed=withShift(base,offset=>accounting.fixed({from:range.from+offset,to:range.to+offset},cell),shiftLimit(range,cell,tape.cut,anchors()));
+  const fixed=reusable(base,offset=>accounting.fixed({from:range.from+offset,to:range.to+offset},cell),cell,tape.from,tape.cut,[cell],anchors(),reserve,release);
   return {...tape,quota:[],money:[],fixed};
 }
 
 function* workAnchors(trace:WorkTrace){yield trace.knownFrom;for(const [,from,to] of workSpans(trace)){yield trace.anchor+from;yield trace.anchor+to;}}
 
-export function fixedWork(trace:WorkTrace,range:PeriodRange,cell:number,now:number,reserve:(bytes:number)=>void):WorkTrace {
+export function fixedWork(trace:WorkTrace,range:PeriodRange,cell:number,now:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void=()=>{}):WorkTrace {
   reserve(trace.spans.length*640+(trace.packed?trace.packed.blocks.length*64+trace.packed.patterns.reduce((n,p)=>n+p.length*128,0):0));
   const index=new PeriodIndex(trace),projection=new PeriodActivity(trace,index.curves);
   const barMs=barOf(cell,range.to-range.from);
@@ -55,6 +56,15 @@ export function fixedWork(trace:WorkTrace,range:PeriodRange,cell:number,now:numb
     return {range,totals:rows.map(row=>[ids.get(row.ref)!,row.workedMs,row.lastWorkedAt]),activity};
   };
   const base=project(range);reserve(JSON.stringify(base).length*6);
-  const fixed=withShift(base,offset=>project({from:range.from+offset,to:range.to+offset}),Math.min(shiftLimit(range,cell,trace.cut??range.to,workAnchors(trace)),shiftLimit(range,barMs,trace.cut??range.to,[])));
+  const fixed=reusable(base,offset=>project({from:range.from+offset,to:range.to+offset}),cell,trace.anchor,trace.cut??range.to,[cell,barMs],workAnchors(trace),reserve,release);
   return {...trace,spans:[],packed:undefined,fixed};
+}
+
+function reusable<T extends {range:PeriodRange}>(base:T,read:(offset:number)=>T,cell:number,from:number,to:number,cells:readonly number[],anchors:Iterable<number>,reserve:(bytes:number)=>void,release:(bytes:number)=>void):T {
+  let bytes=0,boundaries:number[]=[];const charge=(size:number)=>{reserve(size);bytes+=size;};
+  try{
+    boundaries=shiftBoundaries(base.range,Math.max(-cell,from-base.range.from),Math.min(cell+1,to-base.range.to+1),cells,anchors,charge);
+    return withShiftWindow(base,read,boundaries,charge);
+  }
+  catch(error){release(bytes);if(!(error instanceof HistoryLimit))throw error;return withShift(base,read,boundaries.find(offset=>offset>0)??1);}
 }

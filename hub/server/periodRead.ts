@@ -7,7 +7,7 @@ import {fail,readHistory,ReadError} from './historyRead.js';
 import {evaluatedRange,parsePeriod,type PeriodBasis,type PeriodSection} from './domain/period.js';
 import {PERIOD_SCOPES,type PeriodReply,type PeriodRequest} from './domain/periodRead.js';
 import type {HistoryScope,HistoryReply} from './domain/history.js';
-import {periodValues} from './periodValues.js';
+import {periodValues,nearbyPeriodValues} from './periodValues.js';
 import {sharedWork,periodWork} from './periodWork.js';
 import {config} from './config.js';
 import {periodTape} from './periodTape.js';
@@ -95,7 +95,8 @@ export class PeriodReader {
     const reservation=this.history.reservation();
     let replyBytes=0;
     const reserve=(bytes:number)=>{reservation.add(bytes);replyBytes+=bytes;};
-    const cell=cellOf(range.to-range.from),fixedRange={from:Math.floor(range.from/cell)*cell,to:Math.min(Math.ceil(range.to/cell)*cell,now)};
+    const release=(bytes:number)=>{reservation.remove(bytes);replyBytes-=bytes;};
+    const cell=cellOf(range.to-range.from),fixedRange={from:Math.max(0,Math.floor(range.from/cell)*cell-cell),to:Math.min(Math.ceil(range.to/cell)*cell+cell,now)};
     const workRange=selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip')?fixedRange:request.sessions?{from:replaceFrom,to:workFrontier.to}:null;
     const work=sharedWork(this.hub,shown,workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes));
     const section=<T>(read:()=>T):PeriodSection<T>=>{
@@ -128,19 +129,21 @@ export class PeriodReader {
         const cursor=this.encode({identity:tapeIdentity,revision:this.revision,from:patch.coveredFrom,cut:patch.coveredTo});
         if(selection.mode==='range'){
           const work=scope==='quota'?retainedWork():null;
-          const release=(bytes:number)=>{reservation.remove(bytes);replyBytes-=bytes;};
           const tape=temporary(()=>fixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release),work,range,Number(query.cell),reserve,release));
           reserve(Buffer.byteLength(JSON.stringify(tape))*3);return {...value,tape};
         }
         const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut,bytes=>{reservation.remove(bytes);replyBytes-=bytes;});
         return {...value,tape:{...tape,cut:patch.coveredTo,...(delta?{replaceTo:patch.to}:{})}};
       });
-      if(request.values)response.values=section(()=>periodValues(store,store.sources(board).filter(s=>request.values!.includes(s.id)),user,cut,reserve));
+      if(request.values)response.values=section(()=>{
+        const sources=store.sources(board).filter(s=>request.values!.includes(s.id));
+        return selection.mode==='range'?nearbyPeriodValues(store,sources,user,cut,cell,reserve,release):periodValues(store,sources,user,cut,reserve);
+      });
       if(request.sessions) {
         const covered=selection.mode==='range'?fixedRange:{from:workFrontier.coveredFrom,to:workFrontier.coveredTo};
         const cursor=this.encode({identity,revision:this.revision,from:covered.from,cut:covered.to});
         const part=section(()=>{
-          const value=selection.mode==='range'?temporary(()=>fixedWork(retainedWork(),range,cellOf(range.to-range.from),now,reserve)):periodWork(this.hub,this.history,board,shown,{from:replaceFrom,to:workFrontier.to},work,now,reserve);
+          const value=selection.mode==='range'?temporary(()=>fixedWork(retainedWork(),range,cellOf(range.to-range.from),now,reserve,release)):periodWork(this.hub,this.history,board,shown,{from:replaceFrom,to:workFrontier.to},work,now,reserve);
           if(selection.mode==='range')reserve(Buffer.byteLength(JSON.stringify(value))*3);
           return {...value,cut:covered.to,cursor};
         });

@@ -4,9 +4,29 @@ import type {PeriodValues, WindowValue} from './domain/periodValues.js';
 import type {Meter, KeyPart} from './domain/meters.js';
 import type {MeterContextValue} from './store/meterContexts.js';
 import {convertBy, conversionId, isConvertible} from './domain/currency.js';
+import {HistoryLimit} from './history.js';
 
 type WindowRow = {window_id:string;at:number;kind:WindowValue['kind'];label:string|null;used:number;reset_at:number|null;minutes:number|null;stale_after_ms:number};
 type ContextRow = {from_at:number;to_at:number;stale_after_ms:number;payload:string};
+
+/** Neighboring right-edge cells keep their actual observations and availability states. */
+export function nearbyPeriodValues(store:Store,sources:readonly {id:string;provider:string;budget?:BudgetAccess}[],user:string,to:number,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void):PeriodValues[] {
+  const values=periodValues(store,sources,user,to,reserve),until=Math.min(Date.now()+1,to+cell+1);
+  for(let i=0;i<values.length;i++){
+    let held=0,scratch=0;const alternatives:NonNullable<PeriodValues['alternatives']>=[];
+    try{
+      for(let at=Math.max(0,to-cell);at<until;){
+        let value:PeriodValues;
+        try{value=periodValues(store,[sources[i]],user,at,bytes=>{reserve(bytes);scratch+=bytes;})[0];}
+        finally{release(scratch);scratch=0;}
+        const bytes=JSON.stringify(value).length*3;reserve(bytes);held+=bytes;alternatives.push(value);
+        at=value.validFor!.to;
+      }
+      values[i].alternatives=alternatives;
+    }catch(error){release(held);if(!(error instanceof HistoryLimit))throw error;}
+  }
+  return values;
+}
 
 /** The last retained native batch defines membership, including windows that disappeared. */
 export function periodValues(store:Store, sources:readonly {id:string;provider:string;budget?:BudgetAccess}[], user:string, to:number, reserve:(bytes:number)=>void):PeriodValues[] {

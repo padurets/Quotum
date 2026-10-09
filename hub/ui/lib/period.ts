@@ -73,6 +73,13 @@ class BoardPeriod {
   readonly transport=new PeriodTransport(historyPool,()=>this.intent(),(reply,intent,reserve)=>this.receive(reply,intent,reserve),fetchPeriod,()=>{page.dispatch({type:'board-close'});if(typeof window!=='undefined')window.dispatchEvent(new Event(UNAUTHORIZED));});
   constructor(){historyPool.register(this);clock.subscribe(this.watch,()=>this.tick());}
   get estimatedBytes(){return this.bytes+[...this.valueCache.values(),...this.retained.values()].reduce((sum,c)=>sum+c.bytes,0);}
+  private valueAt(value:PeriodValues|undefined|null,to:number){
+    if(!value)return;
+    const found=[value,...value.alternatives??[]].find(v=>v.validFor&&v.validFor.from<=to&&to<v.validFor.to);
+    if(!found||found===value)return found;
+    const {alternatives=[],...base}=value;
+    return {...found,alternatives:alternatives.some(v=>v.validFor?.from===base.validFor?.from&&v.validFor?.to===base.validFor?.to)?alternatives:[base,...alternatives]};
+  }
   evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}})).concat([...this.retained].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.retained.delete(key);}})));}
   private retainCurrent(){
     if(!this.cacheKey)return;
@@ -81,7 +88,7 @@ class BoardPeriod {
     const tapes=new Map([...this.tapes].map(([scope,tape])=>[scope,{...tape}])),work=this.work,index=this.index,activity=this.activity,workSelection=this.workSelection,workRangeKey=this.workRangeKey,cursor=this.cursor,liveEvidence=this.liveEvidence,values=new Map(this.values),cursors=this.transport.evidence(),bytes=this.bytes;
     const context=JSON.stringify([this.authority,prefs().money,prefs().funds,prefs().kind]);
     const workProofEpoch=this.workProofEpoch,reusable=workProofEpoch===this.proofEpoch&&[...tapes.values()].every(t=>t.proofEpoch===this.proofEpoch);
-    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,prefs().money,prefs().funds,prefs().kind])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>v.value?.validFor&&v.value.validFor.from<=selection.to&&selection.to<v.value.validFor.to),restore:selection=>{
+    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,prefs().money,prefs().funds,prefs().kind])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>this.valueAt(v.value,selection.to)),restore:selection=>{
       this.tapes.clear();for(const [scope,tape] of tapes)this.tapes.set(scope,tape);
       this.work=work;this.index=index;this.activity=activity;this.workSelection=workSelection;this.workRangeKey=workRangeKey;this.cursor=cursor;this.liveEvidence=liveEvidence;this.bytes=bytes;
       for(const id of new Set([...this.values.keys(),...values.keys()]))this.setValue(id,values.get(id)??noValue);
@@ -90,7 +97,7 @@ class BoardPeriod {
         this.work={...work,value,basis:work.basis?{...work.basis,range:selection}:null};this.index=new PeriodIndex(value);this.activity=new PeriodActivity(value,this.index.curves);
         this.workSelection=selection;this.workRangeKey=periodKey(selection);
         for(const [scope,entry] of tapes){const tape={...entry.tape,fixed:shifted(entry.tape.fixed!,selection)!};this.tapes.set(scope,{...entry,tape,accounting:new PeriodAccounting(tape,value),selection,rangeKey:periodKey(selection)});}
-        for(const [id,reading] of values)this.setValue(id,{...reading,basis:reading.basis?{...reading.basis,range:selection}:null});
+        for(const [id,reading] of values)this.setValue(id,{...reading,value:this.valueAt(reading.value,selection.to)!,basis:reading.basis?{...reading.basis,range:selection}:null});
       }
       this.transport.restoreEvidence(cursors);this.workNeeded=false;this.valuesNeeded=false;
       this.workProofEpoch=workProofEpoch;
@@ -159,9 +166,9 @@ class BoardPeriod {
       if(oldBoard!==board.id||event?.type==='hub'&&['mine','lineup'].includes(event.event.type))this.clear();
       this.cacheKey=cacheKey;
       let cached=this.valueCache.get(periodKey(selection));
-      if(!cached&&selection.mode==='range')cached=[...this.valueCache.values()].find(c=>sources.every(id=>{const interval=c.values.get(id)?.value?.validFor;return interval&&interval.from<=selection.to&&selection.to<interval.to;}));
+      if(!cached&&selection.mode==='range')cached=[...this.valueCache.values()].find(c=>sources.every(id=>this.valueAt(c.values.get(id)?.value,selection.to)));
       this.valuesNeeded=selection.mode==='range'&&!cached;
-      if(selection.mode==='range')for(const id of sources){const saved=cached?.values.get(id);this.setValue(id,saved?{...saved,basis:saved.basis?{...saved.basis,range:{from:selection.from,to:selection.to}}:null}:{...this.getValue(id),loading:true,error:null});}
+      if(selection.mode==='range')for(const id of sources){const saved=cached?.values.get(id),value=this.valueAt(saved?.value,selection.to);this.setValue(id,saved?{...saved,...(value?{value}:{}),basis:saved.basis?{...saved.basis,range:{from:selection.from,to:selection.to}}:null}:{...this.getValue(id),loading:true,error:null});}
       else {for(const id of this.values.keys())this.setValue(id,noValue);this.values.clear();}
       const range=evaluatedRange(selection,hubNow());
       if(this.tapes.size||this.work.value) {

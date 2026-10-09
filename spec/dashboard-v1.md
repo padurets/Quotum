@@ -434,7 +434,11 @@ the recorded rate path. Native quota interruptions end availability exclusively.
 Expired evidence remains visible as stale; an absent predecessor remains unknown.
 An optional `validFor: {from,to}` gives the half-open interval of right-edge positions
 with identical values, including membership, anchors and stale state. It is scoped to
-the same authority and evidence revision. Current errors, credentials, actions, forecasts
+the same authority and evidence revision. Fixed values may also carry `alternatives`,
+an array of measurement projections without nested alternatives. Each has its own
+`validFor` interval. They cover nearby right-edge cells, including actual observations
+and availability changes; the client selects an applicable state without interpolation.
+Current errors, credentials, actions, forecasts
 and live source state are separate.
 
 Session evidence is a complete temporal index:
@@ -457,7 +461,17 @@ Session evidence is a complete temporal index:
     range: {from: number; to: number};
     totals: [refIndex: number, workedMs: number, lastWorkedAt: number][];
     activity: Activity; // exact totals, groups and boundary bars
-    shift?: {until: number; steps: [path: (string | number)[], perMs: number][]};
+    shift?: {
+      until: number;
+      steps: [path: (string | number)[], perMs: number][];
+      window?: {
+        start: object; // complete fixed summary at the first piece, without shift
+        paths: (string | number)[][];
+        slopes: [pathIndex: number, perMs: number][][];
+        pieces: [fromEnd: number, untilEnd: number, slopesIndex: number,
+          changes: ([pathIndex: number, value: unknown] | [pathIndex: number])[]][];
+      };
+    };
   };
   replaceFrom?: number; replaceTo?: number;
 }
@@ -478,7 +492,17 @@ summary; each changes by `perMs` times the endpoint advance. The reader bounds t
 proof by observations, work endpoints, validity deadlines, evidence cut and cell
 edges. Only exact clipped timestamps and durations move; monetary amounts are
 never interpolated. Paths and proof bytes share the retained history budget.
-Outside that interval a new summary is required. Only optional current presence
+An optional `window` instead proves positions in neighboring endpoint cells, in
+either direction with the same duration. Its ordered pieces cover half-open intervals
+of right-edge positions. Replay begins at the immutable `start` summary: advance
+numeric fields using the preceding piece's slopes, then apply the next piece's exact
+changes. A one-element change deletes that field. Within a covered piece, advance
+using its own slopes. Gaps have no proof. Cell, observation and deadline boundaries
+are explicit pieces; monetary strings and changing arrays are replaced exactly.
+The immutable start also makes repeated moves independent of the previous position.
+These optional proofs and nearby value states share existing memory limits and may
+be omitted when they cannot fit. Outside proven positions a new summary is required.
+Only optional current presence
 can expire locally while a fixed selection remains unchanged.
 Offsets in `spans` are exact milliseconds from `anchor`. Only credited intervals intersecting the
 requested evidence are included, clipped by capture, retention, membership and sharing

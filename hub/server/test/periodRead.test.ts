@@ -13,7 +13,7 @@ import {newSecret} from '../domain/auth.js';
 import type {PeriodReply,PeriodRequest} from '../domain/periodRead.js';
 import {mergeWork,workedSessions} from '../domain/periodWork.js';
 import {deepSeekMeasurement} from '../connectors/deepseek.js';
-import {periodValues} from '../periodValues.js';
+import {periodValues,nearbyPeriodValues} from '../periodValues.js';
 import {HistoryLimit} from '../history.js';
 import {sharedWork} from '../periodWork.js';
 
@@ -50,6 +50,23 @@ test('period values use the last batch strictly before the boundary and keep exp
     for(const edge of [interval.from,interval.to-1])assert.deepEqual(read(edge).windows,retained.windows);
     assert.notDeepEqual(read(interval.to).windows,retained.windows,'a stale boundary or new observation ends reuse');
   }finally{store.close();}
+});
+
+test('nearby card states cross exclusive observations and deadlines without interpolating money',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const wallet=h.store.source('deepseek','b'.repeat(24),now-3*H);h.store.hold(wallet,h.user.id,now-3*H);
+  for(const [at,used,amount] of [[now-3*M,90,'9007199254.740993'],[now-M,30,'9007199254.740991']] as const){
+    h.store.record(h.source,{observedAt:at,plan:'',resets:null,staleAfterMs:M,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used,remaining:100-used,resetAt:now-M}]});
+    h.store.record(wallet,deepSeekMeasurement({is_available:true,balance_infos:[{currency:'USD',total_balance:amount,granted_balance:'0',topped_up_balance:amount}]},at));
+  }
+  const sources=[{id:h.source,provider:'codex'},{id:wallet,provider:'deepseek'}];let held=0;
+  const values=nearbyPeriodValues(h.store,sources,h.user.id,now-2*M,2*M,bytes=>{held+=bytes;},bytes=>{held-=bytes;assert.ok(held>=0);});assert.ok(held>0);
+  for(const to of [now-4*M,now-3*M,now-3*M+1,now-2*M,now-2*M+1,now-M,now-M+1,now]){
+    const fresh=periodValues(h.store,sources,h.user.id,to,()=>{});
+    for(const [i,value] of values.entries()){
+      const snapshot=value.alternatives!.find(v=>v.validFor!.from<=to&&to<v.validFor!.to);assert.ok(snapshot,String(to));assert.deepEqual(snapshot,fresh[i]);
+    }
+  }
 });
 
 test('a cached cell range reads exact totals and boundaries without rebuilding cells',async t=>{
@@ -153,9 +170,9 @@ test('a fixed range summarizes its own work without rewriting the retained live 
   const past={mode:'range' as const,from:now-2*H,to:now-H};
   const extended=(await h.read({...request,selection:past,sessions:{cursor:initial.value.cursor}})).json<PeriodReply>().sessions!;
   if(extended.state!=='complete')throw new Error('fixed range');
-  assert.deepEqual(ranges,[[now-2*H,now-H]]);
+  assert.deepEqual(ranges,[[now-2*H-M,now-H+M]]);
   const value=extended.value;
-  assert.equal(value.anchor,now-2*H);assert.equal(value.cut,now-H);assert.ok(value.fixed);assert.deepEqual(value.spans,[]);
+  assert.equal(value.anchor,now-2*H-M);assert.equal(value.cut,now-H+M);assert.deepEqual(value.fixed?.range,{from:past.from,to:past.to});assert.deepEqual(value.spans,[]);
   assert.equal(workedSessions(value,past,now)[0].workedMs,H);
   assert.equal(workedSessions(initial.value,{from:now-H,to:now},now)[0].workedMs,30*M);
   const detailRequest={version:1,selection:past,evaluatedAt:now,cursor:extended.value.cursor,refs:[value.refs[0].ref]};
