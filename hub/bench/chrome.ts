@@ -140,7 +140,9 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
           const probe=state.probes={attempts:(state.probes?.attempts??0)+1,stage:'headers',elapsedMs:0,failures:state.probes?.failures??{}} as NonNullable<LaunchReport['probes']>;
           try {
             const reply = await deadline(1_000, async signal => {
-              try {return await devtoolsJson(candidate + '/json/version', signal, 'GET',(stage,status)=>{probe.stage=stage;probe.status=status;});}
+              try {return await devtoolsJson(candidate + '/json/version', signal, 'GET',(stage,status)=>{
+                probe.stage=stage;probe.status=status;progress?.(snapshot());
+              });}
               catch(error){probe.reason=probeFailure(error,signal.aborted);throw error;}
             }, pending) as {Browser?: unknown; webSocketDebuggerUrl?: unknown};
             failure = 'invalid-reply'; state.failure = failure; state.stage = 'reply';
@@ -158,7 +160,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
             const reason=probe.reason??'cancelled-or-deadline';
             probe.failures[reason]=(probe.failures[reason]??0)+1;
             pending.throwIfAborted();
-          } finally {probe.elapsedMs=Math.round(performance.now()-probeStarted);}
+          } finally {probe.elapsedMs=Math.round(performance.now()-probeStarted);progress?.(snapshot());}
         }
         await deadline(150, pending => new Promise<void>((resolve, reject) => {
           const timer = setTimeout(resolve, 100);

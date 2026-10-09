@@ -6,7 +6,7 @@ import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {ChromeLaunchError, launchedChrome, launchChrome, probeFailure, safeStream} from '../chrome.js';
+import {ChromeLaunchError, launchedChrome, launchChrome, probeFailure, safeStream, type LaunchReport} from '../chrome.js';
 
 const until = async (ready: () => boolean) => {
   const deadline = Date.now() + 4_000;
@@ -14,16 +14,17 @@ const until = async (ready: () => boolean) => {
   assert.ok(ready(), 'the real stand-in reached its synchronization point');
 };
 
-function fixture(t: TestContext, mode = 'ready') {
+function fixture(t: TestContext, mode = 'ready', holdPort = false) {
   const profile = mkdtempSync(path.join(os.tmpdir(), 'quotum-chrome-test-'));
   const workers=new Set<number>();
   // This is a real process with real pipes and a real listening socket, not an installed browser.
   const script = `
     const fs = require('node:fs'), http = require('node:http'), cp = require('node:child_process');
-    const profile = process.argv[1], mode = process.argv[2];
+    const profile = process.argv[1], mode = process.argv[2], holdPort = process.argv[3] === 'true';
     if (mode === 'exit') process.exit(7);
     if (mode === 'term-ignore') process.on('SIGTERM', () => {});
     const server = http.createServer((req, res) => {
+      fs.writeFileSync(profile+'/requested','');
       if (mode === 'headers-hang') return;
       if (mode === 'body-hang') {res.writeHead(200);res.write('{');return;}
       if (mode === 'oversize') {res.end('x'.repeat(17000));return;}
@@ -32,7 +33,7 @@ function fixture(t: TestContext, mode = 'ready') {
       res.end(JSON.stringify({Browser:'Chrome/fixture',webSocketDebuggerUrl:'ws://127.0.0.1:'+port+'/devtools/browser/'+(mode === 'mismatch'?'foreign':'fixture')}));
     }).listen(0, '127.0.0.1', () => {
       const port = server.address().port;
-      if (mode !== 'no-port') fs.writeFileSync(profile+'/DevToolsActivePort', (mode === 'invalid'?'65536':port)+'\\n/devtools/browser/fixture\\n');
+      if (mode !== 'no-port' && !holdPort) fs.writeFileSync(profile+'/DevToolsActivePort', (mode === 'invalid'?'65536':port)+'\\n/devtools/browser/fixture\\n');
       if (mode === 'worker' || mode === 'escaped-worker') {
         const worker=cp.spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{detached:mode==='escaped-worker',stdio:mode==='escaped-worker'?'ignore':['ignore','inherit','inherit']});
         fs.writeFileSync(profile+'/worker',String(worker.pid));
@@ -40,7 +41,7 @@ function fixture(t: TestContext, mode = 'ready') {
       fs.writeFileSync(profile+'/started',String(port));
     });
   `;
-  const child = spawn(process.execPath, ['-e', script, profile, mode], {detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe']});
+  const child = spawn(process.execPath, ['-e', script, profile, mode, String(holdPort)], {detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe']});
   t.mock.method(console, 'error', () => {});
   t.after(() => {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
@@ -50,8 +51,11 @@ function fixture(t: TestContext, mode = 'ready') {
     }
     rmSync(profile, {recursive: true, force: true});
   });
-  return {profile, child, launch: async(signal?: AbortSignal) => {
-    const browser=await launchedChrome(child, profile, process.platform !== 'win32', signal);
+  return {profile, child, publishPort: () => {
+    const port = readFileSync(profile+'/started','utf8');
+    writeFileSync(profile+'/DevToolsActivePort', port+'\n/devtools/browser/fixture\n');
+  }, launch: async(signal?: AbortSignal, progress?: (report: LaunchReport) => void) => {
+    const browser=await launchedChrome(child, profile, process.platform !== 'win32', signal, 'stand-in', progress);
     if(existsSync(profile+'/worker'))workers.add(Number(readFileSync(profile+'/worker','utf8')));
     return browser;
   }};
@@ -80,9 +84,12 @@ test('pre-aborted startup creates no process', async () => {
 
 for (const mode of ['no-port', 'invalid', 'mismatch', 'redirect', 'headers-hang', 'body-hang', 'oversize']) {
   test(`cancelled ${mode} startup never grants readiness and closes its owned endpoint`, async t => {
-    const {profile, launch} = fixture(t, mode), controller = new AbortController();
+    const hangs = mode === 'headers-hang' || mode === 'body-hang';
+    const {profile, launch, publishPort} = fixture(t, mode, hangs), controller = new AbortController();
+    t.after(() => controller.abort());
     let ready = false;
-    const pending = launch(controller.signal).then(browser => {ready = true; return browser.close();});
+    let observed: LaunchReport | undefined;
+    const pending = launch(controller.signal, report => {observed = report;}).then(browser => {ready = true; return browser.close();});
     const failed = assert.rejects(pending, (error:unknown) => {
       assert.ok(error instanceof ChromeLaunchError);
       assert.equal(error.report.failure,'cancelled');
@@ -96,7 +103,19 @@ for (const mode of ['no-port', 'invalid', 'mismatch', 'redirect', 'headers-hang'
     });
     await until(() => existsSync(profile + '/started'));
     const port = readFileSync(profile + '/started', 'utf8');
-    await new Promise(resolve => setTimeout(resolve, 150));
+    if (hangs) {
+      // A listening child need not have published its endpoint or received a probe yet.
+      await until(() => observed?.failure === 'no-port');
+      assert.equal(observed?.probes, undefined);
+      assert.equal(existsSync(profile+'/requested'), false);
+      publishPort();
+      await until(() => observed?.probes?.stage === (mode === 'headers-hang' ? 'headers' : 'body')
+        && existsSync(profile+'/requested'));
+    } else if (mode === 'no-port' || mode === 'invalid') {
+      await until(() => observed?.failure === (mode === 'no-port' ? 'no-port' : 'invalid-port'));
+    } else {
+      await until(() => Object.keys(observed?.probes?.failures ?? {}).length > 0);
+    }
     assert.equal(ready, false); controller.abort(); await failed;
     assert.equal(existsSync(profile), false);
     await assert.rejects(fetch('http://127.0.0.1:' + port));
