@@ -1197,3 +1197,6 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
   .currency-details .currency-history { grid-template-columns: minmax(0, 1fr); }
   .currency-history .settings-item-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 4px; }
 }
+
+.period-status { display: flex; flex-wrap: wrap; gap: .4rem .8rem; color: var(--muted); font-size: .8rem; }
+.period-pages { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem 0; }

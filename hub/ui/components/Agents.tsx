@@ -1,3 +1,5 @@
+import {usePeriodSessions} from '../lib/period';
+import {PeriodStatus} from './PeriodStatus';
 import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject} from 'react';
 import type {LiveSession} from '../lib/types';
 import {sourceLabel} from '../lib/quota';
@@ -26,7 +28,7 @@ import {
   type Dimension,
 } from '../lib/agents';
 import {recentActivity, stamp, workHours} from '../lib/format';
-import {useLineup, useSessionsOf, useTitles} from '../lib/board';
+import {useLineup, useTitles} from '../lib/board';
 import {setPrefs, usePrefs} from '../lib/prefs';
 import {hubNow} from '../lib/clock';
 import {t, useLocale, type Key} from '../i18n';
@@ -47,7 +49,7 @@ function Mark({session, style}: {session: LiveSession; style?: CSSProperties}) {
 
 /** What a session is doing, as the legend names its mark. */
 const stateOf = (session: LiveSession) =>
-  t(session.working ? 'agents.working' : session.origin === 'terminal' ? 'agents.idle' : 'agents.window');
+  t(session.ref&&!session.currentPresence ? 'agents.retained' : session.working ? 'agents.working' : session.origin === 'terminal' ? 'agents.idle' : 'agents.window');
 
 /** A cut name in full on hover: the project, and the folder on a line of its own. */
 const placeOf = (session: LiveSession) => [session.project, folderOf(session)].filter(Boolean).join('\n') || undefined;
@@ -96,8 +98,10 @@ function Origin({origin}: {origin: LiveSession['origin']}) {
  * unseen, so the tray can tell when they fit again.
  */
 export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy?: boolean}) {
+  const [page,setPage]=useState(0);
   if (!sessions.length) return null;
-  const machines = machinesOf(sessions);
+  const currentPage=Math.min(page,Math.max(0,Math.ceil(sessions.length/50)-1));
+  const machines = machinesOf(sessions.slice(currentPage*50,currentPage*50+50));
   const working = sessions.filter(s => s.working).length;
   const summary = t('agents.summary', {count: sessions.length, working});
   return (
@@ -125,6 +129,7 @@ export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy
         </>
       }
     >
+      <AgentPages page={currentPage} count={sessions.length} onPage={setPage}/>
       <div className="popover-title agents-list-head">
         <span>{t('agents.title')}</span>
         <span title={t('agents.workedHint')}>{t('agents.worked')}</span>
@@ -182,7 +187,7 @@ type Context = {still: boolean; color: (source: AgentSource) => CSSProperties};
 function WorkTime({ms, labeled = false}: {ms: number | null; labeled?: boolean}) {
   if (ms === null) return <span title={t('agents.workedUnknown')} aria-label={t('agents.workedUnknown')}>—</span>;
   const time = workHours(ms);
-  return <>{labeled ? t('agents.workedValue', {time}) : time}</>;
+  return <span data-time="worked">{labeled ? t('agents.workedValue', {time}) : time}</span>;
 }
 
 /** How many of a group's agents work, of how many, as a card's tray counts them, and a mark for each while they are few. */
@@ -206,6 +211,7 @@ function Tally({group, color}: {group: AgentGroup; color: Context['color']}) {
 
 /** Last observed work; the unseen sizing copy never subscribes to the page clock. */
 function LastActivity({group, still}: {group: AgentGroup; still: boolean}) {
+  if(group.rows[0]?.session.ref&&group.lastWorkedAt!==null)return <span>{stamp(group.lastWorkedAt)}</span>;
   if (group.working) return <>{t('time.now')}</>;
   if (group.lastWorkedAt === null)
     return (
@@ -231,7 +237,7 @@ const COLUMNS: Record<AgentColumn, {title: Key; hint?: Key; cell: (group: AgentG
   agents: {title: 'agents.agents', cell: (group, {color}) => <Tally group={group} color={color} />},
   worked: {title: 'agents.worked', hint: 'agents.workedHint', cell: group => <WorkTime ms={group.workedMs} />},
   activity: {title: 'agents.lastActivity', hint: 'agents.lastActivityHint', cell: (group, {still}) => <LastActivity group={group} still={still} />},
-  running: {title: 'agents.running', cell: (group, {still}) => (still ? stillSince(group.startedAt) : <Since from={group.startedAt} />)},
+  running: {title: 'agents.running', cell: (group, {still}) => (!Number.isFinite(group.startedAt)?'—':still ? stillSince(group.startedAt) : <Since from={group.startedAt} />)},
 };
 
 /** A cut name in full on hover. */
@@ -482,6 +488,7 @@ function AgentsDialog({
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [chosen, setChosen] = useState(initial);
+  const [page,setPage]=useState(0);
   // A group whose agents have all gone leaves its dialog with all the others.
   const group = by === 'none' || chosen === null ? null : (groups.find(g => g.key === chosen) ?? null);
   const {name, columns} = arrangement(group !== null);
@@ -489,7 +496,8 @@ function AgentsDialog({
   const shown = [name, ...columns];
   const active = visibleAgentsSort(agentsSort, shown);
   const ordered = sortedGroups(group ? groupsOf(group.rows, 'none') : groups, active, shown);
-  const sorting: Sorting = {active, headers: shown.map(id => ({id, title: COLUMNS[id].title})), sortBy: (column, cycle) => sortBy(active, column, cycle)};
+  const sorting: Sorting = {active, headers: shown.map(id => ({id, title: COLUMNS[id].title})), sortBy: (column, cycle) => {setPage(0);sortBy(active, column, cycle);}};
+  const currentPage=Math.min(page,Math.max(0,Math.ceil(ordered.length/50)-1));
   const back = group !== null && initial === null;
   const sortMenu = layout === 'list' && ordered.length > 0;
   const title = group ? (by === 'project' ? projectName(group.name) : (group.name ?? '')) : t('agents.title');
@@ -513,31 +521,32 @@ function AgentsDialog({
         {empty ? (
           <p className="panel-empty">{t(`agents.${empty}`)}</p>
         ) : (
-          <AgentsRows groups={ordered} name={name} columns={columns} single={group !== null || by === 'none'} by={by} layout={layout} color={color} sorting={sorting} onOpen={setChosen} />
+          <AgentsRows groups={ordered.slice(currentPage*50,currentPage*50+50)} name={name} columns={columns} single={group !== null || by === 'none'} by={by} layout={layout} color={color} sorting={sorting} onOpen={key=>{setChosen(key);setPage(0);}} />
         )}
+        <AgentPages page={currentPage} count={ordered.length} onPage={setPage}/>
       </div>
     </Modal>
   );
 }
 
 /**
- * Running agents gathered by project (or machine, subscription, or not at all: each
+ * Period sessions gathered by project (or machine, subscription, or not at all: each
  * viewer's choice), as a table where the chosen columns fit, otherwise a compact list: a
  * group tells how many of its agents work, how long they have worked and when one last did,
  * and opens its agents in a dialog. It reads the agents of every source of the board and
  * their names, not their cards: a new measurement does not render it. What shows time is
  * a part of its own. In a widget made shorter than its rows it shows the first of them that
  * fit whole and a last row saying how many more, which opens them all in a dialog; it tells
- * the board what it needs (`useSizing`), measuring all its rows unseen beside the ones it shows.
+ * the board what it needs (`useSizing`), measuring at most fifty rows beside the ones it shows.
  */
 export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrange}) {
   useLocale();
   const lineup = useLineup();
-  const sessions = useSessionsOf(lineup);
+  const period=usePeriodSessions();
   const titles = useTitles(arrange.view.names);
   const sources = useMemo(
-    () => lineup.flatMap((id, i): AgentSource[] => (titles[id] ? [{id, provider: titles[id].provider, title: titles[id].title, sessions: sessions[i]}] : [])),
-    [lineup, sessions, titles],
+    () => {const bySource=new Map<string,LiveSession[]>();for(const row of period.rows){let rows=bySource.get(row.source);if(!rows)bySource.set(row.source,rows=[]);rows.push(row);}return lineup.flatMap((id):AgentSource[]=>titles[id]?[{id,provider:titles[id].provider,title:titles[id].title,sessions:bySource.get(id)??[]}]:[]);},
+    [lineup, period.rows, titles],
   );
   const {agentsSort, agentsBy} = usePrefs();
   const sizing = useSizing();
@@ -574,7 +583,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const single = agentsBy === 'none';
   // With two rows or more a row may say how many more there are: it is measured unseen, and in a chosen height every row with it.
   const measured = ordered.length >= 2;
-  const count = manual && measured ? Math.min(fit ?? ordered.length, ordered.length) : ordered.length;
+  const count = manual && measured ? Math.min(fit ?? 50, ordered.length,50) : Math.min(50,ordered.length);
   // Who may change what: every viewer how the list gathers, the owner its columns and whether it shows.
   const toggles = columnsOf(agentsBy).rest;
   const detailToggles = single ? [] : columnsOf(agentsBy, true).rest.filter(column => !toggles.includes(column));
@@ -679,6 +688,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
           </Popover>
         </div>
       </div>
+      <PeriodStatus {...period}/>
       {empty ? (
         <p className="panel-empty">{t(`agents.${empty}`)}</p>
       ) : (
@@ -699,7 +709,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
       )}
       {measured && (
         <div className="agents-measure" aria-hidden="true" inert>
-          <AgentsRows groups={manual ? ordered : []} name={name} columns={columns} single={single} by={agentsBy} layout={layout} color={color} more={ordered.length - 1} still body={unseen} />
+          <AgentsRows groups={manual ? ordered.slice(0,50) : []} name={name} columns={columns} single={single} by={agentsBy} layout={layout} color={color} more={ordered.length - 1} still body={unseen} />
         </div>
       )}
       {open && (
@@ -719,3 +729,12 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     </section>
   );
 });
+
+function AgentPages({page,count,onPage}:{page:number;count:number;onPage:(page:number)=>void}) {
+  if(count<=50)return null;
+  return <div className="period-pages">
+    <button type="button" className="button" disabled={page===0} onClick={()=>onPage(page-1)}>{t('period.previous')}</button>
+    <span>{page*50+1}–{Math.min(count,page*50+50)} / {count}</span>
+    <button type="button" className="button" disabled={(page+1)*50>=count} onClick={()=>onPage(page+1)}>{t('period.next')}</button>
+  </div>;
+}

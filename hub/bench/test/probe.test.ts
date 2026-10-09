@@ -22,7 +22,7 @@ class Element {
     const attribute = selector.match(/^\[([\w-]+)\]$/);
     if (attribute) return this.hasAttribute(attribute[1]);
     const [tag, klass] = selector.split('.');
-    return this.tagName.toLowerCase() === tag && this.className.split(' ').includes(klass);
+    return (!tag || this.tagName.toLowerCase() === tag) && this.className.split(' ').includes(klass);
   }
   closest(selector: string): Element | null {
     const any = selector.split(',').map(s => s.trim());

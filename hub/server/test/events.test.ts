@@ -1,3 +1,4 @@
+import {encodeView, EMPTY_VIEW, VIEW_VERSION, VIEW_VERSION_HEADER} from '../domain/view.js';
 import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync} from 'node:fs';
@@ -183,9 +184,9 @@ async function hub(options: Partial<EventsOptions> = {}, clock?: Clock) {
     const response = await app.inject({
       method,
       url,
-      payload: method==='POST'&&url.endsWith('/view')&&options.body&&typeof options.body==='object'?{version:2,...options.body}:options.body,
+      payload: method==='POST'&&url.endsWith('/view')&&options.body&&typeof options.body==='object'?encodeView({...EMPTY_VIEW,...options.body}):options.body,
       headers: {
-        ...(method==='POST'&&url.endsWith('/view')?{'X-Quotum-View-Version':'2','If-Match':'"'+directory.viewRevision(url.split('/')[3])+'"'}:{}),
+        ...(method==='POST'&&url.endsWith('/view')?{[VIEW_VERSION_HEADER]:String(VIEW_VERSION),'If-Match':'"'+directory.viewRevision(url.split('/')[3])+'"'}:{}),
         ...(options.as && cookies.get(options.as) ? {cookie: cookies.get(options.as)!} : {}),
         ...(options.token ? {authorization: `Bearer ${options.token}`} : {}),
         ...options.headers,
@@ -326,7 +327,7 @@ test('a height the owner chose reaches every reader: in the view event of one al
   await h.person('bob', await h.invite('alice', team));
   const bob = await reading(h, 'bob', team);
   t.after(bob.close);
-  const layout = {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 12}, agents: {x: 0, y: 12, w: 3}}};
+  const layout = {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 12}, agents: {x: 0, y: 1, w: 3}}};
   const saved = await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout}});
   assert.deepEqual(saved.body.view.layout, layout);
   const told = (await bob.within()).filter(e => e.type === 'view');
@@ -336,7 +337,7 @@ test('a height the owner chose reaches every reader: in the view event of one al
   assert.deepEqual(later.snapshot.view.layout, layout);
   assert.deepEqual((await h.call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view.layout, layout);
   // Given back to its content: the key goes, for everyone.
-  const auto = {columns: 6, places: {history: {x: 0, y: 0, w: 6}, agents: {x: 0, y: 12, w: 3}}};
+  const auto = {columns: 6, places: {history: {x: 0, y: 0, w: 6}, agents: {x: 0, y: 1, w: 3}}};
   await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: auto}});
   const again = (await bob.within()).filter(e => e.type === 'view');
   assert.deepEqual(again.map(e => e.data.view.layout), [auto]);

@@ -33,6 +33,7 @@ export type WorkKey = WorkContext & {identity: {kind: 'legacy'; ordinal: number}
  * of it.
  */
 export type Shown = Map<string, {since: number; holders: {user: string; from: number}[]}>;
+export type WorkRead = (from: number, to: number) => Stretch[];
 
 export type DeviceFailure = {device: string; provider: Provider; error: string; detail: string | null; at: number};
 
@@ -465,7 +466,7 @@ export class Store {
   }
 
   /** Complete cells of every measured window, read once through a run of missing tiles. */
-  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, []), meters, scope}: {now?: number; shown?: Shown; meters?: MeterSelection; scope?: HistoryScope} = {}): Chunk<number>[] {
+  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, []), meters, scope, work}: {now?: number; shown?: Shown; meters?: MeterSelection; scope?: HistoryScope; work?: WorkRead} = {}): Chunk<number>[] {
     const sources = this.sources(board);
     // Subscription caps accompany native windows; wallet selections retain their cheaper read.
     const withWindows=scope ? scope==='quota' : !meters||meters.ids.some(([id])=>sources.some(source=>source.id===id&&providerOf(source.provider)?.funding==='subscription'));
@@ -498,7 +499,7 @@ export class Store {
     const readFrom = workFrom(groups, from);
     const holders = new Map([...shown].map(([source, value]) => [source, new Map(value.holders.map(h => [h.user, Math.max(h.from, value.since, known.work)]))]));
     const stretches: Stretch[] = [];
-    for (const s of shown.size ? this.agentWork(readFrom, Math.min(to, now), [...shown.keys()]) : []) {
+    for (const s of shown.size ? (work ? work(readFrom, Math.min(to, now)) : this.agentWork(readFrom, Math.min(to, now), [...shown.keys()])) : []) {
       const after = holders.get(s.source)?.get(s.user);
       if (after === undefined || s.to <= after) continue;
       stretches.push(s.from < after ? {...s, from: after} : s);
@@ -643,7 +644,7 @@ export class Store {
       this.db.exec('RELEASE credit');
       throw error;
     }
-    for (const [source, start] of credited) tell(this.observer, o => o.history(source, start, ['quota']));
+    for (const [source, start] of credited) tell(this.observer, o => o.history(source, start, ['quota'], true));
   }
 
   /** Retained credit of an identified session on its current subscription; legacy identity is unknown. */
@@ -657,7 +658,7 @@ export class Store {
   }
 
   /** Every stretch agents worked within [from, to), of the given subscriptions or all, projects named as their people corrected them. */
-  agentWork(from: number, to: number, sources?: string[]): Stretch[] {
+  agentWork(from: number, to: number, sources?: string[], reserve?: (bytes:number)=>void): Stretch[] {
     // A month of a busy board is tens of thousands of rows, read as arrays: half the time of objects. The
     // index on time, even for the order: else a day would go through every stretch the hub keeps.
     const read = this.db.prepare(
@@ -667,19 +668,21 @@ export class Store {
         ' ORDER BY w.session_id, w.from_at',
     );
     read.setReturnArrays(true);
-    const rows = read.all(from, to, from, to, ...(sources ? [JSON.stringify(sources)] : [])) as unknown as [number, number, number][];
+    const rows: [number,number,number][]=[];
+    for(const row of read.iterate(from,to,from,to,...(sources?[JSON.stringify(sources)]:[]))) {
+      reserve?.(256); rows.push(row as unknown as [number,number,number]);
+    }
     // What is said of a session is read once rather than with each of its stretches: that takes most of the time.
-    const sessions = new Map(
-      (
-        this.db
-          .prepare(
-            "SELECT s.id, s.source_id AS source, s.device_id AS device, d.user_id AS user, s.origin, COALESCE(n.name, NULLIF(s.project, '')) AS project," +
-              " NULLIF(s.folder, '') AS folder, s.started_at AS startedAt FROM agent_sessions s JOIN devices d ON d.id = s.device_id" +
-              ' LEFT JOIN project_names n ON n.user_id = d.user_id AND n.reported = s.project WHERE s.id IN (SELECT value FROM json_each(?))',
-          )
-          .all(JSON.stringify([...new Set(rows.map(([id]) => id))])) as ({id: number} & Omit<Stretch, 'session' | 'from' | 'to'>)[]
-      ).map(({id, ...session}) => [id, session]),
-    );
+    const sessions=new Map<number,Omit<Stretch,'session'|'from'|'to'>>();
+    const contexts=this.db.prepare(
+      "SELECT s.id, s.source_id AS source, s.device_id AS device, d.user_id AS user, s.origin, COALESCE(n.name, NULLIF(s.project, '')) AS project,"+
+      " NULLIF(s.folder, '') AS folder, s.started_at AS startedAt FROM agent_sessions s JOIN devices d ON d.id = s.device_id"+
+      ' LEFT JOIN project_names n ON n.user_id = d.user_id AND n.reported = s.project WHERE s.id IN (SELECT value FROM json_each(?))');
+    for(const raw of contexts.iterate(JSON.stringify([...new Set(rows.map(([id])=>id))]))) {
+      const {id,...session}=raw as {id:number}&Omit<Stretch,'session'|'from'|'to'>;
+      reserve?.(512+2*((session.project?.length??0)+(session.folder?.length??0)));
+      sessions.set(id,session);
+    }
     return rows.map(([id, start, end]) => {
       const s = sessions.get(id)!;
       return {session: id, source: s.source, device: s.device, user: s.user, origin: s.origin, project: s.project, folder: s.folder, startedAt: s.startedAt, from: start, to: end};

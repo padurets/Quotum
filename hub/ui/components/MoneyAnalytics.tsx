@@ -5,7 +5,7 @@ import {useMemo,useRef} from 'react';
 import {DEFAULT_CURRENCY,currencySymbol} from '../../server/domain/currency';
 import {useBoardId,useNamed,useServerView,useCurrencyContext} from '../lib/board';
 import {useBudgetHistory,useHistoryBegins,useBudgetHistoryPlot,budgetHistory} from '../lib/history';
-import {usePrefs,setPrefs,setMuted} from '../lib/prefs';
+import {usePrefs,setMuted} from '../lib/prefs';
 import {moneySelection} from '../lib/moneySelection';
 import {money,capName} from '../lib/money';
 import {moneyIdentity,moneyPointAt,meterPointIn,moneyTotal,type MeterHistory} from '../lib/moneyView';
@@ -19,8 +19,6 @@ import {t,useLocale} from '../i18n';
 import {Chart} from './Chart';
 import {usePlot} from './sizing';
 import {Popover,SlidersIcon,HideRow} from './Popover';
-import {Segmented} from './Kit';
-import {MoneySettings} from './MoneySettings';
 import {axisNavigation} from '../lib/axisNavigation';
 import {usePrepared} from './prepared';
 import {usePanning} from '../lib/pan';
@@ -102,8 +100,6 @@ export function MoneyHistory({arrange}:{arrange:Arrange}) {
   const answered=history?.range===(selected?timeRangeKey(selected):prefs.range);
   return <AnalyticsPanel ref={panel} className="budget-history" title={t('widgets.budgetHistory')} chart history={history} loading={loading} error={error} retry={budgetHistory.retry}
     settings={<Popover label={t('history.settings')} icon={<SlidersIcon/>}>
-      <div className="popover-pad"><Segmented value={prefs.money.view} onChange={view=>setPrefs({money:{...prefs.money,view}})} options={[["balance",t('money.balance')],["spending",t('money.spending')]]} label={t('money.value')}/></div>
-      <MoneySettings sources={sources} hidden={arrange.view.hidden} series={original}/>
       {arrange.owner&&<HideRow onHide={()=>arrange.update(v=>withHidden(v,BUDGET_HISTORY,true))}>{t('widget.hide')}</HideRow>}
     </Popover>}>
     <SelectionNotice/>

@@ -34,8 +34,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
     document.head.append(style); document.querySelector('.analytics-head')?.scrollIntoView();
   })()`);
     // A manual horizon keeps the 30d source's full 1.25-width path inside retention.
-    await click('.history .panel-head .picker > button');
-    await click('.history .popover .segmented button', 1);
+    await click('.analytics-head .controls .picker > button');
+    await click('.analytics-head .popover .popover-section:last-child .segmented button', 1);
     await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     for (const [period, index] of [['24h', 4], ['30d', 8]] as const) {
       await click('.period .picker > button');
@@ -99,10 +99,12 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
         for(const type of types){owner.addEventListener(type,capture,true);window.addEventListener(type,input);}
         const originalFetch=window.fetch.bind(window);probe.originalFetch=originalFetch;
         window.fetch=async(...args)=>{
-          const url=new URL(String(args[0]),location.href);if(url.pathname!='/api/history')return originalFetch(...args);
-          const scope=url.searchParams.get('scope'),cell=Number(url.searchParams.get('cell')),from=Number(url.searchParams.get('from')),to=Number(url.searchParams.get('to')),tiles=Math.floor((to-1)/(cell*60))-Math.floor(from/(cell*60))+1;
-          for(const f of probe.flights.values())if(f.scope===scope&&f.cell===cell&&f.from<to&&f.to>from)probe.duplicateReads++;
-          const id={},signal=args[1]?.signal,aborted=()=>probe.flights.delete(id);probe.flights.set(id,{scope,cell,from,to});signal?.addEventListener('abort',aborted,{once:true});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.maxTiles=Math.max(probe.maxTiles,tiles);probe.coldReads++;
+          const url=new URL(String(args[0]),location.href),legacy=url.pathname==='/api/history';if(!legacy&&!new RegExp('^/api/boards/[^/]+/period(?:/sessions)?$').test(url.pathname))return originalFetch(...args);
+          const body=legacy?null:JSON.parse(args[1]?.body||'{}');
+          const sections=legacy?[Object.fromEntries(url.searchParams)]:['quota','budget'].filter(scope=>body[scope]&&body[scope].cells!=='skip').map(scope=>({...body[scope],scope}));
+          const ranges=sections.map(q=>({scope:q.scope,cell:Number(q.cell),from:Number(q.from),to:Number(q.to)}));
+          for(const q of ranges){for(const f of probe.flights.values())for(const other of f)if(other.scope===q.scope&&other.cell===q.cell&&other.from<q.to&&other.to>q.from)probe.duplicateReads++;probe.maxTiles=Math.max(probe.maxTiles,Math.floor((q.to-1)/(q.cell*60))-Math.floor(q.from/(q.cell*60))+1);}
+          const id={},signal=args[1]?.signal,aborted=()=>probe.flights.delete(id);probe.flights.set(id,ranges);signal?.addEventListener('abort',aborted,{once:true});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.coldReads++;
           try {return await originalFetch(...args);}finally{probe.flights.delete(id);signal?.removeEventListener('abort',aborted);}
         };
         probe.observer=new MutationObserver(records=>{
@@ -262,8 +264,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
     if (interception) await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
     await cdp.evaluate(`(() => {window.__quotumPan?.cleanup();document.getElementById('quotum-pan-layout')?.remove();})()`);
     try {
-      if (await cdp.evaluate<boolean>(`!document.querySelector('.history .popover')`)) await click('.history .panel-head .picker > button');
-      await click('.history .popover .segmented button', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
+      if (await cdp.evaluate<boolean>(`!document.querySelector('.analytics-head .popover')`)) await click('.analytics-head .controls .picker > button');
+      await click('.analytics-head .popover .popover-section:last-child .segmented button', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
       await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     } catch {
       // A failed setup retains its original error; the benchmark owns and closes its tab.

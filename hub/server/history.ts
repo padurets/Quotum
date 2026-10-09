@@ -1,7 +1,7 @@
 import {createHmac, randomBytes} from 'node:crypto';
 import {config} from './config.js';
 import {tileEnd, tileOf, tileStart, type Chunk, type HistoryBasis, type HistoryScope} from './domain/history.js';
-import type {Shown, Store} from './store/store.js';
+import type {Shown, Store, WorkRead} from './store/store.js';
 import type {MeterSelection} from './domain/meterHistory.js';
 
 export class HistoryLimit extends Error { constructor() {super('history_limit');} }
@@ -9,7 +9,7 @@ export class HistoryLimit extends Error { constructor() {super('history_limit');
 type Kept = {scope?: HistoryScope; workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
 
 /** JSON permits shorter exact integer spellings (300000 is 3e5); names stay untouched. */
-function compactJSON(value: unknown): string {
+export function compactJSON(value: unknown): string {
   return JSON.stringify(value).replace(/"(?:[^"\\]|\\.)*"|(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)/g, (token, number: string | undefined) => {
     if (!number || !/^-?\d+0{3,}$/.test(number)) return token;
     const end = number.match(/0+$/)![0].length;
@@ -24,6 +24,7 @@ export class HistoryTiles {
   private readonly kept = new Map<string, Kept>();
   private bytes = 0;
   private retentionRevision = 0;
+  private reserved = 0;
 
   constructor(private readonly store: Store, private readonly budget = 32 * 1024 * 1024) {}
 
@@ -33,6 +34,20 @@ export class HistoryTiles {
 
   ref(board: string, session: number) {
     return createHmac('sha256', this.key).update(`${board}:${session}`).digest('base64url').slice(0, 8);
+  }
+
+  /** Request projections share the tile budget and release their reservation on every exit. */
+  reservation() {
+    let used = 0;
+    return {
+      add: (bytes: number) => {
+        if (bytes + this.reserved > this.budget) throw new HistoryLimit();
+        while (this.bytes + this.reserved + bytes > this.budget && this.kept.size) this.drop(this.kept.keys().next().value!);
+        this.reserved += bytes; used += bytes;
+      },
+      remove: (bytes: number) => {if(bytes<0||bytes>used)throw new Error('invalid_reservation');this.reserved-=bytes;used-=bytes;},
+      close: () => {this.reserved -= used; used = 0;},
+    };
   }
 
   touch(source: string, since: number, scopes?: readonly HistoryScope[]) {
@@ -46,7 +61,7 @@ export class HistoryTiles {
   }
 
   /** JSON is stored as sent, so hits do not allocate or serialize all the cells again. */
-  read(board: string, cell: number, from: number, to: number, now: number, shown: Shown, meters?: MeterSelection, scope?: HistoryScope): string[] {
+  read(board: string, cell: number, from: number, to: number, now: number, shown: Shown, meters?: MeterSelection, scope?: HistoryScope, work?: WorkRead): string[] {
     if (this.retentionRevision !== this.store.retentionRevision) {
       this.kept.clear();
       this.bytes = 0;
@@ -73,7 +88,7 @@ export class HistoryTiles {
       if (parts[i].json !== undefined) {i++; continue;}
       const start = i;
       while (i < parts.length && parts[i].json === undefined) i++;
-      const chunks = this.store.cells(board, cell, parts[start].from, parts[i - 1].to, {now, shown, meters, scope});
+      const chunks = this.store.cells(board, cell, parts[start].from, parts[i - 1].to, {now, shown, meters, scope, work});
       chunks.forEach((raw, offset) => {
         const part = parts[start + offset];
         const chunk: Chunk = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, ...rest]) => [this.ref(board, id), ...rest])}};
@@ -84,7 +99,7 @@ export class HistoryTiles {
           const bytes = Buffer.byteLength(json);
           this.kept.set(part.key, {scope, workKey, sources, cell, tile: part.tile, json, bytes});
           this.bytes += bytes;
-          while (this.bytes > this.budget && this.kept.size) this.drop(this.kept.keys().next().value!);
+          while (this.bytes + this.reserved > this.budget && this.kept.size) this.drop(this.kept.keys().next().value!);
         }
       });
     }

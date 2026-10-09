@@ -1,3 +1,10 @@
+import {MeasurementClock,useMeasurementClock,useMeasurementTime} from '../lib/measurementClock';
+import {usePeriodValues,useSourcePeriodSessions} from '../lib/period';
+import {useTimeRange} from '../lib/timeRange';
+import {PeriodStatus} from './PeriodStatus';
+import {MoneyValues} from './MoneyCard';
+import {useCurrencyContext} from '../lib/board';
+import {keyShown} from '../lib/view';
 import {memo, useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import type {Card, Win} from '../lib/types';
 import {MEASURE_INTERVAL, windowKey, type MeasureIntervalMs} from '../lib/types';
@@ -12,7 +19,7 @@ import {MoneyCard,QuotaCard,QuotaMark,AccessMark,BalanceMark} from './MoneyCard'
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS,hasSubscriptionCaps} from '../lib/providers';
 import {call} from '../lib/http';
-import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useSourceAccess, useTitle} from '../lib/board';
+import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSourceAccess, useTitle} from '../lib/board';
 import {providerOf} from '../../server/domain/providers';
 import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
@@ -26,7 +33,7 @@ import {quotaPeriods,quotaRemaining} from '../lib/subscription';
 
 /** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
 function PlanMark({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
-  const now = useClock(now => planMarkChangesAt(w, measuredAt, now, weekly));
+  const now = useMeasurementClock(now => planMarkChangesAt(w, measuredAt, now, weekly));
   const pace = planMark(w, measuredAt, now, weekly);
   return (
     <b
@@ -41,7 +48,7 @@ function PlanMark({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; w
 
 /** How far ahead of the plan or behind it the limit is, when that is worth a word. */
 function PlanNote({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
-  const now = useClock(now => planNoteChangesAt(w, measuredAt, now, weekly));
+  const now = useMeasurementClock(now => planNoteChangesAt(w, measuredAt, now, weekly));
   const note = planNote(w, measuredAt, now, weekly);
   if (note?.key === 'ahead') {
     return (
@@ -62,7 +69,9 @@ function PlanNote({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; w
 
 /** When the limit resets: in how long, that the time has passed, or that it is not known. */
 export function ResetLine({w, short = false}: {w: Win; short?: boolean}) {
-  const now = useClock(now => resetLineChangesAt(w, now));
+  const now = useMeasurementClock(now => resetLineChangesAt(w, now));
+  const historical=useMeasurementTime()!==null;
+  if(historical)return <span>{w.resetAt===null?t('limit.resetUnknown'):stamp(w.resetAt)}</span>;
   return <ResetText resetAt={w.resetAt} now={now} short={short}/>;
 }
 
@@ -71,8 +80,9 @@ export function LimitMeter({w, children}: {w: Win; children?: ReactNode}) {
   return <MeterBar remaining={w.remaining} label={windowName(w).replaceAll(' · ', '\n')}>{children}</MeterBar>;
 }
 
-function Limit({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
+function Limit({w, measuredAt, weekly}: {w: Win & {stale?:boolean;observedAt?:number}; measuredAt: number | null; weekly: WeeklyPlan | null}) {
   return <PercentLimit name={windowName(w)} remaining={w.remaining}
+    status={w.observedAt!==undefined&&<small className="key-status" role="img" aria-hidden={!w.stale} title={w.stale?`${t('money.stale')}\n${stamp(w.observedAt)}`:undefined}/>}
     reset={<ResetLine w={w}/>} note={<PlanNote w={w} measuredAt={measuredAt} weekly={weekly}/>}
   ><PlanMark w={w} measuredAt={measuredAt} weekly={weekly}/></PercentLimit>;
 }
@@ -449,7 +459,7 @@ export function CardMark({source}: {source: Card}) {
 
 /** The card's tray: news of resets for everyone, free resets, the agents running on it. */
 function CardTray({source}: {source: Card}) {
-  const sessions = useSessions(source.id);
+  const sessions = useSourcePeriodSessions(source.id);
   const resets = useResetsFor(source.provider);
   const access = useSourceAccess(source.id);
   const quotaIssue=source.quota&&!source.quota.complete;
@@ -468,11 +478,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
   const title = useTitle(id, arrange.view.names);
   const mine = useMine(id);
   if (!source) return null;
-  const visible = source.windows.filter(w => !isWindowHidden(arrange.view, source.id, w.id));
-  const periods=quotaPeriods(source),shownPeriods=periods.filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
-  const weekly = planOf(arrange.view, source.id);
   const takeOff = !personal && (arrange.owner || mine);
-  const caps=hasSubscriptionCaps(source.provider);
 
   return (
     <article className="card" data-card={id} style={{'--card-color': colorOf(arrange.view, source.id, source.provider)} as CSSProperties}>
@@ -487,15 +493,32 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
         <SourceSettings key={boardId} source={source} title={title} arrange={arrange} boardId={boardId} takeOff={takeOff} />
       </div>
 
-      <div className="limits">
-        {caps?<QuotaCard source={source} ids={shownPeriods.map(w=>w.id)}/>:source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
-        {visible.map(w => (
-          <Limit key={w.id} w={w} measuredAt={source.successAt} weekly={weekly} />
-        ))}
-        {!caps && !source.windows.length && !source.meters && <div className="card-empty">{errorText(source.error ?? 'waiting')}</div>}
-        {!!periods.length && !shownPeriods.length && <AllHidden source={source} arrange={arrange} />}
-      </div>
+      <CardMeasurements source={source} arrange={arrange} boardId={boardId}/>
       <CardTray source={source} />
     </article>
   );
 });
+
+/** The two inputs are explicit: live operations never masquerade as historical measurements. */
+function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;boardId:string}) {
+  const reading=usePeriodValues(source.id),selected=useTimeRange(),context=useCurrencyContext(source.id);
+  const historical=!!selected,value=historical?reading.value:null;
+  const historicalContext=value?{...context,sources:{...context.sources,[source.id]:value.meters.flatMap(m=>m.conversion?[{from:m.conversion.original.unit,at:m.conversion.original.at,anchor:null,steps:m.conversion.steps??[m.conversion.rate]}]:[])}}:context;
+  const windows=historical?value?.windows??[]:source.windows;
+  const periods=quotaPeriods({provider:source.provider,windows}),shownPeriods=periods.filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
+  const visible=windows.filter(w=>!isWindowHidden(arrange.view,source.id,w.id)),weekly=planOf(arrange.view,source.id),caps=hasSubscriptionCaps(source.provider);
+  const noEvidence=historical&&!reading.loading&&!windows.length&&!value?.meters.length;
+  return <MeasurementClock.Provider value={historical?reading.basis?.range.to??selected.to:null}>
+    <div className="limits">
+      {historical?<>
+        {caps&&value&&<QuotaCard source={value} ids={shownPeriods.map(w=>w.id)}/>}
+        {!caps&&value&&value.meters.length>0&&<MoneyValues source={value} keys={value.keys.filter(k=>keyShown(arrange.view,source.id,k.id,value.keys))} meters={value.meters} context={historicalContext}/>}
+      </>:caps?<QuotaCard source={source} ids={shownPeriods.map(w=>w.id)}/>:source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
+      {visible.map(w=><Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>)}
+      {noEvidence&&<div className="card-empty">{t('period.noEvidence')}</div>}
+      {!historical&&!caps&&!source.windows.length&&!source.meters&&<div className="card-empty">{errorText(source.error??'waiting')}</div>}
+      {!!periods.length&&!shownPeriods.length&&<AllHidden source={source} arrange={arrange}/>}
+      {historical&&<PeriodStatus {...reading}/>}
+    </div>
+  </MeasurementClock.Provider>;
+}

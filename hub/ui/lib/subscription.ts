@@ -45,7 +45,7 @@ const leftPercent=(left:string,limit:string|null|undefined):number|null=>{
 };
 
 /** Exact cap cells become percentage lines while preserving their exclusive validity bounds. */
-export function* capLinesPrepared(series:readonly MeterHistory[],sources:readonly (Card&{title?:string})[],view:View,kind:Kind,from:number,to:number):Preparation<Line[]> {
+export function* capLinesPrepared(series:readonly MeterHistory[],sources:readonly (Card&{title?:string})[],view:View,kind:Kind,from:number,to:number,exact=false,live=true):Preparation<Line[]> {
   const result:Line[]=[];
   for(const entry of series) {
     yield;
@@ -65,7 +65,7 @@ export function* capLinesPrepared(series:readonly MeterHistory[],sources:readonl
     const current=source.meters?.find(m=>m.id===period.id);
     const edge=(at:number)=>capCells.find(p=>at>=p.from&&at<p.to)?.value??null;
     result.push({sourceId:source.id,windowId:period.id,kind:period.kind,label:period.label,minutes:period.minutes,key:windowKey(source.id,period.id),provider:source.provider,name:seriesName(source,period),color:colorOf(view,source.id,source.provider),dash:'',
-      current:quotaRemaining(source,period.id),consumed:0,coveredMs:0,remainingAtStart:edge(from),remainingAtEnd:edge(to-1),staleAfterMs:current?.staleAfterMs??0,points,capCells,work:null});
+      current:live?quotaRemaining(source,period.id):exact?(entry.end===null?null:leftPercent(entry.end,entry.semantics?.limit)):edge(to-1),consumed:0,coveredMs:0,remainingAtStart:edge(from),remainingAtEnd:exact?(entry.end===null?null:leftPercent(entry.end,entry.semantics?.limit)):edge(to-1),staleAfterMs:current?.staleAfterMs??0,points,capCells,work:null});
   }
   return result;
 }
@@ -73,7 +73,7 @@ export function* capLinesPrepared(series:readonly MeterHistory[],sources:readonl
 export function* subscriptionLinesPrepared(history:History|null,sources:(Card&{title?:string})[],view:View,kind:Kind):Preparation<Line[]> {
   const native=yield* linesPrepared(history,sources,view,kind);
   if(!history)return native;
-  const caps=yield* capLinesPrepared(history.meterSeries??[],sources,view,kind,history.since,history.to);
+  const caps=yield* capLinesPrepared(history.meterSeries??[],sources,view,kind,history.since,history.to,history.exact,history.live);
   if(!caps.length)return native;
   return yield* ordered([...native,...caps],(a,b)=>sources.findIndex(s=>s.id===a.sourceId)-sources.findIndex(s=>s.id===b.sourceId));
 }

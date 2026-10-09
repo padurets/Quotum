@@ -125,7 +125,7 @@ export function clientScript(root = config.clientRoot): string | null {
 
 export class Events implements Touches {
   /** The history cache hears every touch, also when no board is watched. */
-  onHistory: ((source: string, since: number, scopes?: readonly HistoryScope[]) => void) | null = null;
+  onHistory: ((source: string, since: number, scopes?: readonly HistoryScope[], work?:boolean) => void) | null = null;
   /** When this start of the hub began, base 36: a page tells a restart by it. */
   readonly epoch: string;
   readonly client: string | null;
@@ -264,9 +264,9 @@ export class Events implements Touches {
     this.schedule();
   }
 
-  history(source: string, since: number, scopes: readonly HistoryScope[] = HISTORY_SCOPES) {
+  history(source: string, since: number, scopes: readonly HistoryScope[] = HISTORY_SCOPES, work=false) {
     try {
-      this.onHistory?.(source, since, scopes);
+      this.onHistory?.(source, since, scopes, work);
     } catch (error) {
       trouble(error);
     }
@@ -276,7 +276,8 @@ export class Events implements Touches {
       if (!pending) this.histories.set(watched.id, (pending = new Map()));
       for(const scope of scopes) {
         const key=JSON.stringify([source,scope]);
-        pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??since,since)});
+        const workSince=Math.min(pending.get(key)?.workSince??Infinity,work?since:Infinity);
+        pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??since,since),...(Number.isFinite(workSince)?{workSince}:{})});
       }
     }
     this.schedule();

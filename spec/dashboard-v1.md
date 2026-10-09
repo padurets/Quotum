@@ -131,16 +131,39 @@ with 32-KiB bodies and ten key-verification attempts per minute per user and add
 Status and reservation have a separate bounded request limit. Credentials cannot be
 submitted in a query. Closed panels do not poll or read catalogue/history data.
 
-`POST /api/boards/:board/view` is owner-only and accepts a full View with
-`version: 2`, up to 76 KiB (77,824 UTF-8 bytes including JSON syntax). The independent
-writer header `X-Quotum-View-Version: 2` is required, even when a previous page echoes
-a received v2 body. Missing or incompatible writer headers and absent/legacy body
-versions return `428 view_reload_required` without mutation; malformed or future body
+`POST /api/boards/:board/view` is owner-only and accepts the compact v3 view described
+below, up to 76 KiB (77,824 UTF-8 bytes including JSON syntax). The independent
+writer header `X-Quotum-View-Version: 3` is required, even when a previous page echoes
+a received v3 view. Missing or incompatible writer headers return
+`428 view_reload_required` without mutation; malformed or unsupported body
 versions return `400 invalid_request`. `If-Match: "<revision>"` remains required:
 missing is `428 view_reload_required`, malformed is `400 invalid_request`, and stale
 is `409 view_conflict` with the authorized current `{view, revision}`.
 Success returns `{view, revision}`. Semantic changes increment revision; no-op saves
 do not. Snapshots and view events carry that revision.
+
+Storage and POST use `[3, places, mask, ...fields]`; events, snapshots and conflict
+responses use the semantic object with `version: 3`. Each place is `[id, geometry]`
+or `[id, geometry, h]`, in reading order. Integer ids 0 through 5 stand for `agents`,
+`activity`, `quota-history`, `budget-history`, `quota-table`, `budget-table`; other ids
+are unchanged strings (including the distinct string `"0"`). Geometry 0 through 9
+indexes `(x,w)` pairs `(0,2),(0,3),(0,4),(0,6),(2,2),(2,3),(2,4),(3,2),(3,3),(4,2)`.
+The array position restores `y`; vertical gaps are not persisted height requests.
+The ten mask bits select nonempty `names`, `hidden`, `shown`, `windows`, `plans`,
+`unplanned`, `colors`, `columns`, `shownColumns`, `enabledWhenEmpty`, in that order.
+Omitted fields restore empty defaults. `shown` is `[builtinMask, ...otherIds]`, with
+the same six builtin bits; at most 204 other ids. Other owner fields keep their
+ordinary types and limits. Duplicate place ids, invalid aliases, duplicate shown ids,
+unknown mask bits and trailing fields are rejected. Decoded drafts must also fit
+128 KiB before publication. Byte accounting for normal and keepalive saves uses the
+actual encoded request; there is no separate quota for each representation.
+
+The upgrade concatenates the visible reading orders of cards and analytics, then
+weaves in saved hidden positions without changing the visible subsequence. It preserves
+widths, requested heights and settings. Standard visible widgets become anchors;
+implicit source cards still follow their preceding visible source in natural order.
+Reads and new membership do not materialize every implicit place. Add, replay and
+device-onboarding writes also require the current writer header.
 
 The standard widgets are `agents`, `activity`, `quota-history`, `budget-history`,
 `quota-table` and `budget-table`. Each analytics replacement in `shown` is placed;
@@ -232,8 +255,8 @@ or the table, a chart as tall as it draws by itself, the first agent of the list
 many more), so `h` is what the owner asked for, not what shows, and the hub does not check
 it against the content. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
 else is refused. The hub migrates stored pre-grid views and split analytics IDs before
-serving the view with its revision. Saves require version 2, its writer header and
-`layout`, with a 76 KiB UTF-8 body limit. The page uses keepalive only within its
+serving the view with its revision. Saves require the compact version 3 codec and
+its writer header, with a 76 KiB UTF-8 body limit. The page uses keepalive only within its
 aggregate 64 KiB budget; larger drafts use immediate serialized ordinary saves.
 There is no separate count limit on places; each place is validated.
 
@@ -334,6 +357,103 @@ reset leaving the history) goes out when it does.
 | `gone` | The board was deleted, or the reader is no longer on it. | Opens another board. |
 | `restart` | The hub stops, or could not work out the board. | Connects again in a few seconds. |
 | `limit` | A newer reader took its place, or it fell 256 KiB behind. | Connects again, not sooner than in 30 seconds. |
+
+## Reading the board period
+
+`POST /api/boards/:board/period` is a read-only, authenticated, origin-checked operation.
+The response is JSON with `Cache-Control: no-store`. Board access and visible source
+capabilities are checked on every request; a cursor grants no additional access.
+The body is at most 76 KiB:
+
+```ts
+{
+  version: 1;
+  selection: {mode: 'live'; periodMs: number} | {mode: 'range'; from: number; to: number};
+  evaluatedAt: number;
+  quota?: {cell: string; from: string; to: string; meters?: string; unit?: string; meta?: string; evidence?: string; cells?: 'skip'};
+  budget?: {cell: string; from: string; to: string; meters: string; unit: string; currency?: string; meta?: string; evidence?: string; cells?: 'skip'};
+  values?: string[];
+  sessions?: {cursor?: string};
+}
+```
+
+Times are safe integer milliseconds. Period lengths are between fifteen minutes and
+31 days, within retained history. `values` contains at most 2000 visible source ids.
+The hub clamps `evaluatedAt` to its own clock. Live selects
+`[evaluatedAt-periodMs,evaluatedAt)`; a fixed interval keeps its exact endpoints.
+The evidence cut cannot extend into the future. Each history section keeps the existing
+cell, selection and eight-tile limits below. `evidence` is its previously returned opaque
+tape cursor; `skip` asks only for cells during progressive panning. Conversely,
+`cells: 'skip'` reads the boundary tape while reusing already cached cells.
+
+The response has a common `basis` and only the requested sections. A basis is
+`{run, revision, evaluatedAt, evidenceCut, range: {from,to}}`. Each section is either
+`{state:'complete', basis, value}` or
+`{state:'error', error:'history_limit'|'history_range_invalid'|'unavailable'}`.
+Sessions can additionally return `{state:'delta', basis, value}`. A section error does
+not invalidate successful siblings. Authentication, invalid request shape and source
+capability failures are HTTP errors. Clients retain the last complete presentation
+under its own basis while a requested replacement is pending or failed.
+
+Quota and budget values contain the compatible history reply below and, unless skipped,
+a `tape`. A tape contains exact native sample anchors and monetary readings, availability
+spans, original allowances and recorded currency bindings. Its `from` and `cut` delimit
+retained evidence; `replaceFrom` and optional `replaceTo` delimit the interval replaced
+by a delta. Metadata is separate from repeated samples. A complete initial tape allows
+a live left boundary to move through its entire retained interval without further IO.
+New evidence extends or replaces that interval; a clock tick does not fetch history.
+Partial spending steps keep their uncertainty instead of becoming proportional amounts.
+
+Values are measurement-only projections: source id/provider, retained native windows,
+meters and keys. Native windows include `observedAt`, `validUntil` and `stale`.
+Membership is the last nonempty retained batch strictly before the right edge. A meter
+keeps exact decimal integer amounts, historical allowance, unit and conversion evidence.
+Expired evidence remains visible as stale; an absent predecessor remains unknown.
+An optional `validFor: {from,to}` gives the half-open interval of right-edge positions
+with identical values, including membership, anchors and stale state. It is scoped to
+the same authority and evidence revision. Current errors, credentials, actions, forecasts
+and live source state are separate.
+
+Session evidence is a complete temporal index:
+
+```ts
+{
+  anchor: number; cut: number; knownFrom: number; cursor: string;
+  refs: {
+    ref: string; source: string; device: {id: string; name: string};
+    origin: 'terminal' | 'editor' | 'app'; project: string | null; folder: string | null;
+    startedAt: number;
+    currentPresence?: {working: boolean; through: number; workingThrough: number; startedAt: number};
+  }[];
+  spans: [refIndex: number, fromOffset: number, toOffset: number][];
+  replaceFrom?: number; replaceTo?: number;
+}
+```
+
+Offsets are exact milliseconds from `anchor`. Only credited intervals intersecting the
+requested evidence are included, clipped by capture, retention, membership and sharing
+cutoffs. No current list or duration total substitutes for those intervals. Clients
+intersect them with the selected accounting range, retain only positive-work contexts,
+and derive grouping and ordering from that result. Optional current presence requires
+a stable authorized identity match; its absence is not an inferred session end.
+A delta replaces its named interval, making retries idempotent. Cursors are signed and
+bound to the board, user, hub run, authority, retention and evidence revision. Currency
+and resource selections also bind a tape cursor. An unprovable frontier returns a
+complete bounded baseline. It never silently returns a partial index.
+
+`POST /api/boards/:board/period/sessions` reads details for at most 100 opaque refs.
+Its body is `{version:1, selection, evaluatedAt, cursor, refs}`, at most 8 KiB. The cursor
+must still name the current authorized evidence and cover the requested interval;
+otherwise the response is `400 history_range_invalid`. It returns a complete sessions
+section containing the requested clipped rows, or a section error. Dashboard pages use
+50 rows from the complete index, so a clock-driven membership change requires no detail
+request. Detail reads use the same accounting transport and memory limits.
+
+The `history` event's optional `changes` entries are
+`{source, scope:'quota'|'budget', since, workSince?}`. `workSince` identifies actual
+credited-work invalidation; the legacy `sources` and earliest `since` remain present.
+Consumers coalesce affected sections into one foreground read. All accounting endpoint
+requests and bytes, including aborted attempts, count toward the same benchmark budget.
 
 ## Reading history
 
@@ -985,6 +1105,15 @@ are absent from every shared projection. Credential details remain owner-only. T
 `shared` rows and public card names never inherit that label.
 
 ## Privacy
+
+Period and session projections expose only authorized board measurements and clipped
+credited work. Opaque refs do not expose producer session ids or database row ids.
+Current context is joined server-side only after an authorized stable identity match.
+Private key labels are absent for other owners; raw meter context/state, owner ids,
+credentials and private currency registries are never included. Currency results retain
+only the selected measurement's permitted valuation provenance. Cursors confer no
+capability and are rechecked after access, visibility or attribution changes.
+
 
 Declared account IDs/names, connector credential records, hints, abilities and key fingerprints are never part of
 a board's state. A source failure whose code begins with `secret_key_` or `credential_`

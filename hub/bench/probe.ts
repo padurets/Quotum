@@ -25,7 +25,7 @@ export type Place = {closest(selector: string): Place | null};
  * The parts of the page work is counted by, the nearest first: a label that shows time, a
  * card, the header, the list of agents, the analytics. Anything else is the page.
  */
-export const NODES = '[data-time], [data-card], header.topbar, section.agents-panel, section.analytics';
+export const NODES = '[data-time], [data-card], header.topbar, section.agents-panel, .history, .forecast, .activity, .budget-history, .budget-table, .analytics-head';
 
 /**
  * The components that rendered in a commit, found as React DevTools finds them: walking
@@ -132,7 +132,7 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
     if (card) return `card:${card.getAttribute('data-card')}`;
     if (node.closest('header.topbar')) return 'header';
     if (node.closest('section.agents-panel')) return 'agents';
-    if (node.closest('section.analytics')) return 'analytics';
+    if (node.closest('.history,.forecast,.activity,.budget-history,.budget-table,.analytics-head')) return 'analytics';
     return 'page';
   };
   const describe = (node: Element | null) => {

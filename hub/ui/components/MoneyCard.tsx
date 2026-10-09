@@ -1,3 +1,4 @@
+import {useMeasurementClock,useMeasurementTime} from '../lib/measurementClock';
 import {QUOTA_IDS} from '../../server/domain/meters';
 import type {Card, View} from '../lib/types';
 import type {KeyPart, Meter} from '../../server/domain/meters';
@@ -33,7 +34,7 @@ import {level, resetLineChangesAt} from '../lib/quota';
 import {useShownKeys} from '../lib/moneyKeys';
 
 function KeyStatus({part, cap}: {part: BudgetLimit['part']; cap: Meter}) {
-  const now = useClock((now) =>
+  const now = useMeasurementClock((now) =>
     earliest(part.expiresAt !== null && part.expiresAt > now ? part.expiresAt : null, capChangesAt(cap, now)),
   );
   const stale = capStale(cap, now);
@@ -57,7 +58,7 @@ function KeyStatus({part, cap}: {part: BudgetLimit['part']; cap: Meter}) {
   );
 }
 function CapStatus({part, cap}: {part?: KeyPart; cap?: Meter}) {
-  const now = useClock((now) =>
+  const now = useMeasurementClock((now) =>
     earliest(
       part?.expiresAt != null && part.expiresAt > now ? part.expiresAt : null,
       cap ? capChangesAt(cap, now) : null,
@@ -86,10 +87,11 @@ function CapStatus({part, cap}: {part?: KeyPart; cap?: Meter}) {
   );
 }
 export function CapReset({meter, short = false}: {meter: Meter; short?: boolean}) {
-  const now = useClock((now) => (meter.resetAt === null ? null : countdownChangesAt(meter.resetAt, now)));
+  const now = useMeasurementClock((now) => (meter.resetAt === null ? null : countdownChangesAt(meter.resetAt, now)));
+  const historical=useMeasurementTime()!==null;
   const unknown = meter.resetAt === null && meter.scope !== 'lifetime';
   const text =
-    meter.resetAt === null
+    historical&&meter.resetAt!==null?stamp(meter.resetAt):meter.resetAt === null
       ? unknown
         ? short
           ? '—'
@@ -266,7 +268,7 @@ export function QuotaCard({
   ids = QUOTA_IDS,
   compact = false,
 }: {
-  source: Card;
+  source: Pick<Card,'meters'>;
   ids?: readonly string[];
   compact?: boolean;
 }) {
@@ -294,7 +296,9 @@ export function QuotaCard({
   );
 }
 function QuotaReset({resetAt, short}: {resetAt: number | null; short: boolean}) {
-  const now = useClock((now) => resetLineChangesAt({resetAt}, now));
+  const now = useMeasurementClock((now) => resetLineChangesAt({resetAt}, now));
+  const historical=useMeasurementTime()!==null;
+  if(historical)return <span>{resetAt===null?t('limit.resetUnknown'):stamp(resetAt)}</span>;
   return <ResetText resetAt={resetAt} now={now} short={short} />;
 }
 export function QuotaMark({source}: {source: Card}) {
@@ -322,6 +326,10 @@ export function MoneyCard({
 }) {
   const context = useCurrencyContext(source.id);
   const {keys, meters, error} = useShownKeys(source, view, board);
+  return <MoneyValues source={source} keys={keys} meters={meters} error={error} compact={compact} context={context}/>;
+}
+
+export function MoneyValues({source,keys,meters,error=null,compact=false,context}:{source:Pick<Card,'id'|'provider'|'meters'|'currencyUnavailable'>;keys:KeyPart[];meters:Meter[];error?:unknown;compact?:boolean;context:CurrencyContext}) {
   const {remaining, limits} = budgetView(source, keys, meters, context),
     groups = remaining.values;
   const displayUnavailable =

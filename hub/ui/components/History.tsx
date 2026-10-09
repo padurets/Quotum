@@ -5,7 +5,7 @@ import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLinePrepared} from '../lib/plan';
 import {announcedOf, forecastLinePrepared, type Context} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
-import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
+import {setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {setTimeRange, timeRangeKey, useTimeRange} from '../lib/timeRange';
 import {frameChangesAt, frameOf, measuredTo} from '../lib/periods';
 import {QUOTA_HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
@@ -18,7 +18,6 @@ import {useBoardId, useForecastsOf, useLineup, useNamed, usePastResets, useReset
 import {useClock} from '../lib/clock';
 import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {t, useLocale} from '../i18n';
-import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {usePlot} from './sizing';
 import {pan, usePanning} from '../lib/pan';
@@ -32,8 +31,8 @@ import {historyProjection, type ProjectionHints} from '../lib/historyProjection'
  * Its note says the look ahead needs the plan or the forecast, where a period ending now
  * has neither; a range in the past has no future at all.
  */
-function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote}: {arrange: Arrange; planAvailable: boolean; forecastAvailable: boolean; horizonNote: boolean}) {
-  const {horizon, showPlan, showForecast} = usePrefs();
+function HistorySettings({arrange, planAvailable, forecastAvailable}: {arrange: Arrange; planAvailable: boolean; forecastAvailable: boolean}) {
+  const {showPlan, showForecast} = usePrefs();
   return (
     <Popover label={t('history.settings')} icon={<SlidersIcon />}>
       <div className="popover-note">{t('chart.panHint')}</div>
@@ -53,18 +52,6 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
           {planAvailable && <div className="popover-note">{t('history.planHint')}</div>}
         </div>
       )}
-      <div className="popover-section">
-        <div className="popover-title">{t('history.horizon')}</div>
-        <div className="popover-pad">
-          <Segmented
-            value={horizon}
-            onChange={value => setPrefs({horizon: value})}
-            options={HORIZONS.map(h => [h, h === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(h)})])}
-            label={t('history.horizon')}
-          />
-        </div>
-        {horizonNote && <div className="popover-note">{t('history.horizonNote')}</div>}
-      </div>
       {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, QUOTA_HISTORY, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
   );
@@ -195,7 +182,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
 
   return (
     <AnalyticsPanel ref={panel} className="history" title={t('history.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
-      settings={<HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)} horizonNote={frame.live && !model?.planShown && !model?.forecastShown}/>}
+      settings={<HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)}/>}
     >
       {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}
       <Chart

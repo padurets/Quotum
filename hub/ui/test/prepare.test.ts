@@ -1,7 +1,7 @@
 import {preparationFixture} from './preparationFixture';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Preparations, drain, type Preparation} from '../lib/prepare';
+import {Preparations, prepareAsync, drain, type Preparation} from '../lib/prepare';
 import {ordered} from '../../server/domain/prepare';
 import {HistoryTile} from '../lib/historyTiles';
 import type {Chunk} from '../../server/domain/history';
@@ -14,6 +14,15 @@ export function sliced() {
   const finish = () => {for (let i = 0; tasks.length && i < 100_000; i++) tick(); assert.equal(tasks.length, 0);};
   return {scheduler, tasks, tick, finish, disposed: () => disposed};
 }
+
+test('asynchronous preparation settles cancellation before and after its first slice and propagates failure',async()=>{
+  const h=sliced(),owner={};let released=0;
+  function* work():Preparation<number>{try{for(let i=0;i<1000;i++)yield;return 1;}finally{released++;}}
+  const unstarted=prepareAsync(owner,work(),()=>true,h.scheduler);h.scheduler.cancel(owner);assert.equal(await unstarted,null);
+  const started=prepareAsync(owner,work(),()=>true,h.scheduler);h.tick();h.scheduler.cancel(owner);assert.equal(await started,null);assert.equal(released,1);
+  const failed=prepareAsync(owner,(function*(){yield;throw new Error('broken');})(),()=>true,h.scheduler);
+  const rejected=assert.rejects(failed,/broken/);h.finish();await rejected;assert.equal(h.scheduler.size,0);
+});
 
 test('actual default slices release the UI after one millisecond of primitive work and complete identically', () => {
   let clock = 0, advances = 0, published: number | null = null;

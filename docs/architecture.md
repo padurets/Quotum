@@ -1106,13 +1106,11 @@ the GPU.
 A card's dot by the logo tells how its measurements go: its colour, and in its tooltip
 when it was measured and, while the hub sets the pace, when the next measurement comes
 and why, each a line of its own.
-A board has two areas: the cards (and the list of running agents, when turned on),
-which are about now and show every window, and under
-them the analytics: agent activity, quota history and table, and budget history and
-table. All use the period in the analytics head; the weekly/session switch applies
-only to the quota pair. Each of the four analytics widgets has independent placement,
-visibility and table columns. Budget series are chosen in the budget chart settings
-and shared with its table, even while the chart is hidden. Each
+A board has one grid for source cards, agent sessions, activity, quota history and
+table, and budget history and table. The period controls stand above it. Quota window
+kind, budget series and mode, and the shared chart horizon live in a filter popover;
+a table keeps its family controls when its chart is hidden. Display settings remain
+with their widget. Each
 analytics panel uses the same heading and reader-error component. The selected
 period appears once in the shared analytics controls. While a different range is loading
 or has failed, retained results name the interval they actually cover; this status
@@ -1120,7 +1118,7 @@ disappears when the selected answer arrives. The
 limit and budget tables share their column controls, cells and responsive renderer;
 when their selected columns no longer fit, both become labelled rows. Their own
 data models provide the values and column widths, including clock-driven cells.
-Each area is arranged on its own grid. A row is 48 px (a 32 px track and a 16 px gap).
+Every widget is arranged on one grid. A row is 48 px (a 32 px track and a 16 px gap).
 Each widget fills the fewest whole rows that contain its content, with any spare room
 above a card's tray or at the bottom of a panel, unless the owner chose a height for it
 (`h`, in rows). A chosen height is a request, not what shows: a card or the table never
@@ -1145,8 +1143,8 @@ edge to edge; a narrow dialog uses an inset compact list. The dialog has no repe
 count or work total above its rows; its toolbar holds only Back and list sorting when
 needed. The list can be shorter than its rows: it
 shows the most whole rows that fit, in its own order, and a last row saying how many
-more, which opens them all in a dialog; to know how many fit, it lays all its rows out
-unseen beside it, their times standing still. Such a widget tells the grid
+more, which opens them all in a dialog; to know how many fit, it measures at most fifty candidate rows unseen beside it, their times standing still.
+Its disclosure pages through the complete retained roster in batches of fifty. Such a widget tells the grid
 through a context of its own (`ui/components/sizing.ts`) the least it can show, what it
 needs whole and, as it lays itself out anew, how tall it shows, so the grid fills the
 rest of its rows before that paints; it reads how tall it is to be and when the grid gives
@@ -1184,9 +1182,12 @@ reading order, with the heights chosen where the least their content can show fi
 arranging is available only on the wide grid.
 The hub migrates pre-grid views and legacy analytics anchors atomically, retaining
 hidden intent, heights, unrelated geometry and each table's columns. A board view and
-revision are read as one reconciled pair. Saves require version 2 and its writer header;
+revision are read as one reconciled pair. Saves use the compact version 3 codec and its writer header;
 a stale runtime cannot save a version it merely echoed from a snapshot. The ordinary
-body limit is 76 KiB UTF-8. Up to the aggregate browser keepalive limit of 64 KiB, saves
+body limit is 76 KiB UTF-8 of the encoded request; decoded drafts fit 128 KiB.
+Storage and POST use the same tuple codec; readers receive a semantic View object.
+The migration concatenates the old visible orders, retains saved hidden places and
+keeps unarranged source cards implicit. New membership never saves all their defaults. Up to the aggregate browser keepalive limit of 64 KiB, saves
 retain their debounce. Larger drafts start ordinary serialized saves immediately; a
 browser close warning stays until acknowledgment or explicit discard, and navigation
 that destroys the saver waits, including native browser Back/Forward. A failed save
@@ -1212,14 +1213,46 @@ the matching pair on first use. An explicit Add also places an empty widget; pla
 is sticky after its last source or series disappears. Explicit hidden intent wins.
 `enabledWhenEmpty` applies to agents and activity; analytics placement lives in `shown`.
 What
-is only about how one person looks (the analytics' period and window type, the chart's
+is only about how one person looks (the board's period and window type, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents table's sort order, the chosen board and language) stays in their browser.
+The controls above the mixed widget grid own the common period, quota kind, monetary
+selection and forecast horizon. They remain available when charts are hidden. Each
+widget keeps its display settings, such as columns, stacking and legend choices.
+A fixed accounting interval is exactly `[from,to)`: card values use the latest retained
+observation strictly before `to`, with validity evaluated at `to`. Missing predecessors
+stay unknown. Native membership follows the last retained nonempty measurement batch;
+monetary values retain their original amounts, allowances and conversion evidence.
+Current operational status, connector failures, actions, forecasts and reset news remain
+live. Compact mode and native notifications also remain live.
+
+The board's period coordinator collects quota, budget, value and session demands into
+one read-only `POST /api/boards/:board/period`. The old history route and the composite
+route call the same cell reader. Sections succeed or fail independently. A retained
+presentation keeps its own interval while a replacement loads or fails. Board, access,
+currency and request generations prevent a late response from acquiring a newer label.
+A bounded signed frontier lets the next read replace changed work and measurement
+intervals or extend missing older evidence. Quota cells and the session projection share
+one authorized work extraction within a composite read.
+
+Retained work traces and measurement tapes provide exact boundaries beside the shared
+interior cells. Work prefixes and interval unions compute clipped session duration,
+active time and agent-hours. Monetary steps remain exact integers; a partially
+intersected spending step is uncertain, never divided by elapsed time. The page clock
+advances live boundaries locally through already received evidence, without a request
+or invented work after the evidence cut. Fixed past accounting does not tick. These
+indexes, dictionaries, response staging and cached values share the history readers'
+15 MiB budget and two transport slots. Server projections share the 32 MiB tile budget.
+An oversized section reports `history_limit` without publishing partial totals. Numeric
+preparation uses the shared cancellable scheduler; aggregate benchmark traffic includes
+composite and detail reads, cancellations and responses that finish after measurement.
+
 Quota history, budget history and agent activity read and move along time alike
 (`ui/components/timeAxis.ts`), each with its legend under it. A time range selected on
-any of them becomes the analytics' period; it lives in the page's
+any of them becomes the board's period, including card measurements, session lists and
+accounting tables; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
-‹ and › beside the period move the analytics by half their length: back, to a range in
+‹ and › beside the period move the board by half its period: back, to a range in
 the past held in the address like a dragged one; forward, up to now, where the chosen
 period comes back. A horizontal touchpad swipe, Shift with the wheel, or Shift with a
 mouse or pen drag moves all three charts continuously. A page-local transaction captures
@@ -1329,9 +1362,13 @@ first and last missing parts. Tiles are kept across frames on the same grid, so 
 or switching 12h and 24h asks nothing once both have been seen. A new lineup makes them stale; changed work attribution invalidates only quota/activity; a late measurement or credited work makes only cells from
 its actual time stale, and the page reads them when a frame needs them.
 
-Both agent lists put working sessions first, then the ones that worked most recently,
-then the newest. The card's panel keeps machine groups, ordered by each one's most
-active session. The table's headers sort ascending, descending, then back to activity;
+Dashboard agent lists contain contexts with credited work intersecting the selected
+period, including contexts absent from the current machine list. Duration is clipped
+to that period, and recency uses the last intersecting work endpoint. Current presence
+is optional and expires separately; it never proves more work or an end time. The
+card's panel keeps machine groups, ordered by each one's most recent credited work.
+The compact view continues to show current sessions, ordered by working state and
+activity. The table's headers sort ascending, descending, then back to activity;
 a hidden column does not sort. When its owner's chosen columns do not fit the widget's
 own width, it becomes a compact list with a sort menu. State is off by default: the
 mark already tells it. Explicit column choices belong to the board, sorting to the viewer.

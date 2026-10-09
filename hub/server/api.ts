@@ -1,4 +1,5 @@
-import {providerOf, quotaMeter, budgetMeter} from './domain/providers.js';
+import {readHistory, ReadError, type HistoryQuery} from './historyRead.js';
+import {PeriodReader,periodRoutes} from './periodRead.js';
 import {Attention} from './attention.js';
 import {STATUS_CODES} from 'node:http';
 import type {Socket} from 'node:net';
@@ -6,9 +7,7 @@ import Fastify, {type FastifyInstance, type FastifyReply, type FastifyRequest} f
 import staticFiles from '@fastify/static';
 import {config, serviceName, version} from './config.js';
 import type {Ingest} from './ingest.js';
-import {HistoryLimit, HistoryTiles} from './history.js';
-import {selectionOf, type MeterSelection} from './domain/meterHistory.js';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, READ_CELLS, cellStart, tileOf, tileStart} from './domain/history.js';
+import {HistoryTiles} from './history.js';
 import type {Pairing} from './pairing.js';
 import type {ResetFeed} from './resets.js';
 import type {Store} from './store/store.js';
@@ -24,8 +23,6 @@ import {localRoutes} from './local.js';
 import {credentialRoutes} from './routes/credentials.js';
 import {Credentials, startSecrets, type SecretInputs} from './secrets/index.js';
 import type {HubSources} from './hubSources.js';
-import {displayHistory} from './currencies/history.js';
-import type {Chunk} from './domain/history.js';
 import {currencyRoutes} from './routes/currencies.js';
 import {sourceKeyRoutes} from './routes/sourceKeys.js';
 import {BoardAdditions} from './additions.js';
@@ -110,7 +107,8 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   const anyHost = hosts.has('*');
   const history = new HistoryTiles(store);
   const events = hub.events ?? new Events(hub);
-  events.onHistory = (source, since, scopes) => history.touch(source, since, scopes);
+  const periods = new PeriodReader(hub,history,events);
+  events.onHistory = (source, since, scopes, work) => {history.touch(source, since, scopes);periods.touch(source,since,scopes,work);};
   events.attach();
   hub.credentials!.setObserver(events);
   hub.hubSources?.setObserver(events);
@@ -177,59 +175,11 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
     return snapshot;
   });
 
-  app.get<{Querystring: {cell?: string; from?: string; to?: string; board?: string; meters?: string; unit?: string; currency?:string; meta?:string; scope?:string}}>('/api/history', (request, reply) => {
+  app.get<{Querystring: HistoryQuery & {board?:string}}>('/api/history', (request, reply) => {
     const access = guards.board(request, reply, request.query.board);
     if (!access) return reply;
-    const scope = request.query.scope;
-    if(scope!==undefined&&scope!=='quota'&&scope!=='budget')return reply.code(400).send({error:'invalid_request'});
-    const now = Date.now();
-    // Credit quiet machines before deciding whether their tiles can be reused.
-    if(scope!=='budget')hub.ingest.live.sweep(now);
-    const number = (value: string | undefined) => value && /^\d{1,15}$/.test(value) ? Number(value) : NaN;
-    const cell = number(request.query.cell);
-    const from = number(request.query.from);
-    const askedTo = number(request.query.to);
-    if (request.query.meta !== undefined && !/^(?:[A-Za-z0-9_-]{43})?$/.test(request.query.meta)) return reply.code(400).send({error: 'invalid_request'});
-    if (!READ_CELLS.includes(cell) || !Number.isFinite(from) || !Number.isFinite(askedTo) || from % cell || (askedTo <= now && askedTo % cell)) return reply.code(400).send({error: 'invalid_request'});
-    const to = Math.min(Math.ceil(askedTo / cell) * cell, cellStart(now + CLOCK_TOLERANCE_MS, cell) + cell);
-    const oldest = tileStart(tileOf(now - config.retention.sampleDays * 86_400_000, cell), cell);
-    if (to % cell || tileOf(to - 1, cell) - tileOf(from, cell) + 1 > MAX_READ_TILES) return reply.code(400).send({error: 'invalid_request'});
-    const board = access.board.id;
-    const shown = store.shown(board, directory.view(board).hidden);
-    let meters: MeterSelection | undefined;
-    if (request.query.meters !== undefined || request.query.unit !== undefined) {
-      try {meters=selectionOf(JSON.parse(request.query.meters??''),request.query.unit);} catch {return reply.code(400).send({error:'invalid_request'});}
-      // A shared hidden source is not a history capability, even when its id is known.
-      if (meters.ids.some(([source])=>!shown.has(source))) return reply.code(404).send({error:'not_found'});
-      if(request.query.currency!==undefined)meters={...meters,nativeCurrencies:true};
-    }
-    if(scope==='budget'&&!meters || scope==='quota'&&request.query.currency!==undefined)return reply.code(400).send({error:'invalid_request'});
-    if(scope&&meters) {
-      const sources=new Map(store.sources(board).map(source=>[source.id,providerOf(source.provider)]));
-      if(meters.ids.some(([source,id])=>!(scope==='quota'?quotaMeter:budgetMeter)(sources.get(source),id)))return reply.code(400).send({error:'invalid_request'});
-    }
-    if (to <= from || from < oldest) return reply.code(400).send({error: scope ? 'history_range_invalid' : 'invalid_request'});
-    let chunks: string[];
-    try {chunks=history.read(board, cell, from, to, now, shown, meters, scope);}
-    catch(error){if(error instanceof HistoryLimit)return reply.code(413).send({error:'history_limit'});throw error;}
-    if(request.query.currency!==undefined){
-      if(!meters)return reply.code(400).send({error:'invalid_request'});
-      try {store.currencies.definition(access.user.id,request.query.currency);}catch{return reply.code(404).send({error:'currency_not_found'});}
-      if(store.currencies.preference(access.user.id).id!==request.query.currency)return reply.code(409).send({error:'currency_changed'});
-      const observed=new Map<string,number[]>();
-      const transformed=displayHistory(chunks.map(json=>JSON.parse(json) as Chunk),store.currencies,access.user.id,request.query.currency,cell,(source,meter,until)=>{
-        const id=meter==='balance'?'usage':meter,key=source+'\n'+id;let times=observed.get(key);
-        if(!times){const rows=store.meters.readings(source,id,from,to),spans=store.meters.spans(source,id,from,to);times=[...rows.map(r=>r.at),...spans.map(s=>s.to)].sort((a,b)=>a-b);observed.set(key,times);}
-        let low=0,high=times.length;while(low<high){const middle=(low+high)>>>1;if(times[middle]<=until)low=middle+1;else high=middle;}return low?times[low-1]:null;
-      });
-      chunks=transformed.map(chunk=>JSON.stringify(chunk));
-      if(chunks.reduce((sum,json)=>sum+Buffer.byteLength(json),0)>16*1024*1024)return reply.code(413).send({error:'history_limit'});
-    }
-    const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown)};
-    const tag = request.query.meta === undefined ? undefined : history.metadata(board, basis, scope);
-    const meta = JSON.stringify(tag && request.query.meta === tag ? {now, run: events.epoch, meta: tag} : {now, ...basis, ...(tag ? {meta: tag} : {})});
-
-    return reply.type('application/json').send(`${meta.slice(0, -1)},"chunks":[${chunks.join(',')}]}`);
+    try {return reply.type('application/json').send(readHistory(hub, history, events, access.board.id, access.user.id, request.query));}
+    catch(error) {if(error instanceof ReadError)return reply.code(error.statusCode).send({error:error.code});throw error;}
   });
 
   if (hub.local) {
@@ -241,6 +191,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   // Open streams and held polls would keep the server from closing: they end first.
   app.addHook('preClose', async () => events.close());
   eventRoutes(app, directory, events, guards, !!hub.local);
+  periodRoutes(app,guards,periods);
   accountRoutes(app, hub, guards);
   sourceKeyRoutes(app,hub,guards);
   currencyRoutes(app,hub,guards);

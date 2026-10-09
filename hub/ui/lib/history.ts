@@ -1,12 +1,13 @@
-import {HistoryPool} from './historyPool';
+import {HistoryPool,historyPool} from './historyPool';
+import {boardPeriod,followPeriod} from './period';
 import type {HistoryScope} from '../../server/domain/history';
 import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, ACTIVITY} from '../../server/domain/widgets';
-import {useSyncExternalStore} from 'react';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type HistoryReply, type Target} from '../../server/domain/history';
+import {useMemo,useRef,useSyncExternalStore} from 'react';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
 import {page, type PageEvent, type PageState} from './board';
 import {hubNow} from './clock';
 import {HistoryTile} from './historyTiles';
-import {ApiError, call, UNAUTHORIZED} from './http';
+import {ApiError, UNAUTHORIZED} from './http';
 import {periodOf} from './periods';
 import {onPrefs, prefs} from './prefs';
 import type {Store} from './store';
@@ -834,20 +835,21 @@ export class HistoryStore {
 }
 
 const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
-export const historyPool = new HistoryPool();
+export {historyPool} from './historyPool';
 function reader(scope: HistoryScope) {
-  return new HistoryStore({
-    read: (board, cell, from, to, signal, meters, meta) => call<HistoryReply>('GET', `/api/history?scope=${scope}&board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids))+(meters.displayCurrency?'&currency='+encodeURIComponent(meters.displayCurrency):'') : ''}`, undefined, 12_000, signal).then(reply => expandHistory(reply, meta)),
+  const value=new HistoryStore({
+    read: (_board, cell, from, to, signal, meters, meta) => boardPeriod.transport.read(scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})},signal).then(reply=>expandHistory(reply,meta)),
     now: hubNow,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
     dropTimeRange: () => {if(timeRange())dropTimeRange();},
     accessLost: () => {page.dispatch({type:'board-close'});window.dispatchEvent(new Event(UNAUTHORIZED));},
   }, STORED_BYTES, scope, historyPool);
+  value.setActive(false);return value;
 }
 export const quotaHistory = reader('quota'), budgetHistory = reader('budget');
 export const loader = quotaHistory;
-let shellActive = true;
+let shellActive = false;
 const selectedMeters = (state: PageState, scope: HistoryScope) => {
   const board=state.board;if(!board)return undefined;
   const cards=board.lineup.flatMap(id=>board.cards[id]??[]);
@@ -858,7 +860,7 @@ function activeReaders(state=page.get()) {
   quotaHistory.setActive(shellActive&&!!board&&[ACTIVITY,...QUOTA_WIDGETS].some(id=>widgetVisible(board.view,id,board.lineup.length)));
   budgetHistory.setActive(shellActive&&!!board&&BUDGET_WIDGETS.some(id=>widgetVisible(board.view,id,board.lineup.length)));
 }
-export const historyReaders = {setActive(active: boolean) {shellActive=active;activeReaders();}};
+export const historyReaders = {setActive(active: boolean) {shellActive=active;boardPeriod.activate(active);activeReaders();}};
 
 /** Event changes identify resources; a reader's choices never mutate another board's selections. */
 export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>) {
@@ -884,6 +886,7 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>)
 }
 const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).flatMap(card => card.windows.map(window => `${card.id} ${window.id}`));
 follow(quotaHistory,page);follow(budgetHistory,page);
+if(typeof window!=='undefined')followPeriod();
 page.listen((_event,state)=>activeReaders(state));
 
 /** The plot follows the gesture; only its completion chooses exact quantities. */
@@ -916,8 +919,20 @@ if (typeof window !== 'undefined') {
   };
   onPrefs(chosen);onTimeRange(chosen);chosen();
 }
-export function useHistory(): Shown {return useSyncExternalStore(quotaHistory.subscribe, quotaHistory.get, quotaHistory.get);}
-export function useBudgetHistory(): Shown {return useSyncExternalStore(budgetHistory.subscribe, budgetHistory.get, budgetHistory.get);}
+function usePeriodHistory(loader:HistoryStore):Shown {
+  const shown=useSyncExternalStore(loader.subscribe,loader.get,loader.get);
+  const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader.scope??'quota',listener),()=>boardPeriod.getProjectionRevision(loader.scope??'quota'));
+  const retained=useRef<{board:string;history:History}|null>(null);
+  return useMemo(()=>{
+    const board=page.get().board?.id??'';if(retained.current?.board!==board)retained.current=null;
+    if(!shown.history)return shown;
+    const scope=loader.scope??'quota',state=boardPeriod.projectionState(shown.history,scope);
+    if(!state.ready)return {...shown,history:retained.current?.history??null,loading:!state.error&&!shown.error,error:state.error??shown.error};
+    const history=boardPeriod.project(shown.history,scope);retained.current={board,history};return {...shown,history};
+  },[shown,revision,loader]);
+}
+export function useHistory(): Shown {return usePeriodHistory(quotaHistory);}
+export function useBudgetHistory(): Shown {return usePeriodHistory(budgetHistory);}
 export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
 export function useBudgetHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(budgetHistory.subscribePlot, budgetHistory.getPlot, budgetHistory.getPlot);}
 /** A fresh answer from either resource family supersedes the board's initial snapshot. */

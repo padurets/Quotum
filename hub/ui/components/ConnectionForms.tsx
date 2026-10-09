@@ -1,3 +1,4 @@
+import {VIEW_VERSION, VIEW_VERSION_HEADER} from '../../server/domain/view';
 import {widgetVisible} from '../../server/domain/widgets';
 import {useEffect, useRef, useState, type FormEvent} from 'react';
 import {t} from '../i18n';
@@ -579,7 +580,7 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
   useEffect(() => {
     mounted.current = true;
     const abort = new AbortController();
-    void call<Intent>('POST', '/api/device-onboarding', {requestId: requestId.current, boardId: board.id}, 12_000, abort.signal).then(
+    void call<Intent>('POST', '/api/device-onboarding', {requestId: requestId.current, boardId: board.id}, 12_000, abort.signal, {[VIEW_VERSION_HEADER]:String(VIEW_VERSION)}).then(
       value => {
         if (!abort.signal.aborted) setIntent(value);
       },
@@ -616,7 +617,7 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
             requestId: selectionId.current,
             deviceId: device,
             sourceIds: selected,
-          });
+          }, 12_000, undefined, {[VIEW_VERSION_HEADER]:String(VIEW_VERSION)});
       if (!mounted.current) return;
       addition.restore(operation);
       await addition.submit(operation.boardId, operation.item);
@@ -674,7 +675,7 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
                 type="button"
                 className="button"
                 onClick={() => {
-                  void call('POST', '/api/device/approve', {code: pending.userCode, onboardingId: intent.id}).then(() => {
+                  void call('POST', '/api/device/approve', {code: pending.userCode, onboardingId: intent.id}, 12_000, undefined, {[VIEW_VERSION_HEADER]:String(VIEW_VERSION)}).then(() => {
                     setPending(null);
                     setCode('');
                     void recover(intent.id);

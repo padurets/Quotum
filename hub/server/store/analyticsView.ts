@@ -1,6 +1,8 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {legacyWidgetTargets, migrateAnalytics, type AnalyticsResources} from '../domain/analyticsView.js';
 import {providers} from '../domain/providers.js';
+import {migrateUnified} from '../domain/unifiedView.js';
+import {encodeView} from '../domain/view.js';
 
 /** Membership alone determines relevance, even while a supplier has no accepted samples. */
 export function analyticsResources(db: DatabaseSync, board: string): AnalyticsResources {
@@ -10,6 +12,20 @@ export function analyticsResources(db: DatabaseSync, board: string): AnalyticsRe
     ? db.prepare('SELECT s.id,s.provider FROM holders h JOIN sources s ON s.id=h.source_id WHERE h.user_id=? ORDER BY h.since,s.rowid').all(owner.created_by)
     : db.prepare('SELECT s.id,s.provider FROM shares h JOIN sources s ON s.id=h.source_id WHERE h.board_id=? ORDER BY h.shared_at,s.rowid').all(board);
   return (rows as AnalyticsResources).sort((a,b) => providers.indexOf(a.provider as typeof providers[number]) - providers.indexOf(b.provider as typeof providers[number]));
+}
+
+/** The compact v3 view is installed once in the same schema transaction. */
+export function migrateUnifiedViews(db: DatabaseSync, now: number) {
+  const boards = db.prepare('SELECT b.id,b.created_by,v.payload,v.revision,v.updated_by FROM boards b LEFT JOIN views v ON v.board_id=b.id').all() as {id:string;created_by:string;payload:string|null;revision:number|null;updated_by:string|null}[];
+  for (const board of boards) {
+    const input = board.payload ? JSON.parse(board.payload) : undefined;
+    if (Array.isArray(input) && input[0] === 3) continue;
+    const view = migrateUnified(input, analyticsResources(db,board.id));
+    const revision = (board.revision ?? 0) + 1;
+    if (!Number.isSafeInteger(revision)) throw new Error('View revision exhausted');
+    db.prepare('INSERT INTO views(board_id,payload,updated_by,updated_at,revision) VALUES(?,?,?,?,?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision')
+      .run(board.id,JSON.stringify(encodeView(view)),board.updated_by ?? board.created_by,now,revision);
+  }
 }
 
 /** Called inside the schema transaction, before the upgraded database can be served. */

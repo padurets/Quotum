@@ -1,14 +1,18 @@
 import {useRef, useState, useSyncExternalStore} from 'react';
 import type {Kind} from '../lib/types';
-import {setPrefs, usePrefs} from '../lib/prefs';
+import {HORIZONS, setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
 import {goTo, setTimeRange, timeRangeLabel, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {hubNow, useClock} from '../lib/clock';
-import {useHistoryBegins} from '../lib/history';
+import {useBudgetHistory, useHistoryBegins} from '../lib/history';
+import {useNamed} from '../lib/board';
+import type {Arrange} from '../lib/view';
+import {QUOTA_WIDGETS, BUDGET_WIDGETS, ACTIVITY, QUOTA_HISTORY, BUDGET_HISTORY} from '../../server/domain/widgets';
 import {t, useLocale} from '../i18n';
 import {pan} from '../lib/pan';
 import {Segmented} from './Kit';
-import {Popover} from './Popover';
+import {Popover, SlidersIcon} from './Popover';
+import {MoneySettings} from './MoneySettings';
 
 /** Weekly or 5-hour windows. */
 function KindSwitch({value, onChange}: {value: string; onChange: (kind: string) => void}) {
@@ -147,19 +151,30 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
   );
 }
 
-/**
- * The head of the board's analytics: the window type and the period that the chart and
- * the table both show. The cards above it are about now and show every window.
- */
-export function AnalyticsHead() {
-  const prefs=usePrefs(),{kind}=prefs;
+function BudgetFilters({arrange}: {arrange: Arrange}) {
+  const prefs = usePrefs(), sources = useNamed(arrange.view.names,'budget'), {history} = useBudgetHistory();
+  return <>
+    <div className="popover-title">{t('widgets.budgetHistory')}</div>
+    <div className="popover-pad"><Segmented value={prefs.money.view} onChange={view=>setPrefs({money:{...prefs.money,view}})} options={[["balance",t('money.balance')],["spending",t('money.spending')]]} label={t('money.value')}/></div>
+    <MoneySettings sources={sources} hidden={arrange.view.hidden} series={history?.meterSeries ?? []}/>
+  </>;
+}
+
+/** Shared filters stay accessible when either member of their widget pair is hidden. */
+export function AnalyticsHead({arrange, widgets}: {arrange: Arrange; widgets: string[]}) {
+  const prefs=usePrefs(),{kind}=prefs, [open,setOpen] = useState(false);
   const historyStart = useHistoryBegins();
+  const quota = QUOTA_WIDGETS.some(id=>widgets.includes(id)), budget = BUDGET_WIDGETS.some(id=>widgets.includes(id));
+  const charts = [ACTIVITY,QUOTA_HISTORY,BUDGET_HISTORY].some(id=>widgets.includes(id));
   return (
     <div className="analytics-head">
-      <h2>{t('analytics.title')}</h2>
+      <PeriodSwitch historyStart={historyStart} />
       <div className="controls">
-        <KindSwitch value={kind} onChange={next => setPrefs({kind:next as Kind})} />
-        <PeriodSwitch historyStart={historyStart} />
+        {(quota || budget || charts) && <Popover label={t('board.filters')} icon={<SlidersIcon/>} open={open} onOpenChange={setOpen}>
+          {quota && <div className="popover-section"><div className="popover-title">{t('history.kind')}</div><div className="popover-pad"><KindSwitch value={kind} onChange={next => setPrefs({kind:next as Kind})}/></div></div>}
+          {budget && open && <div className="popover-section"><BudgetFilters arrange={arrange}/></div>}
+          {(quota || budget || charts) && <div className="popover-section"><div className="popover-title">{t('history.horizon')}</div><div className="popover-pad"><Segmented value={prefs.horizon} onChange={horizon=>setPrefs({horizon})} options={HORIZONS.map(h=>[h,h==='auto'?t('history.horizonAuto'):t('history.daysShort',{count:parseInt(h)})])} label={t('history.horizon')}/></div></div>}
+        </Popover>}
       </div>
     </div>
   );

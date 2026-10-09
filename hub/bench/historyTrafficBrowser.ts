@@ -1,3 +1,5 @@
+import {accountingPath} from './accountingTraffic';
+import type {PeriodReply,PeriodRequest} from '../server/domain/periodRead';
 import assert from 'node:assert/strict';
 import {cellStart, expandHistory, type HistoryAnswer, type HistoryBasis, type HistoryReply} from '../server/domain/history';
 import {openTab, type Browser, type Cdp} from './cdp';
@@ -6,14 +8,15 @@ import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type 
 import {observeReversal} from './reversalDiagnostic';
 
 const DAY = 86_400_000;
-type Read = {selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
+type ResourceRead={scope?:'quota'|'budget';selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
+type Read = {sections?:ResourceRead[];selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
 
 /** Time coordinates and borrowed metadata do not identify a resource selection. */
 export function historyReadSelection(url: URL) {
   const params = new URLSearchParams(url.search);
-  for (const field of ['from', 'to', 'cell', 'meta']) params.delete(field);
+  for (const field of ['from', 'to', 'cell', 'meta', 'evidence', 'cells']) params.delete(field);
   params.sort();
   return params.toString();
 }
@@ -26,7 +29,7 @@ export function historyPageScript(period: string) {
     const original=window.fetch.bind(window),attempts=window.__quotumHistoryAttempts={};let serial=0;
     window.fetch=(resource,init={})=>{
       const uri=resource instanceof Request?resource.url:String(resource);
-      if(new URL(uri,location.href).pathname!='/api/history')return original(resource,init);
+      const path=new URL(uri,location.href).pathname;if(path!='/api/history'&&!/^\\/api\\/boards\\/[^/]+\\/period(?:\\/sessions)?$/.test(path))return original(resource,init);
       const id=${JSON.stringify(prefix)}+':'+(++serial),headers=new Headers(init.headers||(resource instanceof Request?resource.headers:undefined)),signal=init.signal||(resource instanceof Request?resource.signal:undefined);
       headers.set(${JSON.stringify(HISTORY_ATTEMPT_HEADER)},id);
       const attempt=attempts[id]={aborted:!!signal?.aborted};signal?.addEventListener('abort',()=>{attempt.aborted=true;},{once:true});
@@ -44,10 +47,17 @@ export class HistoryBodies {
   private readonly active = new Map<string, Read>();
   private readonly metadata = new Map<string, HistoryBasis>();
   get activeCount() {return this.active.size;}
+  get resources():Read[] {return this.reads.flatMap(read=>read.sections?read.sections.map(section=>({...read,...section})):read.cell>0?[read]:[]);}
   constructor(cdp: Pick<Cdp, 'on' | 'send'>) {
-    cdp.on<{requestId: string; request: {url: string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
-      const url = new URL(event.request.url); if (url.pathname !== '/api/history') return;
+    cdp.on<{requestId: string; request: {url: string;postData?:string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
+      const url = new URL(event.request.url); if (!accountingPath(url.pathname)) return;
       const read: Read = {selection: historyReadSelection(url), id: event.requestId, phase: this.phase, from: Number(url.searchParams.get('from')), to: Number(url.searchParams.get('to')), cell: Number(url.searchParams.get('cell')), lower: 0, before: Promise.all([...this.pending]), attemptId: lowerHeaders(event.request.headers ?? {})[HISTORY_ATTEMPT_HEADER]};
+      if(url.pathname!=='/api/history'){
+        const body=JSON.parse(event.request.postData??'{}') as PeriodRequest;
+        read.sections=[];
+        for(const scope of ['quota','budget'] as const)if(body[scope]&&body[scope]!.cells!=='skip'){const query=new URL('/api/history',url);query.search=new URLSearchParams({board:decodeURIComponent(url.pathname.split('/')[3]),scope,...body[scope]}).toString();read.sections.push({scope,selection:historyReadSelection(query),from:Number(body[scope]!.from),to:Number(body[scope]!.to),cell:Number(body[scope]!.cell)});}
+        if(read.sections[0])Object.assign(read,read.sections[0]);
+      }
       this.active.set(read.id, read); this.reads.push(read);
     });
     cdp.on<{requestId: string; headers: Record<string, string>}>('Network.requestWillBeSentExtraInfo', event => {
@@ -69,10 +79,18 @@ export class HistoryBodies {
         // DevTools can finish fetching an earlier full body after the page has
         // already used its metadata to start this request. Count the raw body.
         await read.before;
-        const reply = JSON.parse(decoded.toString()) as HistoryReply;
-        const answer = expandHistory(reply, this.metadata.get(reply.meta ?? ''));
-        if (answer.meta) this.metadata.set(answer.meta, {run: answer.run, now: answer.now, historyStart: answer.historyStart, known: answer.known, meta: answer.meta});
-        read.answer = {run: answer.run, now: answer.now, known: answer.known}; read.chunks = answer.chunks.map(chunk => [chunk.from, chunk.to]);
+        const raw=JSON.parse(decoded.toString()) as HistoryReply|PeriodReply;
+        const parts=read.sections??[read];
+        for(const part of parts){
+          const scope='scope' in part?part.scope:undefined;
+          const section=scope?(raw as PeriodReply)[scope]:undefined;
+          if(scope&&section?.state!=='complete')throw new Error('accounting section did not complete');
+          const reply=section?.state==='complete'?section.value:raw as HistoryReply;
+          const answer=expandHistory(reply,this.metadata.get(reply.meta??''));
+          if(answer.meta)this.metadata.set(answer.meta,{run:answer.run,now:answer.now,historyStart:answer.historyStart,known:answer.known,meta:answer.meta});
+          part.answer={run:answer.run,now:answer.now,known:answer.known};part.chunks=answer.chunks.map(chunk=>[chunk.from,chunk.to]);
+        }
+        if(read.sections?.[0])Object.assign(read,read.sections[0]);
         read.count = {complete: true, decoded: decoded.length, lower: read.length ?? NaN, upper: read.length, length: read.length, coding: read.coding, id: read.attemptId ?? read.transferId, responseId: read.transferId};
       }).catch(error => {this.errors.push(error); read.count = {complete: false, lower: read.lower, upper: read.length, length: read.length, coding: read.coding, id: read.attemptId ?? read.transferId, responseId: read.transferId};});
       this.pending.add(work); void work.then(() => this.pending.delete(work));
@@ -122,7 +140,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     await settled();
     const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number}>(`(() => {const svg=document.querySelector(${JSON.stringify(future ? '.history .chart>svg' : '.activity .chart>svg')});svg.scrollIntoView({block:'center'});const r=svg.getBoundingClientRect(),left=${future ? 40 : 48};return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-left-12)/svg.viewBox.baseVal.width,series:document.querySelectorAll('.history .series[d]:not([d=""])').length};})()`);
     assert.ok(geometry.series >= 12, `${name}: fewer than twelve actual series`);
-    const seedReads = bodies.reads.filter(read => read.phase === seedPhase && read.count?.complete);
+    const seedReads = bodies.resources.filter(read => read.phase === seedPhase && read.count?.complete);
     assert.ok(seedReads.length); const cell = seedReads[0].cell;
     const seeds = new Map<string, {answer: NonNullable<Read['answer']>; initial: Set<number>}>();
     for (const read of seedReads) {
@@ -161,7 +179,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         const pose = await cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; from: number; to: number}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,from:Number(new URLSearchParams(location.search).get("from")),to:Number(new URLSearchParams(location.search).get("to"))})');
         assert.equal(pose.tokens.length, 1); assert.equal(pose.pushes, 1); assert.ok(pose.poses.length > 1 && pose.from > 0);
         assert.ok(Math.abs(pose.to - pose.poses[0].origin + (length + future) * fraction) <= 3 * (length + future) / geometry.width, 'native gesture did not move by its named fraction');
-        const cold = bodies.reads.filter(read => read.phase === phase);
+        const physical=bodies.reads.filter(read=>read.phase===phase),cold = bodies.resources.filter(read => read.phase === phase);
         await proxy.settled(phase);
         const families = [];
         for (const selection of new Set(cold.map(read => read.selection))) {
@@ -186,6 +204,9 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
           }
           families.push({name: `${name}/${scope}`, attempts: reads.length, maxAttempts: fraction === .04 ? 2 : future ? 7 : 5, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, optionalUnvisitedCells: optional.length});
         }
+        const physicalTotals=bodyTotals(physical.map(read=>({count:read.count!,transfer:transferFor(read.count!,proxy.transfers)})));
+        const aggregate={name:name+'/all-accounting',attempts:physical.length,...physicalTotals,referenceDecoded:families.reduce((n,f)=>n+f.referenceDecoded,0),referenceEncoded:families.reduce((n,f)=>n+f.referenceEncoded,0),ratios:fraction===.5};
+        problems.push(...trafficProblems(aggregate));reports.push(aggregate);
         const warmPhase = `${name}/warm`; bodies.phase = warmPhase; proxy.phase(warmPhase);
         // A selected chart has no future, so its return uses the captured time delta.
         await scroll(-(pose.poses[0].origin - pose.to) / length * geometry.width,'cached return'); await settled();
@@ -195,8 +216,8 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         const metrics = await cdp.send<{metrics: {name: string; value: number}[]}>('Performance.getMetrics');
         for (const family of families) {
           const report = {...family, warmAttempts: warm.length, series: geometry.series, movement: {tokens: pose.tokens.length, samples: pose.poses.length, pushes: pose.pushes, from: pose.from, to: pose.to}, heapBytes: metrics.metrics.find(m => m.name === 'JSHeapUsedSize')?.value};
-          reports.push(report); problems.push(...trafficProblems(report));
-          console.error(`bench: ${report.name}: ${report.attempts} GETs, ${warm.length} warm GETs, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / report.referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / report.referenceEncoded}`);
+          reports.push(report); problems.push(...trafficProblems({...report,ratios:false}));
+          console.error(`bench: ${report.name}: ${report.attempts} requests, ${warm.length} warm requests, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / report.referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / report.referenceEncoded}`);
         }
         break;
       } catch (error) {
@@ -215,7 +236,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
     if(diagnostic&&(length!==DAY||mode!=='reversal'))continue;
     const name = `browser/${length / DAY}d/${mode}`;
     console.error(`bench: ${name}: opening seed page`);
-    const {cdp, bodies, settled, geometry, seed, cell, close} = await historyPage(browser, proxy, cookie, name, length, DAY);
+    const {cdp, bodies, settled, geometry, seed, seeds, cell, close} = await historyPage(browser, proxy, cookie, name, length, DAY);
     let observer:Awaited<ReturnType<typeof observeReversal>>|null=null;
     console.error(`bench: ${name}: seed page ready`);
     const phase = `${name}/gesture`, reads = () => bodies.reads.filter(r => r.phase === phase);
@@ -254,7 +275,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
       await step('proxy settled', () => proxy.settled(phase));
       const attempts = reads(); assert.ok(attempts.every(r => r.count?.id));
       const totals = bodyTotals(attempts.map(r => ({count: r.count!, transfer: transferFor(r.count!, proxy.transfers)})));
-      for (const read of attempts) if (read.answer) stableHistory(read.answer, seed, cell);
+      for (const read of bodies.resources.filter(r=>r.phase===phase))if(read.answer)stableHistory(read.answer,seeds.get(read.selection)?.answer??seed,cell);
       const state = await step('read final state', () => cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; selected: boolean; attempts: Record<string, {aborted: boolean}>}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,selected:new URLSearchParams(location.search).has("from"),attempts:__quotumHistoryAttempts})'));
       assert.equal(state.tokens.length, 1); assert.ok(state.poses.some(p => p.end < p.origin));
       assert.equal(state.pushes, mode === 'reversal' ? 1 : 0); assert.equal(state.selected, mode === 'reversal');

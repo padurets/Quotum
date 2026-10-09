@@ -5,7 +5,7 @@ import {activityEmpty, activityScale, atOnce, shownActivity, groupColors, mutedK
 import {CATEGORY_COLORS, PROVIDERS} from '../lib/providers';
 import type {ActivityGroup, View} from '../lib/types';
 
-const view: View = {version: 2 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+const view: View = {version: 3 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 const HOUR = 3_600_000;
 const group = (key: string, change: Partial<ActivityGroup> = {}): ActivityGroup => ({key, name: key, agentMs: HOUR, activeMs: HOUR, agents: 1, cells: [], ...change});
 

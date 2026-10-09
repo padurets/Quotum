@@ -234,3 +234,25 @@ test('the browser fixture tags each fetch before IO and keeps cancellation ident
   controller.abort(); assert.equal(window.__quotumHistoryAttempts[ids[0]].aborted, true);
   assert.equal(window.__quotumHistoryAttempts[ids[1]].aborted, false);
 });
+
+test('composite bodies count once while both resource selections and standalone detail attempts remain visible',async()=>{
+  const listeners=new Map<string,(event:never)=>void>();
+  const history={run:'r',now:1,historyStart:0,known:{work:0,sources:{}},chunks:[{from:0,to:60}]};
+  const raw={basis:{},quota:{state:'complete',value:history},budget:{state:'complete',value:history},sessions:{state:'complete',value:{refs:[]}}};
+  const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:async<T>()=>({body:JSON.stringify(raw),base64Encoded:false} as T)};
+  const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
+  const query={cell:'1',from:'0',to:'60',evidence:'cursor'};
+  emit('Network.requestWillBeSent',{requestId:'combined',request:{url:'http://localhost/api/boards/b/period',postData:JSON.stringify({quota:query,budget:{...query,meters:'[]',unit:'USD'}})}});
+  emit('Network.loadingFinished',{requestId:'combined'});await Promise.all([...observer.pending]);
+  assert.deepEqual(observer.errors,[]);assert.equal(observer.reads.length,1);assert.equal(observer.resources.length,2);
+  assert.equal(observer.reads[0].count?.decoded,Buffer.byteLength(JSON.stringify(raw)));
+  assert.deepEqual(observer.resources.map(r=>new URLSearchParams(r.selection).get('scope')),['quota','budget']);
+  assert.ok(observer.resources.every(r=>!new URLSearchParams(r.selection).has('evidence')));
+  emit('Network.requestWillBeSent',{requestId:'details',request:{url:'http://localhost/api/boards/b/period/sessions',postData:'{}'}});
+  emit('Network.loadingFailed',{requestId:'details',canceled:true});
+  assert.equal(observer.reads.length,2);assert.equal(observer.resources.length,2);assert.equal(observer.reads[1].canceled,true);
+  emit('Network.requestWillBeSent',{requestId:'evidence',request:{url:'http://localhost/api/boards/b/period',postData:JSON.stringify({quota:{...query,cells:'skip'}})}});
+  emit('Network.loadingFinished',{requestId:'evidence'});await Promise.all([...observer.pending]);
+  assert.equal(observer.reads.length,3);assert.equal(observer.resources.length,2,'evidence bytes count without pretending cached cells were reread');
+  assert.equal(observer.reads[2].count?.decoded,Buffer.byteLength(JSON.stringify(raw)));assert.deepEqual(observer.errors,[]);
+});

@@ -9,7 +9,7 @@ test('the actual card tray adds no news container for an ordinary client or comp
   const source=readFileSync(new URL('../components/SourceCard.tsx',import.meta.url),'utf8');
   const start=source.indexOf('function CardTray('),end=source.indexOf('\n/**',start);
   const context={exports:{},CardTray:null as unknown as (props:{source:object})=>{props:{news:unknown}},
-    useSessions:()=>[],useResetsFor:()=>undefined,useSourceAccess:()=>null,
+    useSourcePeriodSessions:()=>[],useResetsFor:()=>undefined,useSourceAccess:()=>null,
     providerOf,
     Tray:'tray',AccessMark:'access',QuotaMark:'quota',BalanceMark:'balance',FreeResets:'reset',
     require:(name:string)=>{assert.equal(name,'react/jsx-runtime');return {jsx:(type:unknown,props:unknown)=>({type,props}),jsxs:(type:unknown,props:unknown)=>({type,props}),Fragment:'fragment'};}};
