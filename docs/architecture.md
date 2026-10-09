@@ -1177,6 +1177,9 @@ limit and budget tables share their column controls, cells and responsive render
 when their selected columns no longer fit, both become labelled rows. Their own
 data models provide the values and column widths, including clock-driven cells.
 Every widget is arranged on one grid. A row is 48 px (a 32 px track and a 16 px gap).
+Content measurements update grid positions and reading order directly, without a
+React render of the grid or neighbouring widgets. Only a widget whose own allocated
+height changes hears a sizing update; layout edits still reconcile through React.
 Each widget fills the fewest whole rows that contain its content, with any spare room
 above a card's tray or at the bottom of a panel, unless the owner chose a height for it
 (`h`, in rows). A chosen height is a request, not what shows: a card or the table never

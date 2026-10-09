@@ -11,6 +11,7 @@ import {
   agentRows,
   agentsFit,
   agentsLayout,
+  byActivity,
   columnsOf,
   drawn,
   folderOf,
@@ -22,6 +23,7 @@ import {
   visibleAgentsSort,
   type AgentColumn,
   type AgentGroup,
+  type AgentRow,
   type AgentsBy,
   type AgentSource,
   type AgentsSort,
@@ -545,31 +547,10 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   useLocale();
   const lineup = useLineup();
   const titles = useTitles(arrange.view.names);
-  const period=usePeriodSessions(rows=>{
-    const entries=rows.flatMap(session=>titles[session.source]?[{session,source:{id:session.source,...titles[session.source],sessions:[]}}]:[]);
-    return AGENTS_BY.map(by=>sortedGroups(groupsOf(entries,by),{column:'worked',descending:true},['worked']).map(group=>group.key));
-  });
-  const sources = useMemo(
-    () => {const bySource=new Map<string,LiveSession[]>();for(const row of period.rows){let rows=bySource.get(row.source);if(!rows)bySource.set(row.source,rows=[]);rows.push(row);}return lineup.flatMap((id):AgentSource[]=>titles[id]?[{id,provider:titles[id].provider,title:titles[id].title,sessions:bySource.get(id)??[]}]:[]);},
-    [lineup, period.rows, titles],
-  );
   const {agentsSort, agentsBy} = usePrefs();
-  const sizing = useSizing();
-  const manual = sizing?.manual ?? false;
-  const panel = useRef<HTMLElement>(null);
-  const heading = useRef<HTMLHeadingElement>(null);
-  const live = useRef<HTMLElement>(null);
-  const unseen = useRef<HTMLElement>(null);
+  const view = arrange.view;
   /** The dialog, open on all the groups or on one; and the group whose row opened it, to go back to. */
   const [open, setOpen] = useState<{group: string | null} | null>(null);
-  const opener = useRef<string | null>(null);
-  /** How many of the rows fit a height chosen for the widget, as last measured. */
-  const [fit, setFit] = useState<number | null>(null);
-  // Only what the board shows: a subscription whose card is hidden is left out here too.
-  const {rows, empty} = agentRows(sources, arrange.view);
-  const working = rows.filter(row => row.session.working).length;
-  const groups = groupsOf(rows, agentsBy);
-  const view = arrange.view;
   const arrangement = useCallback<Arrangement>(
     inGroup => {
       const {name, rest} = columnsOf(agentsBy, inGroup);
@@ -577,6 +558,34 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     },
     [agentsBy, view],
   );
+  const period=usePeriodSessions(rows=>{
+    // Duration labels have their own clock. Only a visible worked-time sort can
+    // make their changing totals reorder the panel or its open detail dialog.
+    if(agentsSort?.column!=='worked')return null;
+    const entries=rows.flatMap(session=>titles[session.source]&&!view.hidden.includes('source:'+session.source)?[{session,source:{id:session.source,...titles[session.source],sessions:[]}}]:[]).sort((a,b)=>byActivity(a.session,b.session)||a.source.id.localeCompare(b.source.id));
+    const order=(rows:AgentRow[],by:AgentsBy,inGroup:boolean)=>{
+      const {name,columns}=arrangement(inGroup),shown=[name,...columns];
+      return visibleAgentsSort(agentsSort,shown)?sortedGroups(groupsOf(rows,by),agentsSort,shown).map(group=>group.key):null;
+    };
+    return [order(entries,agentsBy,false),open&&agentsBy!=='none'?groupsOf(entries,agentsBy).map(group=>[group.key,order(group.rows,'none',true)]):null];
+  });
+  const sources = useMemo(
+    () => {const bySource=new Map<string,LiveSession[]>();for(const row of period.rows){let rows=bySource.get(row.source);if(!rows)bySource.set(row.source,rows=[]);rows.push(row);}return lineup.flatMap((id):AgentSource[]=>titles[id]?[{id,provider:titles[id].provider,title:titles[id].title,sessions:bySource.get(id)??[]}]:[]);},
+    [lineup, period.rows, titles],
+  );
+  const sizing = useSizing();
+  const manual = sizing?.manual ?? false;
+  const panel = useRef<HTMLElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const live = useRef<HTMLElement>(null);
+  const unseen = useRef<HTMLElement>(null);
+  const opener = useRef<string | null>(null);
+  /** How many of the rows fit a height chosen for the widget, as last measured. */
+  const [fit, setFit] = useState<number | null>(null);
+  // Only what the board shows: a subscription whose card is hidden is left out here too.
+  const {rows, empty} = agentRows(sources, arrange.view);
+  const working = rows.filter(row => row.session.working).length;
+  const groups = groupsOf(rows, agentsBy);
   const {name, columns} = arrangement(false);
   const layout = useAgentsLayout(panel, columns, sizing?.width);
   const shown = [name, ...columns];
