@@ -3,7 +3,7 @@ import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, cellStart, tileOf, type HistoryAnswe
 import assert from 'node:assert/strict';
 
 export class HistoryCutChanged extends Error {}
-export function stableHistory(answer: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, cell: number, to = Infinity) {
+export function stableHistory(answer: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, cell: number, to: number) {
   assert.equal(answer.run, seed.run); assert.deepEqual(answer.known, seed.known);
   // The live cutoff cannot change coverage of a request ending wholly in the past.
   // Keep the exclusive request end, including requests ending inside a grid cell.

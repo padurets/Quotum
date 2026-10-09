@@ -25,7 +25,7 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
       for (let take = 1; take <= 3; take++) {
         const name = `${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`, anchor = cellStart(Date.now() - 60_000, 60_000);
         let selected: {from: number; to: number} | null = {from: anchor - length, to: anchor};
-        let phase = `${name}/seed`, inFlight = 0, peakFlights = 0, latest: HistoryAnswer | undefined;
+        let phase = `${name}/seed`, inFlight = 0, peakFlights = 0, latest: HistoryAnswer | undefined, latestTo = 0;
         const bodies: {phase: string; count: BodyCount; from: number; to: number}[] = [], attempts: {from: number; to: number; cell: number; phase: string}[] = [];
         const requested = new Set<number>(), visited = new Set<number>(), bridges = new Set<number>();
         let interest: {from: number; to: number} | null = null, freshOverlap = 0, ownershipOverlap = 0;
@@ -52,7 +52,7 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
               }
             }
             inFlight++; peakFlights = Math.max(peakFlights, inFlight);
-            const result = historyBody(`${proxy.url}/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}`, cookie, signal, count => bodies.push({phase: readPhase, count, from, to})).then(value => {latest = expandHistory(value as HistoryReply, meta); return latest;});
+            const result = historyBody(`${proxy.url}/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}`, cookie, signal, count => bodies.push({phase: readPhase, count, from, to})).then(value => {latestTo = to; latest = expandHistory(value as HistoryReply, meta); return latest;});
             pending.add(result);
             void result.then(() => {pending.delete(result); inFlight--;}, () => {pending.delete(result); inFlight--;});
             return result;
@@ -88,7 +88,7 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
           gesture.finish(token); await settle();
           assert.ok(store.get().history); assert.equal(store.get().history!.range, `${selected!.from}-${selected!.to}`);
           const final = store.get().history!, meta = latest!;
-          stableHistory(meta, seed, cell);
+          stableHistory(meta, seed, cell, latestTo);
           assert.equal(freshOverlap, 0, 'fresh cells were read again'); assert.equal(ownershipOverlap, 0, 'conflicting tile writers'); assert.ok(peakFlights <= 2);
           assert.ok([...requested].filter(at => !visited.has(at) && !bridges.has(at)).length <= Math.min(60, Math.ceil(length / cell / 4)), 'unvisited optional cells exceeded the buffer');
           const coldBodies = bodies.filter(b => b.phase === phase);
@@ -98,13 +98,13 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
           let referenceDecoded = 0, referenceEncoded = 0;
           const readReference = async (from: number, to: number) => {
             const answer = await historyBody(`${proxy.url}/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}`, cookie, undefined, count => {assert.ok(count.complete); referenceDecoded += count.decoded!; referenceEncoded += count.lower;}) as HistoryAnswer;
-            stableHistory(answer, seed, cell); return answer;
+            stableHistory(answer, seed, cell, to); return answer;
           };
           for (const [from, to] of readUnion(requested, cell)) await readReference(from, to);
           const referenceCells = new Set(cellsOf(cellStart(selected!.from, cell), Math.ceil(selected!.to / cell) * cell, cell)), chunks: Chunk[] = [];
           for (const [from, to] of readUnion(referenceCells, cell)) {
             const answer = await historyBody(`${proxy.url}/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}`, cookie) as HistoryAnswer;
-            stableHistory(answer, seed, cell); chunks.push(...answer.chunks);
+            stableHistory(answer, seed, cell, to); chunks.push(...answer.chunks);
           }
           assert.deepEqual(final, {...compose(chunks, meta, targetOf(length, anchor, final.range, selected), new Set(windows)), board}, 'independently read series, activity and events differ');
           assert.ok(final.series.length >= 12, 'dense fixture must contain twelve actual series');

@@ -21,7 +21,7 @@ export function historyReadSelection(url: URL) {
 }
 
 /** Private work bounds belong to quota history, so every response keeps its own seed. */
-export function stableHistoryReads(reads: readonly (Pick<Read, 'selection' | 'answer'> & Partial<Pick<Read, 'to'>>)[], seeds: ReadonlyMap<string, {answer: NonNullable<Read['answer']>}>, cell: number) {
+export function stableHistoryReads(reads: readonly Pick<Read, 'selection' | 'answer' | 'to'>[], seeds: ReadonlyMap<string, {answer: NonNullable<Read['answer']>}>, cell: number) {
   for (const read of reads) {
     const seed = seeds.get(read.selection); assert.ok(seed, 'the gesture must retain its seeded resource selection');
     if (read.answer) stableHistory(read.answer, seed.answer, cell, read.to);
@@ -181,6 +181,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         assert.ok(Math.abs(pose.to - pose.poses[0].origin + (length + future) * fraction) <= 3 * (length + future) / geometry.width, 'native gesture did not move by its named fraction');
         const cold = bodies.reads.filter(read => read.phase === phase);
         await proxy.settled(phase);
+        stableHistoryReads(cold, seeds, cell);
         const families = [];
         for (const selection of new Set(cold.map(read => read.selection))) {
           const group = seeds.get(selection); assert.ok(group, 'the gesture must retain its seeded resource selection');
@@ -192,7 +193,6 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
           for (let at = cellStart(pose.from, cell); at < Math.ceil(Math.min(pose.poses[0].origin, pose.to + ahead) / cell) * cell; at += cell) visited.add(at);
           for (const read of reads) {
             assert.ok(read.count, 'every attempt needs a terminal body count');
-            if (read.answer) stableHistory(read.answer, group.answer, cell);
             for (let at = read.from; at < read.to; at += cell) {assert.ok(!group.initial.has(at), 'browser reread fresh seed data in the same selection'); requested.add(at);}
           }
           const totals = bodyTotals(reads.map(read => ({count: read.count!, transfer: transferFor(read.count!, proxy.transfers)})));
@@ -200,7 +200,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
           proxy.phase(`${name}/reference/${scope}`); let referenceDecoded = 0, referenceEncoded = 0;
           for (const [from, to] of readUnion(requested, cell)) {
             const answer = await historyBody(`${proxy.url}/api/history?${selection}&cell=${cell}&from=${from}&to=${to}`, cookie, undefined, body => {assert.ok(body.complete); referenceDecoded += body.decoded!; referenceEncoded += body.lower;}) as HistoryAnswer;
-            stableHistory(answer, group.answer, cell);
+            stableHistory(answer, group.answer, cell, to);
           }
           families.push({name: `${name}/${scope}`, attempts: reads.length, maxAttempts: fraction === .04 ? 2 : future ? 7 : 5, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, optionalUnvisitedCells: optional.length});
         }

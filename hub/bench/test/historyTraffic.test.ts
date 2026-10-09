@@ -66,11 +66,11 @@ test('cancelled resource cohorts keep private quota bounds separate from financi
   const quota = {run: 'r', now: 0, known: {work: 0, own: 100, sources: {s: 0}}};
   const money = {run: 'r', now: 0, known: {work: 0, sources: {s: 0}}};
   const seeds = new Map([['quota', {answer: quota}], ['budget', {answer: money}], ['funds', {answer: money}]]);
-  const reads = [{selection: 'quota', answer: quota}, {selection: 'budget', answer: money}, {selection: 'funds', answer: money}, {selection: 'quota'}];
+  const reads = [{selection: 'quota', answer: quota, to: 60_000}, {selection: 'budget', answer: money, to: 60_000}, {selection: 'funds', answer: money, to: 60_000}, {selection: 'quota', to: 60_000}];
   stableHistoryReads(reads, seeds, 60_000);
-  assert.throws(() => stableHistoryReads([{selection: 'quota', answer: money}], seeds, 60_000));
-  assert.throws(() => stableHistoryReads([{selection: 'budget', answer: {...money, known: {...money.known, work: 1}}}], seeds, 60_000));
-  assert.throws(() => stableHistoryReads([{selection: 'other', answer: money}], seeds, 60_000));
+  assert.throws(() => stableHistoryReads([{selection: 'quota', answer: money, to: 60_000}], seeds, 60_000));
+  assert.throws(() => stableHistoryReads([{selection: 'budget', answer: {...money, known: {...money.known, work: 1}}, to: 60_000}], seeds, 60_000));
+  assert.throws(() => stableHistoryReads([{selection: 'other', answer: money, to: 60_000}], seeds, 60_000));
 });
 
 test('the browser observer expands late metadata while counting only each actual response body', async () => {
@@ -150,9 +150,9 @@ test('complete payloads and partial bounds remain separate in a bounded verdict'
 
 test('a cutoff crossing is a retryable invalid cohort, while changed known metadata remains a failure', () => {
   const seed = {run: 'r', now: 0, known: {work: 0, sources: {s: 0}}};
-  stableHistory({...seed, now: 10_000}, seed, 60_000);
-  assert.throws(() => stableHistory({...seed, now: 31_000}, seed, 60_000), HistoryCutChanged);
-  assert.throws(() => stableHistory({...seed, known: {work: 1, sources: {s: 0}}}, seed, 60_000), error => !(error instanceof HistoryCutChanged));
+  stableHistory({...seed, now: 10_000}, seed, 60_000, 120_000);
+  assert.throws(() => stableHistory({...seed, now: 31_000}, seed, 60_000, 120_000), HistoryCutChanged);
+  assert.throws(() => stableHistory({...seed, known: {work: 1, sources: {s: 0}}}, seed, 60_000, 120_000), error => !(error instanceof HistoryCutChanged));
 });
 
 test('past-only cancellation reads survive an unrelated live cutoff while changed coverage still fails', () => {
@@ -167,9 +167,31 @@ test('past-only cancellation reads survive an unrelated live cutoff while change
   assert.throws(() => stableHistory(answer, seed, cell, boundary + 1), HistoryCutChanged);
   assert.throws(() => stableHistoryReads([{selection: 'quota', answer, to: boundary + 1}], seeds, cell), HistoryCutChanged);
   assert.throws(() => stableHistory(answer, seed, cell, boundary + cell), HistoryCutChanged);
-  assert.throws(() => stableHistory(answer, seed, cell), HistoryCutChanged);
+  assert.throws(() => stableHistory(answer, seed, cell, Infinity), HistoryCutChanged);
   assert.throws(() => stableHistory({...answer, run: 'new'}, seed, cell, 1791448500000));
   assert.throws(() => stableHistory({...answer, known: {...seed.known, work: 1}}, seed, cell, 1791448500000));
+});
+
+test('native 30d cold reads retain their own exclusive ends across the live two-hour cutoff', () => {
+  // Captured cold-cohort clocks and request ends; stable metadata is synthetic.
+  const quota = {run: 'r', now: 1791568768004, known: {work: 0, own: 100, sources: {s: 0}}};
+  const budget = {run: 'r', now: 1791568768170, known: {work: 0, sources: {s: 0}}};
+  const funds = {...budget, now: 1791568768315};
+  const seeds = new Map([['quota', {answer: quota}], ['budget', {answer: budget}], ['funds', {answer: funds}]]);
+  const reads = [
+    {selection: 'quota', answer: {...quota, now: 1791568770357}, to: 1788530400000},
+    {selection: 'budget', answer: {...budget, now: 1791568770793}, to: 1788530400000},
+    {selection: 'funds', answer: {...funds, now: 1791568770835}, to: 1788530400000},
+  ], cell = 7_200_000, boundary = 1791568800000;
+  stableHistoryReads(reads, seeds, cell);
+  for (const read of reads) {
+    const seed = seeds.get(read.selection)!.answer;
+    stableHistory(read.answer, seed, cell, read.to);
+    stableHistory(read.answer, seed, cell, boundary);
+    assert.throws(() => stableHistoryReads([{...read, to: boundary + 1}], seeds, cell), HistoryCutChanged);
+    assert.throws(() => stableHistory({...read.answer, run: 'new'}, seed, cell, read.to));
+    assert.throws(() => stableHistoryReads([{...read, answer: {...read.answer, known: {...read.answer.known, work: 1}}}], seeds, cell));
+  }
 });
 
 test('native history gestures use CDP integer speed while retaining the requested movement and cadence', () => {
