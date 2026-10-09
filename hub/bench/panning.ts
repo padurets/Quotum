@@ -144,7 +144,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
             const pending=!!foldAnimation?.pending;
             if(nextPhase!==phase||foldAnimation!==observedAnimation||pending!==observedPending){
               const number=value=>typeof value==='number'&&Number.isFinite(value)?value:null;
-              timeline.add('presentation-phase',{phase:nextPhase,frameId:stamp,pending,owner:folding?(foldOwner===layers[0]?'html':'svg'):null,currentTime:number(foldAnimation?.currentTime),startTime:number(foldAnimation?.startTime)});
+              timeline.add('presentation-phase',{phase:nextPhase,frameId:stamp,pending,htmlOwner:folding?foldOwner===layers[0]:null,currentTime:number(foldAnimation?.currentTime),startTime:number(foldAnimation?.startTime)});
               observedAnimation=foldAnimation;observedPending=pending;
             }
           }

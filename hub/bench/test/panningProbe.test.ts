@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {panEvidenceScript} from '../panEvidence.js';
+import {safeEvidence} from '../evidence.js';
 import {panningProblems, type PanReading} from '../panningBudget';
 
 // Run the production browser probe with the browser's ordered RAF queue.
@@ -195,11 +196,11 @@ test('diagnostic phases retain pending animation time without manufacturing movi
   animation.currentTime = 30;
   f.historyLayer.style.transform = 'translateX(20px) scaleX(.8)'; f.runFrame(100);
   animation.playState = 'finished'; f.historyLayer.style.transform = 'none'; f.runFrame(230);
-  const entries = JSON.parse(JSON.stringify(f.reading.timeline.read().entries));
+  const entries = JSON.parse(JSON.stringify(safeEvidence(f.reading.timeline.read().entries)));
   assert.deepEqual(entries.filter((entry: {kind: string}) => entry.kind === 'presentation-phase').map(({id: _id, ...entry}: Record<string, unknown>) => entry), [
-    {at: 10, kind: 'presentation-phase', phase: 'fold', frameId: 10, pending: true, owner: 'html', currentTime: 0, startTime: null},
-    {at: 80, kind: 'presentation-phase', phase: 'fold', frameId: 80, pending: false, owner: 'html', currentTime: 10, startTime: 70},
-    {at: 230, kind: 'presentation-phase', phase: 'idle', frameId: 230, pending: false, owner: null, currentTime: null, startTime: null},
+    {at: 10, kind: 'presentation-phase', phase: 'fold', frameId: 10, pending: true, htmlOwner: true, currentTime: 0, startTime: null},
+    {at: 80, kind: 'presentation-phase', phase: 'fold', frameId: 80, pending: false, htmlOwner: true, currentTime: 10, startTime: 70},
+    {at: 230, kind: 'presentation-phase', phase: 'idle', frameId: 230, pending: false, htmlOwner: null, currentTime: null, startTime: null},
   ]);
   assert.deepEqual(Array.from(f.reading.frames), [20], 'phase records do not change the moving-frame budget');
 });
