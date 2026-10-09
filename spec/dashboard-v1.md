@@ -434,10 +434,13 @@ the recorded rate path. Native quota interruptions end availability exclusively.
 Expired evidence remains visible as stale; an absent predecessor remains unknown.
 An optional `validFor: {from,to}` gives the half-open interval of right-edge positions
 with identical values, including membership, anchors and stale state. It is scoped to
-the same authority and evidence revision. Fixed values may also carry `alternatives`,
-an array of measurement projections without nested alternatives. Each has its own
-`validFor` interval. They cover nearby right-edge cells, including actual observations
-and availability changes; the client selects an applicable state without interpolation.
+the same authority and evidence revision. Fixed values may also carry `states`:
+a full `start` projection, shared `paths` and `[from,to,changes]` pieces. Changes use
+the exact replacement, deletion and array splice operations of fixed shift windows.
+Each piece retains its own `validFor` interval, including actual observations and
+availability changes. Replay starts from the immutable first projection; no numeric
+interpolation or nested state sequences occur. Candidate lookup checks intervals
+without allocating a replay; staging accounts for copies before they are built.
 Current errors, credentials, actions, forecasts
 and live source state are separate.
 

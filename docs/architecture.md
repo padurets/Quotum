@@ -1301,7 +1301,9 @@ curves. Numeric columns use constant values, piecewise integer progressions or e
 with 64-bit values for fractions and wider ranges. Changed series rebuild only their own
 prefixes. Fixed selections carry exact totals and boundary geometry instead of a rolling
 ledger; the server and browser share the accounting implementation in `server/domain`.
-The interior drawing still uses cached history cells. Complete live indexes and fixed
+The interior drawing still uses cached history cells. Neighboring card states keep exact sparse changes instead of repeated measurement objects.
+Their interval lookup allocates no replay; restored values share immutable proofs.
+Complete live indexes and fixed
 summaries can move into the shared LRU when a different interval is selected. Returning
 to a retained target reuses it; new evidence or authority changes invalidate those entries.
 Fixed summaries also describe exact duration and timestamp changes between

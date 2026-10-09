@@ -14,6 +14,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {evaluatedRange,periodKey} from '../../server/domain/period.js';
 import {fixedTape,fixedWork} from '../../server/periodFixed.js';
+import {hasPeriodValue,periodValueAt,withValueStates} from '../../server/domain/periodValues.js';
 import {canShift,shifted} from '../../server/domain/periodShift.js';
 
 const ref=(id:string)=>({ref:id,source:'s',device:{id:'d',name:'Laptop'},origin:'terminal' as const,project:id,folder:null,startedAt:0});
@@ -23,7 +24,7 @@ test('returning from settings resumes the actual period coordinator after prefer
   let reads=0;
   const board={id:'board',lineup:[],view:{hidden:[]}},state={board};
   const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed():void}},
-    hubNow:()=>5_000_000,historyPool:{register:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    hubNow:()=>5_000_000,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{change(){reads++;}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
     timeRange:()=>({from:1_400_000,to:5_000_000}),prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),
@@ -225,11 +226,11 @@ test('complete live and fixed targets share the LRU and cached return performs n
     const tape={from:anchor,cut,replaceFrom:anchor,cursor:'q',money:[],quota:[{source:'s',window:'w',samples:[anchor,10,-1,3_600_000,-1]}]};
     return {basis,...(body.quota?{quota:{state:'complete',basis,value:{run:'r',now:5_000_000,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:body.selection.mode==='live'?tape:fixedTape(tape,work,range,60_000,()=>{})}}}:{}),
       ...(body.sessions?{sessions:{state:'complete',basis,value:{...(body.selection.mode==='live'?work:fixedWork(work,range,60_000,5_000_000,()=>{})),cursor:'w'}}}:{}),
-      ...(body.values?{values:{state:'complete',basis,value:[{id:'s',provider:'codex',windows:[],meters:[],keys:[],validFor:{from:0,to:1_400_500},alternatives:[{id:'s',provider:'codex',windows:[],meters:[],keys:[],currencyUnavailable:true,validFor:{from:1_400_500,to:9_000_000}}]}]}}:{})};
+      ...(body.values?{values:{state:'complete',basis,value:[withValueStates({id:'s',provider:'codex',windows:[],meters:[],keys:[],validFor:{from:0,to:1_400_500}},[{id:'s',provider:'codex',windows:[],meters:[],keys:[],validFor:{from:0,to:1_400_500}},{id:'s',provider:'codex',windows:[],meters:[],keys:[],currencyUnavailable:true,validFor:{from:1_400_500,to:9_000_000}}],()=>{})]}}:{})};
   };
   const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event?:unknown):void;get():{rows:{workedMs:number}[]};getValue(id:string):{value:{currencyUnavailable?:boolean}};estimatedBytes:number}},
     hubNow:()=>5_000_000,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>state},pan:{get:()=>null},preparations:()=>null,
-    prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,
+    prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,hasPeriodValue,periodValueAt,
     shifted:(fixed:Parameters<typeof shifted>[0],range:{from:number;to:number})=>{assert.ok(pool.estimatedBytes>period.estimatedBytes,'the copy is reserved before allocation');stagedRestores++;return shifted(fixed,range);},
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),timeRange:()=>selected,prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),cellOf:()=>60_000,
     widgetVisible:(_view:unknown,id:string)=>id==='history',subscriptionSelection:()=>null,PERIOD_SCOPES:['quota','budget','funds'],QUOTA_WIDGETS:['history'],BUDGET_WIDGETS:['budget'],SUBSCRIPTION_FUNDS:'funds',ACTIVITY:'activity',AGENTS:'agents',noSessions:[],noValue:{},

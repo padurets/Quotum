@@ -5,7 +5,7 @@ import {PERIOD_SCOPES,type PeriodScope,type HistoryQuery} from '../../server/dom
 import {prepareAsync,preparations,type Preparation} from './prepare';
 import {useSyncExternalStore} from 'react';
 import {evaluatedRange,periodKey,type PeriodBasis,type PeriodSelection} from '../../server/domain/period';
-import type {PeriodValues} from '../../server/domain/periodValues';
+import {hasPeriodValue,periodValueAt,type PeriodValues} from '../../server/domain/periodValues';
 import {mergeWorkPrepared,packWorkPrepared,type WorkedSession,type WorkTrace} from '../../server/domain/periodWork';
 import type {PeriodReply} from '../../server/domain/periodRead';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
@@ -74,13 +74,6 @@ class BoardPeriod {
   readonly transport=new PeriodTransport(historyPool,()=>this.intent(),(reply,intent,reserve)=>this.receive(reply,intent,reserve),fetchPeriod,()=>{page.dispatch({type:'board-close'});if(typeof window!=='undefined')window.dispatchEvent(new Event(UNAUTHORIZED));});
   constructor(){historyPool.register(this);clock.subscribe(this.watch,()=>this.tick());}
   get estimatedBytes(){return this.bytes+[...this.valueCache.values(),...this.retained.values()].reduce((sum,c)=>sum+c.bytes,0);}
-  private valueAt(value:PeriodValues|undefined|null,to:number){
-    if(!value)return;
-    const found=[value,...value.alternatives??[]].find(v=>v.validFor&&v.validFor.from<=to&&to<v.validFor.to);
-    if(!found||found===value)return found;
-    const {alternatives=[],...base}=value;
-    return {...found,alternatives:alternatives.some(v=>v.validFor?.from===base.validFor?.from&&v.validFor?.to===base.validFor?.to)?alternatives:[base,...alternatives]};
-  }
   evictionCandidates(){return [...this.valueCache].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.valueCache.delete(key);}})).concat([...this.retained].map(([key,c])=>({bytes:c.bytes,shownAt:c.at,drop:()=>{this.retained.delete(key);}})));}
   private retainCurrent(){
     if(!this.cacheKey)return;
@@ -93,12 +86,12 @@ class BoardPeriod {
     const context=JSON.stringify([this.authority,prefs().money,prefs().funds,prefs().kind]);
     const workProofEpoch=this.workProofEpoch,valuesProofEpoch=this.valuesProofEpoch,reusable=workProofEpoch===this.proofEpoch&&(!values.size||valuesProofEpoch===this.proofEpoch)&&[...tapes.values()].every(t=>t.proofEpoch===this.proofEpoch);
     // Proofs and alternative states are immutable and shared by shifted summaries.
-    // Reserve only the summaries and wrappers that replay actually copies.
+    // Summaries exclude shared shift proofs; a whole value sequence bounds its largest replay.
     const copyBytes=workSelection.mode==='live'?0:JSON.stringify({...work.value,fixed:work.value?.fixed?{...work.value.fixed,shift:undefined}:undefined}).length*6
       +[...tapes.values()].reduce((sum,{tape})=>sum+JSON.stringify({...tape,fixed:tape.fixed?{...tape.fixed,shift:undefined}:undefined}).length*6,0)
-      +JSON.stringify([...values.values()].map(v=>({...v,value:v.value?{...v.value,alternatives:undefined}:null}))).length*3;
+      +JSON.stringify([...values.values()]).length*3;
     this.valueCache.delete(periodKey(this.selection));
-    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,prefs().money,prefs().funds,prefs().kind])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>this.valueAt(v.value,selection.to)),restore:selection=>{
+    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,prefs().money,prefs().funds,prefs().kind])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,selection.to)),restore:selection=>{
       this.tapes.clear();for(const [scope,tape] of tapes)this.tapes.set(scope,tape);
       this.work=work;this.index=index;this.activity=activity;this.workSelection=workSelection;this.workRangeKey=workRangeKey;this.cursor=cursor;this.liveEvidence=liveEvidence;this.bytes=bytes;
       for(const id of new Set([...this.values.keys(),...values.keys()]))this.setValue(id,values.get(id)??noValue);
@@ -107,7 +100,7 @@ class BoardPeriod {
         this.work={...work,value,basis:work.basis?{...work.basis,range:selection}:null};this.index=new PeriodIndex(value);this.activity=new PeriodActivity(value,this.index.curves);
         this.workSelection=selection;this.workRangeKey=periodKey(selection);
         for(const [scope,entry] of tapes){const tape={...entry.tape,fixed:shifted(entry.tape.fixed!,selection)!};this.tapes.set(scope,{...entry,tape,accounting:new PeriodAccounting(tape,value),selection,rangeKey:periodKey(selection)});}
-        for(const [id,reading] of values)this.setValue(id,{...reading,value:this.valueAt(reading.value,selection.to)!,basis:reading.basis?{...reading.basis,range:selection}:null});
+        for(const [id,reading] of values)this.setValue(id,{...reading,value:periodValueAt(reading.value,selection.to)!,basis:reading.basis?{...reading.basis,range:selection}:null});
       }
       this.transport.restoreEvidence(cursors);this.workNeeded=false;this.valuesNeeded=false;
       this.workProofEpoch=workProofEpoch;
@@ -177,18 +170,21 @@ class BoardPeriod {
       if(oldBoard!==board.id||event?.type==='hub'&&['mine','lineup'].includes(event.event.type))this.clear();
       this.cacheKey=cacheKey;
       let cached=this.valueCache.get(periodKey(selection));
-      if(!cached&&selection.mode==='range')cached=[...this.valueCache.values()].find(c=>sources.every(id=>this.valueAt(c.values.get(id)?.value,selection.to)));
+      if(!cached&&selection.mode==='range')cached=[...this.valueCache.values()].find(c=>sources.every(id=>hasPeriodValue(c.values.get(id)?.value,selection.to)));
+      const valueStaging={role:'visible' as const};
+      if(cached&&!historyPool.reserve(valueStaging,cached.bytes))cached=undefined;
       this.valuesNeeded=selection.mode==='range'&&!cached;
-      if(selection.mode==='range')for(const id of sources){const saved=cached?.values.get(id),value=this.valueAt(saved?.value,selection.to);this.setValue(id,saved?{...saved,...(value?{value}:{}),basis:saved.basis?{...saved.basis,range:{from:selection.from,to:selection.to}}:null}:{...this.getValue(id),loading:true,error:null});}
+      if(selection.mode==='range')for(const id of sources){const saved=cached?.values.get(id),value=periodValueAt(saved?.value,selection.to);this.setValue(id,saved?{...saved,...(value?{value}:{}),basis:saved.basis?{...saved.basis,range:{from:selection.from,to:selection.to}}:null}:{...this.getValue(id),loading:true,error:null});}
       else {for(const id of this.values.keys())this.setValue(id,noValue);this.values.clear();}
       const range=evaluatedRange(selection,hubNow());
       if(this.tapes.size||this.work.value) {
         // Complete evidence belongs either to this target or to the shared LRU.
         // A fixed target replaces its raw ledger with exact summaries and edges.
         preparations()?.cancel(this.preparationOwner);this.tapes.clear();this.cursor=undefined;this.index=null;this.activity=null;this.work={...this.work,value:null};this.liveEvidence=false;this.transport.forgetEvidence();
-        this.bytes=JSON.stringify([...this.values.values()]).length*3+JSON.stringify(this.workRows).length*3;
         clock.due(this.watch,null,hubNow());
       }
+      this.bytes=JSON.stringify([...this.values.values()]).length*3+JSON.stringify(this.workRows).length*3;
+      historyPool.release(valueStaging);
       this.workNeeded=wantsWork&&(!this.work.value||range.from<this.work.value.anchor||range.to>(this.work.value.cut??0)&&!this.liveEvidence);
       const saved=this.retained.has(cacheKey)?[cacheKey,this.retained.get(cacheKey)!] as const:[...this.retained].find(([,entry])=>entry.fits(selection));
       if(saved){

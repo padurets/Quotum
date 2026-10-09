@@ -1,6 +1,6 @@
 import type {BudgetAccess,CreditBalanceState} from './domain/resources.js';
 import type {Store} from './store/store.js';
-import type {PeriodValues, WindowValue} from './domain/periodValues.js';
+import {withValueStates,type PeriodValues,type WindowValue} from './domain/periodValues.js';
 import type {Meter, KeyPart} from './domain/meters.js';
 import type {MeterContextValue} from './store/meterContexts.js';
 import {convertBy, conversionId, isConvertible} from './domain/currency.js';
@@ -13,17 +13,18 @@ type ContextRow = {from_at:number;to_at:number;stale_after_ms:number;payload:str
 export function nearbyPeriodValues(store:Store,sources:readonly {id:string;provider:string;budget?:BudgetAccess}[],user:string,to:number,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void):PeriodValues[] {
   const values=periodValues(store,sources,user,to,reserve),until=Math.min(Date.now()+1,to+cell+1);
   for(let i=0;i<values.length;i++){
-    let held=0,scratch=0;const alternatives:NonNullable<PeriodValues['alternatives']>=[];
-    try{
-      for(let at=Math.max(0,to-cell);at<until;){
-        let value:PeriodValues;
-        try{value=periodValues(store,[sources[i]],user,at,bytes=>{reserve(bytes);scratch+=bytes;})[0];}
-        finally{release(scratch);scratch=0;}
-        const bytes=JSON.stringify(value).length*3;reserve(bytes);held+=bytes;alternatives.push(value);
-        at=value.validFor!.to;
-      }
-      values[i].alternatives=alternatives;
-    }catch(error){release(held);if(!(error instanceof HistoryLimit))throw error;}
+    let held=0,scratch=0,previous=0;
+    function* nearby(){
+      try{
+        for(let at=Math.max(0,to-cell);at<until;){
+          const value=periodValues(store,[sources[i]],user,at,bytes=>{reserve(bytes);scratch+=bytes;})[0];
+          yield value;at=value.validFor!.to;
+          release(previous);previous=scratch;scratch=0;
+        }
+      }finally{release(previous+scratch);previous=scratch=0;}
+    }
+    try{values[i]=withValueStates(values[i],nearby(),bytes=>{reserve(bytes);held+=bytes;});}
+    catch(error){release(held);if(!(error instanceof HistoryLimit))throw error;}
   }
   return values;
 }

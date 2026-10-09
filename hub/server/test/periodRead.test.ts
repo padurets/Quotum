@@ -14,6 +14,7 @@ import type {PeriodReply,PeriodRequest} from '../domain/periodRead.js';
 import {mergeWork,workedSessions} from '../domain/periodWork.js';
 import {deepSeekMeasurement} from '../connectors/deepseek.js';
 import {periodValues,nearbyPeriodValues} from '../periodValues.js';
+import {periodValueAt,hasPeriodValue,withValueStates} from '../domain/periodValues.js';
 import {HistoryLimit} from '../history.js';
 import {sharedWork} from '../periodWork.js';
 
@@ -64,9 +65,27 @@ test('nearby card states cross exclusive observations and deadlines without inte
   for(const to of [now-4*M,now-3*M,now-3*M+1,now-2*M,now-2*M+1,now-M,now-M+1,now]){
     const fresh=periodValues(h.store,sources,h.user.id,to,()=>{});
     for(const [i,value] of values.entries()){
-      const snapshot=value.alternatives!.find(v=>v.validFor!.from<=to&&to<v.validFor!.to);assert.ok(snapshot,String(to));assert.deepEqual(snapshot,fresh[i]);
+      assert.ok(hasPeriodValue(value,to),String(to));const {states:_states,...snapshot}=periodValueAt(value,to)!;assert.deepEqual(snapshot,fresh[i]);
     }
   }
+});
+
+test('sparse card states preserve optional fields and unchanged key context in either direction',()=>{
+  const base={id:'s',provider:'deepseek',windows:[],meters:[],keys:[]};
+  const values=Array.from({length:80},(_,i)=>({...base,validFor:{from:i*100,to:(i+1)*100},
+    keys:[{id:'key',name:'A long retained key name',disabled:false,expiresAt:null,includeByok:false,at:i,staleAfterMs:100,presence:'observed' as const,missCount:0,periods:{day:null,week:null,month:null},byokUsage:{total:null,day:null,week:null,month:null}}],
+    ...(i%3?{currencyUnavailable:true}:{}),
+  }));
+  const packed=withValueStates(values[40],values,()=>{});
+  assert.ok(JSON.stringify(packed).length<JSON.stringify(values).length/2);
+  const roundtrip=JSON.parse(JSON.stringify(packed));
+  for(const to of [7999,0,4199,100,7899,1,4099]){
+    const {states:_states,...value}=periodValueAt(roundtrip,to)!;
+    assert.deepEqual(value,values[Math.floor(to/100)]);
+  }
+  assert.equal(periodValueAt(roundtrip,8000),undefined);
+  assert.equal(periodValueAt(roundtrip,-1),undefined);
+  assert.deepEqual(roundtrip,packed,'replay never mutates the shared sequence');
 });
 
 test('a cached cell range reads exact totals and boundaries without rebuilding cells',async t=>{
