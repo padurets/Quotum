@@ -174,7 +174,7 @@ fn codex_role(mut input: impl Read) -> Role {
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 fn invocation_role(name: &str, input: impl Read) -> Role {
     if client_of(name) == Some(ClientId::OpenCode) { opencode_role(input) } else { codex_role(input) }
 }
