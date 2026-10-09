@@ -32,8 +32,8 @@ function fixture(t: TestContext, mode = 'ready') {
     }).listen(0, '127.0.0.1', () => {
       const port = server.address().port;
       if (mode !== 'no-port') fs.writeFileSync(profile+'/DevToolsActivePort', (mode === 'invalid'?'65536':port)+'\\n/devtools/browser/fixture\\n');
-      if (mode === 'worker') {
-        const worker=cp.spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{stdio:['ignore','inherit','inherit']});
+      if (mode === 'worker' || mode === 'escaped-worker') {
+        const worker=cp.spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{detached:mode==='escaped-worker',stdio:mode==='escaped-worker'?'ignore':['ignore','inherit','inherit']});
         fs.writeFileSync(profile+'/worker',String(worker.pid));
       }
       fs.writeFileSync(profile+'/started',String(port));
@@ -106,6 +106,16 @@ test('an owned worker that survives its parent receives escalation and cannot re
   assert.equal(existsSync(profile), false);
   const stat = (() => {try {return readFileSync(`/proc/${worker}/stat`, 'utf8');} catch {return '';}})();
   assert.ok(!stat || /\) Z /.test(stat), 'worker exited, even if the platform has not reaped its zombie yet');
+});
+
+test('an escaped owned worker cannot authorize another group signal or a successful cleanup', {skip:process.platform!=='linux'},async t=>{
+  const {profile,launch}=fixture(t,'escaped-worker');
+  const browser=await launch(),worker=Number(readFileSync(profile+'/worker','utf8'));
+  t.after(()=>{try{process.kill(worker,'SIGKILL');}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')throw error;}});
+  await assert.rejects(browser.close(),/cleanup unconfirmed/);
+  assert.equal(existsSync(profile),true,'the profile stays while an observed owner remains alive');
+  process.kill(worker,0);
+  assert.equal((browser.launchReport!() as {cleanup:{status:string;pipesClosed:boolean}}).cleanup.status,'residual');
 });
 
 test('probe failure categories never copy a raw network error or its cause',()=>{

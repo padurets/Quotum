@@ -1,23 +1,23 @@
 import type {ChildProcess} from 'node:child_process';
 import {readFile, readdir} from 'node:fs/promises';
 
-type Identity = {pid: number; group: number; session: number; birth: string; state: string};
+type Identity = {pid: number; parent: number; group: number; session: number; birth: string; state: string};
 const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 async function identity(pid: number): Promise<Identity | null> {
   const stat = await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => '');
   const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-  return fields.length > 19 ? {pid, state: fields[0], group: Number(fields[2]), session: Number(fields[3]), birth: fields[19]} : null;
+  return fields.length > 19 ? {pid, state: fields[0], parent: Number(fields[1]), group: Number(fields[2]), session: Number(fields[3]), birth: fields[19]} : null;
 }
 
 /** Only numeric identities are read. No command lines, process-name matching, or foreign signals. */
-async function members(group: number): Promise<Identity[]> {
+async function processes(): Promise<Identity[]> {
   const entries = await readdir('/proc');
   const result: Identity[] = [];
   // Limit concurrent reads on a shared machine.
   for (let from = 0; from < entries.length; from += 64) {
     const batch = await Promise.all(entries.slice(from, from + 64).filter(value => /^\d+$/.test(value)).map(value => identity(Number(value))));
-    result.push(...batch.filter((value): value is Identity => value !== null && value.group === group && value.session === group));
+    result.push(...batch.filter((value): value is Identity => value !== null));
   }
   return result;
 }
@@ -33,11 +33,19 @@ export function browserProcess(child: ChildProcess, group: boolean) {
   const live = () => !exited && child.exitCode === null && child.signalCode === null;
   const observe = async () => {
     if (!child.pid || !group || process.platform !== 'linux') return [];
-    const current = await members(child.pid);
+    const all=await processes();
+    const current = all.filter(value=>value.group===child.pid&&value.session===child.pid);
     const anchored = current.some(value => (value.pid === child.pid && live()) || known.get(value.pid) === value.birth);
     if (anchored && !released) for (const value of current) known.set(value.pid, value.birth);
     if (!current.length && !live()) released = true;
-    return current;
+    // Escaping the group never grants signal authority, but cannot count as a clean exit.
+    const owned=new Set(all.filter(value=>known.get(value.pid)===value.birth).map(value=>value.pid));
+    for(let depth=0;depth<16;depth++) {
+      const descendants=all.filter(value=>owned.has(value.parent)&&!owned.has(value.pid));
+      if(!descendants.length)break;
+      for(const value of descendants){known.set(value.pid,value.birth);owned.add(value.pid);}
+    }
+    return all.filter(value=>owned.has(value.pid));
   };
   let closing: Promise<ProcessCleanup> | undefined;
   return {observe, close: () => closing ??= (async () => {
@@ -54,7 +62,7 @@ export function browserProcess(child: ChildProcess, group: boolean) {
         }
         if ((!child.pid || !live()) && !workers.length && !portableGroupExists && pipesClosed) {result.status = 'closed'; break;}
         const canSignal = group && process.platform === 'linux'
-          ? !released && workers.some(value => known.get(value.pid) === value.birth)
+          ? !released && workers.some(value => value.group===child.pid&&value.session===child.pid&&known.get(value.pid) === value.birth)
           : live();
         if (canSignal && (!result.term || (!result.kill && performance.now() - started >= 5_000))) {
           const signal = result.term ? 'SIGKILL' : 'SIGTERM';
