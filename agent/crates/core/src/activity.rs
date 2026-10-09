@@ -424,23 +424,45 @@ impl Activity {
 
     /// A currently running native image, as a fallback for catalogue discovery.
     pub fn client_paths(&self) -> std::collections::BTreeMap<ClientId, PathBuf> {
-        #[allow(unused_mut)]
-        let mut found = std::collections::BTreeMap::new();
         #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::MetadataExt;
+            self.client_paths_with(&sys::stat, &|pid| {
+                let path = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+                let image = path.metadata().ok()?;
+                Some((path, (image.dev(), image.ino())))
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        std::collections::BTreeMap::new()
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    fn client_paths_with(
+        &self,
+        process: &impl Fn(u32) -> Option<Proc>,
+        image_path: &impl Fn(u32) -> Option<(PathBuf, (u64, u64))>,
+    ) -> std::collections::BTreeMap<ClientId, PathBuf> {
+        let mut found = std::collections::BTreeMap::new();
         for (key, scope) in &self.scopes {
             let Some(client) = scope.client.filter(|c| self.tracked.contains(c)) else {
                 continue;
             };
-            let Some(birth) = sys::birth(key.0) else {
+            let Some(image) = scope.image.filter(|_| client_of(&scope.name) == Some(client)) else {
                 continue;
             };
-            if cache_key(key.0, 0, Some(&birth)) != *key {
+            let Some(before) = process(key.0) else { continue };
+            // A birth survives exec. Discovery must still belong to the native image
+            // we observed, including while its executable path is being resolved.
+            if before.native_birth.is_none()
+                || before.key().as_ref() != Some(key)
+                || before.name != scope.name
+                || before.image != Some(image)
+            {
                 continue;
             }
-            let Ok(path) = std::fs::read_link(format!("/proc/{}/exe", key.0)) else {
-                continue;
-            };
-            if sys::birth(key.0).as_ref() == Some(&birth) {
+            let Some((path, path_image)) = image_path(key.0) else { continue };
+            if path_image == image && process(key.0).is_some_and(|after| before.same_process(&after)) {
                 found.entry(client).or_insert(path);
             }
         }
@@ -1422,7 +1444,7 @@ mod sys {
 
     /// A process from /proc/<pid>/stat: its name, parent, start and the CPU time it and its
     /// finished children have spent, in milliseconds.
-    fn stat(pid: u32) -> Option<Proc> {
+    pub(super) fn stat(pid: u32) -> Option<Proc> {
         let text = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         // The name is in parentheses and may itself hold spaces and parentheses.
         let (open, close) = (text.find('(')?, text.rfind(')')?);
@@ -2041,6 +2063,59 @@ mod tests {
 
     fn codex(pid: u32, parent: u32, invocation: &[u8]) -> Proc {
         Proc { role: codex_role(invocation), ..p(pid, parent, "codex") }
+    }
+
+    #[test]
+    fn running_discovery_stays_with_the_observed_native_image() {
+        let listed = Proc {
+            times: Some(Times { started: 100, own: 0, reaped: 0 }),
+            native_birth: Some(vec![1]),
+            image: Some((2, 3)),
+            role: Role::Local,
+            ..p(7, 1, "opencode")
+        };
+        let mut activity = Activity::new("/fixture-home".into(), false);
+        let path = PathBuf::from("/fixture/opencode");
+        let image_path = |_: u32| Some((path.clone(), (2, 3)));
+        let read = |_: u32| Some(listed.clone());
+        assert!(activity.client_paths_with(&read, &image_path).is_empty());
+        activity.observe(
+            std::slice::from_ref(&listed),
+            900,
+            Instant::now(),
+            100,
+            &|p| Some(p.clone()),
+            &|_| None,
+            &|_| None,
+            &|_| true,
+        );
+        assert_eq!(activity.client_paths_with(&read, &image_path).get(&ClientId::OpenCode), Some(&path));
+        for changed in [
+            Proc { name: "other".into(), image: Some((2, 4)), ..listed.clone() },
+            Proc { image: Some((2, 4)), ..listed.clone() },
+            Proc { image: None, ..listed.clone() },
+            Proc { native_birth: Some(vec![2]), ..listed.clone() },
+        ] {
+            assert!(activity.client_paths_with(&|_| Some(changed.clone()), &image_path).is_empty());
+            let reads = std::cell::Cell::new(0);
+            assert!(
+                activity
+                    .client_paths_with(
+                        &|_| {
+                            let first = reads.replace(reads.get() + 1) == 0;
+                            Some(if first { listed.clone() } else { changed.clone() })
+                        },
+                        &image_path,
+                    )
+                    .is_empty(),
+                "a replacement during path resolution is not a discovery"
+            );
+        }
+        assert!(activity.client_paths_with(&read, &|_| Some((path.clone(), (2, 4)))).is_empty());
+        assert!(activity.client_paths_with(&|_| None, &image_path).is_empty());
+        assert!(activity.client_paths_with(&read, &|_| None).is_empty());
+        activity.track(&[]);
+        assert!(activity.client_paths_with(&read, &image_path).is_empty());
     }
 
     #[test]

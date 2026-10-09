@@ -1,5 +1,6 @@
-// Frozen ingest parser from 22d2737; only import paths and the Measurement type alias are adapted.
-import {providers, type Provider} from '../../domain/sources.js';
+// Frozen ingest parser from 22d2737; only type aliases are adapted.
+const providers = ['claude', 'codex', 'antigravity'] as const;
+type Provider = (typeof providers)[number];
 import type {FreeResets, Kind, WindowMeasurement as Measurement, Win} from '../../domain/quota.js';
 
 /** Clocks within this of the hub's are taken as they are; beyond it, agent times are shifted. */

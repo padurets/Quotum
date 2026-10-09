@@ -146,6 +146,42 @@ test('evidence strengthens without splitting work and equal-strength conflict lo
   assert.deepEqual(mergeEvidence(conflict,first),conflict);
 });
 
+test('private known-unheld work and names leave shared history dependencies and closed tiles unchanged', t => {
+  const h=setup(),hour=60*60_000;let now=at+3*hour;
+  h.store.db.prepare('INSERT INTO members VALUES (?,?,?,?)').run(h.shared,h.other.id,'member',at);
+  const owned=h.store.source('claude','a'.repeat(24),at),foreign=h.store.source('codex','f'.repeat(24),at);
+  h.store.hold(owned,h.owner.id,at);h.store.share(h.shared,owned,h.owner.id,at);
+  h.store.hold(foreign,h.other.id,at);h.store.share(h.shared,foreign,h.other.id,at);
+  const packet={...report,sessions:[],clientSessions:[]};h.ingest.sessions(h.credential,packet,at);
+  const events=new Events({store:h.store,directory:h.directory,ingest:h.ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>now,after:()=>()=>{}});
+  events.attach();const tiles=new HistoryTiles(h.store);events.onClientHistory=(user,since)=>tiles.touchClient(user,since);
+  t.after(()=>{events.close();h.store.close();});
+  const frames:Frame[]=[];h.directory.createSession('private-dependency-reader',h.other.id,at,4*hour);
+  events.open({user:h.other.id,secret:'private-dependency-reader',board:h.shared,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});frames.splice(0);
+  const shown=h.store.shown(h.shared,[]),key=h.store.workKey(h.shared,shown);let reads=0;const cells=h.store.cells.bind(h.store);
+  h.store.cells=(...args)=>{reads++;return cells(...args);};
+  const read=()=>tiles.read(h.shared,60_000,at,at+hour,now,shown),before=read();assert.equal(reads,1);
+  const privateSession={...session,clientId:'codex',source:{provider:'codex',account:'f'.repeat(24)},project:'Private project',startedAt:iso(at+2*hour)};
+  h.ingest.sessions(h.credential,{...packet,sentAt:iso(at+2*hour),clientSessions:[privateSession]},at+2*hour);
+  h.ingest.sessions(h.credential,{...packet,sentAt:iso(at+2*hour+15_000),clientSessions:[privateSession]},at+2*hour+15_000);
+  assert.equal(h.store.workKey(h.shared,shown),key,'a source held by another member does not make this device public');
+  assert.deepEqual(read(),before);assert.equal(reads,1,'private credit keeps the shared closed tile warm');
+  events.touchBoards([h.shared]);events.flush();assert.ok(!frames.some(frame=>frame.type==='history'));
+  h.store.nameProjects(h.owner.id,['Private project'],'Private rename');events.touchBoards([h.shared]);events.flush();
+  assert.equal(h.store.workKey(h.shared,shown),key);assert.deepEqual(read(),before);assert.equal(reads,1);
+  assert.ok(!frames.some(frame=>frame.type==='history'));assert.equal(readHistory(h.store,h.shared,at,60_000,{to:now}).activity.agentMs,0);
+  h.store.hold(foreign,h.owner.id,now);events.touchBoards([h.shared]);events.flush();
+  assert.notEqual(h.store.workKey(h.shared,h.store.shown(h.shared,[])),key,'a real holding makes the names visible');
+  assert.ok(frames.some(frame=>frame.type==='history'));
+  assert.equal(readHistory(h.store,h.shared,at,60_000,{to:now}).activity.agentMs,15_000);
+});
+
+test('historical parsers keep their own provider authority as the current catalogue grows', () => {
+  const hubSession={...report.sessions[0],provider:'openrouter'};
+  assert.throws(()=>initiative({...report,sessions:[hubSession]}),/provider/);
+  assert.deepEqual(baseline({...report,sessions:[{provider:'openrouter',startedAt:'invalid'}]}).sessions,[]);
+});
+
 test('explicit account names and supplemental source evidence differ from device inference and missing evidence', t => {
   const h=setup(); t.after(()=>h.store.close());
   h.ingest.sessions(h.credential,{...report,sessions:[],clientSessions:[]},at);
@@ -235,7 +271,7 @@ test('device presence hints reach only the owner on every board and expire held-
 });
 
 test('device presence recovers for every owner reader after projection failures', t => {
-  for(const fault of ['devices','deadline','own'] as const) {
+  for(const fault of ['devices','deadline','own','ownDeadline'] as const) {
     const h=setup(); let now=at;
     h.store.db.prepare('INSERT INTO members VALUES (?,?,?,?)').run(h.shared,h.other.id,'member',at);
     const source=h.store.source('codex','f'.repeat(24),at);h.store.hold(source,h.owner.id,at);
@@ -250,22 +286,25 @@ test('device presence recovers for every owner reader after projection failures'
       events.open({user,secret,board,kind:'stream',send:batch=>frames[i].push(...batch),end:()=>{}});
     }
     frames.forEach(list=>list.splice(0));
-    const live=h.ingest.live,devices=live.devices.bind(live),deadline=live.devicesChangesAt.bind(live),own=live.own.bind(live);
+    const live=h.ingest.live,devices=live.devices.bind(live),deadline=live.devicesChangesAt.bind(live),own=live.own.bind(live),ownDeadline=live.ownChangesAt.bind(live);
     let fail=true;
     const once=()=>{if(fail){fail=false;throw new Error('synthetic presence read failure');}};
     if(fault==='devices')live.devices=(...args)=>{if(args[0]===h.owner.id)once();return devices(...args);};
     if(fault==='deadline')live.devicesChangesAt=(...args)=>{if(args[0]===h.owner.id)once();return deadline(...args);};
     if(fault==='own')live.own=(...args)=>{if(args[0]===h.owner.id&&args[1]===h.board)once();return own(...args);};
-    const started={...session,working:false,...(fault==='own'?{}:{clientId:'codex',source:{provider:'codex',account:'f'.repeat(24)}})};
+    if(fault==='ownDeadline')live.ownChangesAt=(...args)=>{if(args[0]===h.owner.id&&args[1]===h.board)once();return ownDeadline(...args);};
+    const privateFault=fault==='own'||fault==='ownDeadline';
+    const started={...session,working:false,...(privateFault?{}:{clientId:'codex',source:{provider:'codex',account:'f'.repeat(24)}})};
     now+=15_000;h.ingest.sessions(h.credential,{...packet,sentAt:iso(now),clientSessions:[started]},now);
     assert.ok(events.flush().users.has(h.owner.id),fault);
     assert.equal(live.deviceSessions(h.owner.id,device,now).length,1);
     assert.ok(!frames[3].some(frame=>frame.type==='devices'||frame.type==='ownSessions'));
     const hints=()=>frames.slice(0,3).map(list=>list.filter(frame=>frame.type==='devices').map(frame=>JSON.parse(frame.data)));
-    if(fault==='own')assert.deepEqual(hints(),[[{}],[{}],[{}]],'a board failure cannot suppress account presence');
-    frames.forEach(list=>list.splice(0));live.devices=devices;live.devicesChangesAt=deadline;live.own=own;
+    if(privateFault)assert.deepEqual(hints(),[[{}],[{}],[{}]],'a board failure cannot suppress account presence');
+    frames.forEach(list=>list.splice(0));live.devices=devices;live.devicesChangesAt=deadline;live.own=own;live.ownChangesAt=ownDeadline;
     events.touchBoards([h.board,h.shared]);events.flush();
-    if(fault!=='own')assert.deepEqual(hints(),[[{}],[{}],[{}]],'recovery reaches every existing owner reader');
+    if(!privateFault)assert.deepEqual(hints(),[[{}],[{}],[{}]],'recovery reaches every existing owner reader');
+    if(privateFault)assert.deepEqual(frames.slice(0,2).map(list=>list.filter(frame=>frame.type==='ownSessions').map(frame=>JSON.parse(frame.data).sessions.length)),[[1],[1]],'private recovery reaches both personal readers');
     assert.ok(!frames[3].some(frame=>frame.type==='devices'||frame.type==='ownSessions'));
     frames.forEach(list=>list.splice(0));now+=15_000;
     h.ingest.sessions(h.credential,{...packet,sentAt:iso(now),clientSessions:[started]},now);events.flush();

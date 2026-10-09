@@ -1,12 +1,10 @@
-// Frozen ingest parser from 072af2b; only import paths and the Measurement type alias are adapted.
-import {providers, type Provider} from '../../domain/sources.js';
-import {providerOf, type ClientProvider} from '../../domain/providers.js';
+// Frozen ingest parser from 072af2b; only type aliases are adapted.
+import {providers, providerOf, type Provider, type ClientProvider, exactDecimal, scalarDecimal} from './ingest-baseline-runtime.js';
 import type {FreeResets, Kind, WindowMeasurement, Win} from '../../domain/quota.js';
-import {exactDecimal, scalarDecimal} from '../../domain/amount.js';
 import type {CreditBalance, ResourceStatuses} from '../../domain/resources.js';
 
 /** Clocks within this of the hub's are taken as they are; beyond it, agent times are shifted. */
-export {CLOCK_TOLERANCE_MS} from '../../domain/history.js';
+export const CLOCK_TOLERANCE_MS = 30_000;
 
 /**
  * Ingest format v1 (spec/ingest-v1.md): what an agent sends. Parsing is strict; a

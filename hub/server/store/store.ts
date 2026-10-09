@@ -53,9 +53,9 @@ export type Announcement = {at: number; url: string; text: string};
 export const WORK_NAMES =
   'SELECT json_group_array(json(name)) AS names FROM (' +
   'SELECT json_array(n.user_id, n.reported, n.name) AS name FROM project_names n WHERE n.user_id IN (SELECT value FROM json_each(?))' +
-  ' AND EXISTS (SELECT 1 FROM devices d JOIN agent_sessions s ON s.device_id = d.id WHERE d.user_id = n.user_id AND s.project = n.reported AND s.source_id IN (SELECT value FROM json_each(?)))' +
+  ' AND EXISTS (SELECT 1 FROM devices d JOIN agent_sessions s ON s.device_id = d.id JOIN holders h ON h.user_id = d.user_id AND h.source_id = s.source_id WHERE d.user_id = n.user_id AND s.project = n.reported AND s.source_id IN (SELECT value FROM json_each(?)))' +
   ' UNION ALL SELECT json_array(d.id, COALESCE(d.label, d.name)) FROM devices d WHERE d.user_id IN (SELECT value FROM json_each(?))' +
-  ' AND EXISTS (SELECT 1 FROM agent_sessions s WHERE s.device_id = d.id AND s.source_id IN (SELECT value FROM json_each(?))) ORDER BY 1)';
+  ' AND EXISTS (SELECT 1 FROM agent_sessions s JOIN holders h ON h.user_id = d.user_id AND h.source_id = s.source_id WHERE s.device_id = d.id AND s.source_id IN (SELECT value FROM json_each(?))) ORDER BY 1)';
 
 /** A source as a board shows it: with the people who measure it and whether they shared it here. */
 export type BoardSource = Source & {holders: string[]; sharedBy: string | null; budget?: BudgetAccess};

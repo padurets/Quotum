@@ -367,7 +367,7 @@ retention period. The hub credits machines that went quiet before reading the ce
   now: number,
   run: string, // this start of the hub, the same as hello.epoch
   historyStart: number,
-  known: {work: number, sources: Record<string, number>},
+  known: {own?: number, work: number, sources: Record<string, number>},
   meta?: string, // opaque metadata token, only when the request opts in
   chunks: Chunk[]
 }
@@ -383,7 +383,10 @@ captured when that request started, requiring both its token and `run` to match;
 it never borrows a later reply's metadata. Requests without `meta` keep the full
 answer shape, and a full answer is accepted without a token.
 
-`known.work` is when the hub began keeping work. `known.sources` gives when each shown
+`known.work` is when the hub began keeping work. A personal board's quota/activity
+history also includes `known.own`, the lower bound for its owner's private work,
+independently of the selected subscriptions. Shared and financial history omit it.
+`known.sources` gives when each shown
 subscription came to the board; hidden cards are absent. The chunks cover the cut
 `[from, to)` whole, including empty cells, in time order, cut at tile edges. A whole tile
 ending no later than now is closed. Closed tiles are cached under their board, grid and
@@ -404,7 +407,7 @@ type Chunk = {
     }][];
   }[];
   activity: {
-    sessions: [ref: string, source: string, project: string | null, device: string][];
+    sessions: [ref: string, source: string | null, project: string | null, device: string][];
     devices: Record<string, string>;
     cells: [index: number, active: number,
       sessions: (number | [sessionIndex: number, agentMs: number])[],
