@@ -1,3 +1,4 @@
+import type {CreditBalanceState} from './resources.js';
 import type {Win} from './quota.js';
 import type {KeyPart, Meter} from './meters.js';
 
@@ -9,6 +10,7 @@ export type PeriodValues = {
   windows:WindowValue[];
   meters:Meter[];
   keys:KeyPart[];
+  creditBalance?:CreditBalanceState;
   validFor?:{from:number;to:number};
   currencyUnavailable?:boolean;
 };

@@ -323,6 +323,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
           provider: s.provider,
           sharedBy: s.sharedBy ? (names.get(s.sharedBy) ?? '') : '',
           mine: s.holders.includes(access.user.id),
+          budget: s.budget,
         })),
         // Only the holder sees the private account label used to distinguish their sources.
         mine: store.held(access.user.id).map(s => ({
@@ -348,8 +349,18 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       if (access.board.personal) return forbidden(reply);
       const source = str(request.body?.source);
       if (!store.holds(access.user.id, source)) return notFound(reply);
-      store.share(access.board.id, source, access.user.id, Date.now());
+      if(request.body?.includeBudget!==undefined&&typeof request.body.includeBudget!=='boolean')return reply.code(400).send({error:'invalid_request'});
+      store.share(access.board.id, source, access.user.id, Date.now(), request.body?.includeBudget===true);
       return {ok: true};
+    });
+
+    app.put<{Params:{board:string;source:string};Body:Body}>('/api/boards/:board/shares/:source/budget',(request,reply)=>{
+      const access=guards.board(request,reply,request.params.board);if(!access)return reply;
+      if(access.board.personal)return forbidden(reply);
+      const {enabled,expectedRevision}=request.body??{};
+      if(typeof enabled!=='boolean'||typeof expectedRevision!=='string'||!/^[0-9a-f]{32}$/.test(expectedRevision))return reply.code(400).send({error:'invalid_request'});
+      try{return {budget:store.setBudget(access.board.id,request.params.source,access.user.id,enabled,expectedRevision,Date.now())};}
+      catch(error){const code=error instanceof Error?error.message:'';return reply.code(code==='share_conflict'?409:code==='not_found'?404:400).send({error:code==='share_conflict'||code==='not_found'?code:'invalid_request'});}
     });
 
     // Taken off a board by those who measure it, or by the board's owner.

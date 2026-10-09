@@ -97,6 +97,14 @@ export class Duty {
     if (holder?.device === device && answers(holder, at)) this.holders.set(subscription, {...holder, askedAt: null, answering: true, scheduledUntil: null});
   }
 
+  /** A late result answers its command without renewing or shortening the lease. */
+  acknowledge(subscription: string, device: string, at: number) {
+    const holder = this.holders.get(subscription);
+    if (holder?.device === device && answers(holder, at)) {
+      this.holders.set(subscription, {...holder, until: Math.max(holder.until, leaseOf(holder)), askedAt:null, answering:true});
+    }
+  }
+
   /** A measurement arrived: its sender holds duty until the measurement goes stale. */
   delivered(subscription: string, device: string, observedAt: number, staleAfterMs: number, now: number) {
     const holder = this.holders.get(subscription);

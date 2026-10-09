@@ -638,6 +638,19 @@ fn print_outcome(outcome: &Outcome, style: &Style) {
                     style.dim(&resets)
                 );
             }
+            if let Some(balance) = snapshot.balances.as_ref().and_then(|balances| balances.first()) {
+                use quotum_core::model::BalanceStatus;
+                let value = match balance.status {
+                    BalanceStatus::Finite => balance.amount.as_deref().unwrap_or("unknown").to_string(),
+                    BalanceStatus::Unlimited => "unlimited".into(),
+                    BalanceStatus::Missing => "not reported".into(),
+                    BalanceStatus::Unsupported => "unsupported".into(),
+                    BalanceStatus::Invalid => "invalid response".into(),
+                };
+                let first =
+                    if snapshot.windows.is_empty() { style.bold(&format!("{head:<14}")) } else { " ".repeat(14) };
+                println!("{first}{:<20}{}", "Codex credits", value);
+            }
             if let Some(free) = snapshot.resets.as_ref().filter(|r| r.available > 0) {
                 // Each group of them expires at its own time; all of them at one is said once.
                 let when = |at: Option<i64>| at.map(|at| format!("in {}", until(at - now_ms())));

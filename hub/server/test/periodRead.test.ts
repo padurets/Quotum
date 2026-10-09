@@ -146,3 +146,18 @@ test('an earlier range extends the complete index without rereading its existing
   h.credit(now-10*M,now-5*M,'another');
   assert.equal((await h.details(detailRequest)).statusCode,400,'a stale detail cursor cannot name current evidence');
 });
+
+
+test('quota unavailability ends both historical values and exact tape coverage at its exclusive boundary',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const at=now-2*M,boundary=now-M;
+  h.store.record(h.source,{observedAt:at,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:now+H}]});
+  h.store.db.prepare("INSERT INTO events(source_id,at,kind,detail) VALUES (?,?,'quota_unavailable','')").run(h.source,boundary);
+  const request:PeriodRequest={version:1,selection:{mode:'range',from:now-H,to:boundary},evaluatedAt:now,values:[h.source],quota:{cell:String(M),from:String(now-H),to:String(now)}};
+  const response=await h.read(request);assert.equal(response.statusCode,200,response.body);
+  const reply=response.json<PeriodReply>();if(reply.values?.state!=='complete'||reply.quota?.state!=='complete')throw new Error('period');
+  const value=reply.values.value[0].windows[0];assert.equal(value.remaining,83);assert.equal(value.validUntil,boundary);assert.equal(value.stale,true);
+  assert.equal(reply.quota.value.tape!.quota[0].samples[0].validUntil,boundary);
+  const before=periodValues(h.store,h.store.sources(h.board),h.user.id,boundary-1,()=>{})[0];
+  assert.equal(before.windows[0].stale,false);assert.equal(before.validFor!.to,boundary);
+});

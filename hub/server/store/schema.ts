@@ -310,7 +310,17 @@ export const STEPS = [
   `,
   // 19 — independently placed quota and budget analytics, with frozen addition targets.
   `ALTER TABLE board_additions ADD COLUMN widget_targets TEXT;`,
-  // 20 — a single grid, stored through the lossless compact view codec below.
+  // 20 — exact native credit coefficients and explicit financial consent on mixed sources.
+  `
+  ALTER TABLE readings ADD COLUMN amount_scale INTEGER NOT NULL DEFAULT 6 CHECK(amount_scale BETWEEN 0 AND 18);
+  ALTER TABLE shares ADD COLUMN budget_since INTEGER;
+  ALTER TABLE shares ADD COLUMN budget_anchor_at INTEGER;
+  ALTER TABLE shares ADD COLUMN budget_revision TEXT NOT NULL DEFAULT '';
+  UPDATE shares SET budget_revision=lower(hex(randomblob(16)));
+  UPDATE shares SET budget_since=0,budget_anchor_at=0 WHERE source_id IN (SELECT id FROM sources WHERE provider IN ('openrouter','deepseek'));
+  CREATE INDEX shares_budget_pending ON shares(source_id,budget_since) WHERE budget_anchor_at IS NULL AND budget_since IS NOT NULL;
+  `,
+  // 21 — a single grid, stored through the lossless compact view codec below.
   `SELECT 1;`,
 ];
 
@@ -330,7 +340,7 @@ export function migrate(db: DatabaseSync, now: number) {
   try {
     for (const step of STEPS.slice(adoptDeclaredLayout(db,current))) db.exec(step);
     if (current < 19) migrateAnalyticsViews(db, now);
-    if (current < 20) migrateUnifiedViews(db, now);
+    if (current < 21) migrateUnifiedViews(db, now);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('historyStart', String(now));
     // Before this, how agents worked is not known (the sums of layout 2 are gone), rather than none worked.

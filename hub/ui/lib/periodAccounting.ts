@@ -42,16 +42,16 @@ class QuotaIndex {
   }
   plot(range:PeriodRange,cell:number,previous:HistorySeries['points']):HistorySeries['points'] {
     const leftEnd=(Math.floor(range.from/cell)+1)*cell,rightStart=Math.floor((range.to-1)/cell)*cell;
-    const points=previous.filter(([at])=>at>=leftEnd&&at<rightStart).map(([at,value,segment])=>[at,value,segment,at+cell] as HistorySeries['points'][number]);
+    const points=previous.filter(([at])=>at>=leftEnd&&at<rightStart).map(([at,value,segment,validUntil])=>[at,value,segment,validUntil??at+cell] as HistorySeries['points'][number]);
     if(!previous.length){
       const cells=new Map<number,HistorySeries['points'][number]>();
-      for(let i=lower(this.times,leftEnd);i<lower(this.times,rightStart);i++){const s=this.series.samples[i],at=Math.floor(s.at/cell)*cell,old=cells.get(at),value=100-s.used;if(!old||value<old[1])cells.set(at,[at,value,i+1,Math.min(at+cell,s.at+s.staleAfterMs+1,s.resetAt??Infinity)]);}
+      for(let i=lower(this.times,leftEnd);i<lower(this.times,rightStart);i++){const s=this.series.samples[i],at=Math.floor(s.at/cell)*cell,old=cells.get(at),value=100-s.used;if(!old||value<old[1])cells.set(at,[at,value,i+1,Math.min(at+cell,s.at+s.staleAfterMs+1,s.resetAt??Infinity,s.validUntil??Infinity)]);}
       points.push(...cells.values());
     }
     for(const [from,to] of leftEnd>=rightStart?[[range.from,range.to]]:[[range.from,leftEnd],[rightStart,range.to]]) {
       const first=Math.max(0,lower(this.times,from+1)-1),end=lower(this.times,to);
       for(let i=first;i<end;i++) {
-        const sample=this.series.samples[i],until=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,this.times[i+1]??Infinity,to),at=Math.max(from,sample.at);
+        const sample=this.series.samples[i],until=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity,this.times[i+1]??Infinity,to),at=Math.max(from,sample.at);
         if(until>at)points.push([at,100-sample.used,i+1,until]);
       }
     }
@@ -61,7 +61,7 @@ class QuotaIndex {
   at(range:PeriodRange):QuotaSummary {
     const lo=lower(this.starts,range.from),hi=lower(this.ends,range.to),last=this.series.samples[lower(this.times,range.to)-1];
     const first=this.series.samples[lower(this.times,range.from+1)-1];
-    const valid=(sample:typeof first,at:number)=>sample&&at<Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity)?100-sample.used:null;
+    const valid=(sample:typeof first,at:number)=>sample&&at<Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity)?100-sample.used:null;
     const sum=(values:number[])=>hi>lo?values[hi]-values[lo]:0;
     const workRange={from:Math.max(range.from,this.known),to:range.to};
     const workLo=lower(this.starts,workRange.from);
@@ -118,9 +118,9 @@ class MoneyIndex {
     this.topup=group.paired?yield* AmountIndex.prepare(group.paired.readings,group.paired.spans,convert):yield* AmountIndex.prepare(group.readings,group.spans,convert,true);
     this.coverage=new Intervals(union(group.spans.map(s=>({from:s.from,to:Math.min(s.to+s.staleAfterMs+1,s.holdUntil??Infinity,s.interruptedAt??Infinity)}))));
   }
-  private convert(value:string,reading:Reading) {
+  private convert(value:string,reading:Reading,at=reading.at) {
     if(!this.group.displayUnit||reading.unit===this.group.displayUnit)return value;
-    const rates=this.group.rates?.[reading.unit+'\n'+reading.at];return rates?convertBy(value,rates):null;
+    const rates=this.group.rates?.[reading.unit+'\n'+at];return rates?convertBy(value,rates,reading.scale):null;
   }
   private value(at:number,inclusive=false) {
     const group=this.group,reading=group.readings[lower(this.times,at+(inclusive?1:0))-1];
@@ -132,14 +132,15 @@ class MoneyIndex {
       if(!credits||credits.unit!==reading.unit||!group.paired.spans.some(s=>s.from<=at&&at<Math.min(s.to+s.staleAfterMs+1,s.holdUntil??Infinity,s.interruptedAt??Infinity)))return null;
       return this.convert((BigInt(credits.amount)-BigInt(reading.amount)).toString(),reading);
     }
-    return this.convert(plottedAmount(reading),reading);
+    const observed=group.meter==='balance:credits'?Math.max(reading.at,span.to<at||inclusive&&span.to===at?span.to:span.from):reading.at;
+    return this.convert(plottedAmount(reading),reading,observed);
   }
   plot(range:PeriodRange,cell:number,previous:MeterHistory['points']):MeterHistory['points'] {
     const leftEnd=(Math.floor(range.from/cell)+1)*cell,rightStart=Math.floor((range.to-1)/cell)*cell;
     const points=previous.filter(p=>p.at>=leftEnd&&p.at<rightStart).map(p=>({...p,validUntil:p.validUntil??(Math.floor(p.at/cell)+1)*cell}));
     const group=this.group;
     for(const [from,to] of leftEnd>=rightStart?[[range.from,range.to]]:[[range.from,leftEnd],[rightStart,range.to]]) {
-      const anchors=new Set([from,...this.times.slice(lower(this.times,from),lower(this.times,to)),...this.pairedTimes.slice(lower(this.pairedTimes,from),lower(this.pairedTimes,to))]);
+      const anchors=new Set([from,...this.times.slice(lower(this.times,from),lower(this.times,to)),...this.pairedTimes.slice(lower(this.pairedTimes,from),lower(this.pairedTimes,to)),...(group.meter==='balance:credits'?group.spans.flatMap(s=>[s.from,s.to]).filter(at=>at>=from&&at<to):[])]);
       for(const at of [...anchors].sort((a,b)=>a-b)) {
         const i=lower(this.times,at+1)-1,row=group.readings[i],value=this.value(at,true);if(!row||value===null)continue;
         const span=group.spans.find(s=>s.from<=at&&at<Math.min(s.to+s.staleAfterMs+1,s.holdUntil??Infinity,s.interruptedAt??Infinity));if(!span)continue;
@@ -173,7 +174,7 @@ export class PeriodAccounting {
   private *build(work:WorkTrace|null):Preparation<void>{
     const tape=this.tape;
     const boundaries=new Set<number>(),deadlines:number[]=[];
-    for(const series of tape.quota){for(const s of series.samples){boundaries.add(s.at+1);boundaries.add(Math.min(s.at+s.staleAfterMs+1,s.resetAt??Infinity));yield;}const last=series.samples.at(-1);if(last)deadlines.push(Math.min(last.at+last.staleAfterMs+1,last.resetAt??Infinity));}
+    for(const series of tape.quota){for(const s of series.samples){boundaries.add(s.at+1);boundaries.add(Math.min(s.at+s.staleAfterMs+1,s.resetAt??Infinity,s.validUntil??Infinity));yield;}const last=series.samples.at(-1);if(last)deadlines.push(Math.min(last.at+last.staleAfterMs+1,last.resetAt??Infinity,last.validUntil??Infinity));}
     this.boundaries=yield* ordered([...boundaries].filter(Number.isFinite),(a,b)=>a-b);this.deadlines=deadlines.sort((a,b)=>a-b);
     const sources=new Map<string,Map<number,[number,number][]>>();
     for(const [id,a,b] of work?.spans??[]){const source=work!.refs[id].source;let refs=sources.get(source);if(!refs)sources.set(source,refs=new Map());let spans=refs.get(id);if(!spans)refs.set(id,spans=[]);spans.push([work!.anchor+a,work!.anchor+b]);yield;}

@@ -119,7 +119,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
     if (request.method === 'GET' || request.method === 'HEAD') return;
     const path = request.url.split('?')[0];
     const api = path.startsWith('/api/');
-    const allowed = (request.method === 'POST' && (api || path.startsWith('/v1/'))) || (request.method === 'DELETE' && api);
+    const allowed = (request.method === 'POST' && (api || path.startsWith('/v1/'))) || ((request.method === 'DELETE' || request.method === 'PUT') && api);
     if (!allowed) return reply.code(405).send({error: 'method_not_allowed'});
     // Cookie-authenticated changes are accepted only from pages of this hub.
     const origin = request.headers.origin;

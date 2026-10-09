@@ -38,6 +38,8 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
       try {meters=selectionOf(JSON.parse(query.meters??''),query.unit);} catch {fail(400, 'invalid_request');}
       // A shared hidden source is not a history capability, even when its id is known.
       if (meters.ids.some(([source])=>!shown.has(source))) fail(404, 'not_found');
+      const financial=new Map(store.sources(board).map(s=>[s.id,s]));
+      if(meters.ids.some(([source,id])=>{const s=financial.get(source);return s?.budget?.enabled===false&&budgetMeter(providerOf(s.provider),id);}))fail(404,'not_found');
       if(query.currency!==undefined)meters={...meters,nativeCurrencies:true};
     }
     if(scope==='budget'&&!meters || scope==='quota'&&query.currency!==undefined)fail(400, 'invalid_request');
@@ -54,9 +56,10 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
       try {store.currencies.definition(user,query.currency);}catch{fail(404, 'currency_not_found');}
       if(store.currencies.preference(user).id!==query.currency)fail(409, 'currency_changed');
       const observed=new Map<string,number[]>();
+      const grants=new Map(store.sources(board).map(s=>[s.id,s.provider==='codex'?s.budget?.anchor??Infinity:0]));
       const transformed=displayHistory(chunks.map(json=>JSON.parse(json) as Chunk),store.currencies,user,query.currency,cell,(source,meter,until)=>{
         const id=meter==='balance'?'usage':meter,key=source+'\n'+id;let times=observed.get(key);
-        if(!times){const rows=store.meters.readings(source,id,from,to),spans=store.meters.spans(source,id,from,to);times=[...rows.map(r=>r.at),...spans.map(s=>s.to)].sort((a,b)=>a-b);observed.set(key,times);}
+        if(!times){const rows=store.meters.readings(source,id,from,to),spans=store.meters.spans(source,id,from,to);times=[...rows.map(r=>r.at),...spans.flatMap(s=>id==='balance:credits'?[s.from,s.to]:[s.to])].filter(at=>at>=(grants.get(source)??Infinity)).sort((a,b)=>a-b);observed.set(key,times);}
         let low=0,high=times.length;while(low<high){const middle=(low+high)>>>1;if(times[middle]<=until)low=middle+1;else high=middle;}return low?times[low-1]:null;
       });
       chunks=transformed.map(chunk=>JSON.stringify(chunk));

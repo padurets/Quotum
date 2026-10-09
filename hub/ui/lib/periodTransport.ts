@@ -1,10 +1,10 @@
-import type {HistoryScope,HistoryReply} from '../../server/domain/history';
-import type {HistoryQuery,PeriodRequest,PeriodReply} from '../../server/domain/periodRead';
+import type {HistoryReply} from '../../server/domain/history';
+import {PERIOD_SCOPES,type PeriodScope,type HistoryQuery,type PeriodRequest,type PeriodReply} from '../../server/domain/periodRead';
 import {ApiError} from './http';
 import type {HistoryPool,HistoryMember} from './historyPool';
 
 export type PeriodIntent={board:string;generation:number;revision:number;request:PeriodRequest};
-type Demand={scope:HistoryScope;query:HistoryQuery;signal?:AbortSignal;resolve(value:HistoryReply):void;reject(error:unknown):void};
+type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;resolve(value:HistoryReply):void;reject(error:unknown):void};
 type Flight={role:'visible';intent:PeriodIntent;controller:AbortController;demands:Demand[];ownSlot:boolean;extras:boolean};
 const aborted=()=>new DOMException('Aborted','AbortError');
 
@@ -24,7 +24,7 @@ export class PeriodTransport implements HistoryMember {
   change(){this.schedule();}
   reset(){this.completed=this.failed='';this.cursors.clear();for(const flight of this.flights)this.abort(flight);for(const demand of this.queue)demand.reject(aborted());this.queue=[];}
   retry(){this.failed='';this.schedule();}
-  read(scope:HistoryScope,query:HistoryQuery,signal?:AbortSignal):Promise<HistoryReply> {
+  read(scope:PeriodScope,query:HistoryQuery,signal?:AbortSignal):Promise<HistoryReply> {
     return new Promise((resolve,reject)=>{
       if(signal?.aborted){reject(aborted());return;}
       const demand={scope,query,signal,resolve,reject};this.queue.push(demand);
@@ -37,15 +37,15 @@ export class PeriodTransport implements HistoryMember {
   private flush() {
     const intent=this.intent();if(!intent)return;
     const key=this.key(intent);
-    const extras=(!!intent.request.values||!!intent.request.sessions||!!intent.request.quota||!!intent.request.budget)&&key!==this.completed&&key!==this.failed&&![...this.flights].some(f=>f.extras&&this.key(f.intent)===key);
+    const extras=(!!intent.request.values||!!intent.request.sessions||!!intent.request.quota||!!intent.request.budget||!!intent.request.funds)&&key!==this.completed&&key!==this.failed&&![...this.flights].some(f=>f.extras&&this.key(f.intent)===key);
     if(!this.queue.length&&!extras)return;
     const demands:Demand[]=[];
-    for(const scope of ['quota','budget'] as const){const index=this.queue.findIndex(d=>d.scope===scope&&!d.signal?.aborted);if(index!==-1)demands.push(this.queue.splice(index,1)[0]);}
+    for(const scope of PERIOD_SCOPES){const index=this.queue.findIndex(d=>d.scope===scope&&!d.signal?.aborted);if(index!==-1)demands.push(this.queue.splice(index,1)[0]);}
     const flight:Flight={role:'visible',intent,controller:new AbortController(),demands,ownSlot:!demands.length,extras};
     this.flights.add(flight);
-    const cursorKey=(scope:HistoryScope,query:HistoryQuery)=>JSON.stringify([intent.board,scope,query.meters,query.unit,query.currency]);
-    const body:PeriodRequest={...intent.request,...(!extras?{values:undefined,sessions:undefined,quota:undefined,budget:undefined}:{}),...Object.fromEntries(demands.map(d=>[d.scope,{...d.query}]))};
-    for(const scope of ['quota','budget'] as const){const query=body[scope];if(query)query.evidence??=this.cursors.get(cursorKey(scope,query));}
+    const cursorKey=(scope:PeriodScope,query:HistoryQuery)=>JSON.stringify([intent.board,scope,query.meters,query.unit,query.currency]);
+    const body:PeriodRequest={...intent.request,...(!extras?{values:undefined,sessions:undefined,quota:undefined,budget:undefined,funds:undefined}:{}),...Object.fromEntries(demands.map(d=>[d.scope,{...d.query}]))};
+    for(const scope of PERIOD_SCOPES){const query=body[scope];if(query)query.evidence??=this.cursors.get(cursorKey(scope,query));}
     const appliedIntent={...intent,request:body};
     const start=()=>{
       if(flight.controller.signal.aborted)return;
@@ -57,7 +57,7 @@ export class PeriodTransport implements HistoryMember {
           await this.receive(reply,appliedIntent);
           const latest=this.intent();
           if(latest?.generation===intent.generation&&latest.revision===intent.revision){if(extras)this.completed=key;
-          for(const scope of ['quota','budget'] as const){const part=reply[scope],query=body[scope];if(query&&part?.state==='complete'&&part.value.tape)this.cursors.set(cursorKey(scope,query),part.value.tape.cursor);}}
+          for(const scope of PERIOD_SCOPES){const part=reply[scope],query=body[scope];if(query&&part?.state==='complete'&&part.value.tape)this.cursors.set(cursorKey(scope,query),part.value.tape.cursor);}}
         }
         for(const demand of demands) {
           const part=reply[demand.scope];

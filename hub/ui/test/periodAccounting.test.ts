@@ -53,3 +53,17 @@ test('fixed boundary geometry keeps the old native window and cap allowance insi
   assert.equal(shown.series[0].windowValue?.label,'Retained');assert.equal(shown.series[0].remainingAtEnd,90);
   assert.deepEqual(shown.series[0].points,[[10_000,90,1,30_000]]);
 });
+
+test('credit heartbeats keep exact coefficients and their own valuation without inventing spending',()=>{
+  const evidence=tape(),rate=(to:string)=>[{id:to,base:'credits:codex',from:'1000000',to,source:'manual',date:0,fetchedAt:0}];
+  evidence.money=[{source:'s',meter:'balance:credits',displayUnit:'USD',accounting:{spending:'unavailable',topups:'unavailable'},
+    readings:[{id:'balance:credits',kind:'balance',unit:'credits:codex',amount:'2500000000001',scale:12,limit:null,at:0,previousAt:null,staleAfterMs:60000,resetAt:null,minutes:null,scope:null,label:null}],
+    spans:[{from:0,to:40000,staleAfterMs:60000}],rates:{'credits:codex\n0':rate('40000'),'credits:codex\n40000':rate('30000')}}];
+  const frame:History={...blank,live:false,meterSeries:[{sourceId:'s',meterId:'balance:credits',unit:'USD',kind:'balance',start:null,end:null,spent:null,topup:null,coveredMs:0,unlocated:[],topupUnlocated:[],semantics:null,points:[]}]};
+  const accounting=new PeriodAccounting(evidence,null);
+  const before=accounting.project(frame,{from:0,to:40000}).meterSeries![0];
+  assert.equal(before.end,'100000');
+  const after=accounting.project(frame,{from:0,to:50000}).meterSeries![0];
+  assert.equal(after.end,'75000');assert.equal(after.spent,null);assert.equal(after.topup,null);
+  assert.equal(after.points.find(p=>p.at===40000)?.value,'75000');
+});

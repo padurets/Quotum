@@ -34,10 +34,11 @@ export async function frequencyKeys(cdp: Cdp) {
 }
 
 /** Each phase keeps its intended monetary selection across the page reload. */
-export async function selectMoney(cdp: Cdp, ids: [string, string][]) {
+export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'budget'|'funds'='budget') {
+  const panel=family==='funds'?'.subscription-funds':'.budget-history';
   await cdp.evaluate(`(() => {
     const prefs = JSON.parse(localStorage.getItem('quotum.prefs') || '{}');
-    prefs.money = {unit: 'USD', view: 'balance', selected: {USD: ${JSON.stringify(ids)}}};
+    prefs.${family==='funds'?'funds':'money'} = {unit: 'USD', view: 'balance', selected: {USD: ${JSON.stringify(ids)}}};
     prefs.muted = {};
     localStorage.setItem('quotum.prefs', JSON.stringify(prefs));
   })()`);
@@ -53,9 +54,9 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][]) {
     while (stable < 3) {
       if (Date.now() > end) throw new Error('money selection did not load');
       await new Promise(requestAnimationFrame);
-      const root = document.querySelector('.budget-history .chart > svg');
-      const series = Array.from(document.querySelectorAll('.budget-history [data-series]'));
-      const waiting = document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.chart>svg[data-draw-ready="false"]');
+      const root = document.querySelector('${panel} .chart > svg');
+      const series = Array.from(document.querySelectorAll('${panel} [data-series]'));
+      const waiting = document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]');
       const ready = root?.dataset.drawReady === 'true' && !waiting && series.length === ${ids.length} && series.every(line => Array.from(line.querySelectorAll('path.series')).some(path => path.getAttribute('d')));
       const box = root?.getBoundingClientRect(), size = box ? [box.x, box.y, box.width, box.height].join(':') : '';
       const moving = document.getAnimations().some(animation => animation.playState === 'running' && animation.effect?.target?.matches('.widget, .widget-body'));
@@ -68,7 +69,7 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][]) {
 /** A zero cap keeps the scale's origin unchanged when balances become spending. */
 export async function moneyView(cdp: Cdp, source: string, cappedSource: string, cap: string) {
   await selectMoney(cdp, [[source, 'balance'], [cappedSource, cap]]);
-  await cdp.evaluate(`document.querySelector('.budget-history .panel-head button').click()`);
+  await cdp.evaluate(`document.querySelector('.analytics-head .controls .picker > button').click()`);
   for (const label of ['Spending', 'Balance', 'Spending']) {
     await cdp.evaluate(`(async () => {
       const button = Array.from(document.querySelectorAll('.popover .segmented button')).find(b => b.textContent === ${JSON.stringify(label)});

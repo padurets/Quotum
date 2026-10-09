@@ -32,7 +32,7 @@ function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
       querySelector: (selector: string) => selector === '.budget-history .chart > svg' ? root
         : selector === '.budget-history.is-loading' ? ready() ? null : {}
         : selector.startsWith('.history.is-loading,') ? broken === 'slow-quota' && frame < 20 ? {} : null
-        : selector === '.budget-history .panel-head button' ? {click() {}}
+        : selector === '.analytics-head .controls .picker > button' ? {click() {}}
         : selector.startsWith('[data-series=') ? line : null,
       querySelectorAll: (selector: string) => selector === '.budget-history [data-series]' ? frame >= 3 ? ids.map(() => line) : [] : buttons,
       getAnimations: () => frame < 8 ? [{playState: 'running', effect: {target: {matches: () => true}}}] : [],

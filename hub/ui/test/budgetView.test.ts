@@ -19,6 +19,7 @@ import * as currency from '../../server/domain/currency';
 import {defaultCurrencyContext} from '../../server/domain/currency';
 import {Store} from '../../server/store/store';
 import * as statusMarks from '../components/StatusMark';
+import * as currencySettings from '../lib/currencySettings';
 
 Object.assign(globalThis,{React});
 
@@ -31,18 +32,20 @@ const dual=()=>card('deepseek',[
 ]);
 
 // Exercise the production card with a closed disclosure and no network or page clock.
-const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact?:boolean})=>ReturnType<typeof createElement>;BalanceMark:(props:{source:Card})=>ReturnType<typeof createElement>|null},require:(name:string)=>{
+let shownCurrency=defaultCurrencyContext;
+const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact?:boolean;tray?:boolean})=>ReturnType<typeof createElement>;BalanceMark:(props:{source:Card})=>ReturnType<typeof createElement>|null},require:(name:string)=>{
   if(name==='react/jsx-runtime')return jsx;
   if(name==='../../server/domain/currency')return currency;
   if(name==='../../server/domain/meters')return meterDomain;
   if(name==='../lib/money')return money;
+  if(name==='../lib/currencySettings')return currencySettings;
   if(name==='../lib/format')return format;
   if(name==='../i18n')return {t};
   if(name==='../lib/moneyKeys')return {useShownKeys:(source:Card)=>({keys:source.keys??[],meters:source.meters??[],error:null})};
   if(name==='./Popover')return {Popover:({trigger,triggerClass,label}:{trigger:ReactNode;triggerClass?:string;label:string})=>createElement('button',{'aria-expanded':false,className:triggerClass,'aria-label':label},trigger)};
   if(name==='./StatusMark')return statusMarks;
   if(name==='./Kit')return {ErrorLine:()=>null};
-  if(name==='../lib/board')return {useCurrencyContext:()=>defaultCurrencyContext};
+  if(name==='../lib/board')return {useCurrencyContext:()=>shownCurrency};
   if(name==='../lib/clock')return {useClock:()=>1};
   if(name==='../lib/measurementClock')return {useMeasurementClock:()=>1,useMeasurementTime:()=>null};
   if(['../lib/board','../lib/clock','../lib/http','../lib/quota','./Meter'].includes(name))return {};
@@ -50,6 +53,36 @@ const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact
 }};
 runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneyCard.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2023,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,fixture);
 const {MoneyCard}=fixture.exports;
+
+test('subscription footer keeps the last known balance in its warning tone, like free resets',()=>{
+  const source={...card('codex',[{...meter('balance:credits','0','credits:codex'),scale:0}]),creditBalance:{id:'balance:credits' as const,unit:'credits:codex' as const,status:'finite' as const,at:1,staleAfterMs:1000}};
+  shownCurrency={...defaultCurrencyContext,sources:{s:[{from:'credits:codex',at:1,anchor:null,steps:[{id:'default',source:'codex-default',base:'credits:codex',date:0,fetchedAt:1,from:'1000000',to:'40000'}]}]}};
+  try {
+    for(const locale of ['en','ru'] as const) {
+      setLocale(locale);
+      const draw=(value:Card)=>renderToStaticMarkup(createElement(MoneyCard,{source:value,board:'',tray:true}));
+      assert.match(draw(source),/data-money="0"/,'a reported zero is a value');
+      assert.ok(!draw(source).includes('data-time='),'live amounts remain data mutations in the performance probe');
+      assert.ok(draw({...source,creditBalance:{...source.creditBalance,status:'unlimited'}}).includes('∞'));
+      const precise=draw({...source,meters:[{...source.meters![0],amount:'12345678912',scale:7}]});
+      const tooltip=precise.match(/\btitle="([^"]*)"/)![1];
+      assert.ok(tooltip.includes(money.money('12345678912','credits:codex',true,shownCurrency,7)));
+      assert.ok(!tooltip.includes('USD'),'the hover tooltip shows the exact native balance, not the converted amount');
+      assert.ok(precise.includes('data-money="49382716"'),'the footer keeps its converted amount');
+      for(const status of ['missing','invalid','unsupported'] as const) {
+        const html=draw({...source,creditBalance:{...source.creditBalance,status}});
+        assert.match(html,/tray-pill is-warn/);
+        assert.match(html,/data-money="0"/,'the last known zero remains visible');
+        assert.ok(!html.includes('—')&&!html.includes('m12 3 10 18H2Z'),'no placeholder or warning icon replaces the balance');
+        const positive=draw({...source,meters:[{...source.meters![0],amount:'2500',stale:true}],creditBalance:{...source.creditBalance,status}});
+        assert.match(positive,/data-money="100000000"/,'the last known positive balance stays visible without opening details');
+      }
+      assert.equal(money.subscriptionFundsVisible({...source,meters:[],creditBalance:undefined}),false);
+      assert.equal(money.subscriptionFundsVisible({...source,meters:[],creditBalance:{...source.creditBalance,status:'missing'}}),false);
+      assert.equal(money.subscriptionFundsVisible({...source,budget:{enabled:false,since:null,anchor:null,revision:''}}),false);
+    }
+  } finally {shownCurrency=defaultCurrencyContext;setLocale('en');}
+});
 
 test('balance news uses the shared warning icon and status tones rather than a text badge',()=>{
   for(const locale of ['en','ru'] as const) {

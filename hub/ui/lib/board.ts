@@ -1,3 +1,4 @@
+import {budgetVisible} from './money';
 import {defaultCurrencyContext,DEFAULT_CURRENCY,type CurrencyContext} from '../../server/domain/currency';
 import {useMemo} from 'react';
 import type {AppState} from './app';
@@ -8,7 +9,7 @@ import type {Board} from './session';
 import {createStore, sameJson, shallowEqual, useSelect} from './store';
 import type {Card, LiveSession, Pace, Refresh, SourceForecast, View} from './types';
 import type {SourceAccess} from '../../server/secrets/credentials';
-import {providerOf,supportsBudget,supportsQuota} from '../../server/domain/providers';
+import {providerOf,moneyFamily,supportsQuota,quotaMeter,type MoneyFamily} from '../../server/domain/providers';
 import {quotaPeriods} from './subscription';
 
 /**
@@ -299,7 +300,7 @@ export const useVisibleLimits = () => usePage(s => {
   if (!b) return NONE;
   return b.lineup.filter(id => {
     const card=b.cards[id],periods=card?quotaPeriods(card):[];
-    return !b.view.hidden.includes(`source:${id}`)&&(!periods.length||periods.some(w=>!b.view.windows.includes(`${id}/${w.id}`)));
+    return !b.view.hidden.includes(`source:${id}`)&&(!!card&&budgetVisible(card)||!periods.length||periods.some(w=>!b.view.windows.includes(`${id}/${w.id}`)));
   });
 }, shallowEqual);
 export const useLineup = () => usePage(s => s.board?.lineup ?? NONE);
@@ -316,7 +317,7 @@ export function useCurrencyContext(source?:string):CurrencyContext {
   const revision=usePage(s=>source?undefined:currencyContextOf(s).revision);
   return useMemo(()=>({target,definitions,sources:source?{[source]:bindings}:{},...(revision?{revision}:{})}),[target,definitions,source,bindings,revision]);
 }
-export const useMoneyUnits=()=>usePage(s=>[...new Set(Object.values(s.board?.cards??{}).filter(c=>providerOf(c.provider)?.funding==='wallet').flatMap(c=>c.meters?.map(m=>/^[A-Z]{3}$/.test(m.unit)?DEFAULT_CURRENCY:m.unit)??[]))].sort(),shallowEqual);
+export const useMoneyUnits=()=>usePage(s=>[...new Set(Object.values(s.board?.cards??{}).filter(budgetVisible).flatMap(c=>c.meters?.map(m=>/^[A-Z]{3}$/.test(m.unit)||m.unit==='credits:codex'?DEFAULT_CURRENCY:m.unit)??[]))].sort(),shallowEqual);
 /** The cards of these sources, in their order; the same list while each card is. */
 export const useCards = (ids: string[]) => usePage(s => ids.flatMap(id => s.board?.cards[id] ?? []), shallowEqual);
 export const useSessions = (id: string) => usePage(s => s.board?.sessions[id] ?? NONE);
@@ -368,9 +369,22 @@ export const useTitle = (id: string, names?: Record<string, string>) => usePage(
 
 export type Named = Card & {title?: string};
 
+/** Financial heartbeats of a subscription cannot change its quota drawing inputs. */
+export function namedCardsOf(state:PageState,scope?:'quota'|MoneyFamily):Card[] {
+  return (state.board?.lineup??[]).flatMap(id=>{
+    const card=state.board?.cards[id];
+    if(!card||scope&&(scope==='quota'?!supportsQuota(providerOf(card.provider)):moneyFamily(providerOf(card.provider))!==scope))return [];
+    if(scope!=='quota')return [card];
+    return [{id:card.id,provider:card.provider,plan:card.plan,successAt:card.successAt,error:card.error,stale:card.stale,
+      windows:card.windows,resets:card.resets,owners:card.owners,staleAfterMs:card.staleAfterMs,measureIntervalMs:card.measureIntervalMs,
+      ...(card.quota?{quota:card.quota}:{}),...(card.resources?{resources:card.resources}:{}),
+      meters:card.meters?.filter(m=>quotaMeter(providerOf(card.provider),m.id))??[]}];
+  });
+}
+
 /** The board's cards in its order, each with its name: what the chart and the table draw. Not their agents or pace. */
-export function useNamed(names?: Record<string, string>, scope?: 'quota'|'budget'): Named[] {
-  const cards = usePage(s=>(s.board?.lineup??[]).flatMap(id=>{const card=s.board?.cards[id];return card&&(!scope||(scope==='quota'?supportsQuota:supportsBudget)(providerOf(card.provider)))?[card]:[];}),shallowEqual);
+export function useNamed(names?: Record<string, string>, scope?: 'quota'|MoneyFamily): Named[] {
+  const cards = usePage(s=>namedCardsOf(s,scope),scope==='quota'?sameJson:shallowEqual);
   const titles = useTitles(names);
   return useMemo(() => cards.map(card => ({...card, title: titles[card.id]?.title})), [cards, titles]);
 }

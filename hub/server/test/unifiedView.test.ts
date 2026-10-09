@@ -29,7 +29,7 @@ test('hidden saved positions cannot move implicit visible neighbours during unif
 
 test('all builtin shown subsets and 204 other ids survive the compact codec', () => {
   const other = Array.from({length:204},(_,i)=>String(i));
-  for (let mask=0;mask<64;mask++) {
+  for (let mask=0;mask<128;mask++) {
     const shown = WIDGETS.filter((_,i)=>mask & 1<<i).concat(other as typeof WIDGETS[number][]);
     const view = {...EMPTY_VIEW,shown};
     const decoded = decodeView(encodeView(view));
@@ -38,9 +38,9 @@ test('all builtin shown subsets and 204 other ids survive the compact codec', ()
   }
   assert.equal(decodeView([3,[[0,3],['agents',3]],0]),null);
   assert.equal(decodeView([3,[['x',3],['x',3]],0]),null);
-  assert.equal(decodeView([3,[[6,3]],0]),null);
+  assert.equal(decodeView([3,[[7,3]],0]),null);
   assert.equal(decodeView([3,[],1024]),null);
-  assert.equal(decodeView([3,[],4,[64]]),null);
+  assert.equal(decodeView([3,[],4,[128]]),null);
   assert.equal(decodeView([3,[],4,[1,'agents']]),null);
   assert.equal(decodeView([3,[],4,[0,'x','x']]),null);
   assert.equal(decodeView([3,[],0,[]]),null);
@@ -59,7 +59,7 @@ test('the largest sparse accepted v2 retains its owner fields through real stora
     const directory=new Directory(db), state=directory.viewState('b');
     assert.equal(state.revision,8);
     assert.deepEqual(state.view.names,input.names); assert.deepEqual(state.view.windows,input.windows);
-    assert.equal(bytes(encodeView(state.view)),77801);
+    assert.equal(bytes(encodeView(state.view)),77808);
     assert.equal(directory.saveView('b',state.view,'u',2),8);
     assert.deepEqual(directory.viewState('b'),state);
     migrate(db,3); assert.deepEqual(directory.viewState('b'),state);
@@ -69,12 +69,12 @@ test('the largest sparse accepted v2 retains its owner fields through real stora
   } finally {db.close();}
 });
 
-test('migration grows no implicit source places and never exceeds the original accepted v2 bytes', () => {
+test('migration grows no implicit source places and preserves the accepted byte budget', () => {
   const sources=Array.from({length:500},(_,i)=>({id:String(i),provider:i%2?'codex':'deepseek'}));
   const tiny={version:2,layout:{columns:6,places:{}}};
   assert.equal(bytes(tiny),48);
-  assert.equal(bytes(encodeView(migrateUnified(parseSplitView(tiny)!,sources))),42);
-  for(let mask=0;mask<64;mask++) for(const saved of [0,1,20]) {
+  assert.equal(bytes(encodeView(migrateUnified(parseSplitView(tiny)!,sources))),49);
+  for(let mask=0;mask<128;mask++) for(const saved of [0,1,20]) {
     const v={...before(),shown:WIDGETS.filter((_,i)=>mask&1<<i),layout:{columns:6,places:Object.fromEntries(sources.slice(0,saved).map((source,i)=>['source:'+source.id,{x:0,w:3,y:i*100}]))}};
     const migrated=migrateUnified(v,sources),wire=encodeView(migrated);
     assert.ok(bytes(wire)<=bytes(v));

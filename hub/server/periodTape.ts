@@ -4,9 +4,9 @@ import type {PeriodTape,MoneyTape} from './domain/periodTape.js';
 import type {HistoryScope} from './domain/history.js';
 import {selectionOf} from './domain/meterHistory.js';
 import type {HistoryQuery} from './domain/periodRead.js';
-import {isCurrency} from './domain/currency.js';
+import {isConvertible} from './domain/currency.js';
 
-export function periodTape(store:Store,shown:Shown,user:string,scope:HistoryScope,query:HistoryQuery,range:PeriodRange,cursor:string,replaceFrom:number,reserve:(bytes:number)=>void,membershipAt=range.to):PeriodTape {
+export function periodTape(store:Store,board:string,shown:Shown,user:string,scope:HistoryScope,query:HistoryQuery,range:PeriodRange,cursor:string,replaceFrom:number,reserve:(bytes:number)=>void,membershipAt=range.to):PeriodTape {
   const tape:PeriodTape={from:range.from,cut:range.to,cursor,replaceFrom,quota:[],money:[]};
   if(replaceFrom>=range.to)return tape;
   if(scope==='quota') {
@@ -22,22 +22,28 @@ export function periodTape(store:Store,shown:Shown,user:string,scope:HistoryScop
         const previous=descriptors.at(-1)?.value;
         if(!previous||previous.kind!==kind||previous.label!==label||previous.minutes!==minutes){reserve(128+(label?.length??0)*2);descriptors.push({at,value:{id:window,kind,label,minutes}});}
       }
-      if(samples.length){const row=descriptor.get(id,membershipAt,id,window,membershipAt);if(!row)continue;reserve(192+String(row.label??'').length*2);tape.quota.push({source:id,window,samples,descriptors,member:!!row.member,windowValue:{id:window,kind:row.kind as 'session'|'weekly'|'other',label:row.label as string|null,minutes:row.minutes as number|null}});}
+      if(samples.length){const row=descriptor.get(id,membershipAt,id,window,membershipAt);if(!row)continue;reserve(192+String(row.label??'').length*2);tape.quota.push({source:id,window,samples:store.quotaAvailability(id,samples,true,reserve),descriptors,member:!!row.member,windowValue:{id:window,kind:row.kind as 'session'|'weekly'|'other',label:row.label as string|null,minutes:row.minutes as number|null}});}
     }
   }
   if(query.meters) {
     const selection=selectionOf(JSON.parse(query.meters),query.unit);
     const target=query.currency,bindings=target?store.currencies.history(user,target,replaceFrom,range.to,reserve):null;
     for(const id of selection.ids.filter(([source])=>shown.has(source))) {
-      const group:MoneyTape=store.meters.groups({...selection,ids:[id]},replaceFrom,range.to,reserve)[0];
+      const group:MoneyTape=store.financialGroups(board,{...selection,ids:[id]},replaceFrom,range.to,Date.now(),reserve)[0];
       if(id[1].startsWith('key:')&&!store.holds(user,id[0]))for(const reading of group.readings)reading.label=null;
       group.spans=group.spans.filter(s=>s.to+s.staleAfterMs+1>=replaceFrom);
       if(group.paired)group.paired.spans=group.paired.spans.filter(s=>s.to+s.staleAfterMs+1>=replaceFrom);
       if(bindings&&target) {
         group.displayUnit=target;group.rates={};
-        for(const reading of [...group.readings,...group.paired?.readings??[]])if(isCurrency(reading.unit)) {
+        for(const reading of [...group.readings,...group.paired?.readings??[]])if(isConvertible(reading.unit)) {
           const steps=bindings.binding(group.source,reading.unit,reading.at);
           reserve(256+(steps?JSON.stringify(steps).length*2:0));group.rates[reading.unit+'\n'+reading.at]=steps;
+
+        }
+        if(group.meter==='balance:credits')for(const span of group.spans)for(const at of [span.from,span.to]) {
+          const key='credits:codex\n'+at;if(key in group.rates)continue;
+          const steps=bindings.binding(group.source,'credits:codex',at);
+          reserve(256+(steps?JSON.stringify(steps).length*2:0));group.rates[key]=steps;
         }
       }
       tape.money.push(group);

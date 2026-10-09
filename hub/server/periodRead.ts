@@ -5,7 +5,7 @@ import type {Events} from './events.js';
 import {compactJSON, HistoryLimit, type HistoryTiles} from './history.js';
 import {fail,readHistory,ReadError} from './historyRead.js';
 import {evaluatedRange,parsePeriod,type PeriodBasis,type PeriodSection} from './domain/period.js';
-import type {PeriodReply,PeriodRequest} from './domain/periodRead.js';
+import {PERIOD_SCOPES,type PeriodReply,type PeriodRequest} from './domain/periodRead.js';
 import type {HistoryScope,HistoryReply} from './domain/history.js';
 import {periodValues} from './periodValues.js';
 import {sharedWork,periodWork} from './periodWork.js';
@@ -49,7 +49,7 @@ export class PeriodReader {
     const selection=parsePeriod(raw.selection),cursor=this.decode(raw.cursor);
     if(!selection||!cursor)fail(400,'history_range_invalid');
     const {store,directory}=this.hub,shown=store.shown(board,directory.view(board).hidden);
-    const identity=createHash('sha256').update(JSON.stringify([board,user,store.workKey(board,shown),store.retentionRevision])).digest('base64url');
+    const identity=createHash('sha256').update(JSON.stringify([board,user,store.workKey(board,shown),store.retentionRevision,store.sources(board).map(s=>[s.id,s.budget])])).digest('base64url');
     const range=evaluatedRange(selection,raw.evaluatedAt);
     if(cursor.identity!==identity||cursor.revision!==this.revision||cursor.from>range.from||cursor.cut<Math.min(range.to,raw.evaluatedAt))fail(400,'history_range_invalid');
     const json=this.read(board,user,{version:1,selection,evaluatedAt:raw.evaluatedAt,sessions:{}}),reservation=this.history.reservation();
@@ -64,10 +64,10 @@ export class PeriodReader {
     finally{reservation.close();}
   }
   read(board:string,user:string,raw:unknown):string {
-    if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','quota','budget','values','sessions'].includes(k)))fail(400,'invalid_request');
+    if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','quota','budget','funds','values','sessions'].includes(k)))fail(400,'invalid_request');
     const selection=parsePeriod(raw.selection);if(!selection)fail(400,'invalid_request');
-    for(const name of ['quota','budget'] as const)if(raw[name]!==undefined&&(!object(raw[name])||Object.values(raw[name]).some(v=>typeof v!=='string')||Object.keys(raw[name]).some(k=>!['cell','from','to','meters','unit','currency','meta','evidence','cells'].includes(k))))fail(400,'invalid_request');
-    for(const name of ['quota','budget'] as const)if(object(raw[name])&&raw[name].cells!==undefined&&raw[name].cells!=='skip')fail(400,'invalid_request');
+    for(const name of PERIOD_SCOPES)if(raw[name]!==undefined&&(!object(raw[name])||Object.values(raw[name]).some(v=>typeof v!=='string')||Object.keys(raw[name]).some(k=>!['cell','from','to','meters','unit','currency','meta','evidence','cells'].includes(k))))fail(400,'invalid_request');
+    for(const name of PERIOD_SCOPES)if(object(raw[name])&&raw[name].cells!==undefined&&raw[name].cells!=='skip')fail(400,'invalid_request');
     if(raw.values!==undefined&&(!Array.isArray(raw.values)||raw.values.length>2000||raw.values.some(v=>typeof v!=='string'||v.length>256)))fail(400,'invalid_request');
     if(raw.sessions!==undefined&&(!object(raw.sessions)||Object.keys(raw.sessions).some(k=>k!=='cursor')||raw.sessions.cursor!==undefined&&(typeof raw.sessions.cursor!=='string'||raw.sessions.cursor.length>2048)))fail(400,'invalid_request');
     const request=raw as PeriodRequest,{store,directory}=this.hub,now=Date.now();
@@ -76,7 +76,7 @@ export class PeriodReader {
     if(range.from<now-config.retention.sampleDays*86_400_000||range.from>=now)fail(400,'history_range_invalid');
     const cut=Math.min(range.to,now),shown=store.shown(board,directory.view(board).hidden);
     if(request.values?.some(id=>!shown.has(id)))fail(404,'not_found');
-    const identity=createHash('sha256').update(JSON.stringify([board,user,store.workKey(board,shown),store.retentionRevision])).digest('base64url');
+    const identity=createHash('sha256').update(JSON.stringify([board,user,store.workKey(board,shown),store.retentionRevision,store.sources(board).map(s=>[s.id,s.budget])])).digest('base64url');
     const previous=this.decode(request.sessions?.cursor);
     const delta=!!previous&&previous.identity===identity&&previous.revision>=this.floor&&previous.revision<=this.revision;
     const frontier=(before:Cursor|null,changes:Change[])=>{
@@ -107,19 +107,20 @@ export class PeriodReader {
       }
     };
     try {
-      for(const scope of ['quota','budget'] as const)if(request[scope])response[scope]=section(()=>{
-        const query=request[scope]!,json=readHistory(this.hub,this.history,this.events,board,user,{...query,scope},work,query.cells!=='skip');
+      for(const scope of PERIOD_SCOPES)if(request[scope])response[scope]=section(()=>{
+        const historyScope=scope==='funds'?'budget':scope;
+        const query=request[scope]!,json=readHistory(this.hub,this.history,this.events,board,user,{...query,scope:historyScope},work,query.cells!=='skip');
         reserve(Buffer.byteLength(json)*2);const value=JSON.parse(json) as HistoryReply;
         if(query.evidence==='skip')return value;
         const tapeIdentity=createHash('sha256').update(JSON.stringify([identity,scope,query.meters,query.unit,query.currency,store.currencies.registryRevision(user)])).digest('base64url');
         const previous=this.decode(query.evidence);
         const delta=previous&&previous.identity===tapeIdentity&&previous.revision>=this.floor&&previous.revision<=this.revision;
-        const changes=delta?this.measurements.filter(c=>c.revision>previous.revision&&shown.has(c.source)&&(!c.scopes||c.scopes.includes(scope))):[];
+        const changes=delta?this.measurements.filter(c=>c.revision>previous.revision&&shown.has(c.source)&&(!c.scopes||c.scopes.includes(historyScope))):[];
         const patch=frontier(delta?previous:null,changes);
         const changed=new Set(changes.map(c=>c.source)),extendsRange=!!delta&&range.from<previous.from;
         const tapeShown=delta&&!extendsRange?new Map([...shown].filter(([id])=>changed.has(id))):shown;
         const cursor=this.encode({identity:tapeIdentity,revision:this.revision,from:patch.coveredFrom,cut:patch.coveredTo});
-        const tape=periodTape(store,tapeShown,user,scope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut);
+        const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut);
         return {...value,tape:{...tape,cut:patch.coveredTo,...(delta?{replaceTo:patch.to}:{})}};
       });
       if(request.values)response.values=section(()=>periodValues(store,store.sources(board).filter(s=>request.values!.includes(s.id)),user,cut,reserve));

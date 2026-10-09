@@ -239,10 +239,10 @@ test('history starts when the database was made, or at an older sample while one
   const id = seen(store, 'codex', 'account-a');
   store.record(id, measurement({observedAt: start + 60_000}));
   assert.equal(store.historyStart(start), start, 'a newer sample changes nothing');
-  store.record(id, measurement({observedAt: start - 100 * day}));
+  store.record(seen(store,'codex','old-spool'), measurement({observedAt: start - 100 * day}));
   assert.equal(store.historyStart(start), start, 'a sample dated before the retention period moves nothing, pruned or not');
   const older = start - 20 * day;
-  store.record(id, measurement({observedAt: older}));
+  store.record(seen(store,'codex','retained-spool'), measurement({observedAt: older}));
   assert.equal(store.historyStart(start), older, 'measurements an agent kept for days, delivered to a new hub');
   const later = older + 91 * day;
   store.prune(later);

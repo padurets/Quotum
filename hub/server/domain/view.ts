@@ -115,7 +115,7 @@ function parseFields(body: unknown, version: 2 | 3): View | SplitView | null {
   if (input.version !== version) return null;
   const layout = parseLayout(input.layout);
   const hidden = ids(input.hidden ?? [], LIMITS.widgets + 4);
-  const shown = ids(input.shown ?? [], LIMITS.widgets + (version === 3 ? 10 : 4));
+  const shown = ids(input.shown ?? [], LIMITS.widgets + (version === 3 ? 11 : 4));
   const windows = ids(input.windows ?? [], LIMITS.windows);
   const names = byId(input.names, isName);
   const plans = byId(input.plans, isValidPlan);
@@ -134,7 +134,7 @@ export const parseView = (body: unknown) => parseFields(body, 3) as View | null;
 export const parseSplitView = (body: unknown) => parseFields(body, 2) as SplitView | null;
 
 // These positions are the persisted v3 codec, independent of the catalogue's order.
-const BUILTIN_WIDGETS: readonly string[] = ['agents', 'activity', 'quota-history', 'budget-history', 'quota-table', 'budget-table'];
+const BUILTIN_WIDGETS: readonly string[] = ['agents', 'activity', 'quota-history', 'budget-history', 'quota-table', 'budget-table', 'subscription-funds'];
 const GEOMETRY = [[0,2],[0,3],[0,4],[0,6],[2,2],[2,3],[2,4],[3,2],[3,3],[4,2]] as const;
 const FIELDS = ['names','hidden','shown','windows','plans','unplanned','colors','columns','shownColumns','enabledWhenEmpty'] as const;
 export type EncodedView = [3, ([string | number, number] | [string | number, number, number])[], number, ...unknown[]];
@@ -181,7 +181,7 @@ export function decodeView(input: unknown): View | null {
     if (at >= input.length) return null;
     let value = input[at++];
     if (FIELDS[i] === 'shown') {
-      if (!Array.isArray(value) || !Number.isInteger(value[0]) || value[0] < 0 || value[0] > 63) return null;
+      if (!Array.isArray(value) || !Number.isInteger(value[0]) || value[0] < 0 || value[0] > 127) return null;
       const other = ids(value.slice(1), LIMITS.widgets + 4);
       if (!other || other.length !== value.length - 1 || other.some(id => BUILTIN_WIDGETS.includes(id))) return null;
       value = [...BUILTIN_WIDGETS.filter((_,j) => value[0] & 1 << j), ...other];

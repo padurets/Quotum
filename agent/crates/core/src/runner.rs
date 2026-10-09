@@ -727,6 +727,8 @@ mod tests {
             stale_after_ms: 0,
             windows: vec![crate::model::Window::new("weekly", Some(10_080), None, 5.0, None)],
             resets: None,
+            resource_status: None,
+            balances: None,
         })
     }
 

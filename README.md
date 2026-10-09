@@ -107,6 +107,16 @@ Codex         api                  idle     started 25m ago · editor
   in the panel. Credit belongs to the current subscription and is unknown without a
   reliable session ID; a dash keeps that distinct from known zero. Terminals, editors
   and the Codex app alike.
+- **Purchased Codex credits.** Additional funds appear in the subscription's footer,
+  beside free resets, with the same compact amount and disclosure in the compact view.
+  The initial estimate is 0.04 USD per credit; Currencies lets you set a personal
+  USD-per-credit rate or restore the default. Hover over the amount for the exact
+  native balance; open it for the rate and measurement time.
+  **Subscription extra funds trends** shows balance history in its own widget, with its own
+  subscription selection. It also appears in the board's **+** menu. Wallet budgets
+  keep their separate chart and table.
+  Shared boards require separate permission to show funds and subsequent history.
+  Credit changes do not imply spending or top-ups.
 - **Free resets.** When a provider grants resets of the limits (Codex does now and
   then), the card shows how many you have and until when.
 - **A weekly spending plan.** By default you spend 30 / 25 / 15 / 15 / 10 / 5% on the
@@ -121,7 +131,8 @@ Codex         api                  idle     started 25m ago · editor
   far as you choose; behind, it marks when limits came back early and when free resets
   were granted. Drag across it to zoom into a burst of work (on a phone, hold a finger
   on it first). ‹ and › move it by half its length; a horizontal touchpad swipe,
-  Shift with the wheel, or Shift-drag moves all three charts continuously through time.
+  Shift with the wheel, or Shift-drag moves the activity, limit, budget and subscription-funds
+  charts together continuously through time.
   The open page keeps the history it has read and fetches only missing
   or changed parts as measurements and agent work arrive.
 - **A table with two forecasts:** what the period spent, each subscription's active time
@@ -196,7 +207,8 @@ day, not a script thrown together over a weekend. In practice that meant:
   down to once every 15 minutes. The machine on duty asks the hub every 15 seconds, which
   starts nothing.
 - **Client credentials stay where they are.** The agent never reads, stores or sends provider
-  tokens or cookies. What leaves the machine: percentages and reset times, plan names,
+  tokens or cookies. What leaves the machine: percentages and reset times, reported
+  Codex credit balances and resource availability, plan names,
   a one-way hash of each account id (so the hub can tell two machines share one
   account), the machine's name and random id, the short message of a client that
   failed, and which coding agents run on the machine: working or idle, since when, and
@@ -217,11 +229,12 @@ day, not a script thrown together over a weekend. In practice that meant:
   consumption. The agent says when its next measurement is due, so a sparse series isn't
   mistaken for a gap.
 - **Few moving parts.** The agent has nine direct dependencies. The hub is Fastify and
-  the SQLite built into Node, and the UI is plain React with about 199 KB of gzipped
+  the SQLite built into Node, and the UI is plain React with about 244 KB of gzipped
   JavaScript. There is no telemetry. The hub reads the two reset trackers (or the
   mirror you name) every ten minutes; `QUOTUM_RESETS=off` turns that off. When you
-  connect OpenRouter, it also reads that account's balance and key limits through
-  fixed HTTPS requests using the management key you supplied.
+  connect OpenRouter, DeepSeek or z.ai, it also reads their balances or quotas through
+  fixed HTTPS requests using the dedicated keys you supplied. Currency conversion uses
+  public reference rates; your private balances and personal rates are not sent to the rate service.
 - **Written down and tested.** The protocol between the agent and the hub is a spec
   ([spec/ingest-v1.md](spec/ingest-v1.md)). Tests cover the spending rules,
   resets, duty, scheduling, permissions, sharing, device pairing, the clients' answers and the
@@ -463,6 +476,14 @@ on a server hub, configure its separate encryption key as described in
 [deploy/README.md](deploy/README.md); back it up separately from the data directory.
 The desktop app manages its encryption key as described in [SECURITY.md](SECURITY.md).
 
+Upgrading from 0.6 preserves measurements, agent-work history, boards, settings and
+encrypted connections. Existing analytics widgets become separate limit and budget
+widgets with their saved choices preserved. The initial display currency is USD;
+choose another or define personal rates in **Account settings → Currencies**.
+Purchased Codex credits require an updated agent and appear after its next measurement.
+Sharing a subscription does not automatically share its extra funds: enable that
+separately on each shared board. Reload open dashboard tabs after the upgrade.
+
 On each machine, run `quotum update`, then restart the background agent with
 `quotum stop` and `quotum start` (or restart its service). With npm, use the latest
 `quotum` package. Update the hub first: older agents still deliver measurements to the
@@ -550,8 +571,9 @@ notification preferences and language belong to the app.
   `~/.cache/com.padurets.quotum/logs` on Linux.
 - **Network access:** the app reads reset announcements from Codex Resets and Claude
   Resets, as every hub does (`QUOTUM_RESETS=off` in the app's environment turns that
-  off). If you connect OpenRouter, its hub also reads your account through fixed HTTPS
-  requests with the management key you supplied. The local hub listens on `127.0.0.1`
+  off). Connected OpenRouter, DeepSeek and z.ai accounts are read through fixed HTTPS
+  requests with the dedicated keys you supplied. Currency conversion fetches public
+  reference rates without sending balances or personal rates. The local hub listens on `127.0.0.1`
   alone, behind a key only the app's windows get; it does not send measurements to a
   server hub.
 - **Size:** Linux packages carry both Chromium for the window and Node.js for the hub.
@@ -676,11 +698,11 @@ Add the hashes of any new database layout steps to `RELEASED` in
 Refresh the README screenshots in both languages from the demo board, check the upgrade
 instructions and prepare the release notes outside the repository.
 
-For example, to prepare 0.6.0 on that branch:
+For example, to prepare 0.7.0 on that branch:
 
 ```sh
-(cd hub && npm version 0.6.0 --no-git-tag-version)
-# agent/Cargo.toml and desktop/Cargo.toml: version = "0.6.0"
+(cd hub && npm version 0.7.0 --no-git-tag-version)
+# agent/Cargo.toml and desktop/Cargo.toml: version = "0.7.0"
 (cd agent && cargo metadata --format-version 1 >/dev/null)
 (cd desktop && cargo metadata --format-version 1 >/dev/null)
 ```
@@ -694,8 +716,8 @@ commit to tag. Only after the maintainer approves that specific release:
 git fetch origin
 git switch main
 git pull --ff-only origin main
-git tag -a v0.6.0 -F /path/to/release-notes.md --cleanup=verbatim
-git push origin v0.6.0
+git tag -a v0.7.0 -F /path/to/release-notes.md --cleanup=verbatim
+git push origin v0.7.0
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or

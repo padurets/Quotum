@@ -163,7 +163,7 @@ test('the add catalogue contains only eligible absent or hidden widgets', async 
   h.directory.saveView(h.board.id, {...view, hidden: ['source:' + shared, 'quota-history']}, h.owner.id, Date.now());
   const owner = await read();
   assert.deepEqual(owner.sources.map((source: {id: string; action: string}) => [source.id, source.action]), [[own, 'add'], [shared, 'show']]);
-  assert.deepEqual(owner.widgets.map((widget: {id: string}) => widget.id), ['agents', 'quota-history', 'budget-history', 'budget-table']);
+  assert.deepEqual(owner.widgets.map((widget: {id: string}) => widget.id), ['agents', 'quota-history', 'subscription-funds', 'budget-history', 'budget-table']);
   const member = await read(h.member.id);
   assert.deepEqual(member.sources.map((source: {id: string; action: string}) => [source.id, source.action]), [[shared, 'show']]);
   assert.deepEqual(member.widgets, []);

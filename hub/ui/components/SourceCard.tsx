@@ -5,6 +5,7 @@ import {PeriodStatus} from './PeriodStatus';
 import {MoneyValues} from './MoneyCard';
 import {useCurrencyContext} from '../lib/board';
 import {keyShown} from '../lib/view';
+import {budgetVisible, subscriptionFundsVisible} from '../lib/money';
 import {memo, useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import type {Card, Win} from '../lib/types';
 import {MEASURE_INTERVAL, windowKey, type MeasureIntervalMs} from '../lib/types';
@@ -457,15 +458,15 @@ export function CardMark({source}: {source: Card}) {
   );
 }
 
-/** The card's tray: news of resets for everyone, free resets, the agents running on it. */
-function CardTray({source}: {source: Card}) {
+/** The card's tray: reset news, additional funds, free resets and running agents. */
+function CardTray({source, funds}: {source: Card; funds?: ReactNode}) {
   const sessions = useSourcePeriodSessions(source.id);
   const resets = useResetsFor(source.provider);
   const access = useSourceAccess(source.id);
   const quotaIssue=source.quota&&!source.quota.complete;
   const news=providerOf(source.provider)?.funding==='wallet'||source.balanceStatus||access||quotaIssue?<><BalanceMark source={source}/>{access&&<AccessMark id={source.id}/>}
     {quotaIssue&&<QuotaMark source={source}/>}</>:null;
-  return <Tray resets={resets} news={news} current={!!source.resets?.available&&<FreeResets resets={source.resets}/>} sessions={sessions} />;
+  return <Tray resets={resets} news={news} current={funds||source.resets?.available?<>{funds}{!!source.resets?.available&&<FreeResets resets={source.resets} observation={source.resources?.resets}/>}</>:null} sessions={sessions} />;
 }
 
 /**
@@ -494,7 +495,7 @@ export const SourceCard = memo(function SourceCard({id, arrange, boardId, person
       </div>
 
       <CardMeasurements source={source} arrange={arrange} boardId={boardId}/>
-      <CardTray source={source} />
+      <CardFooter source={source} arrange={arrange} boardId={boardId}/>
     </article>
   );
 });
@@ -512,8 +513,8 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
     <div className="limits">
       {historical?<>
         {caps&&value&&<QuotaCard source={value} ids={shownPeriods.map(w=>w.id)}/>}
-        {!caps&&value&&value.meters.length>0&&<MoneyValues source={value} keys={value.keys.filter(k=>keyShown(arrange.view,source.id,k.id,value.keys))} meters={value.meters} context={historicalContext}/>}
-      </>:caps?<QuotaCard source={source} ids={shownPeriods.map(w=>w.id)}/>:source.meters&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
+        {!caps&&providerOf(source.provider)?.funding==='wallet'&&value&&value.meters.length>0&&<MoneyValues source={value} keys={value.keys.filter(k=>keyShown(arrange.view,source.id,k.id,value.keys))} meters={value.meters} context={historicalContext}/>}
+      </>:caps?<QuotaCard source={source} ids={shownPeriods.map(w=>w.id)}/>:budgetVisible(source)&&providerOf(source.provider)?.funding==='wallet'&&<MoneyCard source={source} board={boardId} view={arrange.view}/>}
       {visible.map(w=><Limit key={w.id} w={w} measuredAt={'observedAt' in w?w.observedAt as number:source.successAt} weekly={weekly}/>)}
       {noEvidence&&<div className="card-empty">{t('period.noEvidence')}</div>}
       {!historical&&!caps&&!source.windows.length&&!source.meters&&<div className="card-empty">{errorText(source.error??'waiting')}</div>}
@@ -521,4 +522,14 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
       {historical&&<PeriodStatus {...reading}/>}
     </div>
   </MeasurementClock.Provider>;
+}
+
+/** Historical funds share the value basis; the tray's actions and reset news stay live. */
+function CardFooter({source,arrange,boardId}:{source:Card;arrange:Arrange;boardId:string}) {
+  const reading=usePeriodValues(source.id),selected=useTimeRange(),context=useCurrencyContext(source.id);
+  if(!selected)return <CardTray source={source} funds={subscriptionFundsVisible(source)?<MoneyCard source={source} board={boardId} view={arrange.view} tray/>:null}/>;
+  const value=reading.value;
+  if(!value||!budgetVisible(source)||!subscriptionFundsVisible(value))return <CardTray source={source}/>;
+  const historicalContext={...context,sources:{...context.sources,[source.id]:value.meters.flatMap(m=>m.conversion?[{from:m.conversion.original.unit,at:m.conversion.original.at,anchor:null,steps:m.conversion.steps??[m.conversion.rate]}]:[])}};
+  return <CardTray source={source} funds={<MeasurementClock.Provider value={reading.basis?.range.to??selected.to}><MoneyValues source={value} meters={value.meters} keys={[]} context={historicalContext} tray/></MeasurementClock.Provider>}/>;
 }

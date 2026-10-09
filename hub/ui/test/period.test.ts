@@ -21,7 +21,7 @@ test('returning from settings resumes the actual period coordinator after prefer
     PeriodTransport:class{change(){reads++;}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
     timeRange:()=>({from:1_400_000,to:5_000_000}),prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),
-    widgetVisible:()=>true,AGENTS:'agents',ACTIVITY:'activity',noSessions:[],noValue:{},
+    PERIOD_SCOPES:['quota','budget','funds'],widgetVisible:()=>true,AGENTS:'agents',ACTIVITY:'activity',noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   const body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
@@ -47,17 +47,17 @@ test('a complete temporal index distinguishes equal totals, changes ranking and 
   assert.deepEqual(fixed.advance(range,30).rows,fixed.advance(range,10_000).rows);
 });
 
-test('one collection combines both history sections and the roster, including their shared budget',async()=>{
+test('one collection combines all three history sections and the roster, including their shared budget',async()=>{
   const pool=new HistoryPool(),sent:PeriodRequest[]=[];
   const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'live',periodMs:3_600_000},evaluatedAt:5_000_000,sessions:{}}};
   const basis={run:'r',revision:'1',evaluatedAt:5_000_000,evidenceCut:5_000_000,range:{from:1_400_000,to:5_000_000}};
   const history={run:'r',now:5_000_000,historyStart:0,known:{work:0,sources:{}},chunks:[]};
   let applied=0;
-  const transport=new PeriodTransport(pool,()=>intent,()=>{applied++;},async(_board,body,_signal,reserve)=>{sent.push(body);assert.equal(reserve(1024),true);return {basis,quota:{state:'complete',basis,value:history},budget:{state:'complete',basis,value:history},sessions:{state:'complete',basis,value:{anchor:0,knownFrom:0,refs:[],spans:[],cursor:'one'}}};});
+  const transport=new PeriodTransport(pool,()=>intent,()=>{applied++;},async(_board,body,_signal,reserve)=>{sent.push(body);assert.equal(reserve(1024),true);return {basis,quota:{state:'complete',basis,value:history},budget:{state:'complete',basis,value:history},funds:{state:'complete',basis,value:history},sessions:{state:'complete',basis,value:{anchor:0,knownFrom:0,refs:[],spans:[],cursor:'one'}}};});
   transport.change();
-  const quota=transport.read('quota',{cell:'1',from:'0',to:'60'}),budget=transport.read('budget',{cell:'1',from:'0',to:'60'});
-  await Promise.all([quota,budget]);await settle();
-  assert.equal(sent.length,1);assert.ok(sent[0].quota);assert.ok(sent[0].budget);assert.ok(sent[0].sessions);assert.equal(applied,1);assert.equal(pool.estimatedBytes,0);
+  const quota=transport.read('quota',{cell:'1',from:'0',to:'60'}),budget=transport.read('budget',{cell:'1',from:'0',to:'60'}),funds=transport.read('funds',{cell:'1',from:'0',to:'60'});
+  await Promise.all([quota,budget,funds]);await settle();
+  assert.equal(sent.length,1);assert.ok(sent[0].quota);assert.ok(sent[0].budget);assert.ok(sent[0].funds);assert.ok(sent[0].sessions);assert.equal(applied,1);assert.equal(pool.estimatedBytes,0);
   transport.change();await settle();assert.equal(sent.length,1,'clock-like reevaluation alone creates no read');
 });
 

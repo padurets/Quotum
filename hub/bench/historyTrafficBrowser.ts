@@ -1,5 +1,5 @@
 import {accountingPath} from './accountingTraffic';
-import type {PeriodReply,PeriodRequest} from '../server/domain/periodRead';
+import {PERIOD_SCOPES,type PeriodScope,type PeriodReply,type PeriodRequest} from '../server/domain/periodRead';
 import assert from 'node:assert/strict';
 import {cellStart, expandHistory, type HistoryAnswer, type HistoryBasis, type HistoryReply} from '../server/domain/history';
 import {openTab, type Browser, type Cdp} from './cdp';
@@ -8,7 +8,7 @@ import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type 
 import {observeReversal} from './reversalDiagnostic';
 
 const DAY = 86_400_000;
-type ResourceRead={scope?:'quota'|'budget';selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
+type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
 type Read = {sections?:ResourceRead[];selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
@@ -55,7 +55,7 @@ export class HistoryBodies {
       if(url.pathname!=='/api/history'){
         const body=JSON.parse(event.request.postData??'{}') as PeriodRequest;
         read.sections=[];
-        for(const scope of ['quota','budget'] as const)if(body[scope]&&body[scope]!.cells!=='skip'){const query=new URL('/api/history',url);query.search=new URLSearchParams({board:decodeURIComponent(url.pathname.split('/')[3]),scope,...body[scope]}).toString();read.sections.push({scope,selection:historyReadSelection(query),from:Number(body[scope]!.from),to:Number(body[scope]!.to),cell:Number(body[scope]!.cell)});}
+        for(const scope of PERIOD_SCOPES)if(body[scope]&&body[scope]!.cells!=='skip'){const query=new URL('/api/history',url);query.search=new URLSearchParams({board:decodeURIComponent(url.pathname.split('/')[3]),scope:scope==='funds'?'budget':scope,...body[scope]}).toString();read.sections.push({scope,selection:historyReadSelection(query),from:Number(body[scope]!.from),to:Number(body[scope]!.to),cell:Number(body[scope]!.cell)});}
         if(read.sections[0])Object.assign(read,read.sections[0]);
       }
       this.active.set(read.id, read); this.reads.push(read);

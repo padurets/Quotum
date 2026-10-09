@@ -170,6 +170,32 @@ test('S10: after a restart the first paced holder measures at once', () => {
   assert.equal(new Cadence().answer('acc', 'laptop', 'codex', t0 + 31 * MIN, null, quiet).measure, true);
 });
 
+test('independent quota evidence changes Auto speed without moving the delivery clock or promise', () => {
+  const cadence = new Cadence();
+  cadence.answer('acc', 'laptop', 'codex', t0, null, quiet);
+  cadence.delivered('acc', 'laptop', reading(quiet.windows), t0, HOUR, false, t0);
+  cadence.delivered('acc', 'laptop', null, t0 + 5 * MIN, staleFor(5 * MIN), false, t0 + 5 * MIN);
+  cadence.answer('acc', 'laptop', 'codex', t0 + 5 * MIN, null, quiet);
+  const at = t0 + 5 * MIN + 15 * S;
+  cadence.observed('acc', 'laptop', reading(quiet.windows), t0 + MIN, false, at);
+  assert.deepEqual(cadence.view('acc', 'laptop', at, quiet), {next: t0 + 9 * MIN, why: 'idle'});
+  cadence.observed('acc', 'laptop', reading(quiet.windows), t0 + 2 * MIN, false, at);
+  assert.deepEqual(cadence.view('acc', 'laptop', at, quiet), {next: t0 + 10 * MIN, why: 'idle'}, 'the newer delivery promise still bounds the stretched interval');
+  cadence.observed('acc', 'laptop', reading([win(49)]), t0 + 3 * MIN, false, at);
+  assert.deepEqual(cadence.view('acc', 'laptop', at, quiet), {next: t0 + 7 * MIN, why: 'changed'});
+});
+
+test('independent quota evidence permits an immediate first Auto measurement and later fixed restoration', () => {
+  for (const fixed of [false, true]) {
+    const cadence = new Cadence();
+    cadence.observed('acc', 'laptop', reading(quiet.windows), t0, false, t0 + MIN);
+    const signals: Signals = {...quiet, measureIntervalMs: fixed ? 300_000 : null};
+    if (fixed) cadence.restore('acc', t0 + 30 * S, HOUR, quiet.windows, t0 + MIN);
+    assert.equal(cadence.answer('acc', 'laptop', 'codex', t0 + MIN, null, signals).measure, !fixed);
+    if (fixed) assert.deepEqual(cadence.view('acc', 'laptop', t0 + MIN, signals), {next: t0 + 330_000, why: 'fixed'});
+  }
+});
+
 test('S11: a measurement nothing came back for is asked again after 90 s, then less and less often', () => {
   // The first answer is lost; so are the next four.
   const lost = new Set<number>();

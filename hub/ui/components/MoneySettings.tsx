@@ -4,7 +4,7 @@ import {useBoardId,useCurrencyContext,type Named} from '../lib/board';
 import {ApiError,call} from '../lib/http';
 import {archivedKeyGroups,keyMeter,moneySelection} from '../lib/moneySelection';
 import {usePrefs,setPrefs} from '../lib/prefs';
-import {referenceBalance,balanceGroups,balanceRoleLabel,keyName} from '../lib/money';
+import {referenceBalance,budgetVisible,balanceGroups,balanceRoleLabel,keyName} from '../lib/money';
 import type {MeterHistory} from '../lib/moneyView';
 import {MAX_METERS} from '../../server/domain/meterHistory';
 import {t} from '../i18n';
@@ -16,7 +16,7 @@ import type {KeyPage} from '../lib/moneyKeys';
 /** Series are chosen in the chart's settings; the key table only reads measurements. */
 export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
   const context=useCurrencyContext(),board=useBoardId(),prefs=usePrefs(),unit=prefs.money.unit??DEFAULT_CURRENCY;
-  const accounts=sources.filter(s=>!hidden.includes('source:'+s.id)&&(unit===DEFAULT_CURRENCY?!!referenceBalance(s,context.target.id!==DEFAULT_CURRENCY):s.meters?.some(m=>m.kind==='balance'&&m.unit===unit)));
+  const accounts=sources.filter(s=>budgetVisible(s)&&!hidden.includes('source:'+s.id)&&(unit===DEFAULT_CURRENCY?!!referenceBalance(s,context.target.id!==DEFAULT_CURRENCY||s.provider==='codex'):s.meters?.some(m=>m.kind==='balance'&&m.unit===unit)));
   const [sourceId,setSource]=useState<string|null>(()=>accounts.length===1?accounts[0].id:null);
   const [loaded,setPage]=useState<KeyPage|null>(null),[after,setAfter]=useState<string|undefined>(),[back,setBack]=useState<(string|undefined)[]>([]),[error,setError]=useState<unknown>(null),[changed,setChanged]=useState(false);
   const [loading,setLoading]=useState(true);
@@ -69,7 +69,7 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
   const total=(page?.total??source?.keysCount??0)+archived.length;
   const busy=!inCard&&loading;
   useEffect(()=>{if(archivePage>extraPages)setArchivePage(extraPages);},[archivePage,extraPages]);
-  const balances=(s:Named)=>(unit===DEFAULT_CURRENCY?[referenceBalance(s,context.target.id!==DEFAULT_CURRENCY)].filter((g):g is NonNullable<typeof g>=>!!g):balanceGroups(s).filter(g=>g.total.unit===unit)).flatMap(g=>[{meter:g.total,role:'total' as const},...g.components].map(({meter,role})=>row(s.id,meter.id,(meter.conversion?'≈ ':'')+balanceRoleLabel(role),false)));
+  const balances=(s:Named)=>(unit===DEFAULT_CURRENCY?[referenceBalance(s,context.target.id!==DEFAULT_CURRENCY||s.provider==='codex')].filter((g):g is NonNullable<typeof g>=>!!g):balanceGroups(s).filter(g=>g.total.unit===unit)).flatMap(g=>[{meter:g.total,role:'total' as const},...g.components].map(({meter,role})=>row(s.id,meter.id,(meter.conversion?'≈ ':'')+balanceRoleLabel(role),false)));
   return <>
     <div className="popover-title popover-section">{t('source.show')}</div>
     <p className="popover-note">{selected.length} / {MAX_METERS}</p>
@@ -112,3 +112,22 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
 }
 
 export const MoneySettings=KeyMoneySettings;
+
+/** Additional subscription funds have their own balance-only series selection. */
+export function FundsSettings({sources,hidden}:{sources:readonly Named[];hidden:readonly string[]}) {
+  const context=useCurrencyContext(),prefs=usePrefs(),settings=prefs.funds,unit=settings.unit??DEFAULT_CURRENCY;
+  const selected=moneySelection(sources,hidden,settings,context,'funds').selection?.ids??[];
+  const available=sources.flatMap(source=>moneySelection([source],hidden,{...settings,selected:{}},context,'funds').selection?.ids??[]);
+  const toggle=(source:string,meter:string,on:boolean)=>{
+    const ids=on?[...selected,[source,meter] as [string,string]]:selected.filter(([s,m])=>s!==source||m!==meter);
+    if(ids.length<=MAX_METERS)setPrefs({funds:{...settings,selected:{...settings.selected,[unit]:ids}}});
+  };
+  return <>
+    <div className="popover-title popover-section">{t('funds.subscriptions')}</div>
+    {available.map(([source,meter])=>{
+      const on=selected.some(([s,m])=>s===source&&m===meter);
+      return <SwitchRow key={source+':'+meter} on={on} disabled={!on&&selected.length>=MAX_METERS} onChange={next=>toggle(source,meter,next)}>{sources.find(s=>s.id===source)?.title??source}</SwitchRow>;
+    })}
+    <div className="popover-section"><button className="popover-row" onClick={()=>{const next={...settings.selected};delete next[unit];setPrefs({funds:{...settings,selected:next}});}}>{t('funds.allSubscriptions')}</button></div>
+  </>;
+}

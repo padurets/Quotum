@@ -1,5 +1,6 @@
+import type {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
-import {DEFAULT_CURRENCY,defaultCurrencyContext,isCurrency,ratePath,convertBy,conversionId,convertMoney,exchangeRatesOf,ratesCover,type ExchangeRates,type RateSnapshot,type Conversion,type CurrencyContext,type CurrencyBinding,type RateLeg} from '../domain/currency.js';
+import {DEFAULT_CURRENCY,defaultCurrencyContext,isConvertible,codexCredit,codexDefault,ratePath,convertBy,conversionId,convertMoney,exchangeRatesOf,ratesCover,type ExchangeRates,type RateSnapshot,type Conversion,type CurrencyContext,type CurrencyBinding,type RateLeg} from '../domain/currency.js';
 import {semanticsOf,validateMeter,type Meter,type Reading,type MeterSpan} from '../domain/meters.js';
 import {CurrencyBindings,type BindingRange,type UnavailableObservation} from './currencyBindings.js';
 import {CurrencyRegistry,type RateChangeRow} from './currencyRegistry.js';
@@ -9,6 +10,7 @@ type ValueRow={at:number;previous_at:number|null;native_id:string;native_unit:st
 
 /** Shared immutable quotes and derived values, separate from provider readings. */
 export class CurrencyStore extends CurrencyRegistry {
+  constructor(db:DatabaseSync) {super(db);this.save(codexDefault(Date.now()));}
   private quoteEpoch=0;
   private quoteLists=new Map<string,{epoch:number;quotes:RateSnapshot[];changes:RateChangeRow[];boundaries:number[];paths:Map<string,RateLeg[]|null>}>();
   private snapshotCache=new Map<string,RateSnapshot>();
@@ -22,7 +24,7 @@ export class CurrencyStore extends CurrencyRegistry {
     let cached=this.quoteLists.get(owner);
     if(!cached||cached.epoch!==this.quoteEpoch) {
       const quotes=(this.db.prepare("SELECT id FROM exchange_rates WHERE owner_id='' ORDER BY reference_date DESC,fetched_at DESC").all() as {id:string}[]).flatMap(q=>this.get(q.id)??[]);
-      const changes=this.db.prepare('SELECT c.* FROM currency_rate_changes c JOIN currency_definitions d ON d.id=c.currency_id AND d.owner_id=c.owner_id WHERE c.owner_id=? AND d.archived_at IS NULL ORDER BY c.effective_at,c.sequence').all(owner) as RateChangeRow[];
+      const changes=this.db.prepare(`SELECT c.* FROM currency_rate_changes c LEFT JOIN currency_definitions d ON d.id=c.currency_id AND d.owner_id=c.owner_id WHERE c.owner_id=? AND (c.currency_id='credits:codex' OR d.id IS NOT NULL AND d.archived_at IS NULL) ORDER BY c.effective_at,c.sequence`).all(owner) as RateChangeRow[];
       const boundaries=[...new Set([...quotes.flatMap(q=>q.validUntil===null?[q.date]:[q.date,q.validUntil??q.date+7*86_400_000]),...changes.map(c=>c.effective_at)])].sort((a,b)=>a-b);
       cached={epoch:this.quoteEpoch,quotes,changes,boundaries,paths:new Map()};this.quoteLists.set(owner,cached);
     }
@@ -38,7 +40,15 @@ export class CurrencyStore extends CurrencyRegistry {
     const eligible=new Map<string,RateChangeRow>();
     for(const change of cached.changes){if(change.effective_at>at)break;eligible.set(change.currency_id+'\n'+change.base,change);}
     const quotes=[...cached.quotes,...[...eligible.values()].flatMap(change=>change.kind==='rate'?(this.get(change.quote_id!,owner)??[]):[])];
-    const path=ratePath(from,target,quotes,at,anchor);
+    const ordinary=quotes.filter(q=>!q.rates[codexCredit.id]);
+    let path:RateLeg[]|null;
+    if(from===codexCredit.id) {
+      const change=eligible.get(codexCredit.id+'\nUSD');
+      const quote=change ? this.get(change.quote_id!,owner) : cached.quotes.find(q=>q.source==='codex-default');
+      const first=quote ? ratePath(from,DEFAULT_CURRENCY,[quote],at) : null;
+      const rest=ratePath(DEFAULT_CURRENCY,target,ordinary,at,anchor);
+      path=first&&rest?[...first,...rest]:null;
+    } else path=ratePath(from,target,ordinary,at,anchor);
     if(path){for(const leg of path)Object.freeze(leg);Object.freeze(path);}
     if(cached.paths.size>=1024)cached.paths.delete(cached.paths.keys().next().value!);
     cached.paths.set(key,path);return path;
@@ -71,11 +81,11 @@ export class CurrencyStore extends CurrencyRegistry {
   context(owner:string,inputs:Record<string,{unit:string;at:number;anchor?:string|null}[]>={}):CurrencyContext {
     const target=this.preference(owner),definitions=this.definitions(owner);if(!definitions.some(d=>d.id===target.id))definitions.push(target);
     const registryRevision=this.registryRevision(owner);
-    if(target.id===DEFAULT_CURRENCY)return {...defaultCurrencyContext,target,definitions,registryRevision};
+    if(target.id===DEFAULT_CURRENCY&&!Object.values(inputs).some(points=>points.some(p=>p.unit!==DEFAULT_CURRENCY&&isConvertible(p.unit))))return {...defaultCurrencyContext,target,definitions,registryRevision};
     const sources:CurrencyContext['sources']={};
     for(const [source,points] of Object.entries(inputs)) {
       const seen=new Set<string>(),bindings:CurrencyBinding[]=[];
-      for(const point of points){if(!isCurrency(point.unit))continue;const anchor=point.anchor??null,key=JSON.stringify([point.unit,point.at,anchor]);if(seen.has(key))continue;seen.add(key);
+      for(const point of points){if(!isConvertible(point.unit))continue;const anchor=point.anchor??null,key=JSON.stringify([point.unit,point.at,anchor]);if(seen.has(key))continue;seen.add(key);
         const steps=this.binding(owner,point.unit,target.id,point.at,anchor,source);if(steps)bindings.push({from:point.unit,at:point.at,anchor,steps});}
       sources[source]=bindings;
     }
@@ -102,7 +112,7 @@ export class CurrencyStore extends CurrencyRegistry {
     if(!row)return null;const parsed=exchangeRatesOf(JSON.parse(row.payload) as ExchangeRates),snapshot=Object.freeze({...parsed,rates:Object.freeze(parsed.rates),id});this.snapshotCache.set(row.owner_id?key:'\n'+id,snapshot);return snapshot;
   }
   latest(at:number):RateSnapshot|null {
-    const row=this.db.prepare("SELECT id FROM exchange_rates WHERE owner_id='' AND reference_date<=? AND reference_date>? ORDER BY reference_date DESC,fetched_at DESC LIMIT 1").get(at,at-7*86_400_000) as {id:string}|undefined;
+    const row=this.db.prepare("SELECT id FROM exchange_rates WHERE owner_id='' AND source<>'codex-default' AND reference_date<=? AND reference_date>? ORDER BY reference_date DESC,fetched_at DESC LIMIT 1").get(at,at-7*86_400_000) as {id:string}|undefined;
     return row?this.get(row.id):null;
   }
   checked():number {return Number(this.db.prepare("SELECT value FROM meta WHERE key='exchangeRatesCheckedAt'").get()?.value??0);}
