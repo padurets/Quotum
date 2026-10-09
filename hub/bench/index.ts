@@ -10,13 +10,13 @@ import type {CurrencyDefinition,CurrencyManagement,RateSnapshot} from '../server
 import {fileURLToPath} from 'node:url';
 import {SETS} from '../demo/catalogue.js';
 import {addressOf, Demo, prepare, Stop} from '../demo/index.js';
-import {cards, MIN, people, snapshot} from '../demo/model.js';
+import {cards, people} from '../demo/model.js';
 import type {Snapshot} from '../server/projection.js';
 import {chartProblems, creditRenderProblems, HISTORY_BYTES_PER_MEASUREMENT, idleProblems, measuredProblems, percentile, renderProblems} from './budget.js';
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
-import {overviewCards, stillProblems, warmUntil} from './still.js';
+import {overviewCards, stillProblems, stillSnapshot, warmUntil} from './still.js';
 import {hear, type Heard} from './stream.js';
 import {frequencyKeys, moneyView, selectMoney} from './controls.js';
 import {panning} from './panning.js';
@@ -313,7 +313,7 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
   const initial = overview.sources.find(s => s.id === source)!.windows.find(w => w.id === 'gemini:weekly')!.used;
   for (let i = 0; i < MEASUREMENTS; i++) {
     await cdp.evaluate('__quotumBench.forgetCards()');
-    const taken = snapshot(card, stand.start, Date.now() - stand.start, 5 * MIN);
+    const taken = stillSnapshot(card, stand.start, Date.now());
     const used = initial + (i + 1) * .1;
     const windows = taken.windows.map(w => w.id === 'gemini:weekly' ? {...w, usedPercent: used} : w);
     const last = `${cellStart(Date.parse(taken.observedAt), cellOf(86_400_000))}:${Math.round((100 - used) * 100) / 100}`;
@@ -355,7 +355,7 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
   // Late independent balances are accepted without replacing these newer quotas.
   // Observation time stays in the past; latency below starts at actual delivery.
   const quotaAt=Date.now();
-  await agent.ingest([snapshot(card,stand.start,quotaAt-stand.start,3*3_600_000)],[],quotaAt);
+  await agent.ingest([stillSnapshot(card,stand.start,quotaAt)],[],quotaAt);
   await deliver('2500',quotaAt-25_000);
   await selectMoney(cdp,[[source,'balance:credits']],'funds');
   const ledger=new DatabaseSync(path.join(demo.dir,'quotum.sqlite'),{readOnly:true});
