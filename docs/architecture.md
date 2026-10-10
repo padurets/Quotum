@@ -1196,8 +1196,9 @@ when it was measured and, while the hub sets the pace, when the next measurement
 and why, each a line of its own.
 A board has one grid for source cards, agent sessions, activity, quota history and
 table, and budget history and table. A compact bar on the right above it shares the
-header's glass surface and keeps the period, quota window kind and shared chart horizon
-available during scrolling. The quota kind
+header's flat glass surface, with rounded corners and no border, shadow or lower
+separator. It keeps the period, quota window kind and shared chart horizon available
+during scrolling. The quota kind
 is also available in each quota widget's settings. The budget chart and table share
 one series selection, editable from either widget even when the other is hidden.
 Balance/spending belongs to the budget chart's settings; subscription funds have their

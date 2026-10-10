@@ -71,7 +71,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .topbar { position: sticky; top: 0; z-index: 10; }
 /* Both sticky bars frost their backing alone, so their popovers can blur the page. */
 .topbar::before, .analytics-head::before { content: ''; position: absolute; inset: 0; z-index: -1; background: #0b0b0ecc; -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); }
-.topbar::after, .analytics-head::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--hair-2) 20%, var(--hair-2) 80%, transparent); }
+.topbar::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--hair-2) 20%, var(--hair-2) 80%, transparent); }
 .topbar-inner { max-width: 1240px; margin: 0 auto; padding: 0 28px; height: 60px; display: flex; align-items: center; gap: 24px; }
 .brand { display: flex; align-items: center; gap: 11px; color: var(--text); text-decoration: none; font-weight: 560; font-size: 15px; letter-spacing: -.01em; white-space: nowrap; }
 .logo { width: 26px; height: 26px; }
@@ -97,7 +97,8 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex
 .widgets { position: relative; display: grid; grid-template-columns: repeat(var(--columns, 6), minmax(0, 1fr)); grid-auto-rows: 32px; gap: 16px; }
 
 /* Shared viewing controls stay on the right as the mixed board scrolls beneath them. */
-.analytics-head { position: sticky; top: 68px; z-index: 5; align-self: flex-end; max-width: 100%; display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; padding: 6px; }
+.analytics-head { position: sticky; top: 68px; z-index: 5; align-self: flex-end; max-width: 100%; display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; padding: 6px; border-radius: 14px; }
+.analytics-head::before { border-radius: inherit; }
 .widget { position: relative; display: flex; flex-direction: column; min-width: 0; }
 .widgets > .card.is-loading { grid-column: span 2; grid-row: span 5; }
 .widget-body { position: relative; display: flex; flex-direction: column; min-width: 0; }
