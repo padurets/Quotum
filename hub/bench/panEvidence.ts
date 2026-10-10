@@ -39,3 +39,16 @@ export function panTransactionsScript(limit = 32): string {
     };
   })()`;
 }
+
+
+/** A failed scenario must retain its own probe rather than an earlier completed one. */
+export function panPartialScript(initiator?: string, period?: string): string {
+  return `(() => {
+    const p=window.__quotumPan;
+    if(!p||!p.running||p.initiator!==${JSON.stringify(initiator??null)}||p.period!==${JSON.stringify(period??null)})return {status:'unavailable'};
+    return {status:'partial',inputs:p.inputs,updated:p.updated,frames:p.frames,latency:p.latency,
+      responses:p.responses,timeline:p.timeline?.read(),transactions:p.readTransactions(),
+      pushesDuring:p.pushesDuring,forbiddenMutations:p.forbiddenMutations,
+      pending:p.pending.map(input=>({inputId:input.id,stamp:input.at,delivered:input.delivered,pixels:input.pixels}))};
+  })()`;
+}

@@ -44,6 +44,9 @@ address writes while input is being fed. Omitted receipts and invalid clocks rem
 explicit. A single native scroll command can stop generating events while its target
 is blocked; these observations distinguish that gap from continuous delivery without
 changing the gesture-completion assertions or their 200 ms pause rule.
+Failed scenarios retain these receipts and their pending inputs in the partial report.
+A missing, retired or different scenario probe is marked unavailable instead of
+attributing an earlier scenario's measurements to the failure.
 `QUOTUM_BENCH_DIAGNOSE_PANNING=pairs` runs a fixed OFF/ON, ON/OFF, OFF/ON
 experiment for bounded input/frame/history correlation. Every result is retained;
 these diagnostic runs cannot satisfy the canonical gate. Input traces retain only

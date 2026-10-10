@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-import {panEvidenceScript, panTransactionsScript, type PanTransactions} from '../panEvidence.js';
+import {panEvidenceScript, panTransactionsScript, panPartialScript, type PanTransactions} from '../panEvidence.js';
 import {safeEvidence} from '../evidence.js';
 import {panningProblems, type PanReading} from '../panningBudget';
 
@@ -47,8 +47,8 @@ function fixture(initiator: 'quota'|'budget'|'funds' = 'quota', timeline = false
     DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);if(value?.startsWith('scaleX'))this.e*=this.a;}},
     window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: () => {}},
   };
-  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${panEvidenceScript(evidence?.timeline === true)}', panEvidenceScript(timeline)).replace('${panTransactionsScript()}', panTransactionsScript()), context);
-  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {feeding: boolean; readTransactions(): PanTransactions; pending: object[]; timeline: {read(): {entries: {kind: string; inputId?: number; frameId?: number}[]}}}}).__quotumPan;
+  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${JSON.stringify(period)}', JSON.stringify('24h')).replace('${panEvidenceScript(evidence?.timeline === true)}', panEvidenceScript(timeline)).replace('${panTransactionsScript()}', panTransactionsScript()), context);
+  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; timeline: {read(): {entries: {kind: string; inputId?: number; frameId?: number}[]}}}}).__quotumPan;
   for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg]) Object.assign(svg.dataset, {panMinEnd: '-1000000000', panMaxEnd: '1000000000'});
   const limits = (min: number, max: number) => {for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg]) Object.assign(svg.dataset, {panMinEnd: String(min), panMaxEnd: String(max)});};
   const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}, deltaX = 12) => {
@@ -83,6 +83,25 @@ test('the original probe records a native generation pause before a handler writ
   assert.equal(evidence.writes[0].token,1,'capture runs before the production handler ends its old gesture');
   assert.equal(evidence.writes[0].stampGap,332.5);assert.equal(evidence.writes[0].idleMs,0);
   assert.ok(!JSON.stringify(safeEvidence(evidence)).includes('private'));
+});
+
+test('a failed scenario retains its original wheel receipts and pending inputs without a timeline', () => {
+  const f=fixture();f.reading.feeding=true;
+  f.wheel(100,114.2);f.wheel(432.5,432.5,0,()=>f.context.history.pushState());
+  const partial=runInNewContext(panPartialScript('quota','24h'),f.context);
+  assert.equal(partial.status,'partial');assert.equal(partial.inputs,2);
+  assert.equal(partial.transactions.maxStampGap,332.5);assert.equal(partial.transactions.pushesDuring,1);
+  assert.equal(partial.pushesDuring,1);assert.equal(partial.pending.length,2);
+  assert.equal(partial.pending[1].inputId,2);assert.equal(partial.pending[1].stamp,432.5);
+  assert.equal(partial.timeline,undefined);
+});
+
+test('failure evidence cannot credit an earlier or retired scenario probe', () => {
+  const f=fixture();f.wheel(100,100);
+  assert.equal(runInNewContext(panPartialScript('quota','30d'),f.context).status,'unavailable');
+  assert.equal(runInNewContext(panPartialScript('budget','24h'),f.context).status,'unavailable');
+  f.reading.cleanup();
+  assert.equal(runInNewContext(panPartialScript('quota','24h'),f.context).status,'unavailable');
 });
 
 test('the probe retains clamped input and credits its reached boundary without inventing movement', () => {

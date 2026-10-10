@@ -1,6 +1,6 @@
 import type {Cdp} from './cdp.js';
 import {panningProblems, type PanReading} from './panningBudget.js';
-import {panEvidenceScript, panTransactionsScript} from './panEvidence.js';
+import {panEvidenceScript, panTransactionsScript, panPartialScript} from './panEvidence.js';
 import {deadline} from './deadline.js';
 import {reload} from './reload.js';
 import {panMetrics, panCost} from './panningMetrics.js';
@@ -57,10 +57,10 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       })()`);
       evidence?.save('panning-stage', {initiator, period, stage: 'starting', viewport: [1280,1600], throttle: 4, geometry});
       await cdp.evaluate(`(() => {
-        const initiator=${JSON.stringify(initiator)};
+        const initiator=${JSON.stringify(initiator)},period=${JSON.stringify(period)};
         const timeline=${panEvidenceScript(evidence?.timeline === true)},transactions=${panTransactionsScript()},staged=new Set();let nextRequest=0;
         const charts=[document.querySelector('.history .chart>svg'),document.querySelector('.activity .chart>svg'),document.querySelector('.budget-history .chart>svg'),document.querySelector('.subscription-funds .chart>svg')],driver=initiator==='quota'?0:initiator==='funds'?3:2,root=charts[driver],views=charts.map(svg=>svg.viewBox.baseVal.width),scales=charts.map((svg,i)=>svg.getBoundingClientRect().width/views[i]),size=svg=>svg.getAttribute('viewBox')+':'+svg.style.height,sizes=charts.map(size);
-        const probe=window.__quotumPan={frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:[0,0,0,0],synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[],timeline};
+        const probe=window.__quotumPan={initiator,period,frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:[0,0,0,0],synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[],timeline};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding){probe.pushesDuring++;transactions.push(probe.segment,root.dataset.panToken===undefined?NaN:Number(root.dataset.panToken));}else probe.pushesAfter++;originalPush(...args);};
         probe.returnSnapshot=()=>({now:Date.now(),url:location.search,charts:charts.map((svg,i)=>{
@@ -313,11 +313,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
     failed = true;
     evidence?.save('panning-failure', {status: 'failed', ...scenario, completed: reports.length, settlement: panningSettlement(error)});
     if (evidence) try {
-      const partial = await deadline(5000, signal => cdp.evaluate(`(() => {
-        const p=window.__quotumPan;if(!p)return {status:'unavailable'};
-        return {status:'partial',inputs:p.inputs,updated:p.updated,frames:p.frames,latency:p.latency,
-          responses:p.responses,timeline:p.timeline?.read(),pending:p.pending.map(input=>({inputId:input.id,stamp:input.at,delivered:input.delivered,pixels:input.pixels}))};
-      })()`, signal));
+      const partial = await deadline(5000, signal => cdp.evaluate(panPartialScript(scenario?.initiator,scenario?.period), signal));
       evidence.save('panning-partial', {...scenario, partial});
     } catch {evidence.save('panning-partial', {status: 'unavailable', ...scenario});}
     throw error;
