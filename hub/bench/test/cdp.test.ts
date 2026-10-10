@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {attachedChrome, Cdp, openTab,nativeProcesses} from '../cdp.js';
+import {attachedChrome, Cdp, openTab,nativeProcesses, threadWait} from '../cdp.js';
 import {Requests} from '../index.js';
 import {safeEvidence} from '../evidence.js';
 
@@ -34,12 +34,23 @@ test('an owned blocked thread keeps its wait category in the saved evidence', {s
     const thread = processes[0]?.threads.find(row => row.id === child.pid);
     const saved = safeEvidence({processes}) as {processes: {threads: {id: number; wait: {kind: string}}[]}[]};
     if (thread?.state.some(line => line.startsWith('State:\tS'))) {
-      assert.equal(saved.processes[0].threads.find(row => row.id === child.pid)?.wait.kind, 'futex');
+      const wait = saved.processes[0].threads.find(row => row.id === child.pid)?.wait;
+      assert.ok(wait && ['futex', 'poll', 'timer', 'pipe', 'child', 'io', 'unknown', 'unavailable'].includes(wait.kind));
+      assert.deepEqual(wait, thread.wait, 'serialization must retain the observed category even when the kernel symbol is unavailable');
       break;
     }
     assert.ok(Date.now() < end, 'the stand-in must reach its blocking wait');
     await new Promise(resolve => setTimeout(resolve, 10));
   }
+});
+
+test('known native waits keep fixed categories while unknown symbols expose no raw text', () => {
+  assert.deepEqual(safeEvidence({wait: threadWait('futex_wait_queue')}), {wait: {kind: 'futex'}});
+  assert.deepEqual(safeEvidence({wait: threadWait('ep_poll')}), {wait: {kind: 'poll'}});
+  assert.deepEqual(safeEvidence({wait: threadWait('0')}), {wait: {kind: 'unknown'}});
+  assert.deepEqual(safeEvidence({wait: threadWait('unavailable')}), {wait: {kind: 'unavailable'}});
+  const saved = safeEvidence({wait: threadWait('/private-canary/kernel-symbol')});
+  assert.deepEqual(saved, {wait: {kind: 'unknown'}}); assert.doesNotMatch(JSON.stringify(saved), /private-canary|kernel-symbol/);
 });
 
 test('what the idle page asks is counted, a stream of events opened meanwhile too; not the one it opened before, nor its images', () => {
