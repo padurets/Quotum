@@ -1,6 +1,6 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
+import {mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -36,6 +36,16 @@ function dirty(): boolean | null {
 }
 const read = (file: string) => {try {return readFileSync(file, 'utf8').trim();} catch {return null;}};
 
+/** Profile positions refer to the compiled client, whose bytes can differ on one Git SHA. */
+export function clientIdentity(directory = path.join(import.meta.dirname, '../dist/client/assets')) {
+  try {
+    const names = readdirSync(directory).filter(name => /^index-[\w-]+\.js$/.test(name));
+    if (names.length !== 1) return {status: 'unavailable' as const};
+    const data = readFileSync(path.join(directory, names[0]));
+    return {status: 'available' as const, name: names[0], bytes: data.length, sha256: createHash('sha256').update(data).digest('hex')};
+  } catch {return {status: 'unavailable' as const};}
+}
+
 /** Each phase survives later failures. Files are atomically replaced inside a unique run directory. */
 export class Evidence {
   readonly id = randomUUID();
@@ -48,7 +58,7 @@ export class Evidence {
     cpu: os.cpus()[0]?.model, cpuMax: read('/sys/fs/cgroup/cpu.max'), memoryMax: read('/sys/fs/cgroup/memory.max'),
     image: process.env.ImageOS?.replace(/[^a-zA-Z0-9.-]/g, ''), imageVersion: process.env.ImageVersion?.replace(/[^a-zA-Z0-9.-]/g, ''),
   };
-  private readonly identity = {sha: git('HEAD'), tree: git('HEAD^{tree}'), dirty: dirty(), run: process.env.GITHUB_RUN_ID?.replace(/\D/g, ''), attempt: process.env.GITHUB_RUN_ATTEMPT?.replace(/\D/g, '')};
+  private readonly identity = {sha: git('HEAD'), tree: git('HEAD^{tree}'), dirty: dirty(), client: clientIdentity(), run: process.env.GITHUB_RUN_ID?.replace(/\D/g, ''), attempt: process.env.GITHUB_RUN_ATTEMPT?.replace(/\D/g, '')};
   private phase = 'startup';
   private status = 'running';
   private completedPhase?: string;

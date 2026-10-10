@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {Evidence, safeEvidence} from '../evidence.js';
+import {clientIdentity, Evidence, safeEvidence} from '../evidence.js';
 
 test('a phase manifest and completed readings survive a later failure with verifiable hashes', t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-evidence-test-'));
@@ -35,4 +35,29 @@ test('an unavailable diagnostic destination cannot interrupt resource cleanup', 
   t.after(() => rmSync(dir, {recursive: true, force: true}));
   const file = path.join(dir, 'occupied'); writeFileSync(file, 'fixture');
   assert.doesNotThrow(() => {const evidence = new Evidence(file); evidence.begin('startup'); evidence.save('state', {}); evidence.finish('failed', {});});
+});
+
+test('client identity distinguishes compiled bytes on the same source and filename', t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-client-identity-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const file = path.join(dir, 'index-public.js');
+  writeFileSync(file, 'first compiled client');
+  const first = clientIdentity(dir);
+  assert.equal(first.status, 'available');
+  assert.equal(first.name, 'index-public.js');
+  assert.equal(first.bytes, 21);
+  assert.equal(first.sha256, createHash('sha256').update('first compiled client').digest('hex'));
+  writeFileSync(file, 'second compiled client');
+  assert.notEqual(clientIdentity(dir).sha256, first.sha256);
+  assert.doesNotMatch(JSON.stringify(first), /quotum-client-identity-/);
+});
+
+test('missing and ambiguous client bundles leave explicit unavailable identity', t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-client-identity-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  assert.deepEqual(clientIdentity(path.join(dir, 'private-canary')), {status: 'unavailable'});
+  assert.deepEqual(clientIdentity(dir), {status: 'unavailable'});
+  writeFileSync(path.join(dir, 'index-one.js'), 'one');
+  writeFileSync(path.join(dir, 'index-two.js'), 'two');
+  assert.deepEqual(clientIdentity(dir), {status: 'unavailable'});
 });
