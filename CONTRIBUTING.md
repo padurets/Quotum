@@ -38,6 +38,12 @@ uncredited until every data plot has finished and its final geometry has committ
 If the original settle wait fails, its captured panel state survives cleanup as
 bounded numeric timestamps and readiness/loading/movement flags. No page text is
 retained, and extracting that evidence sends no additional browser command.
+Every original panning report also retains the largest native wheel timestamp and
+delivery gaps within each feeding segment, and at most 32 numeric receipts for
+address writes while input is being fed. Omitted receipts and invalid clocks remain
+explicit. A single native scroll command can stop generating events while its target
+is blocked; these observations distinguish that gap from continuous delivery without
+changing the gesture-completion assertions or their 200 ms pause rule.
 `QUOTUM_BENCH_DIAGNOSE_PANNING=pairs` runs a fixed OFF/ON, ON/OFF, OFF/ON
 experiment for bounded input/frame/history correlation. Every result is retained;
 these diagnostic runs cannot satisfy the canonical gate. Input traces retain only

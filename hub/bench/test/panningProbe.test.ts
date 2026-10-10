@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-import {panEvidenceScript} from '../panEvidence.js';
+import {panEvidenceScript, panTransactionsScript, type PanTransactions} from '../panEvidence.js';
 import {safeEvidence} from '../evidence.js';
 import {panningProblems, type PanReading} from '../panningBudget';
 
@@ -41,14 +41,14 @@ function fixture(initiator: 'quota'|'budget'|'funds' = 'quota', timeline = false
   const context = {
     performance: {now: () => time, timeOrigin: 0}, URL, URLSearchParams, location: {href: 'https://example.test/', search: ''},
     document: {body: {}, querySelector: (selector: string) => selector.startsWith('.history') ? historySvg : selector.startsWith('.budget-history') ? budgetSvg : selector.startsWith('.subscription-funds') ? fundsSvg : activitySvg},
-    history: {pushState: () => {}}, getComputedStyle: (node: {style: {transform: string}}) => ({opacity: '1', transform: node.style.transform}),
+    history: {pushState: (..._args: unknown[]) => {}}, getComputedStyle: (node: {style: {transform: string}}) => ({opacity: '1', transform: node.style.transform}),
     requestAnimationFrame: schedule, cancelAnimationFrame: () => {},
     MutationObserver: class {observe() {} disconnect() {}},
     DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);if(value?.startsWith('scaleX'))this.e*=this.a;}},
     window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: () => {}},
   };
-  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${panEvidenceScript(evidence?.timeline === true)}', panEvidenceScript(timeline)), context);
-  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {pending: object[]; timeline: {read(): {entries: {kind: string; inputId?: number; frameId?: number}[]}}}}).__quotumPan;
+  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${panEvidenceScript(evidence?.timeline === true)}', panEvidenceScript(timeline)).replace('${panTransactionsScript()}', panTransactionsScript()), context);
+  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {feeding: boolean; readTransactions(): PanTransactions; pending: object[]; timeline: {read(): {entries: {kind: string; inputId?: number; frameId?: number}[]}}}}).__quotumPan;
   for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg]) Object.assign(svg.dataset, {panMinEnd: '-1000000000', panMaxEnd: '1000000000'});
   const limits = (min: number, max: number) => {for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg]) Object.assign(svg.dataset, {panMinEnd: String(min), panMaxEnd: String(max)});};
   const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}, deltaX = 12) => {
@@ -71,6 +71,19 @@ function fixture(initiator: 'quota'|'budget'|'funds' = 'quota', timeline = false
   const runFrame = (at: number) => frame(at).forEach(callback => callback(at));
   return {reading, wheel, limits, listeners, bubble, update, frame, runFrame, requestFrame: context.window.requestAnimationFrame, context, historySvg, activitySvg, budgetSvg, fundsSvg, fundsLayer, budgetLayer, historyLayer, activityLayer, activityClip};
 }
+
+test('the original probe records a native generation pause before a handler writes the address', () => {
+  const f=fixture();f.reading.feeding=true;
+  f.wheel(100,114.2);
+  f.wheel(432.5,432.5,0,()=>{f.context.history.pushState({private:'not retained'},'', '/private');f.historySvg.dataset.panToken='2';});
+  const evidence=f.reading.readTransactions();
+  assert.equal(f.reading.pushesDuring,1,'the original failure count remains');
+  assert.equal(evidence.wheelEvents,2);assert.equal(evidence.maxStampGap,332.5);
+  assert.ok(Math.abs(evidence.maxDeliveryGap!-318.3)<1e-9);
+  assert.equal(evidence.writes[0].token,1,'capture runs before the production handler ends its old gesture');
+  assert.equal(evidence.writes[0].stampGap,332.5);assert.equal(evidence.writes[0].idleMs,0);
+  assert.ok(!JSON.stringify(safeEvidence(evidence)).includes('private'));
+});
 
 test('the probe retains clamped input and credits its reached boundary without inventing movement', () => {
   for (const initiator of ['quota', 'budget', 'funds'] as const) {

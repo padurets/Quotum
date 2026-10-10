@@ -1,6 +1,6 @@
 import type {Cdp} from './cdp.js';
 import {panningProblems, type PanReading} from './panningBudget.js';
-import {panEvidenceScript} from './panEvidence.js';
+import {panEvidenceScript, panTransactionsScript} from './panEvidence.js';
 import {deadline} from './deadline.js';
 import {reload} from './reload.js';
 import {panMetrics, panCost} from './panningMetrics.js';
@@ -58,11 +58,11 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       evidence?.save('panning-stage', {initiator, period, stage: 'starting', viewport: [1280,1600], throttle: 4, geometry});
       await cdp.evaluate(`(() => {
         const initiator=${JSON.stringify(initiator)};
-        const timeline=${panEvidenceScript(evidence?.timeline === true)},staged=new Set();let nextRequest=0;
+        const timeline=${panEvidenceScript(evidence?.timeline === true)},transactions=${panTransactionsScript()},staged=new Set();let nextRequest=0;
         const charts=[document.querySelector('.history .chart>svg'),document.querySelector('.activity .chart>svg'),document.querySelector('.budget-history .chart>svg'),document.querySelector('.subscription-funds .chart>svg')],driver=initiator==='quota'?0:initiator==='funds'?3:2,root=charts[driver],views=charts.map(svg=>svg.viewBox.baseVal.width),scales=charts.map((svg,i)=>svg.getBoundingClientRect().width/views[i]),size=svg=>svg.getAttribute('viewBox')+':'+svg.style.height,sizes=charts.map(size);
         const probe=window.__quotumPan={frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:[0,0,0,0],synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[],timeline};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
-        history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
+        history.pushState=(...args)=>{if(probe.feeding){probe.pushesDuring++;transactions.push(probe.segment,root.dataset.panToken===undefined?NaN:Number(root.dataset.panToken));}else probe.pushesAfter++;originalPush(...args);};
         probe.returnSnapshot=()=>({now:Date.now(),url:location.search,charts:charts.map((svg,i)=>{
           const left=i===1?48:i>=2?76:40,box=svg.viewBox.baseVal.width,inner=box-left-12,r=svg.getBoundingClientRect(),scale=r.width/box;
           const layer=svg.parentElement.querySelector(i===1?'.plot-clip.is-band .plot-move':'.plot-move[data-plot-main]'),slides=layer.querySelector('.slides'),matrix=slides.getScreenCTM();
@@ -75,7 +75,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
         const matrixOf=value=>{const key=value||'none';let matrix=transforms.get(key);if(!matrix){const raw=new DOMMatrix(key==='none'?undefined:key);matrix={a:raw.a,e:raw.e};transforms.set(key,matrix);if(transforms.size>64)transforms.delete(transforms.keys().next().value);}return matrix;};
         let gesture=null;
         const capturedInputs=new WeakMap();
-        const capture=e=>{const delivered=performance.now(),at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;capturedInputs.set(e,{at:Math.min(delivered,at),delivered});};
+        const capture=e=>{const delivered=performance.now(),at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;capturedInputs.set(e,{at:Math.min(delivered,at),delivered});if(probe.running&&probe.feeding&&e.type==='wheel')transactions.input(at,delivered,probe.segment);};
         const owners=()=>charts.map((svg,i)=>svg.parentElement.querySelector(i===1?'.plot-clip.is-band .plot-move':'.plot-move[data-plot-main]'));
         // Inline frozen matrices and the committed domain are enough during input;
         // no computed style or SVG layout read belongs in this moving-frame probe.
@@ -197,6 +197,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
           if(root.dataset.panEnd&&!probe.pending.length&&lastFrame!==stamp)probe.last=0;
           probe.raf=schedule(tick);
         };
+        probe.readTransactions=()=>transactions.read();
         probe.cleanup=()=>{probe.running=false;cancelAnimationFrame(probe.raf);probe.observer.disconnect();for(const type of types){owner.removeEventListener(type,capture,true);window.removeEventListener(type,input);}window.requestAnimationFrame=originalRAF;window.fetch=originalFetch;history.pushState=originalPush;};
         probe.raf=schedule(tick);
       })()`);
@@ -252,7 +253,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       const report = await cdp.evaluate<PanReading>(`(() => {
         const p=window.__quotumPan;p.cleanup();
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
-        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,segments,outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34),timeline:p.timeline?.read()};
+        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,segments,transactions:p.readTransactions(),outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34),timeline:p.timeline?.read()};
       })()`);
       report.initiator = initiator; report.period = period; report.series = geometry.series; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
       if(costStart&&costEnd)report.cost=panCost(costStart,costEnd);

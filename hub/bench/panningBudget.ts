@@ -1,8 +1,10 @@
 import {percentile} from './budget.js';
+import type {PanTransactions} from './panEvidence.js';
 
 export type PanReading = {
   initiator: 'quota' | 'budget' | 'funds'; period: string; series: number; budgetSeries: number; fundsSeries: number; charts: number; rate: number;
   timeline?: {status: string; count: number; omitted: number; entries: unknown[]};
+  transactions?: PanTransactions;
   cost?: {valid: boolean; scriptMs: number; taskMs: number; seconds: number};
   frames: number[]; latency: number[]; inputs: number; updated: number;
   chartUpdates: number[]; synchronized: boolean;
