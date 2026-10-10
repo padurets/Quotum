@@ -67,6 +67,8 @@ export class Pan {
   onStop = (listener: (stop: PanStop) => void) => {this.stopListeners.add(listener); return () => void this.stopListeners.delete(listener);};
   get input() {return this.draft?.input ?? null;}
   get source() {return this.draft?.source ?? null;}
+  get oldestEnd() {return this.minEnd;}
+  get newestEnd() {return this.maxEnd;}
   setShift(held: boolean) {
     if (held === this.shift) return;
     this.shift = held;

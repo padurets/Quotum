@@ -6,13 +6,13 @@ import ts from 'typescript';
 
 test('actual projection helpers read only authored pose between animations and still sample an owned animation', () => {
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('  const visualGeometry = '), geometry = source.slice(start, source.indexOf('  const freezeSlides = ', start));
+  const start = source.indexOf('  const readPose = '), geometry = source.slice(start, source.indexOf('  const freezeSlides = ', start));
   const screenX = source.slice(source.indexOf('screenX: (at: number) => ')).split(', get held')[0].replace('screenX: ', '');
   for (const span of [0, 3_600_000]) {
     let lookups = 0, computed = 0;
     const layer = {}, base = 1_791_000_000_000;
     const context = {drawing: {current: {from: base, to: base + span, end: base + span}}, pose: {current: {a: 1.2, b: -73, offset: 130}},
-      animations: {current: new Map<object, object>()}, width: 920, scale: .73, left: 48, right: 12,
+      animations: {current: new Map<object, object>()}, animationPoses: {current: new WeakMap()}, width: 920, scale: .73, left: 48, right: 12,
       box: {current: {querySelector: () => {lookups++; return layer;}}},
       getComputedStyle: () => {computed++; return {transform: 'matrix(1.05,0,0,1,-32,0)'};},
       DOMMatrix: class {a = 1.05; e = -32;},

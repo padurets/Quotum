@@ -1318,9 +1318,12 @@ plain dragging still selects a range and touch retains its hold-to-select gestur
 Prepared SVG artwork moves in composited HTML surfaces behind a stationary clip;
 the axes and readouts stay in place. The surfaces keep their compositor hints between
 gestures, avoiding repeated promotion and rasterization on the first input. Label
-backgrounds retain their measured offsets when only their anchor moves. The chart
-container owns pointer capture and
-wheel input, projected through its fixed SVG viewport, including labels in another
+backgrounds retain their measured offsets when only their anchor moves. Each chart
+reuses glyph bounds for matching text, anchors and font weights in its bounded caption
+cache. Shortening a name also reuses its measured fit for the same text, available
+width and font weight. Loading a web font or changing the SVG viewport scale clears
+both sets of measurements. Its container
+owns pointer capture and wheel input, projected through its fixed SVG viewport, including labels in another
 surface. Surface geometry and painters become visible only after their DOM commits.
 The future moves with the strip during the gesture, then folds away over 160 ms on
 release in the past, or unfolds on returning to live. Reduced motion skips this final
@@ -1328,7 +1331,10 @@ transition. Release within eight source pixels of now restores the chosen live p
 One changed gesture creates one address entry; cancellation or returning to the exact
 origin creates none. A horizontal wheel ends after a 200 ms pause. Shift-wheel keeps
 one captured scale across pauses and ends when Shift is released, like a held drag;
-a pointer can continue that transaction. Neither adds inertia. Holding Shift hides
+a pointer can continue that transaction. A wheel restarting in the same event keeps
+the preceding gesture's committed range as its origin, even before that selection
+renders. Publishing it preserves the new gesture; a later navigation still cancels it.
+Neither adds inertia. Holding Shift hides
 chart and activity-legend readouts even before movement starts. The plot and legend
 keep their height through the gesture, final fold and resulting range; extra legend
 entries scroll inside. Ordinary range navigation or a layout/language change measures
@@ -1345,7 +1351,15 @@ band; a counter-translation keeps its artwork in place. The clip boundaries use
 compositor transforms while the SVG's coordinate system stays unchanged. Two short
 edge bars in their own SVG are recomputed when the draft crosses a cell; moving within
 a cell only translates the prepared artwork
-and updates its clip. The final 160 ms fold stays inside SVG to preserve stroke widths.
+and updates its clip. The final 160 ms fold animates the existing HTML surface over
+the final SVG projection, avoiding repainting dotted plan strokes on every frame.
+Only during this fold may horizontal scaling change stroke thickness; completion or
+interruption restores the SVG's non-scaling strokes. Each owned animation keeps its
+absolute projection endpoints; reading its eased effect progress reconstructs the
+displayed pose without querying computed styles. Retargeting and interruption use
+that same pose. An inactive effect
+uses the committed pose, and an animation without known endpoints retains the native
+transform fallback. Ordinary 220 ms navigation slides still animate inside SVG.
 A temporary shared registry keeps plot and
 legend colors and dashes consistent, adding new groups with a pending total. Visible
 missing cells are read immediately in contiguous batches of at most eight tiles.
@@ -1376,7 +1390,9 @@ Numeric preparation runs outside React rendering through one cancellable Message
 scheduler. Its shared generators yield between small cell, session, group, event and point
 operations. UI slices target one millisecond and check the deadline after at most sixteen
 generator advances; server and synchronous readers drain those same generators. Each owner
-keeps only its latest job. Tile responses use private COW staging and publish their
+keeps only its latest job. Stable sorting yields after each copied or merged row, reuses two
+merge buffers and forwards one immutable pending result through delegated generators;
+iteration and cancellation retain the native generator lifecycle. Tile responses use private COW staging and publish their
 tiles, read bounds and metadata together. At most two responses are admitted for
 HTTP and processing together, including raw answers waiting for a tile reservation.
 Quota, budget and subscription-funds readers share that pool and a 15 MiB retained-tile and staged-growth
@@ -1388,7 +1404,7 @@ Each chart replaces one typed drawing model whole after preparation, then publis
 its geometry and painters after the DOM commits. Input keeps the displayed model and
 its composed SVG matrix and CSS offset until that handoff. Finishing a gesture commits
 the address immediately and presents its last pending delta on RAF; the final pose
-stays held until the matching drawing model is ready. The SVG fold and CSS offset
+stays held until the matching drawing model is ready. The surface fold and CSS offset
 reset then start from the same displayed coordinates. A new gesture samples that
 actual presentation, including an interrupted fold, separately from its URL origin.
 Partial plots continue to publish during the gesture. Its final drawing readiness
@@ -1519,6 +1535,11 @@ controller accepts every foreground request into one current head: its revision,
 compact or none, and resolved anchor. Startup, second launches, tray actions and the
 compact panel's buttons share that order. Workers carry an immutable ticket and the
 initial handshake reads the current head, so an older worker cannot reclaim focus.
+If a main request reaches a browser already committed to its idle exit, the
+controller starts a replacement for that newer, unopened request after the old
+process and its private channel finish. Main surface acknowledgements remain
+recorded after closure, so closing a window does not replay its request. A fresh
+engine's initial request is never retried by this handoff.
 Cancellation is terminal for its revision; native callbacks also belong to one engine
 and presentation. Each GTK loader has its own native window and immutable ticket;
 its focus, Escape and close signals retain that ticket even when delivered late.

@@ -1,6 +1,7 @@
 import {cellOf, cellStart} from '../server/domain/history.js';
 import {createServer} from 'node:net';
 import {DatabaseSync} from 'node:sqlite';
+import {createHash} from 'node:crypto';
 import {realpathSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {MONEY_KEY} from '../demo/money.js';
@@ -16,15 +17,23 @@ import {chartProblems, creditRenderProblems, HISTORY_BYTES_PER_MEASUREMENT, idle
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
-import {overviewCards, stillProblems, stillSnapshot, warmUntil} from './still.js';
+import {idlePhaseProblems, idlePhaseScript, idleWindow, overviewCards, stillProblems, stillSnapshot, warmUntil, type IdlePhase} from './still.js';
 import {hear, type Heard} from './stream.js';
 import {frequencyKeys, moneyView, selectMoney} from './controls.js';
 import {panning} from './panning.js';
 import {seedPanningBudgets,panningSet} from './fixture.js';
-import {profilePanning} from './panningProfile.js';
 import {historyTraffic} from './historyTraffic.js';
 import {diagnoseReversal} from './historyTrafficBrowser.js';
+import {RunOwner} from './runOwner.js';
+import {Evidence} from './evidence.js';
+import {Requests} from './requests.js';
+export {Requests} from './requests.js';
+import {doubledIdle} from './idleDiagnostic.js';
+import {panningPairs, tracePanning, traceControls} from './panningDiagnostic.js';
+import {profilePanning, profileControls} from './cpuProfile.js';
+import {ChromeLaunchError} from './chrome.js';
 import {creditSnapshot} from './credits.js';
+import {startupTrials} from './startupDiagnostic.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -44,8 +53,6 @@ const USAGE = 'Usage: npm run bench -- [--ci] [--cdp <http://host:port>]';
 const IDLE = {full: 300, ci: 120};
 /** How long the board may take to show its cards. */
 const SHOWN_MS = 30_000;
-/** The requests of a page, as Chrome types them: those it makes itself, not its images or styles. */
-const ASKED = new Set(['Fetch', 'XHR', 'EventSource', 'Document']);
 /** The card measured again and again: on Ana's personal board, measured by her laptop, with no plan. */
 const MEASURED = 'antigravity';
 /** How many times, and how far apart. */
@@ -83,33 +90,6 @@ function freePort(bind: string): Promise<number> {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
 const say = (text: string) => console.error(`bench: ${text}`);
 
-/** Counts what the page asks the hub while `counting`: the stream of events it opened before is not asked again, one opened meanwhile is. */
-export class Requests {
-  counting = false;
-  count = 0;
-  bytes = 0;
-  readonly byPath: Record<string, number> = {};
-  readonly bytesByPath: Record<string, number> = {};
-  readonly history: {scope:string|null;meters:string|null;from:number;to:number}[] = [];
-  private readonly ids = new Map<string, string>();
-  get historyPending() {return [...this.ids.values()].filter(path => path === '/api/history').length;}
-
-  constructor(cdp: Cdp) {
-    cdp.on<{requestId: string; type?: string; request: {url: string}}>('Network.requestWillBeSent', event => {
-      if (!this.counting || !ASKED.has(event.type ?? '')) return;
-      const url = new URL(event.request.url);
-      this.count++;
-      this.byPath[url.pathname] = (this.byPath[url.pathname] ?? 0) + 1;
-      if(url.pathname==='/api/history')this.history.push({scope:url.searchParams.get('scope'),meters:url.searchParams.get('meters'),from:Number(url.searchParams.get('from')),to:Number(url.searchParams.get('to'))});
-      this.ids.set(event.requestId, url.pathname);
-    });
-    cdp.on<{requestId: string; encodedDataLength: number}>('Network.loadingFinished', event => {
-      const path = this.ids.get(event.requestId);
-      if (path) {this.ids.delete(event.requestId); this.bytes += event.encodedDataLength; this.bytesByPath[path] = (this.bytesByPath[path] ?? 0) + event.encodedDataLength;}
-    });
-  }
-}
-
 async function metrics(cdp: Cdp): Promise<Metrics> {
   const {metrics} = await cdp.send<{metrics: {name: string; value: number}[]}>('Performance.getMetrics');
   return Object.fromEntries(metrics.map(m => [m.name, m.value]));
@@ -117,29 +97,43 @@ async function metrics(cdp: Cdp): Promise<Metrics> {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  const evidence = new Evidence();
+  const panDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_PANNING;
+  const idleDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE;
+  const startupDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP;
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
-  const address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
-  await prepare(address);
-  const chrome = options.cdp ? null : findChrome(process.env);
-  if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
+  let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
+  try {
+    address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
+    if (startupDiagnostic && (startupDiagnostic !== '1' || options.cdp || panDiagnostic || idleDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup diagnostic mode');
+    if (idleDiagnostic && (idleDiagnostic !== 'double' || panDiagnostic)) throw new Stop('Unknown or conflicting idle diagnostic mode');
+    if (panDiagnostic && !['pairs', 'trace', 'cpu'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
+    await prepare(address);
+    chrome = options.cdp ? null : findChrome(process.env);
+    if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
+  } catch (error) {
+    evidence.finish('failed', {stage: 'preparation', status: 'no-browser-created'});
+    throw error;
+  }
   const seconds = options.ci ? IDLE.ci : IDLE.full;
 
   let browser: Browser | undefined;
   let tab: Awaited<ReturnType<typeof openTab>> | undefined;
   let heard: Heard | undefined;
-  let finished = false;
-  const finish = async (code: number) => {
-    if (finished) return;
-    finished = true;
+  const owner = new RunOwner(evidence);
+  let cancelled = false;
+  let finishing: Promise<void> | undefined;
+  const finish = (code: number): Promise<void> => finishing ??= (async () => {
     heard?.close();
-    await tab?.close().catch(() => undefined);
-    await browser?.close().catch(() => undefined);
-    await demo.stop();
+    evidence.begin('cleanup');
+    try {await owner.close();} catch (error) {code = 1; say(String(error));}
+    try {await demo.stop();} catch {code = 1; say('demo cleanup failed');}
+    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic || idleDiagnostic || startupDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
     process.exit(code);
-  };
+  })();
   const set = panningSet(SETS[0]);
   const demo = new Demo({set, scene: set.scene, still: true, idleAgents: true,money:false, address, onExit: () => void finish(1)});
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => void finish(1));
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => {cancelled = true; void finish(1);});
 
   try {
     say(`a still hub of the ${set.id} set at ${address.base}`);
@@ -150,12 +144,35 @@ async function main() {
     const overview = () => overviewCards(path => ana.get<Snapshot>(path), board);
     heard = await hear(address.base, ana.cookie, board);
 
-    browser = options.cdp ? attachedChrome(options.cdp) : await launchChrome(chrome!, !process.env.CI);
+    if(startupDiagnostic){
+      const code = await startupTrials(chrome!,!process.env.CI,owner,evidence);
+      await finish(code);return;
+    }
+    browser = await owner.start(signal => options.cdp ? Promise.resolve(attachedChrome(options.cdp)) : launchChrome(chrome!, !process.env.CI, signal));
+    evidence.save('browser', browser.launchReport?.() ?? {mode: 'attached'});
     if(process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1'){
       say('diagnostic native replay only; this does not run the canonical benchmark');
       await diagnoseReversal(browser,address.base,ana.cookie,24);
       say('diagnostic replay completed; canonical benchmark was not run');
       await finish(0);return;
+    }
+    // The unchanged traffic matrix runs while the seeded measurements age. Its
+    // temporary pages close before the idle board opens or any script budget starts.
+    let traffic:Awaited<ReturnType<typeof historyTraffic>>|undefined;
+    if(!panDiagnostic&&!idleDiagnostic){
+      say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
+      evidence.begin('history-traffic');
+      const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
+      try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser, evidence);}
+      catch(error){
+        if(/browser\/(?:1|30)d\/reversal/.test(String(error))){
+          say('replaying the failed reversal with page and browser diagnostics; the original failure remains');
+          try{await diagnoseReversal(browser,address.base,ana.cookie);}catch(diagnostic){say('reversal replay failed: '+String(diagnostic));}
+        }
+        throw error;
+      }
+      evidence.save('history-traffic', traffic);
+      if(process.env.QUOTUM_BENCH_REVERSAL_PROBE==='1')await diagnoseReversal(browser,address.base,ana.cookie,12);
     }
     tab = await openTab(browser);
     const {cdp} = tab;
@@ -174,36 +191,83 @@ async function main() {
       if (Date.now() > shownBy) throw new Stop(`The board showed no cards in ${SHOWN_MS / 1000} s.`);
       await sleep(250);
     }
+    if (panDiagnostic) {
+      evidence.begin('diagnostic-panning-'+panDiagnostic);
+      say('diagnostic panning '+panDiagnostic+'; canonical benchmark is not run');
+      await cdp.evaluate('__quotumBench.pause()');
+      const result = panDiagnostic === 'pairs' ? await panningPairs(cdp, browser, evidence) : panDiagnostic === 'cpu' ? await profilePanning(cdp, browser, evidence) : await tracePanning(cdp, browser, evidence);
+      evidence.save('diagnostic-panning-result', 'attempts' in result ? result : {
+        mode:'diagnostic',problems:result.problems.map(reason=>({reason})),
+        reports:result.reports.map(report=>({initiator:report.initiator,period:report.period,
+          frameP95:percentile(report.frames,.95),frameP99:percentile(report.frames,.99),inputP95:percentile(report.latency,.95),
+          frames:report.frames.length,inputs:report.inputs,credited:report.latency.length,
+          omitted:report.timeline?.omitted??0,cost:report.cost})),
+      });
+      if(panDiagnostic==='trace')await traceControls(browser,evidence);
+      if(panDiagnostic==='cpu')await profileControls(browser,evidence);
+      say('diagnostic panning completed; all outcomes remain in artifacts');
+      await finish('attempts' in result && result.attempts.some(attempt => attempt.status === 'failed') ? 1 : 0); return;
+    }
     const opened = Date.now();
+    evidence.begin('warmup');
     const warm = warmUntil(await overview(), opened);
     say(`the board is open; it settles for ${Math.round((warm - Date.now()) / 1000)} s`);
     await sleep(warm - Date.now());
     if (heard.counts().history) throw new Stop('The stand credited agent work during warmup; its agents must be idle.');
 
+    const cellMs = cellOf(86_400_000);
+    const planned = idleWindow(Date.now(), seconds, cellMs);
+    evidence.save('idle-plan', planned);
+    say(`waiting ${Math.round((planned.from-Date.now())/1000)} s to include one real chart-cell transition`);
+    await sleep(planned.from-Date.now());
     const from = Date.now();
     const to = from + seconds * 1000;
     const moving = stillProblems(await overview(), from, to);
     if (moving.length) throw new Stop(`The stand does not stand still over the window, so its numbers would not be of an idle board: ${moving.join('; ')}.`);
 
     say(`watching the idle page for ${seconds} s`);
+    evidence.begin('idle');
     await cdp.evaluate('__quotumBench.reset()');
+    await cdp.evaluate(idlePhaseScript(cellMs));
     heard.reset();
     requests.counting = true;
     const before = await metrics(cdp);
+    const firstReading = await cdp.evaluate<Reading>('__quotumBench.read()');
     await sleep(to - Date.now());
+    const lastReading = await cdp.evaluate<Reading>('__quotumBench.read()');
     const after = await metrics(cdp);
     requests.counting = false;
     const events = heard.counts();
     const reading = await cdp.evaluate<Reading>('__quotumBench.read()');
-    const cellMs = cellOf(86_400_000);
-    const scriptMsPerSecond = round(scriptPerSecond(before, after, reading.instrumentMs, seconds));
+    const phase = await cdp.evaluate<IdlePhase>('(()=>{const p=__quotumIdlePhase.read();__quotumIdlePhase.stop();return p;})()');
+    const actualSeconds = after.Timestamp - before.Timestamp;
+    const phaseProblems = idlePhaseProblems(phase, planned.boundary);
+    if (firstReading.commits || firstReading.mutations.length) phaseProblems.push('idle work crossed the opening measurement boundary');
+    if (reading.commits !== lastReading.commits || JSON.stringify(reading.mutations) !== JSON.stringify(lastReading.mutations)) phaseProblems.push('idle work crossed the closing measurement boundary');
+    if (!Number.isFinite(actualSeconds) || actualSeconds <= 0) phaseProblems.push('idle performance duration unavailable');
+    const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
     const idle = {from, to, cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
+    evidence.save('idle', {...idle, planned, phase, actualSeconds, phaseProblems});
+    if (idleDiagnostic) {
+      const baselineProblems=[...phaseProblems,...idleProblems(idle)];
+      if(baselineProblems.length)throw new Stop('idle sensitivity baseline failed: '+baselineProblems.join('; '));
+      say('checking sensitivity with two independent copies of the same idle board');
+      const control=await doubledIdle(browser,cdp,address.base,seconds,cellMs,evidence,heard,scriptMsPerSecond);
+      say(`idle double control: ${JSON.stringify(control)}`);
+      await finish(control.growthDetected?0:1);return;
+    }
 
+    evidence.begin('measurements');
     const measured = await measure(stand, cdp);
+    evidence.save('measured', measured);
+    evidence.begin('work');
     const worked = await work(demo, stand, cdp);
+    evidence.save('work', worked);
     const privateWork = await workPrivate(demo, stand, cdp);
+    evidence.save('private-work', privateWork);
     const problems = [
       ...idleProblems(idle),
+      ...phaseProblems,
       ...worked.problems,
       ...privateWork.problems,
       ...chartProblems(measured.chartLatencies),
@@ -224,42 +288,32 @@ async function main() {
     // DOM for the finished measurement phase would add unrelated work to every frame.
     await cdp.evaluate('__quotumBench.pause()');
     say('checking native continuous wheel and Shift-drag from quota, budget and subscription funds at 24h and 30d, CPU ×4');
-    const panned = await panning(cdp);
+    evidence.begin('panning');
+    const panned = await panning(cdp, undefined, evidence);
+    evidence.save('panning', panned);
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95))})), problems: panned.problems})}`);
-    // Capture any movement failure before the later phases change the selection.
-    if (panned.problems.length) {
-      try {await profilePanning(cdp);}
-      catch (error) {say(`panning diagnostic failed: ${(error as Error).message}`);}
-    }
-    say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
-    const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
-    let traffic:Awaited<ReturnType<typeof historyTraffic>>;
-    try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser);}
-    catch(error){
-      if(/browser\/(?:1|30)d\/reversal/.test(String(error))){
-        say('replaying the failed reversal with page and browser diagnostics; the original failure remains');
-        try{await diagnoseReversal(browser,address.base,ana.cookie);}catch(diagnostic){say('reversal replay failed: '+String(diagnostic));}
-      }
-      throw error;
-    }
+    if(!traffic)throw new Stop('canonical history traffic readings unavailable');
     problems.push(...traffic.problems);
-    if(process.env.QUOTUM_BENCH_REVERSAL_PROBE==='1')await diagnoseReversal(browser,address.base,ana.cookie,12);
-    const credits=await creditPhase(demo,stand,cdp);
+    evidence.begin('credits');
+    const credits=await creditPhase(demo,stand,cdp,evidence);
+    evidence.save('credits', credits);
     problems.push(...credits.problems);
-    const monetary=await moneyPhase(demo,stand,cdp);
+    evidence.begin('money');
+    const monetary=await moneyPhase(demo,stand,cdp,evidence);
+    evidence.save('money', monetary);
     problems.push(...monetary.problems);
     const result = {
       set: set.id,
       idle: {
-        seconds,
+        seconds: actualSeconds, plannedSeconds: seconds, planned, phase, phaseProblems,
         requests: {count: requests.count, bytes: requests.bytes, byPath: requests.byPath},
         events,
         renders: {commits: reading.commits, ...tally(reading.renders)},
         mutations: tally(reading.mutations),
         scriptMsPerSecond,
-        instrumentMsPerSecond: round(reading.instrumentMs / seconds),
-        taskMsPerSecond: round((delta(before, after, 'TaskDuration') * 1000) / seconds),
+        instrumentMsPerSecond: round(reading.instrumentMs / actualSeconds),
+        taskMsPerSecond: round((delta(before, after, 'TaskDuration') * 1000) / actualSeconds),
         layouts: delta(before, after, 'LayoutCount'),
         recalcStyles: delta(before, after, 'RecalcStyleCount'),
       },
@@ -287,10 +341,13 @@ async function main() {
       problems,
     };
     console.log(JSON.stringify(result, null, 2));
+    evidence.save('result', result);
     if (problems.length) say(`over budget:\n- ${problems.join('\n- ')}`);
     await finish(problems.length ? 1 : 0);
   } catch (error) {
-    if (finished) return;
+    if (finishing) return;
+    evidence.save('failure', {status: 'failed', kind: error instanceof Stop ? 'fixture' : 'runtime'});
+    if(error instanceof ChromeLaunchError)evidence.save('browser',error.report);
     await demo.settled();
     console.error(error instanceof Stop ? error.message : `The benchmark failed: ${(error as Error).stack ?? error}`);
     await finish(error instanceof Stop ? 2 : 1);
@@ -347,7 +404,7 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
 }
 
 /** Mixed-source credit updates retain quota drawings and only read their own financial tail. */
-async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp) {
+async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,evidence:Evidence) {
   say('checking Codex balance changes and unchanged credit heartbeats independently of quota and wallet analytics');
   const owner=stand.people.get(people(stand.set)[0].id)!,overview=await owner.get<Snapshot>('/api/overview');
   const card=cards(stand.set).find(card=>card.provider==='codex'&&overview.sources.some(source=>source.id===stand.sources.get(card.id)&&source.windows.length))!;
@@ -364,16 +421,27 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
   const ledger=new DatabaseSync(path.join(demo.dir,'quotum.sqlite'),{readOnly:true});
   const rows=()=>Number(ledger.prepare('SELECT count(*) n FROM readings WHERE source_id=? AND meter_id=?').get(source,'balance:credits')?.n);
   const coverage=()=>Number(ledger.prepare('SELECT max(to_at) at FROM meter_spans WHERE source_id=? AND meter_id=?').get(source,'balance:credits')?.at);
+  const drawing=async()=>{
+    const {paths,...state}=await cdp.evaluate<{present:boolean;at:number|null;value:number|null;ready:boolean;paths:string[]}>(`(() => {
+      const line=[...document.querySelectorAll('[data-series]')].find(node=>node.getAttribute('data-series')===${JSON.stringify(source+' balance:credits')});
+      const mark=/^(\\d+):(-?\\d+)$/.exec(line?.getAttribute('data-last')??'');
+      return {present:!!line,at:mark?Number(mark[1]):null,value:mark?Number(mark[2]):null,
+        ready:line?.closest('.chart')?.querySelector('svg')?.dataset.drawReady==='true',
+        paths:[...(line?.querySelectorAll('path')??[])].map(path=>path.getAttribute('d')??'')};
+    })()`);
+    return {...state,paths:paths.length,geometryHash:createHash('sha256').update(JSON.stringify(paths)).digest('hex')};
+  };
   const problems:string[]=[],updates:{amount:string;heartbeat:boolean;cardMs:number|null;chartMs:number|null;historyRequests:number;historyBytes:number;ledgerRowsUnchanged:boolean;coverageAdvanced:boolean}[]=[];
   try {
     for(const [index,amount] of ['2499','2498','2498','2498'].entries()) {
+      const before=await drawing();
       await cdp.evaluate('__quotumBench.reset()');
       const beforeRows=rows(),beforeCoverage=coverage(),at=quotaAt-20_000+index*2000,sent=Date.now(),heartbeat=index>=2,requests=new Requests(cdp);requests.counting=true;
       await deliver(amount,at);
-      const value=String(BigInt(amount)*40_000n),last=at+':'+value;
+      const value=String(BigInt(amount)*40_000n);
       let chart:number|null=null,changed:number|null=null;
       while(Date.now()<sent+SHOWN_WITHIN&&(chart===null||!heartbeat&&changed===null)) {
-        chart=await cdp.evaluate<number|null>(`__quotumBench.seriesChanged(${JSON.stringify(source+' balance:credits')},${JSON.stringify(last)})`);
+        chart=await cdp.evaluate<number|null>(`__quotumBench.seriesChanged(${JSON.stringify(source+' balance:credits')},${JSON.stringify(at+':'+value)})`);
         changed=await cdp.evaluate<number|null>(`__quotumBench.moneyChanged(${JSON.stringify(source)},${JSON.stringify(value)})`);
         if(chart===null||!heartbeat&&changed===null)await sleep(20);
       }
@@ -382,6 +450,9 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
       const balance=await cdp.evaluate<string|null>(`document.querySelector('[data-card="${source}"] [data-money]')?.getAttribute('data-money')??null`);
       const point={amount,heartbeat,cardMs:changed===null?null:changed-sent,chartMs:chart===null?null:chart-sent,historyRequests:requests.history.length,historyBytes,ledgerRowsUnchanged:rows()===beforeRows,coverageAdvanced:coverage()>beforeCoverage};
       updates.push(point);
+      const after=await drawing();
+      evidence.save(`credit-update-${index+1}`,{index,observedAt:at,sent,to,expectedValue:Number(value),cellStart:cellStart(to,cellOf(86_400_000)),before,after,...point,reading});
+      if(chart===null)say(`missing credit update: ${JSON.stringify({index,observedAt:at,sent,to,before,after,heartbeat})}`);
       problems.push(...chartProblems([chart===null?Infinity:chart-sent]),...creditRenderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from:sent,to,cellMs:cellOf(86_400_000)}));
       if(!heartbeat)problems.push(...measuredProblems({card:source,latencies:[changed===null?Infinity:changed-sent],renders:reading.renders,mutations:reading.mutations,from:sent,to}));
       if(balance!==value||!point.coverageAdvanced||heartbeat&&!point.ledgerRowsUnchanged)problems.push('Codex heartbeat lost coverage, changed the ledger or displayed the wrong amount');
@@ -392,7 +463,7 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
   return {source,updates,problems};
 }
 
-async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp) {
+async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,evidence?:Evidence) {
   const owner=stand.people.get(people(stand.set)[0].id)!;
   say('checking money updates, partial inventory, pagination, selection and unchanged observations');
   // The panning scenarios finish at 30d; this phase measures one-day cell updates.
@@ -481,7 +552,7 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
     cap=cappedState.sources.find(s=>s.id===cappedSource)?.meters?.find(m=>m.kind==='cap'&&m.limit==='0');
     if(!cap){if(Date.now()>cappedBy)throw new Stop('zero-cap money fixture did not appear');await sleep(20);}
   }
-  await moneyView(cdp,source,cappedSource,cap.id);
+  await moneyView(cdp,source,cappedSource,cap.id,evidence);
   return {count:latencies.length,p95Ms:Math.round(percentile(latencies,.95)),chartP95Ms:Math.round(percentile(chartLatencies,.95)),historyBytesPerMeasurement:bytes,heartbeat,currencies,problems};
 }
 

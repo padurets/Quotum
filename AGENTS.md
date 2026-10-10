@@ -65,6 +65,9 @@ Input is credited after the production RAF reaches its coalesced position on the
 data layers. Input-free pauses are excluded from moving intervals; pending input keeps
 delayed work measurable. The final geometry must commit before an unpainted last input
 can be credited. These are RAF proxies; physical presentation is checked separately.
+Captured transaction bounds clamp the expected input position at history and live edges;
+every event remains measured. A clamped event reaching an already displayed boundary
+adds no movement frame, and a later gesture cannot credit an earlier gesture's input.
 
 `npm start` in `hub/` serves the built dashboard on `127.0.0.1:8080` (a new hub prints
 the setup code of the first account to its log). `npm run demo` in `hub/` serves it on

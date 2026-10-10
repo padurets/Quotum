@@ -35,15 +35,24 @@ export function AnalyticsTable<Id extends string>({columns, rows, name, nameWidt
 }) {
   const body = useRef<HTMLDivElement | HTMLUListElement>(null);
   const [layout, setLayout] = useState<'table' | 'list'>('table');
+  // Changing columns reuses the measured box; reading its width here would
+  // force layout of the plots rebuilt in the same commit.
+  const space = useRef<{element: HTMLElement; width: number; edges: number} | null>(null);
   const width = nameWidth + columns.reduce((sum, column) => sum + column.width, 0);
   useLayoutEffect(() => {
     const element = body.current!.parentElement!;
     const fit = () => {
+      const measured = space.current!;
+      setLayout(tableLayout(columns.map(column => column.width), measured.width, nameWidth, measured.edges));
+    };
+    const measure = () => {
       const style = getComputedStyle(element);
       const edges = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) - 20;
-      setLayout(tableLayout(columns.map(column => column.width), element.clientWidth, nameWidth, edges));
+      space.current = {element, width: element.clientWidth, edges};
+      fit();
     };
-    const observer = new ResizeObserver(fit); observer.observe(element); fit();
+    const observer = new ResizeObserver(measure); observer.observe(element);
+    if (space.current?.element === element) fit(); else measure();
     return () => observer.disconnect();
   }, [width]);
   if (layout === 'list') return <ul ref={element => {body.current = element;}} className="analytics-compact">{rows.map(row => <li key={row.key}>

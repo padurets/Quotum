@@ -6,6 +6,7 @@ import {HistoryTile} from '../lib/historyTiles';
 import {drain,Preparations} from '../lib/prepare';
 import type {Chunk} from '../../server/domain/history';
 import type {MeterSemantics} from '../../server/domain/meters';
+import type {MeterMetadata} from '../lib/meterMetadata';
 
 test('staging a money update keeps the published exact tile unchanged',()=>{
   const cell=60_000,known={work:0,sources:{s:0}},tile=new HistoryTile(0,cell);
@@ -40,6 +41,33 @@ test('money tile packing preserves bigint values, original intervals, partial he
   tile.merge(60_000,120_000,[{...raw,semantics:before,cells:[[0,'13000000','0','0',0,{segment:1}]]}]);
   assert.equal(tile.chunk(60_000,120_000)[0].cells[0][1],'13000000');
   assert.deepEqual(tile.chunk(60_000,120_000)[0].cells[0][5]?.steps,undefined);
+});
+
+test('a slice decodes unchanged interned semantics once and preserves exact cells',()=>{
+  const cell=60_000,semantics:MeterSemantics={limit:null,resetAt:null,minutes:null,scope:null,label:null};
+  const input:MeterSeriesCells={source:'s',meter:'balance',kind:'balance',unit:'USD',role:'total',accounting:{spending:'unavailable',topups:'unavailable'},pointMode:'cell',semantics,
+    cells:Array.from({length:32},(_,i)=>[i,'9007199254740993',null,null,cell,{validUntil:(i+1)*cell-1}])};
+  const tile=new MeterTile(0,cell);tile.merge(0,32*cell,[input]);
+  const metadata=(tile as unknown as {metadata:MeterMetadata}).metadata,read=metadata.semantics.bind(metadata);
+  let reads=0;metadata.semantics=id=>{reads++;return read(id);};
+  const output=tile.chunk(8*cell,24*cell);
+  assert.deepEqual(output,[{...input,cells:input.cells.slice(8,24).map(row=>[row[0]-8,...row.slice(1)])}]);
+  assert.equal(reads,1,'one immutable dictionary entry needs only one decoding');
+});
+
+test('a slice decodes each changed semantics once and retains the predecessor and every anchor',()=>{
+  const cell=60_000;
+  const semantics=(i:number):MeterSemantics=>({limit:null,resetAt:null,minutes:null,scope:null,label:null,scale:6,
+    conversion:{original:{meterId:'balance:credits',unit:'credits:codex',amount:String(25000000000000n-BigInt(i)),scale:10,at:i*cell},
+      rate:{id:'default',source:'codex-default',base:'credits:codex',date:0,fetchedAt:100,from:'1000000',to:'40000'}}});
+  const input:MeterSeriesCells={source:'s',meter:'balance:credits',kind:'balance',unit:'USD',role:'total',accounting:{spending:'unavailable',topups:'unavailable'},pointMode:'cell',semantics:null,
+    cells:Array.from({length:32},(_,i)=>[i,'9007199254740993',null,null,cell,{validUntil:(i+1)*cell-1,semantics:semantics(i)}])};
+  const tile=new MeterTile(0,cell);tile.merge(0,32*cell,[input]);
+  const metadata=(tile as unknown as {metadata:MeterMetadata}).metadata,read=metadata.semantics.bind(metadata);
+  let reads=0;metadata.semantics=id=>{reads++;return read(id);};
+  const output=tile.chunk(8*cell,24*cell);
+  assert.deepEqual(output,[{...input,semantics:semantics(7),cells:input.cells.slice(8,24).map(row=>[row[0]-8,...row.slice(1)])}]);
+  assert.equal(reads,17,'decode the predecessor and sixteen changed entries, without unused per-cell predecessors');
 });
 
 test('a dense monetary cell yields before reading all intervals and cancellation preserves the published tile',()=>{

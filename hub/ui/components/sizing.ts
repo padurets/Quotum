@@ -53,6 +53,18 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
   const [plot, setPlot] = useState<number | undefined>(undefined);
   const base = useRef<number | null>(null);
   const held = useRef<{legend: HTMLElement; height: string; overflow: string; alignContent: string; keep: boolean; range: TimeRange | null} | null>(null);
+  const legendHeights = useRef(new WeakMap<Element, number>());
+  const sizes = useRef<ResizeObserver | null>(null);
+  const watchedLegend = useRef<HTMLElement | null>(null);
+  const watchLegend = () => {
+    const observer = sizes.current;
+    if (!observer) return;
+    const legend = panel.current?.querySelector<HTMLElement>(':scope > .legend') ?? null;
+    if (legend === watchedLegend.current) return;
+    if (watchedLegend.current) observer.unobserve(watchedLegend.current);
+    watchedLegend.current = legend;
+    if (legend) {legendHeights.current.delete(legend); observer.observe(legend);}
+  };
   const locked = () => !!pan.active() || pan.shifting() || !!panel.current?.querySelector('.chart > svg.is-panning');
   const measure = useRef(() => {});
   measure.current = () => {
@@ -83,10 +95,13 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
       held.current = null;
     };
     const changed = () => {
+      watchLegend();
       if (locked()) {
         const legend = panel.current?.querySelector<HTMLElement>(':scope > .legend');
         if (held.current || !legend) return;
-        const height = legend.getBoundingClientRect().height;
+        // The observer captured the displayed legend before gesture styles changed.
+        // A newly mounted legend still needs its first actual size.
+        const height = legendHeights.current.get(legend) ?? legend.getBoundingClientRect().height;
         held.current = {legend, height: legend.style.height, overflow: legend.style.overflow, alignContent: legend.style.alignContent, keep: false, range: timeRange()};
         Object.assign(legend.style, {height: `${height}px`, overflow: 'auto', alignContent: 'flex-start'});
       } else if (held.current && !held.current.keep) {
@@ -119,9 +134,18 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
     return () => {alive = false; unsubscribe(); stopped(); navigated(); preferences(); board(); observer.disconnect(); restore();};
   }, [panel, sizing?.manual, sizing?.allocated, sizing?.width, locale]);
   useLayoutEffect(() => {
-    const observer = new ResizeObserver(() => measure.current());
+    const observer = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        if (entry.target === watchedLegend.current && !locked() && !held.current) {
+          legendHeights.current.set(entry.target, entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height);
+        }
+      }
+      measure.current();
+    });
+    sizes.current = observer;
     if (panel.current) observer.observe(panel.current);
-    return () => observer.disconnect();
+    watchLegend();
+    return () => {observer.disconnect(); sizes.current = null; watchedLegend.current = null;};
   }, [panel]);
   const report = sizing?.report;
   useLayoutEffect(() => () => report?.(null), [report]);

@@ -1,9 +1,41 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
 import {brotliCompressSync, constants} from 'node:zlib';
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from '../historyProxy';
 import {HistoryCutChanged, bodyBounds, bodyTotals, stableHistory, trafficProblems, transferFor} from '../historyTrafficBudget';
+import {trafficReadEvidence} from '../historyTrafficBrowser';
+
+test('history cleanup releases its owned target when the renderer cannot answer', async () => {
+  const source = readFileSync(new URL('../historyTrafficBrowser.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('  const close = async () =>'), end = source.indexOf('\n  try {', start);
+  assert.ok(start >= 0 && end > start);
+  let closed = 0, evaluations = 0;
+  const contexts: string[] = [];
+  const fixture = {name: 'fixture', cdp: {at: (value: string) => contexts.push(value),
+    evaluate() {evaluations++; return new Promise(() => {});}},
+  tab: {async close() {closed++;}}, close: null as unknown as () => Promise<void>};
+  runInNewContext(ts.transpileModule(`${source.slice(start, end)}\nglobalThis.close=close;`, {
+    compilerOptions: {target: ts.ScriptTarget.ES2022},
+  }).outputText, fixture);
+  const result = fixture.close();
+  assert.equal(closed, 1, 'target release cannot depend on a renderer response');
+  assert.equal(evaluations, 0); assert.deepEqual(contexts, ['fixture/cleanup']);
+  await result;
+});
+
+test('traffic evidence retains attempted ranges and body uncertainty without selection text or payloads', () => {
+  const read={selection:'board=private-canary',id:'1',phase:'cold',from:0,to:60,cell:1,lower:12,
+    before:Promise.resolve(['private-canary']),payload:'private-canary',count:{complete:false,lower:12,coding:'br'}};
+  const [saved]=trafficReadEvidence([read]);
+  assert.doesNotMatch(JSON.stringify(saved),/private-canary|payload|before/);
+  assert.equal(saved.from,0);assert.equal(saved.to,60);assert.equal(saved.count?.complete,false);
+  assert.equal(saved.count?.lower,12);assert.equal(saved.selectionHash.length,64);
+  assert.notEqual(saved.selectionHash,trafficReadEvidence([{...read,selection:'board=another'}])[0].selectionHash);
+});
 
 const transfer: Transfer = {id: '1', phase: 'cold', cell: 1, from: 0, to: 60, started: 0, sent: true, finished: true, aborted: false, decoded: 100, encoded: 40};
 test('body budgets require actual matching coding and payload lengths, never transport totals', () => {
@@ -55,11 +87,11 @@ test('cancelled resource cohorts keep private quota bounds separate from financi
   const quota = {run: 'r', now: 0, known: {work: 0, own: 100, sources: {s: 0}}};
   const money = {run: 'r', now: 0, known: {work: 0, sources: {s: 0}}};
   const seeds = new Map([['quota', {answer: quota}], ['budget', {answer: money}], ['funds', {answer: money}]]);
-  const reads = [{selection: 'quota', answer: quota}, {selection: 'budget', answer: money}, {selection: 'funds', answer: money}, {selection: 'quota'}];
+  const reads = [{selection: 'quota', answer: quota, to: 60_000}, {selection: 'budget', answer: money, to: 60_000}, {selection: 'funds', answer: money, to: 60_000}, {selection: 'quota', to: 60_000}];
   stableHistoryReads(reads, seeds, 60_000);
-  assert.throws(() => stableHistoryReads([{selection: 'quota', answer: money}], seeds, 60_000));
-  assert.throws(() => stableHistoryReads([{selection: 'budget', answer: {...money, known: {...money.known, work: 1}}}], seeds, 60_000));
-  assert.throws(() => stableHistoryReads([{selection: 'other', answer: money}], seeds, 60_000));
+  assert.throws(() => stableHistoryReads([{selection: 'quota', answer: money, to: 60_000}], seeds, 60_000));
+  assert.throws(() => stableHistoryReads([{selection: 'budget', answer: {...money, known: {...money.known, work: 1}}, to: 60_000}], seeds, 60_000));
+  assert.throws(() => stableHistoryReads([{selection: 'other', answer: money, to: 60_000}], seeds, 60_000));
 });
 
 test('the browser observer expands late metadata while counting only each actual response body', async () => {
@@ -139,9 +171,48 @@ test('complete payloads and partial bounds remain separate in a bounded verdict'
 
 test('a cutoff crossing is a retryable invalid cohort, while changed known metadata remains a failure', () => {
   const seed = {run: 'r', now: 0, known: {work: 0, sources: {s: 0}}};
-  stableHistory({...seed, now: 10_000}, seed, 60_000);
-  assert.throws(() => stableHistory({...seed, now: 31_000}, seed, 60_000), HistoryCutChanged);
-  assert.throws(() => stableHistory({...seed, known: {work: 1, sources: {s: 0}}}, seed, 60_000), error => !(error instanceof HistoryCutChanged));
+  stableHistory({...seed, now: 10_000}, seed, 60_000, 120_000);
+  assert.throws(() => stableHistory({...seed, now: 31_000}, seed, 60_000, 120_000), HistoryCutChanged);
+  assert.throws(() => stableHistory({...seed, known: {work: 1, sources: {s: 0}}}, seed, 60_000, 120_000), error => !(error instanceof HistoryCutChanged));
+});
+
+test('past-only cancellation reads survive an unrelated live cutoff while changed coverage still fails', () => {
+  // A real reversal seeded at 08:39:29.593 read yesterday at 08:39:30.840.
+  const seed = {run: 'r', now: 1791535169593, known: {work: 0, sources: {s: 0}}};
+  const answer = {...seed, now: 1791535170840}, cell = 300_000;
+  stableHistory(answer, seed, cell, 1791448500000);
+  const seeds = new Map([['quota', {answer: seed}]]);
+  stableHistoryReads([{selection: 'quota', answer, to: 1791448500000}], seeds, cell);
+  const boundary = 1791535200000;
+  stableHistory(answer, seed, cell, boundary);
+  assert.throws(() => stableHistory(answer, seed, cell, boundary + 1), HistoryCutChanged);
+  assert.throws(() => stableHistoryReads([{selection: 'quota', answer, to: boundary + 1}], seeds, cell), HistoryCutChanged);
+  assert.throws(() => stableHistory(answer, seed, cell, boundary + cell), HistoryCutChanged);
+  assert.throws(() => stableHistory(answer, seed, cell, Infinity), HistoryCutChanged);
+  assert.throws(() => stableHistory({...answer, run: 'new'}, seed, cell, 1791448500000));
+  assert.throws(() => stableHistory({...answer, known: {...seed.known, work: 1}}, seed, cell, 1791448500000));
+});
+
+test('native 30d cold reads retain their own exclusive ends across the live two-hour cutoff', () => {
+  // Captured cold-cohort clocks and request ends; stable metadata is synthetic.
+  const quota = {run: 'r', now: 1791568768004, known: {work: 0, own: 100, sources: {s: 0}}};
+  const budget = {run: 'r', now: 1791568768170, known: {work: 0, sources: {s: 0}}};
+  const funds = {...budget, now: 1791568768315};
+  const seeds = new Map([['quota', {answer: quota}], ['budget', {answer: budget}], ['funds', {answer: funds}]]);
+  const reads = [
+    {selection: 'quota', answer: {...quota, now: 1791568770357}, to: 1788530400000},
+    {selection: 'budget', answer: {...budget, now: 1791568770793}, to: 1788530400000},
+    {selection: 'funds', answer: {...funds, now: 1791568770835}, to: 1788530400000},
+  ], cell = 7_200_000, boundary = 1791568800000;
+  stableHistoryReads(reads, seeds, cell);
+  for (const read of reads) {
+    const seed = seeds.get(read.selection)!.answer;
+    stableHistory(read.answer, seed, cell, read.to);
+    stableHistory(read.answer, seed, cell, boundary);
+    assert.throws(() => stableHistoryReads([{...read, to: boundary + 1}], seeds, cell), HistoryCutChanged);
+    assert.throws(() => stableHistory({...read.answer, run: 'new'}, seed, cell, read.to));
+    assert.throws(() => stableHistoryReads([{...read, answer: {...read.answer, known: {...read.answer.known, work: 1}}}], seeds, cell));
+  }
 });
 
 test('native history gestures use CDP integer speed while retaining the requested movement and cadence', () => {
@@ -228,7 +299,6 @@ test('Chrome request headers preserve a cancelled attempt identity before respon
   assert.equal(f.observer.reads[1].count?.id, 'b1:2', 'late extra headers update the terminal count instead of matching a query');
 });
 
-import {runInNewContext} from 'node:vm';
 import {historyPageScript} from '../historyTrafficBrowser';
 
 test('the browser fixture tags each fetch before IO and keeps cancellation identity without response headers', async () => {

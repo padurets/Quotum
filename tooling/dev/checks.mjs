@@ -41,6 +41,9 @@ await locked(path.join(ctx.shared, 'heavy.lock'), async () => {
   } else if (action === 'bench') {
     const benchEnv = {...env};
     if (process.env.QUOTUM_CHROME) benchEnv.QUOTUM_CHROME = process.env.QUOTUM_CHROME;
+    for (const key of ['QUOTUM_BENCH_DIAGNOSTICS_DIR', 'QUOTUM_BENCH_DIAGNOSE_NATIVE', 'QUOTUM_BENCH_DIAGNOSE_PANNING', 'QUOTUM_BENCH_DIAGNOSE_IDLE']) {
+      if (process.env[key]) benchEnv[key] = process.env[key];
+    }
     const args = ['run', 'bench', '--', '--ci', ...(process.env.BENCH_CDP ? ['--cdp', process.env.BENCH_CDP] : [])];
     await run('npm', args, path.join(root, 'hub'), benchEnv);
   } else throw new Error(`Unknown check: ${action}`);

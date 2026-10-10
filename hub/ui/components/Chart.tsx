@@ -25,6 +25,16 @@ export type Marker = {key: string; at: number; label: string; color: string; str
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
 
+/** Sorted plot points let a label inspect only the interval it covers. */
+function firstAt(points: Line['points'], at: number): number {
+  let low = 0, high = points.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (points[middle][0] < at) low = middle + 1; else high = middle;
+  }
+  return low;
+}
+
 /** How wide an announcement's label is taken to be, and how near an edge a value hides under it (percent). */
 const LABEL_WIDTH = 220;
 const LABEL_BAND = 15;
@@ -99,6 +109,41 @@ export function edgeFit<T>(inside: number, past: T[], rows: number): {shown: T[]
   return {shown: past.slice(0, room), more: past.slice(room)};
 }
 
+type LabelBox = {offset: number; width: number};
+/** Repeated captions reuse native bounds and shortening measurements across mounts. */
+class LabelBoxes {
+  private fonts = -1;
+  private scale = NaN;
+  private readonly saved = new Map<string, LabelBox>();
+  private readonly fits = new Map<string, number | null>();
+  private loaded(fonts: number, scale: number) {
+    if (this.fonts !== fonts || this.scale !== scale) {this.fonts = fonts; this.scale = scale; this.saved.clear(); this.fits.clear();}
+  }
+  fit(text: string, name: string, room: number, forecast: boolean, fonts: number, scale: number, read: () => number | null | undefined): number | null | undefined {
+    this.loaded(fonts, scale);
+    const key = JSON.stringify([text, name, room, forecast]);
+    if (this.fits.has(key)) return this.fits.get(key);
+    const value = read();
+    if (value !== undefined) {
+      if (this.fits.size >= 256) this.fits.delete(this.fits.keys().next().value!);
+      this.fits.set(key, value);
+    }
+    return value;
+  }
+  measure(text: string, end: boolean, forecast: boolean, fonts: number, scale: number, read: () => LabelBox | null): LabelBox | null {
+    this.loaded(fonts, scale);
+    const key = JSON.stringify([text, end, forecast]);
+    const known = this.saved.get(key);
+    if (known) return known;
+    const value = read();
+    if (value) {
+      if (this.saved.size >= 256) this.saved.delete(this.saved.keys().next().value!);
+      this.saved.set(key, value);
+    }
+    return value;
+  }
+}
+
 /**
  * A label on the chart on a backing sized to its text, so no line under it gets in the way.
  * One pointing past the right edge tells its exact time under the pointer or on a tap
@@ -112,6 +157,8 @@ function MarkerLabel({
   children,
   shorten,
   fonts,
+  scale,
+  boxes,
   onTip,
 }: {
   x: number;
@@ -123,6 +170,9 @@ function MarkerLabel({
   shorten?: {name: string; say: (name: string) => string; room: number};
   /** Counts the web fonts loaded: what was measured before one came is measured again. */
   fonts: number;
+  /** Native glyph metrics also follow the SVG viewport scale. */
+  scale: number;
+  boxes: LabelBoxes;
   onTip?: (shown: boolean, tapped: boolean) => void;
 }) {
   const text = useRef<SVGTextElement>(null);
@@ -142,33 +192,37 @@ function MarkerLabel({
   useLayoutEffect(() => {
     const element = whole.current;
     if (!shorten || !element) return;
-    let found: number | null = null;
-    try {
-      const start = children.indexOf(shorten.name);
-      const length = element.getSubStringLength(0, children.length);
-      if (length > shorten.room && start >= 0 && element.getNumberOfChars() === children.length + 1) {
-        let at = start;
-        const widths = graphemes(shorten.name).map(letter => {
-          const width = element.getSubStringLength(at, letter.length);
-          at += letter.length;
-          return width;
-        });
-        const name = widths.reduce((sum, width) => sum + width, 0);
-        found = fitting(widths, length - name, element.getSubStringLength(children.length, 1), shorten.room);
+    const measured = boxes.fit(children, shorten.name, shorten.room, !!color, fonts, scale, () => {
+      let found: number | null = null;
+      try {
+        const start = children.indexOf(shorten.name);
+        const length = element.getSubStringLength(0, children.length);
+        if (length > shorten.room && start >= 0 && element.getNumberOfChars() === children.length + 1) {
+          let at = start;
+          const widths = graphemes(shorten.name).map(letter => {
+            const width = element.getSubStringLength(at, letter.length);
+            at += letter.length;
+            return width;
+          });
+          const name = widths.reduce((sum, width) => sum + width, 0);
+          found = fitting(widths, length - name, element.getSubStringLength(children.length, 1), shorten.room);
+        }
+      } catch {
+        return undefined;
       }
-    } catch {
-      found = null;
-    }
+      return found;
+    });
+    const found = measured ?? null;
     setFit(fit => (fit?.input === input && fit.keep === found ? fit : {input, keep: found}));
-  }, [input]);
+  }, [input, shorten?.name, !!color, scale]);
   useLayoutEffect(() => {
-    const measured = text.current?.getBBox();
-    if (measured) {
-      const offset = measured.x - x, width = measured.width;
-      setBox(box => box?.offset === offset && box.width === width ? box : {offset, width});
-    }
+    const measured = boxes.measure(shown, end, !!color, fonts, scale, () => {
+      const value = text.current?.getBBox();
+      return value ? {offset: value.x - x, width: value.width} : null;
+    });
+    if (measured) setBox(box => box?.offset === measured.offset && box.width === measured.width ? box : measured);
     // The glyph bounds move with their anchor; only their text or font needs measuring.
-  }, [end, shown, fonts, !!color]);
+  }, [end, shown, fonts, !!color, scale]);
   return (
     <g
       className={`marker-label ${onTip ? 'is-pointed' : ''} ${color ? 'is-forecast' : ''}`}
@@ -204,6 +258,8 @@ const EdgeLabel = memo(function EdgeLabel({
   y,
   room,
   fonts,
+  scale,
+  boxes,
   onEdge,
 }: {
   id: string;
@@ -216,6 +272,9 @@ const EdgeLabel = memo(function EdgeLabel({
   y: number;
   room: number;
   fonts: number;
+  /** Native glyph metrics also follow the SVG viewport scale. */
+  scale: number;
+  boxes: LabelBoxes;
   onEdge: (edge: {key: string; tapped: boolean} | null) => void;
 }) {
   const now = useClock(now => countdownChangesAt(at, now));
@@ -229,7 +288,7 @@ const EdgeLabel = memo(function EdgeLabel({
         y={y}
         end
         color={color}
-        fonts={fonts}
+        fonts={fonts} scale={scale} boxes={boxes}
         // It ends at the plot's right edge, and its backing, 6 wider than the text, starts within the plot.
         shorten={runsOut ? {name, say, room} : undefined}
         onTip={(shown, tapped) => onEdge(shown ? {key: id, tapped} : null)}
@@ -291,7 +350,7 @@ export const Chart = memo(function Chart({
   onSelect?: (range: TimeRange) => void;
   plot?: number;
   onBase?: (height: number) => void;
-  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;detail?:(key:string,at:number)=>ReactNode};
+  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;observedAt?:(key:string,at:number)=>number|undefined;detail?:(key:string,at:number)=>ReactNode};
   stepped?:boolean;
   strip?: PlotBuffer | null;
   prepared?: boolean;
@@ -325,7 +384,8 @@ export const Chart = memo(function Chart({
       let latest: string | undefined;
       let lastAt:number|undefined;
       for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; lastAt=at; yield;}
-      if(lastAt!==undefined&&valueAxis?.rawValue)latest=`${lastAt}:${valueAxis.rawValue(line.key,lastAt)}`;
+      // A carried balance can receive a new observation without changing its outline.
+      if(lastAt!==undefined&&valueAxis?.rawValue)latest=`${valueAxis.observedAt?.(line.key,lastAt)??lastAt}:${valueAxis.rawValue(line.key,lastAt)}`;
       if(line.pointMode==='observation') {
         const observed=yield* observationRunsPrepared(line.points,incomingStrip?.from??drawFrom,incomingStrip?.to??basis.to,drawNow);
         const runs:[number,number][][]=[];
@@ -434,6 +494,7 @@ export const Chart = memo(function Chart({
   const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + cellMs);
   // Labels are measured: a web font that arrives later makes them as wide as they are drawn.
   const [fonts, setFonts] = useState(0);
+  const [boxes] = useState(() => new LabelBoxes());
   useEffect(() => {
     const loaded = () => setFonts(count => count + 1);
     document.fonts?.addEventListener('loadingdone', loaded);
@@ -479,8 +540,10 @@ export const Chart = memo(function Chart({
     let low = 0;
     let high = 0;
     for (const line of lines) {
-      for (const [at, value] of line.points) {
-        if (at < a || at > b) continue;
+      const points = line.points;
+      for (let i = firstAt(points, a); i < points.length; i++) {
+        const [at, value] = points[i];
+        if (at > b) break;
         if (value < LABEL_BAND) low++;
         else if (value > 100 - LABEL_BAND) high++;
       }
@@ -503,7 +566,14 @@ export const Chart = memo(function Chart({
       if (value < band) low++;
       else if (value > 100 - band) high++;
     };
-    for (const line of lines) for (const [at, value] of line.points) if (at >= a && at <= b) count(value);
+    if (a <= b) for (const line of lines) {
+      const points = line.points;
+      for (let i = firstAt(points, a); i < points.length; i++) {
+        const [at, value] = points[i];
+        if (at > b) break;
+        count(value);
+      }
+    }
     const across = [0, 0.25, 0.5, 0.75, 1].map(share => a + (b - a) * share);
     for (const forecast of forecasts) for (const at of across) count(valueAt([forecast.points], at));
     for (const plan of plans) for (const at of across) count(valueAt(plan.runs, at));
@@ -640,7 +710,7 @@ export const Chart = memo(function Chart({
           const nearRight = mx > width - right - 150;
           const lx = nearRight ? mx - 6 : mx + 6;
           return (
-            <MarkerLabel key={marker.key} x={lx} y={stackRows.get(marker.key) ?? labelY(lx, nearRight)} end={nearRight} fonts={fonts}>
+            <MarkerLabel key={marker.key} x={lx} y={stackRows.get(marker.key) ?? labelY(lx, nearRight)} end={nearRight} fonts={fonts} scale={scale} boxes={boxes}>
               {marker.label}
             </MarkerLabel>
           );
@@ -666,7 +736,7 @@ export const Chart = memo(function Chart({
                 x={width - right}
                 y={stackRows.get(label.key)!}
                 room={width - left - right - 6}
-                fonts={fonts}
+                fonts={fonts} scale={scale} boxes={boxes}
                 onEdge={panning ? () => {} : setEdge}
               />
             ))}
@@ -675,7 +745,7 @@ export const Chart = memo(function Chart({
                 x={width - right}
                 y={stackRows.get(MORE)!}
                 end
-                fonts={fonts}
+                fonts={fonts} scale={scale} boxes={boxes}
                 onTip={(shown, tapped) => !panning && setEdge(shown ? {key: MORE, tapped} : null)}
               >
                 {t('chart.more', {count: more.length})}

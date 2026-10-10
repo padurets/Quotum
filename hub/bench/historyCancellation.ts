@@ -71,7 +71,7 @@ export async function cancellationTraffic(proxy: Awaited<ReturnType<typeof histo
       proxy.phase(`${name}/reference`);
       const target = targetOf(length, anchor, `${selected.from}-${selected.to}`, selected), cells = new Set<number>(), chunks: Chunk[] = [];
       for (let k = target.k0; k <= target.k1; k++) cells.add(k * cell);
-      for (const [from, to] of readUnion(cells, cell)) {const answer = await historyBody(url(from, to), cookie) as HistoryAnswer; stableHistory(answer, seed, cell); chunks.push(...answer.chunks);}
+      for (const [from, to] of readUnion(cells, cell)) {const answer = await historyBody(url(from, to), cookie) as HistoryAnswer; stableHistory(answer, seed, cell, to); chunks.push(...answer.chunks);}
       const meta = mode === 'reversal' ? latest! : seed;
       assert.deepEqual(store.get().history, {...compose(chunks, meta, target, new Set(windows)), board});
       const report = {name, attempted: attempts.length, completed: attempts.filter(r => r.count?.complete).length, failed: attempts.filter(r => r.failed && !r.signal?.aborted).length, aborted, discardedDelivered, ...totals, finalComplete: true, requests: attempts.map(r => ({from: r.from, to: r.to, id: r.count!.id, aborted: r.signal?.aborted}))};

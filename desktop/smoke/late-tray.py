@@ -8,11 +8,14 @@ import os
 import subprocess
 import sys
 import tempfile
+from native_evidence import Evidence
 
 from gi.repository import Gio, GLib
 
 if os.environ.get('QUOTUM_TEST_PRIVATE_BUS') != '1':
     raise SystemExit('run this check through tray.sh, on its private bus')
+
+evidence = Evidence(Path(sys.argv[1]).resolve())
 
 bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
 watcher = 'org.kde.StatusNotifierWatcher'
@@ -106,14 +109,10 @@ with tempfile.TemporaryDirectory(prefix='quotum-late-tray-') as directory:
                 result.update(title=props['Title'], status=props['Status'])
                 if os.environ.get('QUOTUM_TEST_PANEL') == '1':
                     from panel import check_panel
-                    result['panel'] = check_panel(bus, registered[0], child, root, env)
-        except Exception as error:
-            # Preserve the synthetic launch log before the temporary profile is removed.
-            try:
-                subprocess.run([sys.executable, str(Path(__file__).with_name('diagnostic.py')),
-                                str(root), f'native panel check failed: {error}'], timeout=5)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+                    result['panel'] = check_panel(bus, registered[0], child, root, env, evidence)
+        except Exception:
+            evidence.product(root)
+            evidence.finish('failed')
             raise
         finally:
             child.terminate()
@@ -123,13 +122,16 @@ with tempfile.TemporaryDirectory(prefix='quotum-late-tray-') as directory:
                 child.kill()
                 child.wait()
             result['exit'] = child.returncode
+            evidence.record('cleanup', exit=child.returncode)
 
     print(result)
     if not (result.get('lateRegistration') and result.get('controllerAlive')
             and result.get('controllerAdvertisedBeforeWatcher')
             and result.get('noRegistrationBeforeWatcher') and child.returncode == 0):
-        print((root / 'launch.log').read_text(), file=sys.stderr)
+        evidence.finish('failed')
         if os.environ.get('GITHUB_ACTIONS') == 'true':
             message = str(result).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
             print(f'::error::late tray registration failed: {message}')
         raise SystemExit(1)
+
+    evidence.finish('passed')

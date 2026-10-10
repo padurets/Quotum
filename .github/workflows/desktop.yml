@@ -82,6 +82,12 @@ jobs:
         run: |
           python3 desktop/smoke/test_trace.py
           python3 desktop/smoke/test_monitor.py
+          python3 desktop/smoke/test_native_evidence.py
+      - name: Native window probe tests
+        if: runner.os == 'Windows'
+        run: |
+          ./desktop/smoke/test-window-probe.ps1
+          ./desktop/smoke/test-wait-observer.ps1
       - name: Commit and version
         shell: bash
         run: |
@@ -167,7 +173,7 @@ jobs:
           sh desktop/smoke/linux.sh normal quotum-desktop --software-rendering
           sh desktop/smoke/linux.sh crash quotum-desktop
           sh desktop/smoke/tray.sh /usr/bin/quotum-desktop
-          QUOTUM_TEST_PANEL=1 xvfb-run -a sh desktop/smoke/tray.sh /usr/bin/quotum-desktop
+          QUOTUM_TEST_PANEL=1 QUOTUM_SMOKE_DIAGNOSTICS_DIR="$RUNNER_TEMP/quotum-native-diagnostics" xvfb-run -a sh desktop/smoke/tray.sh /usr/bin/quotum-desktop
       - name: Smoke (Fedora)
         if: runner.os == 'Linux'
         shell: bash
@@ -177,9 +183,10 @@ jobs:
           rpm=$(ls desktop/target/${{ matrix.target }}/release/bundle/rpm/*.rpm)
           # Chromium keeps its own sandbox; nested user namespaces need to pass the
           # outer container's syscall filter. The app still runs as the smoke user.
-          docker run --rm --security-opt seccomp=unconfined -v "$PWD:/work:ro" -w /work fedora:42 sh -c "
+          # Fedora's registry avoids anonymous Docker Hub pull quotas before RPM smoke.
+          docker run --rm --security-opt seccomp=unconfined -v "$PWD:/work:ro" -w /work quay.io/fedora/fedora:42 sh -c "
             set -e
-            dnf -y install nodejs xorg-x11-server-Xvfb xorg-x11-xauth procps-ng strace dbus-daemon python3-gobject-base /work/$rpm > /tmp/dnf.log || { cat /tmp/dnf.log; exit 1; }
+            dnf -y install nodejs xorg-x11-server-Xvfb xorg-x11-xauth procps-ng strace dbus-daemon python3-gobject-base util-linux /work/$rpm > /tmp/dnf.log || { cat /tmp/dnf.log; exit 1; }
             rpm -ql quotum | grep '^/usr/bin/'
             useradd -m smoke
             runuser -u smoke -- sh desktop/smoke/linux.sh normal quotum-desktop
@@ -248,13 +255,19 @@ jobs:
           if ($stop) { throw "UI smoke stopped: $stop" }
           if ($failed.Count) { throw "UI smoke failed in $($failed.Count) runs: $($failed -join ', ')" }
           if (-not (Test-Path -LiteralPath "$profiles\EBWebView\quotum-ci-sentinel")) { throw 'The UI smoke did not put the profile of WebView2 back' }
-      # What the UI smoke saw (its report, the app's logs, its processes): when it failed,
-      # and always in a run by hand. A failure before the UI smoke leaves nothing to keep.
-      - name: UI smoke diagnostics (Windows)
-        if: (failure() || github.event_name == 'workflow_dispatch') && runner.os == 'Windows'
+      # Preserve bounded native stage evidence for each exact build, passed or not.
+      - name: Native smoke diagnostics (Linux)
+        if: always() && runner.os == 'Linux'
         uses: actions/upload-artifact@v7
         with:
-          name: quotum-ui-diagnostics-${{ env.QUOTUM_COMMIT }}-${{ github.run_attempt }}
+          name: quotum-native-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quotum-native-diagnostics
+          if-no-files-found: warn
+      - name: UI smoke diagnostics (Windows)
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: quotum-ui-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/quotum-ui-diagnostics
           if-no-files-found: ignore
 

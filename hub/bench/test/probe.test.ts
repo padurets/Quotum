@@ -114,6 +114,19 @@ function page() {
     insert: (target: Element, ...addedNodes: unknown[]) => observer!([{type: 'childList', target, addedNodes}])};
 }
 
+test('credit heartbeats require a new DOM commit of the exact observation, series and amount',()=>{
+  const {bench,mutate}=page(),observedAt=286000;
+  const found=()=>bench.seriesChanged('credit balance:credits',observedAt+':99960000')!==null;
+  const draw=(key:string,last:string)=>mutate(el('path',el('g',null,{'data-series':key,'data-last':last})));
+  bench.reset();assert.equal(found(),false);
+  for(const [key,last] of [['another balance:credits','286000:99960000'],['credit balance:credits','286000:100000000'],['credit balance:credits','280000:99960000'],['credit balance:credits','300000:99960000']]) {
+    draw(key,last);assert.equal(found(),false);
+  }
+  draw('credit balance:credits','286000:99960000');assert.equal(found(),true);
+  bench.reset();assert.equal(found(),false,'a previous change cannot credit an unchanged heartbeat');
+  draw('credit balance:credits','286000:99960000');assert.equal(found(),true);
+});
+
 test('the live probe distinguishes subscription funds, quota and wallets inside shared analytics',()=>{
   const p=page(),analytics=el('section',null,{},'analytics');
   for(const [name,widget] of [['history','quota'],['forecast','quota'],['budget-history','budget'],['budget-table','budget'],['subscription-funds','funds'],['activity','activity']] as const) {

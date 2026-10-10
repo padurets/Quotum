@@ -3,9 +3,13 @@ import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, cellStart, tileOf, type HistoryAnswe
 import assert from 'node:assert/strict';
 
 export class HistoryCutChanged extends Error {}
-export function stableHistory(answer: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, cell: number) {
+export function stableHistory(answer: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, cell: number, to: number) {
   assert.equal(answer.run, seed.run); assert.deepEqual(answer.known, seed.known);
-  if (cellStart(answer.now + CLOCK_TOLERANCE_MS, cell) !== cellStart(seed.now + CLOCK_TOLERANCE_MS, cell)) throw new HistoryCutChanged('history crossed its grid cutoff during this cohort');
+  // The live cutoff cannot change coverage of a request ending wholly in the past.
+  // Keep the exclusive request end, including requests ending inside a grid cell.
+  const last = (Math.ceil(to / cell) - 1) * cell;
+  const cut = (now: number) => Math.min(last, cellStart(now + CLOCK_TOLERANCE_MS, cell));
+  if (cut(answer.now) !== cut(seed.now)) throw new HistoryCutChanged('history crossed its grid cutoff during this cohort');
 }
 
 /** A reference union is partitioned only by holes and the existing API tile cap. */

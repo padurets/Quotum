@@ -1,6 +1,7 @@
 import {createServer, request, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse} from 'node:http';
 import {promisify} from 'node:util';
 import {brotliCompress, brotliDecompress, constants} from 'node:zlib';
+import type {RunOwner} from './runOwner.js';
 
 const compress = promisify(brotliCompress), decompress = promisify(brotliDecompress);
 export const HISTORY_CODEC = {quality: 4, mode: 'text', lgwin: 22, node: process.version} as const;
@@ -10,7 +11,8 @@ const params = {[constants.BROTLI_PARAM_QUALITY]: HISTORY_CODEC.quality, [consta
 export type Transfer = {id: string; phase: string; cell: number; from: number; to: number; started: number; status?: number; decoded?: number; encoded?: number; sent: boolean; finished: boolean; aborted: boolean};
 
 /** The benchmark owns this loopback forwarder, its fixed upstream and every socket. */
-export async function historyProxy(upstream: string) {
+export async function historyProxy(upstream: string, owner?: RunOwner) {
+  owner?.signal.throwIfAborted();
   const target = new URL(upstream);
   if (target.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname)) throw new Error('history proxy requires its own loopback HTTP hub');
   let phase = 'seed', latency = 0, serial = 0;
@@ -58,11 +60,16 @@ export async function historyProxy(upstream: string) {
     delete headers['transfer-encoding'];
     outgoing.writeHead(response.statusCode!, headers); transfer.sent = true; outgoing.end(encoded);
   }
-  await new Promise<void>((resolve, reject) => {server.once('error', reject); server.listen(0, '127.0.0.1', resolve);});
+  let closing: Promise<void> | undefined;
+  const stop = () => closing ??= (async () => {for (const [timer, resolve] of delays) {clearTimeout(timer); resolve();} delays.clear(); for (const req of requests) req.destroy(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));})();
+  const close = owner?.resource(stop) ?? stop;
+  const listen = () => new Promise<void>((resolve, reject) => {server.once('error', reject); server.listen(0, '127.0.0.1', resolve);});
+  await (owner ? owner.operation(listen) : listen());
+  if (owner?.signal.aborted) {await close(); owner.signal.throwIfAborted();}
   return {url: `http://127.0.0.1:${(server.address() as {port: number}).port}`, transfers,
     phase(value: string, addedLatency = 0) {phase = value; latency = addedLatency;},
     async settled(value: string) {await Promise.all(transfers.filter(t => t.phase === value).map(t => terminals.get(t.id)));},
-    async close() {for (const [timer, resolve] of delays) {clearTimeout(timer); resolve();} delays.clear(); for (const req of requests) req.destroy(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));},
+    close,
   };
 }
 

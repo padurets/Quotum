@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import type {Evidence} from './evidence';
 import {cellStart, expandHistory, type HistoryAnswer, type HistoryBasis, type HistoryReply} from '../server/domain/history';
 import {openTab, type Browser, type Cdp} from './cdp';
 import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
@@ -19,10 +21,10 @@ export function historyReadSelection(url: URL) {
 }
 
 /** Private work bounds belong to quota history, so every response keeps its own seed. */
-export function stableHistoryReads(reads: readonly Pick<Read, 'selection' | 'answer'>[], seeds: ReadonlyMap<string, {answer: NonNullable<Read['answer']>}>, cell: number) {
+export function stableHistoryReads(reads: readonly Pick<Read, 'selection' | 'answer' | 'to'>[], seeds: ReadonlyMap<string, {answer: NonNullable<Read['answer']>}>, cell: number) {
   for (const read of reads) {
     const seed = seeds.get(read.selection); assert.ok(seed, 'the gesture must retain its seeded resource selection');
-    if (read.answer) stableHistory(read.answer, seed.answer, cell);
+    if (read.answer) stableHistory(read.answer, seed.answer, cell, read.to);
   }
 }
 
@@ -93,6 +95,14 @@ export class HistoryBodies {
   }
 }
 
+export function trafficReadEvidence(reads: readonly Read[]) {
+  const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  return reads.map(read=>({id:read.id,phase:read.phase,from:read.from,to:read.to,cell:read.cell,
+    lower:read.lower,coding:read.coding,length:read.length,attemptId:read.attemptId,transferId:read.transferId,
+    canceled:read.canceled,count:read.count,selectionHash:hash(read.selection),chunks:read.chunks,
+    run:read.answer?.run,now:read.answer?.now,knownHash:read.answer?.known===undefined?undefined:hash(read.answer.known)}));
+}
+
 /** CDP's speed is an integer; keep the named cold gesture near 750 ms. */
 export function historyScroll(geometry: {x: number; y: number; width: number}, fraction: number, distance: number) {
   if (![geometry.x, geometry.y, geometry.width, fraction, distance].every(Number.isFinite) || geometry.width <= 0 || fraction <= 0) throw new Error('invalid history gesture geometry');
@@ -104,7 +114,9 @@ type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, la
 async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number) {
   const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp);
   cdp.at(`${name}/seed`);
-  const close = async () => {cdp.at(`${name}/cleanup`); await cdp.evaluate('(()=>{const p=window.__historyTraffic;if(p){p.running=false;cancelAnimationFrame(p.raf);history.pushState=p.originalPush;}})()').catch(() => {}); await tab.close();};
+  // Closing this owned target discards its observers and overrides. A stalled
+  // renderer cannot acknowledge a cleanup evaluation before its target closes.
+  const close = async () => {cdp.at(`${name}/cleanup`); await tab.close();};
   try {
     const seedPhase = `${name}/seed`; bodies.phase = seedPhase; proxy.phase(seedPhase);
     await cdp.send('Network.enable'); await cdp.send('Page.enable'); await cdp.send('Performance.enable');
@@ -150,15 +162,16 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
 }
 
 /** Separate tabs use the fixed-codec proxy; this never changes the native perf route. */
-export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string) {
+export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string, evidence?: Pick<Evidence, 'save'>) {
   const reports = [], invalidated = [], problems: string[] = [];
   for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
     for (let take = 1; take <= 3; take++) {
       const name = `browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
+      evidence?.save('traffic-stage', {name, stage: 'seed'});
       const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, future);
-      let observer:Awaited<ReturnType<typeof observeReversal>>|null=null;
+      let observer:Awaited<ReturnType<typeof observeReversal>>|null=null, status='failed';
       try {
-        observer=await observeReversal(cdp,browser,false);
+        observer=await observeReversal(cdp,browser);
         const phase = `${name}/cold`; bodies.phase = phase; proxy.phase(phase, latency);
         const scroll = (distance: number,stage:string) => {
           cdp.at(`${bodies.phase}/${stage}`);
@@ -170,6 +183,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         assert.ok(Math.abs(pose.to - pose.poses[0].origin + (length + future) * fraction) <= 3 * (length + future) / geometry.width, 'native gesture did not move by its named fraction');
         const cold = bodies.reads.filter(read => read.phase === phase);
         await proxy.settled(phase);
+        stableHistoryReads(cold, seeds, cell);
         const families = [];
         for (const selection of new Set(cold.map(read => read.selection))) {
           const group = seeds.get(selection); assert.ok(group, 'the gesture must retain its seeded resource selection');
@@ -181,7 +195,6 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
           for (let at = cellStart(pose.from, cell); at < Math.ceil(Math.min(pose.poses[0].origin, pose.to + ahead) / cell) * cell; at += cell) visited.add(at);
           for (const read of reads) {
             assert.ok(read.count, 'every attempt needs a terminal body count');
-            if (read.answer) stableHistory(read.answer, group.answer, cell);
             for (let at = read.from; at < read.to; at += cell) {assert.ok(!group.initial.has(at), 'browser reread fresh seed data in the same selection'); requested.add(at);}
           }
           const totals = bodyTotals(reads.map(read => ({count: read.count!, transfer: transferFor(read.count!, proxy.transfers)})));
@@ -189,7 +202,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
           proxy.phase(`${name}/reference/${scope}`); let referenceDecoded = 0, referenceEncoded = 0;
           for (const [from, to] of readUnion(requested, cell)) {
             const answer = await historyBody(`${proxy.url}/api/history?${selection}&cell=${cell}&from=${from}&to=${to}`, cookie, undefined, body => {assert.ok(body.complete); referenceDecoded += body.decoded!; referenceEncoded += body.lower;}) as HistoryAnswer;
-            stableHistory(answer, group.answer, cell);
+            stableHistory(answer, group.answer, cell, to);
           }
           families.push({name: `${name}/${scope}`, attempts: reads.length, maxAttempts: fraction === .04 ? 2 : future ? 7 : 5, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, optionalUnvisitedCells: optional.length});
         }
@@ -205,22 +218,30 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
           reports.push(report); problems.push(...trafficProblems(report));
           console.error(`bench: ${report.name}: ${report.attempts} GETs, ${warm.length} warm GETs, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / report.referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / report.referenceEncoded}`);
         }
+        status=reports.filter(report=>report.name.startsWith(name+'/')).some(report=>trafficProblems(report).length)?'over-budget':'passed';
         break;
       } catch (error) {
         if (!(error instanceof HistoryCutChanged) || take === 3) throw new Error(`${name}: ${String(error)}`, {cause: error});
+        status='invalidated';
         invalidated.push({name, reason: error.message, reads: bodies.reads.map(read => ({phase: read.phase, from: read.from, to: read.to, count: read.count}))});
-      } finally {await observer?.close();await close();}
+      } finally {
+        evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name,status,geometry,cell,
+          reads:trafficReadEvidence(bodies.reads),reports:reports.filter(report=>report.name.startsWith(name+'/')),
+          transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),command:cdp.snapshot()});
+        await observer?.close();await close();
+      }
     }
   }
   return {reports, invalidated, problems};
 }
 
 /** Native cancellation/reversal keeps one Shift-wheel token while responses are owned. */
-export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false,profileBeforeInput=false) {
+export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false,profileBeforeInput=false,evidence?:Pick<Evidence,'save'>) {
   const reports = [];
   for (const length of [DAY, 30 * DAY]) for (const mode of ['before-headers', 'after-delivery', 'reversal'] as const) {
     if(diagnostic&&(length!==DAY||mode!=='reversal'))continue;
     const name = `browser/${length / DAY}d/${mode}`;
+    evidence?.save('traffic-stage', {name,stage:'seed'});
     console.error(`bench: ${name}: opening seed page`);
     const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, DAY);
     let observer:Awaited<ReturnType<typeof observeReversal>>|null=null;
@@ -230,14 +251,14 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
     const step = async <T>(value: string, run: () => Promise<T>) => {
       stage = value; cdp.at(`${name}/${stage}`);
       console.error(`bench: ${name}: ${stage}`);
-      return diagnostic && observer ? observer.watch(value, run) : run();
+      return observer ? observer.watch(value, run) : run();
     };
     const until = async (predicate: () => boolean | Promise<boolean>) => {const end = Date.now() + 10_000; while (!await predicate()) {if (bodies.errors.length) throw bodies.errors[0]; if (Date.now() > end) throw new Error(`${name}: lifecycle boundary not reached`); await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,10))');}};
     const key = (type: string, name: string, code: number, modifiers: number) => cdp.send('Input.dispatchKeyEvent', {type, key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers});
     const wheel = (pixels: number) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: pixels, deltaY: 0, modifiers: 8});
     try {
       // The canonical failing page is observed without changing V8 before input.
-      observer=mode==='reversal'?await observeReversal(cdp,browser,profileBeforeInput):null;
+      observer=await observeReversal(cdp,browser,{mode:diagnostic?'diagnostic':'canonical',profileBeforeInput,closeTarget:close});
       bodies.phase = phase; proxy.phase(phase, mode === 'after-delivery' ? 0 : 400);
       await step('shift down', () => key('keyDown', 'Shift', 16, 8));
       await step('first wheel', () => wheel(-geometry.width * .1));
@@ -247,7 +268,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
         await step('reverse wheel', () => wheel(geometry.width * .1));
         await step('first cancellation', () => until(() => reads()[0]?.canceled === true));
         await step('reversal frame', () => cdp.evaluate('new Promise(requestAnimationFrame)'));
-        await step('repeat wheel', () => !diagnostic&&observer?observer.watch('repeat wheel',()=>wheel(-geometry.width * .1)):wheel(-geometry.width * .1));
+        await step('repeat wheel', () => wheel(-geometry.width * .1));
         await step('repeat delivery', () => until(() => reads().length >= 2 && reads().slice(1).some(r => r.count?.complete)));
         await step('shift up', () => key('keyUp', 'Shift', 16, 0));
         await step('drawings settled', settled);
@@ -272,10 +293,13 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
     } catch (error) {
       console.error(`bench: ${name}: failed at ${stage}; HTTP ${JSON.stringify({active: bodies.activeCount, pending: bodies.pending.size, reads: reads().map(r => ({from: r.from, to: r.to, canceled: r.canceled, complete: r.count?.complete}))})}`);
       cdp.at(`${name}/failure state`);
-      const state = await cdp.evaluate('({visibility:document.visibilityState,ready:document.readyState,charts:[...document.querySelectorAll(".chart>svg")].map(svg=>({...svg.dataset})),selected:new URLSearchParams(location.search).has("from")})').catch(cause => String(cause));
+      const state = cdp.snapshot();
       console.error(`bench: ${name}: failure state ${JSON.stringify(state)}`);
       throw error;
     } finally {
+      evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name,stage,
+        status:reports.some(report=>report.name===name)?'passed':'failed',reads:trafficReadEvidence(bodies.reads),
+        reports:reports.filter(report=>report.name===name),transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),command:cdp.snapshot()});
       await observer?.close();
       cdp.at(`${name}/release shift`);
       await key('keyUp', 'Shift', 16, 0).catch(() => {}); await close();
@@ -287,7 +311,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
 
 /** An instrumented replay diagnoses an earlier failure and never replaces its verdict. */
 export async function diagnoseReversal(browser:Browser,upstream:string,cookie:string,repeats=1){
-  const proxy=await historyProxy(upstream);
+  const proxy=await historyProxy(upstream, browser.owner);
   try{for(let take=0;take<repeats;take++){const profileBeforeInput=take%2===0;console.error(`reversal diagnostic replay ${take+1}/${repeats}, profiler ${profileBeforeInput?'before input':'after stall'}`);await browserCancellationTraffic(browser,proxy,cookie,true,profileBeforeInput);}}
   finally{await proxy.close();}
 }

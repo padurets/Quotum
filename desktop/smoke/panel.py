@@ -1,15 +1,17 @@
 """Native popup lifecycle, on tray.sh's private bus and an isolated Xvfb display."""
 import ctypes as C
 import inspect
-import os
 from pathlib import Path
 import re
-import signal
 import subprocess
 import time
+from native_evidence import belongs, identity, paused
 
 
-def check_panel(bus, item, child, root, env):
+def check_panel(bus, item, child, root, env, evidence):
+    controller = identity(child.pid)
+    known_engines = {}
+    scenario = 'initial'
     from gi.repository import Gio, GLib
     x = C.CDLL('libX11.so.6')
     x.XOpenDisplay.argtypes = [C.c_char_p]
@@ -57,7 +59,7 @@ def check_panel(bus, item, child, root, env):
             if data:
                 x.XFree(data)
 
-    def visible(owner):
+    def visible(owner, all_windows=False):
         parent = C.c_ulong()
         screen = C.c_ulong()
         children = C.POINTER(C.c_ulong)()
@@ -69,10 +71,12 @@ def check_panel(bus, item, child, root, env):
             x.XFree(children)
         found = []
         for window in ids:
-            matches = property_values(window, b'_NET_WM_PID') == [owner] and property_values(window, b'_NET_WM_WINDOW_OPACITY') != [0]
+            opacity = property_values(window, b'_NET_WM_WINDOW_OPACITY')
+            matches = property_values(window, b'_NET_WM_PID') == [owner] and (all_windows or opacity != [0])
             if matches:
                 attributes = Attributes()
-                if x.XGetWindowAttributes(display, window, C.byref(attributes)) and attributes.map_state == 2:
+                if x.XGetWindowAttributes(display, window, C.byref(attributes)) and (all_windows or attributes.map_state == 2):
+                    attributes.opacity = opacity[0] if opacity else 0xffffffff
                     attributes.skip_taskbar = x.XInternAtom(display, b'_NET_WM_STATE_SKIP_TASKBAR', 0) in property_values(window, b'_NET_WM_STATE')
                     attributes.id = window
                     found.append(attributes)
@@ -99,38 +103,41 @@ def check_panel(bus, item, child, root, env):
             current = parent.value
         return False
 
+    def snapshot(stage):
+        pid = engine()
+        focus, revert = C.c_ulong(), C.c_int()
+        x.XGetInputFocus(display, C.byref(focus), C.byref(revert))
+        def windows(owner):
+            return [dict(id=w.id, override=w.override, x=w.x, y=w.y, width=w.width,
+                         height=w.height, mapState=w.map_state, opacity=w.opacity)
+                    for w in visible(owner, True)] if owner else []
+        evidence.record(stage, scenario=scenario, focus=focus.value, controller=identity(child.pid),
+                        engine=identity(pid) if pid else None, controllerWindows=windows(child.pid),
+                        engineWindows=windows(pid))
+
     def wait(predicate):
         until = time.monotonic() + 10
+        evidence.record('wait-start', scenario=scenario, line=inspect.currentframe().f_back.f_lineno)
         while time.monotonic() < until:
             if child.poll() is not None:
                 raise RuntimeError('controller exited during the native panel check')
             value = predicate()
             if value:
+                snapshot('wait-complete')
                 return value
             time.sleep(.01)
-        pid = engine()
-        focus, revert = C.c_ulong(), C.c_int()
-        x.XGetInputFocus(display, C.byref(focus), C.byref(revert))
-        def windows(owner):
-            return [dict(id=w.id, override=w.override, x=w.x, y=w.y, width=w.width, height=w.height)
-                    for w in visible(owner)] if owner else []
-        states = {}
-        for owner in [child.pid, pid]:
-            try:
-                states[owner] = [line for line in Path(f'/proc/{owner}/status').read_text().splitlines()
-                                 if line.startswith(('Name:', 'State:', 'PPid:'))]
-            except OSError:
-                pass
-        print({'failedLine': inspect.currentframe().f_back.f_lineno, 'focus': focus.value,
-               'controllerWindows': windows(child.pid), 'engineWindows': windows(pid),
-               'processStates': states}, flush=True)
+        snapshot('wait-timeout')
         raise RuntimeError('native panel operation timed out')
 
     def engine():
         log = root / 'app/logs/hub.log'
         matches = re.findall(r'Chromium starts \(pid (\d+)\)', log.read_text()) if log.exists() else []
         pid = int(matches[-1]) if matches else None
-        return pid if pid and Path(f'/proc/{pid}').exists() else None
+        current = identity(pid) if pid else None
+        if not current or current['state'] in ('Z', 'X') or not belongs(pid, controller):
+            return None
+        birth = known_engines.setdefault(pid, current['birth'])
+        return pid if birth == current['birth'] else None
 
     def activate():
         bus.call_sync(item, '/StatusNotifierItem', 'org.kde.StatusNotifierItem', 'Activate', GLib.Variant('(ii)', (600, 440)), None, Gio.DBusCallFlags.NONE, 3000, None)
@@ -149,18 +156,16 @@ def check_panel(bus, item, child, root, env):
 
     try:
         for cancel in [False, True]:
+            scenario = 'initial-cancel' if cancel else 'initial-handoff'
             activate()
             loader = wait(lambda: visible(child.pid))
             assert len(loader) == 1 and loader[0].skip_taskbar, 'loader must stay out of the taskbar'
             pid = wait(engine)
-            os.kill(pid, signal.SIGSTOP)
-            try:
+            with paused(identity(pid), controller, evidence.record):
                 assert visible(child.pid), 'the loader cannot wait for Chromium'
                 if cancel:
                     activate()
                     wait(lambda: not visible(child.pid))
-            finally:
-                os.kill(pid, signal.SIGCONT)
             if cancel:
                 wait(lambda: engine() is None)
                 assert not visible(child.pid), 'a cancelled loader reappeared'
@@ -173,14 +178,12 @@ def check_panel(bus, item, child, root, env):
                 wait(lambda: engine() is None)
         # Queue three real tray callbacks while only our controller is paused.
         # Blur from the first hide must not cancel the final open request.
-        os.kill(child.pid, signal.SIGSTOP)
-        try:
+        scenario = 'queued-final-open'
+        with paused(identity(child.pid), controller, evidence.record):
             for _ in range(3):
                 bus.call(item, '/StatusNotifierItem', 'org.kde.StatusNotifierItem', 'Activate', GLib.Variant('(ii)', (600, 440)), None, Gio.DBusCallFlags.NONE, 3000, None, None, None)
                 bus.flush_sync(None)
                 time.sleep(.1)
-        finally:
-            os.kill(child.pid, signal.SIGCONT)
         pid = wait(engine)
         wait(lambda: visible(pid))
         activate()
@@ -188,12 +191,12 @@ def check_panel(bus, item, child, root, env):
         wait(lambda: engine() is None)
         # Reopening main was accepted first, but its browser is paused. A newer
         # tray request must remain foreground when both queued heads are drained.
+        scenario = 'old-main-new-panel'
         open_main()
         pid = wait(engine)
         board = wait(lambda: next((w for w in visible(pid) if not w.override), None))
         x.XSelectInput(display, board.id, 1 << 21)  # FocusChangeMask
-        os.kill(pid, signal.SIGSTOP)
-        try:
+        with paused(identity(pid), controller, evidence.record):
             open_main()
             activate()
             loader = wait(lambda: visible(child.pid))
@@ -203,8 +206,6 @@ def check_panel(bus, item, child, root, env):
             event = (C.c_long * 24)()
             while x.XPending(display):
                 x.XNextEvent(display, C.byref(event))
-        finally:
-            os.kill(pid, signal.SIGCONT)
         popup = wait(lambda: next((w for w in visible(pid) if w.override), None))
         focus, revert = C.c_ulong(), C.c_int()
         def panel_focused():
@@ -220,23 +221,18 @@ def check_panel(bus, item, child, root, env):
         # Keep an existing browser stopped while the native loader is closed and
         # reopened by two queued tray callbacks. Its old FocusOut must belong to
         # the retired GTK window, even when the new show waits for publication.
-        os.kill(pid, signal.SIGSTOP)
-        try:
+        scenario = 'retired-loader-reopen'
+        with paused(identity(pid), controller, evidence.record):
             activate()
             old_loader = wait(lambda: visible(child.pid))[0]
             wait(lambda: focused_inside(old_loader.id))
-            os.kill(child.pid, signal.SIGSTOP)
-            try:
+            with paused(identity(child.pid), controller, evidence.record):
                 for _ in range(2):
                     bus.call(item, '/StatusNotifierItem', 'org.kde.StatusNotifierItem', 'Activate', GLib.Variant('(ii)', (600, 440)), None, Gio.DBusCallFlags.NONE, 3000, None, None, None)
                     bus.flush_sync(None)
                     time.sleep(.1)
-            finally:
-                os.kill(child.pid, signal.SIGCONT)
             replacement = wait(lambda: next((w for w in visible(child.pid) if w.id != old_loader.id), None))
             wait(lambda: focused_inside(replacement.id))
-        finally:
-            os.kill(pid, signal.SIGCONT)
         popup = wait(lambda: next((w for w in visible(pid) if w.override), None))
         wait(lambda: focused_inside(popup.id))
         activate()
@@ -244,5 +240,9 @@ def check_panel(bus, item, child, root, env):
         assert not errors, f'unexpected X11 errors: {errors}'
         return {'loadingWithoutBrowser': True, 'popupHandoff': True, 'cancelledBeforePaint': True, 'queuedFinalOpen': True, 'newerPanelKeepsFocus': True, 'retiredLoaderCannotCancelReopen': True}
     finally:
-        x.XCloseDisplay(display)
-        x.XSetErrorHandler(previous_handler)
+        try:
+            evidence.product(root)
+            snapshot('scenario-finished')
+        finally:
+            x.XCloseDisplay(display)
+            x.XSetErrorHandler(previous_handler)

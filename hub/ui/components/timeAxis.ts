@@ -81,10 +81,11 @@ export function useTimeAxis({
   const [, present] = useState(0);
   const foldTicket = useRef(0);
   const animations = useRef(new Map<SVGGElement, Animation>());
+  const animationPoses = useRef(new WeakMap<Animation, {from: Pose; to: Pose}>());
   // The axis owns these animations; finding them through the DOM flushes styles.
-  const animateSlide = (layer: SVGGElement, frames: Keyframe[], options: KeyframeAnimationOptions) => {
+  const animateSlide = (layer: SVGGElement, frames: Keyframe[], options: KeyframeAnimationOptions, owner: Element = layer) => {
     animations.current.get(layer)?.cancel();
-    const animation = layer.animate(frames, options);
+    const animation = owner.animate(frames, options);
     animations.current.set(layer, animation);
     const release = () => {if (animations.current.get(layer) === animation) animations.current.delete(layer);};
     animation.finished.then(release, release);
@@ -150,14 +151,28 @@ export function useTimeAxis({
   }, []);
 
   const paintPan = useRef(() => {});
+  const readPose = (layer: SVGGElement): Pose => {
+    const animation = animations.current.get(layer);
+    if (!animation) return pose.current;
+    const frames = animationPoses.current.get(animation);
+    if (frames) {
+      // Effect progress includes easing without reading the surface's computed style.
+      const progress = animation.effect?.getComputedTiming().progress;
+      if (progress === null) return pose.current;
+      if (progress !== undefined) return {a: frames.from.a + (frames.to.a - frames.from.a) * progress,
+        b: frames.from.b + (frames.to.b - frames.from.b) * progress, offset: 0};
+    }
+    const owner = (animation.effect as KeyframeEffect | null)?.target ?? layer;
+    const matrix = new DOMMatrix(getComputedStyle(owner).transform);
+    // A fold moves the HTML surface relative to its final SVG projection.
+    // Freezing that composition restores non-scaling strokes before new input.
+    return owner === layer ? {...pose.current, a: matrix.a, b: matrix.e}
+      : {...pose.current, a: matrix.a * pose.current.a, b: matrix.a * pose.current.b + matrix.e / scale};
+  };
   const visualGeometry = (): DrawingGeometry => {
     const base = drawing.current;
     const layer = animations.current.size ? box.current?.querySelector<SVGGElement>('[data-plot-main] .slides') : null;
-    let {a, b, offset} = pose.current;
-    if (layer && animations.current.has(layer)) {
-      const moving = getComputedStyle(layer).transform;
-      if (moving !== 'none') {const matrix = new DOMMatrix(moving); a = matrix.a || 1; b = matrix.e;}
-    }
+    const {a, b, offset} = layer ? readPose(layer) : pose.current;
     const span = Math.max(60_000, base.to - base.from);
     const inverse = (px: number) => base.from + (((px - offset) / scale - b) / a - left) / (width - left - right) * span;
     const start = inverse(left * scale), finish = inverse((width - right) * scale);
@@ -165,10 +180,7 @@ export function useTimeAxis({
   };
   const freezeSlides = () => {
     const layer = box.current?.querySelector<SVGGElement>('[data-plot-main] .slides');
-    if (layer && animations.current.has(layer)) {
-      const moving = getComputedStyle(layer).transform;
-      if (moving !== 'none') {const matrix = new DOMMatrix(moving); pose.current.a = matrix.a || 1; pose.current.b = matrix.e;}
-    }
+    if (layer) pose.current = readPose(layer);
     cancelSlides();
     for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) layer.style.transform = `translateX(${pose.current.b}px) scaleX(${pose.current.a})`;
   };
@@ -189,11 +201,15 @@ export function useTimeAxis({
       motion.current = null;
       const visual = visualGeometry();
       freezeSlides();
-      captured.current = {token: frame.token, ...drawing.current, visual, pose: {...pose.current}, pixelsPerMs: (width - left - right) * scale / (visual.to - visual.from), navigation: wanted.current.navigation, innerWidth: width - left - right, cssScale: scale, left};
+      // A wheel can restart before React publishes the preceding selection.
+      // Its origin already carries that range; the committed callback may not.
+      captured.current = {token: frame.token, ...drawing.current, visual, pose: {...pose.current}, pixelsPerMs: (width - left - right) * scale / (visual.to - visual.from), navigation: navigationAt(wanted.current.navigation, frame.origin), innerWidth: width - left - right, cssScale: scale, left};
       element.dataset.panToken = String(frame.token);
       element.dataset.panOrigin = String(frame.originEnd);
       element.dataset.panScale = String((visual.to - visual.from) / ((width - left - right) * scale));
       element.dataset.panBase = String(pose.current.offset);
+      element.dataset.panMinEnd = String(pan.oldestEnd);
+      element.dataset.panMaxEnd = String(pan.newestEnd);
       setFolding(false);
     }
     const origin = captured.current;
@@ -209,6 +225,8 @@ export function useTimeAxis({
       delete element.dataset.panOrigin;
       delete element.dataset.panScale;
       delete element.dataset.panBase;
+      delete element.dataset.panMinEnd;
+      delete element.dataset.panMaxEnd;
       element.classList.remove('is-grabbing');
       element.classList.toggle('is-panning', finished.current !== null || folding);
       captured.current = null;
@@ -413,7 +431,15 @@ export function useTimeAxis({
     const moving: Animation[] = [];
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (!reduced && duration > 0 && (Math.abs(start.a - end.a) > 1e-9 || Math.abs(start.b - end.b) > 1e-9)) {
-      for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) moving.push(animateSlide(layer, [{transform: `translateX(${start.b}px) scaleX(${start.a})`}, {transform: `translateX(${end.b}px) scaleX(${end.a})`}], {duration, easing: fold ? 'ease-out' : 'cubic-bezier(.2, .7, .3, 1)'}));
+      for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) {
+        const owner = fold ? layer.closest<HTMLElement>('.plot-move') : null;
+        const a = start.a / end.a, b = (start.b - a * end.b) * scale;
+        const frames = owner ? [{transform: `translateX(${b}px) scaleX(${a})`}, {transform: 'none'}]
+          : [{transform: `translateX(${start.b}px) scaleX(${start.a})`}, {transform: `translateX(${end.b}px) scaleX(${end.a})`}];
+        const animation = animateSlide(layer, frames, {duration, easing: fold ? 'ease-out' : 'cubic-bezier(.2, .7, .3, 1)'}, owner ?? layer);
+        animationPoses.current.set(animation, {from: start, to: end});
+        moving.push(animation);
+      }
     }
     if (!moving.length) {motion.current = null; setFolding(false); return;}
     motion.current = {key, until: performance.now() + duration, fold};

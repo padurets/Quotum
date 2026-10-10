@@ -232,6 +232,8 @@ export class HistoryStore {
   choose(period: string, selected: TimeRange | null) {
     const key = selected ? timeRangeKey(selected) : period;
     if (key === (this.selected ? timeRangeKey(this.selected) : this.period)) return;
+    this.preparations?.cancel(this.composeOwner);
+    this.composeIdentity = '';
     this.period = period;
     this.historyLimit=false;this.readError=false;
     this.selected = selected;
@@ -255,6 +257,11 @@ export class HistoryStore {
   /** Geometry changes do not choose a committed target or compose its totals. */
   pan(interest: PlotInterest) {
     const previous = this.interest;
+    if (!previous) {
+      // Active input invalidates composition; its identity must leave with the job.
+      this.preparations?.cancel(this.composeOwner);
+      this.composeIdentity = '';
+    }
     this.interest = interest;
     this.panReads = true;
     this.plotPending = true;

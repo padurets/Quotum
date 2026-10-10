@@ -1,7 +1,7 @@
 # Ordinary startup, including the window-state and single-instance plugins that --smoke skips.
 # Every run starts from a fresh profile of WebView2, as the first start on a machine does:
 # the one there is set aside and put back at the end.
-# -Diagnostics <dir> keeps there, passed or not, the report, the app's logs and its processes.
+# -Diagnostics <dir> keeps bounded stage readings and owned process identities, passed or not.
 param([Parameter(Mandatory=$true)][string]$App, [string]$Report, [string]$Diagnostics)
 $ErrorActionPreference = 'Stop'
 # Relative to PowerShell's location: .NET would take them relative to the process's.
@@ -32,144 +32,56 @@ $browsers = @{}
 $closedAt = @{}
 
 if (-not ('QuotumWindowProbe' -as [type])) {
-  Add-Type @'
-using System;
-using System.Text;
-using System.Runtime.InteropServices;
-public static class QuotumWindowProbe {
-  public delegate bool EnumCallback(IntPtr window, IntPtr data);
-  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
-  [StructLayout(LayoutKind.Sequential)] public struct MonitorInfo { public int Size; public Rect Monitor, Work; public uint Flags; }
-  [DllImport("user32.dll")] static extern bool EnumWindows(EnumCallback callback, IntPtr data);
-  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int size);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder text, int size);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
-  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr window, uint message, IntPtr w, IntPtr l);
-  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr window, int command);
-  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
-  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
-  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
-  public static void Escape(IntPtr window, int process) {
-    uint owner; GetWindowThreadProcessId(window,out owner);
-    if(owner!=(uint)process) throw new Exception("Not the test app window");
-    SetForegroundWindow(window);
-    if(GetForegroundWindow()!=window) throw new Exception("Test panel does not own keyboard focus");
-    keybd_event(27,0,0,UIntPtr.Zero);
-    keybd_event(27,0,2,UIntPtr.Zero);
-  }
-  [DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
-  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out Rect rect);
-  [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
-  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
-  public static IntPtr Find(int process) {
-    return FindOther(process,IntPtr.Zero);
-  }
-  public static IntPtr FindOther(int process, IntPtr except) {
-    IntPtr found=IntPtr.Zero;
-    EnumWindows((window,data) => {
-      uint owner; GetWindowThreadProcessId(window,out owner);
-      if(owner!=(uint)process || window==except || !IsWindowVisible(window)) return true;
-      var kind=new StringBuilder(256); GetClassName(window,kind,kind.Capacity);
-      if(kind.ToString()=="QuotumLoading") return true;
-      var text=new StringBuilder(256); GetWindowText(window,text,text.Capacity);
-      if(text.ToString()!="Quotum") return true;
-      found=window; return false;
-    },IntPtr.Zero);
-    return found;
-  }
-  [DllImport("kernel32.dll")] static extern IntPtr OpenThread(uint access, bool inherit, uint thread);
-  [DllImport("kernel32.dll")] static extern uint SuspendThread(IntPtr thread);
-  [DllImport("kernel32.dll")] static extern uint ResumeThread(IntPtr thread);
-  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
-  [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int x1,int y1,int x2,int y2);
-  [DllImport("user32.dll")] static extern int GetWindowRgn(IntPtr window,IntPtr region);
-  [DllImport("gdi32.dll")] static extern bool PtInRegion(IntPtr region,int x,int y);
-  [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
-  [StructLayout(LayoutKind.Sequential)] public struct Point { public int X,Y; }
-  [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr window,ref Point point);
-  [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr window,out Rect rect);
-  public static bool Rounded(IntPtr window) {
-    IntPtr region=CreateRectRgn(0,0,0,0);
-    try {
-      Rect outer,client;var origin=new Point();
-      if(GetWindowRgn(window,region)==0 || !GetWindowRect(window,out outer) || !GetClientRect(window,out client) || !ClientToScreen(window,ref origin)) return false;
-      int x=origin.X-outer.Left,y=origin.Y-outer.Top;
-      return !PtInRegion(region,x,y) && PtInRegion(region,x+client.Right/2,y+client.Bottom/2);
-    } finally { DeleteObject(region); }
-  }
-  public static IntPtr Loading(int process) {
-    IntPtr found=IntPtr.Zero;
-    EnumWindows((window,data)=>{
-      uint owner;GetWindowThreadProcessId(window,out owner);
-      if(owner!=(uint)process || !IsWindowVisible(window)) return true;
-      var name=new StringBuilder(256);GetClassName(window,name,name.Capacity);
-      if(name.ToString()!="QuotumLoading") return true;
-      found=window;return false;
-    },IntPtr.Zero);return found;
-  }
-  public static IntPtr PauseUi(IntPtr window,int process) {
-    uint owner;uint thread=GetWindowThreadProcessId(window,out owner);
-    if(owner!=(uint)process || thread==0) throw new Exception("Not the test app UI thread");
-    IntPtr handle=OpenThread(2,false,thread);
-    if(handle==IntPtr.Zero) throw new Exception("Cannot open the test UI thread");
-    if(SuspendThread(handle)==uint.MaxValue){CloseHandle(handle);throw new Exception("Cannot pause the test UI thread");}
-    return handle;
-  }
-  public static void ResumeUi(IntPtr thread) {
-    try { if(ResumeThread(thread)==uint.MaxValue) throw new Exception("Cannot resume the test UI thread"); }
-    finally {CloseHandle(thread);}
-  }
-  [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,uint message,IntPtr w,IntPtr l);
-  [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(uint process);
-  [StructLayout(LayoutKind.Sequential)] struct CopyData { public UIntPtr Kind; public uint Size; public IntPtr Data; }
-  public static IntPtr MainRequestThenPause(int process,string exe) {
-    IntPtr target=IntPtr.Zero;
-    EnumWindows((window,data)=>{
-      uint owner;GetWindowThreadProcessId(window,out owner);
-      var name=new StringBuilder(256);GetClassName(window,name,name.Capacity);
-      if(owner!=(uint)process || name.ToString()!="com.padurets.quotum-sic")return true;
-      target=window;return false;
-    },IntPtr.Zero);
-    if(target==IntPtr.Zero || !Responsive(target))throw new Exception("No responsive owned single-instance window");
-    // The pinned single-instance plugin's normal second-launch message. Wait for
-    // its callback before pausing, so the main worker already owns an old request.
-    byte[] bytes=Encoding.UTF8.GetBytes(Environment.CurrentDirectory+"|"+exe+"\0");
-    IntPtr dataBuffer=Marshal.AllocHGlobal(bytes.Length),message=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(CopyData)));
-    try {
-      Marshal.Copy(bytes,0,dataBuffer,bytes.Length);
-      Marshal.StructureToPtr(new CopyData{Kind=new UIntPtr(1542),Size=(uint)bytes.Length,Data=dataBuffer},message,false);
-      AllowSetForegroundWindow((uint)process);
-      if(SendMessage(target,0x4a,IntPtr.Zero,message)!=new IntPtr(1))throw new Exception("Second-launch message rejected");
-      return PauseUi(target,process);
-    } finally {Marshal.FreeHGlobal(message);Marshal.FreeHGlobal(dataBuffer);}
-  }
-  public static bool Foreground(IntPtr window) { return GetForegroundWindow()==window; }
-  public static bool OpenPanel(int process) {
-    IntPtr tray=IntPtr.Zero;
-    EnumWindows((window,data) => {
-      uint owner; GetWindowThreadProcessId(window,out owner);
-      if(owner!=(uint)process) return true;
-      var name=new StringBuilder(256); GetClassName(window,name,name.Capacity);
-      if(name.ToString()!="QuotumTray") return true;
-      tray=window; return false;
-    },IntPtr.Zero);
-    // The Shell icon's version-4 NIN_SELECT callback (icon 1).
-    return tray!=IntPtr.Zero && PostMessage(tray,0x8002,IntPtr.Zero,new IntPtr(0x10400));
-  }
-  public static bool Responsive(IntPtr window) {
-    IntPtr result;
-    return SendMessageTimeout(window,0,IntPtr.Zero,IntPtr.Zero,2,1000,out result)!=IntPtr.Zero;
-  }
-  public static int[] Bounds(IntPtr window) {
-    Rect rect;
-    var info=new MonitorInfo(); info.Size=Marshal.SizeOf(info);
-    if(!GetWindowRect(window,out rect) || !GetMonitorInfo(MonitorFromWindow(window,2),ref info)) throw new Exception("Cannot read the window work area");
-    return new int[]{rect.Left,rect.Top,rect.Right,rect.Bottom,info.Work.Left,info.Work.Top,info.Work.Right,info.Work.Bottom};
-  }
+  Add-Type -Path (Join-Path $PSScriptRoot 'window-probe.cs')
 }
-'@
+# Installed and portable smoke can share one PowerShell process and its static types.
+[QuotumWindowProbe]::ResetDispatch()
+. (Join-Path $PSScriptRoot 'wait-observer.ps1')
+
+$manifest=[ordered]@{schemaVersion=1;status='running';sha=((& git rev-parse HEAD).Trim());run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT;platform='windows';packageHash=(Get-FileHash -LiteralPath $appPath -Algorithm SHA256).Hash;files=@();errors=@()}
+function Save-Manifest {
+  if(-not $Diagnostics){return}
+  try {
+    New-Item -ItemType Directory -Force $Diagnostics | Out-Null
+    [IO.File]::WriteAllText((Join-Path $Diagnostics 'manifest.json.tmp'),(ConvertTo-Json -InputObject $manifest -Depth 5))
+    Move-Item -LiteralPath (Join-Path $Diagnostics 'manifest.json.tmp') -Destination (Join-Path $Diagnostics 'manifest.json') -Force
+  } catch {Write-Warning 'Native evidence manifest unavailable'}
+}
+Save-Manifest
+$timelineClock=[Diagnostics.Stopwatch]::StartNew()
+$timeline=New-Object 'System.Collections.Generic.List[object]'
+$waitObservers=New-Object 'System.Collections.Generic.List[object]'
+function Prepare-WaitObserver {
+  if(-not $Diagnostics){return $null}
+  $observer=Start-WaitObserver $process
+  $waitObservers.Add($observer)
+  return $observer
+}
+function Save-Stage([string]$Stage,[IntPtr]$Window=[IntPtr]::Zero,[Nullable[bool]]$Resumed=$null) {
+  try {
+    if($timeline.Count -ge 1000){$manifest.errors=@('timeline truncated');Save-Manifest;return}
+    $reading=[QuotumWindowProbe]::LastDispatch
+    # Copy mutable dispatch fields now; a later resume must not rewrite earlier stages.
+    $dispatch=if($reading){[ordered]@{Stage=$reading.Stage;Acceptance=$reading.Acceptance;Window=$reading.Window;ElapsedMs=$reading.ElapsedMs;Process=$reading.Process;Thread=$reading.Thread;Paused=$reading.Paused;ResumeAttempted=$reading.ResumeAttempted;Resumed=$reading.Resumed}}else{$null}
+    $entry=[ordered]@{stage=$Stage;ms=$timelineClock.Elapsed.TotalMilliseconds;utcTicks=[DateTime]::UtcNow.Ticks;dispatch=$dispatch}
+    if($null -ne $Resumed){$entry.resumed=$Resumed}
+    if($process){$entry.window=[QuotumWindowProbe]::Snapshot($Window,$process.Id)}
+    $timeline.Add($entry)
+    if($Diagnostics){
+      New-Item -ItemType Directory -Force $Diagnostics | Out-Null
+      [IO.File]::WriteAllText((Join-Path $Diagnostics 'timeline.json.tmp'),(ConvertTo-Json -InputObject $timeline.ToArray() -Depth 6))
+      Move-Item -LiteralPath (Join-Path $Diagnostics 'timeline.json.tmp') -Destination (Join-Path $Diagnostics 'timeline.json') -Force
+    }
+  } catch {Write-Warning 'Native stage evidence unavailable'}
+}
+Save-Stage 'initial'
+
+function Save-ObservedPause($Observer,[string]$Kind,$From,$To,$Resumed) {
+  $observed=Stop-WaitObserver $Observer
+  if(-not $Diagnostics){return}
+  $observed.pause=@{from=$From;to=$To;resumed=$Resumed}
+  try {[IO.File]::WriteAllText((Join-Path $Diagnostics ('wait-chain-'+$Kind+'.json')),(ConvertTo-Json -InputObject $observed -Depth 9))} catch {Write-Warning 'Wait-chain artifact unavailable'}
+  if(-not $observed.stopped){$manifest.errors+=@('wait observer cleanup unconfirmed');Save-Manifest;throw 'Wait observer cleanup unconfirmed'}
 }
 
 function Wait-Window {
@@ -235,13 +147,17 @@ function Test-QueuedPanelReopen([IntPtr]$Except) {
   if($process.HasExited){throw "Controller exited during queued reopen: $($process.ExitCode)"}
   if($panel -eq [IntPtr]::Zero){throw 'No panel for queued-close check'}
   $paused=[QuotumWindowProbe]::PauseUi($panel,$process.Id)
+  Save-Stage 'queued-panel-paused' $panel
   try {
     [void][QuotumWindowProbe]::PostMessage($panel,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
     if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot toggle queued panel closed'}
     Start-Sleep -Milliseconds 100
     if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot request panel reopen'}
     Start-Sleep -Milliseconds 100
-  } finally { [QuotumWindowProbe]::ResumeUi($paused) }
+  } finally {
+    $resumed=$false
+    try {[QuotumWindowProbe]::ResumeUi($paused);$resumed=$true} finally {Save-Stage 'queued-panel-resume' $panel $resumed}
+  }
   $deadline=(Get-Date).AddSeconds(15)
   Start-Sleep -Seconds 2
   do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$Except);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
@@ -256,36 +172,59 @@ function Test-QueuedPanelReopen([IntPtr]$Except) {
 }
 
 function Test-MainPanelHandoff([IntPtr]$Main) {
-  if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot open panel before main handoff'}
-  $deadline=(Get-Date).AddSeconds(15)
-  do {$old=[QuotumWindowProbe]::FindOther($process.Id,$Main);if($old -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
-  if($old -eq [IntPtr]::Zero){throw 'No initial panel before main handoff'}
-  $paused=[QuotumWindowProbe]::MainRequestThenPause($process.Id,$appPath)
+  $observer=Prepare-WaitObserver
   try {
-    if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot supersede the pending main request'}
-    $deadline=(Get-Date).AddSeconds(3)
-    do {$loader=[QuotumWindowProbe]::Loading($process.Id);if($loader -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 10}while((Get-Date) -lt $deadline)
-    if($loader -eq [IntPtr]::Zero -or -not [QuotumWindowProbe]::Responsive($loader)){throw 'New loader waited for the old main request'}
-  } finally {[QuotumWindowProbe]::ResumeUi($paused)}
-  Start-Sleep -Seconds 2
-  $deadline=(Get-Date).AddSeconds(15)
-  do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$Main);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
-  if($process.HasExited){throw "Old main request crashed the controller: $($process.ExitCode)"}
-  if($panel -eq [IntPtr]::Zero -or -not [QuotumWindowProbe]::Rounded($panel) -or -not [QuotumWindowProbe]::Responsive($panel)){throw 'Old main request lost the new panel'}
-  Start-Sleep -Seconds 1
-  if(-not [QuotumWindowProbe]::Foreground($panel) -or [QuotumWindowProbe]::Loading($process.Id) -ne [IntPtr]::Zero){throw 'Old main request took foreground from the new panel'}
-  [QuotumWindowProbe]::Escape($panel,$process.Id)
-  $deadline=(Get-Date).AddSeconds(5)
-  while([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
-  if([QuotumWindowProbe]::IsWindowVisible($panel)){throw 'Cannot close panel after main handoff'}
-  if($Main -eq [IntPtr]::Zero){
-    $deadline=(Get-Date).AddSeconds(10)
-    do {
-      $browsersLeft=@(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'"|Where-Object {$_.ParentProcessId -eq $process.Id})
-      if(-not $browsersLeft.Count){break};Start-Sleep -Milliseconds 100
-    }while((Get-Date) -lt $deadline)
-    if($browsersLeft.Count -or [QuotumWindowProbe]::Find($process.Id) -ne [IntPtr]::Zero){throw 'Cancelled main creation retained a window or WebView'}
-  }
+    if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot open panel before main handoff'}
+    $deadline=(Get-Date).AddSeconds(15)
+    do {$old=[QuotumWindowProbe]::FindOther($process.Id,$Main);if($old -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
+    if($old -eq [IntPtr]::Zero){throw 'No initial panel before main handoff'}
+    $pauseFrom=$null;$resumeFrom=$null
+    $paused=$null
+    try {
+      $paused=[QuotumWindowProbe]::MainRequestThenPause($process.Id,$appPath)
+      $pauseFrom=[DateTime]::UtcNow.Ticks
+      $tray=[QuotumWindowProbe]::Snapshot([QuotumWindowProbe]::Tray($process.Id),$process.Id)
+      Watch-OwnedThreads $observer @([QuotumWindowProbe]::LastDispatch.Thread,$tray.Thread)
+      Save-Stage 'main-accepted-paused' $Main
+      if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot supersede the pending main request'}
+      $deadline=(Get-Date).AddSeconds(3)
+      do {$loader=[QuotumWindowProbe]::Loading($process.Id);if($loader -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 10}while((Get-Date) -lt $deadline)
+      Save-Stage 'main-handoff-loader' $loader
+      if($loader -eq [IntPtr]::Zero){throw 'Main handoff: loader missing within 3s'}
+      if(-not [QuotumWindowProbe]::Responsive($loader)){throw 'Main handoff: loader unresponsive'}
+    } finally {
+      $resumeFrom=[DateTime]::UtcNow.Ticks
+      try {if($paused){$paused.Dispose()}} finally {
+        Save-Stage 'main-handoff-resume' $Main $(if($paused){$paused.Resumed}else{$null})
+        $kind=if($Main -eq [IntPtr]::Zero){'only-panel'}else{'with-main'}
+        Save-ObservedPause $observer $kind $pauseFrom $resumeFrom $(if($paused){$paused.Resumed}else{$null})
+      }
+    }
+    Start-Sleep -Seconds 2
+    $deadline=(Get-Date).AddSeconds(15)
+    do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$Main);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
+    if($process.HasExited){throw "Old main request crashed the controller: $($process.ExitCode)"}
+    Save-Stage 'main-handoff-panel' $panel
+    if($panel -eq [IntPtr]::Zero){throw 'Main handoff: panel missing within 15s'}
+    if(-not [QuotumWindowProbe]::Rounded($panel)){throw 'Main handoff: panel shape wrong'}
+    if(-not [QuotumWindowProbe]::Responsive($panel)){throw 'Main handoff: panel unresponsive'}
+    Start-Sleep -Seconds 1
+    Save-Stage 'main-handoff-focus' $panel
+    if(-not [QuotumWindowProbe]::Foreground($panel)){throw 'Main handoff: panel lost foreground'}
+    if([QuotumWindowProbe]::Loading($process.Id) -ne [IntPtr]::Zero){throw 'Main handoff: loader not retired'}
+    [QuotumWindowProbe]::Escape($panel,$process.Id)
+    $deadline=(Get-Date).AddSeconds(5)
+    while([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
+    if([QuotumWindowProbe]::IsWindowVisible($panel)){throw 'Cannot close panel after main handoff'}
+    if($Main -eq [IntPtr]::Zero){
+      $deadline=(Get-Date).AddSeconds(10)
+      do {
+        $browsersLeft=@(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'"|Where-Object {$_.ParentProcessId -eq $process.Id})
+        if(-not $browsersLeft.Count){break};Start-Sleep -Milliseconds 100
+      }while((Get-Date) -lt $deadline)
+      if($browsersLeft.Count -or [QuotumWindowProbe]::Find($process.Id) -ne [IntPtr]::Zero){throw 'Cancelled main creation retained a window or WebView'}
+    }
+  } finally {if($observer -and $observer.Process){Save-ObservedPause $observer 'handoff-setup' $null $null $null}}
 }
 
 try {
@@ -417,6 +356,9 @@ try {
   $result.queuedPanelReopen=$true
   $result.queuedPanelReopenWithoutMain=$true
   $result.mainPanelHandoff=$true
+  # Prepare both workers before creating/minimizing the main window. Observation
+  # must not insert a warm-up between the native acknowledgement and its pause.
+  $loadingObservers=@((Prepare-WaitObserver),(Prepare-WaitObserver))
   $second=Start-Process -FilePath $appPath -PassThru
   $null=$second.Handle
   if(-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0){throw 'Could not reopen main after the last-WebView check'}
@@ -428,13 +370,22 @@ try {
   while(-not [QuotumWindowProbe]::IsIconic($window) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
   if(-not [QuotumWindowProbe]::IsIconic($window)){throw 'Could not put the test UI thread in the background'}
   foreach($cancel in @($false,$true)) {
-    $paused=[QuotumWindowProbe]::PauseUi($window,$process.Id)
+    $observer=$loadingObservers[[int]$cancel]
+    $paused=$null;$pauseFrom=$null
     try {
+      $paused=[QuotumWindowProbe]::PauseUi($window,$process.Id)
+      $pauseFrom=[DateTime]::UtcNow.Ticks
+      $ui=[QuotumWindowProbe]::Snapshot($window,$process.Id)
+      $tray=[QuotumWindowProbe]::Snapshot([QuotumWindowProbe]::Tray($process.Id),$process.Id)
+      Watch-OwnedThreads $observer @($ui.Thread,$tray.Thread)
+      Save-Stage 'ui-paused' $window
       $loadingClock=[Diagnostics.Stopwatch]::StartNew()
       if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot ask for the loading panel'}
       $loader=[IntPtr]::Zero
       do {$loader=[QuotumWindowProbe]::Loading($process.Id);if($loader -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 10}while($loadingClock.ElapsedMilliseconds -lt 3000)
-      if($loader -eq [IntPtr]::Zero -or -not [QuotumWindowProbe]::Responsive($loader)){throw 'Native loader waited for the blocked WebView thread'}
+      Save-Stage 'paused-ui-loader' $loader
+      if($loader -eq [IntPtr]::Zero){throw 'Paused UI: loader missing within 3s'}
+      if(-not [QuotumWindowProbe]::Responsive($loader)){throw 'Paused UI: loader unresponsive'}
       if(-not [QuotumWindowProbe]::Rounded($loader)){throw 'Native loader has square corners'}
       $result.loadingMs=$loadingClock.ElapsedMilliseconds
       if($cancel){
@@ -443,14 +394,24 @@ try {
         while([QuotumWindowProbe]::IsWindowVisible($loader) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 10}
         if([QuotumWindowProbe]::IsWindowVisible($loader)){throw 'Escape could not cancel native loading'}
       }
-    } finally { [QuotumWindowProbe]::ResumeUi($paused) }
+    } finally {
+      $resumed=$false
+      $resumeFrom=[DateTime]::UtcNow.Ticks
+      try {if($paused){[QuotumWindowProbe]::ResumeUi($paused);$resumed=$true}} finally {
+        Save-Stage 'ui-resume' $window $resumed
+        $kind=if($cancel){'cancel-loading'}else{'ready-loading'}
+        Save-ObservedPause $observer $kind $pauseFrom $resumeFrom $resumed
+      }
+    }
     if($cancel){
       Start-Sleep -Seconds 1
       if([QuotumWindowProbe]::FindOther($process.Id,$window) -ne [IntPtr]::Zero){throw 'Cancelled loading opened a panel later'}
     } else {
       $deadline=(Get-Date).AddSeconds(15)
       do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$window);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
-      if($panel -eq [IntPtr]::Zero -or -not [QuotumWindowProbe]::Rounded($panel)){throw 'Rounded browser panel did not replace the loader'}
+      Save-Stage 'paused-ui-panel' $panel
+      if($panel -eq [IntPtr]::Zero){throw 'Paused UI: panel missing within 15s'}
+      if(-not [QuotumWindowProbe]::Rounded($panel)){throw 'Paused UI: panel shape wrong'}
       # ShowWindow and hiding the loader are separate native messages. Observe
       # the completed handoff, not the brief interval where both are visible.
       $deadline=(Get-Date).AddSeconds(2)
@@ -465,14 +426,18 @@ try {
   }
   $result.passed = $true
 } catch {
+  Save-Stage 'failed'
   $result.error = $_.Exception.Message
   $failed = $true
   throw
 } finally {
   # Every step on its own: none may take the report, the diagnostics or the restoration of
   # the runner's files with it.
+  foreach($observer in $waitObservers){
+    if($observer.Process){Invoke-Step 'ending wait observer' {if(-not (Stop-WaitObserver $observer).stopped){throw 'Wait observer cleanup unconfirmed'}}}
+  }
   $listed = @(Invoke-Step 'listing processes' {
-    Get-CimInstance Win32_Process | Select-Object Name, ProcessId, ParentProcessId, CreationDate, CommandLine
+    Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CreationDate
   })
   # Before anything is ended: an ending app takes its web view's processes with it.
   for ($cycle = 0; $cycle -lt $result.cycles.Count; $cycle++) {
@@ -496,15 +461,15 @@ try {
     foreach ($info in $tree) {
       Invoke-Step "holding child $($info.ProcessId)" {
         $owned = Get-Process -Id $info.ProcessId -ErrorAction SilentlyContinue
-        if ($owned) { $null = $owned.Handle; $script:children += [pscustomobject]@{Process=$owned; Info=$info} }
+        if ($owned -and $owned.StartTime -eq $info.CreationDate) { $null = $owned.Handle; $script:children += [pscustomobject]@{Process=$owned; Info=$info} }
       }
     }
   }
   if (Test-Path -LiteralPath $work) {
     Invoke-Step 'writing processes.json' {
       $mine = @($process.Id) + @($tree | ForEach-Object ProcessId)
-      $kept = @($listed | Where-Object { $mine -contains $_.ProcessId -or $_.Name -eq 'msedgewebview2.exe' -or $_.Name -like 'quotum-*' } |
-        ForEach-Object { [ordered]@{Name=$_.Name; ProcessId=$_.ProcessId; ParentProcessId=$_.ParentProcessId; CreationDate=$(if ($_.CreationDate) { $_.CreationDate.ToString('o') }); CommandLine=$_.CommandLine} })
+      $kept = @($listed | Where-Object { $mine -contains $_.ProcessId } |
+        ForEach-Object { [ordered]@{ProcessId=$_.ProcessId; ParentProcessId=$_.ParentProcessId; CreationDate=$(if ($_.CreationDate) { $_.CreationDate.ToString('o') })} })
       [IO.File]::WriteAllText("$work/processes.json", (ConvertTo-Json -InputObject $kept -Depth 3))
     }
   }
@@ -517,8 +482,8 @@ try {
   $leftovers = @()
   foreach ($child in $children) {
     if (-not $child.Process.WaitForExit(10000)) {
-      $description = "$($child.Info.ProcessId) $($child.Info.Name): $($child.Info.CommandLine)"
-      $leftovers += [ordered]@{pid=$child.Info.ProcessId; name=$child.Info.Name; commandLine=$child.Info.CommandLine}
+      $description = "owned child $($child.Info.ProcessId)"
+      $leftovers += [ordered]@{pid=$child.Info.ProcessId}
       Invoke-Step 'ending a child' { Stop-Owned $child.Process $description }
     }
   }
@@ -558,11 +523,15 @@ try {
   if ($Diagnostics) {
     Invoke-Step 'keeping the diagnostics' {
       New-Item -ItemType Directory -Force $Diagnostics | Out-Null
-      [IO.File]::WriteAllText((Join-Path $Diagnostics 'report.json'), $json)
+      # Artifact strings are fixed stage labels; exceptions and private paths remain local.
+      $safe=[ordered]@{passed=$result.passed;firstWindowMs=$result.firstWindowMs;windows=$result.windows;cycles=$result.cycles;panels=$result.panels;errorCount=$result.errors.Count;failed=$failed;leftovers=$result.leftovers}
+      [IO.File]::WriteAllText((Join-Path $Diagnostics 'report.json'), (ConvertTo-Json -InputObject $safe -Depth 6))
       Copy-Item -LiteralPath "$work/processes.json" -Destination $Diagnostics -ErrorAction SilentlyContinue
-      Get-ChildItem -LiteralPath "$work/app/logs" -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination $Diagnostics
-      }
+      $manifest.status=if($result.passed){'passed'}else{'failed'}
+      $manifest.files=@(Get-ChildItem -LiteralPath $Diagnostics -Filter '*.json' | Where-Object {$_.Name -ne 'manifest.json'} | ForEach-Object {
+        [ordered]@{name=$_.Name;bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
+      })
+      Save-Manifest
       Write-Host "Diagnostics kept in $Diagnostics"
     }
   }

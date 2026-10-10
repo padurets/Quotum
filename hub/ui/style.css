@@ -567,7 +567,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .plot-layer.is-under { z-index: 0; }
 .plot-overlay { z-index: 3; }
 .plot-clip { position: absolute; top: 0; bottom: 0; overflow: hidden; }
-.plot-move { position: absolute; top: 0; height: 100%; }
+.plot-move { position: absolute; top: 0; height: 100%; transform-origin: 0 0; }
 .plot-crop, .plot-unclip { position: absolute; inset: 0; }
 .plot-crop { overflow: hidden; }
 .plot-move > svg, .plot-overlay > svg { display: block; width: 100%; height: 100%; overflow: visible; }

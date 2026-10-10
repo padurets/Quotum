@@ -321,7 +321,9 @@ function openSurface(role, anchor, request) {
       if (changed || !existing.readyReported) existing.ready();
     } else if (changed || !existing.revealed) {
       if (existing.window.isMinimized()) existing.window.restore();
-      existing.window.show(); existing.window.focus(); existing.revealed = true;
+      // show() already focuses. A second focus could reclaim a newer native loader
+      // if this process was suspended after the window became visible.
+      existing.window.show(); existing.revealed = true;
       if (existing.loaded && role === 'main') send({type: 'loaded', url: existing.window.webContents.getURL()});
       scheduleGraphics();
     }
@@ -367,7 +369,7 @@ function openSurface(role, anchor, request) {
   }
   entry.reveal = () => {
     if (!current(entry)) return;
-    entry.revealed = true; window.show(); window.focus();
+    entry.revealed = true; window.show();
     send({type: 'panel_visible', request: entry.request});
     scheduleGraphics();
   };

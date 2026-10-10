@@ -1,7 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {attachedChrome, Cdp, openTab,nativeProcesses} from '../cdp.js';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {attachedChrome, Cdp, openTab,nativeProcesses, threadWait} from '../cdp.js';
 import {Requests} from '../index.js';
+import {safeEvidence} from '../evidence.js';
 
 /** Stands in for what the benchmark hears of the browser: events by name, emitted by the test. */
 function browser() {
@@ -17,6 +20,37 @@ test('native diagnostics inspect an owned process and exclude a process outside 
   assert.equal(owned.length,1);assert.equal(owned[0].pid,process.pid);
   assert.ok(owned[0].threads.length>0);
   assert.deepEqual(await nativeProcesses(999999999,[process.pid]),[]);
+});
+
+test('an owned blocked thread keeps its wait category in the saved evidence', {skip: process.platform !== 'linux'}, async t => {
+  const child = spawn(process.execPath, ['-e', 'process.stdout.write("ready\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);'], {stdio: ['ignore', 'pipe', 'ignore']});
+  const closed = once(child, 'close');
+  t.after(async () => {if (child.exitCode === null && child.signalCode === null) child.kill(); await closed;});
+  assert.ok(child.pid);
+  await Promise.race([once(child.stdout!, 'data'), closed.then(() => {throw new Error('the stand-in exited before its wait');})]);
+  const end = Date.now() + 5_000;
+  for (;;) {
+    const processes = await nativeProcesses(process.pid, [child.pid]);
+    const thread = processes[0]?.threads.find(row => row.id === child.pid);
+    const saved = safeEvidence({processes}) as {processes: {threads: {id: number; wait: {kind: string}}[]}[]};
+    if (thread?.state.some(line => line.startsWith('State:\tS'))) {
+      const wait = saved.processes[0].threads.find(row => row.id === child.pid)?.wait;
+      assert.ok(wait && ['futex', 'poll', 'timer', 'pipe', 'child', 'io', 'unknown', 'unavailable'].includes(wait.kind));
+      assert.deepEqual(wait, thread.wait, 'serialization must retain the observed category even when the kernel symbol is unavailable');
+      break;
+    }
+    assert.ok(Date.now() < end, 'the stand-in must reach its blocking wait');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+});
+
+test('known native waits keep fixed categories while unknown symbols expose no raw text', () => {
+  assert.deepEqual(safeEvidence({wait: threadWait('futex_wait_queue')}), {wait: {kind: 'futex'}});
+  assert.deepEqual(safeEvidence({wait: threadWait('ep_poll')}), {wait: {kind: 'poll'}});
+  assert.deepEqual(safeEvidence({wait: threadWait('0')}), {wait: {kind: 'unknown'}});
+  assert.deepEqual(safeEvidence({wait: threadWait('unavailable')}), {wait: {kind: 'unavailable'}});
+  const saved = safeEvidence({wait: threadWait('/private-canary/kernel-symbol')});
+  assert.deepEqual(saved, {wait: {kind: 'unknown'}}); assert.doesNotMatch(JSON.stringify(saved), /private-canary|kernel-symbol/);
 });
 
 test('what the idle page asks is counted, a stream of events opened meanwhile too; not the one it opened before, nor its images', () => {
@@ -46,9 +80,134 @@ class Socket extends EventTarget {
   readonly commands: {id: number; method: string}[] = [];
   send(value: string) {this.commands.push(JSON.parse(value));}
   answer(id: number, result: unknown) {this.dispatchEvent(new MessageEvent('message', {data: JSON.stringify({id, result})}));}
+  reject(id: number, message: string) {this.dispatchEvent(new MessageEvent('message', {data: JSON.stringify({id, error: {message}})}));}
+  emit(method: string, params: object = {}) {this.dispatchEvent(new MessageEvent('message', {data: JSON.stringify({method, params})}));}
   close() {this.readyState = WebSocket.CLOSED;}
 }
 const connection = (socket: Socket) => new (Cdp as unknown as new (socket: unknown) => Cdp)(socket);
+
+test('a protocol rejection keeps its original command through cleanup without retaining browser text', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  for (const method of ['Runtime.evaluate', 'Network.getResponseBody']) {
+    const socket = new Socket(), cdp = connection(socket);
+    try {
+      cdp.at('board/open');
+      const failed = assert.rejects(cdp.send(method, {expression: 'private-expression-canary'}), /private-protocol-text-canary/);
+      cdp.at('cleanup'); socket.reject(1, 'private-protocol-text-canary'); await failed;
+      const original = cdp.snapshot().failure;
+      assert.ok(original);
+      assert.equal(original.id, 1); assert.equal(original.method, method); assert.equal(original.context, 'board/open');
+      assert.equal(original.reason, 'the browser rejected the command');
+      assert.ok(Number.isFinite(original.elapsedMs)); assert.equal(original.deadline - original.started, 30_000);
+      const cleanup = cdp.send('Emulation.setCPUThrottlingRate', {rate: 1}); socket.answer(2, {}); await cleanup;
+      assert.equal(cdp.snapshot().lastAck?.id, 2);
+      const timed = assert.rejects(cdp.send('Performance.getMetrics'), /no browser response/);
+      t.mock.timers.tick(30_000); await timed;
+      socket.reject(1, 'private-late-error-canary'); socket.reject(999, 'private-unknown-error-canary');
+      assert.deepEqual(cdp.snapshot().failure, original); assert.deepEqual(cdp.snapshot().pending, []);
+      assert.doesNotMatch(JSON.stringify(cdp.snapshot()), /private-|expression|message/);
+    } finally {cdp.close();}
+  }
+});
+
+test('a rejection for an unknown or cancelled command cannot invent another command failure', async () => {
+  const socket = new Socket(), cdp = connection(socket), abort = new AbortController();
+  try {
+    socket.reject(999, 'private-unknown-error-canary');
+    assert.equal(cdp.snapshot().failure, null);
+    const cancelled = assert.rejects(cdp.send('Runtime.evaluate', {expression: 'private-expression-canary'}, abort.signal), /cancelled/);
+    abort.abort(); await cancelled; socket.reject(1, 'private-cancelled-error-canary');
+    assert.equal(cdp.snapshot().failure, null);
+    cdp.at('board/open'); const failed = assert.rejects(cdp.send('Network.getResponseBody'), /private-protocol-text-canary/);
+    socket.reject(1, 'private-stale-error-canary'); assert.equal(cdp.snapshot().failure, null);
+    socket.reject(2, 'private-protocol-text-canary'); await failed;
+    assert.equal(cdp.snapshot().failure?.id, 2); assert.equal(cdp.snapshot().failure?.method, 'Network.getResponseBody');
+    assert.equal(cdp.snapshot().failure?.context, 'board/open'); assert.deepEqual(cdp.snapshot().pending, []);
+    assert.doesNotMatch(JSON.stringify(cdp.snapshot()), /private-|expression|message/);
+  } finally {cdp.close();}
+});
+
+test('a page exception keeps its original command through later cleanup failures without retaining page text', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const socket = new Socket(), cdp = connection(socket);
+  t.after(() => cdp.close());
+  cdp.at('panning/quota/30d/setup');
+  const failed = assert.rejects(cdp.evaluate('private-expression-canary'), /private-page-error-canary/);
+  cdp.at('cleanup');
+  socket.answer(1, {result: {type: 'object'}, exceptionDetails: {text: 'private-page-error-canary', exception: {description: 'private-page-error-canary'}}});
+  await failed;
+  const original = cdp.snapshot().failure;
+  assert.ok(original);
+  assert.equal(original?.id, 1);
+  assert.equal(original?.method, 'Runtime.evaluate');
+  assert.equal(original?.context, 'panning/quota/30d/setup');
+  assert.equal(original?.reason, 'a page evaluation failed');
+  assert.ok(Number.isFinite(original.elapsedMs));
+  const cleanup = assert.rejects(cdp.send('Emulation.clearDeviceMetricsOverride'), /no browser response/);
+  t.mock.timers.tick(30_000); await cleanup;
+  const crash = assert.rejects(cdp.send('Performance.getMetrics'), /renderer crashed/);
+  socket.emit('Inspector.targetCrashed'); await crash;
+  assert.deepEqual(cdp.snapshot().failure, original);
+  assert.equal(cdp.snapshot().terminal?.method, 'Inspector.targetCrashed');
+  assert.deepEqual(cdp.snapshot().pending, []);
+  assert.equal(socket.commands.length, 3);
+  assert.doesNotMatch(JSON.stringify(cdp.snapshot()), /private-expression-canary|private-page-error-canary|description|expression/);
+});
+
+test('an exceptionDetails field returned as ordinary page data is not a failed evaluation', async () => {
+  const socket = new Socket(), cdp = connection(socket);
+  try {
+    const result = cdp.evaluate('ordinary page data');
+    socket.answer(1, {result: {value: {exceptionDetails: 'ordinary page data'}}});
+    assert.deepEqual(await result, {exceptionDetails: 'ordinary page data'});
+    assert.equal(cdp.snapshot().failure, null);
+  } finally {cdp.close();}
+});
+
+for (const [event, reason] of [['Inspector.targetCrashed', 'the renderer crashed'], ['Inspector.detached', 'the browser detached the target']]) {
+  test(`${event} rejects open-socket waiters and prevents cleanup commands from hiding the cause`, async t => {
+    t.mock.timers.enable({apis: ['setTimeout']});
+    const socket = new Socket(), cdp = connection(socket);
+    t.after(() => cdp.close());
+    cdp.at('quota/24h/return');
+    const pending = [cdp.evaluate('private-canary'), cdp.send('Input.dispatchMouseEvent', {x: 123})]
+      .map(promise => promise.then(() => 'unexpected success', error => String(error.message)));
+    cdp.at('cleanup');
+    socket.emit(event, {reason: 'private-detach-canary'});
+    // The original deadlines do not advance; the event itself must settle both calls.
+    await new Promise(resolve => setImmediate(resolve));
+    for (const promise of pending) assert.match(await Promise.race([promise, Promise.resolve('still waiting')]), new RegExp('quota/24h/return: .*: ' + reason));
+    assert.deepEqual(cdp.snapshot().pending, []);
+    assert.equal(cdp.snapshot().failure?.context, 'quota/24h/return');
+    assert.equal(cdp.snapshot().failure?.reason, reason);
+    assert.equal(cdp.snapshot().terminal?.method, event);
+    const after = cdp.send('Emulation.setCPUThrottlingRate', {rate: 1}).then(() => 'unexpected success', error => String(error.message));
+    await Promise.resolve();
+    assert.match(await Promise.race([after, Promise.resolve('still waiting')]), new RegExp(reason));
+    assert.equal(socket.commands.length, 2);
+    t.mock.timers.tick(30_000);
+    assert.equal(cdp.snapshot().failure?.reason, reason);
+    assert.doesNotMatch(JSON.stringify(cdp.snapshot()), /private-canary|private-detach-canary|expression|"x"/);
+  });
+}
+
+test('a crash reload event permits new work without reviving old commands or retrying them', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const socket = new Socket(), cdp = connection(socket);
+  t.after(() => cdp.close());
+  const original = cdp.send('Performance.getMetrics').then(() => 'unexpected success', error => String(error.message));
+  socket.emit('Inspector.targetCrashed');
+  await Promise.resolve();
+  assert.match(await Promise.race([original, Promise.resolve('still waiting')]), /renderer crashed/);
+  socket.emit('Inspector.targetReloadedAfterCrash');
+  const next = cdp.send('Performance.getMetrics');
+  socket.answer(1, {metrics: ['stale']});
+  socket.answer(2, {metrics: ['new']});
+  assert.deepEqual(await next, {metrics: ['new']});
+  assert.equal(cdp.snapshot().terminal, null);
+  assert.equal(cdp.snapshot().failure?.reason, 'the renderer crashed');
+  assert.deepEqual(socket.commands.map(command => command.id), [1, 2]);
+});
 
 test('a silent open browser has a Node deadline even when the page RAF never advances', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
@@ -79,6 +238,22 @@ test('closing CDP rejects pending commands even without a socket close event', a
   const first = assert.rejects(cdp.send('Input.dispatchKeyEvent'), /the browser closed the connection/);
   const second = assert.rejects(cdp.evaluate('new Promise(requestAnimationFrame)'), /the browser closed the connection/);
   cdp.close(); await Promise.all([first, second]);
+});
+
+test('cancelled CDP waiters ignore late replies and retain safe failure identity without parameters', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const socket = new Socket(), cdp = connection(socket), controller = new AbortController();
+  const cancelled = assert.rejects(cdp.send('Runtime.evaluate', {expression: 'secret-canary'}, controller.signal), /cancelled/);
+  controller.abort(); await cancelled;
+  assert.deepEqual(cdp.snapshot().pending, []);
+  socket.answer(1, {result: {value: 'late'}});
+  cdp.at('quota/24h/wheel');
+  const timed = assert.rejects(cdp.send('Input.dispatchMouseEvent', {x: 123}), /no browser response/);
+  t.mock.timers.tick(30_000); await timed;
+  assert.equal(cdp.snapshot().failure?.method, 'Input.dispatchMouseEvent');
+  assert.equal(cdp.snapshot().failure?.context, 'quota/24h/wheel');
+  assert.doesNotMatch(JSON.stringify(cdp.snapshot()), /secret-canary|expression|"x"/);
+  cdp.close();
 });
 
 test('a DevTools connection timeout closes only the tab it just created in an attached browser', async t => {

@@ -95,6 +95,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
     const min=-Number(pad)/1_000_000,max=Number(span+pad)/1_000_000;
     return {min,max,ticks:Array.from({length:5},(_,i)=>min+(max-min)*i/4),label:t('money.value')+' ('+symbol+')',
       rawValue:(key:string,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return series&&pointAt(series,at,strip?.cell??history?.cellMs??60000)?.value;},
+      observedAt:(key:string,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return series?.pointMode==='observation'?moneyPointAt(series,at)?.semantics?.conversion?.original.at:undefined;},
       formatTick:(value:number)=>money((origin+BigInt(Math.round(value*1_000_000))).toString(),unit,false,context).slice(0,-symbol.length-1),
       formatValue:(key:string,_value:number,at:number)=>{const series=entries.find(s=>moneyIdentity(s)===key);return money(series&&pointAt(series,at,strip?.cell??history?.cellMs??60000)?.value,unit,true,context);},
       detail:(key:string,at:number)=>{
