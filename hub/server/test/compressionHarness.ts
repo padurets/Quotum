@@ -69,4 +69,3 @@ export async function fixture(t: TestContext, local = false, observedAt = NOW - 
   t.after(async () => {await app.close(); store.close();});
   return {app, base, board, cookie: COOKIE, store, authorization, received};
 }
-

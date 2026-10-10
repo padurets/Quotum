@@ -72,4 +72,3 @@ export function audited(dir: string) {
   try { assert.deepEqual({...db.prepare('PRAGMA quick_check').get()}, {quick_check: 'ok'}); }
   finally { db.close(); }
 }
-
