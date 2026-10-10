@@ -1383,7 +1383,9 @@ Numeric preparation runs outside React rendering through one cancellable Message
 scheduler. Its shared generators yield between small cell, session, group, event and point
 operations. UI slices target one millisecond and check the deadline after at most sixteen
 generator advances; server and synchronous readers drain those same generators. Each owner
-keeps only its latest job. Tile responses use private COW staging and publish their
+keeps only its latest job. Stable sorting yields after each copied or merged row, reuses two
+merge buffers and forwards one immutable pending result through delegated generators;
+iteration and cancellation retain the native generator lifecycle. Tile responses use private COW staging and publish their
 tiles, read bounds and metadata together. At most two responses are admitted for
 HTTP and processing together, including raw answers waiting for a tile reservation.
 Quota, budget and subscription-funds readers share that pool and a 15 MiB retained-tile and staged-growth
