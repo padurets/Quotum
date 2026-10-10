@@ -53,7 +53,7 @@ async function main(extend?: ExtendHub) {
   const setup = new Setup(!local && directory.userCount() === 0, config.auth.setupCode);
   const ingest = new Ingest(store, directory, new Duty(), new Cadence());
   const credentials=new Credentials(store,inputs.current,secretKey);
-  const hubSources=new HubSources(store,credentials);
+  const hubSources=new HubSources(store,credentials,undefined,ingest.live);
   const currencies=new Currencies(store);
   const app = await buildApp({store, directory, resets, ingest, pairing: new Pairing(directory), setup, local: local && {key: local.key}, credentials,hubSources, secretSnapshot: {storageAtStart: inputs.storageAtStart, wasFileAtStart: inputs.wasFileAtStart}}, extend);
 

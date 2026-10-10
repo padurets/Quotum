@@ -16,7 +16,8 @@ const resultContent=(result:import('./connectors/registry.js').ConnectorIdentity
   for(const meter of result.measurement?.meters??[])meters.set(meter.id,meter);
   return content({meters:[...meters.values()],quota:result.quotaObservation.quota,plan:result.quotaObservation.plan});
 };
-type Job={generation:number;next:number|null;last:number|null;retryAt:number;interval:number;failures:number;controller:AbortController|null;request:RefreshRequest|null;requestedAt:number|null};
+type Job={generation:number;next:number|null;last:number|null;retryAt:number;interval:number;failures:number;controller:AbortController|null;request:RefreshRequest|null;requestedAt:number|null;inUse:boolean};
+type Activity={working(source:string,now:number):boolean;workingChangesAt(source:string,now:number):number|null};
 
 export function measurementFingerprint(state:SourceState,measurement?:MeterMeasurement):string {
   if(!state.balanceStatus&&!measurement?.balanceStatus)return JSON.stringify((measurement?.meters??state.meters)?.map(m=>[m.id,m.amount,m.limit,m.resetAt]));
@@ -33,25 +34,29 @@ export class HubSources {
   private active=0;
   private readonly activeSources=new Set<string>();
   private cancelTimer:(()=>void)|null=null;
+  private cancelActivity:(()=>void)|null=null;
   private observer:Touches|null=null;
-  constructor(private readonly store:Store,private readonly credentials:Credentials,private readonly clock:Clock=realClock) {
+  constructor(private readonly store:Store,private readonly credentials:Credentials,private readonly clock:Clock=realClock,private readonly activity?:Activity) {
     credentials.onChange=source=>this.changed(source);
   }
   setObserver(observer:Touches){this.observer=observer;}
   start(){if(this.running)return;this.running=true;this.credentials.reconcile();for(const source of this.credentials.sources())this.changed(source);}
-  stop(){this.running=false;this.cancelTimer?.();this.cancelTimer=null;for(const job of this.jobs.values()){job.generation++;job.controller?.abort();}this.jobs.clear();}
+  stop(){this.running=false;this.cancelTimer?.();this.cancelTimer=null;this.cancelActivity?.();this.cancelActivity=null;for(const job of this.jobs.values()){job.generation++;job.controller?.abort();}this.jobs.clear();}
   private changed(source:string) {
     if(!this.running)return;
     const old=this.jobs.get(source);old?.controller?.abort();if(old)old.generation++;
     if(!this.credentials.sources().includes(source)){this.jobs.delete(source);this.arm();return;}
     if(providerOf(this.store.state(source).provider)?.measuredBy!=='hub')return;
     const now=this.clock.now();
-    this.jobs.set(source,{generation:(old?.generation??0)+1,next:Math.max(now,(old?.last??-Infinity)+60_000,old?.retryAt??0),last:old?.last??null,retryAt:old?.retryAt??0,interval:120_000,failures:0,controller:null,request:null,requestedAt:old?.requestedAt??null});
+    this.jobs.set(source,{generation:(old?.generation??0)+1,next:Math.max(now,(old?.last??-Infinity)+60_000,old?.retryAt??0),last:old?.last??null,retryAt:old?.retryAt??0,interval:120_000,failures:0,controller:null,request:null,requestedAt:old?.requestedAt??null,inUse:this.activity?.working(source,now)??false});
     this.arm();this.touch(source);
   }
   private touch(source:string){tell(this.observer,o=>o.touchSources([source]));}
   private arm() {
-    this.cancelTimer?.();this.cancelTimer=null;if(!this.running||this.active>=2)return;
+    this.cancelTimer?.();this.cancelTimer=null;this.cancelActivity?.();this.cancelActivity=null;if(!this.running)return;
+    const now=this.clock.now(),boundary=Math.min(...[...this.jobs.keys()].map(source=>this.activity?.workingChangesAt(source,now)??Infinity));
+    if(Number.isFinite(boundary)&&boundary>now)this.cancelActivity=this.clock.after(boundary-now,()=>{this.cancelActivity=null;for(const source of this.jobs.keys())this.activityChanged(source,this.clock.now());this.arm();});
+    if(this.active>=2)return;
     const next=Math.min(...[...this.jobs].filter(([s,j])=>!this.activeSources.has(s)&&!j.controller&&j.next!==null).map(([,j])=>j.next!));
     if(!Number.isFinite(next))return;
     this.cancelTimer=this.clock.after(Math.max(0,next-this.clock.now()),()=>{this.cancelTimer=null;this.pump();});
@@ -74,11 +79,12 @@ export class HubSources {
       // inventory runs out of time. This signal cancels the source lifecycle only.
       const result=await this.credentials.measure(source,controller.signal,valid,result=>{
         const after=resultContent(result,this.store.state(source));
-        return this.store.measureInterval(source)??(before===after?Math.min(job.interval*2,900_000):120_000);
+        return this.store.measureInterval(source)??(this.activity?.working(source,this.clock.now())?120_000:before===after?Math.min(job.interval*2,900_000):120_000);
       });
       if(!valid())return;if(!result)throw new SecretError('connector_timeout');
       const after=resultContent(result,this.store.state(source));
-      if(result.quotaObservation&&!result.measurement)job.failures++;else job.failures=0;job.interval=this.store.measureInterval(source)??(!result.measurement?Math.min(120_000*2**Math.min(job.failures-1,3),900_000):before===after?Math.min(job.interval*2,900_000):120_000);
+      job.inUse=this.activity?.working(source,this.clock.now())??false;
+      if(result.quotaObservation&&!result.measurement)job.failures++;else job.failures=0;job.interval=this.store.measureInterval(source)??(!result.measurement?Math.min(120_000*2**Math.min(job.failures-1,3),900_000):job.inUse?120_000:before===after?Math.min(job.interval*2,900_000):120_000);
       // Freshness belongs to the accepted observation; it is never extended after failure.
       job.retryAt=this.clock.now()+(result.retryAfterMs??0);
       job.next=Math.max(this.clock.now()+job.interval,job.retryAt);
@@ -95,9 +101,20 @@ export class HubSources {
       if(valid())this.touch(source);this.arm();
     }
   }
-  cadence(source:string):{value:{by:'hub';next:number;why:'fixed'|'idle'|'changed'}|null;changesAt:number|null} {
+  activityChanged(source:string,now=this.clock.now()) {
+    const job=this.jobs.get(source);if(!job||!this.running)return;
+    const before=JSON.stringify([job.next,job.interval,job.inUse]);
+    job.inUse=this.activity?.working(source,now)??false;
+    if(job.inUse&&job.failures===0&&job.next!==null&&this.store.measureInterval(source)===null){
+      job.interval=120_000;
+      if(!job.controller)job.next=Math.min(job.next,Math.max(now,(job.last??-Infinity)+60_000,(this.store.state(source).successAt??now)+120_000,job.retryAt));
+    }
+    if(before!==JSON.stringify([job.next,job.interval,job.inUse]))this.touch(source);
+    this.arm();
+  }
+  cadence(source:string):{value:{by:'hub';next:number;why:'fixed'|'idle'|'changed'|'inUse'}|null;changesAt:number|null} {
     const job=this.jobs.get(source);
-    return {value:job?.next===null||!job?null:{by:'hub',next:job.next,why:this.store.measureInterval(source)!==null?'fixed':job.interval===120_000?'changed':'idle'},changesAt:null};
+    return {value:job?.next===null||!job?null:{by:'hub',next:job.next,why:this.store.measureInterval(source)!==null?'fixed':job.inUse&&job.failures===0?'inUse':job.interval===120_000?'changed':'idle'},changesAt:this.activity?.workingChangesAt(source,this.clock.now())??null};
   }
   refresh(source:string,now:number):{value:Refresh;changesAt:number|null} {
     const job=this.jobs.get(source),availableAt=Math.max(job?.retryAt??0,job?.requestedAt===null||job?.requestedAt===undefined?0:job.requestedAt+60_000);

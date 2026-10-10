@@ -247,6 +247,7 @@ export class Events implements Touches {
   // ---------- touches ----------
 
   touchSources(ids: string[]) {
+    for (const id of ids) this.parts.hubSources?.activityChanged(id, this.clock.now());
     for (const watched of this.watched.values()) {
       for (const id of ids) {
         if (!watched.lineup.includes(id)) continue;

@@ -948,6 +948,11 @@ source holding and shares a one-minute cooldown across boards. Owner source acce
 projected separately for each reader, outside the shared board cache.
 Frequency saves publish the new preference during an active poll; its cadence is
 recomputed after that poll finishes.
+Resolved held client work keeps healthy Auto polling at two minutes. Starting work
+shortens an idle promise while preserving the last-dispatch minute, supplier retry
+floor and fixed settings. A single activity timer follows rule boundaries and report
+expiry without a dashboard reader. In-flight observations use current activity for
+their next interval and freshness promise.
 
 ## Trusted connector keys
 
