@@ -25,6 +25,16 @@ export type Marker = {key: string; at: number; label: string; color: string; str
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
 
+/** Sorted plot points let a label inspect only the interval it covers. */
+function firstAt(points: Line['points'], at: number): number {
+  let low = 0, high = points.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (points[middle][0] < at) low = middle + 1; else high = middle;
+  }
+  return low;
+}
+
 /** How wide an announcement's label is taken to be, and how near an edge a value hides under it (percent). */
 const LABEL_WIDTH = 220;
 const LABEL_BAND = 15;
@@ -480,8 +490,10 @@ export const Chart = memo(function Chart({
     let low = 0;
     let high = 0;
     for (const line of lines) {
-      for (const [at, value] of line.points) {
-        if (at < a || at > b) continue;
+      const points = line.points;
+      for (let i = firstAt(points, a); i < points.length; i++) {
+        const [at, value] = points[i];
+        if (at > b) break;
         if (value < LABEL_BAND) low++;
         else if (value > 100 - LABEL_BAND) high++;
       }
@@ -504,7 +516,14 @@ export const Chart = memo(function Chart({
       if (value < band) low++;
       else if (value > 100 - band) high++;
     };
-    for (const line of lines) for (const [at, value] of line.points) if (at >= a && at <= b) count(value);
+    if (a <= b) for (const line of lines) {
+      const points = line.points;
+      for (let i = firstAt(points, a); i < points.length; i++) {
+        const [at, value] = points[i];
+        if (at > b) break;
+        count(value);
+      }
+    }
     const across = [0, 0.25, 0.5, 0.75, 1].map(share => a + (b - a) * share);
     for (const forecast of forecasts) for (const at of across) count(valueAt([forecast.points], at));
     for (const plan of plans) for (const at of across) count(valueAt(plan.runs, at));
