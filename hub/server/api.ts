@@ -27,6 +27,7 @@ import type {HubSources} from './hubSources.js';
 import {displayHistory} from './currencies/history.js';
 import type {Chunk} from './domain/history.js';
 import {currencyRoutes} from './routes/currencies.js';
+import {linkRoutes} from './routes/links.js';
 import {sourceKeyRoutes} from './routes/sourceKeys.js';
 import {BoardAdditions} from './additions.js';
 import {additionRoutes} from './routes/additions.js';
@@ -248,6 +249,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   accountRoutes(app, hub, guards);
   sourceKeyRoutes(app,hub,guards);
   currencyRoutes(app,hub,guards);
+  linkRoutes(app,hub,guards);
   await extend?.(app, hub, guards);
   const verificationAttempts=new Limiter(10,60_000);
   await app.register(async scope => credentialRoutes(scope, hub.credentials!, guards, verificationAttempts, additions, directory));

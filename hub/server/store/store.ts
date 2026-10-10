@@ -23,6 +23,7 @@ import {budgetAccess, type BudgetAccess} from '../domain/resources.js';
 import {exactDecimal} from '../domain/amount.js';
 import {CurrencyStore} from './currencies.js';
 import {importLegacyCurrencies} from './legacyCurrencies.js';
+import {LinkStore} from './links.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
 export type WorkContext = SessionEvidence & {client?: string; source: string | null; origin: Origin; startedAt: number; project: string; folder: string};
@@ -71,6 +72,7 @@ export class Store {
   readonly db: DatabaseSync;
   readonly meters: MeterStore;
   readonly currencies:CurrencyStore;
+  readonly links: LinkStore;
   private monetaryRecords=new Set<(source:string,state:SourceState)=>void>();
   private currencyChanges=new Set<(owner:string)=>void>();
   /** When this database was made. */
@@ -81,6 +83,16 @@ export class Store {
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
+    this.links = new LinkStore(this.db);
+    this.links.onChange = owner => {
+      const sources = this.held(owner).map(s => s.id);
+      tell(this.observer, o => {
+        o.touchSources(sources);
+        o.touchBoards([...new Set(sources.flatMap(source => this.boardsOf(source)))]);
+        o.touchUser(owner); o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0);
+        for (const source of sources) o.history(source, 0, ['quota']);
+      });
+    };
     this.currencies=new CurrencyStore(this.db);
     this.currencies.onChange=owner=>{if(owner){for(const listener of this.currencyChanges)listener(owner);tell(this.observer,o=>o.touchUser(owner));}};
     importLegacyCurrencies(this.db,this.currencies);

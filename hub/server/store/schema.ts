@@ -349,6 +349,22 @@ export const STEPS = [
   END;
   `,
 
+  // Temporal declarations never replace the account evidence in the work ledger.
+  `
+  CREATE TABLE client_links (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, client TEXT NOT NULL, device_id TEXT,
+    route_class TEXT CHECK(route_class IN ('subscription','api','unknown')), route_provider TEXT,
+    source_id TEXT NOT NULL, from_at INTEGER NOT NULL CHECK(from_at>=0 AND from_at<=9007199254740991),
+    to_at INTEGER CHECK(to_at IS NULL OR to_at>from_at AND to_at<=9007199254740991), created_at INTEGER NOT NULL,
+    CHECK(route_class IS NOT NULL OR route_provider IS NULL));
+  CREATE INDEX client_links_by_owner ON client_links(user_id,client,device_id,route_class,route_provider,from_at,to_at);
+  CREATE TABLE link_versions (user_id TEXT PRIMARY KEY, version INTEGER NOT NULL) WITHOUT ROWID;
+  CREATE TABLE link_mutations (user_id TEXT NOT NULL,request_id TEXT NOT NULL,hash TEXT NOT NULL,
+    status INTEGER NOT NULL,response TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(user_id,request_id)) WITHOUT ROWID;
+  CREATE TABLE device_tracking_policy (device_id TEXT NOT NULL,client TEXT NOT NULL,route_enabled INTEGER NOT NULL CHECK(route_enabled IN (0,1)),
+    PRIMARY KEY(device_id,client)) WITHOUT ROWID;
+  CREATE INDEX devices_by_owner ON devices(user_id,id);
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

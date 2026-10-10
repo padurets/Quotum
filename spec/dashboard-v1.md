@@ -1240,3 +1240,30 @@ measuring settings are separate in desktop
 `app_save_settings` accepts client enabled/route patches without a new bridge command.
 With every collector disabled and tracking enabled, the agent state is `tracking`;
 `idle` means both measurement and client tracking are off.
+
+## Private client links
+
+`GET /api/links` returns the authenticated owner's `revision`, temporal `links`, held
+`sources` choices, own `devices` and known `clients`. A link has `id`, `clientId`, nullable
+`deviceId` (all devices), nullable `route` (`class` and nullable catalogue `provider`),
+`sourceId`, `from`, nullable `to` and `createdAt`. Management adds current `active`.
+Periods use safe nonnegative Unix milliseconds and are half-open `[from,to)`.
+Provider conditions require a class. Dropping a holding retains its rules.
+
+`POST /api/links` creates a rule (201), `POST /api/links/:id` corrects it,
+`POST /api/links/:id/change` changes only its source from `at` with `newSourceId`, and
+`DELETE /api/links/:id` removes it (200). Create/correction supply all rule fields;
+every mutation includes `expectedRevision` and a UUID `requestId`, including DELETE's
+JSON body. The reply is `{revision,links}`. A material mutation increments the revision
+once. A correction with identical fields keeps it. A dated change preserves the previous
+period and adds the new period atomically; at its beginning it replaces the source.
+
+Exact owner/client/device/class/provider tuples, including nulls, cannot overlap;
+different scopes and conditions may overlap. Validation, ownership, holding, overlap,
+revision and write share one transaction. An identical successful request replays its
+original result for seven days, before revision checking; reusing its UUID with another
+body returns 409 `mutation_conflict`. A stale revision is 409 `links_changed`, overlap
+is 409 `link_overlap`, a known own unavailable target is 409 `source_not_held`, invalid
+input is 400 `invalid_link`, and foreign or unknown objects are 404 `not_found`.
+Errors contain no rejected identifiers or raw evidence. Session and Origin guards apply
+in web and desktop local mode. Rules and held choices never enter shared projections.
