@@ -114,7 +114,9 @@ type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, la
 async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number) {
   const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp);
   cdp.at(`${name}/seed`);
-  const close = async () => {cdp.at(`${name}/cleanup`); await cdp.evaluate('(()=>{const p=window.__historyTraffic;if(p){p.running=false;cancelAnimationFrame(p.raf);history.pushState=p.originalPush;}})()').catch(() => {}); await tab.close();};
+  // Closing this owned target discards its observers and overrides. A stalled
+  // renderer cannot acknowledge a cleanup evaluation before its target closes.
+  const close = async () => {cdp.at(`${name}/cleanup`); await tab.close();};
   try {
     const seedPhase = `${name}/seed`; bodies.phase = seedPhase; proxy.phase(seedPhase);
     await cdp.send('Network.enable'); await cdp.send('Page.enable'); await cdp.send('Performance.enable');

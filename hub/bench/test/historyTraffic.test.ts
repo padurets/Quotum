@@ -1,10 +1,31 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
 import {brotliCompressSync, constants} from 'node:zlib';
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from '../historyProxy';
 import {HistoryCutChanged, bodyBounds, bodyTotals, stableHistory, trafficProblems, transferFor} from '../historyTrafficBudget';
 import {trafficReadEvidence} from '../historyTrafficBrowser';
+
+test('history cleanup releases its owned target when the renderer cannot answer', async () => {
+  const source = readFileSync(new URL('../historyTrafficBrowser.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('  const close = async () =>'), end = source.indexOf('\n  try {', start);
+  assert.ok(start >= 0 && end > start);
+  let closed = 0, evaluations = 0;
+  const contexts: string[] = [];
+  const fixture = {name: 'fixture', cdp: {at: (value: string) => contexts.push(value),
+    evaluate() {evaluations++; return new Promise(() => {});}},
+  tab: {async close() {closed++;}}, close: null as unknown as () => Promise<void>};
+  runInNewContext(ts.transpileModule(`${source.slice(start, end)}\nglobalThis.close=close;`, {
+    compilerOptions: {target: ts.ScriptTarget.ES2022},
+  }).outputText, fixture);
+  const result = fixture.close();
+  assert.equal(closed, 1, 'target release cannot depend on a renderer response');
+  assert.equal(evaluations, 0); assert.deepEqual(contexts, ['fixture/cleanup']);
+  await result;
+});
 
 test('traffic evidence retains attempted ranges and body uncertainty without selection text or payloads', () => {
   const read={selection:'board=private-canary',id:'1',phase:'cold',from:0,to:60,cell:1,lower:12,
@@ -278,7 +299,6 @@ test('Chrome request headers preserve a cancelled attempt identity before respon
   assert.equal(f.observer.reads[1].count?.id, 'b1:2', 'late extra headers update the terminal count instead of matching a query');
 });
 
-import {runInNewContext} from 'node:vm';
 import {historyPageScript} from '../historyTrafficBrowser';
 
 test('the browser fixture tags each fetch before IO and keeps cancellation identity without response headers', async () => {
