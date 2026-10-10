@@ -55,7 +55,7 @@ function hub(t: TestContext) {
 }
 
 test('failed handover retains fixed plans from successful data and each device minimum', t => {
-  for (const interval of [MIN, 2 * MIN, 5 * MIN, 15 * MIN]) for (const minimum of [MIN, 30 * MIN]) {
+  for (const interval of [60_000, 120_000, 300_000, 900_000] as const) for (const minimum of [MIN, 30 * MIN]) {
     const h = hub(t);
     h.ask(0);
     h.deliver(0, {used: 91});

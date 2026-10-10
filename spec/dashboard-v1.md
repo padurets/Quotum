@@ -1044,7 +1044,12 @@ and when), no names and nothing of people, as long as samples.
 In local mode, so that the app tells of a limit once in each cycle of a window, a restart
 included, the hub keeps on disk for each window its cycle, which of its thresholds it has
 reached in it, and its last sample (what is left and used, the reset time, its kind, label
-and length, when it was measured), with no end: the hub forgets no source it has measured.
+and length, when it was measured), for the sample-retention period (90 days) since
+its last observation. At the exact retention cutoff the ledger is still kept. A
+returning window whose ledger expired starts with a silent baseline. One persisted
+global cycle counter, containing no source, window or person, keeps new notification
+IDs distinct from consumed ones after expiry, source deletion and restart; no
+per-window tombstones remain.
 For each provider it keeps when the latest scheduled reset it has learned of was
 announced, and the links announced then, up to 64. Nothing of people.
 
