@@ -638,6 +638,9 @@ ID is kept only in the hub's work ledger; no producer ID, raw native token, PID,
 metadata or salt appears in board state, history, errors or logs.
 
 The measuring-frequency preference is kept on the hub. It adds no information to agent traffic.
+Releasing duty after a fresh failure uses only the existing device, subscription
+binding, corrected observation time and latest command held in hub memory. It sends
+no new identity or failure fields and leaves retained sample validity unchanged.
 
 ### Client discovery privacy
 
