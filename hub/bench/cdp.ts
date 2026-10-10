@@ -158,6 +158,19 @@ export function findChrome(env: NodeJS.ProcessEnv): string | null {
 /** A browser the benchmark drives: the DevTools endpoint (`http://host:port`) and how to let go of it. */
 export type Browser = {endpoint: string; owned?: boolean; owner?: RunOwner; launchReport?(): unknown; close(): Promise<void>; diagnostics?(pids:number[],candidate?:number,signal?:AbortSignal):Promise<unknown>};
 
+/** Fixed categories survive evidence filtering without exposing kernel symbol text. */
+export function threadWait(value: string) {
+  const symbol = value.trim();
+  const kind = /^(?:__)?futex_wait(?:_queue(?:_me)?)?$/.test(symbol) ? 'futex'
+    : /^(?:ep_poll|do_epoll_wait|poll_schedule_timeout|do_poll|do_select)$/.test(symbol) ? 'poll'
+    : /^(?:hrtimer_nanosleep|do_nanosleep)$/.test(symbol) ? 'timer'
+    : /^(?:pipe_read|pipe_write)$/.test(symbol) ? 'pipe'
+    : symbol === 'do_wait' ? 'child'
+    : /^(?:io_schedule|folio_wait_bit_common)$/.test(symbol) ? 'io'
+    : !symbol || symbol === 'unavailable' ? 'unavailable' : 'unknown';
+  return {kind};
+}
+
 /** Only a launched browser's descendants may expose native thread state. */
 export async function nativeProcesses(owner:number,pids:number[],signal?:AbortSignal){
   const status=async(pid:number)=>readFile(`/proc/${pid}/status`,{encoding:'utf8',signal}).catch(()=> '');
@@ -177,7 +190,7 @@ export async function nativeProcesses(owner:number,pids:number[],signal?:AbortSi
       if(signal?.aborted)break;
       const text=await readFile(`/proc/${pid}/task/${id}/status`,{encoding:'utf8',signal}).catch(()=> '');
       const wait=await readFile(`/proc/${pid}/task/${id}/wchan`,{encoding:'utf8',signal}).catch(()=> 'unavailable');
-      threads.push({id:Number(id),state:text.split('\n').filter(line=>/^(Name|State):/.test(line)),wait});
+      threads.push({id:Number(id),state:text.split('\n').filter(line=>/^(Name|State):/.test(line)),wait:threadWait(wait)});
     }
     processes.push({pid,state,threads});
   }

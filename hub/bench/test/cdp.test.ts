@@ -1,7 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {attachedChrome, Cdp, openTab,nativeProcesses} from '../cdp.js';
 import {Requests} from '../index.js';
+import {safeEvidence} from '../evidence.js';
 
 /** Stands in for what the benchmark hears of the browser: events by name, emitted by the test. */
 function browser() {
@@ -17,6 +20,26 @@ test('native diagnostics inspect an owned process and exclude a process outside 
   assert.equal(owned.length,1);assert.equal(owned[0].pid,process.pid);
   assert.ok(owned[0].threads.length>0);
   assert.deepEqual(await nativeProcesses(999999999,[process.pid]),[]);
+});
+
+test('an owned blocked thread keeps its wait category in the saved evidence', {skip: process.platform !== 'linux'}, async t => {
+  const child = spawn(process.execPath, ['-e', 'process.stdout.write("ready\\n"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);'], {stdio: ['ignore', 'pipe', 'ignore']});
+  const closed = once(child, 'close');
+  t.after(async () => {if (child.exitCode === null && child.signalCode === null) child.kill(); await closed;});
+  assert.ok(child.pid);
+  await Promise.race([once(child.stdout!, 'data'), closed.then(() => {throw new Error('the stand-in exited before its wait');})]);
+  const end = Date.now() + 5_000;
+  for (;;) {
+    const processes = await nativeProcesses(process.pid, [child.pid]);
+    const thread = processes[0]?.threads.find(row => row.id === child.pid);
+    const saved = safeEvidence({processes}) as {processes: {threads: {id: number; wait: {kind: string}}[]}[]};
+    if (thread?.state.some(line => line.startsWith('State:\tS'))) {
+      assert.equal(saved.processes[0].threads.find(row => row.id === child.pid)?.wait.kind, 'futex');
+      break;
+    }
+    assert.ok(Date.now() < end, 'the stand-in must reach its blocking wait');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
 });
 
 test('what the idle page asks is counted, a stream of events opened meanwhile too; not the one it opened before, nor its images', () => {
