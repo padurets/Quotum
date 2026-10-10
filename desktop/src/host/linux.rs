@@ -452,6 +452,7 @@ enum Message {
     Fault {
         process: String,
         reason: String,
+        navigation: Option<NavigationFailure>,
     },
     Graphics {
         electron: String,
@@ -460,6 +461,53 @@ enum Message {
         compositing: String,
         rasterization: String,
     },
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NavigationFailure {
+    role: window::Role,
+    instance: u64,
+    request: u64,
+    current_request: u64,
+    sequence: u64,
+    current_sequence: u64,
+    requested_generation: u64,
+    current_generation: u64,
+    started_ms: f64,
+    rejected_ms: f64,
+    error_number: Option<i32>,
+    code_type: NavigationCodeType,
+    loaded: bool,
+    painted: bool,
+    revealed: bool,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum NavigationCodeType {
+    String,
+    Undefined,
+    Other,
+}
+impl NavigationFailure {
+    fn receipt(&self) -> String {
+        format!(
+            "app: navigation role={:?} instance={} request={}/{} sequence={}/{} generation={}/{} error_number={:?} code_type={:?} elapsed_ms={:.1} loaded={} painted={} revealed={}",
+            self.role,
+            self.instance,
+            self.request,
+            self.current_request,
+            self.sequence,
+            self.current_sequence,
+            self.requested_generation,
+            self.current_generation,
+            self.error_number,
+            self.code_type,
+            self.rejected_ms - self.started_ms,
+            self.loaded,
+            self.painted,
+            self.revealed,
+        )
+    }
 }
 /// Bounded frames: neither a broken GUI nor stderr can allocate unbounded memory.
 fn read_frame(reader: &mut impl BufRead) -> io::Result<Option<String>> {
@@ -537,7 +585,10 @@ fn read_messages(shell: &Arc<Shell>, gui: &Arc<Gui>, socket: UnixStream) {
             Message::Graphics { electron, chromium, backend, compositing, rasterization } => {
                 shell.hub_log.line(&format!("app: Electron {electron}, Chromium {chromium}, display {backend}, compositing {compositing}, rasterization {rasterization}"));
             }
-            Message::Fault { process, reason } => {
+            Message::Fault { process, reason, navigation } => {
+                if let Some(navigation) = navigation {
+                    shell.hub_log.line(&navigation.receipt());
+                }
                 shell.hub_log.line(&format!("app: Chromium child ended unexpectedly ({process}: {reason})"));
                 if shell.smoke.is_some() {
                     smoke::fail("a Chromium child failed");
@@ -806,6 +857,38 @@ pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn navigation_fault_transport_keeps_numeric_context_and_rejects_raw_error_fields() {
+        let frame = json!({
+            "type": "fault", "process": "navigation", "reason": "load failed",
+            "navigation": {
+                "role": "main", "instance": 1, "request": 0, "currentRequest": 1,
+                "sequence": 2, "currentSequence": 3,
+                "requestedGeneration": 1, "currentGeneration": 2,
+                "startedMs": 100.0, "rejectedMs": 123.0, "errorNumber": -2,
+                "codeType": "undefined", "loaded": false, "painted": true, "revealed": true,
+            }
+        });
+        let Message::Fault { navigation: Some(navigation), .. } = serde_json::from_value(frame.clone()).unwrap() else {
+            panic!("navigation context missing");
+        };
+        assert_eq!(
+            navigation.receipt(),
+            "app: navigation role=Main instance=1 request=0/1 sequence=2/3 generation=1/2 error_number=Some(-2) code_type=Undefined elapsed_ms=23.0 loaded=false painted=true revealed=true"
+        );
+        for field in ["url", "message", "stack"] {
+            let mut unsafe_frame = frame.clone();
+            unsafe_frame["navigation"][field] = json!("private entry key");
+            assert!(serde_json::from_value::<Message>(unsafe_frame).is_err());
+        }
+        let mut unsafe_frame = frame;
+        unsafe_frame["navigation"]["codeType"] = json!("private entry key");
+        assert!(serde_json::from_value::<Message>(unsafe_frame).is_err());
+        assert!(matches!(
+            serde_json::from_str::<Message>(r#"{"type":"fault","process":"renderer","reason":"crashed"}"#).unwrap(),
+            Message::Fault { navigation: None, .. }
+        ));
+    }
     #[test]
     fn a_main_accepted_during_engine_exit_starts_once_and_stays_closed_after_acknowledgement() {
         use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};

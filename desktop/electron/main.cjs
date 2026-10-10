@@ -157,12 +157,25 @@ function destination(role) {
   if (role === 'compact' && url.protocol === 'http:') url.searchParams.set('view', 'compact');
   return url.href;
 }
+function navigationFailure(error, entry, request, sequence, requestedGeneration, startedMs) {
+  const codes = new Set(['ERR_ABORTED', 'ERR_FAILED', 'ERR_CONNECTION_REFUSED', 'ERR_CONNECTION_CLOSED', 'ERR_CONNECTION_RESET', 'ERR_EMPTY_RESPONSE', 'ERR_INVALID_URL', 'ERR_INVALID_ARGUMENT', 'ERR_FILE_NOT_FOUND', 'ERR_ACCESS_DENIED', 'ERR_TIMED_OUT', 'ERR_NAME_NOT_RESOLVED', 'ERR_INTERNET_DISCONNECTED', 'ERR_BLOCKED_BY_CLIENT', 'ERR_BLOCKED_BY_RESPONSE', 'ERR_TOO_MANY_REDIRECTS']);
+  const type = typeof error?.code;
+  return {reason: codes.has(error?.code) ? error.code : 'load failed', navigation: {
+    role: entry.role, instance: entry.instance, request, currentRequest: entry.request, sequence, currentSequence: entry.navigationSequence,
+    requestedGeneration, currentGeneration: generation, startedMs, rejectedMs: performance.now(),
+    errorNumber: Number.isSafeInteger(error?.errno) && error.errno >= -1000 && error.errno <= 0 ? error.errno : null,
+    codeType: type === 'string' || type === 'undefined' ? type : 'other',
+    loaded: entry.loaded === true, painted: entry.painted === true, revealed: entry.revealed === true,
+  }};
+}
 function navigate(entry) {
   const url = destination(entry.role);
   const window = entry.window;
-  // Error messages can include the entry key. Log only an error code, never the URL.
+  const request = entry.request, requestedGeneration = generation, sequence = (entry.navigationSequence ?? 0) + 1, startedMs = performance.now();
+  entry.navigationSequence = sequence;
+  // Error messages can include the entry key. Keep only codes and request identity.
   window.loadURL(url).catch(error => {
-    if (!quitting && !entry.dismissed && !window.isDestroyed() && error.code !== 'ERR_ABORTED') send({type: 'fault', process: 'navigation', reason: error.code || 'load failed'});
+    if (!quitting && !entry.dismissed && !window.isDestroyed() && error?.code !== 'ERR_ABORTED') send({type: 'fault', process: 'navigation', ...navigationFailure(error, entry, request, sequence, requestedGeneration, startedMs)});
   });
 }
 

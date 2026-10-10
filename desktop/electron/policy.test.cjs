@@ -70,7 +70,7 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
     setPosition(x, y) { this.position = [x, y]; }
     getContentSize() { return this.size; }
     setContentSize(w, h) { this.size = [w, h]; }
-    loadURL(url) { navigations.push(url); return new Promise((_, reject) => { this.failNavigation = code => reject(Object.assign(new Error('private entry URL'), {code})); }); }
+    loadURL(url) { navigations.push(url); return new Promise((_, reject) => { this.failNavigation = code => reject(Object.assign(new Error('private entry URL'), {code})); this.failNavigationError = reject; }); }
   }
   const context = vm.createContext({
     require(name) {
@@ -337,7 +337,7 @@ test('closing a loading panel is not a navigation failure, but a live page faili
   assert.deepEqual(main.traffic.filter(m => m.type === 'fault'), []);
   main.windows[0].failNavigation('ERR_FAILED');
   await new Promise(setImmediate);
-  assert.deepEqual(main.traffic.filter(m => m.type === 'fault'), [{type: 'fault', process: 'navigation', reason: 'ERR_FAILED'}]);
+  assert.deepEqual(main.traffic.filter(m => m.type === 'fault').map(({type, process, reason}) => ({type, process, reason})), [{type: 'fault', process: 'navigation', reason: 'ERR_FAILED'}]);
 });
 
 
@@ -602,4 +602,55 @@ test('a coalesced new compact head retires the old presentation without relabell
   assert.equal(current.visible, true);
   assert.equal(current.destroyed, false);
   assert.deepEqual(main.traffic.filter(m => m.type === 'panel_closed').map(m => m.request), [1]);
+});
+
+
+test('a navigation without a string code retains numeric error and its original request', async () => {
+  const main = await mainProcess();
+  main.deliver({type: 'state', generation: 1, url: hub});
+  main.tick(23);
+  main.windows[0].failNavigationError(Object.assign(new Error('private-canary entry key'), {errno: -2, url: 'http://private-canary.invalid'}));
+  await new Promise(setImmediate);
+  const faults = main.traffic.filter(m => m.type === 'fault');
+  assert.equal(faults.length, 1); assert.equal(faults[0].reason, 'load failed');
+  assert.deepEqual(faults[0].navigation, {role: 'main', instance: 1, request: 0, currentRequest: 0, sequence: 2, currentSequence: 2,
+    requestedGeneration: 1, currentGeneration: 1, startedMs: 0, rejectedMs: 23, errorNumber: -2, codeType: 'undefined', loaded: false, painted: true, revealed: true});
+  assert.doesNotMatch(JSON.stringify(faults), /private-canary|entry key|http:/);
+});
+
+test('a late failed navigation preserves its generation instead of taking the newer request identity', async () => {
+  const main = await mainProcess();
+  main.deliver({type: 'state', generation: 1, url: hub});
+  const reject = main.windows[0].failNavigationError;
+  main.deliver({type: 'state', generation: 2, url: hub.replace('fixture', 'new-entry')});
+  main.tick(41); reject(Object.assign(new Error('private-canary'), {code: 'ERR_FAILED', errno: -2}));
+  await new Promise(setImmediate);
+  const faults = main.traffic.filter(m => m.type === 'fault');
+  assert.equal(faults.length, 1); assert.equal(faults[0].reason, 'ERR_FAILED');
+  assert.equal(faults[0].navigation.requestedGeneration, 1); assert.equal(faults[0].navigation.currentGeneration, 2);
+  assert.equal(faults[0].navigation.sequence, 2); assert.equal(faults[0].navigation.currentSequence, 3);
+  assert.equal(faults[0].navigation.errorNumber, -2); assert.equal(faults[0].navigation.codeType, 'string');
+});
+
+test('unknown navigation code payloads and invalid native numbers never enter the fault transport', async () => {
+  const main = await mainProcess();
+  main.windows[0].failNavigationError(Object.assign(new Error('private-canary'), {code: 'private-canary', errno: Infinity}));
+  await new Promise(setImmediate);
+  const faults = main.traffic.filter(m => m.type === 'fault');
+  assert.equal(faults.length, 1); assert.equal(faults[0].reason, 'load failed');
+  assert.equal(faults[0].navigation.codeType, 'string'); assert.equal(faults[0].navigation.errorNumber, null);
+  assert.doesNotMatch(JSON.stringify(faults), /private-canary/);
+});
+
+test('a reused main window keeps the failed navigation request before a newer activation', async () => {
+  const main = await mainProcess();
+  main.deliver({type: 'state', generation: 1, url: hub});
+  const reject = main.windows[0].failNavigationError;
+  main.deliver({type: 'foreground', head: {revision: 1, target: 'main'}});
+  reject(Object.assign(new Error('private-canary'), {code: 'ERR_FAILED', errno: -2}));
+  await new Promise(setImmediate);
+  const faults = main.traffic.filter(m => m.type === 'fault');
+  assert.equal(faults.length, 1);
+  assert.equal(faults[0].navigation.request, 0);
+  assert.equal(faults[0].navigation.currentRequest, 1);
 });

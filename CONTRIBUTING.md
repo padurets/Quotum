@@ -199,6 +199,10 @@ policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-i
 is measured, its board appears, the window opens twice and the app quits. Linux checks
 need `xvfb`, `xauth` and Python 3; `desktop/smoke/monitor.py` adopts surviving
 children and audits their exits, alongside Electron's live child-failure reports.
+Navigation failures record the window instance, original and current activation request,
+navigation sequence and hub generation, native error number, code availability and
+presentation state before smoke exits. They never record the destination, entry key or
+raw error message.
 This uses no ptrace and keeps Chromium's sandbox intact. The installed-package checks also start the controller before a stand-in tray watcher
 (`desktop/smoke/tray.sh`, Python 3 with PyGObject) to cover early start at login.
 The panel check also queues three activations while its own controller is briefly paused,
