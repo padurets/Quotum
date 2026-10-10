@@ -1,10 +1,21 @@
 import type {FastifyInstance, FastifyReply, FastifyRequest} from 'fastify';
 import type {Guards, Hub} from '../api.js';
 import {clients} from '../domain/clients.js';
+import type {LinkInput} from '../domain/links.js';
+
+const basis = (value: LinkInput) => JSON.stringify([value.deviceId, value.clientId, value.route?.class ?? null, value.route?.provider ?? null, value.sourceId, value.from, value.to]);
 
 /** Link management is always scoped to the authenticated owner. */
 export function linkRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   const store = hub.store.links;
+  app.get('/api/links/suggestions', (request, reply) => {
+    const user = guards.user(request, reply); if (!user) return reply;
+    return {revision: store.revision(user.id), suggestions: hub.ingest.live.suggestions(user.id, Date.now())};
+  });
+  app.get('/api/links/attribution', (request, reply) => {
+    const user = guards.user(request, reply); if (!user) return reply;
+    return {sessions: hub.ingest.live.attributions(user.id, Date.now())};
+  });
   app.get('/api/links', (request, reply) => {
     const user = guards.user(request, reply); if (!user) return reply;
     return {revision: store.revision(user.id), links: store.list(user.id).map(link => ({...link, active: hub.store.holds(user.id, link.sourceId)})),
@@ -16,7 +27,11 @@ export function linkRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   const command = (request: FastifyRequest, reply: FastifyReply, operation: 'create' | 'correct' | 'change' | 'delete', id: string | null) => {
     const user = guards.user(request, reply); if (!user) return reply;
     try {
-      const result = store.mutate(user.id, operation, id, request.body, Date.now());
+      const body = request.body as (LinkInput & {suggestion?: LinkInput}) | null;
+      const fresh = operation === 'create' && body?.suggestion !== undefined ? () => {
+        if (!body.suggestion || basis(body) !== basis(body.suggestion) || !hub.ingest.live.suggestions(user.id, Date.now()).some(candidate => basis(candidate) === basis(body.suggestion!))) throw new Error('suggestion_changed');
+      } : undefined;
+      const result = store.mutate(user.id, operation, id, request.body, Date.now(), fresh);
       return reply.code(result.status).send(result.body);
     } catch (error) {
       const code = error instanceof Error ? error.message : '';

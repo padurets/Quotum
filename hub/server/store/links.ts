@@ -37,7 +37,7 @@ export class LinkStore {
     }
     const disabled = new Set((this.db.prepare('SELECT p.device_id,p.client FROM device_tracking_policy p JOIN devices d ON d.id=p.device_id WHERE d.user_id IN (SELECT value FROM json_each(?)) AND p.route_enabled=0').all(people) as {device_id: string; client: string}[]).map(r => JSON.stringify([r.device_id, r.client])));
     const empty: ClientLink[] = [], noHoldings = new Map<string, string>();
-    return (owner, device, client) => ({links: links.get(owner)?.get(client) ?? empty, held: held.get(owner) ?? noHoldings, routeEnabled: !disabled.has(JSON.stringify([device, client]))});
+    return (owner, device, client) => ({links: links.get(owner)?.get(client) ?? empty, held: held.get(owner) ?? noHoldings, routeEnabled: !disabled.has(JSON.stringify([device, '*'])) && !disabled.has(JSON.stringify([device, client]))});
   }
   private own(owner: string, id: string): ClientLink {
     const row = this.db.prepare('SELECT * FROM client_links WHERE user_id=? AND id=?').get(owner, id) as Row | undefined;

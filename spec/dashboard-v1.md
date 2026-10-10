@@ -1253,6 +1253,16 @@ With every collector disabled and tracking enabled, the agent state is `tracking
 Periods use safe nonnegative Unix milliseconds and are half-open `[from,to)`.
 Provider conditions require a class. Dropping a holding retains its rules.
 
+`GET /api/links/suggestions` returns `{revision,suggestions}` without writing. Each
+suggestion is a device-specific API/provider rule for the unique held source, clipped
+to the free exact-tuple gap containing now and the earliest live session start.
+Both period bounds are shown before acceptance. A create with `suggestion` containing
+that same rule recomputes its basis before writing; a changed basis returns 409
+`suggestion_changed`. Successful receipts replay before this freshness check.
+`GET /api/links/attribution` returns only the owner's current sessions and detailed
+attribution evidence. Host and custom gateway hints are confined to this endpoint;
+disabled route policy suppresses both route conditions and host disclosure.
+
 `POST /api/links` creates a rule (201), `POST /api/links/:id` corrects it,
 `POST /api/links/:id/change` changes only its source from `at` with `newSourceId`, and
 `DELETE /api/links/:id` removes it (200). Create/correction supply all rule fields;

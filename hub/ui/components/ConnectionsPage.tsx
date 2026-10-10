@@ -13,6 +13,7 @@ import {logoOf} from './logos';
 
 import {KeyForm, RecoveredAddition, DemoNotice} from './ConnectionForms';
 import {WidgetAdd} from './WidgetAdd';
+import {ClientLinks} from './ClientLinks';
 
 function RecentAdditions({boardId, onRestore}: {boardId?: string; onRestore: (operation: Operation) => void}) {
   const [operations, setOperations] = useState<Operation[]>([]),
@@ -171,6 +172,7 @@ export function ConnectionsPage({
         </button>
       </div>
       {demo && <DemoNotice />}
+      <ClientLinks userId={userId} />
       <p className="dialog-text">{t('settings.connectionScope')}</p>
       <div className="settings-section-head">
         <small className="drawer-note">{readAt && t('settings.checkedAt', {time: stamp(readAt)})}</small>

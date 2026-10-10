@@ -1201,3 +1201,5 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
   .currency-details .currency-history { grid-template-columns: minmax(0, 1fr); }
   .currency-history .settings-item-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 4px; }
 }
+
+.multiline { white-space: pre-line; }

@@ -64,6 +64,7 @@ export type CadenceWhy = 'low' | 'inUse' | 'changed' | 'idle' | 'reset' | 'fixed
 /** A coding agent running on a machine, spending the subscription of its card. */
 export type LiveSession = {
   clientId?: string;
+  route?: {class: 'subscription' | 'api' | 'unknown'; provider: string | null};
   device: {id: string; name: string};
   /** A terminal; an editor or the provider's app, which run one client per window. */
   origin: 'terminal' | 'editor' | 'app';

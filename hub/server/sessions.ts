@@ -1,4 +1,4 @@
-import {safeRoute, matches, splitLinks, type LinkRoute} from './domain/links.js';
+import {safeRoute, matches, splitLinks, suggestion, type LinkRoute, type LinkInput, type Attribution} from './domain/links.js';
 import type {SessionEvidence} from './domain/sessionEvidence.js';
 import type {Origin} from './domain/ingest.js';
 import type {Store, WorkKey} from './store/store.js';
@@ -199,6 +199,36 @@ export class Sessions {
     return [...this.machines].filter(([, machine]) => machine.user === user && now-machine.at <= KEEP_MS)
       .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
       .map(([device]) => ({device, sessions: this.deviceSessions(user, device, now)}));
+  }
+
+  suggestions(user: string, now: number): LinkInput[] {
+    const context = this.store.links.batch([user]), found = new Map<string, LinkInput>();
+    for (const [device, machine] of this.machines) {
+      if (machine.user !== user || now - machine.at > KEEP_MS) continue;
+      for (const s of machine.sessions) {
+        const input = {...s, clientId: s.clientId, deviceId: device};
+        const candidate = suggestion(input, context(user, device, s.clientId), now, s.startedAt);
+        if (!candidate) continue;
+        const key = JSON.stringify([device, s.clientId, candidate.route]);
+        const old = found.get(key); if (old) old.from = Math.min(old.from, candidate.from); else found.set(key, candidate);
+      }
+    }
+    return [...found.values()];
+  }
+
+  /** Detailed evidence has its own owner endpoint, never a shared session field. */
+  attributions(user: string, now: number): (Attribution & {deviceId: string; clientId: string; startedAt: number; project: string | null; accountSourceId: string | null; host?: string})[] {
+    const context = this.store.links.batch([user]), result = [];
+    for (const [deviceId, machine] of this.machines) {
+      if (machine.user !== user || now - machine.at > KEEP_MS) continue;
+      const keys = keysOf(machine), resolved = this.store.resolveSessions(user, deviceId, keys, now);
+      for (let i = 0; i < machine.sessions.length; i++) {
+        const s = machine.sessions[i], policy = context(user, deviceId, s.clientId);
+        result.push({...resolved[i], deviceId, clientId: s.clientId, startedAt: s.startedAt, project: s.project, accountSourceId: s.source && policy.held.has(s.source) ? s.source : null,
+          ...(policy.routeEnabled && s.route?.host ? {host: s.route.host} : {})});
+      }
+    }
+    return result;
   }
 
   devicesChangesAt(user: string, now: number): number | null {

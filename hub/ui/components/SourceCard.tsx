@@ -1,3 +1,4 @@
+import {openClientLinks} from './ClientLinks';
 import {budgetVisible, subscriptionFundsVisible} from '../lib/money';
 import {memo, useEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import type {Card, Win} from '../lib/types';
@@ -268,6 +269,7 @@ function Frequency({source, board}: {source: Card; board: string}) {
 
 /** A card's menu: holders choose frequency, readers refresh, and the board's owner arranges its view. */
 function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Card; title: string; arrange: Arrange; boardId: string; takeOff: boolean}) {
+  const mine = useMine(source.id);
   const [error, setError] = useState<unknown>(null);
   const [open, setOpen] = useState(false);
   const hidden = new Set(arrange.view.windows);
@@ -328,6 +330,7 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
         </div>
       )}
       <Frequency key={`${boardId}:${source.id}`} source={source} board={boardId} />
+      {mine && <button className="popover-row" onClick={() => {setOpen(false); openClientLinks(undefined, source.id);}}>{t('links.manage')}</button>}
       <div className={owner ? 'popover-section' : undefined}>
         <RefreshAction id={source.id} board={boardId} onAccepted={() => setOpen(false)} />
         {owner && <HideRow section={false} onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('widget.hide')}</HideRow>}
