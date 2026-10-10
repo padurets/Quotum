@@ -129,7 +129,6 @@ export class Ingest {
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
           if (this.cadence.failed(key, device.id, failure.error, at)) {
             this.duty.failed(key, device.id, at);
-            if (this.duty.holder(key) === device.id) this.duty.schedule(key, null);
             this.cadence.refreshResult(key, device.id, at, false, now);
           }
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);

@@ -321,6 +321,14 @@ keeps asking: the hub waits them out, longer each time in a row (15 minutes for
 a healthy device takes it as before. Such a device on duty, or with no other device on
 duty, is answered `onDuty: true` until its pause is over.
 
+A fresh accepted failure answering the current holder's latest command releases
+its starter, measurement and waiting lease protection. The device's own failure
+pause remains. A healthy device can take over on its next eligible check-in; Auto
+asks it to measure immediately, while a fixed frequency keeps its schedule from
+the last successful observation and respects the new device's minimum interval.
+Older, duplicate and off-duty failures cannot release a newer command. This change
+does not alter the validity of retained measurements or send new identity fields.
+
 A reader may ask the hub for fresh limits from the subscription's card. The next
 permitted check-in of its current paced holder then asks for a measurement using the
 same fields above. This never bypasses the one-minute minimum, the device's

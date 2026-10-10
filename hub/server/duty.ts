@@ -91,10 +91,10 @@ export class Duty {
     holder.scheduledUntil = extend || until === null ? until : holder.scheduledUntil == null ? null : Math.min(holder.scheduledUntil, until);
   }
 
-  /** The holder failed to measure: done measuring, it keeps duty only as long as its last measurement. */
+  /** A failure answering the holder's latest command releases all duty protection. */
   failed(subscription: string, device: string, at: number) {
     const holder = this.holders.get(subscription);
-    if (holder?.device === device && answers(holder, at)) this.holders.set(subscription, {...holder, askedAt: null, answering: true, scheduledUntil: null});
+    if (holder?.device === device && answers(holder, at)) this.holders.set(subscription, {...holder, until: 0, askedAt: null, answering: true, scheduledUntil: null});
   }
 
   /** A late result answers its command without renewing or shortening the lease. */

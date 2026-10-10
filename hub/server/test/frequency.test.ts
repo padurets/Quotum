@@ -54,6 +54,31 @@ function hub(t: TestContext) {
   return {store, directory, user, duty, cadence, ingest, credential, agent, ask, deliver, source, frequency, device, parts};
 }
 
+test('failed handover retains fixed plans from successful data and each device minimum', t => {
+  for (const interval of [MIN, 2 * MIN, 5 * MIN, 15 * MIN]) for (const minimum of [MIN, 30 * MIN]) {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0, {used: 91});
+    h.frequency(interval);
+    h.ask(0, minimum, 'healthy');
+    const baseline = 10 * MIN;
+    h.deliver(baseline, {used: 91});
+    h.ask(baseline + 1000, MIN, 'broken', true);
+    const holder = h.duty.holder(ACCOUNT);
+    // Refresh supplies a command even when the fixed ordinary due is later.
+    h.ingest.requestRefresh(h.source(), T + baseline + 2000);
+    assert.equal(h.ask(baseline + MIN, MIN, 'broken', true).measure, true);
+    h.deliver(baseline + MIN + 5000, {name: 'broken', failure: 'unsupported'});
+    const at = baseline + MIN + 6000;
+    const answer = h.ask(at, minimum, 'healthy');
+    assert.equal(answer.onDuty, true);
+    assert.notEqual(h.duty.holder(ACCOUNT), holder);
+    const due = baseline + Math.max(interval, minimum);
+    assert.equal(answer.measure, at >= due);
+    if (at < due) assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, T + at).value?.next, T + due);
+  }
+});
+
 test('migration defaults old sources to Auto; every choice survives reopening and new sources still insert', t => {
   const folder = mkdtempSync(path.join(tmpdir(), 'quotum-frequency-'));
   t.after(() => rmSync(folder, {recursive: true}));
@@ -388,8 +413,8 @@ test('a bounded delivery restores waiting protection after its fresh word, inclu
   h.ask(MIN);
   h.frequency(900_000, MIN + 15_000);
   h.deliver(3 * MIN + 1, {failure: 'timeout'});
-  assert.equal(h.ingest.refresh(h.source(), T + 3 * MIN + 1).value.unavailable, 'paused');
-  assert.equal(h.duty.until(ACCOUNT), T + 348_000, 'a fresh failure still grants no waiting protection');
+  assert.equal(h.ingest.refresh(h.source(), T + 3 * MIN + 1).value.unavailable, 'no_device');
+  assert.equal(h.duty.until(ACCOUNT), 0, 'a fresh answering failure releases data and waiting protection');
 });
 
 test('a failed first fixed measurement retries after its pause and minimum without a successful baseline', t => {
