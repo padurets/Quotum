@@ -110,12 +110,28 @@ export function edgeFit<T>(inside: number, past: T[], rows: number): {shown: T[]
 }
 
 type LabelBox = {offset: number; width: number};
-/** Repeated captions reuse glyph bounds without flushing layout during a fold. */
+/** Repeated captions reuse native bounds and shortening measurements across mounts. */
 class LabelBoxes {
   private fonts = -1;
+  private scale = NaN;
   private readonly saved = new Map<string, LabelBox>();
-  measure(text: string, end: boolean, forecast: boolean, fonts: number, read: () => LabelBox | null): LabelBox | null {
-    if (this.fonts !== fonts) {this.fonts = fonts; this.saved.clear();}
+  private readonly fits = new Map<string, number | null>();
+  private loaded(fonts: number, scale: number) {
+    if (this.fonts !== fonts || this.scale !== scale) {this.fonts = fonts; this.scale = scale; this.saved.clear(); this.fits.clear();}
+  }
+  fit(text: string, name: string, room: number, forecast: boolean, fonts: number, scale: number, read: () => number | null | undefined): number | null | undefined {
+    this.loaded(fonts, scale);
+    const key = JSON.stringify([text, name, room, forecast]);
+    if (this.fits.has(key)) return this.fits.get(key);
+    const value = read();
+    if (value !== undefined) {
+      if (this.fits.size >= 256) this.fits.delete(this.fits.keys().next().value!);
+      this.fits.set(key, value);
+    }
+    return value;
+  }
+  measure(text: string, end: boolean, forecast: boolean, fonts: number, scale: number, read: () => LabelBox | null): LabelBox | null {
+    this.loaded(fonts, scale);
     const key = JSON.stringify([text, end, forecast]);
     const known = this.saved.get(key);
     if (known) return known;
@@ -141,6 +157,7 @@ function MarkerLabel({
   children,
   shorten,
   fonts,
+  scale,
   boxes,
   onTip,
 }: {
@@ -153,6 +170,8 @@ function MarkerLabel({
   shorten?: {name: string; say: (name: string) => string; room: number};
   /** Counts the web fonts loaded: what was measured before one came is measured again. */
   fonts: number;
+  /** Native glyph metrics also follow the SVG viewport scale. */
+  scale: number;
   boxes: LabelBoxes;
   onTip?: (shown: boolean, tapped: boolean) => void;
 }) {
@@ -173,33 +192,37 @@ function MarkerLabel({
   useLayoutEffect(() => {
     const element = whole.current;
     if (!shorten || !element) return;
-    let found: number | null = null;
-    try {
-      const start = children.indexOf(shorten.name);
-      const length = element.getSubStringLength(0, children.length);
-      if (length > shorten.room && start >= 0 && element.getNumberOfChars() === children.length + 1) {
-        let at = start;
-        const widths = graphemes(shorten.name).map(letter => {
-          const width = element.getSubStringLength(at, letter.length);
-          at += letter.length;
-          return width;
-        });
-        const name = widths.reduce((sum, width) => sum + width, 0);
-        found = fitting(widths, length - name, element.getSubStringLength(children.length, 1), shorten.room);
+    const measured = boxes.fit(children, shorten.name, shorten.room, !!color, fonts, scale, () => {
+      let found: number | null = null;
+      try {
+        const start = children.indexOf(shorten.name);
+        const length = element.getSubStringLength(0, children.length);
+        if (length > shorten.room && start >= 0 && element.getNumberOfChars() === children.length + 1) {
+          let at = start;
+          const widths = graphemes(shorten.name).map(letter => {
+            const width = element.getSubStringLength(at, letter.length);
+            at += letter.length;
+            return width;
+          });
+          const name = widths.reduce((sum, width) => sum + width, 0);
+          found = fitting(widths, length - name, element.getSubStringLength(children.length, 1), shorten.room);
+        }
+      } catch {
+        return undefined;
       }
-    } catch {
-      found = null;
-    }
+      return found;
+    });
+    const found = measured ?? null;
     setFit(fit => (fit?.input === input && fit.keep === found ? fit : {input, keep: found}));
-  }, [input]);
+  }, [input, shorten?.name, !!color, scale]);
   useLayoutEffect(() => {
-    const measured = boxes.measure(shown, end, !!color, fonts, () => {
+    const measured = boxes.measure(shown, end, !!color, fonts, scale, () => {
       const value = text.current?.getBBox();
       return value ? {offset: value.x - x, width: value.width} : null;
     });
     if (measured) setBox(box => box?.offset === measured.offset && box.width === measured.width ? box : measured);
     // The glyph bounds move with their anchor; only their text or font needs measuring.
-  }, [end, shown, fonts, !!color]);
+  }, [end, shown, fonts, !!color, scale]);
   return (
     <g
       className={`marker-label ${onTip ? 'is-pointed' : ''} ${color ? 'is-forecast' : ''}`}
@@ -235,6 +258,7 @@ const EdgeLabel = memo(function EdgeLabel({
   y,
   room,
   fonts,
+  scale,
   boxes,
   onEdge,
 }: {
@@ -248,6 +272,8 @@ const EdgeLabel = memo(function EdgeLabel({
   y: number;
   room: number;
   fonts: number;
+  /** Native glyph metrics also follow the SVG viewport scale. */
+  scale: number;
   boxes: LabelBoxes;
   onEdge: (edge: {key: string; tapped: boolean} | null) => void;
 }) {
@@ -262,7 +288,7 @@ const EdgeLabel = memo(function EdgeLabel({
         y={y}
         end
         color={color}
-        fonts={fonts} boxes={boxes}
+        fonts={fonts} scale={scale} boxes={boxes}
         // It ends at the plot's right edge, and its backing, 6 wider than the text, starts within the plot.
         shorten={runsOut ? {name, say, room} : undefined}
         onTip={(shown, tapped) => onEdge(shown ? {key: id, tapped} : null)}
@@ -684,7 +710,7 @@ export const Chart = memo(function Chart({
           const nearRight = mx > width - right - 150;
           const lx = nearRight ? mx - 6 : mx + 6;
           return (
-            <MarkerLabel key={marker.key} x={lx} y={stackRows.get(marker.key) ?? labelY(lx, nearRight)} end={nearRight} fonts={fonts} boxes={boxes}>
+            <MarkerLabel key={marker.key} x={lx} y={stackRows.get(marker.key) ?? labelY(lx, nearRight)} end={nearRight} fonts={fonts} scale={scale} boxes={boxes}>
               {marker.label}
             </MarkerLabel>
           );
@@ -710,7 +736,7 @@ export const Chart = memo(function Chart({
                 x={width - right}
                 y={stackRows.get(label.key)!}
                 room={width - left - right - 6}
-                fonts={fonts} boxes={boxes}
+                fonts={fonts} scale={scale} boxes={boxes}
                 onEdge={panning ? () => {} : setEdge}
               />
             ))}
@@ -719,7 +745,7 @@ export const Chart = memo(function Chart({
                 x={width - right}
                 y={stackRows.get(MORE)!}
                 end
-                fonts={fonts} boxes={boxes}
+                fonts={fonts} scale={scale} boxes={boxes}
                 onTip={(shown, tapped) => !panning && setEdge(shown ? {key: MORE, tapped} : null)}
               >
                 {t('chart.more', {count: more.length})}

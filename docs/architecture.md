@@ -1320,8 +1320,10 @@ the axes and readouts stay in place. The surfaces keep their compositor hints be
 gestures, avoiding repeated promotion and rasterization on the first input. Label
 backgrounds retain their measured offsets when only their anchor moves. Each chart
 reuses glyph bounds for matching text, anchors and font weights in its bounded caption
-cache; loading a web font clears those measurements. Its container owns pointer capture and
-wheel input, projected through its fixed SVG viewport, including labels in another
+cache. Shortening a name also reuses its measured fit for the same text, available
+width and font weight. Loading a web font or changing the SVG viewport scale clears
+both sets of measurements. Its container
+owns pointer capture and wheel input, projected through its fixed SVG viewport, including labels in another
 surface. Surface geometry and painters become visible only after their DOM commits.
 The future moves with the strip during the gesture, then folds away over 160 ms on
 release in the past, or unfolds on returning to live. Reduced motion skips this final
