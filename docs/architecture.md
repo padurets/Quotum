@@ -1195,10 +1195,13 @@ A card's dot by the logo tells how its measurements go: its colour, and in its t
 when it was measured and, while the hub sets the pace, when the next measurement comes
 and why, each a line of its own.
 A board has one grid for source cards, agent sessions, activity, quota history and
-table, and budget history and table. The period controls stand above it. Quota window
-kind, budget series and mode, and the shared chart horizon live in a filter popover;
-a table keeps its family controls when its chart is hidden. Display settings remain
-with their widget. Each
+table, and budget history and table. A compact glass bar above it keeps the period,
+quota window kind and shared chart horizon available during scrolling. The quota kind
+is also available in each quota widget's settings. The budget chart and table share
+one series selection, editable from either widget even when the other is hidden.
+Balance/spending belongs to the budget chart's settings; subscription funds have their
+own selection in their chart. Table columns remain owner settings, while shared filters
+are available to every reader. Each
 analytics panel uses the same heading and reader-error component. The selected
 period appears once in the shared analytics controls. While a different range is loading
 or has failed, retained results name the interval they actually cover; this status
@@ -1307,9 +1310,10 @@ What
 is only about how one person looks (the board's period and window type, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents table's sort order, the chosen board and language) stays in their browser.
-The controls above the mixed widget grid own the common period, quota kind, monetary
-selection and forecast horizon. They remain available when charts are hidden. Each
-widget keeps its display settings, such as columns, stacking and legend choices.
+The controls above the mixed widget grid own the common period, quota kind and forecast
+horizon. Shared quota and budget filters are also accessible from the relevant widgets,
+including a table whose chart is hidden. Each widget keeps its display settings, such as
+columns, balance/spending mode, stacking and legend choices.
 A fixed accounting interval is exactly `[from,to)`: card values use the latest retained
 observation strictly before `to`, with validity evaluated at `to`. Missing predecessors
 stay unknown. Native membership follows the last retained nonempty measurement batch;

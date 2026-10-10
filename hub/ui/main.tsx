@@ -260,7 +260,7 @@ function Dashboard({
           </section>
         ) : state === 'widgets' || shownCards.length > 0 || shownPanels.length > 0 ? (
           <>
-            <AnalyticsHead arrange={arrange} widgets={shownWidgets.map(widget=>widget.id)} />
+            <AnalyticsHead widgets={shownWidgets.map(widget=>widget.id)} />
             {grid(shownWidgets)}
           </>
         ) : (

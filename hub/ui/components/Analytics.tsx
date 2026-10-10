@@ -4,22 +4,20 @@ import {HORIZONS, setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
 import {goTo, setTimeRange, timeRangeLabel, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {hubNow, useClock} from '../lib/clock';
-import {useBudgetHistory, useHistoryBegins} from '../lib/history';
-import {useNamed} from '../lib/board';
-import type {Arrange} from '../lib/view';
-import {QUOTA_WIDGETS, BUDGET_WIDGETS, ACTIVITY, QUOTA_HISTORY, BUDGET_HISTORY, SUBSCRIPTION_FUNDS} from '../../server/domain/widgets';
+import {useHistoryBegins} from '../lib/history';
+import {QUOTA_WIDGETS, ACTIVITY, QUOTA_HISTORY, BUDGET_HISTORY, SUBSCRIPTION_FUNDS} from '../../server/domain/widgets';
 import {t, useLocale} from '../i18n';
 import {pan} from '../lib/pan';
 import {Segmented} from './Kit';
-import {Popover, SlidersIcon} from './Popover';
-import {MoneySettings,FundsSettings} from './MoneySettings';
+import {Popover} from './Popover';
 
 /** Weekly or 5-hour windows. */
-function KindSwitch({value, onChange}: {value: string; onChange: (kind: string) => void}) {
+function KindSwitch() {
+  const {kind} = usePrefs();
   return (
     <Segmented
-      value={value}
-      onChange={onChange}
+      value={kind}
+      onChange={next => setPrefs({kind: next as Kind})}
       options={[
         ['weekly', t('history.weekly')],
         ['session', t('history.session')],
@@ -27,6 +25,14 @@ function KindSwitch({value, onChange}: {value: string; onChange: (kind: string) 
       label={t('history.kind')}
     />
   );
+}
+
+/** The same filter is available beside either member of the quota pair. */
+export function QuotaSettings() {
+  return <div className="popover-section">
+    <div className="popover-title">{t('history.kind')}</div>
+    <div className="popover-pad"><KindSwitch /></div>
+  </div>;
 }
 
 const Arrow = ({back}: {back: boolean}) => (
@@ -54,7 +60,7 @@ function PeriodName({selected, range}: {selected: TimeRange | null; range: strin
 }
 
 /**
- * The period of the analytics (agent activity, the chart and the table): one of a list,
+ * The viewing period of the whole board: one of a list,
  * ending now, or a time range in the past, dragged across a chart or stepped back to with
  * ‹. ‹ and › move either by half its length; › up to now brings the chosen period back,
  * as clearing a range does.
@@ -151,36 +157,23 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
   );
 }
 
-function BudgetFilters({arrange}: {arrange: Arrange}) {
-  const prefs = usePrefs(), sources = useNamed(arrange.view.names,'budget'), {history} = useBudgetHistory();
-  return <>
-    <div className="popover-title">{t('widgets.budgetHistory')}</div>
-    <div className="popover-pad"><Segmented value={prefs.money.view} onChange={view=>setPrefs({money:{...prefs.money,view}})} options={[["balance",t('money.balance')],["spending",t('money.spending')]]} label={t('money.value')}/></div>
-    <MoneySettings sources={sources} hidden={arrange.view.hidden} series={history?.meterSeries ?? []}/>
-  </>;
-}
-
-function FundsFilters({arrange}: {arrange:Arrange}) {
-  const sources=useNamed(arrange.view.names,'funds');
-  return <><div className="popover-title">{t('widgets.subscriptionFunds')}</div><FundsSettings sources={sources} hidden={arrange.view.hidden}/></>;
-}
-
-/** Shared filters stay accessible when either member of their widget pair is hidden. */
-export function AnalyticsHead({arrange, widgets}: {arrange: Arrange; widgets: string[]}) {
-  const prefs=usePrefs(),{kind}=prefs, [open,setOpen] = useState(false);
+/** Only controls shared across widgets belong above the board. */
+export function AnalyticsHead({widgets}: {widgets: string[]}) {
+  const {horizon} = usePrefs();
   const historyStart = useHistoryBegins();
-  const quota = QUOTA_WIDGETS.some(id=>widgets.includes(id)), budget = BUDGET_WIDGETS.some(id=>widgets.includes(id));
-  const funds=widgets.includes(SUBSCRIPTION_FUNDS);
+  const quota = QUOTA_WIDGETS.some(id=>widgets.includes(id));
   const charts = [ACTIVITY,QUOTA_HISTORY,BUDGET_HISTORY,SUBSCRIPTION_FUNDS].some(id=>widgets.includes(id));
+  const horizonName = (value: typeof horizon) => value === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(value)});
   return (
     <div className="analytics-head">
       <PeriodSwitch historyStart={historyStart} />
       <div className="controls">
-        {(quota || budget || funds || charts) && <Popover label={t('board.filters')} icon={<SlidersIcon/>} open={open} onOpenChange={setOpen}>
-          {quota && <div className="popover-section"><div className="popover-title">{t('history.kind')}</div><div className="popover-pad"><KindSwitch value={kind} onChange={next => setPrefs({kind:next as Kind})}/></div></div>}
-          {budget && open && <div className="popover-section"><BudgetFilters arrange={arrange}/></div>}
-          {funds && open && <div className="popover-section"><FundsFilters arrange={arrange}/></div>}
-          {(quota || budget || funds || charts) && <div className="popover-section"><div className="popover-title">{t('history.horizon')}</div><div className="popover-pad"><Segmented value={prefs.horizon} onChange={horizon=>setPrefs({horizon})} options={HORIZONS.map(h=>[h,h==='auto'?t('history.horizonAuto'):t('history.daysShort',{count:parseInt(h)})])} label={t('history.horizon')}/></div></div>}
+        {quota && <KindSwitch />}
+        {charts && <Popover label={t('history.horizon')} trigger={<span className="period-name">{t('history.horizon')}: {horizonName(horizon)}<ChevronIcon /></span>}>
+          <div className="popover-section">
+            <div className="popover-title">{t('history.horizon')}</div>
+            <div className="popover-pad"><Segmented value={horizon} onChange={horizon => setPrefs({horizon})} options={HORIZONS.map(h => [h, horizonName(h)])} label={t('history.horizon')} /></div>
+          </div>
         </Popover>}
       </div>
     </div>

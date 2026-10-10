@@ -1,4 +1,5 @@
 import {AnalyticsPanel, AnalyticsNote, SeriesLegendItem} from './AnalyticsPanel';
+import {QuotaSettings} from './Analytics';
 import {memo, useLayoutEffect, useRef} from 'react';
 import {earliest, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
@@ -27,15 +28,14 @@ import {historyProjection, type ProjectionHints} from '../lib/historyProjection'
 
 /**
  * The chart's own settings: whether it draws the plan and the forecast (where either has
- * something to draw), how far it looks ahead, and (for the board's owner) hiding it.
- * Its note says the look ahead needs the plan or the forecast, where a period ending now
- * has neither; a range in the past has no future at all.
+ * something to draw), the shared quota kind, and (for the board's owner) hiding it.
  */
 function HistorySettings({arrange, planAvailable, forecastAvailable}: {arrange: Arrange; planAvailable: boolean; forecastAvailable: boolean}) {
   const {showPlan, showForecast} = usePrefs();
   return (
     <Popover label={t('history.settings')} icon={<SlidersIcon />}>
       <div className="popover-note">{t('chart.panHint')}</div>
+      <QuotaSettings />
       {(planAvailable || forecastAvailable) && (
         <div className="popover-section">
           <div className="popover-title">{t('history.show')}</div>

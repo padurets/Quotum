@@ -5,7 +5,7 @@ import {useMemo,useRef} from 'react';
 import {DEFAULT_CURRENCY,currencySymbol} from '../../server/domain/currency';
 import {useBoardId,useNamed,useServerView,useCurrencyContext} from '../lib/board';
 import {useBudgetHistory,useHistoryBegins,useBudgetHistoryPlot,budgetHistory,fundsHistory} from '../lib/history';
-import {usePrefs,setMuted} from '../lib/prefs';
+import {usePrefs,setPrefs,setMuted} from '../lib/prefs';
 import {moneySelection} from '../lib/moneySelection';
 import {money,capName,unitLabel} from '../lib/money';
 import {moneyIdentity,moneyPointAt,meterPointIn,moneyTotal,type MeterHistory} from '../lib/moneyView';
@@ -19,6 +19,8 @@ import {t,useLocale} from '../i18n';
 import {Chart} from './Chart';
 import {usePlot} from './sizing';
 import {Popover,SlidersIcon,HideRow} from './Popover';
+import {Segmented} from './Kit';
+import {MoneySettings,FundsSettings} from './MoneySettings';
 import {axisNavigation} from '../lib/axisNavigation';
 import {usePrepared} from './prepared';
 import {usePanning} from '../lib/pan';
@@ -104,6 +106,8 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const answered=history?.range===(selected?timeRangeKey(selected):prefs.range);
   return <AnalyticsPanel ref={panel} className={funds?'subscription-funds':'budget-history'} title={t(funds?'widgets.subscriptionFunds':'widgets.budgetHistory')} chart history={history} loading={loading} error={error} retry={reader.retry}
     settings={<Popover label={t('history.settings')} icon={<SlidersIcon/>}>
+      {!funds&&<div className="popover-pad"><Segmented value={settings.view} onChange={view=>setPrefs({money:{...prefs.money,view}})} options={[["balance",t('money.balance')],["spending",t('money.spending')]]} label={t('money.value')}/></div>}
+      {funds?<FundsSettings sources={sources} hidden={arrange.view.hidden}/>:<MoneySettings sources={sources} hidden={arrange.view.hidden} series={original}/>}
       {arrange.owner&&<HideRow onHide={()=>arrange.update(v=>withHidden(v,funds?SUBSCRIPTION_FUNDS:BUDGET_HISTORY,true))}>{t('widget.hide')}</HideRow>}
     </Popover>}>
     <SelectionNotice family={family}/>
@@ -145,7 +149,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
         cells:{value:cellOf(series,'value'),spending:cellOf(series,'spending'),topup:cellOf(series,'topup')}};
     })} name={t('money.key')} nameWidth={240} lead="value"/>,[history,unit,sources,context,arrange.view,locale]);
   return <AnalyticsPanel ref={panel} className="budget-table" title={t('widgets.budgetTable')} history={history} loading={loading} error={error} retry={budgetHistory.retry}
-    settings={<TableSettings arrange={arrange} widget={BUDGET_TABLE} columns={definitions} visible={columns.map(column=>column.id)}/>}
+    settings={<TableSettings arrange={arrange} widget={BUDGET_TABLE} columns={definitions} visible={columns.map(column=>column.id)}><MoneySettings sources={sources} hidden={arrange.view.hidden} series={entries}/></TableSettings>}
   >
     <SelectionNotice/>
     {!history&&!error?<p className="panel-loading">{t('history.loading')}</p>:!entries.length&&!error?<p className="panel-empty">{t(empty)}</p>:null}

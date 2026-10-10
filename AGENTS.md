@@ -192,7 +192,8 @@ and platform smoke checks still apply.
   spending, forecasts or agent-work attribution.
 - Devices and provider accounts connect through My connections. Account settings hold
   profile and app settings. A widget's display switches live in its own settings;
-  measurement tables do not change chart selections.
+  table column switches do not change chart selections. Shared quota and budget filters
+  remain accessible from either member of their chart/table pair.
 - **Budget widgets share one semantic presentation.** Dashboard and compact use the
   same budget view and renderer: one Available balance, supported scoped allowances
   separately, and balance composition in the existing disclosure. Accounting totals

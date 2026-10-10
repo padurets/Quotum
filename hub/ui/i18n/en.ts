@@ -582,7 +582,6 @@ export const en = {
   'period.limit': 'This period exceeds the history limit',
   'period.retry': 'Retry',
   'period.noEvidence': 'No retained measurement for this time',
-  'board.filters': 'Filters',
   'analytics.title': 'Analytics',
   'history.range': 'Period',
   'history.rangeClear': 'Clear the selection and go back to the period',

@@ -1,4 +1,5 @@
 import {AnalyticsPanel, AnalyticsNote} from './AnalyticsPanel';
+import {QuotaSettings} from './Analytics';
 import {AnalyticsTable, TableSettings, type Cell, type TimedCell} from './AnalyticsTable';
 import {memo, useMemo, useRef} from 'react';
 import {num, rateText} from '../lib/format';
@@ -185,7 +186,7 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
     [lines,columns,range,sources,forecasts,news,history,view,locale]);
   return (
     <AnalyticsPanel ref={panel} className="forecast" title={t('forecast.title')} history={history} loading={loading} error={error} retry={quotaHistory.retry}
-      settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}/>}
+      settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}><QuotaSettings /></TableSettings>}
     >
       {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}
       {!history ? error ? null : <div className="panel-loading">{t('history.loading')}</div>

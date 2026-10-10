@@ -577,7 +577,6 @@ export const ru = {
   'period.limit': 'Период превышает лимит истории',
   'period.retry': 'Повторить',
   'period.noEvidence': 'Нет сохранённого замера на этот момент',
-  'board.filters': 'Фильтры',
   'analytics.title': 'Аналитика',
   'history.range': 'Период',
   'history.rangeClear': 'Снять выделение и вернуться к периоду',
