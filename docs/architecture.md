@@ -1328,7 +1328,10 @@ transition. Release within eight source pixels of now restores the chosen live p
 One changed gesture creates one address entry; cancellation or returning to the exact
 origin creates none. A horizontal wheel ends after a 200 ms pause. Shift-wheel keeps
 one captured scale across pauses and ends when Shift is released, like a held drag;
-a pointer can continue that transaction. Neither adds inertia. Holding Shift hides
+a pointer can continue that transaction. A wheel restarting in the same event keeps
+the preceding gesture's committed range as its origin, even before that selection
+renders. Publishing it preserves the new gesture; a later navigation still cancels it.
+Neither adds inertia. Holding Shift hides
 chart and activity-legend readouts even before movement starts. The plot and legend
 keep their height through the gesture, final fold and resulting range; extra legend
 entries scroll inside. Ordinary range navigation or a layout/language change measures

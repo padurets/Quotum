@@ -192,7 +192,9 @@ export function useTimeAxis({
       motion.current = null;
       const visual = visualGeometry();
       freezeSlides();
-      captured.current = {token: frame.token, ...drawing.current, visual, pose: {...pose.current}, pixelsPerMs: (width - left - right) * scale / (visual.to - visual.from), navigation: wanted.current.navigation, innerWidth: width - left - right, cssScale: scale, left};
+      // A wheel can restart before React publishes the preceding selection.
+      // Its origin already carries that range; the committed callback may not.
+      captured.current = {token: frame.token, ...drawing.current, visual, pose: {...pose.current}, pixelsPerMs: (width - left - right) * scale / (visual.to - visual.from), navigation: navigationAt(wanted.current.navigation, frame.origin), innerWidth: width - left - right, cssScale: scale, left};
       element.dataset.panToken = String(frame.token);
       element.dataset.panOrigin = String(frame.originEnd);
       element.dataset.panScale = String((visual.to - visual.from) / ((width - left - right) * scale));

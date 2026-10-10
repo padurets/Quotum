@@ -9,6 +9,42 @@ import {axisPresentationFixture} from './axisPresentationFixture';
 
 const offsetIs = (transform: string, expected: number, message?: string) => assert.ok(Math.abs(Number(transform.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0) - expected) < 1e-9, message);
 
+test('a wheel restart retains the range committed by its preceding gesture before React publishes it', () => {
+  const H = 3_600_000, now = 100 * H;
+  const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('  const paint = () => {');
+  const paint = source.slice(start, source.indexOf('\n  useLayoutEffect(() => {\n    const unsubscribe', start));
+  for (const returning of [false, true]) {
+    let selected = returning ? {from: now - 2 * H, to: now - H} : null;
+    const initial = navigationAt({context: 'test', range: 'live'}, selected);
+    const base = selected ? {...selected, end: selected.to} : {from: now - H, to: now, end: now};
+    const f = axisPresentationFixture(base, initial), frames: (() => void)[] = [];
+    let commits = 0;
+    const pan = new Pan({now: () => now, commit: range => {selected = range; commits++;}, requestFrame: run => {frames.push(run); return run;}, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}});
+    const chart = {current: Symbol('chart')};
+    Object.assign(f.context, {pan, navigationAt, source: chart, folding: false,
+      panPointer: {current: null}, wheelBounds: {current: null}, freezeSlides: f.context.cancelSlides,
+      useLayoutEffect: (effect: () => void) => effect(),
+    });
+    Object.assign(f.context.svg.current.classList, {contains: (name: string) => f.classes.has(name), add: (name: string) => f.classes.add(name), remove: (name: string) => f.classes.delete(name)});
+    runInNewContext(ts.transpileModule(paint, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, f.context);
+    pan.subscribe(() => f.context.paintPan.current());
+    const input = (timeStamp: number, deltaX: number) => ({timeStamp, deltaX, deltaY: 0, deltaMode: 0, cancelable: true, shiftKey: false});
+    const begin = () => ({source: chart.current, selected, length: H, now, historyStart: 0, span: H, width: 270});
+    assert.equal(pan.wheel(begin, input(1_000, returning ? 270 : -24)), true);
+    frames.shift()!();
+    assert.equal(pan.wheel(begin, input(1_300, -12)), true);
+    assert.equal(commits, 1);
+    const token = pan.active(); assert.ok(token);
+    const target = selected ? {...selected, end: selected.to} : {from: now - H, to: now, end: now};
+    f.navigate(target, navigationAt(initial, selected));
+    assert.equal(pan.active(), token, 'publishing the preceding commit must not cancel the new wheel');
+    assert.equal(f.context.svg.current.dataset.panToken, String(token));
+    f.navigate(target, {...navigationAt(initial, selected), context: 'another board'});
+    assert.equal(pan.active(), null, 'a different navigation context still cancels the wheel');
+  }
+});
+
 test('the actual axis publishes committed HTML owners and applies the captured CSS scale', () => {
   const H = 3_600_000, now = 100 * H, selected = {from: now - 2 * H, to: now - H};
   const frames: (() => void)[] = [];
@@ -28,7 +64,7 @@ test('the actual axis publishes committed HTML owners and applies the captured C
   const panLayers = {current: [] as ReturnType<typeof makeLayer>[]};
   const captured = {current: null};
   const paintPan = {current: () => {}};
-  const context = {pan, source, svg, box, panLayers, captured, paintPan, wanted: {current: {navigation: {context: 'test', range: 'range'}}}, motion: {current: null}, finished: {current: null}, foldTicket: {current: 0},
+  const context = {pan, source, svg, box, panLayers, captured, paintPan, navigationAt, wanted: {current: {navigation: {context: 'test', range: 'range'}}}, motion: {current: null}, finished: {current: null}, foldTicket: {current: 0},
     drawing: {current: {...selected, end: selected.to}}, pose: {current: {a: 1, b: 0, offset: 0}}, finalFrame: {current: null}, folding: false,
     visualGeometry: () => ({...selected, end: selected.to}), freezeSlides: () => {}, setFolding: () => {}, cancelSlides: () => {},
     width: 600, left: 40, right: 20, scale: .5, panPointer: {current: null as {id: number} | null}, wheelBounds: {current: null},
