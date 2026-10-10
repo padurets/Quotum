@@ -1523,6 +1523,11 @@ controller accepts every foreground request into one current head: its revision,
 compact or none, and resolved anchor. Startup, second launches, tray actions and the
 compact panel's buttons share that order. Workers carry an immutable ticket and the
 initial handshake reads the current head, so an older worker cannot reclaim focus.
+If a main request reaches a browser already committed to its idle exit, the
+controller starts a replacement for that newer, unopened request after the old
+process and its private channel finish. Main surface acknowledgements remain
+recorded after closure, so closing a window does not replay its request. A fresh
+engine's initial request is never retried by this handoff.
 Cancellation is terminal for its revision; native callbacks also belong to one engine
 and presentation. Each GTK loader has its own native window and immutable ticket;
 its focus, Escape and close signals retain that ticket even when delivered late.
