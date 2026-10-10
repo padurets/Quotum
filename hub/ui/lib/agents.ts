@@ -22,6 +22,16 @@ export const since = (ms: number) => (ms < 60_000 ? t('agents.justNow') : durati
 /** When `since` reads otherwise: at a minute it stops being fresh, then as `duration` rounds. */
 export const sinceChangesAt = (from: number, now: number) => (now - from < 60_000 ? from + 60_000 : durationChangesAt(from, now, true));
 
+/** Retained work confirms current presence only through its own observation deadline. */
+export const sessionPresent = (session:LiveSession,now:number) => !session.ref || !!session.currentPresence&&now<session.currentPresence.through;
+export const sessionPresenceChangesAt = (session:LiveSession,now:number) => session.ref&&session.currentPresence&&now<session.currentPresence.through?session.currentPresence.through:null;
+
+export const runningFrom = (rows:readonly AgentRow[],now:number) => Math.min(...rows.map(({session})=>session.ref?sessionPresent(session,now)?session.currentPresence!.startedAt:Infinity:session.startedAt));
+export function runningChangesAt(rows:readonly AgentRow[],now:number){
+  const from=runningFrom(rows,now),next=Math.min(Number.isFinite(from)?sinceChangesAt(from,now):Infinity,...rows.map(({session})=>sessionPresenceChangesAt(session,now)??Infinity));
+  return Number.isFinite(next)?next:null;
+}
+
 /** A source of the board as the list of agents names it, with its agents. */
 export type AgentSource = {id: string; provider: string; title?: string; sessions: LiveSession[]};
 /** A running agent in the board's table, with the card whose subscription it spends. */
@@ -67,7 +77,7 @@ function groupOf(key: string, name: string | null, rows: AgentRow[]): AgentGroup
     working: rows.filter(row => row.session.working).length,
     workedMs: rows.some(row => row.session.workedMs === null) ? null : rows.reduce((sum, row) => sum + row.session.workedMs!, 0),
     lastWorkedAt: seen.length ? Math.max(...seen) : null,
-    startedAt: Math.min(...rows.map(row => row.session.startedAt)),
+    startedAt: Math.min(...rows.map(row => row.session.ref ? row.session.currentPresence?.startedAt ?? Infinity : row.session.startedAt)),
   };
 }
 
@@ -84,7 +94,7 @@ export function groupsOf(rows: AgentRow[], by: AgentsBy): AgentGroup[] {
       by === 'project' ? [JSON.stringify(row.session.project), row.session.project]
       : by === 'machine' ? [row.session.device.id, row.session.device.name]
       : by === 'subscription' ? [row.source?.id ?? 'unknown', agentSourceLabel(row.source)]
-      : [String(i), row.session.project];
+      : [row.session.ref ?? String(i), row.session.project];
     const group = groups.get(key);
     if (group) group.rows.push(row);
     else groups.set(key, {name, rows: [row]});
@@ -106,6 +116,7 @@ export function columnsOf(by: AgentsBy, inGroup = false): {name: Dimension; rest
 
 /** Working now, idle since known work, then never seen working; newest first in each group. */
 export function byActivity(a: LiveSession, b: LiveSession): number {
+  if(a.ref&&b.ref)return (b.lastWorkedAt??0)-(a.lastWorkedAt??0)||a.ref.localeCompare(b.ref);
   const group = (s: LiveSession) => (s.working ? 0 : s.lastWorkedAt != null ? 1 : 2);
   const time = (s: LiveSession) => (!s.working && s.lastWorkedAt != null ? s.lastWorkedAt : s.startedAt);
   return group(a) - group(b) || time(b) - time(a) || b.startedAt - a.startedAt ||
@@ -153,7 +164,7 @@ export const visibleAgentsSort = (sort: AgentsSort, columns: readonly AgentColum
   sort && columns.includes(sort.column) ? sort : null;
 
 /** How recently a group worked, the more the sooner: now while one of its agents works, else when one last did. */
-const recency = (group: AgentGroup) => (group.working ? Infinity : (group.lastWorkedAt ?? -Infinity));
+const recency = (group: AgentGroup) => (group.working&&!group.rows[0]?.session.ref ? Infinity : (group.lastWorkedAt ?? -Infinity));
 const compare = (a: number, b: number) => (a === b ? 0 : a < b ? -1 : 1);
 
 /**

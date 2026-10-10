@@ -6,11 +6,12 @@ import ts from 'typescript';
 import {preparationFixture} from './preparationFixture';
 import {INITIAL, reduce, type PageState, type Snapshot} from '../lib/board';
 import type {Device} from '../components/Machines';
+import * as view from '../../server/domain/view';
 
 type Node={type:unknown;props:Record<string,unknown>};
 const nodes=(value:unknown):Node[]=>Array.isArray(value)?value.flatMap(nodes):value&&typeof value==='object'&&'props' in value?[value as Node,...nodes((value as Node).props.children)]:[];
 const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
-const snapshot:Snapshot={board:{id:'b',name:'Board',personal:false},view:{version:2,layout:{columns:6,places:{}},names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{}},historyStart:0,sources:[],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
+const snapshot:Snapshot={board:{id:'b',name:'Board',personal:false},view:{version:3,layout:{columns:6,places:{}},names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{}},historyStart:0,sources:[],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
 const device:Device={id:'d',name:'Laptop',reported:'Laptop',os:'linux',arch:'x86_64',agent:'quotum/0.7.0',via:'token',lastSeenAt:1,sources:[],failures:[],clients:[{clientId:'opencode',version:'1.2.3',seenAt:1}],sessions:[]};
 const session={clientId:'opencode',device:{id:'d',name:'Laptop'},source:null,origin:'terminal' as const,project:'Current project',folder:null,startedAt:1,lastWorkedAt:null,working:false,workedMs:0};
 
@@ -32,6 +33,7 @@ function fixture(){
     if(name.endsWith('/quota'))return {errorText:()=>''};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key,rich:()=>''};
     if(name.endsWith('/clients'))return {clientName:(id:string)=>id};
+    if(name.endsWith('/view'))return view;
     if(name==='./Kit')return {Modal:modal,ErrorLine:errorLine};
     if(name==='./Connections')return {ConnectionRow:row};
     if(name==='./Time')return {Ago:{}};

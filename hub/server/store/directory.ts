@@ -2,7 +2,7 @@ import {analyticsResources} from './analyticsView.js';
 import {reconcileAnalytics} from '../domain/analyticsView.js';
 import type {DatabaseSync} from 'node:sqlite';
 import {newId, secretHash} from '../domain/auth.js';
-import {EMPTY_VIEW, type View} from '../domain/view.js';
+import {EMPTY_VIEW, encodeView, decodeView, sameView, viewBytes, VIEW_BODY_LIMIT, type View} from '../domain/view.js';
 import {tell, transaction, type Touches} from '../touches.js';
 
 export type User = {id: string; email: string; name: string; createdAt: number};
@@ -172,13 +172,17 @@ export class Directory {
   viewState(boardId: string): {view: View; revision: number} {
     return this.transaction(() => {
       const row = this.db.prepare('SELECT payload,revision,updated_by FROM views WHERE board_id=?').get(boardId) as {payload: string; revision: number; updated_by: string} | undefined;
-      const saved: View = row ? {...EMPTY_VIEW, ...JSON.parse(row.payload)} : EMPTY_VIEW;
-      const view = reconcileAnalytics(saved, analyticsResources(this.db, boardId));
+      const saved = row ? decodeView(JSON.parse(row.payload)) : EMPTY_VIEW;
+      if (!saved) throw new Error('Invalid stored board view');
+      const reconciled = reconcileAnalytics(saved, analyticsResources(this.db, boardId));
+      const view = reconciled === saved ? saved : decodeView(encodeView(reconciled));
+      if (!view) throw Object.assign(new Error('view_limit'), {statusCode:413});
       let revision = row?.revision ?? 0;
       if (view !== saved) {
+        if (viewBytes(view) > VIEW_BODY_LIMIT) throw Object.assign(new Error('view_limit'), {statusCode:413});
         if (!Number.isSafeInteger(++revision)) throw new Error('View revision exhausted');
         const owner = row?.updated_by ?? (this.db.prepare('SELECT created_by FROM boards WHERE id=?').get(boardId) as {created_by: string}).created_by;
-        this.db.prepare('INSERT INTO views(board_id,payload,updated_by,updated_at,revision) VALUES(?,?,?,?,?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision').run(boardId, JSON.stringify(view), owner, Date.now(), revision);
+        this.db.prepare('INSERT INTO views(board_id,payload,updated_by,updated_at,revision) VALUES(?,?,?,?,?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision').run(boardId, JSON.stringify(encodeView(view)), owner, Date.now(), revision);
         tell(this.observer, o => o.touchBoards([boardId]));
       }
       return {view, revision};
@@ -190,10 +194,11 @@ export class Directory {
   saveView(boardId: string, view: View, by: string, now: number) {
     return this.transaction(() => {
       const current = this.viewState(boardId);
-      if (JSON.stringify(current.view) === JSON.stringify(view)) return current.revision;
+      if (viewBytes(view) > VIEW_BODY_LIMIT || !decodeView(encodeView(view))) throw Object.assign(new Error('view_limit'), {statusCode:413});
+      if (sameView(current.view, view)) return current.revision;
       const revision = current.revision + 1;
       if (!Number.isSafeInteger(revision)) throw new Error('View revision exhausted');
-      this.db.prepare('INSERT INTO views (board_id, payload, updated_by, updated_at, revision) VALUES (?, ?, ?, ?, ?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload, updated_by=excluded.updated_by, updated_at=excluded.updated_at, revision=excluded.revision').run(boardId, JSON.stringify(view), by, now, revision);
+      this.db.prepare('INSERT INTO views (board_id, payload, updated_by, updated_at, revision) VALUES (?, ?, ?, ?, ?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload, updated_by=excluded.updated_by, updated_at=excluded.updated_at, revision=excluded.revision').run(boardId, JSON.stringify(encodeView(view)), by, now, revision);
       tell(this.observer, o => o.touchBoards([boardId]));
       return revision;
     });

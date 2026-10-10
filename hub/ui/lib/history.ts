@@ -1,13 +1,14 @@
-import {HistoryPool} from './historyPool';
+import {HistoryPool,historyPool} from './historyPool';
+import {boardPeriod,followPeriod} from './period';
 import type {HistoryScope} from '../../server/domain/history';
 import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVITY} from '../../server/domain/widgets';
-import {useSyncExternalStore} from 'react';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type HistoryReply, type Target} from '../../server/domain/history';
+import {useMemo,useRef,useSyncExternalStore} from 'react';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
 import {page, type PageEvent, type PageState} from './board';
-import {hubNow} from './clock';
+import {hubNow,useClock} from './clock';
 import {HistoryTile} from './historyTiles';
-import {ApiError, call, UNAUTHORIZED} from './http';
-import {periodOf} from './periods';
+import {ApiError, UNAUTHORIZED} from './http';
+import {periodOf,frameChangesAt} from './periods';
 import {onPrefs, prefs} from './prefs';
 import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
@@ -16,7 +17,7 @@ import type {MeterSelection} from '../../server/domain/meterHistory';
 import type {MoneyFamily} from '../../server/domain/providers';
 import {moneySelection} from './moneySelection';
 import {subscriptionSelection} from './subscription';
-import {pan, type Pan} from './pan';
+import {pan,usePanning, type Pan} from './pan';
 import {plotPrepared, type Coverage, type PlotBuffer} from './historyPlot';
 
 import {prepare, preparations, type Preparation, type Preparations} from './prepare';
@@ -280,6 +281,9 @@ export class HistoryStore {
 
   endPan(commit: boolean) {
     this.interest = null;
+    // Release keeps the last strip until the complete frame is ready. Rebuilding
+    // that strip would decode the same cells alongside the final composition.
+    this.preparations?.cancel(this.plotOwner);
     this.panReads = commit;
     this.cohort = '';
     this.optional.clear();
@@ -422,7 +426,9 @@ export class HistoryStore {
     const first = this.grids.get(target.cell)?.get(tileOf(bad[0], target.cell));
     // Cold reads omit the unseen head. Entering a held tile's head fills it once.
     const from = !first || first.readTo === first.readFrom ? bad[0] : bad[0] < first.readFrom ? first.from : first.validTo;
-    const to = Math.min(tileEnd(tileOf(bad.at(-1)!, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
+    // Coarse cells contain days of raw observations; decode one tile at a time.
+    const last = this.pool && target.cell >= 3_600_000 ? from : bad.at(-1)!;
+    const to = Math.min(tileEnd(tileOf(last, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
     this.read(target, from, to, 'visible');
   }
 
@@ -432,7 +438,7 @@ export class HistoryStore {
   }
 
   private publishPlot() {
-    if (!this.meta || !this.plotPending) return;
+    if (!this.meta || !this.plotPending || !this.interest) return;
     const visible = this.plotTarget();
     const half = visible.length / 2;
     if (!this.strip || this.strip.cell !== visible.cell || this.stripToken !== (this.interest?.token ?? this.stripToken) || visible.k0 * visible.cell < this.strip.k0 * visible.cell + half / 2 || (visible.k1 + 1) * visible.cell > (this.strip.k1 + 1) * visible.cell - half / 2) {
@@ -550,13 +556,16 @@ export class HistoryStore {
     // Serialize writes to a tile, including disjoint slices: writeSeq belongs to a tile.
     const blocked = (at: number) => [...this.flights].some(f => f.cell === target.cell && tileOf(at, target.cell) >= tileOf(f.from, f.cell) && tileOf(at, target.cell) <= tileOf(f.to - 1, f.cell));
     const backwards = this.interest?.direction === -1;
+    // The shared pool also retains exact period evidence. Decode one input tile
+    // at a time, including after a fast gesture skips across several tiles.
+    const readTiles = this.pool ? 1 : MAX_READ_TILES;
     if (backwards) bad.reverse();
     const at = bad.find(at => !blocked(at));
     if (at === undefined) return;
     let from = at, to = at + target.cell, last = at;
     for (const next of bad) {
       if (backwards ? next >= at : next <= at) continue;
-      if (Math.abs(next - last) !== target.cell || Math.abs(tileOf(next, target.cell) - tileOf(at, target.cell)) >= MAX_READ_TILES || blocked(next)) break;
+      if (Math.abs(next - last) !== target.cell || Math.abs(tileOf(next, target.cell) - tileOf(at, target.cell)) >= readTiles || blocked(next)) break;
       from = Math.min(from, next); to = Math.max(to, next + target.cell);
       last = next;
     }
@@ -575,7 +584,7 @@ export class HistoryStore {
       const upper = this.cutTo ?? (Math.floor((Math.max(this.env.now(), this.meta?.now ?? 0) + CLOCK_TOLERANCE_MS) / target.cell) + 1) * target.cell;
       for (let n = 0; n < buffer; n++) {
         const extra = direction < 0 ? from - target.cell : to;
-        if (extra < lower || extra >= upper || blocked(extra) || tileOf(Math.max(to, extra + target.cell) - 1, target.cell) - tileOf(Math.min(from, extra), target.cell) >= MAX_READ_TILES) break;
+        if (extra < lower || extra >= upper || blocked(extra) || tileOf(Math.max(to, extra + target.cell) - 1, target.cell) - tileOf(Math.min(from, extra), target.cell) >= readTiles) break;
         const tile = this.grids.get(target.cell)?.get(tileOf(extra, target.cell));
         if (tile && tile.readTo > tile.readFrom && (extra >= tile.readFrom && extra < tile.validTo || Math.min(tile.to, Math.max(to, extra + target.cell)) < tile.readFrom || Math.max(tile.from, Math.min(from, extra)) > tile.readTo)) break;
         // A large foreground run may end before the viewport edge. Its extension
@@ -782,12 +791,13 @@ export class HistoryStore {
   }
 
   evictionCandidates() {
-    const target=this.interest?this.plotTarget():this.target(),shown=this.shown;
+    const target=this.interest?this.plotTarget():this.target();
     const candidates:{bytes:number;shownAt:number;drop:()=>void}[]=[];
     for(const [cell,tiles] of this.grids)for(const [n,tile] of tiles){
       if(this.reservations.has(`${cell}:${n}`))continue;
       if(this.active&&cell===target.cell&&tile.to>target.k0*cell&&tile.from<=(target.k1)*cell)continue;
-      if(this.active&&shown&&cell===shown.cellMs&&tile.to>shown.since&&tile.from<shown.to)continue;
+      // The complete displayed frame owns its geometry. Its former input tiles
+      // can leave the cache while a different target is prepared.
       candidates.push({bytes:tile.bytes,shownAt:tile.shownAt,drop:()=>{
         tiles.delete(n);this.plotChunks.delete(`${cell}:${tile.from}`);this.version++;this.aheadStopped=true;
         // Another reader can evict this tile while our final projection is yielding.
@@ -835,20 +845,21 @@ export class HistoryStore {
 }
 
 const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
-export const historyPool = new HistoryPool();
-function reader(scope: HistoryScope) {
-  return new HistoryStore({
-    read: (board, cell, from, to, signal, meters, meta) => call<HistoryReply>('GET', `/api/history?scope=${scope}&board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids))+(meters.displayCurrency?'&currency='+encodeURIComponent(meters.displayCurrency):'') : ''}`, undefined, 12_000, signal).then(reply => expandHistory(reply, meta)),
+export {historyPool} from './historyPool';
+function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
+  const value=new HistoryStore({
+    read: (_board, cell, from, to, signal, meters, meta) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})},signal).then(reply=>expandHistory(reply,meta)),
     now: hubNow,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
     dropTimeRange: () => {if(timeRange())dropTimeRange();},
     accessLost: () => {page.dispatch({type:'board-close'});window.dispatchEvent(new Event(UNAUTHORIZED));},
   }, STORED_BYTES, scope, historyPool);
+  value.setActive(false);return value;
 }
-export const quotaHistory = reader('quota'), budgetHistory = reader('budget'), fundsHistory = reader('budget');
+export const quotaHistory = reader('quota'), budgetHistory = reader('budget'), fundsHistory = reader('budget','funds');
 export const loader = quotaHistory;
-let shellActive = true;
+let shellActive = false;
 const selectedMeters = (state: PageState, scope: HistoryScope, family: MoneyFamily = 'budget') => {
   const board=state.board;if(!board)return undefined;
   const cards=board.lineup.flatMap(id=>board.cards[id]??[]);
@@ -860,7 +871,7 @@ function activeReaders(state=page.get()) {
   fundsHistory.setActive(shellActive&&!!board&&widgetVisible(board.view,SUBSCRIPTION_FUNDS,board.lineup.length));
   budgetHistory.setActive(shellActive&&!!board&&BUDGET_WIDGETS.some(id=>widgetVisible(board.view,id,board.lineup.length)));
 }
-export const historyReaders = {setActive(active: boolean) {shellActive=active;activeReaders();}};
+export const historyReaders = {setActive(active: boolean) {shellActive=active;boardPeriod.activate(active);activeReaders();}};
 
 /** Event changes identify resources; a reader's choices never mutate another board's selections. */
 export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>, family: MoneyFamily = 'budget') {
@@ -886,6 +897,7 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
   });
 }
 const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).flatMap(card => card.windows.map(window => `${card.id} ${window.id}`));
+if(typeof window!=='undefined')followPeriod();
 follow(quotaHistory,page);follow(budgetHistory,page);follow(fundsHistory,page,'funds');
 page.listen((_event,state)=>activeReaders(state));
 
@@ -920,8 +932,35 @@ if (typeof window !== 'undefined') {
   };
   onPrefs(chosen);onTimeRange(chosen);chosen();
 }
-export function useHistory(): Shown {return useSyncExternalStore(quotaHistory.subscribe, quotaHistory.get, quotaHistory.get);}
-export function useBudgetHistory(family: MoneyFamily = 'budget'): Shown {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribe, reader.get, reader.get);}
+function usePeriodHistory(loader:HistoryStore,rolling=false):Shown&{drawing:History|null} {
+  const shown=useSyncExternalStore(loader.subscribe,loader.get,loader.get);
+  const panning=usePanning();
+  const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>boardPeriod.getProjectionRevision(loader===fundsHistory?'funds':loader.scope??'quota'));
+  const now=useClock(at=>rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at):null,[shown,revision,panning]);
+  const retained=useRef<{board:string;history:History}|null>(null);
+  const gesture=useRef<{active:boolean;target:string|null}>({active:false,target:null});
+  const result=useMemo(()=>{
+    const board=page.get().board?.id??'';if(retained.current?.board!==board)retained.current=null;
+    const selected=timeRange(),target=board+':'+(selected?timeRangeKey(selected):prefs().range);
+    if(panning!==null){gesture.current.active=true;gesture.current.target=null;}
+    else if(gesture.current.active){gesture.current.active=false;gesture.current.target=target;}
+    if(gesture.current.target!==target)gesture.current.target=null;
+    const folding=gesture.current.target===target;
+    // The data layers move through their strips during a gesture. Keep the last
+    // complete accounting frame until release, including its full opacity.
+    if(panning!==null&&retained.current)return {...shown,history:retained.current.history,loading:false};
+    if(!shown.history)return shown;
+    const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=boardPeriod.projectionState(shown.history,scope);
+    if(!state.ready)return {...shown,history:retained.current?.history??null,loading:!folding&&!state.error&&!shown.error,error:state.error??shown.error};
+    const history=boardPeriod.project(shown.history,scope,now);retained.current={board,history};if(!shown.loading)gesture.current.target=null;return {...shown,history,loading:folding?false:shown.loading};
+  },[shown,revision,loader,panning,now]);
+  // Rolling totals change with the endpoints; their unchanged drawing evidence
+  // must not restart line and stack preparation on the same clock wake.
+  const drawing=useMemo(()=>result.history,[shown,revision,loader,panning]);
+  return {...result,drawing};
+}
+export function useHistory(rolling=false) {return usePeriodHistory(quotaHistory,rolling);}
+export function useBudgetHistory(family:MoneyFamily='budget',rolling=false) {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling);}
 export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
 export function useBudgetHistoryPlot(family: MoneyFamily = 'budget'): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribePlot, reader.getPlot, reader.getPlot);}
 /** A fresh answer from either resource family supersedes the board's initial snapshot. */

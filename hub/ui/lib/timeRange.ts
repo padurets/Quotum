@@ -1,13 +1,13 @@
 import {useSyncExternalStore} from 'react';
 import {navigate, onLocation, routeLocation} from './router';
 import {clock, day, stamp} from './format';
+import {MIN_PERIOD, parsePeriod, type PeriodRange} from '../../server/domain/period';
 
 /** A period selected on the chart, in milliseconds. */
-export type TimeRange = {from: number; to: number};
+export type TimeRange = PeriodRange;
 
 /** The shortest and longest selections the page offers. */
-export const MIN_TIME_RANGE = 15 * 60_000;
-const MAX_TIME_RANGE = 31 * 86_400_000;
+export const MIN_TIME_RANGE = MIN_PERIOD;
 const DAY = 86_400_000;
 
 /**
@@ -28,7 +28,7 @@ export const ofTimeRange = (history: {range: string} | null) => !!history && his
 export function parseTimeRange(search: string): TimeRange | null {
   const params = new URLSearchParams(search);
   const [from, to] = [params.get('from'), params.get('to')].map(value => (value && /^\d{1,15}$/.test(value) ? Number(value) : NaN));
-  return to - from >= MIN_TIME_RANGE && to - from <= MAX_TIME_RANGE ? {from, to} : null;
+  return parsePeriod({mode: 'range', from, to}) ? {from, to} : null;
 }
 
 // Tests import the helpers below without a page.

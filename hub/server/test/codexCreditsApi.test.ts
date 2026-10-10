@@ -74,3 +74,40 @@ test('builtin credit rate writes use CAS receipts, keep history and cannot becom
   assert.equal((await h.call(h.alice.id,'GET',path+'/history')).json().changes.length,0);
   assert.equal((await h.call(h.bob.id,'POST','/api/currencies/display',{currency:'credits:codex'})).statusCode,400);
 });
+
+
+test('the shared period keeps exact credit scale and grant anchors in values, cells and tapes',async t=>{
+  const h=await fixture(t),from=Date.now()-3600000,off=(await h.overview()).sources[0].budget;
+  const query={cell:'60000',from:String(from),to:String(from+4200000),unit:'USD',currency:'USD',meters:JSON.stringify([[h.source,'balance:credits']])};
+  const period=(extra:object={})=>h.call(h.alice.id,'POST',`/api/boards/${h.board.id}/period`,{version:1,selection:{mode:'range',from,to:Date.now()},evaluatedAt:Date.now(),values:[h.source],...extra});
+  h.advance(1000);
+  const hidden=(await period()).json();
+  assert.deepEqual(hidden.values.value[0].meters,[]);assert.equal(hidden.values.value[0].creditBalance,undefined);
+  assert.equal((await period({funds:query})).statusCode,404);
+  const enabled=(await h.grant(h.bob.id,true,off.revision)).json().budget;
+  h.advance(1000);
+  assert.deepEqual((await period({funds:query})).json().funds.value.tape.fixed.money,[]);
+  const at=Date.now(),measurement=creditMeasurement('finite',at);
+  measurement.balances![0].amount='2.500000000001';h.store.record(h.source,measurement);
+  h.advance(1000);
+  const first=await period({funds:query});assert.equal(first.statusCode,200,first.body);
+  const reply=first.json(),value=reply.values.value[0],native=value.meters.find((m:any)=>m.id==='balance:credits');
+  assert.equal(native.amount,'2500000000001');assert.equal(native.scale,12);assert.equal(native.at,at);
+  assert.equal(value.creditBalance.status,'finite');
+  assert.equal(value.meters.find((m:any)=>m.conversion)?.amount,'100000');
+  const summary=reply.funds.value.tape.fixed.money[0];
+  assert.equal(summary.end,'100000');assert.equal(summary.endScale,6);
+  assert.equal(summary.semantics.conversion.original.at,at);
+  assert.equal(summary.semantics.conversion.original.scale,12);
+  assert.equal(summary.semantics.conversion.original.amount,'2500000000001');
+  assert.ok(summary.semantics.conversion.steps.length);
+  const cursor=reply.funds.value.tape.cursor;
+  const removed=(await h.grant(h.bob.id,false,enabled.revision)).json().budget;
+  assert.equal((await period({funds:{...query,evidence:cursor}})).statusCode,404);
+  assert.equal((await period()).json().values.value[0].creditBalance,undefined);
+  h.advance(1000);await h.grant(h.bob.id,true,removed.revision);h.advance(1000);
+  const renewed=(await period({funds:{...query,evidence:cursor}})).json();
+  assert.deepEqual(renewed.values.value[0].meters,[]);
+  assert.equal(renewed.funds.value.tape.replaceTo,undefined,'a new grant cannot reuse a former grant cursor');
+  assert.deepEqual(renewed.funds.value.tape.fixed.money,[]);
+});

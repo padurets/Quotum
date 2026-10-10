@@ -1,3 +1,4 @@
+import {VIEW_VERSION, VIEW_VERSION_HEADER} from '../../server/domain/view';
 import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
 import {stamp} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
@@ -148,7 +149,7 @@ export function DeviceTokens({onboardingId}: {onboardingId?: string} = {}) {
     setBusy(true);
     setError(null);
     try {
-      const token = await call<Token & {secret: string}>('POST', '/api/tokens', {name: name.trim(), ...(onboardingId ? {onboardingId} : {})});
+      const token = await call<Token & {secret: string}>('POST', '/api/tokens', {name: name.trim(), ...(onboardingId ? {onboardingId} : {})}, 12_000, undefined, {[VIEW_VERSION_HEADER]:String(VIEW_VERSION)});
       setCreated({secret: token.secret, name: tokenName(token)});
       setName('');
       load();

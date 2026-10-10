@@ -53,7 +53,7 @@ export class CurrencyStore extends CurrencyRegistry {
     if(cached.paths.size>=1024)cached.paths.delete(cached.paths.keys().next().value!);
     cached.paths.set(key,path);return path;
   }
-  history(owner:string,target:string,from=0,to=Number.MAX_SAFE_INTEGER):CurrencyBindings {
+  history(owner:string,target:string,from=0,to=Number.MAX_SAFE_INTEGER,reserve?:(bytes:number)=>void):CurrencyBindings {
     this.definition(owner,target,true);
     const load=this.db.prepare(`SELECT observation_at,through_at,anchor,steps FROM currency_bindings
       WHERE owner_id=? AND source_id=? AND from_currency=? AND target_currency=? AND observation_at<?
@@ -66,10 +66,14 @@ export class CurrencyStore extends CurrencyRegistry {
     const missing=this.db.prepare('INSERT OR IGNORE INTO currency_unavailable_observations VALUES (?,?,?,?,?,?)');
     const recovered=this.db.prepare('DELETE FROM currency_unavailable_observations WHERE owner_id=? AND source_id=? AND from_currency=? AND target_currency=? AND observation_at=? AND anchor=?');
     const active=!target.startsWith('personal:')||this.db.prepare('SELECT 1 FROM currency_definitions WHERE owner_id=? AND id=? AND archived_at IS NULL').get(owner,target);
-    return new CurrencyBindings(target,(source,unit)=>load.all(owner,source,unit,target,to,from,owner,source,unit,target,from) as BindingRange[],
+    return new CurrencyBindings(target,(source,unit)=>{
+      const rows:BindingRange[]=[];for(const raw of load.iterate(owner,source,unit,target,to,from,owner,source,unit,target,from)){const row=raw as BindingRange;reserve?.(512+row.steps.length*2);rows.push(row);}return rows;
+    },
       (unit,at,anchor)=>active?this.path(owner,unit,target,at,anchor):null,
       (source,unit,row)=>{save.run(owner,source,unit,target,row.observation_at,row.through_at,row.anchor,row.steps);},
-      (source,unit)=>loadMissing.all(owner,source,unit,target,to,from,owner,source,unit,target,from) as UnavailableObservation[],
+      (source,unit)=>{
+        const rows:UnavailableObservation[]=[];for(const raw of loadMissing.iterate(owner,source,unit,target,to,from,owner,source,unit,target,from)){reserve?.(128);rows.push(raw as UnavailableObservation);}return rows;
+      },
       (source,unit,point,unavailable)=>{(unavailable?missing:recovered).run(owner,source,unit,target,point.observation_at,point.anchor);},
       (from,to)=>this.interval(owner,from)===this.interval(owner,to));
   }
@@ -149,12 +153,20 @@ export class CurrencyStore extends CurrencyRegistry {
     const at=span.to_at,stale=native.stale||native.amount!==row.native_amount||native.unit!==row.native_unit||native.at!==at||span.interrupted_at!==null||now>at+span.stale_after_ms;
     return {...JSON.parse(row.semantics) as ReturnType<typeof semanticsOf>,id,kind:'balance',unit:target,amount:row.amount,at,staleAfterMs:span.stale_after_ms,stale,conversion:this.conversion(row,at)};
   }
-  readings(source:string,id:string,from:number,to:number):Reading[] {
-    const rows=this.db.prepare('SELECT * FROM money_valuations WHERE source_id=? AND meter_id=? AND at<? AND at>=coalesce((SELECT max(at) FROM money_valuations WHERE source_id=? AND meter_id=? AND at<?),?) ORDER BY at').all(source,id,to,source,id,from,from) as ValueRow[];
-    return rows.map(row=>({...JSON.parse(row.semantics) as ReturnType<typeof semanticsOf>,id,kind:'balance',unit:row.unit,amount:row.amount,at:row.at,previousAt:row.previous_at,staleAfterMs:row.stale_after_ms,conversion:this.conversion(row)}));
+  readings(source:string,id:string,from:number,to:number,reserve?:(bytes:number)=>void):Reading[] {
+    const rows:Reading[]=[];
+    for(const raw of this.db.prepare('SELECT * FROM money_valuations WHERE source_id=? AND meter_id=? AND at<? AND at>=coalesce((SELECT max(at) FROM money_valuations WHERE source_id=? AND meter_id=? AND at<?),?) ORDER BY at').iterate(source,id,to,source,id,from,from)) {
+      const row=raw as ValueRow;reserve?.(1024+row.semantics.length*2);
+      rows.push({...JSON.parse(row.semantics) as ReturnType<typeof semanticsOf>,id,kind:'balance',unit:row.unit,amount:row.amount,at:row.at,previousAt:row.previous_at,staleAfterMs:row.stale_after_ms,conversion:this.conversion(row)});
+    }
+    return rows;
   }
-  spans(source:string,id:string,to:number):MeterSpan[] {
-    return (this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at FROM meter_spans WHERE source_id=? AND meter_id=? AND from_at<=?').all(source,id,to) as {from_at:number;to_at:number;stale_after_ms:number;interrupted_at:number|null}[]).map(r=>({from:r.from_at,to:r.to_at,staleAfterMs:r.stale_after_ms,...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})}));
+  spans(source:string,id:string,to:number,reserve?:(bytes:number)=>void):MeterSpan[] {
+    const rows:MeterSpan[]=[];
+    for(const raw of this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at FROM meter_spans WHERE source_id=? AND meter_id=? AND from_at<=?').iterate(source,id,to)) {
+      const r=raw as {from_at:number;to_at:number;stale_after_ms:number;interrupted_at:number|null};reserve?.(160);rows.push({from:r.from_at,to:r.to_at,staleAfterMs:r.stale_after_ms,...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})});
+    }
+    return rows;
   }
   prune(cutoff:number) {
     this.quoteEpoch++;this.quoteLists.clear();this.snapshotCache.clear();

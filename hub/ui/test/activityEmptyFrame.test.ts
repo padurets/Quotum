@@ -34,7 +34,7 @@ test('the actual empty activity result keeps its time axis and legend container 
     useLocale: () => 'en', useTimeAxis: () => ({box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {...range, end: range.to}, x, drawX: x, screenX: x, commitDrawing: () => {}}),
     clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key: string) => key,
     Tooltip: () => null, useTip: () => ({tip: {current: null}, style: {}}), panel: {current: null}, loading: false,
-    history: history as History | null, activity: history.activity, plot: undefined as number | undefined, onBase: () => {}, arrange: {},
+    history: history as History | null, drawing: history, activity: history.activity, drawnActivity: history.activity, currentGroups: [], plot: undefined as number | undefined, onBase: () => {}, arrange: {},
     Totals: () => null, ActivitySettings: () => null, LegendItem: () => null,
     shownMs: 0, since: null, from: range.from, to: range.to, setTimeRange: () => {}, by: 'project', selected: range,
     timeRangeKey: (value: typeof range) => `${value.from}-${value.to}`, prefs: {muted: {}, range: '24h'}, groups: [], titles: {}, shownSources: ['s'],

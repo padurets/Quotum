@@ -9,23 +9,33 @@ type PackedCell = {data: Uint8Array; references: number[]; bytes: number};
 type Packed = {series: Omit<MeterSeriesCells,'cells'|'semantics'>; cells: Map<number,PackedCell>; bytes: number};
 type EncodedExtra = Omit<NonNullable<MeterCell[5]>, 'semantics' | 'openSemantics' | 'observations'> & {openSemantics?: number};
 type Header = {row: [number, string, string | null, string | null, number, EncodedExtra]; before: number | null; semantics: number | null; steps: number; topupSteps: number; observations?: number};
+type PackedHeader = [Header['before'],Header['semantics'],[number,string,string|null,string|null,number,Record<string,unknown>],number,number,number?];
 const encoder=new TextEncoder(),decoder=new TextDecoder();
+const fields=['pointOffsetMs','openOffsetMs','openSemantics','validUntil','first','open','segment','knownFrom','knownUntil','topupInternal','at','value','semantics','from','to','amount','evidence'];
+// Cell headers and interval leaves repeat the same field names thousands of times.
+// Short local keys keep every value and unknown field without retaining those names.
+const compact=(value:object)=>Object.fromEntries(Object.entries(value).map(([key,value])=>{const index=fields.indexOf(key);return [index<0?'x:'+key:String(index),value];}));
+const expand=<T>(value:object):T=>Object.fromEntries(Object.entries(value).map(([key,value])=>[key.startsWith('x:')?key.slice(2):fields[Number(key)],value])) as T;
 
 /** Each JSON leaf is small; interval arrays never become one synchronous JSON operation. */
 function* pack(cell:StoredCell, metadata:MeterMetadata):Preparation<PackedCell> {
   const references=new Set<number>(),keep=(value:MeterSemantics|null)=>metadata.retainSemantics(value,references);
   const {steps=[],topupSteps=[],observations,semantics:_semantics,openSemantics,...extra}=cell.row[5]??{};
-  const head={before:keep(cell.before),semantics:keep(cell.semantics),row:[...cell.row.slice(0,5),{...extra,...(openSemantics?{openSemantics:keep(openSemantics)}:{})}],steps:steps.length,topupSteps:topupSteps.length,...(observations?{observations:observations.length}:{})};
+  const row=[...cell.row.slice(0,5),compact({...extra,...(openSemantics?{openSemantics:keep(openSemantics)}:{})})] as PackedHeader[2];
+  const head:PackedHeader=[keep(cell.before),keep(cell.semantics),row,steps.length,topupSteps.length];if(observations)head[5]=observations.length;
   const parts:Uint8Array[]=[encoder.encode(JSON.stringify(head))];
   let length=4+parts[0].byteLength;yield;
-  for(const values of [steps,topupSteps])for(const step of values){const bytes=encoder.encode(JSON.stringify(step));parts.push(bytes);length+=4+bytes.byteLength;yield;}
-  for(const point of observations??[]){const bytes=encoder.encode(JSON.stringify({...point,...(point.semantics?{semantics:keep(point.semantics)}:{})}));parts.push(bytes);length+=4+bytes.byteLength;yield;}
+  for(const values of [steps,topupSteps])for(const step of values){const bytes=encoder.encode(JSON.stringify(compact(step)));parts.push(bytes);length+=4+bytes.byteLength;yield;}
+  for(const point of observations??[]){const bytes=encoder.encode(JSON.stringify(compact({...point,...(point.semantics?{semantics:keep(point.semantics)}:{})})));parts.push(bytes);length+=4+bytes.byteLength;yield;}
   const result=new Uint8Array(length),view=new DataView(result.buffer);
   let at=0;
   for(const bytes of parts){view.setUint32(at,bytes.byteLength);result.set(bytes,at+4);at+=4+bytes.byteLength;yield;}
   return {data:result,references:[...references],bytes:result.byteLength+128+references.size*8};
 }
-const header=(bytes:Uint8Array):Header=>JSON.parse(decoder.decode(bytes.subarray(4,4+new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength).getUint32(0))));
+const header=(bytes:Uint8Array):Header=>{
+  const [before,semantics,row,steps,topupSteps,observations]=JSON.parse(decoder.decode(bytes.subarray(4,4+new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength).getUint32(0)))) as PackedHeader;
+  return {before,semantics,row:[row[0],row[1],row[2],row[3],row[4],expand(row[5])],steps,topupSteps,...(observations===undefined?{}:{observations})};
+};
 function* unpack(bytes:Uint8Array,metadata:MeterMetadata):Preparation<StoredCell> {
   const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength),head=header(bytes);
   let at=4+view.getUint32(0);yield;
@@ -34,12 +44,15 @@ function* unpack(bytes:Uint8Array,metadata:MeterMetadata):Preparation<StoredCell
   for(const [name,count] of [['steps',head.steps],['topupSteps',head.topupSteps]] as const) {
     if(!count)continue;
     const steps:ExceptionalStep[]=[];
-    for(let i=0;i<count;i++){const size=view.getUint32(at);steps.push(JSON.parse(decoder.decode(bytes.subarray(at+4,at+4+size))));at+=4+size;yield;}
+    for(let i=0;i<count;i++){const size=view.getUint32(at);steps.push(expand(JSON.parse(decoder.decode(bytes.subarray(at+4,at+4+size)))));at+=4+size;yield;}
     extra[name]=steps;
   }
   if(head.observations!==undefined) {
     const observations:NonNullable<typeof extra.observations>=[];
-    for(let i=0;i<head.observations;i++){const size=view.getUint32(at),point=JSON.parse(decoder.decode(bytes.subarray(at+4,at+4+size)));observations.push({...point,...(typeof point.semantics==='number'?{semantics:metadata.semantics(point.semantics)}:{})});at+=4+size;yield;}
+    for(let i=0;i<head.observations;i++){
+      const size=view.getUint32(at),point=expand<Omit<NonNullable<typeof extra.observations>[number],'semantics'>&{semantics?:number|null}>(JSON.parse(decoder.decode(bytes.subarray(at+4,at+4+size))));
+      const {semantics,...rest}=point;observations.push({...rest,...(semantics===undefined?{}:{semantics:metadata.semantics(semantics)})});at+=4+size;yield;
+    }
     extra.observations=observations;
   }
   return {row:[head.row[0],head.row[1],head.row[2],head.row[3],head.row[4],extra],before:metadata.semantics(head.before),semantics:metadata.semantics(head.semantics)};

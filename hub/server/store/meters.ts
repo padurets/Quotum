@@ -102,15 +102,18 @@ export class MeterStore {
   }
 
   /** Include one predecessor even when it predates retention: it is evidence, not a plotted point. */
-  readings(source: string, meter: string, from: number, to: number): Reading[] {
+  readings(source: string, meter: string, from: number, to: number, reserve?:(bytes:number)=>void): Reading[] {
     const query = this.db.prepare('SELECT * FROM readings WHERE source_id=? AND meter_id=? AND at<? AND at>=coalesce((SELECT max(at) FROM readings WHERE source_id=? AND meter_id=? AND at<?),?) ORDER BY at');
     query.setReadBigInts(true);
-    return (query.all(source, meter, to, source, meter, from, from) as ReadingRow[]).map(r => ({id: r.meter_id, at: Number(r.at), previousAt: numberOf(r.previous_at), kind: r.kind, unit: r.unit, amount: r.amount.toString(), ...(r.unit === 'credits:codex' ? {scale:Number(r.amount_scale)} : {}), limit: r.limit_amount?.toString() ?? null, resetAt: numberOf(r.reset_at), minutes: numberOf(r.minutes), scope: r.scope, label: r.label, staleAfterMs: Number(r.stale_after_ms)}));
+    const rows:Reading[]=[];
+    for(const raw of query.iterate(source,meter,to,source,meter,from,from)){const r=raw as ReadingRow;reserve?.(640+2*((r.label?.length??0)+(r.scope?.length??0)+r.meter_id.length+r.unit.length));rows.push({id: r.meter_id, at: Number(r.at), previousAt: numberOf(r.previous_at), kind: r.kind, unit: r.unit, amount: r.amount.toString(), ...(r.unit==='credits:codex'?{scale:Number(r.amount_scale)}:{}), limit: r.limit_amount?.toString() ?? null, resetAt: numberOf(r.reset_at), minutes: numberOf(r.minutes), scope: r.scope, label: r.label, staleAfterMs: Number(r.stale_after_ms)});}
+    return rows;
   }
 
-  spans(source: string, meter: string, from: number, to: number): MeterSpan[] {
-    const rows = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans WHERE source_id=? AND meter_id=? AND min(coalesce(interrupted_at,9223372036854775807),coalesce(hold_until,9223372036854775807),to_at+stale_after_ms+1)>? AND from_at<=? ORDER BY from_at').all(source, meter, from, to) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null;hold_until:number|null}[];
-    return rows.map(r => ({from: r.from_at, to: r.to_at, staleAfterMs: r.stale_after_ms,...(r.hold_until===null?{}:{holdUntil:r.hold_until}),...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})}));
+  spans(source: string, meter: string, from: number, to: number,reserve?:(bytes:number)=>void): MeterSpan[] {
+    const rows:MeterSpan[]=[];
+    for(const raw of this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans WHERE source_id=? AND meter_id=? AND min(coalesce(interrupted_at,9223372036854775807),coalesce(hold_until,9223372036854775807),to_at+stale_after_ms+1)>? AND from_at<=? ORDER BY from_at').iterate(source,meter,from,to)){const r=raw as {from_at:number;to_at:number;stale_after_ms:number;interrupted_at:number|null;hold_until:number|null};reserve?.(160);rows.push({from:r.from_at,to:r.to_at,staleAfterMs:r.stale_after_ms,...(r.hold_until===null?{}:{holdUntil:r.hold_until}),...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})});}
+    return rows;
   }
 
   calendar(source: string, now: number, asOf=now) {
@@ -121,18 +124,18 @@ export class MeterStore {
     return {day:spending(readings,spans,periods.day,Math.max(periods.day,asOf)),week:spending(readings,spans,periods.week,Math.max(periods.week,asOf)),month:spending(readings,spans,periods.month,Math.max(periods.month,asOf))};
   }
 
-  groups(selection: MeterSelection, from: number, to: number): MeterGroup[] {
+  groups(selection: MeterSelection, from: number, to: number,reserve?:(bytes:number)=>void): MeterGroup[] {
     return selection.ids.map(([source,meter]): MeterGroup => {
       const usage = meter === 'balance' ? 'usage' : meter;
       const provider=this.db.prepare('SELECT provider FROM sources WHERE id=?').get(source)?.provider;
       const policy=monetaryOf(String(provider));
       const descriptor=balanceDescriptor(String(provider),meter);
       const conversion=conversionOrigin(meter);
-      if(conversion){const native=balanceDescriptor(String(provider),conversion.meter);return {source,meter,accounting:{spending:'unavailable',topups:'unavailable'},...(native?{role:native.role}:{}),pointMode:'observation',readings:this.currencies.readings(source,meter,from,to),spans:this.currencies.spans(source,meter,to)};}
-      const group = {source,meter,...(policy?{accounting:{spending:policy.spending,topups:policy.topups},...(descriptor?{role:descriptor.role}:{}),...(policy.spending==='unavailable'?{pointMode:'observation' as const}:{})}:{accounting:{spending:'unavailable' as const,topups:'unavailable' as const}}),readings:this.readings(source,usage,from,to),spans:this.spans(source,usage,0,to)};
+      if(conversion){const native=balanceDescriptor(String(provider),conversion.meter);return {source,meter,accounting:{spending:'unavailable',topups:'unavailable'},...(native?{role:native.role}:{}),pointMode:'observation',readings:this.currencies.readings(source,meter,from,to,reserve),spans:this.currencies.spans(source,meter,to,reserve)};}
+      const group = {source,meter,...(policy?{accounting:{spending:policy.spending,topups:policy.topups},...(descriptor?{role:descriptor.role}:{}),...(policy.spending==='unavailable'?{pointMode:'observation' as const}:{})}:{accounting:{spending:'unavailable' as const,topups:'unavailable' as const}}),readings:this.readings(source,usage,from,to,reserve),spans:this.spans(source,usage,0,to,reserve)};
       if (meter !== 'balance') return group;
-      if (provider !== 'openrouter') return {...group,readings:this.readings(source,meter,from,to),spans:this.spans(source,meter,0,to)};
-      return {...group,paired:{readings:this.readings(source,'credits',from,to),spans:this.spans(source,'credits',0,to)}};
+      if (provider !== 'openrouter') return {...group,readings:this.readings(source,meter,from,to,reserve),spans:this.spans(source,meter,0,to,reserve)};
+      return {...group,paired:{readings:this.readings(source,'credits',from,to,reserve),spans:this.spans(source,'credits',0,to,reserve)}};
     });
   }
 

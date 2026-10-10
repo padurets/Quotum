@@ -18,13 +18,19 @@ function Timed({cell, render}: {cell: TimedCell; render: (cell: Cell, time: stri
 const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: string) => ReactNode) =>
   'at' in cell ? <Timed key={key} cell={cell} render={render}/> : <Fragment key={key}>{render(cell)}</Fragment>;
 
-export function TableSettings<Id extends string>({arrange, widget, columns, visible}: {
+export function TableSettings<Id extends string>({arrange, widget, columns, visible, children}: {
   arrange: Arrange; widget: string; columns: readonly AnalyticsColumn<Id>[]; visible: readonly Id[];
+  children?: ReactNode;
 }) {
-  return arrange.owner ? <Popover label={t('forecast.settings')} icon={<SlidersIcon/>}>
-    <div className="popover-title">{t('table.columns')}</div>
-    {columns.map(column => <SwitchRow key={column.id} on={visible.includes(column.id)} onChange={on => arrange.update(view => withColumn(view, widget, column.id, on))}>{column.title}</SwitchRow>)}
-    <HideRow onHide={() => arrange.update(view => withHidden(view, widget, true))}>{t('widget.hide')}</HideRow>
+  return arrange.owner || children ? <Popover label={t('forecast.settings')} icon={<SlidersIcon/>}>
+    {children}
+    {arrange.owner && <>
+      <div className="popover-section">
+        <div className="popover-title">{t('table.columns')}</div>
+        {columns.map(column => <SwitchRow key={column.id} on={visible.includes(column.id)} onChange={on => arrange.update(view => withColumn(view, widget, column.id, on))}>{column.title}</SwitchRow>)}
+      </div>
+      <HideRow onHide={() => arrange.update(view => withHidden(view, widget, true))}>{t('widget.hide')}</HideRow>
+    </>}
   </Popover> : null;
 }
 

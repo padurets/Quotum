@@ -47,6 +47,7 @@ const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact
   if(name==='./Kit')return {ErrorLine:()=>null};
   if(name==='../lib/board')return {useCurrencyContext:()=>shownCurrency};
   if(name==='../lib/clock')return {useClock:()=>1};
+  if(name==='../lib/measurementClock')return {useMeasurementClock:()=>1,useMeasurementTime:()=>null};
   if(['../lib/board','../lib/clock','../lib/http','../lib/quota','./Meter'].includes(name))return {};
   throw new Error(name);
 }};

@@ -1,5 +1,5 @@
 import {legacyLayout, ordered} from './layout.js';
-import {EMPTY_VIEW, type View} from './view.js';
+import {EMPTY_VIEW, type View, type SplitView} from './view.js';
 import {providerOf, moneyFamily, supportsQuota} from './providers.js';
 import {ACTIVITY, SUBSCRIPTION_FUNDS, QUOTA_HISTORY, QUOTA_TABLE, BUDGET_HISTORY, BUDGET_TABLE, QUOTA_WIDGETS, BUDGET_WIDGETS, showWidgets} from './widgets.js';
 
@@ -9,14 +9,14 @@ const families = (resources: AnalyticsResources) => ({quota: resources.some(s =>
 const legacyIds = ['history', 'forecast'];
 
 /** The server applies defaults once; hidden and placed widgets never depend on a reader. */
-export function reconcileAnalytics(view: View, resources: AnalyticsResources): View {
+export function reconcileAnalytics<T extends View | SplitView>(view: T, resources: AnalyticsResources): T {
   const {quota, budget} = families(resources);
   const funds = resources.some(s => s.budget?.enabled!==false && moneyFamily(providerOf(s.provider))==='funds');
   const add = [...(quota ? QUOTA_WIDGETS : []), ...(funds ? [SUBSCRIPTION_FUNDS] : []), ...(budget ? BUDGET_WIDGETS : [])].filter(id => !view.shown.includes(id) && !view.hidden.includes(id));
   if (!add.length) return view;
   const next = showWidgets(view, add), places = {...view.layout.places};
   // Existing anchors keep their coordinates. Newly applicable panels use free trailing rows.
-  let y = Math.max(-1, ...Object.entries(places).filter(([id]) => !id.startsWith('source:') && id !== 'agents').map(([,p]) => p.y)) + 1;
+  let y = Math.max(-1, ...Object.entries(places).filter(([id]) => view.version === 3 || !id.startsWith('source:') && id !== 'agents').map(([,p]) => p.y)) + 1;
   for (const id of add) if (!places[id]) places[id] = {x: 0, y: y++, w: 6};
   return {...next, layout: {...view.layout, places}};
 }
@@ -28,8 +28,8 @@ export function legacyWidgetTargets(id: string, resources: AnalyticsResources, e
 }
 
 /** Lossless, deterministic conversion; neither local modes nor current values are inputs. */
-export function migrateAnalytics(input: Partial<LegacyView> | View | undefined, resources: AnalyticsResources): View {
-  if (input?.version === 2) return input as View;
+export function migrateAnalytics(input: Partial<LegacyView> | SplitView | undefined, resources: AnalyticsResources): SplitView {
+  if (input?.version === 2) return input;
   if (input?.version !== undefined && input.version !== 1) throw new Error('Unsupported board view version');
   const old = {...EMPTY_VIEW, ...input} as LegacyView;
   const areas = {cards: [...resources.map(s => 'source:' + s.id), 'agents'], analytics: [ACTIVITY, ...legacyIds]};

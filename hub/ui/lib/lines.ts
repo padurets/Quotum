@@ -34,7 +34,7 @@ export function preciseReadout(line: Pick<PlotSeries,'pointMode'|'capCells'|'poi
  * hidden on the board, or any of a card hidden on the board is left out. A source's windows share its colour and differ by
  * dash.
  */
-export function* linesPrepared<T extends PlotSeries>(history: {series: readonly T[]} | null, sources: {id: string; provider: string; title?: string; windows: Win[]}[] | null, view: View, kind: Kind): Preparation<(T & LineName)[]> {
+export function* linesPrepared<T extends PlotSeries>(history: {series: readonly T[];live?:boolean} | null, sources: {id: string; provider: string; title?: string; windows: Win[]}[] | null, view: View, kind: Kind): Preparation<(T & LineName)[]> {
   if (!history || !sources) return [];
   const perSource: Record<string, number> = {};
   const hidden = new Set([...view.windows, ...view.hidden]);
@@ -46,7 +46,8 @@ export function* linesPrepared<T extends PlotSeries>(history: {series: readonly 
   for (const entry of yield* ordered(history.series, (a, b) => rank(a) - rank(b))) {
     yield;
     const source = hidden.has(cardId(entry.sourceId)) ? undefined : sources.find(s => s.id === entry.sourceId);
-    const live = source?.windows.find(w => w.id === entry.windowId);
+    const retained=history.live===false&&'windowValue' in entry?entry.windowValue as Pick<Win,'id'|'kind'|'label'|'minutes'>|undefined:undefined;
+    const live = retained??source?.windows.find(w => w.id === entry.windowId);
     if (!source || !live || live.kind !== kind || !entry.points.length || hidden.has(windowKey(entry.sourceId, entry.windowId))) continue;
     const index = (perSource[entry.sourceId] = (perSource[entry.sourceId] ?? -1) + 1);
     result.push(
@@ -60,7 +61,7 @@ export function* linesPrepared<T extends PlotSeries>(history: {series: readonly 
         name: seriesName(source, live),
         color: colorOf(view, entry.sourceId, source.provider),
         dash: DASHES[index % DASHES.length],
-        current: live.remaining,
+        current: history.live===false&&'remainingAtEnd' in entry ? entry.remainingAtEnd as number|null : 'remaining' in live?live.remaining as number:null,
       },
     );
   }

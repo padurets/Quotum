@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
@@ -13,6 +14,7 @@ import {
 } from 'react';
 import {t} from '../i18n';
 import {pixels, same, SizingContext, type Report, type Size} from './sizing';
+import {WidgetSizing} from '../lib/widgetSizing';
 import {
   cellOf,
   edgeScroll,
@@ -21,7 +23,6 @@ import {
   heightIntent,
   landed,
   leftWidths,
-  MAX_ROWS,
   narrowed,
   nearest,
   ordered,
@@ -99,7 +100,8 @@ function useColumns() {
  * only: a neighbour's height renders nothing of it, neither the widget nor this (the same
  * content, the same numbers).
  */
-const Sized = memo(function Sized({id, manual, allocated, width, report, children}: {id: string; manual: boolean; allocated: number; width: string; report: (id: string, size: Report | null) => void; children: ReactNode}) {
+const Sized = memo(function Sized({id, manual, geometry, width, report, children}: {id: string; manual: boolean; geometry: WidgetSizing; width: string; report: (id: string, size: Report | null) => void; children: ReactNode}) {
+  const allocated=useSyncExternalStore(useCallback(listener=>geometry.subscribe(id,listener),[geometry,id]),()=>geometry.allocated(id));
   const bound = useCallback((size: Report | null) => report(id, size), [id, report]);
   const value = useMemo(() => ({manual, allocated, width, report: bound}), [manual, allocated, width, bound]);
   return <SizingContext.Provider value={value}>{children}</SizingContext.Provider>;
@@ -134,11 +136,7 @@ export function Widgets({
   const refocus = useRef<{id: string; handle: Handle} | null>(null);
   /** Whether each of the last two presses on a handle saved a size or was given up: a double click after two that did neither fits the content. */
   const presses = useRef<boolean[]>([]);
-  const [heights, setHeights] = useState<Record<string, number>>({});
-  // How much shorter than it adds up to the screen draws a row (CSS pixels): at 110 % or 133 % a little, which a tall widget's rows sum to pixels.
-  const [short, setShort] = useState(0);
-  // What the charts and the list of agents tell they need: a chosen height fills them, so what they show is not it.
-  const [sizes, setSizes] = useState<Record<string, Size>>({});
+  const [geometry]=useState(()=>new WidgetSizing(same));
   // How many gestures on each widget's side have ended: its width followed the pointer until then, and it takes the grid's.
   const [released, setReleased] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<{id: string; kind: Kind; items: Item[]; intent?: number} | null>(null);
@@ -147,39 +145,63 @@ export function Widgets({
   const ids = widgets.map(widget => widget.id);
   const base = ordered(layout, ids);
   const saved = (id: string) => layout.places[id]?.h;
-  const sizeOf = (id: string, measured = heights): Size | undefined => {
-    const size = sizes[id], shown = measured[id];
+  const sizeOf = (id: string, measured = geometry.heights): Size | undefined => {
+    const size = geometry.sizes[id], shown = measured[id];
     if (!size) return shown === undefined ? undefined : {min: shown, natural: shown};
     // Following its content, a chart or the list of agents shows all of itself, and the board measures that as soon as
     // styles change it (at a breakpoint), before the widget renders. Stretched to a height, or measured on a gesture's
     // release before it has drawn itself at the width it snapped to, it is what it tells, in the frame its least comes from.
-    return measured === heights && intended(id) === undefined && shown !== undefined ? {min: size.min, natural: shown} : size;
+    return measured === geometry.heights && intended(id) === undefined && shown !== undefined ? {min: size.min, natural: shown} : size;
   };
   /** How few rows a widget can take, and how many it takes with the height it has, at its width and content now. */
-  const bounds = (id: string, measured = heights) => {
+  const bounds = (id: string, measured = geometry.heights) => {
     const size = sizeOf(id, measured);
     return {min: size ? rowsOf(size.min) : 1, baseline: rowsFor(size, saved(id))};
   };
   const signature = JSON.stringify(base.map(({id, x, w}) => [id, x, w, saved(id) ?? 0]));
   const activePreview = movable && gesture.current?.signature === signature ? preview : null;
   const intended = (id: string) => (activePreview?.id === id && activePreview.intent !== undefined ? activePreview.intent : saved(id));
-  const items = (activePreview?.items ?? base).map(item => ({...item, h: rowsFor(sizeOf(item.id), intended(item.id))}));
-  const spots = columns === 6 ? settle(items, layout.columns) : narrowed(items, columns as 1 | 2, layout.columns);
+  const positions=()=>{
+    const items = (activePreview?.items ?? base).map(item => ({...item, h: rowsFor(sizeOf(item.id), intended(item.id))}));
+    return columns === 6 ? settle(items, layout.columns) : narrowed(items, columns as 1 | 2, layout.columns);
+  };
+  const spots=positions();
   const byId = new Map(widgets.map(widget => [widget.id, widget]));
   // The widths the board gives, not a gesture's preview: meanwhile the width follows the pointer, which a chart hears after it shows.
   const given = new Map(base.map(item => [item.id, `${columns} ${item.w} ${released[item.id] ?? 0}`]));
-  const latest = useRef({spots, onPlaces, bounds, sizeOf, saved, sizes});
-  latest.current = {spots, onPlaces, bounds, sizeOf, saved, sizes};
+  const latest = useRef({spots, onPlaces, bounds, sizeOf, saved});
+  latest.current = {spots, onPlaces, bounds, sizeOf, saved};
+  const place=useRef(()=>{});
+  place.current=()=>{
+    const spots=reading(positions()),allocations=new Map<string,number>();
+    latest.current.spots=spots;
+    let previous:HTMLElement|null=null;
+    for(const spot of spots){
+      const node=places.current.get(spot.id);if(!node||!grid.current)continue;
+      const allocated=spot.h*(ROW-geometry.short)-GAP;
+      const fill=geometry.heights[spot.id]===undefined?0:Math.max(0,allocated-geometry.heights[spot.id]);
+      const column=`${spot.x+1} / span ${spot.w}`,row=`${spot.y+1} / span ${spot.h}`;
+      if(node.style.gridColumn!==column)node.style.gridColumn=column;
+      if(node.style.gridRow!==row)node.style.gridRow=row;
+      if(node.style.getPropertyValue('--fill')!==`${fill}px`)node.style.setProperty('--fill',`${fill}px`);
+      // Keep keyboard reading order in step with geometry, including after React
+      // reconciles a changed set of widgets against its earlier child order.
+      const next:Element|null=previous?previous.nextElementSibling:grid.current.firstElementChild;
+      if(next!==node){
+        const focused=document.activeElement instanceof HTMLElement&&node.contains(document.activeElement)?document.activeElement:null;
+        const parent=grid.current as HTMLDivElement&{moveBefore?:(node:Node,child:Node|null)=>void};
+        if(parent.moveBefore)parent.moveBefore(node,next);
+        else {grid.current.insertBefore(node,next);focused?.focus({preventScroll:true});}
+      }
+      previous=node;
+      allocations.set(spot.id,intended(spot.id)!==undefined?allocated:0);
+    }
+    geometry.allocate(allocations);
+  };
   const report = useCallback((id: string, size: Report | null) => {
-    setSizes(old => {
-      const was = old[id];
-      if (size ? same(was?.min, size.min) && same(was?.natural, size.natural) : !was) return old;
-      const {[id]: _, ...rest} = old;
-      return size ? {...rest, [id]: {min: size.min, natural: size.natural}} : rest;
-    });
     // What it shows is what the board measures of it, told as it lays itself out anew, before that paints; the later of the two holds.
-    if (size) setHeights(old => (same(old[id], size.shown) ? old : {...old, [id]: size.shown}));
-  }, []);
+    if(geometry.report(id,size))place.current();
+  }, [geometry]);
   // Height changes and our preview never invalidate the frozen origin. External placement changes do.
   const remember = () => {
     before.current = new Map([...places.current].map(([id, node]) => [id, node.getBoundingClientRect()]));
@@ -189,7 +211,6 @@ export function Widgets({
   /** What every widget shows, kept for the next render, but on a gesture's `release` what the charts and the list show: they draw themselves at a new width only later, and tell it then. */
   const measure = (release = false) => {
     const next: Record<string, number> = {};
-    const reported = latest.current.sizes;
     let tallest = {rows: 0, px: 0};
     const spans = new Map(latest.current.spots.map(spot => [spot.id, spot.h]));
     for (const [id, body] of bodies.current) {
@@ -202,18 +223,15 @@ export function Widgets({
       const px = pixels(place.getBoundingClientRect().height);
       if (rows !== undefined && rows > tallest.rows) tallest = {rows, px};
     }
-    setHeights(old => {
-      const kept = Object.fromEntries(Object.entries(next).map(([id, h]) => [id, same(old[id], h) || (release && reported[id] && old[id] !== undefined) ? old[id] : h]));
-      return Object.keys(kept).length === Object.keys(old).length && Object.entries(kept).every(([id, h]) => old[id] === h) ? old : kept;
-    });
     // The same for every row, so the tallest widget tells it best; a change of it that no widget would show within a pixel of the screen is none.
     const row = tallest.rows ? Math.max(0, (tallest.rows * ROW - GAP - tallest.px) / tallest.rows) : 0;
-    setShort(old => (same(old * MAX_ROWS, row * MAX_ROWS) ? old : row));
+    if(geometry.measure(next,row,release))place.current();
     return next;
   };
   // Before paint on the first render; later one observer measures content, never the row's stretched box.
   useLayoutEffect(() => {
     measure();
+    place.current();
   });
   useLayoutEffect(() => {
     const observer = new ResizeObserver(() => measure());
@@ -458,7 +476,7 @@ export function Widgets({
   const fit = (id: string, handle?: Handle) => {
     if (!movable || gesture.current || saved(id) === undefined) return;
     const next = settle(
-      reading(spots).map(spot => (spot.id === id ? {...spot, h: rowsFor(sizeOf(id), undefined)} : spot)),
+      reading(latest.current.spots).map(spot => (spot.id === id ? {...spot, h: rowsFor(sizeOf(id), undefined)} : spot)),
       layout.columns,
     );
     remember();
@@ -474,7 +492,7 @@ export function Widgets({
   };
   const key = (id: string, handle: Handle) => (event: KeyboardEvent<HTMLButtonElement>) => {
     if (!movable || gesture.current) return;
-    const origin = reading(spots);
+    const origin = reading(latest.current.spots);
     const item = origin.find(item => item.id === id)!;
     const name = byId.get(id)!.name;
     let next: Spot[];
@@ -554,8 +572,8 @@ export function Widgets({
     <div className={`widgets ${movable ? 'is-movable' : ''}`} ref={grid} style={{'--columns': columns} as CSSProperties}>
       {reading(spots).map(spot => {
         const widget = byId.get(spot.id)!;
-        const allocated = spot.h * (ROW - short) - GAP;
-        const fill = heights[spot.id] === undefined ? 0 : Math.max(0, allocated - heights[spot.id]);
+        const allocated = spot.h * (ROW - geometry.short) - GAP;
+        const fill = geometry.heights[spot.id] === undefined ? 0 : Math.max(0, allocated - geometry.heights[spot.id]);
         const manual = intended(spot.id) !== undefined;
         return (
           <div
@@ -591,7 +609,7 @@ export function Widgets({
                   </svg>
                 </button>
               )}
-              <Sized id={spot.id} manual={manual} allocated={manual ? allocated : 0} width={given.get(spot.id)!} report={report}>
+              <Sized id={spot.id} manual={manual} geometry={geometry} width={given.get(spot.id)!} report={report}>
                 {widget.content}
               </Sized>
               {movable && (

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {linesOf, valueIn} from '../lib/lines';
 import type {History, HistorySeries, View, Win} from '../lib/types';
 
-const view: View = {version: 2 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+const view: View = {version: 3 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 const series = (windowId: string): HistorySeries => ({
   sourceId: 'codex:1', windowId, consumed: 0, coveredMs: 0, remainingAtStart: 50, remainingAtEnd: 50, staleAfterMs: 300_000, points: [[0, 50, 0]], work: null,
 });

@@ -13,7 +13,7 @@ import {SwitchRow} from './Popover';
 import {KEYS_PER_PAGE,KeyPages,KeyPageContent} from './KeyPages';
 import type {KeyPage} from '../lib/moneyKeys';
 
-/** Series are chosen in the chart's settings; the key table only reads measurements. */
+/** The chart and table edit the same reader selection beside their own measurements. */
 export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
   const context=useCurrencyContext(),board=useBoardId(),prefs=usePrefs(),unit=prefs.money.unit??DEFAULT_CURRENCY;
   const accounts=sources.filter(s=>budgetVisible(s)&&!hidden.includes('source:'+s.id)&&(unit===DEFAULT_CURRENCY?!!referenceBalance(s,context.target.id!==DEFAULT_CURRENCY||s.provider==='codex'):s.meters?.some(m=>m.kind==='balance'&&m.unit===unit)));

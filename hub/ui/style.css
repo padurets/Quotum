@@ -96,12 +96,10 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex
 /* ---------- widgets ---------- */
 .widgets { position: relative; display: grid; grid-template-columns: repeat(var(--columns, 6), minmax(0, 1fr)); grid-auto-rows: 32px; gap: 16px; }
 
-/* The analytics under the cards: one head with the filters of agent activity, the chart
-   and the table, which stays under the top bar while they scroll by. */
-.analytics { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
-.analytics-head { position: sticky; top: 60px; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 10px 0; }
-.analytics-head::before { content: ''; position: absolute; inset: 0 -28px; z-index: -1; background: #0b0b0ecc; -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); }
-.analytics-head h2 { margin: 0; font-size: 17px; font-weight: 560; letter-spacing: -.015em; }
+/* Shared viewing controls stay together as the mixed board scrolls beneath them.
+   Frost the backing alone so the popovers can still blur the page behind the bar. */
+.analytics-head { position: sticky; top: 68px; z-index: 5; align-self: flex-start; max-width: 100%; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px; border-radius: var(--popup-radius); }
+.analytics-head::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: var(--glass-fill); border: 1px solid var(--glass-edge); box-shadow: var(--glass-shadow); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
 .widget { position: relative; display: flex; flex-direction: column; min-width: 0; }
 .widgets > .card.is-loading { grid-column: span 2; grid-row: span 5; }
 .widget-body { position: relative; display: flex; flex-direction: column; min-width: 0; }
@@ -525,8 +523,9 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .panel-note { margin-right: auto; color: var(--text-3); font-size: 12.5px; }
 .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .controls .picker { margin-left: 0; }
-/* At the right even when it takes a row of its own: the arrows at its end stay where they were. */
-.analytics-head .controls { margin-left: auto; justify-content: flex-end; }
+.analytics-head .controls { display: contents; }
+.analytics-head .controls .segmented { flex: 0 1 auto; }
+.analytics-head .controls .picker { width: auto; }
 .segmented { display: flex; padding: 2px; gap: 2px; border: 1px solid var(--hair); border-radius: 9px; background: #ffffff04; }
 .segmented button, .segmented-radio span { white-space: nowrap; border: 0; background: none; color: var(--text-3); padding: 5px 12px; border-radius: 7px; font-size: 12.5px; transition: color .15s, background .15s; }
 .segmented button:hover, .segmented-radio:hover span { color: var(--text-2); }
@@ -537,7 +536,11 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .segmented-radio:has(input:disabled) { cursor: default; }
 .segmented:has(:disabled):not([aria-busy=true]) { opacity: .5; }
 /* The period: [the list] and a time range's × beside it, then ‹ ›. */
-.period { display: flex; align-items: center; gap: 2px; }
+.period { display: flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
+.period > .picker { min-width: 0; margin-left: 0; }
+.period .text-button { max-width: 100%; }
+.period .period-name { min-width: 0; }
+.period-name > span { min-width: 0; overflow-wrap: anywhere; }
 .period .icon-button { width: 28px; height: 28px; }
 .period .icon-button svg { stroke-width: 1.6; stroke-linejoin: round; }
 .period .icon-button:disabled { opacity: .35; pointer-events: none; }
@@ -878,9 +881,7 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .resize-handle { display: none; }
 }
 @media (max-width: 680px) {
-  /* On a phone the filters take two rows: they scroll with the page. */
-  .analytics-head { position: static; }
-  .analytics-head::before { display: none; }
+  .analytics-head { gap: 6px; }
   .topbar-inner { padding: 0 16px; gap: 12px; }
   .board-name { max-width: 120px; }
   .inline-form { flex-direction: column; align-items: stretch; }
@@ -1201,3 +1202,6 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
   .currency-details .currency-history { grid-template-columns: minmax(0, 1fr); }
   .currency-history .settings-item-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 4px; }
 }
+
+.period-status { display: flex; flex-wrap: wrap; gap: .4rem .8rem; color: var(--muted); font-size: .8rem; }
+.period-pages { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem 0; }

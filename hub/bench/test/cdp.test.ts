@@ -113,3 +113,14 @@ test('history bytes are counted by path after reads finish, separately from othe
   assert.equal(requests.historyPending, 0);
   assert.equal(requests.bytesByPath['/api/history'], 2345);
 });
+
+test('composite and detail attempts stay in the accounting budget after cancellation and the measurement window',()=>{
+  const cdp=browser(),requests=new Requests(cdp as unknown as Cdp);requests.counting=true;
+  for(const [requestId,path] of [['period','/api/boards/b/period'],['detail','/api/boards/b/period/sessions']])cdp.emit('Network.requestWillBeSent',{requestId,type:'Fetch',request:{url:'http://localhost'+path}});
+  assert.equal(requests.historyPending,2);assert.equal(requests.historyRequests,2);
+  requests.counting=false;
+  cdp.emit('Network.dataReceived',{requestId:'detail',encodedDataLength:123});
+  cdp.emit('Network.loadingFailed',{requestId:'detail',canceled:true});
+  cdp.emit('Network.loadingFinished',{requestId:'period',encodedDataLength:2345});
+  assert.equal(requests.historyPending,0);assert.equal(requests.historyBytes,2468);
+});

@@ -1,21 +1,23 @@
 import {useRef, useState, useSyncExternalStore} from 'react';
 import type {Kind} from '../lib/types';
-import {setPrefs, usePrefs} from '../lib/prefs';
+import {HORIZONS, setPrefs, usePrefs} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
 import {goTo, setTimeRange, timeRangeLabel, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistoryBegins} from '../lib/history';
+import {QUOTA_WIDGETS, ACTIVITY, QUOTA_HISTORY, BUDGET_HISTORY, SUBSCRIPTION_FUNDS} from '../../server/domain/widgets';
 import {t, useLocale} from '../i18n';
 import {pan} from '../lib/pan';
 import {Segmented} from './Kit';
 import {Popover} from './Popover';
 
 /** Weekly or 5-hour windows. */
-function KindSwitch({value, onChange}: {value: string; onChange: (kind: string) => void}) {
+function KindSwitch() {
+  const {kind} = usePrefs();
   return (
     <Segmented
-      value={value}
-      onChange={onChange}
+      value={kind}
+      onChange={next => setPrefs({kind: next as Kind})}
       options={[
         ['weekly', t('history.weekly')],
         ['session', t('history.session')],
@@ -23,6 +25,14 @@ function KindSwitch({value, onChange}: {value: string; onChange: (kind: string) 
       label={t('history.kind')}
     />
   );
+}
+
+/** The same filter is available beside either member of the quota pair. */
+export function QuotaSettings() {
+  return <div className="popover-section">
+    <div className="popover-title">{t('history.kind')}</div>
+    <div className="popover-pad"><KindSwitch /></div>
+  </div>;
 }
 
 const Arrow = ({back}: {back: boolean}) => (
@@ -50,7 +60,7 @@ function PeriodName({selected, range}: {selected: TimeRange | null; range: strin
 }
 
 /**
- * The period of the analytics (agent activity, the chart and the table): one of a list,
+ * The viewing period of the whole board: one of a list,
  * ending now, or a time range in the past, dragged across a chart or stepped back to with
  * ‹. ‹ and › move either by half its length; › up to now brings the chosen period back,
  * as clearing a range does.
@@ -147,19 +157,24 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
   );
 }
 
-/**
- * The head of the board's analytics: the window type and the period that the chart and
- * the table both show. The cards above it are about now and show every window.
- */
-export function AnalyticsHead() {
-  const prefs=usePrefs(),{kind}=prefs;
+/** Only controls shared across widgets belong above the board. */
+export function AnalyticsHead({widgets}: {widgets: string[]}) {
+  const {horizon} = usePrefs();
   const historyStart = useHistoryBegins();
+  const quota = QUOTA_WIDGETS.some(id=>widgets.includes(id));
+  const charts = [ACTIVITY,QUOTA_HISTORY,BUDGET_HISTORY,SUBSCRIPTION_FUNDS].some(id=>widgets.includes(id));
+  const horizonName = (value: typeof horizon) => value === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(value)});
   return (
     <div className="analytics-head">
-      <h2>{t('analytics.title')}</h2>
+      <PeriodSwitch historyStart={historyStart} />
       <div className="controls">
-        <KindSwitch value={kind} onChange={next => setPrefs({kind:next as Kind})} />
-        <PeriodSwitch historyStart={historyStart} />
+        {quota && <KindSwitch />}
+        {charts && <Popover label={t('history.horizon')} trigger={<span className="period-name">{t('history.horizon')}: {horizonName(horizon)}<ChevronIcon /></span>}>
+          <div className="popover-section">
+            <div className="popover-title">{t('history.horizon')}</div>
+            <div className="popover-pad"><Segmented value={horizon} onChange={horizon => setPrefs({horizon})} options={HORIZONS.map(h => [h, horizonName(h)])} label={t('history.horizon')} /></div>
+          </div>
+        </Popover>}
       </div>
     </div>
   );

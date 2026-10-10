@@ -1,4 +1,5 @@
 import {AnalyticsPanel, AnalyticsNote} from './AnalyticsPanel';
+import {QuotaSettings} from './Analytics';
 import {AnalyticsTable, TableSettings, type Cell, type TimedCell} from './AnalyticsTable';
 import {memo, useMemo, useRef} from 'react';
 import {num, rateText} from '../lib/format';
@@ -26,8 +27,8 @@ import {subscriptionLinesOf,subscriptionOverflow} from '../lib/subscription';
 import {usePrefs} from '../lib/prefs';
 import {ofTimeRange} from '../lib/timeRange';
 import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
-import {hubNow} from '../lib/clock';
 import {quotaHistory, useHistory} from '../lib/history';
+import {boardPeriod} from '../lib/period';
 import {t, useLocale, type Key} from '../i18n';
 
 const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', {value: num(spent.value, 1)}) : spent.key === 'unused' ? t('table.unused') : '—');
@@ -98,20 +99,17 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
       cells.now=edge(line.current);cells.start=edge(line.remainingAtStart);cells.end=edge(line.remainingAtEnd);
       return cells;
     }
-    // Of the cells about work, only the hours left move with time (below); the rest read the same at any moment.
-    const work = lineWork(line, range, resetAt, hubNow());
-    const perWork = work && 'value' in work.perwork ? work.perwork.value : null;
+    // A rolling left edge changes credited work locally. Only the affected cell
+    // reads its exact summary; its table and the other lines remain asleep.
+    const lineAt=(now:number)=>range?line:boardPeriod.quotaAt(line,now,history!.range);
     const workCell = (column: WorkColumn, now: number): Cell => {
-      const cells = column === 'workleft' ? lineWork(line, range, resetAt, now) : work;
-      return cells && line.work ? workText(column, cells[column], line.work, history!.since, resetAt, perWork) : {content: '—'};
+      const value=lineAt(now),cells=lineWork(value,range,resetAt,now),perWork=cells&&'value' in cells.perwork?cells.perwork.value:null;
+      const since=range?history!.since:boardPeriod.rangeAt('quota',now,history!.range)?.from??history!.since;
+      return cells&&value.work?workText(column,cells[column],value.work,since,resetAt,perWork):{content:'—'};
     };
-    const workCells: Record<WorkColumn, Cell | TimedCell> = {
-      work: workCell('work', 0),
-      agenthours: workCell('agenthours', 0),
-      perwork: workCell('perwork', 0),
-      during: workCell('during', 0),
-      workleft: range ? workCell('workleft', 0) : {time: 'workleft', changesAt: now => workLeftChangesAt(line, resetAt, now), at: now => workCell('workleft', now)},
-    };
+    const timed=(column:WorkColumn):Cell|TimedCell=>range?workCell(column,0):{time:column,
+      changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>JSON.stringify(workCell(column,at)),column==='workleft'?at=>workLeftChangesAt(lineAt(at),resetAt,at):undefined,line.sourceId,history!.range),at:now=>workCell(column,now)};
+    const workCells:Record<WorkColumn,Cell|TimedCell>={work:timed('work'),agenthours:timed('agenthours'),perwork:timed('perwork'),during:timed('during'),workleft:timed('workleft')};
     if (range) {
       return {
         ...workCells,
@@ -154,7 +152,7 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
           };
         },
       },
-      spent: {content: spentText(spentOf(line))},
+      spent: {time:'spent',changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>spentText(spentOf(lineAt(at))),undefined,line.sourceId,history!.range),at:now=>({content:spentText(spentOf(lineAt(now)))})},
       forecast: {
         time: 'forecast',
         changesAt: now => cellChangesAt(live, measuredAt, now, ahead, context, chosen),
@@ -180,16 +178,20 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
   };
 
   const definitions = modeColumns.map(id => ({id, title: heading(id, range), width: FORECAST_WIDTHS[id], hint: HEADINGS[id].hint ? t(HEADINGS[id].hint!) : undefined}));
+  // A pan phase changes the panel's presentation, not its retained rows. Reusing
+  // the table also keeps every clock cell from replanning its deadline on input.
+  const table=useMemo(()=><AnalyticsTable columns={definitions.filter(column=>columns.includes(column.id))}
+    rows={lines.map(line=>({key:line.key,name:line.name,color:line.color,cells:cellsOf(line)}))}
+    name={t('table.limit')} nameWidth={FORECAST_WIDTHS.limit} lead={range?'end':'now'}/>,
+    [lines,columns,range,sources,forecasts,news,history,view,locale]);
   return (
     <AnalyticsPanel ref={panel} className="forecast" title={t('forecast.title')} history={history} loading={loading} error={error} retry={quotaHistory.retry}
-      settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}/>}
+      settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}><QuotaSettings /></TableSettings>}
     >
       {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}
       {!history ? error ? null : <div className="panel-loading">{t('history.loading')}</div>
         : !lines.length ? <p className="panel-empty">{t('forecast.empty')}</p>
-        : <AnalyticsTable columns={definitions.filter(column => columns.includes(column.id))}
-            rows={lines.map(line => ({key: line.key, name: line.name, color: line.color, cells: cellsOf(line)}))}
-            name={t('table.limit')} nameWidth={FORECAST_WIDTHS.limit} lead={range ? 'end' : 'now'}/>
+        : table
       }
     </AnalyticsPanel>
   );

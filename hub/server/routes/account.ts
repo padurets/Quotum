@@ -12,7 +12,7 @@ import {
 } from '../domain/auth.js';
 import type {Guards, Hub} from '../api.js';
 import type {Board, User} from '../store/directory.js';
-import {parseView, VIEW_BODY_LIMIT} from '../domain/view.js';
+import {decodeView, VIEW_VERSION, VIEW_VERSION_HEADER, VIEW_BODY_LIMIT} from '../domain/view.js';
 import {longerThan} from '../domain/ingest.js';
 import {PROJECT_NAME_CHARS} from '../domain/projects.js';
 import {validFrequency} from '../domain/frequency.js';
@@ -289,10 +289,8 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     const access = guards.board(request, reply, request.params.board);
     if (!access) return reply;
     if (!isOwner(access.board)) return forbidden(reply);
-    if (request.headers['x-quotum-view-version'] !== '2') return reply.code(428).send({error: 'view_reload_required'});
-    const version = (request.body as {version?: unknown} | null)?.version;
-    if (version === undefined || version === 1) return reply.code(428).send({error: 'view_reload_required'});
-    const view = parseView(request.body);
+    if (request.headers[VIEW_VERSION_HEADER.toLowerCase()] !== String(VIEW_VERSION)) return reply.code(428).send({error: 'view_reload_required'});
+    const view = decodeView(request.body);
     if (!view) return reply.code(400).send({error: 'invalid_request'});
     const match = request.headers['if-match'];
     if (match === undefined) return reply.code(428).send({error: 'view_reload_required'});
@@ -300,7 +298,8 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     return directory.transaction(() => {
       const {revision, view: currentView} = directory.viewState(access.board.id);
       if (revision !== Number(match.slice(1, -1))) return reply.code(409).send({error: 'view_conflict', view: currentView, revision});
-      return {view, revision: directory.saveView(access.board.id, view, access.user.id, Date.now())};
+      directory.saveView(access.board.id, view, access.user.id, Date.now());
+      return directory.viewState(access.board.id);
     });
   });
 
@@ -465,6 +464,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       // A token without a name is shown under a default one in the reader's language.
       const name = str(request.body?.name).trim();
       if (name && !validName(name)) return reply.code(400).send({error: 'invalid_name'});
+      if (request.body?.onboardingId !== undefined && request.headers[VIEW_VERSION_HEADER.toLowerCase()] !== String(VIEW_VERSION)) return reply.code(428).send({error:'view_reload_required'});
       try {
         return directory.transaction(() => {
           const secret = newSecret('qt_m');
@@ -507,6 +507,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       if (!user) return reply;
       const decision = (request.params as {decision: string}).decision;
       if (decision !== 'approve' && decision !== 'deny') return notFound(reply);
+      if (request.body?.onboardingId !== undefined && request.headers[VIEW_VERSION_HEADER.toLowerCase()] !== String(VIEW_VERSION)) return reply.code(428).send({error:'view_reload_required'});
       if (!lookups.allow(`user:${user.id}`)) return reply.code(429).send({error: 'too_many_attempts'});
       try {
         const ok = directory.transaction(() => {

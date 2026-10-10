@@ -36,6 +36,7 @@ const context={exports:{} as {QuotaCard:typeof QuotaComponent;CapReset:typeof Re
   if(name.endsWith('/money'))return money;
   if(name.endsWith('/format'))return format;
   if(name.endsWith('/clock'))return {useClock:()=>now};
+  if(name.endsWith('/measurementClock'))return {useMeasurementClock:()=>now,useMeasurementTime:()=>null};
   if(name.endsWith('/i18n'))return {t};
   if(name==='./Meter')return {MeterBar,PercentLimit,ResetText};
   if(name.endsWith('/quota'))return quota;

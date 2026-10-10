@@ -15,7 +15,7 @@ test('the actual card tray adds no news container for an ordinary client or comp
   const source=readFileSync(new URL('../components/SourceCard.tsx',import.meta.url),'utf8');
   const start=source.indexOf('function CardTray('),end=source.indexOf('\n/**',start);
   const context={exports:{},CardTray:null as unknown as (props:{source:object})=>{props:{news:unknown}},
-    useSessions:()=>[],useResetsFor:()=>undefined,useSourceAccess:()=>null,
+    useSourcePeriodSessions:()=>[],useResetsFor:()=>undefined,useSourceAccess:()=>null,
     providerOf,
     Tray:'tray',AccessMark:'access',QuotaMark:'quota',BalanceMark:'balance',FreeResets:'reset',
     require:(name:string)=>{assert.equal(name,'react/jsx-runtime');return {jsx:(type:unknown,props:unknown)=>({type,props}),jsxs:(type:unknown,props:unknown)=>({type,props}),Fragment:'fragment'};}};
@@ -37,6 +37,7 @@ test('subscription balances live only in the dashboard and compact footers, with
   let source:Card={id:'fixture',provider:'codex',plan:'pro',successAt:1,error:null,stale:false,owners:[],staleAfterMs:1000,measureIntervalMs:null,windows:[],resets:{available:2,expiring:[]},budget:budgetAccess('codex',true),creditBalance};
   const context={exports:{},SourceCard:null as unknown as (props:object)=>Node,Row:null as unknown as (props:object)=>Node,
     memo:(fn:unknown)=>fn,useLocale:()=>{},useCard:()=>source,useTitle:()=>'Fixture',useMine:()=>true,
+    usePeriodValues:()=>({value:null}),useTimeRange:()=>null,useCurrencyContext:()=>({}),MeasurementClock:{Provider:'clock'},useSourcePeriodSessions:()=>[],
     useSessions:()=>[],useResetsFor:()=>undefined,useSourceAccess:()=>null,useBoardId:()=>'board',useServerView:()=>EMPTY_VIEW,
     providerOf,budgetVisible,subscriptionFundsVisible,quotaPeriods,hasSubscriptionCaps,isWindowHidden:()=>false,planOf:()=>null,colorOf:()=>'',
     SourceSettings:'settings',CardMark:'mark',BalanceMark:'balance-status',AccessMark:'access',QuotaMark:'quota-status',

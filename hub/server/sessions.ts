@@ -118,6 +118,15 @@ export class Sessions {
     return [...new Set((this.machines.get(device)?.sessions ?? []).flatMap(s => s.source ? [s.source] : []))];
   }
 
+  /** Only a producer's stable identity can enrich a retained context with current presence. */
+  presence(device:string, client:string, source:string|null, producer:string|null, origin:Origin, project:string|null, folder:string|null, now:number) {
+    if(!producer)return undefined;
+    const machine=this.machines.get(device);
+    if(!machine||now>machine.at+KEEP_MS)return undefined;
+    const session=machine.sessions.find(s=>s.clientId===client&&s.source===source&&s.sessionId===producer&&s.origin===origin&&(s.project??'')===(project??'')&&(s.folder??'')===(folder??''));
+    return session?{working:session.working&&now<machine.at+CREDIT_MS,through:machine.at+KEEP_MS+1,workingThrough:machine.at+CREDIT_MS,startedAt:session.startedAt}:undefined;
+  }
+
   /**
    * The sessions running on a subscription on the machines of `people` (those on the
    * board read who measure it, whoever brought it there), by machine name and then by age,

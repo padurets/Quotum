@@ -7,7 +7,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
   const key = (down: boolean, name: string, code: number) => cdp.send('Input.dispatchKeyEvent', {type: down ? 'keyDown' : 'keyUp', key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers: down && name === 'Shift' ? 8 : 0});
   const mouse = (type: string, x: number, y: number, modifiers = 0) => cdp.send('Input.dispatchMouseEvent', {type, x, y, modifiers, button: type === 'mouseMoved' && !modifiers ? 'none' : 'left', buttons: type === 'mousePressed' || type === 'mouseMoved' && modifiers ? 1 : 0, clickCount: type === 'mouseMoved' ? undefined : 1});
   const click = async (selector: string, index = 0) => {
-    const point = await cdp.evaluate<{x: number; y: number}>(`(async () => {const until=Date.now()+5000;let element;while(!(element=document.querySelectorAll(${JSON.stringify(selector)})[${index}])){if(Date.now()>until)throw new Error('missing native input target: '+${JSON.stringify(selector)});await new Promise(r=>setTimeout(r,20));}if(!element.closest('.popover')){element.scrollIntoView({block:'center'});await new Promise(requestAnimationFrame);}const r=element.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    const point = await cdp.evaluate<{x: number; y: number}>(`(async () => {const until=Date.now()+5000;let element;while(!(element=document.querySelectorAll(${JSON.stringify(selector)})[${index}])){if(Date.now()>until)throw new Error('missing native input target: '+${JSON.stringify(selector)});await new Promise(r=>setTimeout(r,20));}element.scrollIntoView({block:element.closest('.popover')?'nearest':'center'});await new Promise(requestAnimationFrame);const r=element.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
     await mouse('mouseMoved', point.x, point.y);
     await mouse('mousePressed', point.x, point.y);
     await mouse('mouseReleased', point.x, point.y);
@@ -30,12 +30,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       const inset = initiator === 'quota' ? 52 : 88;
       await cdp.evaluate(`(() => {
     const style=document.createElement('style'); style.id='quotum-pan-layout';
-    style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important}.widget:not(:has(.history,.activity,.budget-history,.subscription-funds)){display:none!important}.widget:has(.history){order:1}.widget:has(.activity){order:2}.widget:has(.budget-history){order:3}.widget:has(.subscription-funds){order:4}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:200px!important}.activity .chart>svg{height:140px!important}.budget-history .chart>svg,.subscription-funds .chart>svg{height:200px!important}.legend{max-height:48px;overflow:auto}.activity .legend{max-height:40px}';
+    // Clear inherited stretch on hidden cards too: all widgets now share this grid.
+    style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important;--fill:0px!important}.widget:not(:has(.history,.activity,.budget-history,.subscription-funds)){display:none!important}.widget:has(.history){order:1}.widget:has(.activity){order:2}.widget:has(.budget-history){order:3}.widget:has(.subscription-funds){order:4}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:200px!important}.activity .chart>svg{height:140px!important}.budget-history .chart>svg,.subscription-funds .chart>svg{height:200px!important}.legend{max-height:48px;overflow:auto}.activity .legend{max-height:40px}';
     document.head.append(style); document.querySelector('.analytics-head')?.scrollIntoView();
   })()`);
     // A manual horizon keeps the 30d source's full 1.25-width path inside retention.
-    await click('.history .panel-head .picker > button');
-    await click('.history .popover .segmented button', 1);
+    await click('.analytics-head .controls .picker > button');
+    await click('.analytics-head .popover .popover-section:last-child .segmented button', 1);
     await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     for (const [period, index] of [['24h', 4], ['30d', 8]] as const) {
       await click('.period .picker > button');
@@ -99,10 +100,12 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
         for(const type of types){owner.addEventListener(type,capture,true);window.addEventListener(type,input);}
         const originalFetch=window.fetch.bind(window);probe.originalFetch=originalFetch;
         window.fetch=async(...args)=>{
-          const url=new URL(String(args[0]),location.href);if(url.pathname!='/api/history')return originalFetch(...args);
-          const scope=JSON.stringify([url.searchParams.get('scope'),url.searchParams.get('meters'),url.searchParams.get('unit'),url.searchParams.get('currency')]),cell=Number(url.searchParams.get('cell')),from=Number(url.searchParams.get('from')),to=Number(url.searchParams.get('to')),tiles=Math.floor((to-1)/(cell*60))-Math.floor(from/(cell*60))+1;
-          for(const f of probe.flights.values())if(f.scope===scope&&f.cell===cell&&f.from<to&&f.to>from)probe.duplicateReads++;
-          const id={},signal=args[1]?.signal,aborted=()=>probe.flights.delete(id);probe.flights.set(id,{scope,cell,from,to});signal?.addEventListener('abort',aborted,{once:true});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.maxTiles=Math.max(probe.maxTiles,tiles);probe.coldReads++;
+          const url=new URL(String(args[0]),location.href),legacy=url.pathname==='/api/history';if(!legacy&&!new RegExp('^/api/boards/[^/]+/period(?:/sessions)?$').test(url.pathname))return originalFetch(...args);
+          const body=legacy?null:JSON.parse(args[1]?.body||'{}');
+          const sections=legacy?[Object.fromEntries(url.searchParams)]:['quota','budget','funds'].filter(scope=>body[scope]&&body[scope].cells!=='skip').map(scope=>({...body[scope],scope:scope==='funds'?'budget':scope}));
+          const ranges=sections.map(q=>({scope:JSON.stringify([q.scope,q.meters,q.unit,q.currency]),cell:Number(q.cell),from:Number(q.from),to:Number(q.to)}));
+          for(const q of ranges){for(const f of probe.flights.values())for(const other of f)if(other.scope===q.scope&&other.cell===q.cell&&other.from<q.to&&other.to>q.from)probe.duplicateReads++;probe.maxTiles=Math.max(probe.maxTiles,Math.floor((q.to-1)/(q.cell*60))-Math.floor(q.from/(q.cell*60))+1);}
+          const id={},signal=args[1]?.signal,aborted=()=>probe.flights.delete(id);probe.flights.set(id,ranges);signal?.addEventListener('abort',aborted,{once:true});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.coldReads++;
           try {return await originalFetch(...args);}finally{probe.flights.delete(id);signal?.removeEventListener('abort',aborted);}
         };
         probe.observer=new MutationObserver(records=>{
@@ -229,9 +232,9 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       await wheel(24, true); await wait(40);
       await key(false, 'Shift', 16); await wait(240);
       if (!(await cdp.evaluate<boolean>(`!document.querySelector('[data-pan-end]')&&!new URLSearchParams(location.search).has('from')`))) throw new Error('Shift-wheel return did not preserve live');
-      await cdp.evaluate(`history.back()`); await wait(300);
+      await cdp.evaluate(`history.back()`); await wait(300); await settled();
       if (!(await cdp.evaluate<boolean>(`new URLSearchParams(location.search).has('from')`))) throw new Error('Back did not restore the whole previous gesture');
-      await cdp.evaluate(`history.forward()`); await wait(300);
+      await cdp.evaluate(`history.forward()`); await wait(300); await settled();
       if (!(await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`))) throw new Error('Forward did not restore live');
       // A wheel does not blur a keyboard-focused legend. Its bubble must stay
       // hidden through ordinary panning, a latched drag and their final fold.
@@ -262,8 +265,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
     if (interception) await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
     await cdp.evaluate(`(() => {window.__quotumPan?.cleanup();document.getElementById('quotum-pan-layout')?.remove();})()`);
     try {
-      if (await cdp.evaluate<boolean>(`!document.querySelector('.history .popover')`)) await click('.history .panel-head .picker > button');
-      await click('.history .popover .segmented button', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
+      if (await cdp.evaluate<boolean>(`!document.querySelector('.analytics-head .popover')`)) await click('.analytics-head .controls .picker > button');
+      await click('.analytics-head .popover .popover-section:last-child .segmented button', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
       await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     } catch {
       // A failed setup retains its original error; the benchmark owns and closes its tab.

@@ -341,7 +341,7 @@ test('the actual card plan components do not subscribe to another projection at 
   const c = pageClock(); c.jump(8 * MIN + 8 * S);
   const w: Win = {id: 'session', kind: 'session', label: null, used: 14.9, remaining: 85.1, resetAt: T0 + 13 * MIN, minutes: 300};
   let changesAt: (now: number) => number | null = () => null;
-  const context = {...plan, num, t, exports: {}, useClock: (read: typeof changesAt) => {changesAt = read; return c.now();}, require: () => jsx,
+  const context = {...plan, num, t, exports: {}, useMeasurementClock: (read: typeof changesAt) => {changesAt = read; return c.now();}, require: () => jsx,
     leaves: {} as Record<string, (props: {w: Win; measuredAt: number; weekly: number[]}) => unknown>};
   const source = readFileSync(new URL('../components/SourceCard.tsx', import.meta.url), 'utf8');
   const region = source.slice(source.indexOf('function PlanMark('), source.indexOf('/** When the limit resets:'));

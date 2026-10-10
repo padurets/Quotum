@@ -788,6 +788,24 @@ function cooperativeHarness(pool?: HistoryPool, scope?: 'quota'|'budget') {
   return {...h, tasks, tick, finish, internals, preparations};
 }
 
+test('release retains its last strip while preparing only the complete selected frame', async () => {
+  const h = cooperativeHarness(); await h.start(); await h.reads[0].answer(); await h.finish();
+  const range = {from: NOW - 36 * H, to: NOW - 12 * H};
+  h.store.pan({token: 1, length: 24 * H, ...range, direction: -1}); await flush(); await h.finish();
+  const strip = h.store.getPlot(); assert.ok(strip);
+  const changes: unknown[] = [];
+  const stop = h.store.subscribePlot(() => changes.push(h.store.getPlot()));
+  // Leave a newer strip queued when the gesture commits.
+  h.store.pan({token: 1, length: 24 * H, from: range.from - H, to: range.to - H, direction: -1}); await flush();
+  h.store.choose('24h', range); h.store.endPan(true); await flush();
+  assert.equal(h.store.getPlot(), strip);
+  for (let i = 0; i < 12 && pending(h).length; i++) {for (const read of pending(h)) await read.answer(); await h.finish();}
+  await h.finish();
+  assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`);
+  assert.deepEqual(changes, [null], 'arrivals replace the retained strip only with the complete frame');
+  stop(); h.store.close();
+});
+
 test('a sliced whole response publishes no live tile, boundaries or history before its atomic commit', async () => {
   const h = cooperativeHarness(); await h.start();
   await h.reads[0].answer();
@@ -1183,6 +1201,28 @@ test('a seven-day look-ahead reads a long visible miss in capped batches and nev
   h.store.close();
 });
 
+test('a shared month reader bounds cold and gesture decoding to one tile without rereading its return', async () => {
+  const h = harness(undefined, undefined, 'budget', new HistoryPool()), length = 30 * 24 * H;
+  h.store.choose('30d', null); await h.start();
+  for(let n=0;n<20&&pending(h).length;n++)for(const r of pending(h)){assert.equal(tileOf(r.from,r.cell),tileOf(r.to-1,r.cell));await r.answer();}
+  assert.equal(h.store.get().history?.range,'30d');
+  const origin = {from: NOW - length, to: NOW}, range = {from: NOW - 2 * length, to: NOW - length};
+  const offset = h.reads.length;
+  h.store.pan({token: 1, length, ...range, direction: -1}); await flush();
+  for (let n = 0; n < 30 && pending(h).length; n++) for (const r of pending(h)) {
+    assert.equal(tileOf(r.from, r.cell), tileOf(r.to - 1, r.cell), 'decoded staging is bounded by one shared input tile');
+    await r.answer();
+  }
+  assert.ok(h.reads.length > offset + 1); assert.equal(pending(h).length, 0);
+  h.store.choose('30d', range); h.store.endPan(true); await flush();
+  assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`);
+  const count = h.reads.length;
+  h.store.pan({token: 2, length, ...origin, direction: 1}); await flush();
+  h.store.choose('30d', null); h.store.endPan(true); await flush();
+  assert.equal(h.store.get().history?.range, '30d'); assert.equal(h.reads.length, count);
+  h.store.close();
+});
+
 test('a custom 31-day range keeps its grid and exact accounting through a pan and cached return', async () => {
   const length = 31 * 24 * H, h = harness(), origin = {from: NOW - length, to: NOW};
   h.store.choose('30d', origin); await h.start(); await h.reads[0].answer();
@@ -1229,6 +1269,17 @@ test('an incoming family cannot evict the other visible frame or publish an over
   b.store.setMeters({unit:'USD',ids:[]});await flush();
   assert.equal(b.store.get().error,undefined);assert.ok(b.store.get().history);assert.equal(b.reads.length,1,'empty selection completes locally');
   q.store.close();b.store.close();
+});
+
+test('a replacement can evict the former frame inputs while its complete drawing stays visible',async()=>{
+  const pool=new HistoryPool(40_000),h=harness(undefined,undefined,'quota',pool);
+  await h.start();await h.reads[0].answer();const retained=h.store.get().history;assert.ok(retained);
+  h.store.choose('24h',{from:NOW-60*H,to:NOW-36*H});await flush();
+  assert.ok(h.store.evictionCandidates().length,'former input cells are no longer pinned by the displayed projection');
+  const incoming={role:'visible' as const};assert.ok(pool.reserve(incoming,pool.budget-pool.estimatedBytes+1));
+  assert.equal(h.store.get().history,retained);assert.ok(pool.estimatedBytes<=pool.budget);
+  pool.release(incoming);await h.reads[1].answer();assert.notEqual(h.store.get().history,retained);assert.equal(h.store.get().error,undefined);
+  h.store.close();
 });
 
 test('every preparation slice accounts for private tile growth, including cancellation and rejection',async()=>{

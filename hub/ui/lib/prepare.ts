@@ -83,3 +83,12 @@ export function prepare<T>(owner: object, work: Preparation<T>, valid: () => boo
   if (scheduler) scheduler.replace(owner, work, valid, ready);
   else {const value = drain(work); if (valid()) ready(value);}
 }
+
+/** Cancellation settles the owner as well as releasing its generator's staged buffers. */
+export function prepareAsync<T>(owner:object,work:Preparation<T>,valid:()=>boolean,scheduler=preparations()):Promise<T|null> {
+  return new Promise((resolve,reject)=>{
+    function* guarded():Preparation<T>{let complete=false;try{yield;const value=yield*work;complete=true;return value;}catch(error){complete=true;reject(error);return undefined as T;}finally{if(!complete)resolve(null);}}
+    const guardedWork=guarded();guardedWork.next();
+    prepare(owner,guardedWork,valid,value=>resolve(value),scheduler);
+  });
+}

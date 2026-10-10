@@ -1,4 +1,4 @@
-import {VIEW_VERSION_HEADER} from '../../server/domain/view';
+import {VIEW_VERSION_HEADER, VIEW_VERSION} from '../../server/domain/view';
 import type {WidgetId} from '../../server/domain/widgets';
 export type {WidgetId} from '../../server/domain/widgets';
 import {createContext, useContext, useEffect, useRef, useState} from 'react';
@@ -123,14 +123,14 @@ export function useAddition() {
       if (boardId) await flushView(boardId);
       if (!currentScope()) return;
       let reserved = current.current;
-      if (!reserved) reserved = await call<Operation>('POST', '/api/additions', {requestId: request.current, boardId, item}, 12_000, undefined, {[VIEW_VERSION_HEADER]: '2'});
+      if (!reserved) reserved = await call<Operation>('POST', '/api/additions', {requestId: request.current, boardId, item}, 12_000, undefined, {[VIEW_VERSION_HEADER]: String(VIEW_VERSION)});
       if (!currentScope()) return;
       if (own === generation.current) accept(reserved);
       const next = await call<Operation>(
         'POST',
         '/api/additions/' + reserved.id + '/run',
         secret === undefined ? {} : {secret, ...options},
-        30_000, undefined, {[VIEW_VERSION_HEADER]: '2'},
+        30_000, undefined, {[VIEW_VERSION_HEADER]: String(VIEW_VERSION)},
       );
       if (!currentScope() || own !== generation.current) return;
       accept(next);

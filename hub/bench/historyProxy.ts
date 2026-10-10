@@ -1,3 +1,4 @@
+import {accountingPath} from './accountingTraffic';
 import {createServer, request, type IncomingHttpHeaders, type IncomingMessage, type ServerResponse} from 'node:http';
 import {promisify} from 'node:util';
 import {brotliCompress, brotliDecompress, constants} from 'node:zlib';
@@ -19,7 +20,7 @@ export async function historyProxy(upstream: string) {
   const terminals = new Map<string, Promise<void>>();
   const server = createServer((incoming, outgoing) => {
     if (!incoming.url?.startsWith('/') || incoming.url.startsWith('//')) {outgoing.writeHead(400).end(); return;}
-    const url = new URL(incoming.url, upstream), history = url.pathname === '/api/history';
+    const url = new URL(incoming.url, upstream), history = accountingPath(url.pathname);
     const attempt = incoming.headers[HISTORY_ATTEMPT_HEADER];
     if (history && attempt !== undefined && (typeof attempt !== 'string' || !/^[a-zA-Z0-9:._-]{1,96}$/.test(attempt) || identities.has(attempt))) {outgoing.writeHead(400).end(); return;}
     let id = typeof attempt === 'string' ? attempt : `p${++serial}`;

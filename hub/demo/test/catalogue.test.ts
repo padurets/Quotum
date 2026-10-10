@@ -1,3 +1,6 @@
+import type {PeriodReply} from '../../server/domain/periodRead.js';
+import {workedSessions} from '../../server/domain/periodWork.js';
+import {PeriodActivity} from '../../ui/lib/periodActivity.js';
 import {compose, targetOf, type HistoryAnswer} from '../../server/domain/history.js';
 import {periodOf} from '../../ui/lib/periods.js';
 import {test, type TestContext} from 'node:test';
@@ -30,7 +33,7 @@ import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.j
 import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type SourceForecast, type View} from '../../ui/lib/types.js';
 import type {Snapshot} from '../../ui/lib/board.js';
 import {ACTIVITY, AGENTS, boardState, cardId, columnShown, QUOTA_TABLE, QUOTA_HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
-import {SCENES, SETS} from '../catalogue.js';
+import {SCENES, SETS,PERIOD_SCENES} from '../catalogue.js';
 import {
   awake,
   cards,
@@ -566,7 +569,7 @@ test('every entry of the whole catalogue shows what it claims over its span', {t
       const {layout} = (await reading.overview('grid')).view;
       assert.deepEqual(layout.places.agents, {x: 0, y: 0, w: 3, h: 16});
       for (const [i, id, h] of [[0, 'claude-max'], [1, 'codex-pro', 9], [2, 'antigravity', 8]] as const) {
-        assert.deepEqual(layout.places[cardId(stand.sources.get(id)!)], {x: 3, y: i, w: 3, ...(h ? {h} : {})});
+        assert.deepEqual(layout.places[cardId(stand.sources.get(id)!)], {x: 3, y: i + 1, w: 3, ...(h ? {h} : {})});
       }
       // The heights chosen on the boards the benchmark and the look go through.
       const ana = (await reading.overview('ana')).view.layout.places;
@@ -854,4 +857,26 @@ test('seed and live credit share producer IDs and expose known positive, zero, l
   assert.equal(byName('mobile-app').workedMs, null);
   assert.equal(byName('ios-app').workedMs, null);
   assert.ok(byName('ios-app').rows.some(row => row.session.workedMs !== null), 'a mixed group contains known credit too');
+});
+
+
+test('period catalogue states use the existing retained demo evidence at exclusive boundaries',async t=>{
+  const set=setOf('activity'),start=Math.floor(Date.now()/MIN)*MIN;
+  const {stand}=await bringUp(t,set,start);t.mock.timers.setTime(start);
+  const reader=stand.people.get('ana')!,board=reader.personalBoard!,sources=[...stand.sources.values()];
+  const selection={mode:'range',from:start-8*HOUR+123,to:start-4*HOUR+321};
+  const reply=await reader.post<PeriodReply>(`/api/boards/${board}/period`,{version:1,selection,evaluatedAt:start,values:sources,sessions:{},quota:{cell:String(MIN),from:String(start-8*HOUR),to:String(start-4*HOUR+MIN)}});
+  assert.equal(reply.values?.state,'complete');assert.equal(reply.sessions?.state,'complete');assert.equal(reply.quota?.state,'complete');
+  if(reply.values?.state!=='complete'||reply.sessions?.state!=='complete'||reply.quota?.state!=='complete')throw new Error('period sections');
+  const values=reply.values.value.flatMap(v=>v.windows),rows=workedSessions(reply.sessions.value,selection,start);
+  assert.ok(values.length);assert.ok(values.every(v=>v.observedAt<selection.to));assert.ok(rows.length);assert.ok(rows.every(r=>r.workedMs>0&&r.lastWorkedAt<=selection.to));
+  assert.ok(rows.every(r=>r.currentPresence===undefined),'retained contexts do not acquire invented live presence');
+  const target=targetOf(selection.to-selection.from,start,'past',selection),history=compose(reply.quota.value.chunks,reply.quota.value as HistoryAnswer,target,new Set());
+  const activity=new PeriodActivity(reply.sessions.value);activity.update(rows);
+  assert.equal(activity.project(history.activity,selection).agentMs,rows.reduce((sum,r)=>sum+r.workedMs,0));
+  const end=start+earliest(set)-1;
+  const empty=await reader.post<PeriodReply>(`/api/boards/${board}/period`,{version:1,selection:{mode:'range',from:end-HOUR,to:end},evaluatedAt:start,values:sources,sessions:{}});
+  if(empty.values?.state!=='complete'||empty.sessions?.state!=='complete')throw new Error('empty period');
+  assert.ok(empty.values.value.every(v=>!v.windows.length&&!v.meters.length));assert.equal(empty.sessions.value.spans.length,0);
+  assert.deepEqual(PERIOD_SCENES.flatMap(s=>s.expect),['past-values','retained-work','exclusive-interval','shared-activity','unknown-value','no-invented-work']);
 });
