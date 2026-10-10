@@ -80,10 +80,52 @@ class Socket extends EventTarget {
   readonly commands: {id: number; method: string}[] = [];
   send(value: string) {this.commands.push(JSON.parse(value));}
   answer(id: number, result: unknown) {this.dispatchEvent(new MessageEvent('message', {data: JSON.stringify({id, result})}));}
+  reject(id: number, message: string) {this.dispatchEvent(new MessageEvent('message', {data: JSON.stringify({id, error: {message}})}));}
   emit(method: string, params: object = {}) {this.dispatchEvent(new MessageEvent('message', {data: JSON.stringify({method, params})}));}
   close() {this.readyState = WebSocket.CLOSED;}
 }
 const connection = (socket: Socket) => new (Cdp as unknown as new (socket: unknown) => Cdp)(socket);
+
+test('a protocol rejection keeps its original command through cleanup without retaining browser text', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  for (const method of ['Runtime.evaluate', 'Network.getResponseBody']) {
+    const socket = new Socket(), cdp = connection(socket);
+    try {
+      cdp.at('board/open');
+      const failed = assert.rejects(cdp.send(method, {expression: 'private-expression-canary'}), /private-protocol-text-canary/);
+      cdp.at('cleanup'); socket.reject(1, 'private-protocol-text-canary'); await failed;
+      const original = cdp.snapshot().failure;
+      assert.ok(original);
+      assert.equal(original.id, 1); assert.equal(original.method, method); assert.equal(original.context, 'board/open');
+      assert.equal(original.reason, 'the browser rejected the command');
+      assert.ok(Number.isFinite(original.elapsedMs)); assert.equal(original.deadline - original.started, 30_000);
+      const cleanup = cdp.send('Emulation.setCPUThrottlingRate', {rate: 1}); socket.answer(2, {}); await cleanup;
+      assert.equal(cdp.snapshot().lastAck?.id, 2);
+      const timed = assert.rejects(cdp.send('Performance.getMetrics'), /no browser response/);
+      t.mock.timers.tick(30_000); await timed;
+      socket.reject(1, 'private-late-error-canary'); socket.reject(999, 'private-unknown-error-canary');
+      assert.deepEqual(cdp.snapshot().failure, original); assert.deepEqual(cdp.snapshot().pending, []);
+      assert.doesNotMatch(JSON.stringify(cdp.snapshot()), /private-|expression|message/);
+    } finally {cdp.close();}
+  }
+});
+
+test('a rejection for an unknown or cancelled command cannot invent another command failure', async () => {
+  const socket = new Socket(), cdp = connection(socket), abort = new AbortController();
+  try {
+    socket.reject(999, 'private-unknown-error-canary');
+    assert.equal(cdp.snapshot().failure, null);
+    const cancelled = assert.rejects(cdp.send('Runtime.evaluate', {expression: 'private-expression-canary'}, abort.signal), /cancelled/);
+    abort.abort(); await cancelled; socket.reject(1, 'private-cancelled-error-canary');
+    assert.equal(cdp.snapshot().failure, null);
+    cdp.at('board/open'); const failed = assert.rejects(cdp.send('Network.getResponseBody'), /private-protocol-text-canary/);
+    socket.reject(1, 'private-stale-error-canary'); assert.equal(cdp.snapshot().failure, null);
+    socket.reject(2, 'private-protocol-text-canary'); await failed;
+    assert.equal(cdp.snapshot().failure?.id, 2); assert.equal(cdp.snapshot().failure?.method, 'Network.getResponseBody');
+    assert.equal(cdp.snapshot().failure?.context, 'board/open'); assert.deepEqual(cdp.snapshot().pending, []);
+    assert.doesNotMatch(JSON.stringify(cdp.snapshot()), /private-|expression|message/);
+  } finally {cdp.close();}
+});
 
 test('a page exception keeps its original command through later cleanup failures without retaining page text', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});

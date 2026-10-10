@@ -133,6 +133,9 @@ every attempt. The `make bench` wrapper forwards this setting without loading pr
 configuration. A pending CDP command still has its 30-second deadline; the canonical
 observer does not pause JavaScript or start a profiler while waiting. On failure it
 collects bounded liveness and command identity, without recording command parameters.
+The first failed command stays recorded through cleanup, including protocol rejections
+and page evaluation failures. Its saved identity contains neither browser error text
+nor the evaluated expression.
 Debugger intervention belongs to an explicitly diagnostic replay, with mandatory
 resume and owned-target cleanup, and cannot provide a passing canonical result.
 The observer credits input after its coalesced position reaches the actual data layers

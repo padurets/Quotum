@@ -31,7 +31,12 @@ export class Cdp {
           this.failure ??= {id: message.id, method: call.method, context: call.context, started: call.started, deadline: call.started + 30_000,
             elapsedMs: performance.now() - call.started, reason: 'a page evaluation failed'};
         }
-        if (message.error) call?.reject(new Error(`${call.method}: ${message.error.message}`));
+        // Keep the first rejection before cleanup replies replace lastAck.
+        if (message.error) {
+          if (call) this.failure ??= {id: message.id, method: call.method, context: call.context, started: call.started, deadline: call.started + 30_000,
+            elapsedMs: performance.now() - call.started, reason: 'the browser rejected the command'};
+          call?.reject(new Error(`${call.method}: ${message.error.message}`));
+        }
         else call?.resolve(message.result as never);
       } else if (message.method) {
         this.lastEvent = {method: message.method, at: performance.now()};
