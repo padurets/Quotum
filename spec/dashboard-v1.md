@@ -45,6 +45,18 @@ A stream is answered `200` with `Content-Type: text/event-stream; charset=utf-8`
 `Cache-Control: no-store`, `X-Accel-Buffering: no` and `Connection: close`, besides the
 security headers of every answer.
 
+## Response encoding
+
+Server read projections on `GET`/`HEAD /api/overview`, `/api/history`, `/api/events`
+(JSON long poll), `/api/resets`, `/api/devices`, `/api/projects` and
+`/api/boards/:board/sources/:source/keys` negotiate response-only `br` or `gzip` for
+JSON bodies of at least 1024 bytes. Explicit `q=0` exclusions take precedence over
+wildcards, including aliases and duplicate entries. Malformed or unsupported-only
+preferences keep the existing identity fallback and status. Eligible JSON responses
+carry `Vary: Accept-Encoding` even without compression. Decoded payloads and exact
+decimal amounts are unchanged. SSE and all local/desktop responses are uncompressed;
+no request decompression is enabled.
+
 ## Measuring frequency
 
 `POST /api/boards/:board/sources/:source/frequency` accepts exactly

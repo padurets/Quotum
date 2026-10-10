@@ -1102,6 +1102,14 @@ hub keeps its two-second bound. Demo and managed-development parents allow seven
 seconds before killing a child; the managed outer fallback remains eight seconds.
 These deadlines require a responsive event loop.
 
+Server read JSON on the explicit overview, history, event-poll, reset, device,
+project and source-key inventory routes negotiates Brotli or gzip above a 1 KiB
+threshold. Compression uses asynchronous streams, Brotli quality 4 and gzip level 6;
+explicit encoding exclusions outrank wildcard weights. These representations vary
+on `Accept-Encoding`, including identity responses. The shipped Caddy forwards the
+encoded response. SSE, static files, other routes and local/desktop hubs remain
+uncompressed, and compressed request bodies are not decompressed.
+
 ## The dashboard
 
 A single-page React app served by the hub. It asks nothing again and again: it opens one

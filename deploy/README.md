@@ -12,6 +12,12 @@ or `SIGINT`, then closes its connections and SQLite before exiting. Give an exte
 supervisor more than five seconds, including scheduling margin, before sending
 `SIGKILL`; Compose's default ten-second grace is sufficient.
 
+The hub compresses allowlisted read JSON responses of at least 1 KiB using negotiated
+`br` or `gzip`, with `Vary: Accept-Encoding`. Caddy forwards the encoded response;
+keep the shipped proxy without a second encoder or SSE buffering. SSE, auth and
+credential/token mutations remain uncompressed. Caddy may request upstream gzip
+when the client sends no `Accept-Encoding`; an explicit `identity` is preserved.
+
 When upgrading an existing direct Docker installation, add `-v quotum-keys:/keys`.
 Automatic storage refuses a missing mount, a key directory inside data, or another mount
 of the same data-volume backing directory. Distinct named volumes on one filesystem
