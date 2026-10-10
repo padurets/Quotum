@@ -1096,4 +1096,15 @@ export const en = {
   "api.source_not_held": "You no longer hold this source. Choose a held source.",
   "api.suggestion_changed": "The session, source or available period changed. Reload the suggestions.",
 
+  "money.activeTime": "Active time",
+  "money.activeRate": "Spending per active hour",
+  "money.remainingActiveHours": "Remaining active hours",
+  "money.activeHoursValue": "{hours}h",
+  "money.workEstimate": "Estimate from reported source spending and resolved work. It does not establish a session\u2019s price.",
+  "money.workBasis": "Rate basis: {active} of active time in complete native observation intervals.",
+  "money.sourceWorkOnly": "Source-level work is shown once, on its total balance row.",
+  "money.noWorkRate": "This resource does not support a spending rate from source work.",
+  "money.workInsufficient": "At least 30 minutes of active work within complete native observation intervals are needed.",
+  "money.noObservedSpending": "No spending was observed; remaining active hours cannot be estimated.",
+
 } satisfies Record<string, Message>;

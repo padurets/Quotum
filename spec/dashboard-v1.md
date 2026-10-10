@@ -723,7 +723,7 @@ selection errors. Existing cell, tile, meter, response and retention limits rema
 
 Cache and metadata identities include the read scope. Work-name changes invalidate only
 quota caches; metadata offered by another scope cannot be reused. A `history` event keeps
-its legacy `sources` union and minimum `since`, and adds `changes: [{source, scope, since}]`.
+its legacy `sources` union and minimum `since`, and adds `changes: [{source, scope, since, work?}]`.
 Each source/scope keeps its own earliest changed time. Native samples, subscription caps
 and credited work affect quota; monetary observations and valuation changes affect budget.
 Work refreshes preserve coalesced budget changes. Clients without `changes` conservatively
@@ -1293,3 +1293,46 @@ returns one fresh permitted snapshot, together with current financial bindings.
 Holding release/reacquisition, link changes, revocation, joining/sharing/visibility
 cutoffs and reached temporal boundaries cannot revive an older queued generation.
 Each SSE reader is checked after batch preparation and before its send.
+
+
+## Monetary work estimates
+
+Budget history opts into source work with `work=1`. The selection must include at
+least one account-level row of a wallet with a catalogue source spending counter.
+Mixed account, key and balance-only selections retain every financial row; only
+eligible sources receive `moneyWork`. Quota, subscription funds and unsupported-only
+selections do not accept this flag. Ordinary work emits budget history changes with
+`work:true`; financial readers ignore them unless they opted in. Financial changes
+without that flag still invalidate both kinds of readers.
+
+Each chunk may include `moneyWork` groups with `source`, native `unit`, nullable
+`knownFrom`, `partial`, `cells` and `edges`. Cells contain
+`[index,activeMs,agentMs,spentInternal,eligibleActiveMs,eligibleAgentMs,coveredMs,duringWorkInternal]`.
+Edges contain `[from,to,spent,eligibleActiveMs,eligibleAgentMs,coveredMs,duringWork,evidence]`.
+Money values are exact decimal integer strings. Active time is the union of permitted
+resolved work; agent time counts the separate retained contexts. Financial basis uses
+whole adjacent accepted native counter pairs, including unchanged endpoints captured
+at observation time. An edge is carried once at its closing cell. Crossing period,
+retention or visibility boundaries and discontinuous observations are excluded from
+the basis and identify partial data. Work after the last actual observation never
+extends its basis. No source link prices an individual session, project or key.
+
+At least 30 active minutes in complete native pairs permit an estimated spending rate:
+`round(spent * 3600000 / eligibleActiveMs)`, using exact integer arithmetic. Fresh known
+remaining funds permit `floor(remaining * eligibleActiveMs / spent)` active milliseconds.
+Zero spending has no finite positive forecast; nonpositive available funds imply zero
+remaining active time. Stale or unknown funds have no current forecast. Native rates
+use the shared currency presentation and recorded binding of the latest native counter
+observation; conversion does not change original spending or work history.
+
+When the same ordinary work event refreshes quota/activity and an active budget work
+table, the transport may send one read-only `POST /api/history`:
+`{board,reads:[{scope:"quota",cell,from,to,meta,meters?,unit?},
+{scope:"budget",cell,from,to,meta,meters,unit,currency?,work:1}]}`.
+The response is `{parts:[{scope,reply}]}` with the existing scoped history replies.
+Exactly those two parts of one board are accepted, each retaining its own grid and
+selection. Both are validated before reading, share one bounded work/resolver pass and
+one coherent database snapshot. Their combined tile count and response use the existing
+history bounds; the request body is limited to 512 KiB. GET remains supported. Cancelling
+one loader leaves the other's part alive; no obsolete loader generation may publish it.
+Financial and work subscriptions stay separate when native financial facts are unchanged.

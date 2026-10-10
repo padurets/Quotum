@@ -1,5 +1,5 @@
 import type {DatabaseSync} from 'node:sqlite';
-import {balanceDescriptor,monetaryOf} from '../domain/providers.js';
+import {balanceDescriptor,monetaryOf,sourceCounterOf} from '../domain/providers.js';
 import {amount} from '../domain/amount.js';
 import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading, type QuotaObservation, QUOTA_IDS} from '../domain/meters.js';
 import type {SourceState} from '../domain/quota.js';
@@ -36,10 +36,13 @@ export class MeterStore {
       if (old && old.at >= meter.at) continue;
       const last = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source, meter.id) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null;hold_until:number|null} | undefined;
       const admission = previous.provider === 'codex' && meter.id === 'balance:credits' && !!this.db.prepare('SELECT 1 FROM shares WHERE source_id=? AND budget_anchor_at IS NULL AND budget_since<=? LIMIT 1').get(source, meter.at);
-      if (!old || !sameMeter(old, meter) || admission) {
-        this.db.prepare('INSERT INTO readings (source_id,meter_id,at,previous_at,kind,unit,amount,limit_amount,reset_at,minutes,scope,label,stale_after_ms,amount_scale) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-          .run(source, meter.id, meter.at, old?.at ?? last?.to_at ?? null, meter.kind, meter.unit, amount(meter.amount), meter.limit === null ? null : amount(meter.limit), meter.resetAt, meter.minutes, meter.scope, meter.label, meter.staleAfterMs, meter.scale ?? 6);
+      const changed = !old || !sameMeter(old, meter) || admission;
+      const pair = sourceCounterOf(previous.provider) === meter.id && meter.kind === 'counter';
+      if (changed || pair) {
+        this.db.prepare('INSERT INTO readings (source_id,meter_id,at,previous_at,kind,unit,amount,limit_amount,reset_at,minutes,scope,label,stale_after_ms,amount_scale,pair_anchor) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .run(source, meter.id, meter.at, old?.at ?? last?.to_at ?? null, meter.kind, meter.unit, amount(meter.amount), meter.limit === null ? null : amount(meter.limit), meter.resetAt, meter.minutes, meter.scope, meter.label, meter.staleAfterMs, meter.scale ?? 6, changed ? 0 : 1);
       }
+      if (pair) this.db.prepare('INSERT OR IGNORE INTO meter_pair_starts VALUES (?,?,?)').run(source, meter.id, meter.at);
       if (admission) this.db.prepare('UPDATE shares SET budget_anchor_at=? WHERE source_id=? AND budget_anchor_at IS NULL AND budget_since<=?').run(meter.at, source, meter.at);
       if (last && last.interrupted_at===null && last.hold_until===null && old && meter.at - last.to_at <= last.stale_after_ms && old.kind === meter.kind && old.unit === meter.unit) {
         this.db.prepare('UPDATE meter_spans SET to_at=?,stale_after_ms=? WHERE source_id=? AND meter_id=? AND from_at=?').run(meter.at, meter.staleAfterMs, source, meter.id, last.from_at);
@@ -103,7 +106,17 @@ export class MeterStore {
 
   /** Include one predecessor even when it predates retention: it is evidence, not a plotted point. */
   readings(source: string, meter: string, from: number, to: number): Reading[] {
-    const query = this.db.prepare('SELECT * FROM readings WHERE source_id=? AND meter_id=? AND at<? AND at>=coalesce((SELECT max(at) FROM readings WHERE source_id=? AND meter_id=? AND at<?),?) ORDER BY at');
+    return this.nativeReadings(source,meter,from,to,false);
+  }
+
+  pairReadings(source: string, meter: string, from: number, to: number): {knownFrom: number | null; readings: Reading[]; spans: MeterSpan[]} {
+    const row = this.db.prepare('SELECT known_from_at FROM meter_pair_starts WHERE source_id=? AND meter_id=?').get(source,meter);
+    return {knownFrom: row ? Number(row.known_from_at) : null, readings: this.nativeReadings(source,meter,from,to,true), spans: this.spans(source,meter,from,to)};
+  }
+
+  private nativeReadings(source: string, meter: string, from: number, to: number, dense: boolean): Reading[] {
+    const sparse = dense ? '' : ' AND pair_anchor=0';
+    const query = this.db.prepare(`SELECT * FROM readings WHERE source_id=? AND meter_id=?${sparse} AND at<? AND at>=coalesce((SELECT max(at) FROM readings WHERE source_id=? AND meter_id=?${sparse} AND at<?),?) ORDER BY at`);
     query.setReadBigInts(true);
     return (query.all(source, meter, to, source, meter, from, from) as ReadingRow[]).map(r => ({id: r.meter_id, at: Number(r.at), previousAt: numberOf(r.previous_at), kind: r.kind, unit: r.unit, amount: r.amount.toString(), ...(r.unit === 'credits:codex' ? {scale:Number(r.amount_scale)} : {}), limit: r.limit_amount?.toString() ?? null, resetAt: numberOf(r.reset_at), minutes: numberOf(r.minutes), scope: r.scope, label: r.label, staleAfterMs: Number(r.stale_after_ms)}));
   }
@@ -142,7 +155,12 @@ export class MeterStore {
 
   prune(cutoff: number): boolean {
     this.contexts.prune(cutoff);
-    let changed = this.db.prepare('DELETE FROM readings WHERE at<? AND at<(SELECT max(at) FROM readings r WHERE r.source_id=readings.source_id AND r.meter_id=readings.meter_id AND r.at<?)').run(cutoff, cutoff).changes > 0;
+    let changed = this.db.prepare(`WITH heads AS MATERIALIZED (
+      SELECT source_id,meter_id,max(at) AS accepted,max(CASE WHEN pair_anchor=0 THEN at END) AS sparse
+      FROM readings WHERE at<? GROUP BY source_id,meter_id)
+      DELETE FROM readings WHERE at<? AND (source_id,meter_id,at) NOT IN (
+        SELECT source_id,meter_id,accepted FROM heads UNION ALL
+        SELECT source_id,meter_id,sparse FROM heads WHERE sparse IS NOT NULL)`).run(cutoff,cutoff).changes > 0;
     changed = this.currencies.prune(cutoff) || changed;
     // The last endpoint is evidence of an unchanged observation, even after the
     // current meter has been archived and its changed reading is much older.

@@ -129,7 +129,7 @@ export function clientScript(root = config.clientRoot): string | null {
 export class Events implements Touches {
   /** The history cache hears every touch, also when no board is watched. */
   onClientHistory: ((user: string, since: number) => void) | null = null;
-  onHistory: ((source: string, since: number, scopes?: readonly HistoryScope[]) => void) | null = null;
+  onHistory: ((source: string, since: number, scopes?: readonly HistoryScope[], options?: {work: true}) => void) | null = null;
   /** When this start of the hub began, base 36: a page tells a restart by it. */
   readonly epoch: string;
   readonly client: string | null;
@@ -285,9 +285,9 @@ export class Events implements Touches {
     this.schedule();
   }
 
-  history(source: string, since: number, scopes: readonly HistoryScope[] = HISTORY_SCOPES) {
+  history(source: string, since: number, scopes: readonly HistoryScope[] = HISTORY_SCOPES, options?: {work: true}) {
     try {
-      this.onHistory?.(source, since, scopes);
+      this.onHistory?.(source, since, scopes, options);
     } catch (error) {
       trouble(error);
     }
@@ -296,8 +296,8 @@ export class Events implements Touches {
       let pending = this.histories.get(watched.id);
       if (!pending) this.histories.set(watched.id, (pending = new Map()));
       for(const scope of scopes) {
-        const key=JSON.stringify([source,scope]);
-        pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??since,since)});
+        const key=JSON.stringify([source,scope,options?.work??false]);
+        pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??since,since),...options});
       }
     }
     this.schedule();
@@ -555,7 +555,7 @@ export class Events implements Touches {
       const work = projection.workKey(watched.id);
       if (watched.work !== null && watched.work !== work) {
         let pending=histories.get(watched.id);if(!pending)histories.set(watched.id,(pending=new Map()));
-        for(const source of ids)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0});
+        for(const source of ids)pending.set(JSON.stringify([source,'quota',false]),{source,scope:'quota',since:0});
         const owner = this.parts.store.privateOwner(watched.id);
         if (owner) {ownHistories.set(owner, 0); this.onClientHistory?.(owner, 0);}
       }

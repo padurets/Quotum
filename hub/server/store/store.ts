@@ -18,7 +18,8 @@ import type {QuotaObservation, MeterMeasurement} from '../domain/meters.js';
 import {MeterStore} from './meters.js';
 import type {MeterSelection} from '../domain/meterHistory.js';
 import {DEFAULT_CURRENCY} from '../domain/currency.js';
-import {providerOf, quotaMeter, supportsBudget} from '../domain/providers.js';
+import {providerOf, quotaMeter, supportsBudget, sourceCounterOf} from '../domain/providers.js';
+import {packMoneyWork} from '../domain/moneyWork.js';
 import {budgetAccess, type BudgetAccess} from '../domain/resources.js';
 import {exactDecimal} from '../domain/amount.js';
 import {CurrencyStore} from './currencies.js';
@@ -82,6 +83,19 @@ export class Store {
   private pruned = 0;
   private readonly attributionEpochs = new Map<string, number>();
   private readonly workReach = new Map<string, {stamp: string; sources: Map<string | null, {projects: Set<string>; devices: Set<string>}>}>();
+  private historyWork: {from:number;to:number;spans:Stretch[]}|null=null;
+
+  private counterSource(source:string):boolean {return sourceCounterOf(String(this.db.prepare('SELECT provider FROM sources WHERE id=?').get(source)?.provider??''))!==null;}
+
+  /** Two history parts share one bounded raw-work read and one resolver pass. */
+  withHistoryWork<T>(board:string,from:number,to:number,shown:Shown,read:()=>T):T {
+    const ids=JSON.stringify([...shown.keys()]),pairs=JSON.stringify([...shown.keys()].flatMap(source=>{const meter=sourceCounterOf(String(this.db.prepare('SELECT provider FROM sources WHERE id=?').get(source)?.provider??''));return meter?[[source,meter]]:[];}));
+    const quota=this.db.prepare('SELECT min(at) AS at FROM (SELECT max(at) AS at FROM samples WHERE source_id IN (SELECT value FROM json_each(?)) AND at<? GROUP BY source_id,window_id)').get(ids,from)?.at;
+    const money=this.db.prepare("SELECT min(at) AS at FROM (SELECT max(r.at) AS at FROM readings r JOIN json_each(?) p ON r.source_id=json_extract(p.value,'$[0]') AND r.meter_id=json_extract(p.value,'$[1]') WHERE r.at<? GROUP BY r.source_id,r.meter_id)").get(pairs,from)?.at;
+    const start=Math.min(from,Number(quota??from),Number(money??from)),prior=this.historyWork;
+    this.historyWork={from:start,to,spans:this.agentWork(start,to,[...shown.keys()],this.privateOwner(board))};
+    try{return read();}finally{this.historyWork=prior;}
+  }
 
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
@@ -94,7 +108,7 @@ export class Store {
         o.touchSources(sources);
         o.touchBoards([...new Set(sources.flatMap(source => this.boardsOf(source)))]);
         o.touchUser(owner); o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0);
-        for (const source of sources) o.history(source, 0, ['quota']);
+        for (const source of sources) {o.history(source, 0, ['quota']); if(this.counterSource(source))o.history(source, 0, ['budget'], {work:true});}
       });
     };
     this.currencies=new CurrencyStore(this.db);
@@ -113,7 +127,7 @@ export class Store {
    */
   historyStart(now: number): number {
     const kept = now - config.retention.sampleDays * 86_400_000;
-    const oldest = (this.db.prepare('SELECT min(at) AS at FROM (SELECT min(at) AS at FROM samples WHERE at>=? UNION ALL SELECT min(at) AS at FROM readings WHERE at>=?)').get(kept, kept) as {at: number | null}).at;
+    const oldest = (this.db.prepare('SELECT min(at) AS at FROM (SELECT min(at) AS at FROM samples WHERE at>=? UNION ALL SELECT min(at) AS at FROM readings WHERE pair_anchor=0 AND at>=?)').get(kept, kept) as {at: number | null}).at;
     return oldest === null ? this.created : Math.min(this.created, oldest);
   }
 
@@ -296,7 +310,7 @@ export class Store {
       const owner = String(this.db.prepare('SELECT user_id FROM devices WHERE id=?').get(device)?.user_id ?? '');
       this.db.prepare("INSERT INTO meta VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1").run('workEvidence:' + owner);
       this.attributionChanged(owner);
-      tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); const sources = [...this.links.held(owner).keys()]; o.touchSources(sources); for (const source of sources) o.history(source, 0, ['quota']);});
+      tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); const sources = [...this.links.held(owner).keys()]; o.touchSources(sources); for (const source of sources) {o.history(source, 0, ['quota']); if(this.counterSource(source))o.history(source, 0, ['budget'], {work:true});}});
     }
     return result;
   }
@@ -634,7 +648,7 @@ export class Store {
     });
   }
 
-  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, []), meters, scope}: {now?: number; shown?: Shown; meters?: MeterSelection; scope?: HistoryScope} = {}): Chunk<number>[] {
+  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, []), meters, scope, work = false}: {now?: number; shown?: Shown; meters?: MeterSelection; scope?: HistoryScope; work?: boolean} = {}): Chunk<number>[] {
     const sources = this.sources(board);
     // Subscription caps accompany native windows; wallet selections retain their cheaper read.
     const withWindows=scope ? scope==='quota' : !meters||meters.ids.some(([id])=>sources.some(source=>source.id===id&&providerOf(source.provider)?.funding==='subscription'));
@@ -643,6 +657,7 @@ export class Store {
       if(meters) {
         const groups=this.financialGroups(board,meters,from,to,now);
         for(const chunk of chunks)chunk.meterSeries=this.meters.cells(meters,chunk.from,chunk.to,cellMs,groups);
+        if(work)this.moneyWork(board,shown,meters,from,to,cellMs,now,chunks);
       }
       return chunks;
     }
@@ -685,6 +700,26 @@ export class Store {
       for (const chunk of chunks) chunk.meterSeries = this.meters.cells(meters,chunk.from,chunk.to,cellMs,groups);
     }
     return chunks;
+  }
+
+  moneyWorkSources(board:string,selection:MeterSelection):string[] {
+    const sources=new Map(this.sources(board).map(source=>[source.id,source.provider]));
+    return [...new Set(selection.ids.filter(([source,meter])=>!meter.startsWith('key:')&&sourceCounterOf(sources.get(source)??'')!==null).map(([source])=>source))];
+  }
+
+  private moneyWork(board:string,shown:Shown,selection:MeterSelection,from:number,to:number,cell:number,now:number,chunks:Chunk<number>[]) {
+    const sources=this.moneyWorkSources(board,selection),known=this.historyKnown(shown);
+    const groups=sources.map(source=>{const counter=sourceCounterOf(this.state(source).provider)!;return {source,...this.meters.pairReadings(source,counter,from,to)};});
+    let readFrom=from;
+    for(const group of groups)for(let i=1;i<group.readings.length;i++){const a=group.readings[i-1],b=group.readings[i];if(b.previousAt===a.at&&b.at-a.at<=a.staleAfterMs)readFrom=Math.min(readFrom,a.at);}
+    const holdings=new Map([...shown].map(([source,value])=>[source,new Map(value.holders.map(holder=>[holder.user,Math.max(holder.from,value.since,known.work)]))]));
+    const work=this.agentWork(readFrom,Math.min(now,to),sources).flatMap(span=>{const after=span.source===null?undefined:holdings.get(span.source)?.get(span.user);return after===undefined||span.to<=after?[]:[{...span,from:Math.max(after,span.from)}];});
+    for(const chunk of chunks)chunk.moneyWork=[];
+    for(const group of groups) {
+      const cutoff=Math.max(known.work,shown.get(group.source)?.since??Infinity,now-config.retention.sampleDays*86_400_000);
+      const packed=packMoneyWork({source:group.source,unit:group.readings.at(-1)?.unit??'USD',knownFrom:group.knownFrom===null?null:Math.max(group.knownFrom,cutoff),readings:group.readings,spans:group.spans,work:work.filter(span=>span.source===group.source)},from,to,cell);
+      for(const chunk of chunks)chunk.moneyWork!.push({...packed,cells:packed.cells.filter(row=>from+row[0]*cell>=chunk.from&&from+row[0]*cell<chunk.to).map(row=>[row[0]-(chunk.from-from)/cell,...row.slice(1)] as typeof row),edges:packed.edges.filter(edge=>edge[1]>=chunk.from&&edge[1]<chunk.to)});
+    }
   }
 
   private lastPlan(source: string): string | null {
@@ -854,9 +889,9 @@ export class Store {
       this.db.exec('RELEASE credit');
       throw error;
     }
-    for (const [source, start] of credited) tell(this.observer, o => o.history(source, start, ['quota']));
+    for (const [source, start] of credited) tell(this.observer, o => {o.history(source, start, ['quota']); if(this.counterSource(source))o.history(source, start, ['budget'], {work:true});});
     for (const [user, start] of privateCredit) tell(this.observer, o => o.clientHistory?.(user, start));
-    if (changedEvidence && owner) {this.attributionChanged(owner); tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); const sources = [...contexts(owner, device, '').held.keys()]; o.touchSources(sources); for (const source of sources) o.history(source, 0, ['quota']);});}
+    if (changedEvidence && owner) {this.attributionChanged(owner); tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); const sources = [...contexts(owner, device, '').held.keys()]; o.touchSources(sources); for (const source of sources) {o.history(source, 0, ['quota']); if(this.counterSource(source))o.history(source, 0, ['budget'], {work:true});}});}
   }
 
   /** Retained credit resolved to the session's current source; legacy identity is unknown. */
@@ -880,6 +915,10 @@ export class Store {
 
   /** Candidate owners are selected before read-time source resolution and display cuts. */
   agentWork(from: number, to: number, sources?: string[], owner: string | null = null): Stretch[] {
+    if(this.historyWork&&from>=this.historyWork.from&&to<=this.historyWork.to) {
+      const selected=sources?new Set(sources):null;
+      return this.historyWork.spans.flatMap(span=>span.to<=from||span.from>=to||selected&&!selected.has(span.source??'')&&!(span.source===null&&span.user===owner)?[]:[{...span,from:Math.max(from,span.from),to:Math.min(to,span.to)}]);
+    }
     const read = this.db.prepare(
       'SELECT w.session_id, max(w.from_at, ?), min(w.to_at, ?) FROM agent_work w INDEXED BY agent_work_by_end JOIN agent_sessions s ON s.id=w.session_id' +
       ' WHERE w.to_at>? AND w.from_at<?' +

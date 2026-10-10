@@ -1,12 +1,15 @@
+import {workHistoryTransport} from './historyTransport';
+import {sourceCounterOf} from '../../server/domain/providers';
+import {columnShown} from './view';
 import {HistoryPool} from './historyPool';
 import type {HistoryScope} from '../../server/domain/history';
-import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVITY} from '../../server/domain/widgets';
+import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVITY, BUDGET_TABLE} from '../../server/domain/widgets';
 import {useSyncExternalStore} from 'react';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type HistoryReply, type Target} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
 import {page, type PageEvent, type PageState} from './board';
 import {hubNow} from './clock';
 import {HistoryTile} from './historyTiles';
-import {ApiError, call, UNAUTHORIZED} from './http';
+import {ApiError, UNAUTHORIZED} from './http';
 import {periodOf} from './periods';
 import {onPrefs, prefs} from './prefs';
 import type {Store} from './store';
@@ -26,7 +29,7 @@ const RETRY_MS = 15_000;
 const STORED_BYTES = 15 * 1024 * 1024;
 
 export type HistoryEnv = {
-  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis): Promise<HistoryAnswer>;
+  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis, workBurst?:number): Promise<HistoryAnswer>;
   now(): number;
   /** Elapsed time stays independent of corrections to the estimated hub clock. */
   elapsedNow?(): number;
@@ -58,6 +61,7 @@ export class HistoryStore {
   private windowsKey = '';
   private windows = new Set<string>();
   private meters: MeterSelection | undefined;
+  private workBurst: number | undefined;
   private period = '24h';
   private selected: TimeRange | null = null;
   private shown: History | null = null;
@@ -80,7 +84,9 @@ export class HistoryStore {
   private scheduled = false;
   private needsCompose = false;
   private readonly listeners = new Set<() => void>();
+  private readonly financialListeners = new Set<() => void>();
   private state: Shown = {history: null, loading: false};
+  private financialState: Shown = this.state;
   private historyLimit=false;
   private readError=false;
   private interest: PlotInterest | null = null;
@@ -138,6 +144,7 @@ export class HistoryStore {
     this.cancelProjection();
     this.epoch++;
     this.board = null;
+    this.workBurst=undefined;
     this.setBoundary(null);
     this.ready = false;
     this.historyLimit=false;this.readError=false;
@@ -206,6 +213,7 @@ export class HistoryStore {
 
   setMeters(meters: MeterSelection | undefined) {
     if(JSON.stringify(meters)===JSON.stringify(this.meters))return;
+    this.workBurst=undefined;
     this.meters=meters;
     this.historyLimit=false;this.readError=false;this.meta=null;this.metaAt=null;
     this.grids.clear();
@@ -215,7 +223,8 @@ export class HistoryStore {
     this.publish();
   }
 
-  news(since: number) {
+  news(since: number, workBurst?:number) {
+    this.workBurst=workBurst;
     this.newsSeq++;
     this.cutTo = null;
     this.aheadStopped = false;
@@ -249,6 +258,8 @@ export class HistoryStore {
   }
 
   get = () => this.state;
+  getFinancial = () => this.financialState;
+  subscribeFinancial = (listener: () => void) => {this.financialListeners.add(listener); return () => void this.financialListeners.delete(listener);};
   getPlot = () => this.plot;
   subscribePlot = (listener: () => void) => {this.plotListeners.add(listener); return () => void this.plotListeners.delete(listener);};
 
@@ -338,6 +349,9 @@ export class HistoryStore {
     if (history === this.state.history && loading === this.state.loading&&error===this.state.error) return;
     this.state = {history, loading,...(error?{error}:{})};
     for (const listener of this.listeners) listener();
+    const prior=this.financialState,old=prior.history;
+    const same=history===old||!!history&&!!old&&history.meterSeries===old.meterSeries&&history.range===old.range&&history.since===old.since&&history.cellMs===old.cellMs&&history.historyStart===old.historyStart;
+    if(!same||loading!==prior.loading||error!==prior.error){this.financialState={history:same?old:history,loading,...(error?{error}:{})};for(const listener of this.financialListeners)listener();}
   }
 
   private tiles(cell: number) {
@@ -491,10 +505,18 @@ export class HistoryStore {
     const tiles = [...(this.grids.get(target.cell)?.values() ?? [])].filter(t => t.readTo > t.readFrom && t.readTo > target.k0 * target.cell && t.readFrom <= target.k1 * target.cell).sort((a, b) => a.from - b.from);
     const pins = this.pins(tiles);
     const valid = () => !this.interest && this.board === board && this.epoch === epoch && this.version === version && this.windows === windows && this.composeIdentity === identity && this.target().key === target.key && this.pinsValid(pins);
+    const thisStore=this;
     const work = function* (): Preparation<History> {
       const chunks: Chunk[] = [];
       for (const {tile} of pins) {chunks.push(yield* tile.chunkPrepared(meta.known)); yield;}
-      return {...yield* composePrepared(chunks, meta, target, windows), board};
+      const history={...yield* composePrepared(chunks, meta, target, windows), board};
+      const previous=thisStore.shown?.meterSeries;
+      if(thisStore.meters?.work&&history.meterSeries&&previous) {
+        const stable=new Map(previous.map(series=>[JSON.stringify([series.sourceId,series.meterId,series.kind,series.unit]),series]));
+        for(let i=0;i<history.meterSeries.length;i++){const next=history.meterSeries[i],old=stable.get(JSON.stringify([next.sourceId,next.meterId,next.kind,next.unit]));if(old&&JSON.stringify(old)===JSON.stringify(next))history.meterSeries[i]=old;yield;}
+        if(history.meterSeries.length===previous.length&&history.meterSeries.every((series,i)=>series===previous[i]))history.meterSeries=previous;
+      }
+      return history;
     };
     prepare(this.composeOwner, work(), valid, history => {
       for (const {tile} of pins) tile.shownAt = this.env.now();
@@ -607,11 +629,12 @@ export class HistoryStore {
     const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role};
     this.flights.add(flight);
     const meta = this.meta?.run === this.run ? this.meta : undefined;
-    const board=this.board!,meters=this.meters;
+    const board=this.board!,meters=this.meters,burst=role==='visible'?this.workBurst:undefined;
+    if(role==='visible')this.workBurst=undefined;
     const start=()=>{
       if(flight.controller.signal.aborted||flight.epoch!==this.epoch){this.abort(flight);return;}
       flight.startedAt=this.elapsedNow();
-      this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
+      this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta, burst).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
     };
     if(this.pool)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
   }
@@ -838,7 +861,7 @@ const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
 export const historyPool = new HistoryPool();
 function reader(scope: HistoryScope) {
   return new HistoryStore({
-    read: (board, cell, from, to, signal, meters, meta) => call<HistoryReply>('GET', `/api/history?scope=${scope}&board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids))+(meters.displayCurrency?'&currency='+encodeURIComponent(meters.displayCurrency):'') : ''}`, undefined, 12_000, signal).then(reply => expandHistory(reply, meta)),
+    read: (board, cell, from, to, signal, meters, meta, burst) => workHistoryTransport.read({board, scope, cell, from, to, meters, meta}, signal, burst).then(reply => expandHistory(reply, meta)),
     now: hubNow,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
@@ -852,7 +875,10 @@ let shellActive = true;
 const selectedMeters = (state: PageState, scope: HistoryScope, family: MoneyFamily = 'budget') => {
   const board=state.board;if(!board)return undefined;
   const cards=board.lineup.flatMap(id=>board.cards[id]??[]);
-  return scope==='budget'?moneySelection(cards,board.view.hidden,prefs()[family==='funds'?'funds':'money'],board.currencies,family).selection:subscriptionSelection(cards,board.view);
+  if(scope!=='budget')return subscriptionSelection(cards,board.view);
+  const selection=moneySelection(cards,board.view.hidden,prefs()[family==='funds'?'funds':'money'],board.currencies,family).selection;
+  const work=family==='budget'&&widgetVisible(board.view,BUDGET_TABLE,board.lineup.length)&&['active','rate','remaining'].some(column=>columnShown(board.view,BUDGET_TABLE,column))&&selection?.ids.some(([source,meter])=>!meter.startsWith('key:')&&sourceCounterOf(board.cards[source]?.provider??'')!==null);
+  return selection&&work?{...selection,work:true}:selection;
 };
 function activeReaders(state=page.get()) {
   const board=state.board;
@@ -861,6 +887,9 @@ function activeReaders(state=page.get()) {
   budgetHistory.setActive(shellActive&&!!board&&BUDGET_WIDGETS.some(id=>widgetVisible(board.view,id,board.lineup.length)));
 }
 export const historyReaders = {setActive(active: boolean) {shellActive=active;activeReaders();}};
+
+const workBursts=new WeakMap<object,number>();
+let workBurstSequence=0;
 
 /** Event changes identify resources; a reader's choices never mutate another board's selections. */
 export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>, family: MoneyFamily = 'budget') {
@@ -876,9 +905,14 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
       else if (hub.type === 'card'&&scope==='quota') loader.setWindows(windowsOf(state));
       else if (hub.type === 'history') {
         const selected=scope==='budget'?new Set(selectedMeters(state,scope,family)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
-        const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source));
+        const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source)&&(!change.work||family==='budget'&&!!selectedMeters(state,scope,family)?.work));
         const ownSince = scope === 'quota' && state.board?.meta.personal ? hub.data.ownSince : undefined;
-        if(changes?.length || ownSince !== undefined)loader.news(Math.min(...(changes ?? []).map(change=>change.since), ownSince ?? Infinity));
+        if(changes?.length || ownSince !== undefined) {
+          const since=Math.min(...(changes??[]).map(change=>change.since),ownSince??Infinity);
+          const linked=since>0&&hub.data.changes?.some(change=>change.scope==='budget'&&change.work);
+          let burst=linked?workBursts.get(event):undefined;if(linked&&!burst){burst=++workBurstSequence;workBursts.set(event,burst);}
+          loader.news(since,burst);
+        }
         else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since);
       }
     }
@@ -923,6 +957,7 @@ if (typeof window !== 'undefined') {
 export function useHistory(): Shown {return useSyncExternalStore(quotaHistory.subscribe, quotaHistory.get, quotaHistory.get);}
 export function useBudgetHistory(family: MoneyFamily = 'budget'): Shown {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribe, reader.get, reader.get);}
 export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
+export function useBudgetFinancialHistory(family: MoneyFamily = 'budget'): Shown {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribeFinancial, reader.getFinancial, reader.getFinancial);}
 export function useBudgetHistoryPlot(family: MoneyFamily = 'budget'): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribePlot, reader.getPlot, reader.getPlot);}
 /** A fresh answer from either resource family supersedes the board's initial snapshot. */
 export function historyBegins(board: string | null, snapshot: number | null, answers: readonly (HistoryBoundary | null)[]): number {

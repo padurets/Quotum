@@ -926,6 +926,20 @@ historical cap semantics and original spending intervals stay separate from the 
 Float64 codec. A logical balance selection internally reads its two counters. Axes and
 arithmetic never combine units; money does not contribute percentage attention,
 forecast or quota notifications.
+Source-level spending counters also retain every accepted unchanged native endpoint
+in the same readings ledger, with a capture fence established at the first supported
+observation. Sparse financial access uses its partial index and excludes these extra
+anchors. Retention preserves both the sparse financial predecessor and the accepted
+pair predecessor. Legacy spans never reconstruct missing timestamps.
+Optional wallet work history correlates whole continuous counter pairs with the union
+of resolved work. It estimates spending per active hour after thirty active minutes and
+remaining active hours from fresh native funds. Balance-only sources, subscription
+funds, individual keys and quota caps supply no monetary work rate. A single source
+correlation is shown once among its selected account rows, with its native evidence
+and partial coverage. Current currency presentation uses the shared recorded binding.
+A work burst can combine quota/activity and opt-in budget tails in one authenticated
+read-only history POST. Their grids remain independent and share a bounded work read;
+ordinary finance-only history keeps its existing path and cache dependencies.
 Money cells are packed separately, with small header and interval leaves; unchanged
 cells share their byte buffers during private staging. Packing, decoding and composition
 yield between leaves and cells through the shared preparation scheduler. Monetary

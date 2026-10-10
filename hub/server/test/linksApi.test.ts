@@ -13,7 +13,7 @@ import {Setup} from '../setup.js';
 import {bootstrapLocal} from '../local.js';
 import {newSecret} from '../domain/auth.js';
 
-for (const local of [false, true]) test(`link API enforces owner scope, origin, revisions and receipts (${local ? 'local' : 'web'})`, async () => {
+for (const local of [false, true]) test(`link API enforces owner scope, origin, revisions and receipts (${local ? 'local' : 'web'})`, async (t) => {
   const now = Date.now(), store = new Store(':memory:', now), directory = new Directory(store.db), key = 'k'.repeat(43);
   const owner = local ? bootstrapLocal(directory, 'qt_m_' + 'a'.repeat(30), now, 'Fixture') : directory.createUser('owner@example.com', 'Owner', 'fixture', now);
   const other = local ? owner : directory.createUser('other@example.com', 'Other', 'fixture', now), source = store.source('openrouter', 'fixture', now);
@@ -68,5 +68,21 @@ for (const local of [false, true]) test(`link API enforces owner scope, origin, 
     const attribution = (await request('GET', '/api/links/attribution')).json().sessions[0];
     assert.equal(attribution.route, null); assert.equal(attribution.host, undefined);
     if (!local) assert.deepEqual((await request('GET', '/api/links/attribution', undefined, other.id)).json().sessions, []);
+    const board=directory.boards(owner.id).find(board=>board.personal)!.id,cell=60_000,from=Math.floor(now/cell)*cell,to=from+cell;
+    const budget={scope:'budget',cell,from,to,unit:'USD',meters:[[source,'balance']],work:1};
+    const quota={scope:'quota',cell,from,to};
+    const query='?board='+board+'&cell='+cell+'&from='+from+'&to='+to+'&scope=budget&unit=USD&meters='+encodeURIComponent(JSON.stringify(budget.meters));
+    const financial=(await request('GET','/api/history'+query)).json();assert.equal(financial.chunks[0].moneyWork,undefined);
+    const selected=(await request('GET','/api/history'+query+'&work=1')).json();assert.equal(selected.chunks[0].moneyWork[0].source,source);
+    const prepare=t.mock.method(store.db,'prepare');
+    const combined=await request('POST','/api/history',{board,reads:[quota,budget]});assert.equal(combined.statusCode,200);
+    assert.deepEqual(combined.json().parts.map((part:{scope:string})=>part.scope),['quota','budget']);
+    assert.equal(prepare.mock.calls.filter(call=>/^SELECT w.session_id,/.test(String(call.arguments[0]))).length,1,'two parts share a single raw work candidate query');
+    const reads=prepare.mock.calls.length;
+    assert.equal((await request('POST','/api/history',{board,reads:[quota,{...budget,work:0}]})).statusCode,400);
+    assert.equal(prepare.mock.calls.slice(reads).filter(call=>/^SELECT w.session_id,/.test(String(call.arguments[0]))).length,0,'invalid second part reads no work');
+    assert.equal((await request('POST','/api/history',{board,reads:[quota,quota]})).statusCode,400);
+    assert.equal((await request('GET','/api/history'+query.replace('scope=budget','scope=quota')+'&work=1')).statusCode,400);
+    prepare.mock.restore();
   } finally {await app.close(); store.close();}
 });

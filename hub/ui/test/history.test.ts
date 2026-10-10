@@ -22,6 +22,27 @@ const NOW = Date.parse('2026-09-26T12:23:00Z');
 const flush = async () => {for (let i = 0; i < 5; i++) await Promise.resolve();};
 const empty = (from: number, to: number): Chunk => ({from, to, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []});
 const pending = (h: ReturnType<typeof harness>) => h.reads.filter(r => !r.settled && !r.signal?.aborted);
+
+test('work-only budget updates preserve the financial subscription and native series identities',async()=>{
+  const h=harness(undefined,undefined,'budget');
+  h.store.setMeters({unit:'USD',ids:[['s','balance']],work:true});
+  h.store.choose('24h',{from:NOW-H,to:NOW-5*M});await h.start();
+  const answer=async(active:number)=>{
+    const read=pending(h)[0],chunks:Chunk[]=[];
+    for(let from=read.from;from<read.to;) {
+      const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell)),chunk=empty(from,to);
+      chunk.meterSeries=[{source:'s',meter:'balance',kind:'balance',unit:'USD',semantics:null,cells:Array.from({length:(to-from)/read.cell},(_,i)=>[i,'6000000','0','0',read.cell])}];
+      chunk.moneyWork=[{source:'s',unit:'USD',knownFrom:0,partial:false,cells:[[0,active,active,'0',active,active,read.cell,'0']],edges:[]}];
+      chunks.push(chunk);from=to;
+    }
+    await read.answer({chunks});
+  };
+  await answer(10);const financial=h.store.getFinancial(),series=financial.history!.meterSeries,prior=h.store.get().history!.moneyWork;
+  let financialRenders=0;const stop=h.store.subscribeFinancial(()=>financialRenders++);
+  h.store.news(NOW-10*M,1);await h.advance(300);await answer(20);
+  assert.notDeepEqual(h.store.get().history!.moneyWork,prior);assert.equal(h.store.getFinancial(),financial);assert.equal(h.store.get().history!.meterSeries,series);assert.equal(financialRenders,0);
+  stop();h.store.close();assert.equal(h.store.getFinancial().history,null);
+});
 function harness(budget?: number, preparations?: Preparations, scope?: 'quota'|'budget', pool?: HistoryPool) {
   let now = NOW;
   let elapsed = 0;

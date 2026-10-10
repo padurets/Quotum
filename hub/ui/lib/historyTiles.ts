@@ -2,6 +2,7 @@ import {decodeCellsPrepared, encodeCellsPrepared, TILE_CELLS, type Chunk, type D
 
 import {drain, type Preparation} from './prepare';
 import {MeterTile} from './meterTiles';
+import type {MoneyWorkCells} from '../../server/domain/moneyWork';
 
 const FIELDS = 11;
 const HEAD = 248; // 61 uint32 offsets, padded to a float64 boundary.
@@ -26,6 +27,9 @@ export class HistoryTile {
   private grants: Chunk['grants'] = [];
   private meters: MeterTile;
   private hasMeters=false;
+  private hasMoneyWork=false;
+  private moneyWork=new Map<string,MoneyWorkCells>();
+  private moneyBytes=0;
 
   constructor(readonly from: number, readonly cell: number) {
     this.readFrom = this.validTo = this.readTo = from;
@@ -35,7 +39,7 @@ export class HistoryTile {
   get to() {return this.from + TILE_CELLS * this.cell;}
 
   get bytes() {
-    return this.activity.byteLength + this.meters.bytes + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + 1024;
+    return this.activity.byteLength + this.meters.bytes + this.moneyBytes + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + 1024;
   }
 
   /** A private COW tile keeps every published buffer untouched until response commit. */
@@ -50,6 +54,8 @@ export class HistoryTile {
     for (const group of this.groups) {copy.groups.push(group); yield;}
     for (const key in this.devices) {copy.devices[key] = this.devices[key]; yield;}
     copy.hasMeters = this.hasMeters; copy.meters = yield* this.meters.clonePrepared();
+    copy.hasMoneyWork=this.hasMoneyWork;copy.moneyBytes=this.moneyBytes;
+    for(const [key,group] of this.moneyWork){copy.moneyWork.set(key,group);yield;}
     copy.activity = this.activity; copy.resets = this.resets; copy.grants = this.grants;
     // Earlier chunks of this response remain owned while their replacement is copied.
     let reserved = this.bytes;
@@ -73,6 +79,16 @@ export class HistoryTile {
   private *mergePrepared(chunk: Chunk, known: HistoryMeta['known']): Preparation<void> {
     this.hasMeters ||= chunk.meterSeries!==undefined;
     yield* this.meters.mergePrepared(chunk.from,chunk.to,chunk.meterSeries??[]);
+    if(chunk.moneyWork!==undefined) {
+      this.hasMoneyWork=true;
+      const incoming=new Map(chunk.moneyWork.map(group=>[JSON.stringify([group.source,group.unit]),group]));
+      for(const key of new Set([...this.moneyWork.keys(),...incoming.keys()])) {
+        const old=this.moneyWork.get(key),group=incoming.get(key)??old!;
+        const cells=[...(old?.cells??[]).filter(row=>this.from+row[0]*this.cell<chunk.from||this.from+row[0]*this.cell>=chunk.to),...(incoming.get(key)?.cells??[]).map(row=>[row[0]+(chunk.from-this.from)/this.cell,...row.slice(1)] as typeof row)].sort((a,b)=>a[0]-b[0]);
+        const edges=[...(old?.edges??[]).filter(edge=>edge[1]<chunk.from||edge[1]>=chunk.to),...(incoming.get(key)?.edges??[])].sort((a,b)=>a[1]-b[1]);
+        const next={...group,cells,edges};this.moneyBytes-=old?JSON.stringify(old).length*2:0;this.moneyBytes+=JSON.stringify(next).length*2;this.moneyWork.set(key,next);yield;
+      }
+    }
     const first = (chunk.from - this.from) / this.cell;
     const last = (chunk.to - this.from) / this.cell;
     for (const [key, s] of this.series) {
@@ -210,6 +226,7 @@ export class HistoryTile {
     for (const row of this.resets) {if (row[2] >= this.readFrom && row[2] < this.readTo) chunk.resets.push([...row]); yield;}
     for (const row of this.grants) {if (row[1] >= this.readFrom && row[1] < this.readTo) chunk.grants.push([...row]); yield;}
     if(this.hasMeters)chunk.meterSeries=yield* this.meters.chunkPrepared(this.readFrom,this.readTo);
+    if(this.hasMoneyWork&&!plot)chunk.moneyWork=[...this.moneyWork.values()].map(group=>({...group,cells:group.cells.filter(row=>this.from+row[0]*this.cell>=this.readFrom&&this.from+row[0]*this.cell<this.readTo).map(row=>[row[0]-(this.readFrom-this.from)/this.cell,...row.slice(1)] as typeof row),edges:group.edges.filter(edge=>edge[1]>=this.readFrom&&edge[1]<this.readTo)}));
     for (const s of this.series.values()) {
       if (plot) {
         const cells: Chunk['series'][number]['cells'] = [];

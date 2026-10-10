@@ -385,6 +385,16 @@ export const STEPS = [
     INSERT INTO meta VALUES ('attributionBoard:'||NEW.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
   END;
   `,
+  // Accepted source-counter endpoints preserve native zero intervals for work estimates.
+  `
+  ALTER TABLE readings ADD COLUMN pair_anchor INTEGER NOT NULL DEFAULT 0 CHECK(pair_anchor IN (0,1));
+  CREATE INDEX readings_sparse ON readings(source_id,meter_id,at) WHERE pair_anchor=0;
+  CREATE TABLE meter_pair_starts (source_id TEXT NOT NULL,meter_id TEXT NOT NULL,known_from_at INTEGER NOT NULL,
+    PRIMARY KEY(source_id,meter_id)) WITHOUT ROWID;
+  CREATE TRIGGER meter_pairs_source_removed AFTER DELETE ON sources BEGIN
+    DELETE FROM meter_pair_starts WHERE source_id=OLD.id;
+  END;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

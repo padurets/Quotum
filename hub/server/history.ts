@@ -6,7 +6,7 @@ import type {MeterSelection} from './domain/meterHistory.js';
 
 export class HistoryLimit extends Error { constructor() {super('history_limit');} }
 
-type Kept = {owner: string | null;scope?: HistoryScope; workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
+type Kept = {owner: string | null;scope?: HistoryScope; work?: boolean; workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
 
 /** JSON permits shorter exact integer spellings (300000 is 3e5); names stay untouched. */
 function compactJSON(value: unknown): string {
@@ -39,8 +39,8 @@ export class HistoryTiles {
     return createHmac('sha256', this.key).update(JSON.stringify([board, session, source])).digest('base64url').slice(0, 8);
   }
 
-  touch(source: string, since: number, scopes?: readonly HistoryScope[]) {
-    for (const [key, tile] of this.kept) if ((!tile.scope || !scopes || scopes.includes(tile.scope)) && tile.sources.has(source) && tileEnd(tile.tile, tile.cell) > since) this.drop(key);
+  touch(source: string, since: number, scopes?: readonly HistoryScope[], options?: {work: true}) {
+    for (const [key, tile] of this.kept) if ((!options?.work || tile.work) && (!tile.scope || !scopes || scopes.includes(tile.scope)) && tile.sources.has(source) && tileEnd(tile.tile, tile.cell) > since) this.drop(key);
   }
 
   touchClient(user: string, since: number) {
@@ -54,7 +54,7 @@ export class HistoryTiles {
   }
 
   /** JSON is stored as sent, so hits do not allocate or serialize all the cells again. */
-  read(board: string, cell: number, from: number, to: number, now: number, shown: Shown, meters?: MeterSelection, scope?: HistoryScope): string[] {
+  read(board: string, cell: number, from: number, to: number, now: number, shown: Shown, meters?: MeterSelection, scope?: HistoryScope, work = false): string[] {
     if (this.retentionRevision !== this.store.retentionRevision) {
       this.kept.clear();
       this.bytes = 0;
@@ -66,10 +66,10 @@ export class HistoryTiles {
     for (let at = from; at < to;) {
       const tile = tileOf(at, cell);
       const end = Math.min(to, tileEnd(tile, cell));
-      parts.push({from: at, to: end, tile, key: `${board} ${scope ?? 'legacy'} ${cell} ${tile}${meters ? ' '+JSON.stringify(meters) : ''}`, eligible: at === tileStart(tile, cell) && end === tileEnd(tile, cell) && end <= now && at >= oldest});
+      parts.push({from: at, to: end, tile, key: `${board} ${scope ?? 'legacy'} ${cell} ${tile}${work ? ' work' : ''}${meters ? ' '+JSON.stringify(meters) : ''}`, eligible: at === tileStart(tile, cell) && end === tileEnd(tile, cell) && end <= now && at >= oldest});
       at = end;
     }
-    const workKey = (scope !== 'budget' && parts.some(p => p.eligible) ? this.store.workKey(board, shown) : '') + (meters ? this.store.financialKey(board) : '');
+    const workKey = ((scope !== 'budget' || work) && parts.some(p => p.eligible) ? this.store.workKey(board, shown) : '') + (meters ? this.store.financialKey(board) : '');
     for (const part of parts) {
       const hit = part.eligible ? this.kept.get(part.key) : undefined;
       if (hit?.workKey !== workKey) continue;
@@ -81,7 +81,7 @@ export class HistoryTiles {
       if (parts[i].json !== undefined) {i++; continue;}
       const start = i;
       while (i < parts.length && parts[i].json === undefined) i++;
-      const chunks = this.store.cells(board, cell, parts[start].from, parts[i - 1].to, {now, shown, meters, scope});
+      const chunks = this.store.cells(board, cell, parts[start].from, parts[i - 1].to, {now, shown, meters, scope, work});
       chunks.forEach((raw, offset) => {
         const part = parts[start + offset];
         const chunk: Chunk = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, source, project, device]) => [this.fragmentRef(board, id, source), source, project, device, this.ref(board, id)])}};
@@ -90,7 +90,7 @@ export class HistoryTiles {
         if (part.eligible) {
           this.drop(part.key);
           const bytes = Buffer.byteLength(json);
-          this.kept.set(part.key, {owner: this.store.privateOwner(board), scope, workKey, sources, cell, tile: part.tile, json, bytes});
+          this.kept.set(part.key, {owner: this.store.privateOwner(board), scope, work, workKey, sources, cell, tile: part.tile, json, bytes});
           this.bytes += bytes;
           while (this.bytes > this.budget && this.kept.size) this.drop(this.kept.keys().next().value!);
         }
