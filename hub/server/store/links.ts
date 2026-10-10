@@ -24,7 +24,21 @@ export class LinkStore {
     const row = this.db.prepare('SELECT route_enabled FROM device_tracking_policy WHERE device_id=? AND client=?').get(device, client);
     return {...context, routeEnabled: context.routeEnabled && row?.route_enabled !== 0};
   }
-  held(owner: string): Map<string, string> {return new Map((this.db.prepare('SELECT h.source_id,s.provider FROM holders h JOIN sources s ON s.id=h.source_id WHERE h.user_id=?').all(owner) as {source_id: string; provider: string}[]).map(r => [r.source_id, r.provider]));}
+  held(owner: string): Map<string, string> {return new Map((this.db.prepare("SELECT h.source_id,COALESCE(s.provider,'') AS provider FROM holders h LEFT JOIN sources s ON s.id=h.source_id WHERE h.user_id=?").all(owner) as {source_id: string; provider: string}[]).map(r => [r.source_id, r.provider]));}
+  /** Three bounded reads serve all owners, clients and devices of one projection. */
+  batch(owners: readonly string[]): (owner: string, device: string, client: string) => LinkContext {
+    const people = JSON.stringify(owners), links = new Map<string, Map<string, ClientLink[]>>(), held = new Map<string, Map<string, string>>();
+    for (const row of this.db.prepare('SELECT * FROM client_links WHERE user_id IN (SELECT value FROM json_each(?))').all(people) as (Row & {user_id: string})[]) {
+      let clients = links.get(row.user_id); if (!clients) links.set(row.user_id, clients = new Map());
+      let list = clients.get(row.client); if (!list) clients.set(row.client, list = []); list.push(linkOf(row));
+    }
+    for (const row of this.db.prepare("SELECT h.user_id,h.source_id,COALESCE(s.provider,'') AS provider FROM holders h LEFT JOIN sources s ON s.id=h.source_id WHERE h.user_id IN (SELECT value FROM json_each(?))").all(people) as {user_id: string; source_id: string; provider: string}[]) {
+      let map = held.get(row.user_id); if (!map) held.set(row.user_id, map = new Map()); map.set(row.source_id, row.provider);
+    }
+    const disabled = new Set((this.db.prepare('SELECT p.device_id,p.client FROM device_tracking_policy p JOIN devices d ON d.id=p.device_id WHERE d.user_id IN (SELECT value FROM json_each(?)) AND p.route_enabled=0').all(people) as {device_id: string; client: string}[]).map(r => JSON.stringify([r.device_id, r.client])));
+    const empty: ClientLink[] = [], noHoldings = new Map<string, string>();
+    return (owner, device, client) => ({links: links.get(owner)?.get(client) ?? empty, held: held.get(owner) ?? noHoldings, routeEnabled: !disabled.has(JSON.stringify([device, client]))});
+  }
   private own(owner: string, id: string): ClientLink {
     const row = this.db.prepare('SELECT * FROM client_links WHERE user_id=? AND id=?').get(owner, id) as Row | undefined;
     if (!row) throw new Error('not_found'); return linkOf(row);

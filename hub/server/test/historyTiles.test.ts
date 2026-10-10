@@ -66,7 +66,8 @@ test('late work, hidden cards and renamed devices invalidate closed tiles, while
   const chunk = JSON.parse(json);
   const ref = chunk.activity.sessions[0][0];
   assert.match(ref, /^[\w-]{8}$/);
-  assert.equal(h.tiles.ref(h.board, 1), ref);
+  assert.equal(h.tiles.fragmentRef(h.board, 1, h.source), ref);
+  assert.equal(chunk.activity.sessions[0][4], h.tiles.ref(h.board, 1));
   assert.notEqual(h.tiles.ref('other', 1), ref);
   assert.notEqual(new HistoryTiles(h.store).ref(h.board, 1), ref);
   assert.equal(JSON.parse(h.read(start, start + H, start + 3 * H, [`source:${h.source}`])[0]).activity.sessions.length, 0);
@@ -129,7 +130,7 @@ test('compact JSON keeps exact numbers and every digit and escape inside names',
   h.store.creditWork(h.device, start, start + M, [{source: h.source, origin: 'terminal', startedAt: start, project: name, folder: '', identity: {kind: 'legacy' as const, ordinal: 0}}]);
   const raw = h.store.cells(h.board, M, start, start + H, {now: start + 3 * H})[0];
   const [json] = h.read();
-  const expected = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, ...rest]) => [h.tiles.ref(h.board, id), ...rest])}};
+  const expected = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, source, project, device]) => [h.tiles.fragmentRef(h.board, id, source), source, project, device, h.tiles.ref(h.board, id)])}};
   assert.deepEqual(JSON.parse(json), expected);
   assert.ok(json.includes('3e5'), 'a hold uses its shorter exact spelling');
   assert.equal(JSON.parse(json).series[0].window, '300000');

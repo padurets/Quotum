@@ -407,7 +407,7 @@ type Chunk = {
     }][];
   }[];
   activity: {
-    sessions: [ref: string, source: string | null, project: string | null, device: string][];
+    sessions: [ref: string, source: string | null, project: string | null, device: string, identityRef?: string][];
     devices: Record<string, string>;
     cells: [index: number, active: number,
       sessions: (number | [sessionIndex: number, agentMs: number])[],
@@ -1016,7 +1016,10 @@ each board, goes to their streams only. Events carry no secrets, no email addres
 no sign-in session ids.
 History exposes each selected coding-agent session's time by cell, with its project and
 machine. Its opaque eight-character reference is stable only within one board and one
-start of the hub, derived with a fresh secret key; it reveals neither database session
+start of the hub, derived with a fresh secret key from the ledger row and effective
+source. A temporal source change creates display fragments with different references.
+The optional `identityRef` identifies their one original row within this board/runtime;
+distinct-agent counts deduplicate by it, or by `ref` for older tuples. It reveals neither database session
 ids nor how many sessions other boards have. These are coding-agent sessions, separate
 from sign-in sessions. A restart changes the references and `run` together.
 Metadata tokens are scoped to the board, hub instance and exact visible metadata.

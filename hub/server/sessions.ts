@@ -1,3 +1,4 @@
+import {safeRoute, matches, type LinkRoute} from './domain/links.js';
 import type {SessionEvidence} from './domain/sessionEvidence.js';
 import type {Origin} from './domain/ingest.js';
 import type {Store, WorkKey} from './store/store.js';
@@ -27,6 +28,7 @@ export type LiveSession = SessionEvidence & {
  */
 export type BoardSession = {
   clientId?: string;
+  route?: LinkRoute;
   device: {id: string; name: string};
   origin: Origin;
   project: string | null;
@@ -88,7 +90,10 @@ export class Sessions {
     const before = this.machines.get(device);
     if (before) this.credit(device, before, Math.min(now, before.at + CREDIT_MS));
     const normalized = sessions.map(s => ({...s, clientId: s.clientId ?? s.source?.split(':')[0] ?? 'unknown'}));
-    if (normalized.length) this.machines.set(device, {at: now, user, sessions: normalized});
+    const next = {at: now, user, sessions: normalized};
+    const evidence = this.store.observeWork(device, keysOf(next));
+    next.sessions = normalized.map((session, i) => ({...session, accountBy: evidence[i].accountBy, route: evidence[i].route}));
+    if (normalized.length) this.machines.set(device, next);
     else this.machines.delete(device);
     this.store.clientSessionsChanged(user);
 
@@ -114,8 +119,10 @@ export class Sessions {
   }
 
   /** The subscriptions a machine's list shows agents on. */
-  sourcesOf(device: string): string[] {
-    return [...new Set((this.machines.get(device)?.sessions ?? []).flatMap(s => s.source ? [s.source] : []))];
+  sourcesOf(device: string, now = Date.now()): string[] {
+    const machine = this.machines.get(device);
+    if (!machine || now - machine.at > KEEP_MS) return [];
+    return [...new Set(this.store.resolveSessions(machine.user, device, keysOf(machine), now).flatMap(s => s.source ? [s.source] : []))];
   }
 
   /**
@@ -129,8 +136,9 @@ export class Sessions {
       if (now - machine.at > KEEP_MS || !people.includes(machine.user)) continue;
       if (!this.store.holds(machine.user, source)) continue;
       const keys = keysOf(machine);
-      const selected = machine.sessions.flatMap((s, i) => s.source === source ? [{s, key: keys[i]}] : []);
-      const worked = this.store.worked(id, selected.map(s => s.key));
+      const resolved = this.store.resolveSessions(machine.user, id, keys, now);
+      const selected = machine.sessions.flatMap((s, i) => resolved[i].source === source ? [{s, key: keys[i]}] : []);
+      const worked = this.store.worked(id, selected.map(s => s.key), now);
       const present = this.presenter(machine.user, id);
       selected.forEach(({s}, i) => found.push(present(s, worked[i])));
 
@@ -140,22 +148,22 @@ export class Sessions {
 
   /** When `of` answers otherwise with no new list: a machine's list shown now stops showing. Null when only a new list changes it. */
   ofChangesAt(source: string, people: string[], now: number): number | null {
-    const ends = [...this.machines.values()].filter(m => now - m.at <= KEEP_MS && people.includes(m.user) && this.store.holds(m.user, source) && m.sessions.some(s => s.source === source)).map(m => m.at + KEEP_MS + 1);
-    return ends.length ? Math.min(...ends) : null;
+    return this.deadline(now, KEEP_MS, machine => people.includes(machine.user) && this.store.holds(machine.user, source));
   }
 
   /** Whether an agent works on a subscription on any machine, by lists that still count as true. */
   working(source: string, now: number): boolean {
-    for (const machine of this.machines.values()) {
-      if (now - machine.at <= CREDIT_MS && this.store.holds(machine.user, source) && machine.sessions.some(s => s.source === source && s.working)) return true;
+    for (const [device, machine] of this.machines) {
+      if (now - machine.at > CREDIT_MS || !this.store.holds(machine.user, source)) continue;
+      const resolved = this.store.resolveSessions(machine.user, device, keysOf(machine), now);
+      if (machine.sessions.some((s, i) => s.working && resolved[i].source === source)) return true;
     }
     return false;
   }
 
   /** When `working` may answer otherwise with no new list: a list that says an agent works stops counting. */
   workingChangesAt(source: string, now: number): number | null {
-    const ends = [...this.machines.values()].filter(m => now - m.at <= CREDIT_MS && this.store.holds(m.user, source) && m.sessions.some(s => s.source === source && s.working)).map(m => m.at + CREDIT_MS + 1);
-    return ends.length ? Math.min(...ends) : null;
+    return this.deadline(now, CREDIT_MS, machine => this.store.holds(machine.user, source) && machine.sessions.some(s => s.working));
   }
 
   /** Unknown and unheld work is private to the owner's personal board. */
@@ -169,8 +177,9 @@ export class Sessions {
     for (const [id, machine] of this.machines) {
       if (machine.user !== user || now - machine.at > KEEP_MS || device !== undefined && id !== device) continue;
       const keys = keysOf(machine);
-      const selected = machine.sessions.flatMap((s, i) => this.store.displaySource(user, s.source) === null ? [{s, key: keys[i]}] : []);
-      const worked = this.store.worked(id, selected.map(s => s.key));
+      const resolved = this.store.resolveSessions(user, id, keys, now);
+      const selected = machine.sessions.flatMap((s, i) => resolved[i].source === null ? [{s, key: keys[i]}] : []);
+      const worked = this.store.worked(id, selected.map(s => s.key), now);
       const present = this.presenter(user, id);
       selected.forEach(({s}, i) => found.push(present(s, worked[i])));
     }
@@ -180,9 +189,9 @@ export class Sessions {
   deviceSessions(user: string, device: string, now: number): (BoardSession & {source: string | null})[] {
     const machine = this.machines.get(device);
     if (!machine || machine.user !== user || now - machine.at > KEEP_MS) return [];
-    const worked = this.store.worked(device, keysOf(machine));
+    const keys = keysOf(machine), worked = this.store.worked(device, keys, now), resolved = this.store.resolveSessions(user, device, keys, now);
     const present = this.presenter(user, device);
-    return machine.sessions.map((session, i) => ({...present(session, worked[i]), source: this.store.displaySource(user, session.source)}));
+    return machine.sessions.map((session, i) => ({...present(session, worked[i]), source: resolved[i].source}));
   }
 
   /** Owner-device presence is independent of the board currently open, including hidden sources. */
@@ -193,22 +202,42 @@ export class Sessions {
   }
 
   devicesChangesAt(user: string, now: number): number | null {
-    const deadlines = [...this.machines.values()].filter(m => m.user === user && now-m.at <= KEEP_MS).map(m => m.at+KEEP_MS+1);
-    return deadlines.length ? Math.min(...deadlines) : null;
+    return this.deadline(now, KEEP_MS, machine => machine.user === user);
   }
 
   ownChangesAt(user: string, board: string, now: number): number | null {
     if (this.store.privateOwner(board) !== user) return null;
-    const deadlines = [...this.machines.values()].filter(m => m.user === user && now - m.at <= KEEP_MS && m.sessions.some(s => this.store.displaySource(user, s.source) === null)).map(m => m.at + KEEP_MS + 1);
-    return deadlines.length ? Math.min(...deadlines) : null;
+    return this.deadline(now, KEEP_MS, machine => machine.user === user);
+  }
+
+  /** Future link boundaries use the same hub clock as presence expiry. */
+  private deadline(now: number, keep: number, eligible: (machine: Machine) => boolean): number | null {
+    const machines = [...this.machines].filter(([, machine]) => now - machine.at <= keep && eligible(machine));
+    if (!machines.length) return null;
+    const contexts = this.store.links.batch([...new Set(machines.map(([, machine]) => machine.user))]);
+    let next = Infinity;
+    for (const [device, machine] of machines) {
+      next = Math.min(next, machine.at + keep + 1);
+      for (const s of machine.sessions) {
+        const context = contexts(machine.user, device, s.clientId), input = {...s, clientId: s.clientId, deviceId: device};
+        const route = safeRoute(s.route, context.routeEnabled).route;
+        for (const link of context.links) if (matches(link, input, route, link.from)) {
+          if (link.from > now) next = Math.min(next, link.from);
+          if (link.to !== null && link.to > now) next = Math.min(next, link.to);
+        }
+      }
+    }
+    return Number.isFinite(next) ? next : null;
   }
 
   private presenter(user: string, id: string): (session: StoredSession, workedMs: number | null) => BoardSession {
     const names = this.store.projectNames(user);
     const alias = this.store.db.prepare('SELECT COALESCE(label,name) AS name FROM devices WHERE id=?').get(id) as {name:string} | undefined;
-    return ({clientId, device, origin, project, folder, startedAt, lastWorkedAt, working}, workedMs) => {
+    const contexts = this.store.links.batch([user]);
+    return ({clientId, device, origin, project, folder, startedAt, lastWorkedAt, working, route}, workedMs) => {
       const shown = project === null ? null : (names.get(project) ?? project);
-      return {clientId, device: alias ? {...device,name:alias.name} : device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, lastWorkedAt, working, workedMs};
+      const safe = safeRoute(route, contexts(user, id, clientId).routeEnabled).route;
+      return {clientId, ...(safe ? {route: safe} : {}), device: alias ? {...device,name:alias.name} : device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, lastWorkedAt, working, workedMs};
     };
   }
 

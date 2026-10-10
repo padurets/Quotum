@@ -205,9 +205,18 @@ collectors keeps reporting clients while session reporting is enabled.
 Legacy sessions retain their released subset and cap priority. Supplemental sessions
 carry work that cannot enter that subset. Schema 21 adds a client namespace, nullable
 source and evidence metadata to session contexts, preserving ledger row/producer IDs
-and every work interval; device inventory is stored separately. Evidence is neither a
-resolver nor identity. Source-less and unheld work is private to the machine owner's
-personal board. Current holdings normalize private source references at read time;
+and every work interval; device inventory is stored separately. Evidence never changes
+process identity. Temporal owner rules resolve attribution when read: device scope
+precedes all devices, then provider-conditioned class, class alone and no condition.
+An inactive winning rule gives no source and masks weaker rules and account fallback.
+Without a matching rule, API and unknown routes have no source; absent or subscription
+routes may use a currently held observed account. Explicit route suppression disables
+route conditions. Only exact catalogue endpoints and session evidence identify providers.
+Live sessions, working state, retained counters and history share this resolver.
+History cuts raw work at rule boundaries without rewriting the ledger. Display fragments
+share a board-scoped row identity so source splitting adds no agents. Stronger context
+evidence applies to retained history, including when received in an idle report.
+Source-less and unheld work is private to the machine owner's personal board;
 shared projections and source activity signals require a current holding.
 
 Private ownSessions and ownSince events update the corresponding page slices and

@@ -323,9 +323,9 @@ export class Ingest {
       });
       if (report.clients !== null) this.directory.saveDeviceClients(device.id, device.userId, report.clients, now);
 
-      const before = this.live.sourcesOf(device.id).filter(source => this.store.holds(device.userId, source));
+      const before = this.live.sourcesOf(device.id, now).filter(source => this.store.holds(device.userId, source));
       this.live.report(device.id, device.userId, sessions, now);
-      tell(this.observer, o => o.touchSources([...new Set([...before, ...sessions.flatMap(s => s.source && this.store.holds(device.userId, s.source) ? [s.source] : [])])]));
+      tell(this.observer, o => o.touchSources([...new Set([...before, ...this.live.sourcesOf(device.id, now)])]));
       return {accepted: sessions.length};
     });
   }

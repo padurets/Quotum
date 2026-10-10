@@ -80,20 +80,21 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
     if (!activity.has(at)) activity.set(at, []);
     activity.get(at)!.push(part);
   }
-  const sessionIndexes = chunks.map(() => new Map<number, number>());
+  const sessionIndexes = chunks.map(() => new Map<string, number>());
   for (const [at, spans] of [...activity].sort((a, b) => a[0] - b[0])) {
     const chunk = chunkOf(at);
     const indexes = sessionIndexes[tileOf(at, cell) - firstTile];
-    const sessions = new Map<number, {ms: number; s: Stretch}>();
+    const sessions = new Map<string, {ms: number; s: Stretch}>();
     for (const s of spans) {
-      if (!indexes.has(s.session)) {
-        indexes.set(s.session, chunk.activity.sessions.length);
+      const key = JSON.stringify([s.session, s.source]);
+      if (!indexes.has(key)) {
+        indexes.set(key, chunk.activity.sessions.length);
         chunk.activity.sessions.push([s.session, s.source, s.project, s.device]);
         chunk.activity.devices[s.device] = devices[s.device];
       }
-      const session = sessions.get(s.session) ?? {ms: 0, s};
+      const session = sessions.get(key) ?? {ms: 0, s};
       session.ms += s.to - s.from;
-      sessions.set(s.session, session);
+      sessions.set(key, session);
     }
     const active = workTime(spans);
     const row: (typeof chunk.activity.cells)[number] = [(at - chunk.from) / cell, active, [...sessions].map(([id, {ms}]) => ms === active ? indexes.get(id)! : [indexes.get(id)!, ms]), []];

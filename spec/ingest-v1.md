@@ -503,7 +503,15 @@ subset. Every packet replaces both live lists, including when either list is abs
 Optional route provenance is `{class: "subscription"|"api"|"unknown",
 by: "session"|"machine", host?: string, provider?: string}`. Only session evidence may
 carry a lower-case DNS host without port, scheme, credentials, path, query or fragment.
-Invalid provenance is ignored. These fields do not resolve or change source attribution.
+Invalid provenance is ignored. These fields are evidence for the hub's read-time
+source resolver, never process identity. An owner rule overrides observed attribution:
+device scope precedes all devices, then class + known provider, class and no condition.
+Periods are half-open; an unheld winning target masks account and weaker-rule fallback.
+Without a matching rule, API and unknown routes have no source; subscription or absent
+routes use the observed account only while held. Explicit `route = false` suppresses
+route conditions. Machine evidence cannot identify a provider; session evidence uses
+only known provider IDs and exact catalogue endpoint hosts. A correction reattributes
+retained work on read and never rewrites the raw source or credited intervals.
 Stored account evidence (`login`, `inferred`, `legacy`) and route evidence are metadata,
 not process identity. Stronger evidence replaces weaker; equal-strength route conflicts
 become unknown with identifying details removed. Updates never split a work context.
@@ -632,6 +640,13 @@ metadata or salt appears in board state, history, errors or logs.
 The measuring-frequency preference is kept on the hub. It adds no information to agent traffic.
 
 ### Client discovery privacy
+
+Manual client links belong to their owner and are kept separately from account and
+route evidence. Neither rule IDs nor disagreements or suggestions are shared.
+Shared sessions may expose only the route class and a recognized catalogue provider,
+after current holding and board visibility checks. Hosts and custom gateway hints stay
+private. The history API uses board-scoped display fragment and row references; neither
+reveals producer identity. Linking work never proves the cost of an individual request.
 
 Inventory uses configured paths and the catalogue's local install locations. Version
 probes run only when executable identity changes, with neutral working directory, closed

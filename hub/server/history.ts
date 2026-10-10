@@ -35,6 +35,10 @@ export class HistoryTiles {
     return createHmac('sha256', this.key).update(`${board}:${session}`).digest('base64url').slice(0, 8);
   }
 
+  fragmentRef(board: string, session: number, source: string | null) {
+    return createHmac('sha256', this.key).update(JSON.stringify([board, session, source])).digest('base64url').slice(0, 8);
+  }
+
   touch(source: string, since: number, scopes?: readonly HistoryScope[]) {
     for (const [key, tile] of this.kept) if ((!tile.scope || !scopes || scopes.includes(tile.scope)) && tile.sources.has(source) && tileEnd(tile.tile, tile.cell) > since) this.drop(key);
   }
@@ -80,7 +84,7 @@ export class HistoryTiles {
       const chunks = this.store.cells(board, cell, parts[start].from, parts[i - 1].to, {now, shown, meters, scope});
       chunks.forEach((raw, offset) => {
         const part = parts[start + offset];
-        const chunk: Chunk = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, ...rest]) => [this.ref(board, id), ...rest])}};
+        const chunk: Chunk = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, source, project, device]) => [this.fragmentRef(board, id, source), source, project, device, this.ref(board, id)])}};
         const json = (part.json = compactJSON(chunk));
         if (meters && Buffer.byteLength(json) > this.budget / 2) throw new HistoryLimit();
         if (part.eligible) {

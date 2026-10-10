@@ -24,6 +24,7 @@ import {exactDecimal} from '../domain/amount.js';
 import {CurrencyStore} from './currencies.js';
 import {importLegacyCurrencies} from './legacyCurrencies.js';
 import {LinkStore} from './links.js';
+import {resolveLink, splitLinks, type AttributionInput, type Attribution} from '../domain/links.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
 export type WorkContext = SessionEvidence & {client?: string; source: string | null; origin: Origin; startedAt: number; project: string; folder: string};
@@ -231,6 +232,36 @@ export class Store {
   }
 
   clientSessionsChanged(user: string) { tell(this.observer, o => o.touchClientSessions?.(user)); }
+
+  resolveSessions(owner: string, device: string, keys: WorkKey[], now: number): Attribution[] {
+    const context = this.links.batch([owner]);
+    return keys.map(key => {
+      const clientId = key.client ?? key.source?.split(':')[0] ?? 'unknown';
+      return resolveLink({...key, clientId, deviceId: device}, context(owner, device, clientId), now);
+    });
+  }
+
+  /** An idle report can strengthen an existing context without crediting any work. */
+  observeWork(device: string, keys: WorkKey[]): WorkKey[] {
+    const read = this.db.prepare("SELECT id,account_by AS accountBy,route_class AS class,route_by AS by,route_host AS host,route_provider AS provider FROM agent_sessions WHERE device_id=? AND client=? AND COALESCE(source_id,'')=COALESCE(?,'') AND source_id IS ? AND origin=? AND project=? AND folder=? AND ((producer_id IS ? AND producer_id IS NOT NULL) OR (producer_id IS NULL AND ? IS NULL AND started_at=? AND ordinal=?))");
+    const save = this.db.prepare('UPDATE agent_sessions SET account_by=?,route_class=?,route_by=?,route_host=?,route_provider=? WHERE id=?');
+    let changed = false;
+    const result = keys.map(key => {
+      const producer = key.identity.kind === 'stable' ? key.identity.sessionId : null;
+      const row = read.get(device, key.client ?? key.source?.split(':')[0] ?? 'unknown', key.source, key.source, key.origin, key.project, key.folder, producer, producer, key.startedAt, key.identity.kind === 'legacy' ? key.identity.ordinal : 0) as {id: number; accountBy: SessionEvidence['accountBy']; class: SessionRoute['class']; by: SessionRoute['by'] | null; host: string | null; provider: string | null} | undefined;
+      if (!row) return key;
+      const before = {accountBy: row.accountBy, route: row.by ? {class: row.class, by: row.by, host: row.host, provider: row.provider} : null};
+      const merged = mergeEvidence(before, key);
+      if (JSON.stringify(before) !== JSON.stringify(merged)) {save.run(merged.accountBy, merged.route?.class ?? null, merged.route?.by ?? null, merged.route?.host ?? null, merged.route?.provider ?? null, row.id); changed = true;}
+      return {...key, ...merged};
+    });
+    if (changed) {
+      const owner = String(this.db.prepare('SELECT user_id FROM devices WHERE id=?').get(device)?.user_id ?? '');
+      this.db.prepare("INSERT INTO meta VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1").run('workEvidence:' + owner);
+      tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); const sources = [...this.links.held(owner).keys()]; o.touchSources(sources); for (const source of sources) o.history(source, 0, ['quota']);});
+    }
+    return result;
+  }
 
   holds(userId: string, source: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM holders WHERE user_id = ? AND source_id = ?').get(userId, source);
@@ -741,6 +772,8 @@ export class Store {
     const credited = new Map<string, number>();
     const privateCredit = new Map<string, number>();
     const owner = (this.db.prepare('SELECT user_id AS user FROM devices WHERE id=?').get(device) as {user: string} | undefined)?.user;
+    const contexts = this.links.batch(owner ? [owner] : []);
+    let changedEvidence = false;
     const evidence = this.db.prepare('SELECT account_by AS accountBy,route_class AS class,route_by AS by,route_host AS host,route_provider AS provider FROM agent_sessions WHERE id=?');
     const saveEvidence = this.db.prepare('UPDATE agent_sessions SET account_by=?,route_class=?,route_by=?,route_host=?,route_provider=? WHERE id=?');
     this.db.exec('SAVEPOINT credit');
@@ -752,20 +785,24 @@ export class Store {
         const client = suppliedClient ?? source?.split(':')[0] ?? 'unknown';
         const producer = identity.kind === 'stable' ? identity.sessionId : null;
         const ordinal = identity.kind === 'legacy' ? identity.ordinal : 0;
-        add.run(device, client, source, origin, startedAt, project, folder, ordinal, producer);
+        const created = add.run(device, client, source, origin, startedAt, project, folder, ordinal, producer).changes > 0;
         const {id} = (producer === null
           ? legacy.get(device, client, source, source, startedAt, origin, project, folder, ordinal)
           : stable.get(device, client, producer, source, source, origin, project, folder)) as {id: number};
         const row = evidence.get(id) as {accountBy: SessionEvidence['accountBy']; class: SessionRoute['class'] | null; by: SessionRoute['by'] | null; host: string | null; provider: string | null};
-        const merged = mergeEvidence({accountBy: row.accountBy, route: row.by ? {class: row.class!, by: row.by, host: row.host, provider: row.provider} : null}, {accountBy, route});
-        saveEvidence.run(merged.accountBy, merged.route?.class ?? null, merged.route?.by ?? null, merged.route?.host ?? null, merged.route?.provider ?? null, id);
+        const before = {accountBy: row.accountBy, route: row.by ? {class: row.class!, by: row.by, host: row.host, provider: row.provider} : null};
+        const merged = mergeEvidence(before, {accountBy, route});
+        if (JSON.stringify(before) !== JSON.stringify(merged)) {saveEvidence.run(merged.accountBy, merged.route?.class ?? null, merged.route?.by ?? null, merged.route?.host ?? null, merged.route?.provider ?? null, id); changedEvidence ||= !created;}
         const own = producer === null ? latest.get(id) : highWater.get(device, client, producer);
         const start = Math.max(from, (own as {at: number | null} | undefined)?.at ?? from, opposite.get(producer === null ? 0 : 1) ?? from);
         if (until <= start) continue;
         if (!extend.run(until, id, start).changes) begin.run(id, start, until);
-        if (source !== null && owner && this.holds(owner, source)) credited.set(source, Math.min(credited.get(source) ?? start, start));
-        else if (owner) privateCredit.set(owner, Math.min(privateCredit.get(owner) ?? start, start));
+        if (owner) for (const fragment of splitLinks({clientId: client, deviceId: device, source, ...merged}, contexts(owner, device, client), start, until)) {
+          if (fragment.source !== null) credited.set(fragment.source, Math.min(credited.get(fragment.source) ?? fragment.from, fragment.from));
+          else privateCredit.set(owner, Math.min(privateCredit.get(owner) ?? fragment.from, fragment.from));
+        }
       }
+      if (changedEvidence && owner) this.db.prepare("INSERT INTO meta VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1").run('workEvidence:' + owner);
       this.db.exec('RELEASE credit');
     } catch (error) {
       this.db.exec('ROLLBACK TO credit');
@@ -774,46 +811,56 @@ export class Store {
     }
     for (const [source, start] of credited) tell(this.observer, o => o.history(source, start, ['quota']));
     for (const [user, start] of privateCredit) tell(this.observer, o => o.clientHistory?.(user, start));
+    if (changedEvidence && owner) tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); const sources = [...contexts(owner, device, '').held.keys()]; o.touchSources(sources); for (const source of sources) o.history(source, 0, ['quota']);});
   }
 
-  /** Retained credit of an identified session on its current subscription; legacy identity is unknown. */
-  worked(device: string, keys: WorkKey[]): (number | null)[] {
+  /** Retained credit resolved to the session's current source; legacy identity is unknown. */
+  worked(device: string, keys: WorkKey[], now = Date.now()): (number | null)[] {
     if (!keys.length) return [];
-    const read = this.db.prepare(
-      'SELECT COALESCE(sum(w.to_at - w.from_at), 0) AS ms FROM agent_sessions s JOIN agent_work w ON w.session_id = s.id' +
-        ' WHERE s.device_id = ? AND s.client = ? AND s.producer_id = ? AND s.source_id IS ?',
-    );
-    return keys.map(({source, client, identity}) => identity.kind === 'legacy' ? null : (read.get(device, client ?? source?.split(':')[0] ?? 'unknown', identity.sessionId, source) as {ms: number}).ms);
+    const owner = String(this.db.prepare('SELECT user_id FROM devices WHERE id=?').get(device)?.user_id ?? '');
+    const context = this.links.batch([owner]);
+    const read = this.db.prepare("SELECT s.id,s.client,s.source_id,s.account_by,s.route_class,s.route_by,s.route_host,s.route_provider,w.from_at,w.to_at FROM agent_sessions s JOIN agent_work w ON w.session_id=s.id WHERE s.device_id=? AND s.client=? AND s.producer_id=? ORDER BY s.id,w.from_at");
+    return keys.map(key => {
+      if (key.identity.kind === 'legacy') return null;
+      const clientId = key.client ?? key.source?.split(':')[0] ?? 'unknown', rules = context(owner, device, clientId);
+      const source = resolveLink({...key, clientId, deviceId: device}, rules, now).source;
+      let ms = 0;
+      for (const row of read.all(device, clientId, key.identity.sessionId) as {source_id: string | null; account_by: SessionEvidence['accountBy']; route_class: SessionRoute['class']; route_by: SessionRoute['by'] | null; route_host: string | null; route_provider: string | null; from_at: number; to_at: number}[]) {
+        const input: AttributionInput = {clientId, deviceId: device, source: row.source_id, accountBy: row.account_by, route: row.route_by ? {class: row.route_class, by: row.route_by, host: row.route_host, provider: row.route_provider} : null};
+        for (const fragment of splitLinks(input, rules, row.from_at, row.to_at)) if (fragment.source === source) ms += fragment.to - fragment.from;
+      }
+      return ms;
+    });
   }
 
-  /** Every stretch agents worked within [from, to), of the given subscriptions or all, projects named as their people corrected them. */
+  /** Candidate owners are selected before read-time source resolution and display cuts. */
   agentWork(from: number, to: number, sources?: string[], owner: string | null = null): Stretch[] {
-    // A month of a busy board is tens of thousands of rows, read as arrays: half the time of objects. The
-    // index on time, even for the order: else a day would go through every stretch the hub keeps.
     const read = this.db.prepare(
-      'SELECT w.session_id, max(w.from_at, ?), min(w.to_at, ?) FROM agent_work w INDEXED BY agent_work_by_end JOIN agent_sessions s ON s.id = w.session_id' +
-        ' WHERE w.to_at > ? AND w.from_at < ?' +
-        (sources ? ' AND (s.source_id IN (SELECT value FROM json_each(?)) OR (? IS NOT NULL AND EXISTS(SELECT 1 FROM devices d WHERE d.id=s.device_id AND d.user_id=? AND (s.source_id IS NULL OR NOT EXISTS(SELECT 1 FROM holders h WHERE h.user_id=d.user_id AND h.source_id=s.source_id)))))' : '') +
-        ' ORDER BY w.session_id, w.from_at',
-    );
+      'SELECT w.session_id, max(w.from_at, ?), min(w.to_at, ?) FROM agent_work w INDEXED BY agent_work_by_end JOIN agent_sessions s ON s.id=w.session_id' +
+      ' WHERE w.to_at>? AND w.from_at<?' +
+      (sources ? ' AND s.device_id IN (SELECT id FROM devices WHERE user_id IN (SELECT user_id FROM holders WHERE source_id IN (SELECT value FROM json_each(?))) OR user_id=?)' : '') +
+      ' ORDER BY w.session_id,w.from_at');
     read.setReturnArrays(true);
-    const rows = read.all(from, to, from, to, ...(sources ? [JSON.stringify(sources), owner, owner] : [])) as unknown as [number, number, number][];
-    // What is said of a session is read once rather than with each of its stretches: that takes most of the time.
-    const sessions = new Map(
-      (
-        this.db
-          .prepare(
-            "SELECT s.id, s.source_id AS source, s.device_id AS device, d.user_id AS user, s.origin, COALESCE(n.name, NULLIF(s.project, '')) AS project," +
-              " NULLIF(s.folder, '') AS folder, s.started_at AS startedAt FROM agent_sessions s JOIN devices d ON d.id = s.device_id" +
-              ' LEFT JOIN project_names n ON n.user_id = d.user_id AND n.reported = s.project WHERE s.id IN (SELECT value FROM json_each(?))',
-          )
-          .all(JSON.stringify([...new Set(rows.map(([id]) => id))])) as ({id: number} & Omit<Stretch, 'session' | 'from' | 'to'>)[]
-      ).map(({id, ...session}) => [id, session]),
-    );
-    return rows.map(([id, start, end]) => {
-      const s = sessions.get(id)!;
-      return {session: id, source: s.source, device: s.device, user: s.user, origin: s.origin, project: s.project, folder: s.folder, startedAt: s.startedAt, from: start, to: end};
-    });
+    const rows = read.all(from, to, from, to, ...(sources ? [JSON.stringify(sources), owner] : [])) as unknown as [number, number, number][];
+    const sessions = this.db.prepare("SELECT s.id,s.client AS clientId,s.source_id AS source,s.device_id AS device,d.user_id AS user,s.origin,COALESCE(n.name,NULLIF(s.project,'')) AS project,NULLIF(s.folder,'') AS folder,s.started_at AS startedAt,s.account_by AS accountBy,s.route_class AS class,s.route_by AS by,s.route_host AS host,s.route_provider AS provider FROM agent_sessions s JOIN devices d ON d.id=s.device_id LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project WHERE s.id IN (SELECT value FROM json_each(?))")
+      .all(JSON.stringify([...new Set(rows.map(([id]) => id))])) as ({id: number; clientId: string; accountBy: SessionEvidence['accountBy']; class: SessionRoute['class']; by: SessionRoute['by'] | null; host: string | null; provider: string | null} & Omit<Stretch, 'session' | 'from' | 'to'>)[];
+    const contexts = this.links.batch([...new Set(sessions.map(s => s.user))]), allowed = sources ? new Set(sources) : null;
+    // Resolve each context's timeline once, then reuse it for all its raw stretches.
+    const timelines = new Map(sessions.map(s => {
+      const input: AttributionInput = {clientId: s.clientId, deviceId: s.device, source: s.source, accountBy: s.accountBy, route: s.by ? {class: s.class, by: s.by, host: s.host, provider: s.provider} : null};
+      return [s.id, {session: s, parts: splitLinks(input, contexts(s.user, s.device, s.clientId), from, to), next: 0}];
+    }));
+    const result: Stretch[] = [];
+    for (const [id, start, end] of rows) {
+      const timeline = timelines.get(id)!, s = timeline.session;
+      while (timeline.next < timeline.parts.length && timeline.parts[timeline.next].to <= start) timeline.next++;
+      for (let n = timeline.next; n < timeline.parts.length && timeline.parts[n].from < end; n++) {
+        const part = timeline.parts[n];
+        if (allowed && !(part.source !== null && allowed.has(part.source) || part.source === null && s.user === owner)) continue;
+        result.push({session: id, source: part.source, device: s.device, user: s.user, origin: s.origin, project: s.project, folder: s.folder, startedAt: s.startedAt, from: Math.max(start, part.from), to: Math.min(end, part.to)});
+      }
+    }
+    return result;
   }
 
   /** The projects a person's machines worked on since `since`, under the names the person gave them. */

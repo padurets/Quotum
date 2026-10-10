@@ -41,7 +41,7 @@ export type SeriesCells = {source: string; window: string; hold: number; open: n
 export type SessionCell = number | [number, number];
 export type GroupCell = [dimension: 's' | 'p' | 'd', key: string, activeMs: number];
 export type ActivityCells<Ref = string> = {
-  sessions: [ref: Ref, source: string | null, project: string | null, device: string][];
+  sessions: [ref: Ref, source: string | null, project: string | null, device: string, identityRef?: Ref][];
   devices: Record<string, string>;
   cells: [index: number, active: number, sessions: SessionCell[], groups: GroupCell[]][];
 };
@@ -193,7 +193,8 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
       for (const member of members) {
         yield;
         const [n, ms] = typeof member === 'number' ? [member, active] : member;
-        const [ref, source, project, device] = chunk.activity.sessions[n];
+        const [fragmentRef, source, project, device, identityRef] = chunk.activity.sessions[n];
+        const ref = identityRef ?? fragmentRef;
         refs.add(ref);
         total.refs.add(ref);
         total.agent += ms;
