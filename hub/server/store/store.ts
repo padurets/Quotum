@@ -80,12 +80,15 @@ export class Store {
   private readonly created: number;
   private observer: Touches | null = null;
   private pruned = 0;
+  private readonly attributionEpochs = new Map<string, number>();
+  private readonly workReach = new Map<string, {stamp: string; sources: Map<string | null, {projects: Set<string>; devices: Set<string>}>}>();
 
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
     this.links = new LinkStore(this.db);
     this.links.onChange = owner => {
+      this.attributionChanged(owner);
       const sources = this.held(owner).map(s => s.id);
       tell(this.observer, o => {
         o.touchSources(sources);
@@ -199,26 +202,40 @@ export class Store {
    * does, as which did is found without reading when (WORK_NAMES).
    */
   workKey(board: string, shown: Shown): string {
-    const people = JSON.stringify([...new Set([...shown.values()].flatMap(s => s.holders.map(h => h.user)))].sort());
-    const sources = JSON.stringify([...shown.keys()]);
-    const names = this.db.prepare(WORK_NAMES).get(people, sources, people, sources) as {names: string};
-    const owner = this.privateOwner(board);
-    const privateNames = owner === null ? null : this.db.prepare(
-      'SELECT json_group_array(json(name)) AS names FROM (' +
-      'SELECT json_array(n.user_id,n.reported,n.name) AS name FROM project_names n WHERE n.user_id=?' +
-      ' AND EXISTS (SELECT 1 FROM devices d JOIN agent_sessions s ON s.device_id=d.id WHERE d.user_id=n.user_id AND s.project=n.reported' +
-      ' AND (s.source_id IS NULL OR NOT EXISTS(SELECT 1 FROM holders h WHERE h.user_id=d.user_id AND h.source_id=s.source_id)))' +
-      ' UNION ALL SELECT json_array(d.id,COALESCE(d.label,d.name)) FROM devices d WHERE d.user_id=?' +
-      ' AND EXISTS (SELECT 1 FROM agent_sessions s WHERE s.device_id=d.id' +
-      ' AND (s.source_id IS NULL OR NOT EXISTS(SELECT 1 FROM holders h WHERE h.user_id=d.user_id AND h.source_id=s.source_id))) ORDER BY 1)'
-    ).get(owner, owner) as {names: string} | null;
-    // Held and private work share names. A new reported project adds data, not a rename
-    // dependency or a second machine entry that would reload every historical cell.
-    const nameKey = privateNames === null ? names.names : [...new Set(
-      [...JSON.parse(names.names) as string[][], ...JSON.parse(privateNames.names) as string[][]].map(name => JSON.stringify(name))
-    )].sort();
-    const holdings = owner === null ? null : this.held(owner).map(s => s.id).sort();
-    const key = JSON.stringify([this.agentWorkSince(), this.sources(board).map(s => s.id), [...shown].map(([id, s]) => [id, s.since, s.holders]), nameKey, holdings]);
+    const owner = this.privateOwner(board), users = [...new Set([...shown.values()].flatMap(s => s.holders.map(h => h.user)).concat(owner ? [owner] : []))].sort();
+    const people = JSON.stringify(users);
+    const versions = this.db.prepare("SELECT u.id,COALESCE(v.version,0) version,COALESCE((SELECT value FROM meta WHERE key='workEvidence:'||u.id),'0') evidence,COALESCE((SELECT value FROM meta WHERE key='workContext:'||u.id),'0') contexts FROM users u LEFT JOIN link_versions v ON v.user_id=u.id WHERE u.id IN (SELECT value FROM json_each(?)) ORDER BY u.id").all(people) as {id: string; version: number; evidence: string; contexts: string}[];
+    const contexts = this.links.batch(users), names = new Set<string>();
+    const aliases = this.db.prepare('SELECT user_id,reported,name FROM project_names WHERE user_id IN (SELECT value FROM json_each(?))').all(people) as {user_id: string; reported: string; name: string}[];
+    const devices = new Map((this.db.prepare('SELECT id,COALESCE(label,name) AS name FROM devices WHERE user_id IN (SELECT value FROM json_each(?))').all(people) as {id: string; name: string}[]).map(d => [d.id, d.name]));
+    const policies = this.db.prepare('SELECT p.* FROM device_tracking_policy p JOIN devices d ON d.id=p.device_id WHERE d.user_id IN (SELECT value FROM json_each(?)) ORDER BY p.device_id,p.client').all(people);
+    for (const version of versions) {
+      const stamp = JSON.stringify([version, [...contexts(version.id, '', '').held].sort(), policies]);
+      let reach = this.workReach.get(version.id);
+      if (!reach || reach.stamp !== stamp) {
+        const sources = new Map<string | null, {projects: Set<string>; devices: Set<string>}>();
+        const rows = this.db.prepare('SELECT s.* FROM devices d JOIN agent_sessions s ON s.device_id=d.id WHERE d.user_id=?').all(version.id) as {client: string; device_id: string; source_id: string | null; account_by: SessionEvidence['accountBy']; route_class: SessionRoute['class']; route_by: SessionRoute['by'] | null; route_host: string | null; route_provider: string | null; project: string}[];
+        for (const row of rows) {
+          const input: AttributionInput = {clientId: row.client, deviceId: row.device_id, source: row.source_id, accountBy: row.account_by, route: row.route_by ? {class: row.route_class, by: row.route_by, host: row.route_host, provider: row.route_provider} : null};
+          for (const fragment of splitLinks(input, contexts(version.id, row.device_id, row.client), 0, Number.MAX_SAFE_INTEGER)) {
+            let group = sources.get(fragment.source); if (!group) sources.set(fragment.source, group = {projects: new Set(), devices: new Set()});
+            group.projects.add(row.project); group.devices.add(row.device_id);
+          }
+        }
+        reach = {stamp, sources}; this.workReach.set(version.id, reach);
+      }
+      const projects = new Set<string>(), eligibleDevices = new Set<string>();
+      for (const [source, group] of reach.sources) {
+        if (source === null ? version.id !== owner : !shown.get(source)?.holders.some(h => h.user === version.id)) continue;
+        for (const project of group.projects) projects.add(project);
+        for (const device of group.devices) eligibleDevices.add(device);
+      }
+      for (const alias of aliases) if (alias.user_id === version.id && projects.has(alias.reported)) names.add(JSON.stringify([alias.user_id, alias.reported, alias.name]));
+      for (const device of eligibleDevices) names.add(JSON.stringify([device, devices.get(device)]));
+    }
+    // Context arrival is data, not metadata. Only actual name dependencies enter the key.
+    const bindings = versions.map(v => [v.id, v.version, v.evidence]);
+    const key = JSON.stringify([this.agentWorkSince(), this.sources(board).map(s => s.id), [...shown].map(([id, s]) => [id, s.since, s.holders]), [...names].sort(), bindings, policies]);
     return createHash('sha256').update(key).digest('base64url').slice(0, 16);
   }
 
@@ -232,6 +249,26 @@ export class Store {
   }
 
   clientSessionsChanged(user: string) { tell(this.observer, o => o.touchClientSessions?.(user)); }
+
+  /** Monotone runtime epochs prevent release/reacquire from reviving a prepared queue. */
+  private attributionChanged(owner: string) {
+    afterCommit(() => {this.workReach.delete(owner); this.attributionEpochs.set(owner, (this.attributionEpochs.get(owner) ?? 0) + 1);});
+  }
+
+  attributionKey(board: string, now: number): string {
+    const members = this.db.prepare('SELECT user_id,joined_at FROM members WHERE board_id=? ORDER BY user_id').all(board) as {user_id: string; joined_at: number}[];
+    const people = JSON.stringify(members.map(m => m.user_id));
+    const holding = this.db.prepare('SELECT user_id,source_id,since FROM holders WHERE user_id IN (SELECT value FROM json_each(?)) ORDER BY user_id,source_id').all(people);
+    const shares = this.db.prepare('SELECT source_id,shared_at FROM shares WHERE board_id=? ORDER BY source_id').all(board);
+    const devices = this.db.prepare('SELECT id,user_id,revoked_at FROM devices WHERE user_id IN (SELECT value FROM json_each(?)) ORDER BY id').all(people);
+    const view = this.db.prepare("SELECT json_extract(payload,'$.hidden') AS hidden FROM views WHERE board_id=?").get(board);
+    const revision = this.db.prepare('SELECT value FROM meta WHERE key=?').get('attributionBoard:' + board)?.value ?? '0';
+    const versions = this.db.prepare("SELECT u.id,COALESCE(v.version,0) version,COALESCE((SELECT value FROM meta WHERE key='workEvidence:'||u.id),'0') evidence FROM users u LEFT JOIN link_versions v ON v.user_id=u.id WHERE u.id IN (SELECT value FROM json_each(?)) ORDER BY u.id").all(people);
+    const policy = this.db.prepare('SELECT p.* FROM device_tracking_policy p JOIN devices d ON d.id=p.device_id WHERE d.user_id IN (SELECT value FROM json_each(?)) ORDER BY p.device_id,p.client').all(people);
+    // A reached boundary changes authority even before the clock callback runs.
+    const phase = this.db.prepare('SELECT count(*) n FROM (SELECT from_at AS at FROM client_links WHERE user_id IN (SELECT value FROM json_each(?)) UNION ALL SELECT to_at FROM client_links WHERE user_id IN (SELECT value FROM json_each(?)) AND to_at IS NOT NULL) WHERE at<=?').get(people, people, now)?.n;
+    return createHash('sha256').update(JSON.stringify([revision, members, holding, shares, devices, view, versions, policy, phase, members.map(m => this.attributionEpochs.get(m.user_id) ?? 0)])).digest('base64url');
+  }
 
   resolveSessions(owner: string, device: string, keys: WorkKey[], now: number): Attribution[] {
     const context = this.links.batch([owner]);
@@ -258,6 +295,7 @@ export class Store {
     if (changed) {
       const owner = String(this.db.prepare('SELECT user_id FROM devices WHERE id=?').get(device)?.user_id ?? '');
       this.db.prepare("INSERT INTO meta VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1").run('workEvidence:' + owner);
+      this.attributionChanged(owner);
       tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); const sources = [...this.links.held(owner).keys()]; o.touchSources(sources); for (const source of sources) o.history(source, 0, ['quota']);});
     }
     return result;
@@ -301,6 +339,7 @@ export class Store {
   /** A person's device measures a source: it is theirs to see and share from now on. */
   hold(source: string, userId: string, now: number) {
     if (this.db.prepare('INSERT OR IGNORE INTO holders VALUES (?, ?, ?)').run(source, userId, now).changes) {
+      this.attributionChanged(userId);
       // It comes to their personal board, and its owners change where it is shared.
       tell(this.observer, o => {
         o.touchBoards(this.boardsOf(source));
@@ -314,6 +353,7 @@ export class Store {
   release(source:string,userId:string) {
     const boards=this.boardsOf(source);
     if(!this.db.prepare('DELETE FROM holders WHERE source_id=? AND user_id=?').run(source,userId).changes)return;
+    this.attributionChanged(userId);
     for(const {board_id} of this.db.prepare('SELECT board_id FROM shares WHERE source_id=?').all(source) as {board_id:string}[])this.unshareOrphans(board_id);
     tell(this.observer,o=>{o.touchBoards(boards);o.touchUser(userId);o.touchClientSessions?.(userId);o.clientHistory?.(userId,0);});
   }
@@ -335,6 +375,7 @@ export class Store {
       if(providerOf(this.state(source).provider)?.measuredBy==='hub')continue;
       const shown = this.observer ? this.boardsOf(source) : [];
       if (!this.db.prepare('DELETE FROM holders WHERE source_id = ? AND user_id = ?').run(source, userId).changes) continue;
+      this.attributionChanged(userId);
       tell(this.observer, o => {
         o.touchBoards(shown);
         o.touchUser(userId);
@@ -786,6 +827,10 @@ export class Store {
         const producer = identity.kind === 'stable' ? identity.sessionId : null;
         const ordinal = identity.kind === 'legacy' ? identity.ordinal : 0;
         const created = add.run(device, client, source, origin, startedAt, project, folder, ordinal, producer).changes > 0;
+        if (created && owner) {
+          this.db.prepare("INSERT INTO meta VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1").run('workContext:' + owner);
+          afterCommit(() => this.workReach.delete(owner));
+        }
         const {id} = (producer === null
           ? legacy.get(device, client, source, source, startedAt, origin, project, folder, ordinal)
           : stable.get(device, client, producer, source, source, origin, project, folder)) as {id: number};
@@ -811,7 +856,7 @@ export class Store {
     }
     for (const [source, start] of credited) tell(this.observer, o => o.history(source, start, ['quota']));
     for (const [user, start] of privateCredit) tell(this.observer, o => o.clientHistory?.(user, start));
-    if (changedEvidence && owner) tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); const sources = [...contexts(owner, device, '').held.keys()]; o.touchSources(sources); for (const source of sources) o.history(source, 0, ['quota']);});
+    if (changedEvidence && owner) {this.attributionChanged(owner); tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); const sources = [...contexts(owner, device, '').held.keys()]; o.touchSources(sources); for (const source of sources) o.history(source, 0, ['quota']);});}
   }
 
   /** Retained credit resolved to the session's current source; legacy identity is unknown. */

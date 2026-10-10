@@ -107,6 +107,7 @@ type Lease = {
   subscriber: Subscriber | null;
   /** Financial authority when this lease's last snapshot or delta was delivered. */
   financialKey: string;
+  attributionKey: string;
   queue: Frame[];
   bytes: number;
   /** The request held until events come. */
@@ -364,11 +365,13 @@ export class Events implements Touches {
     const tails = new Map<string, Frame[]>();
     const lineups = new Map<string, BoardSource[]>();
     const financialKeys = new Map<string, string>();
+    const attributionKeys = new Map<string, string>();
     const failed: Failed = {boards: new Set(), users: new Set(), hub: false};
     for (const id of new Set([...whole, ...sources.keys(), ...histories.keys()])) {
       const watched = this.watched.get(id);
       if (!watched) continue;
       try {
+        attributionKeys.set(id, this.parts.store.attributionKey(id, now));
         if (whole.has(id) || sources.has(id)) {
           const head = this.refresh(watched, whole.has(id), sources.get(id) ?? new Set(), now, lineups, histories, ownHistories);
           if (!head) continue;
@@ -477,7 +480,7 @@ export class Events implements Touches {
         if (sub.fresh) continue;
         if(!frames.length&&!sub.desktop)continue;
         try {
-          const replacement=this.financialSnapshot(sub,financialKey);
+          const replacement=this.financialSnapshot(sub,financialKey,attributionKeys.get(watched.id));
           if(replacement)frames=[frame('snapshot',replacement.snapshot)];
         }catch(error){trouble(error);this.end(sub,'restart');continue;}
         if (sub.desktop && (sources.has(watched.id) || whole.has(watched.id) || frames.length || sub.pending.length || sub.invalidations.size || sub.rebaseline)) {
@@ -763,6 +766,7 @@ export class Events implements Touches {
       this.watched.set(id, watched);
     }
     const financialKey=this.parts.store.financialKey(reader.board);
+    const attributionKey=this.parts.store.attributionKey(reader.board,this.clock.now());
     const sub: Subscriber = {...reader, id: this.next++, fresh: true, stopPing: () => {}, seq: 0, baselineAt: 0, attentionKey: '', pending: [], invalidations: new Map(), pendingBytes: 0, rebaseline: false};
     this.subscribers.set(sub.id, sub);
     watched.subscribers.add(sub);
@@ -803,7 +807,7 @@ export class Events implements Touches {
         connectionsRevision: this.parts.directory.connectionsRevision(reader.user),
         resets: this.hub?.value,
       };
-      const replacement=this.financialSnapshot(sub,financialKey);
+      const replacement=this.financialSnapshot(sub,financialKey,attributionKey);
       if(replacement)snapshot=replacement.snapshot;
     } catch (error) {
       // Refused with an error, and nothing of it is left behind.
@@ -923,7 +927,7 @@ export class Events implements Touches {
       return {lease: known.id, now: this.clock.now(), frames};
     }
 
-    const lease: Lease = {...reader, id: randomBytes(16).toString('base64url'), subscriber: null, financialKey:this.parts.store.financialKey(reader.board), queue: [], bytes: 0, waiting: null, stopExpiry: () => {}, tomb: null};
+    const lease: Lease = {...reader, id: randomBytes(16).toString('base64url'), subscriber: null, financialKey:this.parts.store.financialKey(reader.board), attributionKey:this.parts.store.attributionKey(reader.board,this.clock.now()), queue: [], bytes: 0, waiting: null, stopExpiry: () => {}, tomb: null};
     const opened = this.subscribe({
       ...reader,
       kind: 'lease',
@@ -950,6 +954,7 @@ export class Events implements Touches {
     });
     if (opened === null || opened === 'limit') return opened;
     lease.subscriber = opened.sub;
+    lease.attributionKey = this.parts.store.attributionKey(reader.board, this.clock.now());
     this.leases.set(lease.id, lease);
     lease.stopExpiry = this.later(this.options.leaseMs, () => this.expire(lease));
     return {lease: lease.id, now: this.clock.now(), frames: opened.frames};
@@ -962,6 +967,14 @@ export class Events implements Touches {
     const reason=this.gone(lease);
     if(reason){this.expire(lease);return [bye(reason)];}
     try {
+      const authority = this.parts.store.attributionKey(lease.board, this.clock.now());
+      if (authority !== lease.attributionKey) {
+        const snapshot = this.projection.snapshot(lease.user, lease.board, this.clock.now());
+        if (!snapshot) throw new Error('the board could not be worked out');
+        lease.attributionKey = authority;
+        lease.financialKey = this.parts.store.financialKey(lease.board);
+        return [frame('snapshot', snapshot)];
+      }
       const replacement=this.financialSnapshot(lease,lease.financialKey);
       if(replacement){lease.financialKey=replacement.key;return [frame('snapshot',replacement.snapshot)];}
     }catch(error){trouble(error);this.expire(lease);return [bye('restart')];}
@@ -969,9 +982,9 @@ export class Events implements Touches {
   }
 
   /** Prepared frames are not yet disclosed: replace their dataset and private bindings together. */
-  private financialSnapshot(reader: Pick<Reader,'user'|'board'>, previous: string) {
+  private financialSnapshot(reader: Pick<Reader,'user'|'board'>, previous: string, previousAuthority?: string) {
     const key=this.parts.store.financialKey(reader.board);
-    if(key===previous)return null;
+    if(key===previous && (previousAuthority === undefined || this.parts.store.attributionKey(reader.board,this.clock.now()) === previousAuthority))return null;
     const snapshot=this.projection.snapshot(reader.user,reader.board,this.clock.now());
     if(!snapshot)throw new Error('the board could not be worked out');
     return {key,snapshot};

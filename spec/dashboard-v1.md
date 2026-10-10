@@ -1270,3 +1270,16 @@ is 409 `link_overlap`, a known own unavailable target is 409 `source_not_held`, 
 input is 400 `invalid_link`, and foreign or unknown objects are 404 `not_found`.
 Errors contain no rejected identifiers or raw evidence. Session and Origin guards apply
 in web and desktop local mode. Rules and held choices never enter shared projections.
+
+Links, current holdings, route policy and strengthened context evidence invalidate
+quota/activity history, including closed tiles without an active reader. Their cache
+key also tracks names reachable through effective attribution. Ordinary work arrival
+does not invalidate pure financial history. Live route display carries only class and
+recognized provider; hosts, custom gateway hints and link details stay owner-private.
+
+Prepared event batches recheck current attribution authority before disclosure. A
+long-poll lease whose authority changed discards its entire undisclosed queue and
+returns one fresh permitted snapshot, together with current financial bindings.
+Holding release/reacquisition, link changes, revocation, joining/sharing/visibility
+cutoffs and reached temporal boundaries cannot revive an older queued generation.
+Each SSE reader is checked after batch preparation and before its send.

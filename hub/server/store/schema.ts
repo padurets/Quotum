@@ -364,6 +364,26 @@ export const STEPS = [
   CREATE TABLE device_tracking_policy (device_id TEXT NOT NULL,client TEXT NOT NULL,route_enabled INTEGER NOT NULL CHECK(route_enabled IN (0,1)),
     PRIMARY KEY(device_id,client)) WITHOUT ROWID;
   CREATE INDEX devices_by_owner ON devices(user_id,id);
+  CREATE TRIGGER attribution_member_added AFTER INSERT ON members BEGIN
+    INSERT INTO meta VALUES ('attributionBoard:'||NEW.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
+  END;
+  CREATE TRIGGER attribution_member_removed AFTER DELETE ON members BEGIN
+    INSERT INTO meta VALUES ('attributionBoard:'||OLD.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
+  END;
+  CREATE TRIGGER attribution_member_changed AFTER UPDATE ON members BEGIN
+    INSERT INTO meta VALUES ('attributionBoard:'||NEW.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
+  END;
+  CREATE TRIGGER attribution_share_added AFTER INSERT ON shares BEGIN
+    INSERT INTO meta VALUES ('attributionBoard:'||NEW.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
+  END;
+  CREATE TRIGGER attribution_share_removed AFTER DELETE ON shares BEGIN
+    INSERT INTO meta VALUES ('attributionBoard:'||OLD.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
+  END;
+  CREATE TRIGGER attribution_visibility_changed AFTER UPDATE OF payload ON views
+    WHEN CASE WHEN json_valid(OLD.payload) AND json_valid(NEW.payload) THEN
+      COALESCE(json_extract(OLD.payload,'$.hidden'),'[]')<>COALESCE(json_extract(NEW.payload,'$.hidden'),'[]') ELSE 1 END BEGIN
+    INSERT INTO meta VALUES ('attributionBoard:'||NEW.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
+  END;
   `,
 ];
 

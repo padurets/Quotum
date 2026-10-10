@@ -8,6 +8,11 @@ import {HistoryTiles} from '../history.js';
 import {compose, targetOf, type Chunk} from '../domain/history.js';
 import {readHistory} from './historyRead.js';
 import type {LinkInput} from '../domain/links.js';
+import {Events, polled} from '../events.js';
+import {Ingest} from '../ingest.js';
+import {Duty} from '../duty.js';
+import {Cadence} from '../cadence.js';
+import {ResetFeed} from '../resets.js';
 
 const now = 1_800_000_000_000, minute = 60_000;
 function setup() {
@@ -98,4 +103,54 @@ test('future boundaries and expiry update source activity without a new report',
     assert.equal(f.live.working(f.wallet, now + CREDIT_MS + 1), false);
     assert.deepEqual(f.live.of(f.wallet, [f.owner.id], now + KEEP_MS + 1), []);
   } finally {f.store.close();}
+});
+
+test('closed tiles without a reader follow corrections and effective device/project names', () => {
+  const f = setup(); try {
+    f.store.creditWork(f.device, now, now + minute, [f.key()]);
+    const tiles = new HistoryTiles(f.store);
+    const read = () => tiles.read(f.board, minute, now, now + 60 * minute, now + 3 * 60 * minute, f.store.shown(f.board, []));
+    assert.equal(JSON.parse(read()[0]).activity.sessions[0][1], null);
+    const link = f.link();
+    assert.equal(JSON.parse(read()[0]).activity.sessions[0][1], f.wallet);
+    f.store.links.mutate(f.owner.id, 'correct', link.id, {...link, sourceId: f.second, expectedRevision: f.store.links.revision(f.owner.id), requestId: randomUUID()}, now);
+    assert.equal(JSON.parse(read()[0]).activity.sessions[0][1], f.second);
+    f.store.db.prepare('INSERT INTO project_names VALUES (?,?,?)').run(f.owner.id, 'Project', 'Renamed project');
+    f.store.db.prepare('UPDATE devices SET label=? WHERE id=?').run('Renamed device', f.device);
+    const renamed = JSON.parse(read()[0]);
+    assert.equal(renamed.activity.sessions[0][2], 'Renamed project');
+    assert.equal(renamed.activity.devices[f.device], 'Renamed device');
+    f.store.release(f.second, f.owner.id);
+    assert.equal(JSON.parse(read()[0]).activity.sessions[0][1], null);
+    f.store.hold(f.second, f.owner.id, now);
+    assert.equal(JSON.parse(read()[0]).activity.sessions[0][1], f.second);
+  } finally {f.store.close();}
+});
+
+for (const flush of [false, true]) for (const change of ['holding', 'rule', 'boundary', 'reacquire'] as const) test(`undelivered shared queues recheck ${change} authority (${flush ? 'after' : 'before'} flush)`, async () => {
+  const f = setup(), reader = f.directory.createUser('reader@example.com', 'Reader', 'fixture', now), holder = f.directory.createUser('holder@example.com', 'Holder', 'fixture', now);
+  const board = f.directory.createBoard('Shared', f.owner.id, now).id;
+  for (const user of [reader.id, holder.id]) f.store.db.prepare('INSERT INTO members VALUES (?,?,?,?)').run(board, user, 'member', now);
+  f.store.hold(f.wallet, holder.id, now); f.store.share(board, f.wallet, f.owner.id, now);
+  let time = now; const clock = {now: () => time, after: (_ms: number, _run: () => void) => () => {}};
+  const ingest = new Ingest(f.store, f.directory, new Duty(), new Cadence()), events = new Events({store: f.store, directory: f.directory, ingest, resets: new ResetFeed(undefined, () => {})}, undefined, clock);
+  events.attach();
+  try {
+    const link = f.link({to: now + minute});
+    const secret = 'synthetic-shared-reader'; f.directory.createSession(secret, reader.id, now, 86_400_000);
+    const reading = {user: reader.id, board, secret};
+    const opened = await events.poll(reading, undefined); assert.ok(opened && opened !== 'limit');
+    ingest.live.report(f.device, f.owner.id, [f.session('opencode', null, {project: 'PRIVATE_QUEUED_CANARY', route: {class: 'api', by: 'session', host: 'private-canary.example', provider: 'custom-gateway-canary'}})], now);
+    events.touchSources([f.wallet]); events.flush();
+    if (change === 'holding' || change === 'reacquire') f.store.release(f.wallet, f.owner.id);
+    if (change === 'reacquire') {f.store.hold(f.wallet, f.owner.id, now); ingest.live.report(f.device, f.owner.id, [f.session('opencode', null, {project: 'Current name'})], now);}
+    if (change === 'rule') f.store.links.mutate(f.owner.id, 'correct', link.id, {...link, sourceId: f.second, expectedRevision: f.store.links.revision(f.owner.id), requestId: randomUUID()}, now);
+    if (change === 'boundary') time = now + minute;
+    if (flush) events.flush();
+    const answer = await events.poll(reading, opened.lease); assert.ok(answer && answer !== 'limit');
+    assert.equal(answer.frames.length, 1); assert.equal(answer.frames[0].type, 'snapshot');
+    const encoded = polled(answer.frames);
+    for (const value of ['PRIVATE_QUEUED_CANARY', 'private-canary.example', 'custom-gateway-canary', link.id, f.owner.id, 'a'.repeat(32)]) assert.ok(!encoded.includes(value), value);
+    if (change === 'reacquire') assert.ok(encoded.includes('Current name'));
+  } finally {events.close(); f.store.close();}
 });

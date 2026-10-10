@@ -1,4 +1,4 @@
-import {safeRoute, matches, type LinkRoute} from './domain/links.js';
+import {safeRoute, matches, splitLinks, type LinkRoute} from './domain/links.js';
 import type {SessionEvidence} from './domain/sessionEvidence.js';
 import type {Origin} from './domain/ingest.js';
 import type {Store, WorkKey} from './store/store.js';
@@ -148,7 +148,7 @@ export class Sessions {
 
   /** When `of` answers otherwise with no new list: a machine's list shown now stops showing. Null when only a new list changes it. */
   ofChangesAt(source: string, people: string[], now: number): number | null {
-    return this.deadline(now, KEEP_MS, machine => people.includes(machine.user) && this.store.holds(machine.user, source));
+    return this.deadline(now, KEEP_MS, machine => people.includes(machine.user) && this.store.holds(machine.user, source), source);
   }
 
   /** Whether an agent works on a subscription on any machine, by lists that still count as true. */
@@ -163,7 +163,7 @@ export class Sessions {
 
   /** When `working` may answer otherwise with no new list: a list that says an agent works stops counting. */
   workingChangesAt(source: string, now: number): number | null {
-    return this.deadline(now, CREDIT_MS, machine => this.store.holds(machine.user, source) && machine.sessions.some(s => s.working));
+    return this.deadline(now, CREDIT_MS, machine => this.store.holds(machine.user, source) && machine.sessions.some(s => s.working), source);
   }
 
   /** Unknown and unheld work is private to the owner's personal board. */
@@ -211,15 +211,16 @@ export class Sessions {
   }
 
   /** Future link boundaries use the same hub clock as presence expiry. */
-  private deadline(now: number, keep: number, eligible: (machine: Machine) => boolean): number | null {
+  private deadline(now: number, keep: number, eligible: (machine: Machine) => boolean, source?: string): number | null {
     const machines = [...this.machines].filter(([, machine]) => now - machine.at <= keep && eligible(machine));
     if (!machines.length) return null;
     const contexts = this.store.links.batch([...new Set(machines.map(([, machine]) => machine.user))]);
     let next = Infinity;
     for (const [device, machine] of machines) {
-      next = Math.min(next, machine.at + keep + 1);
       for (const s of machine.sessions) {
         const context = contexts(machine.user, device, s.clientId), input = {...s, clientId: s.clientId, deviceId: device};
+        if (source !== undefined && (keep === CREDIT_MS && !s.working || !splitLinks(input, context, now, machine.at + keep + 1).some(part => part.source === source))) continue;
+        next = Math.min(next, machine.at + keep + 1);
         const route = safeRoute(s.route, context.routeEnabled).route;
         for (const link of context.links) if (matches(link, input, route, link.from)) {
           if (link.from > now) next = Math.min(next, link.from);
