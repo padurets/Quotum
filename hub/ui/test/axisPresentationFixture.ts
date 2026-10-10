@@ -24,6 +24,7 @@ export function axisPresentationFixture(base: DrawingGeometry, navigation: AxisN
     finished: {current: null as {visual: DrawingGeometry; navigation: AxisNavigation; stop: {range: unknown; canceled: boolean}} | null},
     captured: {current: null}, finalFrame: {current: null as number | null}, foldTicket: {current: 0},
     motion: {current: null as {key: string; until: number; fold: boolean} | null}, animations: {current: new Map<object, Moving>()},
+    animationPoses: {current: new WeakMap<object, {from: {a: number; b: number; offset: number}; to: {a: number; b: number; offset: number}}>()},
     cancelAnimationFrame: (frame: number) => canceledFrames.push(frame),
     cancelSlides: () => {for (const animation of context.animations.current.values()) animation.cancel(); context.animations.current.clear();},
     pan: {active: () => active.current, cancel: () => {active.current = null;}}, paintPan: {current: () => {}},

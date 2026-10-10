@@ -81,6 +81,7 @@ export function useTimeAxis({
   const [, present] = useState(0);
   const foldTicket = useRef(0);
   const animations = useRef(new Map<SVGGElement, Animation>());
+  const animationPoses = useRef(new WeakMap<Animation, {from: Pose; to: Pose}>());
   // The axis owns these animations; finding them through the DOM flushes styles.
   const animateSlide = (layer: SVGGElement, frames: Keyframe[], options: KeyframeAnimationOptions, owner: Element = layer) => {
     animations.current.get(layer)?.cancel();
@@ -153,6 +154,14 @@ export function useTimeAxis({
   const readPose = (layer: SVGGElement): Pose => {
     const animation = animations.current.get(layer);
     if (!animation) return pose.current;
+    const frames = animationPoses.current.get(animation);
+    if (frames) {
+      // Effect progress includes easing without reading the surface's computed style.
+      const progress = animation.effect?.getComputedTiming().progress;
+      if (progress === null) return pose.current;
+      if (progress !== undefined) return {a: frames.from.a + (frames.to.a - frames.from.a) * progress,
+        b: frames.from.b + (frames.to.b - frames.from.b) * progress, offset: 0};
+    }
     const owner = (animation.effect as KeyframeEffect | null)?.target ?? layer;
     const matrix = new DOMMatrix(getComputedStyle(owner).transform);
     // A fold moves the HTML surface relative to its final SVG projection.
@@ -427,7 +436,9 @@ export function useTimeAxis({
         const a = start.a / end.a, b = (start.b - a * end.b) * scale;
         const frames = owner ? [{transform: `translateX(${b}px) scaleX(${a})`}, {transform: 'none'}]
           : [{transform: `translateX(${start.b}px) scaleX(${start.a})`}, {transform: `translateX(${end.b}px) scaleX(${end.a})`}];
-        moving.push(animateSlide(layer, frames, {duration, easing: fold ? 'ease-out' : 'cubic-bezier(.2, .7, .3, 1)'}, owner ?? layer));
+        const animation = animateSlide(layer, frames, {duration, easing: fold ? 'ease-out' : 'cubic-bezier(.2, .7, .3, 1)'}, owner ?? layer);
+        animationPoses.current.set(animation, {from: start, to: end});
+        moving.push(animation);
       }
     }
     if (!moving.length) {motion.current = null; setFolding(false); return;}

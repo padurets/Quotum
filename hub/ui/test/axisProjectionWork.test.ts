@@ -12,7 +12,7 @@ test('actual projection helpers read only authored pose between animations and s
     let lookups = 0, computed = 0;
     const layer = {}, base = 1_791_000_000_000;
     const context = {drawing: {current: {from: base, to: base + span, end: base + span}}, pose: {current: {a: 1.2, b: -73, offset: 130}},
-      animations: {current: new Map<object, object>()}, width: 920, scale: .73, left: 48, right: 12,
+      animations: {current: new Map<object, object>()}, animationPoses: {current: new WeakMap()}, width: 920, scale: .73, left: 48, right: 12,
       box: {current: {querySelector: () => {lookups++; return layer;}}},
       getComputedStyle: () => {computed++; return {transform: 'matrix(1.05,0,0,1,-32,0)'};},
       DOMMatrix: class {a = 1.05; e = -32;},

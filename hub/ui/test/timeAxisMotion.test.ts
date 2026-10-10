@@ -138,7 +138,7 @@ test('starting from a settled axis avoids a style flush but samples an interrupt
   let reads = 0;
   const layer = {getAnimations: () => {throw new Error('animation lookup must not flush styles');}};
   const animations = {current: new Map()};
-  const context = {box: {current: {querySelector: () => layer}}, animations,
+  const context = {box: {current: {querySelector: () => layer}}, animations, animationPoses: {current: new WeakMap()},
     drawing: {current: {from: 0, to: 1_000_000, end: 800_000}}, pose: {current: {a: 1, b: 0, offset: 0}}, scale: .5, left: 40, right: 12, width: 900,
     getComputedStyle: () => {reads++; return {transform: 'matrix'};},
     DOMMatrix: class {a = .5; e = 20;}, read: null as unknown as () => {from: number; to: number; end: number}};
@@ -196,7 +196,7 @@ test('the actual drawing commit holds pending geometry and starts its final fold
     navigationKey, wanted: {current: {navigation: {context: 'test', range: 'range'}, projection: {from: selected.from, to: selected.to, end: selected.to}}}, requestedNavigation: {context: 'test', range: 'range'}, motion: {current: null}, captured: {current: null},
     finished: {current: {navigation: {context: 'test', range: 'range'}, visual, stop: {range: selected, canceled: false}} as {navigation: {context: string; range: string}; visual: typeof visual; stop: {range: typeof selected; canceled: boolean}} | null},
     finalFrame: {current: 1 as number | null}, timeRange: () => selected, left, right, width, scale, from: selected.from, to: selected.to,
-    foldTicket: {current: 0}, animations: {current: new Map()}, matchMedia: () => ({matches: false}), setFolding: () => {},
+    foldTicket: {current: 0}, animations: {current: new Map()}, animationPoses: {current: new WeakMap()}, matchMedia: () => ({matches: false}), setFolding: () => {},
     animateSlide: (_layer: object, next: Keyframe[]) => {frames.push(next); return {finished: new Promise(() => {})};}, slideOf: () => 0,
     visualGeometry: () => visual, cancelSlides: () => {}, useLayoutEffect: () => {}, performance: {now: () => 0},
     commit: null as unknown as (geometry: typeof old, ready: boolean) => void,
@@ -221,7 +221,7 @@ test('sampling and freezing an owned fold keeps its matrix after cancelling the 
   const start = source.indexOf('  const readPose = '), body = source.slice(start, source.indexOf('  const geometry = ', start));
   const layer = {style: {transform: ''}}, other = {style: {transform: ''}}, animations = {current: new Map([[layer, {}]])};
   const pose = {current: {a: 1, b: 0, offset: 17}};
-  const context = {box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose,
+  const context = {box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose, animationPoses: {current: new WeakMap()},
     getComputedStyle: () => ({transform: 'matrix'}), DOMMatrix: class {a = .6; e = 21;}, cancelSlides: () => animations.current.clear(), freeze: null as unknown as () => void};
   runInNewContext(ts.transpileModule(`${body}\nglobalThis.freeze=freezeSlides;`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
   context.freeze();
@@ -239,7 +239,7 @@ test('an interrupted HTML fold composes its CSS matrix with the final SVG pose b
     let canceled = false;
     const animation = {effect: {target: owner}};
     const animations = {current: new Map([[layer, animation]])};
-    const context = {drawing: {current: base}, box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose,
+    const context = {drawing: {current: base}, box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose, animationPoses: {current: new WeakMap()},
       scale, width: 600, left: 40, right: 20,
       getComputedStyle: (target: object) => {assert.equal(target, owner); return {transform: 'matrix(.63,0,0,1,27,0)'};},
       DOMMatrix: class {a = .63; e = 27;}, cancelSlides: () => {canceled = true; animations.current.clear();},

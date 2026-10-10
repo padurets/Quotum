@@ -1354,8 +1354,12 @@ a cell only translates the prepared artwork
 and updates its clip. The final 160 ms fold animates the existing HTML surface over
 the final SVG projection, avoiding repainting dotted plan strokes on every frame.
 Only during this fold may horizontal scaling change stroke thickness; completion or
-interruption restores the SVG's non-scaling strokes. Ordinary 220 ms navigation slides
-still animate inside SVG.
+interruption restores the SVG's non-scaling strokes. Each owned animation keeps its
+absolute projection endpoints; reading its eased effect progress reconstructs the
+displayed pose without querying computed styles. Retargeting and interruption use
+that same pose. An inactive effect
+uses the committed pose, and an animation without known endpoints retains the native
+transform fallback. Ordinary 220 ms navigation slides still animate inside SVG.
 A temporary shared registry keeps plot and
 legend colors and dashes consistent, adding new groups with a pending total. Visible
 missing cells are read immediately in contiguous batches of at most eight tiles.
