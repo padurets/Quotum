@@ -8,6 +8,7 @@ const BREAKDOWN = ['handle_input_events_us','animate_us','style_update_us','layo
 type Fields = Record<string,unknown>;
 type TraceEvent = {name:string;ph:string;ts?:unknown;dur?:unknown;tts?:unknown;tdur?:unknown;pid?:unknown;tid?:unknown;id2?:unknown;args?:unknown};
 export type SafeTrace = {name:string;phase:string;ts?:number;duration?:number;threadTs?:number;threadDuration?:number;pid?:number;tid?:number;stage?:string;trackId?:number;
+  source?:{scriptId:number;lineNumber:number;columnNumber:number};
   frame?:{source?:number;sequence?:number;hostId?:number;state?:string;mainAnimation?:boolean;compositorAnimation?:boolean};
   input?:{type?:string};tile?:{layerId?:number;sourceFrame?:number};breakdown?:Partial<Record<typeof BREAKDOWN[number],number>>};
 const fields = (value:unknown):Fields => value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Fields:{};
@@ -31,6 +32,12 @@ export function traceSanitizer() {
         if(!tracks.has(key)&&tracks.size<100_000)tracks.set(key,tracks.size+1);
         safe.trackId=tracks.get(key);
       }
+    }
+    if(event.name==='FunctionCall') {
+      // Callback locations survive without names, URLs or source text.
+      const scriptId=typeof data.scriptId==='string'&&/^(0|[1-9][0-9]*)$/.test(data.scriptId)?integer(Number(data.scriptId)):integer(data.scriptId);
+      const lineNumber=integer(data.lineNumber),columnNumber=integer(data.columnNumber);
+      if(scriptId!==undefined&&lineNumber!==undefined&&columnNumber!==undefined)safe.source={scriptId,lineNumber,columnNumber};
     }
     if(event.name==='EventLatency') {
       const type=fields(args.event_latency).event_type;

@@ -59,8 +59,11 @@ label) records an owned synthetic browser's new intervals with numeric
 script/layout/paint/GC events from `cc` and `devtools.timeline`, bounded to 32 MiB per
 scenario. Broad task instrumentation is excluded from this diagnostic; its delivery
 can exceed the unchanged five-second drain. This is opt-in. Trace data
-never contains script sources, arguments, arbitrary URLs or user text. Missing
-scheduler evidence and truncated timelines remain explicit. Trace events retain both
+never contains script sources, arguments, arbitrary URLs or user text. Callback events
+retain validated numeric script IDs and source coordinates; an entry position does not
+partition nested work. Script IDs belong to their recorded browser context. Missing
+source identities, scheduler evidence and truncated timelines remain explicit. Trace
+events retain both
 elapsed and thread CPU time where Chrome supplies them, with start/end page clock
 markers. The opt-in timeline also records observed animation phases, including pending
 start and the first sample after completion. These observations bound the phase;

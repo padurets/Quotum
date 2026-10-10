@@ -37,6 +37,43 @@ test('a failing trace interval stops collection and preserves the original error
   assert.ok(f.files.has('trace'));
 });
 
+test('callback source coordinates survive export without private source fields', async()=>{
+  const f=fixture();
+  await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
+    f.listeners.get('Tracing.dataCollected')?.({value:[
+      {name:'FunctionCall',ph:'X',ts:1,dur:41091,pid:3,tid:4,args:{data:{scriptId:'8',lineNumber:9,columnNumber:174400,functionName:'private-canary',url:'https://private-canary.invalid',scriptSource:'private-canary'}}},
+      {name:'FunctionCall',ph:'B',ts:2,args:{data:{scriptId:8,lineNumber:9,columnNumber:174400}}},
+      {name:'FunctionCall',ph:'E',ts:3},
+      {name:'FunctionCall',ph:'X',ts:4,args:{data:{scriptId:'0',lineNumber:0,columnNumber:0}}},
+    ]});
+  },f.evidence);
+  const trace=safeEvidence(f.files.get('trace')) as {events:SafeTrace[]};
+  assert.deepEqual(trace.events.map(event=>event.source),[
+    {scriptId:8,lineNumber:9,columnNumber:174400},
+    {scriptId:8,lineNumber:9,columnNumber:174400},
+    undefined,
+    {scriptId:0,lineNumber:0,columnNumber:0},
+  ]);
+  assert.equal(trace.events[0].duration,41091);
+  assert.doesNotMatch(JSON.stringify(trace),/private-canary|functionName|scriptSource|url/);
+});
+
+test('invalid callback locations never become usable source coordinates', async()=>{
+  const f=fixture(),data={scriptId:'8',lineNumber:9,columnNumber:174400};
+  const invalid=[
+    ...['private-canary','008','-1','8.5',Number.MAX_SAFE_INTEGER+1,Infinity].map(scriptId=>({...data,scriptId})),
+    ...[-1,1.5,Infinity,'private-canary'].map(lineNumber=>({...data,lineNumber})),
+    ...[-1,1.5,Number.MAX_SAFE_INTEGER+1,'private-canary'].map(columnNumber=>({...data,columnNumber})),
+  ];
+  await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
+    f.listeners.get('Tracing.dataCollected')?.({value:invalid.map(data=>({name:'FunctionCall',ph:'X',ts:1,args:{data}}))});
+  },f.evidence);
+  const trace=safeEvidence(f.files.get('trace')) as {events:SafeTrace[]};
+  assert.equal(trace.events.length,invalid.length);
+  assert.ok(trace.events.every(event=>event.source===undefined));
+  assert.doesNotMatch(JSON.stringify(trace),/private-canary/);
+});
+
 for(const fails of [false,true])test(`an unconfirmed trace drain closes its browser and preserves ${fails?'the scenario failure':'the drain failure'}`, async t=>{
   t.mock.timers.enable({apis:['setTimeout']});
   const f=fixture(),original=f.cdp.send.bind(f.cdp),error=new Error('original scenario failed');
