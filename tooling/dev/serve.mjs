@@ -21,7 +21,7 @@ async function stop(code) {
   if (hub && hub.exitCode === null && hub.signalCode === null) {
     const exited = new Promise(resolve => hub.once('exit', resolve));
     hub.kill('SIGTERM');
-    const timeout = setTimeout(() => hub.kill('SIGKILL'), 5000);
+    const timeout = setTimeout(() => hub.kill('SIGKILL'), 7000);
     await exited;
     clearTimeout(timeout);
   }

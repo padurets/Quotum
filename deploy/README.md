@@ -7,6 +7,11 @@ The hub creates its trusted-credential encryption key automatically in the separ
 recreation. Keep the key volume's backup separate from the database backup. A backup
 of both stores or the whole host can decrypt credentials; a data-only backup cannot.
 
+The hub allows in-flight requests to finish for up to five seconds after `SIGTERM`
+or `SIGINT`, then closes its connections and SQLite before exiting. Give an external
+supervisor more than five seconds, including scheduling margin, before sending
+`SIGKILL`; Compose's default ten-second grace is sufficient.
+
 When upgrading an existing direct Docker installation, add `-v quotum-keys:/keys`.
 Automatic storage refuses a missing mount, a key directory inside data, or another mount
 of the same data-volume backing directory. Distinct named volumes on one filesystem

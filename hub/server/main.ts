@@ -62,13 +62,27 @@ async function main(extend?: ExtendHub) {
   async function shutdown() {
     if (closing) return;
     closing = true;
-    clearInterval(pruning);
-    resets.stop();
-    hubSources.stop();
-    await currencies.stop();
-    await app.close();
-    store.close();
-    process.exit(0);
+    const finish = (code: number) => {
+      // No asynchronous continuation may run after SQLite closes on the hard path.
+      app.server.closeAllConnections();
+      try { store.close(); }
+      catch { code = 1; }
+      if (code) say({event: 'error', code: 'hub_stop_failed'});
+      process.exit(code);
+    };
+    const deadline = setTimeout(() => finish(0), local ? 2000 : 5000);
+    try {
+      clearInterval(pruning);
+      resets.stop();
+      hubSources.stop();
+      // Drain requests while cancelling integrations, within the same deadline.
+      await Promise.all([app.close(), currencies.stop()]);
+      clearTimeout(deadline);
+      finish(0);
+    } catch {
+      clearTimeout(deadline);
+      finish(1);
+    }
   }
 
   if (local) {
@@ -83,7 +97,6 @@ async function main(extend?: ExtendHub) {
       if (stopping) return;
       stopping = true;
       say({event: 'stop', reason});
-      setTimeout(() => process.exit(0), 2000).unref();
       void shutdown();
     };
     // Without resume() a pipe reports neither its end nor its closing.

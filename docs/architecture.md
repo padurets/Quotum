@@ -1090,6 +1090,14 @@ rate-limited. An agent's request with an unknown or revoked token is refused bef
 body is read, so whoever reaches the hub cannot make it hold bodies it would throw away,
 and a request has 30 seconds to arrive in full.
 
+`SIGTERM` and `SIGINT` stop a server hub within five seconds of its first signal.
+Open events and polls end first; ordinary in-flight requests can finish during that
+grace while integrations stop concurrently. At the deadline the hub cuts its own
+connections, closes SQLite and exits without running further callbacks. The local
+hub keeps its two-second bound. Demo and managed-development parents allow seven
+seconds before killing a child; the managed outer fallback remains eight seconds.
+These deadlines require a responsive event loop.
+
 ## The dashboard
 
 A single-page React app served by the hub. It asks nothing again and again: it opens one
