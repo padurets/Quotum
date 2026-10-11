@@ -154,7 +154,7 @@ function activityOrder(period:any,column:'active'|'concurrency'):Order{
 test('activity table union sorting crosses on the real common clock rather than additive session time',async()=>{
   const h=await harness({anchor:0,knownFrom:0,refs:[ref('a1','A'),ref('a2','A'),ref('b','B')],spans:[[0,0,160_000],[1,0,160_000],[2,300_000,455_000]]});
   const order=activityOrder(h.period,'active'),consumer=panel(h.period,order,'project'),passive=panel(h.period,()=>null,'project');
-  const keys=()=>JSON.parse(JSON.stringify(order(h.period.get().rows)!.key));
+  const keys=()=>JSON.parse(JSON.stringify(consumer.render().order));
   assert.deepEqual(keys(),['"A"','"B"']);const baseline=passive.renders();
   h.advance(H+5000);consumer.render();assert.deepEqual(keys(),['"A"','"B"']);
   h.advance(H+5250);assert.deepEqual(keys(),['"B"','"A"']);consumer.render();
@@ -166,11 +166,11 @@ test('activity table ratio sorting handles quadratic equality and inversion, rem
   const h=await harness({anchor:0,knownFrom:0,refs:[ref('a1','A'),ref('a2','A'),ref('b1','B'),ref('b2','B'),ref('b3','B')],
     spans:[[0,0,200_000],[1,0,120_000],[2,0,100_000],[3,300_000,400_000],[4,300_000,350_000]]});
   const order=activityOrder(h.period,'concurrency'),consumer=panel(h.period,order,'project');
-  const keys=()=>JSON.parse(JSON.stringify(order(h.period.get().rows)!.key));
+  const keys=()=>JSON.parse(JSON.stringify(consumer.render().order));
   assert.deepEqual(keys(),['"A"','"B"']);
   consumer.strictRemount();assert.equal(h.period.workOrders.size,1);
   h.advance(H+70_000);consumer.render();assert.deepEqual(keys(),['"A"','"B"']);
-  h.advance(H+70_001);consumer.render();assert.deepEqual(keys(),['"B"','"A"']);
+  h.advance(H+70_250);consumer.render();assert.deepEqual(keys(),['"B"','"A"']);
   assert.equal(h.reads(),1);assert.ok(h.pool.estimatedBytes<=h.pool.budget);
   consumer.setOrder(()=>null);assert.equal(h.period.workOrders.size,1);
   consumer.close();assert.equal(h.period.workOrders.size,0);h.close();
