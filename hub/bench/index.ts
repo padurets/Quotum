@@ -496,7 +496,7 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
   const revision=(await owner.get<{revision:string}>('/api/links')).revision;
   const created=await owner.post<{revision:string;links:{id:string}[]}>('/api/links',{clientId:'opencode',deviceId:null,route:null,sourceId:source,from:start,to:null,expectedRevision:revision,requestId:randomUUID()});
   const session={clientId:'opencode',sessionId:'e'.repeat(32),source:null,origin:'terminal',project:'Linked benchmark',startedAt:new Date(start).toISOString(),working:true};
-  agent.trackClients([session],[]);await demo.nextReport('laptop');await sleep(1000);
+  agent.trackClients([session],[]);await demo.reportNow('laptop');await sleep(1000);
   const geometry=()=>cdp.evaluate<string>(`JSON.stringify(Array.from(document.querySelectorAll('.budget-history [data-series]')).map(node=>[node.getAttribute('data-series'),node.getAttribute('data-last'),Array.from(node.querySelectorAll('path')).map(path=>path.getAttribute('d'))]))`);
   const active=()=>cdp.evaluate<number>(`Number(document.querySelector('[data-work-source="${source}"]')?.getAttribute('data-active-ms')??-1)`);
   const reports:{at:number;reads:number;bytes:number;activeMs:number}[]=[],problems:string[]=[];
@@ -505,7 +505,7 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
     if(before<0)throw new Stop('linked wallet work columns are not visible');
     await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
     if(i===2)agent.trackClients([{...session,working:false}],[]);
-    const at=await demo.nextReport('laptop');await sleep(1000);await drain(requests);requests.counting=false;
+    const at=await demo.reportNow('laptop');await sleep(1000);await drain(requests);requests.counting=false;
     const value=await active(),reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.byPath['/api/history']??0,bytes=requests.bytesByPath['/api/history']??0;
     reports.push({at,reads,bytes,activeMs:value});
     if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`linked wallet work read history ${reads} times, ${bytes} bytes`);
@@ -515,7 +515,7 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
     if(reading.renders.some(part=>!part.time&&part.widget==='budget'&&part.node.includes('.budget-history')))problems.push('linked wallet work rendered the financial chart');
     problems.push(...renderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from,to:Date.now()}));
   }
-  agent.trackClients([],[]);await demo.nextReport('laptop');
+  agent.trackClients([],[]);await demo.reportNow('laptop');
   const response=await fetch(owner.base+'/api/links/'+created.links.at(-1)!.id,{method:'DELETE',headers:{cookie:owner.cookie,origin:new URL(owner.base).origin,'content-type':'application/json'},body:JSON.stringify({expectedRevision:created.revision,requestId:randomUUID()})});
   if(!response.ok)throw new Stop('linked wallet fixture could not remove its rule');
   return {reports,problems};
@@ -597,18 +597,18 @@ async function workPrivate(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, 
   say('checking private client credit without card, header or financial renders');
   const agent=stand.agents.get('laptop')!,start=Date.now();
   const session={clientId:'opencode',sessionId:'d'.repeat(32),source:null,origin:'terminal',project:'Private benchmark',startedAt:new Date(start).toISOString(),working:true};
-  agent.trackClients([session],[]);await demo.nextReport('laptop');await sleep(1000);
+  agent.trackClients([session],[]);await demo.reportNow('laptop');await sleep(1000);
   const reports:{at:number;reads:number;bytes:number}[]=[],problems:string[]=[];
   for(let i=0;i<3;i++) {
     await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
     if(i===2)agent.trackClients([{...session,working:false}],[]);
-    const at=await demo.nextReport('laptop');await sleep(1000);await drain(requests);requests.counting=false;
+    const at=await demo.reportNow('laptop');await sleep(1000);await drain(requests);requests.counting=false;
     const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.byPath['/api/history']??0,bytes=requests.bytesByPath['/api/history']??0;
     reports.push({at,reads,bytes});
     if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`private work read history ${reads} times, ${bytes} bytes`);
     problems.push(...privateWorkRenderProblems({renders:reading.renders,mutations:reading.mutations,from,to:Date.now(),cellMs:cellOf(86_400_000)}));
   }
-  agent.trackClients([],[]);await demo.nextReport('laptop');
+  agent.trackClients([],[]);await demo.reportNow('laptop');
   return {reports,problems};
 }
 

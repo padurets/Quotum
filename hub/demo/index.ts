@@ -124,6 +124,8 @@ export class Demo {
   private hub: ChildProcess | undefined;
   private trackers: Trackers | undefined;
   private timer: NodeJS.Timeout | undefined;
+  private tick: ((manual?: boolean) => Promise<void>) | undefined;
+  private reporting = Promise.resolve();
   stopping = false;
   private benchWork = false;
   private readonly reports = new Set<(machine: string, at: number) => void>();
@@ -140,6 +142,17 @@ export class Demo {
       const heard = (id: string, at: number) => {if (id === machine) {clearTimeout(timer); this.reports.delete(heard); resolve(at);}};
       this.reports.add(heard);
     });
+  }
+
+  /** Bench cases advance the same list writer without waiting for its next timer. */
+  async reportNow(machine: string): Promise<number> {
+    if (!this.options.idleAgents || !this.tick || this.stopping) throw new Error('manual reports need a running idle-agent stand');
+    clearTimeout(this.timer);
+    await this.reporting;
+    clearTimeout(this.timer);
+    const heard = this.nextReport(machine);
+    await this.tick(true);
+    return heard;
   }
 
   constructor(
@@ -211,7 +224,7 @@ export class Demo {
       }
       return idle;
     }, (machine, at) => {for (const heard of this.reports) heard(machine.id, at);});
-    const tick = async () => {
+    const tick = (manual = false) => this.reporting = this.reporting.then(async () => {
       const t = Date.now() - this.start;
       try {
         if (still) await live.report(0, Date.now());
@@ -224,8 +237,9 @@ export class Demo {
         await this.settled();
         if (!this.stopping) console.error(`demo: ${(error as Error).message}`);
       }
-      if (!this.stopping) this.timer = setTimeout(() => void tick(), TICK - ((Date.now() - this.start) % TICK));
-    };
+      if (!this.stopping) this.timer = setTimeout(() => void tick(), manual ? TICK : TICK - ((Date.now() - this.start) % TICK));
+    });
+    this.tick = tick;
     await tick();
     return stand;
   }
