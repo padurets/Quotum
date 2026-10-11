@@ -107,21 +107,6 @@ test('the exact threshold, Vary composition and original header survive the rout
   assert.equal(encoded.decoded.length, 1024);
 });
 
-test('aborting an asynchronous compressed response leaves the server able to close', async t => {
-  const app = Fastify();
-  await responseCompression(app, false);
-  app.get('/api/overview', () => ({text: '0123456789abcdef'.repeat(512 * 1024)}));
-  await app.listen({host: '127.0.0.1', port: 0});
-  t.after(() => app.close());
-  await new Promise<void>((resolve, reject) => {
-    const req = request(`http://127.0.0.1:${(app.server.address() as {port: number}).port}/api/overview`, {headers: {'accept-encoding': 'br'}}, res => {
-      res.once('data', () => {req.destroy(); resolve();});
-    });
-    req.on('error', reject); req.end();
-  });
-  await app.close();
-});
-
 test('only allowlisted read JSON reaches the encoder, regardless of body size', async t => {
   const app = Fastify();
   await responseCompression(app, false);

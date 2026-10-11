@@ -1,6 +1,6 @@
-import compress from '@fastify/compress';
 import type {FastifyInstance} from 'fastify';
-import {constants} from 'node:zlib';
+import {Readable, pipeline} from 'node:stream';
+import {constants, createBrotliCompress, createGzip} from 'node:zlib';
 
 const READS = new Set([
   '/api/overview', '/api/history', '/api/events', '/api/resets', '/api/devices',
@@ -29,29 +29,39 @@ export function normalizedEncoding(header: string | undefined): string {
 /** One response-only policy for read projections; local hubs keep identity throughout. */
 export async function responseCompression(app: FastifyInstance, local: boolean) {
   if (local) return;
-  app.addHook('onRoute', route => {
-    const methods = Array.isArray(route.method) ? route.method : [route.method];
-    if (!methods.every(method => eligible(method, route.url))) route.compress = false;
-  });
   // History and poll responses are already serialized strings: preSerialization skips them.
-  // A root onSend runs before the plugin's route encoder, after the authorization handler.
-  app.addHook('onSend', async (request, reply, payload) => {
-    if (!eligible(request.method, request.routeOptions.url ?? '')) return payload;
+  app.addHook('onSend', (request, reply, payload, done) => {
+    if (!eligible(request.method, request.routeOptions.url ?? '')) return done(null, payload);
     const json = /^application\/json(?:;|$)/i.test(String(reply.getHeader('content-type')));
-    // The plugin also recognizes MIME database types; restrict it to this JSON policy.
-    // Fastify's setter overlays headers for hooks while preserving the original raw headers.
-    request.headers = {...request.headers, 'accept-encoding': json ? normalizedEncoding(request.raw.headers['accept-encoding']) : 'identity'};
-    if (!json) return payload;
+    if (!json) return done(null, payload);
     const vary = String(reply.getHeader('vary') ?? '').split(',').map(token => token.trim()).filter(Boolean);
     if (!vary.some(token => token === '*' || token.toLowerCase() === 'accept-encoding')) vary.push('Accept-Encoding');
     reply.header('vary', vary.join(', '));
-    return payload;
-  });
-  await app.register(compress, {
-    globalCompression: true, globalDecompression: false,
-    threshold: 1024, syncThreshold: 0, encodings: ['br', 'gzip', 'identity'],
-    customTypes: /^application\/json(?:;|$)/i,
-    brotliOptions: {params: {[constants.BROTLI_PARAM_QUALITY]: 4, [constants.BROTLI_PARAM_MODE]: constants.BROTLI_MODE_TEXT}},
-    zlibOptions: {level: 6},
+
+    const encoded = reply.getHeader('content-encoding');
+    if ((encoded && encoded !== 'identity') || reply.statusCode < 200 || [204, 206, 304].includes(reply.statusCode)
+      || reply.getHeader('content-range') !== undefined || request.headers['x-no-compression'] !== undefined
+      || (typeof payload !== 'string' && !Buffer.isBuffer(payload)) || Buffer.byteLength(payload) < 1024) return done(null, payload);
+    let coding = 'identity', weight = 0;
+    for (const preference of normalizedEncoding(request.raw.headers['accept-encoding']).split(',')) {
+      const [name, q = '1'] = preference.split(';q=');
+      if (Number(q) > weight) {coding = name; weight = Number(q);}
+    }
+    if (coding === 'identity') return done(null, payload);
+    // HEAD describes the GET representation without starting unused compression work.
+    if (request.method === 'HEAD') {
+      reply.header('content-encoding', coding).removeHeader('content-length');
+      return done(null, Readable.from([]));
+    }
+    const codec = coding === 'br' ? createBrotliCompress({params: {
+      [constants.BROTLI_PARAM_QUALITY]: 4, [constants.BROTLI_PARAM_MODE]: constants.BROTLI_MODE_TEXT,
+    }}) : createGzip({level: 6});
+    reply.header('content-encoding', coding).removeHeader('content-length');
+    // A pre-header stream error is replaced by Fastify's ordinary JSON error response.
+    codec.once('error', () => {if (!reply.raw.headersSent) reply.removeHeader('content-encoding');});
+    // Fastify owns this native stream, so a socket close destroys it directly.
+    // Pipeline propagates that destruction to the source; Fastify also owns stream errors.
+    pipeline(Readable.from([payload]), codec, () => {});
+    done(null, codec);
   });
 }

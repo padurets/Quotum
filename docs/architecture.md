@@ -1109,12 +1109,15 @@ seconds before killing a child; the managed outer fallback remains eight seconds
 These deadlines require a responsive event loop.
 
 Server read JSON on the explicit overview, history, event-poll, reset, device,
-project and source-key inventory routes negotiates Brotli or gzip above a 1 KiB
-threshold. Compression uses asynchronous streams, Brotli quality 4 and gzip level 6;
+project and source-key inventory routes negotiates Brotli or gzip at a 1 KiB
+threshold. Compression uses native asynchronous streams, Brotli quality 4 and gzip level 6;
 explicit encoding exclusions outrank wildcard weights. These representations vary
 on `Accept-Encoding`, including identity responses. The shipped Caddy forwards the
 encoded response. SSE, static files, other routes and local/desktop hubs remain
 uncompressed, and compressed request bodies are not decompressed.
+Fastify owns the native encoder returned as the response stream. A Node pipeline
+connects its input to that encoder, so an aborted response destroys both without
+waiting for garbage collection or continuing to encode the abandoned body.
 
 ## The dashboard
 

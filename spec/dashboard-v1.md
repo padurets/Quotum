@@ -56,6 +56,8 @@ preferences keep the existing identity fallback and status. Eligible JSON respon
 carry `Vary: Accept-Encoding` even without compression. Decoded payloads and exact
 decimal amounts are unchanged. SSE and all local/desktop responses are uncompressed;
 no request decompression is enabled.
+Aborting an encoded response closes its input and native encoder without waiting
+for garbage collection. `HEAD` carries no response body.
 
 ## Measuring frequency
 
