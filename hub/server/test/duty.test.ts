@@ -67,16 +67,17 @@ test('only a failure of the latest holder command releases starter, data and sch
     duty.asked('acc', 'broken', t0 + MIN);
     if (protection === 'schedule') duty.schedule('acc', t0 + 30 * MIN);
     const until = duty.until('acc');
-    duty.failed('acc', 'other', t0 + MIN);
+    assert.equal(duty.failed('acc', 'other', t0 + MIN), false);
     assert.equal(duty.until('acc'), until, 'off-duty failure changes nothing');
-    duty.failed('acc', 'broken', t0 + 29_999);
+    assert.equal(duty.failed('acc', 'broken', t0 + 29_999), false);
     assert.equal(duty.until('acc'), until, 'older than the tolerance changes nothing');
-    duty.failed('acc', 'broken', t0 + 30_000);
+    assert.equal(duty.failed('acc', 'broken', t0 + 30_000), true);
     assert.equal(duty.until('acc'), 0, protection);
+    assert.equal(duty.failed('acc', 'broken', t0 + MIN), false, 'one command is released once');
     assert.equal(duty.claim('acc', 'healthy', false, t0 + MIN + 1).measure, true);
     duty.asked('acc', 'healthy', t0 + MIN + 1);
     const next = duty.until('acc');
-    duty.failed('acc', 'broken', t0 + 2 * MIN);
+    assert.equal(duty.failed('acc', 'broken', t0 + 2 * MIN), false);
     assert.equal(duty.until('acc'), next, 'the retired holder cannot release new work');
   }
 });

@@ -288,6 +288,10 @@ subscription:
   cannot end a newer command. Source figures retain their independent validity.
   A delayed snapshot taken before or at the device's latest failure can update the
   source without renewing that device's duty; recovery requires a later observation.
+  Release also invalidates that holder's waiting planner. Expiring its cooldown,
+  receiving another batch or accepting another device's data cannot restore it.
+  A new eligible claim or the holder's own successful recovery restores planning;
+  the shared successful-data baseline still determines fixed due times.
 
 Duty decides who measures; the hub's **pace** (`hub/server/cadence.ts`) decides when,
 from what it sees of the subscription everywhere, which no single machine does:

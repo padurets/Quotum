@@ -92,9 +92,11 @@ export class Duty {
   }
 
   /** A failure answering the holder's latest command releases all duty protection. */
-  failed(subscription: string, device: string, at: number) {
+  failed(subscription: string, device: string, at: number): boolean {
     const holder = this.holders.get(subscription);
-    if (holder?.device === device && answers(holder, at)) this.holders.set(subscription, {...holder, until: 0, askedAt: null, answering: true, scheduledUntil: null});
+    if (holder?.device !== device || !answers(holder, at)) return false;
+    this.holders.set(subscription, {...holder, until: 0, askedAt: null, answering: true, scheduledUntil: null});
+    return true;
   }
 
   /** A late result answers its command without renewing or shortening the lease. */

@@ -331,6 +331,10 @@ does not alter the validity of retained measurements or send new identity fields
 An accepted snapshot taken before or exactly at that device's latest failure still
 updates source evidence, but cannot renew its duty. A later successful observation
 proves recovery and can renew duty as before.
+Release also ends the old holder's right to waiting protection. The end of its
+pause, another batch or a newer shared observation from another device does not
+restore that right. Its own successful recovery or a new eligible duty claim can
+restore it; a fixed plan still follows the shared successful-data baseline.
 
 A reader may ask the hub for fresh limits from the subscription's card. The next
 permitted check-in of its current paced holder then asks for a measurement using the
@@ -644,6 +648,8 @@ The measuring-frequency preference is kept on the hub. It adds no information to
 Releasing duty after a fresh failure uses only the existing device, subscription
 binding, corrected observation time and latest command held in hub memory. It sends
 no new identity or failure fields and leaves retained sample validity unchanged.
+Waiting eligibility belongs to that same in-memory holder, independently of the
+subscription's shared observation clock; it adds no device fields or persisted identity.
 
 ### Client discovery privacy
 
