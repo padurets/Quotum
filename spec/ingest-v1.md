@@ -328,6 +328,9 @@ asks it to measure immediately, while a fixed frequency keeps its schedule from
 the last successful observation and respects the new device's minimum interval.
 Older, duplicate and off-duty failures cannot release a newer command. This change
 does not alter the validity of retained measurements or send new identity fields.
+An accepted snapshot taken before or exactly at that device's latest failure still
+updates source evidence, but cannot renew its duty. A later successful observation
+proves recovery and can renew duty as before.
 
 A reader may ask the hub for fresh limits from the subscription's card. The next
 permitted check-in of its current paced holder then asks for a measurement using the

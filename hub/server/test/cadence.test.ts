@@ -591,6 +591,36 @@ test('first-ever measurement failure and rollback release duty only after a comm
   assert.deepEqual([h.ask('healthy', t0 + 6 * S).measure, h.duty.holder(ACCOUNT)], [true, h.device('healthy')]);
 });
 
+test('a delayed success before or at a failure keeps its data without renewing the failed device duty', t => {
+  for (const failure of ['unsupported', 'timeout']) for (const prior of [600.5, 606]) {
+    const h = hub();
+    t.after(() => h.store.close());
+    h.follow('healthy', t0, t0 + 601 * S, {}, () => 91);
+    h.ask('broken', t0 + 601 * S, {active: true});
+    h.deliver('broken', t0 + 606 * S, 91, MIN, failure);
+    const pause = h.cadence.pausedUntil(ACCOUNT, h.device('broken'), t0 + 607 * S);
+    assert.equal(h.deliver('broken', t0 + 607 * S, 92, MIN, undefined, t0 + prior * S).accepted, 1);
+    assert.equal(h.store.state(h.source()).successAt, t0 + prior * S, 'source observations retain their independent validity');
+    assert.equal(h.cadence.pausedUntil(ACCOUNT, h.device('broken'), t0 + 608 * S), pause);
+    const healthy = h.ask('healthy', t0 + 608 * S);
+    assert.deepEqual([healthy.measure, healthy.onDuty], [true, true]);
+    const lease = h.duty.until(ACCOUNT);
+    h.deliver('broken', t0 + 609 * S, 93, MIN, undefined, t0 + prior * S + 1);
+    assert.equal(h.duty.until(ACCOUNT), lease, 'late evidence does not disturb the healthy command');
+  }
+});
+
+test('success taken after a failure can recover duty before the device cooldown expires', t => {
+  const h = hub();
+  t.after(() => h.store.close());
+  h.ask('broken', t0);
+  h.deliver('broken', t0 + 5 * S, 50, MIN, 'timeout');
+  h.deliver('broken', t0 + 6 * S, 49, MIN, undefined, t0 + 5 * S + 1);
+  assert.equal(h.cadence.pausedUntil(ACCOUNT, h.device('broken'), t0 + 7 * S), null);
+  assert.ok(h.duty.until(ACCOUNT)! > t0 + 7 * S);
+  assert.equal(h.ask('healthy', t0 + 7 * S).measure, false);
+});
+
 test('a fresh failure older than the latest command preserves that command and its lease', t => {
   const h = hub();
   t.after(() => h.store.close());

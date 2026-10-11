@@ -324,6 +324,12 @@ export class Cadence {
     return true;
   }
 
+  /** A delayed observation cannot restore duty before it proves recovery from this device's latest failure. */
+  canRenewDuty(key: string, device: string, observedAt: number): boolean {
+    const pause = this.pauses.get(pauseKey(key, device));
+    return !pause || observedAt > pause.at;
+  }
+
   /** When a device's pause after failing ends, if it is in one at `now`. */
   pausedUntil(key: string, device: string, now: number): number | null {
     const pause = this.pauses.get(pauseKey(key, device));
