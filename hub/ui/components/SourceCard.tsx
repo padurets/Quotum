@@ -427,6 +427,7 @@ export function CardMark({source,compact=false}: {source: Card;compact?:boolean}
       document.removeEventListener('pointerdown', hide);
     };
   }, [tip]);
+  const managesDevices=compact && mine && providerOf(source.provider)?.measuredBy==='client';
   const mark = (
     <span
       className={`provider-mark ${warn ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
@@ -434,9 +435,9 @@ export function CardMark({source,compact=false}: {source: Card;compact?:boolean}
       data-refresh={outcome ?? 'idle'}
       aria-label={lines.join('\n')}
       role="img"
-      onPointerEnter={event => event.pointerType !== 'touch' && setHovered(true)}
+      onPointerEnter={event => !managesDevices && event.pointerType !== 'touch' && setHovered(true)}
       onPointerLeave={() => setHovered(false)}
-      onPointerUp={event => event.pointerType === 'touch' && setTip(true)}
+      onPointerUp={event => !managesDevices && event.pointerType === 'touch' && setTip(true)}
     >
       <img className="provider-logo" src={logoOf(source.provider)} alt="" />
       {pending ? (
@@ -446,14 +447,14 @@ export function CardMark({source,compact=false}: {source: Card;compact?:boolean}
       ) : (
         <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />
       )}
-      <span className="dot-tip glass" ref={bubble} aria-hidden="true">
+      {!managesDevices&&<span className="dot-tip glass" ref={bubble} aria-hidden="true">
         {lines.map((line, index) => (
           <span key={index}>{line}</span>
         ))}
-      </span>
+      </span>}
     </span>
   );
-  return compact && mine && providerOf(source.provider)?.measuredBy==='client' ? <Popover label={t('measurements.manage')} trigger={mark} triggerClass="measurement-mark-button" align="left" width={288}>
+  return managesDevices ? <Popover label={t('measurements.manage')} trigger={mark} triggerClass="measurement-mark-button" align="left" width={288}>
     <div className="popover-note">{lines.map((line,index)=><div key={index}>{line}</div>)}</div>
     <button type="button" className="popover-row" onClick={()=>inApp()?void app.openMain({kind:'devices',sourceId:source.id}):navigate(measurementDevicesHref(source.id))}>{t('measurements.manage')}</button>
   </Popover> : mark;
