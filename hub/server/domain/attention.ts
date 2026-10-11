@@ -17,12 +17,12 @@ export type WindowLedger = {schemaVersion: 1; cycle: number; previous: WindowSam
 export type QuotaKind = 'low' | 'critical' | 'reset';
 export const sameWindow = (a: Pick<Win, 'kind' | 'label' | 'minutes'>, b: Pick<Win, 'kind' | 'label' | 'minutes'>) =>
   a.kind === b.kind && a.label === b.label && a.minutes === b.minutes;
-export function advanceWindow(previous: WindowLedger | null, sample: WindowSample, live: boolean): {ledger: WindowLedger; event: QuotaKind | null; boundary: boolean} {
+export function advanceWindow(previous: WindowLedger | null, sample: WindowSample, live: boolean): {ledger: WindowLedger; event: QuotaKind | null; boundary: boolean; newCycle: boolean} {
   const same = previous && sameWindow(previous.previous, sample);
   const reset = same && sample.at > previous.previous.at && resetEvidence(previous.previous, sample);
   const continuous = same && sample.at > previous.previous.at && sample.at - previous.previous.at <= previous.previous.staleAfterMs;
   const ledger: WindowLedger = {
-    schemaVersion: 1, cycle: (previous?.cycle ?? 0) + (reset || (previous && !same) ? 1 : 0), previous: sample,
+    schemaVersion: 1, cycle: previous?.cycle ?? 0, previous: sample,
     consumedLow: same && !reset ? previous.consumedLow : false,
     consumedCritical: same && !reset ? previous.consumedCritical : false,
   };
@@ -35,7 +35,7 @@ export function advanceWindow(previous: WindowLedger | null, sample: WindowSampl
   }
   if (severity !== 'ok') ledger.consumedLow = true;
   if (severity === 'crit') ledger.consumedCritical = true;
-  return {ledger, event, boundary: !(live && continuous) || !!reset};
+  return {ledger, event, boundary: !(live && continuous) || !!reset, newCycle: !previous || !!reset || !same};
 }
 
 export type QuotaCandidate = {

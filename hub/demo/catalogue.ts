@@ -1378,7 +1378,7 @@ const all: DemoSet = {
       {id: 'refresh-updated', refresh: {at: 15 * SECOND}, expect: [{refresh: 'queued', from: 30 * SECOND, to: 55 * SECOND}, {refresh: 'updated', from: 75 * SECOND, to: 115 * SECOND}]},
       {id: 'refresh-queued', refresh: {at: 15 * SECOND, minimum: 5 * MIN}, expect: [{refresh: 'queued', from: 30 * SECOND, to: 4 * MIN}]},
       {id: 'refresh-waiting', refresh: {at: 15 * SECOND, delay: 150 * SECOND}, expect: [{refresh: 'waiting', from: 75 * SECOND, to: 3 * MIN}]},
-      {id: 'refresh-failed', refresh: {at: 15 * SECOND, response: 'failed' as const}, expect: [{refresh: 'failed', unavailable: 'paused', from: 75 * SECOND, to: 115 * SECOND}]},
+      {id: 'refresh-failed', refresh: {at: 15 * SECOND, response: 'failed' as const}, expect: [{refresh: 'failed', unavailable: 'no_device', from: 75 * SECOND, to: 115 * SECOND}]},
       {id: 'refresh-no-result', refresh: {at: 15 * SECOND, response: 'lost' as const}, expect: [{refresh: 'no_result', from: 6 * MIN + 15 * SECOND, to: 6 * MIN + 45 * SECOND}]},
       {id: 'refresh-legacy', refresh: {at: 0, legacy: true}, expect: [{unavailable: 'unsupported', from: 0, to: 4 * MIN}]},
       {id: 'refresh-silent', refresh: {at: 0, silent: true}, expect: [{unavailable: 'silent', from: 135 * SECOND, to: 4 * MIN}]},

@@ -38,6 +38,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - run: docker pull caddy:2-alpine
+      - run: node --import tsx --test server/test/compression.integration.ts
       - run: npm run build
 
   # What an open dashboard costs, measured in Chrome on the built hub and page (hub/bench).

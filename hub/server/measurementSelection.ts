@@ -35,7 +35,7 @@ export class MeasurementSelection {
   current(device:string,accounts:Map<ClientProvider,Set<string>>,now:number) {
     for(const before of [...(this.devices.get(device)?.values() ?? [])]) {
       const current=accounts.get(before.provider);
-      if(before.expiresAt>now && (!current || current.size!==1 || current.has(before.key)))continue;
+      if(current?.has(before.key) || before.expiresAt>now && (!current || current.size!==1))continue;
       this.duty.release(before.key,device);
       this.cadence.withdraw(before.key,device,now);
       if(this.commands.get(before.key)?.device===device)this.commands.delete(before.key);

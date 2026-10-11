@@ -126,12 +126,16 @@ export class Ingest {
         afterCommit(() => {
           if (recorded.delivery) this.measurementSelection.observe(account, snapshot.provider, device.id, observedAt);
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
+          let onDuty = false;
           if (recorded.delivery) {
             this.cadence.refreshResult(account, device.id, observedAt, true, now);
-            this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now, acknowledge);
+            if (this.cadence.canRenewDuty(account, device.id, observedAt)) {
+              this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now, acknowledge);
+              onDuty = this.duty.holder(account) === device.id;
+            }
           } else if (acknowledge) this.duty.acknowledge(account, device.id, observedAt);
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
-          if (recorded.delivery) this.cadence.delivered(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,snapshot.staleAfterMs,this.signals(source,account,now).inUse,now,acknowledge);
+          if (recorded.delivery) this.cadence.delivered(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,snapshot.staleAfterMs,this.signals(source,account,now).inUse,now,onDuty,acknowledge);
           else if (recorded.accepted) this.cadence.observed(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,this.signals(source,account,now).inUse,now,acknowledge);
           else if (acknowledge) this.cadence.acknowledge(account,device.id,observedAt);
         });
@@ -154,8 +158,7 @@ export class Ingest {
         if (key&&at>failureFloor) afterCommit(() => {
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
           if (this.cadence.failed(key, device.id, failure.error, at, acknowledge)) {
-            if (acknowledge) this.duty.failed(key, device.id, at);
-            if (this.duty.holder(key) === device.id) this.duty.schedule(key, null);
+            if (acknowledge && this.duty.failed(key, device.id, at)) this.cadence.released(key, device.id);
             if (acknowledge) this.cadence.refreshResult(key, device.id, at, false, now);
           }
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);

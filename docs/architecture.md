@@ -282,6 +282,16 @@ subscription:
   minutes, so the numbers come from where the subscription is actually being used.
 - A holder that goes quiet (asleep, switched off) loses duty when its last measurement
   goes stale and its bounded plan protection ends; the next device to ask takes over.
+- A fresh accepted failure answering the current holder's latest command releases
+  all its duty protection, including a new holder's starter lease. Its own cooldown
+  remains; the next eligible healthy device takes over. Older and off-duty failures
+  cannot end a newer command. Source figures retain their independent validity.
+  A delayed snapshot taken before or at the device's latest failure can update the
+  source without renewing that device's duty; recovery requires a later observation.
+  Release also invalidates that holder's waiting planner. Expiring its cooldown,
+  receiving another batch or accepting another device's data cannot restore it.
+  A new eligible claim or the holder's own successful recovery restores planning;
+  the shared successful-data baseline still determines fixed due times.
 
 Duty decides who measures; the hub's **pace** (`hub/server/cadence.ts`) decides when,
 from what it sees of the subscription everywhere, which no single machine does:
@@ -1124,6 +1134,25 @@ rate-limited. An agent's request with an unknown or revoked token is refused bef
 body is read, so whoever reaches the hub cannot make it hold bodies it would throw away,
 and a request has 30 seconds to arrive in full.
 
+`SIGTERM` and `SIGINT` stop a server hub within five seconds of its first signal.
+Open events and polls end first; ordinary in-flight requests can finish during that
+grace while integrations stop concurrently. At the deadline the hub cuts its own
+connections, closes SQLite and exits without running further callbacks. The local
+hub keeps its two-second bound. Demo and managed-development parents allow seven
+seconds before killing a child; the managed outer fallback remains eight seconds.
+These deadlines require a responsive event loop.
+
+Server read JSON on the explicit overview, history, event-poll, reset, device,
+project and source-key inventory routes negotiates Brotli or gzip at a 1 KiB
+threshold. Compression uses native asynchronous streams, Brotli quality 4 and gzip level 6;
+explicit encoding exclusions outrank wildcard weights. These representations vary
+on `Accept-Encoding`, including identity responses. The shipped Caddy forwards the
+encoded response. SSE, static files, other routes and local/desktop hubs remain
+uncompressed, and compressed request bodies are not decompressed.
+Fastify owns the native encoder returned as the response stream. A Node pipeline
+connects its input to that encoder, so an aborted response destroys both without
+waiting for garbage collection or continuing to encode the abandoned body.
+
 ## The dashboard
 
 A single-page React app served by the hub. It asks nothing again and again: it opens one
@@ -1736,6 +1765,14 @@ key, keeps the session cookie in memory and reads the desktop variant of its SSE
 (spec/dashboard-v1.md). The hub shares level, visibility and naming with the board.
 A persistent window ledger consumes each threshold once per confirmed cycle inside the
 measurement transaction; candidates and observation boundaries leave only after commit.
+The ledger expires after the sample-retention horizon since its last observation,
+including for a source still present. A returning window starts silently. New cycles
+use one persisted global high-water counter, allocated in the same transaction,
+so cleanup and restart cannot reuse a consumed notification identity. The counter
+is bootstrapped from legacy cycles before any ledger is removed; invalid or exhausted
+metadata suppresses new cycles with a safe diagnostic.
+Failed legacy bootstrap disables allocations even if the counter itself looks valid;
+the same scalar records that failure so cleanup and restart cannot make it usable again.
 Boundaries precede the coalesced card deltas, and new candidates follow them. Thus a
 temporary replacement or disappearance can revoke an already queued native intent
 even when the final card has its old metadata again. The boundary/candidate buffer is

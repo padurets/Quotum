@@ -1,5 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
 import {advanceWindow, level, resetEvidence, type Candidate, type Invalidation, type WindowLedger, type WindowSample} from '../domain/attention.js';
 import {Attention} from '../attention.js';
 import {Store} from '../store/store.js';
@@ -13,6 +16,7 @@ import {ResetFeed} from '../resets.js';
 import {config} from '../config.js';
 import {newSecret} from '../domain/auth.js';
 import type {ResetStatus} from '../domain/resets.js';
+import {afterCommit, transaction} from '../touches.js';
 
 const T = 1_800_000_000_000;
 const sample = (remaining: number, at = T): WindowSample => ({id: 'week', kind: 'weekly', label: null, minutes: 10080, used: 100 - remaining, remaining, resetAt: T + 600_000, at, staleAfterMs: 204_000});
@@ -197,6 +201,7 @@ test('rollback leaves neither consumed events nor live startup bookkeeping', t =
   assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM attention_windows').get()!.n, 0);
   assert.equal(h.candidates.length, 0);
   assert.equal(h.invalidations.length, 0, 'rolled-back observation boundaries never escape');
+  assert.equal(h.store.db.prepare("SELECT value FROM meta WHERE key = 'attentionCycle'").get()!.value, '0', 'allocation rolls back with the ledger');
   h.store.record = record;
   h.deliver([[T + 2000, 29]]);
   assert.equal(h.candidates.length, 0, 'first live remains a baseline');
@@ -273,7 +278,7 @@ test('hidden events are consumed and visibility is checked again before stream d
   assert.equal(notifications(h.frames).length, 0, 'corrections do not reset consumed thresholds');
 });
 
-test('restarting the service keeps consumed thresholds and prunes only orphan ledgers', t => {
+test('restarting the service keeps consumed thresholds within retention and source deletion removes its ledger', t => {
   const h = setup(t);
   h.deliver([[T, 35], [T + 1000, 29]]);
   const restarted = new Attention(h.store, T + 1500);
@@ -289,12 +294,172 @@ test('restarting the service keeps consumed thresholds and prunes only orphan le
   assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM attention_windows').get()!.n, 0);
 });
 
+test('obsolete windows expire strictly before the retention cutoff while the source stays', t => {
+  const h = setup(t);
+  const kept = config.retention.sampleDays * 86_400_000;
+  h.deliver([[T, 35], [T + 1, 29]]);
+  const source = h.store.states(h.board)[0];
+  const high = h.store.db.prepare("SELECT value FROM meta WHERE key = 'attentionCycle'").get()!.value;
+  h.store.prune(T + 1 + kept);
+  assert.equal(h.store.attentionCycle(source.id, 'week'), Number(high), 'equal cutoff survives');
+  h.deliver([[T + kept + 2, 50, undefined, 'current']]);
+  h.store.prune(T + kept + 2);
+  assert.equal(h.store.attentionCycle(source.id, 'week'), null);
+  assert.ok(h.store.attentionCycle(source.id, 'current')! > Number(high));
+  assert.equal(h.store.states(h.board)[0].windows[0].id, 'current');
+  assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM attention_windows').get()!.n, 1);
+});
+
+test('prune, repeated reappearance and service restart never reuse an event identity', t => {
+  const h = setup(t);
+  const kept = config.retention.sampleDays * 86_400_000;
+  h.deliver([[T, 35], [T + 1000, 29]]);
+  const ids = new Set(h.candidates.map(c => c.id));
+  let at = T + 1000;
+  for (let i = 0; i < 3; i++) {
+    at += kept + 1000;
+    h.store.prune(at);
+    assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM attention_windows').get()!.n, 0);
+    const count = h.candidates.length;
+    if (i % 2 === 0) {
+      const attention = new Attention(h.store, at);
+      attention.onEvents = changes => h.candidates.push(...changes.candidates);
+      h.ingest.attention = attention;
+    }
+    h.deliver([[at, 35]]);
+    assert.equal(h.candidates.length, count, 'return is a silent baseline');
+    h.deliver([[at + 1000, 29]]);
+    const next = h.candidates.at(-1)!;
+    assert.equal(next.kind, 'low');
+    assert.ok(!ids.has(next.id));
+    ids.add(next.id);
+    at += 1000;
+  }
+  assert.equal(ids.size, 4);
+  assert.equal(h.store.db.prepare("SELECT count(*) AS n FROM meta WHERE key LIKE 'attention%'").get()!.n, 1, 'one scalar, no per-window tombstones');
+});
+
+test('legacy cycles bootstrap before cleanup and the global high water survives database restart and source deletion', t => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'quotum-attention-cycle-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const file = path.join(dir, 'db.sqlite');
+  let store = new Store(file, T);
+  const source = store.source('codex', 'legacy', T);
+  const legacy: WindowLedger = {...advanceWindow(null, sample(29), false).ledger, cycle: 417};
+  store.db.prepare('INSERT INTO attention_windows VALUES (?, ?, ?, ?, ?)').run(source, 'week', 417, T, JSON.stringify(legacy));
+  store.db.prepare("DELETE FROM meta WHERE key = 'attentionCycle'").run();
+  store.close();
+  store = new Store(file, T);
+  assert.equal(store.db.prepare("SELECT value FROM meta WHERE key = 'attentionCycle'").get()!.value, '417');
+  const kept = config.retention.sampleDays * 86_400_000;
+  const ids = new Set<string>();
+  for (let i = 1; i <= 3; i++) {
+    const at = T + i * (kept + 10_000);
+    store.prune(at);
+    store.close();
+    store = new Store(file, at);
+    const attention = new Attention(store, at);
+    attention.onEvents = changes => changes.candidates.forEach(c => {assert.ok(!ids.has(c.id)); ids.add(c.id);});
+    const record = (remaining: number, time: number) => transaction(store.db, () => {
+      const batch = attention.begin();
+      const measurement = {observedAt: time, windows: [{...sample(remaining, time), resetAt: null}], staleAfterMs: 204_000, resets: null, plan: 'pro'};
+      batch.record(store.state(source), measurement, time);
+      store.record(source, measurement);
+      afterCommit(() => batch.committed());
+    });
+    record(35, at);
+    assert.equal(store.attentionCycle(source, 'week'), 417 + i);
+    record(29, at + 1000);
+    assert.equal(ids.size, i);
+  }
+  store.db.prepare('DELETE FROM sources WHERE id = ?').run(source);
+  store.close();
+  store = new Store(file, T);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM attention_windows').get()!.n, 0);
+  assert.equal(store.db.prepare("SELECT value FROM meta WHERE key = 'attentionCycle'").get()!.value, '420');
+  store.close();
+});
+
+test('invalid and exhausted cycle metadata never wrap or emit a new identity', t => {
+  for (const value of ['invalid', '-1', '9007199254740992', String(Number.MAX_SAFE_INTEGER)]) {
+    const h = setup(t);
+    const errors: string[] = [];
+    const mock = t.mock.method(console, 'error', (message: string) => errors.push(message));
+    h.store.db.prepare("UPDATE meta SET value = ? WHERE key = 'attentionCycle'").run(value);
+    h.deliver([[T, 35], [T + 1000, 29]]);
+    assert.deepEqual(h.candidates, []);
+    assert.equal(h.store.db.prepare('SELECT count(*) AS n FROM attention_windows').get()!.n, 0);
+    assert.equal(h.store.db.prepare("SELECT value FROM meta WHERE key = 'attentionCycle'").get()!.value, value);
+    assert.ok(errors.length > 0 && errors.every(e => JSON.parse(e).message === 'invalid_attention_cycle'));
+    mock.mock.restore();
+  }
+});
+
+test('failed legacy bootstrap disables new cycles through cleanup and database restart', t => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'quotum-attention-invalid-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const errors: string[] = [];
+  t.mock.method(console, 'error', (message: string) => errors.push(message));
+  const file = path.join(dir, 'db.sqlite');
+  let store = new Store(file, T);
+  const source = store.source('codex', 'legacy', T);
+  const legacy = {...advanceWindow(null, sample(35), false).ledger, cycle: 2};
+  store.db.prepare('INSERT INTO attention_windows VALUES (?, ?, ?, ?, ?)').run(source, 'week', 2, T, JSON.stringify(legacy));
+  store.db.prepare('INSERT INTO attention_windows VALUES (?, ?, ?, ?, ?)').run(source, 'invalid', 9007199254740992n, T, '{}');
+  store.db.prepare("UPDATE meta SET value = '0' WHERE key = 'attentionCycle'").run();
+  store.close();
+  store = new Store(file, T);
+  t.after(() => store.close());
+  const record = (attention: Attention, remaining: number, at: number) => transaction(store.db, () => {
+    const batch = attention.begin();
+    const measurement = {observedAt: at, windows: [sample(remaining, at)], staleAfterMs: 204_000, resets: null, plan: 'pro'};
+    batch.record(store.state(source), measurement, at);
+    assert.equal(store.record(source, measurement).accepted, true, 'invalid notification metadata does not reject measurements');
+    afterCommit(() => batch.committed());
+  });
+  const attention = new Attention(store, T), candidates: Candidate[] = [];
+  attention.onEvents = events => candidates.push(...events.candidates);
+  for (const [i, remaining] of [35, 29, 100, 29, 100, 29].entries()) record(attention, remaining, T + i * 1000);
+  assert.equal(candidates.length, 1, 'the retained cycle may finish, but no new identity is allocated');
+  assert.equal(store.attentionCycle(source, 'week'), 2);
+  const at = T + 6001 + config.retention.sampleDays * 86_400_000;
+  store.prune(at);
+  store.close();
+  store = new Store(file, at);
+  const returning = new Attention(store, at);
+  returning.onEvents = events => candidates.push(...events.candidates);
+  record(returning, 35, at);
+  record(returning, 29, at + 1000);
+  assert.equal(store.attentionCycle(source, 'week'), null, 'cleanup cannot restore an unverified counter');
+  assert.equal(candidates.length, 1);
+  assert.ok(errors.length > 0 && errors.every(e => JSON.parse(e).message === 'invalid_attention_cycle'));
+});
+
+test('an expired low window returns consumed and cannot replay its old low intent', t => {
+  const h = setup(t);
+  h.deliver([[T, 35]]);
+  h.open();
+  h.deliver([[T + 1000, 29]]);
+  const source = h.store.states(h.board)[0];
+  const old = h.candidates[0];
+  const at = T + 1001 + config.retention.sampleDays * 86_400_000;
+  h.store.prune(at);
+  assert.equal(h.store.attentionCycle(source.id, 'week'), null);
+  assert.deepEqual(h.projection.visibleCandidates(h.board, [old], at), []);
+  h.deliver([[at, 29], [at + 1000, 31], [at + 2000, 29]]);
+  h.events.flush();
+  assert.deepEqual(notifications(h.frames), []);
+  h.deliver([[at + 3000, 9]]);
+  assert.deepEqual(h.candidates.map(c => c.kind), ['low', 'critical']);
+  assert.notEqual(h.candidates.at(-1)!.id, old.id);
+});
+
 test('candidate overflow gives a new empty baseline, never replay', t => {
   const h = setup(t);
   h.deliver([[T, 35]]);
   h.open();
   const source = h.store.states(h.board)[0];
-  const candidate: Candidate = {id: `${source.id}/week/0/critical`, kind: 'critical', at: T, observedFrom: T, observedAt: T + 1, sourceId: source.id, windowId: 'week', provider: 'codex', name: '', window: {kind: 'weekly', label: null, minutes: 10080}, remaining: 9, resetAt: null};
+  const candidate: Candidate = {id: `${source.id}/week/${h.store.attentionCycle(source.id, 'week')}/critical`, kind: 'critical', at: T, observedFrom: T, observedAt: T + 1, sourceId: source.id, windowId: 'week', provider: 'codex', name: '', window: {kind: 'weekly', label: null, minutes: 10080}, remaining: 9, resetAt: null};
   h.events.attention({candidates: Array.from({length: 2000}, () => candidate), invalidations: []});
   h.events.flush();
   const attention = h.frames.filter(f => f.type === 'attention').map(f => JSON.parse(f.data));
