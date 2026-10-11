@@ -83,6 +83,7 @@ export function LimitMeter({w, children}: {w: Win; children?: ReactNode}) {
 
 function Limit({w, measuredAt, weekly}: {w: Win & {stale?:boolean;observedAt?:number}; measuredAt: number | null; weekly: WeeklyPlan | null}) {
   return <PercentLimit name={windowName(w)} remaining={w.remaining}
+    valueTitle={w.observedAt===undefined?undefined:[t('source.measured',{at:stamp(w.observedAt)}),w.stale?t('money.stale'):null].filter(Boolean).join('\n')}
     status={w.observedAt!==undefined&&<small className="key-status" role="img" aria-hidden={!w.stale} title={w.stale?`${t('money.stale')}\n${stamp(w.observedAt)}`:undefined}/>}
     reset={<ResetLine w={w}/>} note={<PlanNote w={w} measuredAt={measuredAt} weekly={weekly}/>}
   ><PlanMark w={w} measuredAt={measuredAt} weekly={weekly}/></PercentLimit>;
