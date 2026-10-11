@@ -1,4 +1,4 @@
-import {MAX_ROWS, reading, nearest, starts, widths, settle, withPlaces, ordered, type Stored, type Place, type Layout, type Item, type Spot} from '../../server/domain/layout.js';
+import {MAX_ROWS, reading, nearest, starts, widths, settle, withPlaces, ordered, defaultWidth, type Stored, type Place, type Layout, type Item, type Spot} from '../../server/domain/layout.js';
 export * from '../../server/domain/layout.js';
 
 /** Content fills whole rows; the last row has no gap below it. */
@@ -165,11 +165,14 @@ export const withArranged = <T extends Stored & {layout: Layout}>(view: T, place
 export function withSparseArrangement<T extends Stored & {layout: Layout}>(view: T, places: Record<string, Place>, ids: string[], height?: Height) {
   const result = withArranged(view, places, height);
   const expected = ordered(result.layout, ids);
-  for (const id of ids) {
+  const positions = new Map(expected.map((item,index) => [item.id,{...item,index}]));
+  for (const [index,id] of ids.entries()) {
     if (!id.startsWith('source:') || Object.hasOwn(view.layout.places,id) || height?.id === id) continue;
-    const candidate = {...result.layout.places}; delete candidate[id];
-    const actual = ordered({...result.layout,places:candidate},ids);
-    if (actual.every((item,i) => item.id === expected[i].id && item.x === expected[i].x && item.w === expected[i].w)) result.layout.places = candidate;
+    const item = positions.get(id)!, prev = positions.get(ids[index-1]);
+    const w = defaultWidth(id,result.layout.columns), x = prev ? (starts(result.layout.columns,w).find(x => x >= prev.x+prev.w) ?? 0) : 0;
+    // Making this anchor implicit moves its following implicit run behind its
+    // natural predecessor. Adjacency and default geometry keep that whole run intact.
+    if (item.index === (prev?.index ?? -1)+1 && item.x === x && item.w === w) delete result.layout.places[id];
   }
   return result;
 }
