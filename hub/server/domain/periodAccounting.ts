@@ -84,7 +84,8 @@ class QuotaIndex {
     const points=previous.filter(([at])=>at>=leftEnd&&at<rightStart).map(([at,value,segment,validUntil])=>[at,value,segment,validUntil??at+cell] as HistorySeries['points'][number]);
     if(!previous.length&&!boundaryOnly){
       const cells=new Map<number,HistorySeries['points'][number]>();
-      for(let i=lower(this.times,leftEnd);i<lower(this.times,rightStart);i++){const s=sampleAt(this.series.samples,i)!,at=Math.floor(s.at/cell)*cell,old=cells.get(at),value=100-s.used;if(!old||value<old[1])cells.set(at,[at,value,i+1,Math.min(at+cell,s.at+s.staleAfterMs+1,s.resetAt??Infinity,s.validUntil??Infinity)]);}
+      const first=lower(this.times,leftEnd),end=lower(this.times,rightStart);
+      for(let i=first;i<end;i++){const s=sampleAt(this.series.samples,i)!,at=Math.floor(s.at/cell)*cell,old=cells.get(at),value=100-s.used;if(!old||value<old[1])cells.set(at,[at,value,i+1,Math.min(at+cell,s.at+s.staleAfterMs+1,s.resetAt??Infinity,s.validUntil??Infinity)]);}
       points.push(...cells.values());
     }
     for(const [from,to] of leftEnd>=rightStart?[[range.from,range.to]]:[[range.from,leftEnd],[rightStart,range.to]]) {
@@ -98,7 +99,7 @@ class QuotaIndex {
   }
 
   at(range:PeriodRange):QuotaSummary {
-    const lo=lower(this.times,range.from),hi=Math.max(0,lower(this.times,range.to)-1),last=sampleAt(this.series.samples,lower(this.times,range.to)-1);
+    const lo=lower(this.times,range.from),end=lower(this.times,range.to),hi=Math.max(0,end-1),last=sampleAt(this.series.samples,end-1);
     const first=sampleAt(this.series.samples,lower(this.times,range.from+1)-1);
     const valid=(sample:typeof first,at:number)=>sample&&at<Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity)?100-sample.used:null;
     const sum=(values:Numbers)=>hi>lo?numberAt(values,hi)!-numberAt(values,lo)!:0;
