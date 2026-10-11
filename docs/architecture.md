@@ -504,15 +504,28 @@ A widget stacks agent-hours by subscription, project or machine in bars of an ho
 than twenty hours). Four agents over an hour make a bar 4h tall. The legend's groups
 add up to the total in every split; projects and machines take seven colours by their
 agent-hours, and those past them share a neutral one. Each group is its own however
-small. Above the stacks are agent-hours, active time, distinct agents and the average
+small. Above the stacks are agent-hours, active time, recorded sessions and the average
 at once (agent-hours divided by active time). Active time is not drawn: it is in the
 totals and tooltips. A bar's tooltip gives these totals first, then its group parts;
 a legend entry's glass bubble gives the group's agent-hours, active time, average at
-once and distinct agents. Hover or keyboard focus opens it, Escape dismisses it; a
+once and recorded sessions. Hover or keyboard focus opens it, Escape dismisses it; a
 tap also switches the group and keeps the bubble for four seconds. Switching groups
 off recomputes stacks, scale and the shown agent-hours; active time, agents and at
 once still cover all the board's agents. A subscription's agent-hours equal its
 windows' Agent-hours column, and its active time equals their Active time column.
+The optional Session activity table compares the same work by project, machine or
+subscription, with independent reader grouping and sorting. It reads the shared
+period work index without quota history or plot preparation. Its rows and whole-period
+total show agent-hours, union active time, recorded sessions and average concurrency;
+the total never adds group active times. Recorded sessions are positive-work retained
+contexts, so one logical producer can count more than once after a context change.
+The chart explains the same count. Opening a group shows those retained contexts,
+including ones without current presence, with their work clipped to the same period.
+Both lists page at 50 rows. The table is added explicitly, stays when empty, and
+has owner-controlled columns while every reader keeps their own presentation choices.
+Small cells and live sort crossings use the common clock; fixed ranges do not tick.
+Replacement reads keep the last complete summary with its original basis until the
+new evidence is accepted, and access or work-authority loss clears retained work.
 What is known of a period begins with `agentWorkSince`, and on a shared board no earlier than the
 subscription came to it: the part before is said to be unknown, not drawn as idle. The
 pace and the share while active are taken over the activity within the steps between

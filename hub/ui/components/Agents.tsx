@@ -269,7 +269,7 @@ const COLUMNS: Record<AgentColumn, {title: Key; hint?: Key; cell: (group: AgentG
 /** A cut name in full on hover. */
 const fullOf = (group: AgentGroup, column: AgentColumn) => (isDimension(column) ? dimensionName(group, column) : undefined);
 
-const SortIcon = () => (
+export const SortIcon = () => (
   <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
     <path d="M4 3v10M1.5 10.5 4 13l2.5-2.5M9 4h5M9 8h3.5M9 12h2" />
   </svg>
@@ -489,7 +489,7 @@ type Arrangement = (inGroup: boolean) => {name: Dimension; columns: AgentColumn[
  * back to all where it came from them. A table where they fit its width, otherwise a list
  * with the sorting in a menu, as the widget has.
  */
-function AgentsDialog({
+export function AgentsDialog({
   groups,
   by,
   arrangement,
@@ -501,6 +501,8 @@ function AgentsDialog({
   initial,
   onClose,
   restore,
+  keepChosen=false,
+  chosenTitle,
 }: {
   groups: AgentGroup[];
   by: AgentsBy;
@@ -513,22 +515,25 @@ function AgentsDialog({
   initial: string | null;
   onClose: () => void;
   restore: () => HTMLElement | null;
+  keepChosen?:boolean;
+  chosenTitle?:string;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [chosen, setChosen] = useState(initial);
   const [page,setPage]=useState(0);
   // A group whose agents have all gone leaves its dialog with all the others.
+  const missing=keepChosen&&chosen!==null&&!groups.some(g=>g.key===chosen);
   const group = by === 'none' || chosen === null ? null : (groups.find(g => g.key === chosen) ?? null);
   const {name, columns} = arrangement(group !== null);
   const layout = useAgentsLayout(box, columns);
   const shown = [name, ...columns];
   const active = visibleAgentsSort(agentsSort, shown);
-  const ordered = sortedGroups(group ? groupsOf(group.rows, 'none') : groups, active, shown);
+  const ordered = sortedGroups(missing?[]:group ? groupsOf(group.rows, 'none') : groups, active, shown);
   const sorting: Sorting = {active, headers: shown.map(id => ({id, title: COLUMNS[id].title})), sortBy: (column, cycle) => {setPage(0);sortBy(active, column, cycle);}};
   const currentPage=Math.min(page,Math.max(0,Math.ceil(ordered.length/50)-1));
   const back = group !== null && initial === null;
   const sortMenu = layout === 'list' && ordered.length > 0;
-  const title = group ? (by === 'project' ? projectName(group.name) : (group.name ?? '')) : t('agents.title');
+  const title = chosenTitle??(group ? (by === 'project' ? projectName(group.name) : (group.name ?? '')) : t('agents.title'));
   // A control that goes (a sort with its column or its form, a group left, or with the last agent) leaves the focus in the dialog, after any render.
   useLayoutEffect(() => {
     if (document.activeElement === document.body) box.current?.closest<HTMLElement>('.dialog')?.focus();
@@ -547,8 +552,8 @@ function AgentsDialog({
             {sortMenu && <SortMenu {...sorting} />}
           </div>
         )}
-        {empty ? (
-          !period.loading&&!period.error&&period.basis&&<p className="panel-empty">{t(`agents.${empty}`)}</p>
+        {empty||missing ? (
+          !period.loading&&!period.error&&period.basis&&<p className="panel-empty">{t(`agents.${empty??'none'}`)}</p>
         ) : (
           <AgentsRows groups={ordered.slice(currentPage*50,currentPage*50+50)} name={name} columns={columns} single={group !== null || by === 'none'} by={by} layout={layout} color={color} sorting={sorting} onOpen={key=>{setChosen(key);setPage(0);}} />
         )}
@@ -775,7 +780,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   );
 });
 
-function AgentPages({page,count,onPage}:{page:number;count:number;onPage:(page:number)=>void}) {
+export function AgentPages({page,count,onPage}:{page:number;count:number;onPage:(page:number)=>void}) {
   if(count<=50)return null;
   return <div className="period-pages">
     <button type="button" className="button" disabled={page===0} onClick={()=>onPage(page-1)}>{t('period.previous')}</button>

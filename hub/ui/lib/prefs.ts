@@ -3,6 +3,7 @@ import {readAgentsBy, readAgentsSort, type AgentsBy, type AgentsSort} from './ag
 import {ANALYTICS_KINDS, type ActivityDimension, type Kind} from './types';
 import {DEFAULT_PERIOD, periodOf} from './periods';
 import {DEFAULT_MONEY,readMoney,type MoneyPrefs} from './moneySelection';
+import {readActivitySort,type ActivitySort} from './activityTable';
 
 /** How far the chart looks ahead: `auto` follows the period. */
 export type Horizon = 'auto' | '1d' | '3d' | '7d';
@@ -40,12 +41,14 @@ export type Prefs = {
   agentsBy: AgentsBy;
   /** What the activity widget stacks its hours by. */
   activityBy: ActivityDimension;
+  activityTableBy: ActivityDimension;
+  activityTableSort: ActivitySort;
 };
 
 const KEY = 'quotum.prefs';
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
 export const ACTIVITY_BY: ActivityDimension[] = ['source', 'project', 'device'];
-const DEFAULTS: Prefs = {funds:DEFAULT_MONEY,money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', filtersVisible: false, showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
+const DEFAULTS: Prefs = {funds:DEFAULT_MONEY,money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', filtersVisible: false, showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project',activityTableBy:'project',activityTableSort:null};
 
 function read(): Prefs {
   try {
@@ -56,8 +59,9 @@ function read(): Prefs {
     if (!ANALYTICS_KINDS.includes(stored.kind)) stored.kind = DEFAULTS.kind;
     if (!HORIZONS.includes(stored.horizon)) stored.horizon = DEFAULTS.horizon;
     if (!ACTIVITY_BY.includes(stored.activityBy)) stored.activityBy = DEFAULTS.activityBy;
+    if (!ACTIVITY_BY.includes(stored.activityTableBy)) stored.activityTableBy = DEFAULTS.activityTableBy;
     const {muted, range, kind, horizon, filtersVisible, showPlan, showForecast, showResets, locked, activityBy} = stored;
-    return {funds:{...readMoney(stored.funds),view:'balance'},money:readMoney(stored.money),muted, range, kind, horizon, filtersVisible: filtersVisible === true, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort), agentsBy: readAgentsBy(stored.agentsBy), activityBy};
+    return {funds:{...readMoney(stored.funds),view:'balance'},money:readMoney(stored.money),muted, range, kind, horizon, filtersVisible: filtersVisible === true, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort), agentsBy: readAgentsBy(stored.agentsBy), activityBy,activityTableBy:stored.activityTableBy,activityTableSort:readActivitySort(stored.activityTableSort)};
   } catch {
     return DEFAULTS;
   }

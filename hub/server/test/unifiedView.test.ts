@@ -28,9 +28,10 @@ test('hidden saved positions cannot move implicit visible neighbours during unif
 });
 
 test('all builtin shown subsets and 204 other ids survive the compact codec', () => {
+  const builtins=['agents','activity','quota-history','budget-history','quota-table','budget-table','subscription-funds'];
   const other = Array.from({length:204},(_,i)=>String(i));
   for (let mask=0;mask<128;mask++) {
-    const shown = WIDGETS.filter((_,i)=>mask & 1<<i).concat(other as typeof WIDGETS[number][]);
+    const shown = builtins.filter((_,i)=>mask & 1<<i).concat(other);
     const view = {...EMPTY_VIEW,shown};
     const decoded = decodeView(encodeView(view));
     assert.ok(decoded); assert.deepEqual(new Set(decoded.shown),new Set(shown));

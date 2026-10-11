@@ -33,7 +33,7 @@ import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.j
 import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type SourceForecast, type View} from '../../ui/lib/types.js';
 import type {Snapshot} from '../../ui/lib/board.js';
 import {ACTIVITY, AGENTS, boardState, cardId, columnShown, QUOTA_TABLE, QUOTA_HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
-import {SCENES, SETS,PERIOD_SCENES} from '../catalogue.js';
+import {SCENES, SETS,PERIOD_SCENES,SESSION_ACTIVITY_SCENES} from '../catalogue.js';
 import {
   awake,
   cards,
@@ -859,6 +859,28 @@ test('seed and live credit share producer IDs and expose known positive, zero, l
   assert.ok(byName('ios-app').rows.some(row => row.session.workedMs !== null), 'a mixed group contains known credit too');
 });
 
+
+test('session comparison catalogue exposes explicit tables and retained work with a whole union total',async t=>{
+  const set=setOf('all'),start=Math.floor(Date.now()/MIN)*MIN;
+  const {stand}=await bringUp(t,set,start);t.mock.timers.setTime(start);
+  const reader=stand.people.get('dan')!,board=reader.personalBoard!;
+  const overview=await reader.get<Snapshot>('/api/overview');
+  assert.ok(overview.view.shown.includes('activity-table'));
+  assert.equal(overview.view.layout.places['activity-table'].w,6);
+  const selection={mode:'range',from:start-7*24*HOUR,to:start};
+  const reply=await reader.post<PeriodReply>(`/api/boards/${board}/period`,{version:1,selection,evaluatedAt:start,sessions:{}});
+  if(reply.sessions?.state!=='complete')throw new Error('comparison work');
+  assert.equal(reply.quota,undefined);
+  const rows=workedSessions(reply.sessions.value,selection,start),metrics=new PeriodActivity(reply.sessions.value);
+  metrics.update(rows);const summary=metrics.summary(selection,'project');
+  assert.ok(summary.by.project.length>=2);
+  assert.ok(summary.by.project.reduce((sum,g)=>sum+g.activeMs,0)>summary.activeMs);
+  assert.equal(summary.agentMs,rows.reduce((sum,r)=>sum+r.workedMs,0));
+  assert.equal(summary.agents,rows.length);assert.ok(rows.some(row=>!row.working));
+  for(const group of summary.by.project){const contexts=rows.filter(row=>JSON.stringify(row.project)===group.key);
+    assert.equal(contexts.length,group.agents);assert.equal(contexts.reduce((sum,r)=>sum+r.workedMs,0),group.agentMs);}
+  assert.deepEqual(SESSION_ACTIVITY_SCENES.flatMap(scene=>scene.expect),['opt-in-table','union-total','retained-contributions','shared-work-index']);
+});
 
 test('period catalogue states use the existing retained demo evidence at exclusive boundaries',async t=>{
   const set=setOf('activity'),start=Math.floor(Date.now()/MIN)*MIN;

@@ -3,13 +3,12 @@ import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type
 import {createPortal} from 'react-dom';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
-import {sourceLabel} from '../lib/quota';
-import {activityEmpty, activityScale, atOnce, groupColors, mutedKey} from '../lib/activity';
+import {activityEmpty, activityScale, activityGroupName as groupName, atOnce, groupColors, mutedKey} from '../lib/activity';
 import {ACTIVITY_BY, setMuted, setPrefs, usePrefs} from '../lib/prefs';
 import {setTimeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
-import {usePersonalBoard, useBoardId, useLineup, useTitles, type Title} from '../lib/board';
+import {usePersonalBoard, useBoardId, useLineup, useTitles} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
 import {boardPeriod} from '../lib/period';
@@ -35,13 +34,6 @@ const MINUTE = 60_000;
 const EMPTY_ACTIVITY: ActivityData = {since: 0, known: null, barMs: MINUTE, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
 
 const LABELS: Record<ActivityDimension, Key> = {source: 'activity.bySource', project: 'activity.byProject', device: 'activity.byDevice'};
-
-/** A group as the legend and the tooltip name it. */
-function groupName(group: Pick<ActivityGroup, 'key' | 'name'>, by: ActivityDimension, titles: Record<string, Title>) {
-  if (by === 'source' && group.key === 'unknown') return t('agents.unknownSource');
-  if (by === 'source') return titles[group.key] ? sourceLabel(titles[group.key]) : group.key;
-  return group.name ?? (by === 'project' ? t('activity.noProject') : group.key);
-}
 
 /** The widget's own settings, as the chart has its own: what its stacks are split by, and (for the board's owner) hiding it. */
 function ActivitySettings({arrange}: {arrange: Arrange}) {

@@ -57,7 +57,7 @@ for(const periodName of ['1h','30d'])test(`${periodName}: PageClock updates fina
   const render=()=>readers.map(reader=>reader.render());
   const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;h.advance(now);timers.delete(next[0]);next[1].run();render();}now=at;h.advance(now);render();};
   try {
-    const before=render();assert.match(before[0],/Agents <b>1/);assert.match(before[2],/>1<\/strong>/);assert.ok(before[3]);
+    const before=render();assert.match(before[0],/Recorded sessions <b>1/);assert.match(before[2],/>1<\/strong>/);assert.ok(before[3]);
     h.requests.length=0;
     advance(to+periodMs+250);
     assert.equal(h.period.get().rows.length,0);

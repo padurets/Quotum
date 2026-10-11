@@ -96,7 +96,7 @@ only the board owner may show another member's hidden card or add a standard wid
 `{kind:"sources", sourceIds:[...]}`, `{kind:"widget", widgetId}`,
 `{kind:"connection", provider, account?: {kind:"new"} | {kind:"existing", id}}`, or `{kind:"replace", credentialId}`.
 Source selections contain one to 100 unique IDs. Standard widgets are `agents`,
-`activity`, `quota-history`, `subscription-funds`, `budget-history`, `quota-table`, `budget-table`. Replacement is personal; the server captures its
+`activity`, `activity-table`, `quota-history`, `subscription-funds`, `budget-history`, `quota-table`, `budget-table`. Replacement is personal; the server captures its
 provider, source and access revision. Reusing a request ID with another destination or
 selection returns `409 addition_conflict`. No secret goes into reservation or storage.
 
@@ -180,12 +180,30 @@ Reads and new membership do not materialize every implicit place. Add, replay an
 device-onboarding writes also require the current writer header.
 
 The standard widgets are `agents`, `activity`, `quota-history`, `budget-history`,
-`quota-table`, `budget-table` and `subscription-funds`. Each analytics replacement in `shown` is placed;
+`activity-table`, `quota-table`, `budget-table` and `subscription-funds`. Each analytics replacement in `shown` is placed;
 `hidden` takes precedence. Unplaced analytics become placed once their resource
 capabilities appear, independently of filters, latest errors or zero balances. Placed
 widgets remain when resources leave. `enabledWhenEmpty` applies only to explicit
 `agents` and `activity` additions. New empty boards have no analytics placed and keep
 activity hidden; any standard widget can be added explicitly to an empty board.
+`activity-table` is opt-in: resource discovery never places it. It remains placed on
+an empty board after an explicit addition. Its v3 ID stays a string; the released
+numeric aliases 0 through 6 and shown mask 127 are unchanged.
+
+Session activity uses the existing period `sessions` section, independent of quota
+history and chart selection. Its reader-local project/machine/subscription grouping
+and raw-value sort are independent of the chart and Agents list. The owner controls
+the `agenthours`, `active`, `sessions` and `concurrency` columns in the shared view;
+all four are visible by default. Group names are always visible. The default order
+is agent-hours descending. Hiding a sorted column temporarily restores that order
+without changing the reader's saved preference.
+Rows and their retained-session disclosures use the same clipped work evidence and
+basis. Agent-hours add, active time is the union, and average concurrency divides
+agent-hours by active time. The total uses the whole union rather than adding group
+active times or averaging ratios. Recorded sessions count positive-work retained
+context references, not distinct logical producer identities. Both table and chart
+explain this limitation. A delayed or failed replacement retains the last complete
+basis; authority loss clears it. Unknown coverage is distinct from confirmed zero.
 
 The schema upgrade converts legacy history/table placements atomically. Mixed boards
 keep the quota pair at the old coordinates and append the budget pair after existing
@@ -802,7 +820,7 @@ longest time of its member sessions in the cell, and is written only when it dif
 Machine names are in `devices`. Only sessions with selected work in the chunk appear.
 
 The page adds cell activity into bars of a length chosen from the requested frame's
-length (`barOf`), keeping a set of session references to count distinct agents in each
+length (`barOf`), keeping a set of session references to count recorded contexts in each
 bar and frame. Group agent time is the sum of its sessions; group active time is the
 sum of its cell unions. Groups rank by agent time, active time, name and key.
 

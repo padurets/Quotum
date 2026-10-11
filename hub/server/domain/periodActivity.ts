@@ -9,6 +9,7 @@ import {PeriodCurves,type WorkTimeline} from './periodCurves.js';
 type Group={name:string|null;curve:WorkTimeline;contexts:WorkTimeline[];agentMs:number;agents:number};
 const dimensions:ActivityDimension[]=['source','project','device'];
 const keys=(row:WorkTrace['refs'][number])=>({source:row.source??'unknown',project:JSON.stringify(row.project),device:row.device.id});
+export type ActivityOrder={by:ActivityDimension;column:'active'|'concurrency';keys:readonly string[]};
 
 export class PeriodActivity {
   private all!:WorkTimeline;
@@ -52,6 +53,42 @@ export class PeriodActivity {
     if(this.trace.fixed)return null;
     const contexts=key===undefined?this.contexts.values():this.groups[dimension].get(key)?.contexts??[];
     let next=Infinity;for(const curve of contexts)next=Math.min(next,curve.next(now-period)+period,curve.next(now));
+    return Number.isFinite(next)?next:null;
+  }
+  /** Both scalar presentations use the same exact group and whole-period curves. */
+  summary(range:PeriodRange,dimension:ActivityDimension,key?:string):Activity {
+    const empty:Activity={since:this.trace.knownFrom,known:null,barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}};
+    if(this.trace.fixed)return this.trace.fixed.activity;
+    return this.numbers(empty,range,dimension,key);
+  }
+  /** Union and ratio sorts can cross between ledger endpoints, without a report. */
+  orderChangesAt(now:number,period:number,orders:readonly ActivityOrder[]):number|null {
+    if(this.trace.fixed||!orders.length)return null;
+    const range={from:now-period,to:now};let next=Infinity;
+    for(const order of orders){
+      const pieces=order.keys.flatMap(key=>{const curve=this.groups[order.by].get(key)?.curve;if(!curve)return [];
+        return [{curve,agent:curve.read(range),active:curve.read(range,true),agentSlope:curve.slope(now)-curve.slope(range.from),activeSlope:Number(curve.working(now))-Number(curve.working(range.from))}];});
+      for(let i=1;i<pieces.length;i++){
+        const a=pieces[i-1],b=pieces[i];
+        const boundary=Math.min(a.curve.next(now),b.curve.next(now),a.curve.next(range.from)+period,b.curve.next(range.from)+period);
+        const compare=(at:number)=>{const selected={from:at-period,to:at},aa=a.curve.read(selected,true),ba=b.curve.read(selected,true);
+          return Math.sign(order.column==='active'?aa-ba:(aa?a.curve.read(selected)/aa:0)-(ba?b.curve.read(selected)/ba:0));};
+        const before=compare(now);
+        const c0=order.column==='active'?a.active-b.active:a.agent*b.active-b.agent*a.active;
+        const c1=order.column==='active'?a.activeSlope-b.activeSlope:a.agentSlope*b.active+a.agent*b.activeSlope-b.agentSlope*a.active-b.agent*a.activeSlope;
+        const c2=order.column==='active'?0:a.agentSlope*b.activeSlope-b.agentSlope*a.activeSlope;
+        const roots:number[]=[];
+        if(!c0&&(c1||c2))roots.push(0);
+        if(!c2){if(c1)roots.push(-c0/c1);}
+        else {const d=c1*c1-4*c2*c0;if(d>=0){const q=-0.5*(c1+(c1>=0?1:-1)*Math.sqrt(d));if(q){roots.push(q/c2,c0/q);}else roots.push(-c1/(2*c2));}}
+        // Verify a bounded neighbourhood with the real comparator: equality and
+        // strict inversion are separate edges, and the next endpoint ends this piece.
+        for(const root of roots)if(root>=0&&Number.isFinite(root)&&now+root<=boundary){
+          const candidate=now+Math.floor(root);
+          for(const at of [candidate-1,candidate,candidate+1,candidate+2])if(at>now&&at<=boundary&&compare(at)!==before)next=Math.min(next,at);
+        }
+      }
+    }
     return Number.isFinite(next)?next:null;
   }
   project(activity:Activity,range:PeriodRange):Activity {

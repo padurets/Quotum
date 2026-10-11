@@ -23,6 +23,8 @@ import {periodOf} from '../lib/periods';
 import {periodTextChangesAt} from '../lib/periodClock';
 import {workHours} from '../lib/format';
 import type {SessionOrder} from '../lib/period';
+import type {ActivityDimension} from '../lib/types';
+import {sortedActivity} from '../lib/activityTable';
 
 const H=3_600_000,ref=(id:string,project:string,source:string|null='s')=>({ref:id,source,device:{id:project,name:project},origin:'terminal' as const,project,folder:null,startedAt:0});
 const compile=(body:string)=>ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
@@ -67,11 +69,11 @@ async function harness(trace:WorkTrace){
 }
 
 /** Effects and external-store equality from the actual hook, including remount. */
-function panel(period:any,initial:Order){
+function panel(period:any,initial:Order,by?:ActivityDimension){
   let order=initial,cursor=0,dirty=false,renders=0,value:any;
   const slots:any[]=[],pending:(()=>void)[]=[];
   const slot=(make:()=>any)=>{const i=cursor++;return slots[i]??(slots[i]=make());};
-  const context={exports:{} as {usePeriodSessions:(order:Order)=>unknown},boardPeriod:period,selector,sameJson,
+  const context={exports:{} as {usePeriodSessions:(order:Order)=>unknown;usePeriodActivity:(by:ActivityDimension,order:Order)=>unknown},boardPeriod:period,selector,sameJson,
     useRef:(current:unknown)=>slot(()=>({current})),useState:(make:()=>unknown)=>[slot(()=>({value:make()})).value],
     useLayoutEffect:(effect:()=>void|(()=>void),deps?:unknown[])=>{const state=slot(()=>({deps:null,stop:null,effect}));state.effect=effect;if(!deps||!state.deps||deps.some((v,i)=>!Object.is(v,state.deps[i]))){state.deps=deps;pending.push(()=>{state.stop?.();state.stop=effect();});}},
     useSyncExternalStore:(subscribe:(listener:()=>void)=>()=>void,read:()=>unknown)=>{
@@ -79,7 +81,7 @@ function panel(period:any,initial:Order){
       state.value=read();return state.value;
     }};
   runInNewContext(compile(coordinator.slice(coordinator.indexOf('const roster='),coordinator.indexOf('export function useSourcePeriodSessions'))),context);
-  function render(){for(let i=0;;i++){assert.ok(i<5,'selector and clock effects cannot render in a loop');cursor=0;dirty=false;value=context.exports.usePeriodSessions(order);renders++;while(pending.length)pending.shift()!();if(!dirty)break;}return value;}
+  function render(){for(let i=0;;i++){assert.ok(i<5,'selector and clock effects cannot render in a loop');cursor=0;dirty=false;value=by?context.exports.usePeriodActivity(by,order):context.exports.usePeriodSessions(order);renders++;while(pending.length)pending.shift()!();if(!dirty)break;}return value;}
   render();
   return {render:()=>dirty?render():value,setOrder:(next:Order)=>{order=next;return render();},rows:()=>value.rows as WorkedSession[],renders:()=>renders,
     strictRemount:()=>{for(const state of slots)if(state.effect){state.stop?.();state.stop=state.effect();}},
@@ -139,4 +141,37 @@ test('domain crossing boundaries cover ties and future membership without minute
   const later=new PeriodIndex({anchor:0,knownFrom:0,refs:[ref('future','F')],spans:[[0,H+2000,H+3000]]});
   later.advance({from:1000,to:H+1000},H+1000);assert.equal(later.changesAt(H+1000,H),H+2000);
   later.advance({from:2000,to:H+2000},H+2000);assert.equal(later.changesAt(H+2000,H),H+2001,'a context enters on the first credited millisecond');
+});
+
+function activityOrder(period:any,column:'active'|'concurrency'):Order{
+  return ()=>{
+    const summary=period.activitySummaryAt('project');
+    const groups=sortedActivity(summary?.by.project??[],{column,descending:true},g=>g.name??g.key,'en','project');
+    return {key:groups.map(g=>g.key),activity:{by:'project',column,keys:groups.map(g=>g.key)}};
+  };
+}
+
+test('activity table union sorting crosses on the real common clock rather than additive session time',async()=>{
+  const h=await harness({anchor:0,knownFrom:0,refs:[ref('a1','A'),ref('a2','A'),ref('b','B')],spans:[[0,0,160_000],[1,0,160_000],[2,300_000,455_000]]});
+  const order=activityOrder(h.period,'active'),consumer=panel(h.period,order,'project'),passive=panel(h.period,()=>null,'project');
+  const keys=()=>JSON.parse(JSON.stringify(order(h.period.get().rows)!.key));
+  assert.deepEqual(keys(),['"A"','"B"']);const baseline=passive.renders();
+  h.advance(H+5000);consumer.render();assert.deepEqual(keys(),['"A"','"B"']);
+  h.advance(H+5250);assert.deepEqual(keys(),['"B"','"A"']);consumer.render();
+  assert.ok(consumer.renders()>1);passive.render();assert.equal(passive.renders(),baseline,'duration-only changes leave the parent table asleep');
+  assert.equal(h.reads(),1);consumer.close();passive.close();h.close();
+});
+
+test('activity table ratio sorting handles quadratic equality and inversion, remount and disposal without HTTP',async()=>{
+  const h=await harness({anchor:0,knownFrom:0,refs:[ref('a1','A'),ref('a2','A'),ref('b1','B'),ref('b2','B'),ref('b3','B')],
+    spans:[[0,0,200_000],[1,0,120_000],[2,0,100_000],[3,300_000,400_000],[4,300_000,350_000]]});
+  const order=activityOrder(h.period,'concurrency'),consumer=panel(h.period,order,'project');
+  const keys=()=>JSON.parse(JSON.stringify(order(h.period.get().rows)!.key));
+  assert.deepEqual(keys(),['"A"','"B"']);
+  consumer.strictRemount();assert.equal(h.period.workOrders.size,1);
+  h.advance(H+70_000);consumer.render();assert.deepEqual(keys(),['"A"','"B"']);
+  h.advance(H+70_001);consumer.render();assert.deepEqual(keys(),['"B"','"A"']);
+  assert.equal(h.reads(),1);assert.ok(h.pool.estimatedBytes<=h.pool.budget);
+  consumer.setOrder(()=>null);assert.equal(h.period.workOrders.size,1);
+  consumer.close();assert.equal(h.period.workOrders.size,0);h.close();
 });

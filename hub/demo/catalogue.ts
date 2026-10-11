@@ -59,6 +59,14 @@ export const PERIOD_SCENES=[
   {id:'before-first-measurement',expect:['unknown-value','no-invented-work']},
 ] as const;
 
+/** Activity-table loading, authority loss, sorting crossings and missing groups are
+ * held by ui/test/activityTable.test.ts and ui/test/periodOrderClock.test.ts.
+ * The table shares this fixture's overlapping and retained contexts with Activity.
+ */
+export const SESSION_ACTIVITY_SCENES=[
+  {id:'comparison',expect:['opt-in-table','union-total','retained-contributions','shared-work-index']},
+] as const;
+
 
 /**
  * The catalogue of the demo board: every state the dashboard knows today, one entry each,
@@ -492,7 +500,7 @@ const all: DemoSet = {
       // Heights she chose, which the benchmark renders too: the list after all her cards however many, 32 rows tall, so most of its
       // agents show with their work totals and a few are left to the dialog; the analytics taller than drawn by themselves.
       agentsPlace: {x: 0, y: 99, w: 6, h: 32},
-      places: {activity: {x: 0, y: 0, w: 6, h: 12}, 'quota-history': {x: 0, y: 1, w: 6, h: 16}, 'quota-table': {x: 0, y: 2, w: 6, h: 30}},
+      places: {activity: {x: 0, y: 0, w: 6, h: 12}, 'activity-table':{x:0,y:1,w:6}, 'quota-history': {x: 0, y: 2, w: 6, h: 16}, 'quota-table': {x: 0, y: 3, w: 6, h: 30}},
       projects: {'docs-site': 'docs'},
       // Each group has a working agent that works within the first twenty minutes.
       expect: [
@@ -559,6 +567,7 @@ const all: DemoSet = {
       kind: 'person',
       id: 'dan',
       name: 'Dan',
+      places:{'activity-table':{x:0,y:1,w:6}},
       // The week before `start`, at a fixed point: the agents of the example are gone by then.
       expect: [
         {state: 'widgets'},
@@ -570,6 +579,7 @@ const all: DemoSet = {
         {activityKnownFrom: -10 * DAY, range: '30d', from: 0, to: 0},
       ],
       look: [
+        'Session activity over 7 days: compare atlas and harbor, then open their retained sessions; its full active-time total is 21h, not the sum of the rows. Chart legend muting leaves the table whole.',
         'Agent activity over 7 days by project: atlas and harbor on days −5 and −4, harbor again on day −3',
         'Its hour bars stack agent-hours and can stand above an hour; over 30 days the bars are two hours',
         'The legend adds up to 44 agent-hours; atlas has 28 agent-hours and 16 active hours',
