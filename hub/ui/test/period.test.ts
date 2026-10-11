@@ -302,7 +302,7 @@ test('a dense retained month adopts its decoded reservation within the shared me
 });
 
 test('an empty replacement period clears the previous roster and card disclosures',async()=>{
-  const context={exports:{} as {BoardPeriod:new()=>{active:boolean;receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;get():{rows:unknown[]};getSource(id:string):unknown[]}},
+  const context={exports:{} as {BoardPeriod:new()=>{active:boolean;selection:PeriodRequest['selection'];receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;get():{rows:unknown[]};getSource(id:string):unknown[]}},
     hubNow:()=>5_000_000,retention,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
@@ -315,6 +315,7 @@ test('an empty replacement period clears the previous roster and card disclosure
   const period=new context.exports.BoardPeriod();period.active=true;
   for(const populated of [true,false,true]){
     const selection={mode:'range' as const,from:populated?1_400_000:0,to:populated?5_000_000:1_400_000};
+    period.selection=selection;
     const basis={run:'r',revision:'1',evaluatedAt:5_000_000,evidenceCut:5_000_000,range:selection};
     const value={anchor:selection.from,cut:selection.to,knownFrom:selection.from,refs:populated?[ref('a')]:[],spans:populated?[[0,0,60_000] as [number,number,number]]:[],cursor:'work'};
     await period.receive({basis,sessions:{state:'complete',basis,value}},{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:5_000_000}});
@@ -324,7 +325,7 @@ test('an empty replacement period clears the previous roster and card disclosure
 
 test('rolling work stays exact while clock ticks leave chart and table revisions asleep',async()=>{
   let now=5_000_000;
-  const context={exports:{} as {BoardPeriod:new()=>{active:boolean;receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;tick():void;get():{rows:{workedMs:number}[]};getProjectionRevision(scope:string):number;workedAt(refs:string[],fallback:number,now:number):number}},
+  const context={exports:{} as {BoardPeriod:new()=>{active:boolean;selection:PeriodRequest['selection'];receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;tick():void;get():{rows:{workedMs:number}[]};getProjectionRevision(scope:string):number;workedAt(refs:string[],fallback:number,now:number):number}},
     hubNow:()=>now,retention,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
@@ -335,6 +336,7 @@ test('rolling work stays exact while clock ticks leave chart and table revisions
   runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const period=new context.exports.BoardPeriod();period.active=true;
   const selection={mode:'live' as const,periodMs:3_600_000},range=evaluatedRange(selection,now),basis={run:'r',revision:'1',evaluatedAt:now,evidenceCut:now,range};
+  period.selection=selection;
   const value={anchor:range.from,cut:range.to,knownFrom:range.from,refs:[ref('a')],spans:[[0,0,120_000] as [number,number,number]],cursor:'work'};
   await period.receive({basis,sessions:{state:'complete',basis,value}},{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:now}});
   const revision=period.getProjectionRevision('quota');
