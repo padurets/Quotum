@@ -1,6 +1,55 @@
 $ErrorActionPreference='Stop'
 if(-not ('QuotumWindowProbe' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'window-probe.cs')}
 . (Join-Path $PSScriptRoot 'wait-observer.ps1')
+
+# Controlled process states do not need a window or a provider client.
+if(-not ('QuotumWaitStopControl' -as [type])){
+  Add-Type @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
+public sealed class QuotumWaitStopControl {
+  readonly string mode;
+  bool gone;
+  public StringWriter StandardInput {get;} = new StringWriter();
+  public List<int> Waits {get;} = new List<int>();
+  public int Kills {get;private set;}
+  public bool Disposed {get;private set;}
+  public int ExitCode {get {return 0;}}
+  public QuotumWaitStopControl(string mode){this.mode=mode;}
+  public bool HasExited {
+    get {
+      if(mode=="identity-unavailable")throw new InvalidOperationException("hidden-wait-cleanup-canary");
+      return gone;
+    }
+  }
+  public bool WaitForExit(int milliseconds){Waits.Add(milliseconds);return gone;}
+  public void Kill(){
+    Kills++;
+    if(mode=="live")throw new Win32Exception(5,"hidden-wait-cleanup-canary");
+    gone=true;
+    if(mode=="race")throw new InvalidOperationException("hidden-wait-cleanup-canary");
+  }
+  public void Dispose(){Disposed=true;StandardInput.Dispose();}
+}
+'@
+}
+foreach($case in @('race','live','identity-unavailable','normal')){
+  $process=[QuotumWaitStopControl]::new($case)
+  $observer=[pscustomobject]@{Process=$process;Output=$null;Errors=$null;Status='ready';Started=$true}
+  $receipt=Stop-WaitObserver $observer
+  $expected=$case -in @('race','normal')
+  if($receipt.stopped -ne $expected -or -not $process.Disposed -or $observer.Process){throw 'Controlled observer state was not preserved'}
+  if($receipt.cleanup.exited -ne $(if($case -eq 'identity-unavailable'){$null}else{$expected})){throw 'Final process confirmation did not match its evidence'}
+  $expectedWaits=if($case -eq 'normal'){@(2000,500)}else{@(2000)}
+  if(($process.Waits -join ',') -ne ($expectedWaits -join ',')){throw 'Observer wait deadlines changed'}
+  if($case -eq 'race' -and ($receipt.cleanup.failure -ne 'kill' -or $receipt.cleanup.errorKind -ne 'invalid-operation')){throw 'The exit race lost its originating operation'}
+  if($case -eq 'live' -and ($receipt.cleanup.errorCode -ne 5 -or $receipt.cleanup.exited)){throw 'A failed kill was credited as stopped'}
+  if((ConvertTo-Json -InputObject $receipt -Depth 7) -match 'hidden-wait-cleanup-canary'){throw 'Cleanup evidence leaked an exception message'}
+  Write-Host (ConvertTo-Json -Compress -InputObject @{case=$case;status=$receipt.status;stopped=$receipt.stopped;failure=$receipt.cleanup.failure})
+}
+
 $root=Join-Path $env:TEMP ('quotum-wait-test-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $root | Out-Null
 try {

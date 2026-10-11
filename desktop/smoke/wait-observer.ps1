@@ -54,20 +54,40 @@ function Watch-OwnedThreads($Observer,[uint32[]]$Threads) {
   } catch {$Observer.Status='unavailable'}
 }
 
+function Set-WaitCleanupFailure($Cleanup,$Failure) {
+  $cause=$Failure.Exception.GetBaseException()
+  $Cleanup.failure=$Cleanup.stage
+  $Cleanup.errorKind=if($cause -is [ComponentModel.Win32Exception]){'win32'}elseif($cause -is [InvalidOperationException]){'invalid-operation'}else{'other'}
+  $Cleanup.errorCode=if($cause -is [ComponentModel.Win32Exception]){$cause.NativeErrorCode}else{$null}
+}
+
 # Call only after the independent pause guard has resumed the UI.
 function Stop-WaitObserver($Observer) {
   if(-not $Observer){return @{status='unavailable';stopped=$true;samples=@()}}
   $status=$Observer.Status;$samples=@();$stopped=$status -ne 'cleanup-unconfirmed'
+  $clock=[Diagnostics.Stopwatch]::StartNew()
+  $cleanup=@{stage='inactive';inputClosed=$false;waited=$null;beforeKill=$null;killAttempted=$false;killReturned=$false;afterKill=$null;exited=$null;failure=$null;errorKind=$null;errorCode=$null;elapsedMs=0}
   try {
     if($Observer.Process){
-      $Observer.Process.StandardInput.Close()
-      if(-not $Observer.Process.WaitForExit(2000)){$status='timeout'}
+      $cleanup.stage='close-input';$Observer.Process.StandardInput.Close();$cleanup.inputClosed=$true
+      $cleanup.stage='wait';$cleanup.waited=$Observer.Process.WaitForExit(2000)
+      if(-not $cleanup.waited){$status='timeout'}
       elseif($Observer.Started -and $Observer.Process.ExitCode -eq 0){$status='complete'}
     }
-  } catch {$status='unavailable'}
+  } catch {$status='unavailable';Set-WaitCleanupFailure $cleanup $_}
   finally {
     if($Observer.Process){
-      try {if(-not $Observer.Process.HasExited){$Observer.Process.Kill();$stopped=$Observer.Process.WaitForExit(500)}} catch {$stopped=$false}
+      try {
+        $cleanup.stage='before-kill';$cleanup.beforeKill=$Observer.Process.HasExited
+        if(-not $cleanup.beforeKill){
+          $cleanup.stage='kill';$cleanup.killAttempted=$true;$Observer.Process.Kill();$cleanup.killReturned=$true
+          $cleanup.stage='wait-after-kill';$cleanup.afterKill=$Observer.Process.WaitForExit(500)
+        }
+      } catch {Set-WaitCleanupFailure $cleanup $_}
+      # A worker can exit between HasExited and Kill. Confirm its state on the same handle.
+      try {$cleanup.stage='confirm-exit';$cleanup.exited=$Observer.Process.HasExited;$stopped=$cleanup.exited}
+      catch {$stopped=$false;if(-not $cleanup.failure){Set-WaitCleanupFailure $cleanup $_}}
+      $cleanup.stage='output'
       # Preserve already-flushed samples even if a later native query hung.
       try {
         if($Observer.Output){
@@ -80,5 +100,6 @@ function Stop-WaitObserver($Observer) {
       $Observer.Process.Dispose();$Observer.Process=$null
     }
   }
-  return @{status=$status;stopped=$stopped;limitMs=5000;intervalMs=200;samples=$samples}
+  $cleanup.stage='finished';$cleanup.elapsedMs=$clock.ElapsedMilliseconds
+  return @{status=$status;stopped=$stopped;limitMs=5000;intervalMs=200;samples=$samples;cleanup=$cleanup}
 }
