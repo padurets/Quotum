@@ -189,8 +189,9 @@ Widget reservation and run/resume also require the writer header. Existing addit
 items and request bindings remain immutable; legacy receipts carry frozen canonical
 `widgetIds` and report `current.widgets` with their current placement. Replaying a
 completed receipt never restores a subsequently hidden widget. Only a current client
-may resume an interrupted legacy widget addition. Non-widget connection operations
-retain their existing version-independent authorization.
+may resume an interrupted legacy widget addition. Connection-only reservations and
+runs require the same writer header, including receipt replays. Existing account
+and board ownership checks still apply.
 
 The page serializes its own saves and flushes pending changes before Add. Ordinary
 bodies retain the debounce; bodies above 64 KiB start an ordinary save immediately.
