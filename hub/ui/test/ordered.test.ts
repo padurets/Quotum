@@ -58,3 +58,62 @@ test('an input failure ends sorting without replacing it with a closing failure'
   assert.throws(() => work.next(), caught => caught === failure);
   assert.equal(closes, 0); assert.deepEqual(work.next(), {value: undefined, done: true});
 });
+test('chronological history rows stay linear without losing stable ties', () => {
+  const input = Array.from({length: 4096}, (_, index) => ({at: 1_790_000_000_000 + Math.floor(index / 2) * 600_000, index}));
+  const before = [...input];
+  let comparisons = 0, steps = 0;
+  const work = ordered(input, (a, b) => {comparisons++; return a.at - b.at;});
+  for (;;) {
+    const count = comparisons, step = work.next();
+    assert.ok(comparisons - count <= 1, 'checking order stays interruptible');
+    if (step.done) {
+      assert.deepEqual(step.value, before);
+      assert.deepEqual(input, before);
+      break;
+    }
+    steps++;
+  }
+  assert.ok(steps <= 2 * input.length, 'already ordered rows need no logarithmic merge passes');
+  assert.ok(comparisons <= input.length, 'chronological cells are checked only once');
+});
+
+test('an inversion near either end falls back to stable sorting without mutating the input', () => {
+  for (const length of [2, 3, 17, 127, 1024]) {
+    for (const at of [0, length - 2]) {
+      const input = Array.from({length}, (_, index) => ({key: Math.floor(index / 2), index}));
+      input[at].key = length;
+      const before = [...input], expected = [...input].sort((a, b) => a.key - b.key);
+      let comparisons = 0;
+      const work = ordered(input, (a, b) => {comparisons++; return a.key - b.key;});
+      for (;;) {
+        const count = comparisons, step = work.next();
+        assert.ok(comparisons - count <= 1, 'falling back does not combine comparison steps');
+        if (step.done) {assert.deepEqual(step.value, expected); break;}
+      }
+      assert.deepEqual(input, before);
+    }
+  }
+});
+
+test('cancellation and comparator errors during order checks retain the generator lifecycle', () => {
+  for (const mode of ['return', 'throw', 'compare'] as const) {
+    let reads = 0, closes = 0, comparisons = 0;
+    const failure = new Error('order check failed');
+    const input: Iterable<number> = {[Symbol.iterator]() {return {
+      next() {return reads < 5 ? {value: reads++, done: false} : {value: undefined, done: true};},
+      return() {closes++; return {value: undefined, done: true};},
+    };}};
+    const work = ordered(input, (a, b) => {comparisons++; if (mode === 'compare') throw failure; return a - b;});
+    for (let i = 0; i < 5; i++) assert.equal(work.next().done, false);
+    assert.equal(comparisons, 0);
+    if (mode === 'compare') assert.throws(() => work.next(), caught => caught === failure);
+    else {
+      assert.equal(work.next().done, false);
+      assert.equal(comparisons, 1);
+      if (mode === 'return') assert.deepEqual(work.return([]), {value: [], done: true});
+      else assert.throws(() => work.throw(failure), caught => caught === failure);
+    }
+    assert.equal(closes, 0, 'the exhausted input is not closed twice');
+    assert.deepEqual(work.next(), {value: undefined, done: true});
+  }
+});

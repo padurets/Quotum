@@ -1390,15 +1390,19 @@ Numeric preparation runs outside React rendering through one cancellable Message
 scheduler. Its shared generators yield between small cell, session, group, event and point
 operations. UI slices target one millisecond and check the deadline after at most sixteen
 generator advances; server and synchronous readers drain those same generators. Each owner
-keeps only its latest job. Stable sorting yields after each copied or merged row, reuses two
-merge buffers and forwards one immutable pending result through delegated generators;
+keeps only its latest job. Stable sorting yields after each copied row and adjacent order
+check. Already chronological rows need only this linear check; an inversion falls back to
+interruptible merge passes with two reusable buffers. Sorting forwards one immutable
+pending result through delegated generators;
 iteration and cancellation retain the native generator lifecycle. Tile responses use private COW staging and publish their
 tiles, read bounds and metadata together. At most two responses are admitted for
 HTTP and processing together, including raw answers waiting for a tile reservation.
 Quota, budget and subscription-funds readers share that pool and a 15 MiB retained-tile and staged-growth
 budget. Global eviction considers only nonvisible, unreserved tiles; an incoming frame
 that cannot fit fails losslessly without evicting the other reader's visible frame. Flights and reservations remain owned until commit or
-discard. Completed projections pin the current tile entry and its write sequence.
+discard. Projections pin the current tile entry and its write sequence. Eviction outside
+the complete target preserves its pending composition; its board, epoch, metadata,
+selected series, target bounds and pinned entries still decide whether that work is current.
 
 Each chart replaces one typed drawing model whole after preparation, then publishes
 its geometry and painters after the DOM commits. Input keeps the displayed model and

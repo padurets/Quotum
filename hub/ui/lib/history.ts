@@ -101,6 +101,7 @@ export class HistoryStore {
   private readonly plotOwner = {};
   private readonly composeOwner = {};
   private composeIdentity = '';
+  private composeCurrent: ((target: Target) => boolean) | null = null;
   private readonly responses = new Map<Flight, ResponseOwner>();
   private readonly reservations = new Map<string, Flight>();
   private readonly plotChunks = new Map<string, {tile: HistoryTile; seq: number; from: number; to: number; chunk: Chunk}>();
@@ -132,6 +133,7 @@ export class HistoryStore {
     this.preparations?.cancel(this.plotOwner);
     this.preparations?.cancel(this.composeOwner);
     this.plotIdentity = this.composeIdentity = '';
+    this.composeCurrent = null;
   }
 
   close() {
@@ -234,6 +236,7 @@ export class HistoryStore {
     if (key === (this.selected ? timeRangeKey(this.selected) : this.period)) return;
     this.preparations?.cancel(this.composeOwner);
     this.composeIdentity = '';
+    this.composeCurrent = null;
     this.period = period;
     this.historyLimit=false;this.readError=false;
     this.selected = selected;
@@ -261,6 +264,7 @@ export class HistoryStore {
       // Active input invalidates composition; its identity must leave with the job.
       this.preparations?.cancel(this.composeOwner);
       this.composeIdentity = '';
+      this.composeCurrent = null;
     }
     this.interest = interest;
     this.panReads = true;
@@ -491,13 +495,16 @@ export class HistoryStore {
   }
 
   private prepareCompose(target: Target) {
+    // Evicting other cached cells cannot invalidate work on this frame's pinned entries.
+    if (this.composeCurrent?.(target)) return;
     const meta = this.meta!, board = this.board!, epoch = this.epoch, version = this.version, windows = this.windows;
     const identity = `${epoch}:${version}:${target.key}:${target.k0}:${target.k1}`;
-    if (identity === this.composeIdentity) return;
+    if (identity === this.composeIdentity && !this.composeCurrent) return;
     this.composeIdentity = identity;
     const tiles = [...(this.grids.get(target.cell)?.values() ?? [])].filter(t => t.readTo > t.readFrom && t.readTo > target.k0 * target.cell && t.readFrom <= target.k1 * target.cell).sort((a, b) => a.from - b.from);
     const pins = this.pins(tiles);
-    const valid = () => !this.interest && this.board === board && this.epoch === epoch && this.version === version && this.windows === windows && this.composeIdentity === identity && this.target().key === target.key && this.pinsValid(pins);
+    const valid = () => !this.interest && this.board === board && this.epoch === epoch && this.meta === meta && this.windows === windows && this.composeIdentity === identity && this.target().key === target.key && this.pinsValid(pins);
+    this.composeCurrent = next => next.key === target.key && next.cell === target.cell && next.k0 === target.k0 && next.k1 === target.k1 && valid();
     const work = function* (): Preparation<History> {
       const chunks: Chunk[] = [];
       for (const {tile} of pins) {chunks.push(yield* tile.chunkPrepared(meta.known)); yield;}
@@ -505,6 +512,7 @@ export class HistoryStore {
     };
     prepare(this.composeOwner, work(), valid, history => {
       for (const {tile} of pins) tile.shownAt = this.env.now();
+      this.composeCurrent = null;
       this.shown = history;
       this.needsCompose = false;
       if (this.plotPending) {this.plotPending = false; this.strip = null; this.plotChunks.clear(); this.preparations?.cancel(this.plotOwner); this.setPlot(null);}

@@ -824,7 +824,18 @@ for (const scope of ['quota', 'budget'] as const) {
   test(`${scope}: returning from an unread range resumes cancelled cached composition`, async () => {
     const h = cooperativeHarness(undefined, scope);
     try {
-      await h.start(); await h.reads[0].answer(); await h.finish();
+      await h.start();
+      const read = h.reads[0], chunks: Chunk[] = [];
+      const end = Math.min(read.to, cellStart(h.now() + CLOCK_TOLERANCE_MS, read.cell) + read.cell);
+      for (let from = read.from; from < end;) {
+        const to = Math.min(end, tileEnd(tileOf(from, read.cell), read.cell));
+        const count = Math.ceil((to - from) / read.cell);
+        // Real rows keep cancellation inside preparation independently of sorting speed.
+        chunks.push({...empty(from, to), series: [{source: 's', window: 'w', hold: read.cell * 2, open: 80, cells: Array.from({length: count}, (_, i) => [i, 80, 0, read.cell])}],
+          meterSeries: [{source: 's', meter: 'balance', kind: 'balance', unit: 'USD', semantics: null, cells: Array.from({length: count}, (_, i) => [i, '1000000000', '0', '0', read.cell])}]});
+        from = to;
+      }
+      await read.answer({chunks}); await h.finish();
       const cached = {from: NOW - 23 * H, to: NOW - H};
       h.store.choose('24h', cached); await flush(); h.tick();
       assert.ok(h.tasks.length, 'the cached composition has not published yet');
@@ -1503,3 +1514,78 @@ test('private cutoffs reread empty personal activity while financial readers and
     assert.equal(q.reads.length,before);
   }finally{stopQ();stopB();q.store.close();b.store.close();}
 });
+
+test('a replaced pinned entry cannot finish a pending final composition with matching stamps', async () => {
+  const h = cooperativeHarness(undefined, 'quota');
+  const range = {from: NOW - 3 * H, to: NOW - 2 * H};
+  try {
+    h.store.choose('1h', range); await h.start();
+    const read = h.reads[0], chunks: Chunk[] = [];
+    for (let from = read.from; from < read.to;) {
+      const to = Math.min(read.to, tileEnd(tileOf(from, read.cell), read.cell));
+      chunks.push({...empty(from, to), series: [{source: 's', window: 'w', hold: read.cell * 2, open: 80,
+        cells: Array.from({length: (to - from) / read.cell}, (_, i) => [i, 80 - i % 20, .25, read.cell])}]});
+      from = to;
+    }
+    await read.answer({chunks}); await h.finish();
+    const final = {from: range.from + 5 * M, to: range.to - 5 * M};
+    h.store.choose('1h', final); await h.advance(300); await flush(); h.tick();
+    assert.ok(h.tasks.length, 'the final projection has yielded before replacement');
+    for (const [cell, grid] of h.internals.grids) for (const [key, old] of grid) {
+      const next = new HistoryTile(tileStart(key, cell), cell);
+      next.readFrom = old.readFrom; next.readTo = old.readTo; next.writeSeq = old.writeSeq;
+      grid.set(key, next);
+    }
+    await h.finish();
+    assert.notEqual(h.store.get().history?.range, `${final.from}-${final.to}`, 'detached entries cannot publish a final frame');
+  } finally {h.store.close();}
+});
+
+for (const scope of ['quota', 'budget'] as const) for (const slices of [1, 8, 20]) {
+  test(`${scope}: eviction outside a final frame preserves preparation after ${slices} slices`, async () => {
+    const fixture = (read: {from: number; to: number; cell: number}): Chunk[] => {
+      const chunks: Chunk[] = [];
+      for (let from = read.from; from < read.to;) {
+        const to = Math.min(read.to, tileEnd(tileOf(from, read.cell), read.cell));
+        const count = (to - from) / read.cell;
+        const chunk = empty(from, to);
+        if (scope === 'quota') chunk.series = [{source: 's', window: 'w', hold: read.cell * 2, open: 80,
+          cells: Array.from({length: count}, (_, i) => [i, 80 - i % 20, .25, read.cell, {o: 80, h: read.cell, w: [.25, .4 * read.cell, .125]}])}];
+        else chunk.meterSeries = [{source: 's', meter: 'balance', kind: 'balance', unit: 'USD', semantics: null,
+          cells: Array.from({length: count}, (_, i) => [i, '1000000000', '0', '0', read.cell])}];
+        chunks.push(chunk); from = to;
+      }
+      return chunks;
+    };
+    const run = async (evict: boolean) => {
+      const pool = new HistoryPool(), h = cooperativeHarness(pool, scope);
+      const first = {from: NOW - 5 * H, to: NOW - 4 * H}, second = {from: NOW - 3 * H, to: NOW - 2 * H};
+      let incoming: {role: 'visible'} | undefined;
+      try {
+        h.store.choose('1h', first); await h.start(); await h.reads[0].answer({chunks: fixture(h.reads[0])}); await h.finish();
+        h.store.choose('1h', second); await h.advance(300); await flush();
+        const read = pending(h)[0]; await read.answer({chunks: fixture(read)}); await h.finish();
+        const victim = h.store.evictionCandidates()[0]; assert.ok(victim);
+        const final = {from: second.from + 5 * M, to: second.to - 5 * M};
+        h.store.choose('1h', final); await h.advance(300); await flush();
+        let posts = 0;
+        for (let i = 0; i < slices; i++) {assert.ok(h.tasks.length); h.tick(); posts++; await flush();}
+        assert.ok(h.tasks.length, 'the final projection still has prepared work to retain');
+        if (evict) {
+          incoming = {role: 'visible'};
+          assert.ok(pool.reserve(incoming, pool.budget - pool.estimatedBytes + victim.bytes));
+          await flush();
+        }
+        while (h.tasks.length) {h.tick(); posts++; await flush(); assert.ok(posts < 1000);}
+        const target = targetOf(final.to - final.from, h.now(), `${final.from}-${final.to}`, final);
+        const expected = {...compose(fixture(read), {now: NOW + 300, historyStart: 0, known: {work: 0, sources: {s: 0}}}, target, new Set(['s w'])), board: 'b'};
+        assert.deepEqual(h.store.get().history, expected);
+        assert.equal(h.reads.length, 2, 'retaining valid work adds no data read');
+        return {posts, history: h.store.get().history};
+      } finally {if (incoming) pool.release(incoming); h.store.close();}
+    };
+    const normal = await run(false), evicted = await run(true);
+    assert.deepEqual(evicted.history, normal.history);
+    assert.equal(evicted.posts, normal.posts, 'unrelated cache eviction cannot restart the final projection');
+  });
+}

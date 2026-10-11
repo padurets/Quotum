@@ -16,6 +16,7 @@ export function* ordered<T>(input: Iterable<T>, compare: (a: T, b: T) => number)
   // pending result instead of allocating an object for every numeric step.
   let iterator: Iterator<T> | undefined, read: Iterator<T>['next'] | undefined;
   let copying = true, rows: T[] = [], spare: T[] | undefined, next: T[] | undefined;
+  let checking = true, checked = 1;
   let size = 1, start = 0, a = 0, b = 0, aEnd = 0, bEnd = 0, at = 0;
   function release() {iterator = undefined; read = undefined; rows = []; spare = next = undefined;}
   function closeInput() {
@@ -42,6 +43,13 @@ export function* ordered<T>(input: Iterable<T>, compare: (a: T, b: T) => number)
           copying = false; iterator = undefined; read = undefined;
         }
         for (;;) {
+          if (checking) {
+            // Ordered history cells need no merge passes; each check stays interruptible.
+            if (checked >= rows.length) {const value = rows; release(); return {value, done: true};}
+            if (compare(rows[checked - 1], rows[checked++]) <= 0) return pendingStep;
+            checking = false;
+            return pendingStep;
+          }
           if (size >= rows.length) {
             const value = rows; release();
             return {value, done: true};
