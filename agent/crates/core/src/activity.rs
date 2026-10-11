@@ -362,6 +362,7 @@ struct Scope {
 /// Looks at the running clients again and again; working or idle is told by the CPU time
 /// spent between two looks.
 pub struct Activity {
+    capture_complete: bool,
     /// Folders that are not projects, as given and as the system resolves them.
     homes: Vec<PathBuf>,
     temps: Vec<PathBuf>,
@@ -403,6 +404,7 @@ impl Activity {
             Vec::new()
         };
         Activity {
+            capture_complete: false,
             homes: both(home),
             temps,
             shielded,
@@ -472,7 +474,7 @@ impl Activity {
     pub fn look(&mut self) -> Vec<Session> {
         let now = Instant::now();
         let wall = crate::model::now_ms();
-        let procs = sys::processes();
+        let (procs, complete) = sys::capture();
         let gone: HashSet<_> = self
             .lifetimes
             .keys()
@@ -483,7 +485,14 @@ impl Activity {
         self.lifetimes.retain(|key, _| !gone.contains(key));
         self.scopes.retain(|key, _| !gone.contains(key));
         self.pending_unsafe.retain(|key| !gone.contains(key));
-        self.observe(&procs, std::process::id(), now, wall, &sys::verified, &sys::cwd, &sys::exe, &sys::mine)
+        let sessions =
+            self.observe(&procs, std::process::id(), now, wall, &sys::verified, &sys::cwd, &sys::exe, &sys::mine);
+        self.capture_complete &= complete;
+        sessions
+    }
+
+    pub fn complete(&self) -> bool {
+        self.capture_complete
     }
 
     fn remember_process(&mut self, p: &mut Proc) {
@@ -588,6 +597,7 @@ impl Activity {
         exe: &dyn Fn(u32) -> Option<String>,
         mine: &dyn Fn(u32) -> bool,
     ) -> Vec<Session> {
+        self.capture_complete = true;
         let by_pid: HashMap<_, _> = procs.iter().map(|p| (p.pid, p)).collect();
         let mut relevant = HashSet::new();
         for p in procs.iter().filter(|p| client_of(&p.name).is_some() && mine(p.pid)) {
@@ -614,6 +624,11 @@ impl Activity {
             at += 1;
         }
         let mut validated: Vec<_> = procs.iter().filter(|p| relevant.contains(&p.pid)).filter_map(read).collect();
+        self.capture_complete &= tree.len() < 4096
+            && procs.iter().filter(|p| relevant.contains(&p.pid) && mine(p.pid)).all(|p| {
+                validated.iter().any(|v| v.same_process(p))
+                    && !(client_of(&p.name).is_some_and(|c| self.tracked.contains(&c)) && p.role == Role::Unavailable)
+            });
         // The OS snapshot already brackets positive role evidence with birth reads.
         // Preserve it even when the very first additional validation fails. Newer
         // validated evidence then supersedes it, without crossing a process birth.
@@ -909,6 +924,7 @@ impl Activity {
             let valid = read(root)
                 .is_some_and(|p| root.same_process(&p) && (p.role == Role::Unavailable || root.role == p.role));
             if !valid {
+                self.capture_complete = false;
                 if let Some(key) = root.key() {
                     seen.remove(&key);
                     bases.remove(&key);
@@ -927,6 +943,7 @@ impl Activity {
         // Missing metadata never proves a birth ended. Positive replacement is
         // pruned above; the OS exit check in look prunes finished births.
         self.scopes.extend(scopes);
+        self.capture_complete &= result.iter().all(|s| s.working.is_some());
         result
     }
 
@@ -1473,11 +1490,27 @@ mod sys {
         })
     }
 
-    pub fn processes() -> Vec<Proc> {
-        let Ok(entries) = fs::read_dir("/proc") else { return Vec::new() };
-        entries
-            .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok())
-            .filter_map(stat)
+    pub fn capture() -> (Vec<Proc>, bool) {
+        let Ok(entries) = fs::read_dir("/proc") else { return (Vec::new(), false) };
+        let complete = std::cell::Cell::new(true);
+        let procs = entries
+            .filter_map(|e| {
+                let entry = match e {
+                    Ok(e) => e,
+                    Err(_) => {
+                        complete.set(false);
+                        return None;
+                    }
+                };
+                entry.file_name().to_str()?.parse::<u32>().ok()
+            })
+            .filter_map(|pid| {
+                let p = stat(pid);
+                if p.is_none() && mine(pid) && !gone(pid) {
+                    complete.set(false);
+                }
+                p
+            })
             .filter_map(|p| {
                 if !matches!(
                     super::client_of(&p.name),
@@ -1493,9 +1526,14 @@ mod sys {
                 // The role must belong to the process we listed, even if it exited and its
                 // pid was reused during the read. Never cache a role by pid alone.
                 let pid = p.pid;
-                super::with_role(p, role, stat(pid))
+                let checked = super::with_role(p, role, stat(pid));
+                if checked.is_none() && !gone(pid) {
+                    complete.set(false);
+                }
+                checked
             })
-            .collect()
+            .collect();
+        (procs, complete.get())
     }
 
     pub fn verified(listed: &Proc) -> Option<Proc> {
@@ -1617,39 +1655,49 @@ mod sys {
         name
     }
 
-    pub fn processes() -> Vec<Proc> {
+    pub fn capture() -> (Vec<Proc>, bool) {
         // SAFETY: with no buffer the call returns how many pids there are; then it fills
         // at most the buffer's size in bytes.
-        let pids = unsafe {
+        let (pids, mut complete) = unsafe {
             let count = libc::proc_listallpids(std::ptr::null_mut(), 0);
             let mut pids = vec![0 as c_int; count.max(0) as usize + 64];
             let size = (pids.len() * mem::size_of::<c_int>()) as c_int;
             let filled = libc::proc_listallpids(pids.as_mut_ptr().cast(), size);
+            let complete = count > 0 && filled > 0 && (filled as usize) < pids.len();
             pids.truncate(filled.max(0) as usize);
-            pids
+            (pids, complete)
         };
         // SAFETY: getuid only reads this process's real user ID.
         let own = unsafe { libc::getuid() };
-        pids.into_iter()
+        let procs = pids
+            .into_iter()
             .filter(|&pid| pid > 0)
             .filter_map(|pid| {
-                let bsd: libc::proc_bsdinfo = info(pid as u32, libc::PROC_PIDTBSDINFO)?;
+                let Some(bsd): Option<libc::proc_bsdinfo> = info(pid as u32, libc::PROC_PIDTBSDINFO) else {
+                    complete = false;
+                    return None;
+                };
                 let name = process_name(pid as u32, &bsd);
                 // A second native read belongs only to our candidate clients, not to
                 // every process on the machine. Re-read their names inside that token.
                 let native_birth =
                     (super::client_of(&name).is_some() && bsd.pbi_uid == own).then(|| birth(pid as u32)).flatten();
                 if native_birth.is_some() {
-                    let checked: libc::proc_bsdinfo = info(pid as u32, libc::PROC_PIDTBSDINFO)?;
+                    let Some(checked): Option<libc::proc_bsdinfo> = info(pid as u32, libc::PROC_PIDTBSDINFO) else {
+                        complete = false;
+                        return None;
+                    };
                     if bsd.pbi_ppid != checked.pbi_ppid
                         || bsd.pbi_start_tvsec != checked.pbi_start_tvsec
                         || bsd.pbi_start_tvusec != checked.pbi_start_tvusec
                         || process_name(pid as u32, &checked) != name
                     {
+                        complete = false;
                         return None;
                     }
                 }
                 if native_birth.is_some() && birth(pid as u32) != native_birth {
+                    complete = false;
                     return None;
                 }
                 Some(Proc {
@@ -1663,7 +1711,8 @@ mod sys {
                     role: Role::Unknown,
                 })
             })
-            .collect()
+            .collect();
+        (procs, complete)
     }
 
     pub fn verified(listed: &Proc) -> Option<Proc> {
@@ -1808,13 +1857,14 @@ mod sys {
     use super::{Proc, Role, Times};
     use crate::model::Millis;
 
-    pub fn processes() -> Vec<Proc> {
+    pub fn capture() -> (Vec<Proc>, bool) {
         let mut list = Vec::new();
+        let complete;
         // SAFETY: the snapshot handle is closed below; each entry is a plain struct with its size set.
         unsafe {
             let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if snapshot == INVALID_HANDLE_VALUE {
-                return list;
+                return (list, false);
             }
             let mut entry: PROCESSENTRY32W = mem::zeroed();
             entry.dwSize = mem::size_of::<PROCESSENTRY32W>() as u32;
@@ -1836,9 +1886,11 @@ mod sys {
                 });
                 more = Process32NextW(snapshot, &mut entry) != 0;
             }
+            complete =
+                windows_sys::Win32::Foundation::GetLastError() == windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES;
             CloseHandle(snapshot);
         }
-        list
+        (list, complete)
     }
 
     fn named_process(pid: u32, listed_name: &str) -> bool {
@@ -2011,8 +2063,8 @@ mod sys {
     use super::{Proc, Times};
     use crate::model::Millis;
 
-    pub fn processes() -> Vec<Proc> {
-        Vec::new()
+    pub fn capture() -> (Vec<Proc>, bool) {
+        (Vec::new(), false)
     }
     pub fn verified(_: &Proc) -> Option<Proc> {
         None
@@ -2064,6 +2116,39 @@ mod tests {
 
     fn codex(pid: u32, parent: u32, invocation: &[u8]) -> Proc {
         Proc { role: codex_role(invocation), ..p(pid, parent, "codex") }
+    }
+
+    #[test]
+    fn capture_completeness_distinguishes_known_empty_unknown_cpu_and_failed_reads() {
+        let mut activity = Activity::new("/fixture-home".into(), false);
+        activity.track(&[ClientId::OpenCode]);
+        let root = Proc {
+            times: Some(Times { started: 100, own: 0, reaped: 0 }),
+            native_birth: Some(vec![1]),
+            role: Role::Local,
+            ..p(7, 1, "opencode")
+        };
+        let now = Instant::now();
+        let look = |a: &mut Activity, procs: &[Proc], at, read: &dyn Fn(&Proc) -> Option<Proc>| {
+            a.observe(
+                procs,
+                900,
+                now + std::time::Duration::from_secs(at),
+                100 + at as i64 * 1000,
+                read,
+                &|_| None,
+                &|_| None,
+                &|_| true,
+            )
+        };
+        look(&mut activity, &[], 0, &|p| Some(p.clone()));
+        assert!(activity.complete(), "a successful empty capture is known");
+        look(&mut activity, std::slice::from_ref(&root), 1, &|p| Some(p.clone()));
+        assert!(!activity.complete(), "first CPU state is unknown");
+        look(&mut activity, std::slice::from_ref(&root), 16, &|p| Some(p.clone()));
+        assert!(activity.complete());
+        look(&mut activity, std::slice::from_ref(&root), 31, &|_| None);
+        assert!(!activity.complete(), "missing metadata must not become a known empty capture");
     }
 
     #[test]
@@ -2629,6 +2714,7 @@ mod tests {
         let gitdir = "home/dev/quotum/.git/worktrees/wt";
         stand.worktree("home/dev/wt", gitdir, &stand.abs(gitdir));
         let mut activity = Activity {
+            capture_complete: false,
             homes: vec![stand.at("home")],
             temps: vec![stand.at("tmp")],
             shielded: Vec::new(),
@@ -2742,7 +2828,7 @@ mod tests {
     #[test]
     fn this_process_is_seen_as_it_is() {
         let me = std::process::id();
-        let own = sys::processes().into_iter().find(|p| p.pid == me).expect("in the list");
+        let own = sys::capture().0.into_iter().find(|p| p.pid == me).expect("in the list");
         #[cfg(unix)]
         assert_eq!(own.parent, std::os::unix::process::parent_id());
         let Times { started, own: cpu, .. } = own.times.or_else(|| sys::times(me)).expect("its times");

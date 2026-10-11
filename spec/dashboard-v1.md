@@ -262,6 +262,22 @@ staleAfterMs, measureIntervalMs}`: the source's last measurement (`successAt`, i
 its numbers hold, and its shared measuring preference. `stale` is the hub's to say, and
 it says so: a card sent when its numbers get too old.
 
+A card may include `usageWork`, an array of `{windowId,from,to,growth,quality,expiresAt}`.
+It describes the latest qualifying quota-growth interval per window: at least one
+reported percentage point between adjacent valid observations no more than 30 minutes
+apart in the same reset period. Any resolved source work overlapping that interval
+vetoes the finding, including held work outside this board. `quality` is `confirmed`
+only when every currently connected holder device completely witnessed the interval in
+its configured client scope; otherwise it is `partial`. It identifies no other request
+or actor. Wallet money and subscription funds do not qualify. Reported caps use their
+own historical allowance, generation and exclusive observation bounds.
+
+Findings end at the next known reset or after 24 hours, whichever comes first; an early
+reset or generation change removes them. Later ordinary work does not erase a past
+finding, while reattribution can remove it. The card event and shared deadline machinery
+update this status. All windows share one warning tray mark in dashboard and compact;
+its details distinguish incomplete data from fully witnessed absence of observed work.
+
 A source's `sessions` are the agents running on it, on the machines of its people on the
 board, each `{device, origin, project, folder, startedAt, lastWorkedAt, working,
 workedMs}`: its machine (`{id, name}`), where it runs, its project as its person named it

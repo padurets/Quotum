@@ -393,8 +393,34 @@ Authorization: Bearer <token>
 
 Each request carries every session of the machine, replacing the ones before; an empty
 list says none runs. The reference agent sends one when the list or a session's state
-changes, and at least every two minutes while any runs. The hub keeps a machine's list
+changes, and at least every two minutes when session reporting is enabled and its
+configured tracking scope is nonempty, including an empty list of running clients. The hub keeps a machine's list
 of running agents for five minutes after its last request, then forgets it.
+
+Optional `tracking` metadata is `{version:1, clients:["codex","opencode"],
+routeDisabled:["codex"], complete:true}`. `clients` is the exact enabled tracking
+scope, independent of enabled measurement collectors and installed-client discovery.
+Both lists contain distinct valid client IDs, at most 64 each; `routeDisabled`
+contains only known configured clients with explicit `route=false`, including clients
+whose tracking is disabled. A valid version-1 snapshot replaces these policies.
+Absent or unsupported metadata preserves the last route policy but establishes no
+complete observation. Malformed metadata is ignored without rejecting an otherwise
+valid report; dropped or capped client entries cannot certify completeness.
+
+`complete` attests successful capture and delivery since the last accepted checkpoint,
+with known working states and no lost or truncated sessions. Startup, resume, scope or
+clock changes, unavailable process observations and failed deliveries latch a continuity
+fault. While latched, every report is incomplete until the hub positively acknowledges
+an incomplete report; recovery alone cannot clear it. The next successful observations
+can then be complete. The first CPU look still sends no working list.
+
+The hub proves only completed half-open intervals between two consecutive complete
+reports with the same nonempty scope, route policy, runtime epoch and device/holding
+topology, separated by at most 200 seconds. Silence never extends coverage. A hub restart
+cannot bridge an unknown gap; previously finished intervals retain their evidence.
+Coverage is retained with the samples, coalescing adjacent intervals. Device connection,
+revocation or holding changes break the topology witness. No coverage changes work credit,
+producer identity or financial observations.
 
 | Field | Meaning |
 |---|---|
@@ -554,6 +580,11 @@ bindings. Revocation removes that access, and re-enabling begins a new history p
 
 Dropped hub-provider elements are not stored and grant no visibility. Only the hub
 can measure a source of such a provider, including DeepSeek balances; the agent contract sends no provider secret or declared account identity.
+
+Tracking metadata adds only configured client IDs, route opt-outs and a completeness
+boolean. It sends no process list, paths, configuration values, environment or credentials.
+The raw scope and route-policy snapshots remain private. Shared boards can receive a
+source-level quota-growth finding and its quality, with no holder or device identity.
 
 What never leaves the machine: provider tokens, cookies, account ids and emails,
 prompts, file contents, file paths.

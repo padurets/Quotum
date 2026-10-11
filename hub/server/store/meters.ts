@@ -1,5 +1,5 @@
 import type {DatabaseSync} from 'node:sqlite';
-import {balanceDescriptor,monetaryOf,sourceCounterOf} from '../domain/providers.js';
+import {balanceDescriptor,monetaryOf,sourceCounterOf,quotaMeter,providerOf} from '../domain/providers.js';
 import {amount} from '../domain/amount.js';
 import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading, type QuotaObservation, QUOTA_IDS} from '../domain/meters.js';
 import type {SourceState} from '../domain/quota.js';
@@ -34,6 +34,8 @@ export class MeterStore {
       ids.add(meter.id);
       const old = current.get(meter.id);
       if (old && old.at >= meter.at) continue;
+      if(quotaMeter(providerOf(previous.provider),meter.id)&&meter.kind==='cap')
+        this.db.prepare('INSERT INTO quota_anchors VALUES (?,?,?,?)').run(source,meter.id,meter.at,JSON.stringify({...meter,generation:measurement.quota?.generation??null}));
       const last = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source, meter.id) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null;hold_until:number|null} | undefined;
       const admission = previous.provider === 'codex' && meter.id === 'balance:credits' && !!this.db.prepare('SELECT 1 FROM shares WHERE source_id=? AND budget_anchor_at IS NULL AND budget_since<=? LIMIT 1').get(source, meter.at);
       const changed = !old || !sameMeter(old, meter) || admission;

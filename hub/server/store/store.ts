@@ -25,6 +25,8 @@ import {exactDecimal} from '../domain/amount.js';
 import {CurrencyStore} from './currencies.js';
 import {importLegacyCurrencies} from './legacyCurrencies.js';
 import {LinkStore} from './links.js';
+import {CoverageStore} from './coverage.js';
+import {UsageWithoutWork} from '../usageWork.js';
 import {resolveLink, splitLinks, type AttributionInput, type Attribution} from '../domain/links.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
@@ -75,6 +77,10 @@ export class Store {
   readonly meters: MeterStore;
   readonly currencies:CurrencyStore;
   readonly links: LinkStore;
+  readonly coverage: CoverageStore;
+  readonly usageWork: UsageWithoutWork;
+  private workGeneration=0;
+  workRevision():number {return this.workGeneration;}
   private monetaryRecords=new Set<(source:string,state:SourceState)=>void>();
   private currencyChanges=new Set<(owner:string)=>void>();
   /** When this database was made. */
@@ -101,6 +107,8 @@ export class Store {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
     this.links = new LinkStore(this.db);
+    this.coverage = new CoverageStore(this.db);
+    this.usageWork = new UsageWithoutWork(this);
     this.links.onChange = owner => {
       this.attributionChanged(owner);
       const sources = this.held(owner).map(s => s.id);
@@ -890,6 +898,7 @@ export class Store {
       throw error;
     }
     for (const [source, start] of credited) tell(this.observer, o => {o.history(source, start, ['quota']); if(this.counterSource(source))o.history(source, start, ['budget'], {work:true});});
+    if(credited.size||privateCredit.size||changedEvidence)afterCommit(()=>{this.workGeneration++;});
     for (const [user, start] of privateCredit) tell(this.observer, o => o.clientHistory?.(user, start));
     if (changedEvidence && owner) {this.attributionChanged(owner); tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); const sources = [...contexts(owner, device, '').held.keys()]; o.touchSources(sources); for (const source of sources) {o.history(source, 0, ['quota']); if(this.counterSource(source))o.history(source, 0, ['budget'], {work:true});}});}
   }
@@ -1022,6 +1031,8 @@ export class Store {
     // Each successful deletion counts immediately: a later statement may fail.
     if (this.db.prepare('DELETE FROM samples WHERE at < ?').run(cutoff).changes) this.pruned++;
     if (this.meters.prune(cutoff)) this.pruned++;
+    this.coverage.prune(cutoff);
+    this.db.prepare('DELETE FROM quota_anchors WHERE at<?').run(cutoff);
     if (this.db.prepare('DELETE FROM agent_work WHERE to_at < ?').run(cutoff).changes) this.pruned++;
     // A session without work is not needed; one still running is made again when credited.
     this.db.prepare('DELETE FROM agent_sessions WHERE NOT EXISTS (SELECT 1 FROM agent_work WHERE session_id = agent_sessions.id)').run();

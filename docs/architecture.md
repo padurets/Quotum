@@ -231,6 +231,26 @@ shared or unproven invocations and other operating systems have no project autho
 Version transport bounds bytes before line parsing and waits for both EOF and successful
 exit within five seconds. It never retains raw output or reads client secrets.
 
+### Tracking coverage and quota growth
+
+Session reports carry optional configured tracking scope and delivery completeness.
+The agent repeats empty reports every two minutes while that scope is enabled, and
+requires a positively acknowledged incomplete report after any capture or delivery fault.
+The hub stores completed intervals separately from positive work. Two compatible complete
+endpoints within 200 seconds prove an interval; silence, restarts and topology changes
+cannot repair a gap. Finished intervals survive restarts and are coalesced and retained
+with measurement history. Installed-client inventory is never coverage evidence.
+
+A source-level helper compares adjacent native quota observations over the last 24 hours.
+Growth of at least one percentage point within 30 minutes and the same valid reset period
+can produce one tray finding per window. Reported caps retain actual native endpoints
+before sparse deduplication, with their own allowance and generation. Any overlapping
+resolved work from current holders vetoes the finding, including work outside the reader's
+board. Complete coverage of all current holder devices makes it confirmed; other cases
+explicitly report incomplete work data. This describes configured observation only.
+Findings contain no actor guesses, private scope, holder identity or money attribution.
+They expire at reset or 24 hours and share existing event deadlines and warning surfaces.
+
 ## Scheduling
 
 Clients are expensive to start, so the schedule is about starting as few as possible,

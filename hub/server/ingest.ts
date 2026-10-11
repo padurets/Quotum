@@ -325,7 +325,9 @@ export class Ingest {
 
       const before = this.live.sourcesOf(device.id, now).filter(source => this.store.holds(device.userId, source));
       this.live.report(device.id, device.userId, sessions, now);
-      tell(this.observer, o => o.touchSources([...new Set([...before, ...this.live.sourcesOf(device.id, now)])]));
+      const tracking=this.store.coverage.record(device.id,device.userId,report.tracking,now);
+      if(tracking.policy)afterCommit(()=>this.store.links.onChange?.(device.userId));
+      tell(this.observer, o => o.touchSources([...new Set([...before, ...this.live.sourcesOf(device.id, now),...(tracking.coverage?this.store.held(device.userId).map(s=>s.id):[])])]));
       return {accepted: sessions.length};
     });
   }

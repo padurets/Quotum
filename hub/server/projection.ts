@@ -19,6 +19,7 @@ import type {ResetProvider, ResetStatus} from './domain/resets.js';
 import type {View} from './domain/view.js';
 import type {Board, Directory} from './store/directory.js';
 import type {Announcement, BoardSource, Store} from './store/store.js';
+import type {UsageWork} from './domain/usageWork.js';
 
 /**
  * What a board shows, as parts that change apart (spec/dashboard-v1.md): the board itself
@@ -35,7 +36,7 @@ import type {Announcement, BoardSource, Store} from './store/store.js';
 export type Timed<T> = {value: T; changesAt: number | null};
 
 /** A source as a card shows it: its state, whose it is on this board, and whether its numbers are too old. */
-export type Card = SourceState & {budget?:BudgetAccess;owners: string[]; stale: boolean; measureIntervalMs: MeasureIntervalMs;spending?:CalendarSpend|null;keysCount?:number;currencyUnavailable?:boolean;identityOrigin?:'supplier'|'declared'};
+export type Card = SourceState & {usageWork?:UsageWork[];budget?:BudgetAccess;owners: string[]; stale: boolean; measureIntervalMs: MeasureIntervalMs;spending?:CalendarSpend|null;keysCount?:number;currencyUnavailable?:boolean;identityOrigin?:'supplier'|'declared'};
 
 /** When a source is measured next and why, while its holder follows the hub's pace. */
 export type Cadence = {by?:'hub';next: number; why: Why} | null;
@@ -129,9 +130,11 @@ export class Projection {
     const byHub=providerOf(source.provider)?.measuredBy==='hub';
     const refresh = byHub?this.hub.hubSources?.refresh(source.id,now)??{value:{by:'hub' as const,unavailable:'no_access' as const,availableAt:null,retryAt:null,request:null},changesAt:null}:ingest.refresh(source.id, now);
     const cadence = byHub?this.hub.hubSources?.cadence(source.id)??{value:null,changesAt:null}:ingest.nextMeasurement(source.id, source.account, now);
+    const usageWork=store.usageWork.of(source.id,state,now);
+    if(usageWork.value.length)card.usageWork=usageWork.value;
     return {
       value: {card, sessions: ingest.live.of(source.id, people, now), cadence: cadence.value, refresh: refresh.value},
-      changesAt: earliest(state.creditBalance&&now<=state.creditBalance.at+state.creditBalance.staleAfterMs?state.creditBalance.at+state.creditBalance.staleAfterMs+1:null,state.balanceStatus&&now<=state.balanceStatus.at+state.balanceStatus.staleAfterMs?state.balanceStatus.at+state.balanceStatus.staleAfterMs+1:null,...state.windows.map(w => w.resetAt !== null && w.resetAt > now ? w.resetAt : null),...(card.meters??[]).map(m=>m.stale?null:m.at+m.staleAfterMs+1),...(card.meters??[]).map(m=>m.resetAt!==null&&m.resetAt>now?m.resetAt:null),card.spending?utcPeriods(now).day+86_400_000:null,this.hub.credentials?.nextExpiry(source.id,now)??null, stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt, refresh.changesAt),
+      changesAt: earliest(usageWork.changesAt,state.creditBalance&&now<=state.creditBalance.at+state.creditBalance.staleAfterMs?state.creditBalance.at+state.creditBalance.staleAfterMs+1:null,state.balanceStatus&&now<=state.balanceStatus.at+state.balanceStatus.staleAfterMs?state.balanceStatus.at+state.balanceStatus.staleAfterMs+1:null,...state.windows.map(w => w.resetAt !== null && w.resetAt > now ? w.resetAt : null),...(card.meters??[]).map(m=>m.stale?null:m.at+m.staleAfterMs+1),...(card.meters??[]).map(m=>m.resetAt!==null&&m.resetAt>now?m.resetAt:null),card.spending?utcPeriods(now).day+86_400_000:null,this.hub.credentials?.nextExpiry(source.id,now)??null, stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt, refresh.changesAt),
     };
   }
 

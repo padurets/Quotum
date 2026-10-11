@@ -369,7 +369,7 @@ fn linux_process_metadata_brackets_a_real_stand_in_role_read() {
         crate::process::detach(&mut command);
         let stand = StandIn { child: command.spawn().unwrap(), dir };
         let pid = stand.child.id();
-        let listed = sys::processes().into_iter().find(|p| p.pid == pid).unwrap();
+        let listed = sys::capture().0.into_iter().find(|p| p.pid == pid).unwrap();
         assert_eq!(listed.sid, Some(pid), "the OS session comes from stat, not argv");
         assert!(listed.native_birth.is_some());
         let before = sys::verified(&listed).unwrap();
@@ -682,14 +682,14 @@ fn linux_unreadable_executable_is_not_a_replaced_process() {
     output.read_line(&mut line).unwrap();
     assert_eq!(line, "ready\n");
     let pid = stand.child.id();
-    let listed = sys::processes().into_iter().find(|p| p.pid == pid).unwrap();
+    let listed = sys::capture().0.into_iter().find(|p| p.pid == pid).unwrap();
     assert_eq!(listed.role, Role::Runtime, "the production Codex-specific reader sees this stand-in");
     assert!(listed.image.is_some());
     stand.child.stdin.as_mut().unwrap().write_all(b"d\n").unwrap();
     line.clear();
     output.read_line(&mut line).unwrap();
     assert_eq!(line, "denied\n");
-    let denied = sys::processes().into_iter().find(|p| p.pid == pid).unwrap();
+    let denied = sys::capture().0.into_iter().find(|p| p.pid == pid).unwrap();
     assert!(denied.native_birth == listed.native_birth, "denied metadata does not change birth");
     assert_eq!(denied.role, Role::Runtime);
     assert_eq!(denied.image, None);
@@ -699,7 +699,7 @@ fn linux_unreadable_executable_is_not_a_replaced_process() {
     line.clear();
     output.read_line(&mut line).unwrap();
     assert_eq!(line, "restored\n");
-    let restored = sys::processes().into_iter().find(|p| p.pid == pid).unwrap();
+    let restored = sys::capture().0.into_iter().find(|p| p.pid == pid).unwrap();
     assert!(restored.image == listed.image && restored.native_birth == listed.native_birth);
 }
 

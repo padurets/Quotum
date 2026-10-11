@@ -395,6 +395,47 @@ export const STEPS = [
     DELETE FROM meter_pair_starts WHERE source_id=OLD.id;
   END;
   `,
+  // Coverage witnesses prove completed observations only within the current topology.
+  `
+  CREATE TABLE device_tracking (device_id TEXT PRIMARY KEY,payload TEXT NOT NULL,last_at INTEGER NOT NULL,
+    epoch TEXT NOT NULL,topology_version INTEGER NOT NULL);
+  CREATE TABLE work_coverage (device_id TEXT NOT NULL,from_at INTEGER NOT NULL,to_at INTEGER NOT NULL,
+    scope_digest TEXT NOT NULL,epoch TEXT NOT NULL,topology_version INTEGER NOT NULL,
+    PRIMARY KEY(device_id,from_at)) WITHOUT ROWID;
+  CREATE INDEX work_coverage_by_end ON work_coverage(to_at,device_id);
+  CREATE TABLE owner_coverage_versions (user_id TEXT PRIMARY KEY,version INTEGER NOT NULL) WITHOUT ROWID;
+  CREATE TABLE quota_anchors (source_id TEXT NOT NULL,window_id TEXT NOT NULL,at INTEGER NOT NULL,payload TEXT NOT NULL,
+    PRIMARY KEY(source_id,window_id,at)) WITHOUT ROWID;
+  CREATE INDEX quota_anchors_by_time ON quota_anchors(at);
+  CREATE TRIGGER quota_anchors_source_deleted AFTER DELETE ON sources BEGIN
+    DELETE FROM quota_anchors WHERE source_id=OLD.id;
+  END;
+  INSERT INTO owner_coverage_versions SELECT id,1 FROM users;
+  CREATE TRIGGER coverage_device_added AFTER INSERT ON devices BEGIN
+    INSERT INTO owner_coverage_versions VALUES (NEW.user_id,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1;
+  END;
+  CREATE TRIGGER coverage_device_removed AFTER DELETE ON devices BEGIN
+    INSERT INTO owner_coverage_versions VALUES (OLD.user_id,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1;
+  END;
+  CREATE TRIGGER coverage_device_status AFTER UPDATE OF revoked_at ON devices WHEN OLD.revoked_at IS NOT NEW.revoked_at BEGIN
+    INSERT INTO owner_coverage_versions VALUES (NEW.user_id,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1;
+  END;
+  CREATE TRIGGER coverage_holding_added AFTER INSERT ON holders BEGIN
+    INSERT INTO owner_coverage_versions VALUES (NEW.user_id,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1;
+  END;
+  CREATE TRIGGER coverage_holding_removed AFTER DELETE ON holders BEGIN
+    INSERT INTO owner_coverage_versions VALUES (OLD.user_id,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1;
+  END;
+  CREATE TRIGGER coverage_holding_changed AFTER UPDATE ON holders BEGIN
+    INSERT INTO owner_coverage_versions VALUES (NEW.user_id,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1;
+  END;
+  CREATE TRIGGER coverage_device_deleted AFTER DELETE ON devices BEGIN
+    DELETE FROM device_tracking WHERE device_id=OLD.id;
+    DELETE FROM work_coverage WHERE device_id=OLD.id;
+    DELETE FROM device_tracking_policy WHERE device_id=OLD.id;
+  END;
+  `,
+
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

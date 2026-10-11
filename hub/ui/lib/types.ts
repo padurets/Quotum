@@ -30,6 +30,7 @@ export type FreeResets = {available: number; expiring?: Expiring[]};
  * the board whose devices measure it, and whether its numbers are too old, as the hub says.
  */
 export type Card = {
+  usageWork?:import('../../server/domain/usageWork').UsageWork[];
   id: string;
   provider: string;
   plan: string;
