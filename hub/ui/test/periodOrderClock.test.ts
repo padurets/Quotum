@@ -151,6 +151,22 @@ function activityOrder(period:any,column:'active'|'concurrency'):Order{
   };
 }
 
+test('idle historical work can reorder equal activity labels, while name order leaves the parent asleep',async()=>{
+  const h=await harness({anchor:0,knownFrom:0,refs:[ref('a','A'),ref('b','B')],spans:[[0,0,160_000],[1,300_000,455_000]]});
+  const order=(column:'name'|'agenthours'):Order=>rows=>{
+    const groups=sortedActivity(h.period.activitySummaryAt('project')?.by.project??[],{column,descending:column==='agenthours'},g=>g.name??g.key,'en','project');
+    return {key:groups.map(g=>g.key),...(column==='agenthours'?{worked:[groups.map(g=>rows.filter(row=>JSON.stringify(row.project)===g.key).map(row=>row.ref))]}:{})};
+  };
+  const numeric=panel(h.period,order('agenthours'),'project'),named=panel(h.period,order('name'),'project'),baseline=named.renders();
+  const keys=(consumer:ReturnType<typeof panel>)=>JSON.parse(JSON.stringify(consumer.render().order));
+  const labels=()=>h.period.activitySummaryAt('project').by.project.map((g:any)=>workHours(g.agentMs));
+  assert.deepEqual(keys(numeric),['"A"','"B"']);assert.deepEqual(labels(),['3m','3m']);
+  h.advance(H+5250);
+  assert.deepEqual(keys(numeric),['"B"','"A"']);assert.deepEqual(labels(),['3m','3m'],'exact ordering changes before the rounded labels');
+  assert.deepEqual(keys(named),['"A"','"B"']);assert.equal(named.renders(),baseline,'the idle benchmark uses name order without masking table renders');
+  assert.equal(h.reads(),1);numeric.close();named.close();h.close();
+});
+
 test('activity table union sorting crosses on the real common clock rather than additive session time',async()=>{
   const h=await harness({anchor:0,knownFrom:0,refs:[ref('a1','A'),ref('a2','A'),ref('b','B')],spans:[[0,0,160_000],[1,0,160_000],[2,300_000,455_000]]});
   const order=activityOrder(h.period,'active'),consumer=panel(h.period,order,'project'),passive=panel(h.period,()=>null,'project');

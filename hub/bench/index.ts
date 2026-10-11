@@ -176,7 +176,12 @@ async function main() {
     await cdp.send('Emulation.setFocusEmulationEnabled', {enabled: true});
     const split = ana.cookie.indexOf('=');
     await cdp.send('Network.setCookie', {name: ana.cookie.slice(0, split), value: ana.cookie.slice(split + 1), url: address.base, httpOnly: true, sameSite: 'Lax'});
-    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: `localStorage.setItem('quotum.locale','en');\n${probeScript()}`});
+    // Historical work leaves the rolling window even with every agent idle.
+    // Name order keeps this phase still; clock-driven numeric crossings have
+    // their own subscribed-selector tests, including equal displayed labels.
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: `localStorage.setItem('quotum.locale','en');
+      localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),activityTableSort:{column:'name',descending:false}}));
+      ${probeScript()}`});
     await cdp.send('Page.navigate', {url: `${address.base}/`});
 
     const shownBy = Date.now() + SHOWN_MS;
