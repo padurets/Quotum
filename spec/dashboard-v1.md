@@ -232,7 +232,7 @@ change as it was.
 | `event` | `data` | When |
 |---|---|---|
 | `hello` | `{epoch, now, client, heartbeatMs}` | First. `epoch`: when this start of the hub began, base 36. `now`: the hub's clock. `client`: the path of the page's entry script the hub serves (`/assets/index-<hash>.js`), null without a build. `heartbeatMs`: 25000. |
-| `snapshot` | `{providers, sourceAccess, board, view, viewRevision, connectionsRevision, historyStart, sources, sessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
+| `snapshot` | `{providers, sourceAccess, board, view, viewRevision, connectionsRevision, historyStart, workAuthority, sources, sessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
 | `board` | `{board: {id, name, personal}}` | The board was renamed. |
 | `view` | `{view, revision}` | The board's view was saved. The monotonic revision belongs to this board. |
 | `connections` | `{revision}` | Only this reader's connection structure or access health changed; no private IDs or labels. Successful measurements and unchanged device heartbeats do not increment it. |
@@ -271,6 +271,14 @@ In a `snapshot`, `sources` are the cards of the board's sources in its order; `s
 `{id, name, personal}`; the reader's role is in `boards`, each `{id, name, personal,
 role}`, as it is theirs alone. `resets` is what `GET /api/resets` answers. `historyStart`
 is when the board's history begins as of the snapshot; `GET /api/history` tells it later.
+`workAuthority` is the existing opaque identity of the board's permitted work context:
+its sources, holders and sharing cutoffs, project/device names and personal holdings.
+Every snapshot producer includes it: overview, streams, new or lost poll leases and
+financial replacements. A new stream starts with a snapshot, without replaying missed
+history events. Changed or missing legacy authority retires retained work, quota/activity
+accounting and prepared drawings before a replacement completes, including on failure.
+An unchanged identity preserves the last complete presentation while the new baseline
+waits or fails. Neither this identity nor a retained cursor grants access to a read.
 
 `providers` is the public code-owned catalogue: each entry has `id`, `name`, `color`,
 `logoAsset`, `order`, `measuredBy` (`client` or `hub`), `meterKinds`, `resets`, and either
@@ -290,7 +298,7 @@ it says so: a card sent when its numbers get too old.
 
 A source's `sessions` are the agents running on it, on the machines of its people on the
 board, each `{device, origin, project, folder, startedAt, lastWorkedAt, working,
-workedMs}`: its machine (`{id, name}`), where it runs, its project as its person named it
+workedMs, presenceKey?, currentPresence?}`: its machine (`{id, name}`), where it runs, its project as its person named it
 and its folder where that is another, when it started and when an idle one last worked
 (both on the hub's clock), whether it works, and how long it has worked: the hub's
 credited work of an identified session on this current subscription across its contexts
@@ -299,7 +307,9 @@ work is kept. `workedMs` is a finite nonnegative number, including known zero, o
 when reliable session identity is unavailable. Older hubs may omit it; the page treats
 missing, null or invalid credit as unknown. A group with any unknown counter has an
 unknown total, and unknown totals sort last in either direction. A list that credits work changes
-`workedMs`, so `sessions` comes with each list while an agent works.
+`workedMs`, so `sessions` comes with each list while an agent works. Stable sessions
+also renew confirmation deadlines under their opaque presence binding as described in
+the session-evidence contract below; an idle confirmation causes no history read.
 
 A source's `forecast` is by the id of each of its weekly windows (the page foresees a
 five-hour window itself, by what it spent since it began): where the recent pace of that
@@ -454,7 +464,11 @@ historical cap allowances, availability bounds and recorded currency provenance.
 
 Values are measurement-only projections: source id/provider, retained native windows,
 meters, keys and the observed `creditBalance` status when authorized. Native windows include `observedAt`, `validUntil` and `stale`.
-Membership is the last nonempty retained batch strictly before the right edge. A meter
+Membership is the last nonempty retained batch strictly before the right edge.
+For a fixed interval, freshness is evaluated at the requested exclusive right edge,
+even when it is after the actual evidence cut. Observations are still admitted only
+before that cut. A retained value can be stale at the selected edge; the projection
+never invents future readings or extends evidence coverage. A meter
 keeps exact decimal integer amounts, historical allowance, unit and conversion evidence.
 An explicitly removed key cap remains absent after its own observation time; later
 partial inventories or malformed limits do not restore an older scale. A subsequent
@@ -491,7 +505,7 @@ Session evidence is a complete temporal index:
   refs: {
     ref: string; source: string | null; clientId: string; device: {id: string; name: string};
     origin: 'terminal' | 'editor' | 'app'; project: string | null; folder: string | null;
-    startedAt: number;
+    startedAt: number; presenceKey?: string;
     currentPresence?: {working: boolean; through: number; workingThrough: number; startedAt: number};
   }[];
   spans: [refIndex: number, fromOffset: number, toOffset: number][];
@@ -529,7 +543,18 @@ On the owner's personal board, retained unknown or unheld work has a null `sourc
 and keeps its `clientId`; shared boards omit these contexts. A held hidden source
 remains excluded. Presence enrichment matches the device, client, stable producer
 and complete retained context, including its original funding, without exposing that
-funding or producer identifier. Private `ownSince` cutoffs invalidate session deltas
+funding or producer identifier. Its optional `presenceKey` is a keyed opaque binding
+from the live session service, shared by authorized stream sessions and period refs.
+It covers the device, client, stable producer and original source/context, remains
+unchanged by display renaming, and changes when the hub restarts. It grants no access.
+Legacy contexts without reliable stable identity omit it and cannot borrow a presence
+from an apparently similar session. Stream `sessions` and `ownSessions` attach the same
+optional `currentPresence` deadlines (`through` and `workingThrough`) to that binding.
+The browser overlays the latest stream confirmation on retained work rows at publication:
+an empty current list removes presence without removing credited work or requesting
+history. New confirmations renew deadlines locally; an older analytical reply cannot
+restore an already removed confirmation. Panel, source disclosure and open detail views
+use the same overlay. Private `ownSince` cutoffs invalidate session deltas
 and quota activity independently of source measurements and financial evidence.
 Fixed selections instead return `fixed` with empty `spans` and no `packed` ledger.
 Every positive-work context remains in the summary. Interior activity bars reuse
@@ -592,7 +617,8 @@ The `history` event's optional `changes` entries are
 `{source, scope:'quota'|'budget', since, workSince?}`. `workSince` identifies actual
 credited-work invalidation; the legacy `sources` and earliest `since` remain present.
 When the board's permitted work or its names change, its quota entries carry
-`since:0, workSince:0`. This retires the previous session index and quota/activity
+`since:0, workSince:0`. History events also carry the current `workAuthority`, so a
+subsequent snapshot can confirm continuity with the newly accepted baseline. This retires the previous session index and quota/activity
 presentation immediately, including prepared drawings and gesture legends, and asks
 for a fresh session baseline. Older quota zero-cutoff events without `workSince`, or
 without `changes`, have the same meaning. A personal `ownSince:0` also retires private
@@ -1270,6 +1296,9 @@ are absent from every shared projection. Credential details remain owner-only. T
 Period and session projections expose only authorized board measurements and clipped
 credited work. Opaque refs do not expose producer session ids or database row ids.
 Current context is joined server-side only after an authorized stable identity match.
+`workAuthority` is an opaque continuity fingerprint, not its private inputs. A
+`presenceKey` is a keyed, hub-lifetime binding, not a producer identifier or permission.
+Neither field exposes raw producer IDs, original private funding or owner IDs.
 Private key labels are absent for other owners; raw meter context/state, owner ids,
 credentials and private currency registries are never included. Currency results retain
 only the selected measurement's permitted valuation provenance. Cursors confer no
@@ -1480,7 +1509,8 @@ for credits, and quota analytics remain percentage-based.
 
 Only the owner's personal snapshot has `ownSessions`, an array of running sessions
 without a currently held source. Each session includes `clientId`, machine ID/name,
-origin, project/folder, start, last work, working and credited `workedMs`; it contains no
+origin, project/folder, start, last work, working, credited `workedMs` and optional opaque
+presence binding/deadlines; it contains no
 producer ID, raw source attribution or provenance. Shared snapshots omit this field.
 The private `ownSessions` event is `{sessions: [...]}` and replaces this slice only.
 Normal source `sessions` also carry `clientId` and retain their visibility rules.

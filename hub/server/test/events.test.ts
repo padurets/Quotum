@@ -400,7 +400,7 @@ test("the board's own events and each reader's own go apart: its owner and a mem
     ['view', 'card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'history'],
   );
   assert.deepEqual(ofAlice.at(-2)!.data, {sources: [source]});
-  assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source], since: 0, changes: [{source,scope:'quota',since:0,workSince:0}]});
+  assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source], since: 0, workAuthority: h.store.workKey(team,h.store.shown(team,h.directory.view(team).hidden)), changes: [{source,scope:'quota',since:0,workSince:0}]});
   assert.deepEqual(
     ofBob.map(e => e.type),
     ['view', 'card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'history'],
@@ -1160,17 +1160,17 @@ test('all of a board’s history is news when whose agents’ work it shows, or 
   const laptop = (await h.call('GET', '/api/devices', {as: 'alice'})).body[0].id;
   const s = await reading(h, 'alice', board);
   t.after(s.close);
-  const all = {sources: [source], since: 0, ownSince: 0, changes: [{source,scope:'quota',since:0,workSince:0}]};
+  const all = () => ({sources: [source], since: 0, ownSince: 0, workAuthority: h.store.workKey(board,h.store.shown(board,h.directory.view(board).hidden)), changes: [{source,scope:'quota',since:0,workSince:0}]});
   const history = async () => (await s.within()).filter(e => e.type === 'history').map(e => e.data);
 
   await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: {}}, hidden: [`source:${source}`]}});
-  assert.deepEqual(await history(), [all], 'a card hidden: its work is off the board');
+  assert.deepEqual(await history(), [all()], 'a card hidden: its work is off the board');
   await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: {}}}});
-  assert.deepEqual(await history(), [all], 'and shown again');
+  assert.deepEqual(await history(), [all()], 'and shown again');
   await h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}});
-  assert.deepEqual(await history(), [all], 'a project renamed');
+  assert.deepEqual(await history(), [all()], 'a project renamed');
   await h.call('POST', `/api/devices/${laptop}`, {as: 'alice', body: {name: 'Book'}});
-  assert.deepEqual(await history(), [all], 'a machine renamed');
+  assert.deepEqual(await history(), [all()], 'a machine renamed');
   await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}});
   assert.deepEqual(await history(), [], 'the widgets moved: the work it shows is the same');
 });

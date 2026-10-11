@@ -51,7 +51,7 @@ export function harness(activity = false) {
   const render = () => {cursor = 0; return context.read(loader, true);};
   const event = (event: HubEvent) => page.dispatch({type: 'hub', event});
   const snapshot = (sources = [card('removed'), card('kept')]): Snapshot => ({board: {id: 'b', name: '', personal: false},
-    view: EMPTY_VIEW, historyStart: 0, sources, sessions: {}, cadence: {}, refresh: {}, forecast: {}, mine: [], boards: [],
+    view: EMPTY_VIEW, historyStart: 0, workAuthority: 'work-a', sources, sessions: {}, cadence: {}, refresh: {}, forecast: {}, mine: [], boards: [],
     resets: {resets: {}, trackers: [], past: {}}});
   const pending = () => reads.filter(read => !read.settled && !read.signal?.aborted);
   async function answerCells() {

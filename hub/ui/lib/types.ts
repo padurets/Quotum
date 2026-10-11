@@ -63,9 +63,10 @@ export type CadenceWhy = 'low' | 'inUse' | 'changed' | 'idle' | 'reset' | 'fixed
 
 /** A coding agent running on a machine, spending the subscription of its card. */
 export type LiveSession = {
-  /** Present only on period rows; current stream sessions keep their released shape. */
+  /** Present only on retained period rows. */
   ref?: string;
-  currentPresence?: {working:boolean;through:number;startedAt:number};
+  presenceKey?: string;
+  currentPresence?: {working:boolean;through:number;workingThrough?:number;startedAt:number};
   clientId?: string;
   device: {id: string; name: string};
   /** A terminal; an editor or the provider's app, which run one client per window. */

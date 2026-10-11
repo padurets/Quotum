@@ -56,6 +56,7 @@ class BoardPeriod {
   private liveEvidence=false;
   private valuesNeeded=false;
   private authority='';
+  private workAuthority:string|undefined;
   private readonly valueCache=new Map<string,{values:Map<string,Reading<PeriodValues>>;bytes:number;at:number}>();
   private readonly values=new Map<string,Reading<PeriodValues>>();
   private readonly valueListeners=new Map<string,Set<()=>void>>();
@@ -73,7 +74,9 @@ class BoardPeriod {
   private rowsBySource=new Map<string,WorkedSession[]>();
   private listeners=new Set<()=>void>();
   private sourceListeners=new Map<string,Set<()=>void>>();
-  private workState={...this.work,rows:this.workRows};
+  /** Stream confirmations refresh props; clock-only presence labels own their deadlines. */
+  private presenceRevision=0;
+  private workState={...this.work,rows:this.workRows,presenceRevision:this.presenceRevision};
   private readonly watch=clock.watch();
   private bytes=0;
   private cacheKey='';
@@ -189,7 +192,7 @@ class BoardPeriod {
     return {board:board.id,generation:this.generation,revision:this.revision,proofEpoch:this.proofEpoch,request:{version:1,selection:this.selection,evaluatedAt:hubNow(),...queries,...(pending&&this.valuesNeeded&&this.selection.mode==='range'&&this.sourceIds.length?{values:this.sourceIds}:{}),...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{})}};
   }
   private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
-  private publishWork() {this.workState={...this.work,rows:this.workRows};for(const listener of this.listeners)listener();}
+  private publishWork() {this.workState={...this.work,rows:this.workRows,presenceRevision:this.presenceRevision};for(const listener of this.listeners)listener();}
   private retireWork() {
     this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.workProofEpoch=-1;
     this.tapes.delete('quota');delete this.projectionErrors.quota;this.transport.forgetEvidence('quota');
@@ -211,6 +214,9 @@ class BoardPeriod {
     const board=state.board;
     if(!board||event?.type==='board-close'){this.identity='';this.generation++;this.clear();return;}
     if(!this.active)return;
+    const snapshot=event?.type==='hub'&&event.event.type==='snapshot';
+    const changedWork=snapshot&&(!board.workAuthority||board.workAuthority!==this.workAuthority);
+    if(snapshot||!this.identity||event?.type==='hub'&&event.event.type==='history'&&event.event.data.workAuthority)this.workAuthority=board.workAuthority;
     const selected=timeRange(),selection:PeriodSelection=selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(prefs().range).ms};
     const sources=board.lineup.filter(id=>!board.view.hidden.includes('source:'+id));
     const wantsWork=sources.length>0||[AGENTS,ACTIVITY].some(id=>widgetVisible(board.view,id,board.lineup.length));
@@ -223,6 +229,7 @@ class BoardPeriod {
     const cacheKey=JSON.stringify([identity,scopeKeys]);
     if(cacheKey!==this.cacheKey){this.retainCurrent();this.cacheKey=cacheKey;}
     this.selection=selection;this.sourceIds=sources;this.wantsWork=wantsWork;this.scopeKeys=scopeKeys;
+    if(changedWork)this.retireWork();
     if(identity!==this.identity) {
       const oldBoard=this.identity?JSON.parse(this.identity)[0]:null;
       this.identity=identity;this.generation++;this.revision++;
@@ -274,7 +281,10 @@ class BoardPeriod {
       if(hub.type==='hello'||hub.type==='snapshot'||hub.type==='mine'||hub.type==='lineup') {
         this.generation++;this.revision++;this.cursor=undefined;this.workNeeded=wantsWork;this.valuesNeeded=selection.mode==='range';
         if(hub.type==='mine'||hub.type==='lineup')this.clear();
+        if(hub.type==='snapshot')this.tick(true,true);
         this.transport.change();
+      }else if(hub.type==='sessions'||hub.type==='ownSessions') {
+        this.tick(true,true);
       }else if(hub.type==='history') {
         const included=hub.data.sources.some(id=>sources.includes(id));
         if(included){this.proofEpoch++;this.valueCache.clear();}
@@ -400,13 +410,31 @@ class BoardPeriod {
   private measureBytes(){
     this.bytes=JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
   }
-  private tick(fromClock=true) {
+  /** The current stream is authoritative even while an older analytical reply is being prepared. */
+  private present(rows:WorkedSession[],now:number) {
+    const board=page.get().board,live=new Map<string,{source:string|null;device:string;presence:NonNullable<WorkedSession['currentPresence']>}>();
+    if(board){
+      for(const source of this.sourceIds)for(const session of board.sessions?.[source]??[])if(session.presenceKey&&session.currentPresence)live.set(session.presenceKey,{source,device:session.device.id,presence:session.currentPresence});
+      if(board.meta.personal)for(const session of board.ownSessions??[])if(session.presenceKey&&session.currentPresence)live.set(session.presenceKey,{source:null,device:session.device.id,presence:session.currentPresence});
+    }
+    return rows.map(row=>{
+      const current=row.presenceKey?live.get(row.presenceKey):undefined;
+      const presence=current&&current.source===row.source&&current.device===row.device.id&&current.presence.through>now?current.presence:undefined;
+      const working=!!presence&&presence.working&&Math.min(presence.through,presence.workingThrough??Infinity)>now;
+      if(working===row.working&&sameJson(presence,row.currentPresence))return row;
+      const {currentPresence:_previous,...rest}=row;return {...rest,working,...(presence?{currentPresence:presence}:{})};
+    });
+  }
+  private tick(fromClock=true,current=false) {
     if(!this.active)return;
-    if(!this.index||!this.work.basis){this.evaluatedAt=hubNow();this.scheduleClock();return;}
-    const now=this.evaluatedAt=hubNow(),range=evaluatedRange(this.workSelection,now),projected=this.index.advance(range,now);
+    const now=this.evaluatedAt=hubNow();
+    const projected=this.index&&this.work.basis?this.index.advance(evaluatedRange(this.workSelection,now),now):{rows:this.workRows,changed:false,limited:false};
     if(projected.limited){this.work={...this.work,error:'history_range_invalid'};this.publishWork();clock.due(this.watch,null,now);return;}
-    if(projected.changed||this.workState.value!==this.work.value) {
-      this.workRows=projected.rows;
+    const rows=this.present(projected.rows,now);
+    const changed=projected.changed||this.workState.value!==this.work.value||rows.length!==this.workRows.length||rows.some((row,i)=>row.ref!==this.workRows[i]?.ref||row.working!==this.workRows[i]?.working||!sameJson(row.currentPresence,this.workRows[i]?.currentPresence));
+    if(changed) {
+      if(current)this.presenceRevision++;
+      this.workRows=rows;
       this.activity?.update(this.workRows);
       const next=new Map<string,WorkedSession[]>();
       for(const row of this.workRows){if(row.source===null)continue;let list=next.get(row.source);if(!list)next.set(row.source,list=[]);list.push(row);}
@@ -416,15 +444,16 @@ class BoardPeriod {
         for(const listener of this.sourceListeners.get(id)??[])listener();
       }
     }
-    this.work={...this.work,basis:{...this.work.basis,evaluatedAt:now,range}};
-    if(projected.changed||this.workState.value!==this.work.value||this.workState.loading!==this.work.loading||this.workState.error!==this.work.error||this.workSelection.mode==='range'&&!sameJson(this.workState.basis?.range,range))this.publishWork();
+    if(this.work.basis)this.work={...this.work,basis:{...this.work.basis,evaluatedAt:now,range:evaluatedRange(this.workSelection,now)}};
+    if(changed||this.workState.loading!==this.work.loading||this.workState.error!==this.work.error||this.workSelection.mode==='range'&&!sameJson(this.workState.basis?.range,this.work.basis?.range))this.publishWork();
     if(!fromClock)this.publishProjection(['quota']);
     this.scheduleClock();
   }
   private scheduleClock(){
     const now=hubNow();
     const orders=this.active&&this.index&&this.workSelection.mode==='live'?[...this.workOrders].flatMap(read=>read(this.workRows)?.worked??[]):[];
-    const due=this.workSelection.mode==='live'?this.index?.changesAt(now,this.workSelection.periodMs,orders)??null:this.index?.presenceChangesAt()??null;
+    let due=this.workSelection.mode==='live'?this.index?.changesAt(now,this.workSelection.periodMs,orders)??null:null;
+    for(const row of this.workRows){const p=row.currentPresence;if(p)for(const at of [p.through,p.working?p.workingThrough??p.through:0])if(at>now)due=Math.min(due??Infinity,at);}
     clock.due(this.watch,due!==null&&Number.isFinite(due)?due:null,now);
   }
   retryHistory(scope:PeriodScope){
@@ -456,7 +485,7 @@ export function usePeriodSessions(order:(rows:WorkedSession[])=>SessionOrder|nul
   const [watch]=useState(()=>(rows:WorkedSession[])=>latest.current(rows));
   useLayoutEffect(()=>boardPeriod.subscribeWorkOrder(watch),[watch]);
   useLayoutEffect(()=>boardPeriod.refreshWorkClock());
-  const [read]=useState(()=>selector(boardPeriod,()=>({select:state=>state,equal:(a,b)=>a.value===b.value&&a.loading===b.loading&&a.error===b.error&&sameJson(panelRoster(a.rows),panelRoster(b.rows))&&sameJson(latest.current(a.rows)?.key,latest.current(b.rows)?.key)})));
+  const [read]=useState(()=>selector(boardPeriod,()=>({select:state=>state,equal:(a,b)=>a.presenceRevision===b.presenceRevision&&a.value===b.value&&a.loading===b.loading&&a.error===b.error&&sameJson(panelRoster(a.rows),panelRoster(b.rows))&&sameJson(latest.current(a.rows)?.key,latest.current(b.rows)?.key)})));
   return useSyncExternalStore(boardPeriod.subscribe,read);
 }
 export type SessionPeriod=Pick<Reading<WorkTrace>,'basis'|'loading'|'error'>;

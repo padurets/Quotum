@@ -474,6 +474,7 @@ export class Events implements Touches {
           const value = ordinary ? JSON.parse(ordinary.data) as {sources: string[]; since: number; changes?: HistoryChange[]} : {sources: [], since: ownSince};
           historyFrames = [...historyFrames.filter(frame => frame.type !== 'history'), frame('history', {...value, since: Math.min(value.since, ownSince), ownSince})];
         }
+        historyFrames = historyFrames.map(item => item.type === 'history' ? frame('history', {...JSON.parse(item.data), workAuthority: watched.work}) : item);
         let frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...(clientFramesByKey.get(sub.user+'\n'+watched.id) ?? []), ...(deviceFramesByUser.get(sub.user) ?? []), ...historyFrames, ...news];
         if (sub.fresh) continue;
         if(!frames.length&&!sub.desktop)continue;
@@ -783,6 +784,7 @@ export class Events implements Touches {
         this.unsubscribe(sub);
         return null;
       }
+      if(watched.work===null)throw new Error('the board work context was not computed');
       const value = (key: string) => watched.base.get(key)?.value;
       this.connections.set(reader.user, this.parts.directory.connectionsRevision(reader.user));
       snapshot = {
@@ -793,6 +795,7 @@ export class Events implements Touches {
         view: value('view'),
         viewRevision: value('viewRevision'),
         historyStart: this.parts.store.historyStart(now),
+        workAuthority: watched.work,
         sources: watched.lineup.map(id => value(`card:${id}`)),
         ...(this.parts.store.privateOwner(reader.board) === reader.user ? {ownSessions: this.projection.ownSessions(reader.user, reader.board, now)!.value} : {}),
         sessions: Object.fromEntries(watched.lineup.map(id => [id, value(`sessions:${id}`)])),

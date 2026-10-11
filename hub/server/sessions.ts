@@ -1,3 +1,4 @@
+import {createHmac, randomBytes} from 'node:crypto';
 import type {SessionEvidence} from './domain/sessionEvidence.js';
 import type {Origin} from './domain/ingest.js';
 import type {Store, WorkKey} from './store/store.js';
@@ -26,6 +27,8 @@ export type LiveSession = SessionEvidence & {
  * stay apart; and how long it has worked, as credited by its machine's lists so far.
  */
 export type BoardSession = {
+  presenceKey?: string;
+  currentPresence?: {working: boolean; through: number; workingThrough: number; startedAt: number};
   clientId?: string;
   device: {id: string; name: string};
   origin: Origin;
@@ -79,6 +82,7 @@ function keysOf(machine: Machine): WorkKey[] {
  */
 export class Sessions {
   private readonly machines = new Map<string, Machine>();
+  private readonly presenceSecret = randomBytes(32);
 
   constructor(private readonly store: Store) {}
 
@@ -118,6 +122,12 @@ export class Sessions {
     return [...new Set((this.machines.get(device)?.sessions ?? []).flatMap(s => s.source ? [s.source] : []))];
   }
 
+  /** An opaque join key for the same stable context in authorized stream and period projections. */
+  binding(device:string, client:string, source:string|null, producer:string|null, origin:Origin, project:string|null, folder:string|null) {
+    if(!producer)return undefined;
+    return createHmac('sha256',this.presenceSecret).update(JSON.stringify([device,client,source,producer,origin,project??'',folder??''])).digest('base64url').slice(0,16);
+  }
+
   /** Only a producer's stable identity can enrich a retained context with current presence. */
   presence(device:string, client:string, source:string|null, producer:string|null, origin:Origin, project:string|null, folder:string|null, now:number) {
     if(!producer)return undefined;
@@ -140,7 +150,7 @@ export class Sessions {
       const keys = keysOf(machine);
       const selected = machine.sessions.flatMap((s, i) => s.source === source ? [{s, key: keys[i]}] : []);
       const worked = this.store.worked(id, selected.map(s => s.key));
-      const present = this.presenter(machine.user, id);
+      const present = this.presenter(machine.user, id, now);
       selected.forEach(({s}, i) => found.push(present(s, worked[i])));
 
     }
@@ -180,7 +190,7 @@ export class Sessions {
       const keys = keysOf(machine);
       const selected = machine.sessions.flatMap((s, i) => this.store.displaySource(user, s.source) === null ? [{s, key: keys[i]}] : []);
       const worked = this.store.worked(id, selected.map(s => s.key));
-      const present = this.presenter(user, id);
+      const present = this.presenter(user, id, now);
       selected.forEach(({s}, i) => found.push(present(s, worked[i])));
     }
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);
@@ -190,7 +200,7 @@ export class Sessions {
     const machine = this.machines.get(device);
     if (!machine || machine.user !== user || now - machine.at > KEEP_MS) return [];
     const worked = this.store.worked(device, keysOf(machine));
-    const present = this.presenter(user, device);
+    const present = this.presenter(user, device, now, false);
     return machine.sessions.map((session, i) => ({...present(session, worked[i]), source: this.store.displaySource(user, session.source)}));
   }
 
@@ -212,12 +222,14 @@ export class Sessions {
     return deadlines.length ? Math.min(...deadlines) : null;
   }
 
-  private presenter(user: string, id: string): (session: StoredSession, workedMs: number | null) => BoardSession {
+  private presenter(user: string, id: string, now: number, includePresence = true): (session: StoredSession, workedMs: number | null) => BoardSession {
     const names = this.store.projectNames(user);
     const alias = this.store.db.prepare('SELECT COALESCE(label,name) AS name FROM devices WHERE id=?').get(id) as {name:string} | undefined;
-    return ({clientId, device, origin, project, folder, startedAt, lastWorkedAt, working}, workedMs) => {
+    return ({clientId, source, sessionId, device, origin, project, folder, startedAt, lastWorkedAt, working}, workedMs) => {
+      const presenceKey=includePresence?this.binding(id,clientId,source,sessionId,origin,project,folder):undefined;
+      const currentPresence=presenceKey?this.presence(id,clientId,source,sessionId,origin,project,folder,now):undefined;
       const shown = project === null ? null : (names.get(project) ?? project);
-      return {clientId, device: alias ? {...device,name:alias.name} : device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, lastWorkedAt, working, workedMs};
+      return {...(presenceKey?{presenceKey,currentPresence}:{}),clientId, device: alias ? {...device,name:alias.name} : device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, lastWorkedAt, working, workedMs};
     };
   }
 

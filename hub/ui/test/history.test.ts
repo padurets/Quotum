@@ -426,16 +426,46 @@ test('news during a flight gives exactly one next read; continuous news never de
   await flush(); assert.equal(h.reads.length, count);
 });
 
-test('lineup and since zero in one network chunk read once; reconnect keeps the shown frame undimmed', async () => {
+test('lineup and since zero retire the shown frame immediately and coalesce one baseline read', async () => {
   const h = harness(); await h.start(); await h.reads[0].answer();
-  const shown = h.store.get().history;
-  h.store.lineup(['s', 'other']); h.store.news(0); await flush();
+  const shown = h.store.get().history,authority=h.store.get().presentation;
+  h.store.lineup(['s', 'other']); h.store.news(0);
+  assert.equal(h.store.get().history,null,'revoked history cannot remain visible until its replacement responds');
+  assert.ok(h.store.get().presentation>authority,'downstream prepared drawings must retire too');
+  await flush();
   assert.equal(h.reads.length, 2);
-  assert.equal(h.store.get().history, shown);
-  assert.equal(h.store.get().loading, false);
+  assert.equal(h.store.get().history, null);
+  assert.equal(h.store.get().loading, true);
   await h.reads[1].answer();
-  h.store.snapshot(['s', 'other']); await flush();
-  assert.equal(h.reads.length, 3);
+  assert.ok(h.store.get().history);
+  assert.notEqual(h.store.get().history,shown,'only the new authorized baseline restores a complete frame');
+  assert.equal(h.store.get().loading,false);
+  await flush();assert.equal(h.reads.length,2,'lineup and zero-cutoff news require no duplicate read');
+  h.store.close();
+});
+
+test('an ordinary reconnect retains its successful baseline undimmed while work authority is unchanged',async()=>{
+  const h=harness();
+  h.store.open('b');h.store.hello('run');h.store.snapshot(['s'],['s w'],0,'work-a');await flush();
+  await h.reads[0].answer();
+  const shown=h.store.get().history,authority=h.store.get().presentation;
+  assert.ok(shown);
+  h.store.snapshot(['s'],['s w'],0,'work-a');await flush();
+  assert.equal(h.reads.length,2);
+  assert.equal(h.store.get().history,shown);
+  assert.equal(h.store.get().presentation,authority);
+  assert.equal(h.store.get().loading,false);
+  await h.reads[1].fail(new Error('offline'));
+  assert.equal(h.store.get().history,shown,'ordinary read failure keeps the authorized baseline');
+  assert.equal(h.store.get().error,'history_failed');
+  h.store.retry();await flush();
+  assert.equal(h.reads.length,3);
+  await h.reads[2].answer();
+  assert.ok(h.store.get().history);
+  assert.notEqual(h.store.get().history,shown);
+  assert.equal(h.store.get().loading,false);
+  assert.equal(h.store.get().error,undefined);
+  h.store.close();
 });
 
 test('news after a past frame asks nothing; late news inside it reads from its old valid boundary', async () => {

@@ -34,6 +34,7 @@ export type Snapshot = {
   viewRevision?: number;
   connectionsRevision?: number;
   historyStart: number;
+  workAuthority?: string;
   sources: Card[];
   ownSessions?: LiveSession[];
   sessions: Record<string, LiveSession[]>;
@@ -64,7 +65,7 @@ export type HubEvent =
   | {type:'sourceAccess';data:Record<string,SourceAccess>}
   | {type:'currencies';data:CurrencyContext}
   | {type: 'boards'; data: {boards: Board[]}}
-  | {type: 'history'; data: {sources: string[]; since: number; ownSince?: number; changes?: import('../../server/domain/history').HistoryChange[]}}
+  | {type: 'history'; data: {sources: string[]; since: number; ownSince?: number; workAuthority?: string; changes?: import('../../server/domain/history').HistoryChange[]}}
   | {type: 'resets'; data: HubResets};
 
 export type ConnectionStatus = 'connecting' | 'live' | 'polling' | 'retrying' | 'paused';
@@ -78,6 +79,7 @@ export type BoardState = {
   viewRevision?: number;
   connectionsRevision?: number;
   historyStart: number;
+  workAuthority?: string;
   lineup: string[];
   cards: Record<string, Card>;
   ownSessions?: LiveSession[];
@@ -163,6 +165,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
     viewRevision: Math.max(old?.viewRevision ?? 0, data.viewRevision ?? 0),
     connectionsRevision: Math.max(old?.connectionsRevision ?? 0, data.connectionsRevision ?? 0),
     historyStart: data.historyStart,
+    workAuthority: typeof data.workAuthority === 'string' && data.workAuthority ? data.workAuthority : undefined,
     lineup: keep(
       old?.lineup,
       data.sources.map(card => card.id),
@@ -258,8 +261,9 @@ function hub(state: PageState, event: HubEvent): PageState {
     }
     case 'resets':
       return {...state, resets: withResets(state.resets, event.data)};
-    case 'hello':
     case 'history':
+      return patch(state, board => event.data.workAuthority && event.data.workAuthority !== board.workAuthority ? {...board, workAuthority: event.data.workAuthority} : board);
+    case 'hello':
       // Nothing to keep: the history loader hears of it (lib/history.ts).
       return state;
   }

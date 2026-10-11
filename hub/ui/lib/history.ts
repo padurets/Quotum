@@ -57,6 +57,7 @@ export class HistoryStore {
   private metaSeq = 0;
   private newsSeq = 0;
   private lineupKey = '';
+  private workAuthority: string | undefined;
   private windowsKey = '';
   private windows = new Set<string>();
   private meters: MeterSelection | undefined;
@@ -142,6 +143,7 @@ export class HistoryStore {
     this.presentation++;
     this.epoch++;
     this.board = null;
+    this.workAuthority = undefined;
     this.setBoundary(null);
     this.ready = false;
     this.historyLimit=false;this.readError=false;
@@ -174,8 +176,10 @@ export class HistoryStore {
     this.ready = false;
   }
 
-  snapshot(lineup: string[], windows: Iterable<string> = this.windows, historyStart = 0) {
-    if(this.removesSource(lineup)||historyStart>this.historyStart){this.retirePresentation();this.grids.clear();}
+  snapshot(lineup: string[], windows: Iterable<string> = this.windows, historyStart = 0, workAuthority?: string) {
+    const changedWork = this.scope !== 'budget' && this.lineupKey !== '' && (!workAuthority || workAuthority !== this.workAuthority);
+    this.workAuthority = workAuthority;
+    if(changedWork||this.removesSource(lineup)||historyStart>this.historyStart){this.retirePresentation();this.grids.clear();}
     this.historyStart=historyStart;
     this.setBoundary(null);
     this.lineupKey = keyOf(lineup);
@@ -222,7 +226,8 @@ export class HistoryStore {
     this.publish();
   }
 
-  news(since: number) {
+  news(since: number, workAuthority?: string) {
+    if (workAuthority || since === 0) this.workAuthority = workAuthority;
     this.newsSeq++;
     this.cutTo = null;
     this.aheadStopped = false;
@@ -901,15 +906,15 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
     else if (event.type === 'hub') {
       const hub = event.event;
       if (hub.type === 'hello') loader.hello(hub.data.epoch);
-      else if (hub.type === 'snapshot') loader.snapshot(state.board?.lineup ?? [], scope==='quota'?windowsOf(state):[], state.board?.historyStart);
+      else if (hub.type === 'snapshot') loader.snapshot(state.board?.lineup ?? [], scope==='quota'?windowsOf(state):[], state.board?.historyStart, state.board?.workAuthority);
       else if (hub.type === 'lineup') {loader.lineup(state.board?.lineup ?? []); if(scope==='quota')loader.setWindows(windowsOf(state));}
       else if (hub.type === 'card'&&scope==='quota') loader.setWindows(windowsOf(state));
       else if (hub.type === 'history') {
         const selected=scope==='budget'?new Set(selectedMeters(state,scope,family)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
         const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source));
         const ownSince = scope === 'quota' && state.board?.meta.personal ? hub.data.ownSince : undefined;
-        if(changes?.length || ownSince !== undefined)loader.news(Math.min(...(changes ?? []).map(change=>change.since), ownSince ?? Infinity));
-        else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since);
+        if(changes?.length || ownSince !== undefined)loader.news(Math.min(...(changes ?? []).map(change=>change.since), ownSince ?? Infinity), hub.data.workAuthority);
+        else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since, hub.data.workAuthority);
       }
     }
     if(state.board)loader.setMeters(selectedMeters(state,scope,family));

@@ -42,10 +42,11 @@ export function periodWork(hub:Hub,history:HistoryTiles,board:string,shown:Shown
     if(index===undefined) {
       index=trace.refs.length;indices.set(row.session,index);
       const saved=context.get(row.session) as {producer_id:string|null;client:string;source_id:string|null;project:string;folder:string};
+      const presenceKey=hub.ingest.live.binding(row.device,saved.client,saved.source_id,saved.producer_id,row.origin,saved.project,saved.folder);
       const currentPresence=hub.ingest.live.presence(row.device,saved.client,saved.source_id,saved.producer_id,row.origin,saved.project,saved.folder,now);
       const deviceName=String(device.get(row.device)?.name??''),folder=row.folder??(row.project!==saved.project?saved.project:null);
-      reserve(384+2*((row.project?.length??0)+(folder?.length??0)+deviceName.length));
-      trace.refs.push({ref:history.ref(board,row.session),source:row.source,clientId:saved.client,device:{id:row.device,name:deviceName},origin:row.origin,project:row.project,folder,startedAt:row.startedAt,...(currentPresence?{currentPresence}:{})});
+      reserve(416+2*((row.project?.length??0)+(folder?.length??0)+deviceName.length));
+      trace.refs.push({ref:history.ref(board,row.session),source:row.source,clientId:saved.client,device:{id:row.device,name:deviceName},origin:row.origin,project:row.project,folder,startedAt:row.startedAt,...(presenceKey?{presenceKey}:{}),...(currentPresence?{currentPresence}:{})});
     }
     const start=row.from-anchor,end=row.to-anchor,last=trace.spans.at(-1);
     if(last&&last[0]===index&&last[2]>=start)last[2]=Math.max(last[2],end);

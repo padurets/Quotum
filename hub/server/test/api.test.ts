@@ -984,7 +984,9 @@ test('agents report the coding agents running on their machines; the cards of th
   assert.equal((await report([{...codex, sessionId: 'a'.repeat(32)}])).status, 200);
   const [identified] = await shown();
   assert.equal(identified.workedMs, 0, 'valid ID starts with known zero, without guessed legacy credit');
-  assert.deepEqual(Object.keys(identified).sort(), Object.keys(first).sort(), 'producer identity never reaches the board');
+  assert.deepEqual(Object.keys(identified).sort(), [...Object.keys(first), 'presenceKey', 'currentPresence'].sort(), 'stable sessions add only the opaque presence binding and deadlines');
+  assert.match(identified.presenceKey, /^[\w-]{16}$/);
+  assert.ok(!JSON.stringify(identified).includes('a'.repeat(32)), 'raw producer identity never reaches the board');
   assert.equal((await report([])).status, 200);
   assert.deepEqual(await shown(), [], 'an empty list: none runs');
   const long = await report([{...codex, project: 'x'.repeat(300), folder: 'y'.repeat(300)}]);
