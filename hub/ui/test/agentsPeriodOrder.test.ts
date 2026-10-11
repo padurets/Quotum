@@ -20,7 +20,7 @@ function order(sort:AgentsSort,open=false,hidden=false,running=false){
     require:()=>({})};
   runInNewContext(ts.transpileModule(body,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   try{context.exports.AgentsPanel({arrange:{view:{...EMPTY_VIEW,columns:hidden?{[AGENTS]:['worked']}:{},shownColumns:running?{[AGENTS]:['running']}:{}}}});}catch(error){assert.equal(error,done);}
-  return (rows:WorkedSession[])=>JSON.stringify(select(rows));
+  return (rows:WorkedSession[])=>JSON.stringify((select(rows) as {key:unknown}|null)?.key);
 }
 const row=(ref:string,project:string,workedMs:number):WorkedSession=>({ref,source:'s',device:{id:'d',name:'Machine'},origin:'terminal',project,folder:null,startedAt:0,workedMs,lastWorkedAt:100,working:false});
 

@@ -30,7 +30,7 @@ test('the session panel retains its snapshot when only a presence label expires'
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   const body=source.slice(source.indexOf('const panelRoster='),source.indexOf('export function useSourcePeriodSessions'));
   const context={exports:{} as {usePeriodSessions:()=>unknown},boardPeriod:{get:()=>state,subscribe:()=>()=>{}},selector,sameJson,
-    useRef:(current:unknown)=>({current}),useState:(make:()=>unknown)=>[make()],useSyncExternalStore:(_subscribe:unknown,get:()=>unknown)=>{read=get;return get();}};
+    useRef:(current:unknown)=>({current}),useState:(make:()=>unknown)=>[make()],useLayoutEffect:()=>{},useSyncExternalStore:(_subscribe:unknown,get:()=>unknown)=>{read=get;return get();}};
   runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const initial=context.exports.usePeriodSessions();
   const {currentPresence:_,...expired}=before;

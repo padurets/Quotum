@@ -17,6 +17,7 @@ class Curve {
   }
   at(at:number,active=false){const i=upper(this.times,at)-1;return i<0?0:(active?this.active[i]:this.agents[i])+(at-this.times[i])*(active?Number(this.slopes[i]>0):this.slopes[i]);}
   working(at:number){return (this.slopes[upper(this.times,at)-1]??0)>0;}
+  slope(at:number){return this.slopes[upper(this.times,at)-1]??0;}
   next(at:number){return this.times[upper(this.times,at)]??Infinity;}
   last(at:number){let i=upper(this.times,at)-1;if(this.times[i]===at)i--;return i<0?null:this.slopes[i]>0?at:this.times[i];}
   get bytes(){return this.times.length*32;}
@@ -34,6 +35,7 @@ export class WorkTimeline {
   private at(at:number,active:boolean){const i=upper(this.hours,at)-1;if(i<0)return 0;return (active?this.active[i]:this.agents[i])+this.curves[i].at(Math.min(WORK_BLOCK_MS,at-this.hours[i]),active);}
   read(range:PeriodRange,active=false){return range.to>range.from?this.at(range.to,active)-this.at(range.from,active):0;}
   working(at:number){const i=upper(this.hours,at)-1;return i>=0&&at<this.hours[i]+WORK_BLOCK_MS&&this.curves[i].working(at-this.hours[i]);}
+  slope(at:number){const i=upper(this.hours,at)-1;return i>=0&&at<this.hours[i]+WORK_BLOCK_MS?this.curves[i].slope(at-this.hours[i]):0;}
   next(at:number){const i=upper(this.hours,at)-1;return Math.min(i<0?Infinity:this.hours[i]+this.curves[i].next(at-this.hours[i]),this.hours[i+1]===undefined?Infinity:this.hours[i+1]+this.curves[i+1].times[0]);}
   last(at:number){let i=upper(this.hours,at)-1;if(i<0)return 0;let value=this.curves[i].last(Math.min(WORK_BLOCK_MS,at-this.hours[i]));if(value===null&&i>0){i--;value=this.curves[i].last(WORK_BLOCK_MS);}return value===null?0:this.hours[i]+value;}
   get bytes(){return this.hours.length*32+16;}

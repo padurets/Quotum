@@ -590,11 +590,16 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     // sorts can reorder the panel or its open detail dialog as time passes.
     if(agentsSort?.column!=='worked'&&agentsSort?.column!=='running')return null;
     const entries=rows.flatMap((session):AgentRow[]=>session.source===null?[{session,source:null}]:titles[session.source]&&!view.hidden.includes('source:'+session.source)?[{session,source:{id:session.source,...titles[session.source],sessions:[]}}]:[]).sort((a,b)=>byActivity(a.session,b.session)||(a.source?.id??'').localeCompare(b.source?.id??''));
+    const worked:string[][][]=[];
     const order=(rows:AgentRow[],by:AgentsBy,inGroup:boolean)=>{
       const {name,columns}=arrangement(inGroup),shown=[name,...columns];
-      return visibleAgentsSort(agentsSort,shown)?sortedGroups(groupsOf(rows,by),agentsSort,shown).map(group=>group.key):null;
+      const sort=visibleAgentsSort(agentsSort,shown);if(!sort)return null;
+      const groups=sortedGroups(groupsOf(rows,by),sort,shown);
+      if(sort.column==='worked')worked.push(groups.filter(group=>group.workedMs!==null).map(group=>group.rows.flatMap(row=>row.session.ref?[row.session.ref]:[])));
+      return groups.map(group=>group.key);
     };
-    return [order(entries,agentsBy,false),open&&agentsBy!=='none'?groupsOf(entries,agentsBy).map(group=>[group.key,order(group.rows,'none',true)]):null];
+    const key=[order(entries,agentsBy,false),open&&agentsBy!=='none'?groupsOf(entries,agentsBy).map(group=>[group.key,order(group.rows,'none',true)]):null];
+    return {key,worked};
   });
   const sources = useMemo(
     () => {const bySource=new Map<string,LiveSession[]>();for(const row of period.rows){if(row.source===null)continue;let rows=bySource.get(row.source);if(!rows)bySource.set(row.source,rows=[]);rows.push(row);}return lineup.flatMap((id):AgentSource[]=>titles[id]?[{id,provider:titles[id].provider,title:titles[id].title,sessions:bySource.get(id)??[]}]:[]);},

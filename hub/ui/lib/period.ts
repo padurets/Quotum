@@ -3,7 +3,7 @@ import {subscriptionSelection} from './subscription';
 import {cellOf} from '../../server/domain/history';
 import {PERIOD_SCOPES,type PeriodScope,type HistoryQuery} from '../../server/domain/periodRead';
 import {prepareAsync,preparations,type Preparation} from './prepare';
-import {useRef,useState,useSyncExternalStore} from 'react';
+import {useLayoutEffect,useRef,useState,useSyncExternalStore} from 'react';
 import {evaluatedRange,periodKey,type PeriodBasis,type PeriodSelection} from '../../server/domain/period';
 import {hasPeriodValue,periodValueAt,type PeriodValues} from '../../server/domain/periodValues';
 import {mergeWorkPrepared,packWorkPrepared,type WorkedSession,type WorkTrace} from '../../server/domain/periodWork';
@@ -11,6 +11,7 @@ import type {PeriodReply} from '../../server/domain/periodRead';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
 import {PeriodTransport,fetchPeriod,type PeriodIntent} from './periodTransport';
 import {PeriodIndex} from './periodIndex';
+import type {WorkOrder} from '../../server/domain/periodIndex';
 import {historyPool} from './historyPool';
 import {page,type PageEvent,type PageState} from './board';
 import {clock,hubNow} from './clock';
@@ -33,7 +34,9 @@ type Reading<T>={value:T|null;basis:PeriodBasis|null;loading:boolean;error:strin
 const empty=<T>():Reading<T>=>({value:null,basis:null,loading:false,error:null});
 const noValue=empty<PeriodValues>(),noSessions:WorkedSession[]=[];
 
+export type SessionOrder={key:unknown;worked?:readonly WorkOrder[]};
 class BoardPeriod {
+  private readonly workOrders=new Set<(rows:WorkedSession[])=>SessionOrder|null>();
   private active=false;
   private readonly preparationOwner={};
   private receiving=Promise.resolve();
@@ -156,6 +159,8 @@ class BoardPeriod {
   getWorkEvidence=()=>this.work.value;
   getValue=(id:string)=>this.values.get(id)??noValue;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
+  subscribeWorkOrder=(read:(rows:WorkedSession[])=>SessionOrder|null)=>{this.workOrders.add(read);this.scheduleClock();return()=>{this.workOrders.delete(read);this.scheduleClock();};};
+  refreshWorkClock=()=>{if(this.evaluatedAt!==hubNow())this.tick();else this.scheduleClock();};
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   subscribeValue=(id:string,listener:()=>void)=>{let set=this.valueListeners.get(id);if(!set)this.valueListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   private queryKey(query:HistoryQuery){return JSON.stringify([query.meters,query.unit,query.currency]);}
@@ -402,7 +407,8 @@ class BoardPeriod {
   }
   private scheduleClock(){
     const now=hubNow();
-    let due=this.workSelection.mode==='live'?this.index?.changesAt(now,this.workSelection.periodMs)??null:this.index?.presenceChangesAt()??null;
+    const orders=this.active&&this.index&&this.workSelection.mode==='live'?[...this.workOrders].flatMap(read=>read(this.workRows)?.worked??[]):[];
+    const due=this.workSelection.mode==='live'?this.index?.changesAt(now,this.workSelection.periodMs,orders)??null:this.index?.presenceChangesAt()??null;
     clock.due(this.watch,due!==null&&Number.isFinite(due)?due:null,now);
   }
   retryHistory(scope:PeriodScope){
@@ -429,9 +435,12 @@ export function followPeriod(){const stop=page.listen((event,state)=>boardPeriod
 export function usePeriodValues(id:string){return useSyncExternalStore(listener=>boardPeriod.subscribeValue(id,listener),()=>boardPeriod.getValue(id));}
 const roster=(rows:readonly WorkedSession[])=>rows.map(({workedMs:_,...row})=>row);
 const panelRoster=(rows:readonly WorkedSession[])=>rows.map(({workedMs:_,currentPresence:_presence,...row})=>row);
-export function usePeriodSessions(order:(rows:WorkedSession[])=>unknown=()=>null){
+export function usePeriodSessions(order:(rows:WorkedSession[])=>SessionOrder|null=()=>null){
   const latest=useRef(order);latest.current=order;
-  const [read]=useState(()=>selector(boardPeriod,()=>({select:state=>state,equal:(a,b)=>a.value===b.value&&a.loading===b.loading&&a.error===b.error&&sameJson(panelRoster(a.rows),panelRoster(b.rows))&&sameJson(latest.current(a.rows),latest.current(b.rows))})));
+  const [watch]=useState(()=>(rows:WorkedSession[])=>latest.current(rows));
+  useLayoutEffect(()=>boardPeriod.subscribeWorkOrder(watch),[watch]);
+  useLayoutEffect(()=>boardPeriod.refreshWorkClock());
+  const [read]=useState(()=>selector(boardPeriod,()=>({select:state=>state,equal:(a,b)=>a.value===b.value&&a.loading===b.loading&&a.error===b.error&&sameJson(panelRoster(a.rows),panelRoster(b.rows))&&sameJson(latest.current(a.rows)?.key,latest.current(b.rows)?.key)})));
   return useSyncExternalStore(boardPeriod.subscribe,read);
 }
 export type SessionPeriod=Pick<Reading<WorkTrace>,'basis'|'loading'|'error'>;

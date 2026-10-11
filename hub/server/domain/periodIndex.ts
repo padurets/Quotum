@@ -3,6 +3,9 @@ import {workedSessions,type WorkTrace,type WorkedSession} from './periodWork.js'
 import type {PeriodRange} from './period.js';
 import {PeriodCurves} from './periodCurves.js';
 
+/** Each entry is one actually displayed group's stable context references. */
+export type WorkOrder=readonly (readonly string[])[];
+
 /** Clock reads search shared prefixes; they never expand the retained work ledger. */
 export class PeriodIndex {
   readonly curves:PeriodCurves;
@@ -28,10 +31,25 @@ export class PeriodIndex {
     return {rows:[...this.rows.values()],changed,limited:false};
   }
   presenceChangesAt(){let next=Infinity;for(const ref of this.trace.refs){const p=ref.currentPresence;if(!p)continue;for(const at of [p.through,p.working?Math.min(p.through,p.workingThrough??Infinity):0])if(at>this.now)next=Math.min(next,at);}return Number.isFinite(next)?next:null;}
-  changesAt(now:number,period:number):number|null {
-    if(!this.rows.size)return null;
+  changesAt(now:number,period:number,orders:readonly WorkOrder[]=[]):number|null {
     let next=this.presenceChangesAt()??Infinity;
-    for(const curve of this.curves.contexts){next=Math.min(next,curve.next(now-period)+period);if(curve.working(now-period))next=Math.min(next,Math.floor(now/60_000)*60_000+60_000);}
+    const values=new Map<string,{value:number;slope:number}>(),range={from:now-period,to:now};
+    for(const [i,curve] of this.curves.contexts.entries()){
+      next=Math.min(next,curve.next(range.from)+period,curve.next(now));
+      const value=curve.read(range),slope=curve.slope(now)-curve.slope(range.from);
+      if(value===0&&slope>0)next=Math.min(next,now+1);
+      if(orders.length)values.set(this.trace.refs[i].ref,{value,slope});
+    }
+    for(const order of orders){
+      const groups=order.map(refs=>refs.reduce((sum,ref)=>{const part=values.get(ref);return {value:sum.value+(part?.value??0),slope:sum.slope+(part?.slope??0)};},{value:0,slope:0})).sort((a,b)=>b.value-a.value);
+      // Within this linear piece, the first order change must cross adjacent
+      // values. Equality and the first strict inversion are separate edges.
+      for(let i=1;i<groups.length;i++){
+        const a=groups[i-1],b=groups[i],difference=a.value-b.value;
+        if(!difference&&a.slope!==b.slope)next=Math.min(next,now+1);
+        else if(b.slope>a.slope)next=Math.min(next,now+Math.max(1,Math.ceil(difference/(b.slope-a.slope))));
+      }
+    }
     return Number.isFinite(next)?next:null;
   }
 }
