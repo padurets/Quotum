@@ -175,11 +175,12 @@ export class Directory {
       const saved = row ? decodeView(JSON.parse(row.payload)) : EMPTY_VIEW;
       if (!saved) throw new Error('Invalid stored board view');
       const reconciled = reconcileAnalytics(saved, analyticsResources(this.db, boardId));
-      const view = reconciled === saved ? saved : decodeView(encodeView(reconciled));
-      if (!view) throw Object.assign(new Error('view_limit'), {statusCode:413});
+      const candidate = reconciled === saved ? saved : decodeView(encodeView(reconciled));
+      // Derived defaults must not block reading or reducing an accepted owner view.
+      // Keeping it unchanged leaves reconciliation pending for the next read with room.
+      const view = candidate && (candidate === saved || viewBytes(candidate) <= VIEW_BODY_LIMIT) ? candidate : saved;
       let revision = row?.revision ?? 0;
       if (view !== saved) {
-        if (viewBytes(view) > VIEW_BODY_LIMIT) throw Object.assign(new Error('view_limit'), {statusCode:413});
         if (!Number.isSafeInteger(++revision)) throw new Error('View revision exhausted');
         const owner = row?.updated_by ?? (this.db.prepare('SELECT created_by FROM boards WHERE id=?').get(boardId) as {created_by: string}).created_by;
         this.db.prepare('INSERT INTO views(board_id,payload,updated_by,updated_at,revision) VALUES(?,?,?,?,?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision').run(boardId, JSON.stringify(encodeView(view)), owner, Date.now(), revision);

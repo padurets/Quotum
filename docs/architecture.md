@@ -1322,7 +1322,12 @@ with an explicit retry carrying the captured revision. Ending the authenticated 
 drops unsent successors; a submitted Add continues when only its form closes, while an
 owner-scope change prevents further phases. No timer polls for those results.
 New empty boards keep analytics widgets pending. Resource capabilities place
-the quota or wallet pair and the subscription-funds chart independently on first use. An explicit Add also places an empty widget; placement
+the quota or wallet pair and the subscription-funds chart independently on first use.
+If those automatic placements would exceed a view size bound, they remain pending
+while the board keeps its valid saved view and revision. A smaller save makes room
+for reconciliation to retry; new source cards remain implicit. Explicit Add and save
+still reject oversized changes without discarding saved settings.
+An explicit Add also places an empty widget; placement
 is sticky after its last source or series disappears. Explicit hidden intent wins.
 `enabledWhenEmpty` applies to agents and activity; analytics placement lives in `shown`.
 What
