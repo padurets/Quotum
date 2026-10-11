@@ -605,6 +605,34 @@ test('a coalesced new compact head retires the old presentation without relabell
 });
 
 
+for (const code of ['', undefined, 'ERR_ABORTED']) test(`a cancelled navigation with ${JSON.stringify(code)} code keeps the current window alive`, async () => {
+  const main = await mainProcess({paintMain: false});
+  main.deliver({type: 'state', generation: 1, url: hub}, {type: 'foreground', head: {revision: 1, target: 'main'}});
+  const window = main.windows[0], attempts = main.navigations.length;
+  window.url = hub;
+  window.webContents.emit('did-finish-load');
+  window.failNavigationError(Object.assign(new Error('private-canary entry key'), {errno: -3, code}));
+  await new Promise(setImmediate);
+  assert.equal(main.traffic.filter(m => m.type === 'fault').length, 0);
+  assert.equal(main.navigations.length, attempts, 'cancellation does not retry navigation');
+  assert.equal(window.destroyed, false);
+  assert.equal(window.visible, undefined, 'cancellation does not reveal an unpainted window');
+  window.emit('ready-to-show');
+  assert.equal(window.visible, true);
+  assert.equal(main.traffic.filter(m => m.type === 'loaded').length, 1);
+});
+
+for (const errno of [-2, -7, '-3', undefined]) test(`a navigation error number ${JSON.stringify(errno)} remains fatal with an empty code`, async () => {
+  const main = await mainProcess();
+  main.windows[0].failNavigationError(Object.assign(new Error('private-canary'), {errno, code: ''}));
+  await new Promise(setImmediate);
+  const faults = main.traffic.filter(m => m.type === 'fault');
+  assert.equal(faults.length, 1);
+  assert.equal(faults[0].reason, 'load failed');
+  assert.equal(faults[0].navigation.errorNumber, typeof errno === 'number' ? errno : null);
+  assert.doesNotMatch(JSON.stringify(faults), /private-canary/);
+});
+
 test('a navigation without a string code retains numeric error and its original request', async () => {
   const main = await mainProcess();
   main.deliver({type: 'state', generation: 1, url: hub});

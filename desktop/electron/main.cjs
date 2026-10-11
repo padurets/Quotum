@@ -175,7 +175,8 @@ function navigate(entry) {
   entry.navigationSequence = sequence;
   // Error messages can include the entry key. Keep only codes and request identity.
   window.loadURL(url).catch(error => {
-    if (!quitting && !entry.dismissed && !window.isDestroyed() && error?.code !== 'ERR_ABORTED') send({type: 'fault', process: 'navigation', ...navigationFailure(error, entry, request, sequence, requestedGeneration, startedMs)});
+    // Electron's did-fail-load can leave the description empty for net::ERR_ABORTED.
+    if (!quitting && !entry.dismissed && !window.isDestroyed() && error?.code !== 'ERR_ABORTED' && error?.errno !== -3) send({type: 'fault', process: 'navigation', ...navigationFailure(error, entry, request, sequence, requestedGeneration, startedMs)});
   });
 }
 
