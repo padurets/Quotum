@@ -77,7 +77,7 @@ function panel(period:any,initial:Order){
       const state=slot(()=>{const state={value:read(),stop:()=>{}};state.stop=subscribe(()=>{const next=read();if(next!==state.value){state.value=next;dirty=true;}});return state;});
       state.value=read();return state.value;
     }};
-  runInNewContext(compile(coordinator.slice(coordinator.indexOf('const panelRoster='),coordinator.indexOf('export function useSourcePeriodSessions'))),context);
+  runInNewContext(compile(coordinator.slice(coordinator.indexOf('const roster='),coordinator.indexOf('export function useSourcePeriodSessions'))),context);
   function render(){for(let i=0;;i++){assert.ok(i<5,'selector and clock effects cannot render in a loop');cursor=0;dirty=false;value=context.exports.usePeriodSessions(order);renders++;while(pending.length)pending.shift()!();if(!dirty)break;}return value;}
   render();
   return {render:()=>dirty?render():value,setOrder:(next:Order)=>{order=next;return render();},rows:()=>value.rows as WorkedSession[],renders:()=>renders,
