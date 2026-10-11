@@ -10,7 +10,7 @@ use std::time::SystemTime;
 
 use serde_json::{Value, json};
 
-use super::{Collector, Context, VersionCache, locate, process_failure};
+use super::{Collector, Context, VersionProbe, locate, process_failure};
 use crate::model::{
     ErrorKind, Failure, Millis, Outcome, Provider, Resets, SESSION_MINUTES, Snapshot, WEEK_MINUTES, Window, now_ms,
     parse_time, pseudonym,
@@ -43,7 +43,7 @@ const ENV: &[(&str, &str)] = &[("DISABLE_AUTOUPDATER", "1")];
 
 #[derive(Default)]
 pub struct Claude {
-    version: VersionCache,
+    version: VersionProbe,
     /// The account read from Claude Code's config, kept until the file changes (it can be large).
     account: Mutex<Option<(SystemTime, Option<String>)>>,
 }

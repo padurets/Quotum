@@ -7,6 +7,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::activity::Activity;
 use crate::clients::{ClientId, Inventory};
 use crate::config::{Config, Paths, home, jitter};
+use crate::measurement_policy::MeasurementPolicy;
 use crate::model::{
     ClientSession, ClientSource, ErrorKind, Millis, Outcome, Provider, RunningSession, STALE_LIMIT_MS, SessionReport,
     now_ms,
@@ -174,6 +175,17 @@ impl Runner {
         let mut used = vec![false; self.adapters.len()];
         // The account each provider last reported, and the state of its sign-in files then.
         let mut accounts: Vec<Option<(Option<String>, Option<SystemTime>)>> = vec![None; self.adapters.len()];
+        let providers = self.providers();
+        let mut policy: Option<MeasurementPolicy> = None;
+        let mut commands: Vec<Option<String>> = vec![None; self.adapters.len()];
+        let mut command_accounts: Vec<Option<String>> = vec![None; self.adapters.len()];
+        let mut policy_contact = Instant::now();
+        if sink.managed() && !providers.is_empty() {
+            policy = sink.checkin_managed(&[], &providers).policy;
+            for (index, provider) in providers.iter().enumerate() {
+                schedule.block(index, !sink.allows_measurement(*provider), now_ms());
+            }
+        }
         let mut clock = Clock::new(now_ms());
         let mut watch = self.config.sessions().then(|| Watch {
             activity: Activity::new(self.home.clone(), self.config.projects()),
@@ -228,15 +240,67 @@ impl Runner {
                 schedule.shift(-back);
             }
 
+            // One recovery contact in the existing loop, including with sessions and every collector off.
+            if !providers.is_empty()
+                && sink.needs_policy_contact()
+                && policy_contact.elapsed() >= Duration::from_secs(60)
+                && !schedule.has_cleared()
+                && schedule.asks(now_ms()).is_empty()
+            {
+                let current = self.current_accounts(&accounts, &identity_paths);
+                let indices: Vec<usize> = providers
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, p)| sink.allows_measurement(**p) && current[*i].is_some() && self.installed(*i))
+                    .map(|(i, _)| i)
+                    .collect();
+                let asks: Vec<Ask> = indices
+                    .iter()
+                    .map(|&i| Ask {
+                        provider: providers[i],
+                        account: current[i].as_ref().and_then(|a| a.as_deref()),
+                        account_name: self.config.account_name(providers[i]),
+                        active: used[i],
+                        min_interval_ms: least[i],
+                    })
+                    .collect();
+                let answer = sink.checkin_managed(&asks, &providers);
+                policy_contact = Instant::now();
+                policy = answer.policy.or(policy);
+                for (index, provider) in providers.iter().enumerate() {
+                    schedule.block(index, !sink.allows_measurement(*provider), now_ms());
+                }
+                let directives: Vec<_> = indices.iter().copied().zip(answer.directives).collect();
+                for (position, &i) in indices.iter().enumerate() {
+                    commands[i] = answer.commands.get(position).cloned().flatten();
+                    command_accounts[i] = answer.accounts.get(position).cloned().flatten();
+                }
+                schedule.answer(&directives, now_ms());
+            }
+
             // What the last answer cleared is measured first, one after another.
             if let Some((index, next_in_ms)) = schedule.take_cleared() {
                 // A run asked to stop starts no client, whatever it waited for until now.
                 if self.stop.requested() {
                     break;
                 }
+                if !sink.allows_measurement(providers[index]) {
+                    schedule.block(index, true, now_ms());
+                    continue;
+                }
                 // As the sign-in files were before it: a sign-in during the measurement (or a token
                 // it refreshed) leaves the account unknown until the next one, never another's.
                 let signed_in = last_activity(&identity_paths[index]);
+                let current =
+                    current_account(self.adapters[index].local_account(&self.home), &accounts[index], signed_in);
+                let target = current.flatten().or_else(|| {
+                    accounts[index]
+                        .as_ref()
+                        .filter(|(_, before)| *before == signed_in)
+                        .and_then(|_| command_accounts[index].clone())
+                });
+                let attempt =
+                    policy.as_ref().map(|policy| policy.attempt(providers[index], target, commands[index].take()));
                 let mut outcome = self.measure(index);
                 if self.stop.requested() {
                     break;
@@ -267,7 +331,7 @@ impl Runner {
                         next
                     }
                 };
-                sink.deliver(&outcome);
+                sink.deliver_attempt(&outcome, attempt.as_ref());
                 each(Event::Measured(&outcome, next));
                 continue;
             }
@@ -320,7 +384,17 @@ impl Runner {
                     }
                 })
                 .collect();
-            let directives = sink.checkin(&asks);
+            let answer = sink.checkin_managed(&asks, &providers);
+            policy_contact = Instant::now();
+            policy = answer.policy.or(policy);
+            for (index, provider) in providers.iter().enumerate() {
+                schedule.block(index, !sink.allows_measurement(*provider), now_ms());
+            }
+            for (position, (i, _)) in asked.iter().enumerate() {
+                commands[*i] = answer.commands.get(position).cloned().flatten();
+                command_accounts[*i] = answer.accounts.get(position).cloned().flatten();
+            }
+            let directives = answer.directives;
             // Refused just now: measuring would only start a client for nothing.
             if let Some(reason) = sink.refused() {
                 return Some(reason.to_string());
@@ -980,6 +1054,50 @@ mod tests {
         assert_eq!((runs, sink.checkins), (0, 1));
         assert!(events.is_empty(), "waiting at the hub's pace is not news");
         assert_eq!(sink.flushed, 1, "the hub answered: what it did not take goes now");
+    }
+    #[test]
+    fn hub_denial_is_learned_before_unknown_account_discovery_with_sessions_off() {
+        struct Denied {
+            checkins: usize,
+        }
+        impl Sink for Denied {
+            fn managed(&self) -> bool {
+                true
+            }
+            fn allows_measurement(&self, _: Provider) -> bool {
+                false
+            }
+            fn checkin(&mut self, asks: &[Ask]) -> Vec<Directive> {
+                assert!(asks.is_empty(), "bootstrap contains no invented account");
+                self.checkins += 1;
+                Vec::new()
+            }
+            fn deliver(&mut self, _: &Outcome) {
+                panic!("blocked collector delivered");
+            }
+        }
+        let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let state = std::env::temp_dir().join(format!("quotum-denial-{}", std::process::id()));
+        let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
+        let adapter: Box<dyn Collector> =
+            Box::new(Scripted { outcome: snapshot, runs: runs.clone(), activity: Vec::new() });
+        let stop = Stop::new();
+        let timer = stop.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            timer.request(crate::stop::How::Exit);
+        });
+        let mut runner = Runner::with_adapters(
+            Config::parse("sessions = false").unwrap(),
+            paths,
+            vec![adapter],
+            std::env::temp_dir(),
+            stop,
+        );
+        let mut sink = Denied { checkins: 0 };
+        runner.run(&mut sink, |_| panic!("blocked collector measured"));
+        assert_eq!(sink.checkins, 1);
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]

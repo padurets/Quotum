@@ -1,7 +1,7 @@
 /** Shared subscription refresh state. Times are the hub's epoch milliseconds. */
 export type Refresh = {
   by?: 'hub';
-  unavailable: 'no_device' | 'unsupported' | 'silent' | 'paused' | 'no_access' | null;
+  unavailable: 'no_device' | 'unsupported' | 'silent' | 'paused' | 'no_access' | 'handover_pending' | null;
   availableAt: number | null;
   retryAt: number | null;
   request: RefreshRequest | null;

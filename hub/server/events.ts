@@ -9,7 +9,7 @@ import type {Credentials} from './secrets/credentials.js';
 import type {HubSources} from './hubSources.js';
 import type {Ingest} from './ingest.js';
 import type {ResetFeed} from './resets.js';
-import {earliest, Projection, type HubPart} from './projection.js';
+import {earliest, Projection, type HubPart, type Snapshot} from './projection.js';
 import type {Directory} from './store/directory.js';
 import type {BoardSource, Store} from './store/store.js';
 import {trouble, type Touches} from './touches.js';
@@ -144,6 +144,8 @@ export class Events implements Touches {
   private readonly dirtyBoards = new Set<string>();
   private readonly dirtySources = new Map<string, Set<string>>();
   private readonly dirtyUsers = new Set<string>();
+  private readonly dirtyDevices = new Set<string>();
+  private readonly contacts = new Map<string, Map<string, number>>();
   private dirtyHub = false;
   private readonly dirtyClientUsers = new Set<string>();
   private readonly ownHistories = new Map<string, number>();
@@ -272,6 +274,18 @@ export class Events implements Touches {
     this.schedule();
   }
 
+  touchDevices(user: string) {
+    if ([...this.subscribers.values()].some(s => s.user === user)) this.dirtyDevices.add(user);
+    this.schedule();
+  }
+
+  deviceContact(user: string, device: string, at: number) {
+    if (![...this.subscribers.values()].some(s => s.user === user)) return;
+    let own = this.contacts.get(user); if (!own) this.contacts.set(user, own = new Map());
+    own.set(device, Math.max(own.get(device) ?? 0, at));
+    this.schedule();
+  }
+
   clientHistory(user: string, since: number) {
     try { this.onClientHistory?.(user, since); } catch (error) { trouble(error); }
     if ([...this.subscribers.values()].some(s => s.user === user && this.parts.store.privateOwner(s.board) === user)) this.ownHistories.set(user, Math.min(this.ownHistories.get(user) ?? since, since));
@@ -326,7 +340,7 @@ export class Events implements Touches {
 
   private schedule() {
     if (this.stopFlush || this.closed) return;
-    if (!this.dirtyBoards.size && !this.dirtySources.size && !this.dirtyUsers.size && !this.dirtyHub && !this.histories.size && !this.dirtyClientUsers.size && !this.ownHistories.size) return;
+    if (!this.dirtyBoards.size && !this.dirtySources.size && !this.dirtyUsers.size && !this.dirtyHub && !this.histories.size && !this.dirtyClientUsers.size && !this.ownHistories.size && !this.dirtyDevices.size && !this.contacts.size) return;
     this.stopFlush = this.later(this.options.smoothMs, () => {
       this.stopFlush = null;
       this.flush();
@@ -348,6 +362,8 @@ export class Events implements Touches {
     const whole = new Set(this.dirtyBoards);
     const sources = new Map(this.dirtySources);
     const users = new Set(this.dirtyUsers);
+    const devices = new Set(this.dirtyDevices), contacts = new Map(this.contacts);
+    this.dirtyDevices.clear(); this.contacts.clear();
     const histories = new Map(this.histories);
     const clientUsers = new Set(this.dirtyClientUsers);
     const ownHistories = new Map(this.ownHistories);
@@ -473,7 +489,12 @@ export class Events implements Touches {
           const value = ordinary ? JSON.parse(ordinary.data) as {sources: string[]; since: number; changes?: HistoryChange[]} : {sources: [], since: ownSince};
           historyFrames = [...historyFrames.filter(frame => frame.type !== 'history'), frame('history', {...value, since: Math.min(value.since, ownSince), ownSince})];
         }
-        let frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...(clientFramesByKey.get(sub.user+'\n'+watched.id) ?? []), ...(deviceFramesByUser.get(sub.user) ?? []), ...historyFrames, ...news];
+        const privateContacts = [...(contacts.get(sub.user) ?? [])].flatMap(([deviceId,lastSeenAt]) => {
+          const device = this.parts.directory.deviceById(deviceId);
+          return device?.userId === sub.user && this.parts.directory.deviceLive(deviceId) ? [{deviceId,lastSeenAt}] : [];
+        });
+        let frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...(clientFramesByKey.get(sub.user+'\n'+watched.id) ?? []), ...(deviceFramesByUser.get(sub.user) ?? []),
+          ...(devices.has(sub.user) ? [frame('devices',{})] : []), ...(privateContacts.length ? [frame('deviceContacts',{devices:privateContacts})] : []), ...historyFrames, ...news];
         if (sub.fresh) continue;
         if(!frames.length&&!sub.desktop)continue;
         try {
@@ -801,6 +822,7 @@ export class Events implements Touches {
         mine: JSON.parse(this.mines.get(`${reader.user}\n${reader.board}`) ?? '[]'),
         boards: this.boardLists.get(reader.user)?.value ?? [],
         connectionsRevision: this.parts.directory.connectionsRevision(reader.user),
+        deviceContacts: Object.fromEntries(this.parts.directory.devices(reader.user).map(device=>[device.id,device.lastSeenAt])),
         resets: this.hub?.value,
       };
       const replacement=this.financialSnapshot(sub,financialKey);
@@ -965,7 +987,18 @@ export class Events implements Touches {
       const replacement=this.financialSnapshot(lease,lease.financialKey);
       if(replacement){lease.financialKey=replacement.key;return [frame('snapshot',replacement.snapshot)];}
     }catch(error){trouble(error);this.expire(lease);return [bye('restart')];}
-    return frames;
+    return frames.flatMap(packet=>{
+      if(packet.type==='snapshot') {
+        const snapshot=JSON.parse(packet.data) as Snapshot;
+        if(!snapshot.deviceContacts)return [packet];
+        snapshot.deviceContacts=Object.fromEntries(Object.entries(snapshot.deviceContacts).filter(([device])=>this.parts.directory.deviceById(device)?.userId===lease.user && this.parts.directory.deviceLive(device)));
+        return [frame('snapshot',snapshot)];
+      }
+      if(packet.type!=='deviceContacts')return [packet];
+      const data=JSON.parse(packet.data) as {devices:{deviceId:string;lastSeenAt:number}[]};
+      const devices=data.devices.filter(contact=>this.parts.directory.deviceById(contact.deviceId)?.userId===lease.user && this.parts.directory.deviceLive(contact.deviceId));
+      return devices.length ? [frame('deviceContacts',{devices})] : [];
+    });
   }
 
   /** Prepared frames are not yet disclosed: replace their dataset and private bindings together. */

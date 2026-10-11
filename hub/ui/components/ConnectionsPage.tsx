@@ -1,3 +1,4 @@
+import {Devices, DeviceCode, DeviceTokens} from './Machines';
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {t} from '../i18n';
 import {ApiError, call} from '../lib/http';
@@ -362,6 +363,12 @@ export function ConnectionsPage({
           </div>
         </Modal>
       )}
+      <section className="settings-section" id="devices">
+        <h2>{t('devices.title')}</h2>
+        <ul className="connections-list"><Devices local={local}/></ul>
+        {!local&&<DeviceCode/>}
+      </section>
+      {!local&&<section className="settings-section"><h2>{t('connect.tokenTitle')}</h2><DeviceTokens/></section>}
     </div>
   );
 }

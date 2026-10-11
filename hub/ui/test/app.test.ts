@@ -62,6 +62,18 @@ test('panel heights serialize and coalesce while close stays responsive', async 
   await Promise.all([first, intermediate, last]);
 });
 
+test('compact opens the main window with a typed source destination through either native bridge',async t=>{
+  for(const bridge of ['__QUOTUM__','__TAURI__'] as const) {
+    const calls:unknown[]=[];
+    const invoke=async(command:string,args:unknown)=>{calls.push({command,args});};
+    inWindow(t,bridge,bridge==='__QUOTUM__'?{invoke}:{core:{invoke}});
+    if(bridge==='__TAURI__')Reflect.deleteProperty(globalThis,'__QUOTUM__');
+    await app.openMain({kind:'devices',sourceId:'codex:123456abcdef'});
+    await app.openMain();
+    assert.deepEqual(calls,[{command:'open_main',args:{destination:{kind:'devices',sourceId:'codex:123456abcdef'}}},{command:'open_main',args:{}}]);
+  }
+});
+
 test('mutations invoke and acknowledge in action order across all app controls', async t => {
   const events: string[] = [];
   const responses = new Map<string, (value: unknown) => void>();

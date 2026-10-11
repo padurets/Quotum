@@ -8,14 +8,14 @@ pub(crate) mod codex;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 pub use antigravity::Antigravity;
 pub use claude::Claude;
 pub use codex::Codex;
 
 use crate::model::{ErrorKind, Failure, Outcome, Provider};
-use crate::process::{Client, ProcError};
+use crate::process::ProcError;
 use crate::stop::Stop;
 
 /// Everything an adapter needs from the agent for one measurement.
@@ -96,7 +96,10 @@ pub(crate) fn process_failure(provider: Provider, error: ProcError) -> Failure {
 /// The first dotted version number in `text` ("2.1.280 (Claude Code)" → "2.1.280").
 pub(crate) fn version_in(text: &str) -> Option<String> {
     text.split(|c: char| !(c.is_ascii_digit() || c == '.'))
-        .find(|part| part.contains('.') && part.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .find(|part| {
+            part.split('.').count() == 3
+                && part.split('.').all(|number| !number.is_empty() && number.parse::<u32>().is_ok())
+        })
         .map(|v| v.trim_end_matches('.').to_string())
 }
 
@@ -106,31 +109,21 @@ pub(crate) fn version_tuple(version: &str) -> (u32, u32, u32) {
     (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0))
 }
 
-/// A client's `--version`, asked at most every six hours.
+/// Fresh bounded evidence for the client about to measure; inventory has its own cache.
 #[derive(Default)]
-pub(crate) struct VersionCache {
-    value: Option<(PathBuf, String, Instant)>,
+pub(crate) struct VersionProbe {
+    image: Option<crate::clients::Image>,
 }
 
-impl VersionCache {
-    const TTL: Duration = Duration::from_secs(6 * 3600);
-
+impl VersionProbe {
     pub fn get(&mut self, program: &Path, ctx: &Context) -> Option<String> {
-        if let Some((path, version, at)) = &self.value {
-            if path == program && at.elapsed() < Self::TTL {
-                return Some(version.clone());
-            }
-        }
-        let mut client =
-            Client::spawn(program, &["--version"], &[], ctx.work_dir, Duration::from_secs(15), ctx.stop).ok()?;
-        let version = version_in(&client.output().ok()?)?;
-        self.value = Some((program.to_path_buf(), version.clone(), Instant::now()));
-        Some(version)
+        self.image = crate::clients::executable_image(program);
+        let version = crate::clients::fresh_version(program, ctx.work_dir, ctx.stop).ok().flatten();
+        if self.unchanged(program) { version } else { None }
     }
 
-    /// Makes the next `get` ask the client again.
-    pub fn forget(&mut self) {
-        self.value = None;
+    pub fn unchanged(&self, program: &Path) -> bool {
+        self.image.is_some() && self.image == crate::clients::executable_image(program)
     }
 }
 

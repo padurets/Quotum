@@ -127,10 +127,12 @@ impl std::fmt::Display for ClientId {
 pub struct InstalledClient {
     pub client_id: ClientId,
     pub version: Option<String>,
+    #[serde(with = "crate::model::ts::option")]
+    pub observed_at: Option<crate::model::Millis>,
 }
 
-#[derive(PartialEq)]
-struct Image {
+#[derive(Debug, PartialEq)]
+pub(crate) struct Image {
     path: PathBuf,
     length: u64,
     modified: Option<SystemTime>,
@@ -138,9 +140,42 @@ struct Image {
     identity: (u64, u64),
 }
 
+pub(crate) fn executable_image(path: &Path) -> Option<Image> {
+    let metadata = path.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    Some(Image {
+        path: path.to_path_buf(),
+        length: metadata.len(),
+        modified: metadata.modified().ok(),
+        #[cfg(unix)]
+        identity: (metadata.dev(), metadata.ino()),
+    })
+}
+
+struct VersionObservation {
+    image: Image,
+    version: Option<String>,
+    observed_at: crate::model::Millis,
+    due: std::time::Instant,
+    failures: u32,
+}
+
+pub(crate) fn fresh_version(
+    path: &Path,
+    work: &Path,
+    stop: &Stop,
+) -> Result<Option<String>, crate::process::ProcError> {
+    let raw = crate::process::Client::version_output(path, work, stop)?;
+    Ok(std::str::from_utf8(&raw).ok().and_then(crate::providers::version_in).filter(|version| version.len() <= 64))
+}
+
 #[derive(Default)]
 pub struct Inventory {
-    versions: BTreeMap<ClientId, (Image, Option<String>)>,
+    versions: BTreeMap<ClientId, VersionObservation>,
 }
 
 impl Inventory {
@@ -175,36 +210,39 @@ impl Inventory {
                 self.versions.remove(&client);
                 continue;
             };
-            let Ok(metadata) = path.metadata() else {
+            let Some(image) = executable_image(&path) else {
                 self.versions.remove(&client);
                 continue;
             };
-            if !metadata.is_file() {
-                continue;
+            let now = std::time::Instant::now();
+            if self.versions.get(&client).is_none_or(|before| before.image != image || now >= before.due) {
+                let prior = self
+                    .versions
+                    .get(&client)
+                    .filter(|before| before.image == image)
+                    .map_or(0, |before| before.failures);
+                let (version, failures, ttl) = match fresh_version(&path, work, stop) {
+                    Ok(Some(version)) => (Some(version), 0, 6 * 3600),
+                    Ok(None) => (None, prior + 1, 900),
+                    Err(_) => (None, prior + 1, (60_u64 << (prior.min(4))).min(900)),
+                };
+                self.versions.insert(
+                    client,
+                    VersionObservation {
+                        image,
+                        version,
+                        observed_at: crate::model::now_ms(),
+                        due: now + std::time::Duration::from_secs(ttl),
+                        failures,
+                    },
+                );
             }
-            #[cfg(unix)]
-            use std::os::unix::fs::MetadataExt;
-            let image = Image {
-                path: path.clone(),
-                length: metadata.len(),
-                modified: metadata.modified().ok(),
-                #[cfg(unix)]
-                identity: (metadata.dev(), metadata.ino()),
-            };
-            if self.versions.get(&client).is_none_or(|(before, _)| *before != image) {
-                let version = crate::process::Client::version_output(&path, work, stop)
-                    .ok()
-                    .and_then(|raw| String::from_utf8(raw).ok())
-                    .and_then(|text| crate::providers::version_in(&text))
-                    .filter(|version| {
-                        version.len() <= 64
-                            && version
-                                .split('.')
-                                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
-                    });
-                self.versions.insert(client, (image, version));
-            }
-            found.push(InstalledClient { client_id: client, version: self.versions[&client].1.clone() });
+            let observation = &self.versions[&client];
+            found.push(InstalledClient {
+                client_id: client,
+                version: observation.version.clone(),
+                observed_at: Some(observation.observed_at),
+            });
         }
         found
     }
@@ -214,6 +252,47 @@ impl Inventory {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn inventory_cache_has_bounded_recovery_while_measurement_probes_are_fresh() {
+        let dir =
+            std::env::temp_dir().join(format!("quotum-version-{}-{}", std::process::id(), crate::model::now_ms()));
+        std::fs::create_dir(&dir).unwrap();
+        let program = dir.join("client");
+        let payload = dir.join("version");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\nprintf x >> '{}/calls'\ncat '{}'\n", dir.display(), payload.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(&payload, "1.2.3").unwrap();
+        let mut config = Config::default();
+        config.clients.insert(
+            "opencode".into(),
+            crate::config::ClientSettings { path: Some(program.clone()), ..Default::default() },
+        );
+        let mut inventory = Inventory::default();
+        let stop = Stop::new();
+        let look = |inventory: &mut Inventory| inventory.look(&config, &[ClientId::OpenCode], &dir, &dir, &stop);
+        let first = look(&mut inventory);
+        std::fs::write(&payload, "2.3.4").unwrap();
+        assert_eq!(look(&mut inventory), first, "the installed observation retains its actual time and version");
+        for _ in 0..2 {
+            assert_eq!(fresh_version(&program, &dir, &stop).unwrap().as_deref(), Some("2.3.4"));
+        }
+        assert_eq!(std::fs::read_to_string(dir.join("calls")).unwrap(), "xxx");
+        inventory.versions.get_mut(&ClientId::OpenCode).unwrap().due = std::time::Instant::now();
+        assert_eq!(look(&mut inventory)[0].version.as_deref(), Some("2.3.4"));
+        std::fs::write(&payload, "1..3").unwrap();
+        inventory.versions.get_mut(&ClientId::OpenCode).unwrap().due = std::time::Instant::now();
+        assert!(look(&mut inventory)[0].version.is_none());
+        let due = inventory.versions[&ClientId::OpenCode].due;
+        assert!(due.saturating_duration_since(std::time::Instant::now()).as_secs() >= 898);
+        let before = std::fs::read_to_string(dir.join("calls")).unwrap();
+        look(&mut inventory);
+        assert_eq!(std::fs::read_to_string(dir.join("calls")).unwrap(), before);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn inventory_reprobes_only_a_changed_executable_and_removes_missing_clients() {
         let dir =

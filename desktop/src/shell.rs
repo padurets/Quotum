@@ -50,6 +50,7 @@ pub struct Shell {
     /// Held by a worker thread while it creates the window, never by the main thread.
     pub window_lock: Mutex<()>,
     pub window_intent: window::OpenIntent,
+    pub main_navigation: Mutex<crate::ipc::MainNavigation>,
     /// Sends the app's state to the board when it changes (see notifier.rs).
     pub notifier: Notifier,
     pub attention: crate::attention::Attention,
@@ -99,6 +100,7 @@ impl Shell {
             state: Mutex::new(State { hub: HubState::Starting, generation: 0, capabilities: Vec::new() }),
             window_lock: Mutex::new(()),
             window_intent: window::OpenIntent::default(),
+            main_navigation: Mutex::new(crate::ipc::MainNavigation::default()),
             notifier: Notifier::default(),
             attention: crate::attention::Attention::default(),
             secret_keys: crate::keys::Control::default(),

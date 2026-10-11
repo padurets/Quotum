@@ -25,6 +25,8 @@ const iso = (ms: number) => new Date(ms).toISOString();
 const ACCOUNT = 'a1b2c3d4e5f6a1b2c3d4e5f6';
 /** The page asks for events with this header (spec: `GET /api/events`). */
 const STREAM = {'quotum-stream': '1'};
+/** Device controls have a separate private-event suite; these assertions track board data. */
+const boardTypes=(frames:Frame[])=>frames.filter(frame=>!['devices','deviceContacts'].includes(frame.type)).map(frame=>frame.type);
 
 test('every subscription of one reader receives the same currency change',t=>{
   const at=Date.now(),store=new Store(':memory:',at),directory=new Directory(store.db);
@@ -158,7 +160,7 @@ async function open(base: string, cookie: string | undefined, board?: string, he
     events,
     next,
     within,
-    types: async (ms?: number) => (await within(ms)).map(e => e.type),
+    types: async (ms?: number) => boardTypes(await within(ms)),
     get ended() {
       return ended;
     },
@@ -363,12 +365,12 @@ test('a change goes out once, only as the part it changed, in one event however 
   clock.advance(1);
   const changed = await s.within();
   assert.deepEqual(
-    changed.map(e => e.type),
+    boardTypes(changed),
     ['card', 'history'],
   );
   assert.equal(changed[0].data.windows[0].used, 53);
-  assert.equal(changed[1].data.sources.length, 1);
-  assert.ok(changed[1].data.since <= clock.now() - 2 * MIN);
+  assert.equal(changed.find(event=>event.type==='history')!.data.sources.length, 1);
+  assert.ok(changed.find(event=>event.type==='history')!.data.since <= clock.now() - 2 * MIN);
 
   // The same numbers again change nothing a reader sees.
   await h.measure(secret, clock.now() - 500, {used: 53});
@@ -395,13 +397,13 @@ test("the board's own events and each reader's own go apart: its owner and a mem
   const [ofAlice, ofBob] = await Promise.all([alice.within(), bob.within()]);
   // Whose agents' work the board shows changed with it: all of its history reads otherwise.
   assert.deepEqual(
-    ofAlice.map(e => e.type),
+    boardTypes(ofAlice),
     ['view', 'card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'history'],
   );
   assert.deepEqual(ofAlice.at(-2)!.data, {sources: [source]});
   assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source], since: 0, changes: [{source,scope:'quota',since:0}]});
   assert.deepEqual(
-    ofBob.map(e => e.type),
+    boardTypes(ofBob),
     ['view', 'card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'history'],
     "not Bob's: no mine for him",
   );
@@ -760,7 +762,7 @@ test('what is a reader’s own or the hub’s that cannot be worked out: a new r
   await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Band'}});
   const told = await other.within();
   assert.deepEqual(
-    [await s.types(), told.map(e => e.type)],
+    [await s.types(), boardTypes(told)],
     [
       ['mine', 'boards'],
       ['mine', 'boards'],
@@ -806,7 +808,7 @@ test('her boards cannot be worked out as her own sources and the board change: t
   // Touched next: what is hers comes whole, with the source her devices now measure.
   await h.call('POST', `/api/boards/${team}`, {as: 'alice', body: {name: 'Team'}});
   const later = await a.within();
-  assert.deepEqual(later.find(e => e.type === 'mine')?.data.sources, [source], `alice later: ${later.map(e => e.type)}`);
+  assert.deepEqual(later.find(e => e.type === 'mine')?.data.sources, [source], `alice later: ${boardTypes(later)}`);
 });
 
 test('a ping finds out what nobody told: a session gone or a place on the board lost behind the hub’s back', async t => {
@@ -980,7 +982,7 @@ test('long polls carry the same events: a lease starts with hello and snapshot, 
   await h.measure(secret, Date.now() - MIN, {used: 60});
   const news = await waiting;
   assert.deepEqual(
-    news.events.map((e: Event) => e.type),
+    boardTypes(news.events),
     ['card', 'history'],
   );
   assert.equal(news.lease, first.lease);
@@ -1119,12 +1121,12 @@ test('every change a reader sees is told: what each request touches reaches the 
     [
       'a list of agents',
       () => h.call('POST', '/v1/sessions', {token: secret, body: {...agent, sentAt: iso(Date.now()), sessions: [session]}}),
-      ['sessions', 'devices'],
-      ['sessions', 'devices'],
+      ['sessions'],
+      ['sessions'],
       [],
     ],
-    ['a project renamed', () => h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}}), ['sessions', 'devices', 'history'], ['sessions', 'devices'], []],
-    ['a project given its name back', () => h.call('POST', '/api/projects/restore', {as: 'alice', body: {reported: ['quotum']}}), ['sessions', 'devices', 'history'], ['sessions', 'devices'], []],
+    ['a project renamed', () => h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}}), ['sessions', 'history'], ['sessions'], []],
+    ['a project given its name back', () => h.call('POST', '/api/projects/restore', {as: 'alice', body: {reported: ['quotum']}}), ['sessions', 'history'], ['sessions'], []],
     ['a view saved', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}}), [], ['view'], []],
     ['a height chosen', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 9}}}}}), [], ['view'], []],
     ['the height given back to the content', () => h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}}), [], ['view'], []],
@@ -1132,8 +1134,8 @@ test('every change a reader sees is told: what each request touches reaches the 
     ['a board made', () => h.call('POST', '/api/boards', {as: 'alice', body: {name: 'Solo'}}), ['boards'], ['boards'], []],
     ['a name changed', () => h.call('POST', '/api/account', {as: 'alice', body: {name: 'Alicia'}}), ['card'], ['card'], []],
     ['a source taken off', () => h.call('DELETE', `/api/boards/${team}/shares/${source}`, {as: 'alice'}), [], ['lineup', 'mine'], []],
-    ['a device renamed', () => h.call('POST', `/api/devices/${devices[0].id}`, {as: 'alice', body: {name: 'Book'}}), ['sessions', 'connections', 'devices'], ['connections', 'devices'], []],
-    ['a device disconnected', () => h.call('DELETE', `/api/devices/${devices[0].id}`, {as: 'alice'}), ['lineup', 'mine', 'connections', 'devices', 'history'], ['connections', 'devices'], []],
+    ['a device renamed', () => h.call('POST', `/api/devices/${devices[0].id}`, {as: 'alice', body: {name: 'Book'}}), ['sessions', 'connections'], ['connections'], []],
+    ['a device disconnected', () => h.call('DELETE', `/api/devices/${devices[0].id}`, {as: 'alice'}), ['lineup', 'mine', 'connections', 'history'], ['connections'], []],
   ];
   for (const [what, act, onOwn, onShared, onBobs] of rows) {
     const done = await act();
@@ -1227,9 +1229,9 @@ test('what each change of data touches reaches the boards it shows on: people jo
       ['connections'],
       [],
     ],
-    ['the machine that told of agents is disconnected', () => h.call('DELETE', `/api/devices/${laptop}`, {as: 'alice'}), ['sessions', 'refresh', 'connections', 'devices'], ['connections', 'devices'], []],
-    ['a machine tells of its agents', () => agents('desk', [session]), ['sessions', 'devices'], ['devices'], []],
-    ['and then of none', () => agents('desk', []), ['sessions', 'devices'], ['devices'], []],
+    ['the machine that told of agents is disconnected', () => h.call('DELETE', `/api/devices/${laptop}`, {as: 'alice'}), ['sessions', 'refresh', 'connections'], ['connections'], []],
+    ['a machine tells of its agents', () => agents('desk', [session]), ['sessions'], [], []],
+    ['and then of none', () => agents('desk', []), ['sessions'], [], []],
     ['the trackers asked', () => h.resets.round(), ['resets'], ['resets'], ['resets']],
   ];
   for (const [what, act, onOwn, onShared, onCarols] of rows) {

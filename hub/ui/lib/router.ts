@@ -135,6 +135,12 @@ export function settingsHref(path: string, boardId?: string) {
   return path + (query.size ? '?' + query : '');
 }
 
+/** All measurement entry points retain the board and range while selecting an own connection. */
+export function measurementDevicesHref(sourceId:string,boardId?:string) {
+  const path=settingsHref('/settings/connections',boardId);
+  return path+(path.includes('?')?'&':'?')+'source='+encodeURIComponent(sourceId);
+}
+
 /** Returning to the selected board keeps its range; another destination starts live. */
 export function boardHref(boardId: string) {
   const selected = selectedBoard();

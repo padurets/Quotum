@@ -6,7 +6,6 @@ import {boardTitle, rereadSession, type Board, type Session, type User} from '..
 import {inApp, settingsSections, type AppState} from '../lib/app';
 import {useApp} from '../lib/board';
 import {Profile, Password, Browser} from './Account';
-import {Devices, DeviceCode, DeviceTokens} from './Machines';
 import {Projects} from './Projects';
 import {SharesTab, MembersTab} from './BoardDialog';
 import {AppSection, Measuring} from './Desktop';
@@ -18,7 +17,7 @@ import {CurrencySettings} from './CurrencySettings';
 type Section = {id: string; title: Key};
 const PERSONAL: Section[] = [
   {id: 'profile', title: 'settings.profile'}, {id: 'connections', title: 'settings.connections'},
-  {id: 'devices', title: 'devices.title'}, {id: 'projects', title: 'projects.manage'},
+  {id: 'projects', title: 'projects.manage'},
   {id: 'currencies', title: 'currencies.title'},
   {id: 'interface', title: 'settings.interface'}, {id: 'application', title: 'settings.application'},
 ];
@@ -116,6 +115,7 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
   const section = boardPath ? boardPath[2] ?? 'general' : path.split('/')[2] ?? first;
   const base = boardPath ? '/boards/' + boardPath[1] + '/settings' : '/settings';
   useEffect(() => {
+    if (!boardPath && section === 'devices') navigate('/settings/connections'+address.slice(path.length),true);
     if (path === base) navigate(settingsHref(base + '/' + section, board?.id), true);
   }, [path, base, section, board?.id]);
   if (boardPath && (local || board?.id !== boardPath[1])) return <main><section className="panel settings-content"><ErrorLine error={null} /><p>{t('settings.unavailable')}</p></section></main>;
@@ -125,17 +125,6 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
       section === 'profile' ? <><Profile user={user} onChanged={refresh} /><Password /></> :
       section === 'connections' ? <ConnectionsPage userId={user.id} boards={boards} trustedKeys={trustedKeys} local={local} /> :
       section === 'currencies' ? <CurrencySettings key={user.id} /> :
-      section === 'devices' ? <>
-        <section className="settings-section">
-          <h2>{t('devices.title')}</h2>
-          <ul className="connections-list"><Devices local={local} /></ul>
-          {!local && <DeviceCode />}
-        </section>
-        {!local && <section className="settings-section">
-          <h2>{t('connect.tokenTitle')}</h2>
-          <DeviceTokens />
-        </section>}
-      </> :
       section === 'projects' ? <Projects /> : section === 'interface' ? <><p className="dialog-text">{t('settings.browserScope')}</p><Browser title={t('settings.interface')} /></> :
       section === 'application' && appState ? <>{capabilities.includes('measuring') && <Measuring state={appState} onState={onAppState} />}{capabilities.includes('app') && <AppSection state={appState} onState={onAppState} />}</> : null}
   </SettingsFrame>;

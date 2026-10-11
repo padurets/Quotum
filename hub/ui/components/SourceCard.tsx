@@ -24,6 +24,8 @@ import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
 import {ErrorLine, Segmented} from './Kit';
 import {useBubble} from './Tooltip';
 import {quotaPeriods,quotaRemaining} from '../lib/subscription';
+import {navigate, measurementDevicesHref} from '../lib/router';
+import {app, inApp} from '../lib/app';
 
 /** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
 function PlanMark({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
@@ -268,6 +270,7 @@ function Frequency({source, board}: {source: Card; board: string}) {
 
 /** A card's menu: holders choose frequency, readers refresh, and the board's owner arranges its view. */
 function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Card; title: string; arrange: Arrange; boardId: string; takeOff: boolean}) {
+  const mine = useMine(source.id);
   const [error, setError] = useState<unknown>(null);
   const [open, setOpen] = useState(false);
   const hidden = new Set(arrange.view.windows);
@@ -328,6 +331,9 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
         </div>
       )}
       <Frequency key={`${boardId}:${source.id}`} source={source} board={boardId} />
+      {mine&&providerOf(source.provider)?.measuredBy==='client'&&<button type="button" className="popover-row" onClick={()=>{
+        navigate(measurementDevicesHref(source.id,boardId));
+      }}>{t('measurements.manage')}</button>}
       <div className={owner ? 'popover-section' : undefined}>
         <RefreshAction id={source.id} board={boardId} onAccepted={() => setOpen(false)} />
         {owner && <HideRow section={false} onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('widget.hide')}</HideRow>}
@@ -370,7 +376,8 @@ function AllHidden({source, arrange}: {source: Card; arrange: Arrange}) {
  * when they were measured and when the next measurement comes and why. It is what of a
  * card changes with time: it renders at those moments, the card does not.
  */
-export function CardMark({source}: {source: Card}) {
+export function CardMark({source,compact=false}: {source: Card;compact?:boolean}) {
+  const mine = useMine(source.id);
   const pace = useCadence(source.id);
   const refresh = useRefresh(source.id);
   const pending = refreshPending(refresh);
@@ -420,7 +427,7 @@ export function CardMark({source}: {source: Card}) {
       document.removeEventListener('pointerdown', hide);
     };
   }, [tip]);
-  return (
+  const mark = (
     <span
       className={`provider-mark ${warn ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
       data-time="mark"
@@ -446,6 +453,10 @@ export function CardMark({source}: {source: Card}) {
       </span>
     </span>
   );
+  return compact && mine && providerOf(source.provider)?.measuredBy==='client' ? <Popover label={t('measurements.manage')} trigger={mark} triggerClass="measurement-mark-button" align="left" width={288}>
+    <div className="popover-note">{lines.map((line,index)=><div key={index}>{line}</div>)}</div>
+    <button type="button" className="popover-row" onClick={()=>inApp()?void app.openMain({kind:'devices',sourceId:source.id}):navigate(measurementDevicesHref(source.id))}>{t('measurements.manage')}</button>
+  </Popover> : mark;
 }
 
 /** The card's tray: reset news, additional funds, free resets and running agents. */

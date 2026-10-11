@@ -22,11 +22,13 @@ function fixture(){
     if(!slot.current||deps.some((value,i)=>!Object.is(value,slot.current!.deps[i])))slot.current={fn,deps};
     return slot.current.fn;
   };
-  const context={exports:{} as {Devices:(props:{local:boolean})=>unknown},require:(name:string)=>{
+  const context={URLSearchParams,exports:{} as {Devices:(props:{local:boolean})=>unknown},require:(name:string)=>{
     if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect:hooks.useLayoutEffect,useCallback:memo};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'};
+    if(name.endsWith('/router'))return {useLocation:()=>'/settings/connections'};
+    if(name==='./MeasurementDevices')return {};
     if(name.endsWith('/board'))return {useConnectionsRevision:()=>state.board?.connectionsRevision??0,useDevicesRevision:()=>state.devicesRevision??0};
-    if(name.endsWith('/http'))return {call:(method:string,url:string)=>{assert.equal(method,'GET');assert.equal(url,'/api/devices');return new Promise<Device[]>((resolve,reject)=>reads.push({resolve,reject}));}};
+    if(name.endsWith('/http'))return {call:(method:string,url:string)=>{assert.equal(method,'GET');assert.equal(url,'/api/devices?measurement=1');return new Promise((resolve,reject)=>reads.push({resolve:devices=>resolve({devices,hubVersion:'0.7.0',sources:[]}),reject}));}};
     if(name.endsWith('/providers'))return {PROVIDERS:{}};
     if(name.endsWith('/format'))return {stamp:()=>''};
     if(name.endsWith('/quota'))return {errorText:()=>''};
@@ -43,28 +45,29 @@ function fixture(){
   const open=()=>{const connection=render().find(node=>node.type===row)!;const button=nodes(connection.props.actions).find(node=>node.type==='button'&&nodes(node.props.children).some(child=>child.props.children==='devices.clients'))!;(button.props.onClick as ()=>void)();render();};
   const close=()=>{(render().find(node=>node.type===modal)!.props.onClose as ()=>void)();render();};
   const hint=()=>{state=reduce(state,{type:'hub',event:{type:'devices',data:{}}});render();};
+  const contact=(lastSeenAt:number)=>{state=reduce(state,{type:'hub',event:{type:'deviceContacts',data:{devices:[{deviceId:device.id,lastSeenAt}]}}});render();};
   const reconnect=()=>{state=reduce(state,{type:'hub',event:{type:'snapshot',data:snapshot}});render();};
-  const projects=()=>render().filter(node=>node.type==='small').map(node=>node.props.children);
-  return {render,reads,open,close,hint,reconnect,projects,errorLine};
+  const projects=()=>{const section=render().find(node=>node.type==='div'&&nodes(node.props.children).some(child=>child.type==='h3'&&child.props.children==='agents.title'));return Array.from(nodes(section?.props.children).filter(node=>node.type==='small').map(node=>node.props.children));};
+  return {render,reads,open,close,hint,contact,reconnect,projects,errorLine};
 }
 
-test('device disclosure refreshes on opening, presence and reconnect, but closed presence hints make no reads',async()=>{
+test('an open Devices view coalesces owner hints, contacts make no reads, and a disclosure shares its data',async()=>{
   const f=fixture();f.render();assert.equal(f.reads.length,1);
   f.reads[0].resolve([device]);await flush();f.render();
-  f.hint();assert.equal(f.reads.length,1,'closed disclosure ignores presence');
-  f.open();assert.equal(f.reads.length,2,'opening reads fresh owner data on a shared board');
+  for(let at=2;at<=10;at++)f.contact(at);
+  assert.equal(f.reads.length,1,'live contact deltas do not reload an open Devices view');
+  f.open();assert.equal(f.reads.length,1,'the disclosure consumes the same owner projection');
+  f.hint();assert.equal(f.reads.length,2);
   f.reads[1].resolve([{...device,sessions:[session]}]);await flush();assert.deepEqual(f.projects(),['Current project']);
   f.hint();assert.equal(f.reads.length,3);
-  f.reads[2].resolve([device]);await flush();assert.deepEqual(f.projects(),[],'full replacement or expiry clears the current list');
+  f.reads[2].resolve([device]);await flush();assert.deepEqual(f.projects(),[]);
   f.reconnect();assert.equal(f.reads.length,4);
-  f.reads[3].resolve([device]);await flush();f.close();f.hint();assert.equal(f.reads.length,4);
-  f.open();assert.equal(f.reads.length,5,'reopening cannot restore a cached session');
-  f.reads[4].resolve([device]);await flush();assert.deepEqual(f.projects(),[]);
+  f.reads[3].resolve([device]);await flush();f.close();f.open();assert.equal(f.reads.length,4);
 });
 
-test('an obsolete device reply or error cannot restore a closed session after newer owner data',async()=>{
+test('an obsolete device reply or error cannot restore a session after newer owner data',async()=>{
   const f=fixture();f.render();f.reads[0].resolve([device]);await flush();f.open();
-  f.hint();f.reads[2].resolve([device]);await flush();
+  f.hint();f.hint();f.reads[2].resolve([device]);await flush();
   f.reads[1].resolve([{...device,sessions:[session]}]);await flush();assert.deepEqual(f.projects(),[]);
   f.hint();f.hint();f.reads[4].resolve([device]);await flush();f.reads[3].reject(new Error('obsolete failure'));await flush();
   assert.ok(!f.render().some(node=>node.type===f.errorLine));

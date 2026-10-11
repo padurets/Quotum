@@ -411,6 +411,40 @@ own schedule (eco mode) once the hub has been silent for four minutes and that
 measurement is due. An agent's log says when another device measures; waiting for the
 hub's pace is not logged.
 
+### Device participation and preferred collectors
+
+Schema 22 adds durable per-device participation gates, collector epochs, policy
+confirmation, global source preferences, bounded mutation receipts and latest resource
+producer anchors. Device participation restricts admission independently of tracking,
+connections, holdings and history. Effective gate changes permanently require launch
+epoch evidence; a delayed packet cannot bypass disable/re-enable using corrected time.
+The agent bootstraps policy before discovery and enforces its connection-bound durable
+cache separately from local configuration and scheduler waits.
+
+MeasurementSelection indexes current account evidence in both directions. Explicit
+check-ins can declare several accounts across batches; a singleton replaces the previous
+login, while multiplexed account evidence expires independently. Old resource backlog
+cannot refresh newer account evidence. Historical device
+bindings are display facts. Auto uses Duty and Cadence; a global preferred own eligible
+device waits for the issued measurement's safe boundary, falls back on ordinary eligible
+collectors when unavailable, and returns on recovery. Reads and intent saves do not
+extend leases. No per-resource parallel collector or completeness ranking is added.
+
+Ingest decides resource admission, issued-command acknowledgement, source failure and
+manual fresh-data completion separately. Modern commands have immutable IDs and launch
+scope; an accepted fresh resource can complete a request without acknowledging its
+command. Unknown/legacy failures remain private device diagnostics. Producer capture
+keeps independent latest value/observation anchors for windows, resets and funds.
+Unavailable readings preserve the value producer; equal finite readings advance the
+latest accepted producer. Historical absent evidence stays unknown.
+
+Owner contact events are coalesced separately from semantic Devices hints, rechecked
+at disclosure, and consumed by small contact-row selectors. My connections hosts the
+controls; widgets offer contextual navigation. Semver age, capability confirmation,
+collector eligibility and resource availability are distinct diagnostics. Native compact
+navigation carries a bounded typed destination through the existing command and keeps
+one latest intent. Local desktop retains its local measurement configuration.
+
 ## Delivery
 
 The agent posts each measurement right away. When the hub is unreachable, measurements
@@ -1034,11 +1068,11 @@ and its limits.
   signs up without an invitation but with its setup code: a new hub prints one to its
   log, so only whoever started it can claim it. After that, signing up needs an invite
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
-- **Devices** are running agents, and each belongs to a person. The *Settings → Devices* page
+- **Devices** are running agents, and each belongs to a person. The *My connections → Devices* section
   shows a person's devices, what each delivers and the last failure of each client
   there (not logged in, too old…); the person names them there. The page has two open
   sections: devices with the one-time connection command, and device tokens with their
-  creation and revocation actions. Provider accounts have their own *My connections* page.
+  creation and revocation actions. Provider accounts and devices share *My connections*.
   *Agent activity → Settings → Manage projects* lists the projects their agents worked
   on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are

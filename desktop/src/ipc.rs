@@ -1,5 +1,5 @@
-//! The six operations the board may request, independent of its window engine, and the
-//! app's state it is sent whenever that changes (on Windows by a seventh, `watch_state`; on
+//! The operations the board may request, independent of its window engine, and the
+//! app's state it is sent whenever that changes (on Windows by `watch_state`; on
 //! Linux the window's preload script listens).
 use crate::{
     agent, autostart, host,
@@ -29,7 +29,10 @@ pub const COMMANDS: [&str; 9] = [
 pub enum Request {
     AppState,
     ResetSecretKey,
-    OpenMain,
+    OpenMain {
+        #[serde(default)]
+        destination: Option<MainDestination>,
+    },
     ClosePanel,
     ReportPanelHeight {
         #[serde(rename = "heightCssPx")]
@@ -49,12 +52,45 @@ pub enum Request {
     Quit,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MainDestination {
+    Devices {
+        #[serde(rename = "sourceId")]
+        source_id: String,
+    },
+}
+impl MainDestination {
+    fn valid(&self) -> bool {
+        let Self::Devices { source_id } = self;
+        let Some((provider, id)) = source_id.split_once(':') else {
+            return false;
+        };
+        matches!(provider, "claude" | "codex" | "antigravity")
+            && id.len() == 12
+            && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }
+}
+
+#[derive(Default, Clone, Serialize)]
+pub struct MainNavigation {
+    pub revision: u64,
+    pub destination: Option<MainDestination>,
+}
+impl MainNavigation {
+    pub fn set(&mut self, destination: Option<MainDestination>) {
+        self.revision += 1;
+        self.destination = destination;
+    }
+}
+
 /// What the board shows of the app: its agent, the settings of measuring, start at
 /// login, where its files are, which build it is. It goes to the board numbered (`seq`,
 /// see notifier.rs): the board keeps the newest.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppState {
+    pub main_navigation: MainNavigation,
     pub secret_key: crate::keys::PublicState,
     pub agent: agent::State,
     pub providers: Vec<agent::Provided>,
@@ -76,6 +112,7 @@ fn state_of(shell: &Arc<Shell>) -> AppState {
     let (agent, providers, clients, sessions) = agent::snapshot(shell);
     let (notifications, locale) = shell.desktop_settings();
     AppState {
+        main_navigation: shell.main_navigation.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         secret_key: shell.secret_keys.state(),
         agent,
         providers,
@@ -129,14 +166,15 @@ pub fn execute(
         return Err("not the board of the running hub".into());
     }
     let compact = role == window::Role::Compact;
-    let panel_command = matches!(request, Request::OpenMain | Request::ClosePanel | Request::ReportPanelHeight { .. });
+    let panel_command =
+        matches!(request, Request::OpenMain { .. } | Request::ClosePanel | Request::ReportPanelHeight { .. });
     if (!compact && panel_command)
         || (compact
             && !matches!(
                 request,
                 Request::AppState
                     | Request::Reenter
-                    | Request::OpenMain
+                    | Request::OpenMain { .. }
                     | Request::ClosePanel
                     | Request::ReportPanelHeight { .. }
             )
@@ -145,8 +183,11 @@ pub fn execute(
         return Err("command unavailable in this window".into());
     }
     match request {
-        Request::OpenMain => {
-            host::open_main_from_panel(shell, instance);
+        Request::OpenMain { destination } => {
+            if destination.as_ref().is_some_and(|target| !target.valid()) {
+                return Err("invalid main destination".into());
+            }
+            host::open_main_from_panel(shell, instance, destination);
             return Ok(Value::Null);
         }
         Request::ClosePanel => {
@@ -197,5 +238,22 @@ mod tests {
         assert!(serde_json::from_str::<Request>(r#"{"command":"set_autostart","args":{"on":true}}"#).is_ok());
         assert!(serde_json::from_str::<Request>(r#"{"command":"set_autostart","args":{"on":"yes"}}"#).is_err());
         assert!(serde_json::from_str::<Request>(r#"{"command":"open_file","args":{"path":"/tmp/a"}}"#).is_err());
+    }
+    #[test]
+    fn main_destinations_are_bounded_and_keep_only_the_latest_intent() {
+        let destination = MainDestination::Devices { source_id: "codex:123456abcdef".into() };
+        assert!(destination.valid());
+        for source in ["https://example.com", "../settings", "codex:123", "codex:123456abcdeF", "opencode:123456abcdef"]
+        {
+            assert!(!MainDestination::Devices { source_id: source.into() }.valid());
+        }
+        assert!(serde_json::from_str::<Request>(r#"{"command":"open_main","args":{"destination":{"kind":"devices","sourceId":"codex:123456abcdef","url":"https://example.com"}}}"#).is_err());
+        let mut pending = MainNavigation::default();
+        pending.set(Some(destination));
+        pending.set(Some(MainDestination::Devices { source_id: "claude:abcdef123456".into() }));
+        assert_eq!(pending.revision, 2);
+        assert_eq!(serde_json::to_value(&pending).unwrap()["destination"]["sourceId"], "claude:abcdef123456");
+        pending.set(None);
+        assert!(pending.destination.is_none());
     }
 }

@@ -120,6 +120,7 @@ async function main(extend?: ExtendHub) {
     const now = Date.now();
     store.prune(now);
     directory.prune(now);
+    ingest.measurementSelection.prune(now);
     ingest.live.sweep(now);
   };
   prune();

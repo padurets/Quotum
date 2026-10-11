@@ -393,7 +393,7 @@ const ACCOUNT = 'a1b2c3d4e5f6a1b2c3d4e5f6';
 const machine = (id: string) => ({id: `${id}-0123456789`, name: id, os: 'linux', arch: 'x86_64'});
 
 /** A hub with Alice and a machine token of hers; her machines ask about one Codex account. */
-function hub() {
+function hub(modern=false) {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-cadence-')), 'db.sqlite'), t0);
   const directory = new Directory(store.db);
   const duty = new Duty();
@@ -402,10 +402,12 @@ function hub() {
   const secret = newSecret('qt_m');
   directory.createToken(secret, '…', alice.id, 'images', t0);
   const token = ingest.authenticate(`Bearer ${secret}`) as Credential;
+  const commands=new Map<string,string>();
   const ask = (device: string, t: number, change: {active?: boolean; minIntervalMs?: number; paced?: boolean} = {}) => {
     const {paced = true, ...subscription} = change;
-    const body = {version: 1, agent: 'quotum/0.4.0', paced, machine: machine(device), subscriptions: [{provider: 'codex', account: ACCOUNT, active: false, ...subscription}]};
-    return ingest.checkin(token, body, t).subscriptions[0];
+    const body = {version: 1, agent: 'quotum/0.4.0',...(modern?{capabilities:{measurementPolicy:1,attemptContext:1}}:{}), paced, machine: machine(device), subscriptions: [{provider: 'codex', account: ACCOUNT, active: false, ...subscription}]};
+    const result=ingest.checkin(token,body,t).subscriptions[0];if(result.commandId)commands.set(device,result.commandId);
+    const {commandId:_id,accountKey:_account,...answer}=result;return answer;
   };
   const deliver = (device: string, t: number, used = 50, nextInMs = 4 * MIN, failure?: string) =>
     ingest.accept(
@@ -419,6 +421,7 @@ function hub() {
           ? []
           : [
               {
+                ...(modern?{attemptContext:{version:1,authority:store.measurementPolicies.authority,collectorEpoch:0,target:{kind:'verified',accountKey:ACCOUNT},...(commands.has(device)?{commandId:commands.get(device)}:{})}}:{}),
                 provider: 'codex',
                 account: ACCOUNT,
                 plan: 'pro',
@@ -428,7 +431,7 @@ function hub() {
                 windows: [{id: '5h', kind: 'session', minutes: 300, usedPercent: used, resetsAt: null}],
               },
             ],
-        failures: failure ? [{provider: 'codex', observedAt: iso(t), error: failure}] : [],
+        failures: failure ? [{...(modern?{attemptContext:{version:1,authority:store.measurementPolicies.authority,collectorEpoch:0,target:{kind:'verified',accountKey:ACCOUNT},...(commands.has(device)?{commandId:commands.get(device)}:{})}}:{}),provider: 'codex', observedAt: iso(t), error: failure}] : [],
       },
       t,
     );
@@ -498,7 +501,7 @@ test('S8: a device that does not follow the pace is answered as before', () => {
 });
 
 test('S9: a paced holder asks often without extending its lease; a device waiting out failures does not take duty', () => {
-  const h = hub();
+  const h = hub(true);
   const laptop = () => h.device('laptop');
   assert.equal(h.ask('laptop', t0).measure, true);
   h.deliver('laptop', t0);
@@ -528,13 +531,14 @@ test('S9: a paced holder asks often without extending its lease; a device waitin
   // A device in its pause and in use does not take duty from an idle holder either.
   h.deliver('server', lease + 2 * S);
   h.follow('server', lease + 15 * S, lease + 20 * MIN);
+  h.ask('laptop',lease + 20 * MIN);
   h.deliver('laptop', lease + 20 * MIN, 50, 4 * MIN, 'timeout');
   const busy = h.ask('laptop', lease + 20 * MIN + S, {active: true});
   assert.deepEqual([busy.measure, busy.onDuty], [false, false]);
   assert.notEqual(h.duty.holder(ACCOUNT), laptop());
 
   // Handed over to a working device that measures at most every 30 minutes: it measures at once and keeps its own pace.
-  const g = hub();
+  const g = hub(true);
   g.follow('server', t0, t0 + 20 * MIN);
   const taken = g.follow('laptop', t0 + 20 * MIN, t0 + 90 * MIN, {active: true, minIntervalMs: 30 * MIN});
   assert.equal(taken[0], t0 + 20 * MIN);
@@ -542,7 +546,7 @@ test('S9: a paced holder asks often without extending its lease; a device waitin
 });
 
 test('S9: a new holder waiting out its failures measures when its pause is over', () => {
-  const h = hub();
+  const h = hub(true);
   // The server measures, then goes silent; the laptop, not following the pace, delivers once its lease is over, then fails.
   h.follow('server', t0, t0 + 3 * MIN);
   h.deliver('laptop', t0 + 8 * MIN);
@@ -554,7 +558,7 @@ test('S9: a new holder waiting out its failures measures when its pause is over'
 });
 
 test('S12: failures reach the pace through the hub, even when the subscription is fresh from another device', () => {
-  const h = hub();
+  const h = hub(true);
   h.follow('laptop', t0, t0 + 5 * MIN);
   // The laptop is told to measure, and fails a minute after its last good measurement.
   const due = h.follow('laptop', t0 + 5 * MIN, t0 + 7 * MIN).at(-1)!;
@@ -566,7 +570,7 @@ test('S12: failures reach the pace through the hub, even when the subscription i
   assert.notEqual(h.ingest.nextMeasurement(h.source(), ACCOUNT, due + 45 * S + 2 * MIN).value, null, 'over');
 
   // A device that never delivered for the provider: its failure is about the subscription it was told to measure.
-  const g = hub();
+  const g = hub(true);
   assert.equal(g.ask('laptop', t0).measure, true);
   g.deliver('laptop', t0 + 5 * S, 50, 4 * MIN, 'timeout');
   const waiting = g.ask('laptop', t0 + 15 * S);

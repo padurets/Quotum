@@ -213,6 +213,7 @@ quotas in credits, unknown resets, exhausted and closed allowances, partial and
 unsupported readings, and private access failures. The other catalogue cards remain
 available through Add widget.
 `DEV_SET=analytics DEV_STILL=true make dev` shows native quotas, z.ai, OpenRouter and DeepSeek with the quota and budget analytics and the separate subscription-funds chart.
+`DEV_SET=devices DEV_STILL=true make dev` shows agent versions, disabled collectors, an epoch barrier, a preferred device and retained measurement origins in My connections.
 `DEV_SET=onboarding DEV_STILL=true make dev` exercises board and account onboarding.
 Ana owns *Studio* and *New board*; Boris is a member of both. OpenRouter starts
 unconnected. Add widget offers synthetic keys for successful, partial and failed

@@ -31,7 +31,7 @@ const Row = memo(function Row({id}: {id: string}) {
   const working = t('desktop.working', {count: sessions.filter(s => s.working).length});
   return <section className="card compact-card">
     <div className="card-head">
-      <CardMark source={card}/>{!funds&&<BalanceMark source={card}/>}<div className="card-heading"><h2 title={title}>{title}</h2>
+      <CardMark source={card} compact/>{!funds&&<BalanceMark source={card}/>}<div className="card-heading"><h2 title={title}>{title}</h2>
         {(card.meters||providerOf(card.provider))&&<small className="resource-type">{t(providerOf(card.provider)?.funding==='wallet'?'resource.budget':'resource.subscription')}</small>}
       </div>
       {sessions.length > 0 && <small className="compact-agents" title={t('desktop.total', {count: sessions.length})}>{working}</small>}

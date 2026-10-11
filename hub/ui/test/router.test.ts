@@ -3,7 +3,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {guardNavigation, navigate, onLocation, selectedBoard, settingsHref} from '../lib/router';
+import {guardNavigation, navigate, onLocation, selectedBoard, measurementDevicesHref} from '../lib/router';
 import {onTimeRange, showBoard, timeRange} from '../lib/timeRange';
 
 test('leaving settings confirms its draft before flushing a large view and keeps history intact on failure',async()=>{
@@ -41,9 +41,10 @@ test('Back restores its own board and range after settings instead of rewriting 
     const off = onTimeRange(() => {}), last = onTimeRange(() => remaining++);
     off();
     showBoard('A');
-    navigate(settingsHref('/settings/connections'));
+    navigate(measurementDevicesHref('codex:123456abcdef'));
     assert.equal(url.pathname, '/settings/connections');
     assert.equal(url.searchParams.get('board'), 'A');
+    assert.equal(url.searchParams.get('source'),'codex:123456abcdef');
     assert.deepEqual(timeRange(), {from: 1800000000000, to: 1800003600000});
     assert.equal(selectedBoard(), 'A');
     navigate('/?board=B&from=1800007200000&to=1800010800000'); showBoard('B');
@@ -52,7 +53,7 @@ test('Back restores its own board and range after settings instead of rewriting 
     assert.equal(url.searchParams.get('board'), 'A', 'the previous screen cannot overwrite the popped location');
     assert.deepEqual(timeRange(), {from: 1800000000000, to: 1800003600000});
     assert.equal(changes, 3);
-    assert.equal(remaining, 2, 'one chart unmounting cannot detach the other range readers');
+    assert.equal(remaining, 3, 'source selection, another board and Back still reach the subscribed range reader');
     last();
   } finally {
     stop(); stopRange();

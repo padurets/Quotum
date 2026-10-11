@@ -1641,4 +1641,13 @@ const machineClients: DemoSet = {id:'clients',about:'OpenCode work and installed
   {kind:'machine',id:'laptop',expect:[{name:'Laptop'}]},
   {kind:'board',id:'team',name:'Shared clients',owner:'ana',members:[],expect:[{state:'onboarding'}]},
 ]};
-export const SETS: DemoSet[] = [all, showcase, activity,money,quotas,analytics, machineClients, ONBOARDING];
+/** Receipt loss, conflicts and handover are held by measurementPolicy/refresh tests. */
+export const MEASUREMENT_DEVICE_SCENES=[{id:'fleet',expect:['behind','ahead','unknown','disabled','requires-epoch','preferred','origins','independent-funds','measurement-version']} ] as const;
+const measurementDevices:DemoSet={id:'devices',about:'Measurement participation, preferred collectors, versions and retained producers',scene:'quiet',entries:[
+  {kind:'person',id:'ana',name:'Ana',agents:true,expect:[{state:'widgets'}],look:['My connections has devices, collector controls and origins in EN/RU']},
+  {kind:'machine',id:'laptop',expect:[{name:'laptop'}]},
+  {kind:'machine',id:'desktop',expect:[{name:'desktop'}]},
+  {kind:'machine',id:'backup',expect:[{name:'backup'}]},
+  {kind:'card',id:'codex-managed',provider:'codex',plan:'Plus',machines:['laptop','desktop','backup'],history:6*HOUR,windows:[weekly({since:-DAY,use:steady(0,5)})],on:{ana:{name:'Measurement selection'}},expect:[{title:'Measurement selection'}],look:['The existing status and settings open My connections without changing card height']},
+]};
+export const SETS: DemoSet[] = [all, showcase, activity,money,quotas,analytics, machineClients,measurementDevices, ONBOARDING];

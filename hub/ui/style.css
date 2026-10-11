@@ -1039,6 +1039,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .settings-item-main small { display: block; margin-top: 3px; color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
 .settings-list-row .settings-item-main { white-space: normal; overflow: visible; }
 .settings-item-detail { max-width: 24ch; color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
+.settings-item-detail small { display: block; margin-top: 3px; font-size: inherit; }
 .settings-item-actions { display: flex; align-items: center; justify-content: flex-end; }
 .view-save-notice { margin: 16px 28px; padding: 16px; border: 1px solid var(--hair-2); border-radius: 12px; overflow-wrap: anywhere; }
 .view-save-notice > b { font-size: 13px; }
@@ -1201,3 +1202,6 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
   .currency-details .currency-history { grid-template-columns: minmax(0, 1fr); }
   .currency-history .settings-item-actions { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: 4px; }
 }
+
+/* A compact status keeps the logo geometry while opening the shared disclosure. */
+.text-button.measurement-mark-button { display: flex; padding: 0; border: 0; }

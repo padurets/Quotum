@@ -706,7 +706,7 @@ pub fn close_panel(shell: &Arc<Shell>, instance: u64) {
         retire_panel(shell, paint);
     }
 }
-pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64) {
+pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64, destination: Option<crate::ipc::MainDestination>) {
     let shell = shell.clone();
     thread::spawn(move || {
         let paint = shell.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -723,6 +723,8 @@ pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64) {
             toggle.closed_at(paint.request);
             toggle.revision()
         };
+        shell.main_navigation.lock().unwrap_or_else(|e| e.into_inner()).set(destination);
+        crate::ipc::publish(&shell);
         open_now(&shell, "the compact panel", Role::Main, request);
         retire_panel(&shell, paint);
     });
