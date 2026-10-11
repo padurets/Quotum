@@ -676,8 +676,10 @@ mod tests {
         assert_eq!(wire["clientSessions"][0]["clientId"], "opencode");
         assert_eq!(wire["sessions"][0]["clientId"], "codex");
         assert_eq!(wire["tracking"]["version"], 1);
-        assert!(wire["tracking"]["clients"].as_array().unwrap().contains(&serde_json::json!("claude")),
-            "disabled measurement collectors remain in the tracking scope");
+        assert!(
+            wire["tracking"]["clients"].as_array().unwrap().contains(&serde_json::json!("claude")),
+            "disabled measurement collectors remain in the tracking scope"
+        );
         let many = (0..201)
             .map(|i| {
                 let mut s = crate::activity::attribution::corrected_sessions()[0].clone();

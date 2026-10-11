@@ -101,6 +101,8 @@ test('native quota thresholds use original samples and exact time boundaries',()
   const a={at:start,used:10,resetAt:start+day,staleAfterMs:30*minute},b={...a,at:start+30*minute,used:11};
   assert.equal(quotaSteps('weekly',[a,b]).length,1);
   assert.deepEqual(quotaSteps('weekly',[a,{...b,used:10.99}]),[]);
+  assert.equal(quotaSteps('weekly',[{...a,used:0.15},{...b,used:1.15}]).length,1,'decimal endpoints do not lose the threshold through subtraction');
+  assert.deepEqual(quotaSteps('weekly',[a,{...b,used:10.99996}]),[],'display rounding cannot promote a smaller native change');
   assert.deepEqual(quotaSteps('weekly',[{...a,staleAfterMs:day},{...b,at:b.at+1}]),[]);
   assert.deepEqual(quotaSteps('weekly',[{...a,validUntil:b.at},b]),[]);
   assert.deepEqual(quotaSteps('weekly',[{...a,resetAt:b.at},{...b,resetAt:b.at+day}]),[]);

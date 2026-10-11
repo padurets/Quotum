@@ -7,7 +7,7 @@ export type UsageSample=Pick<Sample,'at'|'used'|'resetAt'|'staleAfterMs'|'validU
 export function quotaSteps(windowId:string,samples:UsageSample[]):UsageStep[] {
   const steps:UsageStep[]=[];
   for(let i=1;i<samples.length;i++) {const a=samples[i-1],b=samples[i],step=edge(a,b);
-    if(step.valid&&step.delta>=1&&b.at-a.at<=30*60_000&&a.resetAt!==null&&b.at<a.resetAt)steps.push({windowId,from:a.at,to:b.at,growth:step.delta,resetAt:b.resetAt});
+    if(step.valid&&b.used>=a.used+1&&b.at-a.at<=30*60_000&&a.resetAt!==null&&b.at<a.resetAt)steps.push({windowId,from:a.at,to:b.at,growth:step.delta,resetAt:b.resetAt});
   }
   return steps;
 }

@@ -11,7 +11,7 @@ export function UsageWorkMark({source}:{source:Card}) {
   const marks=source.usageWork?.filter(s=>s.expiresAt>now)??[];
   if(!marks.length)return null;
   const periods=quotaPeriods(source),label=t('usageWork.mark');
-  return <StatusMark tone="warn" label={label} trigger={<><WarningIcon/>{label}</>}>
+  return <span data-time="usage-work"><StatusMark tone="warn" label={label} trigger={<><WarningIcon/>{label}</>}>
     <div className="tray-panel-head"><strong>{label}</strong></div>
     {marks.map(mark=><div className="settings-section" key={mark.windowId}>
       <strong>{t(`usageWork.${mark.quality}`)}</strong>
@@ -19,5 +19,5 @@ export function UsageWorkMark({source}:{source:Card}) {
       <p className="tray-panel-when">{stamp(mark.from)} — {stamp(mark.to)}</p>
     </div>)}
     <p>{t('usageWork.scope')}</p>
-  </StatusMark>;
+  </StatusMark></span>;
 }
