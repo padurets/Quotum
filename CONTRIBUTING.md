@@ -189,6 +189,10 @@ make dev       # reuse unchanged code; rebuild and restart after source/configur
 make down      # stop only this stand; keep its port reservation
 ```
 
+Shutdown gives the hub five seconds to finish requests and close its store. Demo and
+managed parents wait seven seconds before killing a child; the outer managed fallback
+waits eight seconds. Ordinary shutdown completes as soon as work drains.
+
 The root `.env` is local and ignored. `make prepare` writes missing development
 defaults and the lowest available port at or above `DEV_PORT_START` (8080 by default).
 It preserves existing user settings and never evaluates shell expressions. Existing

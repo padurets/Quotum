@@ -54,6 +54,150 @@ function hub(t: TestContext) {
   return {store, directory, user, duty, cadence, ingest, credential, agent, ask, deliver, source, frequency, device, parts};
 }
 
+test('failed handover retains fixed plans from successful data and each device minimum', t => {
+  for (const interval of [60_000, 120_000, 300_000, 900_000] as const) for (const minimum of [MIN, 30 * MIN]) {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0, {used: 91});
+    h.frequency(interval);
+    h.ask(0, minimum, 'healthy');
+    const baseline = 10 * MIN;
+    h.deliver(baseline, {used: 91});
+    h.ask(baseline + 1000, MIN, 'broken', true);
+    const holder = h.duty.holder(ACCOUNT);
+    // Refresh supplies a command even when the fixed ordinary due is later.
+    h.ingest.requestRefresh(h.source(), T + baseline + 2000);
+    assert.equal(h.ask(baseline + MIN, MIN, 'broken', true).measure, true);
+    h.deliver(baseline + MIN + 5000, {name: 'broken', failure: 'unsupported'});
+    const at = baseline + MIN + 6000;
+    const answer = h.ask(at, minimum, 'healthy');
+    assert.equal(answer.onDuty, true);
+    assert.notEqual(h.duty.holder(ACCOUNT), holder);
+    const due = baseline + Math.max(interval, minimum);
+    assert.equal(answer.measure, at >= due);
+    if (at < due) assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, T + at).value?.next, T + due);
+  }
+});
+
+for (const failure of ['timeout', 'unsupported']) for (const fixed of [false, true]) for (const observed of [64_000, 65_000]) {
+  test(`${failure} cooldown ending cannot restore ${fixed ? 'fixed' : 'Auto'} duty from a snapshot ${observed === 65_000 ? 'at' : 'before'} the failure`, t => {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0);
+    if (fixed) h.frequency(900_000, 1);
+    assert.equal(h.ingest.requestRefresh(h.source(), T + MIN).status, 'accepted');
+    assert.equal(h.ask(MIN).measure, true);
+    h.deliver(65_000, {failure});
+    assert.equal(h.duty.until(ACCOUNT), 0);
+    const ended = 65_000 + (failure === 'timeout' ? 2 * MIN : 15 * MIN);
+    // A long device minimum keeps Auto's ordinary plan in the future after a 15-minute pause.
+    const minimum = failure === 'unsupported' && !fixed ? 30 * MIN : MIN;
+    assert.equal(h.ask(ended - 1, minimum).measure, false, 'a paused question grants no new claim');
+    assert.equal(h.deliver(ended + 1000, {observed}).accepted, 1);
+    assert.equal(h.store.state(h.source()).successAt, T + observed, 'source evidence remains independent of duty');
+    assert.equal(h.duty.until(ACCOUNT), 0, 'contact and an old successful snapshot cannot restore the released planner');
+    const answer = h.ask(ended + 2000, MIN, 'healthy');
+    assert.equal(answer.onDuty, true, 'a healthy device can claim the released duty');
+    assert.equal(answer.measure, !fixed || ended + 2000 >= observed + 15 * MIN);
+    if (!answer.measure) assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, T + ended + 2000).value?.next, T + observed + 15 * MIN);
+  });
+}
+
+for (const contact of ['empty', 'duplicate', 'frequency']) {
+  test(`${contact} after cooldown cannot restore a failed fixed holder's waiting protection`, t => {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0);
+    h.frequency(900_000, 1);
+    h.ingest.requestRefresh(h.source(), T + MIN);
+    h.ask(MIN);
+    h.deliver(65_000, {failure: 'timeout'});
+    const at = 186_000;
+    if (contact === 'empty') h.ingest.accept(h.credential, {...h.agent('laptop'), sentAt: iso(at), snapshots: [], failures: []}, T + at);
+    else if (contact === 'duplicate') assert.equal(h.deliver(at, {observed: 0}).duplicates, 1);
+    else {
+      h.ask(at - 2000);
+      h.frequency(300_000, at);
+    }
+    assert.equal(h.duty.until(ACCOUNT), 0, 'an elapsed pause is not recovery evidence');
+    const answer = h.ask(at + 1000, MIN, 'healthy');
+    assert.deepEqual([answer.onDuty, answer.measure], [true, false]);
+    assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, T + at + 1000).value?.next, T + (contact === 'frequency' ? 5 : 15) * MIN);
+  });
+}
+
+test('another failed device can advance the shared baseline without restoring the released holder', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.deliver(1000, {name: 'other', observed: 0});
+  h.frequency(900_000, 1001);
+  h.ingest.requestRefresh(h.source(), T + MIN);
+  h.ask(MIN);
+  h.deliver(100_000, {name: 'other', failure: 'timeout'});
+  h.deliver(101_000, {observed: 65_000, failure: 'timeout'});
+  assert.equal(h.duty.until(ACCOUNT), 0);
+  assert.equal(h.cadence.pausedUntil(ACCOUNT, h.device(), T + 186_000), null);
+  assert.ok(h.cadence.pausedUntil(ACCOUNT, h.device('other'), T + 186_000)! > T + 186_000);
+  assert.equal(h.deliver(186_000, {name: 'other', observed: 90_000}).accepted, 1);
+  assert.equal(h.store.state(h.source()).successAt, T + 90_000, 'shared data are newer than the released holder failure');
+  assert.equal(h.duty.until(ACCOUNT), 0, 'the shared source clock is not evidence of holder recovery');
+  assert.deepEqual([h.ask(187_000, MIN, 'healthy').onDuty, h.duty.holder(ACCOUNT)], [true, h.device('healthy')]);
+  assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, T + 187_000).value?.next, T + 90_000 + 15 * MIN);
+});
+
+test('a permitted claim after cooldown restores fixed waiting protection beyond its starter lease', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.frequency(900_000, 1);
+  h.ingest.requestRefresh(h.source(), T + MIN);
+  h.ask(MIN);
+  h.deliver(65_000, {failure: 'timeout'});
+  const claimed = h.ask(186_000);
+  assert.deepEqual([claimed.onDuty, claimed.measure], [true, false]);
+  assert.equal(h.duty.until(ACCOUNT), T + 16 * MIN, 'a new permitted planner protects the successful fixed baseline');
+  assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, T + 186_000).value?.next, T + 15 * MIN);
+  for (let at = 201_000; at < 10 * MIN; at += 15_000) h.ask(at);
+  assert.equal(h.ask(10 * MIN, MIN, 'healthy').onDuty, false, 'the new waiting plan outlives the five-minute starter');
+  assert.equal(h.ask(15 * MIN).measure, true);
+});
+
+test('own post-failure success restores fixed waiting protection without a new check-in', t => {
+  const h = hub(t);
+  h.ask(0);
+  h.deliver(0);
+  h.frequency(900_000, 1);
+  h.ingest.requestRefresh(h.source(), T + MIN);
+  h.ask(MIN);
+  h.deliver(65_000, {failure: 'timeout'});
+  h.deliver(66_000, {observed: 65_001});
+  assert.equal(h.cadence.pausedUntil(ACCOUNT, h.device(), T + 66_000), null);
+  assert.equal(h.duty.until(ACCOUNT), T + 65_001 + 16 * MIN, 'successful recovery restores both data duty and the fixed waiting plan');
+  assert.equal(h.ask(8 * MIN, MIN, 'healthy').onDuty, false, 'the recovered fixed plan survives its snapshot going stale');
+});
+
+test('own recovery evidence cannot displace a healthy command or fixed waiting plan', t => {
+  for (const fixed of [false, true]) {
+    const h = hub(t);
+    h.ask(0);
+    h.deliver(0);
+    if (fixed) h.frequency(900_000, 1);
+    h.ingest.requestRefresh(h.source(), T + MIN);
+    h.ask(MIN);
+    h.deliver(65_000, {failure: 'timeout'});
+    assert.equal(h.ask(66_000, MIN, 'healthy').onDuty, true);
+    assert.equal(h.deliver(67_000, {observed: 65_001}).accepted, 1);
+    assert.equal(h.cadence.pausedUntil(ACCOUNT, h.device(), T + 67_000), null);
+    assert.equal(h.duty.holder(ACCOUNT), h.device('healthy'), 'recovery data cannot steal protected duty');
+    assert.equal(h.ask(68_000).onDuty, false);
+    if (fixed) {
+      assert.equal(h.ingest.nextMeasurement(h.source(), ACCOUNT, T + 68_000).value?.next, T + 65_001 + 15 * MIN);
+      assert.equal(h.ask(8 * MIN).onDuty, false, 'shared data preserve the healthy fixed planner');
+    } else assert.equal(h.duty.until(ACCOUNT), T + 66_000 + 5 * MIN, 'the healthy command retains its execution protection');
+  }
+});
+
 test('migration defaults old sources to Auto; every choice survives reopening and new sources still insert', t => {
   const folder = mkdtempSync(path.join(tmpdir(), 'quotum-frequency-'));
   t.after(() => rmSync(folder, {recursive: true}));
@@ -388,8 +532,8 @@ test('a bounded delivery restores waiting protection after its fresh word, inclu
   h.ask(MIN);
   h.frequency(900_000, MIN + 15_000);
   h.deliver(3 * MIN + 1, {failure: 'timeout'});
-  assert.equal(h.ingest.refresh(h.source(), T + 3 * MIN + 1).value.unavailable, 'paused');
-  assert.equal(h.duty.until(ACCOUNT), T + 348_000, 'a fresh failure still grants no waiting protection');
+  assert.equal(h.ingest.refresh(h.source(), T + 3 * MIN + 1).value.unavailable, 'no_device');
+  assert.equal(h.duty.until(ACCOUNT), 0, 'a fresh answering failure releases data and waiting protection');
 });
 
 test('a failed first fixed measurement retries after its pause and minimum without a successful baseline', t => {

@@ -397,7 +397,8 @@ function hub() {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-cadence-')), 'db.sqlite'), t0);
   const directory = new Directory(store.db);
   const duty = new Duty();
-  const ingest = new Ingest(store, directory, duty, new Cadence());
+  const cadence = new Cadence();
+  const ingest = new Ingest(store, directory, duty, cadence);
   const alice = directory.createUser('alice@example.com', 'Alice', 'x', t0);
   const secret = newSecret('qt_m');
   directory.createToken(secret, '…', alice.id, 'images', t0);
@@ -407,7 +408,7 @@ function hub() {
     const body = {version: 1, agent: 'quotum/0.4.0', paced, machine: machine(device), subscriptions: [{provider: 'codex', account: ACCOUNT, active: false, ...subscription}]};
     return ingest.checkin(token, body, t).subscriptions[0];
   };
-  const deliver = (device: string, t: number, used = 50, nextInMs = 4 * MIN, failure?: string) =>
+  const deliver = (device: string, t: number, used = 50, nextInMs = 4 * MIN, failure?: string, observedAt = t) =>
     ingest.accept(
       token,
       {
@@ -422,13 +423,13 @@ function hub() {
                 provider: 'codex',
                 account: ACCOUNT,
                 plan: 'pro',
-                observedAt: iso(t),
+                observedAt: iso(observedAt),
                 via: 'codex/app-server',
                 staleAfterMs: staleFor(nextInMs),
                 windows: [{id: '5h', kind: 'session', minutes: 300, usedPercent: used, resetsAt: null}],
               },
             ],
-        failures: failure ? [{provider: 'codex', observedAt: iso(t), error: failure}] : [],
+        failures: failure ? [{provider: 'codex', observedAt: iso(observedAt), error: failure}] : [],
       },
       t,
     );
@@ -458,7 +459,7 @@ function hub() {
     return measured;
   };
   const source = () => store.findSource('codex', ACCOUNT)!;
-  return {store, ingest, duty, ask, deliver, working, follow, source, device: (name: string) => directory.deviceByMachine(alice.id, machine(name).id)!.id};
+  return {store, directory, ingest, duty, cadence, ask, deliver, working, follow, source, device: (name: string) => directory.deviceByMachine(alice.id, machine(name).id)!.id};
 }
 
 test('S3, S4: use on another machine or on the holder brings the pace to 2 minutes', () => {
@@ -508,14 +509,11 @@ test('S9: a paced holder asks often without extending its lease; a device waitin
   assert.equal(h.duty.until(ACCOUNT), t0 + staleFor(4 * MIN), 'asking does not extend the lease');
   assert.equal(h.duty.holder(ACCOUNT), laptop());
 
-  // The laptop fails; its lease runs out; it asks before the healthy server does and is refused duty.
+  // The laptop's accepted failure releases duty; its pause still forbids taking it again.
   const failedAt = t0 + 2 * MIN;
   assert.equal(h.ask('laptop', failedAt).measure, true);
   h.deliver('laptop', failedAt, 50, 4 * MIN, 'not_logged_in');
-  // The server, not on duty and healthy, is told when the holder's lease runs out.
-  const waits = h.ask('server', t0 + 3 * MIN);
-  assert.deepEqual([waits.measure, waits.onDuty, waits.askInMs], [false, false, t0 + staleFor(4 * MIN) - (t0 + 3 * MIN)]);
-  const lease = h.duty.until(ACCOUNT)!;
+  const lease = failedAt;
   const refused = h.ask('laptop', lease + S);
   assert.equal(refused.askInMs, 10 * MIN, 'at most ten minutes, though its pause lasts longer');
   assert.deepEqual([refused.measure, refused.onDuty], [false, true], 'no one else holds it: its own pause, quietly');
@@ -553,6 +551,90 @@ test('S9: a new holder waiting out its failures measures when its pause is over'
   assert.equal(h.follow('laptop', t0 + 9 * MIN + 15 * S, t0 + 15 * MIN)[0], t0 + 11 * MIN, 'at the end of its 2-minute pause');
 });
 
+test('failed active takeover releases a fresh starter lease but keeps the device cooldown', t => {
+  for (const failure of ['unsupported', 'timeout']) for (const brokenFirst of [false, true]) {
+    const h = hub();
+    t.after(() => h.store.close());
+    h.follow('healthy', t0, t0 + 601 * S, {}, () => 91);
+    assert.equal(h.ask('broken', t0 + 601 * S, {active: true}).measure, true);
+    assert.equal(h.duty.until(ACCOUNT), t0 + 901 * S);
+    assert.equal(h.ingest.requestRefresh(h.source(), t0 + 602 * S).status, 'accepted');
+    h.deliver('broken', t0 + 606 * S, 91, MIN, failure);
+    assert.equal(h.store.state(h.source()).error, null, 'successful source evidence remains fresh');
+    assert.equal(h.ingest.refresh(h.source(), t0 + 606 * S).value.request?.status, 'failed', 'failure settles before the handover');
+    const cooldown = t0 + 606 * S + (failure === 'unsupported' ? 15 * MIN : 2 * MIN);
+    assert.equal(h.cadence.pausedUntil(ACCOUNT, h.device('broken'), t0 + 607 * S), cooldown);
+    if (brokenFirst) assert.equal(h.ask('broken', t0 + 607 * S, {active: true}).measure, false);
+    const healthy = h.ask('healthy', t0 + 607 * S);
+    assert.deepEqual([healthy.measure, healthy.onDuty], [true, true], 'Auto takes over immediately');
+    const lease = h.duty.until(ACCOUNT);
+    assert.equal(h.ask('broken', t0 + 608 * S, {active: true}).measure, false);
+    h.deliver('broken', t0 + 609 * S, 91, MIN, failure, t0 + 606 * S);
+    assert.equal(h.duty.until(ACCOUNT), lease, 'duplicate off-duty failure cannot release the healthy command');
+    assert.equal(h.cadence.pausedUntil(ACCOUNT, h.device('broken'), t0 + 609 * S), cooldown, 'duplicate does not extend cooldown');
+  }
+});
+
+test('first-ever measurement failure and rollback release duty only after a committed answer', t => {
+  const h = hub();
+  t.after(() => h.store.close());
+  h.ask('broken', t0);
+  const lease = h.duty.until(ACCOUNT);
+  assert.throws(() => h.directory.transaction(() => {
+    h.deliver('broken', t0 + 5 * S, 50, MIN, 'timeout');
+    assert.equal(h.duty.until(ACCOUNT), lease, 'no release inside the transaction');
+    throw new Error('rollback fixture');
+  }), /rollback fixture/);
+  assert.equal(h.duty.until(ACCOUNT), lease);
+  assert.equal(h.cadence.pausedUntil(ACCOUNT, h.device('broken'), t0 + 6 * S), null);
+  h.deliver('broken', t0 + 5 * S, 50, MIN, 'timeout');
+  assert.deepEqual([h.ask('healthy', t0 + 6 * S).measure, h.duty.holder(ACCOUNT)], [true, h.device('healthy')]);
+});
+
+test('a delayed success before or at a failure keeps its data without renewing the failed device duty', t => {
+  for (const failure of ['unsupported', 'timeout']) for (const prior of [600.5, 606]) {
+    const h = hub();
+    t.after(() => h.store.close());
+    h.follow('healthy', t0, t0 + 601 * S, {}, () => 91);
+    h.ask('broken', t0 + 601 * S, {active: true});
+    h.deliver('broken', t0 + 606 * S, 91, MIN, failure);
+    const pause = h.cadence.pausedUntil(ACCOUNT, h.device('broken'), t0 + 607 * S);
+    assert.equal(h.deliver('broken', t0 + 607 * S, 92, MIN, undefined, t0 + prior * S).accepted, 1);
+    assert.equal(h.store.state(h.source()).successAt, t0 + prior * S, 'source observations retain their independent validity');
+    assert.equal(h.cadence.pausedUntil(ACCOUNT, h.device('broken'), t0 + 608 * S), pause);
+    const healthy = h.ask('healthy', t0 + 608 * S);
+    assert.deepEqual([healthy.measure, healthy.onDuty], [true, true]);
+    const lease = h.duty.until(ACCOUNT);
+    h.deliver('broken', t0 + 609 * S, 93, MIN, undefined, t0 + prior * S + 1);
+    assert.equal(h.duty.until(ACCOUNT), lease, 'late evidence does not disturb the healthy command');
+  }
+});
+
+test('success taken after a failure can recover duty before the device cooldown expires', t => {
+  const h = hub();
+  t.after(() => h.store.close());
+  h.ask('broken', t0);
+  h.deliver('broken', t0 + 5 * S, 50, MIN, 'timeout');
+  h.deliver('broken', t0 + 6 * S, 49, MIN, undefined, t0 + 5 * S + 1);
+  assert.equal(h.cadence.pausedUntil(ACCOUNT, h.device('broken'), t0 + 7 * S), null);
+  assert.ok(h.duty.until(ACCOUNT)! > t0 + 7 * S);
+  assert.equal(h.ask('healthy', t0 + 7 * S).measure, false);
+});
+
+test('a fresh failure older than the latest command preserves that command and its lease', t => {
+  const h = hub();
+  t.after(() => h.store.close());
+  h.ask('holder', t0);
+  h.deliver('holder', t0, 91, MIN);
+  h.ask('holder', t0 + MIN);
+  h.ask('holder', t0 + MIN + 90 * S);
+  const lease = h.duty.until(ACCOUNT);
+  const oldAt = t0 + MIN + 59 * S;
+  h.deliver('holder', t0 + MIN + 91 * S, 91, MIN, 'timeout', oldAt);
+  assert.equal(h.duty.until(ACCOUNT), lease, 'a newer delivery watermark alone cannot prove the command was answered');
+  assert.equal(h.ask('other', t0 + MIN + 92 * S).measure, false);
+});
+
 test('S12: failures reach the pace through the hub, even when the subscription is fresh from another device', () => {
   const h = hub();
   h.follow('laptop', t0, t0 + 5 * MIN);
@@ -570,9 +652,8 @@ test('S12: failures reach the pace through the hub, even when the subscription i
   assert.equal(g.ask('laptop', t0).measure, true);
   g.deliver('laptop', t0 + 5 * S, 50, 4 * MIN, 'timeout');
   const waiting = g.ask('laptop', t0 + 15 * S);
-  assert.deepEqual([waiting.measure, waiting.askInMs], [false, 15 * S]);
-  // Its pause ends at 2:05; asked at 2:00, it comes back no sooner than 10 s later.
-  assert.equal(g.follow('laptop', t0 + 15 * S, t0 + 5 * MIN)[0], t0 + 2 * MIN + 10 * S);
+  assert.deepEqual([waiting.measure, waiting.askInMs], [false, 110 * S]);
+  assert.equal(g.follow('laptop', t0 + 15 * S, t0 + 5 * MIN)[0], t0 + 2 * MIN + 5 * S, 'at its pause boundary');
 });
 
 test('S13: the overview tells when a paced holder measures next and why', () => {

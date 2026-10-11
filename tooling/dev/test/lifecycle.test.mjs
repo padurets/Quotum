@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {execFileSync, spawn} from 'node:child_process';
 import fs, {chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync} from 'node:fs';
 import {syncBuiltinESMExports} from 'node:module';
-import {createServer} from 'node:net';
+import {connect, createServer} from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -311,6 +311,34 @@ test('ready ownership, hub credential omission, dirty down and persistent-data f
   assert.equal((await info(ctx)).status, 'stopped');
   await stop(ctx, true);
   assert.equal(existsSync(state.data), false);
+});
+
+test('managed parent and outer fallback allow a busy child to finalize after its five-second grace', async t => {
+  const {ctx} = fixture(t);
+  standIn(ctx);
+  const entry = path.join(ctx.root, 'hub/dist/server/index.js');
+  writeFileSync(entry, readFileSync(entry, 'utf8')
+    .replace("const server=createServer((req,res)=>res.end('ok'));", "const server=createServer((req,res)=>{if(req.url==='/hang')return;res.end('ok')});")
+    .replace("process.on('SIGTERM',()=>server.close(()=>process.exit(0)));", `let stopping=false;
+process.on('SIGTERM',()=>{
+ if(stopping)return;stopping=true;
+ const until=Date.now()+200;while(Date.now()<until){}
+ const finish=()=>{server.closeAllConnections();writeFileSync(process.env.QUOTUM_DATA_DIR+'/closed','closed');process.exit(0)};
+ setTimeout(finish,5000);server.close(finish);
+});`));
+  const c = {...config(ctx.root, {}), DEV_MODE: 'hub', DEV_PORT_START: String(await freeBase())};
+  const port = await allocate(ctx, c, null);
+  const state = await start(ctx, c, port, {inputs: 'fixture-build', commit: 'fixture', output: 'fixture'});
+  const socket = connect(port, '127.0.0.1');
+  socket.on('error', () => {});
+  t.after(() => socket.destroy());
+  await new Promise(resolve => socket.once('connect', resolve));
+  socket.write('GET /hang HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n');
+  await sleep(100);
+  await stop(ctx);
+  assert.equal(readFileSync(path.join(state.data, 'closed'), 'utf8'), 'closed');
+  assert.equal((await info(ctx)).status, 'stopped');
+  assert.equal(await portFree(port), true);
 });
 
 test('an unowned replacement data directory is preserved before any supervisor signal', async t => {

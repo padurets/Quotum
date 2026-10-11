@@ -28,6 +28,7 @@ import {sourceKeyRoutes} from './routes/sourceKeys.js';
 import {BoardAdditions} from './additions.js';
 import {additionRoutes} from './routes/additions.js';
 import {DeviceOnboarding} from './deviceOnboarding.js';
+import {responseCompression} from './compression.js';
 
 /**
  * `local`: the desktop app's hub, with the key its window enters with (see local.ts); null
@@ -103,6 +104,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
       return (reply as FastifyReply).code(status >= 500 ? 500 : 400).send({error: status >= 500 ? 'internal_error' : 'invalid_request'});
     },
   });
+  await responseCompression(app, !!hub.local);
   const hosts = new Set<string>(config.http.hosts);
   const anyHost = hosts.has('*');
   const history = new HistoryTiles(store);

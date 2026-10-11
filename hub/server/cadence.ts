@@ -63,7 +63,7 @@ type Pace = {
   /** The least interval of the asked device, and when it last asked. */
   minIntervalMs: number | null;
   askAt: number | null;
-  /** The holder whose waiting plan is shown, even before its first command. */
+  /** The holder authorized to keep a waiting plan, even before its first command. */
   plannerDevice: string | null;
 };
 
@@ -273,9 +273,11 @@ export class Cadence {
   }
 
   /** An accepted measurement advances the shared delivery clock and its freshness promise. */
-  delivered(key: string, device: string, windows: {id: string; usedPercent: number}[] | null, observedAt: number, staleAfterMs: number, busy: boolean, now: number) {
+  delivered(key: string, device: string, windows: {id: string; usedPercent: number}[] | null, observedAt: number, staleAfterMs: number, busy: boolean, now: number, onDuty = false) {
     this.observed(key, device, windows, observedAt, busy, now);
     const pace = this.pace(key, now);
+    // A delivery that actually restores duty may restore its released waiting plan too.
+    if (onDuty && pace.plannerDevice === null) pace.plannerDevice = device;
     // Never later than this measurement goes stale, whoever took it and however it was asked for.
     // Whole milliseconds: the times the hub answers with are whole numbers (spec).
     if (observedAt > (pace.lastAt ?? -Infinity)) {
@@ -322,6 +324,18 @@ export class Cadence {
     this.pauses.set(pauseKey(key, device), {count: (pause?.count ?? 0) + 1, kind, at});
     if (pace) this.answeredBy(pace, device, at);
     return true;
+  }
+
+  /** An actual duty release ends the holder's waiting authority, without losing shared data. */
+  released(key: string, device: string) {
+    const pace = this.paces.get(key);
+    if (pace?.plannerDevice === device) pace.plannerDevice = null;
+  }
+
+  /** A delayed observation cannot restore duty before it proves recovery from this device's latest failure. */
+  canRenewDuty(key: string, device: string, observedAt: number): boolean {
+    const pause = this.pauses.get(pauseKey(key, device));
+    return !pause || observedAt > pause.at;
   }
 
   /** When a device's pause after failing ends, if it is in one at `now`. */
