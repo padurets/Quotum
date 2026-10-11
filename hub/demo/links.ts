@@ -35,7 +35,7 @@ export async function seedLinks(store:Store,directory:Directory,stand:Stand) {
   const meter=(id:string,at:number,amount:string,kind:Meter['kind']='counter'):Meter=>({id,at,amount,kind,unit:'USD',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:3*hour,stale:false});
   for(const [at,usage] of [[now-hour,'0'],[now-hour/2,'700000'],[now,'1400000']] as const)
     store.record(wallet,{type:'meters',observedAt:at,staleAfterMs:3*hour,meters:[meter('credits',at,'15400000'),meter('usage',at,usage)],keys:[],inventoryComplete:true,inventoryError:null});
-  for(const id of ambiguous)store.record(id,{type:'meters',observedAt:now,staleAfterMs:3*hour,meters:[meter('balance',now,'25000000','balance')],keys:[],inventoryComplete:true,inventoryError:null});
+  for(const id of ambiguous)store.record(id,{type:'meters',observedAt:now,staleAfterMs:3*hour,meters:[meter('balance:USD',now,'25000000','balance')],keys:[],inventoryComplete:true,inventoryError:null});
   const quota=(source:string,at:number,used:number)=>store.record(source,{observedAt:at,plan:'',windows:[{id:'weekly',kind:'weekly',label:null,minutes:10080,used,remaining:100-used,resetAt:now+3*hour}],staleAfterMs:3*hour,resets:null});
   for(const id of [confirmed,partial]){quota(id,now-2*minute,10);quota(id,now,12);}
   // Fixture devices existed before these observations, including the finished witnesses.

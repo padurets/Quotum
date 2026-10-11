@@ -52,7 +52,8 @@ test('linked-client catalogue codes hold through production reports, projections
     const work=drain(composeMoneyWorkPrepared(chunks,cell,from,to))[0],estimate=moneyWorkRate(work,'14000000');
     assert.equal(work.eligibleActiveMs,hour);assert.equal(estimate.rate,'1400000');seen.add('active-hour-rate');
     assert.equal(estimate.remainingMs,String(10*hour));seen.add('remaining-active-hours');
-    assert.deepEqual(store.moneyWorkSources(owner.personalBoard,{unit:'USD',ids:[[source('DeepSeek account 1').id,'balance']]}),[]);seen.add('balance-only-unsupported');
+    assert.equal(source('DeepSeek account 1').meters?.find(meter=>meter.id==='balance:USD')?.amount,'25000000');
+    assert.deepEqual(store.moneyWorkSources(owner.personalBoard,{unit:'USD',ids:[[source('DeepSeek account 1').id,'balance:USD']]}),[]);seen.add('balance-only-unsupported');
     for(const scene of LINK_SCENES)for(const code of scene.expect)assert.ok(seen.has(code),scene.id+': '+code);
   }finally{await app.close();store.close();}
 });
