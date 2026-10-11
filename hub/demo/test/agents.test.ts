@@ -113,3 +113,43 @@ test('demo heartbeats count the supplemental clients alongside the legacy list',
   await live.reportOne(machine,15_000,25_000);
   assert.equal(reports,2);
 });
+
+test('unchanged seeded work keeps the minute report ledger with one continuous credit', () => {
+  const start = 1_800_000_000_000, span = 24 * 60 * MIN;
+  const machine: Machine = {kind: 'machine', id: 'machine', expect: []};
+  const set: DemoSet = {id: 'continuous', about: '', scene: '', workHistoryMs: span, entries: [
+    {kind: 'person', id: 'person', name: 'Person', expect: []},
+    {kind: 'card', id: 'card', provider: 'codex', plan: '', machines: [machine.id], history: span, windows: [], expect: [], agents: [
+      {machine: machine.id, origin: 'terminal', project: 'same', since: -span, works: ALWAYS},
+      {machine: machine.id, origin: 'terminal', project: 'same', since: -span, works: ALWAYS, legacy: true},
+    ]},
+  ]};
+  const fixtures = [false, true].map(() => {
+    const store = new Store(':memory:', start - span), directory = new Directory(store.db);
+    const user = directory.createUser('person@example.com', 'Person', 'fixture', start - span);
+    const device = directory.saveDevice({userId: user.id, machine: machineInfo(machine), agent: 'quotum-demo/1', tokenId: null}, start - span).id;
+    const stand: Stand = {set, start, people: new Map([['person', new Person('', user.id, '', '')]]), boards: new Map(), agents: new Map(), sources: new Map([['card', 'codex:fixture']])};
+    return {store, user, device, stand, live: new Sessions(store)};
+  });
+  const [seeded, reported] = fixtures;
+  let credits = 0;
+  const credit = seeded.store.creditWork.bind(seeded.store);
+  seeded.store.creditWork = (device, from, to, keys) => {if (keys.length) credits++; return credit(device, from, to, keys);};
+  try {
+    seedWork(seeded.store, seeded.stand);
+    for (let at = -span; at <= 0; at += MIN) {
+      const parsed = parseSessions({version: 1, agent: 'quotum-demo/1', machine: machineInfo(machine), sentAt: new Date(start + at).toISOString(), sessions: sessionsAt(set, machine, start, at)});
+      reported.live.report(reported.device, reported.user.id, parsed.sessions.map(({provider: _provider, account: _account, accountName: _accountName, ...session}) => ({
+        ...session, sentStartedAt: session.startedAt, source: 'codex:fixture', device: {id: reported.device, name: machine.id},
+      })), start + at);
+    }
+    const rows = (store: Store) => store.db.prepare(
+      'SELECT producer_id, ordinal, started_at, project, folder, from_at, to_at FROM agent_sessions s JOIN agent_work w ON w.session_id=s.id ORDER BY producer_id, ordinal, from_at',
+    ).all();
+    assert.deepEqual(rows(seeded.store), rows(reported.store));
+    assert.deepEqual(rows(seeded.store).map(row => [row.from_at, row.to_at]), [[start - span, start], [start - span, start]]);
+    assert.equal(credits, 1, 'an unchanged parallel packet needs one database credit for the whole interval');
+  } finally {
+    for (const fixture of fixtures) fixture.store.close();
+  }
+});
