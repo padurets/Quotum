@@ -14,11 +14,10 @@ const rule = (value: Partial<ClientLink> = {}): ClientLink => ({id: randomUUID()
 
 test('temporal resolver agrees with an independent exhaustive precedence oracle', () => {
   // Six ordered buckets encode the product decision independently of numeric ranks.
-  const templates = [null, 'device'].flatMap(deviceId => [null, {class: 'api' as const, provider: null}, {class: 'api' as const, provider: 'openrouter'}].map(route => rule({deviceId, route})));
   const routes: (SessionRoute | null)[] = [null, ...(['subscription', 'api', 'unknown'] as const).flatMap(className => (['session', 'machine'] as const).flatMap(by => [null, 'openrouter', 'unrecognized'].map(provider => ({class: className, by, provider, host: null}))))];
   let checks = 0;
-  for (let mask = 0; mask < 64; mask++) {
-    if (mask.toString(2).replaceAll('0', '').length > 3) continue;
+  for (const conditionClass of ['subscription', 'api', 'unknown'] as const) for (let mask = 0; mask < 64; mask++) {
+    const templates = [null, 'device'].flatMap(deviceId => [null, {class: conditionClass, provider: null}, {class: conditionClass, provider: 'openrouter'}].map(route => rule({deviceId, route})));
     const links = templates.filter((_, i) => mask & 1 << i);
     for (const heldWallet of [false, true]) for (const enabled of [false, true]) for (const route of routes) for (const source of [null, 'account', 'unheld']) for (const accountBy of ['login', 'inferred', 'legacy'] as const) for (const at of [99, 100, 199, 200]) {
       const context: LinkContext = {links, held: new Map([['account', 'codex'], ...(heldWallet ? [['wallet', 'openrouter'] as [string, string]] : [])]), routeEnabled: enabled};
@@ -36,7 +35,7 @@ test('temporal resolver agrees with an independent exhaustive precedence oracle'
       checks++;
     }
   }
-  assert.ok(checks > 100_000);
+  assert.equal(checks, 525_312);
 });
 
 test('safe route mapping, inactive masking, free suggestion gap and temporal conservation', () => {
