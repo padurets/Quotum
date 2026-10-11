@@ -1,6 +1,7 @@
 import {useMeasurementClock,useMeasurementTime} from '../lib/measurementClock';
 import type {ReactNode} from 'react';
 import {QUOTA_IDS} from '../../server/domain/meters';
+import {observationDeadline} from '../../server/domain/resources';
 import type {Card, View} from '../lib/types';
 import type {KeyPart, Meter} from '../../server/domain/meters';
 import {currencySymbol, type CurrencyContext} from '../../server/domain/currency';
@@ -484,7 +485,7 @@ export function MoneyValues({source,keys,meters,error=null,compact=false,tray=fa
 function FundsMark({source,groups,context,native,rateSources,quoteDate,displayUnavailable}:{source:MoneySource;groups:ReturnType<typeof budgetView>['remaining']['values'];context:CurrencyContext;native?:Meter;rateSources:string;quoteDate:string;displayUnavailable:boolean}) {
   const now=useMeasurementClock(now=>creditChangesAt(source,now));
   const unlimited=source.creditBalance?.status==='unlimited';
-  const stale=!!source.creditBalance&&(now>source.creditBalance.at+source.creditBalance.staleAfterMs||!['finite','unlimited'].includes(source.creditBalance.status))||!unlimited&&!!native?.stale;
+  const stale=!!source.creditBalance&&(now>=observationDeadline(source.creditBalance)||!['finite','unlimited'].includes(source.creditBalance.status))||!unlimited&&!!native?.stale;
   const values=groups.map(({total,approximate})=>({total,text:(approximate?'≈ ':'')+money(total.amount,total.unit,false,context,total.scale)}));
   if(!values.length&&!native&&!unlimited)return null;
   const nativeText=native&&money(native.amount,native.unit,true,context,native.scale);
@@ -509,7 +510,7 @@ function FundsMark({source,groups,context,native,rateSources,quoteDate,displayUn
 }
 function creditChangesAt(source: MoneySource, now: number) {
   const status = source.creditBalance;
-  return status && now <= status.at + status.staleAfterMs ? status.at + status.staleAfterMs + 1 : null;
+  return status && now < observationDeadline(status) ? observationDeadline(status) : null;
 }
 function CreditBalanceValue({source, breakdown, children}: {source: MoneySource; breakdown: ReactNode; children: ReactNode}) {
   const now = useMeasurementClock(now => creditChangesAt(source, now));
@@ -530,7 +531,7 @@ function creditBalanceText(source:MoneySource,now:number):string|null {
   if(source.provider!=='codex')return null;
   const status=source.creditBalance;
   if(!status)return t('money.notReported');
-  if(now>status.at+status.staleAfterMs)return t('money.stale');
+  if(now>=observationDeadline(status))return t('money.stale');
   switch(status.status){
     case 'finite':return null;
     case 'unlimited':return t('money.unlimited');

@@ -442,6 +442,12 @@ Values are measurement-only projections: source id/provider, retained native win
 meters, keys and the observed `creditBalance` status when authorized. Native windows include `observedAt`, `validUntil` and `stale`.
 Membership is the last nonempty retained batch strictly before the right edge. A meter
 keeps exact decimal integer amounts, historical allowance, unit and conversion evidence.
+Historical meters and `creditBalance` may carry an exclusive `validUntil`, derived from
+their retained availability spans. When present, it governs freshness instead of
+reapplying the original `staleAfterMs` to `at`: that timestamp remains an actual retained
+observation anchor, even inside compressed heartbeat spans. Without `validUntil`, the
+ordinary observation-time TTL applies. Availability does not prove accounting coverage
+beyond the last confirmed observation, or admit a new observation exactly at `to`.
 The same financial grant and its observation anchor govern cells, tapes, values and
 cursor reuse. Credit coefficients retain their original scale; converted values use
 the recorded rate path. Native quota interruptions end availability exclusively.

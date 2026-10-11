@@ -43,6 +43,7 @@ class BoardPeriod {
   private workProofEpoch=-1;
   private valuesProofEpoch=-1;
   private readonly dirtyScopes=new Set<PeriodScope>();
+  private scopeKeys:Partial<Record<PeriodScope,string>>={};
   private evaluatedAt=hubNow();
   private identity='';
   private selection:PeriodSelection={mode:'live',periodMs:86_400_000};
@@ -83,10 +84,10 @@ class BoardPeriod {
     if(!this.valuesNeeded&&this.valuesProofEpoch===this.proofEpoch&&this.selection.mode==='range'&&[...this.values.values()].every(v=>v.value&&!v.loading&&!v.error)){
       const values=new Map(this.values);this.valueCache.set(periodKey(this.selection),{values,bytes:JSON.stringify([...values]).length*3,at:hubNow()});
     }
-    const wanted=this.intent()?.request;
-    if(!wanted||this.workNeeded||this.work.loading||this.work.error||this.valuesNeeded||PERIOD_SCOPES.some(scope=>wanted[scope]||this.projectionErrors[scope]))return;
+    const range=evaluatedRange(this.selection,hubNow());
+    if(!this.active||!page.get().board||this.workNeeded||this.work.loading||this.work.error||this.valuesNeeded||[...this.values.values()].some(value=>value.loading||value.error)||PERIOD_SCOPES.some(scope=>this.projectionErrors[scope]||this.scopeKeys[scope]&&this.needsTape(scope,this.scopeKeys[scope]!,range)))return;
     const tapes=new Map([...this.tapes].map(([scope,tape])=>[scope,{...tape}])),work=this.work,index=this.index,activity=this.activity,workSelection=this.workSelection,workRangeKey=this.workRangeKey,cursor=this.cursor,liveEvidence=this.liveEvidence,values=new Map(this.values),cursors=this.transport.evidence(),bytes=this.bytes;
-    const context=JSON.stringify([this.authority,prefs().money,prefs().funds,prefs().kind]);
+    const context=JSON.stringify([this.authority,this.scopeKeys]);
     const workProofEpoch=this.workProofEpoch,valuesProofEpoch=this.valuesProofEpoch,reusable=workProofEpoch===this.proofEpoch&&(!values.size||valuesProofEpoch===this.proofEpoch)&&[...tapes.values()].every(t=>t.proofEpoch===this.proofEpoch);
     // Proofs and alternative states are immutable and shared by shifted summaries.
     // Summaries exclude shared shift proofs; a whole value sequence bounds its largest replay.
@@ -94,7 +95,7 @@ class BoardPeriod {
       +[...tapes.values()].reduce((sum,{tape})=>sum+JSON.stringify({...tape,fixed:tape.fixed?{...tape.fixed,shift:undefined}:undefined}).length*6,0)
       +JSON.stringify([...values.values()]).length*3;
     this.valueCache.delete(periodKey(this.selection));
-    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,prefs().money,prefs().funds,prefs().kind])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,selection.to)),restore:selection=>{
+    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,this.scopeKeys])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,selection.to)),restore:selection=>{
       this.tapes.clear();for(const [scope,tape] of tapes)this.tapes.set(scope,tape);
       this.work=work;this.index=index;this.activity=activity;this.workSelection=workSelection;this.workRangeKey=workRangeKey;this.cursor=cursor;this.liveEvidence=liveEvidence;this.bytes=bytes;
       for(const id of new Set([...this.values.keys(),...values.keys()]))this.setValue(id,values.get(id)??noValue);
@@ -150,25 +151,30 @@ class BoardPeriod {
     const period=tape.selection.periodMs;
     return periodTextChangesAt(now,at=>{const next=Math.min(tape.accounting.changesAt(at,period,source)??Infinity,scope==='quota'?this.workBoundary(at,undefined,source)??Infinity:Infinity,extra?.(at)??Infinity);return Number.isFinite(next)?next:null;},read);
   }
-  projectionState(history:History,scope:PeriodScope){const tape=this.tapes.get(scope),range=evaluatedRange(this.selection,this.evaluatedAt);return {ready:!!tape&&tape.rangeKey===history.range&&range.from>=tape.tape.from&&(range.to<=tape.tape.cut||this.selection.mode==='live'&&this.liveEvidence),error:this.projectionErrors[scope]};}
+  projectionState(history:History,scope:PeriodScope){const tape=this.tapes.get(scope),range=evaluatedRange(this.selection,this.evaluatedAt);return {ready:!!tape&&tape.queryKey===this.scopeKeys[scope]&&tape.rangeKey===history.range&&range.from>=tape.tape.from&&(range.to<=tape.tape.cut||this.selection.mode==='live'&&this.liveEvidence),error:this.projectionErrors[scope]};}
   getSource=(id:string)=>this.rowsBySource.get(id)??noSessions;
   getWorkEvidence=()=>this.work.value;
   getValue=(id:string)=>this.values.get(id)??noValue;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   subscribeValue=(id:string,listener:()=>void)=>{let set=this.valueListeners.get(id);if(!set)this.valueListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
-  private intent():PeriodIntent|null {
-    const board=page.get().board;if(!board||!this.active)return null;
-    const pending=!pan.get();
-    const range=evaluatedRange(this.selection,hubNow()),cell=cellOf(range.to-range.from),cards=board.lineup.flatMap(id=>board.cards[id]??[]);
+  private queryKey(query:HistoryQuery){return JSON.stringify([query.meters,query.unit,query.currency]);}
+  private needsTape(scope:PeriodScope,key:string,range:{from:number;to:number}){const tape=this.tapes.get(scope);return this.dirtyScopes.has(scope)||!tape||tape.queryKey!==key||range.from<tape.tape.from||range.to>tape.tape.cut&&!this.liveEvidence;}
+  private queries(board:NonNullable<PageState['board']>,range:{from:number;to:number}) {
+    const cell=cellOf(range.to-range.from),cards=board.lineup.flatMap(id=>board.cards[id]??[]);
     const queries:Partial<Record<PeriodScope,HistoryQuery>>={};
-    if(pending)for(const scope of PERIOD_SCOPES) {
+    for(const scope of PERIOD_SCOPES) {
       const visible=(scope==='quota'?[ACTIVITY,...QUOTA_WIDGETS]:scope==='funds'?[SUBSCRIPTION_FUNDS]:BUDGET_WIDGETS).some(id=>widgetVisible(board.view,id,board.lineup.length));if(!visible)continue;
       const meters=scope==='quota'?subscriptionSelection(cards,board.view):moneySelection(cards,board.view.hidden,scope==='funds'?prefs().funds:prefs().money,board.currencies,scope==='funds'?'funds':'budget').selection;
       const query:HistoryQuery={cell:String(cell),from:String(Math.floor(range.from/cell)*cell),to:String(Math.ceil(range.to/cell)*cell),cells:'skip',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})};
-      const key=JSON.stringify([query.meters,query.unit,query.currency]),tape=this.tapes.get(scope);
-      if(this.dirtyScopes.has(scope)||this.projectionErrors[scope]||!tape||tape.queryKey!==key||range.from<tape.tape.from||range.to>tape.tape.cut&&!this.liveEvidence)queries[scope]=query;
+      queries[scope]=query;
     }
+    return queries;
+  }
+  private intent():PeriodIntent|null {
+    const board=page.get().board;if(!board||!this.active)return null;
+    const pending=!pan.get(),range=evaluatedRange(this.selection,hubNow()),queries=pending?this.queries(board,range):{};
+    for(const scope of PERIOD_SCOPES)if(queries[scope]&&(this.projectionErrors[scope]&&!this.dirtyScopes.has(scope)||!this.needsTape(scope,this.queryKey(queries[scope]!),range)))delete queries[scope];
     return {board:board.id,generation:this.generation,revision:this.revision,proofEpoch:this.proofEpoch,request:{version:1,selection:this.selection,evaluatedAt:hubNow(),...queries,...(pending&&this.valuesNeeded&&this.selection.mode==='range'&&this.sourceIds.length?{values:this.sourceIds}:{}),...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{})}};
   }
   private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
@@ -189,17 +195,20 @@ class BoardPeriod {
     const selected=timeRange(),selection:PeriodSelection=selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(prefs().range).ms};
     const sources=board.lineup.filter(id=>!board.view.hidden.includes('source:'+id));
     const wantsWork=sources.length>0||[AGENTS,ACTIVITY].some(id=>widgetVisible(board.view,id,board.lineup.length));
+    const scopeKeys=Object.fromEntries(Object.entries(this.queries(board,evaluatedRange(selection,hubNow()))).map(([scope,query])=>[scope,this.queryKey(query)]));
+    const changedScopes=PERIOD_SCOPES.filter(scope=>scopeKeys[scope]!==this.scopeKeys[scope]);
     const identity=JSON.stringify([board.id,periodKey(selection),sources,wantsWork,board.currencies?.target.id,board.currencies?.revision,board.currencies?.registryRevision,sources.map(id=>[id,board.cards[id]?.budget])]);
     const authority=JSON.stringify([board.id,sources,wantsWork,board.currencies?.target.id,board.currencies?.revision,board.currencies?.registryRevision,sources.map(id=>[id,board.cards[id]?.budget])]);
     if(authority!==this.authority){this.clear();this.authority=authority;}
     if(event?.type==='hub'&&['history','hello','snapshot','mine','lineup'].includes(event.event.type))this.retained.clear();
-    const cacheKey=JSON.stringify([identity,prefs().money,prefs().funds,prefs().kind]);
+    const cacheKey=JSON.stringify([identity,scopeKeys]);
     if(cacheKey!==this.cacheKey){this.retainCurrent();this.cacheKey=cacheKey;}
-    this.selection=selection;this.sourceIds=sources;this.wantsWork=wantsWork;
+    this.selection=selection;this.sourceIds=sources;this.wantsWork=wantsWork;this.scopeKeys=scopeKeys;
     if(identity!==this.identity) {
       const oldBoard=this.identity?JSON.parse(this.identity)[0]:null;
       this.identity=identity;this.generation++;this.revision++;
       this.dirtyScopes.clear();
+      for(const scope of PERIOD_SCOPES)delete this.projectionErrors[scope];
       if(oldBoard!==board.id||event?.type==='hub'&&['mine','lineup'].includes(event.event.type))this.clear();
       this.cacheKey=cacheKey;
       let cached=this.valueCache.get(periodKey(selection));
@@ -234,6 +243,13 @@ class BoardPeriod {
       this.transport.change();return;
     }
     if(!this.active)return;
+    if(changedScopes.length){
+      // A resource choice changes only its evidence. Other families and the
+      // complete session index remain available under their existing proofs.
+      this.generation++;this.revision++;preparations()?.cancel(this.preparationOwner);
+      for(const scope of changedScopes){this.tapes.delete(scope);this.dirtyScopes.delete(scope);delete this.projectionErrors[scope];this.transport.forgetEvidence(scope);}
+      this.measureBytes();this.publishProjection(changedScopes);this.transport.change();
+    }
     if(event?.type==='hub') {
       const hub=event.event;
       if(hub.type==='hello'||hub.type==='snapshot'||hub.type==='mine'||hub.type==='lineup') {
@@ -334,18 +350,18 @@ class BoardPeriod {
     const valid=()=>intent.generation===this.generation&&intent.revision===this.revision;
     const prepared=await prepareAsync(this.preparationOwner,build(),valid).catch(error=>{release();throw error;});
     if(!prepared||!valid()){release();return;}
-    for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part){if(part.state==='error')this.projectionErrors[scope]=part.error==='history_limit'?'history_limit':'history_failed';else delete this.projectionErrors[scope];changed.add(scope);}}
+    for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part){if(part.state==='error'){this.projectionErrors[scope]=part.error==='history_limit'?'history_limit':'history_failed';this.dirtyScopes.delete(scope);}else delete this.projectionErrors[scope];changed.add(scope);}}
     this.evaluatedAt=hubNow();this.tapes.clear();for(const [scope,tape] of prepared.tapes)this.tapes.set(scope,tape);
     for(const scope of PERIOD_SCOPES){const section=reply[scope];if(section?.state==='complete'&&section.value.tape)this.dirtyScopes.delete(scope);}
     if(reply.values) {
       if(reply.values.state==='complete'){
         changed.add('quota');this.valuesNeeded=false;this.valuesProofEpoch=proofEpoch;for(const value of reply.values.value)this.setValue(value.id,{value,basis:reply.values.basis,loading:false,error:null});
       }
-      else for(const id of this.sourceIds)this.setValue(id,{...this.getValue(id),loading:false,error:reply.values.error});
+      else {this.valuesNeeded=false;for(const id of this.sourceIds)this.setValue(id,{...this.getValue(id),loading:false,error:reply.values.error});}
     }
     if(reply.sessions) {
       const section=reply.sessions;
-      if(section.state==='error'){this.work={...this.work,loading:false,error:section.error};this.publishWork();}
+      if(section.state==='error'){this.workNeeded=false;this.work={...this.work,loading:false,error:section.error};this.publishWork();}
       else {
         const value=prepared.work!;
         this.cursor=section.value.cursor;this.workNeeded=false;this.liveEvidence ||= intent.request.selection.mode==='live';
@@ -361,7 +377,7 @@ class BoardPeriod {
     this.scheduleClock();
   }
   private measureBytes(){
-    this.bytes=JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.quotaBytes,0);
+    this.bytes=JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
   }
   private tick(fromClock=true) {
     if(!this.active)return;
@@ -389,7 +405,19 @@ class BoardPeriod {
     let due=this.workSelection.mode==='live'?this.index?.changesAt(now,this.workSelection.periodMs)??null:this.index?.presenceChangesAt()??null;
     clock.due(this.watch,due!==null&&Number.isFinite(due)?due:null,now);
   }
-  retry=()=>{this.revision++;this.workNeeded=this.wantsWork;this.valuesNeeded=this.selection.mode==='range';this.transport.retry();};
+  retryHistory(scope:PeriodScope){
+    if(!this.projectionErrors[scope])return;
+    delete this.projectionErrors[scope];this.dirtyScopes.add(scope);this.revision++;
+    this.publishProjection([scope]);this.transport.retry();
+  }
+  retry=()=>{
+    let needed=false;
+    if(this.work.error&&this.wantsWork){needed=this.workNeeded=true;this.work={...this.work,loading:true,error:null};this.publishWork();}
+    if(this.selection.mode==='range'&&[...this.values.values()].some(value=>value.error)){
+      needed=this.valuesNeeded=true;for(const id of this.sourceIds)this.setValue(id,{...this.getValue(id),loading:true,error:null});
+    }
+    if(needed){this.revision++;this.transport.retry();}
+  };
 }
 
 const workBytes=(trace:WorkTrace|null,curves?:number)=>trace?JSON.stringify({...trace,spans:[],packed:undefined}).length*2+(trace.packed?trace.packed.blocks.length*8+trace.packed.patterns.reduce((n,p)=>n+p.length*8+32,0)+(curves??trace.packed.blocks.length/3*144+trace.packed.patterns.reduce((n,p)=>n+p.length*128,0)):trace.spans.length*640)+trace.refs.length*768:0;
@@ -406,8 +434,16 @@ export function usePeriodSessions(order:(rows:WorkedSession[])=>unknown=()=>null
   const [read]=useState(()=>selector(boardPeriod,()=>({select:state=>state,equal:(a,b)=>a.value===b.value&&a.loading===b.loading&&a.error===b.error&&sameJson(panelRoster(a.rows),panelRoster(b.rows))&&sameJson(latest.current(a.rows),latest.current(b.rows))})));
   return useSyncExternalStore(boardPeriod.subscribe,read);
 }
+export type SessionPeriod=Pick<Reading<WorkTrace>,'basis'|'loading'|'error'>;
 export function useSourcePeriodSessions(id:string){
   const current=useRef(id);current.current=id;
   const [read]=useState(()=>selector({get:()=>({rows:boardPeriod.getSource(current.current),value:boardPeriod.getWorkEvidence()})},()=>({select:state=>state,equal:(a,b)=>a.value===b.value&&sameJson(roster(a.rows),roster(b.rows))})));
-  return useSyncExternalStore(listener=>boardPeriod.subscribeSource(id,listener),read).rows;
+  const rows=useSyncExternalStore(listener=>boardPeriod.subscribeSource(id,listener),read).rows;
+  // Global work events carry loading and failure even when a source has no rows.
+  // Successful clock/evidence updates still notify only that source's data reader.
+  const [status]=useState(()=>selector(boardPeriod,()=>({
+    select:({basis,loading,error}):SessionPeriod=>({basis:loading||error?basis:null,loading,error}),
+    equal:(a,b)=>a.loading===b.loading&&a.error===b.error&&sameJson(a.basis?.range,b.basis?.range),
+  })));
+  return {rows,...useSyncExternalStore(boardPeriod.subscribe,status)};
 }

@@ -1,13 +1,13 @@
 import {balanceDescriptor} from './providers.js';
 import {amount, amountScale, isUnit, type Unit} from './amount.js';
 import type {Conversion} from './currency.js';
-import type {CreditBalanceState} from './resources.js';
+import type {CreditBalanceState,ObservationTiming} from './resources.js';
 
 export type BalanceIssue = 'currency_invalid'|'currency_unknown'|'currency_duplicate'|'currency_missing'|'empty_balances';
 export type BalanceStatus = {isAvailable:boolean;at:number;staleAfterMs:number;partial:boolean;issues:BalanceIssue[]};
 export type MeterKind = 'counter' | 'balance' | 'cap';
 export type MeterSemantics = {limit: string | null; resetAt: number | null; minutes: number | null; scope: string | null; label: string | null;scale?:number;conversion?:Conversion};
-export type Meter = MeterSemantics & {id: string; kind: MeterKind; unit: Unit; amount: string; at: number; staleAfterMs: number; stale: boolean};
+export type Meter = MeterSemantics & ObservationTiming & {id: string; kind: MeterKind; unit: Unit; amount: string; stale: boolean};
 export type KeyPart = {
   id: string; name: string | null; disabled: boolean; expiresAt: number | null; includeByok: boolean;
   at: number; staleAfterMs: number; presence: 'observed' | 'missing'; missCount: number;

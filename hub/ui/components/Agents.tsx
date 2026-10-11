@@ -1,5 +1,7 @@
-import {boardPeriod,usePeriodSessions} from '../lib/period';
+import {boardPeriod,usePeriodSessions,type SessionPeriod} from '../lib/period';
 import {PeriodStatus} from './PeriodStatus';
+import {WarningIcon} from './StatusMark';
+import {timeRangeLabel} from '../lib/timeRange';
 import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject} from 'react';
 import type {LiveSession} from '../lib/types';
 import {clientName} from '../../server/domain/clients';
@@ -103,31 +105,39 @@ function Origin({origin}: {origin: LiveSession['origin']}) {
 }
 
 /**
- * The coding agents running on a subscription right now, in the card's tray; not there
- * while none runs. The marks tell at a glance how many run and work on which machine;
+ * The subscription's sessions in the viewing period, in the card's tray. The marks
+ * tell at a glance how many still work and on which machine;
  * the panel it opens, upwards where there is room, names them. When the tray has no room
  * for the marks (`roomy` false), they all go and the count stays; they are still laid out,
  * unseen, so the tray can tell when they fit again.
  */
-export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy?: boolean}) {
+export function Agents({sessions, roomy = true, period}: {sessions: LiveSession[]; roomy?: boolean; period?: SessionPeriod}) {
   const [page,setPage]=useState(0);
-  if (!sessions.length) return null;
+  const pending=!!period?.loading || !!period?.error;
+  if (!sessions.length && !pending) return null;
   const currentPage=Math.min(page,Math.max(0,Math.ceil(sessions.length/50)-1));
-  const machines = machinesOf(sessions.slice(currentPage*50,currentPage*50+50));
+  let offset=0;
+  const machines=machinesOf(sessions).flatMap(machine=>{
+    const count=machine.sessions.length,from=Math.max(0,currentPage*50-offset),to=Math.min(count,(currentPage+1)*50-offset);
+    offset+=count;
+    return to>from?[{...machine,count,working:machine.sessions.filter(session=>session.working).length,sessions:machine.sessions.slice(from,to)}]:[];
+  });
   const working = sessions.filter(s => s.working).length;
-  const summary = t('agents.summary', {count: sessions.length, working});
+  const summary = sessions.length?t('agents.summary', {count: sessions.length, working}):t('agents.title');
+  const status=period?.error?t(period.error==='history_limit'?'period.limit':'period.failed'):period?.loading?t('period.loading'):'';
+  const label=[summary,status,pending&&period?.basis?t('analytics.retainedRange',{range:timeRangeLabel(period.basis.range)}):null].filter(Boolean).join('\n');
   return (
     <Popover
-      label={summary}
-      triggerClass="tray-pill agents-pill"
+      label={label}
+      triggerClass={`tray-pill agents-pill${period?.error?' is-warn':''}`}
       up
       trigger={
         <>
-          <TerminalIcon />
-          <span className="agents-count">
+          {period?.error?<WarningIcon/>:period?.loading?<i className="spinner" aria-hidden="true"/>:<TerminalIcon />}
+          {sessions.length>0&&<span className="agents-count">
             <b>{working}</b>/{sessions.length}
-          </span>
-          {drawn(sessions) && (
+          </span>}
+          {sessions.length>0&&drawn(sessions) && (
             <span className={`agents-marks ${roomy ? '' : 'is-out'}`}>
               {machines.map(machine => (
                 <span className="agents-group" key={machine.id}>
@@ -141,6 +151,7 @@ export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy
         </>
       }
     >
+      {pending&&period&&<div className="popover-pad"><PeriodStatus {...period}/></div>}
       <AgentPages page={currentPage} count={sessions.length} onPage={setPage}/>
       <div className="popover-title agents-list-head">
         <span>{t('agents.title')}</span>
@@ -151,7 +162,7 @@ export function Agents({sessions, roomy = true}: {sessions: LiveSession[]; roomy
           <section key={machine.id} className="agents-machine">
             <h3 title={machine.name}>
               <span>{machine.name}</span>
-              <small>{t('agents.machineSummary', {working: machine.sessions.filter(s => s.working).length, count: machine.sessions.length})}</small>
+              <small>{t('agents.machineSummary', {working: machine.working, count: machine.count})}</small>
             </h3>
             {machine.sessions.map((session, i) => (
               <div className={`agents-row ${session.working ? 'is-working' : ''}`} key={i} title={stateOf(session)}>

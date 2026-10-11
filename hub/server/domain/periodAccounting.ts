@@ -2,13 +2,14 @@ import type {PeriodValues} from './periodValues.js';
 import {drain,type Preparation} from './prepare.js';
 import {edge} from './quota.js';
 import type {History,HistorySeries} from './history.js';
-import {sampleAt,sampleCount,numberAt,numberBytes,numberColumn,lowerNumber,rateAt,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
+import {sampleAt,sampleCount,numberAt,numberBytes,numberColumn,lowerNumber,rateAt,rateObservations,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
 import type {MeterHistory} from './meterHistory.js';
 import {meterStep,plottedAmount,semanticsOf,type ExceptionalStep,type MeterSpan,type Reading,type MeterSemantics} from './meters.js';
 import {convertBy} from './currency.js';
 import type {PeriodRange} from './period.js';
 import type {WorkTrace} from './periodWork.js';
 import {union} from './work.js';
+import {spanBefore,spanDeadline,valuationAt} from './periodMoney.js';
 import {PeriodCurves,type WorkTimeline} from './periodCurves.js';
 
 const lower=lowerNumber;
@@ -124,74 +125,88 @@ class MoneyIndex {
   private topup!:AmountIndex;
   private coverage!:Intervals;
   private pairedTimes:number[]=[];
+  private valuations=new Map<string,number[]>();
+  private anchors:number[]=[];
+  /** Separate from the tape's objects: exact prefixes, numeric indexes and sorting scratch. */
+  static bytes(group:MoneyTape) {
+    const readings=group.readings.length+(group.paired?.readings.length??0),spans=group.spans.length+(group.paired?.spans.length??0);
+    const rates=Object.keys(group.rates??{}).length+Object.keys(group.rateBindings?.entries??{}).length;
+    return 1024+readings*448+spans*128+rates*160;
+  }
+  get bytes(){return MoneyIndex.bytes(this.group);}
   constructor(readonly group:MoneyTape,deferred=false) {if(!deferred)drain(this.build());}
   static *prepare(group:MoneyTape):Preparation<MoneyIndex>{const value=new MoneyIndex(group,true);yield*value.build();return value;}
   private *build():Preparation<void>{
     const group=this.group;
     for(const r of group.readings){this.times.push(r.at);yield;}for(const r of group.paired?.readings??[]){this.pairedTimes.push(r.at);yield;}
+    for(const [unit,at] of rateObservations(group)){const times=this.valuations.get(unit)??[];times.push(at);this.valuations.set(unit,times);yield;}
+    for(const times of this.valuations.values())times.sort((a,b)=>a-b);
+    this.anchors=[...new Set([...this.times,...this.pairedTimes,...[...this.valuations.values()].flat(),...[group,...(group.paired?[group.paired]:[])].flatMap(part=>part.spans.flatMap(span=>[span.from,span.to]))])].sort((a,b)=>a-b);
     const convert=(amount:string,reading:Reading)=>this.convert(amount,reading);
     this.spent=yield* AmountIndex.prepare(group.accounting?.spending==='unavailable'?[]:group.readings,group.spans,convert);
     // Account credits are a monotonically increasing funding counter; balance-only
     // suppliers have no accounting authority and never reach this result.
     this.topup=group.accounting?.topups==='unavailable'?yield* AmountIndex.prepare([],[],convert):group.paired?yield* AmountIndex.prepare(group.paired.readings,group.paired.spans,convert):yield* AmountIndex.prepare(group.readings,group.spans,convert,true);
-    this.coverage=new Intervals(union(group.spans.map(s=>({from:s.from,to:Math.min(s.to+s.staleAfterMs+1,s.holdUntil??Infinity,s.interruptedAt??Infinity)}))));
+    // Accounting is confirmed only between observations. A held value's TTL is not
+    // evidence of zero spending in the unobserved tail.
+    this.coverage=new Intervals(union(group.spans.map(s=>({from:Math.max(s.from,group.retainedFrom??0),to:Math.min(s.to,s.holdUntil??Infinity,s.interruptedAt??Infinity)})).filter(s=>s.to>s.from)));
   }
   private convert(value:string,reading:Reading,at=reading.at) {
     if(!this.group.displayUnit||reading.unit===this.group.displayUnit)return value;
     const rates=rateAt(this.group,reading.unit+'\n'+at);return rates?convertBy(value,rates,reading.scale):null;
   }
-  private semantics(reading:Reading,at=reading.at):MeterSemantics {
+  private semantics(reading:Reading,at=reading.at,native=plottedAmount(reading)):MeterSemantics {
     const original=semanticsOf(reading),converted=this.group.displayUnit&&this.group.displayUnit!==reading.unit;
     if(!converted)return original;
     const steps=rateAt(this.group,reading.unit+'\n'+at);
-    const credits=this.group.paired?.readings[lower(this.pairedTimes,at+1)-1];
-    const native=credits?(BigInt(credits.amount)-BigInt(reading.amount)).toString():plottedAmount(reading);
-    return {...original,scale:6,limit:reading.limit===null?null:this.convert(reading.limit,reading,at),...(steps?.length?{conversion:{original:{meterId:this.group.meter,amount:native,unit:reading.unit,at,...(reading.scale===undefined?{}:{scale:reading.scale}),limit:reading.limit},rate:steps[0],steps}}:{})};
+    return {...original,scale:6,limit:reading.limit===null?null:this.convert(reading.limit,reading,at),...(steps?.length?{conversion:{original:{meterId:this.group.meter,amount:native,unit:reading.unit,at,...(reading.scale===undefined?{}:{scale:reading.scale}),limit:reading.limit},rate:steps.at(-1)!,steps}}:{})};
   }
-  private value(at:number,inclusive=false) {
-    const group=this.group,reading=group.readings[lower(this.times,at+(inclusive?1:0))-1];
+  private observation(at:number,inclusive=false) {
+    const group=this.group,edge=at+(inclusive?1:0),reading=group.readings[lower(this.times,edge)-1];
     if(!reading)return null;
-    const span=group.spans.find(s=>s.from<=at&&at<Math.min(s.to+s.staleAfterMs+1,s.holdUntil??Infinity,s.interruptedAt??Infinity));
-    if(!span||reading.kind==='cap'&&reading.resetAt!==null&&reading.resetAt<=at)return null;
+    const span=spanBefore(group.spans,at,inclusive),times=this.valuations.get(reading.unit)??[];
+    const anchor=(row:Reading,span:MeterSpan|undefined)=>valuationAt(row,span,at,inclusive,times[lower(times,Math.min(edge,(span?.to??row.at)+1))-1]??null);
+    let observed=anchor(reading,span),native=plottedAmount(reading);
+    let deadline=Math.min(span?spanDeadline(span):-Infinity,reading.resetAt??Infinity);
     if(group.paired) {
-      const credits=group.paired.readings[lower(this.pairedTimes,at+(inclusive?1:0))-1];
-      if(!credits||credits.unit!==reading.unit||!group.paired.spans.some(s=>s.from<=at&&at<Math.min(s.to+s.staleAfterMs+1,s.holdUntil??Infinity,s.interruptedAt??Infinity)))return null;
-      return this.convert((BigInt(credits.amount)-BigInt(reading.amount)).toString(),reading);
+      const credits=group.paired.readings[lower(this.pairedTimes,edge)-1],pairedSpan=spanBefore(group.paired.spans,at,inclusive);
+      if(!credits||credits.unit!==reading.unit)return null;
+      native=(BigInt(credits.amount)-BigInt(reading.amount)).toString();
+      observed=Math.min(observed,anchor(credits,pairedSpan));
+      deadline=Math.min(deadline,pairedSpan?spanDeadline(pairedSpan):-Infinity,credits.resetAt??Infinity);
     }
-    const observed=group.meter==='balance:credits'?Math.max(reading.at,span.to<at||inclusive&&span.to===at?span.to:span.from):reading.at;
-    return this.convert(plottedAmount(reading),reading,observed);
+    return {reading,span,observed,native,deadline};
+  }
+  private value(observation:ReturnType<MoneyIndex['observation']>,at:number) {
+    return observation&&at<observation.deadline?this.convert(observation.native,observation.reading,observation.observed):null;
   }
   plot(range:PeriodRange,cell:number,previous:MeterHistory['points']):MeterHistory['points'] {
     const leftEnd=(Math.floor(range.from/cell)+1)*cell,rightStart=Math.floor((range.to-1)/cell)*cell;
     const points=previous.filter(p=>p.at>=leftEnd&&p.at<rightStart).map(p=>({...p,validUntil:p.validUntil??(Math.floor(p.at/cell)+1)*cell}));
-    const group=this.group;
     for(const [from,to] of leftEnd>=rightStart?[[range.from,range.to]]:[[range.from,leftEnd],[rightStart,range.to]]) {
-      const anchors=new Set([from,...this.times.slice(lower(this.times,from),lower(this.times,to)),...this.pairedTimes.slice(lower(this.pairedTimes,from),lower(this.pairedTimes,to)),...(group.meter==='balance:credits'?group.spans.flatMap(s=>[s.from,s.to]).filter(at=>at>=from&&at<to):[])]);
-      for(const at of [...anchors].sort((a,b)=>a-b)) {
-        const i=lower(this.times,at+1)-1,row=group.readings[i],value=this.value(at,true);if(!row||value===null)continue;
-        const span=group.spans.find(s=>s.from<=at&&at<Math.min(s.to+s.staleAfterMs+1,s.holdUntil??Infinity,s.interruptedAt??Infinity));if(!span)continue;
-        const next=Math.min(this.times[i+1]??Infinity,this.pairedTimes[lower(this.pairedTimes,at+1)]??Infinity);
-        const until=Math.min(to,next,span.to+span.staleAfterMs+1,span.holdUntil??Infinity,span.interruptedAt??Infinity,row.resetAt??Infinity);
+      const anchors=[...new Set([from,...this.anchors.slice(lower(this.anchors,from),lower(this.anchors,to))])];
+      for(const at of anchors) {
+        const observation=this.observation(at,true),value=this.value(observation,at);if(!observation?.span||value===null)continue;
+        const {reading,span,observed,native,deadline}=observation;
+        const until=Math.min(to,this.anchors[lower(this.anchors,at+1)]??Infinity,deadline);
         if(until<=at)continue;
-        const semantics=this.semantics(row,group.meter==='balance:credits'?Math.max(row.at,span.to<=at?span.to:span.from):row.at);
-        points.push({at:row.kind==='cap'?Math.floor(at/cell)*cell:at,value,knownFrom:at,knownUntil:until,validUntil:until,spent:null,segment:span.from,semantics,steps:[]});
+        points.push({at:reading.kind==='cap'?Math.floor(at/cell)*cell:at,value,knownFrom:at,knownUntil:until,validUntil:until,spent:null,segment:span.from,semantics:this.semantics(reading,observed,native),steps:[]});
       }
     }
     return points.sort((a,b)=>a.at-b.at||(a.knownFrom??0)-(b.knownFrom??0));
   }
   at(range:PeriodRange):Pick<MeterHistory,'start'|'end'|'startScale'|'endScale'|'spent'|'topup'|'unlocated'|'topupUnlocated'|'coveredMs'|'semantics'> {
     const spent=this.spent.at(range),topup=this.topup.at(range),authority=this.group.accounting;
-    const last=this.group.readings[lower(this.times,range.to)-1];
-    const first=this.group.readings[lower(this.times,range.from+1)-1],span=this.group.spans.find(s=>s.from<=range.to&&range.to<Math.min(s.to+s.staleAfterMs+1,s.holdUntil??Infinity,s.interruptedAt??Infinity));
-    const semantics=last?this.semantics(last,this.group.meter==='balance:credits'&&span?Math.max(last.at,span.to<range.to?span.to:span.from):last.at):null;
-    const scale=(row:Reading|undefined)=>row?(this.group.displayUnit&&this.group.displayUnit!==row.unit?6:row.scale):undefined;
+    const last=this.observation(range.to),first=this.observation(range.from,true);
+    const semantics=last?this.semantics(last.reading,last.observed,last.native):null;
+    const scale=(observation:typeof last)=>observation?(this.group.displayUnit&&this.group.displayUnit!==observation.reading.unit?6:observation.reading.scale):undefined;
     const coveredMs=this.coverage.in(range);
-    return {start:this.value(range.from,true),end:this.value(range.to),startScale:scale(first),endScale:scale(last),semantics,spent:authority?.spending==='unavailable'||!coveredMs?null:spent.value,topup:authority?.topups==='unavailable'||!coveredMs?null:topup.value,unlocated:authority?.spending==='unavailable'?[]:spent.unlocated,topupUnlocated:authority?.topups==='unavailable'?[]:topup.unlocated,coveredMs};
+    return {start:this.value(first,range.from),end:this.value(last,range.to),startScale:scale(first),endScale:scale(last),semantics,spent:authority?.spending==='unavailable'||!coveredMs?null:spent.value,topup:authority?.topups==='unavailable'||!coveredMs?null:topup.value,unlocated:authority?.spending==='unavailable'?[]:spent.unlocated,topupUnlocated:authority?.topups==='unavailable'?[]:topup.unlocated,coveredMs};
   }
   changesAt(now:number,period:number) {
     let next=Infinity;
     const consider=(at:number)=>{for(const offset of [0,period])for(const edge of [at+offset,at+offset+1])if(edge>now)next=Math.min(next,edge);};
-    for(const times of [this.times,this.pairedTimes])for(const offset of [0,period]){
+    for(const times of [this.anchors])for(const offset of [0,period]){
       const i=lower(times,now-offset);if(i<times.length)consider(times[i]);
       if(i+1<times.length)consider(times[i+1]);
     }
@@ -236,9 +251,14 @@ export class PeriodAccounting {
       if(!reuse){preparedBytes+=index.bytes;progress?.(preparedBytes);}
       this.quota.set(key,index);this.sampleTimes.set(key,index.times);
     }
-    for(const group of tape.money){const key=group.source+'\n'+group.meter+'\n'+(group.displayUnit??group.readings[0]?.unit),old=prior?.money.get(key);this.money.set(key,old?.group===group?old:yield*MoneyIndex.prepare(group));}
+    for(const group of tape.money){
+      const key=group.source+'\n'+group.meter+'\n'+(group.displayUnit??group.readings[0]?.unit),old=prior?.money.get(key),reuse=old?.group===group;
+      if(!reuse){preparedBytes+=MoneyIndex.bytes(group);progress?.(preparedBytes);}
+      this.money.set(key,reuse?old!:yield*MoneyIndex.prepare(group));
+    }
   }
   get quotaBytes(){return [...this.quota.values()].reduce((n,index)=>n+index.bytes,0);}
+  get bytes(){return this.quotaBytes+[...this.money.values()].reduce((n,index)=>n+index.bytes,0);}
   quotaSummary(source:string,window:string,range:PeriodRange){return this.quota.get(source+'\n'+window)?.at(range);}
   moneySummary(source:string,meter:string,unit:string,range:PeriodRange){return this.money.get(source+'\n'+meter+'\n'+unit)?.at(range);}
   fixed(range:PeriodRange,cell:number):NonNullable<PeriodTape['fixed']> {

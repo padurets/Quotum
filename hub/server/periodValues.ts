@@ -5,6 +5,7 @@ import type {Meter, KeyPart} from './domain/meters.js';
 import type {MeterContextValue} from './store/meterContexts.js';
 import {convertBy, conversionId, isConvertible} from './domain/currency.js';
 import {HistoryLimit} from './history.js';
+import {spanBefore,spanDeadline,valuationAt} from './domain/periodMoney.js';
 
 type WindowRow = {window_id:string;at:number;kind:WindowValue['kind'];label:string|null;used:number;reset_at:number|null;minutes:number|null;stale_after_ms:number};
 type ContextRow = {from_at:number;to_at:number;stale_after_ms:number;payload:string};
@@ -23,6 +24,9 @@ const valueChanges=`WITH changes(at) AS (
     UNION ALL SELECT from_at+1 FROM meter_contexts WHERE source_id=:source
     UNION ALL SELECT to_at+1 FROM meter_contexts WHERE source_id=:source
     UNION ALL SELECT to_at+stale_after_ms+1 FROM meter_contexts WHERE source_id=:source
+    UNION ALL SELECT observation_at+1 FROM currency_bindings WHERE source_id=:source AND owner_id=:user AND target_currency=:target
+    UNION ALL SELECT through_at+1 FROM currency_bindings WHERE source_id=:source AND owner_id=:user AND target_currency=:target
+    UNION ALL SELECT observation_at+1 FROM currency_unavailable_observations WHERE source_id=:source AND owner_id=:user AND target_currency=:target
   )`;
 
 /** Neighboring right-edge cells keep their actual observations and availability states. */
@@ -40,7 +44,7 @@ export function nearbyPeriodValues(store:Store,sources:readonly {id:string;provi
       try{
         const boundaries:number[]=[];
         const add=(at:number)=>{reserve(64);boundaryBytes+=64;boundaries.push(at);};
-        for(const row of edges.iterate({source:sources[i].id,from,until}))add(Number(row.at));
+        for(const row of edges.iterate({source:sources[i].id,from,until,user,target:store.currencies.preference(user).id}))add(Number(row.at));
         if(!boundaries.length||boundaries[0]>from){reserve(64);boundaryBytes+=64;boundaries.unshift(0);}
         if(boundaries.at(-1)!<until)add(Number.MAX_SAFE_INTEGER);
         for(let n=0;n+1<boundaries.length;n++){
@@ -82,16 +86,16 @@ function readValues(store:Store,sources:readonly {id:string;provider:string;budg
     for(const raw of ids.iterate(id,to)) {
       const meter=String(raw.meter_id),reading=store.meters.readings(id,meter,to,to,reserve)[0];
       if(!reading||reading.at<anchor)continue;
-      const spans=store.meters.spans(id,meter,reading.at,to,reserve),span=spans.filter(s=>s.from<to).at(-1);
-      const deadline=span?Math.min(span.to+span.staleAfterMs+1,span.interruptedAt??Infinity,span.holdUntil??Infinity,reading.resetAt??Infinity):reading.at+reading.staleAfterMs+1;
+      const spans=store.meters.spans(id,meter,reading.at,to,reserve),span=spanBefore(spans,to);
+      const deadline=Math.min(span?spanDeadline(span):reading.at+reading.staleAfterMs+1,reading.resetAt??Infinity);
       // A compressed span has two known anchors; an interior heartbeat time is not recoverable.
-      const at=span&&span.to<to?Math.max(reading.at,span.to):reading.at;
+      const at=valuationAt(reading,span,to,false,isConvertible(reading.unit)?bindings.observationAt(id,reading.unit,Math.min(to-1,span?.to??reading.at)):null);
       reserve(512);
       const {previousAt:_previousAt,...value}=reading;
-      meters.push({...value,...(!owned&&meter.startsWith('key:')?{label:null}:{}),at,stale:to>=deadline});
+      meters.push({...value,...(!owned&&meter.startsWith('key:')?{label:null}:{}),at,validUntil:deadline,stale:to>=deadline});
     }
     const credits=meters.find(m=>m.id==='credits'),usage=meters.find(m=>m.id==='usage');
-    if(provider==='openrouter'&&credits&&usage&&credits.unit===usage.unit)meters.push({...usage,id:'balance',kind:'balance',amount:(BigInt(credits.amount)-BigInt(usage.amount)).toString(),at:Math.min(credits.at,usage.at),stale:credits.stale||usage.stale});
+    if(provider==='openrouter'&&credits&&usage&&credits.unit===usage.unit)meters.push({...usage,id:'balance',kind:'balance',amount:(BigInt(credits.amount)-BigInt(usage.amount)).toString(),at:Math.min(credits.at,usage.at),validUntil:Math.min(credits.validUntil!,usage.validUntil!),stale:credits.stale||usage.stale});
     const inventory=context.get(id,'inventory',to) as ContextRow|undefined;
     const saved=inventory?JSON.parse(inventory.payload) as MeterContextValue:null;
     if(saved?.type==='inventory')for(const key of saved.keys) {
@@ -107,7 +111,7 @@ function readValues(store:Store,sources:readonly {id:string;provider:string;budg
     const credit=context.get(id,'credit-balance',to) as ContextRow|undefined;
     if(credit&&anchor<to&&credit.to_at>=anchor){
       reserve(512+credit.payload.length*2);const saved=JSON.parse(credit.payload) as MeterContextValue;
-      if(saved.type==='credit-balance'){const {type:_type,...value}=saved;creditBalance={...value,at:credit.to_at<to?credit.to_at:Math.max(credit.from_at,anchor),staleAfterMs:credit.stale_after_ms};}
+      if(saved.type==='credit-balance'){const {type:_type,...value}=saved;creditBalance={...value,at:credit.to_at<to?credit.to_at:Math.max(credit.from_at,anchor),staleAfterMs:credit.stale_after_ms,validUntil:credit.to_at+credit.stale_after_ms+1};}
     }
     let currencyUnavailable=false;
     // Keep native cap denominators and provenance; the common money renderer selects the valuation.
@@ -118,7 +122,7 @@ function readValues(store:Store,sources:readonly {id:string;provider:string;budg
       const original={meterId:meter.id,amount:meter.amount,unit:meter.unit,at:meter.at,...(meter.scale!==undefined?{scale:meter.scale}:{}),...(meter.kind==='cap'?{limit:meter.limit}:{})};
       meters.push({...meter,id:conversionId(meter.id,target),unit:target,scale:undefined,amount:convertBy(meter.amount,steps,meter.scale),limit:meter.limit===null?null:convertBy(meter.limit,steps,meter.scale),conversion:{original,rate:steps.at(-1)!,...(steps.length>1?{steps}:{})}});
     }
-    const boundsAt=interval??(()=>{const row=bounds!.get({source:id,edge:to}) as {start:number;end:number};return {from:row.start,to:row.end};})();
+    const boundsAt=interval??(()=>{const row=bounds!.get({source:id,edge:to,user,target}) as {start:number;end:number};return {from:row.start,to:row.end};})();
     result.push({id,provider,windows,meters,keys,...(creditBalance?{creditBalance}:{}),validFor:boundsAt,...(currencyUnavailable?{currencyUnavailable:true}:{})});
   }
   bindings.flush();

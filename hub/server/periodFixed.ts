@@ -1,5 +1,5 @@
 import type {PeriodRange} from './domain/period.js';
-import {decodeSamples,sampleCount,sampleAt,type PeriodTape} from './domain/periodTape.js';
+import {decodeSamples,sampleCount,sampleAt,rateObservations,type PeriodTape} from './domain/periodTape.js';
 import {drain} from './domain/prepare.js';
 import {PeriodCurves} from './domain/periodCurves.js';
 import {PeriodAccounting} from './domain/periodAccounting.js';
@@ -13,7 +13,6 @@ import type {History} from './domain/history.js';
 
 /** A fixed interval needs exact totals and boundary geometry, not a rolling ledger. */
 export function fixedTape(tape:PeriodTape,work:WorkTrace|null,range:PeriodRange,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void=()=>{}):PeriodTape {
-  reserve(JSON.stringify(tape.money).length*3);
   for(const series of tape.quota)if(series.samplesEncoding==='delta'){reserve(sampleCount(series.samples)*40);series.samples=decodeSamples(series.samples);delete series.samplesEncoding;}
   if(work)reserve(work.spans.length*640+(work.packed?work.packed.blocks.length*64+work.packed.patterns.reduce((n,p)=>n+p.length*128,0):0));
   const curves=work?new PeriodCurves(work):undefined;
@@ -31,6 +30,7 @@ export function fixedTape(tape:PeriodTape,work:WorkTrace|null,range:PeriodRange,
       for(const r of part.readings){yield r.at;yield r.previousAt??Infinity;yield r.resetAt??Infinity;yield r.at+r.staleAfterMs+1;}
       for(const s of part.spans){yield s.from;yield s.to;yield s.to+s.staleAfterMs+1;yield s.holdUntil??Infinity;yield s.interruptedAt??Infinity;}
     }
+    for(const group of tape.money)for(const [,at] of rateObservations(group))yield at;
     if(work)yield*workAnchors(work);
   }
   const fixed=reusable(base,offset=>accounting.fixed({from:range.from+offset,to:range.to+offset},cell),cell,tape.from,tape.cut,[cell],anchors(),reserve,release);

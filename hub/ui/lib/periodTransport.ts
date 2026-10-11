@@ -6,13 +6,14 @@ import type {HistoryPool,HistoryMember} from './historyPool';
 
 export type PeriodIntent={board:string;generation:number;revision:number;proofEpoch?:number;request:PeriodRequest};
 type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;resolve(value:HistoryReply):void;reject(error:unknown):void};
-type Flight={role:'visible';intent:PeriodIntent;controller:AbortController;demands:Demand[];ownSlot:boolean;extras:boolean};
+type Flight={role:'visible';intent:PeriodIntent;controller:AbortController;demands:Demand[];ownSlot:boolean;extras:boolean;preparing?:boolean};
 const aborted=()=>new DOMException('Aborted','AbortError');
 
 /** One event-loop collection combines chart sections with the period's other visible consumers. */
 export class PeriodTransport implements HistoryMember {
   private queue:Demand[]=[];
   private scheduled=false;
+  private resetEpoch=0;
   private readonly flights=new Set<Flight>();
   private completed='';
   private failed='';
@@ -24,23 +25,28 @@ export class PeriodTransport implements HistoryMember {
   get estimatedBytes(){return 0;}
   evictionCandidates(){return [];}
   private key(intent:PeriodIntent){return `${intent.generation}:${intent.revision}`;}
-  change(){this.schedule();}
-  forgetEvidence(){this.cursors.clear();}
+  change(){this.retire();this.schedule();}
+  forgetEvidence(scope?:PeriodScope){if(!scope)this.cursors.clear();else for(const key of this.cursors.keys())if(JSON.parse(key)[1]===scope)this.cursors.delete(key);}
   evidence(){return new Map(this.cursors);}
   restoreEvidence(cursors:ReadonlyMap<string,string>){this.cursors.clear();for(const [key,value] of cursors)this.cursors.set(key,value);}
-  reset(){this.completed=this.failed='';this.cursors.clear();for(const flight of this.flights)this.abort(flight);for(const demand of this.queue)demand.reject(aborted());this.queue=[];}
-  retry(){this.failed='';this.schedule();}
+  reset(){this.resetEpoch++;this.completed=this.failed=this.baselineKey='';this.baselineParts.clear();this.cursors.clear();for(const flight of this.flights)this.abort(flight);for(const demand of this.queue)demand.reject(aborted());this.queue=[];}
+  retry(){this.failed='';this.change();}
   read(scope:PeriodScope,query:HistoryQuery,signal?:AbortSignal):Promise<HistoryReply> {
     return new Promise((resolve,reject)=>{
       if(signal?.aborted){reject(aborted());return;}
       const demand={scope,query,signal,resolve,reject};this.queue.push(demand);
-      signal?.addEventListener('abort',()=>{reject(aborted());this.queue=this.queue.filter(d=>d!==demand);for(const flight of this.flights)if(flight.demands.includes(demand)&&flight.demands.every(d=>d.signal?.aborted)&&!flight.extras)this.abort(flight);},{once:true});
+      signal?.addEventListener('abort',()=>{reject(aborted());this.queue=this.queue.filter(d=>d!==demand);for(const flight of this.flights)if(flight.demands.includes(demand)&&flight.demands.every(d=>d.signal?.aborted)&&!flight.extras)this.abort(flight);this.schedule();},{once:true});
       this.schedule();
     });
   }
   private schedule(){if(this.scheduled)return;this.scheduled=true;queueMicrotask(()=>queueMicrotask(()=>queueMicrotask(()=>{this.scheduled=false;this.flush();})));}
-  private abort(flight:Flight){flight.controller.abort();for(const demand of flight.demands)demand.reject(aborted());this.pool.release(flight);this.flights.delete(flight);}
+  // An answer already being prepared still owns its bytes and any borrowed
+  // chart slot. Its cancellation settles with that preparation, before reuse.
+  private abort(flight:Flight){flight.controller.abort();if(flight.preparing)return;for(const demand of flight.demands)demand.reject(aborted());this.pool.release(flight);this.flights.delete(flight);}
+  private current(intent:PeriodIntent){const current=this.intent();return current?.board===intent.board&&this.key(current)===this.key(intent);}
+  private retire(){for(const flight of this.flights)if(flight.extras&&!this.current(flight.intent))this.abort(flight);}
   private flush() {
+    this.retire();
     const intent=this.intent();if(!intent)return;
     const key=this.key(intent);
     if(this.baselineKey!==key){this.baselineKey=key;this.baselineParts.clear();}
@@ -66,14 +72,18 @@ export class PeriodTransport implements HistoryMember {
     }
     for(const scope of PERIOD_SCOPES){const query=body[scope];if(query)query.evidence??=!extras?'skip':this.cursors.get(cursorKey(scope,query));}
     const appliedIntent={...intent,request:body};
+    const resetEpoch=this.resetEpoch;
     const start=()=>{
       if(flight.controller.signal.aborted)return;
+      if(extras&&!this.current(intent)){this.abort(flight);this.schedule();return;}
       this.send(intent.board,body,flight.controller.signal,bytes=>this.pool.reserve(flight,bytes)).then(async reply=>{
         if(flight.controller.signal.aborted)return;
         // A→B→A is three generations. Equal target text does not revive the first response.
         const current=this.intent();
         if(current?.generation===intent.generation&&current.revision===intent.revision) {
+          flight.preparing=true;
           await this.receive(reply,appliedIntent,bytes=>this.pool.reserve(flight,bytes));
+          if(flight.controller.signal.aborted)return;
           const latest=this.intent();
           if(latest?.generation===intent.generation&&latest.revision===intent.revision){if(extras){if(!deferredBaseline)this.completed=key;if(baseline)for(const part of [...PERIOD_SCOPES,'values','sessions'] as const)if(body[part])this.baselineParts.add(part);}
           for(const scope of PERIOD_SCOPES){const part=reply[scope],query=body[scope];if(query&&part?.state==='complete'&&part.value.tape)this.cursors.set(cursorKey(scope,query),part.value.tape.cursor);}}
@@ -84,12 +94,13 @@ export class PeriodTransport implements HistoryMember {
           else demand.reject(new ApiError(part?.state==='error'&&part.error==='history_limit'?413:400,part?.state==='error'?part.error:'history_failed'));
         }
       }).catch(error=>{
+        if(flight.controller.signal.aborted)return;
         if(error instanceof ApiError&&[401,403,404].includes(error.status))this.accessLost();
         if(extras){if(!deferredBaseline)this.failed=key;if(baseline&&this.baselineKey===key)for(const part of [...PERIOD_SCOPES,'values','sessions'] as const)if(body[part])this.baselineParts.add(part);}
         for(const demand of demands)demand.reject(error);
         if(extras){const current=this.intent();if(current?.generation===intent.generation&&current.revision===intent.revision){const section={state:'error' as const,error:error instanceof ApiError&&error.code==='history_limit'?'history_limit' as const:'unavailable' as const};this.receive({basis:{run:'',revision:'',evaluatedAt:intent.request.evaluatedAt,evidenceCut:0,range:{from:0,to:0}},...Object.fromEntries(PERIOD_SCOPES.filter(scope=>body[scope]).map(scope=>[scope,section])),...(body.values?{values:section}:{}),...(body.sessions?{sessions:section}:{})},appliedIntent);}}
       })
-        .finally(()=>{this.pool.release(flight);this.flights.delete(flight);this.schedule();});
+        .finally(()=>{if(flight.controller.signal.aborted)for(const demand of demands)demand.reject(aborted());this.pool.release(flight);this.flights.delete(flight);if(resetEpoch===this.resetEpoch)this.schedule();});
     };
     if(flight.ownSlot)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
     if(this.queue.length)this.schedule();

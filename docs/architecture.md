@@ -1330,6 +1330,9 @@ A fixed accounting interval is exactly `[from,to)`: card values use the latest r
 observation strictly before `to`, with validity evaluated at `to`. Missing predecessors
 stay unknown. Native membership follows the last retained nonempty measurement batch;
 monetary values retain their original amounts, allowances and conversion evidence.
+Their optional exclusive `validUntil` separates availability from the recoverable
+observation timestamp: compressed heartbeats can confirm a value between stored anchors
+without inventing a newer measurement time. Live values without it use their normal TTL.
 Current operational status, connector failures, actions, forecasts and reset news remain
 live. Compact mode and native notifications also remain live.
 
@@ -1337,7 +1340,9 @@ The board's period coordinator collects quota, wallet budget, subscription funds
 one read-only `POST /api/boards/:board/period`. The old history route and the composite
 route call the same cell reader. Sections succeed or fail independently. A retained
 presentation keeps its own interval while a replacement loads or fails. Board, access,
-currency and request generations prevent a late response from acquiring a newer label.
+currency, resource selections, visible consumers and request generations prevent a late
+response from acquiring a newer label. Superseded period reads leave the transport queue;
+retrying an analytical widget repeats its failed exact evidence as well as its drawing cells.
 A bounded signed frontier lets the next read replace changed work and measurement
 intervals or extend missing older evidence. Quota cells and the session projection share
 one authorized work extraction within a composite read.
@@ -1382,7 +1387,10 @@ replaces scratch reservations as each retained index is completed. Shared pan re
 decode one input tile at a time, as do coarse cold reads, so an unread month cannot displace the complete period
 with one large transport body.
 Monetary steps remain exact integers; a partially
-intersected spending step is uncertain, never divided by elapsed time. The page clock
+intersected spending step is uncertain, never divided by elapsed time. A balance's TTL
+does not establish spending coverage beyond its last confirmed observation. Cards and
+analytical boundary values use the same recorded heartbeat valuation; an exchange-rate
+change does not become spending. The page clock
 advances live boundaries locally through already received evidence, without a request
 or invented work after the evidence cut. Fixed past accounting does not tick. These
 indexes, dictionaries, response staging and cached values share the history readers'
@@ -1511,6 +1519,9 @@ period, including contexts absent from the current machine list. Duration is cli
 to that period, and recency uses the last intersecting work endpoint. Current presence
 is optional and expires separately; it never proves more work or an end time. The
 card's panel keeps machine groups, ordered by each one's most recent credited work.
+It groups and orders the complete roster before paging. Loading and failure remain
+visible in its tray disclosure even before any sessions arrive; retained rows name their
+own interval and offer a retry there. A failed read never establishes an empty period.
 The compact view continues to show current sessions, ordered by working state and
 activity. The table's headers sort ascending, descending, then back to activity;
 a hidden column does not sort. When its owner's chosen columns do not fit the widget's

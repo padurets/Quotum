@@ -100,6 +100,11 @@ function* replaceSamples(before:SampleRows,after:SampleRows,from:number,to:numbe
 
 export type MoneyTape = MeterGroup & {displayUnit?:string;rates?:Record<string,RateLeg[]|null>;rateBindings?:{paths:(RateLeg[]|null)[];entries:Record<string,number>}};
 export function rateAt(group:MoneyTape,key:string){const index=group.rateBindings?.entries[key];return index===undefined?group.rates?.[key]:group.rateBindings!.paths[index];}
+export function* rateObservations(group:MoneyTape):Generator<[string,number]> {
+  for(const key of new Set([...Object.keys(group.rates??{}),...Object.keys(group.rateBindings?.entries??{})])) {
+    const split=key.lastIndexOf('\n');yield [key.slice(0,split),Number(key.slice(split+1))];
+  }
+}
 /** Observation anchors keep their identity while repeated complete rate paths share storage. */
 export function bindRate(group:MoneyTape,key:string,path:RateLeg[]|null):number {
   const bindings=group.rateBindings??={paths:[],entries:{}},text=JSON.stringify(path);

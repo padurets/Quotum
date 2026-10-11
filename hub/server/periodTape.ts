@@ -6,6 +6,7 @@ import type {HistoryScope} from './domain/history.js';
 import {selectionOf} from './domain/meterHistory.js';
 import type {HistoryQuery} from './domain/periodRead.js';
 import {isConvertible} from './domain/currency.js';
+import {readingBefore} from './domain/periodMoney.js';
 
 export function periodTape(store:Store,board:string,shown:Shown,user:string,scope:HistoryScope,query:HistoryQuery,range:PeriodRange,cursor:string,replaceFrom:number,reserve:(bytes:number)=>void,membershipAt=range.to,release:(bytes:number)=>void=()=>{},compact=false):PeriodTape {
   const tape:PeriodTape={from:range.from,cut:range.to,cursor,replaceFrom,quota:[],money:[]};
@@ -47,15 +48,20 @@ export function periodTape(store:Store,board:string,shown:Shown,user:string,scop
       if(group.paired)group.paired.spans=group.paired.spans.filter(s=>s.to+s.staleAfterMs+1>=replaceFrom);
       if(bindings&&target) {
         group.displayUnit=target;group.rateBindings={paths:[],entries:{}};
-        for(const reading of [...group.readings,...group.paired?.readings??[]])if(isConvertible(reading.unit)) {
-          const steps=bindings.binding(group.source,reading.unit,reading.at);
-          reserve(bindRate(group,reading.unit+'\n'+reading.at,steps));
-
-        }
-        if(group.meter==='balance:credits')for(const span of group.spans)for(const at of [span.from,span.to]) {
-          const key='credits:codex\n'+at;if(key in group.rateBindings.entries)continue;
-          const steps=bindings.binding(group.source,'credits:codex',at);
-          reserve(bindRate(group,key,steps));
+        for(const part of [group,...(group.paired?[group.paired]:[])]) {
+          const units=new Set(part.readings.filter(r=>isConvertible(r.unit)).map(r=>r.unit));
+          const bind=(unit:string,at:number)=>{const key=unit+'\n'+at;if(!isConvertible(unit)||key in group.rateBindings!.entries)return;
+            reserve(bindRate(group,key,bindings.binding(group.source,unit,at)));};
+          for(const reading of part.readings)bind(reading.unit,reading.at);
+          for(const span of part.spans) {
+            // Unchanged amounts still have genuine heartbeat and recorded valuation anchors.
+            for(const at of [span.from,span.to]){const reading=readingBefore(part.readings,at);if(reading)bind(reading.unit,at);}
+            for(const unit of units) {
+              for(const at of bindings.changes(group.source,unit,span.from,Math.min(span.to+1,range.to))) {
+                if(readingBefore(part.readings,at)?.unit===unit)bind(unit,at);
+              }
+            }
+          }
         }
       }
       tape.money.push(group);

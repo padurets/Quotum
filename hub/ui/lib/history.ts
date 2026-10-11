@@ -35,6 +35,7 @@ export type HistoryEnv = {
   clearTimeout(timer: unknown): void;
   dropTimeRange(): void;
   accessLost?(): void;
+  retry?(): void;
   schedule?(run: () => void): void;
   preparations?: Preparations | null;
 };
@@ -751,6 +752,7 @@ export class HistoryStore {
   private failed(flight: Flight, error: unknown) {
     this.flights.delete(flight);this.pool?.release(flight);
     if (flight.controller.signal.aborted || flight.epoch !== this.epoch) return;
+    if(error instanceof Error&&error.name==='AbortError'){this.schedule();return;}
     if(error instanceof ApiError&&(error.status===401||error.status===403||error.code==='board_not_found')) {
       this.close();this.env.accessLost?.();return;
     }
@@ -807,7 +809,7 @@ export class HistoryStore {
     return candidates;
   }
 
-  retry = () => {this.readError=false;this.historyLimit=false;this.clear('retry');this.publish();this.schedule();};
+  retry = () => {this.env.retry?.();this.readError=false;this.historyLimit=false;this.clear('retry');this.publish();this.schedule();};
 
   private evict() {
     if(this.pool){if(!this.pool.trim())this.limit();return;}
@@ -854,6 +856,7 @@ function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
     clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
     dropTimeRange: () => {if(timeRange())dropTimeRange();},
     accessLost: () => {page.dispatch({type:'board-close'});window.dispatchEvent(new Event(UNAUTHORIZED));},
+    retry:()=>boardPeriod.retryHistory(family==='funds'?'funds':scope),
   }, STORED_BYTES, scope, historyPool);
   value.setActive(false);return value;
 }
@@ -952,7 +955,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false):Shown&{drawing:Hist
     if(!shown.history)return shown;
     const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=boardPeriod.projectionState(shown.history,scope);
     if(!state.ready)return {...shown,history:retained.current?.history??null,loading:!folding&&!state.error&&!shown.error,error:state.error??shown.error};
-    const history=boardPeriod.project(shown.history,scope,now);retained.current={board,history};if(!shown.loading)gesture.current.target=null;return {...shown,history,loading:folding?false:shown.loading};
+    const history=boardPeriod.project(shown.history,scope,now);retained.current={board,history};if(!shown.loading)gesture.current.target=null;return {...shown,history,loading:folding?false:shown.loading,error:state.error??shown.error};
   },[shown,revision,loader,panning,now]);
   // Rolling totals change with the endpoints; their unchanged drawing evidence
   // must not restart line and stack preparation on the same clock wake.

@@ -49,6 +49,8 @@ export const ANALYTICS_SCENES=[
 /** The same activity fixture can be viewed in the past without changing current status.
  * Pending/error retention, cursor races and bounded large rosters are held by
  * server/test/periodRead.test.ts and ui/test/period.test.ts.
+ * Source disclosures retain their own range through loading and failure, including
+ * initial errors, in ui/test/sourcePeriodPresentation.test.ts.
  */
 export const PERIOD_SCENES=[
   {id:'retained-period',expect:['past-values','retained-work','exclusive-interval','shared-activity']},

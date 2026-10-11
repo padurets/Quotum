@@ -47,8 +47,9 @@ test('returning from settings resumes the actual period coordinator after prefer
     hubNow:()=>5_000_000,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{change(){reads++;}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
-    timeRange:()=>({from:1_400_000,to:5_000_000}),prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),
-    PERIOD_SCOPES:['quota','budget','funds'],widgetVisible:()=>true,AGENTS:'agents',ACTIVITY:'activity',noSessions:[],noValue:{},
+    timeRange:()=>({from:1_400_000,to:5_000_000}),prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),cellOf:()=>60_000,
+    subscriptionSelection:()=>undefined,moneySelection:()=>({selection:undefined}),
+    PERIOD_SCOPES:['quota','budget','funds'],widgetVisible:()=>true,QUOTA_WIDGETS:['history'],BUDGET_WIDGETS:['budget'],SUBSCRIPTION_FUNDS:'funds',AGENTS:'agents',ACTIVITY:'activity',noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   const body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
@@ -80,7 +81,7 @@ test('monetary evidence refreshes only the selected resource family',()=>{
     hubNow:()=>5_000_000,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{change(){}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
-    timeRange:()=>null,prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),
+    timeRange:()=>null,prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),cellOf:()=>60_000,subscriptionSelection:()=>undefined,
     moneySelection:(_cards:unknown,_hidden:unknown,_prefs:unknown,_currency:unknown,family:string)=>({selection:{ids:[[family==='funds'?'credit':'wallet','balance']]}}),
     PERIOD_SCOPES:['quota','budget','funds'],widgetVisible:()=>true,QUOTA_WIDGETS:['history'],BUDGET_WIDGETS:['budget'],SUBSCRIPTION_FUNDS:'funds',AGENTS:'agents',ACTIVITY:'activity',noSessions:[],noValue:{},
   };
