@@ -34,6 +34,7 @@ function fixture(){
     if(name.endsWith('/clients'))return {clientName:(id:string)=>id};
     if(name==='./Kit')return {Modal:modal,ErrorLine:errorLine};
     if(name==='./Connections')return {ConnectionRow:row};
+    if(name==='./ClientLinks')return {openClientLinks:()=>{}};
     if(name==='./Time')return {Ago:{}};
     if(name==='./logos')return {logoOf:()=>''};
     throw new Error(name);

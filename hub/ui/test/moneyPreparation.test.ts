@@ -74,7 +74,7 @@ test('MoneyHistory passes resource retirement through to the prepared Chart whil
       'react/jsx-runtime': jsx, react: {useRef: outer.useRef, useMemo: memo},
       '../../server/domain/providers': providers, '../../server/domain/currency': currency, '../../server/domain/meterHistory': {composeMetersPrepared},
       '../lib/board': {useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
-      '../lib/history': {useBudgetHistory: () => ({history, loading: !history}), useBudgetHistoryPlot: () => null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
+      '../lib/history': {useBudgetFinancialHistory: () => ({history, loading: !history}), useBudgetHistoryPlot: () => null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
       '../lib/prefs': {usePrefs: () => prefs}, '../lib/moneySelection': {moneySelection}, '../lib/moneyView': moneyView, '../lib/money': money,
       '../lib/view': {colorOf: () => '#fff'}, '../lib/periods': {frameOf: () => ({from: 0, to: 120000, live: true}), measuredTo: () => 60000},
       '../lib/timeRange': {useTimeRange: () => null}, '../lib/clock': {useClock: () => 60000}, '../lib/pan': {usePanning: () => null},
