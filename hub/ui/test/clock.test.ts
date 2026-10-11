@@ -116,6 +116,46 @@ test('later labels and unchanged deadlines keep the timer; an earlier label and 
   assert.deepEqual(c.woken, ['minute']);
 });
 
+test('many labels with unchanged deadlines keep one timer without searching every label again', () => {
+  const c = pageClock(), count = 800;
+  let reads = 0;
+  const watches = Array.from({length: count}, (_, i) => {
+    const watch = c.clock.watch();
+    let due = watch.due;
+    Object.defineProperty(watch, 'due', {get: () => {reads++; return due;}, set: value => {due = value;}});
+    c.clock.subscribe(watch, () => {
+      c.woken.push(String(i));
+      c.clock.due(watch, c.now() + MIN, c.now());
+    });
+    c.clock.due(watch, T0 + MIN, c.now());
+    return watch;
+  });
+  assert.ok(reads < count * 20, 'initial deadlines need linear work');
+  const before = reads, timer = c.timers[0].id;
+  for (const watch of watches) c.clock.due(watch, T0 + MIN, c.now());
+  assert.ok(reads - before < count * 10, 'unchanged label commits need linear work');
+  assert.equal(c.timers.length, 1);
+  assert.equal(c.timers[0].id, timer);
+  c.advance(MIN);
+  assert.deepEqual(c.woken, watches.map((_, i) => String(i)));
+  assert.equal(c.timers[0].at, T0 + 2 * MIN);
+});
+
+test('a deadline set before subscribing joins the clock only while subscribed', () => {
+  const c = pageClock();
+  c.part('minute', () => T0 + MIN);
+  const pending = c.clock.watch(), kept = c.timers[0].id;
+  c.clock.due(pending, T0 + 30 * S, c.now());
+  assert.equal(c.timers[0].id, kept);
+  const remove = c.clock.subscribe(pending, () => c.woken.push('pending'));
+  assert.equal(c.timers[0].at, T0 + 30 * S);
+  remove();
+  c.clock.due(pending, T0 + 10 * S, c.now());
+  assert.equal(c.timers[0].at, T0 + MIN);
+  c.advance(MIN);
+  assert.deepEqual(c.woken, ['minute']);
+});
+
 test('a moment that is not after now is a mistake of its part: taken as a minute on, never a spin', () => {
   const c = pageClock();
   c.part('wrong', now => now);

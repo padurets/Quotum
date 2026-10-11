@@ -31,6 +31,8 @@ export class PageClock {
   private skew = 0;
   private readonly watches = new Set<Watch>();
   private timer: {handle: unknown; at: number} | null = null;
+  private nearest: Watch | null = null;
+  private staleNearest = false;
 
   constructor(private readonly env: ClockEnv) {}
 
@@ -56,17 +58,21 @@ export class PageClock {
   subscribe(watch: Watch, listener: () => void) {
     watch.listener = listener;
     this.watches.add(watch);
+    this.reconsider(watch, null);
     this.arm();
     return () => {
       watch.listener = null;
       this.watches.delete(watch);
+      if (this.nearest === watch) this.staleNearest = true;
       this.arm();
     };
   }
 
   /** What a part shows now changes at `at` (hub time), or never by itself (null). */
   due(watch: Watch, at: number | null, now: number) {
+    const previous = watch.due;
     watch.due = at === null ? null : at > now ? at : now + MISSED;
+    if (this.watches.has(watch)) this.reconsider(watch, previous);
     this.arm();
   }
 
@@ -79,6 +85,7 @@ export class PageClock {
   private wake(which: (watch: Watch) => boolean) {
     const woken = [...this.watches].filter(which);
     for (const watch of woken) {
+      if (this.nearest === watch) this.staleNearest = true;
       watch.due = null;
       watch.wakes++;
     }
@@ -86,12 +93,21 @@ export class PageClock {
     this.arm();
   }
 
+  private reconsider(watch: Watch, previous: number | null) {
+    if (this.nearest === watch) {
+      if (watch.due === null || previous !== null && watch.due > previous) this.staleNearest = true;
+    } else if (watch.due !== null && (!this.nearest || this.nearest.due === null || watch.due < this.nearest.due)) this.nearest = watch;
+  }
+
   /** One timer, for the nearest moment any part changes; none on a hidden tab. */
   private arm() {
-    let nearest = Infinity;
-    if (this.env.visible()) for (const watch of this.watches) {
-      if (watch.due !== null && watch.due < nearest) nearest = watch.due;
+    // Keep the nearest watcher through label commits; rescan when it moves later or leaves.
+    if (this.staleNearest) {
+      this.nearest = null;
+      for (const watch of this.watches) if (watch.due !== null && (!this.nearest || watch.due < this.nearest.due!)) this.nearest = watch;
+      this.staleNearest = false;
     }
+    const nearest = this.env.visible() ? this.nearest?.due ?? Infinity : Infinity;
     const now = this.env.now();
     const at = Number.isFinite(nearest) ? now + Math.min(Math.max(nearest - this.hubNow(now), NEAREST), FURTHEST) : null;
     // A commit updates many labels; their unchanged nearest deadline needs no new timer.
