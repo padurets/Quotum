@@ -181,7 +181,7 @@ const Totals = memo(function Totals({activity, shownMs, since}: {activity: Activ
   useLocale();
   if (!activity?.known || activity.activeMs <= 0) return null;
   return (
-    <div className="activity-totals">
+    <div className="activity-totals" data-agent-ms={activity.agentMs}>
       <span title={t('activity.agentHoursHint')}>
         {t('activity.agentHours')} <b>{workHours(activity.agentMs)}</b>
         {shownMs < activity.agentMs && <span className="activity-since activity-shown">{t('activity.shown', {time: workHours(shownMs)})}</span>}

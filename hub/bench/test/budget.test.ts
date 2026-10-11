@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {chartProblems, creditRenderProblems, IDLE_SCRIPT_MS_PER_SECOND, idleProblems, LATENCY_P95_MS, measuredProblems, percentile, privateWorkRenderProblems, renderProblems, type Idle, type Measured} from '../budget.js';
+import {activityCreditProblems, chartProblems, creditRenderProblems, IDLE_SCRIPT_MS_PER_SECOND, idleProblems, LATENCY_P95_MS, measuredProblems, percentile, privateWorkRenderProblems, renderProblems, type Idle, type Measured} from '../budget.js';
 import type {Counted} from '../probe.js';
 
 const MIN = 60_000;
@@ -41,6 +41,18 @@ test('private CPU credit cannot redraw financial widgets except at their actual 
     assert.ok(privateWorkRenderProblems({...reading,from:5*MIN-1,to:5*MIN+1,renders:[{...chart,count:2}]}).length);
     assert.ok(privateWorkRenderProblems({...reading,from:5*MIN-1,to:5*MIN+1,renders:[{...part('analytics',null,1),widget}]}).length);
   }
+});
+
+test('linked credit requires actual Activity data as well as its chart render',()=>{
+  const activity={...part('analytics','chart',1),widget:'activity' as const};
+  assert.deepEqual(activityCreditProblems([activity],1000,2000),[]);
+  assert.match(activityCreditProblems([activity],1000,1000).join('\n'),/agent time did not advance/);
+  assert.match(activityCreditProblems([activity],-1,2000).join('\n'),/agent time did not advance/);
+  assert.match(activityCreditProblems([activity],NaN,2000).join('\n'),/agent time did not advance/);
+  assert.match(activityCreditProblems([activity],1000,Infinity).join('\n'),/agent time did not advance/);
+  assert.match(activityCreditProblems([],1000,2000).join('\n'),/did not render/);
+  assert.match(activityCreditProblems([{...activity,kind:'label'}],1000,2000).join('\n'),/did not render/);
+  assert.match(activityCreditProblems([{...activity,widget:'budget'}],1000,2000).join('\n'),/did not render/);
 });
 
 /** Two minutes of a page that only shows time, on a history of five-minute cells. */

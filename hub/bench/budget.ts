@@ -137,6 +137,14 @@ export function creditRenderProblems({card,renders,mutations,from,to,cellMs}:Omi
   return found;
 }
 
+/** A chart render alone cannot prove that Activity received a work credit. */
+export function activityCreditProblems(renders: Counted[], before: number, after: number): string[] {
+  const found: string[] = [];
+  if (!Number.isFinite(before) || !Number.isFinite(after) || before < 0 || after <= before) found.push('linked wallet agent time did not advance in Activity');
+  if (!renders.some(part => part.widget === 'activity' && (!part.time || part.kind === 'chart'))) found.push('linked wallet credit did not render Activity');
+  return found;
+}
+
 /** Private CPU work has no card or financial balance to update. */
 export function privateWorkRenderProblems({renders,mutations,from,to,cellMs}:Omit<Measured,'latencies'|'card'>&{cellMs:number}):string[] {
   const found=renderProblems({card:'private-client-no-card',renders,mutations,from,to});
