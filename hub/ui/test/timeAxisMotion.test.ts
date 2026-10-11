@@ -19,8 +19,8 @@ test('a wheel restart retains the range committed by its preceding gesture befor
     const initial = navigationAt({context: 'test', range: 'live'}, selected);
     const base = selected ? {...selected, end: selected.to} : {from: now - H, to: now, end: now};
     const f = axisPresentationFixture(base, initial), frames: (() => void)[] = [];
-    let commits = 0;
-    const pan = new Pan({now: () => now, commit: range => {selected = range; commits++;}, requestFrame: run => {frames.push(run); return run;}, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}});
+    let commits = 0, deliveredAt = 1000;
+    const pan = new Pan({now: () => now, commit: range => {selected = range; commits++;}, requestFrame: run => {frames.push(run); return run;}, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}}, () => deliveredAt);
     const chart = {current: Symbol('chart')};
     Object.assign(f.context, {pan, navigationAt, source: chart, folding: false,
       panPointer: {current: null}, wheelBounds: {current: null}, freezeSlides: f.context.cancelSlides,
@@ -33,6 +33,7 @@ test('a wheel restart retains the range committed by its preceding gesture befor
     const begin = () => ({source: chart.current, selected, length: H, now, historyStart: 0, span: H, width: 270});
     assert.equal(pan.wheel(begin, input(1_000, returning ? 270 : -24)), true);
     frames.shift()!();
+    deliveredAt = 1300;
     assert.equal(pan.wheel(begin, input(1_300, -12)), true);
     assert.equal(commits, 1);
     const token = pan.active(); assert.ok(token);

@@ -1358,7 +1358,9 @@ The future moves with the strip during the gesture, then folds away over 160 ms 
 release in the past, or unfolds on returning to live. Reduced motion skips this final
 transition. Release within eight source pixels of now restores the chosen live preset.
 One changed gesture creates one address entry; cancellation or returning to the exact
-origin creates none. A horizontal wheel ends after a 200 ms pause. Shift-wheel keeps
+origin creates none. A horizontal wheel ends after a 200 ms pause. An arriving event
+starts a new transaction only when both its capture and delivery gaps reach that
+boundary; a renderer backlog cannot reset its axis through either clock alone. Shift-wheel keeps
 one captured scale across pauses and ends when Shift is released, like a held drag;
 a pointer can continue that transaction. A wheel restarting in the same event keeps
 the preceding gesture's committed range as its origin, even before that selection
