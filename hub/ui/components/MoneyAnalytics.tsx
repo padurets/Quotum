@@ -143,7 +143,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
       if(!work||!workRow(s))return {content:'—',title:t(work?'money.sourceWorkOnly':'money.noWorkRate')};
       const native=card&&referenceBalance(card)?.total;
       const estimate=moneyWorkRate(work,null),proof=[t('money.workEstimate'),t('money.workBasis',{active:activeHours(String(work.eligibleActiveMs))}),work.partial?t('money.partial'):null].filter(Boolean).join('\n');
-      if(id==='active')return {content:activeHours(String(work.activeMs)),title:proof};
+      if(id==='active')return {content:<span data-work-source={s.sourceId} data-active-ms={work.activeMs}>{activeHours(String(work.activeMs))}</span>,title:proof};
       if(id==='remaining')return {content:<RemainingWork work={work} native={native} proof={proof}/>,title:proof};
       if(estimate.status==='insufficient')return {content:'—',title:t('money.workInsufficient')+'\n'+proof};
       const counter=card?.meters?.find(meter=>meter.id==='usage'&&meter.unit===work.unit),shown=counter&&estimate.rate!==null?displayMeter({...counter,amount:estimate.rate},s.sourceId,context):null;

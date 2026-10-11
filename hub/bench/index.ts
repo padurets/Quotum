@@ -1,5 +1,6 @@
 import {cellOf, cellStart} from '../server/domain/history.js';
 import {createServer} from 'node:net';
+import {randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {realpathSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
@@ -471,6 +472,7 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
     const heartbeatReading=await cdp.evaluate<Reading>('__quotumBench.read()');
     problems.push(...renderProblems({card:source,renders:heartbeatReading.renders,mutations:heartbeatReading.mutations,from:heartbeatFrom,to:Date.now()}));
   }finally{ledger.close();}
+  const linkedWork=await workLinkedWallet(demo,stand,cdp,source);problems.push(...linkedWork.problems);
   const currencies=await currencyPhase(demo,stand,cdp,source,record.id);problems.push(...currencies.problems);
   const capped=await owner.post<Credential>('/api/credentials',{provider:'openrouter',secret:MONEY_KEY(5),allowNoExpiry:true});
   const cappedSource=capped.sourceId!;
@@ -482,7 +484,39 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
     if(!cap){if(Date.now()>cappedBy)throw new Stop('zero-cap money fixture did not appear');await sleep(20);}
   }
   await moneyView(cdp,source,cappedSource,cap.id);
-  return {count:latencies.length,p95Ms:Math.round(percentile(latencies,.95)),chartP95Ms:Math.round(percentile(chartLatencies,.95)),historyBytesPerMeasurement:bytes,heartbeat,currencies,problems};
+  return {count:latencies.length,p95Ms:Math.round(percentile(latencies,.95)),chartP95Ms:Math.round(percentile(chartLatencies,.95)),historyBytesPerMeasurement:bytes,heartbeat,linkedWork,currencies,problems};
+}
+
+/** Attributed wallet credit updates work readers once while financial drawing stays still. */
+async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,source:string) {
+  say('checking linked wallet credit with Activity, money work columns and a stable financial chart');
+  const owner=stand.people.get(people(stand.set)[0].id)!,agent=stand.agents.get('laptop')!,start=Date.now();
+  const revision=(await owner.get<{revision:string}>('/api/links')).revision;
+  const created=await owner.post<{revision:string;links:{id:string}[]}>('/api/links',{clientId:'opencode',deviceId:null,route:null,sourceId:source,from:start,to:null,expectedRevision:revision,requestId:randomUUID()});
+  const session={clientId:'opencode',sessionId:'e'.repeat(32),source:null,origin:'terminal',project:'Linked benchmark',startedAt:new Date(start).toISOString(),working:true};
+  agent.trackClients([session],[]);await demo.nextReport('laptop');await sleep(1000);
+  const geometry=()=>cdp.evaluate<string>(`JSON.stringify(Array.from(document.querySelectorAll('.budget-history [data-series]')).map(node=>[node.getAttribute('data-series'),node.getAttribute('data-last'),Array.from(node.querySelectorAll('path')).map(path=>path.getAttribute('d'))]))`);
+  const active=()=>cdp.evaluate<number>(`Number(document.querySelector('[data-work-source="${source}"]')?.getAttribute('data-active-ms')??-1)`);
+  const reports:{at:number;reads:number;bytes:number;activeMs:number}[]=[],problems:string[]=[];
+  for(let i=0;i<3;i++) {
+    const before=await active(),drawing=await geometry();
+    if(before<0)throw new Stop('linked wallet work columns are not visible');
+    await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
+    if(i===2)agent.trackClients([{...session,working:false}],[]);
+    const at=await demo.nextReport('laptop');await sleep(1000);await drain(requests);requests.counting=false;
+    const value=await active(),reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.byPath['/api/history']??0,bytes=requests.bytesByPath['/api/history']??0;
+    reports.push({at,reads,bytes,activeMs:value});
+    if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`linked wallet work read history ${reads} times, ${bytes} bytes`);
+    if(value<=before)problems.push('linked wallet active time did not advance');
+    if(!reading.renders.some(part=>!part.time&&part.widget==='activity'))problems.push('linked wallet credit did not reach Activity');
+    if(await geometry()!==drawing)problems.push('linked wallet work changed financial geometry');
+    if(reading.renders.some(part=>!part.time&&part.widget==='budget'&&part.node.includes('.budget-history')))problems.push('linked wallet work rendered the financial chart');
+    problems.push(...renderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from,to:Date.now()}));
+  }
+  agent.trackClients([],[]);await demo.nextReport('laptop');
+  const response=await fetch(owner.base+'/api/links/'+created.links.at(-1)!.id,{method:'DELETE',headers:{cookie:owner.cookie,origin:new URL(owner.base).origin,'content-type':'application/json'},body:JSON.stringify({expectedRevision:created.revision,requestId:randomUUID()})});
+  if(!response.ok)throw new Stop('linked wallet fixture could not remove its rule');
+  return {reports,problems};
 }
 
 /** The personal display path uses the same measurement and render budgets as native money. */

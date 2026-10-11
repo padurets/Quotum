@@ -36,6 +36,7 @@ export {QUOTA_SCENES} from './quotas.js';
 export {MONEY_SCENES} from './money.js';
 export {CODEX_CREDIT_SCENES} from './codexCredits.js';
 export {CURRENCY_SCENES} from './currencies.js';
+export {LINK_SCENES} from './links.js';
 
 /** Mixed analytics stays visible; loading and read failures are held by history tests.
  * Legend mutes, table-only views and explicit empty Add are exercised on this set in
@@ -1641,4 +1642,11 @@ const machineClients: DemoSet = {id:'clients',about:'OpenCode work and installed
   {kind:'machine',id:'laptop',expect:[{name:'Laptop'}]},
   {kind:'board',id:'team',name:'Shared clients',owner:'ana',members:[],expect:[{state:'onboarding'}]},
 ]};
-export const SETS: DemoSet[] = [all, showcase, activity,money,quotas,analytics, machineClients, ONBOARDING];
+const linkedClients:DemoSet={id:'links',about:'Temporal client links, suggestions, monetary work and complete or partial observation',scene:'quiet',workHistoryMs:2*HOUR,entries:[
+  {kind:'person',id:'ana',name:'Ana',agents:true,expect:[{state:'widgets'}],look:['My connections: client links, explicit suggestion dates, inactive targets and account disagreements']},
+  {kind:'person',id:'boris',name:'Boris',agents:true,expect:[{state:'widgets'}]},
+  {kind:'machine',id:'laptop',person:'ana',expect:[{via:'token'}]},
+  {kind:'machine',id:'remote',person:'boris',expect:[{via:'token'}]},
+  {kind:'board',id:'team',name:'Shared linked sources',owner:'ana',members:['boris'],agents:true,expect:[{state:'widgets'}]},
+]};
+export const SETS: DemoSet[] = [all, showcase, activity,money,quotas,analytics, machineClients, linkedClients, ONBOARDING];

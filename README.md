@@ -635,6 +635,22 @@ without a project. Generic Node/bun hosts are not detected. Version probes are b
 and never read credentials or make model requests. Working states estimate process CPU
 activity; they are not provider reports of model work.
 
+In **My connections → Client links**, assign a client to a held source on one device
+or all your devices, with an explicit start and optional end date. Optional conditions
+match a reported subscription/API route and known provider. Device rules take priority;
+an unavailable winning source keeps the work unassigned. Correcting a rule changes how
+retained work is displayed without rewriting the machine's original observations.
+Changing its source from a date preserves the earlier assignment. Suggestions show
+their exact dates and require your acceptance; API work is never assigned from a host
+alone. Detailed route evidence and disagreements remain private.
+
+The budget table can show source spending per active hour and remaining active hours
+when a source reports a spending counter and at least 30 minutes of eligible work.
+These are estimates from adjacent observations, not prices of individual requests or
+sessions. Balance-only sources have no such estimate. A subscription's warning mark
+distinguishes quota growth with complete observations and no attributed work from
+growth during incomplete observation; silence never proves that no work happened.
+
 ### Hub
 
 | Variable | Default | Meaning |

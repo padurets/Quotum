@@ -1,6 +1,7 @@
 import type {FastifyInstance, FastifyReply, FastifyRequest} from 'fastify';
 import type {Guards, Hub} from '../api.js';
 import {clients} from '../domain/clients.js';
+import {titled} from '../domain/presentation.js';
 import type {LinkInput} from '../domain/links.js';
 
 const basis = (value: LinkInput) => JSON.stringify([value.deviceId, value.clientId, value.route?.class ?? null, value.route?.provider ?? null, value.sourceId, value.from, value.to]);
@@ -18,9 +19,11 @@ export function linkRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   });
   app.get('/api/links', (request, reply) => {
     const user = guards.user(request, reply); if (!user) return reply;
+    const personal=hub.directory.boards(user.id).find(board=>board.personal);
+    const sources=titled(hub.store.held(user.id),personal?hub.directory.view(personal.id).names:{});
     return {revision: store.revision(user.id), links: store.list(user.id).map(link => ({...link, active: hub.store.holds(user.id, link.sourceId)})),
-      sources: hub.store.held(user.id).map(source => ({id: source.id, provider: source.provider,
-        name: String(hub.store.db.prepare('SELECT name FROM declared_accounts WHERE user_id=? AND source_id=?').get(user.id, source.id)?.name ?? hub.store.state(source.id).plan ?? source.provider)})),
+      sources: sources.map(source => ({id: source.id, provider: source.provider,
+        name: String(hub.store.db.prepare('SELECT name FROM declared_accounts WHERE user_id=? AND source_id=?').get(user.id, source.id)?.name ?? source.title)})),
       clients: [...new Set([...clients.map(c => c.id), ...(hub.store.db.prepare('SELECT client FROM device_clients c JOIN devices d ON d.id=c.device_id WHERE d.user_id=? UNION SELECT client FROM agent_sessions s JOIN devices d ON d.id=s.device_id WHERE d.user_id=?').all(user.id, user.id) as {client: string}[]).map(c => c.client)])],
       devices: hub.directory.devices(user.id).map(device => ({id: device.id, name: device.label ?? device.name}))};
   });

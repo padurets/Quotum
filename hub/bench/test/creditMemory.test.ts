@@ -42,7 +42,7 @@ test('three production readers retain the dense 30d credit pan and cached return
           reads[index]++;peak=Math.max(peak,pool.activeFlights);assert.ok(pool.activeFlights<=2);
           const end=Math.min(to,cellStart(now+30_000,cell)+cell);
           const native=meters?.displayCurrency?{...meters,unit:'credits:codex'}:meters;
-          let chunks:Chunk[]=store.cells(board,cell,from,end,{now,scope:scope as HistoryScope,meters:native}).map(chunk=>({...chunk,activity:{...chunk.activity,sessions:chunk.activity.sessions.map(([id,...rest])=>[String(id),...rest])}}));
+          let chunks:Chunk[]=store.cells(board,cell,from,end,{now,scope:scope as HistoryScope,meters:native}).map(chunk=>({...chunk,activity:{...chunk.activity,sessions:chunk.activity.sessions.map(([id,source,project,device,identity])=>[String(id),source,project,device,...identity===undefined?[]:[String(identity)]] as Chunk['activity']['sessions'][number])}}));
           if(meters?.displayCurrency)chunks=displayHistory(chunks,store.currencies,user.id,meters.displayCurrency,cell,(source,_meter,at)=>observations.get(source)?.filter(value=>value<=at).at(-1)??null);
           return {run:'run',now,historyStart:now-75*day,known,chunks};
         },
