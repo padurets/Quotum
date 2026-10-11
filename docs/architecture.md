@@ -1196,10 +1196,12 @@ when it was measured and, while the hub sets the pace, when the next measurement
 and why, each a line of its own.
 A board has one grid for source cards, agent sessions, activity, quota history and
 table, and budget history and table. A filter button in the header toggles a separate
-glass row directly beneath it, with its controls aligned right and a subtle bottom rule.
-On wide screens both rows share the content's 1240 px maximum width and 28 px inner
-side spacing. Only the bottom of the combined glass surface has rounded corners;
-with filters hidden, the header itself has them. Narrow screens keep edge-to-edge bars.
+row directly beneath it, with its controls aligned right. Navigation and filters share
+one sticky glass backing and a continuous outer edge, without a divider between them.
+Its translucent surface remains distinct from the page background. On wide screens
+the backing shares the content's 1240 px maximum width and 28 px inner side spacing,
+with rounded lower corners. Hiding filters reduces that same surface to the header.
+Narrow screens keep edge-to-edge bars.
 The row starts closed and remembers its visibility in the reader's browser.
 Hiding it preserves the selected period, quota window kind and shared chart horizon;
 while open, it keeps them available during scrolling. Board navigation and widget

@@ -69,10 +69,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .limit-value, .legend-item b, td, .tooltip-row strong { font-variant-numeric: tabular-nums; }
 
 /* ---------- header ---------- */
+.board-bar { position: sticky; top: 0; z-index: 10; }
+/* One backing keeps navigation and filters on the same glass, while their popovers can blur the page. */
+.board-bar::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: color-mix(in srgb, var(--surface) 80%, transparent); -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); box-shadow: inset 0 0 0 1px var(--hair), 0 8px 24px -12px #00000080; }
 .topbar { position: sticky; top: 0; z-index: 10; }
-/* Both sticky bars frost their backing alone, so their popovers can blur the page. */
-.topbar::before, .analytics-head::before { content: ''; position: absolute; inset: 0; z-index: -1; background: #0b0b0ecc; -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); }
-.topbar::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--hair-2) 20%, var(--hair-2) 80%, transparent); }
 .topbar-inner { max-width: var(--page-width); margin: 0 auto; padding: 0 28px; height: 60px; display: flex; align-items: center; gap: 24px; }
 .brand { display: flex; align-items: center; gap: 11px; color: var(--text); text-decoration: none; font-weight: 560; font-size: 15px; letter-spacing: -.01em; white-space: nowrap; }
 .logo { width: 26px; height: 26px; }
@@ -99,14 +99,10 @@ main { max-width: var(--page-width); margin: 0 auto; padding: 28px 28px 56px; di
 
 /* Shared viewing controls extend the header's glass below its navigation. */
 .analytics-head { position: sticky; top: 60px; z-index: 5; }
-.analytics-head::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--hair); }
 .analytics-head-inner { max-width: var(--page-width); min-height: 56px; margin: 0 auto; padding: 10px 28px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
 /* Once there is room beside the content, the glass shares its width and rounds only its lower edge. */
 @media (min-width: 1280px) {
-  .topbar, .analytics-head { max-width: var(--page-width); margin-inline: auto; border-radius: 0 0 16px 16px; }
-  .topbar:has(+ .analytics-head:not([hidden])) { border-radius: 0; }
-  .topbar::before, .analytics-head::before { border-radius: inherit; }
-  .topbar::after, .analytics-head::after { inset: 0; height: auto; border-bottom: 1px solid var(--hair); border-radius: inherit; background: none; pointer-events: none; }
+  .board-bar { max-width: var(--page-width); margin-inline: auto; border-radius: 0 0 16px 16px; }
 }
 .widget { position: relative; display: flex; flex-direction: column; min-width: 0; }
 .widgets > .card.is-loading { grid-column: span 2; grid-row: span 5; }
