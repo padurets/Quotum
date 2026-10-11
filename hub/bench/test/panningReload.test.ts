@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import type {Cdp} from '../cdp.js';
-import {panningReload} from '../panningReload.js';
+import {panningReload,reloadHubProbe} from '../panningReload.js';
 import {panning} from '../panning.js';
 
 const flush=async()=>{for(let i=0;i<20;i++)await Promise.resolve();};
@@ -66,6 +66,50 @@ test('only the failed five-second reload starts its observer and an observed lat
   t.mock.timers.tick(4999);await flush();assert.deepEqual(labels,[]);assert.deepEqual(f.commands,['Page.reload']);
   t.mock.timers.tick(1);await failed;
   assert.deepEqual(labels,['native/budget/reload']);assert.equal(signal?.aborted,true);
+});
+
+test('a silent renderer does not delay the observer and navigation stays attributable across recovery',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date']});
+  const f=fixture(true),logs:string[]=[],marks:unknown[]=[];t.mock.method(console,'error',(line:string)=>logs.push(line));
+  const failed=assert.rejects(panningReload(f.cdp,'budget',async(_label,_signal,origin)=>{
+    marks.push({atMs:Date.now()-origin.startedAt,navigation:origin.navigation()});
+    f.emit('Page.frameNavigated',{frame:{id:'frame',loaderId:'new-loader'}});
+    f.emit('Page.loadEventFired');
+    marks.push(origin.navigation());
+  }),/native\/budget\/reload: panning board reload did not finish in 5 s/);
+  f.emit('Network.requestWillBeSent',{requestId:'document',type:'Document',frameId:'frame',loaderId:'new-loader',request:{url:'http://fixture.invalid/',method:'GET'}});
+  t.mock.timers.tick(4999);await flush();assert.deepEqual(marks,[]);
+  t.mock.timers.tick(1);await flush();
+  assert.deepEqual(marks,[{atMs:5000,navigation:{requested:{atMs:0,frame:'frame',loader:'new-loader'},committed:undefined,loadAtMs:null}},
+    {requested:{atMs:0,frame:'frame',loader:'new-loader'},committed:{atMs:5000,frame:'frame',loader:'new-loader'},loadAtMs:5000}]);
+  t.mock.timers.tick(2000);await failed;
+  assert.ok(logs.at(-1)?.includes('"loadAtMs":5000'));
+});
+
+test('the independent health probe records only status and timing and cancels its unread body',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date']});
+  const logs:string[]=[],controller=new AbortController();let canceled=false,requestSignal:AbortSignal|undefined;
+  t.mock.method(console,'error',(line:string)=>logs.push(line));
+  t.mock.method(globalThis,'fetch',async(url:unknown,init?:RequestInit)=>{
+    assert.equal(url,'http://fixture.invalid/health');assert.equal(init?.redirect,'error');requestSignal=init?.signal as AbortSignal;
+    t.mock.timers.tick(25);
+    return {status:200,body:{cancel:async()=>{canceled=true;}},headers:{secret:'SECRET'}} as unknown as Response;
+  });
+  await reloadHubProbe('http://fixture.invalid',controller.signal,{startedAt:Date.now(),navigation:()=>({loadAtMs:null})});
+  assert.equal(canceled,true);assert.equal(requestSignal?.aborted,true);
+  assert.deepEqual(JSON.parse(logs[0].slice('panning reload hub '.length)),{startedAt:0,startedMs:0,finishedMs:25,durationMs:25,state:'answered',status:200,originalDocumentArrival:'unknown'});
+  assert.ok(!logs[0].includes('SECRET'));
+});
+
+test('a silent health request is aborted at its bound without logging a raw error',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date']});
+  const logs:string[]=[],controller=new AbortController();let signal:AbortSignal|undefined;
+  t.mock.method(console,'error',(line:string)=>logs.push(line));
+  t.mock.method(globalThis,'fetch',async(_url:unknown,init?:RequestInit)=>{signal=init?.signal as AbortSignal;return new Promise<Response>(()=>{});});
+  const probe=reloadHubProbe('http://fixture.invalid',controller.signal,{startedAt:Date.now(),navigation:()=>({loadAtMs:null})});
+  t.mock.timers.tick(1999);await flush();assert.equal(signal?.aborted,false);
+  t.mock.timers.tick(1);await probe;assert.equal(signal?.aborted,true);
+  assert.ok(logs[0].includes('"state":"unavailable"'));assert.ok(logs[0].includes('"finishedMs":2000'));
 });
 
 test('an observer exception cannot replace the canonical reload timeout',async t=>{

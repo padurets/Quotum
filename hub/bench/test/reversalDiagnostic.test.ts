@@ -46,20 +46,60 @@ test('canceling a diagnostic step releases its deadline and preserves the cancel
   controller.abort(reason);await failed;release('late reply');t.mock.timers.tick(5000);
 });
 
-test('an expired page probe still captures independent and native evidence before V8 intervention',async t=>{
+test('native evidence starts before a silent renderer and independent state does not wait for it',async t=>{
   t.mock.timers.enable({apis:['setTimeout','Date']});
   const f=diagnosticFixture(t,'Runtime.evaluate'),controller=new AbortController();
   const observer=await observeReversal(f.page,f.browser,false,controller.signal);
   assert.deepEqual(f.commands,['SystemInfo.getProcessInfo']);
   const diagnosed=observer.diagnose('native/budget/reload');await flush();
+  assert.ok(f.commands.indexOf('native')<f.commands.indexOf('Runtime.evaluate'));
+  assert.ok(f.commands.includes('independent state'),'the second socket runs while the first remains silent');
   t.mock.timers.tick(5000);await diagnosed;await observer.close();
   const result=JSON.parse(f.logs[0].slice('reversal diagnostic '.length));
   assert.equal(result.elapsedMs,5000);assert.equal(result.cpuElapsedMs,5000);assert.match(result.pageState,/diagnostic deadline/);
   assert.deepEqual(result.native,{pids:[17],candidate:17});assert.deepEqual(result.independentState,{responsive:true});
   assert.equal(result.browserCpu[0].cpuDeltaSeconds,1);
+  assert.equal(result.timing.nativeStarted.atMs,0);assert.equal(result.timing.nativeFinished.atMs,0);
+  assert.equal(result.timing.pageFinished.atMs,5000);assert.equal(result.timing.processBefore.atMs,0);assert.equal(result.timing.processAfter.atMs,5000);
   assert.ok(f.commands.indexOf('native')<f.commands.indexOf('Debugger.enable'));
   assert.ok(f.commands.lastIndexOf('SystemInfo.getProcessInfo')>f.commands.indexOf('independent state'),'CPU delta spans the bounded page probes');
   assert.deepEqual(f.closed(),{control:true,independent:true,page:false});
+});
+
+test('all reported browser processes reach the ownership guard and late V8 capture has its own loader context',async t=>{
+  t.mock.timers.enable({apis:['setTimeout','Date']});
+  const f=diagnosticFixture(t,'Runtime.evaluate'),controller=new AbortController();
+  const processes=[{type:'renderer',id:17,cpuTime:1},{type:'browser',id:11,cpuTime:1},{type:'GPU',id:12,cpuTime:1},{type:'network',id:13,cpuTime:1}];
+  const connect=Cdp.connect;
+  t.mock.method(Cdp,'connect',async(url:string,signal?:AbortSignal)=>{
+    const connection=await connect(url,signal);
+    if(url!=='ws://page.invalid')t.mock.method(connection,'send',async()=>({processInfo:processes}));
+    return connection;
+  });
+  let committed:{atMs:number;frame:string;loader:string}|undefined;
+  const origin={startedAt:Date.now(),navigation:()=>({requested:{atMs:10,frame:'frame',loader:'new'},committed,loadAtMs:committed?8304:null})};
+  t.mock.timers.tick(5000);
+  const observer=await observeReversal(f.page,f.browser,false,controller.signal,origin);
+  const diagnosed=observer.diagnose('native/budget/reload');await flush();
+  committed={atMs:8263,frame:'frame',loader:'new'};t.mock.timers.tick(4000);
+  f.release({result:{value:{ready:'complete',timeOrigin:8000}}});await diagnosed;await observer.close();
+  const result=JSON.parse(f.logs[0].slice('reversal diagnostic '.length));
+  assert.deepEqual(result.native,{pids:[17,11,12,13],candidate:17});
+  assert.equal(result.timing.nativeStarted.atMs,5000);assert.equal(result.timing.nativeStarted.navigation.committed,undefined);
+  assert.equal(result.timing.profileStarted.atMs,9000);assert.deepEqual(result.timing.profileStarted.navigation.committed,committed);
+  assert.equal(result.timing.paused.atMs,9000);assert.equal(result.pageState.timeOrigin,8000);
+});
+
+test('a slow native capture does not block either renderer probe and cancellation sends no late V8 commands',async t=>{
+  const f=diagnosticFixture(t),controller=new AbortController(),reason=new Error('whole observer deadline');
+  let release!:()=>void;
+  t.mock.method(f.browser,'diagnostics',async()=>{f.commands.push('native');return new Promise<void>(resolve=>{release=resolve;});});
+  const observer=await observeReversal(f.page,f.browser,false,controller.signal);
+  const failed=assert.rejects(observer.diagnose('native/budget/reload'),error=>error===reason);
+  await flush();assert.ok(f.commands.includes('Runtime.evaluate'));assert.ok(f.commands.includes('independent state'));
+  controller.abort(reason);await failed;await observer.close();
+  const sent=f.commands.slice();release();await flush();assert.deepEqual(f.commands,sent);
+  assert.equal(sent.some(command=>command.startsWith('Debugger.')||command.startsWith('Profiler.')),false);
 });
 
 for(const stalled of ['Debugger.enable','Profiler.enable','Profiler.start','Debugger.pause'])test(`cancellation cleans up requested ${stalled} before its late acknowledgement`,async t=>{
