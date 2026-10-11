@@ -60,6 +60,7 @@ export class MeterStore {
       const id=`key:${key}:cap`;
       if(!observed.has(key)||ids.has(id))throw new Error('invalid_key_part');
       current.delete(id);
+      since=Math.min(since,keyTimes.get(key)!);
       this.db.prepare('UPDATE meter_spans SET stale_after_ms=min(stale_after_ms,max(0,?-to_at-1)) WHERE source_id=? AND meter_id=? AND from_at=(SELECT max(from_at) FROM meter_spans WHERE source_id=? AND meter_id=?)')
         .run(keyTimes.get(key)!,source,id,source,id);
     }

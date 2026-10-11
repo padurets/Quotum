@@ -1,8 +1,11 @@
 import type {Cdp} from './cdp.js';
 import {panningProblems, type PanReading} from './panningBudget.js';
+import {panningReload} from './panningReload.js';
 
 /** Native input against the real charts; the temporary layout brings all four into view. */
-export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp,'at'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+  let stage='native/setup';
+  const progress=(next:string)=>{stage='native/'+next;cdp.at?.(stage);console.log('bench: '+stage);};
   const wait = (ms: number) => cdp.evaluate(`new Promise(resolve => setTimeout(resolve, ${ms}))`);
   const key = (down: boolean, name: string, code: number) => cdp.send('Input.dispatchKeyEvent', {type: down ? 'keyDown' : 'keyUp', key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers: down && name === 'Shift' ? 8 : 0});
   const mouse = (type: string, x: number, y: number, modifiers = 0) => cdp.send('Input.dispatchMouseEvent', {type, x, y, modifiers, button: type === 'mouseMoved' && !modifiers ? 'none' : 'left', buttons: type === 'mousePressed' || type === 'mouseMoved' && modifiers ? 1 : 0, clickCount: type === 'mouseMoved' ? undefined : 1});
@@ -20,11 +23,9 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
   try {
     for (const initiator of ['quota', 'budget', 'funds'] as const) {
       // A newly opened board gives each input owner an independently unread edge.
-      const loaded = new Promise<void>((resolve, reject) => {
-        const late = setTimeout(() => reject(new Error('panning board reload did not finish')), 5000);
-        cdp.on('Page.loadEventFired', () => {clearTimeout(late); resolve();});
-      });
-      await cdp.send('Page.reload'); await loaded;
+      progress(`${initiator}/reload`);
+      await panningReload(cdp,initiator);
+      progress(`${initiator}/charts-open`);
       await cdp.evaluate(`(async()=>{window.__quotumBench?.pause();const until=Date.now()+15000;while(!['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))){if(Date.now()>until)throw new Error('panning charts did not open');await new Promise(r=>setTimeout(r,20));}})()`);
       const selector = initiator === 'quota' ? '.history' : initiator === 'funds' ? '.subscription-funds' : '.budget-history';
       const inset = initiator === 'quota' ? 52 : 88;
@@ -39,9 +40,11 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
     await click('.analytics-head .popover .popover-section:last-child .segmented button', 1);
     await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     for (const [period, index] of [['24h', 4], ['30d', 8]] as const) {
+      progress(`${initiator}/${period}/select`);
       await click('.period .picker > button');
       await click('.period .popover .popover-row', index);
       await settled();
+      progress(`${initiator}/${period}/prepare`);
       await cdp.evaluate(`(async () => {for(let i=0;i<3;i++){await new Promise(requestAnimationFrame);const r=document.querySelector('.history .chart>svg').getBoundingClientRect();scrollBy(0,r.top-140);}})()`);
       const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number; budgetSeries: number; fundsSeries: number; charts: number}>(`(() => {
         const svg=document.querySelector('${selector} .chart>svg'), r=svg.getBoundingClientRect();
@@ -167,6 +170,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       interception = true;
       const wheel = (dx: number, shift = false) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: dx, deltaY: 0, modifiers: shift ? 8 : 0});
       const sent: Promise<unknown>[] = [];
+      progress(`${initiator}/${period}/wheel`);
       await cdp.evaluate('window.__quotumPan.feeding=true');
       // The browser generates native wheel input without a CDP IPC per delta.
       const scroll = (distance: number, reverse = 0) => cdp.send('Input.synthesizeScrollGesture', {x: geometry.x, y: geometry.y, xDistance: distance, xOverscroll: reverse, yDistance: 0, speed: 720, gestureSourceType: 'mouse', preventFling: true});
@@ -175,8 +179,10 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       await wait(240);
       await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
       interception = false;
+      progress(`${initiator}/${period}/wheel-settle`);
       await settled();
       // Shift-drag keeps capture when the pointer leaves the SVG, without extra inertia.
+      progress(`${initiator}/${period}/drag`);
       await cdp.evaluate(`window.__quotumPan.segment='drag'`);
       await key(true, 'Shift', 16);
       await mouse('mousePressed', geometry.x, geometry.y, 8);
@@ -188,8 +194,10 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       await cdp.evaluate('window.__quotumPan.feeding=false');
       await mouse('mouseReleased', geometry.x + 720, geometry.y, 8);
       await key(false, 'Shift', 16);
+      progress(`${initiator}/${period}/drag-settle`);
       await settled();
       // Native Shift deltaX returns to live, then Back/Forward restore complete gestures.
+      progress(`${initiator}/${period}/return-live`);
       sent.length = 0;
       await cdp.evaluate(`window.__quotumPan.segment='return'`);
       const returnBefore = await cdp.evaluate<unknown>('window.__quotumPan.returnSnapshot()');
@@ -219,6 +227,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       }
       await cdp.evaluate('window.__quotumPan.returnInput=null');
       // Held Shift-wheel has the same uninterrupted scale as dragging, across rests.
+      progress(`${initiator}/${period}/held-shift-and-navigation`);
       await mouse('mouseMoved', geometry.x, geometry.y);
       await key(true, 'Shift', 16);
       await wait(30);
@@ -238,6 +247,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       if (!(await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`))) throw new Error('Forward did not restore live');
       // A wheel does not blur a keyboard-focused legend. Its bubble must stay
       // hidden through ordinary panning, a latched drag and their final fold.
+      progress(`${initiator}/${period}/legend`);
       const legendVisible = () => cdp.evaluate<boolean>(`[...document.querySelectorAll('.activity-legend-tip.is-open')].some(tip=>getComputedStyle(tip).display!=='none')`);
       await key(true, 'Tab', 9); await key(false, 'Tab', 9);
       await cdp.evaluate(`document.querySelector('.activity .legend-item').focus()`); await wait(40);
@@ -256,10 +266,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       if (await legendVisible()) throw new Error('a drag fold reopened a focused legend readout');
       await wait(260);
       await cdp.evaluate(`history.back()`); await settled();
+      progress(`${initiator}/${period}/complete`);
     }
       await cdp.evaluate(`document.getElementById('quotum-pan-layout')?.remove()`);
     }
     return {reports, problems: reports.flatMap(panningProblems)};
+  } catch(error) {
+    console.error('bench: '+stage+' failed');throw error;
   } finally {
     await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
     if (interception) await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});

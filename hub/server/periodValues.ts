@@ -86,6 +86,11 @@ function readValues(store:Store,sources:readonly {id:string;provider:string;budg
     for(const raw of ids.iterate(id,to)) {
       const meter=String(raw.meter_id),reading=store.meters.readings(id,meter,to,to,reserve)[0];
       if(!reading||reading.at<anchor)continue;
+      const key=reading.kind==='cap'?/^key:([0-9a-f]{12}):cap$/.exec(meter)?.[1]:undefined;
+      if(key) {
+        const row=context.get(id,'key-cap:'+key,to) as ContextRow|undefined;
+        if(row){reserve(128+row.payload.length*2);const membership=JSON.parse(row.payload) as MeterContextValue;if(membership.type==='key-cap'&&!membership.present)continue;}
+      }
       const spans=store.meters.spans(id,meter,reading.at,to,reserve),span=spanBefore(spans,to);
       const deadline=Math.min(span?spanDeadline(span):reading.at+reading.staleAfterMs+1,reading.resetAt??Infinity);
       // A compressed span has two known anchors; an interior heartbeat time is not recoverable.

@@ -508,7 +508,7 @@ function CardMeasurements({source,arrange,boardId}:{source:Card;arrange:Arrange;
   const windows=historical?value?.windows??[]:source.windows;
   const periods=quotaPeriods({provider:source.provider,windows}),shownPeriods=periods.filter(w=>!isWindowHidden(arrange.view,source.id,w.id));
   const visible=windows.filter(w=>!isWindowHidden(arrange.view,source.id,w.id)),weekly=planOf(arrange.view,source.id),caps=hasSubscriptionCaps(source.provider);
-  const noEvidence=historical&&!!value&&!reading.loading&&!reading.error&&!windows.length&&!value.meters.length;
+  const noEvidence=historical&&!!value&&!reading.loading&&!reading.error&&!windows.length&&!value.meters.length&&value.creditBalance?.status!=='unlimited';
   return <MeasurementClock.Provider value={historical?reading.basis?.range.to??selected.to:null}>
     <div className="limits">
       {historical?<>

@@ -442,6 +442,9 @@ Values are measurement-only projections: source id/provider, retained native win
 meters, keys and the observed `creditBalance` status when authorized. Native windows include `observedAt`, `validUntil` and `stale`.
 Membership is the last nonempty retained batch strictly before the right edge. A meter
 keeps exact decimal integer amounts, historical allowance, unit and conversion evidence.
+An explicitly removed key cap remains absent after its own observation time; later
+partial inventories or malformed limits do not restore an older scale. A subsequent
+valid cap observation restores it. These transitions obey the same exclusive right edge.
 Historical meters and `creditBalance` may carry an exclusive `validUntil`, derived from
 their retained availability spans. When present, it governs freshness instead of
 reapplying the original `staleAfterMs` to `at`: that timestamp remains an actual retained

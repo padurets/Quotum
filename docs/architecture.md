@@ -682,6 +682,13 @@ spending or retroactively reconstructing overwritten period totals.
 A missing key is stale after one successful traversal and archived after two successive
 successful misses; partial traversals never confirm absence, and history is retained.
 A valid null limit explicitly ends the current cap, including in a partial round.
+Each key's explicit cap presence or absence is saved at that key page's observation
+time. Partial inventories and malformed limits do not replace this evidence. Historical
+cards apply the last confirmed state before their right edge, and retention keeps its
+predecessor; a later incomplete response cannot restore a removed scale.
+Older retained inventories can establish absence only by their recorded completion
+time. They cannot recover an earlier page time or a removal that retention already
+discarded; without that evidence the old amount remains last-known and stale.
 Invalid money leaves stay distinct from null. The ledger retains the last confirmed
 span endpoint as evidence through archival and retention; reappearance uses that
 heartbeat time as its spending anchor.
@@ -1521,7 +1528,9 @@ is optional and expires separately; it never proves more work or an end time. Th
 card's panel keeps machine groups, ordered by each one's most recent credited work.
 It groups and orders the complete roster before paging. Loading and failure remain
 visible in its tray disclosure even before any sessions arrive; retained rows name their
-own interval and offer a retry there. A failed read never establishes an empty period.
+own interval and offer a retry there. The full session dialog carries the same interval,
+loading state and retry, so its modal surface does not hide the evidence behind its rows.
+A failed read never establishes an empty period.
 The compact view continues to show current sessions, ordered by working state and
 activity. The table's headers sort ascending, descending, then back to activity;
 a hidden column does not sort. When its owner's chosen columns do not fit the widget's

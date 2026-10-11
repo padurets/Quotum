@@ -499,6 +499,7 @@ function AgentsDialog({
   sortBy,
   color,
   empty,
+  period,
   initial,
   onClose,
   restore,
@@ -510,6 +511,7 @@ function AgentsDialog({
   sortBy: (active: AgentsSort, column: AgentColumn, cycle?: boolean) => void;
   color: Context['color'];
   empty: 'none' | 'noneShown' | null;
+  period: SessionPeriod;
   initial: string | null;
   onClose: () => void;
   restore: () => HTMLElement | null;
@@ -536,6 +538,7 @@ function AgentsDialog({
   return (
     <Modal title={title} wide onClose={onClose} restore={restore}>
       <div className="agents-dialog" ref={box}>
+        <PeriodStatus {...period}/>
         {(back || sortMenu) && (
           <div className="agents-dialog-head">
             {back && (
@@ -547,7 +550,7 @@ function AgentsDialog({
           </div>
         )}
         {empty ? (
-          <p className="panel-empty">{t(`agents.${empty}`)}</p>
+          !period.loading&&!period.error&&period.basis&&<p className="panel-empty">{t(`agents.${empty}`)}</p>
         ) : (
           <AgentsRows groups={ordered.slice(currentPage*50,currentPage*50+50)} name={name} columns={columns} single={group !== null || by === 'none'} by={by} layout={layout} color={color} sorting={sorting} onOpen={key=>{setChosen(key);setPage(0);}} />
         )}
@@ -759,6 +762,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
           sortBy={sortBy}
           color={color}
           empty={empty}
+          period={period}
           initial={open.group}
           onClose={close}
           restore={restore}
