@@ -13,7 +13,7 @@ export type MeterContextValue =
   | {type:'inventory';complete:boolean;error:string|null;keys:string[];uncapped:string[]}
   | {type:'key-cap';present:boolean}
   | {type:'key';id:string;unit:string|null;name:string|null;disabled:boolean;expiresAt:number|null;includeByok:boolean;createdAt:number|null;updatedAt:number|null;periodFrom:{day:number;week:number;month:number};periods:Periods;byokUsage:Periods&{total:string|null}};
-export type MeterContext = {from:number;to:number;staleAfterMs:number;value:MeterContextValue};
+export type MeterContext = {observedFrom?:number;from:number;to:number;staleAfterMs:number;value:MeterContextValue};
 const exact=(value:string|null|undefined)=>value==null?null:amount(value).toString();
 const periods=(value:Periods|undefined):Periods=>({day:exact(value?.day),week:exact(value?.week),month:exact(value?.month)});
 
@@ -37,14 +37,14 @@ export class MeterContexts {
   private seedKeyCaps() {
     const keys=this.db.prepare(`SELECT DISTINCT c.source_id,j.value AS key_id FROM meter_contexts c,json_each(c.payload,'$.uncapped') j
       WHERE c.item='inventory' AND NOT EXISTS(SELECT 1 FROM meter_contexts known WHERE known.source_id=c.source_id AND known.item='key-cap:'||j.value)`).all() as {source_id:string;key_id:string}[];
-    const inventories=this.db.prepare(`SELECT from_at,to_at,stale_after_ms FROM meter_contexts c WHERE source_id=? AND item='inventory'
+    const inventories=this.db.prepare(`SELECT observed_from,to_at,stale_after_ms FROM meter_contexts c WHERE source_id=? AND item='inventory'
       AND EXISTS(SELECT 1 FROM json_each(c.payload,'$.uncapped') WHERE value=?) ORDER BY from_at`);
     const readings=this.db.prepare('SELECT at,stale_after_ms FROM readings WHERE source_id=? AND meter_id=? ORDER BY at');
     for(const {source_id:source,key_id:key} of keys) {
       if(!/^[0-9a-f]{12}$/.test(key))continue;
       const events:{at:number;staleAfterMs:number;present:boolean}[]=[];
       for(const row of readings.iterate(source,`key:${key}:cap`))events.push({at:Number(row.at),staleAfterMs:Number(row.stale_after_ms),present:true});
-      for(const row of inventories.iterate(source,key))for(const at of new Set([Number(row.from_at),Number(row.to_at)]))events.push({at,staleAfterMs:Number(row.stale_after_ms),present:false});
+      for(const row of inventories.iterate(source,key))for(const at of new Set([...(row.observed_from===null?[]:[Number(row.observed_from)]),Number(row.to_at)]))events.push({at,staleAfterMs:Number(row.stale_after_ms),present:false});
       // An exact positive observation takes priority over a coincident legacy upper bound.
       events.sort((a,b)=>a.at-b.at||Number(b.present)-Number(a.present));
       for(const event of events)this.record(source,'key-cap:'+key,event.at,event.staleAfterMs,{type:'key-cap',present:event.present});
@@ -54,11 +54,11 @@ export class MeterContexts {
   private record(source:string,item:string,at:number,staleAfterMs:number,value:MeterContextValue) {
     if(!Number.isSafeInteger(at)||at<0||!Number.isSafeInteger(staleAfterMs)||staleAfterMs<0)throw new Error('invalid_meter_context');
     const payload=JSON.stringify(value);
-    const previous=this.db.prepare('SELECT from_at,to_at,stale_after_ms,payload FROM meter_contexts WHERE source_id=? AND item=? ORDER BY from_at DESC LIMIT 1').get(source,item) as {from_at:number;to_at:number;stale_after_ms:number;payload:string}|undefined;
+    const previous=this.db.prepare('SELECT from_at,to_at,stale_after_ms,payload,observed_from FROM meter_contexts WHERE source_id=? AND item=? ORDER BY from_at DESC LIMIT 1').get(source,item) as {from_at:number;to_at:number;stale_after_ms:number;payload:string}|undefined;
     if(previous&&at<=previous.to_at)return;
     if(previous&&previous.payload===payload&&at-previous.to_at<=previous.stale_after_ms) {
-      this.db.prepare('UPDATE meter_contexts SET to_at=?,stale_after_ms=? WHERE source_id=? AND item=? AND from_at=?').run(at,staleAfterMs,source,item,previous.from_at);
-    }else this.db.prepare('INSERT INTO meter_contexts VALUES (?,?,?,?,?,?)').run(source,item,at,at,staleAfterMs,payload);
+      this.db.prepare('UPDATE meter_contexts SET to_at=?,stale_after_ms=?,observed_from=coalesce(observed_from,to_at) WHERE source_id=? AND item=? AND from_at=?').run(at,staleAfterMs,source,item,previous.from_at);
+    }else this.db.prepare('INSERT INTO meter_contexts(source_id,item,from_at,to_at,stale_after_ms,payload,observed_from) VALUES (?,?,?,?,?,?,?)').run(source,item,at,at,staleAfterMs,payload,at);
   }
 
   observe(source:string,provider:string,measurement:MeterMeasurement,status:BalanceStatus|undefined) {
@@ -96,8 +96,8 @@ export class MeterContexts {
   }
 
   history(source:string,item:string,from:number,to:number):MeterContext[] {
-    const rows=this.db.prepare('SELECT from_at,to_at,stale_after_ms,payload FROM meter_contexts WHERE source_id=? AND item=? AND to_at+stale_after_ms+1>? AND from_at<? ORDER BY from_at').all(source,item,from,to) as {from_at:number;to_at:number;stale_after_ms:number;payload:string}[];
-    return rows.map(row=>({from:row.from_at,to:row.to_at,staleAfterMs:row.stale_after_ms,value:JSON.parse(row.payload) as MeterContextValue}));
+    const rows=this.db.prepare('SELECT from_at,to_at,stale_after_ms,payload,observed_from FROM meter_contexts WHERE source_id=? AND item=? AND to_at+stale_after_ms+1>? AND from_at<? ORDER BY from_at').all(source,item,from,to) as {from_at:number;to_at:number;observed_from:number|null;stale_after_ms:number;payload:string}[];
+    return rows.map(row=>({from:row.from_at,to:row.to_at,...(row.observed_from===null?{}:{observedFrom:row.observed_from}),staleAfterMs:row.stale_after_ms,value:JSON.parse(row.payload) as MeterContextValue}));
   }
 
   prune(cutoff:number) {

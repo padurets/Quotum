@@ -180,6 +180,10 @@ Explicitly hidden legacy panels hide both replacements. Columns follow their fam
 other source settings and geometry are retained. Reader-local modes never participate.
 Runtime capability reconciliation produces one authoritative view/revision pair and
 preserves the previous editor; a concurrent owner save receives the normal conflict.
+If automatic placements exceed either view size bound, reads keep the valid saved
+view and revision. Reconciliation retries after space becomes available. This does
+not prevent reading the board or saving a smaller view; explicit Add and save
+operations still reject an oversized result without changing the saved intent.
 
 Widget reservation and run/resume also require the writer header. Existing addition
 items and request bindings remain immutable; legacy receipts carry frozen canonical
@@ -425,6 +429,15 @@ exclusive validity bound. Metadata is separate from repeated samples. A complete
 a live left boundary to move through its entire retained interval without further IO.
 New evidence extends or replaces that interval; a clock tick does not fetch history.
 Partial spending steps keep their uncertainty instead of becoming proportional amounts.
+Monetary availability spans keep geometry in `from` and the last actual observation
+in `to`. Optional `observedFrom` identifies a confirmed first observation separately
+from that geometry. Retention and access clipping never turn `from` into a measurement.
+An omitted `observedFrom` is unknown, including legacy spans whose original head cannot
+be proved. A confirmed head can be later than `from`; it is eligible only after the
+same exclusive observation boundary as other samples. Authorized projections omit
+anchors outside the reader's financial grant. Card values and accounting use confirmed
+anchors and recorded currency evidence, preserving their original timestamps through
+retention, delta merging and packing.
 Monetary tapes store repeated recorded exchange paths once in
 `rateBindings: {paths, entries}`. Each `entries` key is the native unit, a newline and
 the exact observation timestamp; its value indexes `paths`. A null path means an

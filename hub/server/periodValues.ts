@@ -5,10 +5,10 @@ import type {Meter, KeyPart} from './domain/meters.js';
 import type {MeterContextValue} from './store/meterContexts.js';
 import {convertBy, conversionId, isConvertible} from './domain/currency.js';
 import {HistoryLimit} from './history.js';
-import {spanBefore,spanDeadline,valuationAt} from './domain/periodMoney.js';
+import {spanBefore,spanDeadline,spanObservedAt,valuationAt} from './domain/periodMoney.js';
 
 type WindowRow = {window_id:string;at:number;kind:WindowValue['kind'];label:string|null;used:number;reset_at:number|null;minutes:number|null;stale_after_ms:number};
-type ContextRow = {from_at:number;to_at:number;stale_after_ms:number;payload:string};
+type ContextRow = {observed_from:number|null;from_at:number;to_at:number;stale_after_ms:number;payload:string};
 
 // Exclusive observations, compressed anchors and availability deadlines all end reuse.
 const valueChanges=`WITH changes(at) AS (
@@ -18,9 +18,11 @@ const valueChanges=`WITH changes(at) AS (
     UNION ALL SELECT at+1 FROM readings WHERE source_id=:source
     UNION ALL SELECT at+stale_after_ms+1 FROM readings WHERE source_id=:source
     UNION ALL SELECT reset_at FROM readings WHERE source_id=:source
+    UNION ALL SELECT observed_from+1 FROM meter_spans WHERE source_id=:source
     UNION ALL SELECT from_at+1 FROM meter_spans WHERE source_id=:source
     UNION ALL SELECT to_at+1 FROM meter_spans WHERE source_id=:source
     UNION ALL SELECT min(to_at+stale_after_ms+1,coalesce(interrupted_at,9223372036854775807),coalesce(hold_until,9223372036854775807)) FROM meter_spans WHERE source_id=:source
+    UNION ALL SELECT observed_from+1 FROM meter_contexts WHERE source_id=:source
     UNION ALL SELECT from_at+1 FROM meter_contexts WHERE source_id=:source
     UNION ALL SELECT to_at+1 FROM meter_contexts WHERE source_id=:source
     UNION ALL SELECT to_at+stale_after_ms+1 FROM meter_contexts WHERE source_id=:source
@@ -69,7 +71,7 @@ function readValues(store:Store,sources:readonly {id:string;provider:string;budg
   const target=store.currencies.preference(user).id;
   const bindings=store.currencies.history(user,target,0,to,reserve);
   const batch=store.db.prepare('SELECT window_id,at,kind,label,used,reset_at,minutes,stale_after_ms FROM samples WHERE source_id=? AND at=(SELECT max(at) FROM samples WHERE source_id=? AND at<?)');
-  const context=store.db.prepare('SELECT from_at,to_at,stale_after_ms,payload FROM meter_contexts WHERE source_id=? AND item=? AND from_at<? ORDER BY from_at DESC LIMIT 1');
+  const context=store.db.prepare('SELECT from_at,to_at,stale_after_ms,payload,observed_from FROM meter_contexts WHERE source_id=? AND item=? AND from_at<? ORDER BY from_at DESC LIMIT 1');
   const ids=store.db.prepare('SELECT DISTINCT meter_id FROM readings WHERE source_id=? AND at<?');
   const bounds=interval?null:store.db.prepare(`${valueChanges} SELECT coalesce(max(CASE WHEN at<=:edge THEN at END),0) AS start, coalesce(min(CASE WHEN at>:edge THEN at END),9007199254740991) AS end FROM changes`);
   const result:PeriodValues[]=[];
@@ -109,14 +111,20 @@ function readValues(store:Store,sources:readonly {id:string;provider:string;budg
       reserve(512+row.payload.length*2);
       const v=JSON.parse(row.payload) as MeterContextValue;
       if(v.type!=='key')continue;
-      const at=row.to_at<to?row.to_at:row.from_at;
+      const at=spanObservedAt({to:row.to_at,observedFrom:row.observed_from??undefined},to);if(at===null)continue;
       keys.push({id:v.id,name:owned?v.name:null,disabled:v.disabled,expiresAt:v.expiresAt,includeByok:v.includeByok,at,staleAfterMs:row.stale_after_ms,presence:to>=row.to_at+row.stale_after_ms+1?'missing':'observed',missCount:0,periods:v.periods,byokUsage:v.byokUsage,createdAt:v.createdAt,updatedAt:v.updatedAt});
     }
     let creditBalance:CreditBalanceState|undefined;
     const credit=context.get(id,'credit-balance',to) as ContextRow|undefined;
     if(credit&&anchor<to&&credit.to_at>=anchor){
       reserve(512+credit.payload.length*2);const saved=JSON.parse(credit.payload) as MeterContextValue;
-      if(saved.type==='credit-balance'){const {type:_type,...value}=saved;creditBalance={...value,at:credit.to_at<to?credit.to_at:Math.max(credit.from_at,anchor),staleAfterMs:credit.stale_after_ms,validUntil:credit.to_at+credit.stale_after_ms+1};}
+      let at=spanObservedAt({to:credit.to_at,observedFrom:credit.observed_from??undefined},to);
+      // Admission is an exact finite credit sample even when the shared context began earlier.
+      if(saved.type==='credit-balance'&&saved.status==='finite'&&(at===null||at<anchor)){
+        const sample=meters.find(m=>m.id==='balance:credits')?.at;
+        if(sample!==undefined&&sample>=anchor&&sample>=(credit.observed_from??credit.from_at)&&sample<=credit.to_at)at=sample;
+      }
+      if(saved.type==='credit-balance'&&at!==null&&at>=anchor){const {type:_type,...value}=saved;creditBalance={...value,at,staleAfterMs:credit.stale_after_ms,validUntil:credit.to_at+credit.stale_after_ms+1};}
     }
     let currencyUnavailable=false;
     // Keep native cap denominators and provenance; the common money renderer selects the valuation.

@@ -22,7 +22,8 @@ export type QuotaObservation = {observedAt: number; receivedIds: string[]; quota
 export {QUOTA_IDS} from './providers.js';
 export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; inventoryAt?:number; uncapped?: string[]; balanceStatus?:BalanceStatus;creditBalance?:CreditBalanceState;quota?:QuotaStatus;plan?:string};
 export type Reading = Omit<Meter, 'stale'> & {previousAt: number | null};
-export type MeterSpan = {from: number; to: number; staleAfterMs: number;interruptedAt?:number;holdUntil?:number|null};
+/** The retained start is geometry; an absent observation head is unknown. */
+export type MeterSpan = {observedFrom?:number;from: number; to: number; staleAfterMs: number;interruptedAt?:number;holdUntil?:number|null};
 export type ExceptionalStep = {from: number; to: number; amount: string; evidence: 'continuous' | 'gap' | 'estimate'};
 export type SpendSummary = {from: number; to: number; amount: string | null; complete: boolean; knownFrom: number | null; uncertain: boolean; unlocated: ExceptionalStep[]};
 export type CalendarSpend = {day: SpendSummary; week: SpendSummary; month: SpendSummary};

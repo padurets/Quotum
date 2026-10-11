@@ -6,7 +6,7 @@ import type {HistoryScope} from './domain/history.js';
 import {selectionOf} from './domain/meterHistory.js';
 import type {HistoryQuery} from './domain/periodRead.js';
 import {isConvertible} from './domain/currency.js';
-import {readingBefore} from './domain/periodMoney.js';
+import {readingBefore,valuationAt} from './domain/periodMoney.js';
 
 export function periodTape(store:Store,board:string,shown:Shown,user:string,scope:HistoryScope,query:HistoryQuery,range:PeriodRange,cursor:string,replaceFrom:number,reserve:(bytes:number)=>void,membershipAt=range.to,release:(bytes:number)=>void=()=>{},compact=false):PeriodTape {
   const tape:PeriodTape={from:range.from,cut:range.to,cursor,replaceFrom,quota:[],money:[]};
@@ -55,10 +55,11 @@ export function periodTape(store:Store,board:string,shown:Shown,user:string,scop
           for(const reading of part.readings)bind(reading.unit,reading.at);
           for(const span of part.spans) {
             // Unchanged amounts still have genuine heartbeat and recorded valuation anchors.
-            for(const at of [span.from,span.to]){const reading=readingBefore(part.readings,at);if(reading)bind(reading.unit,at);}
+            for(const at of [...(span.observedFrom===undefined?[]:[span.observedFrom]),span.to]){const reading=readingBefore(part.readings,at);if(reading)bind(reading.unit,at);}
             for(const unit of units) {
-              for(const at of bindings.changes(group.source,unit,span.from,Math.min(span.to+1,range.to))) {
-                if(readingBefore(part.readings,at)?.unit===unit)bind(unit,at);
+              for(const at of bindings.changes(group.source,unit,span.observedFrom??span.from,Math.min(span.to+1,range.to))) {
+                const reading=readingBefore(part.readings,at);
+                if(reading?.unit===unit&&valuationAt(reading,span,at,true,at)===at)bind(unit,at);
               }
             }
           }

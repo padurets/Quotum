@@ -2,11 +2,13 @@ import {providerOf, quotaMeter, budgetMeter} from './domain/providers.js';
 import {config} from './config.js';
 import type {Hub} from './api.js';
 import {HistoryLimit, type HistoryTiles} from './history.js';
-import {selectionOf, type MeterSelection} from './domain/meterHistory.js';
+import {selectionOf, type MeterGroup, type MeterSelection} from './domain/meterHistory.js';
 import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, READ_CELLS, cellStart, tileOf, tileStart, type Chunk} from './domain/history.js';
 import type {Events} from './events.js';
 import {displayHistory} from './currencies/history.js';
 import type {WorkRead} from './store/store.js';
+import {conversionOrigin} from './domain/currency.js';
+import {readingBefore,spanBefore,valuationAt} from './domain/periodMoney.js';
 
 import type {HistoryQuery} from './domain/periodRead.js';
 export type {HistoryQuery} from './domain/periodRead.js';
@@ -55,15 +57,30 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
       if(!meters)fail(400, 'invalid_request');
       try {store.currencies.definition(user,query.currency);}catch{fail(404, 'currency_not_found');}
       if(store.currencies.preference(user).id!==query.currency)fail(409, 'currency_changed');
-      const observed=new Map<string,number[]>();
-      const grants=new Map(store.sources(board).map(s=>[s.id,s.provider==='codex'?s.budget?.anchor??Infinity:0]));
-      const transformed=displayHistory(chunks.map(json=>JSON.parse(json) as Chunk),store.currencies,user,query.currency,cell,(source,meter,until)=>{
-        const id=meter==='balance'?'usage':meter,key=source+'\n'+id;let times=observed.get(key);
-        if(!times){const rows=store.meters.readings(source,id,from,to),spans=store.meters.spans(source,id,from,to);times=[...rows.map(r=>r.at),...spans.flatMap(s=>id==='balance:credits'?[s.from,s.to]:[s.to])].filter(at=>at>=(grants.get(source)??Infinity)).sort((a,b)=>a-b);observed.set(key,times);}
-        let low=0,high=times.length;while(low<high){const middle=(low+high)>>>1;if(times[middle]<=until)low=middle+1;else high=middle;}return low?times[low-1]:null;
-      });
-      chunks=transformed.map(chunk=>JSON.stringify(chunk));
-      if(chunks.reduce((sum,json)=>sum+Buffer.byteLength(json),0)>16*1024*1024)fail(413, 'history_limit');
+      const reservation=history.reservation();
+      try {
+        const observed=new Map<string,MeterGroup>();
+        const grants=new Map(store.sources(board).map(s=>[s.id,s.provider==='codex'?s.budget?.anchor??Infinity:0]));
+        const anchorAt=(source:string,meter:string,until:number,binding:number|null=null)=>{
+          const key=source+'\n'+meter;let group=observed.get(key);
+          if(!group){
+            const part=(id:string)=>conversionOrigin(id)?{readings:store.currencies.readings(source,id,from,to,reservation.add),spans:store.currencies.spans(source,id,to,reservation.add,from)}:
+              {readings:store.meters.readings(source,id,from,to,reservation.add),spans:store.meters.spans(source,id,from,to,reservation.add)};
+            group={source,meter,...part(meter==='balance'?'usage':meter),...(meter==='balance'?{paired:part('credits')}:{})};observed.set(key,group);
+          }
+          const grant=grants.get(source)??Infinity;
+          const anchor=(part:Pick<MeterGroup,'readings'|'spans'>)=>{
+            const reading=readingBefore(part.readings,until);if(!reading||reading.at<grant)return null;
+            return valuationAt(reading,spanBefore(part.spans,until,true),until,true,binding);
+          };
+          const at=anchor(group);if(at===null)return null;
+          if(!group.paired)return at;
+          const paired=anchor(group.paired);return paired===null?null:Math.min(at,paired);
+        };
+        const transformed=displayHistory(chunks.map(json=>JSON.parse(json) as Chunk),store.currencies,user,query.currency,cell,anchorAt,anchorAt,reservation.add);
+        chunks=transformed.map(chunk=>JSON.stringify(chunk));
+        if(chunks.reduce((sum,json)=>sum+Buffer.byteLength(json),0)>16*1024*1024)fail(413, 'history_limit');
+      }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}finally{reservation.close();}
     }
     const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown,scope==='budget'?null:store.privateOwner(board))};
     const tag = query.meta === undefined ? undefined : history.metadata(board, basis, scope);

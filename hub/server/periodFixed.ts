@@ -28,7 +28,7 @@ export function fixedTape(tape:PeriodTape,work:WorkTrace|null,range:PeriodRange,
     }
     for(const group of tape.money)for(const part of [group,...(group.paired?[group.paired]:[])]){
       for(const r of part.readings){yield r.at;yield r.previousAt??Infinity;yield r.resetAt??Infinity;yield r.at+r.staleAfterMs+1;}
-      for(const s of part.spans){yield s.from;yield s.to;yield s.to+s.staleAfterMs+1;yield s.holdUntil??Infinity;yield s.interruptedAt??Infinity;}
+      for(const s of part.spans){yield s.from;yield s.to;yield s.observedFrom??Infinity;yield s.to+s.staleAfterMs+1;yield s.holdUntil??Infinity;yield s.interruptedAt??Infinity;}
     }
     for(const group of tape.money)for(const [,at] of rateObservations(group))yield at;
     if(work)yield*workAnchors(work);

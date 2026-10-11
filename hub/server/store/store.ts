@@ -547,7 +547,7 @@ export class Store {
       const anchor=source?.provider==='codex' ? source.budget?.enabled ? source.budget.anchor : null : 0;
       return {...group,retainedFrom:now-config.retention.sampleDays*86_400_000,
         readings:anchor==null?[]:group.readings.filter(r=>r.at>=anchor),
-        spans:anchor==null?[]:group.spans.filter(s=>s.to>=anchor).map(s=>s.from<anchor?{...s,from:anchor}:s)};
+        spans:anchor==null?[]:group.spans.filter(s=>s.to>=anchor).map(s=>({...s,from:Math.max(s.from,anchor),...(s.observedFrom!==undefined&&s.observedFrom<anchor?{observedFrom:undefined}:{})}))};
     });
   }
 

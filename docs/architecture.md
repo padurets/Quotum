@@ -666,6 +666,13 @@ Money readings use signed integer millionths; native Codex credits carry their o
 exact coefficient and scale. Both have sparse value/semantic changes and
 continuous observation spans. Unchanged heartbeats extend freshness without another
 reading. Retention keeps one predecessor to distinguish a late increase from a reset.
+Spans and provider contexts store their confirmed first observation separately from
+their retained start. Pruning clips geometry without changing that observation or its
+currency quote. A same-value recovery records its actual new start. Legacy heads are
+unknown unless retained evidence proves them. Extending a span with an unknown head
+preserves its previous confirmed tail before advancing it; that anchor cannot date an
+earlier historical value. Readers never treat the retention cutoff as a measurement.
+Reference and private currency retention preserve the quotes needed by these anchors.
 Safe provider context has its own sparse history alongside that ledger: DeepSeek funds
 availability, inventory completeness and observed key identities, and each key's
 properties, reported period usage, BYOK usage and supplier dates. Exact amounts stay

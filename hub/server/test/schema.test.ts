@@ -120,6 +120,7 @@ test('the shared currency upgrade preserves native state and legacy history and 
     assert.deepEqual(store.state('s').meters,[native]);assert.equal(store.state('s').balanceStatus?.partial,false);assert.ok(!JSON.stringify(store.state('s')).includes('usdRate'));
     const valued=store.currencies.project('s',native,'USD',at)!;assert.equal(valued.amount,'15714286');assert.equal(valued.scope,'wallet');assert.equal(valued.label,'Original');assert.equal(valued.conversion?.original.amount,'110000000');assert.equal(valued.conversion?.rate.fetchedAt,at);
     assert.equal(store.currencies.spans('s','fx:USD:balance:CNY',at+10000)[0].interruptedAt,at+10000);
+    assert.equal(store.currencies.spans('s','fx:USD:balance:CNY',at+10000)[0].observedFrom,at);
     assert.equal(store.meters.readings('s','converted:balance:USD',0,at+1)[0].amount,'15714286');
     assert.equal(store.db.prepare("SELECT count(*) n FROM exchange_rates WHERE source<>'codex-default'").get()?.n,1);
   }finally{store.close();}
@@ -169,7 +170,7 @@ test('board additions append to the integrated currency layout while analytics m
     const view=decodeView(JSON.parse(String(saved.payload)))!; assert.equal(view.version,3);
     assert.deepEqual(view.names,{legacy:'Kept'});
     assert.deepEqual(view.hidden,['source:deepseek:123456789abc']);
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,23);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,24);
   }finally{db.close();}
 });
 

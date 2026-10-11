@@ -34,7 +34,7 @@ export class MeterStore {
       ids.add(meter.id);
       const old = current.get(meter.id);
       if (old && old.at >= meter.at) continue;
-      const last = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source, meter.id) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null;hold_until:number|null} | undefined;
+      const last = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until,observed_from FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source, meter.id) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null;hold_until:number|null} | undefined;
       const admission = previous.provider === 'codex' && meter.id === 'balance:credits' && !!this.db.prepare('SELECT 1 FROM shares WHERE source_id=? AND budget_anchor_at IS NULL AND budget_since<=? LIMIT 1').get(source, meter.at);
       if (!old || !sameMeter(old, meter) || admission) {
         this.db.prepare('INSERT INTO readings (source_id,meter_id,at,previous_at,kind,unit,amount,limit_amount,reset_at,minutes,scope,label,stale_after_ms,amount_scale) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
@@ -42,8 +42,8 @@ export class MeterStore {
       }
       if (admission) this.db.prepare('UPDATE shares SET budget_anchor_at=? WHERE source_id=? AND budget_anchor_at IS NULL AND budget_since<=?').run(meter.at, source, meter.at);
       if (last && last.interrupted_at===null && last.hold_until===null && old && meter.at - last.to_at <= last.stale_after_ms && old.kind === meter.kind && old.unit === meter.unit) {
-        this.db.prepare('UPDATE meter_spans SET to_at=?,stale_after_ms=? WHERE source_id=? AND meter_id=? AND from_at=?').run(meter.at, meter.staleAfterMs, source, meter.id, last.from_at);
-      } else this.db.prepare('INSERT INTO meter_spans (source_id,meter_id,from_at,to_at,stale_after_ms) VALUES (?,?,?,?,?)').run(source, meter.id, meter.at, meter.at, meter.staleAfterMs);
+        this.db.prepare('UPDATE meter_spans SET to_at=?,stale_after_ms=?,observed_from=coalesce(observed_from,to_at) WHERE source_id=? AND meter_id=? AND from_at=?').run(meter.at, meter.staleAfterMs, source, meter.id, last.from_at);
+      } else this.db.prepare('INSERT INTO meter_spans (source_id,meter_id,from_at,to_at,stale_after_ms,observed_from) VALUES (?,?,?,?,?,?)').run(source, meter.id, meter.at, meter.at, meter.staleAfterMs, meter.at);
       since = Math.min(since, last?.interrupted_at==null?old?.at??meter.at:meter.at);
       current.set(meter.id, {...meter, stale: false});
     }
@@ -113,7 +113,7 @@ export class MeterStore {
 
   spans(source: string, meter: string, from: number, to: number,reserve?:(bytes:number)=>void): MeterSpan[] {
     const rows:MeterSpan[]=[];
-    for(const raw of this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans WHERE source_id=? AND meter_id=? AND min(coalesce(interrupted_at,9223372036854775807),coalesce(hold_until,9223372036854775807),to_at+stale_after_ms+1)>? AND from_at<=? ORDER BY from_at').iterate(source,meter,from,to)){const r=raw as {from_at:number;to_at:number;stale_after_ms:number;interrupted_at:number|null;hold_until:number|null};reserve?.(160);rows.push({from:r.from_at,to:r.to_at,staleAfterMs:r.stale_after_ms,...(r.hold_until===null?{}:{holdUntil:r.hold_until}),...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})});}
+    for(const raw of this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until,observed_from FROM meter_spans WHERE source_id=? AND meter_id=? AND min(coalesce(interrupted_at,9223372036854775807),coalesce(hold_until,9223372036854775807),to_at+stale_after_ms+1)>? AND from_at<=? ORDER BY from_at').iterate(source,meter,from,to)){const r=raw as {from_at:number;to_at:number;observed_from:number|null;stale_after_ms:number;interrupted_at:number|null;hold_until:number|null};reserve?.(192);rows.push({from:r.from_at,to:r.to_at,...(r.observed_from===null?{}:{observedFrom:r.observed_from}),staleAfterMs:r.stale_after_ms,...(r.hold_until===null?{}:{holdUntil:r.hold_until}),...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})});}
     return rows;
   }
 

@@ -131,7 +131,7 @@ class MoneyIndex {
   static bytes(group:MoneyTape) {
     const readings=group.readings.length+(group.paired?.readings.length??0),spans=group.spans.length+(group.paired?.spans.length??0);
     const rates=Object.keys(group.rates??{}).length+Object.keys(group.rateBindings?.entries??{}).length;
-    return 1024+readings*448+spans*128+rates*160;
+    return 1024+readings*448+spans*160+rates*160;
   }
   get bytes(){return MoneyIndex.bytes(this.group);}
   constructor(readonly group:MoneyTape,deferred=false) {if(!deferred)drain(this.build());}
@@ -141,7 +141,7 @@ class MoneyIndex {
     for(const r of group.readings){this.times.push(r.at);yield;}for(const r of group.paired?.readings??[]){this.pairedTimes.push(r.at);yield;}
     for(const [unit,at] of rateObservations(group)){const times=this.valuations.get(unit)??[];times.push(at);this.valuations.set(unit,times);yield;}
     for(const times of this.valuations.values())times.sort((a,b)=>a-b);
-    this.anchors=[...new Set([...this.times,...this.pairedTimes,...[...this.valuations.values()].flat(),...[group,...(group.paired?[group.paired]:[])].flatMap(part=>part.spans.flatMap(span=>[span.from,span.to]))])].sort((a,b)=>a-b);
+    this.anchors=[...new Set([...this.times,...this.pairedTimes,...[...this.valuations.values()].flat(),...[group,...(group.paired?[group.paired]:[])].flatMap(part=>part.spans.flatMap(span=>[span.from,span.to,...(span.observedFrom===undefined?[]:[span.observedFrom])]))])].sort((a,b)=>a-b);
     const convert=(amount:string,reading:Reading)=>this.convert(amount,reading);
     this.spent=yield* AmountIndex.prepare(group.accounting?.spending==='unavailable'?[]:group.readings,group.spans,convert);
     // Account credits are a monotonically increasing funding counter; balance-only
@@ -157,7 +157,7 @@ class MoneyIndex {
   }
   private semantics(reading:Reading,at=reading.at,native=plottedAmount(reading)):MeterSemantics {
     const original=semanticsOf(reading),converted=this.group.displayUnit&&this.group.displayUnit!==reading.unit;
-    if(!converted)return original;
+    if(!converted)return original.conversion?{...original,conversion:{...original.conversion,original:{...original.conversion.original,at}}}:original;
     const steps=rateAt(this.group,reading.unit+'\n'+at);
     return {...original,scale:6,limit:reading.limit===null?null:this.convert(reading.limit,reading,at),...(steps?.length?{conversion:{original:{meterId:this.group.meter,amount:native,unit:reading.unit,at,...(reading.scale===undefined?{}:{scale:reading.scale}),limit:reading.limit},rate:steps.at(-1)!,steps}}:{})};
   }
@@ -211,7 +211,7 @@ class MoneyIndex {
       if(i+1<times.length)consider(times[i+1]);
     }
     for(const part of [this.group,...(this.group.paired?[this.group.paired]:[])]){
-      for(const span of part.spans){consider(span.from);consider(span.to);consider(Math.min(span.to+span.staleAfterMs+1,span.holdUntil??Infinity,span.interruptedAt??Infinity));}
+      for(const span of part.spans){consider(span.from);consider(span.to);consider(span.observedFrom??Infinity);consider(Math.min(span.to+span.staleAfterMs+1,span.holdUntil??Infinity,span.interruptedAt??Infinity));}
       for(const reading of part.readings){consider(reading.previousAt??Infinity);consider(reading.at+reading.staleAfterMs+1);consider(reading.resetAt??Infinity);}
     }
     return next;
