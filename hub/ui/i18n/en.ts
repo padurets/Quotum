@@ -417,6 +417,7 @@ export const en = {
   'header.filters': 'Filters',
   'header.showFilters': 'Show filters',
   'header.hideFilters': 'Hide filters',
+  'header.historicalPeriod': 'Viewing a historical period',
   'header.devices': 'My connections',
   'header.people': 'People and subscriptions of the board',
   'machines.title': 'My connections',

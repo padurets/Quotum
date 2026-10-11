@@ -174,7 +174,6 @@ function ViewingControls({widgets}: {widgets: string[]}) {
   const horizonName = (value: typeof horizon) => value === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(value)});
   return (
     <div className="analytics-head-inner">
-      <PeriodSwitch historyStart={historyStart} />
       <div className="controls">
         {quota && <KindSwitch />}
         {charts && <Popover label={t('history.horizon')} trigger={<span className="period-name">{t('history.horizon')}: {horizonName(horizon)}<ChevronIcon /></span>}>
@@ -184,6 +183,7 @@ function ViewingControls({widgets}: {widgets: string[]}) {
           </div>
         </Popover>}
       </div>
+      <PeriodSwitch historyStart={historyStart} />
     </div>
   );
 }

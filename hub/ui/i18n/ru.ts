@@ -412,6 +412,7 @@ export const ru = {
   'header.filters': 'Фильтры',
   'header.showFilters': 'Показать фильтры',
   'header.hideFilters': 'Скрыть фильтры',
+  'header.historicalPeriod': 'Выбран период в прошлом',
   'header.devices': 'Мои подключения',
   'header.people': 'Люди и подписки доски',
   'machines.title': 'Мои подключения',

@@ -9,6 +9,7 @@ import {Popover, PopoverHeading} from './Popover';
 import {ChevronDown, Funnel, Settings as SettingsIcon} from 'lucide-react';
 import {t} from '../i18n';
 import {boardHref, navigate, useLocation} from '../lib/router';
+import {useTimeRange} from '../lib/timeRange';
 
 /** The connection lost this long (by the hub's clock) is said in the header. */
 const OFFLINE_AFTER = 45_000;
@@ -22,6 +23,28 @@ function BoardHome({board}: {board: Board | null}) {
     event.preventDefault();
     navigate(href);
   }} />;
+}
+
+/** The range indicator follows navigation without waking the board controls. */
+function FilterToggle({expanded, onToggle}: {expanded: boolean; onToggle: () => void}) {
+  const selected = useTimeRange();
+  const label = [t(expanded ? 'header.hideFilters' : 'header.showFilters'), selected && t('header.historicalPeriod')].filter(Boolean).join('\n');
+  return (
+    <div className="filter-toggle">
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={label}
+        title={label}
+        aria-expanded={expanded}
+        aria-controls="board-filters"
+        onClick={onToggle}
+      >
+        <Funnel size={16} aria-hidden="true" />
+        {selected && <span className="filter-range-dot" aria-hidden="true" />}
+      </button>
+    </div>
+  );
 }
 
 /** Deleting a shared board: its name typed out, since nothing of it can come back. */
@@ -196,27 +219,13 @@ export function Header({
       <div className="topbar-inner">
         <BoardHome board={board} />
         <div className="status">
-          {filters && (
-            <div className="filter-toggle">
-              <button
-                type="button"
-                className="icon-button"
-                aria-label={t(filters.expanded ? 'header.hideFilters' : 'header.showFilters')}
-                title={t(filters.expanded ? 'header.hideFilters' : 'header.showFilters')}
-                aria-expanded={filters.expanded}
-                aria-controls="board-filters"
-                onClick={filters.onToggle}
-              >
-                <Funnel size={16} aria-hidden="true" />
-              </button>
-            </div>
-          )}
           {(!local || actions) && (
             <div className="board-controls" role="group" aria-label={board ? boardTitle(board) : t('boards.title')}>
               {!local && <BoardSwitcher boards={boards} board={board} onSelect={onBoard} />}
               {actions}
             </div>
           )}
+          {filters && <FilterToggle {...filters} />}
           {local ? (
             <button className="icon-button" aria-label={t('header.settings')} onClick={onAccount}>
               <SettingsIcon size={16} aria-hidden="true" />

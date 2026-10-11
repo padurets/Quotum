@@ -1197,11 +1197,13 @@ and why, each a line of its own.
 A board has one grid for source cards, agent sessions, activity, quota history and
 table, and budget history and table. A filter button in the header toggles a separate
 row directly beneath it, with its controls aligned right. Navigation and filters share
-one sticky glass backing and a continuous outer edge, without a divider between them.
+one sticky glass backing and a continuous outer edge, with an inset divider between the rows.
 Its translucent surface remains distinct from the page background. On wide screens
 the backing shares the content's 1240 px maximum width and 28 px inner side spacing,
 with rounded lower corners. Hiding filters reduces that same surface to the header.
 Narrow screens keep edge-to-edge bars.
+The filter button forms its own group after the board controls. A small dot marks a
+selected historical range, including when the row is hidden; returning to live removes it.
 The row starts closed and remembers its visibility in the reader's browser.
 Hiding it preserves the selected period, quota window kind and shared chart horizon;
 while open, it keeps them available during scrolling. Board navigation and widget
@@ -1212,7 +1214,8 @@ Balance/spending belongs to the budget chart's settings; subscription funds have
 own selection in their chart. Table columns remain owner settings, while shared filters
 are available to every reader. Each
 analytics panel uses the same heading and reader-error component. The selected
-period appears once in the shared analytics controls. While a different range is loading
+period and its back/forward buttons appear together at the right end of the shared
+analytics controls. While a different range is loading
 or has failed, retained results name the interval they actually cover; this status
 disappears when the selected answer arrives. The
 limit and budget tables share their column controls, cells and responsive renderer;
