@@ -44,6 +44,8 @@ foreach($case in @('race','live','identity-unavailable','normal')){
   if($receipt.cleanup.exited -ne $(if($case -eq 'identity-unavailable'){$null}else{$expected})){throw 'Final process confirmation did not match its evidence'}
   $expectedWaits=if($case -eq 'normal'){@(2000,500)}else{@(2000)}
   if(($process.Waits -join ',') -ne ($expectedWaits -join ',')){throw 'Observer wait deadlines changed'}
+  if($case -eq 'identity-unavailable' -and ($receipt.cleanup.failure -ne 'before-kill' -or $receipt.cleanup.errorKind -ne 'invalid-operation' -or $process.Kills -ne 0)){throw 'Unavailable process state was hidden or authorized a kill'}
+  if($receipt.stopped -isnot [bool]){throw 'Observer exit confirmation must be Boolean'}
   if($case -eq 'race' -and ($receipt.cleanup.failure -ne 'kill' -or $receipt.cleanup.errorKind -ne 'invalid-operation')){throw 'The exit race lost its originating operation'}
   if($case -eq 'live' -and ($receipt.cleanup.errorCode -ne 5 -or $receipt.cleanup.exited)){throw 'A failed kill was credited as stopped'}
   if((ConvertTo-Json -InputObject $receipt -Depth 7) -match 'hidden-wait-cleanup-canary'){throw 'Cleanup evidence leaked an exception message'}

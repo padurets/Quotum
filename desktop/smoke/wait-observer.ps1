@@ -77,15 +77,16 @@ function Stop-WaitObserver($Observer) {
   } catch {$status='unavailable';Set-WaitCleanupFailure $cleanup $_}
   finally {
     if($Observer.Process){
+      # Calling the getter preserves failures that PowerShell property access would hide.
       try {
-        $cleanup.stage='before-kill';$cleanup.beforeKill=$Observer.Process.HasExited
-        if(-not $cleanup.beforeKill){
+        $cleanup.stage='before-kill';$cleanup.beforeKill=$Observer.Process.get_HasExited()
+        if($cleanup.beforeKill -eq $false){
           $cleanup.stage='kill';$cleanup.killAttempted=$true;$Observer.Process.Kill();$cleanup.killReturned=$true
           $cleanup.stage='wait-after-kill';$cleanup.afterKill=$Observer.Process.WaitForExit(500)
         }
       } catch {Set-WaitCleanupFailure $cleanup $_}
       # A worker can exit between HasExited and Kill. Confirm its state on the same handle.
-      try {$cleanup.stage='confirm-exit';$cleanup.exited=$Observer.Process.HasExited;$stopped=$cleanup.exited}
+      try {$cleanup.stage='confirm-exit';$cleanup.exited=$Observer.Process.get_HasExited();$stopped=$cleanup.exited -eq $true}
       catch {$stopped=$false;if(-not $cleanup.failure){Set-WaitCleanupFailure $cleanup $_}}
       $cleanup.stage='output'
       # Preserve already-flushed samples even if a later native query hung.
