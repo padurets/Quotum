@@ -1438,8 +1438,10 @@ selected series, target bounds and pinned entries still decide whether that work
 Each chart replaces one typed drawing model whole after preparation, then publishes
 its geometry and painters after the DOM commits. Input keeps the displayed model and
 its composed SVG matrix and CSS offset until that handoff. Finishing a gesture commits
-the address immediately and presents its last pending delta on RAF; the final pose
-stays held until the matching drawing model is ready. The surface fold and CSS offset
+the address immediately and presents its last pending delta on RAF. If another gesture
+starts first, each chart applies that accepted delta before capturing the new origin;
+cancellation keeps the currently displayed pose. The final pose stays held until the
+matching drawing model is ready. The surface fold and CSS offset
 reset then start from the same displayed coordinates. A new gesture samples that
 actual presentation, including an interrupted fold, separately from its URL origin.
 Partial plots continue to publish during the gesture. Its final drawing readiness

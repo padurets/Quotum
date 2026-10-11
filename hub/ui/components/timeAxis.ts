@@ -105,6 +105,7 @@ export function useTimeAxis({
   const drawing = useRef<DrawingGeometry>({from, to, end});
   const pose = useRef<Pose>({a: 1, b: 0, offset: 0});
   const finalFrame = useRef<number | null>(null);
+  const finishPresentation = useRef<(() => void) | null>(null);
   const requestedNavigation: AxisNavigation = {context: `${navigation.context}:${left}:${right}:${width}:${scale}`, range: navigation.range};
   const wanted = useRef({navigation: requestedNavigation, projection: {from, to, end}});
   const motion = useRef<{key: string; until: number; fold: boolean} | null>(null);
@@ -124,6 +125,8 @@ export function useTimeAxis({
   useEffect(() => () => cancelHold(), []);
 
   const startPan = (input: 'wheel' | 'pointer'): PanStart => {
+    // Accepted input belongs to the next origin even before its final RAF.
+    if (!finished.current?.stop.canceled) finishPresentation.current?.();
     const selected = timeRange();
     const now = Math.max(hubNow(), end);
     const visual = visualGeometry();
@@ -195,6 +198,8 @@ export function useTimeAxis({
     if (!element) return;
     const frame = pan.get();
     if (frame && captured.current?.token !== frame.token) {
+      if (!finished.current?.stop.canceled) finishPresentation.current?.();
+      finishPresentation.current = null;
       if (finalFrame.current !== null) {cancelAnimationFrame(finalFrame.current); finalFrame.current = null;}
       finished.current = null;
       foldTicket.current++;
@@ -253,10 +258,12 @@ export function useTimeAxis({
     const delta = stop.draft.to - stop.draft.originEnd;
     finished.current = {visual: {...origin.visual, from: origin.visual.from + delta, to: origin.visual.to + delta}, stop, navigation: navigationAt(origin.navigation, stop.range)};
     setFolding(true);
-    // Logical completion is immediate; the last accepted delta still reaches a real RAF.
-    finalFrame.current = requestAnimationFrame(() => {
-      if (pan.active() || finished.current?.stop !== stop) return;
+    // A new gesture can consume this final pose before its scheduled RAF.
+    const finish = () => {
+      if (finished.current?.stop !== stop) return;
+      if (finalFrame.current !== null) cancelAnimationFrame(finalFrame.current);
       finalFrame.current = null;
+      finishPresentation.current = null;
       const base = drawing.current;
       if (base.from === origin.from && base.to === origin.to) {
         pose.current = {...origin.pose, offset: origin.pose.offset - delta * origin.pixelsPerMs};
@@ -268,11 +275,18 @@ export function useTimeAxis({
       for (const layer of box.current?.querySelectorAll<SVGGElement>('.slides') ?? []) layer.style.transform = `translateX(${pose.current.b}px) scaleX(${pose.current.a})`;
       for (const layer of panLayers.current) layer.style.transform = pose.current.offset ? `translateX(${pose.current.offset}px)` : '';
       present(value => value + 1);
+    };
+    finishPresentation.current = finish;
+    finalFrame.current = requestAnimationFrame(() => {
+      if (pan.active() || finished.current?.stop !== stop) return;
+      finalFrame.current = null;
+      finish();
     });
     captured.current = null;
   }), []);
   useEffect(() => () => {
     foldTicket.current++;
+    finishPresentation.current = null;
     if (finalFrame.current !== null) cancelAnimationFrame(finalFrame.current);
     if (pan.source === source.current) pan.cancel();
   }, []);

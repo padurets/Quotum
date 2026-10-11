@@ -22,6 +22,7 @@ export function axisPresentationFixture(base: DrawingGeometry, navigation: AxisN
     svg: {current: {dataset: {} as Record<string, string>, classList: {toggle: (name: string, on: boolean) => {if (on) classes.add(name); else classes.delete(name);}}}},
     box: {current: {querySelectorAll: () => slides}}, panLayers: {current: layers},
     finished: {current: null as {visual: DrawingGeometry; navigation: AxisNavigation; stop: {range: unknown; canceled: boolean}} | null},
+    finishPresentation: {current: null as (() => void) | null},
     captured: {current: null}, finalFrame: {current: null as number | null}, foldTicket: {current: 0},
     motion: {current: null as {key: string; until: number; fold: boolean} | null}, animations: {current: new Map<object, Moving>()},
     animationPoses: {current: new WeakMap<object, {from: {a: number; b: number; offset: number}; to: {a: number; b: number; offset: number}}>()},

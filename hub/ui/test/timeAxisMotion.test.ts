@@ -66,7 +66,7 @@ test('the actual axis publishes committed HTML owners and applies the captured C
   const captured = {current: null};
   const paintPan = {current: () => {}};
   const context = {pan, source, svg, box, panLayers, captured, paintPan, navigationAt, wanted: {current: {navigation: {context: 'test', range: 'range'}}}, motion: {current: null}, finished: {current: null}, foldTicket: {current: 0},
-    drawing: {current: {...selected, end: selected.to}}, pose: {current: {a: 1, b: 0, offset: 0}}, finalFrame: {current: null}, folding: false,
+    drawing: {current: {...selected, end: selected.to}}, pose: {current: {a: 1, b: 0, offset: 0}}, finishPresentation: {current: null}, finalFrame: {current: null}, folding: false,
     visualGeometry: () => ({...selected, end: selected.to}), freezeSlides: () => {}, setFolding: () => {}, cancelSlides: () => {},
     width: 600, left: 40, right: 20, scale: .5, panPointer: {current: null as {id: number} | null}, wheelBounds: {current: null},
     useLayoutEffect: (commit: () => void) => commits.push(commit),
@@ -196,7 +196,7 @@ test('the actual drawing commit holds pending geometry and starts its final fold
     panLayers: {current: layers}, pose, pan: {active: () => null}, paintPan: {current: () => {}},
     navigationKey, wanted: {current: {navigation: {context: 'test', range: 'range'}, projection: {from: selected.from, to: selected.to, end: selected.to}}}, requestedNavigation: {context: 'test', range: 'range'}, motion: {current: null}, captured: {current: null},
     finished: {current: {navigation: {context: 'test', range: 'range'}, visual, stop: {range: selected, canceled: false}} as {navigation: {context: string; range: string}; visual: typeof visual; stop: {range: typeof selected; canceled: boolean}} | null},
-    finalFrame: {current: 1 as number | null}, timeRange: () => selected, left, right, width, scale, from: selected.from, to: selected.to,
+    finishPresentation: {current: null}, finalFrame: {current: 1 as number | null}, timeRange: () => selected, left, right, width, scale, from: selected.from, to: selected.to,
     foldTicket: {current: 0}, animations: {current: new Map()}, animationPoses: {current: new WeakMap()}, matchMedia: () => ({matches: false}), setFolding: () => {},
     animateSlide: (_layer: object, next: Keyframe[]) => {frames.push(next); return {finished: new Promise(() => {})};}, slideOf: () => 0,
     visualGeometry: () => visual, cancelSlides: () => {}, useLayoutEffect: () => {}, performance: {now: () => 0},
@@ -295,7 +295,7 @@ test('the actual last-input RAF uses the gesture CSS scale rather than the mount
   const layer = {style: {transform: 'translateX(44px)'}};
   const context = {pan, navigationAt, drawing: {current: {...selected, end: selected.to}}, box: {current: null}, width: 900, left: 40, right: 20, scale: 1,
     captured: {current: {token, ...selected, end: selected.to, visual: {...selected, end: selected.to}, pose: {a: 1, b: 0, offset: 17}, pixelsPerMs: 270 / H, navigation: {context: 'test', range: 'range'}, innerWidth: 540, cssScale: .5, left: 40}},
-    finished: {current: null}, pose: {current: {a: 1, b: 0, offset: 44}}, finalFrame: {current: null}, panLayers: {current: [layer]},
+    finished: {current: null}, pose: {current: {a: 1, b: 0, offset: 44}}, finishPresentation: {current: null}, finalFrame: {current: null}, panLayers: {current: [layer]},
     setFolding: () => {}, present: () => {}, requestAnimationFrame: (run: () => void) => {finalFrames.push(run); return finalFrames.length;},
     useLayoutEffect: (effect: () => void) => effect(),
   };
@@ -309,4 +309,69 @@ test('the actual last-input RAF uses the gesture CSS scale rather than the mount
   const offset = Number(layer.style.transform.match(/translateX\(([-.\d]+)px\)/)![1]);
   assert.ok(Math.abs(offset - 57) < 1e-9, 'the last 13px input is presented at the actual captured 270px plot width');
   assert.ok(Math.abs(context.pose.current.offset - 57) < 1e-9);
+});
+
+
+for (const mode of ['idle', 'cancel', 'shift']) test(`all four axes retain accepted input on ${mode} before the final RAF`, () => {
+  const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
+  const region = (start: string, end: string) => {const i = source.indexOf(start), j = source.indexOf(end, i); assert.ok(i >= 0 && j > i); return source.slice(i, j);};
+  const actual = [region('  const startPan = ', '  const wheelPan = '), region('  const readPose = ', '  const geometry = '), region('  const paint = () => {', '\n  useLayoutEffect(() => {\n    const unsubscribe'), region('  useLayoutEffect(() => pan.onStop(stop => {', '  useEffect(() => () => {\n    foldTicket.current++')].join('\n');
+  const H = 3_600_000, now = 100 * H;
+  const frames = new Map<number, () => void>(), timers = new Map<number, () => void>();
+  const commits: ({from: number; to: number} | null)[] = [];
+  let serial = 0, delivery = 1000, selected: {from: number; to: number} | null = null;
+  const requestFrame = (run: () => void) => {const id = ++serial; frames.set(id, run); return id;};
+  const cancelFrame = (id: unknown) => {frames.delete(id as number);};
+  const hubNow = () => now + delivery - 1000;
+  const pan = new Pan({now: hubNow, commit: range => {selected = range; commits.push(range);}, requestFrame, cancelFrame,
+    setTimeout: (run, ms) => {assert.equal(ms, 200); const id = ++serial; timers.set(id, run); return id;},
+    clearTimeout: id => {timers.delete(id as number);},
+  }, () => delivery);
+  const specs = [[600, .5, 40, 20], [700, .6, 48, 12], [800, .8, 76, 12], [900, 1, 76, 12]];
+  const axes = specs.map(([width, scale, left, right]) => {
+    const f = axisPresentationFixture({from: now - H, to: now, end: now}, {context: 'test', range: 'live'}, width, scale, left, right);
+    const chart = {current: Symbol('chart')};
+    Object.assign(f.context, {pan, source: chart, navigationAt, hubNow, historyStart: 0, timeRange: () => selected,
+      prefs: () => ({range: '1h'}), periodOf: () => ({ms: H}), folding: false,
+      panPointer: {current: null}, wheelBounds: {current: null}, requestAnimationFrame: requestFrame,
+      cancelAnimationFrame: cancelFrame, useLayoutEffect: (effect: () => void) => effect(), present: () => {},
+      getComputedStyle: () => {throw new Error('an ordinary restart must not read computed styles');},
+    });
+    Object.assign(f.context.box.current, {querySelector: () => f.slides[0], querySelectorAll: (selector: string) => selector === '.plot-move' ? f.layers : f.slides});
+    Object.assign(f.context.svg.current.classList, {contains: (name: string) => f.classes.has(name), add: (name: string) => f.classes.add(name), remove: (name: string) => f.classes.delete(name)});
+    const context = f.context as typeof f.context & {begin: () => Parameters<Pan['begin']>[0]};
+    runInNewContext(ts.transpileModule(actual + "\nglobalThis.begin=()=>startPan('wheel');", {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
+    pan.subscribe(() => context.paintPan.current());
+    pan.register(chart.current, () => ({end: now, future: 0}));
+    return {f, context, width, scale, left, right};
+  });
+  const input = (timeStamp: number, deltaX: number) => ({timeStamp, deltaX, deltaY: 0, deltaMode: 0, cancelable: true, shiftKey: false});
+  if (mode === 'shift') pan.setShift(true);
+  assert.equal(pan.wheel(axes[0].context.begin, input(1000, -448)), true);
+  const first = pan.active(); assert.ok(first);
+  if (mode === 'cancel') pan.cancel();
+  delivery = 1302;
+  assert.equal(pan.wheel(axes[0].context.begin, input(1301, -24)), true);
+  const current = pan.active(); assert.ok(current);
+  if (mode === 'shift') {
+    assert.equal(current, first); assert.equal(commits.length, 0); assert.equal(timers.size, 0);
+  } else {
+    assert.notEqual(current, first); assert.equal(commits.length, mode === 'idle' ? 1 : 0);
+  }
+  delivery = 1352;
+  if (mode !== 'cancel') {
+    assert.equal(pan.wheel(axes[0].context.begin, input(1317, 279)), true);
+    assert.equal(pan.active(), current);
+  }
+  if (mode === 'shift') pan.setShift(false);
+  else {assert.equal(timers.size, 1); [...timers.values()][0]();}
+  assert.equal(pan.active(), null); assert.equal(commits.length, mode === 'idle' ? 2 : 1);
+  const wantedPixels = mode === 'cancel' ? 24 : 193;
+  assert.equal(commits.at(-1)?.to, Math.round(now - wantedPixels * H / 270));
+  for (const [id, run] of frames) {frames.delete(id); run();}
+  for (const {f, context, width, scale, left, right} of axes) {
+    const offset = wantedPixels * (width - left - right) * scale / 270;
+    assert.ok(Math.abs(context.pose.current.offset - offset) < 1e-9, 'all followers keep the complete accepted CSS displacement');
+    assert.ok(Math.abs(f.point(now) - ((width - right) * scale + offset)) < 1e-9);
+  }
 });
