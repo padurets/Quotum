@@ -445,9 +445,11 @@ the latest list of each machine in memory for five minutes (after a restart the 
 send theirs again), files each session under its subscription (the account the client is signed in to now, else the one
 the machine last delivered for that client; only one its person holds; the agent leaves
 out a session of a client signed in anew since it last measured, until it knows which
-account that is) and shows it on
-that card, by project (as that person named it) and folder, to the members of a board
-the person is on where the subscription is shown, whoever brought it. Each list also counts until the next one, for at most 200 seconds: the hub
+account that is). This list supplies current presence by project (as that person named
+it) and folder, visible to members of a board the person is on where the subscription
+is shown, whoever brought it. The compact panel uses current sessions; dashboard lists
+use retained work in the board's period, with this presence attached when known.
+Each list also counts until the next one, for at most 200 seconds: the hub
 keeps when each session worked, with its machine, subscription, where it runs, since
 when and its project and folder names as reported, as long as samples. A session is
 never credited twice for the same time: after the hub's clock goes back, it is credited
@@ -457,9 +459,10 @@ out when read (`domain/work.ts`): agent-hours add each stretch up, two agents co
 twice; active time is their union, overlaps counted once for whichever machines,
 people or projects are asked about. The corrections people make to project
 names apply when read, so they reach all the time kept. The database says since when
-this is kept (`agentWorkSince`): before it, how agents worked is not known. A board's
-live lists tell each identified running agent's retained credited work on its current
-subscription, summed across project, folder and origin contexts. The optional opaque
+this is kept (`agentWorkSince`): before it, how agents worked is not known. The live
+session projection carries each identified running agent's retained credited work on
+its current subscription, summed across project, folder and origin contexts. This
+operational counter is separate from the dashboard's period totals. The optional opaque
 producer identity hashes a persisted private installation salt, OS, provider and native
 process birth; wall clocks and context names do not tell identity. Linux and macOS use
 boot IDs with raw process birth clocks, while Windows attempts only a validated fixed
@@ -472,12 +475,15 @@ persisted high-water end across its contextual rows; crossing legacy and identif
 namespaces clips against the opposite namespace's retained device-wide end, snapshotted
 before writes. On rollback this can conservatively undercount parallel work until that
 end. History keeps its sharing/joining cutoff; live counters for allowed sessions include
-retained current-subscription credit before that cutoff too.
-The agents panel opened from a card's tray shows this credited work time for each
-session in agent-hours, with its project and folder, grouped by machine.
+retained current-subscription credit before that cutoff too. Dashboard session lists
+and the agents panel opened from a card's tray use authorized work intersecting the
+board's selected period, clipped to that period and those cutoffs. They include retained
+contexts absent from the current machine list. The tray panel shows that period's work
+in agent-hours, with project and folder, grouped by machine. Optional current presence
+never supplies additional credited work or changes the historical roster.
 
-The analytics show it over their period. The table tells, for each window, its
-subscription's active time, what the window spent per active hour, what share of its
+The accounting table and agent activity use that same period. The table tells, for
+each window, its subscription's active time, what the window spent per active hour, what share of its
 spending came while agents were active, and, beside the forecast by time, a forecast by
 work: how many active hours what is left lasts at that spending (or that it lasts to
 the reset). An optional Agent-hours column adds each agent's time separately.
@@ -764,14 +770,16 @@ observation/freshness. Accepted empty or partial replies retain missing numerica
 values as stale and persist an exclusive interruption on their observation spans.
 A same-value return starts a new span without inventing a changed reading. Accepted
 status time is the watermark even when numerical success is older.
-Budget cards and the compact panel use one typed presentation of current funds and
-selected allowances. A single Available balance section uses the reader's display currency. Native reference currency takes
-precedence over separate converted observations; the two are never summed. Composition
+Budget cards and the compact panel use one typed presentation of funds and selected
+allowances. Dashboard cards use the latest retained measurements before the end of a
+historical selection; compact keeps current values. A single Available balance section
+uses the reader's display currency. Native reference currency takes precedence over
+separate converted observations; the two are never summed. Composition
 opens from the balance amount in a shared Popover. Key allowances appear separately, with their own scope, limit and reset;
 they do not add to account funds. Only catalogue-supported caps have scales. Lifetime
 credits never supply a wallet's percentage denominator. DeepSeek has no key-cap scales
 or spending summary. Each value keeps its own observation time and stale state.
-Additional observations have explicit purposes: balance components explain current
+Additional observations have explicit purposes: balance components explain the displayed
 funds, counters and reported period totals support analytics, BYOK retains a separate
 accounting basis, and key properties and inventory quality describe access and
 measurement reliability. New API fields do not automatically add card rows. The safe
@@ -1085,8 +1093,9 @@ and its limits.
   more (its last holder left or was removed). Deleting a board deletes its sharing and
   its view, never the measurements.
 - **The view** of a board is how it is arranged: the order of its widgets (a card per
-  source, the list of running agents, the chart, the table and agent activity), their places on a
-  six-column grid (`x`, `y`, `w`, and `h` where the owner chose a height; what the content
+  source, agent sessions, activity, quota and budget charts and tables, and subscription
+  funds history), their places on a six-column grid (`x`, `y`, `w`, and `h` where the
+  owner chose a height; what the content
   needs is measured, never stored), names and colours
   given to cards, the hidden widgets (and those
   off by default, the list of agents, turned on), the columns hidden in a widget's table,
@@ -1245,14 +1254,13 @@ above a card's tray or at the bottom of a panel, unless the owner chose a height
 gets shorter than its content, and grows past the chosen rows while its content needs
 more, back to them when it needs less, without the view changing. All four charts give a
 chosen height to their plot, never drawing it lower than they do by themselves, their
-heads, totals and legends whole. The Agent sessions widget gathers them by project (one name
-across people, as agent activity counts it), machine or subscription, each viewer for
-themselves, or lists each agent: a group tells how many of its agents work, how long they
-have worked (each running agent's credited work, which the hub sends with it) and their
-last activity as now while any works or within the first minute, minutes or hours ago
-on the current day, yesterday for the previous local day, then a date and time. The exact
-time stays in the tooltip; an unknown time is a dash. Only the time label wakes when its
-wording changes.
+heads, totals and legends whole. The Agent sessions widget gathers the period's sessions
+by project (one name across people, as agent activity counts it), machine or subscription,
+each viewer for themselves, or lists each agent. A group tells how many of its agents
+are currently known to work, their credited work within the period and the date and
+time of their last intersecting work endpoint, using `stamp` in `ui/lib/format.ts`.
+An unknown time is a dash. Presence and rolling work labels have separate clocks;
+current presence does not turn a period's last-work timestamp into a relative label.
 In a narrow grouped list, the default first line pairs the name with the agent count;
 the second pairs credited work on the left with last activity on the right, aligned
 with the line above.
@@ -1357,8 +1365,12 @@ live. Compact mode and native notifications also remain live.
 
 The board's period coordinator collects quota, wallet budget, subscription funds, value and session demands into
 one read-only `POST /api/boards/:board/period`. The old history route and the composite
-route call the same cell reader. Sections succeed or fail independently. A retained
-presentation keeps its own interval while a replacement loads or fails. Board, access,
+route call the same cell reader. Sections succeed or fail independently. Within the
+same authorized scope, a retained complete presentation keeps its own interval while
+a replacement loads or fails, including across reconnects. A source or resource removal,
+changed currency context or changed permission to read work retires both the displayed
+result and its reusable presentation until a new authorized baseline is ready; panning
+or restoring the same IDs cannot bring back a retired result. Board, access,
 currency, resource selections, visible consumers and request generations prevent a late
 response from acquiring a newer label. Superseded period reads leave the transport queue;
 retrying an analytical widget repeats its failed exact evidence as well as its drawing cells.
@@ -1549,8 +1561,9 @@ visible in its tray disclosure even before any sessions arrive; retained rows na
 own interval and offer a retry there. The full session dialog carries the same interval,
 loading state and retry, so its modal surface does not hide the evidence behind its rows.
 A failed read never establishes an empty period.
-The compact view continues to show current sessions, ordered by working state and
-activity. The table's headers sort ascending, descending, then back to activity;
+The compact view keeps live measurements and current session counts independently of
+the board's selected period. The Agent sessions table's headers sort ascending,
+descending, then back to activity;
 a hidden column does not sort. When its owner's chosen columns do not fit the widget's
 own width, it becomes a compact list with a sort menu. State is off by default: the
 mark already tells it. Explicit column choices belong to the board, sorting to the viewer.

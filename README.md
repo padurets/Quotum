@@ -97,16 +97,26 @@ Codex         api                  idle     started 25m ago · editor
 
 ## What the dashboard shows
 
+The board shares one time range across card measurements, agent sessions, charts and
+tables. In a historical range, cards show the last retained measurement before its end,
+with freshness checked at that boundary; unavailable history stays unknown. Values
+keep their measurement times, and reset times are shown as dates and times. Loading or
+failed reads label any retained results with the range they actually cover.
+Measurement status, connection errors, refresh actions, forecasts, free-reset
+availability and reset announcements remain live. The compact panel and native
+notifications also stay live, independently of the board's historical range.
+
 - **A card per subscription**, one meter per window: green above 30%, amber at 30% and
   below, red under 10%. A tick on the meter shows where your spending plan expects you
-  to be right now. The dot on the provider's logo says whether the numbers are fresh.
-- **Which agents run on it, and which of them work.** Under the limits, a mark per
-  Claude Code, Codex or Antigravity session spending the subscription, grouped by
-  machine: filled while it works, outlined while idle; its project, its folder (a
-  worktree, a folder inside the repository) and its credited work time in agent-hours
-  in the panel. Credit belongs to the current subscription and is unknown without a
-  reliable session ID; a dash keeps that distinct from known zero. Terminals, editors
-  and the Codex app alike.
+  to be at the displayed time. The dot on the provider's logo tells how measurements
+  are going now; historical values have their own measurement time and stale state.
+- **Which agents worked on it during the period.** Under the limits, a mark per
+  Claude Code, Codex or Antigravity session with recorded work on the subscription,
+  grouped by machine, including sessions no longer running. The panel shows each
+  session's project, folder (a worktree or a folder inside the repository) and work
+  within the selected period in agent-hours. Marks also show current working state
+  when known; current presence does not add work to the period. Terminals, editors and
+  the Codex app alike.
 - **Purchased Codex credits.** Additional funds appear in the subscription's footer,
   beside free resets, with the same compact amount and disclosure in the compact view.
   The initial estimate is 0.04 USD per credit; Currencies lets you set a personal
@@ -123,8 +133,11 @@ Codex         api                  idle     started 25m ago · editor
   six days after the reset and nothing on the seventh. Each subscription can have its
   own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
 - **Separate subscription limit and budget charts and metrics**, each movable, resizable and
-  hideable. They share one time interval with agent activity; weekly/session switches
-  affect only subscription limits. Budget history opens with balances, with spending in its settings.
+  hideable on the same grid as cards and agent sessions. They share the board's time
+  range. The weekly/session switch selects windows in the quota chart and table;
+  cards keep their own window visibility settings. Budget history opens with balances,
+  with spending in its chart settings. The budget chart and table share
+  a series selection available in either widget's settings, even when the other is hidden.
 - **A chart of the weekly or the 5-hour windows** over the last hour up to the last 30
   days. Ahead of now it draws the plan, where each window is going (a weekly one nearly
   flat over the hours its subscription usually spends nothing) and the next resets, as
@@ -154,12 +167,13 @@ Codex         api                  idle     started 25m ago · editor
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
-- **Boards made of widgets** (a card per subscription, agent activity, the chart, the
-  table, and a list of the running agents to turn on, gathered by project, machine or
-  subscription, each group with how many of its agents work, their agent-hours and the
-  date and time of their last activity, or now while any works; individual agents with
-  their machines and subscriptions a click away), like a dashboard in Grafana:
-  the cards show what is left now, the analytics under them share one set of filters.
+- **Boards made of widgets**, like a dashboard in Grafana: source cards, agent activity,
+  charts, tables and an optional Agent sessions list share one grid. The list gathers
+  sessions by project, machine or subscription, with work within the selected period,
+  the date and time of their last recorded work in it and current working counts when
+  known. Individual agents with their machines and subscriptions are a click away.
+  The header's filter button reveals the common period, quota window and forecast
+  horizon; hiding the controls keeps those choices. A dot marks a historical range.
   The owner places them on a six-column grid by dragging their heads, and resizes them
   to a third, a half, two thirds or the whole width. Each fills only the rows its content
   needs, so cards stack beside a tall list, unless the owner drags its bottom edge (or
@@ -361,9 +375,10 @@ rate cache contains no credentials or account information. Historical estimates 
 their original rate. Without a usable rate, CNY is retained and USD stays unknown or stale.
 All original balances, estimates, rate provenance, funds status and safe provider
 context are retained within the history retention period. Budget history and its table
-appear beside subscription analytics. Totals are selected by
-default; components can be added in the chart's settings. The total is not added to its
-components. Reported USD and converted CNY are never summed. Spending and top-up events
+share the board's grid and time range. Totals are selected by default; components can
+be added from either the chart's or the table's settings, using their shared series
+selection. The total is not added to its components. Reported USD and converted CNY
+are never summed. Spending and top-up events
 are **unavailable** because the endpoint has no spending counter; a balance change
 cannot establish spending. An omitted currency keeps its last value as stale and
 breaks its history until a valid observation returns. A failed request preserves the
@@ -394,18 +409,21 @@ action. **Recent additions and recovery** finds saved results after a lost respo
 reload, without duplicating access or restoring a later hidden or removed card.
 
 The original plan label stays beside the title; a small second line identifies the
-resource as **Subscription** or **Budget**. The budget card shows only current state:
-its balance and enabled key-limit scales with their reset times. Its settings switch
-individual scales, including keys beyond the initial five-key preview. Scales use the
+resource as **Subscription** or **Budget**. The budget card shows its balance and enabled
+key-limit scales with their reset times, using the board's time range. A historical
+range uses retained measurements before its end; the compact panel keeps current
+values. The card's settings switch individual scales, including keys beyond the
+initial five-key preview. Scales use the
 same segmented meters as subscriptions; keys without a spending limit have no scale.
 Spending belongs to analytics.
 Settings show at most ten keys per page. Access turns amber seven days before expiry;
 expired, revoked or forbidden access is red. Working keys without expiry have no expiry
 mark. Temporary read failures are amber.
-The chart's own settings select
-key usage and remaining limits for the independent budget chart and table.
-Account balances are selected
-by default; at most 32 logical series are drawn, with visible overflow. The chart uses
+The budget chart and table share a selection of key usage and remaining limits,
+editable from either widget's settings. The chart's balance/spending mode and the
+table's columns remain separate display settings.
+Account balances are selected by default; at most 32 logical series are drawn, with
+visible overflow. The chart uses
 one unit per axis and keeps the same time range and gestures as subscription history.
 Wallet balances have no percentage; only positive key limits do.
 
