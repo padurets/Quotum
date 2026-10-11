@@ -16,7 +16,23 @@ export function numberAt(rows:Numbers,index:number):number|undefined {
   return bases[a]+(index-(a?ends[a-1]:0))*steps[a];
 }
 export const numberBytes=(rows:Numbers)=>'base' in rows?(rows.runs?rows.runs.ends.byteLength+rows.runs.bases.byteLength+rows.runs.steps.byteLength+128:(rows.values?.byteLength??0)+32):rows.length*8;
-export const lowerNumber=(rows:Numbers,at:number)=>{let a=0,b=rows.length;while(a<b){const m=(a+b)>>>1;if(numberAt(rows,m)!<at)a=m+1;else b=m;}return a;};
+export const lowerNumber=(rows:Numbers,at:number)=>{
+  if('base' in rows&&rows.runs){
+    const {ends,bases,steps}=rows.runs;let a=0,b=rows.length,run=0,from=0,to=ends[0],base=bases[0],step=steps[0];
+    // Successive probes often stay in one run; keep it for this search only.
+    while(a<b){
+      const m=(a+b)>>>1;
+      if(m>=to||m<from){
+        let lo=0,hi=ends.length;
+        while(lo<hi){const mid=(lo+hi)>>>1;if(ends[mid]<=m)lo=mid+1;else hi=mid;}
+        run=lo;from=run?ends[run-1]:0;to=ends[run];base=bases[run];step=steps[run];
+      }
+      if(base+(m-from)*step<at)a=m+1;else b=m;
+    }
+    return a;
+  }
+  let a=0,b=rows.length;while(a<b){const m=(a+b)>>>1;if(numberAt(rows,m)!<at)a=m+1;else b=m;}return a;
+};
 /** Integer offsets use four bytes only when the complete range is exactly representable. */
 export function* numberColumn(length:number,value:(i:number,pass:number)=>number):Preparation<NumberColumn>{
   let min=Infinity,max=-Infinity,integers=true,count=0,start=0,base=0,step:number|undefined,previous=0;
