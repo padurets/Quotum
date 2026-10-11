@@ -82,6 +82,7 @@ test('the shared table summary keeps its old complete basis through delayed rang
   const h=await fixture({personal:true,privateWork:true,unknown:true,tableOnly:true});
   try{
     const before=h.period.activitySummaryAt('project',NOW),basis=h.period.get().basis;
+    assert.equal(activity.activityCoverage(h.period.activitySummaryAt('project',NOW+1),h.period.activityRangeAt(NOW+1).from),null,'a stale publication basis must not invent an unknown prefix');
     const pending=h.hold();h.settings.range='6h';h.period.changed();await flush();
     assert.equal(h.period.get().loading,true);
     const retained=h.period.activitySummaryAt('project',NOW)!;
@@ -89,10 +90,15 @@ test('the shared table summary keeps its old complete basis through delayed rang
     assert.deepEqual(retained.by.project,before.by.project);
     assert.deepEqual(h.period.get().basis,basis);
     assert.equal(h.period.activitySummaryChangesAt('project',NOW,()=>''),null,'retained scalars are frozen while replacement is pending');
+    assert.equal(h.period.activityCoverageChangesAt(NOW),null);
     h.period.refreshWorkClock();assert.deepEqual(h.period.get().basis,basis);
     pending.release();await flush();assert.equal(h.period.get().loading,false);
     assert.equal(h.period.activitySummaryAt('project',NOW).agentMs,M);
     assert.equal(h.period.get().basis.range.from,NOW-6*60*M);
+    const since=h.period.activitySummaryAt('project',NOW).since,deadline=since+6*60*M;
+    assert.ok(activity.activityCoverage(h.period.activitySummaryAt('project',deadline-1),h.period.activityRangeAt(deadline-1).from));
+    assert.equal(h.period.activityCoverageChangesAt(NOW),deadline);
+    assert.equal(activity.activityCoverage(h.period.activitySummaryAt('project',deadline),h.period.activityRangeAt(deadline).from),null);
     h.event({type:'history',data:{sources:[],since:NOW,ownSince:NOW,workAuthority:'replacement'}});await flush();
     h.period.activate(false);assert.equal(h.period.activitySummaryAt('project',NOW),null);
   }finally{await h.close();}
@@ -116,12 +122,12 @@ test('numeric and name sorting preserve independent preferences, hidden-column f
 function renderer(){
   let by:ActivityDimension='device',owner=false,hidden:string[]=[],range={from:25_000,to:125_000},knownFrom=0;
   const index=new PeriodIndex(trace),metrics=new PeriodActivity(trace,index.curves);
-  const period={activitySummaryAt:(dimension:ActivityDimension,_now:number,key?:string)=>metrics.summary(range,dimension,key),activitySummaryChangesAt:()=>null};
+  const period={activitySummaryAt:(dimension:ActivityDimension,_now:number,key?:string)=>metrics.summary(range,dimension,key),activitySummaryChangesAt:()=>null,activityRangeAt:()=>range,activityCoverageChangesAt:()=>null};
   let summary=metrics.summary(range,by);
   const modules:Record<string,unknown>={react:React,'react/jsx-runtime':jsxRuntime,'../lib/activityTable':table,'../lib/activity':activity,'../lib/format':format,'../lib/agents':agents,'../lib/view':view,
     '../i18n':{...i18n,useLocale:i18n.useLocale},'../lib/prefs':{ACTIVITY_BY:['project','device','source'],usePref:(key:string)=>key==='activityTableBy'?by:key==='activityTableSort'?null:'1h'},
     '../lib/board':{useTitles:()=>({s:{provider:'codex',title:'Subscription'}})},'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>125_000},
-    '../lib/period':{boardPeriod:period,usePeriodActivity:()=>({summary,basis:{range},loading:false,error:null})},'./sizing':{useSizing:()=>null},'./PeriodStatus':{PeriodStatus:()=>null},'./Popover':{Popover:()=>null},'./Agents':{AgentPages:()=>null,SortIcon:()=>null},'./Kit':{Segmented:()=>null}};
+    '../lib/period':{boardPeriod:period,usePeriodActivity:()=>({summary,basis:{range:{from:range.from-1,to:range.to}},loading:false,error:null})},'./sizing':{useSizing:()=>null},'./PeriodStatus':{PeriodStatus:()=>null},'./Popover':{Popover:()=>null},'./Agents':{AgentPages:()=>null,SortIcon:()=>null},'./Kit':{Segmented:()=>null}};
   const compile=(file:string)=>{
     const context={exports:{} as Record<string,React.ComponentType<any>>,require:(name:string)=>modules[name]??{}};
     runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);return context.exports;
@@ -137,6 +143,7 @@ test('actual shared table renders union totals, session hints, honest unknowns a
     for(const locale of ['en','ru'] as const){
       i18n.setLocale(locale);r.set({range:{from:25_000,to:125_000},knownFrom:0,hidden:[]});let html=r.render();
       assert.ok(html.includes(i18n.t('activityTable.title'))&&html.includes(i18n.t('activity.agents')));
+      assert.ok(!html.includes(i18n.t('activity.notKnown',{time:format.stamp(25_000)})),'a one-millisecond stale basis must not label complete coverage as unknown');
       assert.equal((html.match(/data-activity-group/g)??[]).length,2);
       const total=html.match(/<tr class="analytics-total">(.*?)<\/tr>/)![1];
       assert.ok(total.includes(format.workHours(150_000))&&total.includes(format.workHours(100_000))&&total.includes(activity.atOnce(150_000,100_000)));

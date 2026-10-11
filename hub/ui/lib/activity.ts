@@ -1,7 +1,7 @@
 import type {ActivityDimension, ActivityGroup, History, View} from './types';
 import {CATEGORY_COLORS} from './providers';
 import {colorOf} from './view';
-import {num} from './format';
+import {num,stamp} from './format';
 import {sourceLabel} from './quota';
 import type {Title} from './board';
 import {t} from '../i18n';
@@ -10,6 +10,11 @@ import {t} from '../i18n';
 export function activityGroupName(group:Pick<ActivityGroup,'key'|'name'>,by:ActivityDimension,titles:Record<string,Title>){
   if(by==='source')return group.key==='unknown'?t('agents.unknownSource'):titles[group.key]?sourceLabel(titles[group.key]):group.key;
   return group.name??(by==='project'?t('activity.noProject'):group.key);
+}
+
+/** Compare coverage and selection at the same instant, including a frozen replacement. */
+export function activityCoverage(activity:History['activity']|null,from:number){
+  return !activity?null:!activity.known?t('activity.knownFrom',{time:stamp(activity.since)}):activity.since>from?t('activity.notKnown',{time:stamp(activity.since)}):null;
 }
 
 const MINUTE = 60_000;

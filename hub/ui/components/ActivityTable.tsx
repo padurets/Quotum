@@ -1,9 +1,10 @@
 import {memo,useCallback,useLayoutEffect,useRef,useState,type CSSProperties,type RefObject} from 'react';
 import type {Activity,ActivityDimension,ActivityGroup} from '../lib/types';
-import {activityGroupName,atOnce,groupColors} from '../lib/activity';
+import {activityCoverage,activityGroupName,atOnce,groupColors} from '../lib/activity';
 import {ACTIVITY_COLUMNS,activityKey,effectiveActivitySort,nextActivitySort,sortedActivity,type ActivityColumn} from '../lib/activityTable';
 import {boardPeriod,usePeriodActivity,usePeriodSessions,type SessionOrder} from '../lib/period';
-import {workHours,num,stamp} from '../lib/format';
+import {workHours,num} from '../lib/format';
+import {useClock} from '../lib/clock';
 import {ACTIVITY_BY,setPrefs,usePref} from '../lib/prefs';
 import {ACTIVITY_TABLE,columnShown,colorOf,type Arrange} from '../lib/view';
 import {useTitles} from '../lib/board';
@@ -54,6 +55,12 @@ const metric=(summary:Activity|null,by:ActivityDimension,column:ActivityColumn,k
   if(!value)return '—';
   return column==='agenthours'?workHours(value.agentMs):column==='active'?workHours(value.activeMs):column==='sessions'?num(value.agents):atOnce(value.agentMs,value.activeMs);
 };
+
+function Coverage({by}:{by:ActivityDimension}){
+  const now=useClock(at=>boardPeriod.activityCoverageChangesAt(at)),range=boardPeriod.activityRangeAt(now);
+  const text=range?activityCoverage(boardPeriod.activitySummaryAt(by,now),range.from):null;
+  return <p className="analytics-note" data-time="activity-coverage" hidden={!text}>{text}</p>;
+}
 
 /** Presence and disclosure sorting wake only the open session list. */
 function Contributions({by,chosen,title,arrange,onClose,restore}:{by:ActivityDimension;chosen:string;title:string;arrange:Arrange;onClose:()=>void;restore:()=>HTMLElement|null}){
@@ -110,7 +117,6 @@ export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrang
     const found=[...panel.current?.querySelectorAll<HTMLElement>('[data-activity-group]')??[]].find(element=>element.dataset.activityGroup===opened?.key);
     return found??panel.current?.querySelector<HTMLElement>('button')??null;
   };
-  const knownFrom=summary?.known?.from;
   return <section ref={panel} className={`panel activity-table${period.loading?' is-loading':''}`} aria-label={t('activityTable.title')} aria-busy={period.loading}
     data-history-range={period.loading||period.error?undefined:selected&&period.basis?timeRangeKey(period.basis.range):range}>
     <div className="panel-head"><h2 className="panel-heading">{t('activityTable.title')}</h2>
@@ -124,8 +130,7 @@ export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrang
       </div>
     </div>
     <PeriodStatus {...period}/>
-    {summary&&!summary.known&&<p className="analytics-note">{t('activity.knownFrom',{time:stamp(summary.since)})}</p>}
-    {summary?.known&&knownFrom!==undefined&&period.basis&&knownFrom>period.basis.range.from&&<p className="analytics-note">{t('activity.notKnown',{time:stamp(knownFrom)})}</p>}
+    <Coverage by={by}/>
     {!summary&&period.loading&&<p className="panel-loading">{t('period.loading')}</p>}
     {summary&&<AnalyticsTable columns={columns} rows={rows} name={t(LABELS[by])} nameWidth={180} lead="agenthours" total={total} sorting={{...active,onSort:sortBy}}
       onOpen={key=>{const group=groups.find(g=>g.key===key);if(group)setOpened({by,key,title:name(group)});}}/>}

@@ -157,6 +157,14 @@ class BoardPeriod {
     return this.activity?this.activity.summary(evaluatedRange(this.workSelection,now),by,key):this.activityRetained;
   }
   activitySelection=()=>this.workSelection;
+  activityRangeAt(now=hubNow()){
+    return this.work.basis?(this.activity?evaluatedRange(this.workSelection,now):this.work.basis.range):null;
+  }
+  activityCoverageChangesAt(now:number){
+    if(!this.activity||this.workSelection.mode!=='live')return null;
+    const period=this.workSelection.periodMs,next=Math.min(...[this.activity.trace.knownFrom+period,(this.activity.trace.cut??Infinity)+period].filter(at=>at>now));
+    return Number.isFinite(next)?next:null;
+  }
   activitySummaryChangesAt(by:import('./types').ActivityDimension,now:number,read:(at:number)=>string,key?:string){
     if(this.workSelection.mode!=='live'||!this.work.basis)return null;
     return periodTextChangesAt(now,at=>this.activity?.changesAt(at,this.workSelection.mode==='live'?this.workSelection.periodMs:0,by,key)??null,read);
