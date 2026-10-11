@@ -477,7 +477,7 @@ class BoardPeriod {
           }else sizes.delete('work');
         }
         const changedWork=new Set<string>(),tapes=new Map(previousTapes);let changedBytes=0;
-        if(work!==previousWork)for(const refs of [work?.refs??[],previousWork?.refs??[]])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}
+        if(work!==previousWork)for(const refs of [work?.refs??[],previousWork?.refs??[]])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)&&previousIndex?.curves.groups.source.get(ref.source)!==index?.curves.groups.source.get(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}
         for(const [scope,entry] of previousTapes){
           let scratch=0;const tape=yield*retention.retainTape(entry.tape,from,bytes=>{scratch+=bytes;charge(scope,scratch);});
           if(tape!==entry.tape||scope==='quota'&&work!==previousWork){
