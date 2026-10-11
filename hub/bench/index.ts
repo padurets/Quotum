@@ -183,6 +183,13 @@ async function main() {
       await sleep(250);
     }
     const opened = Date.now();
+    // Measure with the shared controls open, as before they could be collapsed.
+    await cdp.evaluate(`(async () => {
+      const toggle = document.querySelector('.filter-toggle > button');
+      if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+      await new Promise(requestAnimationFrame);
+      if (!document.querySelector('.analytics-head:not([hidden]) .period')) throw new Error('shared filters did not open');
+    })()`);
     const warm = warmUntil(await overview(), opened);
     say(`the board is open; it settles for ${Math.round((warm - Date.now()) / 1000)} s`);
     await sleep(warm - Date.now());

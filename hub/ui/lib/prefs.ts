@@ -24,6 +24,8 @@ export type Prefs = {
   range: string;
   kind: Kind;
   horizon: Horizon;
+  /** Keep the shared filter row open beneath the header. */
+  filtersVisible: boolean;
   /** Draw the spending plan on the weekly chart. */
   showPlan: boolean;
   /** Draw where each window's pace leads on the chart. */
@@ -43,7 +45,7 @@ export type Prefs = {
 const KEY = 'quotum.prefs';
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
 export const ACTIVITY_BY: ActivityDimension[] = ['source', 'project', 'device'];
-const DEFAULTS: Prefs = {funds:DEFAULT_MONEY,money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
+const DEFAULTS: Prefs = {funds:DEFAULT_MONEY,money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', filtersVisible: false, showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
 
 function read(): Prefs {
   try {
@@ -54,8 +56,8 @@ function read(): Prefs {
     if (!ANALYTICS_KINDS.includes(stored.kind)) stored.kind = DEFAULTS.kind;
     if (!HORIZONS.includes(stored.horizon)) stored.horizon = DEFAULTS.horizon;
     if (!ACTIVITY_BY.includes(stored.activityBy)) stored.activityBy = DEFAULTS.activityBy;
-    const {muted, range, kind, horizon, showPlan, showForecast, showResets, locked, activityBy} = stored;
-    return {funds:{...readMoney(stored.funds),view:'balance'},money:readMoney(stored.money),muted, range, kind, horizon, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort), agentsBy: readAgentsBy(stored.agentsBy), activityBy};
+    const {muted, range, kind, horizon, filtersVisible, showPlan, showForecast, showResets, locked, activityBy} = stored;
+    return {funds:{...readMoney(stored.funds),view:'balance'},money:readMoney(stored.money),muted, range, kind, horizon, filtersVisible: filtersVisible === true, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort), agentsBy: readAgentsBy(stored.agentsBy), activityBy};
   } catch {
     return DEFAULTS;
   }

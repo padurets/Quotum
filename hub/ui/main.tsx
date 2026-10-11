@@ -172,6 +172,7 @@ function Dashboard({
   const shownCards = shownOf(cardWidgets);
   const shownPanels = shownOf(panelWidgets);
   const shownWidgets = [...shownCards, ...shownPanels];
+  const hasWidgets = !!meta && (state === 'widgets' || shownWidgets.length > 0);
   const grid = (list: Widget[]) => (
     <Widgets
       key={boardId}
@@ -192,6 +193,10 @@ function Dashboard({
         onAccount={openSettings}
         onSignedOut={onSignedOut}
         local={local}
+        filters={active && hasWidgets ? {
+          expanded: prefs.filtersVisible,
+          onToggle: () => setPrefs(prefs => ({filtersVisible: !prefs.filtersVisible})),
+        } : undefined}
         actions={board && (
           <BoardActions
             board={board}
@@ -221,6 +226,7 @@ function Dashboard({
           />
         )}
       />
+      {active && hasWidgets && <AnalyticsHead widgets={shownWidgets.map(widget => widget.id)} visible={prefs.filtersVisible} />}
       {arrange.saveFailures?.map(failure => <aside key={failure.board} className="view-save-notice" role="alert"><b>{t('layout.saveFailed', {board: boards.find(board => board.id === failure.board) ? boardTitle(boards.find(board => board.id === failure.board)!) : t('layout.unavailableBoard')})}</b><ErrorLine error={failure.error} />
         <div className="button-row is-start">{failure.retryable && <button className="button" onClick={() => {void arrange.retrySave?.(failure.board).catch(() => {});}}>{t('layout.retrySave')}</button>}<button className="link-button" onClick={() => arrange.dismissSave?.(failure.board)}>{t('common.close')}</button></div>
       </aside>)}
@@ -258,11 +264,8 @@ function Dashboard({
               )}
             </div>
           </section>
-        ) : state === 'widgets' || shownCards.length > 0 || shownPanels.length > 0 ? (
-          <>
-            <AnalyticsHead widgets={shownWidgets.map(widget=>widget.id)} />
-            {grid(shownWidgets)}
-          </>
+        ) : hasWidgets ? (
+          grid(shownWidgets)
         ) : (
           <section className="panel onboarding">
             <h2>{t('widgets.allHidden')}</h2>

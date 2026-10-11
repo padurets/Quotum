@@ -409,6 +409,9 @@ export const ru = {
   'widgets.showAll': 'Показать все',
 
   'header.settings': 'Настройки',
+  'header.filters': 'Фильтры',
+  'header.showFilters': 'Показать фильтры',
+  'header.hideFilters': 'Скрыть фильтры',
   'header.devices': 'Мои подключения',
   'header.people': 'Люди и подписки доски',
   'machines.title': 'Мои подключения',

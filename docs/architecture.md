@@ -1195,10 +1195,12 @@ A card's dot by the logo tells how its measurements go: its colour, and in its t
 when it was measured and, while the hub sets the pace, when the next measurement comes
 and why, each a line of its own.
 A board has one grid for source cards, agent sessions, activity, quota history and
-table, and budget history and table. A compact bar on the right above it shares the
-header's flat glass surface, with rounded corners and no border, shadow or lower
-separator. It keeps the period, quota window kind and shared chart horizon available
-during scrolling. The quota kind
+table, and budget history and table. A filter button in the header toggles a separate
+full-width glass row directly beneath it, with its controls aligned right and a subtle
+bottom rule. The row starts closed and remembers its visibility in the reader's browser.
+Hiding it preserves the selected period, quota window kind and shared chart horizon;
+while open, it keeps them available during scrolling. Board navigation and widget
+management stay in the header. The quota kind
 is also available in each quota widget's settings. The budget chart and table share
 one series selection, editable from either widget even when the other is hidden.
 Balance/spending belongs to the budget chart's settings; subscription funds have their

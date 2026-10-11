@@ -6,7 +6,7 @@ import {page, useConnection} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {Brand, ErrorLine, Field, Modal} from './Kit';
 import {Popover, PopoverHeading} from './Popover';
-import {ChevronDown, Settings as SettingsIcon} from 'lucide-react';
+import {ChevronDown, Funnel, Settings as SettingsIcon} from 'lucide-react';
 import {t} from '../i18n';
 import {boardHref, navigate, useLocation} from '../lib/router';
 
@@ -168,6 +168,7 @@ export function Header({
   onSignedOut,
   local,
   actions,
+  filters,
 }: {
   boards: Board[];
   board: Board | null;
@@ -177,6 +178,7 @@ export function Header({
   onSignedOut: () => void;
   local: boolean;
   actions?: ReactNode;
+  filters?: {expanded: boolean; onToggle: () => void};
 }) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -194,6 +196,21 @@ export function Header({
       <div className="topbar-inner">
         <BoardHome board={board} />
         <div className="status">
+          {filters && (
+            <div className="filter-toggle">
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={t(filters.expanded ? 'header.hideFilters' : 'header.showFilters')}
+                title={t(filters.expanded ? 'header.hideFilters' : 'header.showFilters')}
+                aria-expanded={filters.expanded}
+                aria-controls="board-filters"
+                onClick={filters.onToggle}
+              >
+                <Funnel size={16} aria-hidden="true" />
+              </button>
+            </div>
+          )}
           {(!local || actions) && (
             <div className="board-controls" role="group" aria-label={board ? boardTitle(board) : t('boards.title')}>
               {!local && <BoardSwitcher boards={boards} board={board} onSelect={onBoard} />}

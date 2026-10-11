@@ -158,14 +158,22 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
 }
 
 /** Only controls shared across widgets belong above the board. */
-export function AnalyticsHead({widgets}: {widgets: string[]}) {
+export function AnalyticsHead({widgets, visible}: {widgets: string[]; visible: boolean}) {
+  return (
+    <section id="board-filters" className="analytics-head" aria-label={t('header.filters')} hidden={!visible}>
+      {visible && <ViewingControls widgets={widgets} />}
+    </section>
+  );
+}
+
+function ViewingControls({widgets}: {widgets: string[]}) {
   const {horizon} = usePrefs();
   const historyStart = useHistoryBegins();
   const quota = QUOTA_WIDGETS.some(id=>widgets.includes(id));
   const charts = [ACTIVITY,QUOTA_HISTORY,BUDGET_HISTORY,SUBSCRIPTION_FUNDS].some(id=>widgets.includes(id));
   const horizonName = (value: typeof horizon) => value === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(value)});
   return (
-    <div className="analytics-head">
+    <div className="analytics-head-inner">
       <PeriodSwitch historyStart={historyStart} />
       <div className="controls">
         {quota && <KindSwitch />}

@@ -33,7 +33,7 @@ export function stableHistoryReads(reads: readonly Pick<Read, 'selection' | 'ans
 export function historyPageScript(period: string) {
   const prefix = `b${++pageSerial}`;
   return `(() => {
-    localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d'}));
+    localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',filtersVisible:true}));
     const original=window.fetch.bind(window),attempts=window.__quotumHistoryAttempts={};let serial=0;
     window.fetch=(resource,init={})=>{
       const uri=resource instanceof Request?resource.url:String(resource);

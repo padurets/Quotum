@@ -414,6 +414,9 @@ export const en = {
   'widgets.showAll': 'Show all',
 
   'header.settings': 'Settings',
+  'header.filters': 'Filters',
+  'header.showFilters': 'Show filters',
+  'header.hideFilters': 'Hide filters',
   'header.devices': 'My connections',
   'header.people': 'People and subscriptions of the board',
   'machines.title': 'My connections',

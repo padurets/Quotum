@@ -96,9 +96,10 @@ main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex
 /* ---------- widgets ---------- */
 .widgets { position: relative; display: grid; grid-template-columns: repeat(var(--columns, 6), minmax(0, 1fr)); grid-auto-rows: 32px; gap: 16px; }
 
-/* Shared viewing controls stay on the right as the mixed board scrolls beneath them. */
-.analytics-head { position: sticky; top: 68px; z-index: 5; align-self: flex-end; max-width: 100%; display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; padding: 6px; border-radius: 14px; }
-.analytics-head::before { border-radius: inherit; }
+/* Shared viewing controls have their own full-width glass row below the header. */
+.analytics-head { position: sticky; top: 60px; z-index: 5; }
+.analytics-head::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--hair); }
+.analytics-head-inner { max-width: 1240px; min-height: 56px; margin: 0 auto; padding: 10px 28px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
 .widget { position: relative; display: flex; flex-direction: column; min-width: 0; }
 .widgets > .card.is-loading { grid-column: span 2; grid-row: span 5; }
 .widget-body { position: relative; display: flex; flex-direction: column; min-width: 0; }
@@ -880,7 +881,9 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .resize-handle { display: none; }
 }
 @media (max-width: 680px) {
-  .analytics-head { gap: 6px; }
+  .analytics-head-inner { padding: 12px 16px; gap: 8px; }
+  .analytics-head .controls > .picker { order: 1; }
+  .analytics-head .controls > .segmented { order: 2; }
   .topbar-inner { padding: 0 16px; gap: 12px; }
   .board-name { max-width: 120px; }
   .inline-form { flex-direction: column; align-items: stretch; }
@@ -994,6 +997,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 
 /* Board actions and the account menu share the original header. */
 .status { flex-shrink: 1; }
+.filter-toggle { flex-shrink: 0; padding-right: 12px; border-right: 1px solid var(--hair-2); }
 .board-controls { display: flex; align-items: center; gap: 8px; min-width: 0; padding-right: 12px; border-right: 1px solid var(--hair-2); }
 .board-controls > .picker { min-width: 0; }
 .board-controls > .picker > .text-button { min-width: 0; max-width: 100%; }
@@ -1095,6 +1099,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
   .status { gap: 8px; }
   .board-actions { gap: 4px; }
   .board-controls { gap: 4px; padding-right: 8px; }
+  .filter-toggle { padding-right: 8px; }
   .manage-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
   .manage-actions { grid-row: 1; padding: 4px 0 12px; border-left: 0; border-bottom: 1px solid var(--hair); }
   .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }

@@ -13,6 +13,7 @@ import {
   type ReactNode,
 } from 'react';
 import {t} from '../i18n';
+import {barsOf} from '../lib/place';
 import {pixels, same, SizingContext, type Report, type Size} from './sizing';
 import {WidgetSizing} from '../lib/widgetSizing';
 import {
@@ -284,10 +285,9 @@ export function Widgets({
     current.items = landed(current.origin, current.id, cell, layout.columns);
     show(current);
   };
-  /** How far down the window the bars stuck over this grid reach: the page's, and over the analytics their head. */
+  /** Dragging beneath either sticky bar scrolls the board back into reach. */
   const cover = () => {
-    const bars = [document.querySelector<HTMLElement>('.topbar'), grid.current!.closest('.analytics')?.querySelector<HTMLElement>('.analytics-head')];
-    return Math.max(0, ...bars.map(bar => (bar && bar.getBoundingClientRect().top <= parseFloat(getComputedStyle(bar).top) + 1 ? bar.getBoundingClientRect().bottom : 0)));
+    return Math.max(0, ...barsOf().map(bar => (bar.getBoundingClientRect().top <= parseFloat(getComputedStyle(bar).top) + 1 ? bar.getBoundingClientRect().bottom : 0)));
   };
   // The page scrolls under a pointer taken to the window's bottom or under the bars at its top, so a widget goes where the window does not reach.
   const frame = () => {
