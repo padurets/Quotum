@@ -13,6 +13,7 @@ const time = (value: unknown): value is number => typeof value === 'number' && N
 /** Owner rules and receipts commit with the revision and all validation. */
 export class LinkStore {
   onChange: ((owner: string) => void) | null = null;
+  private readonly batches = new Map<string, {version: number; clients: Map<string, ClientLink[]>}>();
   constructor(private readonly db: DatabaseSync) {}
   revision(owner: string): string {return String(this.db.prepare('SELECT version FROM link_versions WHERE user_id=?').get(owner)?.version ?? 0);}
   list(owner: string): ClientLink[] {return (this.db.prepare('SELECT * FROM client_links WHERE user_id=? ORDER BY client,device_id,from_at,id').all(owner) as Row[]).map(linkOf);}
@@ -27,10 +28,29 @@ export class LinkStore {
   held(owner: string): Map<string, string> {return new Map((this.db.prepare("SELECT h.source_id,COALESCE(s.provider,'') AS provider FROM holders h LEFT JOIN sources s ON s.id=h.source_id WHERE h.user_id=?").all(owner) as {source_id: string; provider: string}[]).map(r => [r.source_id, r.provider]));}
   /** Three bounded reads serve all owners, clients and devices of one projection. */
   batch(owners: readonly string[]): (owner: string, device: string, client: string) => LinkContext {
-    const people = JSON.stringify(owners), links = new Map<string, Map<string, ClientLink[]>>(), held = new Map<string, Map<string, string>>();
-    for (const row of this.db.prepare('SELECT * FROM client_links WHERE user_id IN (SELECT value FROM json_each(?))').all(people) as (Row & {user_id: string})[]) {
-      let clients = links.get(row.user_id); if (!clients) links.set(row.user_id, clients = new Map());
-      let list = clients.get(row.client); if (!list) clients.set(row.client, list = []); list.push(linkOf(row));
+    const users=[...new Set(owners)],people = JSON.stringify(users), links = new Map<string, Map<string, ClientLink[]>>(), held = new Map<string, Map<string, string>>();
+    // Read revisions with the rules: unchanged owners reuse their parsed rules,
+    // while holdings and route policy are always read from the current transaction.
+    const requested=JSON.stringify(users.map(owner=>[owner,this.batches.get(owner)?.version??-1]));
+    const rows=this.db.prepare("WITH requested AS (SELECT json_extract(value,'$[0]') AS owner,json_extract(value,'$[1]') AS version FROM json_each(?)) SELECT r.owner,COALESCE(v.version,0) AS version,l.* FROM requested r LEFT JOIN link_versions v ON v.user_id=r.owner LEFT JOIN client_links l ON l.user_id=r.owner AND COALESCE(v.version,0)<>r.version").all(requested) as (Row & {owner:string;version:number})[];
+    const next=new Map<string,{version:number;clients:Map<string,ClientLink[]>}>();
+    for(const row of rows) {
+      let group=next.get(row.owner);
+      if(!group) {
+        const prior=this.batches.get(row.owner);
+        group=prior?.version===row.version?prior:{version:row.version,clients:new Map()};
+        next.set(row.owner,group);
+      }
+      if(row.id) {
+        let list=group.clients.get(row.client);if(!list)group.clients.set(row.client,list=[]);list.push(linkOf(row));
+      }
+    }
+    for(const [owner,group] of next) {
+      links.set(owner,group.clients);
+      afterCommit(()=>{
+        this.batches.delete(owner);this.batches.set(owner,group);
+        while(this.batches.size>128)this.batches.delete(this.batches.keys().next().value!);
+      });
     }
     for (const row of this.db.prepare("SELECT h.user_id,h.source_id,COALESCE(s.provider,'') AS provider FROM holders h LEFT JOIN sources s ON s.id=h.source_id WHERE h.user_id IN (SELECT value FROM json_each(?))").all(people) as {user_id: string; source_id: string; provider: string}[]) {
       let map = held.get(row.user_id); if (!map) held.set(row.user_id, map = new Map()); map.set(row.source_id, row.provider);
@@ -94,6 +114,7 @@ export class LinkStore {
         if (changed) this.save(owner, {...input, id: old?.id ?? randomUUID(), createdAt: old?.createdAt ?? now});
       }
       if (changed) {
+        this.batches.delete(owner);
         this.db.prepare('INSERT INTO link_versions VALUES (?,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1').run(owner);
         this.db.prepare('INSERT INTO account_revisions VALUES (?,1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1').run(owner);
         afterCommit(() => this.onChange?.(owner));

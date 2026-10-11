@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Store} from '../store/store.js';
 import {Directory} from '../store/directory.js';
+import {transaction} from '../touches.js';
 import {resolveLink, safeRoute, splitLinks, suggestion, type ClientLink, type LinkContext, type AttributionInput, type LinkInput} from '../domain/links.js';
 import type {SessionRoute} from '../domain/ingest.js';
 
@@ -107,4 +108,22 @@ test('two connections reject stale revisions, replay lost replies and expire rec
     assert.equal(f.store.links.list(f.owner.id).length, 1);
     assert.equal(f.store.links.revision(f.owner.id), '1');
   } finally {second.close(); f.store.close(); rmSync(path, {recursive: true});}
+});
+
+test('batched resolution follows committed corrections, rollback, holdings and route policy', () => {
+  const path=mkdtempSync(join(tmpdir(),'quotum-link-batches-')),f=fixture(join(path,'test.sqlite')),other=new Store(join(path,'test.sqlite'),0);
+  try {
+    const input={...f.input,route:{class:'api' as const,provider:null}},rule=f.mutate('create',null,input).body.links[0];
+    const evidence:AttributionInput={clientId:input.clientId,deviceId:f.device.id,source:f.source,route:{class:'api',by:'session',host:null,provider:'openrouter'}};
+    const observed=(store:Store)=>resolveLink(evidence,store.links.batch([f.owner.id,f.owner.id])(f.owner.id,f.device.id,input.clientId),150).source;
+    assert.equal(observed(f.store),f.source);assert.equal(observed(other),f.source);
+    assert.throws(()=>transaction(f.store.db,()=>{f.mutate('correct',rule.id,{...input,sourceId:f.second});assert.equal(observed(f.store),f.second);throw new Error('rollback');}),/rollback/);
+    f.store.hold(f.alien,f.owner.id,0);
+    other.links.mutate(f.owner.id,'correct',rule.id,{...input,sourceId:f.alien,requestId:randomUUID(),expectedRevision:other.links.revision(f.owner.id)},0);
+    assert.equal(observed(f.store),f.alien);assert.equal(observed(other),f.alien);
+    f.store.release(f.alien,f.owner.id);assert.equal(observed(other),null);
+    f.store.hold(f.alien,f.owner.id,0);assert.equal(observed(other),f.alien);
+    f.store.db.prepare('INSERT INTO device_tracking_policy VALUES (?,?,0)').run(f.device.id,input.clientId);
+    assert.equal(observed(other),f.source);
+  }finally{other.close();f.store.close();rmSync(path,{recursive:true});}
 });
