@@ -42,8 +42,9 @@ export class HistoryTiles {
 
   /** Partial tiles reuse these immutable pseudonyms without hashing every read. */
   private cachedRef(input: string) {
-    const value=this.refs.get(input)??createHmac('sha256',this.key).update(input).digest('base64url').slice(0,8);
-    this.refs.delete(input);this.refs.set(input,value);
+    const hit=this.refs.get(input);if(hit!==undefined)return hit;
+    const value=createHmac('sha256',this.key).update(input).digest('base64url').slice(0,8);
+    this.refs.set(input,value);
     while(this.refs.size>Math.max(1,Math.floor(this.budget/1024)))this.refs.delete(this.refs.keys().next().value!);
     return value;
   }
