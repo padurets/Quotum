@@ -1351,7 +1351,9 @@ currency, resource selections, visible consumers and request generations prevent
 response from acquiring a newer label. Superseded period reads leave the transport queue;
 retrying an analytical widget repeats its failed exact evidence as well as its drawing cells.
 A bounded signed frontier lets the next read replace changed work and measurement
-intervals or extend missing older evidence. Quota cells and the session projection share
+intervals or extend missing older evidence. All change journals share a monotonic
+admission boundary: once any required proof is discarded, an older cursor needs a
+complete bounded baseline. Quota cells and the session projection share
 one authorized work extraction within a composite read.
 
 Retained work traces and measurement tapes provide exact boundaries beside the shared

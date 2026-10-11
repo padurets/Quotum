@@ -29,16 +29,19 @@ export class PeriodReader {
   private measurements:(Change&{scopes?:readonly HistoryScope[]})[]=[];
   private floor=0;
   constructor(private readonly hub:Hub,private readonly history:HistoryTiles,private readonly events:Events) {}
+  private append<T extends Change>(journal:T[],change:T) {
+    journal.push(change);
+    // All journals share the cursor admission frontier. Evicting an older
+    // change cannot recover proof already discarded by another journal.
+    if(journal.length>2048)this.floor=Math.max(this.floor,journal.shift()!.revision);
+  }
   touch(source:string,since:number,_scopes?:readonly HistoryScope[],work=false) {
     this.revision++;
-    if(work)this.workChanges.push({revision:this.revision,source,since});
-    else this.measurements.push({revision:this.revision,source,since,scopes:_scopes});
-    if(this.workChanges.length>2048)this.floor=this.workChanges.shift()!.revision;
-    if(this.measurements.length>2048)this.floor=Math.max(this.floor,this.measurements.shift()!.revision);
+    if(work)this.append(this.workChanges,{revision:this.revision,source,since});
+    else this.append(this.measurements,{revision:this.revision,source,since,scopes:_scopes});
   }
   touchClient(owner:string,since:number) {
-    this.revision++;this.workChanges.push({revision:this.revision,source:'',owner,since});
-    if(this.workChanges.length>2048)this.floor=Math.max(this.floor,this.workChanges.shift()!.revision);
+    this.revision++;this.append(this.workChanges,{revision:this.revision,source:'',owner,since});
   }
   private tag(body:string){return createHmac('sha256',this.key).update(body).digest();}
   private encode(value:Cursor){const body=Buffer.from(JSON.stringify(value)).toString('base64url');return body+'.'+this.tag(body).toString('base64url');}
