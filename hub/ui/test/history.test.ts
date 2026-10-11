@@ -604,7 +604,9 @@ test('window metadata changes recompose without reading, and only after a fresh 
   assert.equal(h.store.get().history?.series[0].windowId, 'other');
   const shown = h.store.get().history;
   h.store.snapshot(['s']); h.store.setWindows(['s w']); await flush();
-  assert.equal(h.store.get().history, shown);
+  assert.notEqual(h.store.get().history, shown);
+  assert.equal(h.store.get().history, null, 'a retired window cannot survive while its replacement epoch loads');
+  assert.equal(h.store.get().loading, true);
   await h.reads[1].answer(); assert.equal(h.store.get().history?.series.length, 0);
 });
 

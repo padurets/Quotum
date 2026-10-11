@@ -39,7 +39,7 @@ export type HistoryEnv = {
   schedule?(run: () => void): void;
   preparations?: Preparations | null;
 };
-export type Shown = {history: History | null; loading: boolean;error?:'history_limit'|'history_failed'};
+export type Shown = {history: History | null; loading: boolean;presentation:number;error?:'history_limit'|'history_failed'};
 type HistoryBoundary = {board: string; at: number; start: number};
 type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead'};
 type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean; limited?: boolean};
@@ -63,6 +63,7 @@ export class HistoryStore {
   private period = '24h';
   private selected: TimeRange | null = null;
   private shown: History | null = null;
+  private presentation=0;
   private meta: HistoryBasis | null = null;
   private metaAt: number | null = null;
   private historyStart = 0;
@@ -82,7 +83,7 @@ export class HistoryStore {
   private scheduled = false;
   private needsCompose = false;
   private readonly listeners = new Set<() => void>();
-  private state: Shown = {history: null, loading: false};
+  private state: Shown = {history: null, loading: false,presentation:0};
   private historyLimit=false;
   private readError=false;
   private interest: PlotInterest | null = null;
@@ -138,6 +139,7 @@ export class HistoryStore {
 
   close() {
     this.cancelProjection();
+    this.presentation++;
     this.epoch++;
     this.board = null;
     this.setBoundary(null);
@@ -173,9 +175,9 @@ export class HistoryStore {
   }
 
   snapshot(lineup: string[], windows: Iterable<string> = this.windows, historyStart = 0) {
+    if(this.removesSource(lineup)||historyStart>this.historyStart){this.retirePresentation();this.grids.clear();}
     this.historyStart=historyStart;
     this.setBoundary(null);
-    if(this.removesSource(lineup)){this.shown=null;this.grids.clear();}
     this.lineupKey = keyOf(lineup);
     this.setWindows(windows);
     this.invalidate();
@@ -185,7 +187,7 @@ export class HistoryStore {
 
   lineup(lineup: string[]) {
     if (keyOf(lineup) === this.lineupKey) return;
-    if(this.removesSource(lineup)){this.shown=null;this.grids.clear();}
+    if(this.removesSource(lineup)){this.retirePresentation();this.grids.clear();}
     this.lineupKey = keyOf(lineup);
     this.invalidate();this.publish();
     this.schedule();
@@ -199,15 +201,18 @@ export class HistoryStore {
     const next = new Set(windows);
     const key = keyOf([...next]);
     if (key === this.windowsKey) return;
+    if([...this.windows].some(window=>!next.has(window)))this.retirePresentation();
     this.windowsKey = key;
     this.windows = next;
     this.needsCompose = true;
     this.version++;
+    this.publish();
     this.schedule();
   }
 
   setMeters(meters: MeterSelection | undefined) {
     if(JSON.stringify(meters)===JSON.stringify(this.meters))return;
+    this.retirePresentation();
     this.meters=meters;
     this.historyLimit=false;this.readError=false;this.meta=null;this.metaAt=null;
     this.grids.clear();
@@ -336,12 +341,19 @@ export class HistoryStore {
 
   private elapsedNow() {return this.env.elapsedNow?.() ?? performance.now();}
 
+  /** A different resource or authority cannot borrow the previous complete frame. */
+  private retirePresentation() {
+    this.presentation++;
+    this.shown=null;
+    this.cancelProjection();this.strip=null;this.plotChunks.clear();this.setPlot(null);
+  }
+
   private publish() {
     const history = this.shown;
     const loading = !this.historyLimit && !this.readError && (!history && this.ready || !this.plotPending && !!history && history.range !== this.target().key);
     const error=this.historyLimit?'history_limit' as const:this.readError?'history_failed' as const:undefined;
-    if (history === this.state.history && loading === this.state.loading&&error===this.state.error) return;
-    this.state = {history, loading,...(error?{error}:{})};
+    if (history === this.state.history && loading === this.state.loading&&error===this.state.error&&this.presentation===this.state.presentation) return;
+    this.state = {history, loading,presentation:this.presentation,...(error?{error}:{})};
     for (const listener of this.listeners) listener();
   }
 
@@ -757,7 +769,7 @@ export class HistoryStore {
       this.close();this.env.accessLost?.();return;
     }
     if(error instanceof ApiError&&error.code==='not_found') {
-      this.cancelProjection();this.abortFlights();this.grids.clear();this.plotChunks.clear();this.shown=null;this.setPlot(null);
+      this.retirePresentation();this.abortFlights();this.grids.clear();
       this.readError=true;this.publish();return;
     }
     const target = this.interest ? this.plotTarget() : this.target();
@@ -942,8 +954,12 @@ function usePeriodHistory(loader:HistoryStore,rolling=false):Shown&{drawing:Hist
   const now=useClock(at=>rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at):null,[shown,revision,panning]);
   const retained=useRef<{board:string;history:History}|null>(null);
   const gesture=useRef<{active:boolean;target:string|null}>({active:false,target:null});
+  const authority=useRef<{board:string;loader:HistoryStore;presentation:number}|null>(null);
   const result=useMemo(()=>{
-    const board=page.get().board?.id??'';if(retained.current?.board!==board)retained.current=null;
+    const board=page.get().board?.id??'';
+    if(authority.current?.board!==board||authority.current.loader!==loader||authority.current.presentation!==shown.presentation){
+      retained.current=null;gesture.current={active:false,target:null};authority.current={board,loader,presentation:shown.presentation};
+    }
     const selected=timeRange(),target=board+':'+(selected?timeRangeKey(selected):prefs().range);
     if(panning!==null){gesture.current.active=true;gesture.current.target=null;}
     else if(gesture.current.active){gesture.current.active=false;gesture.current.target=target;}
