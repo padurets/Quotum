@@ -131,7 +131,7 @@ test('history clips a retained observation at retention without moving its actua
   const history=composeMeters(response.json().chunks,M,60_000,120_000)[0];
   assert.equal(history.points[0].at,cutoff);assert.equal(history.points[0].validUntil,120_000);assert.equal(history.coveredMs,0);
   assert.equal(history.spent,null);assert.equal(history.topup,null);
-  assert.deepEqual(h.store.meters.spans(source,'balance:USD',0,120_000),[{from:60_001,to:60_001,staleAfterMs:204_000}]);
+  assert.deepEqual(h.store.meters.spans(source,'balance:USD',0,120_000),[{from:60_001,to:60_001,observedFrom:60_001,staleAfterMs:204_000}]);
 });
 
 test('empty-account KEK replacement and ABA resets reject pending creation and stale loaded keys before GET',async()=>{
