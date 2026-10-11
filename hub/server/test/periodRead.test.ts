@@ -19,6 +19,7 @@ import {HistoryLimit} from '../history.js';
 import {sharedWork} from '../periodWork.js';
 import {expandPeriod,type PeriodWireReply} from '../domain/periodWire.js';
 import {HISTORY_BYTES_PER_MEASUREMENT} from '../../bench/budget.js';
+import {PeriodAccounting} from '../domain/periodAccounting.js';
 
 const M=60_000,H=60*M,now=1_800_000_000_000;
 async function fixture() {
@@ -34,6 +35,18 @@ async function fixture() {
   const details=(body:unknown)=>app.inject({method:'POST',url:`/api/boards/${board}/period/sessions`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body as object});
   return {store,directory,hub,app,user,board,source,device,read,credit,details};
 }
+
+test('a period response rechecks authentication after cooperative preparation',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const original=PeriodAccounting.prepare;
+  t.mock.method(PeriodAccounting,'prepare',function*(...args:Parameters<typeof original>){
+    setImmediate(()=>h.directory.deleteSessions(h.user.id));
+    const until=performance.now()+12;do{yield;}while(performance.now()<until);
+    return yield*original(...args);
+  });
+  const response=await h.read({version:1,selection:{mode:'range',from:now-H,to:now-M},evaluatedAt:now,quota:{cell:String(M),from:String(now-H),to:String(now),cells:'skip'}});
+  assert.equal(response.statusCode,401);assert.deepEqual(response.json(),{error:'unauthorized'});
+});
 
 test('private client periods retain exact work, client identity and late changes only on the personal board',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});

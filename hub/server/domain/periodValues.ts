@@ -2,6 +2,7 @@ import {ValueChanges,applyValueChanges,type ValuePath,type ValueChange} from './
 import type {CreditBalanceState} from './resources.js';
 import type {Win} from './quota.js';
 import type {KeyPart, Meter} from './meters.js';
+import {drain,type Preparation} from './prepare.js';
 
 export type WindowValue = Win & {observedAt:number; validUntil:number; stale:boolean};
 /** Measurements only. Operational status, account names and actions come from the live board. */
@@ -33,12 +34,15 @@ export function periodValueAt(value:PeriodValues|null|undefined,to:number):Perio
 
 /** Every actual state remains recoverable; only repeated fields are omitted. */
 export function withValueStates(base:PeriodValues,values:Iterable<PeriodValues>,reserve:(bytes:number)=>void):PeriodValues {
+  return drain(prepareValueStates(base,values,reserve));
+}
+export function* prepareValueStates(base:PeriodValues,values:Iterable<PeriodValues>,reserve:(bytes:number)=>void):Preparation<PeriodValues> {
   const changes=new ValueChanges(reserve);let states:PeriodValues['states'],previous:PeriodValues=base;
   for(const value of values){
     if(!states){reserve(128);states={paths:changes.paths,pieces:[]};}
     const patch=changes.between(previous,value);
     reserve(JSON.stringify(patch).length*3+64);
-    states.pieces.push([value.validFor!.from,value.validFor!.to,patch]);previous=value;
+    states.pieces.push([value.validFor!.from,value.validFor!.to,patch]);previous=value;yield;
   }
   return states?{...base,states}:base;
 }

@@ -1380,7 +1380,15 @@ A bounded signed frontier lets the next read replace changed work and measuremen
 intervals or extend missing older evidence. All change journals share a monotonic
 admission boundary: once any required proof is discarded, an older cursor needs a
 complete bounded baseline. Quota cells and the session projection share
-one authorized work extraction within a composite read.
+one authorized work extraction within a composite read. The request captures one clock,
+expires quiet sessions at that time, then captures the evidence revision. Nested readers
+use that same clock, and every section and cursor names that revision.
+Server period reads yield between preparation slices and share a serial queue, so an
+abandoned request can release its reservation while the hub serves other routes.
+Before resuming or publishing a response, the reader checks access, currency context
+and relevant evidence changes. A changed input discards the whole preparation and
+permits one fresh attempt; continued churn returns `unavailable`. Unrelated boards
+and facts beyond the captured evidence interval do not invalidate the read.
 
 Retained work traces and measurement tapes provide exact boundaries beside the shared
 interior cells. Work prefixes and interval unions compute clipped session duration,
@@ -1391,6 +1399,17 @@ with 64-bit values for fractions and wider ranges. Changed series rebuild only t
 prefixes. Rolling numeric labels read those prefixes through the shared clock and wake
 when their formatted value changes. A duration update alone does not wake its roster or
 table; membership and ordering still do. Charts advance at their own grid boundaries.
+As a live window advances, expired work blocks and redundant measurement prefixes
+leave the retained indexes. The last real observation before the boundary, its
+availability bounds and required currency evidence remain intact. This cleanup runs
+through the cancellable preparation scheduler without reading history; widening past
+discarded coverage, including a backward correction of the hub clock, requires a new
+bounded baseline and keeps the previous basis visible until it arrives. Capture and authority cutoffs
+remain independent of the locally retained coverage.
+When a continuous monetary span grows, merging retires a superseded heartbeat tail
+only when it is no longer an observation anchor, the new answer omits its binding
+and its complete rate path is unchanged. Explicit bindings and real rate changes
+remain, so accumulated history and a fresh read retain the same conversion provenance.
 Fixed selections carry exact totals and boundary geometry instead of a rolling
 ledger; the server and browser share the accounting implementation in `server/domain`.
 The interior drawing still uses cached history cells. Neighboring card states keep exact sparse changes instead of repeated measurement objects.
@@ -1439,6 +1458,9 @@ advances live boundaries locally through already received evidence, without a re
 or invented work after the evidence cut. Fixed past accounting does not tick. These
 indexes, dictionaries, response staging and cached values share the history readers'
 15 MiB budget and two transport slots. Server projections share the 32 MiB tile budget.
+Work packing reserves its hourly expansion, dictionaries and overlapping buffers
+before allocation; cancellation releases scratch, and completed packing retains only
+its output charge.
 An oversized section reports `history_limit` without publishing partial totals. Numeric
 preparation uses the shared cancellable scheduler; aggregate benchmark traffic includes
 composite and detail reads, cancellations and responses that finish after measurement.

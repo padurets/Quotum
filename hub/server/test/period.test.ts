@@ -116,3 +116,25 @@ test('integer patches compress nearby timestamps without rounding amounts or fra
   applyValueChanges(copy,changes.paths,JSON.parse(JSON.stringify(patch)));assert.deepEqual(copy,next);
   const reverse=changes.between(next,first);applyValueChanges(copy,changes.paths,reverse);assert.deepEqual(copy,first);
 });
+
+test('virtual advancement preserves moving array suffixes and own JSON field names',async()=>{
+  const {ValueChanges,applyValueChanges}=await import('../domain/valueChanges.js');
+  const changes=new ValueChanges(()=>{}),before={points:[[100,1.25],[200,'900719925474099312345'],[300,3.5]],range:{from:0,to:1000}};
+  const paths=[['points',0,0],['points',1,0],['points',2,0],['range','from'],['range','to']] as (string|number)[][];
+  const steps=paths.map(path=>[changes.pathId(path),1] as [number,number]);
+  const prediction={points:[[110,1.25],[210,'900719925474099312345'],[310,3.5]],range:{from:10,to:1010}},after={points:[[210,'900719925474099312345'],[310,3.5]],range:{from:10,to:1010}};
+  const snapshot=structuredClone(before),patch=changes.advanced(before,after,steps,10);
+  applyValueChanges(prediction,changes.paths,patch);assert.deepEqual(prediction,after);assert.deepEqual(before,snapshot);
+  const object={},named={constructor:'Own field',toString:'Own text'};
+  applyValueChanges(object,changes.paths,changes.between(object,named));assert.deepEqual(object,named);
+});
+
+test('neighbor proof preparation yields without cloning every projected summary',async t=>{
+  const {prepareShiftWindow,shifted}=await import('../domain/periodShift.js');
+  const read=(offset:number)=>({range:{from:100+offset,to:200+offset},duration:400-offset,points:offset<10?[[offset,.125],[20+offset,.375]]:[[20+offset,.375]]});
+  const preparation=prepareShiftWindow(read(0),read,[-5,0,10,20],()=>{});
+  const clone=t.mock.method(globalThis,'structuredClone',()=>{throw new Error('summary clone during preparation');});
+  let step=preparation.next(),yields=0;while(!step.done){yields++;step=preparation.next();}
+  clone.mock.restore();assert.ok(yields>=4);
+  for(let offset=-5;offset<20;offset++){const {shift:_,...value}=shifted(step.value,{from:100+offset,to:200+offset})!;assert.deepEqual(value,read(offset));}
+});

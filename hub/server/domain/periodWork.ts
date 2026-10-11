@@ -39,14 +39,60 @@ export function* workSpans(trace:WorkTrace):Generator<[number,number,number]> {
   if(trace.packed){const {blocks,patterns}=trace.packed;for(let i=0;i<blocks.length;i+=3){const at=blocks[i+1]*WORK_BLOCK_MS-trace.anchor,pattern=patterns[blocks[i+2]];for(let j=0;j<pattern.length;j+=2)yield [blocks[i],at+pattern[j],at+pattern[j+1]];}}
 }
 
-export const packWork=(trace:WorkTrace)=>drain(packWorkPrepared(trace));
-export function* packWorkPrepared(trace:WorkTrace):Preparation<WorkTrace> {
+function expandedBlocks(trace:WorkTrace) {
+  let blocks=0,ref=-1,hour=-1;
+  for(const [id,a,b] of trace.spans)if(b>a){
+    const first=Math.floor((trace.anchor+a)/WORK_BLOCK_MS),last=Math.ceil((trace.anchor+b)/WORK_BLOCK_MS)-1;
+    blocks+=last-first+1-Number(ref===id&&hour===first);ref=id;hour=last;
+  }
+  return blocks;
+}
+
+/** Admit the exact output block array before expanding hours; patterns are charged as they appear. */
+export function workPackingBytes(trace:WorkTrace) {
+  if(trace.packed)return 0;
+  return 512+expandedBlocks(trace)*48;
+}
+
+/** Curves, context/group indexes and their scratch share the same request budget. */
+export function workPreparationBytes(trace:WorkTrace) {
+  return trace.refs.length*512+(trace.packed
+    ?trace.packed.blocks.length*64+trace.packed.patterns.reduce((n,p)=>n+p.length*128,0)
+    :workPackingBytes(trace)+expandedBlocks(trace)*192+trace.spans.length*640);
+}
+
+export const packWork=(trace:WorkTrace,reserve?:(bytes:number)=>void,release?:(bytes:number)=>void)=>drain(packWorkPrepared(trace,reserve,release));
+export function* packWorkPrepared(trace:WorkTrace,reserve?:(bytes:number)=>void,release?:(bytes:number)=>void):Preparation<WorkTrace> {
   if(trace.packed)return trace;
-  const patterns:number[][]=[],blocks:number[]=[],ids=new Map<string,number>();
-  let ref=-1,hour=-1,pattern:number[]=[];
-  const flush=()=>{if(!pattern.length)return;const key=pattern.join(','),id=ids.get(key)??patterns.length;if(id===patterns.length){patterns.push(pattern);ids.set(key,id);}blocks.push(ref,hour,id);pattern=[];};
-  for(const [id,a,b] of trace.spans){let from=trace.anchor+a;const end=trace.anchor+b;while(from<end){const h=Math.floor(from/WORK_BLOCK_MS),at=h*WORK_BLOCK_MS,to=Math.min(end,at+WORK_BLOCK_MS);if(ref!==id||hour!==h){flush();ref=id;hour=h;}const start=from-at;if(pattern.length&&pattern.at(-1)!>=start)pattern[pattern.length-1]=Math.max(pattern.at(-1)!,to-at);else pattern.push(start,to-at);from=to;yield;}}
-  flush();return {...trace,spans:[],packed:{patterns,blocks}};
+  let reserved=0,complete=false;
+  const charge=(bytes:number)=>{reserve?.(bytes);reserved+=bytes;};
+  const drop=(bytes:number)=>{if(reserve&&release){release(bytes);reserved-=bytes;}};
+  const count=expandedBlocks(trace);
+  charge(512+count*48);
+  try {
+    const patterns:number[][]=[],blocks=new Array<number>(count*3),ids=new Map<string,number>();
+    charge(64);let ref=-1,hour=-1,offset=0,pattern:number[]=[],patternBytes=64;
+    const flush=()=>{
+      if(!pattern.length)return;
+      // Decimal keys and growing numeric arrays are temporary. Repeated hour
+      // patterns keep only their shared dictionary entry and output references.
+      const keyBytes=64+pattern.length*64;charge(keyBytes);
+      let key=pattern.join(',');const id=ids.get(key)??patterns.length,duplicate=id<patterns.length;
+      if(!duplicate){
+        charge(128);patterns.push(pattern);ids.set(key,id);
+        drop(keyBytes-(64+key.length*2));
+        drop(patternBytes-(64+pattern.length*16));
+      }
+      blocks[offset++]=ref;blocks[offset++]=hour;blocks[offset++]=id;
+      charge(64);pattern=[];
+      if(duplicate){key='';drop(keyBytes+patternBytes);}
+      patternBytes=64;
+    };
+    for(const [id,a,b] of trace.spans){let from=trace.anchor+a;const end=trace.anchor+b;while(from<end){const h=Math.floor(from/WORK_BLOCK_MS),at=h*WORK_BLOCK_MS,to=Math.min(end,at+WORK_BLOCK_MS);if(ref!==id||hour!==h){flush();ref=id;hour=h;}const start=from-at;if(pattern.length&&pattern.at(-1)!>=start)pattern[pattern.length-1]=Math.max(pattern.at(-1)!,to-at);else {charge(64);patternBytes+=64;pattern.push(start,to-at);}from=to;yield;}}
+    flush();ids.clear();
+    if(reserve&&release){const retained=256+blocks.length*16+patterns.reduce((n,p)=>n+96+p.length*16,0);drop(reserved-retained);}
+    complete=true;return {...trace,spans:[],packed:{patterns,blocks}};
+  }finally{if(!complete&&reserved)release?.(reserved);}
 }
 
 /** Replacement, never addition: a retry or an extended interval cannot count work twice. */

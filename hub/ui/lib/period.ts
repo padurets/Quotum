@@ -6,7 +6,7 @@ import {prepareAsync,preparations,type Preparation} from './prepare';
 import {useLayoutEffect,useRef,useState,useSyncExternalStore} from 'react';
 import {evaluatedRange,periodKey,type PeriodBasis,type PeriodSelection} from '../../server/domain/period';
 import {hasPeriodValue,periodValueAt,type PeriodValues} from '../../server/domain/periodValues';
-import {mergeWorkPrepared,packWorkPrepared,type WorkedSession as RecordedSession,type WorkTrace} from '../../server/domain/periodWork';
+import {mergeWorkPrepared,packWorkPrepared,workPreparationBytes,type WorkedSession as RecordedSession,type WorkTrace} from '../../server/domain/periodWork';
 import type {LiveSession} from './types';
 import type {PeriodReply} from '../../server/domain/periodRead';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
@@ -30,6 +30,7 @@ import {PeriodAccounting} from './periodAccounting';
 import {PeriodActivity} from './periodActivity';
 import type {History} from '../../server/domain/history';
 import {canShift,shifted} from '../../server/domain/periodShift';
+import * as retention from '../../server/domain/periodRetention';
 
 type Reading<T>={value:T|null;basis:PeriodBasis|null;loading:boolean;error:string|null};
 type WorkedSession=Omit<RecordedSession,'currentPresence'>&Pick<LiveSession,'currentPresence'>;
@@ -42,6 +43,10 @@ class BoardPeriod {
   private active=false;
   private readonly preparationOwner={};
   private receiving=Promise.resolve();
+  private retirementAt=Infinity;
+  private retiring=false;
+  private retirementPreparing=false;
+  private workEvidence=0;
   private generation=0;
   private revision=0;
   private proofEpoch=0;
@@ -76,7 +81,7 @@ class BoardPeriod {
   private rowsBySource=new Map<string,WorkedSession[]>();
   private listeners=new Set<()=>void>();
   private sourceListeners=new Map<string,Set<()=>void>>();
-  private workState={...this.work,rows:this.workRows};
+  private workState={...this.work,rows:this.workRows,evidence:this.workEvidence};
   private readonly watch=clock.watch();
   private bytes=0;
   private cacheKey='';
@@ -102,6 +107,7 @@ class BoardPeriod {
       +JSON.stringify([...values.values()]).length*3;
     this.valueCache.delete(periodKey(this.selection));
     this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,this.scopeKeys])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,selection.to)),restore:selection=>{
+      this.workEvidence++;
       this.tapes.clear();for(const [scope,tape] of tapes)this.tapes.set(scope,tape);
       this.work=work;this.index=index;this.activity=activity;this.workSelection=workSelection;this.workRangeKey=workRangeKey;this.cursor=cursor;this.liveEvidence=liveEvidence;this.bytes=bytes;
       for(const id of new Set([...this.values.keys(),...values.keys()]))this.setValue(id,values.get(id)??noValue);
@@ -116,6 +122,8 @@ class BoardPeriod {
       this.transport.restoreEvidence(cursors);this.workNeeded=false;this.valuesNeeded=false;
       this.workProofEpoch=workProofEpoch;
       this.valuesProofEpoch=valuesProofEpoch;
+      // A cached live ledger may have crossed all of its old deadlines while hidden.
+      this.retirementAt=selection.mode==='live'?hubNow():Infinity;
     }});
   }
   get=()=>this.workState;
@@ -172,11 +180,11 @@ class BoardPeriod {
   }
   projectionState(history:History,scope:PeriodScope){const tape=this.tapes.get(scope),range=evaluatedRange(this.selection,this.evaluatedAt);return {ready:!!tape&&tape.queryKey===this.scopeKeys[scope]&&tape.rangeKey===history.range&&this.tapeCovers(tape.tape,range),error:this.projectionErrors[scope]};}
   getSource=(id:string)=>this.rowsBySource.get(id)??noSessions;
-  getWorkEvidence=()=>this.work.value;
+  getWorkEvidence=()=>this.workEvidence;
   getValue=(id:string)=>this.values.get(id)??noValue;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   subscribeWorkOrder=(read:(rows:WorkedSession[])=>SessionOrder|null)=>{this.workOrders.add(read);this.scheduleClock();return()=>{this.workOrders.delete(read);this.scheduleClock();};};
-  refreshWorkClock=()=>{if(this.evaluatedAt!==hubNow())this.tick();else this.scheduleClock();};
+  refreshWorkClock=()=>{if(this.evaluatedAt!==hubNow())this.tick();else{this.retireExpired(hubNow());this.scheduleClock();}};
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   subscribeValue=(id:string,listener:()=>void)=>{let set=this.valueListeners.get(id);if(!set)this.valueListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   private queryKey(query:HistoryQuery){return JSON.stringify([query.meters,query.unit,query.currency]);}
@@ -205,8 +213,9 @@ class BoardPeriod {
     return {board:board.id,generation:this.generation,revision:this.revision,proofEpoch:this.proofEpoch,request:{version:1,selection:this.selection,evaluatedAt:hubNow(),...queries,...(pending&&this.valuesNeeded&&this.selection.mode==='range'&&this.sourceIds.length?{values:this.sourceIds}:{}),...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{})}};
   }
   private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
-  private publishWork() {this.workState={...this.work,rows:this.workRows};for(const listener of this.listeners)listener();}
+  private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence};for(const listener of this.listeners)listener();}
   private retireWork() {
+    this.workEvidence++;this.retirementAt=Infinity;
     this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.workProofEpoch=-1;
     this.tapes.delete('quota');delete this.projectionErrors.quota;this.transport.forgetEvidence('quota');
     this.workRows=[];
@@ -215,6 +224,7 @@ class BoardPeriod {
     this.measureBytes();clock.due(this.watch,null,hubNow());
   }
   private clear() {
+    this.workEvidence++;this.retirementAt=Infinity;
     this.proofEpoch++;this.workProofEpoch=-1;this.valuesProofEpoch=-1;this.dirtyScopes.clear();
     this.retained.clear();this.cacheKey='';
     preparations()?.cancel(this.preparationOwner);this.transport.reset();this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.tapes.clear();delete this.projectionErrors.quota;delete this.projectionErrors.budget;delete this.projectionErrors.funds;this.valueCache.clear();this.liveEvidence=false;this.bytes=0;this.workRows=[];this.publishProjection();
@@ -246,6 +256,7 @@ class BoardPeriod {
     if(identity!==this.identity) {
       const oldBoard=this.identity?JSON.parse(this.identity)[0]:null;
       this.identity=identity;this.generation++;this.revision++;
+      this.workEvidence++;this.retirementAt=Infinity;
       this.dirtyScopes.clear();
       for(const scope of PERIOD_SCOPES)delete this.projectionErrors[scope];
       if(oldBoard!==board.id||event?.type==='hub'&&['mine','lineup'].includes(event.event.type))this.clear();
@@ -322,6 +333,7 @@ class BoardPeriod {
   private receive(reply:PeriodReply,intent:PeriodIntent,reserve?:(bytes:number)=>boolean) {
     // Sibling resource replies share one retained projection. Let each commit before
     // taking the next snapshot, so a later chart cannot cancel values or sessions.
+    if(this.retirementPreparing)preparations()?.cancel(this.preparationOwner);
     const next=this.receiving.then(()=>this.applyReply(reply,intent,reserve));
     this.receiving=next.catch(()=>{});return next;
   }
@@ -348,7 +360,8 @@ class BoardPeriod {
     // Card states are adopted unchanged; only their reading wrappers are new.
     if(reply.values?.state==='complete')try{charge('values',JSON.stringify(reply.values.value).length*3+reply.values.value.length*768);}catch(error){if(error!==limited)throw error;reply.values={state:'error',error:'history_limit'};}
     const priorWork=this.work.value,priorIndex=this.index,priorTapes=new Map(this.tapes);
-    function* build():Preparation<{work:WorkTrace|null;index:PeriodIndex|null;activity:PeriodActivity|null;tapes:typeof priorTapes}> {
+    const retainedFrom=intent.request.selection.mode==='live'?evaluatedRange(intent.request.selection,hubNow()).from:null;
+    function* build():Preparation<{work:WorkTrace|null;index:PeriodIndex|null;activity:PeriodActivity|null;tapes:typeof priorTapes;edge:number}> {
       const incomingTapes=new Map<PeriodScope,PeriodTape>();
       // Compact each decoded column before allocating work or accounting indexes.
       // Progress replaces reservations as scratch buffers become unreachable.
@@ -365,22 +378,30 @@ class BoardPeriod {
             incomingBytes+=quotaTapeBytes(series,true)-before;charge(scope,incomingBytes);yield;
           }
           const replacement=previous?.quota.filter(s=>incoming.quota.some(row=>row.source===s.source&&row.window===s.window)).reduce((n,s)=>n+s.samples.length/5*88,0)??0;
-          charge(scope,tapeBytes(incoming)+replacement);
-          const tape=yield*mergeTapePrepared(previous,incoming);incomingTapes.set(scope,tape);if(part?.state==='complete')part.value.tape=tape;charge(scope,tapeBytes(ownTape(tape,previous)));
+          const mergeBase=tapeBytes(incoming)+replacement;let mergeScratch=0;
+          charge(scope,mergeBase);
+          const merging=(bytes:number)=>{mergeScratch+=bytes;charge(scope,mergeBase+mergeScratch);};
+          let tape=yield*mergeTapePrepared(previous,incoming,merging,bytes=>merging(-bytes));
+          if(retainedFrom!==null){let scratch=0;const before=tapeBytes(ownTape(tape,previous));tape=yield*retention.retainTape(tape,retainedFrom,bytes=>{scratch+=bytes;charge(scope,before+scratch);});}
+          incomingTapes.set(scope,tape);if(part?.state==='complete')part.value.tape=tape;charge(scope,tapeBytes(ownTape(tape,previous)));
         }catch(error){if(error!==limited)throw error;incomingTapes.delete(scope);failScope(scope);}
       }
-      let work=priorWork,index:PeriodIndex|null=null,activity:PeriodActivity|null=null;
+      let work=priorWork,index:PeriodIndex|null=null,activity:PeriodActivity|null=null,retired=false;
       const part=reply.sessions;
       if(part&&part.state!=='error')try{
         charge('work',workBytes(part.value)+(part.state==='delta'?workBytes(priorWork):0));
         work=part.state==='delta'&&priorWork?yield*mergeWorkPrepared(priorWork,part.value):part.value;
+        if(retainedFrom!==null){let scratch=0;const before=workBytes(work),previous=work;work=yield*retention.retainWork(work,retainedFrom,bytes=>{scratch+=bytes;charge('work',before+scratch);});retired=work!==previous;}
         // Current presence belongs to the stream. A delayed analytical response
         // contributes credited work, never another lease or presence deadline.
         work={...work,refs:work.refs.map(({currentPresence:_,...ref})=>ref)};
+        charge('work',workBytes(work,0)+workPreparationBytes(work));
         if(!work.packed&&!work.fixed)work=yield*packWorkPrepared(work);
-        charge('work',workBytes(work));index=yield*PeriodIndex.prepare(work);activity=yield*PeriodActivity.prepare(work,index.curves);charge('work',workBytes(work,index.curves.bytes));
+        charge('work',workBytes(work,0)+workPreparationBytes(work));index=yield*PeriodIndex.prepare(work);activity=yield*PeriodActivity.prepare(work,index.curves);charge('work',workBytes(work,index.curves.bytes));
       }catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};work=priorWork;index=null;activity=null;discard('work');}
-      const workPart=reply.sessions,changedWork=new Set(workPart&&workPart.state!=='error'?[...workPart.value.refs,...(workPart.state==='complete'?priorWork?.refs??[]:[])].flatMap(ref=>ref.source?[ref.source]:[]):[]);
+      const workPart=reply.sessions,changedWork=new Set<string>();let changedBytes=0;
+      try{if(workPart&&workPart.state!=='error')for(const refs of [workPart.value.refs,...(workPart.state==='complete'||retired?[priorWork?.refs??[]]:[])])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}}
+      catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};work=priorWork;index=null;activity=null;changedWork.clear();discard('changedWork');discard('work');}
       const tapes=new Map(priorTapes);
       for(const scope of PERIOD_SCOPES){
         const old=tapes.get(scope),incoming=incomingTapes.get(scope);
@@ -393,7 +414,8 @@ class BoardPeriod {
           else tapes.set(scope,{...old!,accounting});
         }catch(error){if(error!==limited)throw error;incomingTapes.delete(scope);failScope(scope);}
       }
-      return {work,index,activity,tapes};
+      const edge=retainedFrom===null?Infinity:yield*retention.retirementEdge(work,[...tapes.values()].map(entry=>entry.tape),retainedFrom);
+      return {work,index,activity,tapes,edge};
     }
     const valid=()=>intent.generation===this.generation&&intent.revision===this.revision;
     const prepared=await prepareAsync(this.preparationOwner,build(),valid).catch(error=>{release();throw error;});
@@ -412,6 +434,7 @@ class BoardPeriod {
       if(section.state==='error'){this.workNeeded=false;this.work={...this.work,loading:false,error:section.error};this.publishWork();}
       else {
         const value=prepared.work!;
+        this.workEvidence++;
         this.cursor=section.value.cursor;this.workNeeded=false;this.liveEvidence ||= intent.request.selection.mode==='live';
         this.workProofEpoch=proofEpoch;
         this.workSelection=intent.request.selection;this.workRangeKey=this.workSelection.mode==='range'?periodKey(this.workSelection):prefs().range;
@@ -422,7 +445,53 @@ class BoardPeriod {
     this.measureBytes();
     release();
     this.publishProjection([...changed]);
+    this.retirementAt=intent.request.selection.mode==='live'?prepared.edge+intent.request.selection.periodMs:Infinity;
     this.scheduleClock();
+  }
+  private async planRetirement(){
+    if(this.selection.mode!=='live'){this.retirementAt=Infinity;return;}
+    const generation=this.generation,revision=this.revision,from=evaluatedRange(this.selection,hubNow()).from,period=this.selection.periodMs;
+    const edge=await prepareAsync(this.preparationOwner,retention.retirementEdge(this.work.value,[...this.tapes.values()].map(entry=>entry.tape),from),()=>this.active&&generation===this.generation&&revision===this.revision);
+    if(edge!==null)this.retirementAt=edge+period;
+  }
+  private retireExpired(now:number){
+    if(this.retiring||now<this.retirementAt||this.selection.mode!=='live'||pan.get())return;
+    this.retiring=true;
+    const generation=this.generation,revision=this.revision,from=evaluatedRange(this.selection,now).from,period=this.selection.periodMs;
+    const valid=()=>this.active&&generation===this.generation&&revision===this.revision&&!pan.get();
+    const run=async()=>{
+      if(!valid())return;
+      const previousWork=this.work.value,previousIndex=this.index,previousTapes=new Map(this.tapes),staging={role:'visible' as const};
+      const limited=new Error('history_limit'),sizes=new Map<string,number>();
+      const charge=(key:string,bytes:number)=>{sizes.set(key,bytes);if(!historyPool.reserve(staging,[...sizes.values()].reduce((a,b)=>a+b,0)))throw limited;};
+      const build=function*():Preparation<{work:WorkTrace|null;index:PeriodIndex|null;activity:PeriodActivity|null;tapes:typeof previousTapes;edge:number}> {
+        let work=previousWork,index=previousIndex,activity:PeriodActivity|null=null,scratch=0;
+        if(work){work=yield*retention.retainWork(work,from,bytes=>{scratch+=bytes;charge('work',scratch);});if(work!==previousWork){charge('work',workBytes(work,0)+workPreparationBytes(work));index=yield*PeriodIndex.prepare(work);activity=yield*PeriodActivity.prepare(work,index.curves);charge('work',workBytes(work,index.curves.bytes));}else sizes.delete('work');}
+        const changedWork=new Set<string>(),tapes=new Map(previousTapes);let changedBytes=0;
+        if(work!==previousWork)for(const refs of [work?.refs??[],previousWork?.refs??[]])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}
+        for(const [scope,entry] of previousTapes){
+          let scratch=0;const tape=yield*retention.retainTape(entry.tape,from,bytes=>{scratch+=bytes;charge(scope,scratch);});
+          if(tape!==entry.tape||scope==='quota'&&work!==previousWork){
+            const owned={...tape,quota:tape.quota.filter(row=>!entry.tape.quota.includes(row)),money:tape.money.filter(row=>!entry.tape.money.includes(row))},base=tapeBytes(owned);
+            charge(scope,base);const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves,entry.accounting,changedWork,bytes=>charge(scope,base+bytes));tapes.set(scope,{...entry,tape,accounting});
+          }else sizes.delete(scope);
+          yield;
+        }
+        const edge=yield*retention.retirementEdge(work,[...tapes.values()].map(entry=>entry.tape),from);
+        return {work,index,activity,tapes,edge};
+      };
+      try{
+        this.retirementPreparing=true;
+        const result=await prepareAsync(this.preparationOwner,build(),valid);if(!result||!valid())return;
+        this.work={...this.work,value:result.work};this.index=result.index;if(result.activity)this.activity=result.activity;
+        this.tapes.clear();for(const [scope,entry] of result.tapes)this.tapes.set(scope,entry);
+        // Compaction changes storage, not evidence or a chart's drawing revision.
+        this.retirementAt=result.edge+period;
+        this.workState={...this.workState,value:result.work};this.tick();this.measureBytes();
+      }catch(error){if(error!==limited)throw error;historyPool.release(staging);await this.planRetirement();}
+      finally{this.retirementPreparing=false;historyPool.release(staging);}
+    };
+    const next=this.receiving.then(run).finally(()=>{this.retiring=false;this.scheduleClock();});this.receiving=next.catch(()=>{});
   }
   private measureBytes(){
     this.bytes=JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
@@ -444,7 +513,22 @@ class BoardPeriod {
   }
   private tick(fromClock=true) {
     if(!this.active)return;
-    const now=this.evaluatedAt=hubNow();
+    const now=hubNow();
+    if(this.selection.mode==='live'){
+      const range=evaluatedRange(this.selection,now),workGap=!!this.index&&range.from<this.index.trace.anchor;
+      const gaps=PERIOD_SCOPES.filter(scope=>{const entry=this.tapes.get(scope);return entry?.selection.mode==='live'&&range.from<entry.tape.from;});
+      const work=workGap&&!this.workNeeded&&!this.work.loading&&!this.work.error,scopes=gaps.filter(scope=>!this.dirtyScopes.has(scope)&&!this.projectionErrors[scope]);
+      if(work||scopes.length){
+        this.revision++;this.retirementAt=Infinity;preparations()?.cancel(this.preparationOwner);
+        if(work){this.cursor=undefined;this.workNeeded=true;this.work={...this.work,loading:true,error:null};this.publishWork();}
+        for(const scope of scopes){this.dirtyScopes.add(scope);this.transport.forgetEvidence(scope);}this.publishProjection(scopes);
+        this.transport.change();
+      }
+      // A corrected hub clock can widen the window behind discarded evidence.
+      // Keep the previous honest basis until its bounded replacement arrives.
+      if(workGap){clock.due(this.watch,null,now);return;}
+    }
+    this.evaluatedAt=now;
     const projected=this.index&&this.work.basis?this.index.advance(evaluatedRange(this.workSelection,now),now):{rows:this.workRows,changed:false,limited:false};
     if(projected.limited){this.work={...this.work,error:'history_range_invalid'};this.publishWork();clock.due(this.watch,null,now);return;}
     const rows=this.present(projected.rows);
@@ -463,13 +547,15 @@ class BoardPeriod {
     if(this.work.basis)this.work={...this.work,basis:{...this.work.basis,evaluatedAt:now,range:evaluatedRange(this.workSelection,now)}};
     if(changed||this.workState.loading!==this.work.loading||this.workState.error!==this.work.error||this.workSelection.mode==='range'&&!sameJson(this.workState.basis?.range,this.work.basis?.range))this.publishWork();
     if(!fromClock)this.publishProjection(['quota']);
+    this.retireExpired(now);
     this.scheduleClock();
   }
   private scheduleClock(){
     const now=hubNow();
     const orders=this.active&&this.index&&this.workSelection.mode==='live'?[...this.workOrders].flatMap(read=>read(this.workRows)?.worked??[]):[];
     const due=this.workSelection.mode==='live'?this.index?.changesAt(now,this.workSelection.periodMs,orders)??null:null;
-    clock.due(this.watch,due!==null&&Number.isFinite(due)?due:null,now);
+    const next=Math.min(due??Infinity,this.retiring||pan.get()?Infinity:this.retirementAt);
+    clock.due(this.watch,Number.isFinite(next)?next:null,now);
   }
   retryHistory(scope:PeriodScope){
     if(!this.projectionErrors[scope])return;
@@ -492,7 +578,7 @@ const quotaTapeBytes=(series:PeriodTape['quota'][number],wire:boolean)=>JSON.str
 const tapeBytes=(tape:PeriodTape,wire=false)=>JSON.stringify({...tape,quota:tape.quota.map(s=>({...s,samples:[]})),money:tape.money.map(s=>({...s,readings:[],spans:[],...(s.paired?{paired:{readings:[],spans:[]}}:{})}))}).length*2+tape.quota.reduce((n,s)=>n+(wire&&!('columns' in s.samples)?s.samples.length*8:sampleBytes(s.samples,s.samplesEncoding==='delta')),0)+tape.money.reduce((n,s)=>n+[...s.readings,...s.paired?.readings??[]].reduce((bytes,r)=>bytes+256+2*((r.amount?.length??0)+(r.unit?.length??0)+(r.label?.length??0)+(r.scope?.length??0)+(r.limit?.length??0)),0)+(s.spans.length+(s.paired?.spans.length??0))*192,0);
 
 export const boardPeriod=new BoardPeriod();
-export function followPeriod(){const stop=page.listen((event,state)=>boardPeriod.changed(event,state));const choose=()=>boardPeriod.changed();const stops=[stop,onPrefs(choose),onTimeRange(choose)];choose();return()=>stops.forEach(stop=>stop());}
+export function followPeriod(){const stop=page.listen((event,state)=>boardPeriod.changed(event,state));const choose=()=>boardPeriod.changed();const stops=[stop,onPrefs(choose),onTimeRange(choose),pan.onPhase(()=>boardPeriod.refreshWorkClock())];choose();return()=>stops.forEach(stop=>stop());}
 export function usePeriodValues(id:string){return useSyncExternalStore(listener=>boardPeriod.subscribeValue(id,listener),()=>boardPeriod.getValue(id));}
 const roster=(rows:readonly WorkedSession[])=>rows.map(({workedMs:_,...row})=>row);
 const panelRoster=roster;
@@ -501,7 +587,7 @@ export function usePeriodSessions(order:(rows:WorkedSession[])=>SessionOrder|nul
   const [watch]=useState(()=>(rows:WorkedSession[])=>latest.current(rows));
   useLayoutEffect(()=>boardPeriod.subscribeWorkOrder(watch),[watch]);
   useLayoutEffect(()=>boardPeriod.refreshWorkClock());
-  const [read]=useState(()=>selector(boardPeriod,()=>({select:state=>state,equal:(a,b)=>a.value===b.value&&a.loading===b.loading&&a.error===b.error&&sameJson(panelRoster(a.rows),panelRoster(b.rows))&&sameJson(latest.current(a.rows)?.key,latest.current(b.rows)?.key)})));
+  const [read]=useState(()=>selector(boardPeriod,()=>({select:({value:_value,...state})=>state,equal:(a,b)=>a.evidence===b.evidence&&a.loading===b.loading&&a.error===b.error&&sameJson(panelRoster(a.rows),panelRoster(b.rows))&&sameJson(latest.current(a.rows)?.key,latest.current(b.rows)?.key)})));
   return useSyncExternalStore(boardPeriod.subscribe,read);
 }
 export type SessionPeriod=Pick<Reading<WorkTrace>,'basis'|'loading'|'error'>;

@@ -130,8 +130,25 @@ export class Sessions {
 
   /** Only a producer's stable identity can enrich a retained context with current presence. */
   presence(device:string, client:string, source:string|null, producer:string|null, origin:Origin, project:string|null, folder:string|null, now:number) {
+    return this.presenceIn(this.machines,device,client,source,producer,origin,project,folder,now);
+  }
+
+  /** Reports replace these lists, so a retained map keeps one request's presence cut. */
+  presenceSnapshot(reserve:(bytes:number)=>void,include:(user:string,source:string|null)=>boolean):Sessions['presence'] {
+    const machines=new Map<string,Machine>();
+    for(const [id,machine] of this.machines){
+      let sessions:StoredSession[]|undefined;
+      for(const session of machine.sessions)if(include(machine.user,session.source)){
+        const bytes=768+2*(session.project?.length??0)+2*(session.folder?.length??0)+2*session.device.name.length;
+        reserve(bytes+(sessions?0:128));(sessions??=[]).push(session);
+      }
+      if(sessions)machines.set(id,{...machine,sessions});
+    }
+    return (...args)=>this.presenceIn(machines,...args);
+  }
+  private presenceIn(machines:ReadonlyMap<string,Machine>,device:string,client:string,source:string|null,producer:string|null,origin:Origin,project:string|null,folder:string|null,now:number) {
     if(!producer)return undefined;
-    const machine=this.machines.get(device);
+    const machine=machines.get(device);
     if(!machine||now>machine.at+KEEP_MS)return undefined;
     const session=machine.sessions.find(s=>s.clientId===client&&s.source===source&&s.sessionId===producer&&s.origin===origin&&(s.project??'')===(project??'')&&(s.folder??'')===(folder??''));
     return session?{working:session.working&&now<machine.at+CREDIT_MS,through:machine.at+KEEP_MS+1,workingThrough:machine.at+CREDIT_MS,startedAt:session.startedAt}:undefined;

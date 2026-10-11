@@ -1,3 +1,4 @@
+import * as retention from '../../server/domain/periodRetention';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -11,7 +12,7 @@ import {PeriodTransport} from '../lib/periodTransport';
 import {drain,type Preparation} from '../lib/prepare';
 import {evaluatedRange,periodKey} from '../../server/domain/period';
 import {PERIOD_SCOPES,type PeriodRequest} from '../../server/domain/periodRead';
-import {packWorkPrepared,mergeWorkPrepared,type WorkedSession,type WorkTrace} from '../../server/domain/periodWork';
+import {packWorkPrepared,workPreparationBytes,mergeWorkPrepared,type WorkedSession,type WorkTrace} from '../../server/domain/periodWork';
 import {sampleBytes} from '../../server/domain/periodTape';
 import {byActivity,columnsOf,groupsOf,sortedGroups,visibleAgentsSort,type AgentsBy,type AgentsSort} from '../lib/agents';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS} from '../../server/domain/widgets';
@@ -45,10 +46,10 @@ async function harness(trace:WorkTrace){
   const timers=new Map<object,{at:number;run:()=>void}>(),pool=new HistoryPool();
   const clock=new PageClock({now:()=>now,visible:()=>visible,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);}});
   const board={id:'b',meta:{personal:true},lineup:['s','hidden'],view:EMPTY_VIEW,cards:{s:{id:'s'},hidden:{id:'hidden'}}};
-  const context={exports:{} as any,hubNow:clock.hubNow,clock,historyPool:pool,PeriodTransport,
+  const context={exports:{} as any,hubNow:clock.hubNow,clock,retention,historyPool:pool,PeriodTransport,
     fetchPeriod:async(_board:string,request:PeriodRequest)=>{reads++;const basis={run:'r',revision:'1',evaluatedAt:now,evidenceCut:now,range:evaluatedRange(request.selection,now)};return {basis,sessions:{state:'complete',basis,value:trace}};},
     page:{get:()=>({board}),dispatch:()=>{}},pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:unknown,work:Preparation<unknown>)=>drain(work),
-    evaluatedRange,periodKey,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,sampleBytes,periodTextChangesAt,
+    evaluatedRange,periodKey,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,sampleBytes,periodTextChangesAt,
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>null,prefs:()=>({range:'1h'}),periodOf,cellOf:()=>60_000,
     PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible:(_view:unknown,id:string)=>id===AGENTS,noSessions:[],noValue:{}};
   runInNewContext(compile(coordinator.slice(coordinator.indexOf('class BoardPeriod'),coordinator.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod')),context);

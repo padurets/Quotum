@@ -128,13 +128,15 @@ function* replace<T>(before:readonly T[],after:readonly T[],keep:(row:T)=>boolea
 }
 
 export const mergeTape=(previous:PeriodTape|undefined,next:PeriodTape)=>drain(mergeTapePrepared(previous,next));
-export function* mergeTapePrepared(previous:PeriodTape|undefined,next:PeriodTape):Preparation<PeriodTape> {
+export function* mergeTapePrepared(previous:PeriodTape|undefined,next:PeriodTape,reserve:(bytes:number)=>void=()=>{},release:(bytes:number)=>void=()=>{}):Preparation<PeriodTape> {
   if(!previous||next.fixed||previous.fixed||next.replaceFrom<=previous.from&&(next.replaceTo??Infinity)>=previous.cut)return next;
+  reserve(256+(previous.quota.length+next.quota.length+previous.money.length+next.money.length)*128);
   const quota=new Map(previous.quota.map(s=>[s.source+'\n'+s.window,s]));
   for(const series of next.quota){const key=series.source+'\n'+series.window,old=quota.get(key);const samples=yield* replaceSamples(old?.samples??[],series.samples,next.replaceFrom,next.replaceTo??Infinity);const descriptors=yield* replace(old?.descriptors??[],series.descriptors??[],s=>s.at<next.replaceFrom||s.at>=(next.replaceTo??Infinity),s=>s.at);quota.set(key,{...series,samples,...(descriptors.length?{descriptors}:{})});}
   const money=new Map(previous.money.map(s=>[s.source+'\n'+s.meter,s]));
   for(const series of next.money) {
     const key=series.source+'\n'+series.meter,old=money.get(key);
+    reserve([old,series,old?.paired,series.paired].reduce((bytes,part)=>bytes+(part?(part.readings.length+part.spans.length)*128:0),0));
     const readings=yield* replace(old?.readings??[],series.readings,r=>r.at<next.replaceFrom||r.at>=(next.replaceTo??Infinity),r=>r.at);
     const spans=yield* replace(old?.spans??[],series.spans,s=>s.to<next.replaceFrom||s.from>=(next.replaceTo??Infinity),s=>s.from);
     let paired=series.paired;
@@ -144,8 +146,36 @@ export function* mergeTapePrepared(previous:PeriodTape|undefined,next:PeriodTape
       paired={readings,spans};
     }
     const merged:MoneyTape={...series,readings,spans,...(paired?{paired}:{}),rates:undefined,rateBindings:undefined};
-    const keys=new Set([old,series].flatMap(part=>[...Object.keys(part?.rates??{}),...Object.keys(part?.rateBindings?.entries??{})]));
-    for(const key of keys){const path=rateAt(series,key);bindRate(merged,key,path===undefined?rateAt(old!,key)!:path);yield;}
+    const keys=new Set<string>(),anchors=new Set<number>(),superseded=new Set<number>();
+    for(const part of [old,series])if(part)for(const dictionary of [part.rates,part.rateBindings?.entries])for(const key in dictionary){
+      if(!keys.has(key)){reserve(128+key.length*2);keys.add(key);}yield;
+    }
+    const anchor=(at:number)=>{if(!anchors.has(at)){reserve(64);anchors.add(at);}};
+    for(const part of [merged,...(merged.paired?[merged.paired]:[])]){
+      for(const reading of part.readings){anchor(reading.at);yield;}
+      for(const span of part.spans){anchor(span.to);if(span.observedFrom!==undefined)anchor(span.observedFrom);yield;}
+    }
+    for(const [before,after] of [[old,series],[old?.paired,series.paired]])if(before&&after){
+      const tails=new Map<number,number>();
+      for(const span of after.spans){reserve(64);tails.set(span.from,span.to);yield;}
+      for(const span of before.spans){if((tails.get(span.from)??-Infinity)>span.to&&!superseded.has(span.to)){reserve(64);superseded.add(span.to);}yield;}
+      tails.clear();
+    }
+    function* entries(){for(const key of keys){reserve(128+key.length*2);const split=key.lastIndexOf('\n');yield {key,unit:key.slice(0,split),at:Number(key.slice(split+1))};}}
+    let previousUnit:string|undefined,previousPath:string|undefined,previousProofBytes=0;
+    for(const {key,unit,at} of yield*ordered(entries(),(a,b)=>a.unit.localeCompare(b.unit)||a.at-b.at)){
+      const incoming=rateAt(series,key),path=incoming===undefined?rateAt(old!,key)!:incoming;
+      const pathBytes=128+(path??[]).reduce((bytes,leg)=>bytes+256+2*(leg.id.length+leg.source.length+leg.base.length+leg.from.length+leg.to.length),0);
+      reserve(pathBytes*2);const proof=JSON.stringify(path);
+      const redundant=incoming===undefined&&superseded.has(at)&&!anchors.has(at)&&previousUnit===unit&&previousPath===proof;
+      previousUnit=unit;previousPath=proof;release(previousProofBytes);previousProofBytes=pathBytes;
+      if(redundant){release(pathBytes);yield;continue;}
+      // Explicit bindings remain authoritative. Only a superseded span tail
+      // carrying the same complete rate proof can be removed.
+      const bound=256+key.length*2+pathBytes;reserve(bound);
+      const owned=bindRate(merged,key,path);release(bound-owned+pathBytes);yield;
+    }
+    release(previousProofBytes);
     money.set(key,merged);
   }
   return {...next,from:Math.min(previous.from,next.from),quota:[...quota.values()],money:[...money.values()]};

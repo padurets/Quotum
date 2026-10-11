@@ -1,3 +1,4 @@
+import * as retention from '../../server/domain/periodRetention';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {PeriodAccounting} from '../lib/periodAccounting.js';
@@ -6,7 +7,7 @@ import {drain} from '../lib/prepare.js';
 import {PeriodIndex} from '../lib/periodIndex.js';
 import {PeriodTransport,fetchPeriod,type PeriodIntent} from '../lib/periodTransport.js';
 import {HistoryPool} from '../lib/historyPool.js';
-import {packWorkPrepared,mergeWorkPrepared,packWork,type WorkTrace} from '../../server/domain/periodWork.js';
+import {packWorkPrepared,workPreparationBytes,mergeWorkPrepared,packWork,type WorkTrace} from '../../server/domain/periodWork.js';
 import {PeriodActivity} from '../lib/periodActivity.js';
 import type {PeriodReply,PeriodRequest} from '../../server/domain/periodRead.js';
 import {readFileSync} from 'node:fs';
@@ -46,7 +47,7 @@ test('returning from settings resumes the actual period coordinator after prefer
   let reads=0;
   const board={meta:{personal:true},id:'board',lineup:[],view:{hidden:[]}},state={board};
   const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed():void}},
-    hubNow:()=>5_000_000,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    hubNow:()=>5_000_000,retention,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{change(){reads++;}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
     timeRange:()=>({from:1_400_000,to:5_000_000}),prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),cellOf:()=>60_000,
@@ -80,7 +81,7 @@ test('a complete temporal index distinguishes equal totals, changes ranking and 
 test('monetary evidence refreshes only the selected resource family',()=>{
   const board={meta:{personal:true},id:'b',lineup:['wallet','credit','unselected'],view:{hidden:[]},cards:{wallet:{id:'wallet'},credit:{id:'credit'},unselected:{id:'unselected'}}},state={board};
   const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event:unknown):void;dirtyScopes:Set<string>;workNeeded:boolean;valuesNeeded:boolean}},
-    hubNow:()=>5_000_000,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    hubNow:()=>5_000_000,retention,historyPool:{register:()=>{},release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
     PeriodTransport:class{change(){}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
     timeRange:()=>null,prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),cellOf:()=>60_000,subscriptionSelection:()=>undefined,
@@ -246,10 +247,10 @@ test('presence expires at the confirmation deadline even when neither accounting
 test('a sibling chart reply cannot cancel the coordinator preparation of historical card values',async()=>{
   const pending:(()=>void)[]=[],value={id:'s',provider:'codex',windows:[],meters:[],keys:[]};
   const context={exports:{} as {BoardPeriod:new()=>{receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;getValue(id:string):{value:unknown}}},
-    hubNow:()=>5_000_000,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
-    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},preparations:()=>null,
+    hubNow:()=>5_000_000,retention,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:(_owner:unknown,work:Parameters<typeof drain>[0])=>new Promise(resolve=>pending.push(()=>resolve(drain(work)))),
-    evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
     prefs:()=>({range:'1h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
@@ -271,10 +272,10 @@ test('a dense retained month adopts its decoded reservation within the shared me
   const pool=new HistoryPool(),flight={role:'visible' as const};
   pool.register({estimatedBytes:6*1024*1024,evictionCandidates:()=>[]});
   const context={exports:{} as {BoardPeriod:new()=>{receive(reply:PeriodReply,intent:PeriodIntent,reserve:(bytes:number)=>boolean):Promise<void>;estimatedBytes:number}},
-    hubNow:()=>2_700_000_000,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
-    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},preparations:()=>null,
+    hubNow:()=>2_700_000_000,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
-    evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
     prefs:()=>({range:'30d'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
@@ -302,10 +303,10 @@ test('a dense retained month adopts its decoded reservation within the shared me
 
 test('an empty replacement period clears the previous roster and card disclosures',async()=>{
   const context={exports:{} as {BoardPeriod:new()=>{active:boolean;receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;get():{rows:unknown[]};getSource(id:string):unknown[]}},
-    hubNow:()=>5_000_000,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
-    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},preparations:()=>null,
+    hubNow:()=>5_000_000,retention,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
-    evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,empty:()=>({value:null,basis:null,loading:false,error:null}),
     sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),prefs:()=>({range:'1h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
@@ -324,10 +325,10 @@ test('an empty replacement period clears the previous roster and card disclosure
 test('rolling work stays exact while clock ticks leave chart and table revisions asleep',async()=>{
   let now=5_000_000;
   const context={exports:{} as {BoardPeriod:new()=>{active:boolean;receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;tick():void;get():{rows:{workedMs:number}[]};getProjectionRevision(scope:string):number;workedAt(refs:string[],fallback:number,now:number):number}},
-    hubNow:()=>now,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
-    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},preparations:()=>null,
+    hubNow:()=>now,retention,historyPool:{register:()=>{},reserve:()=>true,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
-    evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,periodTextChangesAt,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,periodTextChangesAt,empty:()=>({value:null,basis:null,loading:false,error:null}),
     sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),prefs:()=>({range:'1h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8'),body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
@@ -358,8 +359,8 @@ test('complete live and fixed targets share the LRU and cached return performs n
       ...(body.values?{values:{state:'complete',basis,value:[withValueStates({id:'s',provider:'codex',windows:[],meters:[],keys:[],validFor:{from:0,to:1_400_500}},[{id:'s',provider:'codex',windows:[],meters:[],keys:[],validFor:{from:0,to:1_400_500}},{id:'s',provider:'codex',windows:[],meters:[],keys:[],currencyUnavailable:true,validFor:{from:1_400_500,to:9_000_000}}],()=>{})]}}:{})};
   };
   const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event?:unknown):void;get():{rows:{workedMs:number}[]};getValue(id:string):{value:{currencyUnavailable?:boolean}};estimatedBytes:number}},
-    hubNow:()=>5_000_000,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>state},pan:{get:()=>null},preparations:()=>null,
-    prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,hasPeriodValue,periodValueAt,
+    hubNow:()=>5_000_000,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>state},pan:{get:()=>null},preparations:()=>null,
+    prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,hasPeriodValue,periodValueAt,
     shifted:(fixed:Parameters<typeof shifted>[0],range:{from:number;to:number})=>{assert.ok(pool.estimatedBytes>period.estimatedBytes,'the copy is reserved before allocation');stagedRestores++;return shifted(fixed,range);},
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),timeRange:()=>selected,prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),cellOf:()=>60_000,
     widgetVisible:(_view:unknown,id:string)=>id==='history',subscriptionSelection:()=>null,PERIOD_SCOPES:['quota','budget','funds'],QUOTA_WIDGETS:['history'],BUDGET_WIDGETS:['budget'],SUBSCRIPTION_FUNDS:'funds',ACTIVITY:'activity',AGENTS:'agents',noSessions:[],noValue:{},

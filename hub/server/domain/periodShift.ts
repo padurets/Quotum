@@ -1,5 +1,6 @@
 import type {PeriodRange} from './period.js';
 import {ValueChanges,applyValueChanges,valueLeaf,type ValuePath as Path,type ValueChange as Change} from './valueChanges.js';
+import {drain,type Preparation} from './prepare.js';
 
 /** Between evidence boundaries only exact durations and clipped timestamps move. */
 type ShiftWindow={start?:Fixed;paths:Path[];slopes:[number,number][][];pieces:[number,number,number,Change[]][]};
@@ -15,18 +16,28 @@ export function shiftLimit(range:PeriodRange,cell:number,cut:number,anchors:Iter
 /** The evidence-free interval is established by the reader, never guessed here. */
 export function withShift<T extends Fixed>(base:T,read:(offset:number)=>T,distance:number):T {
   if(distance<2)return base;
-  const steps:PeriodShift['steps']=[],next=read(1),last=read(distance-1);
+  const steps:PeriodShift['steps']=[],next=read(1),last=distance===2?next:read(distance-1);
   const compare=(a:unknown,b:unknown,c:unknown,path:(string|number)[]):boolean=>{
     if(typeof a==='number'&&typeof b==='number'&&typeof c==='number'){
       const step=b-a;
       if(!Number.isSafeInteger(step)||c!==a+(distance-1)*step)return false;
-      if(step)steps.push([path,step]);return true;
+      if(step)steps.push([[...path],step]);return true;
     }
     if(a===null||typeof a!=='object')return a===b&&a===c;
     if(!b||typeof b!=='object'||!c||typeof c!=='object'||Array.isArray(a)!==Array.isArray(b)||Array.isArray(a)!==Array.isArray(c))return false;
-    const keys=Object.keys(a).filter(k=>(a as Record<string,unknown>)[k]!==undefined);
-    if([b,c].some(v=>Object.keys(v).filter(k=>(v as Record<string,unknown>)[k]!==undefined).join('\n')!==keys.join('\n')))return false;
-    return keys.every(key=>compare((a as Record<string,unknown>)[key],(b as Record<string,unknown>)[key],(c as Record<string,unknown>)[key],[...path,Array.isArray(a)?Number(key):key]));
+    const av=a as Record<string,unknown>,bv=b as typeof av,cv=c as typeof av;
+    const keys=Object.keys(av),bk=Object.keys(bv),ck=Object.keys(cv);let bi=0,ci=0;
+    for(const key of keys){
+      if(av[key]===undefined)continue;
+      while(bi<bk.length&&bv[bk[bi]]===undefined)bi++;
+      while(ci<ck.length&&cv[ck[ci]]===undefined)ci++;
+      if(bk[bi++]!==key||ck[ci++]!==key)return false;
+      path.push(Array.isArray(a)?Number(key):key);const matches=compare(av[key],bv[key],cv[key],path);path.pop();
+      if(!matches)return false;
+    }
+    while(bi<bk.length&&bv[bk[bi]]===undefined)bi++;
+    while(ci<ck.length&&cv[ck[ci]]===undefined)ci++;
+    return bi===bk.length&&ci===ck.length;
   };
   return compare(base,next,last,[])?{...base,shift:{until:base.range.to+distance,steps}}:base;
 }
@@ -64,25 +75,30 @@ function advance(value:unknown,paths:Path[],steps:[number,number][],offset:numbe
 
 /** Neighboring endpoint cells provide exact event partitions, including grid changes. */
 export function shiftBoundaries(range:PeriodRange,from:number,to:number,cells:readonly number[],anchors:Iterable<number>,reserve:(bytes:number)=>void=()=>{}):number[] {
+  return drain(prepareShiftBoundaries(range,from,to,cells,anchors,reserve));
+}
+export function* prepareShiftBoundaries(range:PeriodRange,from:number,to:number,cells:readonly number[],anchors:Iterable<number>,reserve:(bytes:number)=>void=()=>{}):Preparation<number[]> {
   reserve(256);
   const result=new Set([from,to]);
   const add=(at:number)=>{if(Number.isSafeInteger(at)&&at>from&&at<to&&!result.has(at)){reserve(64);result.add(at);}};
   for(const edge of [range.from,range.to])for(const cell of cells)for(let at=Math.floor((edge+from)/cell)*cell;at<edge+to;at+=cell){add(at-edge);add(at+1-edge);}
-  for(const at of anchors)for(const edge of [range.from,range.to]){add(at-edge);add(at+1-edge);}
+  for(const at of anchors){for(const edge of [range.from,range.to]){add(at-edge);add(at+1-edge);}yield;}
   return [...result].sort((a,b)=>a-b);
 }
 
 /** Sparse changes preserve full values across boundaries; only proven integer slopes interpolate. */
 export function withShiftWindow<T extends Fixed>(base:T,read:(offset:number)=>T,boundaries:readonly number[],reserve:(bytes:number)=>void):T&{shift:PeriodShift} {
-  const start=read(boundaries[0]);reserve(JSON.stringify(start).length*6+128);
+  return drain(prepareShiftWindow(base,read,boundaries,reserve));
+}
+export function* prepareShiftWindow<T extends Fixed>(base:T,read:(offset:number)=>T,boundaries:readonly number[],reserve:(bytes:number)=>void):Preparation<T&{shift:PeriodShift}> {
+  const start=boundaries[0]===0?base:read(boundaries[0]);reserve(JSON.stringify(start).length*6+128);yield;
   const changes=new ValueChanges(reserve),window:ShiftWindow={paths:changes.paths,slopes:[],pieces:[]},slopes=new Map<string,number>();
   // The first patch starts from the requested summary already carried by the reply.
   // A shifted copy retains that immutable base for all later replays.
   let previous=base,at=base.range.to,steps:[number,number][]=[];
   for(let i=0;i+1<boundaries.length;i++){
     const offset=boundaries[i],distance=boundaries[i+1]-offset,target=i===0?start:offset===0?base:read(offset);
-    const prediction=structuredClone(previous);advance(prediction,window.paths,steps,target.range.to-at);
-    const patch=changes.between(prediction,target);
+    const patch=changes.advanced(previous,target,steps,target.range.to-at);yield;
     const proof=withShift(target,n=>read(offset+n),distance);
     // A one-position piece needs no interpolation. Keeping applicable old slopes
     // predicts the next patch without repeating every moving timestamp and total.
@@ -91,7 +107,7 @@ export function withShiftWindow<T extends Fixed>(base:T,read:(offset:number)=>T,
     if(slope===undefined){reserve(key.length*6+64);slope=window.slopes.length;slopes.set(key,slope);window.slopes.push(next);}
     reserve(JSON.stringify(patch).length*6+128);
     window.pieces.push([target.range.to,proof.shift?.until??target.range.to+1,slope,patch]);
-    previous=target;at=target.range.to;steps=next;
+    previous=target;at=target.range.to;steps=next;yield;
   }
   return {...base,shift:{until:base.range.to,steps:[],window}};
 }

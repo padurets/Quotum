@@ -1,3 +1,4 @@
+import * as retention from '../../server/domain/periodRetention';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -14,7 +15,7 @@ import {ApiError} from '../lib/http';
 import {evaluatedRange,periodKey,type PeriodRange} from '../../server/domain/period';
 import {cellOf,expandHistory,type History} from '../../server/domain/history';
 import {PERIOD_SCOPES,type PeriodScope,type PeriodRequest,type PeriodReply} from '../../server/domain/periodRead';
-import {packWorkPrepared,mergeWorkPrepared,type WorkTrace} from '../../server/domain/periodWork';
+import {packWorkPrepared,workPreparationBytes,mergeWorkPrepared,type WorkTrace} from '../../server/domain/periodWork';
 import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/domain/periodTape';
 import {hasPeriodValue,periodValueAt} from '../../server/domain/periodValues';
 import {canShift,shifted} from '../../server/domain/periodShift';
@@ -47,8 +48,8 @@ function harness(visible:string[]=['quota-history']) {
     if(body.values)reply.values=failValues?{state:'error',error:'unavailable'}:{state:'complete',basis,value:body.values.map(id=>({id,provider:'openrouter',windows:[],meters:[],keys:[]}))};
     return reply;
   };
-  const context={exports:{} as {BoardPeriod:new()=>Coordinator},hubNow:()=>NOW,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>({board})},pan:{get:()=>null},preparations:()=>null,
-    prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
+  const context={exports:{} as {BoardPeriod:new()=>Coordinator},hubNow:()=>NOW,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>({board})},pan:{get:()=>null},preparations:()=>null,
+    prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneySelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(coordinatorCode,context);
   const period=new context.exports.BoardPeriod();
@@ -172,7 +173,7 @@ test('a chart sharing retired period extras immediately reads its current cells 
 function readerFor(period:Coordinator,pool:HistoryPool,scope:'quota'|'budget',family:'budget'|'funds'='budget') {
   const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
   const code=source.slice(source.indexOf('function reader('),source.indexOf('export const quotaHistory'));
-  const context={reader:null as unknown as (scope:'quota'|'budget',family:'budget'|'funds')=>HistoryStore,HistoryStore,boardPeriod:period,historyPool:pool,STORED_BYTES:15*1024*1024,hubNow:()=>NOW,pan:{get:()=>null},expandHistory,setTimeout,clearTimeout};
+  const context={reader:null as unknown as (scope:'quota'|'budget',family:'budget'|'funds')=>HistoryStore,HistoryStore,boardPeriod:period,retention,historyPool:pool,STORED_BYTES:15*1024*1024,hubNow:()=>NOW,pan:{get:()=>null},expandHistory,setTimeout,clearTimeout};
   runInNewContext(ts.transpileModule(code+'\nglobalThis.reader=reader;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
   return context.reader(scope,family);
 }

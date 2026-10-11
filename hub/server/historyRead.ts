@@ -18,13 +18,14 @@ export class ReadError extends Error {
 export function fail(status:number, code:string):never {throw new ReadError(status,code);}
 
 /** Both transports enforce the same tile, authority and currency contract. */
-export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, work?:WorkRead, cells=true):string {
+export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, work?:WorkRead, cells=true, capturedAt?:number):string {
   const {store,directory}=hub;
     const scope = query.scope;
     if(scope!==undefined&&scope!=='quota'&&scope!=='budget')fail(400, 'invalid_request');
-    const now = Date.now();
+    const now = capturedAt??Date.now();
     // Credit quiet machines before deciding whether their tiles can be reused.
-    if(scope!=='budget')hub.ingest.live.sweep(now);
+    // A composite read already swept before capturing its journal frontier.
+    if(scope!=='budget'&&capturedAt===undefined)hub.ingest.live.sweep(now);
     const number = (value: string | undefined) => value && /^\d{1,15}$/.test(value) ? Number(value) : NaN;
     const cell = number(query.cell);
     const from = number(query.from);

@@ -413,7 +413,14 @@ tape cursor; `skip` asks only for cells during progressive panning. Conversely,
 `cells: 'skip'` reads the boundary tape while reusing already cached cells.
 
 The response has a common `basis` and only the requested sections. A basis is
-`{run, revision, evaluatedAt, evidenceCut, range: {from,to}}`. Each section is either
+`{run, revision, evaluatedAt, evidenceCut, range: {from,to}}`. The hub expires quiet
+sessions before capturing the evidence revision. Nested readers use the same captured
+clock; sections and their cursors cannot acknowledge evidence credited by a later sweep.
+Preparation may yield to other requests. The hub rechecks authority and relevant
+evidence before completing it; a conflicting change restarts the whole read once.
+Repeated changes return `503 unavailable`, with no mixed or partially published answer.
+Disconnecting the reader cancels its queued or active preparation.
+Each section is either
 `{state:'complete', basis, value}` or
 `{state:'error', error:'history_limit'|'history_range_invalid'|'unavailable'}`.
 Sessions can additionally return `{state:'delta', basis, value}`. A section error does
@@ -617,6 +624,10 @@ A delta replaces its named interval, making retries idempotent. Cursors are sign
 bound to the board, user, hub run, authority, retention and evidence revision. Currency
 and resource selections also bind a tape cursor. An unprovable frontier returns a
 complete bounded baseline. It never silently returns a partial index.
+Live clients may discard expired work and redundant measurement prefixes while keeping
+the real boundary predecessor and its availability and currency evidence. Such cleanup
+does not change capture or authority cutoffs. A cursor only proves its retained interval;
+widening into a discarded prefix requires a complete bounded baseline.
 
 `POST /api/boards/:board/period/sessions` reads details for at most 100 opaque refs.
 Its body is `{version:1, selection, evaluatedAt, cursor, refs}`, at most 8 KiB. The cursor
