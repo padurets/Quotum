@@ -313,7 +313,15 @@ export class HistoryStore {
     this.schedule();
   }
   subscribe = (listener: () => void) => {this.listeners.add(listener); return () => void this.listeners.delete(listener);};
-  get estimatedBytes() {return [...this.grids.values()].reduce((sum, tiles) => sum + [...tiles.values()].reduce((sum, tile) => sum + tile.bytes, 0), 0);}
+  get estimatedBytes() {
+    let bytes = 0;
+    for (const tiles of this.grids.values()) {
+      let gridBytes = 0;
+      for (const tile of tiles.values()) gridBytes += tile.bytes;
+      bytes += gridBytes;
+    }
+    return bytes;
+  }
 
   private invalidate() {
     this.cancelProjection();

@@ -51,7 +51,12 @@ export class MeterTile {
   private readonly series=new Map<string,Packed>();
   private metadata=new MeterMetadata();
   constructor(private readonly from:number,private readonly cell:number) {}
-  get bytes(){return this.metadata.bytes+[...this.series.values()].reduce((sum,s)=>sum+s.bytes+256,0);}
+  get bytes() {
+    const metadataBytes = this.metadata.bytes;
+    let seriesBytes = 0;
+    for (const series of this.series.values()) seriesBytes = seriesBytes + series.bytes + 256;
+    return metadataBytes + seriesBytes;
+  }
   *clonePrepared():Preparation<MeterTile> {
     const copy=new MeterTile(this.from,this.cell);
     copy.metadata=yield* this.metadata.clonePrepared();
