@@ -3,8 +3,9 @@ import {threadCpuWindow} from './traceCpu.js';
 import {deadline} from './deadline.js';
 import {percentile} from './budget.js';
 import {panning} from './panning.js';
-import type {Evidence} from './evidence.js';
+import {clientIdentity, type Evidence} from './evidence.js';
 import {traceSanitizer, type SafeTrace} from './traceEvents.js';
+import {ScriptBinding} from './scriptBinding.js';
 export type {SafeTrace} from './traceEvents.js';
 
 const ORDER = [false, true, true, false, false, true];
@@ -43,10 +44,22 @@ export async function panningPairs(cdp: Cdp, browser: Browser, evidence: Evidenc
 
 /** Tracing belongs only to a new diagnostic interval in this run's own browser. */
 type TraceEvidence={save(name:string,value:unknown):void;saveTrace?(name:string,value:unknown):void};
-export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceEvidence, run=panning) {
-  let active:Promise<unknown>|undefined,release=()=>{},interval=0;
+export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceEvidence, run=panning, client=clientIdentity()) {
+  if(!browser.owned)throw new Error('browser-wide tracing requires an owned synthetic browser');
+  let active:Promise<unknown>|undefined,release=()=>{},interval=0,familyStart=0,failed=false;
+  const binding=new ScriptBinding(cdp,client,(name,value)=>evidence?.save(name,value));
   const stop=async()=>{if(active){release();const pending=active;active=undefined;await pending;}};
-  const measured={on:cdp.on.bind(cdp),off:cdp.off.bind(cdp),evaluate:cdp.evaluate.bind(cdp),at:cdp.at?.bind(cdp),
+  const measured={on:cdp.on.bind(cdp),off:cdp.off.bind(cdp),at:cdp.at?.bind(cdp),
+    evaluate:async<T>(expression:string,signal?:AbortSignal):Promise<T>=>{
+      const value=await cdp.evaluate<T>(expression,signal);
+      // This original cleanup follows both periods and all extra family checks.
+      if(expression===`document.getElementById('quotum-pan-layout')?.remove()`){
+        await stop();
+        await binding.afterFamily(Array.from({length:interval-familyStart},(_,index)=>familyStart+index+1));
+        familyStart=interval;
+      }
+      return value;
+    },
     send:async<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>=>{
       const rate=(params as {rate?:number}).rate;
       if(method==='Emulation.setCPUThrottlingRate'&&rate===4){
@@ -63,7 +76,11 @@ export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceE
       return cdp.send<T>(method,params,signal);
     }};
   try {return await run(measured,undefined,{timeline:true,save:(name,value)=>evidence?.save('trace-'+name,value)});}
-  finally {await stop();}
+  catch(error){failed=true;throw error;}
+  finally {
+    binding.close();
+    try {await stop();}catch(error){if(!failed)throw error;}
+  }
 }
 
 export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promise<T>, evidence?: TraceEvidence) {
