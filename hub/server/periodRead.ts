@@ -145,7 +145,7 @@ export class PeriodReader {
       });
       if(request.values)response.values=section(()=>{
         const sources=store.sources(board).filter(s=>request.values!.includes(s.id));
-        return selection.mode==='range'?nearbyPeriodValues(store,sources,user,cut,cell,reserve,release):periodValues(store,sources,user,cut,reserve);
+        return selection.mode==='range'?nearbyPeriodValues(store,sources,user,range.to,cell,reserve,release,now):periodValues(store,sources,user,cut,reserve,now);
       });
       if(request.sessions) {
         const covered=selection.mode==='range'?fixedRange:{from:workFrontier.coveredFrom,to:workFrontier.coveredTo};
