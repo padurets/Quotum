@@ -1,9 +1,9 @@
 import type {Cdp} from './cdp.js';
 import {panningProblems, type PanReading} from './panningBudget.js';
-import {panningReload} from './panningReload.js';
+import {panningReload,type ReloadDiagnostic} from './panningReload.js';
 
 /** Native input against the real charts; the temporary layout brings all four into view. */
-export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp,'at'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp,'at'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)),diagnoseReload?:ReloadDiagnostic) {
   let stage='native/setup';
   const progress=(next:string)=>{stage='native/'+next;cdp.at?.(stage);console.log('bench: '+stage);};
   const wait = (ms: number) => cdp.evaluate(`new Promise(resolve => setTimeout(resolve, ${ms}))`);
@@ -19,12 +19,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
   const reports: PanReading[] = [];
   const originalHorizon = await cdp.evaluate<string>(`JSON.parse(localStorage.getItem('quotum.prefs')||'{}').horizon||'auto'`);
   let interception = false;
+  let failed = false;
   await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 1600, deviceScaleFactor: 1, mobile: false});
   try {
     for (const initiator of ['quota', 'budget', 'funds'] as const) {
       // A newly opened board gives each input owner an independently unread edge.
       progress(`${initiator}/reload`);
-      await panningReload(cdp,initiator);
+      await panningReload(cdp,initiator,diagnoseReload);
       progress(`${initiator}/charts-open`);
       await cdp.evaluate(`(async()=>{window.__quotumBench?.pause();const until=Date.now()+15000;while(!['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))){if(Date.now()>until)throw new Error('panning charts did not open');await new Promise(r=>setTimeout(r,20));}})()`);
       const selector = initiator === 'quota' ? '.history' : initiator === 'funds' ? '.subscription-funds' : '.budget-history';
@@ -272,8 +273,9 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
     }
     return {reports, problems: reports.flatMap(panningProblems)};
   } catch(error) {
-    console.error('bench: '+stage+' failed');throw error;
+    failed=true;console.error('bench: '+stage+' failed');throw error;
   } finally {
+    try {
     await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
     if (interception) await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
     await cdp.evaluate(`(() => {window.__quotumPan?.cleanup();document.getElementById('quotum-pan-layout')?.remove();})()`);
@@ -286,5 +288,9 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await cdp.evaluate(`(() => {const p=JSON.parse(localStorage.getItem('quotum.prefs')||'{}');p.horizon=${JSON.stringify(originalHorizon)};localStorage.setItem('quotum.prefs',JSON.stringify(p));})()`);
     }
     await cdp.send('Emulation.clearDeviceMetricsOverride');
+    } catch(error) {
+      if(!failed)throw error;
+      console.error('bench: '+stage+' cleanup failed; retaining original failure');
+    }
   }
 }

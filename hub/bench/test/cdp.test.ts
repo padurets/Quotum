@@ -101,6 +101,43 @@ test('a DevTools connection timeout closes only the tab it just created in an at
   assert.deepEqual(calls,['http://fixture.invalid/json/new?about:blank','http://fixture.invalid/json/close/owned-tab']);
 });
 
+test('canceling a pending diagnostic connection closes its socket and ignores late open or error events',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const sockets:ConnectingSocket[]=[];
+  class ConnectingSocket extends EventTarget {
+    closes=0;
+    constructor(){super();sockets.push(this);}
+    close(){this.closes++;}
+  }
+  t.mock.property(globalThis,'WebSocket',ConnectingSocket as unknown as typeof WebSocket);
+  const controller=new AbortController(),reason=new Error('diagnostic canceled');
+  const failed=assert.rejects(Cdp.connect('ws://fixture.invalid',controller.signal),error=>error===reason);
+  assert.equal(sockets.length,1);controller.abort(reason);await failed;
+  sockets[0].dispatchEvent(new Event('open'));sockets[0].dispatchEvent(new Event('error'));
+  t.mock.timers.tick(30000);assert.equal(sockets[0].closes,1);
+  await assert.rejects(Cdp.connect('ws://unused.invalid',controller.signal),error=>error===reason);
+  assert.equal(sockets.length,1,'an already canceled connection never opens a socket');
+});
+
+test('a settled diagnostic connection removes its abort handler and connection deadline',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const sockets:ConnectingSocket[]=[];
+  class ConnectingSocket extends EventTarget {
+    closes=0;
+    constructor(){super();sockets.push(this);}
+    close(){this.closes++;}
+  }
+  t.mock.property(globalThis,'WebSocket',ConnectingSocket as unknown as typeof WebSocket);
+  const controller=new AbortController(),opening=Cdp.connect('ws://fixture.invalid',controller.signal);
+  sockets[0].dispatchEvent(new Event('open'));const cdp=await opening;
+  controller.abort();sockets[0].dispatchEvent(new Event('error'));t.mock.timers.tick(30000);
+  assert.equal(sockets[0].closes,0,'after opening, its owner controls the CDP lifetime');
+  cdp.close();assert.equal(sockets[0].closes,1);
+  const failedController=new AbortController(),failed=assert.rejects(Cdp.connect('ws://fixture.invalid',failedController.signal),/cannot reach the browser/);
+  sockets[1].dispatchEvent(new Event('error'));await failed;
+  failedController.abort();t.mock.timers.tick(30000);assert.equal(sockets[1].closes,1);
+});
+
 test('history bytes are counted by path after reads finish, separately from other traffic', () => {
   const cdp = browser();
   const requests = new Requests(cdp as unknown as Cdp);

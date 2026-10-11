@@ -25,6 +25,7 @@ import {seedPanningBudgets,panningSet} from './fixture.js';
 import {profilePanning} from './panningProfile.js';
 import {historyTraffic} from './historyTraffic.js';
 import {diagnoseReversal} from './historyTrafficBrowser.js';
+import {observeReversal} from './reversalDiagnostic.js';
 import {creditChartAnchors,creditSnapshot} from './credits.js';
 
 /**
@@ -241,7 +242,11 @@ async function main() {
     // DOM for the finished measurement phase would add unrelated work to every frame.
     await cdp.evaluate('__quotumBench.pause()');
     say('checking native continuous wheel and Shift-drag from quota, budget and subscription funds at 24h and 30d, CPU ×4');
-    const panned = await panning(cdp);
+    const panningBrowser=browser;
+    const panned = await panning(cdp,undefined,async(label,signal)=>{
+      const observer=await observeReversal(cdp,panningBrowser,false,signal);
+      try{await observer.diagnose(label);}finally{await observer.close();}
+    });
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95)),pushesDuring:report.pushesDuring,pushesAfter:report.pushesAfter,forbiddenMutations:report.forbiddenMutations})), problems: panned.problems})}`);
     // Capture any movement failure before the later phases change the selection.
