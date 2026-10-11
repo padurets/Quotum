@@ -22,6 +22,7 @@ import {
   accessChangesAt,
   ACCESS_WARNING_MS,
   type BudgetLimit,
+  type BudgetView,
 } from '../lib/money';
 import {stamp, day, countdown, duration, countdownChangesAt, earliest} from '../lib/format';
 import {useClock} from '../lib/clock';
@@ -327,7 +328,7 @@ export function MoneyCard({
 }) {
   const context = useCurrencyContext(source.id);
   const {keys, meters, error} = useShownKeys(source, view, board);
-  const {remaining, limits} = budgetView(source, keys, meters, context),
+  const {remaining, limits, spendLimit} = budgetView(source, keys, meters, context),
     groups = remaining.values;
   const credit=source.provider==='codex';
   const native=source.meters?.find(m=>m.id==='balance:credits'&&!m.conversion);
@@ -462,6 +463,7 @@ export function MoneyCard({
           </CreditBalanceValue>
         </div>
       </div>
+      {spendLimit&&<SpendLimitValue limit={spendLimit} context={context}/>}
       <div className="limits money-limits">
         {limits.map((limit) => (
           <BudgetKeyMetrics key={limit.scope.id} limit={limit} context={context} compact={compact} />
@@ -470,6 +472,23 @@ export function MoneyCard({
       <ErrorLine error={error} />
     </div>
   );
+}
+/** A configured control has no measured remaining funds or percentage denominator. */
+function SpendLimitValue({limit,context}:{limit:NonNullable<BudgetView['spendLimit']>;context:CurrencyContext}) {
+  const now=useClock(now=>capChangesAt(limit.native,now)),stale=capStale(limit.native,now);
+  const enforcement=stale?'unknown':limit.read.value!.enforcement;
+  const label=t('money.monthlyLimit'),shown=limit.meter;
+  return <div className="money-balance money-spend-limit">
+    <span>{label}</span>
+    <Popover label={label} triggerClass="money-balance-trigger" up trigger={<span className={`limit-value${stale?' is-stale':''}`}>{shown?money(shown.amount,shown.unit,false,context):'—'}</span>}>
+      <div data-time="spend-limit">
+        <p>{label}: {money(limit.native.amount,limit.native.unit,true,context)}</p>
+        <p>{t(enforcement==='enforcing'?'money.enforcing':enforcement==='inactive'?'money.inactive':'money.enforcementUnknown')}</p>
+        {stale&&<p>{t('money.lastKnown')}</p>}
+        <p>{stamp(limit.native.at)}</p>
+      </div>
+    </Popover>
+  </div>;
 }
 /** Subscription funds share the budget value and disclosure, in the existing footer. */
 function FundsMark({source,groups,context,native,rateSources,quoteDate,displayUnavailable}:{source:Card;groups:ReturnType<typeof budgetView>['remaining']['values'];context:CurrencyContext;native?:Meter;rateSources:string;quoteDate:string;displayUnavailable:boolean}) {

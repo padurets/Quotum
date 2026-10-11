@@ -1,7 +1,7 @@
 import type {DatabaseSync} from 'node:sqlite';
 import {balanceDescriptor,monetaryOf} from '../domain/providers.js';
 import {amount} from '../domain/amount.js';
-import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading, type QuotaObservation, QUOTA_IDS} from '../domain/meters.js';
+import {balanceStatusOf,calendarSpending,spending,utcPeriods, sameCounterPeriod, sameMeter, validateMeter, type Meter, type MeterMeasurement, type MeterSpan, type Reading, type QuotaObservation, QUOTA_IDS} from '../domain/meters.js';
 import type {SourceState} from '../domain/quota.js';
 import {MeterContexts} from './meterContexts.js';
 import {meterCells, type MeterGroup, type MeterSelection, type MeterSeriesCells} from '../domain/meterHistory.js';
@@ -18,11 +18,12 @@ export class MeterStore {
   constructor(private readonly db: DatabaseSync,private readonly currencies:CurrencyStore) {this.contexts=new MeterContexts(db);this.contexts.seed();}
 
   record(source: string, previous: SourceState, measurement: MeterMeasurement): {state: SourceState; since: number|null} {
+    const monthlyLimit=measurement.monthlyLimit?{...measurement.monthlyLimit,value:measurement.monthlyLimit.status==='ok'?measurement.monthlyLimit.value:previous.monthlyLimit?.value??null,valueAt:measurement.monthlyLimit.status==='ok'?measurement.monthlyLimit.observedAt:previous.monthlyLimit?.valueAt??null,staleAfterMs:measurement.staleAfterMs}:previous.monthlyLimit;
     const current = new Map((previous.meters ?? []).map(m => [m.id, {...m, stale: true}]));
     const ids = new Set<string>();
     const keyTimes = new Map(measurement.keys.map(key => [key.id, key.at]));
     let since = Infinity;
-    if(measurement.balanceStatus || measurement.creditBalance)for(const old of previous.meters??[])if(balanceDescriptor(previous.provider,old.id)&&!measurement.meters.some(m=>m.id===old.id)) {
+    for(const old of previous.meters??[])if(((measurement.balanceStatus||measurement.creditBalance)&&balanceDescriptor(previous.provider,old.id)||old.kind==='counter'&&old.resetAt!==null)&&!measurement.meters.some(m=>m.id===old.id)) {
       const result=this.db.prepare('UPDATE meter_spans SET interrupted_at=? WHERE source_id=? AND meter_id=? AND interrupted_at IS NULL AND from_at=(SELECT max(from_at) FROM meter_spans WHERE source_id=? AND meter_id=?)').run(measurement.observedAt,source,old.id,source,old.id);
       if(result.changes){since=Math.min(since,measurement.observedAt);}
     }
@@ -41,7 +42,7 @@ export class MeterStore {
           .run(source, meter.id, meter.at, old?.at ?? last?.to_at ?? null, meter.kind, meter.unit, amount(meter.amount), meter.limit === null ? null : amount(meter.limit), meter.resetAt, meter.minutes, meter.scope, meter.label, meter.staleAfterMs, meter.scale ?? 6);
       }
       if (admission) this.db.prepare('UPDATE shares SET budget_anchor_at=? WHERE source_id=? AND budget_anchor_at IS NULL AND budget_since<=?').run(meter.at, source, meter.at);
-      if (last && last.interrupted_at===null && last.hold_until===null && old && meter.at - last.to_at <= last.stale_after_ms && old.kind === meter.kind && old.unit === meter.unit) {
+      if (last && last.interrupted_at===null && last.hold_until===null && old && meter.at - last.to_at <= last.stale_after_ms && old.kind === meter.kind && old.unit === meter.unit && sameCounterPeriod(old,meter)) {
         this.db.prepare('UPDATE meter_spans SET to_at=?,stale_after_ms=? WHERE source_id=? AND meter_id=? AND from_at=?').run(meter.at, meter.staleAfterMs, source, meter.id, last.from_at);
       } else this.db.prepare('INSERT INTO meter_spans (source_id,meter_id,from_at,to_at,stale_after_ms) VALUES (?,?,?,?,?)').run(source, meter.id, meter.at, meter.at, meter.staleAfterMs);
       since = Math.min(since, last?.interrupted_at==null?old?.at??meter.at:meter.at);
@@ -82,6 +83,7 @@ export class MeterStore {
       error: previous.provider === 'codex' ? previous.error : accountSuccess||balanceStatus ? null : previous.error,
       ...(measurement.creditBalance ? {creditBalance:measurement.creditBalance} : {}),
       ...(balanceStatus?{balanceStatus}:{}),
+      ...(monthlyLimit?{monthlyLimit}:{}),
       meters: [...current.values()], keys: [...keys.values()].sort((a,b) => (a.name ?? '').localeCompare(b.name ?? '') || a.id.localeCompare(b.id)),
       ...(measurement.quota || previous.provider === 'codex' ? {} : {inventory: {complete: measurement.inventoryComplete, observed: observed.size, missing: [...keys.values()].filter(k => k.presence === 'missing').length, error: measurement.inventoryError}}),
     };

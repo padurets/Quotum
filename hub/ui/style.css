@@ -943,6 +943,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .money-balance .picker { margin-left: 0; }
 .money-balance-values { display: grid; gap: 6px; min-width: 0; max-width: 100%; margin-left: auto; text-align: right; }
 .money-balance .limit-value { max-width: 100%; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.money-spend-limit .limit-value { font-size: 1rem; }
 .money-limits { min-width: 0; }
 .money-limits:not(:empty) { border-top: 1px solid var(--hair); padding-top: 16px; margin-top: 4px; }
 .money-partial { margin-left: 4px; color: var(--text-3); }

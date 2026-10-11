@@ -5,10 +5,12 @@ import {deepSeek} from './deepseek.js';
 import {zai} from './zai.js';
 import type {QuotaObservation} from '../domain/meters.js';
 import {openRouter} from './openrouter.js';
+import {openAIPlatform} from './openai.js';
+import type {SecretCode} from '../secrets/crypto.js';
 
 export type IdentityOrigin = 'supplier' | 'declared';
 export type ExpiryKind = 'dated' | 'none' | 'unknown';
-type ConnectorResult = {abilities: CredentialAbility[]; expiresAt: number | null; expiryKind?: ExpiryKind; measurement?: MeterMeasurement; retryAfterMs?: number; quotaObservation?: QuotaObservation};
+type ConnectorResult = {abilities: CredentialAbility[]; expiresAt: number | null; expiryKind?: ExpiryKind; measurement?: MeterMeasurement; retryAfterMs?: number; quotaObservation?: QuotaObservation;attempt?:{outcome:'ok'|'degraded'|'transient'|'access_lost';safeCode:SecretCode|null;retryNotBefore:number|null}};
 export type ConnectorIdentity = ConnectorResult & ({identityOrigin?: 'supplier'; account: string} | {identityOrigin: 'declared'; account?: never});
 
 export type ConnectorAnswer = ConnectorIdentity;
@@ -26,4 +28,4 @@ export type Connector<Answer extends ConnectorAnswer=ConnectorAnswer> = {
 };
 
 /** Production destinations are code-owned. Tests and demos inject their own adapters. */
-export const connectors: ReadonlyMap<string, Connector> = new Map<string,Connector>([['openrouter',openRouter()],['deepseek',deepSeek()],['zai',zai()]]);
+export const connectors: ReadonlyMap<string, Connector> = new Map<string,Connector>([['openrouter',openRouter()],['deepseek',deepSeek()],['zai',zai()],['openai_platform',openAIPlatform()]]);

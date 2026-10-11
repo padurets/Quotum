@@ -70,7 +70,7 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'bud
 export async function moneyView(cdp: Cdp, source: string, cappedSource: string, cap: string) {
   await selectMoney(cdp, [[source, 'balance'], [cappedSource, cap]]);
   await cdp.evaluate(`document.querySelector('.budget-history .panel-head button').click()`);
-  for (const label of ['Spending', 'Balance', 'Spending']) {
+  for (const label of ['Spending', 'Value', 'Spending']) {
     await cdp.evaluate(`(async () => {
       const button = Array.from(document.querySelectorAll('.popover .segmented button')).find(b => b.textContent === ${JSON.stringify(label)});
       if (!button) throw new Error('no money view control');

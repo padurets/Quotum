@@ -425,7 +425,7 @@ export class Store {
       const at = measurement.observedAt, ttl = measurement.staleAfterMs;
       let state = previous, quotaSince: number | null = null, budgetSince: number | null = null;
       if ('meters' in measurement) {
-        if (at <= Math.max(previous.successAt ?? -Infinity, previous.balanceStatus?.at ?? -Infinity)) return result;
+        if (at <= Math.max(previous.successAt ?? -Infinity, previous.balanceStatus?.at ?? -Infinity,previous.monthlyLimit?.observedAt ?? -Infinity)) return result;
         const recorded = this.meters.record(id, previous, measurement);
         state = recorded.state;
         result.accepted = true;

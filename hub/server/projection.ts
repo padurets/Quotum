@@ -72,7 +72,7 @@ const DAY = 86_400_000;
 /** Credential failures are private even to other members of a source's shared board. */
 export function publicSourceState(state: SourceState, financial=true): SourceState {
   const error = state.error?.startsWith('secret_key_') || state.error?.startsWith('credential_') ? 'unmeasured' : state.error;
-  return {id: state.id, provider: state.provider, plan: state.plan, successAt: state.successAt, error, windows: state.windows, staleAfterMs: state.staleAfterMs, resets: state.resets,...(state.resources?{resources:state.resources}:{}),...(financial&&state.creditBalance?{creditBalance:state.creditBalance}:{}),...(state.quota?{quota:state.quota}:{}),...(financial&&state.balanceStatus?{balanceStatus:{isAvailable:state.balanceStatus.isAvailable,at:state.balanceStatus.at,staleAfterMs:state.balanceStatus.staleAfterMs,partial:state.balanceStatus.partial,issues:state.balanceStatus.issues}}:{}),...(state.meters&&(financial||!monetaryOf(state.provider))?{meters:state.meters,keys:state.keys,inventory:state.inventory}:{})};
+  return {id: state.id, provider: state.provider, plan: state.plan, successAt: state.successAt, error, windows: state.windows, staleAfterMs: state.staleAfterMs, resets: state.resets,...(state.resources?{resources:state.resources}:{}),...(financial&&state.creditBalance?{creditBalance:state.creditBalance}:{}),...(state.quota?{quota:state.quota}:{}),...(financial&&state.monthlyLimit?{monthlyLimit:{...state.monthlyLimit,error:state.monthlyLimit.error?'unavailable':null}}:{}),...(financial&&state.balanceStatus?{balanceStatus:{isAvailable:state.balanceStatus.isAvailable,at:state.balanceStatus.at,staleAfterMs:state.balanceStatus.staleAfterMs,partial:state.balanceStatus.partial,issues:state.balanceStatus.issues}}:{}),...(state.meters&&(financial||!monetaryOf(state.provider))?{meters:state.meters,keys:state.keys,inventory:state.inventory}:{})};
 }
 
 export class Projection {
@@ -115,7 +115,7 @@ export class Projection {
     if(card.meters) {
       const keys=card.keys??[];if(!card.quota)card.keysCount=keys.length;card.keys=keys.slice(0,5).map(k=>({...k,periods:{day:utcPeriods(k.at).day===utcPeriods(now).day?k.periods.day:null,week:utcPeriods(k.at).week===utcPeriods(now).week?k.periods.week:null,month:utcPeriods(k.at).month===utcPeriods(now).month?k.periods.month:null}}));
       const preview=new Set(card.keys.map(k=>k.id));
-      card.meters=card.meters.filter(m=>!m.id.startsWith('key:')||preview.has(m.id.split(':')[1])).map(m=>({...m,stale:m.stale||now>m.at+m.staleAfterMs||m.kind==='cap'&&m.resetAt!==null&&m.resetAt<=now}));
+      card.meters=card.meters.filter(m=>!m.id.startsWith('key:')||preview.has(m.id.split(':')[1])).map(m=>({...m,stale:m.stale||now>m.at+m.staleAfterMs||(m.kind==='cap'||m.kind==='counter')&&m.resetAt!==null&&m.resetAt<=now}));
       const credits=card.meters.find(m=>m.id==='credits'),usage=card.meters.find(m=>m.id==='usage');
       if(credits&&usage&&credits.unit===usage.unit)card.meters.push({...usage,id:'balance',kind:'balance',amount:(BigInt(credits.amount)-BigInt(usage.amount)).toString(),stale:credits.stale||usage.stale});
       const originals=card.meters.filter(m=>m.kind==='balance'&&m.unit!==DEFAULT_CURRENCY&&m.unit!=='credits:codex'&&balanceDescriptor(card.provider,m.id));
@@ -192,6 +192,8 @@ export class Projection {
     const {store}=this.hub;
     const inputs=Object.fromEntries(lineup.map(source=>{
       const meters=source.budget?.enabled===false?[]:store.state(source.id).meters??[],points=meters.map(m=>({unit:m.unit,at:m.at,anchor:null as string|null}));
+      const limit=source.budget?.enabled===false?undefined:store.state(source.id).monthlyLimit;
+      if(limit?.value&&limit.valueAt!==null)points.push({unit:limit.value.unit,at:limit.valueAt,anchor:null});
       for(const native of meters){const value=store.currencies.project(source.id,native,DEFAULT_CURRENCY,now);if(value?.conversion)points.push({unit:value.conversion.original.unit,at:value.conversion.original.at,anchor:value.conversion.rate.id});}
       return [source.id,points];
     }));

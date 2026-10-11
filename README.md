@@ -9,7 +9,7 @@
 
 Quotum shows how much of your coding-agent subscriptions is left — Claude Code, Codex
 and Antigravity — on every machine you work on, in one place: for you alone or for a
-whole team. It also shows OpenRouter balances and API-key caps, DeepSeek balances, and personal z.ai subscription quotas. You host it yourself;
+whole team. It also shows OpenRouter balances and API-key caps, DeepSeek balances, personal z.ai subscription quotas, and OpenAI Platform organization costs. You host it yourself;
 the agent never reads provider tokens, and the hub encrypts the dedicated provider key you
 explicitly connect.
 
@@ -453,6 +453,39 @@ Every new connection creates a separate source local to its owner. Replacing a k
 requires confirmation that it belongs to the same account and preserves history;
 the quota API cannot verify that declaration. For another account, connect separately.
 Credential details remain private on shared boards.
+
+## Connecting OpenAI Platform
+
+Open **My connections → Connect → OpenAI Platform** and supply a dedicated
+[organization Admin key](https://platform.openai.com/settings/organization/admin-keys).
+A project key does not grant organization cost access. Quotum reads only the documented
+Costs and Spend Limit GET methods. The server operator can decrypt stored access;
+local desktop mode uses the app’s existing key protection. The selected methods do not
+report the key’s expiry, so saving it requires confirmation of an unknown deadline.
+
+The card and compact panel use the shared Available balance presentation. These
+methods do not report account funds or credit expiry, so that balance stays unavailable;
+reported costs and monthly spending limits do not substitute for it. The optional
+monthly threshold and enforcement state remain separate source metadata. An
+inaccessible limit, including a Spend Limit 404, stays unknown while valid costs survive.
+
+Analytics use Quotum’s own samples of the current reported monthly cost. Each poll
+reads the current month’s Costs buckets and aggregates them into one observation;
+no supplier daily history is imported. **Value** shows that monthly amount, and
+**Spending** uses the existing changes-between-samples rules. The first observation
+is a baseline, rereading it adds no spending, and a new UTC month starts a new baseline.
+Downward corrections do not become top-ups or refunds. Positive changes after a
+correction use the corrected baseline. Signed net adjustments are retained. Empty,
+invalid or incomplete replies preserve the last valid value as unavailable, never zero.
+The values reflect what OpenAI has reported by the poll, including later corrections;
+they are not a real-time billing balance or a final invoice. The configured threshold
+is shown separately, with its enforcement status in the existing disclosure.
+
+The fixed response organization proof binds the source independently of its key.
+Replacement for the same verified organization preserves history; another organization
+requires a separate connection. Each holder must independently prove access. Saved keys
+and raw organization identifiers are private. Sharing and holder-only refresh work as
+for other hub-measured sources; costs do not enter quota forecasts or notifications.
 
 ## Updating
 

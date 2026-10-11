@@ -11,9 +11,11 @@ export type MoneyPrefs={unit:string|null;view:'balance'|'spending';selected:Reco
 export const DEFAULT_MONEY:MoneyPrefs={unit:DEFAULT_CURRENCY,view:'balance',selected:{}};
 export function readMoney(value:unknown):MoneyPrefs {
   if(!value||typeof value!=='object')return DEFAULT_MONEY;
-  const raw=value as Partial<MoneyPrefs>,selected:MoneyPrefs['selected']={};
-  if(raw.selected&&typeof raw.selected==='object')for(const [unit,ids] of Object.entries(raw.selected)){
-    try{if(!unit.startsWith('credits:'))selected[unit]=selectionOf(ids,unit).ids;}catch{/* Invalid saved selections grant no capabilities. */}
+  const raw=value as Partial<MoneyPrefs>&{modes?:Partial<Record<MoneyPrefs['view'],MoneyPrefs['selected']>>},selected:MoneyPrefs['selected']={};
+  const saved=raw.modes?.[raw.view==='spending'?'spending':'balance']??raw.selected;
+  if(saved&&typeof saved==='object')for(const [unit,ids] of Object.entries(saved)){
+    try{if(!unit.startsWith('credits:'))selected[unit]=selectionOf(ids,unit).ids.flatMap(([source,meter]):[string,string][]=>source.startsWith('openai_platform:')
+      ?meter==='monthly'?[]:[[source,meter==='costs'?'usage':meter]]:[[source,meter]]);}catch{/* Invalid saved selections grant no capabilities. */}
   }
   return {unit:isUnit(raw.unit)&&!raw.unit.startsWith('credits:')?raw.unit==='CNY'?DEFAULT_CURRENCY:raw.unit:DEFAULT_CURRENCY,view:raw.view==='spending'?'spending':'balance',selected,...(Number.isSafeInteger(raw.removed)&&raw.removed!>0&&raw.removed!<=32?{removed:raw.removed}:{})};
 }
@@ -23,7 +25,9 @@ export function moneySelection(cards:readonly Card[],hidden:readonly string[],se
   const explicit=settings.selected[unit];
   const ids=explicit??shown.flatMap(card=>{
     const balance=unit===DEFAULT_CURRENCY?(referenceBalance(card,context.target.id!==DEFAULT_CURRENCY||card.provider==='codex')?.total):card.meters?.find(m=>m.kind==='balance'&&m.unit===unit&&balanceDescriptor(card.provider,m.id)?.role==='total');
-    return balance?[[card.id,balance.id] as [string,string]]:[];
+    if(balance)return [[card.id,balance.id] as [string,string]];
+    const usage=card.meters?.find(m=>m.kind==='counter'&&m.id==='usage'&&(unit===DEFAULT_CURRENCY||m.unit===unit));
+    return usage?[[card.id,usage.id] as [string,string]]:[];
   });
   const admitted=ids.filter(([source,meter])=>visible.has(source)&&budgetMeter(providerOf(shown.find(card=>card.id===source)?.provider??''),meter));
   return {selection:{...selectionOf(admitted.slice(0,MAX_METERS),unit),...(shown.some(c=>c.provider==='codex')?{resourceRevision:JSON.stringify(shown.filter(c=>c.provider==='codex').map(c=>[c.id,c.budget]))}:{}),...(unit===DEFAULT_CURRENCY&&(context.target.id!==DEFAULT_CURRENCY||shown.some(c=>c.provider==='codex'))?{displayCurrency:context.target.id,...(context.revision?{displayRevision:context.revision}:{})}:{})},omitted:Math.max(0,admitted.length-MAX_METERS),removed:ids.length-admitted.length};

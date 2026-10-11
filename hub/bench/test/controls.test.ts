@@ -19,7 +19,7 @@ function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
     getBBox: () => ({y: broken === 'scale' && changedAt !== null ? -1 : 10, height: 0}),
     ownerSVGElement: {viewBox: {baseVal: {height: 220}}},
   };
-  const buttons = ['Spending', 'Balance'].map(textContent => ({textContent, click() {
+  const buttons = ['Spending', 'Value'].map(textContent => ({textContent, click() {
     assert.ok(frame >= 11, 'controls wait for populated paths, committed data and stable layout');
     if (changedAt !== null) assert.ok(ready(), 'each switch must finish its numeric preparation');
     selected.push({label: textContent, frame}); changedAt = frame;
@@ -62,7 +62,7 @@ test('monetary measurements wait for the other reader to finish after selection 
 test('money controls start from a complete drawing and await each prepared view', async () => {
   const page = moneyPage();
   await moneyView(page.cdp, 'wallet', 'capped', 'zero');
-  assert.deepEqual(page.selected.map(change => change.label), ['Spending', 'Balance', 'Spending']);
+  assert.deepEqual(page.selected.map(change => change.label), ['Spending', 'Value', 'Spending']);
   for (let i = 1; i < page.selected.length; i++) assert.ok(page.selected[i].frame - page.selected[i - 1].frame >= 4);
 });
 

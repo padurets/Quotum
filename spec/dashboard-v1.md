@@ -1154,6 +1154,45 @@ Chart settings show current and selected archived keys through the same pages of
 most ten keys. Selected current keys on other pages are not duplicated. An open page
 reloads after a successful source measurement.
 
+
+## Current OpenAI Platform observations
+
+`openai_platform` is hub-measured, separate from the Codex subscription. Its monetary
+capabilities are `meterKinds: ["counter"]`, spending `counter`, top-ups `unavailable`,
+and no balance descriptors. The current reported monthly Costs sum is an ordinary
+`usage` meter in USD: `kind: "counter"`, `scope: "monthly"`, `limit: null`, with the
+UTC month’s exclusive end as `resetAt`. Period counters may retain signed net amounts.
+A changed deadline starts a new baseline and breaks continuity; the expired value
+cannot appear as the new month’s value. Original supplier buckets are transient input,
+not history rows. Histories use the existing `meterSeries`, observations, accounting
+intervals, currency provenance and retention contracts. The first sample is a baseline;
+unchanged polls are heartbeats. Existing positive counter movements calculate spending,
+including after downward corrections; no refund or top-up is inferred.
+
+The card can also carry `monthlyLimit`: `{status, observedAt, error, value, valueAt,
+staleAfterMs}`. Value is `{unit, amount, enforcement}`; amounts are exact whole
+millionths, integer cents multiplied by 10000, and enforcement is `enforcing`, `inactive`
+or `unknown`. An unavailable read retains the last threshold and its original
+`valueAt`, with unavailable status. Public errors are neutral safe component states;
+credential failures stay private. A 404 does not prove no configured threshold.
+
+Cards and compact keep the shared Available balance as unknown; Costs and thresholds
+never replace account funds. A known configured threshold is separate, without an
+inferred allowance or percentage scale, and uses the shared display currency. Its
+original value, observation time and enforcement status are in the existing disclosure.
+Analytics select the ordinary usage meter through the shared settings: Value shows
+the monthly sum and Spending shows our measured changes. Failed/invalid/partial
+sampling retains the prior value as unavailable, not zero. Returned amounts may be
+corrected or delayed by the supplier; they are neither final invoices nor wallet funds.
+
+OpenAI access uses the shared `expiryKind: "unknown"` credential contract, with
+`allowUnknownExpiry` and `credential_expiry_confirmation` before saving. Authentication
+failure without expiry proof is `credential_access_invalid` (revoked or expired).
+Keys and raw organization headers never enter board state, events or history. Hub
+refresh may finish as `updated_partially` when an optional component is unavailable;
+transient attempts fail and preserve the retry deadline across refresh, rotation and
+restart while a complete current sample can remain visible.
+
 ## Mixed Codex subscription and credit balance
 
 Codex keeps one source/card with independent quota, reset and financial observations.

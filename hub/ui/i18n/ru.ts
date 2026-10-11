@@ -1046,4 +1046,18 @@ export const ru = {
   "error.connector_quota_invalid": "Поставщик передал некорректные данные лимитов.",
   "error.connector_quota_partial": "Часть данных лимитов недоступна; последние корректные измерения сохранены.",
 
+  "sources.openaiExpiryAdvice": "Создайте отдельный ключ для Quotum. OpenAI не сообщает здесь срок его действия; перед сохранением понадобится согласие на доступ с неизвестным сроком.",
+  "sources.openaiRights": "Используйте выделенный Admin key организации. У него административные права; Quotum читает только расходы организации и месячный лимит. Создать и отозвать его можно в OpenAI Platform.",
+  "sources.adminKey": "Admin key",
+  "api.credential_expiry_unknown_confirmation": "Подтвердите сохранение доступа с неизвестным сроком действия.",
+  "api.credential_access_invalid": "Доступ отозван или истёк. Замените его.",
+  "api.credential_identity_unavailable": "Поставщик не подтвердил организацию. Доступ не сохранён.",
+  "refresh.updated_partially": "Обновлено частично",
+  "refresh.row.updated_partially": "Обновлено частично",
+  "money.monthlyLimit": "Месячный лимит расходов",
+  "money.enforcing": "Применяется",
+  "money.enforcementUnknown": "Применение неизвестно",
+  "sources.adminKeySettings": "Создать или отозвать Admin key на OpenAI Platform",
+  "money.monthlyCosts": "Сообщаемые расходы месяца",
+  "trustedKeys.localProtection": "Сохранённый доступ защищён хранилищем доверенных ключей приложения. Его состояние показано в настройках приложения.",
 } satisfies Catalog;

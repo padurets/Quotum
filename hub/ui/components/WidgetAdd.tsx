@@ -222,6 +222,7 @@ export function WidgetCatalogue({
             demo={catalogue?.demo}
             available={trustedKeys?.available === true}
             storageReason={trustedKeys?.reason}
+            local={local}
             onClose={onClose}
           />
         </div>

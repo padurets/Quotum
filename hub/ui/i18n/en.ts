@@ -1051,4 +1051,18 @@ export const en = {
   "error.connector_quota_invalid": "The reported limit data is invalid.",
   "error.connector_quota_partial": "Some limit data is unavailable; the last valid readings are kept.",
 
+  "sources.openaiExpiryAdvice": "Create a dedicated key for Quotum. OpenAI does not report its expiry here; you will be asked to confirm access with an unknown expiry before saving it.",
+  "sources.openaiRights": "Use a dedicated organization Admin key. It has administrative privileges; Quotum reads only organization costs and the monthly spend limit. Create it and revoke it in OpenAI Platform.",
+  "sources.adminKey": "Admin key",
+  "api.credential_expiry_unknown_confirmation": "Confirm saving access whose expiry cannot be verified.",
+  "api.credential_access_invalid": "The access was revoked or expired. Replace it.",
+  "api.credential_identity_unavailable": "The provider did not prove the organization. No access was saved.",
+  "refresh.updated_partially": "Partially updated",
+  "refresh.row.updated_partially": "Partially updated",
+  "money.monthlyLimit": "Monthly spend limit",
+  "money.enforcing": "Enforcing",
+  "money.enforcementUnknown": "Enforcement unknown",
+  "sources.adminKeySettings": "Create or revoke an Admin key on OpenAI Platform",
+  "money.monthlyCosts": "Reported month costs",
+  "trustedKeys.localProtection": "Saved access uses this app’s trusted-key protection. Review its storage state in app settings.",
 } satisfies Record<string, Message>;

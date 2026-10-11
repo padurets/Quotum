@@ -2,7 +2,7 @@ import {DEFAULT_CURRENCY,defaultCurrencyContext,currencySymbol,type CurrencyCont
 import {displayMeter,convertedRemaining} from '../../server/domain/currencyPresentation';
 import {monetaryOf,providerOf,supportsBudget} from '../../server/domain/providers';
 import type {Card} from './types';
-import type {Meter,KeyPart} from '../../server/domain/meters';
+import type {Meter,KeyPart,MonthlyLimit} from '../../server/domain/meters';
 import type {SourceAccess} from '../../server/secrets/credentials';
 import {countdownChangesAt} from './format';
 import {formatLocale, t} from '../i18n';
@@ -94,10 +94,11 @@ export type BudgetLimit={scope:{kind:'key';id:string};part:BudgetKey;meter:Meter
 export type BudgetView={
   remaining:{kind:'funds';values:ReturnType<typeof balanceGroups>};
   limits:BudgetLimit[];
+  spendLimit?:{read:MonthlyLimit;native:Meter;meter:Meter|null};
 };
 
 /** Cards show current funds and selected allowances; accounting stays in analytics. */
-export function budgetView(source:Pick<Card,'id'|'provider'|'meters'>,keys:readonly KeyPart[]=[],meters:readonly Meter[]=source.meters??[],context:CurrencyContext=defaultCurrencyContext):BudgetView {
+export function budgetView(source:Pick<Card,'id'|'provider'|'meters'|'monthlyLimit'>,keys:readonly KeyPart[]=[],meters:readonly Meter[]=source.meters??[],context:CurrencyContext=defaultCurrencyContext):BudgetView {
   const byId=new Map(meters.map(m=>[m.id,m]));
   const caps=providerOf(source.provider)?.meterKinds.some(kind=>kind==='cap');
   const limits=caps?keys.flatMap(part=>{
@@ -110,6 +111,8 @@ export function budgetView(source:Pick<Card,'id'|'provider'|'meters'>,keys:reado
   if(balance?.approximate&&context.target.id!==DEFAULT_CURRENCY){const original=balanceGroups(source).find(g=>!g.approximate&&g.total.id===balance!.total.conversion?.original.meterId);if(original&&displayMeter(original.total,source.id,context))balance=original;}
   const shown=balance&&displayMeter(balance.total,source.id,context);
   const components=balance?.components.flatMap(part=>{const meter=displayMeter(part.meter,source.id,context);return meter?[{...part,meter}]:[];})??[];
-  return {remaining:{kind:'funds',values:shown?[{total:shown,components,approximate:!!shown.conversion}]:[]},limits};
+  const read=source.monthlyLimit,native:Meter|undefined=read?.value&&read.valueAt!==null?{id:'spend_limit',kind:'counter',unit:read.value.unit,amount:read.value.amount,at:read.valueAt,staleAfterMs:read.staleAfterMs,stale:read.status!=='ok',limit:null,resetAt:null,minutes:null,scope:'monthly',label:null}:undefined;
+  const spendLimit=read&&native?{read,native,meter:displayMeter(native,source.id,context)}:undefined;
+  return {...(spendLimit?{spendLimit}:{}),remaining:{kind:'funds',values:shown?[{total:shown,components,approximate:!!shown.conversion}]:[]},limits};
 }
 export const balanceRoleLabel=(role:'total'|'granted'|'toppedUp')=>t(`money.${role}`);

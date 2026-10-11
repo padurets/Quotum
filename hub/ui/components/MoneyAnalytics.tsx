@@ -29,6 +29,7 @@ import {composeMetersPrepared} from '../../server/domain/meterHistory';
 function nameOf(series:MeterHistory,title:string,context:import('../../server/domain/currency').CurrencyContext,family:MoneyFamily='budget') {
   if(family==='funds')return title;
   if(series.role)return [title,t(`money.${series.role}`),series.semantics?.conversion?`≈ ${unitLabel(series.semantics.conversion.original.unit)} → ${currencySymbol(series.unit,context)} (${series.semantics.conversion.rate.source==='manual'?t('money.personalRate'):series.semantics.conversion.rate.source==='codex-default'?t('money.defaultEstimate'):series.semantics.conversion.rate.source.toUpperCase()})`:series.semantics?.label].filter(Boolean).join(' — ');
+  if(series.kind==='counter'&&series.semantics?.scope==='monthly')return [title,t('money.monthlyCosts')].join(' — ');
   const detail=series.meterId==='balance'?'':series.kind==='cap'?capName({id:series.meterId,scope:series.semantics?.scope??null,label:series.semantics?.label??null}):series.semantics?.label??series.meterId;
   return [title,detail,series.kind==='cap'?t('money.cap'):series.meterId==='balance'?'':t('money.usage')].filter(Boolean).join(' — ');
 }
@@ -105,7 +106,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const answered=history?.range===(selected?timeRangeKey(selected):prefs.range);
   return <AnalyticsPanel ref={panel} className={funds?'subscription-funds':'budget-history'} title={t(funds?'widgets.subscriptionFunds':'widgets.budgetHistory')} chart history={history} loading={loading} error={error} retry={reader.retry}
     settings={<Popover label={t('history.settings')} icon={<SlidersIcon/>}>
-      {!funds&&<div className="popover-pad"><Segmented value={settings.view} onChange={view=>setPrefs({money:{...settings,view}})} options={[["balance",t('money.balance')],["spending",t('money.spending')]]} label={t('money.value')}/></div>}
+      {!funds&&<div className="popover-pad"><Segmented value={settings.view} onChange={view=>setPrefs({money:{...settings,view}})} options={[["balance",t('money.value')],["spending",t('money.spending')]]} label={t('money.value')}/></div>}
       <>{funds?<FundsSettings sources={sources} hidden={arrange.view.hidden}/>:<MoneySettings sources={sources} hidden={arrange.view.hidden} series={original}/>}</>
       {arrange.owner&&<HideRow onHide={()=>arrange.update(v=>withHidden(v,funds?SUBSCRIPTION_FUNDS:BUDGET_HISTORY,true))}>{t('widget.hide')}</HideRow>}
     </Popover>}>

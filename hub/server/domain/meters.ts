@@ -20,7 +20,9 @@ export type QuotaIssue = 'empty' | 'unsupported' | 'invalid' | 'missing';
 export type QuotaStatus = {observedAt: number; generation: 'credit' | null; complete: boolean; issue: QuotaIssue | null};
 export type QuotaObservation = {observedAt: number; receivedIds: string[]; quota: QuotaStatus; plan: string};
 export {QUOTA_IDS} from './providers.js';
-export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; inventoryAt?:number; uncapped?: string[]; balanceStatus?:BalanceStatus;creditBalance?:CreditBalanceState;quota?:QuotaStatus;plan?:string};
+export type MonthlyLimitRead={status:'ok'|'unavailable';observedAt:number;error:string|null;value:{unit:Unit;amount:string;enforcement:'enforcing'|'inactive'|'unknown'}|null};
+export type MonthlyLimit=MonthlyLimitRead & {valueAt:number|null;staleAfterMs:number};
+export type MeterMeasurement = {type: 'meters'; observedAt: number; staleAfterMs: number; meters: Meter[]; keys: KeyPart[]; inventoryComplete: boolean; inventoryError: string | null; inventoryAt?:number; uncapped?: string[]; balanceStatus?:BalanceStatus;creditBalance?:CreditBalanceState;quota?:QuotaStatus;plan?:string;monthlyLimit?:MonthlyLimitRead};
 export type Reading = Omit<Meter, 'stale'> & {previousAt: number | null};
 export type MeterSpan = {from: number; to: number; staleAfterMs: number;interruptedAt?:number;holdUntil?:number|null};
 export type ExceptionalStep = {from: number; to: number; amount: string; evidence: 'continuous' | 'gap' | 'estimate'};
@@ -31,7 +33,7 @@ export function validateMeter(meter: Meter): void {
   if (!/^[A-Za-z0-9:_-]{1,120}$/.test(meter.id) || !['counter', 'balance', 'cap'].includes(meter.kind) || !isUnit(meter.unit)) throw new Error('invalid_meter');
   const value = amount(meter.amount);
   if (amountScale(meter.scale) !== 6 && !(meter.id === 'balance:credits' && meter.unit === 'credits:codex' && meter.kind === 'balance')) throw new Error('invalid_meter');
-  if (meter.kind !== 'balance' && value < 0n || meter.kind === 'cap' && meter.limit === null || meter.kind !== 'cap' && meter.limit !== null) throw new Error('invalid_meter');
+  if (meter.kind !== 'balance' && !(meter.kind === 'counter' && meter.resetAt !== null) && value < 0n || meter.kind === 'cap' && meter.limit === null || meter.kind !== 'cap' && meter.limit !== null) throw new Error('invalid_meter');
   if (meter.limit !== null && amount(meter.limit) < 0n) throw new Error('invalid_meter');
   if (!Number.isSafeInteger(meter.at) || meter.at < 0 || !Number.isSafeInteger(meter.staleAfterMs) || meter.staleAfterMs <= 0 || meter.staleAfterMs > 86_400_000) throw new Error('invalid_meter');
   if (meter.resetAt !== null && (!Number.isSafeInteger(meter.resetAt) || meter.resetAt < 0) || meter.minutes !== null && (!Number.isSafeInteger(meter.minutes) || meter.minutes <= 0)) throw new Error('invalid_meter');
@@ -39,11 +41,13 @@ export function validateMeter(meter: Meter): void {
 
 export const semanticsOf = (m: MeterSemantics): MeterSemantics => ({limit: m.limit, resetAt: m.resetAt, minutes: m.minutes, scope: m.scope, label: m.label,...(m.scale===undefined?{}:{scale:m.scale}),...(m.conversion?{conversion:m.conversion}:{})});
 export const sameMeter = (a: Meter, b: Meter) => a.kind === b.kind && a.unit === b.unit && a.amount === b.amount && JSON.stringify(semanticsOf(a)) === JSON.stringify(semanticsOf(b));
+/** A period total starts a new baseline when its exclusive deadline changes. */
+export const sameCounterPeriod = (a: Pick<Meter,'kind'|'resetAt'>,b: Pick<Meter,'kind'|'resetAt'>) => a.kind !== 'counter' || b.kind !== 'counter' || a.resetAt === b.resetAt;
 export const plottedAmount = (m: Pick<Meter, 'kind' | 'amount' | 'limit'>) => m.kind === 'cap' ? (amount(m.limit!) - amount(m.amount)).toString() : m.amount;
 
 /** Keep a positive movement's original interval even when its timing is unknown. */
 export function meterStep(a: Reading, b: Reading, spans: readonly MeterSpan[]): ExceptionalStep | null {
-  if (a.kind !== b.kind || a.unit !== b.unit || b.at <= a.at || b.kind === 'cap') return null;
+  if (a.kind !== b.kind || a.unit !== b.unit || b.at <= a.at || b.kind === 'cap' || !sameCounterPeriod(a,b)) return null;
   const delta = b.kind === 'balance' ? amount(a.amount) - amount(b.amount) : amount(b.amount) - amount(a.amount);
   if (delta <= 0n) return null;
   const from = b.previousAt ?? a.at;

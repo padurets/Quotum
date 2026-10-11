@@ -137,6 +137,7 @@ export function KeyForm({
   demo,
   available,
   storageReason,
+  local = false,
   onClose,
   onSaved,
   onAddToBoard,
@@ -149,6 +150,7 @@ export function KeyForm({
   demo?: Demo;
   available: boolean;
   storageReason?: string | null;
+  local?: boolean;
   onClose: () => void;
   onSaved?: () => void;
   onAddToBoard?: (sourceId: string) => void;
@@ -162,7 +164,9 @@ export function KeyForm({
       : undefined) ??
     chosenProvider;
   const namedAccounts = provider === 'deepseek',
-    declared = namedAccounts || provider === 'zai';
+    declared = namedAccounts || provider === 'zai',
+    openai = provider === 'openai_platform',
+    unknownExpiry = declared || openai;
   const savedTarget = initialOperation?.item.kind === 'connection' ? initialOperation.item.account : undefined;
   const [account, setAccount] = useState(savedTarget?.kind === 'existing' ? savedTarget.id : 'new'),
     [name, setName] = useState('');
@@ -205,7 +209,7 @@ export function KeyForm({
   const blocked =
     !available ||
     addition.busy ||
-    (declared && !consent) ||
+    (unknownExpiry && !consent) ||
     (needsSame && !sameAccount) ||
     (namedAccounts && !replacing && (!accountReady || !validAccount || (account === 'new' && !name.trim())));
   const changed = () => {
@@ -232,7 +236,7 @@ export function KeyForm({
       personal || replacing ? null : board!.id,
       item,
       secret,
-      declared
+      unknownExpiry
         ? {
             allowUnknownExpiry: consent,
             ...(needsSame ? {sameAccount} : {}),
@@ -304,12 +308,16 @@ export function KeyForm({
         <b>{personal ? t('boards.personalName') : boardTitle(board!)}</b>
       </div>
       <p className="dialog-text">
-        {t(namedAccounts ? 'sources.deepseekRights' : provider === 'zai' ? 'sources.zaiRights' : 'add.keyRights')}
+        {t(openai ? 'sources.openaiRights' : namedAccounts ? 'sources.deepseekRights' : provider === 'zai' ? 'sources.zaiRights' : 'add.keyRights')}
       </p>
+      {openai && <p className="dialog-text">{t('sources.openaiExpiryAdvice')}</p>}
+      <p className="drawer-note">{t(local?'trustedKeys.localProtection':'trustedKeys.operator')}</p>
       <a
         className="provider-link"
         href={
-          namedAccounts
+          openai
+            ? 'https://platform.openai.com/settings/organization/admin-keys'
+            : namedAccounts
             ? 'https://platform.deepseek.com/api_keys'
             : provider === 'zai'
               ? 'https://z.ai/manage-apikey/apikey-list'
@@ -318,7 +326,7 @@ export function KeyForm({
         target="_blank"
         rel="noopener noreferrer"
       >
-        {t(namedAccounts ? 'sources.deepseekSettings' : provider === 'zai' ? 'sources.zaiSettings' : 'sources.providerSettings')}
+        {t(openai ? 'sources.adminKeySettings' : namedAccounts ? 'sources.deepseekSettings' : provider === 'zai' ? 'sources.zaiSettings' : 'sources.providerSettings')}
         <ExternalLink size={14} aria-hidden="true" />
       </a>
       {!personal && !board?.personal && <p className="sharing-disclosure">{t('add.disclosure', {board: boardTitle(board!)})}</p>}
@@ -452,7 +460,7 @@ export function KeyForm({
       )}
       <Field
         type="password"
-        label={t(declared ? 'sources.apiKey' : 'sources.key')}
+        label={t(openai ? 'sources.adminKey' : declared ? 'sources.apiKey' : 'sources.key')}
         value={secret}
         autoComplete="new-password"
         data-1p-ignore=""
@@ -467,7 +475,7 @@ export function KeyForm({
           setConsent(false);
         }}
       />
-      {declared ? (
+      {unknownExpiry ? (
         <label className="source-consent">
           <input
             type="checkbox"

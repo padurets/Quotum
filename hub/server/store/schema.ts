@@ -349,6 +349,29 @@ export const STEPS = [
   END;
   `,
 
+  // 22 — replaceable daily reports and component confirmations.
+  `
+  CREATE TABLE reported_intervals (
+    source_id TEXT NOT NULL, meter_id TEXT NOT NULL, unit TEXT NOT NULL,
+    from_at INTEGER NOT NULL, to_at INTEGER NOT NULL, amount INTEGER NOT NULL,
+    observed_at INTEGER NOT NULL, revision INTEGER NOT NULL,
+    PRIMARY KEY (source_id,meter_id,unit,from_at,to_at)) WITHOUT ROWID;
+  CREATE INDEX reported_by_end ON reported_intervals (to_at);
+  CREATE TABLE reported_components (
+    source_id TEXT NOT NULL, meter_id TEXT NOT NULL, unit TEXT NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY (source_id,meter_id,unit)) WITHOUT ROWID;
+  `,
+  // 23 — current monetary observations replace imported organization reports.
+  `
+  DROP TABLE reported_intervals;
+  DROP TABLE reported_components;
+  DELETE FROM readings WHERE meter_id='monthly' AND source_id IN (SELECT id FROM sources WHERE provider='openai_platform');
+  DELETE FROM meter_spans WHERE meter_id='monthly' AND source_id IN (SELECT id FROM sources WHERE provider='openai_platform');
+  UPDATE state SET payload=json_set(json_remove(payload,'$.reportQuality','$.reportAttemptedAt','$.reportDigest'),
+    '$.meters',json('[]'),'$.successAt',null,'$.error','unmeasured')
+    WHERE source_id IN (SELECT id FROM sources WHERE provider='openai_platform');
+  `,
+
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

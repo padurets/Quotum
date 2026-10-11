@@ -1,5 +1,5 @@
 import type {Provider} from './sources.js';
-import type {BalanceStatus, KeyPart, Meter, MeterMeasurement, QuotaStatus} from './meters.js';
+import type {MonthlyLimit, BalanceStatus, KeyPart, Meter, MeterMeasurement, QuotaStatus} from './meters.js';
 import type {CreditBalance, CreditBalanceState, Delivery, ResourceObservation, ResourceStatuses} from './resources.js';
 
 /** A window's length as the agent classifies it (spec: Window `kind`). */
@@ -59,6 +59,7 @@ export type SourceState = {
   staleAfterMs: number | null;
   resets: FreeResets | null;
   balanceStatus?: BalanceStatus;
+  monthlyLimit?: MonthlyLimit;
   meters?: Meter[];
   quota?: QuotaStatus;
   keys?: KeyPart[];

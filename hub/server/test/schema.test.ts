@@ -37,6 +37,22 @@ const RELEASED = [
   'b4ae9c2c749fcff165b0da116a55a018573aef239a49782a430646ec185d8a3b', // 0.7
 ];
 
+test('upgrading imported OpenAI reports retains the connection and threshold without reinterpreting old reports as our samples',()=>{
+  const db=new DatabaseSync(':memory:');try {
+    for(const step of STEPS.slice(0,22))db.exec(step);db.exec('PRAGMA user_version = 22');
+    db.exec("INSERT INTO sources(id,provider,account,created_at) VALUES ('openai_platform:fixture','openai_platform','fixture',1)");
+    const limit={status:'ok',value:{amount:'100000000',unit:'USD',enforcement:'enforcing'},observedAt:1,valueAt:1,staleAfterMs:60000};
+    db.prepare('INSERT INTO state VALUES (?,?)').run('openai_platform:fixture',JSON.stringify({id:'openai_platform:fixture',provider:'openai_platform',successAt:1,error:null,reportQuality:[],reportDigest:'obsolete',reportAttemptedAt:1,meters:[{id:'monthly',kind:'cap'}],monthlyLimit:limit}));
+    db.exec("INSERT INTO reported_intervals VALUES ('openai_platform:fixture','costs','USD',0,86400000,5000000,1,1)");
+    migrate(db,2);
+    const state=JSON.parse(String(db.prepare('SELECT payload FROM state').get()!.payload));
+    assert.deepEqual(state.meters,[]);assert.equal(state.successAt,null);assert.equal('reportQuality' in state,false);assert.deepEqual(state.monthlyLimit,limit);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM sources').get()!.n,1);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name IN ('reported_intervals','reported_components')").get()!.n,0);
+    migrate(db,3);
+  }finally{db.close();}
+});
+
 test('released layout steps never change; new ones come after them', () => {
   const hashes = STEPS.map(step => createHash('sha256').update(step).digest('hex'));
   assert.deepEqual(hashes.slice(0, RELEASED.length), RELEASED);
@@ -168,7 +184,7 @@ test('board additions append to the integrated currency layout while analytics m
     const view=JSON.parse(String(saved.payload)); assert.equal(view.version,2);
     assert.deepEqual(view.names,{legacy:'Kept'}); assert.deepEqual(view.unknown,{kept:true});
     assert.deepEqual(view.hidden,['source:deepseek:123456789abc']);
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,21);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,23);
   }finally{db.close();}
 });
 

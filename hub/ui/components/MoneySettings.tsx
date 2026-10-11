@@ -73,6 +73,7 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
   return <>
     <div className="popover-title popover-section">{t('source.show')}</div>
     <p className="popover-note">{selected.length} / {MAX_METERS}</p>
+    {sources.filter(s=>budgetVisible(s)&&!hidden.includes('source:'+s.id)&&!referenceBalance(s,true)).map(s=>{const meter=s.meters?.find(m=>m.kind==='counter'&&m.id==='usage');return meter?<div key={s.id} className="popover-section"><div className="popover-title">{s.title}</div>{row(s.id,meter.id,t(meter.scope==='monthly'?'money.monthlyCosts':'money.usage'))}</div>:null;})}
     {source?<>
       {accounts.length>1&&<button className="popover-row" onClick={()=>setSource(null)}><span>← {t('money.accounts')}</span></button>}
       <div className="popover-title">{source.title}</div>

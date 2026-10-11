@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {money,capPercent,capStale,capChangesAt,accessTone,accessChangesAt} from '../lib/money';
+import {money,capPercent,capStale,capChangesAt,accessTone,accessChangesAt,budgetView} from '../lib/money';
+import {defaultCurrencyContext} from '../../server/domain/currency';
 import {setLocale} from '../i18n';
 import {archivedKeyGroups,moneySelection,readMoney} from '../lib/moneySelection';
 import {moneyTotal,type MeterHistory} from '../lib/moneyView';
@@ -12,6 +13,25 @@ import {INITIAL,reduce,type Snapshot} from '../lib/board';
 
 const meter=(id:string,value='1'):Meter=>({id,amount:value,kind:'balance',unit:'USD',limit:null,at:1,stale:false,staleAfterMs:1000,resetAt:null,minutes:null,scope:null,label:null});
 const card=(id:string):Card=>({id,provider:'openrouter',plan:'',successAt:1,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,meters:[meter('balance'),...Array.from({length:10},(_,i)=>meter('key:'+i))]});
+test('a converted monthly threshold preserves native provenance and never becomes funds or an allowance',()=>{
+  const source:Card={...card('s'),provider:'openai_platform',meters:[{...meter('usage','10000000'),kind:'counter',resetAt:100000,scope:'monthly'}],monthlyLimit:{value:{amount:'100000000',unit:'USD',enforcement:'inactive'},valueAt:1,observedAt:1,staleAfterMs:1000,status:'ok',error:null}};
+  const context={...defaultCurrencyContext,target:{id:'EUR',name:'Euro',symbol:'€',fractionDigits:2},sources:{s:[{from:'USD',at:1,anchor:null,steps:[{id:'fixture',source:'ecb',base:'EUR',date:0,fetchedAt:1,from:'2000000',to:'1000000'}]}]}};
+  const view=budgetView(source,[],source.meters,context);
+  assert.equal(view.remaining.values.length,0);assert.equal(view.limits.length,0);
+  assert.equal(view.spendLimit!.meter!.amount,'50000000');assert.equal(view.spendLimit!.native.amount,'100000000');
+  assert.equal(view.spendLimit!.meter!.conversion!.original.amount,'100000000');
+});
+test('a source with expenses and no funds selects its current counter through both existing views',()=>{
+  const source:Card={...card('openai'),provider:'openai_platform',meters:[{...meter('usage','30000000'),kind:'counter',resetAt:100000,scope:'monthly'}]};
+  for(const view of ['balance','spending'] as const)assert.deepEqual(moneySelection([source],[],readMoney({unit:'USD',view})).selection?.ids,[['openai','usage']]);
+  assert.deepEqual(moneySelection([source],['source:openai'],readMoney({unit:'USD'})).selection?.ids,[]);
+  assert.deepEqual(moneySelection([source],[],readMoney({unit:'USD',selected:{USD:[]}})).selection?.ids,[]);
+});
+test('saved OpenAI report choices follow the current sample without losing other selected accounts',()=>{
+  const source='openai_platform:fixture',selected={USD:[[source,'costs'],[source,'monthly'],['openrouter:fixture','balance']]};
+  assert.deepEqual(readMoney({unit:'USD',selected}).selected.USD,[[source,'usage'],['openrouter:fixture','balance']]);
+  assert.deepEqual(readMoney({unit:'USD',view:'spending',selected:{USD:[]},modes:{spending:selected}}).selected.USD,[[source,'usage'],['openrouter:fixture','balance']]);
+});
 test('unknown spending stays unknown, and a known subtotal identifies missing coverage',()=>{
   const series:MeterHistory={sourceId:'s',meterId:'balance',kind:'balance',unit:'USD',semantics:null,start:null,end:'10',spent:'0',topup:'0',unlocated:[],topupUnlocated:[],coveredMs:0,points:[]};
   assert.deepEqual(moneyTotal(series,0,86400000),{amount:null,unknown:true,partial:true});

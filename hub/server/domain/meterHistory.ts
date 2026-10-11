@@ -44,7 +44,7 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
       if(!matches(row))continue;
       while(spanIndex<group.spans.length&&group.spans[spanIndex].to<=row.at)spanIndex++;
       for(let n=spanIndex;n<group.spans.length&&group.spans[n].from<until;n++) {
-        const span=group.spans[n],start=Math.max(span.from,row.at),end=Math.min(span.to,until);
+        const span=group.spans[n],start=Math.max(span.from,row.at),end=Math.min(span.to,until,row.kind==='counter'?row.resetAt??Infinity:Infinity);
         if(end<=start)continue;
         const previous=spans.at(-1);
         if(previous?.to===start)previous.to=end;else spans.push({...span,from:start,to:end});
@@ -119,12 +119,12 @@ export function meterCells(group: MeterGroup, unit: Unit, from: number, to: numb
       const closing=predecessor(group.readings,end-1);
       let last=matches(closing)?closing:undefined;
       if(!last)for(let i=group.readings.length-1;i>=0;i--){const row=group.readings[i];if(row.at<at)break;if(row.at<end&&matches(row)){last=row;break;}}
-      if (!matches(last) || !fresh(group.spans,Math.max(at,last.at))) continue;
+      if (!matches(last) || last.kind==='counter'&&last.resetAt!==null&&last.resetAt<=Math.max(at,last.at) || !fresh(group.spans,Math.max(at,last.at))) continue;
       const pointAt=Math.max(at,last.at,group.paired ? predecessor(group.paired.readings,end-1)?.at??at : at);
       const value=valueOf(last,pointAt);
       if (value===null) continue;
       const first=predecessor(group.readings,at-1);
-      const open=matches(first) && fresh(group.spans,at) ? valueOf(first,at-1) : null;
+      const open=matches(first) && !(first.kind==='counter'&&first.resetAt!==null&&first.resetAt<=at) && fresh(group.spans,at) ? valueOf(first,at-1) : null;
       const span=group.spans.filter(s=>s.from<=pointAt && s.to+s.staleAfterMs>=pointAt).at(-1);
       const segment=span?.from??last.at;
       const extra: MeterCellExtra = {segment};

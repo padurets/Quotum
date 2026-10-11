@@ -248,6 +248,15 @@ test('HTTP replacement accepts no-expiry keys in one submit',async t=>{
   h.clean(response.body);
 });
 
+test('unknown expiry asks for its own 409 consent before any credential or holding is written',async t=>{
+  const h=await harness();t.after(async()=>{await h.app.close();h.store.close();});
+  t.mock.method(fixture,'identify',async()=>({account:'0'.repeat(24),abilities:['balance'],expiresAt:null,expiryKind:'unknown'}));
+  const blocked=await h.call('POST','/api/credentials',{provider:'test',secret:CANARY});
+  assert.equal(blocked.statusCode,409);assert.deepEqual(blocked.json(),{error:'credential_expiry_confirmation',expiresAt:null,expiryKind:'unknown'});
+  assert.equal(h.credentials.list(h.users.get('alice')!).length,0);assert.equal(h.store.held(h.users.get('alice')!).length,0);
+  const saved=await h.call('POST','/api/credentials',{provider:'test',secret:CANARY,allowUnknownExpiry:true});assert.equal(saved.statusCode,201);assert.equal(saved.json().expiryKind,'unknown');
+});
+
 test('legacy and addition APIs share the same provider verification limit',async t=>{
   const h=await harness();t.after(async()=>{await h.app.close();h.store.close();});
   const identify=fixture.identify;let calls=0;

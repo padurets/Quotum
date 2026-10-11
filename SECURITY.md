@@ -36,6 +36,16 @@ provider API cannot verify. Unknown expiry has separate consent. Revoke keys wit
 their provider when no longer needed. Key names and measured spending are shared board data;
 management secrets, raw creator ids, masked labels and raw key hashes are not.
 
+OpenAI Platform uses a dedicated organization Admin key, with access to administrative
+resources. Quotum uses only fixed Costs and Spend Limit GET operations. A successful
+response must prove the organization through the allowlisted organization header;
+raw organization identifiers and header maps are never persisted or projected. Different
+organizations cannot replace one another’s history. The two selected methods leave
+expiry unknown, which requires explicit consent; an authentication failure without
+expiry evidence is described as revoked or expired. Remove saved access in Quotum and
+revoke the dedicated key in the provider’s Admin keys settings when it is no longer needed.
+
+
 On a new server, Quotum creates a key outside its data directory. Docker requires a
 separate persistent `/keys` mount; known temporary filesystems such as tmpfs and
 ramfs are refused before key admission. The standard commands use a named key volume.

@@ -19,6 +19,7 @@ export class Currencies {
     this.unsubscribe=this.store.onMonetaryRecord((source,state)=>{
       // Capture every accepted anchor before deferred reference fetching can coalesce reports.
       const points=(state.meters??[]).map(m=>({unit:m.unit,at:m.at}));
+      if(state.monthlyLimit?.value&&state.monthlyLimit.valueAt!==null)points.push({unit:state.monthlyLimit.value.unit,at:state.monthlyLimit.valueAt});
       for(const owner of this.store.currencyReaders(source))this.store.currencies.context(owner,{[source]:points});
       this.schedule(source);
     });
@@ -66,7 +67,8 @@ export class Currencies {
   async update(source:string) {
     if(!this.running)return;
     const initial=this.family(source);if(!initial)return;
-    const readers=this.store.currencyReaders(source),points=initial.state.meters??[];
+    const readers=this.store.currencyReaders(source),points=(initial.state.meters??[]).map(m=>({unit:m.unit,at:m.at}));
+    if(initial.state.monthlyLimit?.value&&initial.state.monthlyLimit.valueAt!==null)points.push({unit:initial.state.monthlyLimit.value.unit,at:initial.state.monthlyLimit.valueAt});
     const needsRates=readers.some(owner=>points.some(m=>isConvertible(m.unit)&&!this.store.currencies.binding(owner,m.unit,this.store.currencies.preference(owner).id,m.at,null,source)));
     if(needsRates)await this.rates();
     let quote=initial.meters.length?this.store.currencies.latest(initial.meters[0].at):null;
@@ -94,6 +96,7 @@ export class Currencies {
     if(changed)this.store.currencyChanged(source,since);
     for(const owner of this.store.currencyReaders(source)) {
       const points=(current.state.meters??[]).map(m=>({unit:m.unit,at:m.at,anchor:null as string|null}));
+      if(current.state.monthlyLimit?.value&&current.state.monthlyLimit.valueAt!==null)points.push({unit:current.state.monthlyLimit.value.unit,at:current.state.monthlyLimit.valueAt,anchor:null});
       for(const native of current.state.meters??[]){const value=this.store.currencies.project(source,native,DEFAULT_CURRENCY,this.now());if(value?.conversion)points.push({unit:value.conversion.original.unit,at:value.conversion.original.at,anchor:value.conversion.rate.id});}
       this.store.currencies.context(owner,{[source]:points});this.store.currencyReaderChanged(owner);
     }

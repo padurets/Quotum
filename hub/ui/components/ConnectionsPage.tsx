@@ -296,6 +296,7 @@ export function ConnectionsPage({
               demo={demo}
               available={trustedKeys?.available === true}
               storageReason={trustedKeys?.reason}
+            local={local}
               onClose={() => {
                 setConnecting(false);
                 setRecovered(undefined);
