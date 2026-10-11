@@ -27,7 +27,10 @@ export function matches(link: ClientLink, input: AttributionInput, route: LinkRo
 
 /** Device scope precedes condition specificity; an inactive winner still decides. */
 export function resolveLink(input: AttributionInput, context: LinkContext, at: number): Attribution {
-  const {route, otherGateway} = safeRoute(input.route, context.routeEnabled);
+  return resolve(input, context, at, safeRoute(input.route, context.routeEnabled));
+}
+
+function resolve(input: AttributionInput, context: LinkContext, at: number, {route, otherGateway}: ReturnType<typeof safeRoute>): Attribution {
   let winner: ClientLink | undefined, rank = -1;
   for (const link of context.links) {
     if (!matches(link, input, route, at)) continue;
@@ -51,17 +54,20 @@ export function resolveLink(input: AttributionInput, context: LinkContext, at: n
 
 /** Display cuts leave the raw ledger and its distinct agent identity untouched. */
 export function splitLinks(input: AttributionInput, context: LinkContext, from: number, to: number): {source: string | null; from: number; to: number}[] {
-  const route = safeRoute(input.route, context.routeEnabled).route;
+  const evidence = safeRoute(input.route, context.routeEnabled), {route} = evidence;
+  // Scope and route cannot change within a retained context. Select their rules
+  // once rather than testing unrelated conditions again at every time boundary.
+  const links = context.links.filter(link => link.clientId === input.clientId && (link.deviceId === null || link.deviceId === input.deviceId)
+    && (link.route === null || route !== null && link.route.class === route.class && (link.route.provider === null || link.route.provider === route.provider)));
+  const selected = {...context, links};
   const bounds = new Set([from, to]);
-  for (const link of context.links) {
-    if (link.clientId !== input.clientId || link.deviceId !== null && link.deviceId !== input.deviceId
-      || link.route !== null && (route === null || link.route.class !== route.class || link.route.provider !== null && link.route.provider !== route.provider)) continue;
+  for (const link of links) {
     if (link.from > from && link.from < to) bounds.add(link.from);
     if (link.to !== null && link.to > from && link.to < to) bounds.add(link.to);
   }
   const times = [...bounds].sort((a, b) => a - b), result: {source: string | null; from: number; to: number}[] = [];
   for (let i = 0; i < times.length - 1; i++) {
-    const source = resolveLink(input, context, times[i]).source, last = result.at(-1);
+    const source = resolve(input, selected, times[i], evidence).source, last = result.at(-1);
     if (last && last.source === source) last.to = times[i + 1];
     else result.push({source, from: times[i], to: times[i + 1]});
   }

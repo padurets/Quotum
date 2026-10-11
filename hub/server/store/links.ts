@@ -32,7 +32,8 @@ export class LinkStore {
     // Read revisions with the rules: unchanged owners reuse their parsed rules,
     // while holdings and route policy are always read from the current transaction.
     const requested=JSON.stringify(users.map(owner=>[owner,this.batches.get(owner)?.version??-1]));
-    const rows=this.db.prepare("WITH requested AS (SELECT json_extract(value,'$[0]') AS owner,json_extract(value,'$[1]') AS version FROM json_each(?)) SELECT r.owner,COALESCE(v.version,0) AS version,l.* FROM requested r LEFT JOIN link_versions v ON v.user_id=r.owner LEFT JOIN client_links l ON l.user_id=r.owner AND COALESCE(v.version,0)<>r.version").all(requested) as (Row & {owner:string;version:number})[];
+    // A null index key skips unchanged owners before SQLite walks their rules.
+    const rows=this.db.prepare("WITH requested AS (SELECT json_extract(value,'$[0]') AS owner,json_extract(value,'$[1]') AS version FROM json_each(?)) SELECT r.owner,COALESCE(v.version,0) AS version,l.* FROM requested r LEFT JOIN link_versions v ON v.user_id=r.owner LEFT JOIN client_links l ON l.user_id=CASE WHEN COALESCE(v.version,0)<>r.version THEN r.owner END").all(requested) as (Row & {owner:string;version:number})[];
     const next=new Map<string,{version:number;clients:Map<string,ClientLink[]>}>();
     for(const row of rows) {
       let group=next.get(row.owner);
