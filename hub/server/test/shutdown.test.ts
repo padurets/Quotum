@@ -54,6 +54,16 @@ test('a cancelled integration cannot defer HTTP closure or the store deadline', 
   });
   await headers;
   hub.child.kill('SIGTERM');
+  await deadline((async () => {
+    for (;;) {
+      try { const response = await fetch(`http://127.0.0.1:${hub.port}/health`, {signal: AbortSignal.timeout(500)}); await response.body?.cancel(); }
+      catch (error) {
+        if (['ECONNREFUSED', 'ECONNRESET'].includes((error as {cause?: {code?: string}}).cause?.code ?? '')) return;
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  })(), 1500);
   assert.deepEqual(await deadline(hub.exited, 6000), {code: 0, signal: null});
   audited(hub.dir);
 });
