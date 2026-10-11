@@ -12,7 +12,7 @@ import {observeReversal} from './reversalDiagnostic';
 const DAY = 86_400_000;
 type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
 type RequestDiagnostic={selection?:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number};evaluatedAt?:number;sections:{scope:PeriodScope;from:number;to:number;cell:number;cells:'skip'|'read';evidence:'skip'|'cursor'|'baseline'}[];values:number;sessions:boolean};
-type Read = {endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
+type Read = {httpStatus?:number;endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
 
@@ -63,7 +63,7 @@ export class HistoryBodies {
   /** Only request shape and body counts: identities, cursors and response contents stay private. */
   diagnostic(phase:string){
     const reads=this.reads.filter(read=>read.phase===phase);
-    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
+    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,httpStatus:read.httpStatus??null,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
   }
   constructor(cdp: Pick<Cdp, 'on' | 'send'>) {
     cdp.on<{requestId: string; request: {url: string;postData?:string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
@@ -94,8 +94,9 @@ export class HistoryBodies {
       read.attemptId = id;
       if (read.count) read.count.id = id;
     });
-    cdp.on<{requestId: string; response: {headers: Record<string, string>}}>('Network.responseReceived', event => {
+    cdp.on<{requestId: string; response: {status:number;headers: Record<string, string>}}>('Network.responseReceived', event => {
       const read = this.active.get(event.requestId); if (!read) return;
+      const status=event.response.status;read.httpStatus=Number.isInteger(status)&&status>=100&&status<=599?status:undefined;
       const headers = lowerHeaders(event.response.headers);
       read.coding = headers['content-encoding']; read.length = headers['content-length'] === undefined ? undefined : Number(headers['content-length']); read.transferId = headers['x-quotum-bench-id'];
     });
@@ -107,6 +108,12 @@ export class HistoryBodies {
         // DevTools can finish fetching an earlier full body after the page has
         // already used its metadata to start this request. Count the raw body.
         await read.before;await read.request;
+        // Count a complete error body without accepting it as accounting data.
+        if(read.httpStatus!==200){
+          read.count = {complete: true, decoded: decoded.length, lower: read.length ?? NaN, upper: read.length, length: read.length, coding: read.coding, id: read.attemptId ?? read.transferId, responseId: read.transferId};
+          this.errors.push(new Error(read.httpStatus===undefined?'accounting HTTP status unavailable':`accounting HTTP status ${read.httpStatus}`));
+          return;
+        }
         const raw=JSON.parse(decoded.toString()) as HistoryReply|PeriodReply;
         const parts=read.sections??[read];
         for(const part of parts){
@@ -134,7 +141,7 @@ export class HistoryBodies {
 export function trafficReadEvidence(reads: readonly Read[]) {
   const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
   return reads.map(read=>({id:read.id,phase:read.phase,from:read.from,to:read.to,cell:read.cell,
-    lower:read.lower,coding:read.coding,length:read.length,attemptId:read.attemptId,transferId:read.transferId,
+    httpStatus:read.httpStatus??null,lower:read.lower,coding:read.coding,length:read.length,attemptId:read.attemptId,transferId:read.transferId,
     canceled:read.canceled,count:read.count,selectionHash:hash(read.selection),chunks:read.chunks,
     run:read.answer?.run,now:read.answer?.now,knownHash:read.answer?.known===undefined?undefined:hash(read.answer.known)}));
 }

@@ -120,7 +120,7 @@ test('the browser observer expands late metadata while counting only each actual
     send: <T>(_method: string, params: object) => ((params as {requestId: string}).requestId === 'first' ? new Promise<{body: string; base64Encoded: boolean}>(resolve => {finishFirst = resolve;}) : Promise.resolve({body: JSON.stringify(compact), base64Encoded: false})) as Promise<T>};
   const observer = new HistoryBodies(cdp);
   const emit = (name: string, event: object) => listeners.get(name)?.(event as never);
-  const start = (id: string) => emit('Network.requestWillBeSent', {requestId: id, request: {url: 'http://localhost/api/history?cell=1&from=0&to=60'}});
+  const start = (id: string) => {emit('Network.requestWillBeSent', {requestId: id, request: {url: 'http://localhost/api/history?cell=1&from=0&to=60'}}); emit('Network.responseReceived', {requestId: id, response: {status: 200, headers: {}}});};
   start('first'); emit('Network.loadingFinished', {requestId: 'first'});
   start('second'); emit('Network.loadingFinished', {requestId: 'second'});
   finishFirst({body: JSON.stringify(full), base64Encoded: false});
@@ -136,13 +136,42 @@ test('the reference union respects fresh holes and the eight-tile API limit', ()
   assert.deepEqual(readUnion(new Set(Array.from({length: 481}, (_, i) => i)), 1), [[0, 480], [480, 481]]);
 });
 
+test('metadata-only accounting rejects HTTP errors while retaining complete body bytes', async () => {
+  for (const status of [500, 200, 401, 403, 409, 429, 503, undefined, 0, NaN]) {
+    const listeners = new Map<string, (event: never) => void>();
+    const body = JSON.stringify(status === 200 ? {basis: {}, values: {state: 'complete', value: []}}
+      : {error: 'internal_error', detail: 'private-canary'});
+    const cdp = {on: <T>(name: string, listener: (event: T) => void) => listeners.set(name, listener as (event: never) => void),
+      send: async <T>() => ({body, base64Encoded: false} as T)};
+    const observer = new HistoryBodies(cdp), emit = (name: string, event: object) => listeners.get(name)?.(event as never);
+    emit('Network.requestWillBeSent', {requestId: 'metadata', request: {url: 'http://localhost/api/boards/private-canary/period',
+      postData: JSON.stringify({selection: {mode: 'range', from: 1000, to: 2000}, values: ['private-canary'],
+        quota: {cell: '1', from: '0', to: '60', cells: 'skip'}})}});
+    emit('Network.responseReceived', {requestId: 'metadata', response: {status, headers: {'Content-Encoding': 'br', 'Content-Length': '40'}}});
+    emit('Network.loadingFinished', {requestId: 'metadata'});
+    await Promise.all([...observer.pending]);
+    const read = observer.reads[0];
+    assert.equal(read.count?.complete, true, 'HTTP errors still have complete physical bodies');
+    assert.equal(read.count?.decoded, Buffer.byteLength(body));
+    assert.equal(read.count?.length, 40);
+    assert.equal(observer.errors.length, status === 200 ? 0 : 1, 'an HTTP error cannot qualify an accounting response');
+    if (status !== 200) assert.equal((observer.errors[0] as Error).message,
+      Number.isInteger(status) && status! >= 100 && status! <= 599 ? `accounting HTTP status ${status}` : 'accounting HTTP status unavailable');
+    const numericStatus = Number.isInteger(status) && status! >= 100 && status! <= 599 ? status : null;
+    assert.equal(trafficReadEvidence(observer.reads)[0].httpStatus, numericStatus);
+    const diagnostic = observer.diagnostic('seed');
+    assert.equal(diagnostic.reads[0].httpStatus, numericStatus);
+    assert.doesNotMatch(JSON.stringify(diagnostic), /private-canary|internal_error/);
+  }
+});
+
 function cdpFixture() {
   const listeners = new Map<string, (event: never) => void>();
   const answer = {run: 'r', now: 1, known: {work: 0, sources: {}}, chunks: [{from: 0, to: 60}]};
   const cdp = {on: <T>(name: string, listener: (event: T) => void) => listeners.set(name, listener as (event: never) => void), send: async <T>() => ({body: JSON.stringify(answer), base64Encoded: false} as T)};
   const observer = new HistoryBodies(cdp);
   const emit = (name: string, event: object) => listeners.get(name)?.(event as never);
-  const start = (id: string) => {emit('Network.requestWillBeSent', {requestId: id, request: {url: 'http://localhost/api/history?cell=1&from=0&to=60'}}); emit('Network.responseReceived', {requestId: id, response: {headers: {'Content-Encoding': 'br', 'Content-Length': '40', 'X-Quotum-Bench-Id': id}}});};
+  const start = (id: string) => {emit('Network.requestWillBeSent', {requestId: id, request: {url: 'http://localhost/api/history?cell=1&from=0&to=60'}}); emit('Network.responseReceived', {requestId: id, response: {status: 200, headers: {'Content-Encoding': 'br', 'Content-Length': '40', 'X-Quotum-Bench-Id': id}}});};
   return {observer, emit, start, answer};
 }
 
@@ -341,6 +370,7 @@ test('composite bodies count once while both resource selections and standalone 
   const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
   const query={cell:'1',from:'0',to:'60',evidence:'cursor'};
   emit('Network.requestWillBeSent',{requestId:'combined',request:{url:'http://localhost/api/boards/b/period',postData:JSON.stringify({quota:query,budget:{...query,meters:'[]',unit:'USD'}})}});
+  emit('Network.responseReceived',{requestId:'combined',response:{status:200,headers:{}}});
   emit('Network.loadingFinished',{requestId:'combined'});await Promise.all([...observer.pending]);
   assert.deepEqual(observer.errors,[]);assert.equal(observer.reads.length,1);assert.equal(observer.resources.length,2);
   assert.equal(observer.reads[0].count?.decoded,Buffer.byteLength(JSON.stringify(raw)));
@@ -350,12 +380,14 @@ test('composite bodies count once while both resource selections and standalone 
   emit('Network.loadingFailed',{requestId:'details',canceled:true});
   assert.equal(observer.reads.length,2);assert.equal(observer.resources.length,2);assert.equal(observer.reads[1].canceled,true);
   emit('Network.requestWillBeSent',{requestId:'evidence',request:{url:'http://localhost/api/boards/b/period',postData:JSON.stringify({quota:{...query,cells:'skip'}})}});
+  emit('Network.responseReceived',{requestId:'evidence',response:{status:200,headers:{}}});
   emit('Network.loadingFinished',{requestId:'evidence'});await Promise.all([...observer.pending]);
   assert.equal(observer.reads.length,3);assert.equal(observer.resources.length,2,'evidence bytes count without pretending cached cells were reread');
   assert.equal(observer.reads[2].count?.decoded,Buffer.byteLength(JSON.stringify(raw)));assert.deepEqual(observer.errors,[]);
   assert.equal(hasSeededHistory(observer.reads,'seed'),false,'evidence and two complete families cannot stand in for the third cell seed');
   emit('Network.requestWillBeSent',{requestId:'funds',request:{url:'http://localhost/api/boards/b/period',postData:JSON.stringify({funds:query})}});
   assert.equal(hasSeededHistory(observer.reads,'seed'),false,'the queued family must finish its physical read');
+  emit('Network.responseReceived',{requestId:'funds',response:{status:200,headers:{}}});
   emit('Network.loadingFinished',{requestId:'funds'});await Promise.all([...observer.pending]);
   assert.equal(hasSeededHistory(observer.reads,'seed'),true);assert.equal(hasSeededHistory(observer.reads,'different phase'),false);
 });
@@ -370,6 +402,7 @@ test('composite resource classification waits for an omitted POST body even afte
   const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
   emit('Network.requestWillBeSent',{requestId:'omitted',request:{url:'http://localhost/api/boards/b/period'}});
   assert.equal(observer.reads.length,1);assert.equal(observer.activeCount,1);assert.equal(observer.pending.size,1);
+  emit('Network.responseReceived',{requestId:'omitted',response:{status:200,headers:{}}});
   emit('Network.loadingFinished',{requestId:'omitted'});await Promise.resolve();
   assert.equal(observer.reads[0].count,undefined,'a response cannot settle before its resource selection is known');
   finish({postData:JSON.stringify({quota:{cell:'1',from:'0',to:'60'}})});
@@ -409,7 +442,7 @@ test('warm failure diagnostics distinguish exact reads and gesture stages withou
   const diagnostic=observer.diagnostic('warm');
   assert.equal(diagnostic.attempts,2);assert.equal(diagnostic.omitted,0);
   assert.deepEqual(diagnostic.reads[0],{stage:'cached return',endpoint:'period',request:{selection:{mode:'live',periodMs:30*86_400_000},evaluatedAt:900,
-    sections:[{scope:'quota',cell:1,from:0,to:60,cells:'skip',evidence:'cursor'},{scope:'funds',cell:1,from:0,to:60,cells:'read',evidence:'skip'}],values:1,sessions:true},canceled:true,complete:false,decoded:undefined,encodedLower:123,encodedUpper:undefined});
+    sections:[{scope:'quota',cell:1,from:0,to:60,cells:'skip',evidence:'cursor'},{scope:'funds',cell:1,from:0,to:60,cells:'read',evidence:'skip'}],values:1,sessions:true},httpStatus:null,canceled:true,complete:false,decoded:undefined,encodedLower:123,encodedUpper:undefined});
   assert.equal(diagnostic.reads[1].stage,'cached repeat');assert.equal(diagnostic.reads[1].endpoint,'period/sessions');
   assert.deepEqual(diagnostic.reads[1].request?.selection,{mode:'range',from:10,to:20});
   assert.equal(JSON.stringify(diagnostic).includes('private'),false);

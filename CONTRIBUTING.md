@@ -534,8 +534,11 @@ loopback proxy uses fixed Brotli settings (quality 4, text mode, window 22), wit
 adding production compression. Decoded JSON may reach 1.5 times, and encoded body
 bytes twice, the reference for the exact missing union and permitted buffer or
 within-tile bridge. The report separates complete bodies, partial byte bounds and
-unknown transfers; headers are never counted as body bytes. Independent whole-cell
-composition also checks series, activity and events. Each history attempt gets its
+unknown transfers; headers are never counted as body bytes. Only HTTP 200 responses
+qualify as accounting data, including metadata-only reads. Error bodies still count
+their physical bytes, and reports retain numeric HTTP status without response contents.
+Independent whole-cell composition also checks series, activity and events. Each
+history attempt gets its
 fixture identity before HTTP starts, so aborts before response headers cannot borrow
 another attempt's byte proof. Separate real HTTP and native Shift-wheel cohorts
 exercise cancellation before headers, after delivery and reversal with a repeated
