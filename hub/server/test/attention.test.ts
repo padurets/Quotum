@@ -395,6 +395,46 @@ test('invalid and exhausted cycle metadata never wrap or emit a new identity', t
   }
 });
 
+test('failed legacy bootstrap disables new cycles through cleanup and database restart', t => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'quotum-attention-invalid-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const errors: string[] = [];
+  t.mock.method(console, 'error', (message: string) => errors.push(message));
+  const file = path.join(dir, 'db.sqlite');
+  let store = new Store(file, T);
+  const source = store.source('codex', 'legacy', T);
+  const legacy = {...advanceWindow(null, sample(35), false).ledger, cycle: 2};
+  store.db.prepare('INSERT INTO attention_windows VALUES (?, ?, ?, ?, ?)').run(source, 'week', 2, T, JSON.stringify(legacy));
+  store.db.prepare('INSERT INTO attention_windows VALUES (?, ?, ?, ?, ?)').run(source, 'invalid', 9007199254740992n, T, '{}');
+  store.db.prepare("UPDATE meta SET value = '0' WHERE key = 'attentionCycle'").run();
+  store.close();
+  store = new Store(file, T);
+  t.after(() => store.close());
+  const record = (attention: Attention, remaining: number, at: number) => transaction(store.db, () => {
+    const batch = attention.begin();
+    const measurement = {observedAt: at, windows: [sample(remaining, at)], staleAfterMs: 204_000, resets: null, plan: 'pro'};
+    batch.record(store.state(source), measurement, at);
+    assert.equal(store.record(source, measurement).accepted, true, 'invalid notification metadata does not reject measurements');
+    afterCommit(() => batch.committed());
+  });
+  const attention = new Attention(store, T), candidates: Candidate[] = [];
+  attention.onEvents = events => candidates.push(...events.candidates);
+  for (const [i, remaining] of [35, 29, 100, 29, 100, 29].entries()) record(attention, remaining, T + i * 1000);
+  assert.equal(candidates.length, 1, 'the retained cycle may finish, but no new identity is allocated');
+  assert.equal(store.attentionCycle(source, 'week'), 2);
+  const at = T + 6001 + config.retention.sampleDays * 86_400_000;
+  store.prune(at);
+  store.close();
+  store = new Store(file, at);
+  const returning = new Attention(store, at);
+  returning.onEvents = events => candidates.push(...events.candidates);
+  record(returning, 35, at);
+  record(returning, 29, at + 1000);
+  assert.equal(store.attentionCycle(source, 'week'), null, 'cleanup cannot restore an unverified counter');
+  assert.equal(candidates.length, 1);
+  assert.ok(errors.length > 0 && errors.every(e => JSON.parse(e).message === 'invalid_attention_cycle'));
+});
+
 test('an expired low window returns consumed and cannot replay its old low intent', t => {
   const h = setup(t);
   h.deliver([[T, 35]]);

@@ -3,7 +3,6 @@ import type {WindowMeasurement as Measurement, SourceState} from './domain/quota
 import type {ResetProvider, ResetStatus} from './domain/resets.js';
 import type {Store} from './store/store.js';
 import {trouble} from './touches.js';
-import {nextAttentionCycle} from './store/attention.js';
 
 /** Transactional event consumption. Only committed candidates leave this service. */
 export class Attention {
@@ -39,7 +38,7 @@ export class Attention {
           const {ledger, event, boundary, newCycle} = advanceWindow(previous, sample, observing && previous !== null && previous.previous.at >= this.startedAt && source.windows.some(w => w.id === window.id));
           if (boundary) invalidate(source.id, window.id, sample.at);
           if (newCycle) {
-            try { ledger.cycle = nextAttentionCycle(this.store.db); }
+            try { ledger.cycle = this.store.newAttentionCycle(); }
             catch { trouble(new Error('invalid_attention_cycle')); continue; }
           }
           this.store.db.prepare('INSERT OR REPLACE INTO attention_windows VALUES (?, ?, ?, ?, ?)').run(source.id, window.id, ledger.cycle, sample.at, JSON.stringify(ledger));

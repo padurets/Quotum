@@ -286,6 +286,8 @@ subscription:
   all its duty protection, including a new holder's starter lease. Its own cooldown
   remains; the next eligible healthy device takes over. Older and off-duty failures
   cannot end a newer command. Source figures retain their independent validity.
+  A delayed snapshot taken before or at the device's latest failure can update the
+  source without renewing that device's duty; recovery requires a later observation.
 
 Duty decides who measures; the hub's **pace** (`hub/server/cadence.ts`) decides when,
 from what it sees of the subscription everywhere, which no single machine does:
@@ -1728,6 +1730,8 @@ use one persisted global high-water counter, allocated in the same transaction,
 so cleanup and restart cannot reuse a consumed notification identity. The counter
 is bootstrapped from legacy cycles before any ledger is removed; invalid or exhausted
 metadata suppresses new cycles with a safe diagnostic.
+Failed legacy bootstrap disables allocations even if the counter itself looks valid;
+the same scalar records that failure so cleanup and restart cannot make it usable again.
 Boundaries precede the coalesced card deltas, and new candidates follow them. Thus a
 temporary replacement or disappearance can revoke an already queued native intent
 even when the final card has its old metadata again. The boundary/candidate buffer is
