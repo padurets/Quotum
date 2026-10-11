@@ -226,7 +226,11 @@ export class HistoryStore {
     this.newsSeq++;
     this.cutTo = null;
     this.aheadStopped = false;
-    if (since === 0) this.invalidate();
+    if (since === 0) {
+      if (this.scope !== 'budget') {this.retirePresentation();this.grids.clear();}
+      this.invalidate();
+      this.publish();
+    }
     else {
       for (const [cell, tiles] of this.grids) for (const tile of tiles.values()) {
         if (tile.to > since) tile.validTo = Math.min(tile.validTo, Math.max(tile.readFrom, cellStart(since, cell)));

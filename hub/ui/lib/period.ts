@@ -190,6 +190,14 @@ class BoardPeriod {
   }
   private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
   private publishWork() {this.workState={...this.work,rows:this.workRows};for(const listener of this.listeners)listener();}
+  private retireWork() {
+    this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.workProofEpoch=-1;
+    this.tapes.delete('quota');delete this.projectionErrors.quota;this.transport.forgetEvidence('quota');
+    this.workRows=[];
+    const previous=this.rowsBySource;this.rowsBySource=new Map();for(const id of previous.keys())for(const listener of this.sourceListeners.get(id)??[])listener();
+    this.work={...this.work,loading:this.wantsWork};this.publishWork();this.publishProjection(['quota']);
+    this.measureBytes();clock.due(this.watch,null,hubNow());
+  }
   private clear() {
     this.proofEpoch++;this.workProofEpoch=-1;this.valuesProofEpoch=-1;this.dirtyScopes.clear();
     this.retained.clear();this.cacheKey='';
@@ -273,6 +281,8 @@ class BoardPeriod {
         const own=board.meta.personal&&hub.data.ownSince!==undefined&&(selection.mode==='live'||hub.data.ownSince<selection.to);
         const relevant=included&&(selection.mode==='live'||hub.data.since<selection.to)||own;
         if(relevant){
+          const retired=own&&hub.data.ownSince===0||included&&(hub.data.changes?hub.data.changes.some(c=>sources.includes(c.source)&&c.scope==='quota'&&(c.since===0||c.workSince===0)):hub.data.since===0);
+          if(retired)this.retireWork();
           if(included&&selection.mode==='range')this.valuesNeeded=true;
           for(const scope of PERIOD_SCOPES){
             const visible=(scope==='quota'?[ACTIVITY,...QUOTA_WIDGETS]:scope==='funds'?[SUBSCRIPTION_FUNDS]:BUDGET_WIDGETS).some(id=>widgetVisible(board.view,id,board.lineup.length));
@@ -280,7 +290,7 @@ class BoardPeriod {
             const selected=scope==='quota'?new Set(sources):new Set(moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,scope==='funds'?prefs().funds:prefs().money,board.currencies,scope==='funds'?'funds':'budget').selection?.ids.map(([id])=>id));
             if(scope==='quota'&&own||(hub.data.changes?hub.data.changes.some(c=>selected.has(c.source)&&c.scope===(scope==='funds'?'budget':scope)&&(selection.mode==='live'||c.since<selection.to)):hub.data.sources.some(id=>selected.has(id))))this.dirtyScopes.add(scope);
           }
-          const work=hub.data.changes?.some(c=>sources.includes(c.source)&&c.workSince!==undefined)??true;if(work||own)this.workNeeded=wantsWork;this.revision++;this.transport.change();
+          const work=hub.data.changes?.some(c=>sources.includes(c.source)&&c.scope==='quota'&&c.workSince!==undefined)??true;if(retired||work||own)this.workNeeded=wantsWork;this.revision++;this.transport.change();
         }
       }
     }

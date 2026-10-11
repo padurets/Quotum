@@ -591,6 +591,14 @@ request. Detail reads use the same accounting transport and memory limits.
 The `history` event's optional `changes` entries are
 `{source, scope:'quota'|'budget', since, workSince?}`. `workSince` identifies actual
 credited-work invalidation; the legacy `sources` and earliest `since` remain present.
+When the board's permitted work or its names change, its quota entries carry
+`since:0, workSince:0`. This retires the previous session index and quota/activity
+presentation immediately, including prepared drawings and gesture legends, and asks
+for a fresh session baseline. Older quota zero-cutoff events without `workSince`, or
+without `changes`, have the same meaning. A personal `ownSince:0` also retires private
+work, even with no sources; shared readers ignore private cutoffs. Budget-only and
+unselected-source changes do not retire the work index. Positive work cutoffs refresh
+credited work while retaining the last complete frame under the same authority.
 Consumers coalesce affected sections into one foreground read. All accounting endpoint
 requests and bytes, including aborted attempts, count toward the same benchmark budget.
 

@@ -50,7 +50,7 @@ type MoneyColumn = typeof MONEY_COLUMNS[number]['id'];
 const pointAt=(series:MeterHistory,at:number,cell=60000)=>series.pointMode==='observation'?moneyPointAt(series,at):meterPointIn(series,at,cell);
 
 export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:MoneyFamily}) {
-  const context=useCurrencyContext(),board=useBoardId(),locale=useLocale(),{history,drawing,loading,error}=useBudgetHistory(family,true),prefs=usePrefs(),sources=useNamed(arrange.view.names,family);
+  const context=useCurrencyContext(),board=useBoardId(),locale=useLocale(),{history,drawing,loading,error,presentation:authority}=useBudgetHistory(family,true),prefs=usePrefs(),sources=useNamed(arrange.view.names,family);
   const funds=family==='funds',settings=funds?prefs.funds:prefs.money,reader=funds?fundsHistory:budgetHistory;
   const strip=useBudgetHistoryPlot(family),panning=usePanning();
   const selected=useTimeRange(),start=useHistoryBegins(),panel=useRef<HTMLElement>(null),{plot,onBase}=usePlot(panel);
@@ -61,7 +61,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const selection=moneySelection(sources,arrange.view.hidden,settings,context,family).selection;
   const noSelection=!(selection?.ids.length);
   const noResources=!sources.some(source=>supportsBudget(providerOf(source.provider))&&!arrange.view.hidden.includes('source:'+source.id));
-  const modelContext=JSON.stringify([family,board,history?.board,unit,selection?.ids]);
+  const modelContext=JSON.stringify([authority,family,board,history?.board,unit,selection?.ids]);
   const prepared=usePrepared(function* () {
     const entries:MeterHistory[]=[],visible:MeterHistory[]=[];
     let low:bigint|null=null,high:bigint|null=null;

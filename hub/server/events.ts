@@ -552,7 +552,7 @@ export class Events implements Touches {
       const work = projection.workKey(watched.id);
       if (watched.work !== null && watched.work !== work) {
         let pending=histories.get(watched.id);if(!pending)histories.set(watched.id,(pending=new Map()));
-        for(const source of ids)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0});
+        for(const source of ids)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0,workSince:0});
         const owner = this.parts.store.privateOwner(watched.id);
         if (owner) {ownHistories.set(owner, 0); this.onClientHistory?.(owner, 0);}
       }

@@ -309,7 +309,7 @@ export const Chart = memo(function Chart({
   useLayoutEffect(() => onBase?.(base * scale), [base, scale, onBase]);
   const top = 12, bottom = 28;
   const inputs = [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, width, height, cellMs, modelContext, navigation && navigationKey(navigation), desiredLive, valueAxis, stepped];
-  const requested = usePreparationBasis({...axis.basis, end: axis.active && !incomingStrip ? axis.basis.end : desiredNow}, inputs, axis.active, incomingReady);
+  const requested = usePreparationBasis({...axis.basis, end: axis.active && !incomingStrip ? axis.basis.end : desiredNow}, inputs, axis.active, incomingReady, modelContext);
   const blockPaths = useRef(new WeakMap<PlotBlock, {geometry: string; line: string; last: [number, number] | null}>());
   const prepared = usePrepared(function* () {
     const basis = {from: requested.from, to: requested.to, end: requested.end};

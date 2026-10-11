@@ -207,9 +207,10 @@ const Totals = memo(function Totals({activity, shownMs, since}: {activity: Activ
  * render it. The unknown part of the period is hatched rather than drawn as idle.
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
-  const {history,drawing,loading,error} = useHistory(true);
+  const {history,drawing,loading,error,presentation:authority} = useHistory(true);
   const strip = useHistoryPlot();
-  const registry = useRef<{token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
+  const registry = useRef<{authority: number; token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
+  if (registry.current?.authority !== authority) registry.current = null;
   const panel = useRef<HTMLElement>(null);
   // Made taller by its owner, the widget gives the room to the stacks, as the chart does.
   const {plot, onBase} = usePlot(panel);
@@ -223,9 +224,9 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const navigation = axisNavigation(useBoardId(), selected, prefs);
   const clockNow = useClock(now => frameChangesAt(selected, history?.cellMs ?? 60_000, now), [history, strip, prefs, selected, titles, arrange.view, locale]);
   const panning = usePanning();
-  const captured = useRef<{token: number; now: number} | null>(null);
+  const captured = useRef<{authority: number; token: number; now: number} | null>(null);
   if (panning === null) captured.current = null;
-  else if (captured.current?.token !== panning) captured.current = {token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow)};
+  else if (captured.current?.token !== panning || captured.current.authority !== authority) captured.current = {authority, token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow)};
   const now = panning !== null ? captured.current!.now : clockNow;
   const historyStart = useHistoryBegins();
   const frame = frameOf(selected, prefs, now, historyStart);
@@ -251,12 +252,12 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     }
     const seed = groups.map((group, i) => ({key: group.key, name: group.name, color: colors[i]}));
     if (!strip) return {identities: seed, shown, strip, registry: null};
-    const previous = registry.current?.token === strip.token && registry.current.by === by ? registry.current : {token: strip.token, by, seed, groups: seed};
+    const previous = registry.current?.authority === authority && registry.current.token === strip.token && registry.current.by === by ? registry.current : {authority, token: strip.token, by, seed, groups: seed};
     const identities = groupRegistry(previous.seed, previous.groups, [...found.values()], by === 'source' ? key => key === 'unknown' ? 'var(--other)' : colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
     const plotted: {group: PlotGroup; color: string; name: string}[] = [];
     for (const identity of identities) {if (!prefs.muted[mutedKey(by, identity.key)]) plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
-    return {identities, shown: plotted, strip, registry: {token: strip.token, by, seed: previous.seed, groups: identities}};
-  }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${history?.board}:${by}`);
+    return {identities, shown: plotted, strip, registry: {authority, token: strip.token, by, seed: previous.seed, groups: identities}};
+  }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${authority}:${history?.board}:${by}`);
   const presentation = prepared.value ?? {identities: [], shown: [], strip: null};
   useLayoutEffect(() => {if (prepared.value) registry.current = prepared.value.registry;}, [prepared.value]);
   const currentGroups=activity?.by[by]??[];
@@ -295,6 +296,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             onBase={onBase}
             strip={presentation.strip}
             prepared={prepared.ready && (panning !== null || answered || !!error)}
+            authority={authority}
             navigation={navigation}
             by={by}
             allMuted={!emptyFrame && presentation.identities.length > 0 && presentation.shown.length === 0}
@@ -334,6 +336,7 @@ const Stacks = memo(function Stacks({
   onBase,
   strip: incomingStrip,
   prepared: incomingReady,
+  authority,
   navigation,
   by,
   allMuted,
@@ -355,6 +358,7 @@ const Stacks = memo(function Stacks({
   onBase: (height: number) => void;
   strip: PlotBuffer | null;
   prepared: boolean;
+  authority: number;
   navigation: AxisNavigation;
   by: ActivityDimension;
   allMuted: boolean;
@@ -369,10 +373,10 @@ const Stacks = memo(function Stacks({
   const height = plot === undefined ? base : Math.max(base, plot / scale);
   useLayoutEffect(() => onBase(base * scale), [base, scale, onBase]);
   const top = 12, bottom = 28;
-  const maxSeen = useRef(0);
-  const stackPaths = useRef(new StackPaths());
+  const cache = useRef({authority, maximum: 0, paths: new StackPaths()});
+  if (cache.current.authority !== authority) cache.current = {authority, maximum: 0, paths: new StackPaths()};
   const inputs = [incomingGroups, incomingStrip, incomingActivity, incomingOrigin, incomingUnknownTo, by, width, height, navigationKey(navigation)];
-  const requested = usePreparationBasis(axis.basis, inputs, active, incomingReady);
+  const requested = usePreparationBasis(axis.basis, inputs, active, incomingReady, authority);
   const prepared = usePrepared(function* () {
     const basis = {from: requested.from, to: requested.to, end: requested.end};
     const span = Math.max(MINUTE, basis.to - basis.from);
@@ -392,7 +396,7 @@ const Stacks = memo(function Stacks({
     let busiest = 0;
     for (const value of heights.values()) {busiest = Math.max(busiest, value); yield;}
     for (const value of bars.values()) {busiest = Math.max(busiest, value); yield;}
-    const maximum = active ? Math.max(maxSeen.current, busiest) : busiest;
+    const maximum = active ? Math.max(cache.current.maximum, busiest) : busiest;
     const vertical = activityScale(maximum);
     const perMs = (width - left - right) / span;
     const pathOrigin = incomingStrip ? basis.from : incomingOrigin;
@@ -402,9 +406,9 @@ const Stacks = memo(function Stacks({
       for (const cell of row.group.cells) {if (cell[0] + barMs > basis.from - span / 2 && cell[0] < basis.to + span / 2) cells.push(cell); yield;}
       drawn.push({...row, group: {...row.group, cells}}); yield;
     }
-    const paths = yield* stackPaths.current.drawPrepared(incomingStrip ? incomingGroups : drawn, pathOrigin, perMs, barMs, height, vertical.max);
+    const paths = yield* cache.current.paths.drawPrepared(incomingStrip ? incomingGroups : drawn, pathOrigin, perMs, barMs, height, vertical.max);
     return {basis, barMs, heights, maximum, vertical, perMs, pathOrigin, paths, groups: incomingGroups, strip: incomingStrip, activity: incomingActivity, originUnknownTo: incomingUnknownTo};
-  }, [...inputs, requested.from, requested.to, requested.end], `${by}:${width}:${height}`, incomingReady);
+  }, [...inputs, requested.from, requested.to, requested.end], `${authority}:${by}:${width}:${height}`, incomingReady);
   const model = prepared.value;
   const basis = model?.basis ?? axis.basis;
   const groups = model?.groups ?? [], strip = model?.strip ?? null, activity = currentActivity ?? model?.activity ?? incomingActivity;
@@ -420,7 +424,7 @@ const Stacks = memo(function Stacks({
   const hover = incomingReady && prepared.ready ? axis.hover : null;
   const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (narrow ? 4 : 7) * (tickTo - tickFrom) / span);
-  useLayoutEffect(() => {if (model) maxSeen.current = model.maximum; axis.commitDrawing(basis, incomingReady && prepared.ready);});
+  useLayoutEffect(() => {if (model) cache.current.maximum = model.maximum; axis.commitDrawing(basis, incomingReady && prepared.ready);});
 
   const innerClip = `${clip}-inner`;
   const bandClip = useRef<HTMLDivElement>(null);

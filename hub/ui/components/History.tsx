@@ -65,9 +65,10 @@ function HistorySettings({arrange, planAvailable, forecastAvailable}: {arrange: 
  * forecast's line goes when the table no longer says where its window leads.
  */
 const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange}) {
-  const {history,drawing,loading,error} = useHistory();
+  const {history,drawing,loading,error,presentation:authority} = useHistory();
   const strip = useHistoryPlot();
-  const registry = useRef<{token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
+  const registry = useRef<{authority: number; token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
+  if (registry.current?.authority !== authority) registry.current = null;
   const panel = useRef<HTMLElement>(null);
   // Made taller by its owner, the widget gives the room to the plot, not to empty space under the legend.
   const {plot, onBase} = usePlot(panel);
@@ -92,9 +93,9 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const past = usePastResets();
   const clockNow = useClock(now => earliest(frameChangesAt(selected, history?.cellMs ?? 60_000, now), ...moments.filter(at => at > now)), [history, strip, sources, hubForecasts, lineup, news, prefs, selected, view, locale, codex, past]);
   const panning = usePanning();
-  const captured = useRef<{token: number; now: number; lookAhead: number; sources: typeof sources; forecasts: typeof hubForecasts; lineup: typeof lineup; news: typeof news; codex: typeof codex; view: typeof view} | null>(null);
+  const captured = useRef<{authority: number; token: number; now: number; lookAhead: number; sources: typeof sources; forecasts: typeof hubForecasts; lineup: typeof lineup; news: typeof news; codex: typeof codex; view: typeof view} | null>(null);
   if (panning === null) captured.current = null;
-  else if (captured.current?.token !== panning) captured.current = {token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow), lookAhead: pan.get()?.lookAhead ?? 0, sources, forecasts: hubForecasts, lineup, news, codex, view};
+  else if (captured.current?.token !== panning || captured.current.authority !== authority) captured.current = {authority, token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow), lookAhead: pan.get()?.lookAhead ?? 0, sources, forecasts: hubForecasts, lineup, news, codex, view};
   const context = panning !== null ? captured.current : null;
   const now = context?.now ?? clockNow;
   const futureSources = context?.sources ?? sources;
@@ -113,10 +114,10 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
     let lines: PlotLine[] = answered;
     let nextRegistry: typeof registry.current = null;
     if (strip) {
-      const previous = registry.current?.token === strip.token ? registry.current : {token: strip.token, seed: answered, lines: answered};
+      const previous = registry.current?.authority === authority && registry.current.token === strip.token ? registry.current : {authority, token: strip.token, seed: answered, lines: answered};
       const eligibleSeed = previous.seed.filter(line => answered.some(current => current.key === line.key));
       lines = lineRegistry(eligibleSeed, previous.lines, yield* subscriptionPlotLinesPrepared(strip, sources, view, prefs.kind));
-      nextRegistry = {token: strip.token, seed: previous.seed, lines};
+      nextRegistry = {authority, token: strip.token, seed: previous.seed, lines};
     }
     const visible: PlotLine[] = [];
     for (const line of lines) {if (!prefs.muted[line.key]) visible.push(line); yield;}
@@ -172,7 +173,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
       if (points.length) forecasts.push({key: line.key, name: line.name, color: line.color, dash: line.dash, points, zero: drawn.zero, at: drawn.at, until: drawn.until}); yield;
     }
     return {futureFacts: ahead.map(a => ({zero: a.drawn.zero, until: a.drawn.until})), hints, lines, visible, markers, plans: [...plans.values()], forecasts, to, from, measured, now: strip ? now : measured, cellMs: strip?.cell ?? history?.cellMs ?? 60_000, strip, frame, planAvailable, forecastAvailable, planShown, forecastShown, moments: [...chartMoments(markers, ahead.map(a => a.drawn), to), ...[...plans.values()].map(plan => plan.until!)], registry: nextRegistry};
-  }, [drawing, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, navigationKey(navigation)], `${history?.board}:${prefs.kind}`);
+  }, [drawing, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, navigationKey(navigation)], `${authority}:${history?.board}:${prefs.kind}`);
   const model = prepared.value;
   useLayoutEffect(() => {if (model) registry.current = model.registry;}, [model]);
   const lines = model?.lines ?? [];
@@ -199,7 +200,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
           cellMs={model?.cellMs ?? history?.cellMs ?? 60_000}
           strip={model?.strip ?? null}
           prepared={prepared.ready && (panning !== null || answered || !!error)}
-          modelContext={`${history?.board}:${prefs.kind}`}
+          modelContext={`${authority}:${history?.board}:${prefs.kind}`}
           empty={error ? null : !history ? t('history.loading') : lines.length ? t('analytics.allMuted') : t('history.noLines')}
           onSelect={setTimeRange}
           plot={plot}

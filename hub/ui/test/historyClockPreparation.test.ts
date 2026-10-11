@@ -16,7 +16,7 @@ test('the actual History producer retains data on clock wakes and keeps forecast
   const start = source.indexOf('  const prepared = usePrepared(');
   const region = source.slice(start, source.indexOf('\n  return (', start));
   type Result = {prepared: {ready: boolean}; model: {forecasts: unknown[]; markers: {at: number}[]}; currentHints: {forecast: boolean; zeros: number[]}; wantedTo: number};
-  const context = {...hook, now: H, measured: H, from: 0, frame: {from: 0, to: H, future: H, live: true}, history: {board: 'b', events: []}, drawing: {board: 'b', events: []}, strip: null,
+  const context = {...hook, now: H, measured: H, from: 0, frame: {from: 0, to: H, future: H, live: true}, authority: 0, history: {board: 'b', events: []}, drawing: {board: 'b', events: []}, strip: null,
     sources: [{id: 's', successAt: H, windows: [{id: 'w', kind: 'weekly', resetAt: 3 * H}]}], view: {},
     prefs: {kind: 'weekly', muted: {}, showPlan: false, showForecast: false, horizon: 'auto'}, locale: 'en',
     futureSources: [] as unknown[], futureForecasts: {}, futureLineup: [], futureNews: null, futureCodex: null, futureView: {},
@@ -46,4 +46,8 @@ test('the actual History producer retains data on clock wakes and keeps forecast
   assert.equal(expired.currentHints.forecast, false); assert.equal(expired.currentHints.zeros.length, 0); assert.equal(expired.wantedTo, context.measured);
   context.drawing = {...context.drawing}; render(); hook.commit(); hook.finish();
   assert.equal(calculations, 3, 'new evidence still rebuilds the paths');
+  context.authority++;
+  context.history = {...context.history}; context.drawing = {...context.drawing};
+  assert.equal(render().model, null, 'a fresh same-board answer cannot borrow the retired model even without an intermediate empty render');
+  hook.commit(); hook.finish(); assert.ok(render().model);
 });

@@ -28,7 +28,7 @@ test('the actual spending generator keeps visible quantities invariant under ove
     const raw=crossing?{...cells,cells:[[1,'10000000','0','1000000',60000,{steps:[{from:10000,to:60001,amount:'1000000',evidence:'continuous'}]}]] as MeterSeriesCells['cells']}:cells;
     const chunks=[{from:0,meterSeries:[raw]}],original=composeMeters(chunks,60000,60000,180000);
     const draw=(strip:unknown)=>{
-      const context={family:'budget',settings:{view:'spending'},context:defaultCurrencyContext,strip,original,history:{meterSeries:original},drawing:{meterSeries:original},unit:'USD',prefs:{money:{view:'spending'},muted:{}},sources:[{id:'s',title:'Fixture',provider:'openrouter'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[['s','balance']]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof original}};
+      const context={authority:0,family:'budget',settings:{view:'spending'},context:defaultCurrencyContext,strip,original,history:{meterSeries:original},drawing:{meterSeries:original},unit:'USD',prefs:{money:{view:'spending'},muted:{}},sources:[{id:'s',title:'Fixture',provider:'openrouter'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[['s','balance']]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof original}};
       runInNewContext(ts.transpileModule(region+'\nglobalThis.model=prepared.value;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
       return JSON.stringify(context.model.entries[0].points.filter(p=>p.at>=60000&&p.at<180000).map(p=>[p.at,p.value]));
     };
@@ -59,14 +59,13 @@ test('the actual prepared money chart keeps its value axis, step geometry and ex
   const next=context.draw().value!;assert.equal(next.valueAxis,context.valueAxis);assert.equal(next.paths[0].latest,'60000:3000000');
 });
 
-test('MoneyHistory passes resource retirement through to the prepared Chart while a replacement read is pending', () => {
-  for (const removed of [false, true]) {
+for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'resource revision']) test(`MoneyHistory retires ${change} through the prepared Chart`, () => {
     const outer = preparationFixture(), inner = preparationFixture();
     const cards: Card[] = ['A', 'B'].map(id => ({id, title: id, provider: 'openrouter', plan: '', successAt: 60000, error: null, stale: false, windows: [], resets: null, owners: [], staleAfterMs: 1000, measureIntervalMs: null,
       meters: [{id: 'balance', amount: '10000000', kind: 'balance', unit: 'USD', limit: null, at: 60000, stale: false, staleAfterMs: 1000, resetAt: null, minutes: null, scope: null, label: null}]}));
     const series = composeMeters([{from: 0, meterSeries: cards.map(c => ({source: c.id, meter: 'balance', kind: 'balance', unit: 'USD', semantics: null, cells: [[0, '10000000', '0', '0', 60000], [1, '10000000', '0', '0', 60000]]}))}], 60000, 0, 120000);
     let history = {board: 'board', range: '1h', cellMs: 60000, since: 0, to: 120000, meterSeries: series} as History | null;
-    let sources = cards, view = EMPTY_VIEW;
+    let sources = cards, view = EMPTY_VIEW, presentation = 0;
     const prefs = {money: {unit: 'USD', view: 'balance', selected: {}}, muted: {}, range: '1h', horizon: 'auto'};
     const Chart = () => null;
     const memo = (read: () => unknown, deps: unknown[]) => {const box = outer.useRef(null) as {current: {deps: unknown[]; value: unknown} | null}; if (!box.current || deps.some((v, i) => !Object.is(v, box.current!.deps[i]))) box.current = {deps, value: read()}; return box.current.value;};
@@ -74,7 +73,7 @@ test('MoneyHistory passes resource retirement through to the prepared Chart whil
       'react/jsx-runtime': jsx, react: {useRef: outer.useRef, useMemo: memo},
       '../../server/domain/providers': providers, '../../server/domain/currency': currency, '../../server/domain/meterHistory': {composeMetersPrepared},
       '../lib/board': {useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
-      '../lib/history': {useBudgetHistory: () => ({history, drawing: history, loading: !history}), useBudgetHistoryPlot: () => null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
+      '../lib/history': {useBudgetHistory: () => ({history, drawing: history, loading: !history, presentation}), useBudgetHistoryPlot: () => null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
       '../lib/prefs': {usePrefs: () => prefs}, '../lib/moneySelection': {moneySelection}, '../lib/moneyView': moneyView, '../lib/money': money,
       '../lib/view': {colorOf: () => '#fff'}, '../lib/periods': {frameOf: () => ({from: 0, to: 120000, live: true}), measuredTo: () => 60000},
       '../lib/timeRange': {useTimeRange: () => null}, '../lib/clock': {useClock: () => 60000}, '../lib/pan': {usePanning: () => null},
@@ -103,9 +102,17 @@ test('MoneyHistory passes resource retirement through to the prepared Chart whil
     assert.equal(original.paths[0].latest, '60000:10000000');
     prefs.range = '3h';
     assert.equal(draw().value, original, 'the same resources keep their answered frame during a range read');
-    history = null;
-    if (removed) sources = cards.slice(1); else view = {...view, hidden: ['source:A']};
-    assert.equal(draw().value, null, 'the nested geometry retires immediately with its source context');
-    assert.equal(settle().value, null, 'no old path, amount or value axis survives while the answer is pending');
-  }
+    const previous = history!; history = null; presentation++;
+    if (change === 'removed') sources = cards.slice(1);
+    else if (change === 'hidden') view = {...view, hidden: ['source:A']};
+    if (change !== 'batched boundary') assert.equal(draw().value, null, 'the nested geometry retires immediately');
+    if (change === 'hidden' || change === 'removed') {
+      assert.equal(settle().value, null, 'no old path, amount or value axis survives while the answer is pending');
+    } else {
+      history = {...previous, range: '3h', since: 60000, meterSeries: series.map(series => ({...series, end: '5000000', points: series.points.map(point => ({...point, value: '5000000'}))}))};
+      assert.equal(draw().value, null, 'same IDs cannot revive the previous model while the authorized replacement prepares');
+      const fresh = settle().value!;
+      assert.equal(fresh.paths[0].latest, '60000:5000000', 'the replacement owns its amount and readout axis');
+      assert.notEqual(fresh.valueAxis, original.valueAxis);
+    }
 });

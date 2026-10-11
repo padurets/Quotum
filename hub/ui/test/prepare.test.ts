@@ -108,4 +108,17 @@ test('the actual hook cancels unready incoming work, retains its current model a
   assert.equal(render('D').value, 'D'); assert.equal(render('D').ready, true);
   assert.deepEqual(made, ['A', 'B', 'D']);
   const incompatible = render('E', false, 'other'); assert.equal(incompatible.value, null); assert.equal(incompatible.ready, false); h.commit();
+  assert.equal(render('F', false, 'same').value, null, 'returning to a retired context cannot revive D');
+});
+
+test('a retired preparation cannot publish between rendering its new lifetime and committing cancellation', () => {
+  const h = preparationFixture();
+  const work = function* (value: string): Preparation<string> {for (let i = 0; i < 100; i++) yield; return value;};
+  const render = (value: string, context: string, enabled = true) => {h.begin(); return h.usePrepared(() => work(value), [value], context, enabled);};
+  render('old', 'board'); h.commit(); h.finish(); assert.equal(render('old', 'board').value, 'old');
+  render('late', 'board'); h.commit(); h.tick();
+  assert.equal(render('empty', 'retired', false).value, null);
+  h.finish();
+  assert.equal(render('fresh', 'board', false).value, null, 'neither the old model nor the late job belongs to the new lifetime');
+  h.commit(); render('fresh', 'board'); h.commit(); h.finish(); assert.equal(render('fresh', 'board').value, 'fresh');
 });

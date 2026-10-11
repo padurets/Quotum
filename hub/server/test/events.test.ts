@@ -400,7 +400,7 @@ test("the board's own events and each reader's own go apart: its owner and a mem
     ['view', 'card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'history'],
   );
   assert.deepEqual(ofAlice.at(-2)!.data, {sources: [source]});
-  assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source], since: 0, changes: [{source,scope:'quota',since:0}]});
+  assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source], since: 0, changes: [{source,scope:'quota',since:0,workSince:0}]});
   assert.deepEqual(
     ofBob.map(e => e.type),
     ['view', 'card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'history'],
@@ -1160,7 +1160,7 @@ test('all of a board’s history is news when whose agents’ work it shows, or 
   const laptop = (await h.call('GET', '/api/devices', {as: 'alice'})).body[0].id;
   const s = await reading(h, 'alice', board);
   t.after(s.close);
-  const all = {sources: [source], since: 0, ownSince: 0, changes: [{source,scope:'quota',since:0}]};
+  const all = {sources: [source], since: 0, ownSince: 0, changes: [{source,scope:'quota',since:0,workSince:0}]};
   const history = async () => (await s.within()).filter(e => e.type === 'history').map(e => e.data);
 
   await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: {}}, hidden: [`source:${source}`]}});
@@ -1297,5 +1297,5 @@ test('history coalesces each resource scope independently and keeps monetary new
   const view=h.directory.view(board);h.directory.saveView(board,{...view,hidden:[...view.hidden,'source:'+source]},h.directory.credentials('alice@example.com')!.user.id,clock.now());
   clock.advance(config.events.smoothMs);
   const combined=(await s.within()).find(event=>event.type==='history')!.data;
-  assert.deepEqual(combined.changes,[{source,scope:'budget',since},{source,scope:'quota',since:0}]);
+  assert.deepEqual(combined.changes,[{source,scope:'budget',since},{source,scope:'quota',since:0,workSince:0}]);
 });
