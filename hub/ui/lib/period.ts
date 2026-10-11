@@ -154,7 +154,7 @@ class BoardPeriod {
     const period=tape.selection.periodMs;
     return periodTextChangesAt(now,at=>{const next=Math.min(tape.accounting.changesAt(at,period,source)??Infinity,scope==='quota'?this.workBoundary(at,undefined,source)??Infinity:Infinity,extra?.(at)??Infinity);return Number.isFinite(next)?next:null;},read);
   }
-  projectionState(history:History,scope:PeriodScope){const tape=this.tapes.get(scope),range=evaluatedRange(this.selection,this.evaluatedAt);return {ready:!!tape&&tape.queryKey===this.scopeKeys[scope]&&tape.rangeKey===history.range&&range.from>=tape.tape.from&&(range.to<=tape.tape.cut||this.selection.mode==='live'&&this.liveEvidence),error:this.projectionErrors[scope]};}
+  projectionState(history:History,scope:PeriodScope){const tape=this.tapes.get(scope),range=evaluatedRange(this.selection,this.evaluatedAt);return {ready:!!tape&&tape.queryKey===this.scopeKeys[scope]&&tape.rangeKey===history.range&&this.tapeCovers(tape.tape,range),error:this.projectionErrors[scope]};}
   getSource=(id:string)=>this.rowsBySource.get(id)??noSessions;
   getWorkEvidence=()=>this.work.value;
   getValue=(id:string)=>this.values.get(id)??noValue;
@@ -164,7 +164,13 @@ class BoardPeriod {
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   subscribeValue=(id:string,listener:()=>void)=>{let set=this.valueListeners.get(id);if(!set)this.valueListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   private queryKey(query:HistoryQuery){return JSON.stringify([query.meters,query.unit,query.currency]);}
-  private needsTape(scope:PeriodScope,key:string,range:{from:number;to:number}){const tape=this.tapes.get(scope);return this.dirtyScopes.has(scope)||!tape||tape.queryKey!==key||range.from<tape.tape.from||range.to>tape.tape.cut&&!this.liveEvidence;}
+  private tapeCovers(tape:PeriodTape,range:{from:number;to:number}) {
+    // A complete fixed summary covers its requested endpoints, even when minute
+    // rounding puts the right edge beyond the separate observation cut.
+    if(tape.fixed)return this.selection.mode==='range'&&range.from===tape.fixed.range.from&&range.to===tape.fixed.range.to;
+    return range.from>=tape.from&&(range.to<=tape.cut||this.selection.mode==='live'&&this.liveEvidence);
+  }
+  private needsTape(scope:PeriodScope,key:string,range:{from:number;to:number}){const tape=this.tapes.get(scope);return this.dirtyScopes.has(scope)||!tape||tape.queryKey!==key||!this.tapeCovers(tape.tape,range);}
   private queries(board:NonNullable<PageState['board']>,range:{from:number;to:number}) {
     const cell=cellOf(range.to-range.from),cards=board.lineup.flatMap(id=>board.cards[id]??[]);
     const queries:Partial<Record<PeriodScope,HistoryQuery>>={};
