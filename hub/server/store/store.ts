@@ -937,13 +937,17 @@ export class Store {
     const day=86_400_000,window=to-from,now=Date.now();
     const tail=window<7*day&&from>(Math.max(this.agentWorkSince(),now-config.retention.sampleDays*day)+now)/2;
     const index=window<day||tail?' INDEXED BY agent_work_by_end':'';
-    const read = this.db.prepare('SELECT w.session_id, max(w.from_at, ?), min(w.to_at, ?) FROM agent_work w'+index+' WHERE w.to_at>? AND w.from_at<?'+candidates+' ORDER BY w.session_id,w.from_at');
+    const read = this.db.prepare('SELECT w.session_id,w.from_at,w.to_at FROM agent_work w'+index+' WHERE w.to_at>? AND w.from_at<?'+candidates+' ORDER BY w.session_id,w.from_at');
     read.setReturnArrays(true);
     const selected=JSON.stringify(sources);
-    const rows=read.all(from,to,from,to,...sources?[owner,selected,owner,selected,selected,to,from]:[]) as unknown as [number,number,number][];
+    const rows=read.all(from,to,...sources?[owner,selected,owner,selected,selected,to,from]:[]) as unknown as [number,number,number][];
     const bounds=new Map<number,{from:number;to:number}>();
     let previous:number|undefined,range:{from:number;to:number}|undefined;
-    for(const [id,start,end] of rows) {
+    for(const row of rows) {
+      // Most retained stretches already fit. Clip at the two edges while finding
+      // context bounds instead of calling SQLite's scalar functions for every row.
+      if(row[1]<from)row[1]=from;if(row[2]>to)row[2]=to;
+      const [id,start,end]=row;
       if(id!==previous) {range={from:start,to:end};bounds.set(id,range);previous=id;}
       else range!.to=Math.max(range!.to,end);
     }
@@ -958,8 +962,11 @@ export class Store {
       return parts.length?[[s.id,{session:s,parts,next:0}] as [number,{session:typeof s;parts:typeof parts;next:number}]]:[];
     }));
     const result: Stretch[] = [];
+    let lastId:number|undefined,lastTimeline:ReturnType<typeof timelines.get>;
     for (const [id, start, end] of rows) {
-      const timeline = timelines.get(id);if(!timeline)continue;const s = timeline.session;
+      // Rows are ordered by context, so one lookup serves all its stretches.
+      const timeline=id===lastId?lastTimeline:timelines.get(id);lastId=id;lastTimeline=timeline;
+      if(!timeline)continue;const s = timeline.session;
       if(timeline.parts.length===1&&timeline.parts[0].from<=start&&timeline.parts[0].to>=end){
         result.push({session:id,source:timeline.parts[0].source,device:s.device,user:s.user,origin:s.origin,project:s.project,folder:s.folder,startedAt:s.startedAt,from:start,to:end});
         continue;
