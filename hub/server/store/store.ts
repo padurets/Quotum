@@ -928,11 +928,19 @@ export class Store {
       const selected=sources?new Set(sources):null;
       return this.historyWork.spans.flatMap(span=>span.to<=from||span.from>=to||selected&&!selected.has(span.source??'')&&!(span.source===null&&span.user===owner)?[]:[{...span,from:Math.max(from,span.from),to:Math.min(to,span.to)}]);
     }
-    // Resolve the smaller context set first. Unselected work then stays in SQLite,
-    // without repeating owner and source joins for every credited stretch.
-    const sessions = this.db.prepare("SELECT s.id,s.client AS clientId,s.source_id AS source,s.device_id AS device,d.user_id AS user,s.origin,COALESCE(n.name,NULLIF(s.project,'')) AS project,NULLIF(s.folder,'') AS folder,s.started_at AS startedAt,s.account_by AS accountBy,s.route_class AS class,s.route_by AS by,s.route_host AS host,s.route_provider AS provider FROM agent_sessions s JOIN devices d ON d.id=s.device_id LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project WHERE s.id IN (SELECT w.session_id FROM agent_work w INDEXED BY agent_work_by_end WHERE w.to_at>? AND w.from_at<?)"+
-      (sources?' AND (d.user_id IN (SELECT user_id FROM holders WHERE source_id IN (SELECT value FROM json_each(?))) OR d.user_id=?)':''))
-      .all(from,to,...sources?[JSON.stringify(sources),owner]:[]) as ({id: number; clientId: string; accountBy: SessionEvidence['accountBy']; class: SessionRoute['class']; by: SessionRoute['by'] | null; host: string | null; provider: string | null} & Omit<Stretch, 'session' | 'from' | 'to'>)[];
+    // Account evidence and possible manual targets select candidates, never their
+    // final source. Materialize this smaller context set once inside SQLite.
+    const candidates = sources ? ' AND w.session_id IN (SELECT s.id FROM agent_sessions s JOIN devices d ON d.id=s.device_id WHERE (d.user_id=? OR d.user_id IN (SELECT user_id FROM holders WHERE source_id IN (SELECT value FROM json_each(?)))) AND (d.user_id=? OR s.source_id IN (SELECT value FROM json_each(?)) OR EXISTS(SELECT 1 FROM client_links l WHERE l.user_id=d.user_id AND l.client=s.client AND (l.device_id IS NULL OR l.device_id=s.device_id) AND l.source_id IN (SELECT value FROM json_each(?)) AND l.from_at<? AND (l.to_at IS NULL OR l.to_at>?))))' : '';
+    // Broad reads use each selected context's ordered primary key. Short reads
+    // keep the end index so long-lived contexts cannot scan their retained past.
+    const index=to-from<86_400_000?' INDEXED BY agent_work_by_end':'';
+    const read = this.db.prepare('SELECT w.session_id, max(w.from_at, ?), min(w.to_at, ?) FROM agent_work w'+index+' WHERE w.to_at>? AND w.from_at<?'+candidates+' ORDER BY w.session_id,w.from_at');
+    read.setReturnArrays(true);
+    const selected=JSON.stringify(sources);
+    const rows=read.all(from,to,from,to,...sources?[owner,selected,owner,selected,selected,to,from]:[]) as unknown as [number,number,number][];
+    const ids=new Set(rows.map(([id])=>id));
+    const sessions = this.db.prepare("SELECT s.id,s.client AS clientId,s.source_id AS source,s.device_id AS device,d.user_id AS user,s.origin,COALESCE(n.name,NULLIF(s.project,'')) AS project,NULLIF(s.folder,'') AS folder,s.started_at AS startedAt,s.account_by AS accountBy,s.route_class AS class,s.route_by AS by,s.route_host AS host,s.route_provider AS provider FROM agent_sessions s JOIN devices d ON d.id=s.device_id LEFT JOIN project_names n ON n.user_id=d.user_id AND n.reported=s.project WHERE s.id IN (SELECT value FROM json_each(?))")
+      .all(JSON.stringify([...ids])) as ({id: number; clientId: string; accountBy: SessionEvidence['accountBy']; class: SessionRoute['class']; by: SessionRoute['by'] | null; host: string | null; provider: string | null} & Omit<Stretch, 'session' | 'from' | 'to'>)[];
     const contexts = this.links.batch([...new Set(sessions.map(s => s.user))]), allowed = sources ? new Set(sources) : null;
     // Resolve each context's timeline once, then reuse it for all its raw stretches.
     const timelines = new Map(sessions.flatMap(s => {
@@ -940,15 +948,9 @@ export class Store {
       const parts=splitLinks(input, contexts(s.user, s.device, s.clientId), from, to).filter(part=>!allowed||part.source!==null&&allowed.has(part.source)||part.source===null&&s.user===owner);
       return parts.length?[[s.id,{session:s,parts,next:0}] as [number,{session:typeof s;parts:typeof parts;next:number}]]:[];
     }));
-    // Broad reads use each selected context's ordered primary key. Short reads
-    // keep the end index so long-lived contexts cannot scan their retained past.
-    const index=to-from<86_400_000?' INDEXED BY agent_work_by_end':'';
-    const read = this.db.prepare('SELECT w.session_id, max(w.from_at, ?), min(w.to_at, ?) FROM agent_work w'+index+' WHERE w.to_at>? AND w.from_at<? AND w.session_id IN (SELECT value FROM json_each(?)) ORDER BY w.session_id,w.from_at');
-    read.setReturnArrays(true);
-    const rows=read.all(from,to,from,to,JSON.stringify([...timelines.keys()])) as unknown as [number,number,number][];
     const result: Stretch[] = [];
     for (const [id, start, end] of rows) {
-      const timeline = timelines.get(id)!, s = timeline.session;
+      const timeline = timelines.get(id);if(!timeline)continue;const s = timeline.session;
       if(timeline.parts.length===1&&timeline.parts[0].from<=start&&timeline.parts[0].to>=end){
         result.push({session:id,source:timeline.parts[0].source,device:s.device,user:s.user,origin:s.origin,project:s.project,folder:s.folder,startedAt:s.startedAt,from:start,to:end});
         continue;
