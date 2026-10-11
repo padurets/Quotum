@@ -1,7 +1,7 @@
 import {preparationFixture} from './preparationFixture';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Preparations, drain, type Preparation} from '../lib/prepare';
+import {Preparations, prepareAsync, drain, type Preparation} from '../lib/prepare';
 import {ordered} from '../../server/domain/prepare';
 import {HistoryTile} from '../lib/historyTiles';
 import type {Chunk} from '../../server/domain/history';
@@ -14,6 +14,15 @@ export function sliced() {
   const finish = () => {for (let i = 0; tasks.length && i < 100_000; i++) tick(); assert.equal(tasks.length, 0);};
   return {scheduler, tasks, tick, finish, disposed: () => disposed};
 }
+
+test('asynchronous preparation settles cancellation before and after its first slice and propagates failure',async()=>{
+  const h=sliced(),owner={};let released=0;
+  function* work():Preparation<number>{try{for(let i=0;i<1000;i++)yield;return 1;}finally{released++;}}
+  const unstarted=prepareAsync(owner,work(),()=>true,h.scheduler);h.scheduler.cancel(owner);assert.equal(await unstarted,null);
+  const started=prepareAsync(owner,work(),()=>true,h.scheduler);h.tick();h.scheduler.cancel(owner);assert.equal(await started,null);assert.equal(released,1);
+  const failed=prepareAsync(owner,(function*(){yield;throw new Error('broken');})(),()=>true,h.scheduler);
+  const rejected=assert.rejects(failed,/broken/);h.finish();await rejected;assert.equal(h.scheduler.size,0);
+});
 
 test('actual default slices release the UI after one millisecond of primitive work and complete identically', () => {
   let clock = 0, advances = 0, published: number | null = null;
@@ -99,4 +108,17 @@ test('the actual hook cancels unready incoming work, retains its current model a
   assert.equal(render('D').value, 'D'); assert.equal(render('D').ready, true);
   assert.deepEqual(made, ['A', 'B', 'D']);
   const incompatible = render('E', false, 'other'); assert.equal(incompatible.value, null); assert.equal(incompatible.ready, false); h.commit();
+  assert.equal(render('F', false, 'same').value, null, 'returning to a retired context cannot revive D');
+});
+
+test('a retired preparation cannot publish between rendering its new lifetime and committing cancellation', () => {
+  const h = preparationFixture();
+  const work = function* (value: string): Preparation<string> {for (let i = 0; i < 100; i++) yield; return value;};
+  const render = (value: string, context: string, enabled = true) => {h.begin(); return h.usePrepared(() => work(value), [value], context, enabled);};
+  render('old', 'board'); h.commit(); h.finish(); assert.equal(render('old', 'board').value, 'old');
+  render('late', 'board'); h.commit(); h.tick();
+  assert.equal(render('empty', 'retired', false).value, null);
+  h.finish();
+  assert.equal(render('fresh', 'board', false).value, null, 'neither the old model nor the late job belongs to the new lifetime');
+  h.commit(); render('fresh', 'board'); h.commit(); h.finish(); assert.equal(render('fresh', 'board').value, 'fresh');
 });

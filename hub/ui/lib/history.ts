@@ -1,13 +1,14 @@
-import {HistoryPool} from './historyPool';
+import {HistoryPool,historyPool} from './historyPool';
+import {boardPeriod,followPeriod} from './period';
 import type {HistoryScope} from '../../server/domain/history';
 import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVITY} from '../../server/domain/widgets';
-import {useSyncExternalStore} from 'react';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type HistoryReply, type Target} from '../../server/domain/history';
+import {useMemo,useRef,useSyncExternalStore} from 'react';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
 import {page, type PageEvent, type PageState} from './board';
-import {hubNow} from './clock';
+import {hubNow,useClock} from './clock';
 import {HistoryTile} from './historyTiles';
-import {ApiError, call, UNAUTHORIZED} from './http';
-import {periodOf} from './periods';
+import {ApiError, UNAUTHORIZED} from './http';
+import {periodOf,frameChangesAt} from './periods';
 import {onPrefs, prefs} from './prefs';
 import type {Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
@@ -16,7 +17,7 @@ import type {MeterSelection} from '../../server/domain/meterHistory';
 import type {MoneyFamily} from '../../server/domain/providers';
 import {moneySelection} from './moneySelection';
 import {subscriptionSelection} from './subscription';
-import {pan, type Pan} from './pan';
+import {pan,usePanning, type Pan} from './pan';
 import {plotPrepared, type Coverage, type PlotBuffer} from './historyPlot';
 
 import {prepare, preparations, type Preparation, type Preparations} from './prepare';
@@ -34,10 +35,11 @@ export type HistoryEnv = {
   clearTimeout(timer: unknown): void;
   dropTimeRange(): void;
   accessLost?(): void;
+  retry?(): void;
   schedule?(run: () => void): void;
   preparations?: Preparations | null;
 };
-export type Shown = {history: History | null; loading: boolean;error?:'history_limit'|'history_failed'};
+export type Shown = {history: History | null; loading: boolean;presentation:number;error?:'history_limit'|'history_failed'};
 type HistoryBoundary = {board: string; at: number; start: number};
 type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead'};
 type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean; limited?: boolean};
@@ -55,12 +57,14 @@ export class HistoryStore {
   private metaSeq = 0;
   private newsSeq = 0;
   private lineupKey = '';
+  private workAuthority: string | undefined;
   private windowsKey = '';
   private windows = new Set<string>();
   private meters: MeterSelection | undefined;
   private period = '24h';
   private selected: TimeRange | null = null;
   private shown: History | null = null;
+  private presentation=0;
   private meta: HistoryBasis | null = null;
   private metaAt: number | null = null;
   private historyStart = 0;
@@ -80,7 +84,7 @@ export class HistoryStore {
   private scheduled = false;
   private needsCompose = false;
   private readonly listeners = new Set<() => void>();
-  private state: Shown = {history: null, loading: false};
+  private state: Shown = {history: null, loading: false,presentation:0};
   private historyLimit=false;
   private readError=false;
   private interest: PlotInterest | null = null;
@@ -91,6 +95,7 @@ export class HistoryStore {
   private inheritedExtra = false;
   private plotPending = false;
   private plot: PlotBuffer | null = null;
+  private drawingPlot: PlotBuffer | null = null;
   private strip: Target | null = null;
   private stripToken = 0;
   private version = 0;
@@ -138,8 +143,10 @@ export class HistoryStore {
 
   close() {
     this.cancelProjection();
+    this.presentation++;
     this.epoch++;
     this.board = null;
+    this.workAuthority = undefined;
     this.setBoundary(null);
     this.ready = false;
     this.historyLimit=false;this.readError=false;
@@ -172,10 +179,12 @@ export class HistoryStore {
     this.ready = false;
   }
 
-  snapshot(lineup: string[], windows: Iterable<string> = this.windows, historyStart = 0) {
+  snapshot(lineup: string[], windows: Iterable<string> = this.windows, historyStart = 0, workAuthority?: string) {
+    const changedWork = this.scope !== 'budget' && this.lineupKey !== '' && (!workAuthority || workAuthority !== this.workAuthority);
+    this.workAuthority = workAuthority;
+    if(changedWork||this.removesSource(lineup)||historyStart>this.historyStart){this.retirePresentation();this.grids.clear();}
     this.historyStart=historyStart;
     this.setBoundary(null);
-    if(this.removesSource(lineup)){this.shown=null;this.grids.clear();}
     this.lineupKey = keyOf(lineup);
     this.setWindows(windows);
     this.invalidate();
@@ -185,7 +194,7 @@ export class HistoryStore {
 
   lineup(lineup: string[]) {
     if (keyOf(lineup) === this.lineupKey) return;
-    if(this.removesSource(lineup)){this.shown=null;this.grids.clear();}
+    if(this.removesSource(lineup)){this.retirePresentation();this.grids.clear();}
     this.lineupKey = keyOf(lineup);
     this.invalidate();this.publish();
     this.schedule();
@@ -199,15 +208,18 @@ export class HistoryStore {
     const next = new Set(windows);
     const key = keyOf([...next]);
     if (key === this.windowsKey) return;
+    if([...this.windows].some(window=>!next.has(window)))this.retirePresentation();
     this.windowsKey = key;
     this.windows = next;
     this.needsCompose = true;
     this.version++;
+    this.publish();
     this.schedule();
   }
 
   setMeters(meters: MeterSelection | undefined) {
     if(JSON.stringify(meters)===JSON.stringify(this.meters))return;
+    this.retirePresentation();
     this.meters=meters;
     this.historyLimit=false;this.readError=false;this.meta=null;this.metaAt=null;
     this.grids.clear();
@@ -217,11 +229,16 @@ export class HistoryStore {
     this.publish();
   }
 
-  news(since: number) {
+  news(since: number, workAuthority?: string) {
+    if (workAuthority || since === 0) this.workAuthority = workAuthority;
     this.newsSeq++;
     this.cutTo = null;
     this.aheadStopped = false;
-    if (since === 0) this.invalidate();
+    if (since === 0) {
+      if (this.scope !== 'budget') {this.retirePresentation();this.grids.clear();}
+      this.invalidate();
+      this.publish();
+    }
     else {
       for (const [cell, tiles] of this.grids) for (const tile of tiles.values()) {
         if (tile.to > since) tile.validTo = Math.min(tile.validTo, Math.max(tile.readFrom, cellStart(since, cell)));
@@ -255,6 +272,7 @@ export class HistoryStore {
 
   get = () => this.state;
   getPlot = () => this.plot;
+  getDrawingPlot = () => this.drawingPlot;
   subscribePlot = (listener: () => void) => {this.plotListeners.add(listener); return () => void this.plotListeners.delete(listener);};
 
   /** Geometry changes do not choose a committed target or compose its totals. */
@@ -271,7 +289,7 @@ export class HistoryStore {
     this.plotPending = true;
     const next = this.plotTarget();
     const cell = next.cell;
-    if(this.meters&&this.plot?.cell===cell)this.setPlot(this.plot);
+    if(this.meters&&this.plot?.cell===cell)this.setPlotFrame(this.plot);
     const cohort = `${interest.token}:${this.epoch}:${cell}`;
     if (this.cohort !== cohort) {
       this.cohort = cohort;
@@ -291,6 +309,9 @@ export class HistoryStore {
 
   endPan(commit: boolean) {
     this.interest = null;
+    // Release keeps the last strip until the complete frame is ready. Rebuilding
+    // that strip would decode the same cells alongside the final composition.
+    this.preparations?.cancel(this.plotOwner);
     this.panReads = commit;
     this.cohort = '';
     this.optional.clear();
@@ -350,12 +371,19 @@ export class HistoryStore {
 
   private elapsedNow() {return this.env.elapsedNow?.() ?? performance.now();}
 
+  /** A different resource or authority cannot borrow the previous complete frame. */
+  private retirePresentation() {
+    this.presentation++;
+    this.shown=null;
+    this.cancelProjection();this.strip=null;this.plotChunks.clear();this.setPlot(null);
+  }
+
   private publish() {
     const history = this.shown;
     const loading = !this.historyLimit && !this.readError && (!history && this.ready || !this.plotPending && !!history && history.range !== this.target().key);
     const error=this.historyLimit?'history_limit' as const:this.readError?'history_failed' as const:undefined;
-    if (history === this.state.history && loading === this.state.loading&&error===this.state.error) return;
-    this.state = {history, loading,...(error?{error}:{})};
+    if (history === this.state.history && loading === this.state.loading&&error===this.state.error&&this.presentation===this.state.presentation) return;
+    this.state = {history, loading,presentation:this.presentation,...(error?{error}:{})};
     for (const listener of this.listeners) listener();
   }
 
@@ -441,7 +469,9 @@ export class HistoryStore {
     const first = this.grids.get(target.cell)?.get(tileOf(bad[0], target.cell));
     // Cold reads omit the unseen head. Entering a held tile's head fills it once.
     const from = !first || first.readTo === first.readFrom ? bad[0] : bad[0] < first.readFrom ? first.from : first.validTo;
-    const to = Math.min(tileEnd(tileOf(bad.at(-1)!, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
+    // Coarse cells contain days of raw observations; decode one tile at a time.
+    const last = this.pool && target.cell >= 3_600_000 ? from : bad.at(-1)!;
+    const to = Math.min(tileEnd(tileOf(last, target.cell), target.cell), cellStart(this.env.now(), target.cell) + 2 * target.cell);
     this.read(target, from, to, 'visible');
   }
 
@@ -451,7 +481,7 @@ export class HistoryStore {
   }
 
   private publishPlot() {
-    if (!this.meta || !this.plotPending) return;
+    if (!this.meta || !this.plotPending || !this.interest) return;
     const visible = this.plotTarget();
     const half = visible.length / 2;
     if (!this.strip || this.strip.cell !== visible.cell || this.stripToken !== (this.interest?.token ?? this.stripToken) || visible.k0 * visible.cell < this.strip.k0 * visible.cell + half / 2 || (visible.k1 + 1) * visible.cell > (this.strip.k1 + 1) * visible.cell - half / 2) {
@@ -573,13 +603,16 @@ export class HistoryStore {
     // Serialize writes to a tile, including disjoint slices: writeSeq belongs to a tile.
     const blocked = (at: number) => [...this.flights].some(f => f.cell === target.cell && tileOf(at, target.cell) >= tileOf(f.from, f.cell) && tileOf(at, target.cell) <= tileOf(f.to - 1, f.cell));
     const backwards = this.interest?.direction === -1;
+    // The shared pool also retains exact period evidence. Decode one input tile
+    // at a time, including after a fast gesture skips across several tiles.
+    const readTiles = this.pool ? 1 : MAX_READ_TILES;
     if (backwards) bad.reverse();
     const at = bad.find(at => !blocked(at));
     if (at === undefined) return;
     let from = at, to = at + target.cell, last = at;
     for (const next of bad) {
       if (backwards ? next >= at : next <= at) continue;
-      if (Math.abs(next - last) !== target.cell || Math.abs(tileOf(next, target.cell) - tileOf(at, target.cell)) >= MAX_READ_TILES || blocked(next)) break;
+      if (Math.abs(next - last) !== target.cell || Math.abs(tileOf(next, target.cell) - tileOf(at, target.cell)) >= readTiles || blocked(next)) break;
       from = Math.min(from, next); to = Math.max(to, next + target.cell);
       last = next;
     }
@@ -598,7 +631,7 @@ export class HistoryStore {
       const upper = this.cutTo ?? (Math.floor((Math.max(this.env.now(), this.meta?.now ?? 0) + CLOCK_TOLERANCE_MS) / target.cell) + 1) * target.cell;
       for (let n = 0; n < buffer; n++) {
         const extra = direction < 0 ? from - target.cell : to;
-        if (extra < lower || extra >= upper || blocked(extra) || tileOf(Math.max(to, extra + target.cell) - 1, target.cell) - tileOf(Math.min(from, extra), target.cell) >= MAX_READ_TILES) break;
+        if (extra < lower || extra >= upper || blocked(extra) || tileOf(Math.max(to, extra + target.cell) - 1, target.cell) - tileOf(Math.min(from, extra), target.cell) >= readTiles) break;
         const tile = this.grids.get(target.cell)?.get(tileOf(extra, target.cell));
         if (tile && tile.readTo > tile.readFrom && (extra >= tile.readFrom && extra < tile.validTo || Math.min(tile.to, Math.max(to, extra + target.cell)) < tile.readFrom || Math.max(tile.from, Math.min(from, extra)) > tile.readTo)) break;
         // A large foreground run may end before the viewport edge. Its extension
@@ -642,6 +675,12 @@ export class HistoryStore {
   private abort(flight: Flight) {this.preparations?.cancel(flight); this.releaseResponse(flight); flight.controller.abort();}
   private abortFlights() {for (const flight of [...this.flights]) this.abort(flight);}
   private setPlot(plot: PlotBuffer | null) {
+    // Both snapshots share the prepared arrays. Moving quantities must not
+    // replace the balance drawing; new data and authority replace both.
+    this.drawingPlot=plot;
+    this.setPlotFrame(plot);
+  }
+  private setPlotFrame(plot: PlotBuffer | null) {
     if(plot&&this.meters&&this.meta) {
       const target=this.plotTarget(),from=target.k0*target.cell,to=Math.min((target.k1+1)*target.cell,this.meta.now);
       if(plot.meterFrame?.from!==from||plot.meterFrame.to!==to)plot={...plot,meterFrame:{from,to}};
@@ -765,11 +804,12 @@ export class HistoryStore {
   private failed(flight: Flight, error: unknown) {
     this.flights.delete(flight);this.pool?.release(flight);
     if (flight.controller.signal.aborted || flight.epoch !== this.epoch) return;
+    if(error instanceof Error&&error.name==='AbortError'){this.schedule();return;}
     if(error instanceof ApiError&&(error.status===401||error.status===403||error.code==='board_not_found')) {
       this.close();this.env.accessLost?.();return;
     }
     if(error instanceof ApiError&&error.code==='not_found') {
-      this.cancelProjection();this.abortFlights();this.grids.clear();this.plotChunks.clear();this.shown=null;this.setPlot(null);
+      this.retirePresentation();this.abortFlights();this.grids.clear();
       this.readError=true;this.publish();return;
     }
     const target = this.interest ? this.plotTarget() : this.target();
@@ -805,12 +845,13 @@ export class HistoryStore {
   }
 
   evictionCandidates() {
-    const target=this.interest?this.plotTarget():this.target(),shown=this.shown;
+    const target=this.interest?this.plotTarget():this.target();
     const candidates:{bytes:number;shownAt:number;drop:()=>void}[]=[];
     for(const [cell,tiles] of this.grids)for(const [n,tile] of tiles){
       if(this.reservations.has(`${cell}:${n}`))continue;
       if(this.active&&cell===target.cell&&tile.to>target.k0*cell&&tile.from<=(target.k1)*cell)continue;
-      if(this.active&&shown&&cell===shown.cellMs&&tile.to>shown.since&&tile.from<shown.to)continue;
+      // The complete displayed frame owns its geometry. Its former input tiles
+      // can leave the cache while a different target is prepared.
       candidates.push({bytes:tile.bytes,shownAt:tile.shownAt,drop:()=>{
         tiles.delete(n);this.plotChunks.delete(`${cell}:${tile.from}`);this.version++;this.aheadStopped=true;
         // Another reader can evict this tile while our final projection is yielding.
@@ -820,7 +861,7 @@ export class HistoryStore {
     return candidates;
   }
 
-  retry = () => {this.readError=false;this.historyLimit=false;this.clear('retry');this.publish();this.schedule();};
+  retry = () => {this.env.retry?.();this.readError=false;this.historyLimit=false;this.clear('retry');this.publish();this.schedule();};
 
   private evict() {
     if(this.pool){if(!this.pool.trim())this.limit();return;}
@@ -858,20 +899,22 @@ export class HistoryStore {
 }
 
 const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
-export const historyPool = new HistoryPool();
-function reader(scope: HistoryScope) {
-  return new HistoryStore({
-    read: (board, cell, from, to, signal, meters, meta) => call<HistoryReply>('GET', `/api/history?scope=${scope}&board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}${meters ? '&unit='+encodeURIComponent(meters.unit)+'&meters='+encodeURIComponent(JSON.stringify(meters.ids))+(meters.displayCurrency?'&currency='+encodeURIComponent(meters.displayCurrency):'') : ''}`, undefined, 12_000, signal).then(reply => expandHistory(reply, meta)),
+export {historyPool} from './historyPool';
+function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
+  const value=new HistoryStore({
+    read: (_board, cell, from, to, signal, meters, meta) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})},signal).then(reply=>expandHistory(reply,meta)),
     now: hubNow,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
     dropTimeRange: () => {if(timeRange())dropTimeRange();},
     accessLost: () => {page.dispatch({type:'board-close'});window.dispatchEvent(new Event(UNAUTHORIZED));},
+    retry:()=>boardPeriod.retryHistory(family==='funds'?'funds':scope),
   }, STORED_BYTES, scope, historyPool);
+  value.setActive(false);return value;
 }
-export const quotaHistory = reader('quota'), budgetHistory = reader('budget'), fundsHistory = reader('budget');
+export const quotaHistory = reader('quota'), budgetHistory = reader('budget'), fundsHistory = reader('budget','funds');
 export const loader = quotaHistory;
-let shellActive = true;
+let shellActive = false;
 const selectedMeters = (state: PageState, scope: HistoryScope, family: MoneyFamily = 'budget') => {
   const board=state.board;if(!board)return undefined;
   const cards=board.lineup.flatMap(id=>board.cards[id]??[]);
@@ -883,7 +926,7 @@ function activeReaders(state=page.get()) {
   fundsHistory.setActive(shellActive&&!!board&&widgetVisible(board.view,SUBSCRIPTION_FUNDS,board.lineup.length));
   budgetHistory.setActive(shellActive&&!!board&&BUDGET_WIDGETS.some(id=>widgetVisible(board.view,id,board.lineup.length)));
 }
-export const historyReaders = {setActive(active: boolean) {shellActive=active;activeReaders();}};
+export const historyReaders = {setActive(active: boolean) {shellActive=active;boardPeriod.activate(active);activeReaders();}};
 
 /** Event changes identify resources; a reader's choices never mutate another board's selections. */
 export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>, family: MoneyFamily = 'budget') {
@@ -894,21 +937,22 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
     else if (event.type === 'hub') {
       const hub = event.event;
       if (hub.type === 'hello') loader.hello(hub.data.epoch);
-      else if (hub.type === 'snapshot') loader.snapshot(state.board?.lineup ?? [], scope==='quota'?windowsOf(state):[], state.board?.historyStart);
+      else if (hub.type === 'snapshot') loader.snapshot(state.board?.lineup ?? [], scope==='quota'?windowsOf(state):[], state.board?.historyStart, state.board?.workAuthority);
       else if (hub.type === 'lineup') {loader.lineup(state.board?.lineup ?? []); if(scope==='quota')loader.setWindows(windowsOf(state));}
       else if (hub.type === 'card'&&scope==='quota') loader.setWindows(windowsOf(state));
       else if (hub.type === 'history') {
         const selected=scope==='budget'?new Set(selectedMeters(state,scope,family)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
         const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source));
         const ownSince = scope === 'quota' && state.board?.meta.personal ? hub.data.ownSince : undefined;
-        if(changes?.length || ownSince !== undefined)loader.news(Math.min(...(changes ?? []).map(change=>change.since), ownSince ?? Infinity));
-        else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since);
+        if(changes?.length || ownSince !== undefined)loader.news(Math.min(...(changes ?? []).map(change=>change.since), ownSince ?? Infinity), hub.data.workAuthority);
+        else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since, hub.data.workAuthority);
       }
     }
     if(state.board)loader.setMeters(selectedMeters(state,scope,family));
   });
 }
 const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).flatMap(card => card.windows.map(window => `${card.id} ${window.id}`));
+if(typeof window!=='undefined')followPeriod();
 follow(quotaHistory,page);follow(budgetHistory,page);follow(fundsHistory,page,'funds');
 page.listen((_event,state)=>activeReaders(state));
 
@@ -943,10 +987,41 @@ if (typeof window !== 'undefined') {
   };
   onPrefs(chosen);onTimeRange(chosen);chosen();
 }
-export function useHistory(): Shown {return useSyncExternalStore(quotaHistory.subscribe, quotaHistory.get, quotaHistory.get);}
-export function useBudgetHistory(family: MoneyFamily = 'budget'): Shown {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribe, reader.get, reader.get);}
+function usePeriodHistory(loader:HistoryStore,rolling=false):Shown&{drawing:History|null} {
+  const shown=useSyncExternalStore(loader.subscribe,loader.get,loader.get);
+  const panning=usePanning();
+  const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>boardPeriod.getProjectionRevision(loader===fundsHistory?'funds':loader.scope??'quota'));
+  const now=useClock(at=>rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at):null,[shown,revision,panning]);
+  const retained=useRef<{board:string;history:History}|null>(null);
+  const gesture=useRef<{active:boolean;target:string|null}>({active:false,target:null});
+  const authority=useRef<{board:string;loader:HistoryStore;presentation:number}|null>(null);
+  const result=useMemo(()=>{
+    const board=page.get().board?.id??'';
+    if(authority.current?.board!==board||authority.current.loader!==loader||authority.current.presentation!==shown.presentation){
+      retained.current=null;gesture.current={active:false,target:null};authority.current={board,loader,presentation:shown.presentation};
+    }
+    const selected=timeRange(),target=board+':'+(selected?timeRangeKey(selected):prefs().range);
+    if(panning!==null){gesture.current.active=true;gesture.current.target=null;}
+    else if(gesture.current.active){gesture.current.active=false;gesture.current.target=target;}
+    if(gesture.current.target!==target)gesture.current.target=null;
+    const folding=gesture.current.target===target;
+    // The data layers move through their strips during a gesture. Keep the last
+    // complete accounting frame until release, including its full opacity.
+    if(panning!==null&&retained.current)return {...shown,history:retained.current.history,loading:false};
+    if(!shown.history)return shown;
+    const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=boardPeriod.projectionState(shown.history,scope);
+    if(!state.ready)return {...shown,history:retained.current?.history??null,loading:!folding&&!state.error&&!shown.error,error:state.error??shown.error};
+    const history=boardPeriod.project(shown.history,scope,now);retained.current={board,history};if(!shown.loading)gesture.current.target=null;return {...shown,history,loading:folding?false:shown.loading,error:state.error??shown.error};
+  },[shown,revision,loader,panning,now]);
+  // Rolling totals change with the endpoints; their unchanged drawing evidence
+  // must not restart line and stack preparation on the same clock wake.
+  const drawing=useMemo(()=>result.history,[shown,revision,loader,panning]);
+  return {...result,drawing};
+}
+export function useHistory(rolling=false) {return usePeriodHistory(quotaHistory,rolling);}
+export function useBudgetHistory(family:MoneyFamily='budget',rolling=false) {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling);}
 export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
-export function useBudgetHistoryPlot(family: MoneyFamily = 'budget'): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribePlot, reader.getPlot, reader.getPlot);}
+export function useBudgetHistoryPlot(family: MoneyFamily = 'budget', quantities=false): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory,read=quantities?reader.getPlot:reader.getDrawingPlot;return useSyncExternalStore(reader.subscribePlot, read, read);}
 /** A fresh answer from either resource family supersedes the board's initial snapshot. */
 export function historyBegins(board: string | null, snapshot: number | null, answers: readonly (HistoryBoundary | null)[]): number {
   const current = answers.filter((answer): answer is HistoryBoundary => !!answer && answer.board === board);

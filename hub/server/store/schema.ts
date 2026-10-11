@@ -1,4 +1,4 @@
-import {migrateAnalyticsViews} from './analyticsView.js';
+import {migrateAnalyticsViews, migrateUnifiedViews} from './analyticsView.js';
 import type {DatabaseSync} from 'node:sqlite';
 import {adoptDeclaredLayout} from './legacyDeclared.js';
 
@@ -349,6 +349,19 @@ export const STEPS = [
   END;
   `,
 
+  // 22 — a single grid, stored through the lossless compact view codec below.
+  `SELECT 1;`,
+  // 23 — historical cards find the last native batch without scanning every window.
+  `CREATE INDEX samples_by_source_time ON samples(source_id,at);`,
+  // 24 — retained geometry never becomes a provider observation.
+  `
+  ALTER TABLE meter_spans ADD COLUMN observed_from INTEGER;
+  ALTER TABLE meter_contexts ADD COLUMN observed_from INTEGER;
+  UPDATE meter_spans SET observed_from=from_at WHERE from_at=to_at OR EXISTS(
+    SELECT 1 FROM readings r WHERE r.source_id=meter_spans.source_id
+      AND r.meter_id=meter_spans.meter_id AND r.at=meter_spans.from_at);
+  UPDATE meter_contexts SET observed_from=to_at WHERE from_at=to_at;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;
@@ -367,6 +380,7 @@ export function migrate(db: DatabaseSync, now: number) {
   try {
     for (const step of STEPS.slice(adoptDeclaredLayout(db,current))) db.exec(step);
     if (current < 19) migrateAnalyticsViews(db, now);
+    if (current < 22) migrateUnifiedViews(db, now);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('historyStart', String(now));
     // Before this, how agents worked is not known (the sums of layout 2 are gone), rather than none worked.

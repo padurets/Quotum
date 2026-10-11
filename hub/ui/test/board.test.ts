@@ -19,7 +19,7 @@ const card = (id: string, used = 50, extra: Partial<Card> = {}): Card => ({
   ...extra,
 });
 
-const VIEW = {version: 2 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+const VIEW = {version: 3 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 const session = {device: {id: 'd', name: 'laptop'}, origin: 'terminal' as const, project: 'quotum', folder: null, startedAt: 1, lastWorkedAt: null, working: true, workedMs: 0};
 const ahead = (F: number): SeriesForecast => ({
   state: 'lasts',

@@ -81,7 +81,7 @@ test('money defaults select only balances, bound overflow and preserve explicit 
   assert.equal(moneySelection(cards,['source:one'],explicit).removed,1);
 });
 test('source access is an independent private slice and disappears with its lineup',()=>{
-  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:{version: 2 as const, layout: {columns: 6, places: {}}, names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{}},historyStart:0,sources:[card('one')],sessions:{},cadence:{},refresh:{},forecast:{},mine:['one'],boards:[],resets:{resets:{},trackers:[],past:{}}};
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:{version: 3 as const, layout: {columns: 6, places: {}}, names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{}},historyStart:0,sources:[card('one')],sessions:{},cadence:{},refresh:{},forecast:{},mine:['one'],boards:[],resets:{resets:{},trackers:[],past:{}}};
   const before=reduce(INITIAL,{type:'hub',event:{type:'snapshot',data:snapshot}});
   const own={error:null,expiresAt:null,canRefresh:true,credentialIds:['own']};
   const next=reduce(before,{type:'hub',event:{type:'sourceAccess',data:{one:own}}});

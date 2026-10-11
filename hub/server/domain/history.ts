@@ -1,5 +1,5 @@
 export type HistoryScope = 'quota' | 'budget';
-export type HistoryChange = {source: string; scope: HistoryScope; since: number};
+export type HistoryChange = {source: string; scope: HistoryScope; since: number; workSince?:number};
 export const HISTORY_SCOPES: readonly HistoryScope[] = ['quota', 'budget'];
 
 import {drain, ordered, type Preparation} from './prepare.js';
@@ -55,9 +55,10 @@ export type Chunk<Ref = string> = {
   grants: [string, number, number][];
 };
 export type HistoryMeta = {now: number; historyStart: number; known: {own?: number; work: number; sources: Record<string, number>}; meta?: string};
+export const workKnownFrom = (known:HistoryMeta['known']) => Math.max(known.own??known.work,...(known.own===undefined&&Object.keys(known.sources).length?[Math.min(...Object.values(known.sources))]:[]));
 export type HistoryAnswer = HistoryMeta & {run: string; chunks: Chunk[]};
 export type HistoryBasis = HistoryMeta & {run: string};
-export type HistoryReply = HistoryAnswer | {now: number; run: string; meta: string; chunks: Chunk[]};
+export type HistoryReply = (HistoryAnswer | {now: number; run: string; meta: string; chunks: Chunk[]}) & {tape?:import('./periodTape.js').PeriodTape};
 
 /** A compact reply can borrow only the metadata captured by its own request. */
 export function expandHistory(reply: HistoryReply, prior?: HistoryBasis): HistoryAnswer {
@@ -69,6 +70,8 @@ export type SourceEvent =
   | {sourceId: string; at: number; kind: 'early_reset'; windows: string[]}
   | {sourceId: string; at: number; kind: 'resets_granted'; count: number};
 export type HistorySeries = {
+  windowValue?:Pick<import('./quota.js').Win,'id'|'kind'|'label'|'minutes'>;
+  pointMode?:'cell'|'observation';
   sourceId: string;
   windowId: string;
   consumed: number;
@@ -80,6 +83,7 @@ export type HistorySeries = {
   work: SeriesWork | null;
 };
 export type History = {
+  exact?:true;
   board?: string;
   range: string;
   live: boolean;
@@ -262,7 +266,7 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
   const resets = yield* resetEventsPrepared(chunksInOrder, windows, since, (k1 + 1) * cell);
   const grants: SourceEvent[] = [];
   for (const chunk of chunksInOrder) for (const [sourceId, at, count] of chunk.grants) {if (inFrame(at)) grants.push({sourceId, at, kind: 'resets_granted', count}); yield;}
-  const activitySince = Math.max(meta.known.own ?? meta.known.work, ...(meta.known.own === undefined && Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []));
+  const activitySince = workKnownFrom(meta.known);
   const knownFrom = Math.max(since, activitySince);
   const groups = {} as Record<Dimension, ActivityGroup[]>;
   for (const dim of DIMENSIONS) {

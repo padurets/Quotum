@@ -145,21 +145,42 @@ with 32-KiB bodies and ten key-verification attempts per minute per user and add
 Status and reservation have a separate bounded request limit. Credentials cannot be
 submitted in a query. Closed panels do not poll or read catalogue/history data.
 
-`POST /api/boards/:board/view` is owner-only and accepts a full View with
-`version: 2`, up to 76 KiB (77,824 UTF-8 bytes including JSON syntax). The independent
-writer header `X-Quotum-View-Version: 2` is required, even when a previous page echoes
-a received v2 body. Missing or incompatible writer headers and absent/legacy body
-versions return `428 view_reload_required` without mutation; malformed or future body
+`POST /api/boards/:board/view` is owner-only and accepts the compact v3 view described
+below, up to 76 KiB (77,824 UTF-8 bytes including JSON syntax). The independent
+writer header `X-Quotum-View-Version: 3` is required, even when a previous page echoes
+a received v3 view. Missing or incompatible writer headers return
+`428 view_reload_required` without mutation; malformed or unsupported body
 versions return `400 invalid_request`. `If-Match: "<revision>"` remains required:
 missing is `428 view_reload_required`, malformed is `400 invalid_request`, and stale
 is `409 view_conflict` with the authorized current `{view, revision}`.
 Success returns `{view, revision}`. Semantic changes increment revision; no-op saves
 do not. Snapshots and view events carry that revision.
 
-The standard widgets are `agents`, `activity`, `quota-history`, `subscription-funds`, `budget-history`,
-`quota-table` and `budget-table`. `subscription-funds` shows additional balances of
-subscriptions. The budget pair shows wallets only. These widgets share monetary
-history transport but keep independent selections and visibility. Each analytics replacement in `shown` is placed;
+Storage and POST use `[3, places, mask, ...fields]`; events, snapshots and conflict
+responses use the semantic object with `version: 3`. Each place is `[id, geometry]`
+or `[id, geometry, h]`, in reading order. Integer ids 0 through 6 stand for `agents`,
+`activity`, `quota-history`, `budget-history`, `quota-table`, `budget-table`, `subscription-funds`; other ids
+are unchanged strings (including the distinct string `"0"`). Geometry 0 through 9
+indexes `(x,w)` pairs `(0,2),(0,3),(0,4),(0,6),(2,2),(2,3),(2,4),(3,2),(3,3),(4,2)`.
+The array position restores `y`; vertical gaps are not persisted height requests.
+The ten mask bits select nonempty `names`, `hidden`, `shown`, `windows`, `plans`,
+`unplanned`, `colors`, `columns`, `shownColumns`, `enabledWhenEmpty`, in that order.
+Omitted fields restore empty defaults. `shown` is `[builtinMask, ...otherIds]`, with
+the same seven builtin bits; at most 204 other ids. Other owner fields keep their
+ordinary types and limits. Duplicate place ids, invalid aliases, duplicate shown ids,
+unknown mask bits and trailing fields are rejected. Decoded drafts must also fit
+128 KiB before publication. Byte accounting for normal and keepalive saves uses the
+actual encoded request; there is no separate quota for each representation.
+
+The upgrade concatenates the visible reading orders of cards and analytics, then
+weaves in saved hidden positions without changing the visible subsequence. It preserves
+widths, requested heights and settings. Standard visible widgets become anchors;
+implicit source cards still follow their preceding visible source in natural order.
+Reads and new membership do not materialize every implicit place. Add, replay and
+device-onboarding writes also require the current writer header.
+
+The standard widgets are `agents`, `activity`, `quota-history`, `budget-history`,
+`quota-table`, `budget-table` and `subscription-funds`. Each analytics replacement in `shown` is placed;
 `hidden` takes precedence. Unplaced analytics become placed once their resource
 capabilities appear, independently of filters, latest errors or zero balances. Placed
 widgets remain when resources leave. `enabledWhenEmpty` applies only to explicit
@@ -173,13 +194,18 @@ Explicitly hidden legacy panels hide both replacements. Columns follow their fam
 other source settings and geometry are retained. Reader-local modes never participate.
 Runtime capability reconciliation produces one authoritative view/revision pair and
 preserves the previous editor; a concurrent owner save receives the normal conflict.
+If automatic placements exceed either view size bound, reads keep the valid saved
+view and revision. Reconciliation retries after space becomes available. This does
+not prevent reading the board or saving a smaller view; explicit Add and save
+operations still reject an oversized result without changing the saved intent.
 
 Widget reservation and run/resume also require the writer header. Existing addition
 items and request bindings remain immutable; legacy receipts carry frozen canonical
 `widgetIds` and report `current.widgets` with their current placement. Replaying a
 completed receipt never restores a subsequently hidden widget. Only a current client
-may resume an interrupted legacy widget addition. Non-widget connection operations
-retain their existing version-independent authorization.
+may resume an interrupted legacy widget addition. Connection-only reservations and
+runs require the same writer header, including receipt replays. Existing account
+and board ownership checks still apply.
 
 The page serializes its own saves and flushes pending changes before Add. Ordinary
 bodies retain the debounce; bodies above 64 KiB start an ordinary save immediately.
@@ -220,7 +246,7 @@ change as it was.
 | `event` | `data` | When |
 |---|---|---|
 | `hello` | `{epoch, now, client, heartbeatMs}` | First. `epoch`: when this start of the hub began, base 36. `now`: the hub's clock. `client`: the path of the page's entry script the hub serves (`/assets/index-<hash>.js`), null without a build. `heartbeatMs`: 25000. |
-| `snapshot` | `{providers, sourceAccess, board, view, viewRevision, connectionsRevision, historyStart, sources, sessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
+| `snapshot` | `{providers, sourceAccess, board, view, viewRevision, connectionsRevision, historyStart, workAuthority, sources, sessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
 | `board` | `{board: {id, name, personal}}` | The board was renamed. |
 | `view` | `{view, revision}` | The board's view was saved. The monotonic revision belongs to this board. |
 | `connections` | `{revision}` | Only this reader's connection structure or access health changed; no private IDs or labels. Successful measurements and unchanged device heartbeats do not increment it. |
@@ -249,8 +275,8 @@ or the table, a chart as tall as it draws by itself, the first agent of the list
 many more), so `h` is what the owner asked for, not what shows, and the hub does not check
 it against the content. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
 else is refused. The hub migrates stored pre-grid views and split analytics IDs before
-serving the view with its revision. Saves require version 2, its writer header and
-`layout`, with a 76 KiB UTF-8 body limit. The page uses keepalive only within its
+serving the view with its revision. Saves require the compact version 3 codec and
+its writer header, with a 76 KiB UTF-8 body limit. The page uses keepalive only within its
 aggregate 64 KiB budget; larger drafts use immediate serialized ordinary saves.
 There is no separate count limit on places; each place is validated.
 
@@ -259,6 +285,14 @@ In a `snapshot`, `sources` are the cards of the board's sources in its order; `s
 `{id, name, personal}`; the reader's role is in `boards`, each `{id, name, personal,
 role}`, as it is theirs alone. `resets` is what `GET /api/resets` answers. `historyStart`
 is when the board's history begins as of the snapshot; `GET /api/history` tells it later.
+`workAuthority` is the existing opaque identity of the board's permitted work context:
+its sources, holders and sharing cutoffs, project/device names and personal holdings.
+Every snapshot producer includes it: overview, streams, new or lost poll leases and
+financial replacements. A new stream starts with a snapshot, without replaying missed
+history events. Changed or missing legacy authority retires retained work, quota/activity
+accounting and prepared drawings before a replacement completes, including on failure.
+An unchanged identity preserves the last complete presentation while the new baseline
+waits or fails. Neither this identity nor a retained cursor grants access to a read.
 
 `providers` is the public code-owned catalogue: each entry has `id`, `name`, `color`,
 `logoAsset`, `order`, `measuredBy` (`client` or `hub`), `meterKinds`, `resets`, and either
@@ -278,7 +312,7 @@ it says so: a card sent when its numbers get too old.
 
 A source's `sessions` are the agents running on it, on the machines of its people on the
 board, each `{device, origin, project, folder, startedAt, lastWorkedAt, working,
-workedMs}`: its machine (`{id, name}`), where it runs, its project as its person named it
+workedMs, presenceKey?, currentPresence?}`: its machine (`{id, name}`), where it runs, its project as its person named it
 and its folder where that is another, when it started and when an idle one last worked
 (both on the hub's clock), whether it works, and how long it has worked: the hub's
 credited work of an identified session on this current subscription across its contexts
@@ -287,7 +321,10 @@ work is kept. `workedMs` is a finite nonnegative number, including known zero, o
 when reliable session identity is unavailable. Older hubs may omit it; the page treats
 missing, null or invalid credit as unknown. A group with any unknown counter has an
 unknown total, and unknown totals sort last in either direction. A list that credits work changes
-`workedMs`, so `sessions` comes with each list while an agent works.
+`workedMs`, so `sessions` comes with each list while an agent works. Stable sessions
+carry `currentPresence: {working, startedAt}` under their opaque presence binding.
+The hub keeps confirmation deadlines internally: an unchanged idle confirmation emits
+no session event or history read. Expiry changes working state or removes current presence.
 
 A source's `forecast` is by the id of each of its weekly windows (the page foresees a
 five-hour window itself, by what it spent since it began): where the recent pace of that
@@ -351,6 +388,283 @@ reset leaving the history) goes out when it does.
 | `gone` | The board was deleted, or the reader is no longer on it. | Opens another board. |
 | `restart` | The hub stops, or could not work out the board. | Connects again in a few seconds. |
 | `limit` | A newer reader took its place, or it fell 256 KiB behind. | Connects again, not sooner than in 30 seconds. |
+
+## Reading the board period
+
+`POST /api/boards/:board/period` is a read-only, authenticated, origin-checked operation.
+The response is JSON with `Cache-Control: no-store`. Board access and visible source
+capabilities are checked on every request; a cursor grants no additional access.
+The body is at most 76 KiB:
+
+```ts
+{
+  version: 1;
+  selection: {mode: 'live'; periodMs: number} | {mode: 'range'; from: number; to: number};
+  evaluatedAt: number;
+  quota?: {cell: string; from: string; to: string; meters?: string; unit?: string; meta?: string; evidence?: string; cells?: 'skip'};
+  budget?: {cell: string; from: string; to: string; meters: string; unit: string; currency?: string; meta?: string; evidence?: string; cells?: 'skip'};
+  funds?: {cell: string; from: string; to: string; meters: string; unit: string; currency?: string; meta?: string; evidence?: string; cells?: 'skip'};
+  values?: string[];
+  sessions?: {cursor?: string};
+}
+```
+
+Times are safe integer milliseconds. Period lengths are between fifteen minutes and
+31 days, within retained history. `values` contains at most 2000 visible source ids.
+The hub clamps `evaluatedAt` to its own clock. Live selects
+`[evaluatedAt-periodMs,evaluatedAt)`; a fixed interval keeps its exact endpoints.
+The evidence cut cannot extend into the future. Independently of the selected endpoints,
+cards and analytical tapes admit observations and availability barriers only before the
+hub clock captured for the request, even when ingest accepted a later timestamp within
+its clock tolerance. A compressed span with a future tail
+can recover only retained sample, observation-head or recorded valuation anchors;
+clamping its tail to that clock boundary does not create an observation. A recovered anchor without
+its original freshness duration proves only that instant. Currency binding and
+accounting use this admitted evidence, including both sides of a paired balance.
+Each history section keeps the existing
+cell, selection and eight-tile limits below. `evidence` is its previously returned opaque
+tape cursor; `skip` asks only for cells during progressive panning. Conversely,
+`cells: 'skip'` reads the boundary tape while reusing already cached cells.
+
+The response has a common `basis` and only the requested sections. A basis is
+`{run, revision, evaluatedAt, evidenceCut, range: {from,to}}`. The hub expires quiet
+sessions before capturing the evidence revision. Nested readers use the same captured
+clock; sections and their cursors cannot acknowledge evidence credited by a later sweep.
+Preparation may yield to other requests. The hub rechecks authority and relevant
+evidence before completing it; a conflicting change restarts the whole read once.
+Repeated changes return `503 unavailable`, with no mixed or partially published answer.
+Disconnecting the reader cancels its queued or active preparation.
+Each section is either
+`{state:'complete', basis, value}` or
+`{state:'error', error:'history_limit'|'history_range_invalid'|'unavailable'}`.
+Sessions can additionally return `{state:'delta', basis, value}`. A section error does
+not invalidate successful siblings. Authentication, invalid request shape and source
+capability failures are HTTP errors. Clients retain the last complete presentation
+under its own basis while a requested replacement is pending or failed.
+
+The optional top-level `moneySemantics` dictionary shares identical monetary cell
+semantics across the reply. Within each history section's `chunks[].meterSeries`,
+`semantics`, a cell extra's `semantics` or `openSemantics`, and an observation's
+`semantics` may be a zero-based index into that dictionary. Null remains unknown;
+an omitted property still inherits as specified below. Expand indices before using
+cells. Entries preserve the complete native amount, observation timestamp and
+conversion provenance; no rounding or combination of observations is implied.
+Within those monetary cell semantics (inline or in `moneySemantics`), a numeric
+`conversion.rate` indexes the optional top-level `rateLegs` dictionary. A rate entry
+retains every field of the original leg; `conversion.original` and additional `steps`
+remain unchanged. Both dictionaries are scoped to this one reply.
+Tapes, card values and the standalone history route retain their existing shape.
+
+Quota, wallet budget and subscription-funds values contain the compatible history reply below and, unless skipped,
+a `tape`. A tape contains exact native sample anchors and monetary readings, availability
+spans, original allowances and recorded currency bindings. Native quota series also
+carry `workFrom`, the source's authorized work boundary. An absent work section does
+not project zero work or a fictional date; work columns remain unavailable until it arrives. Its `from` and `cut` delimit
+retained evidence; `replaceFrom` and optional `replaceTo` delimit the interval replaced
+by a delta. Each native series stores `samples` as a flat numeric array of five-value rows:
+`[at, used, resetAt, staleAfterMs, validUntil]`. With `samplesEncoding:"delta"`,
+all fields except `used` are exact differences from the previous row. The initial
+values are `at=0`, `resetAt=-1`, `staleAfterMs=0`, `validUntil=-1`. Both optional
+deadlines use `-1` for absence after decoding; zero is a real timestamp. The encoding preserves every sample and its
+exclusive validity bound. Metadata is separate from repeated samples. A complete initial tape allows
+a live left boundary to move through its entire retained interval without further IO.
+New evidence extends or replaces that interval; a clock tick does not fetch history.
+Partial spending steps keep their uncertainty instead of becoming proportional amounts.
+Monetary availability spans keep geometry in `from` and the last actual observation
+in `to`. Optional `observedFrom` identifies a confirmed first observation separately
+from that geometry. Retention and access clipping never turn `from` into a measurement.
+An omitted `observedFrom` is unknown, including legacy spans whose original head cannot
+be proved. A confirmed head can be later than `from`; it is eligible only after the
+same exclusive observation boundary as other samples. Authorized projections omit
+anchors outside the reader's financial grant. Card values and accounting use confirmed
+anchors and recorded currency evidence, preserving their original timestamps through
+retention, delta merging and packing.
+Monetary tapes store repeated recorded exchange paths once in
+`rateBindings: {paths, entries}`. Each `entries` key is the native unit, a newline and
+the exact observation timestamp; its value indexes `paths`. A null path means an
+unavailable conversion. Paths retain every rate leg and its recorded provenance.
+
+A fixed selection replaces the rolling tape with `fixed: {range, cell, quota, money}`.
+The quota and money arrays contain exact history-series totals and only the first and
+last cells' observation geometry. Their interior cells come from the same history
+reader and cache. The ordinary `quota` and `money` tape arrays are empty. A summary
+applies only to its exact range and cell size; it cannot project another interval.
+The server and browser use the same accounting functions, including original scales,
+historical cap allowances, availability bounds and recorded currency provenance.
+
+Values are measurement-only projections: source id/provider, retained native windows,
+meters, keys and the observed `creditBalance` status when authorized. Native windows include `observedAt`, `validUntil` and `stale`.
+Membership is the last nonempty retained batch strictly before the right edge.
+For a fixed interval, freshness is evaluated at the requested exclusive right edge,
+even when it is after the actual evidence cut. Observations are still admitted only
+before that cut. A retained value can be stale at the selected edge; the projection
+never invents future readings or extends evidence coverage. A meter
+keeps exact decimal integer amounts, historical allowance, unit and conversion evidence.
+An explicitly removed key cap remains absent after its own observation time; later
+partial inventories or malformed limits do not restore an older scale. A subsequent
+valid cap observation restores it. These transitions obey the same exclusive right edge.
+Historical meters and `creditBalance` may carry an exclusive `validUntil`, derived from
+their retained availability spans. When present, it governs freshness instead of
+reapplying the original `staleAfterMs` to `at`: that timestamp remains an actual retained
+observation anchor, even inside compressed heartbeat spans. Without `validUntil`, the
+ordinary observation-time TTL applies. Availability does not prove accounting coverage
+beyond the last confirmed observation, or admit a new observation exactly at `to`.
+The same financial grant and its observation anchor govern cells, tapes, values and
+cursor reuse. Credit coefficients retain their original scale; converted values use
+the recorded rate path. Native quota interruptions end availability exclusively.
+Expired evidence remains visible as stale; an absent predecessor remains unknown.
+An optional `validFor: {from,to}` gives the half-open interval of right-edge positions
+with identical values, including membership, anchors and stale state. It is scoped to
+the same authority and evidence revision. Fixed values may also carry `states`:
+an optional full `start` projection, shared `paths` and `[from,to,changes]` pieces. Changes use
+the exact replacement, deletion, integer delta and array splice operations of fixed shift windows.
+Each piece retains its own `validFor` interval, including actual observations and
+availability changes. Without `start`, replay starts from the value carrying the sequence;
+the first patch reaches the first interval. A restored value retains that immutable
+starting projection for subsequent replays. No numeric
+interpolation or nested state sequences occur. Candidate lookup checks intervals
+without allocating a replay; staging accounts for copies before they are built.
+Current errors, credentials, actions, forecasts
+and live source state are separate.
+
+Session evidence is a complete temporal index:
+
+```ts
+{
+  anchor: number; cut: number; knownFrom: number; cursor: string;
+  refs: {
+    ref: string; source: string | null; clientId: string; device: {id: string; name: string};
+    origin: 'terminal' | 'editor' | 'app'; project: string | null; folder: string | null;
+    startedAt: number; presenceKey?: string;
+    currentPresence?: {working: boolean; through: number; workingThrough: number; startedAt: number};
+  }[];
+  spans: [refIndex: number, fromOffset: number, toOffset: number][];
+  packed?: {
+    patterns: number[][]; // flat pairs of exact offsets within an hour
+    blocks: number[];    // flat triples: refIndex, UTC hour since epoch, patternIndex
+  };
+  fixed?: {
+    range: {from: number; to: number};
+    totals: [refIndex: number, workedMs: number, lastWorkedAt: number][];
+    activity: Activity; // exact totals, groups and boundary bars
+    shift?: {
+      until: number;
+      steps: [path: (string | number)[], perMs: number][];
+      window?: {
+        start?: object; // immutable replay base, without shift; otherwise the carrying summary
+        paths: (string | number)[][];
+        slopes: [pathIndex: number, perMs: number][][];
+        pieces: [fromEnd: number, untilEnd: number, slopesIndex: number,
+          changes: ([pathIndex: number, value: unknown] | [pathIndex: number] |
+            [pathIndex: number, delta: number, add: 0] |
+            [pathIndex: number, start: number, remove: number, insert: unknown[]])[]][];
+      };
+    };
+  };
+  replaceFrom?: number; replaceTo?: number;
+}
+```
+
+Dense evidence uses `packed` with empty `spans`. Each block's hour is multiplied by
+3,600,000, then its pattern's millisecond pairs give the original credited intervals.
+Repeated patterns share storage; gaps and boundary fragments are never approximated.
+Both representations have identical replacement and projection semantics.
+On the owner's personal board, retained unknown or unheld work has a null `source`
+and keeps its `clientId`; shared boards omit these contexts. A held hidden source
+remains excluded. Presence enrichment matches the device, client, stable producer
+and complete retained context, including its original funding, without exposing that
+funding or producer identifier. Its optional `presenceKey` is a keyed opaque binding
+from the live session service, shared by authorized stream sessions and period refs.
+It covers the device, client, stable producer and original source/context, remains
+unchanged by display renaming, and changes when the hub restarts. It grants no access.
+Legacy contexts without reliable stable identity omit it and cannot borrow a presence
+from an apparently similar session. Stream `sessions` and `ownSessions` attach optional
+`currentPresence: {working, startedAt}` to that binding. Renewal deadlines remain inside
+the hub; it sends semantic changes when work confirmation or presence expires.
+The browser overlays the latest confirmed stream state on retained work rows:
+an empty current list removes presence without removing credited work or requesting
+history. A lost connection or new `hello` clears confirmation until an actual snapshot
+arrives; entering `live` or `polling` alone cannot confirm old rows. A delayed analytical
+reply cannot restore current presence, including the optional deadline-bearing presence
+in its retained refs. Panel, source disclosure and open detail views use the same overlay.
+Loss of confirmation means current presence is unknown, not that the session ended.
+Private `ownSince` cutoffs invalidate session deltas
+and quota activity independently of source measurements and financial evidence.
+Fixed selections instead return `fixed` with empty `spans` and no `packed` ledger.
+Every positive-work context remains in the summary. Interior activity bars reuse
+the history cells; boundary bars and group totals are exact. Fixed summaries are
+complete replacements, and changing their interval requires another summary or a
+matching cached result. An optional `shift`, also available on a fixed measurement
+tape, proves reuse when both endpoints advance by the same number of milliseconds
+and the new `to` is below `until`. Its paths address numeric fields of that fixed
+summary; each changes by `perMs` times the endpoint advance. The reader bounds the
+proof by observations, work endpoints, validity deadlines, evidence cut and cell
+edges. Only exact clipped timestamps and durations move; monetary amounts are
+never interpolated. Paths and proof bytes share the retained history budget.
+An optional `window` instead proves positions in neighboring endpoint cells, in
+either direction with the same duration. Its ordered pieces cover half-open intervals
+of right-edge positions. Replay begins at the immutable `start` summary, or the carrying
+summary when `start` is absent. A restored summary retains this base for repeated moves. Advance
+numeric fields using the preceding piece's slopes, then apply the next piece's exact
+changes. A one-element change deletes that field. A three-element change
+`[pathId, delta, 0]` adds an exact safe-integer delta to a safe-integer field;
+fractional values and monetary strings still use exact replacements. A four-element change splices
+the addressed array at `start`, removing `remove` elements and inserting `insert`.
+Unchanged prefixes and suffixes remain exact. Within a covered piece, advance
+using its own slopes. Gaps have no proof. Cell, observation and deadline boundaries
+are explicit pieces; monetary strings and changing arrays are replaced exactly.
+The immutable start also makes repeated moves independent of the previous position.
+Fixed shift windows and card `states` may use `pathEncoding:"prefix"` on the wire.
+Each `paths` entry is then `[sharedLength,...suffix]`, extending the preceding decoded
+path (initially empty). The last changes array is removed from each piece; a parallel
+`changes` array has one row per path. Each row contains the original operations with
+their first element replaced by the zero-based piece index. Restore those operations
+into their pieces before replay. Edits within a piece address disjoint fields: a parent
+replacement never accompanies a descendant edit. Restoring them in path order preserves
+the exact result, including deletions, nulls, splices and fractional values. Clients
+charge the additional path and operation containers before allocating them. The encoding
+is optional and scoped to a single response; it does not change proof coverage or evidence.
+These optional proofs and nearby value states share existing memory limits and may
+be omitted when they cannot fit. Outside proven positions a new summary is required.
+Only optional current presence can change or lose confirmation while a fixed selection
+remains unchanged.
+Offsets in `spans` are exact milliseconds from `anchor`. Only credited intervals intersecting the
+requested evidence are included, clipped by capture, retention, membership and sharing
+cutoffs. No current list or duration total substitutes for those intervals. Clients
+intersect them with the selected accounting range, retain only positive-work contexts,
+and derive grouping and ordering from that result. Optional current presence requires
+a stable authorized identity match; its absence is not an inferred session end.
+A delta replaces its named interval, making retries idempotent. Cursors are signed and
+bound to the board, user, hub run, authority, retention and evidence revision. Currency
+and resource selections also bind a tape cursor. An unprovable frontier returns a
+complete bounded baseline. It never silently returns a partial index.
+Live clients may discard expired work and redundant measurement prefixes while keeping
+the real boundary predecessor and its availability and currency evidence. Such cleanup
+does not change capture or authority cutoffs. A cursor only proves its retained interval;
+widening into a discarded prefix requires a complete bounded baseline.
+
+`POST /api/boards/:board/period/sessions` reads details for at most 100 opaque refs.
+Its body is `{version:1, selection, evaluatedAt, cursor, refs}`, at most 8 KiB. The cursor
+must still name the current authorized evidence and cover the requested interval;
+otherwise the response is `400 history_range_invalid`. It returns a complete sessions
+section containing the requested clipped rows, or a section error. Dashboard pages use
+50 rows from the complete index, so a clock-driven membership change requires no detail
+request. Detail reads use the same accounting transport and memory limits.
+
+The `history` event's optional `changes` entries are
+`{source, scope:'quota'|'budget', since, workSince?}`. `workSince` identifies actual
+credited-work invalidation; the legacy `sources` and earliest `since` remain present.
+When the board's permitted work or its names change, its quota entries carry
+`since:0, workSince:0`. History events also carry the current `workAuthority`, so a
+subsequent snapshot can confirm continuity with the newly accepted baseline. This retires the previous session index and quota/activity
+presentation immediately, including prepared drawings and gesture legends, and asks
+for a fresh session baseline. Older quota zero-cutoff events without `workSince`, or
+without `changes`, have the same meaning. A personal `ownSince:0` also retires private
+work, even with no sources; shared readers ignore private cutoffs. Budget-only and
+unselected-source changes do not retire the work index. Positive work cutoffs refresh
+credited work while retaining the last complete frame under the same authority.
+Consumers coalesce affected sections into one foreground read. All accounting endpoint
+requests and bytes, including aborted attempts, count toward the same benchmark budget.
 
 ## Reading history
 
@@ -1017,6 +1331,18 @@ are absent from every shared projection. Credential details remain owner-only. T
 
 ## Privacy
 
+Period and session projections expose only authorized board measurements and clipped
+credited work. Opaque refs do not expose producer session ids or database row ids.
+Current context is joined server-side only after an authorized stable identity match.
+`workAuthority` is an opaque continuity fingerprint, not its private inputs. A
+`presenceKey` is a keyed, hub-lifetime binding, not a producer identifier or permission.
+Neither field exposes raw producer IDs, original private funding or owner IDs.
+Private key labels are absent for other owners; raw meter context/state, owner ids,
+credentials and private currency registries are never included. Currency results retain
+only the selected measurement's permitted valuation provenance. Cursors confer no
+capability and are rechecked after access, visibility or attribution changes.
+
+
 Declared account IDs/names, connector credential records, hints, abilities and key fingerprints are never part of
 a board's state. A source failure whose code begins with `secret_key_` or `credential_`
 is projected as `unmeasured`, for its owner too; details remain in the owner's
@@ -1226,7 +1552,8 @@ for credits, and quota analytics remain percentage-based.
 
 Only the owner's personal snapshot has `ownSessions`, an array of running sessions
 without a currently held source. Each session includes `clientId`, machine ID/name,
-origin, project/folder, start, last work, working and credited `workedMs`; it contains no
+origin, project/folder, start, last work, working, credited `workedMs` and optional opaque
+presence binding/deadlines; it contains no
 producer ID, raw source attribution or provenance. Shared snapshots omit this field.
 The private `ownSessions` event is `{sessions: [...]}` and replaces this slice only.
 Normal source `sessions` also carry `clientId` and retain their visibility rules.

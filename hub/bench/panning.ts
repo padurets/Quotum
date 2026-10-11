@@ -2,18 +2,22 @@ import type {Cdp} from './cdp.js';
 import {panningProblems, type PanReading} from './panningBudget.js';
 import {panEvidenceScript, panTransactionsScript, panPartialScript} from './panEvidence.js';
 import {deadline} from './deadline.js';
-import {reload} from './reload.js';
+import {panningReload,type ReloadDiagnostic} from './panningReload.js';
 import {panMetrics, panCost} from './panningMetrics.js';
 import {panningSettlement} from './panningFailure.js';
 
 /** Native input against the real charts; the temporary layout brings all four into view. */
-export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'> & Partial<Pick<Cdp, 'at'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), evidence?: {timeline?: boolean; save(name: string, value: unknown): void}) {
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {timeline?: boolean; save(name: string, value: unknown): void}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic) {
+  const evidence=typeof options==='function'?undefined:options;
+  diagnoseReload??=typeof options==='function'?options:undefined;
   cdp.at?.('panning/setup');
+  let stage='native/setup';
+  const progress=(next:string)=>{stage='native/'+next;cdp.at?.(stage);console.log('bench: '+stage);};
   const wait = (ms: number) => cdp.evaluate(`new Promise(resolve => setTimeout(resolve, ${ms}))`);
   const key = (down: boolean, name: string, code: number) => cdp.send('Input.dispatchKeyEvent', {type: down ? 'keyDown' : 'keyUp', key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers: down && name === 'Shift' ? 8 : 0});
   const mouse = (type: string, x: number, y: number, modifiers = 0) => cdp.send('Input.dispatchMouseEvent', {type, x, y, modifiers, button: type === 'mouseMoved' && !modifiers ? 'none' : 'left', buttons: type === 'mousePressed' || type === 'mouseMoved' && modifiers ? 1 : 0, clickCount: type === 'mouseMoved' ? undefined : 1});
   const click = async (selector: string, index = 0) => {
-    const point = await cdp.evaluate<{x: number; y: number}>(`(async () => {const until=Date.now()+5000;let element;while(!(element=document.querySelectorAll(${JSON.stringify(selector)})[${index}])){if(Date.now()>until)throw new Error('missing native input target: '+${JSON.stringify(selector)});await new Promise(r=>setTimeout(r,20));}if(!element.closest('.popover')){element.scrollIntoView({block:'center'});await new Promise(requestAnimationFrame);}const r=element.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    const point = await cdp.evaluate<{x: number; y: number}>(`(async () => {const until=Date.now()+5000;let element;while(!(element=document.querySelectorAll(${JSON.stringify(selector)})[${index}])){if(Date.now()>until)throw new Error('missing native input target: '+${JSON.stringify(selector)});await new Promise(r=>setTimeout(r,20));}element.scrollIntoView({block:element.closest('.popover')?'nearest':'center'});await new Promise(requestAnimationFrame);const r=element.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
     await mouse('mouseMoved', point.x, point.y);
     await mouse('mousePressed', point.x, point.y);
     await mouse('mouseReleased', point.x, point.y);
@@ -30,25 +34,32 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       scenario = {initiator};
       at('load');
       // A newly opened board gives each input owner an independently unread edge.
-      await reload(cdp);
+      progress(`${initiator}/reload`);
+      await panningReload(cdp,initiator,diagnoseReload);
+      progress(`${initiator}/charts-open`);
       await cdp.evaluate(`(async()=>{window.__quotumBench?.pause();const until=Date.now()+15000;while(!['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))){if(Date.now()>until)throw new Error('panning charts did not open');await new Promise(r=>setTimeout(r,20));}})()`);
+      // Diagnostic entry points also start with the shared filters collapsed.
+      await cdp.evaluate(`(async()=>{const toggle=document.querySelector('.filter-toggle > button');if(toggle?.getAttribute('aria-expanded')==='false')toggle.click();const until=Date.now()+5000;while(document.querySelector('.analytics-head')?.hidden){if(Date.now()>until)throw new Error('shared chart controls did not open');await new Promise(requestAnimationFrame);}})()`);
       const selector = initiator === 'quota' ? '.history' : initiator === 'funds' ? '.subscription-funds' : '.budget-history';
       const inset = initiator === 'quota' ? 52 : 88;
       await cdp.evaluate(`(() => {
     const style=document.createElement('style'); style.id='quotum-pan-layout';
-    style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important}.widget:not(:has(.history,.activity,.budget-history,.subscription-funds)){display:none!important}.widget:has(.history){order:1}.widget:has(.activity){order:2}.widget:has(.budget-history){order:3}.widget:has(.subscription-funds){order:4}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:200px!important}.activity .chart>svg{height:140px!important}.budget-history .chart>svg,.subscription-funds .chart>svg{height:200px!important}.legend{max-height:48px;overflow:auto}.activity .legend{max-height:40px}';
+    // Clear inherited stretch on hidden cards too: all widgets now share this grid.
+    style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important;--fill:0px!important}.widget:not(:has(.history,.activity,.budget-history,.subscription-funds)){display:none!important}.widget:has(.history){order:1}.widget:has(.activity){order:2}.widget:has(.budget-history){order:3}.widget:has(.subscription-funds){order:4}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:200px!important}.activity .chart>svg{height:140px!important}.budget-history .chart>svg,.subscription-funds .chart>svg{height:200px!important}.legend{max-height:48px;overflow:auto}.activity .legend{max-height:40px}';
     document.head.append(style); document.querySelector('.analytics-head')?.scrollIntoView();
   })()`);
     // A manual horizon keeps the 30d source's full 1.25-width path inside retention.
-    await click('.history .panel-head .picker > button');
-    await click('.history .popover .segmented button', 1);
+    await click('.analytics-head .controls .picker > button');
+    await click('.analytics-head .popover .popover-section:last-child .segmented button', 1);
     await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     for (const [period, index] of [['24h', 4], ['30d', 8]] as const) {
       scenario = {initiator, period};
       at('setup');
+      progress(`${initiator}/${period}/select`);
       await click('.period .picker > button');
       await click('.period .popover .popover-row', index);
       await settled();
+      progress(`${initiator}/${period}/prepare`);
       await cdp.evaluate(`(async () => {for(let i=0;i<3;i++){await new Promise(requestAnimationFrame);const r=document.querySelector('.history .chart>svg').getBoundingClientRect();scrollBy(0,r.top-140);}})()`);
       const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number; budgetSeries: number; fundsSeries: number; charts: number}>(`(() => {
         const svg=document.querySelector('${selector} .chart>svg'), r=svg.getBoundingClientRect();
@@ -115,11 +126,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
         for(const type of types){owner.addEventListener(type,capture,true);window.addEventListener(type,input);}
         const originalFetch=window.fetch.bind(window);probe.originalFetch=originalFetch;
         window.fetch=async(...args)=>{
-          const url=new URL(String(args[0]),location.href);if(url.pathname!='/api/history')return originalFetch(...args);
-          const scope=JSON.stringify([url.searchParams.get('scope'),url.searchParams.get('meters'),url.searchParams.get('unit'),url.searchParams.get('currency')]),cell=Number(url.searchParams.get('cell')),from=Number(url.searchParams.get('from')),to=Number(url.searchParams.get('to')),tiles=Math.floor((to-1)/(cell*60))-Math.floor(from/(cell*60))+1;
-          for(const f of probe.flights.values())if(f.scope===scope&&f.cell===cell&&f.from<to&&f.to>from)probe.duplicateReads++;
-          const id=++nextRequest,signal=args[1]?.signal,aborted=()=>{if(timeline)timeline.add('history-abort',{requestId:id});probe.flights.delete(id);};probe.flights.set(id,{scope,cell,from,to});signal?.addEventListener('abort',aborted,{once:true});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.maxTiles=Math.max(probe.maxTiles,tiles);probe.coldReads++;
-          if(timeline)timeline.add('history-start',{requestId:id,cell,from,to});
+          const url=new URL(String(args[0]),location.href),legacy=url.pathname==='/api/history';if(!legacy&&!new RegExp('^/api/boards/[^/]+/period(?:/sessions)?$').test(url.pathname))return originalFetch(...args);
+          const body=legacy?null:JSON.parse(args[1]?.body||'{}');
+          const sections=legacy?[Object.fromEntries(url.searchParams)]:['quota','budget','funds'].filter(scope=>body[scope]&&body[scope].cells!=='skip').map(scope=>({...body[scope],scope:scope==='funds'?'budget':scope}));
+          const ranges=sections.map(q=>({scope:JSON.stringify([q.scope,q.meters,q.unit,q.currency]),cell:Number(q.cell),from:Number(q.from),to:Number(q.to)}));
+          for(const q of ranges){for(const f of probe.flights.values())for(const other of f)if(other.scope===q.scope&&other.cell===q.cell&&other.from<q.to&&other.to>q.from)probe.duplicateReads++;probe.maxTiles=Math.max(probe.maxTiles,Math.floor((q.to-1)/(q.cell*60))-Math.floor(q.from/(q.cell*60))+1);}
+          const id=++nextRequest,signal=args[1]?.signal,aborted=()=>{if(timeline)timeline.add('history-abort',{requestId:id});probe.flights.delete(id);};probe.flights.set(id,ranges);signal?.addEventListener('abort',aborted,{once:true});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.coldReads++;
+          if(timeline)for(const {cell,from,to}of ranges)timeline.add('history-start',{requestId:id,cell,from,to});
           try {
             const response=await originalFetch(...args);
             if(timeline){
@@ -209,6 +222,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       const sent: Promise<unknown>[] = [];
       const costStart = evidence?.timeline !== undefined ? await panMetrics(cdp) : undefined;
       at('wheel');
+      progress(`${initiator}/${period}/wheel`);
       await cdp.evaluate('window.__quotumPan.feeding=true');
       // The browser generates native wheel input without a CDP IPC per delta.
       const scroll = (distance: number, reverse = 0) => cdp.send('Input.synthesizeScrollGesture', {x: geometry.x, y: geometry.y, xDistance: distance, xOverscroll: reverse, yDistance: 0, speed: 720, gestureSourceType: 'mouse', preventFling: true});
@@ -217,9 +231,11 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       await wait(240);
       await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
       interception = false;
+      progress(`${initiator}/${period}/wheel-settle`);
       await settled();
       // Shift-drag keeps capture when the pointer leaves the SVG, without extra inertia.
       at('drag');
+      progress(`${initiator}/${period}/drag`);
       await cdp.evaluate(`window.__quotumPan.segment='drag'`);
       await key(true, 'Shift', 16);
       await mouse('mousePressed', geometry.x, geometry.y, 8);
@@ -231,9 +247,11 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       await cdp.evaluate('window.__quotumPan.feeding=false');
       await mouse('mouseReleased', geometry.x + 720, geometry.y, 8);
       await key(false, 'Shift', 16);
+      progress(`${initiator}/${period}/drag-settle`);
       await settled();
       // Native Shift deltaX returns to live, then Back/Forward restore complete gestures.
       at('return');
+      progress(`${initiator}/${period}/return-live`);
       sent.length = 0;
       await cdp.evaluate(`window.__quotumPan.segment='return'`);
       const returnBefore = await cdp.evaluate<unknown>('window.__quotumPan.returnSnapshot()');
@@ -268,6 +286,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       }
       await cdp.evaluate('window.__quotumPan.returnInput=null');
       // Held Shift-wheel has the same uninterrupted scale as dragging, across rests.
+      progress(`${initiator}/${period}/held-shift-and-navigation`);
       await mouse('mouseMoved', geometry.x, geometry.y);
       await key(true, 'Shift', 16);
       await wait(30);
@@ -281,12 +300,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       await wheel(24, true); await wait(40);
       await key(false, 'Shift', 16); await wait(240);
       if (!(await cdp.evaluate<boolean>(`!document.querySelector('[data-pan-end]')&&!new URLSearchParams(location.search).has('from')`))) throw new Error('Shift-wheel return did not preserve live');
-      await cdp.evaluate(`history.back()`); await wait(300);
+      await cdp.evaluate(`history.back()`); await wait(300); await settled();
       if (!(await cdp.evaluate<boolean>(`new URLSearchParams(location.search).has('from')`))) throw new Error('Back did not restore the whole previous gesture');
-      await cdp.evaluate(`history.forward()`); await wait(300);
+      await cdp.evaluate(`history.forward()`); await wait(300); await settled();
       if (!(await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`))) throw new Error('Forward did not restore live');
       // A wheel does not blur a keyboard-focused legend. Its bubble must stay
       // hidden through ordinary panning, a latched drag and their final fold.
+      progress(`${initiator}/${period}/legend`);
       const legendVisible = () => cdp.evaluate<boolean>(`[...document.querySelectorAll('.activity-legend-tip.is-open')].some(tip=>getComputedStyle(tip).display!=='none')`);
       await key(true, 'Tab', 9); await key(false, 'Tab', 9);
       await cdp.evaluate(`document.querySelector('.activity .legend-item').focus()`); await wait(40);
@@ -305,6 +325,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
       if (await legendVisible()) throw new Error('a drag fold reopened a focused legend readout');
       await wait(260);
       await cdp.evaluate(`history.back()`); await settled();
+      progress(`${initiator}/${period}/complete`);
     }
       await cdp.evaluate(`document.getElementById('quotum-pan-layout')?.remove()`);
     }
@@ -328,14 +349,17 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on' | 'off'>
           await cdp.evaluate(`(() => {window.__quotumPan?.cleanup();document.getElementById('quotum-pan-layout')?.remove();const p=JSON.parse(localStorage.getItem('quotum.prefs')||'{}');p.horizon=${JSON.stringify(originalHorizon)};localStorage.setItem('quotum.prefs',JSON.stringify(p));})()`, signal);
           await cdp.send('Emulation.clearDeviceMetricsOverride', {}, signal);
         });
-      } catch {evidence?.save('panning-cleanup', {status: 'incomplete'});}
+      } catch {
+        evidence?.save('panning-cleanup', {status: 'incomplete'});
+        console.error('bench: '+stage+' cleanup failed; retaining original failure');
+      }
     } else {
     await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
     if (interception) await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
     await cdp.evaluate(`(() => {window.__quotumPan?.cleanup();document.getElementById('quotum-pan-layout')?.remove();})()`);
     try {
-      if (await cdp.evaluate<boolean>(`!document.querySelector('.history .popover')`)) await click('.history .panel-head .picker > button');
-      await click('.history .popover .segmented button', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
+      if (await cdp.evaluate<boolean>(`!document.querySelector('.analytics-head .popover')`)) await click('.analytics-head .controls .picker > button');
+      await click('.analytics-head .popover .popover-section:last-child .segmented button', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
       await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     } catch {
       // A failed setup retains its original error; the benchmark owns and closes its tab.

@@ -13,7 +13,7 @@ async function failedSettlement(message: string) {
       if (expression.includes('const p=window.__quotumPan')) return {status: 'unavailable'} as T;
       return (expression.includes('horizon') ? 'auto' : {x: 1, y: 1}) as T;
     },
-    on: <T>(_method: string, callback: (params: T) => void) => {loaded = () => callback(undefined as T);}, off() {},
+    on: <T>(method: string, callback: (params: T) => void) => {if(method==='Page.loadEventFired')loaded = () => callback(undefined as T);}, off() {},
   };
   await assert.rejects(panning(cdp, async () => {}, {save: (name, value) => saved.set(name, safeEvidence(value))}), value => value === error);
   return saved.get('panning-failure') as {settlement?: unknown};

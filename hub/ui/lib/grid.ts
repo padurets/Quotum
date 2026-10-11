@@ -1,4 +1,4 @@
-import {MAX_ROWS, reading, nearest, starts, widths, settle, withPlaces, type Stored, type Place, type Layout, type Item, type Spot} from '../../server/domain/layout.js';
+import {MAX_ROWS, reading, nearest, starts, widths, settle, withPlaces, ordered, defaultWidth, type Stored, type Place, type Layout, type Item, type Spot} from '../../server/domain/layout.js';
 export * from '../../server/domain/layout.js';
 
 /** Content fills whole rows; the last row has no gap below it. */
@@ -160,6 +160,22 @@ export function samePlaces(a: Spot[], b: Spot[]): boolean {
 /** What a gesture or a key does to the view: applied to the latest one, saved or not yet, so the chosen heights come from it. */
 export const withArranged = <T extends Stored & {layout: Layout}>(view: T, places: Record<string, Place>, height?: Height) =>
   withPlaces(view, withHeights(view.layout.places, places, height));
+
+/** Keep implicit source neighbours only when a gesture needs them to reproduce its result. */
+export function withSparseArrangement<T extends Stored & {layout: Layout}>(view: T, places: Record<string, Place>, ids: string[], height?: Height) {
+  const result = withArranged(view, places, height);
+  const expected = ordered(result.layout, ids);
+  const positions = new Map(expected.map((item,index) => [item.id,{...item,index}]));
+  for (const [index,id] of ids.entries()) {
+    if (!id.startsWith('source:') || Object.hasOwn(view.layout.places,id) || height?.id === id) continue;
+    const item = positions.get(id)!, prev = positions.get(ids[index-1]);
+    const w = defaultWidth(id,result.layout.columns), x = prev ? (starts(result.layout.columns,w).find(x => x >= prev.x+prev.w) ?? 0) : 0;
+    // Making this anchor implicit moves its following implicit run behind its
+    // natural predecessor. Adjacency and default geometry keep that whole run intact.
+    if (item.index === (prev?.index ?? -1)+1 && item.x === x && item.w === w) delete result.layout.places[id];
+  }
+  return result;
+}
 
 export function narrowed(items: Item[], columns: 2 | 1, wideColumns: number): Spot[] {
   const skyline = Array<number>(columns).fill(0);

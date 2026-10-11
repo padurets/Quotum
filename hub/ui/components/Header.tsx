@@ -6,9 +6,10 @@ import {page, useConnection} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {Brand, ErrorLine, Field, Modal} from './Kit';
 import {Popover, PopoverHeading} from './Popover';
-import {ChevronDown, Settings as SettingsIcon} from 'lucide-react';
+import {ChevronDown, Funnel, Settings as SettingsIcon} from 'lucide-react';
 import {t} from '../i18n';
 import {boardHref, navigate, useLocation} from '../lib/router';
+import {useTimeRange} from '../lib/timeRange';
 
 /** The connection lost this long (by the hub's clock) is said in the header. */
 const OFFLINE_AFTER = 45_000;
@@ -22,6 +23,28 @@ function BoardHome({board}: {board: Board | null}) {
     event.preventDefault();
     navigate(href);
   }} />;
+}
+
+/** The range indicator follows navigation without waking the board controls. */
+function FilterToggle({expanded, onToggle}: {expanded: boolean; onToggle: () => void}) {
+  const selected = useTimeRange();
+  const label = [t(expanded ? 'header.hideFilters' : 'header.showFilters'), selected && t('header.historicalPeriod')].filter(Boolean).join('\n');
+  return (
+    <div className="filter-toggle">
+      <button
+        type="button"
+        className="icon-button"
+        aria-label={label}
+        title={label}
+        aria-expanded={expanded}
+        aria-controls="board-filters"
+        onClick={onToggle}
+      >
+        <Funnel size={16} aria-hidden="true" />
+        {selected && <span className="filter-range-dot" aria-hidden="true" />}
+      </button>
+    </div>
+  );
 }
 
 /** Deleting a shared board: its name typed out, since nothing of it can come back. */
@@ -168,6 +191,7 @@ export function Header({
   onSignedOut,
   local,
   actions,
+  filters,
 }: {
   boards: Board[];
   board: Board | null;
@@ -177,6 +201,7 @@ export function Header({
   onSignedOut: () => void;
   local: boolean;
   actions?: ReactNode;
+  filters?: {expanded: boolean; onToggle: () => void};
 }) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -200,6 +225,7 @@ export function Header({
               {actions}
             </div>
           )}
+          {filters && <FilterToggle {...filters} />}
           {local ? (
             <button className="icon-button" aria-label={t('header.settings')} onClick={onAccount}>
               <SettingsIcon size={16} aria-hidden="true" />

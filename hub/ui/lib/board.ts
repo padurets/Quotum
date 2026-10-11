@@ -34,6 +34,7 @@ export type Snapshot = {
   viewRevision?: number;
   connectionsRevision?: number;
   historyStart: number;
+  workAuthority?: string;
   sources: Card[];
   ownSessions?: LiveSession[];
   sessions: Record<string, LiveSession[]>;
@@ -64,12 +65,14 @@ export type HubEvent =
   | {type:'sourceAccess';data:Record<string,SourceAccess>}
   | {type:'currencies';data:CurrencyContext}
   | {type: 'boards'; data: {boards: Board[]}}
-  | {type: 'history'; data: {sources: string[]; since: number; ownSince?: number; changes?: import('../../server/domain/history').HistoryChange[]}}
+  | {type: 'history'; data: {sources: string[]; since: number; ownSince?: number; workAuthority?: string; changes?: import('../../server/domain/history').HistoryChange[]}}
   | {type: 'resets'; data: HubResets};
 
 export type ConnectionStatus = 'connecting' | 'live' | 'polling' | 'retrying' | 'paused';
 
 export type BoardState = {
+  /** A snapshot confirms stream presence until this connection loses continuity. */
+  presenceConfirmed?: boolean;
   currencies?:CurrencyContext;
   sourceAccess?:Record<string,SourceAccess>;
   id: string;
@@ -78,6 +81,7 @@ export type BoardState = {
   viewRevision?: number;
   connectionsRevision?: number;
   historyStart: number;
+  workAuthority?: string;
   lineup: string[];
   cards: Record<string, Card>;
   ownSessions?: LiveSession[];
@@ -157,12 +161,14 @@ function keepCurrencyContext(old:CurrencyContext|undefined,next:CurrencyContext)
 function snapshot(state: PageState, data: Snapshot): PageState {
   const old = state.board?.id === data.board.id ? state.board : null;
   const board: BoardState = {
+    presenceConfirmed: true,
     id: data.board.id,
     meta: keep(old?.meta, data.board),
     view: old && (old.viewRevision ?? 0) > (data.viewRevision ?? 0) ? old.view : keep(old?.view, data.view),
     viewRevision: Math.max(old?.viewRevision ?? 0, data.viewRevision ?? 0),
     connectionsRevision: Math.max(old?.connectionsRevision ?? 0, data.connectionsRevision ?? 0),
     historyStart: data.historyStart,
+    workAuthority: typeof data.workAuthority === 'string' && data.workAuthority ? data.workAuthority : undefined,
     lineup: keep(
       old?.lineup,
       data.sources.map(card => card.id),
@@ -201,6 +207,8 @@ function set<K extends 'cards' | 'sessions' | 'cadence' | 'refresh' | 'forecast'
 
 function hub(state: PageState, event: HubEvent): PageState {
   switch (event.type) {
+    case 'hello':
+      return patch(state, board => board.presenceConfirmed ? {...board, presenceConfirmed: false} : board);
     case 'devices':
       return {...state, devicesRevision: (state.devicesRevision ?? 0)+1};
     case 'snapshot':
@@ -258,10 +266,8 @@ function hub(state: PageState, event: HubEvent): PageState {
     }
     case 'resets':
       return {...state, resets: withResets(state.resets, event.data)};
-    case 'hello':
     case 'history':
-      // Nothing to keep: the history loader hears of it (lib/history.ts).
-      return state;
+      return patch(state, board => event.data.workAuthority && event.data.workAuthority !== board.workAuthority ? {...board, workAuthority: event.data.workAuthority} : board);
   }
 }
 
@@ -269,10 +275,12 @@ export function reduce(state: PageState, event: PageEvent): PageState {
   switch (event.type) {
     case 'hub':
       return hub(state, event.event);
-    case 'connection':
-      return state.connection.status === event.status && state.connection.lostAt === event.lostAt
-        ? state
-        : {...state, connection: {status: event.status, lostAt: event.lostAt}};
+    case 'connection': {
+      const next = event.status === 'live' || event.status === 'polling' ? state : patch(state, board => board.presenceConfirmed ? {...board, presenceConfirmed: false} : board);
+      return next.connection.status === event.status && next.connection.lostAt === event.lostAt
+        ? next
+        : {...next, connection: {status: event.status, lostAt: event.lostAt}};
+    }
     case 'session-boards': {
       const boards = keep(state.boards ?? undefined, event.boards);
       return boards === state.boards ? state : {...state, boards};

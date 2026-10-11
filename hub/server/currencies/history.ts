@@ -5,17 +5,20 @@ import type {CurrencyStore} from '../store/currencies.js';
 import {convertBy,isConvertible,type Conversion} from '../domain/currency.js';
 
 /** Transform the already-accounted native cells; FX changes never become spending. */
-export function displayHistory(chunks:readonly Chunk[],currencies:CurrencyStore,owner:string,target:string,cell:number,nativeAt?:(source:string,meter:string,until:number)=>number|null):Chunk[] {
+export function displayHistory(chunks:readonly Chunk[],currencies:CurrencyStore,owner:string,target:string,cell:number,nativeAt?:(source:string,meter:string,until:number)=>number|null,valuationAt?:(source:string,meter:string,until:number,binding:number|null)=>number|null,reserve?:(bytes:number)=>void):Chunk[] {
   const from=Math.min(...chunks.map(c=>c.from)),to=Math.max(...chunks.map(c=>c.to??c.from+((c.meterSeries??[]).reduce((n,s)=>Math.max(n,...s.cells.map(r=>r[0]+1)),0))*cell));
-  const bindings=currencies.history(owner,target,from,to);
+  const bindings=currencies.history(owner,target,from,to,reserve);
   const result=chunks.map(chunk=>({...chunk,meterSeries:chunk.meterSeries?.map(series=>{
     if(!isConvertible(series.unit))return series;
     let semantics=series.semantics,previousMetadata='null';
     type Presented={amount:string;metadata:MeterSemantics|null;encoded:string;convert:(amount:string)=>string};
     const views=new Map<MeterSemantics|null,Map<string,Presented>>();
     const present=(value:string,input:MeterSemantics|null,at:number)=>{
-      const proof=input?.conversion,boundAt=Math.max(bindings.observationAt(series.source,series.unit,at)??0,proof?bindings.observationAt(series.source,proof.original.unit,at)??0:0),reportedAt=nativeAt?.(series.source,series.meter,at);
-      const quoteAt=Math.max(proof?.original.at??0,reportedAt??0,boundAt)||at,anchor=proof?.rate.id??null;
+      const proof=input?.conversion,boundAt=Math.max(bindings.observationAt(series.source,series.unit,at)??-Infinity,proof?bindings.observationAt(series.source,proof.original.unit,at)??-Infinity:-Infinity),reportedAt=nativeAt?.(series.source,series.meter,at);
+      const valuation=valuationAt?valuationAt(series.source,series.meter,at,Number.isFinite(boundAt)?boundAt:null):Math.max(reportedAt??-Infinity,boundAt);
+      if(valuation===null&&!proof)return null;
+      const knownAt=Math.max(proof?.original.at??-Infinity,valuation??-Infinity);
+      const quoteAt=Number.isFinite(knownAt)?knownAt:at,anchor=proof?.rate.id??null;
       const key=JSON.stringify([value,quoteAt,anchor]),cached=views.get(input)?.get(key);if(cached)return cached;
       const observed=quoteAt===reportedAt||quoteAt===proof?.original.at||quoteAt===boundAt;
       const path=bindings.binding(series.source,series.unit,quoteAt,anchor,observed);if(!path)return null;

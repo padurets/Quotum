@@ -29,7 +29,7 @@ test('a failed panning scenario saves its partial evidence and survives failed c
   const error = new Error('original scenario failure'), files = new Map<string, unknown>();
   let first = true, loaded = () => {};
   const cdp = {
-    on: (_method: string, callback: () => void) => {loaded = callback;}, off: () => {},
+    on: (method: string, callback: () => void) => {if(method==='Page.loadEventFired')loaded = callback;}, off: () => {},
     send: async (method: string) => {if (method === 'Page.reload') loaded(); if (method === 'Emulation.setCPUThrottlingRate') throw new Error('cleanup failed');},
     evaluate: async (source: string) => {
       if (first) {first = false; return 'auto';}

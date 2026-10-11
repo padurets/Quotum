@@ -14,7 +14,7 @@ import {ResetFeed} from '../resets.js';
 import {HistoryTiles} from '../history.js';
 import {readHistory} from './historyRead.js';
 import {mergeEvidence} from '../domain/sessionEvidence.js';
-import {KEEP_MS} from '../sessions.js';
+import {CREDIT_MS, KEEP_MS} from '../sessions.js';
 
 const at = Date.parse('2026-09-22T12:00:00Z'), iso = (n: number) => new Date(n).toISOString();
 const session = {clientId: 'opencode', sessionId: 'b'.repeat(32), source: null, origin: 'terminal', project: 'Quotum', startedAt: iso(at), working: true};
@@ -323,7 +323,13 @@ test('private presence expires without a quota card, while shared streams receiv
   const frames: Frame[][] = [[], []];
   for (let i=0; i<2; i++) {const secret='expiry-'+i; h.directory.createSession(secret,h.owner.id,at,1_000_000); events.open({user:h.owner.id,secret,board:i===0?h.board:h.shared,kind:'stream',send:batch=>frames[i].push(...batch),end:()=>{}});}
   frames.forEach(f=>f.splice(0));
-  const expiry = [...timers].find(timer=>timer.at===at+KEEP_MS+1); assert.ok(expiry, 'private presence arms its deadline on the initial snapshot');
+  const workExpiry = [...timers].find(timer=>timer.at===at+CREDIT_MS); assert.ok(workExpiry, 'working confirmation arms the first semantic deadline');
+  now = workExpiry.at; timers.delete(workExpiry); workExpiry.run(); events.flush();
+  const idle = JSON.parse(frames[0].find(f=>f.type==='ownSessions')!.data).sessions;
+  assert.equal(idle.length,1); assert.equal(idle[0].working,false); assert.equal(idle[0].currentPresence.working,false);
+  assert.ok(!frames[1].some(f=>f.type==='ownSessions'||f.type==='history'));
+  frames.forEach(f=>f.splice(0));
+  const expiry = [...timers].find(timer=>timer.at===at+KEEP_MS+1); assert.ok(expiry, 'idle confirmation retains its presence deadline');
   now = expiry.at; expiry.run(); events.flush();
   assert.deepEqual(JSON.parse(frames[0].find(f=>f.type==='ownSessions')!.data), {sessions: []});
   assert.ok(!frames[1].some(f=>f.type==='ownSessions'||f.type==='history'));

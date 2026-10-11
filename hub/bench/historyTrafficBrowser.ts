@@ -1,3 +1,5 @@
+import {accountingPath} from './accountingTraffic';
+import {PERIOD_SCOPES,type PeriodScope,type PeriodReply,type PeriodRequest} from '../server/domain/periodRead';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import type {Evidence} from './evidence';
@@ -8,14 +10,16 @@ import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type 
 import {observeReversal} from './reversalDiagnostic';
 
 const DAY = 86_400_000;
-type Read = {selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
+type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
+type RequestDiagnostic={selection?:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number};evaluatedAt?:number;sections:{scope:PeriodScope;from:number;to:number;cell:number;cells:'skip'|'read';evidence:'skip'|'cursor'|'baseline'}[];values:number;sessions:boolean};
+type Read = {endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
 
 /** Time coordinates and borrowed metadata do not identify a resource selection. */
 export function historyReadSelection(url: URL) {
   const params = new URLSearchParams(url.search);
-  for (const field of ['from', 'to', 'cell', 'meta']) params.delete(field);
+  for (const field of ['from', 'to', 'cell', 'meta', 'evidence', 'cells']) params.delete(field);
   params.sort();
   return params.toString();
 }
@@ -32,15 +36,15 @@ export function stableHistoryReads(reads: readonly Pick<Read, 'selection' | 'ans
 export function historyPageScript(period: string) {
   const prefix = `b${++pageSerial}`;
   return `(() => {
-    localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d'}));
+    localStorage.setItem('quotum.locale','en');localStorage.setItem('quotum.prefs',JSON.stringify({range:${JSON.stringify(period)},horizon:'1d',filtersVisible:true}));
     const original=window.fetch.bind(window),attempts=window.__quotumHistoryAttempts={};let serial=0;
     window.fetch=(resource,init={})=>{
       const uri=resource instanceof Request?resource.url:String(resource);
-      if(new URL(uri,location.href).pathname!='/api/history')return original(resource,init);
+      const path=new URL(uri,location.href).pathname;if(path!='/api/history'&&!/^\\/api\\/boards\\/[^/]+\\/period(?:\\/sessions)?$/.test(path))return original(resource,init);
       const id=${JSON.stringify(prefix)}+':'+(++serial),headers=new Headers(init.headers||(resource instanceof Request?resource.headers:undefined)),signal=init.signal||(resource instanceof Request?resource.signal:undefined);
       headers.set(${JSON.stringify(HISTORY_ATTEMPT_HEADER)},id);
-      const attempt=attempts[id]={aborted:!!signal?.aborted};signal?.addEventListener('abort',()=>{attempt.aborted=true;},{once:true});
-      return original(resource,{...init,headers});
+      const started=performance.now(),attempt=attempts[id]={aborted:!!signal?.aborted};signal?.addEventListener('abort',()=>{attempt.aborted=true;attempt.abortedAt=performance.now()-started;attempt.reason=signal.reason?.name;},{once:true});
+      return original(resource,{...init,headers}).then(response=>{attempt.headersAt=performance.now()-started;return response;},error=>{attempt.failedAt=performance.now()-started;attempt.error=error.name;throw error;});
     };
   })()`;
 }
@@ -48,17 +52,41 @@ export function historyPageScript(period: string) {
 /** Counts encoded bodies only. Chrome's loadingFinished total includes headers. */
 export class HistoryBodies {
   phase = 'seed';
+  stage = 'seed';
   readonly reads: Read[] = [];
   readonly pending = new Set<Promise<unknown>>();
   readonly errors: unknown[] = [];
   private readonly active = new Map<string, Read>();
   private readonly metadata = new Map<string, HistoryBasis>();
   get activeCount() {return this.active.size;}
+  get resources():Read[] {return this.reads.flatMap(read=>read.sections?read.sections.map(section=>({...read,...section})):read.cell>0?[read]:[]);}
+  /** Only request shape and body counts: identities, cursors and response contents stay private. */
+  diagnostic(phase:string){
+    const reads=this.reads.filter(read=>read.phase===phase);
+    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
+  }
   constructor(cdp: Pick<Cdp, 'on' | 'send'>) {
-    cdp.on<{requestId: string; request: {url: string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
-      const url = new URL(event.request.url); if (url.pathname !== '/api/history') return;
-      const read: Read = {selection: historyReadSelection(url), id: event.requestId, phase: this.phase, from: Number(url.searchParams.get('from')), to: Number(url.searchParams.get('to')), cell: Number(url.searchParams.get('cell')), lower: 0, before: Promise.all([...this.pending]), attemptId: lowerHeaders(event.request.headers ?? {})[HISTORY_ATTEMPT_HEADER]};
+    cdp.on<{requestId: string; request: {url: string;postData?:string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
+      const url = new URL(event.request.url); if (!accountingPath(url.pathname)) return;
+      const read: Read = {endpoint:url.pathname==='/api/history'?'history':url.pathname.endsWith('/sessions')?'period/sessions':'period',stage:this.stage,selection: historyReadSelection(url), id: event.requestId, phase: this.phase, from: Number(url.searchParams.get('from')), to: Number(url.searchParams.get('to')), cell: Number(url.searchParams.get('cell')), lower: 0, before: Promise.all([...this.pending]), attemptId: lowerHeaders(event.request.headers ?? {})[HISTORY_ATTEMPT_HEADER]};
       this.active.set(read.id, read); this.reads.push(read);
+      if(url.pathname!=='/api/history'){
+        read.sections=[];
+        const classify=(postData:string)=>{
+          const body=JSON.parse(postData) as PeriodRequest;
+          const selection=body.selection;
+          read.diagnostic={...(selection?{selection:selection.mode==='live'?{mode:'live',periodMs:Number(selection.periodMs)}:{mode:'range',from:Number(selection.from),to:Number(selection.to)}}:{}),evaluatedAt:Number(body.evaluatedAt),sections:PERIOD_SCOPES.flatMap(scope=>{const query=body[scope];return query?[{scope,from:Number(query.from),to:Number(query.to),cell:Number(query.cell),cells:query.cells==='skip'?'skip' as const:'read' as const,evidence:query.evidence==='skip'?'skip' as const:query.evidence?'cursor' as const:'baseline' as const}]:[];}),values:body.values?.length??0,sessions:!!body.sessions};
+          for(const scope of PERIOD_SCOPES)if(body[scope]&&body[scope]!.cells!=='skip'){const query=new URL('/api/history',url);query.search=new URLSearchParams({board:decodeURIComponent(url.pathname.split('/')[3]),scope:scope==='funds'?'budget':scope,...body[scope]}).toString();read.sections!.push({scope,selection:historyReadSelection(query),from:Number(body[scope]!.from),to:Number(body[scope]!.to),cell:Number(body[scope]!.cell)});}
+          if(read.sections![0])Object.assign(read,read.sections![0]);
+        };
+        if(event.request.postData!==undefined){try{classify(event.request.postData);}catch(error){this.errors.push(error);}}
+        else {
+          // Chrome may omit the inline POST body. Its absence says nothing
+          // about the requested resources, even if the response finishes first.
+          const work=cdp.send<{postData:string}>('Network.getRequestPostData',{requestId:read.id}).then(result=>classify(result.postData)).catch(error=>{this.errors.push(error);});
+          read.request=work;this.pending.add(work);void work.then(()=>this.pending.delete(work));
+        }
+      }else read.diagnostic={sections:[{scope:url.searchParams.get('scope')==='budget'?'budget':'quota',from:read.from,to:read.to,cell:read.cell,cells:'read',evidence:'skip'}],values:0,sessions:false};
     });
     cdp.on<{requestId: string; headers: Record<string, string>}>('Network.requestWillBeSentExtraInfo', event => {
       const read = this.reads.find(r => r.id === event.requestId), id = lowerHeaders(event.headers)[HISTORY_ATTEMPT_HEADER];
@@ -78,11 +106,19 @@ export class HistoryBodies {
         const decoded = result.base64Encoded ? Buffer.from(result.body, 'base64') : Buffer.from(result.body);
         // DevTools can finish fetching an earlier full body after the page has
         // already used its metadata to start this request. Count the raw body.
-        await read.before;
-        const reply = JSON.parse(decoded.toString()) as HistoryReply;
-        const answer = expandHistory(reply, this.metadata.get(reply.meta ?? ''));
-        if (answer.meta) this.metadata.set(answer.meta, {run: answer.run, now: answer.now, historyStart: answer.historyStart, known: answer.known, meta: answer.meta});
-        read.answer = {run: answer.run, now: answer.now, known: answer.known}; read.chunks = answer.chunks.map(chunk => [chunk.from, chunk.to]);
+        await read.before;await read.request;
+        const raw=JSON.parse(decoded.toString()) as HistoryReply|PeriodReply;
+        const parts=read.sections??[read];
+        for(const part of parts){
+          const scope='scope' in part?part.scope:undefined;
+          const section=scope?(raw as PeriodReply)[scope]:undefined;
+          if(scope&&section?.state!=='complete')throw new Error('accounting section did not complete');
+          const reply=section?.state==='complete'?section.value:raw as HistoryReply;
+          const answer=expandHistory(reply,this.metadata.get(reply.meta??''));
+          if(answer.meta)this.metadata.set(answer.meta,{run:answer.run,now:answer.now,historyStart:answer.historyStart,known:answer.known,meta:answer.meta});
+          part.answer={run:answer.run,now:answer.now,known:answer.known};part.chunks=answer.chunks.map(chunk=>[chunk.from,chunk.to]);
+        }
+        if(read.sections?.[0])Object.assign(read,read.sections[0]);
         read.count = {complete: true, decoded: decoded.length, lower: read.length ?? NaN, upper: read.length, length: read.length, coding: read.coding, id: read.attemptId ?? read.transferId, responseId: read.transferId};
       }).catch(error => {this.errors.push(error); read.count = {complete: false, lower: read.lower, upper: read.length, length: read.length, coding: read.coding, id: read.attemptId ?? read.transferId, responseId: read.transferId};});
       this.pending.add(work); void work.then(() => this.pending.delete(work));
@@ -101,6 +137,11 @@ export function trafficReadEvidence(reads: readonly Read[]) {
     lower:read.lower,coding:read.coding,length:read.length,attemptId:read.attemptId,transferId:read.transferId,
     canceled:read.canceled,count:read.count,selectionHash:hash(read.selection),chunks:read.chunks,
     run:read.answer?.run,now:read.answer?.now,knownHash:read.answer?.known===undefined?undefined:hash(read.answer.known)}));
+}
+
+/** A complete drawing can precede a queued cell read backed by its period evidence. */
+export function hasSeededHistory(reads:readonly Read[],phase:string){
+  return PERIOD_SCOPES.every(scope=>reads.some(read=>read.phase===phase&&read.count?.complete&&read.sections?.some(section=>section.scope===scope)));
 }
 
 /** CDP's speed is an integer; keep the named cold gesture near 750 ms. */
@@ -125,25 +166,25 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     const split = cookie.indexOf('='); await cdp.send('Network.setCookie', {name: cookie.slice(0, split), value: cookie.slice(split + 1), url: proxy.url, httpOnly: true, sameSite: 'Lax'});
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: historyPageScript(length === DAY ? '24h' : '30d')});
     await cdp.send('Page.navigate', {url: proxy.url});
-    const settled = async () => {
+    const settled = async (seed = false) => {
       const deadline = Date.now() + 20_000;
       for (;;) {
         if (bodies.errors.length) throw bodies.errors[0];
-        if (!bodies.activeCount && !bodies.pending.size && await cdp.evaluate<boolean>(`!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning')`)) {
+        if ((!seed||hasSeededHistory(bodies.reads,seedPhase))&&!bodies.activeCount && !bodies.pending.size && await cdp.evaluate<boolean>(`['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning')`)) {
           await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,250))');
           if (!bodies.activeCount && !bodies.pending.size) return;
         }
-        if (Date.now() > deadline) throw new Error(`${name}: full drawings or terminal HTTP did not settle`);
+        if (Date.now() > deadline) throw new Error(`${name}: full drawings or terminal HTTP did not settle: ${JSON.stringify({reads:bodies.reads.map(read=>({id:read.attemptId,phase:read.phase,resources:read.sections?.map(section=>section.scope),complete:read.count?.complete,canceled:read.canceled})),attempts:await cdp.evaluate('window.__quotumHistoryAttempts'),transfers:proxy.transfers.filter(t=>t.phase===seedPhase)})}`);
         await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,20))');
       }
     };
-    await settled();
-    await cdp.evaluate(`(() => {const style=document.createElement('style');style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important}.widget:not(:has(.history,.activity)){display:none!important}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:260px!important}.activity .chart>svg{height:180px!important}.legend{max-height:40px;overflow:auto}';document.head.append(style);document.querySelector('.analytics-head').scrollIntoView();})()`);
+    await settled(true);
+    await cdp.evaluate(`(() => {const style=document.createElement('style');style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important;--fill:0px!important}.widget:not(:has(.history,.activity)){display:none!important}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:260px!important}.activity .chart>svg{height:180px!important}.legend{max-height:40px;overflow:auto}';document.head.append(style);document.querySelector('.analytics-head').scrollIntoView();})()`);
     await settled();
     const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number}>(`(() => {const svg=document.querySelector(${JSON.stringify(future ? '.history .chart>svg' : '.activity .chart>svg')});svg.scrollIntoView({block:'center'});const r=svg.getBoundingClientRect(),left=${future ? 40 : 48};return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-left-12)/svg.viewBox.baseVal.width,series:document.querySelectorAll('.history .series[d]:not([d=""])').length};})()`);
     assert.ok(geometry.series >= 12, `${name}: fewer than twelve actual series`);
-    const seedReads = bodies.reads.filter(read => read.phase === seedPhase && read.count?.complete);
-    assert.ok(seedReads.length); const cell = seedReads[0].cell;
+    const seedReads = bodies.resources.filter(read => read.phase === seedPhase && read.count?.complete);
+    assert.ok(seedReads.length,`${name}: no complete seed resources: ${JSON.stringify(bodies.reads.map(read=>({phase:read.phase,resources:read.sections?.length,cell:read.cell,complete:read.count?.complete,canceled:read.canceled})))}`); const cell = seedReads[0].cell;
     const seeds = new Map<string, {answer: NonNullable<Read['answer']>; initial: Set<number>}>();
     for (const read of seedReads) {
       let group = seeds.get(read.selection);
@@ -174,6 +215,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         observer=await observeReversal(cdp,browser);
         const phase = `${name}/cold`; bodies.phase = phase; proxy.phase(phase, latency);
         const scroll = (distance: number,stage:string) => {
+          bodies.stage=stage;
           cdp.at(`${bodies.phase}/${stage}`);
           return observer!.watch(`${bodies.phase}/${stage}`,()=>cdp.send('Input.synthesizeScrollGesture', historyScroll(geometry, fraction, distance)));
         };
@@ -181,12 +223,12 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         const pose = await cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; from: number; to: number}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,from:Number(new URLSearchParams(location.search).get("from")),to:Number(new URLSearchParams(location.search).get("to"))})');
         assert.equal(pose.tokens.length, 1); assert.equal(pose.pushes, 1); assert.ok(pose.poses.length > 1 && pose.from > 0);
         assert.ok(Math.abs(pose.to - pose.poses[0].origin + (length + future) * fraction) <= 3 * (length + future) / geometry.width, 'native gesture did not move by its named fraction');
-        const cold = bodies.reads.filter(read => read.phase === phase);
+        const physical=bodies.reads.filter(read=>read.phase===phase),cold = bodies.resources.filter(read => read.phase === phase);
         await proxy.settled(phase);
         stableHistoryReads(cold, seeds, cell);
         const families = [];
         for (const selection of new Set(cold.map(read => read.selection))) {
-          const group = seeds.get(selection); assert.ok(group, 'the gesture must retain its seeded resource selection');
+          const group = seeds.get(selection); assert.ok(group, 'the gesture must retain its seeded resource selection: '+JSON.stringify({selection,seeds:[...seeds.keys()]}));
           assert.equal(new URLSearchParams(selection).get('board'), board);
           const scope = new URLSearchParams(selection).get('scope'), reads = cold.filter(read => read.selection === selection);
           const requested = new Set<number>(), visited = new Set<number>(), ahead = scope === 'budget' ? 0 : DAY;
@@ -206,17 +248,23 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
           }
           families.push({name: `${name}/${scope}`, attempts: reads.length, maxAttempts: fraction === .04 ? 2 : future ? 7 : 5, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, optionalUnvisitedCells: optional.length});
         }
+        const physicalTotals=bodyTotals(physical.map(read=>({count:read.count!,transfer:transferFor(read.count!,proxy.transfers)})));
+        const aggregate={name:name+'/all-accounting',attempts:physical.length,...physicalTotals,referenceDecoded:families.reduce((n,f)=>n+f.referenceDecoded,0),referenceEncoded:families.reduce((n,f)=>n+f.referenceEncoded,0),ratios:fraction===.5};
+        problems.push(...trafficProblems(aggregate));reports.push(aggregate);
+        console.error(`bench: ${aggregate.name}: ${JSON.stringify(aggregate)}`);
         const warmPhase = `${name}/warm`; bodies.phase = warmPhase; proxy.phase(warmPhase);
         // A selected chart has no future, so its return uses the captured time delta.
         await scroll(-(pose.poses[0].origin - pose.to) / length * geometry.width,'cached return'); await settled();
         assert.equal(await cdp.evaluate<boolean>('new URLSearchParams(location.search).has("from")'), false, 'cached return did not reach live');
         await scroll(geometry.width * fraction,'cached repeat'); await settled();
-        const warm = bodies.reads.filter(read => read.phase === warmPhase); assert.equal(warm.length, 0, 'browser cached return/repeat started history');
+        const warm = bodies.reads.filter(read => read.phase === warmPhase);
+        if(warm.length)console.error('bench: warm history diagnostic '+JSON.stringify({name,...bodies.diagnostic(warmPhase)}));
+        assert.equal(warm.length, 0, 'browser cached return/repeat started history');
         const metrics = await cdp.send<{metrics: {name: string; value: number}[]}>('Performance.getMetrics');
         for (const family of families) {
-          const report = {...family, warmAttempts: warm.length, series: geometry.series, movement: {tokens: pose.tokens.length, samples: pose.poses.length, pushes: pose.pushes, from: pose.from, to: pose.to}, heapBytes: metrics.metrics.find(m => m.name === 'JSHeapUsedSize')?.value};
-          reports.push(report); problems.push(...trafficProblems(report));
-          console.error(`bench: ${report.name}: ${report.attempts} GETs, ${warm.length} warm GETs, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / report.referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / report.referenceEncoded}`);
+          const report = {...family, ratios:false, warmAttempts: warm.length, series: geometry.series, movement: {tokens: pose.tokens.length, samples: pose.poses.length, pushes: pose.pushes, from: pose.from, to: pose.to}, heapBytes: metrics.metrics.find(m => m.name === 'JSHeapUsedSize')?.value};
+          reports.push(report); problems.push(...trafficProblems({...report,ratios:false}));
+          console.error(`bench: ${report.name}: ${report.attempts} requests, ${warm.length} warm requests, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / report.referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / report.referenceEncoded}`);
         }
         status=reports.filter(report=>report.name.startsWith(name+'/')).some(report=>trafficProblems(report).length)?'over-budget':'passed';
         break;
@@ -282,7 +330,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
       await step('proxy settled', () => proxy.settled(phase));
       const attempts = reads(); assert.ok(attempts.every(r => r.count?.id));
       const totals = bodyTotals(attempts.map(r => ({count: r.count!, transfer: transferFor(r.count!, proxy.transfers)})));
-      stableHistoryReads(attempts, seeds, cell);
+      stableHistoryReads(bodies.resources.filter(r=>r.phase===phase), seeds, cell);
       const state = await step('read final state', () => cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; selected: boolean; attempts: Record<string, {aborted: boolean}>}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,selected:new URLSearchParams(location.search).has("from"),attempts:__quotumHistoryAttempts})'));
       assert.equal(state.tokens.length, 1); assert.ok(state.poses.some(p => p.end < p.origin));
       assert.equal(state.pushes, mode === 'reversal' ? 1 : 0); assert.equal(state.selected, mode === 'reversal');

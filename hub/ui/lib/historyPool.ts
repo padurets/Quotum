@@ -71,3 +71,5 @@ export class HistoryPool {
     return false;
   }
 }
+
+export const historyPool = new HistoryPool();

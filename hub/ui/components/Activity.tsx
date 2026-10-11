@@ -1,5 +1,5 @@
 import {AnalyticsPanel} from './AnalyticsPanel';
-import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps} from 'react';
 import {createPortal} from 'react-dom';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
@@ -12,6 +12,8 @@ import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view'
 import {usePersonalBoard, useBoardId, useLineup, useTitles, type Title} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
+import {boardPeriod} from '../lib/period';
+import type {History} from '../../server/domain/history';
 import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {usePrepared, usePreparationBasis} from './prepared';
 import {axisNavigation, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
@@ -83,8 +85,31 @@ function Metrics({agentMs, activeMs, agents, shownMs}: {agentMs: number; activeM
   );
 }
 
+const metricsText = (value: {agentMs:number;activeMs:number;agents:number}) => [workHours(value.agentMs),workHours(value.activeMs),num(value.agents),atOnce(value.agentMs,value.activeMs)];
+
+/** Small numerical consumers follow formatted changes, independently of the drawing grid. */
+function useActivityNumbers(history:History|null,by:ActivityDimension,read:(activity:ActivityData)=>string,enabled=true,bar?:number,key?:string) {
+  const panning=usePanning();
+  const at=(now:number)=>history?boardPeriod.activityAt(history,by,now,bar,key):null;
+  const now=useClock(now=>history&&enabled&&panning===null?boardPeriod.activityChangesAt(history,by,now,at=>read(boardPeriod.activityAt(history,by,at,bar,key)),key):null);
+  return panning===null&&enabled?at(now):bar===undefined?history?.activity??null:null;
+}
+
+function LegendAmount({history,by,groupKey,group}:{history:History|null;by:ActivityDimension;groupKey:string;group:ActivityGroup|null}) {
+  const text=(activity:ActivityData)=>workHours(activity.by[by].find(g=>g.key===groupKey)?.agentMs??0);
+  const activity=useActivityNumbers(history,by,text,true,undefined,groupKey);
+  return <b data-time="activity-work">{activity?text(activity):group?workHours(group.agentMs):'—'}</b>;
+}
+
+function LegendMetrics({history,by,groupKey,group,active}:{history:History|null;by:ActivityDimension;groupKey:string;group:ActivityGroup|null;active:boolean}) {
+  const part=(activity:ActivityData)=>activity.by[by].find(g=>g.key===groupKey)??{agentMs:0,activeMs:0,agents:0};
+  const activity=useActivityNumbers(history,by,value=>JSON.stringify(metricsText(part(value))),active,undefined,groupKey);
+  const value=activity?part(activity):group;
+  return <span data-time="activity-metrics">{value?<Metrics agentMs={value.agentMs} activeMs={value.activeMs} agents={value.agents}/>:<span>{t('activity.pendingRange')}</span>}</span>;
+}
+
 /** Hover and touch state belong to one legend entry, leaving the stacks untouched. */
-const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, muted}: {group: ActivityGroup | null; groupKey: string; by: ActivityDimension; name: string; color: string; muted: boolean}) {
+const LegendItem = memo(function LegendItem({history, group, groupKey, by, name, color, muted}: {history:History|null;group: ActivityGroup | null; groupKey: string; by: ActivityDimension; name: string; color: string; muted: boolean}) {
   useLocale();
   const shifting = useShifting();
   const id = useId();
@@ -131,7 +156,7 @@ const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, m
       onClick={event => event.stopPropagation()}
     >
       <span className="tooltip-time">{name}</span>
-      {group ? <Metrics agentMs={group.agentMs} activeMs={group.activeMs} agents={group.agents} /> : <span>{t('activity.pendingRange')}</span>}
+      <LegendMetrics history={history} by={by} groupKey={groupKey} group={group} active={active}/>
     </span>
   );
   return (
@@ -169,7 +194,7 @@ const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, m
       >
         <i className="activity-swatch" style={{background: color}} />
         <span>{name}</span>
-        <b>{group ? workHours(group.agentMs) : '—'}</b>
+        <LegendAmount history={history} by={by} groupKey={groupKey} group={group}/>
       </button>
       {container ? createPortal(bubble, container) : bubble}
     </div>
@@ -177,11 +202,14 @@ const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, m
 });
 
 /** Complete quantities do not render for partial plot arrivals. */
-const Totals = memo(function Totals({activity, shownMs, since}: {activity: ActivityData | null; shownMs: number; since: number | null}) {
+const Totals = memo(function Totals({history,by,muted,since}: {history:History|null;by:ActivityDimension;muted:Record<string,boolean>;since:number|null}) {
   useLocale();
+  const shown=(activity:ActivityData)=>activity.by[by].reduce((sum,group)=>sum+(muted[mutedKey(by,group.key)]?0:group.agentMs),0);
+  const activity=useActivityNumbers(history,by,value=>JSON.stringify([!!value.known,...metricsText(value),shown(value)<value.agentMs,workHours(shown(value))]));
   if (!activity?.known || activity.activeMs <= 0) return null;
+  const shownMs=shown(activity);
   return (
-    <div className="activity-totals">
+    <div className="activity-totals" data-time="activity-totals">
       <span title={t('activity.agentHoursHint')}>
         {t('activity.agentHours')} <b>{workHours(activity.agentMs)}</b>
         {shownMs < activity.agentMs && <span className="activity-since activity-shown">{t('activity.shown', {time: workHours(shownMs)})}</span>}
@@ -207,9 +235,10 @@ const Totals = memo(function Totals({activity, shownMs, since}: {activity: Activ
  * render it. The unknown part of the period is hatched rather than drawn as idle.
  */
 export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
-  const {history, loading,error} = useHistory();
+  const {history,drawing,loading,error,presentation:authority} = useHistory(true);
   const strip = useHistoryPlot();
-  const registry = useRef<{token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
+  const registry = useRef<{authority: number; token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
+  if (registry.current?.authority !== authority) registry.current = null;
   const panel = useRef<HTMLElement>(null);
   // Made taller by its owner, the widget gives the room to the stacks, as the chart does.
   const {plot, onBase} = usePlot(panel);
@@ -223,25 +252,25 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const navigation = axisNavigation(useBoardId(), selected, prefs);
   const clockNow = useClock(now => frameChangesAt(selected, history?.cellMs ?? 60_000, now), [history, strip, prefs, selected, titles, arrange.view, locale]);
   const panning = usePanning();
-  const captured = useRef<{token: number; now: number} | null>(null);
+  const captured = useRef<{authority: number; token: number; now: number} | null>(null);
   if (panning === null) captured.current = null;
-  else if (captured.current?.token !== panning) captured.current = {token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow)};
+  else if (captured.current?.token !== panning || captured.current.authority !== authority) captured.current = {authority, token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow)};
   const now = panning !== null ? captured.current!.now : clockNow;
   const historyStart = useHistoryBegins();
   const frame = frameOf(selected, prefs, now, historyStart);
   const from = frame.from;
   const to = measuredTo(frame, history, selected, prefs.range);
-  const activity = history?.activity ?? null;
+  const activity = history?.activity ?? null,drawnActivity=drawing?.activity??null;
   // What the groups look like changes with the answer, the board and the legend, not with time: the same objects as the clock moves the frame.
   const {groups, colors, shown} = useMemo(() => {
-    const groups = activity?.by[by] ?? [];
+    const groups = drawnActivity?.by[by] ?? [];
     const colors = groupColors(groups, by, arrange.view, source => titles[source]?.provider ?? '');
     const names = groups.map(group => groupName(group, by, titles));
     const muted = groups.map(group => !!prefs.muted[mutedKey(by, group.key)]);
     const shown = groups.flatMap((group, i) => (muted[i] ? [] : [{group, color: colors[i], name: names[i]}]));
     return {groups, colors, names, muted, shown};
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activity, by, arrange.view, titles, prefs.muted, locale]);
+  }, [drawnActivity, by, arrange.view, titles, prefs.muted, locale]);
   const prepared = usePrepared(function* () {
     const data = new Map<string, PlotGroup>();
     const found = new Map<string, Pick<PlotGroup, 'key' | 'name'>>();
@@ -251,15 +280,15 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     }
     const seed = groups.map((group, i) => ({key: group.key, name: group.name, color: colors[i]}));
     if (!strip) return {identities: seed, shown, strip, registry: null};
-    const previous = registry.current?.token === strip.token && registry.current.by === by ? registry.current : {token: strip.token, by, seed, groups: seed};
+    const previous = registry.current?.authority === authority && registry.current.token === strip.token && registry.current.by === by ? registry.current : {authority, token: strip.token, by, seed, groups: seed};
     const identities = groupRegistry(previous.seed, previous.groups, [...found.values()], by === 'source' ? key => key === 'unknown' ? 'var(--other)' : colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
     const plotted: {group: PlotGroup; color: string; name: string}[] = [];
     for (const identity of identities) {if (!prefs.muted[mutedKey(by, identity.key)]) plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
-    return {identities, shown: plotted, strip, registry: {token: strip.token, by, seed: previous.seed, groups: identities}};
-  }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${history?.board}:${by}`);
+    return {identities, shown: plotted, strip, registry: {authority, token: strip.token, by, seed: previous.seed, groups: identities}};
+  }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${authority}:${history?.board}:${by}`);
   const presentation = prepared.value ?? {identities: [], shown: [], strip: null};
   useLayoutEffect(() => {if (prepared.value) registry.current = prepared.value.registry;}, [prepared.value]);
-  const shownMs = useMemo(() => shown.reduce((sum, {group}) => sum + group.agentMs, 0), [shown]);
+  const currentGroups=activity?.by[by]??[];
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
@@ -279,11 +308,13 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
       settings={<ActivitySettings arrange={arrange}/>}
     >
-      <Totals activity={activity} shownMs={shownMs} since={since} />
+      <Totals history={history} by={by} muted={prefs.muted} since={since} />
       <>
           <Stacks
-            activity={activity ?? EMPTY_ACTIVITY}
-            origin={history?.since ?? from}
+            history={history}
+            activity={drawnActivity ?? EMPTY_ACTIVITY}
+            currentActivity={activity ?? EMPTY_ACTIVITY}
+            origin={drawing?.since ?? from}
             groups={emptyFrame ? [] : presentation.shown}
             from={from}
             to={to}
@@ -293,6 +324,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             onBase={onBase}
             strip={presentation.strip}
             prepared={prepared.ready && (panning !== null || answered || !!error)}
+            authority={authority}
             navigation={navigation}
             by={by}
             allMuted={!emptyFrame && presentation.identities.length > 0 && presentation.shown.length === 0}
@@ -300,7 +332,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
           />
           <div className="legend">
             {(emptyFrame ? [] : presentation.identities).map(identity => (
-              <LegendItem key={identity.key} groupKey={identity.key} by={by} group={groups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} />
+              <LegendItem key={identity.key} history={history} groupKey={identity.key} by={by} group={currentGroups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} />
             ))}
           </div>
       </>
@@ -319,8 +351,27 @@ export const stacksHeight = (width: number) => (width < 560 ? 160 : 200);
  */
 const EMPTY_CELLS: PlotGroup['cells'] = [];
 
+/** A stationary readout advances its clipped numbers without waking the SVG. */
+function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps}:{history:History|null;by:ActivityDimension;hover:number;barMs:number;bar:number[];parts:{key:string;name:string;color:string;ms:number}[];tipProps:Omit<ComponentProps<typeof Tooltip>,'children'>}) {
+  const values=(activity:ActivityData)=>parts.map(part=>({...part,ms:activity.by[by].find(group=>group.key===part.key)?.agentMs??0})).filter(part=>part.ms>0);
+  const activity=useActivityNumbers(history,by,value=>{const shown=values(value),sum=shown.reduce((total,part)=>total+part.ms,0);return JSON.stringify([...metricsText(value),sum<value.agentMs,workHours(sum),...shown.map(part=>[part.key,workHours(part.ms)])]);},true,hover);
+  const current=activity?values(activity):parts,agentMs=activity?.agentMs??bar[2],activeMs=activity?.activeMs??bar[1],agents=activity?.agents??bar[3],shownMs=current.reduce((sum,part)=>sum+part.ms,0);
+  if(!current.length)return null;
+  return <Tooltip {...tipProps}>
+    <div className="tooltip-time">{cellLabel(hover,barMs)}</div>
+    <div data-time="activity-readout"><Metrics agentMs={agentMs} activeMs={activeMs} agents={agents} shownMs={shownMs}/>
+      <div className="tooltip-sep"/>
+      <div className="tooltip-grid" style={{gridTemplateColumns:'14px minmax(0, 1fr) auto'}}>
+        {current.map(part=><div className="tooltip-row" key={part.key}><i className="activity-swatch" style={{background:part.color}}/><span className="tooltip-name">{part.name}</span><strong>{workHours(part.ms)}</strong></div>)}
+      </div>
+    </div>
+  </Tooltip>;
+}
+
 const Stacks = memo(function Stacks({
+  history,
   activity: incomingActivity,
+  currentActivity,
   origin: incomingOrigin,
   groups: incomingGroups,
   from,
@@ -331,12 +382,16 @@ const Stacks = memo(function Stacks({
   onBase,
   strip: incomingStrip,
   prepared: incomingReady,
+  authority,
   navigation,
   by,
   allMuted,
   empty,
 }: {
+  history?: History|null;
   activity: ActivityData;
+  /** Exact boundary bars and readout advance without rebuilding interior stacks. */
+  currentActivity?: ActivityData;
   /** Where the answer begins: the bars are drawn from there, so their numbers stay small however old the hub. */
   origin: number;
   /** The groups switched on in the legend, bottom to top, each with its colour and name. */
@@ -350,6 +405,7 @@ const Stacks = memo(function Stacks({
   onBase: (height: number) => void;
   strip: PlotBuffer | null;
   prepared: boolean;
+  authority: number;
   navigation: AxisNavigation;
   by: ActivityDimension;
   allMuted: boolean;
@@ -364,10 +420,10 @@ const Stacks = memo(function Stacks({
   const height = plot === undefined ? base : Math.max(base, plot / scale);
   useLayoutEffect(() => onBase(base * scale), [base, scale, onBase]);
   const top = 12, bottom = 28;
-  const maxSeen = useRef(0);
-  const stackPaths = useRef(new StackPaths());
+  const cache = useRef({authority, maximum: 0, paths: new StackPaths()});
+  if (cache.current.authority !== authority) cache.current = {authority, maximum: 0, paths: new StackPaths()};
   const inputs = [incomingGroups, incomingStrip, incomingActivity, incomingOrigin, incomingUnknownTo, by, width, height, navigationKey(navigation)];
-  const requested = usePreparationBasis(axis.basis, inputs, active, incomingReady);
+  const requested = usePreparationBasis(axis.basis, inputs, active, incomingReady, authority);
   const prepared = usePrepared(function* () {
     const basis = {from: requested.from, to: requested.to, end: requested.end};
     const span = Math.max(MINUTE, basis.to - basis.from);
@@ -387,7 +443,7 @@ const Stacks = memo(function Stacks({
     let busiest = 0;
     for (const value of heights.values()) {busiest = Math.max(busiest, value); yield;}
     for (const value of bars.values()) {busiest = Math.max(busiest, value); yield;}
-    const maximum = active ? Math.max(maxSeen.current, busiest) : busiest;
+    const maximum = active ? Math.max(cache.current.maximum, busiest) : busiest;
     const vertical = activityScale(maximum);
     const perMs = (width - left - right) / span;
     const pathOrigin = incomingStrip ? basis.from : incomingOrigin;
@@ -397,12 +453,12 @@ const Stacks = memo(function Stacks({
       for (const cell of row.group.cells) {if (cell[0] + barMs > basis.from - span / 2 && cell[0] < basis.to + span / 2) cells.push(cell); yield;}
       drawn.push({...row, group: {...row.group, cells}}); yield;
     }
-    const paths = yield* stackPaths.current.drawPrepared(incomingStrip ? incomingGroups : drawn, pathOrigin, perMs, barMs, height, vertical.max);
+    const paths = yield* cache.current.paths.drawPrepared(incomingStrip ? incomingGroups : drawn, pathOrigin, perMs, barMs, height, vertical.max);
     return {basis, barMs, heights, maximum, vertical, perMs, pathOrigin, paths, groups: incomingGroups, strip: incomingStrip, activity: incomingActivity, originUnknownTo: incomingUnknownTo};
-  }, [...inputs, requested.from, requested.to, requested.end], `${by}:${width}:${height}`, incomingReady);
+  }, [...inputs, requested.from, requested.to, requested.end], `${authority}:${by}:${width}:${height}`, incomingReady);
   const model = prepared.value;
   const basis = model?.basis ?? axis.basis;
-  const groups = model?.groups ?? [], strip = model?.strip ?? null, activity = model?.activity ?? incomingActivity;
+  const groups = model?.groups ?? [], strip = model?.strip ?? null, activity = currentActivity ?? model?.activity ?? incomingActivity;
   const barMs = model?.barMs ?? incomingActivity.barMs;
   const vertical = model?.vertical ?? activityScale(0);
   const paths = model?.paths ?? [], perMs = model?.perMs ?? (width - left - right) / Math.max(MINUTE, basis.to - basis.from), pathOrigin = model?.pathOrigin ?? basis.from;
@@ -415,7 +471,7 @@ const Stacks = memo(function Stacks({
   const hover = incomingReady && prepared.ready ? axis.hover : null;
   const tickFrom = strip?.from ?? from, tickTo = strip?.to ?? to;
   const {ticks, daily} = niceTicks(tickFrom, tickTo, (narrow ? 4 : 7) * (tickTo - tickFrom) / span);
-  useLayoutEffect(() => {if (model) maxSeen.current = model.maximum; axis.commitDrawing(basis, incomingReady && prepared.ready);});
+  useLayoutEffect(() => {if (model) cache.current.maximum = model.maximum; axis.commitDrawing(basis, incomingReady && prepared.ready);});
 
   const innerClip = `${clip}-inner`;
   const bandClip = useRef<HTMLDivElement>(null);
@@ -425,15 +481,17 @@ const Stacks = memo(function Stacks({
   const painted = useRef('');
   const paintEdges = () => {
     if (!bandClip.current) return;
-    if (!strip || !mask.current || !edges.current) {
+    const draft = pan.get();
+    // Until a gesture has a strip, the retained answer moves as a whole. Its
+    // old accounting endpoints cannot clip the newly exposed viewport.
+    if ((!strip && (!currentActivity || draft || axis.held)) || !mask.current || !edges.current) {
       clipPlot(bandClip.current, left * scale, (width - right) * scale, width * scale);
       return;
     }
-    const draft = pan.get();
     const visual = axis.visualGeometry();
-    const range = draft || axis.held ? {from: visual.from, to: visual.from + (draft?.length ?? strip.length)} : {from, to};
-    const target = targetOf(strip.length, draft?.now ?? to, 'edge', range);
-    const start = target.k0 * strip.cell, end = (target.k1 + 1) * strip.cell;
+    const range = strip && (draft || axis.held) ? {from: visual.from, to: visual.from + (draft?.length ?? strip.length)} : {from, to};
+    const target = strip ? targetOf(strip.length, draft?.now ?? to, 'edge', range) : null;
+    const start = strip && target ? target.k0 * strip.cell : from, end = strip && target ? (target.k1 + 1) * strip.cell : to;
     const firstFull = Math.ceil(start / barMs) * barMs, lastFull = Math.floor(end / barMs) * barMs;
     if (draft || axis.held) {
       const a = Math.max(left, Math.min(width - right, axis.screenX(firstFull)));
@@ -447,19 +505,19 @@ const Stacks = memo(function Stacks({
       if (mask.current.getAttribute('x') !== maskX) mask.current.setAttribute('x', maskX);
       if (mask.current.getAttribute('width') !== maskWidth) mask.current.setAttribute('width', maskWidth);
     }
-    const key = `${target.k0}:${target.k1}:${strip.version}:${vertical.max}:${height}:${perMs}:${groups.map(g => g.group.key).join(',')}`;
+    const key = `${start}:${end}:${strip?.version}:${vertical.max}:${height}:${perMs}:${groups.map(g => g.group.key).join(',')}`;
     if (key === painted.current) return;
     painted.current = key;
     const starts = [...new Set([cellStart(start, barMs), cellStart(end - 1, barMs)])].filter(at => at < firstFull || at >= lastFull);
     const paths = groups.map(() => '');
     for (const at of starts) {
-      const bar = plotBar(strip, at, target, by);
-      if (!bar) continue;
+      const bar = strip && target ? plotBar(strip, at, target, by) : null;
+      if (strip && !bar) continue;
       let total = 0;
       const gap = perMs * barMs >= 8 ? 0.5 : 0;
       const a = x(at) + gap, b = x(at + barMs) - gap;
       groups.forEach(({group}, i) => {
-        const ms = bar.groups.get(group.key)?.ms ?? 0;
+        const ms = strip ? bar?.groups.get(group.key)?.ms ?? 0 : activity.by[by].find(g => g.key === group.key)?.cells.find(([start]) => start === at)?.[1] ?? 0;
         if (!ms) return;
         const low = total;
         total += ms;
@@ -477,8 +535,7 @@ const Stacks = memo(function Stacks({
   const bar = hover === null ? null : strip ? partialBar ? [hover, partialBar.activeMs, partialBar.agentMs, partialBar.agents] : null : activity.cells.find(([start]) => start === hover);
   // What the hovered bar draws: over one whose groups are all switched off, nothing tells of it, as over an empty one.
   const parts =
-    hover === null ? [] : groups.flatMap(({group, color, name}) => strip ? partialBar?.groups.has(group.key) ? [{key: group.key, color, name, ms: partialBar.groups.get(group.key)!.ms}] : [] : group.cells.filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
-  const shownMs = parts.reduce((sum, part) => sum + part.ms, 0);
+    hover === null ? [] : groups.flatMap(({group, color, name}) => strip ? partialBar?.groups.has(group.key) ? [{key: group.key, color, name, ms: partialBar.groups.get(group.key)!.ms}] : [] : (currentActivity ? activity.by[by].find(g => g.key === group.key)?.cells ?? [] : group.cells).filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
   const hoverX = hover === null ? 0 : axis.screenX(Math.max(from, Math.min(to, hover + barMs / 2)));
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: true, bottom: height * scale});
   // The label of the part not known shows only where it fits within its hatching, measured
@@ -535,7 +592,7 @@ const Stacks = memo(function Stacks({
         )}
       </PlotLayer>
       <PlotLayer width={width} height={height} scale={scale} left={left} right={right} clipRef={bandClip} top={top} bottom={bottom}>
-        <g clipPath={strip && !active ? `url(#${CSS.escape(innerClip)})` : undefined}>
+        <g clipPath={(strip || currentActivity) && !active ? `url(#${CSS.escape(innerClip)})` : undefined}>
           <g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
             {groups.map(({group, color}, i) => (
               <path key={group.key} d={paths[i]} fill={color} className="activity-stack" />
@@ -543,7 +600,7 @@ const Stacks = memo(function Stacks({
           </g>
         </g>
       </PlotLayer>
-      {strip && (
+      {(strip || currentActivity) && (
         <PlotLayer width={width} height={height} scale={scale} left={left} right={right}>
           <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" />)}</g>
         </PlotLayer>
@@ -557,21 +614,7 @@ const Stacks = memo(function Stacks({
       {empty && <div className="chart-empty">{empty}</div>}
       {allMuted && <div className="chart-empty">{t('activity.allOff')}</div>}
       {hover !== null && bar && parts.length > 0 && !drag && (
-        <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={tipStyle}>
-          <div className="tooltip-time">{cellLabel(hover, barMs)}</div>
-          {/* The totals come first: a tooltip cut to the window loses the last of its parts, not them. */}
-          <Metrics agentMs={bar[2]} activeMs={bar[1]} agents={bar[3]} shownMs={shownMs} />
-          <div className="tooltip-sep" />
-          <div className="tooltip-grid" style={{gridTemplateColumns: '14px minmax(0, 1fr) auto'}}>
-            {parts.map(part => (
-              <div className="tooltip-row" key={part.key}>
-                <i className="activity-swatch" style={{background: part.color}} />
-                <span className="tooltip-name">{part.name}</span>
-                <strong>{workHours(part.ms)}</strong>
-              </div>
-            ))}
-          </div>
-        </Tooltip>
+        <ActivityReadout history={history??null} by={by} hover={hover} barMs={barMs} bar={bar} parts={parts} tipProps={{tip,className:narrow?'is-below':'',style:tipStyle}}/>
       )}
     </div>
   );

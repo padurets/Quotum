@@ -8,7 +8,7 @@ import {showBoard} from './lib/timeRange';
 import {navigate, settingsHref, usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
 import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, QUOTA_TABLE, QUOTA_HISTORY, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE, isHidden, useView} from './lib/view';
-import {withArranged} from './lib/grid';
+import {withSparseArrangement} from './lib/grid';
 import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles, useViewRevision} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
@@ -131,7 +131,7 @@ function Dashboard({
       },
     ]),
   );
-  // The list of every running agent is about now too: it goes with the cards.
+  // The roster shares placement and the viewing period with every other widget.
   cards.set(AGENTS, {
     id: AGENTS,
     name: t('agents.title'),
@@ -166,25 +166,26 @@ function Dashboard({
       },
     ],
   ]);
-  // The cards are about now; agent activity, the chart and the table below them, with their
-  // filters, are the analytics. Each area is arranged on its own grid, and on its own.
   const cardWidgets = [...cards.values()];
   const panelWidgets = ANALYTICS.map(id => panels.get(id)!);
   const shownOf = (list: Widget[]) => list.filter(widget => widgetVisible(arrange.view, widget.id, lineup.length));
   const shownCards = shownOf(cardWidgets);
   const shownPanels = shownOf(panelWidgets);
-  const grid = (list: Widget[], area: string) => (
+  const shownWidgets = [...shownCards, ...shownPanels];
+  const hasWidgets = !!meta && (state === 'widgets' || shownWidgets.length > 0);
+  const grid = (list: Widget[]) => (
     <Widgets
-      key={`${boardId}/${area}`}
+      key={boardId}
       widgets={list}
       layout={arrange.view.layout}
       movable={arrange.owner && !prefs.locked}
-      onPlaces={(places, height) => arrange.update(view => withArranged(view, places, height))}
+      onPlaces={(places, height) => arrange.update(view => withSparseArrangement(view, places, list.map(widget => widget.id), height))}
     />
   );
 
   return (
     <AdditionScope.Provider value={additionScope}>
+      <div className="board-bar">
       <Header
         boards={boards}
         board={board}
@@ -193,6 +194,10 @@ function Dashboard({
         onAccount={openSettings}
         onSignedOut={onSignedOut}
         local={local}
+        filters={active && hasWidgets ? {
+          expanded: prefs.filtersVisible,
+          onToggle: () => setPrefs(prefs => ({filtersVisible: !prefs.filtersVisible})),
+        } : undefined}
         actions={board && (
           <BoardActions
             board={board}
@@ -222,6 +227,8 @@ function Dashboard({
           />
         )}
       />
+      {active && hasWidgets && <AnalyticsHead widgets={shownWidgets.map(widget => widget.id)} visible={prefs.filtersVisible} />}
+      </div>
       {arrange.saveFailures?.map(failure => <aside key={failure.board} className="view-save-notice" role="alert"><b>{t('layout.saveFailed', {board: boards.find(board => board.id === failure.board) ? boardTitle(boards.find(board => board.id === failure.board)!) : t('layout.unavailableBoard')})}</b><ErrorLine error={failure.error} />
         <div className="button-row is-start">{failure.retryable && <button className="button" onClick={() => {void arrange.retrySave?.(failure.board).catch(() => {});}}>{t('layout.retrySave')}</button>}<button className="link-button" onClick={() => arrange.dismissSave?.(failure.board)}>{t('common.close')}</button></div>
       </aside>)}
@@ -259,16 +266,8 @@ function Dashboard({
               )}
             </div>
           </section>
-        ) : state === 'widgets' || shownCards.length > 0 || shownPanels.length > 0 ? (
-          <>
-            {shownCards.length > 0 && grid(shownCards, 'cards')}
-            {shownPanels.length > 0 && (
-              <section className="analytics" aria-label={t('analytics.title')}>
-                <AnalyticsHead />
-                {grid(shownPanels, 'analytics')}
-              </section>
-            )}
-          </>
+        ) : hasWidgets ? (
+          grid(shownWidgets)
         ) : (
           <section className="panel onboarding">
             <h2>{t('widgets.allHidden')}</h2>

@@ -46,6 +46,19 @@ export const ANALYTICS_SCENES=[
   {id:'empty',expect:['pending-empty','explicit-empty','sticky-placement']},
 ] as const;
 
+/** The same activity fixture can be viewed in the past without changing current status.
+ * Pending/error retention, cursor races and bounded large rosters are held by
+ * server/test/periodRead.test.ts and ui/test/period.test.ts.
+ * Source disclosures retain their own range through loading and failure, including
+ * initial errors, in ui/test/sourcePeriodPresentation.test.ts.
+ * Session dialogs retain that status in ui/test/agentsPeriodDialog.test.ts; saved
+ * unlimited credits remain measurement evidence in ui/test/sourcePeriodEvidence.test.ts.
+ */
+export const PERIOD_SCENES=[
+  {id:'retained-period',expect:['past-values','retained-work','exclusive-interval','shared-activity']},
+  {id:'before-first-measurement',expect:['unknown-value','no-invented-work']},
+] as const;
+
 
 /**
  * The catalogue of the demo board: every state the dashboard knows today, one entry each,

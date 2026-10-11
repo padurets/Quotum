@@ -2,7 +2,9 @@ import {Cdp, type Browser} from './cdp.js';
 import {deadline, devtoolsJson} from './deadline.js';
 import {safeEvidence} from './evidence.js';
 
-type Options = {mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; closeTarget?: () => Promise<void>};
+type DocumentMark={atMs:number;frame?:string;loader?:string};
+export type DiagnosticOrigin={startedAt:number;navigation:()=>{requested?:DocumentMark;committed?:DocumentMark;loadAtMs:number|null}};
+type Options = {mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
 type Process = {type: string; id: number; cpuTime: number};
 let serial = 0;
 
@@ -13,7 +15,7 @@ export const bounded = <T>(label: string, work: (signal: AbortSignal) => Promise
 /** Canonical observation is passive until the unchanged command deadline has failed. */
 export async function observeReversal(page: Cdp, browser: Browser, options: Options = {}) {
   const diagnostic = options.mode === 'diagnostic';
-  const id = ++serial, signal = browser.owner?.signal;
+  const id = ++serial, signal = options.signal&&browser.owner?AbortSignal.any([options.signal,browser.owner.signal]):options.signal??browser.owner?.signal;
   let intervention = false, capture: Promise<void> | undefined, released = false;
   const report: Record<string, unknown> = {id, mode: diagnostic ? 'diagnostic' : 'canonical', ownedBrowser: Boolean(browser.owned)};
   const store = () => {
@@ -55,7 +57,9 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
         report.browserAlive = true;
         if (!browser.owned) {report.native = 'unavailable for attached browser'; return;}
         if (typeof reply.webSocketDebuggerUrl !== 'string') throw new Error('browser connection unavailable');
-        control = await Cdp.connect(reply.webSocketDebuggerUrl, alive);
+        const connected=await Cdp.connect(reply.webSocketDebuggerUrl, alive);
+        if(alive.aborted){connected.close();alive.throwIfAborted();}
+        control=connected;
         const processes = await control.send<{processInfo: Process[]}>('SystemInfo.getProcessInfo', {}, alive);
         report.processes = processes.processInfo.map(({type, id, cpuTime}) => ({type, id, cpuTime}));
         if (browser.diagnostics) report.native = await browser.diagnostics(processes.processInfo.map(value => value.id), undefined, alive);
@@ -65,6 +69,12 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
   };
   const collect = async (label: string) => {
     report.scenario = label; report.command = page.snapshot();
+    if(options.origin){
+      const {requested,committed,loadAtMs}=options.origin.navigation();
+      const mark=(value:DocumentMark|undefined)=>value?{atMs:value.atMs,frameId:value.frame,loaderId:value.loader}:undefined;
+      report.startedAt=options.origin.startedAt;
+      report.navigation={requested:mark(requested),committed:mark(committed),loadAtMs};
+    }
     try {
       await bounded('failure collection', async pending => {
         await Promise.all([
@@ -88,6 +98,7 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
     catch (error) {await release(); store(); throw error;}
   }
   return {
+    async diagnose(label:string){signal?.throwIfAborted();capture??=collect(label);await capture;signal?.throwIfAborted();},
     async watch<T>(label: string, run: () => Promise<T>) {
       signal?.throwIfAborted();
       const timer = setTimeout(() => {

@@ -1,5 +1,7 @@
+import {useMeasurementClock,useMeasurementTime} from '../lib/measurementClock';
 import type {ReactNode} from 'react';
 import {QUOTA_IDS} from '../../server/domain/meters';
+import {observationDeadline} from '../../server/domain/resources';
 import type {Card, View} from '../lib/types';
 import type {KeyPart, Meter} from '../../server/domain/meters';
 import {currencySymbol, type CurrencyContext} from '../../server/domain/currency';
@@ -36,7 +38,7 @@ import {useShownKeys} from '../lib/moneyKeys';
 import {rateText} from '../lib/currencySettings';
 
 function KeyStatus({part, cap}: {part: BudgetLimit['part']; cap: Meter}) {
-  const now = useClock((now) =>
+  const now = useMeasurementClock((now) =>
     earliest(part.expiresAt !== null && part.expiresAt > now ? part.expiresAt : null, capChangesAt(cap, now)),
   );
   const stale = capStale(cap, now);
@@ -60,7 +62,7 @@ function KeyStatus({part, cap}: {part: BudgetLimit['part']; cap: Meter}) {
   );
 }
 function CapStatus({part, cap}: {part?: KeyPart; cap?: Meter}) {
-  const now = useClock((now) =>
+  const now = useMeasurementClock((now) =>
     earliest(
       part?.expiresAt != null && part.expiresAt > now ? part.expiresAt : null,
       cap ? capChangesAt(cap, now) : null,
@@ -89,10 +91,11 @@ function CapStatus({part, cap}: {part?: KeyPart; cap?: Meter}) {
   );
 }
 export function CapReset({meter, short = false}: {meter: Meter; short?: boolean}) {
-  const now = useClock((now) => (meter.resetAt === null ? null : countdownChangesAt(meter.resetAt, now)));
+  const now = useMeasurementClock((now) => (meter.resetAt === null ? null : countdownChangesAt(meter.resetAt, now)));
+  const historical=useMeasurementTime()!==null;
   const unknown = meter.resetAt === null && meter.scope !== 'lifetime';
   const text =
-    meter.resetAt === null
+    historical&&meter.resetAt!==null?stamp(meter.resetAt):meter.resetAt === null
       ? unknown
         ? short
           ? '—'
@@ -269,7 +272,7 @@ export function QuotaCard({
   ids = QUOTA_IDS,
   compact = false,
 }: {
-  source: Card;
+  source: Pick<Card,'meters'>;
   ids?: readonly string[];
   compact?: boolean;
 }) {
@@ -297,7 +300,9 @@ export function QuotaCard({
   );
 }
 function QuotaReset({resetAt, short}: {resetAt: number | null; short: boolean}) {
-  const now = useClock((now) => resetLineChangesAt({resetAt}, now));
+  const now = useMeasurementClock((now) => resetLineChangesAt({resetAt}, now));
+  const historical=useMeasurementTime()!==null;
+  if(historical)return <span>{resetAt===null?t('limit.resetUnknown'):stamp(resetAt)}</span>;
   return <ResetText resetAt={resetAt} now={now} short={short} />;
 }
 export function QuotaMark({source}: {source: Card}) {
@@ -327,6 +332,11 @@ export function MoneyCard({
 }) {
   const context = useCurrencyContext(source.id);
   const {keys, meters, error} = useShownKeys(source, view, board);
+  return <MoneyValues source={source} keys={keys} meters={meters} error={error} compact={compact} tray={tray} context={context}/>;
+}
+
+type MoneySource=Pick<Card,'id'|'provider'|'meters'|'currencyUnavailable'|'creditBalance'>;
+export function MoneyValues({source,keys,meters,error=null,compact=false,tray=false,context}:{source:MoneySource;keys:KeyPart[];meters:Meter[];error?:unknown;compact?:boolean;tray?:boolean;context:CurrencyContext}) {
   const {remaining, limits} = budgetView(source, keys, meters, context),
     groups = remaining.values;
   const credit=source.provider==='codex';
@@ -472,10 +482,10 @@ export function MoneyCard({
   );
 }
 /** Subscription funds share the budget value and disclosure, in the existing footer. */
-function FundsMark({source,groups,context,native,rateSources,quoteDate,displayUnavailable}:{source:Card;groups:ReturnType<typeof budgetView>['remaining']['values'];context:CurrencyContext;native?:Meter;rateSources:string;quoteDate:string;displayUnavailable:boolean}) {
-  const now=useClock(now=>creditChangesAt(source,now));
+function FundsMark({source,groups,context,native,rateSources,quoteDate,displayUnavailable}:{source:MoneySource;groups:ReturnType<typeof budgetView>['remaining']['values'];context:CurrencyContext;native?:Meter;rateSources:string;quoteDate:string;displayUnavailable:boolean}) {
+  const now=useMeasurementClock(now=>creditChangesAt(source,now));
   const unlimited=source.creditBalance?.status==='unlimited';
-  const stale=!!source.creditBalance&&(now>source.creditBalance.at+source.creditBalance.staleAfterMs||!['finite','unlimited'].includes(source.creditBalance.status))||!unlimited&&!!native?.stale;
+  const stale=!!source.creditBalance&&(now>=observationDeadline(source.creditBalance)||!['finite','unlimited'].includes(source.creditBalance.status))||!unlimited&&!!native?.stale;
   const values=groups.map(({total,approximate})=>({total,text:(approximate?'≈ ':'')+money(total.amount,total.unit,false,context,total.scale)}));
   if(!values.length&&!native&&!unlimited)return null;
   const nativeText=native&&money(native.amount,native.unit,true,context,native.scale);
@@ -498,12 +508,12 @@ function FundsMark({source,groups,context,native,rateSources,quoteDate,displayUn
     {displayUnavailable&&<p>{t('money.noDisplayBalance',{currency:context.target.symbol})}</p>}
   </StatusMark></span>;
 }
-function creditChangesAt(source: Card, now: number) {
+function creditChangesAt(source: MoneySource, now: number) {
   const status = source.creditBalance;
-  return status && now <= status.at + status.staleAfterMs ? status.at + status.staleAfterMs + 1 : null;
+  return status && now < observationDeadline(status) ? observationDeadline(status) : null;
 }
-function CreditBalanceValue({source, breakdown, children}: {source: Card; breakdown: ReactNode; children: ReactNode}) {
-  const now = useClock(now => creditChangesAt(source, now));
+function CreditBalanceValue({source, breakdown, children}: {source: MoneySource; breakdown: ReactNode; children: ReactNode}) {
+  const now = useMeasurementClock(now => creditChangesAt(source, now));
   const status = creditBalanceText(source, now);
   if (!status) return children;
   const value = <span data-time="credit-status" className="limit-value money-balance-status">{status}</span>;
@@ -511,17 +521,17 @@ function CreditBalanceValue({source, breakdown, children}: {source: Card; breakd
     ? <Popover label={t('money.breakdown')} trigger={value} triggerClass="money-balance-trigger" up>{breakdown}</Popover>
     : value;
 }
-function CreditLastKnown({source}: {source: Card}) {
-  const now = useClock(now => creditChangesAt(source, now));
+function CreditLastKnown({source}: {source: MoneySource}) {
+  const now = useMeasurementClock(now => creditChangesAt(source, now));
   return creditBalanceText(source, now) || source.meters?.some(m => m.id === 'balance:credits' && m.stale)
     ? <p data-time="credit-last-known">{t('money.lastKnown')}</p> : null;
 }
 /** Status is independent of the last numeric value and its quota windows. */
-function creditBalanceText(source:Card,now:number):string|null {
+function creditBalanceText(source:MoneySource,now:number):string|null {
   if(source.provider!=='codex')return null;
   const status=source.creditBalance;
   if(!status)return t('money.notReported');
-  if(now>status.at+status.staleAfterMs)return t('money.stale');
+  if(now>=observationDeadline(status))return t('money.stale');
   switch(status.status){
     case 'finite':return null;
     case 'unlimited':return t('money.unlimited');

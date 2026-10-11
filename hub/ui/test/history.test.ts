@@ -1,5 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
 import {follow,followPan, historyBegins, HistoryStore} from '../lib/history';
 import {HistoryPool} from '../lib/historyPool';
 import {Pan} from '../lib/pan';
@@ -158,7 +161,7 @@ test('each history flight captures metadata without crossing boards or hub resta
   h.store.close();
 });
 
-test('a monetary pan exposes newly read points while keeping the complete table answer',async()=>{
+test('a monetary pan exposes new data without notifying balance drawings for quantity changes',async()=>{
   const h=harness();h.store.setMeters({unit:'USD',ids:[['s','balance']]});await h.start();
   const answer=async(read:typeof h.reads[number])=>{
     const chunks:Chunk[]=[];
@@ -174,13 +177,56 @@ test('a monetary pan exposes newly read points while keeping the complete table 
   assert.ok(series[0].points.some(point=>point.at>=range.from&&point.at<range.to));
   assert.equal(series[0].end,'9007199254740993');
   assert.equal(h.store.get().history,complete);
+  // Exercise the actual hook's snapshot choice, as useSyncExternalStore does.
+  const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
+  type Watch={read:HistoryStore['getPlot'];stop:()=>void;changes:number};
+  const watches:Watch[]=[];
+  const context={budgetHistory:h.store,fundsHistory:h.store,useSyncExternalStore:(subscribe:HistoryStore['subscribePlot'],read:HistoryStore['getPlot'])=>{
+    let value=read();const watch:Watch={read,stop:()=>{},changes:0};
+    watch.stop=subscribe(()=>{const next=read();if(next!==value){value=next;watch.changes++;}});watches.push(watch);return value;
+  },hook:null as unknown as (family:string,quantities?:boolean)=>unknown};
+  const hook=source.slice(source.indexOf('export function useBudgetHistoryPlot('),source.indexOf('/** A fresh answer from either resource'));
+  runInNewContext(ts.transpileModule(hook.replace('export function','function')+'\nglobalThis.hook=useBudgetHistoryPlot;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  context.hook('budget');context.hook('funds');context.hook('budget',true);
+  const drawing=watches[0].read()!;
+  assert.equal(watches[1].read(),drawing);
+  for(const field of ['meterChunks','series','coverage','activityCells'] as const)assert.equal(drawing[field],plot[field],'snapshots share prepared arrays');
   const chunks=plot.meterChunks,reads=h.reads.length;
-  h.store.pan({token:1,length:24*H,from:range.from+plot.cell,to:range.to+plot.cell,direction:0});await flush();
+  for(let i=1;i<=3;i++){h.store.pan({token:1,length:24*H,from:range.from+i*plot.cell,to:range.to+i*plot.cell,direction:0});await flush();}
+  assert.deepEqual(watches.map(w=>w.changes),[0,0,3],'cached movement updates spending quantities without rendering balance or funds');
   assert.equal(h.store.getPlot()!.meterChunks,chunks,'cached movement does not rebuild the drawing strip');
-  assert.equal(h.store.getPlot()!.meterFrame!.from,Math.floor((range.from+plot.cell)/plot.cell)*plot.cell);
+  assert.equal(h.store.getPlot()!.meterFrame!.from,Math.floor((range.from+3*plot.cell)/plot.cell)*plot.cell);
   assert.equal(h.reads.length,reads);
+  h.store.pan({token:1,length:24*H,from:range.from+12*H,to:range.to+12*H,direction:0});await flush();
+  const rebased=watches[0].read()!;
+  assert.notEqual(rebased,drawing,'a prepared strip rebase reaches balance readers');
+  assert.equal(rebased.version,drawing.version,'strip geometry can change without a data version');
+  assert.notEqual(rebased.from,drawing.from);
   h.store.choose('24h',range);h.store.endPan(true);await flush();
-  assert.notEqual(h.store.get().history,complete);h.store.close();
+  assert.notEqual(h.store.get().history,complete);
+  assert.equal(watches[0].read(),null,'the complete frame replaces the drawing strip after release');
+  h.store.pan({token:2,length:24*H,from:NOW-80*H,to:NOW-56*H,direction:-1});await flush();
+  const before=watches[0].read(),changes=watches[0].changes;
+  assert.ok(pending(h).length);await answer(pending(h)[0]);
+  assert.notEqual(watches[0].read(),before,'newly read cells reach the drawing snapshot');
+  assert.ok(watches[0].changes>changes);
+  for(const field of ['meterChunks','series','coverage','activityCells'] as const)assert.equal(watches[0].read()![field],h.store.getPlot()![field],'both snapshots release the old prepared arrays');
+  for(const watch of watches)watch.stop();h.store.close();
+  assert.equal(h.store.getDrawingPlot(),null);assert.equal(h.store.getPlot(),null);
+});
+
+test('monetary drawing and quantity snapshots retire together across authority and error boundaries',async()=>{
+  for(const boundary of ['board','run','selection','cancel','limit','not found'] as const){
+    const h=harness();h.store.setMeters({unit:'USD',ids:[['s','balance']]});await h.start();await h.reads[0].answer();
+    h.store.pan({token:1,length:24*H,from:NOW-36*H,to:NOW-12*H,direction:-1});await flush();
+    assert.ok(h.store.getDrawingPlot());assert.ok(h.store.getPlot());
+    if(boundary==='board')h.store.open('other');
+    else if(boundary==='run')h.store.hello('new-run');
+    else if(boundary==='selection')h.store.setMeters({unit:'EUR',ids:[['s','balance']]});
+    else if(boundary==='cancel')h.store.endPan(false);
+    else {assert.ok(pending(h).length);await pending(h)[0].fail(new ApiError(boundary==='limit'?413:404,boundary==='limit'?'history_limit':'not_found'));}
+    assert.equal(h.store.getDrawingPlot(),null,boundary);assert.equal(h.store.getPlot(),null,boundary);h.store.close();
+  }
 });
 
 test('separately bounded monetary responses cannot publish an over-budget assembled frame',async()=>{
@@ -426,16 +472,46 @@ test('news during a flight gives exactly one next read; continuous news never de
   await flush(); assert.equal(h.reads.length, count);
 });
 
-test('lineup and since zero in one network chunk read once; reconnect keeps the shown frame undimmed', async () => {
+test('lineup and since zero retire the shown frame immediately and coalesce one baseline read', async () => {
   const h = harness(); await h.start(); await h.reads[0].answer();
-  const shown = h.store.get().history;
-  h.store.lineup(['s', 'other']); h.store.news(0); await flush();
+  const shown = h.store.get().history,authority=h.store.get().presentation;
+  h.store.lineup(['s', 'other']); h.store.news(0);
+  assert.equal(h.store.get().history,null,'revoked history cannot remain visible until its replacement responds');
+  assert.ok(h.store.get().presentation>authority,'downstream prepared drawings must retire too');
+  await flush();
   assert.equal(h.reads.length, 2);
-  assert.equal(h.store.get().history, shown);
-  assert.equal(h.store.get().loading, false);
+  assert.equal(h.store.get().history, null);
+  assert.equal(h.store.get().loading, true);
   await h.reads[1].answer();
-  h.store.snapshot(['s', 'other']); await flush();
-  assert.equal(h.reads.length, 3);
+  assert.ok(h.store.get().history);
+  assert.notEqual(h.store.get().history,shown,'only the new authorized baseline restores a complete frame');
+  assert.equal(h.store.get().loading,false);
+  await flush();assert.equal(h.reads.length,2,'lineup and zero-cutoff news require no duplicate read');
+  h.store.close();
+});
+
+test('an ordinary reconnect retains its successful baseline undimmed while work authority is unchanged',async()=>{
+  const h=harness();
+  h.store.open('b');h.store.hello('run');h.store.snapshot(['s'],['s w'],0,'work-a');await flush();
+  await h.reads[0].answer();
+  const shown=h.store.get().history,authority=h.store.get().presentation;
+  assert.ok(shown);
+  h.store.snapshot(['s'],['s w'],0,'work-a');await flush();
+  assert.equal(h.reads.length,2);
+  assert.equal(h.store.get().history,shown);
+  assert.equal(h.store.get().presentation,authority);
+  assert.equal(h.store.get().loading,false);
+  await h.reads[1].fail(new Error('offline'));
+  assert.equal(h.store.get().history,shown,'ordinary read failure keeps the authorized baseline');
+  assert.equal(h.store.get().error,'history_failed');
+  h.store.retry();await flush();
+  assert.equal(h.reads.length,3);
+  await h.reads[2].answer();
+  assert.ok(h.store.get().history);
+  assert.notEqual(h.store.get().history,shown);
+  assert.equal(h.store.get().loading,false);
+  assert.equal(h.store.get().error,undefined);
+  h.store.close();
 });
 
 test('news after a past frame asks nothing; late news inside it reads from its old valid boundary', async () => {
@@ -604,7 +680,9 @@ test('window metadata changes recompose without reading, and only after a fresh 
   assert.equal(h.store.get().history?.series[0].windowId, 'other');
   const shown = h.store.get().history;
   h.store.snapshot(['s']); h.store.setWindows(['s w']); await flush();
-  assert.equal(h.store.get().history, shown);
+  assert.notEqual(h.store.get().history, shown);
+  assert.equal(h.store.get().history, null, 'a retired window cannot survive while its replacement epoch loads');
+  assert.equal(h.store.get().loading, true);
   await h.reads[1].answer(); assert.equal(h.store.get().history?.series.length, 0);
 });
 
@@ -850,6 +928,24 @@ for (const scope of ['quota', 'budget'] as const) {
     } finally {h.store.close();}
   });
 }
+
+test('release retains its last strip while preparing only the complete selected frame', async () => {
+  const h = cooperativeHarness(); await h.start(); await h.reads[0].answer(); await h.finish();
+  const range = {from: NOW - 36 * H, to: NOW - 12 * H};
+  h.store.pan({token: 1, length: 24 * H, ...range, direction: -1}); await flush(); await h.finish();
+  const strip = h.store.getPlot(); assert.ok(strip);
+  const changes: unknown[] = [];
+  const stop = h.store.subscribePlot(() => changes.push(h.store.getPlot()));
+  // Leave a newer strip queued when the gesture commits.
+  h.store.pan({token: 1, length: 24 * H, from: range.from - H, to: range.to - H, direction: -1}); await flush();
+  h.store.choose('24h', range); h.store.endPan(true); await flush();
+  assert.equal(h.store.getPlot(), strip);
+  for (let i = 0; i < 12 && pending(h).length; i++) {for (const read of pending(h)) await read.answer(); await h.finish();}
+  await h.finish();
+  assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`);
+  assert.deepEqual(changes, [null], 'arrivals replace the retained strip only with the complete frame');
+  stop(); h.store.close();
+});
 
 test('a sliced whole response publishes no live tile, boundaries or history before its atomic commit', async () => {
   const h = cooperativeHarness(); await h.start();
@@ -1246,6 +1342,28 @@ test('a seven-day look-ahead reads a long visible miss in capped batches and nev
   h.store.close();
 });
 
+test('a shared month reader bounds cold and gesture decoding to one tile without rereading its return', async () => {
+  const h = harness(undefined, undefined, 'budget', new HistoryPool()), length = 30 * 24 * H;
+  h.store.choose('30d', null); await h.start();
+  for(let n=0;n<20&&pending(h).length;n++)for(const r of pending(h)){assert.equal(tileOf(r.from,r.cell),tileOf(r.to-1,r.cell));await r.answer();}
+  assert.equal(h.store.get().history?.range,'30d');
+  const origin = {from: NOW - length, to: NOW}, range = {from: NOW - 2 * length, to: NOW - length};
+  const offset = h.reads.length;
+  h.store.pan({token: 1, length, ...range, direction: -1}); await flush();
+  for (let n = 0; n < 30 && pending(h).length; n++) for (const r of pending(h)) {
+    assert.equal(tileOf(r.from, r.cell), tileOf(r.to - 1, r.cell), 'decoded staging is bounded by one shared input tile');
+    await r.answer();
+  }
+  assert.ok(h.reads.length > offset + 1); assert.equal(pending(h).length, 0);
+  h.store.choose('30d', range); h.store.endPan(true); await flush();
+  assert.equal(h.store.get().history?.range, `${range.from}-${range.to}`);
+  const count = h.reads.length;
+  h.store.pan({token: 2, length, ...origin, direction: 1}); await flush();
+  h.store.choose('30d', null); h.store.endPan(true); await flush();
+  assert.equal(h.store.get().history?.range, '30d'); assert.equal(h.reads.length, count);
+  h.store.close();
+});
+
 test('a custom 31-day range keeps its grid and exact accounting through a pan and cached return', async () => {
   const length = 31 * 24 * H, h = harness(), origin = {from: NOW - length, to: NOW};
   h.store.choose('30d', origin); await h.start(); await h.reads[0].answer();
@@ -1292,6 +1410,17 @@ test('an incoming family cannot evict the other visible frame or publish an over
   b.store.setMeters({unit:'USD',ids:[]});await flush();
   assert.equal(b.store.get().error,undefined);assert.ok(b.store.get().history);assert.equal(b.reads.length,1,'empty selection completes locally');
   q.store.close();b.store.close();
+});
+
+test('a replacement can evict the former frame inputs while its complete drawing stays visible',async()=>{
+  const pool=new HistoryPool(40_000),h=harness(undefined,undefined,'quota',pool);
+  await h.start();await h.reads[0].answer();const retained=h.store.get().history;assert.ok(retained);
+  h.store.choose('24h',{from:NOW-60*H,to:NOW-36*H});await flush();
+  assert.ok(h.store.evictionCandidates().length,'former input cells are no longer pinned by the displayed projection');
+  const incoming={role:'visible' as const};assert.ok(pool.reserve(incoming,pool.budget-pool.estimatedBytes+1));
+  assert.equal(h.store.get().history,retained);assert.ok(pool.estimatedBytes<=pool.budget);
+  pool.release(incoming);await h.reads[1].answer();assert.notEqual(h.store.get().history,retained);assert.equal(h.store.get().error,undefined);
+  h.store.close();
 });
 
 test('every preparation slice accounts for private tile growth, including cancellation and rejection',async()=>{

@@ -17,28 +17,33 @@ export class PreparationBasis {
   }
 }
 
-export function usePreparationBasis(value: Projection, deps: readonly unknown[], captured: boolean, enabled = true): Projection {
-  const basis = useRef<PreparationBasis | null>(null);
-  basis.current ??= new PreparationBasis();
-  return basis.current.get(value, deps, captured, enabled);
+export function usePreparationBasis(value: Projection, deps: readonly unknown[], captured: boolean, enabled = true, context: unknown = null): Projection {
+  const basis = useRef<{context: unknown; value: PreparationBasis} | null>(null);
+  if (!basis.current || !Object.is(basis.current.context, context)) basis.current = {context, value: new PreparationBasis()};
+  return basis.current.value.get(value, deps, captured, enabled);
 }
 
 /** Numeric preparation starts after commit and replaces the displayed model whole. */
 export function usePrepared<T>(work: () => Preparation<T>, deps: readonly unknown[], context: unknown = null, enabled = true) {
   const owner = useRef({});
-  const intent = useRef<{deps: readonly unknown[]; context: unknown} | null>(null);
-  const [saved, setSaved] = useState<{deps: readonly unknown[]; context: unknown; value: T} | null>(null);
+  const lifetime = useRef({context});
+  if (!Object.is(lifetime.current.context, context)) lifetime.current = {context};
+  const scope = lifetime.current;
+  const intent = useRef<{deps: readonly unknown[]; scope: typeof scope} | null>(null);
+  const [saved, setSaved] = useState<{deps: readonly unknown[]; scope: typeof scope; value: T} | null>(null);
+  // Returning to the same context text cannot revive a retired lifetime.
+  if (saved && saved.scope !== scope) setSaved(null);
   useLayoutEffect(() => {
     if (!enabled) {
       intent.current = null;
       preparations()?.cancel(owner.current);
       return;
     }
-    if (intent.current && intent.current.context === context && same(intent.current.deps, deps)) return;
-    const current = {deps: [...deps], context};
+    if (intent.current && intent.current.scope === scope && same(intent.current.deps, deps)) return;
+    const current = {deps: [...deps], scope};
     intent.current = current;
-    prepare(owner.current, work(), () => intent.current === current, value => setSaved({...current, value}));
+    prepare(owner.current, work(), () => intent.current === current && lifetime.current === scope, value => setSaved({...current, value}));
   });
   useLayoutEffect(() => () => {intent.current = null; preparations()?.cancel(owner.current);}, []);
-  return {value: saved && saved.context === context ? saved.value : null, ready: enabled && !!saved && saved.context === context && same(saved.deps, deps)};
+  return {value: saved && saved.scope === scope ? saved.value : null, ready: enabled && !!saved && saved.scope === scope && same(saved.deps, deps)};
 }

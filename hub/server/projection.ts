@@ -52,6 +52,7 @@ export type Snapshot = Omit<BoardPart, 'lineup'> & {
   providers: typeof catalogue;
   sourceAccess:Record<string,SourceAccess>;
   historyStart: number;
+  workAuthority: string;
   sources: Card[];
   sessions: Record<string, BoardSession[]>;
   ownSessions?: BoardSession[];
@@ -237,6 +238,7 @@ export class Projection {
       view: part.view,
       viewRevision: part.viewRevision,
       historyStart: this.hub.store.historyStart(now),
+      workAuthority: this.workKey(board),
       sources: sources.map(s => s.card),
       ...(this.hub.store.privateOwner(board) === user ? {ownSessions: this.ownSessions(user, board, now)!.value} : {}),
       sessions: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].sessions])),

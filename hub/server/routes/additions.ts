@@ -1,3 +1,4 @@
+import {VIEW_VERSION, VIEW_VERSION_HEADER} from '../domain/view.js';
 import type {FastifyInstance} from 'fastify';
 import type {Guards, Hub} from '../api.js';
 import {AdditionError, BoardAdditions, WIDGETS, type AdditionItem} from '../additions.js';
@@ -72,13 +73,13 @@ export async function additionRoutes(app: FastifyInstance, hub: Hub, guards: Gua
   });
   app.post('/api/additions',{bodyLimit:32*1024},(request,reply)=>{
     const user=guards.user(request,reply);if(!user)return reply;
+    if(request.headers[VIEW_VERSION_HEADER.toLowerCase()]!==String(VIEW_VERSION))return reply.code(428).send({error:'view_reload_required'});
     const input=fields(request.body,['requestId','boardId','item']);
     if(!uuid(input.requestId)||input.boardId!==null&&!boardId(input.boardId))throw new AdditionError('addition_invalid');
     if ((input.item as {kind?:unknown}|null)?.kind==='widget') {
       if (input.boardId===null) throw new AdditionError('addition_invalid');
       const access=guards.board(request,reply,input.boardId as string); if(!access)return reply;
       if(access.board.role!=='owner')throw new AdditionError('addition_permission');
-      if(request.headers['x-quotum-view-version']!=='2')return reply.code(428).send({error:'view_reload_required'});
     }
     return additions.reserve(user.id,input.requestId,input.boardId as string|null,itemOf(input.item));
   });
@@ -96,7 +97,7 @@ export async function additionRoutes(app: FastifyInstance, hub: Hub, guards: Gua
   app.post<{Params:{id:string}}>('/api/additions/:id/run',{bodyLimit:32*1024},async(request,reply)=>{
     const user=guards.user(request,reply);if(!user)return reply;
     if(!uuid(request.params.id))throw new AdditionError('addition_not_found');
-    if(additions.isWidget(user.id,request.params.id)&&request.headers['x-quotum-view-version']!=='2')return reply.code(428).send({error:'view_reload_required'});
+    if(request.headers[VIEW_VERSION_HEADER.toLowerCase()]!==String(VIEW_VERSION))return reply.code(428).send({error:'view_reload_required'});
     const input=fields(request.body,[],['secret','allowUnknownExpiry','sameAccount','accountName']),operation=additions.get(user.id,request.params.id);
     if(['allowUnknownExpiry','sameAccount'].some(key=>input[key]!==undefined&&typeof input[key]!=='boolean'))throw new AdditionError('addition_invalid');
     if(input.accountName!==undefined&&(typeof input.accountName!=='string'||input.accountName.length>480||operation.item.kind!=='connection'||operation.item.account?.kind!=='new'))throw new AdditionError('addition_invalid');
@@ -112,6 +113,7 @@ export async function additionRoutes(app: FastifyInstance, hub: Hub, guards: Gua
     const onboarding=hub.deviceOnboarding!;
     app.post('/api/device-onboarding',(request,reply)=>{
       const user=guards.user(request,reply);if(!user)return reply;
+      if(request.headers[VIEW_VERSION_HEADER.toLowerCase()]!==String(VIEW_VERSION))return reply.code(428).send({error:'view_reload_required'});
       const input=fields(request.body,['requestId','boardId']);
       if(!uuid(input.requestId)||!boardId(input.boardId))throw new AdditionError('addition_invalid');
       return onboarding.reserve(user.id,input.requestId,input.boardId);
@@ -129,6 +131,7 @@ export async function additionRoutes(app: FastifyInstance, hub: Hub, guards: Gua
     });
     app.post<{Params:{id:string}}>('/api/device-onboarding/:id/selection',(request,reply)=>{
       const user=guards.user(request,reply);if(!user)return reply;
+      if(request.headers[VIEW_VERSION_HEADER.toLowerCase()]!==String(VIEW_VERSION))return reply.code(428).send({error:'view_reload_required'});
       const input=fields(request.body,['requestId','deviceId','sourceIds'],['includeBudget']);
       if(!uuid(request.params.id)||!uuid(input.requestId)||!boardId(input.deviceId)||!Array.isArray(input.sourceIds)||input.sourceIds.length<1||input.sourceIds.length>100||!input.sourceIds.every(sourceId))throw new AdditionError('addition_invalid');
       if(input.includeBudget!==undefined&&(!Array.isArray(input.includeBudget)||input.includeBudget.length>100||!input.includeBudget.every(sourceId)))throw new AdditionError('addition_invalid');

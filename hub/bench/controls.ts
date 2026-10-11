@@ -67,7 +67,7 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'bud
 /** A zero cap keeps the scale's origin unchanged when balances become spending. */
 export async function moneyView(cdp: Cdp, source: string, cappedSource: string, cap: string, evidence?: Pick<Evidence, 'save'>) {
   await selectMoney(cdp, [[source, 'balance'], [cappedSource, cap]]);
-  await cdp.evaluate(`document.querySelector('.budget-history .panel-head button').click()`);
+  await cdp.evaluate(`document.querySelector('.budget-history .panel-head .picker > button').click()`);
   for (const [index, label] of ['Spending', 'Balance', 'Spending'].entries()) {
     try {
       await cdp.evaluate(`(async () => {

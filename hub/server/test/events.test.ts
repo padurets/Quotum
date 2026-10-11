@@ -1,3 +1,4 @@
+import {encodeView, EMPTY_VIEW, VIEW_VERSION, VIEW_VERSION_HEADER} from '../domain/view.js';
 import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync} from 'node:fs';
@@ -183,9 +184,9 @@ async function hub(options: Partial<EventsOptions> = {}, clock?: Clock) {
     const response = await app.inject({
       method,
       url,
-      payload: method==='POST'&&url.endsWith('/view')&&options.body&&typeof options.body==='object'?{version:2,...options.body}:options.body,
+      payload: method==='POST'&&url.endsWith('/view')&&options.body&&typeof options.body==='object'?encodeView({...EMPTY_VIEW,...options.body}):options.body,
       headers: {
-        ...(method==='POST'&&url.endsWith('/view')?{'X-Quotum-View-Version':'2','If-Match':'"'+directory.viewRevision(url.split('/')[3])+'"'}:{}),
+        ...(method==='POST'&&url.endsWith('/view')?{[VIEW_VERSION_HEADER]:String(VIEW_VERSION),'If-Match':'"'+directory.viewRevision(url.split('/')[3])+'"'}:{}),
         ...(options.as && cookies.get(options.as) ? {cookie: cookies.get(options.as)!} : {}),
         ...(options.token ? {authorization: `Bearer ${options.token}`} : {}),
         ...options.headers,
@@ -326,7 +327,7 @@ test('a height the owner chose reaches every reader: in the view event of one al
   await h.person('bob', await h.invite('alice', team));
   const bob = await reading(h, 'bob', team);
   t.after(bob.close);
-  const layout = {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 12}, agents: {x: 0, y: 12, w: 3}}};
+  const layout = {columns: 6, places: {history: {x: 0, y: 0, w: 6, h: 12}, agents: {x: 0, y: 1, w: 3}}};
   const saved = await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout}});
   assert.deepEqual(saved.body.view.layout, layout);
   const told = (await bob.within()).filter(e => e.type === 'view');
@@ -336,7 +337,7 @@ test('a height the owner chose reaches every reader: in the view event of one al
   assert.deepEqual(later.snapshot.view.layout, layout);
   assert.deepEqual((await h.call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view.layout, layout);
   // Given back to its content: the key goes, for everyone.
-  const auto = {columns: 6, places: {history: {x: 0, y: 0, w: 6}, agents: {x: 0, y: 12, w: 3}}};
+  const auto = {columns: 6, places: {history: {x: 0, y: 0, w: 6}, agents: {x: 0, y: 1, w: 3}}};
   await h.call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {layout: auto}});
   const again = (await bob.within()).filter(e => e.type === 'view');
   assert.deepEqual(again.map(e => e.data.view.layout), [auto]);
@@ -399,7 +400,7 @@ test("the board's own events and each reader's own go apart: its owner and a mem
     ['view', 'card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'mine', 'history'],
   );
   assert.deepEqual(ofAlice.at(-2)!.data, {sources: [source]});
-  assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source], since: 0, changes: [{source,scope:'quota',since:0}]});
+  assert.deepEqual(ofAlice.at(-1)!.data, {sources: [source], since: 0, workAuthority: h.store.workKey(team,h.store.shown(team,h.directory.view(team).hidden)), changes: [{source,scope:'quota',since:0,workSince:0}]});
   assert.deepEqual(
     ofBob.map(e => e.type),
     ['view', 'card', 'sessions', 'cadence', 'refresh', 'forecast', 'lineup', 'history'],
@@ -1159,17 +1160,17 @@ test('all of a board’s history is news when whose agents’ work it shows, or 
   const laptop = (await h.call('GET', '/api/devices', {as: 'alice'})).body[0].id;
   const s = await reading(h, 'alice', board);
   t.after(s.close);
-  const all = {sources: [source], since: 0, ownSince: 0, changes: [{source,scope:'quota',since:0}]};
+  const all = () => ({sources: [source], since: 0, ownSince: 0, workAuthority: h.store.workKey(board,h.store.shown(board,h.directory.view(board).hidden)), changes: [{source,scope:'quota',since:0,workSince:0}]});
   const history = async () => (await s.within()).filter(e => e.type === 'history').map(e => e.data);
 
   await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: {}}, hidden: [`source:${source}`]}});
-  assert.deepEqual(await history(), [all], 'a card hidden: its work is off the board');
+  assert.deepEqual(await history(), [all()], 'a card hidden: its work is off the board');
   await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: {}}}});
-  assert.deepEqual(await history(), [all], 'and shown again');
+  assert.deepEqual(await history(), [all()], 'and shown again');
   await h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum'}});
-  assert.deepEqual(await history(), [all], 'a project renamed');
+  assert.deepEqual(await history(), [all()], 'a project renamed');
   await h.call('POST', `/api/devices/${laptop}`, {as: 'alice', body: {name: 'Book'}});
-  assert.deepEqual(await history(), [all], 'a machine renamed');
+  assert.deepEqual(await history(), [all()], 'a machine renamed');
   await h.call('POST', `/api/boards/${board}/view`, {as: 'alice', body: {layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}}}}});
   assert.deepEqual(await history(), [], 'the widgets moved: the work it shows is the same');
 });
@@ -1296,5 +1297,5 @@ test('history coalesces each resource scope independently and keeps monetary new
   const view=h.directory.view(board);h.directory.saveView(board,{...view,hidden:[...view.hidden,'source:'+source]},h.directory.credentials('alice@example.com')!.user.id,clock.now());
   clock.advance(config.events.smoothMs);
   const combined=(await s.within()).find(event=>event.type==='history')!.data;
-  assert.deepEqual(combined.changes,[{source,scope:'budget',since},{source,scope:'quota',since:0}]);
+  assert.deepEqual(combined.changes,[{source,scope:'budget',since},{source,scope:'quota',since:0,workSince:0}]);
 });

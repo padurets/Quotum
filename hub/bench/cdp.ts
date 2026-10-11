@@ -56,15 +56,15 @@ export class Cdp {
     return new Promise((resolve, reject) => {
       if (signal?.aborted) {reject(signal.reason); return;}
       const socket = new WebSocket(url);
-      const clean = () => {clearTimeout(timer); signal?.removeEventListener('abort', cancelled); socket.removeEventListener('open', opened); socket.removeEventListener('error', failed);};
-      const fail = (error: Error) => {clean(); socket.close(); reject(error);};
-      const timer = setTimeout(() => fail(new Error('the browser did not open its DevTools connection in 30 s')), 30_000);
-      const cancelled = () => fail(new Error('DevTools connection cancelled'));
-      const opened = () => {clean(); resolve(new Cdp(socket, url));};
-      const failed = () => fail(new Error('cannot reach the browser DevTools connection'));
-      socket.addEventListener('open', opened, {once: true});
-      socket.addEventListener('error', failed, {once: true});
-      signal?.addEventListener('abort', cancelled, {once: true});
+      let settled=false;
+      const clean=()=>{clearTimeout(timer);signal?.removeEventListener('abort',cancelled);socket.removeEventListener('open',opened);socket.removeEventListener('error',failed);};
+      const fail=(error:unknown)=>{if(settled)return;settled=true;clean();socket.close();reject(error);};
+      const timer=setTimeout(()=>fail(new Error('the browser did not open its DevTools connection in 30 s')),30_000);
+      const cancelled=()=>fail(signal!.reason);
+      const opened=()=>{if(settled)return;settled=true;clean();resolve(new Cdp(socket,url));};
+      const failed=()=>fail(new Error('cannot reach the browser DevTools connection'));
+      socket.addEventListener('open',opened,{once:true});socket.addEventListener('error',failed,{once:true});
+      signal?.addEventListener('abort',cancelled,{once:true});if(signal?.aborted)cancelled();
     });
   }
 

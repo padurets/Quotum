@@ -85,3 +85,28 @@ test('unconfirmed resume closes only the owned diagnostic target', async t => {
   await flush(); t.mock.timers.tick(2000); await failure; await observer.close();
   assert.equal(closes, 1);
 });
+
+test('a late connection after reload cancellation cannot inspect processes or remain open',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});t.mock.method(console,'error',()=>{});
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({webSocketDebuggerUrl:'ws://fixture.invalid'})));
+  let connected=()=>{},release!:(value:Cdp)=>void,closed=0,inspected=0;
+  const waiting=new Promise<void>(resolve=>{connected=resolve;});
+  t.mock.method(Cdp,'connect',async()=>{connected();return new Promise<Cdp>(resolve=>{release=resolve;});});
+  const {page,commands}=pageFixture(),controller=new AbortController(),reason=new Error('reload observer canceled');
+  const observer=await observeReversal(page,{owned:true,endpoint:'fixture',close:async()=>{}},{signal:controller.signal});
+  const result=assert.rejects(observer.diagnose('native/quota/reload'),value=>value===reason);
+  await waiting;controller.abort(reason);await result;await observer.close();
+  release({send:async()=>{inspected++;return {};},close:()=>{closed++;}}as unknown as Cdp);await flush();
+  assert.equal(closed,1);assert.equal(inspected,0);assert.deepEqual(commands,[]);
+});
+
+test('canonical reload collection retains its original navigation without debugger or raw page fields',async t=>{
+  const logs:string[]=[],{page,commands}=pageFixture(async()=>({ready:'complete',url:'https://private-canary.invalid'}));
+  t.mock.method(console,'error',(line:string)=>logs.push(line));
+  t.mock.method(globalThis,'fetch',async()=>new Response('{}'));
+  const observer=await observeReversal(page,attachedChrome('http://fixture.invalid'),{origin:{startedAt:1000,navigation:()=>({requested:{atMs:1,frame:'frame-1',loader:'loader-1'},committed:{atMs:2,frame:'frame-1',loader:'loader-2'},loadAtMs:3})}});
+  await observer.diagnose('native/quota/reload');await observer.close();
+  const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  assert.equal(report.mode,'canonical');assert.equal(report.startedAt,1000);assert.equal(report.navigation.requested.loaderId,'loader-1');assert.equal(report.navigation.committed.loaderId,'loader-2');assert.equal(report.navigation.loadAtMs,3);
+  assert.deepEqual(commands,[]);assert.doesNotMatch(logs.join(''),/private-canary|Debugger|Profiler/);
+});

@@ -5,7 +5,7 @@ import {DEFAULT_PLAN, isValidPlan, type WeeklyPlan} from './plan';
 import {type View} from './types';
 import {FALLBACK_COLOR, PROVIDERS} from './providers';
 
-import {EMPTY_VIEW as EMPTY, VIEW_VERSION_HEADER, VIEW_KEEPALIVE_LIMIT} from '../../server/domain/view';
+import {EMPTY_VIEW as EMPTY, VIEW_VERSION_HEADER, VIEW_KEEPALIVE_LIMIT, VIEW_VERSION, encodeView, sameView, viewBytes} from '../../server/domain/view';
 import {widgetHidden, splitWidget, ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE} from '../../server/domain/widgets';
 export {ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE};
 import {cardId, windowKey} from '../../server/domain/presentation';
@@ -119,7 +119,7 @@ export const withPlan = (view: View, sourceId: string, plan: WeeklyPlan | null):
   return {...view, plans};
 };
 
-const same = (a: View, b: View) => JSON.stringify(a) === JSON.stringify(b);
+const same = sameView;
 
 export type Arrange = {
   view: View;
@@ -137,7 +137,7 @@ const flushers = new Set<(board: string) => Promise<void>>();
 const largeFlushers = new Set<() => Promise<void>>();
 /** Only browser navigation that destroys the saver waits for oversized pending work. */
 export async function flushLargeViews() {if (!inApp()) for (const flush of largeFlushers) await flush();}
-const bytes = (view: View) => new TextEncoder().encode(JSON.stringify(view)).byteLength;
+const bytes = viewBytes;
 const large = (view: View) => bytes(view) > VIEW_KEEPALIVE_LIMIT;
 
 /** Add waits for this person's pending layout before changing the same board. */
@@ -177,7 +177,7 @@ export function useView(board: string, told: View | null, owner: boolean, revisi
     const controller = state.controller = new AbortController();
     state.flight = (async () => {
       try {
-        const saved = await call<{view: View; revision: number}>('POST', '/api/boards/' + encodeURIComponent(id) + '/view', pending.view, 12_000, controller.signal, {'If-Match': '"' + pending.revision + '"', [VIEW_VERSION_HEADER]: '2'});
+        const saved = await call<{view: View; revision: number}>('POST', '/api/boards/' + encodeURIComponent(id) + '/view', encodeView(pending.view), 12_000, controller.signal, {'If-Match': '"' + pending.revision + '"', [VIEW_VERSION_HEADER]: String(VIEW_VERSION)});
         if (!alive.current || controller.signal.aborted) return;
         // Only our serial successor can use this revision; an external edit stays authoritative.
         if (state.revision <= saved.revision) {
@@ -228,8 +228,8 @@ export function useView(board: string, told: View | null, owner: boolean, revisi
         state.pending = undefined; keepaliveBytes += size;
         void fetch('/api/boards/' + encodeURIComponent(id) + '/view', {
           method: 'POST', keepalive: true,
-          headers: {'content-type': 'application/json', 'If-Match': '"' + pending.revision + '"', [VIEW_VERSION_HEADER]: '2'},
-          body: JSON.stringify(pending.view),
+          headers: {'content-type': 'application/json', 'If-Match': '"' + pending.revision + '"', [VIEW_VERSION_HEADER]: String(VIEW_VERSION)},
+          body: JSON.stringify(encodeView(pending.view)),
         }).catch(() => {}).finally(() => {keepaliveBytes -= size;});
       }
     };

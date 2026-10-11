@@ -10,7 +10,7 @@ import type {Arrange} from '../lib/view';
 import type {View} from '../lib/types';
 import {preparationFixture} from './preparationFixture';
 
-const EMPTY:View={version:2,layout:{columns:6,places:{}},names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{},enabledWhenEmpty:[]};
+const EMPTY:View={version:3,layout:{columns:6,places:{}},names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{},enabledWhenEmpty:[]};
 const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 function fixture(platform?: 'electron'|'tauri') {
   const hooks=preparationFixture(),reads:{url:string;view:View;headers:Record<string,string>;resolve:(value:unknown)=>void;reject:(error:unknown)=>void}[]=[],events=new Map<string,()=>void>();
@@ -24,7 +24,7 @@ function fixture(platform?: 'electron'|'tauri') {
     if(name.endsWith('/domain/view'))return viewContract;
     if(name.endsWith('/domain/widgets'))return widgets;
     if(name==='react')return {useRef:hooks.useRef,useState:hooks.useState,useEffect:(effect:()=>void|(()=>void),deps:unknown[])=>hooks.useLayoutEffect(()=>{const cleanup=effect();if(cleanup)cleanups.add(cleanup);return cleanup;},deps),useMemo:memo,useCallback:(fn:unknown,deps:unknown[])=>memo(()=>fn,deps)};
-    if(name==='./http')return {ApiError,call:(_method:string,url:string,view:View,_timeout:number,_signal:unknown,headers:Record<string,string>)=>new Promise((resolve,reject)=>reads.push({url,view,headers,resolve,reject}))};
+    if(name==='./http')return {ApiError,call:(_method:string,url:string,view:View,_timeout:number,_signal:unknown,headers:Record<string,string>)=>new Promise((resolve,reject)=>reads.push({url,view:viewContract.decodeView(view)!,headers,resolve,reject}))};
     if(name==='./plan')return {DEFAULT_PLAN:[],isValidPlan:()=>true};
     if(name==='./providers')return {PROVIDERS:{}};
     if(name.endsWith('/presentation'))return {};
@@ -84,11 +84,11 @@ test('ending the owner shell prevents an unsent serial successor from moving to 
   await h.flush('board');assert.equal(h.reads.length,1);
 });
 
-const oversized={...EMPTY,names:Object.fromEntries(Array.from({length:200},(_,i)=>['name'+i,'é'.repeat(60)])),layout:{columns:6,places:Object.fromEntries(Array.from({length:1200},(_,i)=>['source:'+i,{x:0,y:i,w:3}]))}};
+const oversized={...EMPTY,names:Object.fromEntries(Array.from({length:199},(_,i)=>['name'+i,'é'.repeat(60)])),layout:{columns:6,places:Object.fromEntries(Array.from({length:1200},(_,i)=>['source:'+String(i).padStart(25,'0'),{x:0,y:i,w:3}]))}};
 test('oversized UTF-8 drafts save immediately in one serial queue and protect browser closing until acknowledged',async()=>{
   const h=fixture();h.render().update(()=>oversized);
-  assert.ok(new TextEncoder().encode(JSON.stringify(oversized)).byteLength>65536);
-  assert.equal(h.reads.length,1);assert.equal(h.reads[0].headers['X-Quotum-View-Version'],'2');
+  assert.ok(new TextEncoder().encode(JSON.stringify(viewContract.encodeView(oversized))).byteLength>65536);
+  assert.equal(h.reads.length,1);assert.equal(h.reads[0].headers['X-Quotum-View-Version'],String(viewContract.VIEW_VERSION));
   assert.equal(h.events.has('beforeunload'),true);
   h.events.get('pagehide')!();assert.equal(h.keepalives.length,0);
   h.render().update(()=>({...EMPTY,names:{s:'latest small draft'}}));
@@ -115,7 +115,7 @@ test('both native bridges retain immediate ordinary autosave without registering
 test('ordinary pagehide saves carry the writer version and clean boards have no close prompt',()=>{
   const h=fixture();h.render().update(view=>({...view,names:{s:'small'}}));
   assert.equal(h.reads.length,0);assert.equal(h.events.has('beforeunload'),false);
-  h.events.get('pagehide')!();assert.equal(h.keepalives.length,1);assert.equal(h.keepalives[0].headers['X-Quotum-View-Version'],'2');h.unmount();
+  h.events.get('pagehide')!();assert.equal(h.keepalives.length,1);assert.equal(h.keepalives[0].headers['X-Quotum-View-Version'],String(viewContract.VIEW_VERSION));h.unmount();
 });
 
 test('native Back and Forward retain the saver through dirty confirmation, failure and every serial successor', async () => {

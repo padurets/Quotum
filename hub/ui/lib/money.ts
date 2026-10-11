@@ -4,6 +4,7 @@ import {monetaryOf,providerOf,supportsBudget} from '../../server/domain/provider
 import type {Card} from './types';
 import type {Meter,KeyPart} from '../../server/domain/meters';
 import type {SourceAccess} from '../../server/secrets/credentials';
+import {observationDeadline} from '../../server/domain/resources';
 import {countdownChangesAt} from './format';
 import {formatLocale, t} from '../i18n';
 
@@ -39,10 +40,10 @@ export function money(value:string|null|undefined,unit=DEFAULT_CURRENCY,exact=fa
 }
 export const keyName=(key:Pick<KeyPart,'id'|'name'>)=>key.name??key.id;
 export const capLeft=convertedRemaining;
-export const capStale=(meter:Meter,now:number)=>meter.stale||now>meter.at+meter.staleAfterMs||meter.resetAt!==null&&meter.resetAt<=now;
+export const capStale=(meter:Meter,now:number)=>meter.stale||now>=observationDeadline(meter)||meter.resetAt!==null&&meter.resetAt<=now;
 export function capChangesAt(meter:Meter,now:number):number|null {
   if(capStale(meter,now))return null;
-  const staleAt=meter.at+meter.staleAfterMs+1;
+  const staleAt=observationDeadline(meter);
   return meter.resetAt===null?staleAt:Math.min(staleAt,meter.resetAt);
 }
 export function capPercent(meter:Meter):number|null {

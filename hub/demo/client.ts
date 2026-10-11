@@ -1,3 +1,4 @@
+import {encodeView, VIEW_VERSION, VIEW_VERSION_HEADER, type View} from '../server/domain/view.js';
 /**
  * The hub's public requests, as people and agents make them: people sign in and keep a
  * session cookie (held here by hand, as a browser would), agents send a bearer token.
@@ -96,9 +97,9 @@ export class Person {
     await this.post(`/api/boards/${encodeURIComponent(board)}/shares`, {source});
   }
 
-  async saveView(board: string, view: object) {
+  async saveView(board: string, view: View) {
     const snapshot=await this.get<{viewRevision:number}>(`/api/overview?board=${encodeURIComponent(board)}`);
-    await call(this.base,'POST',`/api/boards/${encodeURIComponent(board)}/view`,{body:view,cookie:this.cookie,headers:{'X-Quotum-View-Version':'2','If-Match':'"'+snapshot.viewRevision+'"'}});
+    await call(this.base,'POST',`/api/boards/${encodeURIComponent(board)}/view`,{body:encodeView(view),cookie:this.cookie,headers:{[VIEW_VERSION_HEADER]:String(VIEW_VERSION),'If-Match':'"'+snapshot.viewRevision+'"'}});
   }
 
   async approve(code: string) {

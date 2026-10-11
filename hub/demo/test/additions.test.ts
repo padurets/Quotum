@@ -1,3 +1,4 @@
+import {VIEW_VERSION, VIEW_VERSION_HEADER} from '../../server/domain/view.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -40,7 +41,7 @@ async function harness(extended = true) {
   const cookies = new Map<string, string>();
   for (const user of [owner, member]) {const token = newSecret('qt_s'); directory.createSession(token, user.id, Date.now(), 60_000); cookies.set(user.id, 'quotum_session=' + token);}
   const app = await buildApp({store, directory, credentials, ingest: new Ingest(store, directory, new Duty(), new Cadence()), pairing: new Pairing(directory), resets: new ResetFeed(undefined, () => {}), setup: new Setup(false, null), local: null}, extended ? demoAdditionControls : undefined);
-  const call = (method: 'GET' | 'POST', url: string, payload?: object, user = owner.id, origin: string | null = 'http://localhost') => app.inject({method, url, payload, headers: {'X-Quotum-View-Version':'2',cookie: cookies.get(user)!, ...(origin ? {origin} : {})}});
+  const call = (method: 'GET' | 'POST', url: string, payload?: object, user = owner.id, origin: string | null = 'http://localhost') => app.inject({method, url, payload, headers: {[VIEW_VERSION_HEADER]:String(VIEW_VERSION),cookie: cookies.get(user)!, ...(origin ? {origin} : {})}});
   const reserve = async (item: object, user = owner.id, boardId: string | null = board.id) => (await call('POST', '/api/additions', {requestId: randomUUID(), boardId, item}, user)).json();
   const close = async () => {await app.close(); store.close(); transport.close(); rmSync(dir, {recursive: true, force: true});};
   return {store, directory, credentials, owner, member, board, call, reserve, close};

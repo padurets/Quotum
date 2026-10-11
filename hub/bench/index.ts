@@ -34,6 +34,8 @@ import {profilePanning, profileControls} from './cpuProfile.js';
 import {ChromeLaunchError} from './chrome.js';
 import {creditSnapshot} from './credits.js';
 import {startupTrials} from './startupDiagnostic.js';
+import {observeReversal} from './reversalDiagnostic.js';
+import {reloadHubProbe} from './panningReload.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -210,6 +212,13 @@ async function main() {
     }
     const opened = Date.now();
     evidence.begin('warmup');
+    // Measure with the shared controls open, as before they could be collapsed.
+    await cdp.evaluate(`(async () => {
+      const toggle = document.querySelector('.filter-toggle > button');
+      if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+      await new Promise(requestAnimationFrame);
+      if (!document.querySelector('.analytics-head:not([hidden]) .period')) throw new Error('shared filters did not open');
+    })()`);
     const warm = warmUntil(await overview(), opened);
     say(`the board is open; it settles for ${Math.round((warm - Date.now()) / 1000)} s`);
     await sleep(warm - Date.now());
@@ -281,6 +290,8 @@ async function main() {
         to: measured.to,
       }),
     ];
+    // Keep completed measurements available if a later browser phase stops the job.
+    say(`initial readings: ${JSON.stringify({idle:{scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,renders:reading.renders,mutations:reading.mutations},measured:{historyBytes:measured.historyBytes,cardP95Ms:percentile(measured.latencies,.95),chartP95Ms:percentile(measured.chartLatencies,.95)},work:worked.reports,problems})}`);
     // The readings above are frozen: keyboard checks do not enter the performance budget.
     say('checking consecutive frequency saves with native arrow keys');
     await frequencyKeys(cdp);
@@ -289,7 +300,12 @@ async function main() {
     await cdp.evaluate('__quotumBench.pause()');
     say('checking native continuous wheel and Shift-drag from quota, budget and subscription funds at 24h and 30d, CPU ×4');
     evidence.begin('panning');
-    const panned = await panning(cdp, undefined, evidence);
+    const panned = await panning(cdp, undefined, evidence, async(label,signal,origin)=>{
+      await Promise.all([reloadHubProbe(address.base,signal,origin),(async()=>{
+        const observer=await observeReversal(cdp,browser!,{signal,origin});
+        try{await observer.diagnose(label);}finally{await observer.close();}
+      })()]);
+    });
     evidence.save('panning', panned);
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95))})), problems: panned.problems})}`);
@@ -399,8 +415,7 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
     await sleep(sent + MEASURE_EVERY - Date.now());
   }
   await drain(requests); requests.counting = false;
-  say(`quota measurement latencies: ${JSON.stringify({cards: latencies.map(String), charts: chartLatencies.map(String)})}`);
-  return {source, latencies, chartLatencies, historyBytes: (requests.bytesByPath['/api/history'] ?? 0) / MEASUREMENTS, reading: await cdp.evaluate<Reading>('__quotumBench.read()'), from, to: Date.now()};
+  return {source, latencies, chartLatencies, historyBytes: requests.historyBytes / MEASUREMENTS, reading: await cdp.evaluate<Reading>('__quotumBench.read()'), from, to: Date.now()};
 }
 
 /** Mixed-source credit updates retain quota drawings and only read their own financial tail. */
@@ -446,9 +461,9 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
         if(chart===null||!heartbeat&&changed===null)await sleep(20);
       }
       await drain(requests);await sleep(100);requests.counting=false;
-      const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),to=Date.now(),historyBytes=requests.bytesByPath['/api/history']??0;
+      const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),to=Date.now(),historyBytes=requests.historyBytes;
       const balance=await cdp.evaluate<string|null>(`document.querySelector('[data-card="${source}"] [data-money]')?.getAttribute('data-money')??null`);
-      const point={amount,heartbeat,cardMs:changed===null?null:changed-sent,chartMs:chart===null?null:chart-sent,historyRequests:requests.history.length,historyBytes,ledgerRowsUnchanged:rows()===beforeRows,coverageAdvanced:coverage()>beforeCoverage};
+      const point={amount,heartbeat,cardMs:changed===null?null:changed-sent,chartMs:chart===null?null:chart-sent,historyRequests:requests.historyRequests,historyBytes,ledgerRowsUnchanged:rows()===beforeRows,coverageAdvanced:coverage()>beforeCoverage};
       updates.push(point);
       const after=await drawing();
       evidence.save(`credit-update-${index+1}`,{index,observedAt:at,sent,to,expectedValue:Number(value),cellStart:cellStart(to,cellOf(86_400_000)),before,after,...point,reading});
@@ -456,7 +471,7 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
       problems.push(...chartProblems([chart===null?Infinity:chart-sent]),...creditRenderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from:sent,to,cellMs:cellOf(86_400_000)}));
       if(!heartbeat)problems.push(...measuredProblems({card:source,latencies:[changed===null?Infinity:changed-sent],renders:reading.renders,mutations:reading.mutations,from:sent,to}));
       if(balance!==value||!point.coverageAdvanced||heartbeat&&!point.ledgerRowsUnchanged)problems.push('Codex heartbeat lost coverage, changed the ledger or displayed the wrong amount');
-      if(requests.history.length!==1||historyBytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push('Codex credit update exceeds the existing single-tail history budget');
+      if(requests.historyRequests!==1||historyBytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push('Codex credit update exceeds the existing single-tail history budget');
       if(requests.history.some(read=>read.scope!=='budget'||read.meters!==JSON.stringify([[source,'balance:credits']])||read.from<cellStart(at,cellOf(86_400_000))-cellOf(86_400_000)))problems.push('Codex credit update read another resource or its full historical period');
     }
   } finally {ledger.close();}
@@ -512,7 +527,7 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
   await drain(requests);requests.counting=false;
   const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),to=Date.now();
   const problems=[...measuredProblems({card:source,latencies,renders:reading.renders,mutations:reading.mutations,from,to}),...chartProblems(chartLatencies)];
-  const bytes=(requests.bytesByPath['/api/history']??0)/6;if(bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push('money history exceeds the existing measurement byte budget');
+  const bytes=requests.historyBytes/6;if(bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push('money history exceeds the existing measurement byte budget');
   const first=await owner.get<{keys:unknown[];next:string|null}>('/api/boards/'+owner.personalBoard+'/sources/'+source+'/keys?limit=50');
   if(first.keys.length!==50||!first.next)problems.push('money key pagination did not expose a full first page');
   const second=await owner.get<{keys:unknown[]}>('/api/boards/'+owner.personalBoard+'/sources/'+source+'/keys?limit=50&after='+encodeURIComponent(first.next??''));
@@ -532,11 +547,11 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
     writeFileSync(path.join(demo.dir,'money-control.json'),JSON.stringify({at:heartbeatFrom,credits:90,usage:33.6}));
     await owner.post('/api/credentials/'+record.id,{secret:MONEY_KEY(1),allowNoExpiry:true});
     const deadline=Date.now()+SHOWN_WITHIN;
-    while(!heartbeatRequests.byPath['/api/history']){if(Date.now()>deadline)throw new Stop('unchanged money observation did not reach browser history');await sleep(20);}
+    while(!heartbeatRequests.historyRequests){if(Date.now()>deadline)throw new Stop('unchanged money observation did not reach browser history');await sleep(20);}
     await drain(heartbeatRequests);heartbeatRequests.counting=false;
     const current=(await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard)).sources.find(s=>s.id===source)!;
     const browserBalance=await cdp.evaluate<string|null>(`document.querySelector('[data-card="${source}"] [data-money]')?.getAttribute('data-money')??null`);
-    heartbeat={historyRequests:heartbeatRequests.byPath['/api/history']??0,historyBytes:heartbeatRequests.bytesByPath['/api/history']??0,coverageAdvanced:coverage()>beforeCoverage&&current.successAt!>previous.successAt!,ledgerRowsUnchanged:rows()===beforeRows,valuesUnchanged:current.meters?.find(m=>m.id==='balance')?.amount===previousBalance&&browserBalance===previousBalance};
+    heartbeat={historyRequests:heartbeatRequests.historyRequests,historyBytes:heartbeatRequests.historyBytes,coverageAdvanced:coverage()>beforeCoverage&&current.successAt!>previous.successAt!,ledgerRowsUnchanged:rows()===beforeRows,valuesUnchanged:current.meters?.find(m=>m.id==='balance')?.amount===previousBalance&&browserBalance===previousBalance};
     if(!heartbeat.coverageAdvanced||!heartbeat.ledgerRowsUnchanged||!heartbeat.valuesUnchanged)problems.push('unchanged money observation lost freshness or changed the ledger or balance');
     if(heartbeat.historyRequests>1||heartbeat.historyBytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push('unchanged money observation exceeds the existing history traffic budget');
     const heartbeatReading=await cdp.evaluate<Reading>('__quotumBench.read()');
@@ -584,7 +599,7 @@ async function currencyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cd
   await drain(requests);requests.counting=false;const reading=await cdp.evaluate<Reading>('__quotumBench.read()');
   const card=await cdp.evaluate<number|null>(`__quotumBench.cardChanged(${JSON.stringify(source)})`),to=Date.now();
   problems.push(...measuredProblems({card:source,latencies:[card===null?Infinity:card-from],renders:reading.renders,mutations:reading.mutations,from,to}),...chartProblems([chart===null?Infinity:chart-from]));
-  if((requests.byPath['/api/history']??0)>1||(requests.bytesByPath['/api/history']??0)>HISTORY_BYTES_PER_MEASUREMENT)problems.push('personal currency measurement exceeds the existing history traffic budget');
+  if(requests.historyRequests>1||requests.historyBytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push('personal currency measurement exceeds the existing history traffic budget');
   await command('/api/currencies/'+created.id+'/rates/'+quote.id+'/archive',{base:'USD'});
   writeFileSync(path.join(demo.dir,'money-control.json'),JSON.stringify({at:Date.now(),credits:90,usage:34}));
   await owner.post('/api/credentials/'+credential,{secret:MONEY_KEY(1),allowNoExpiry:true});await waitBalance(null);
@@ -594,7 +609,7 @@ async function currencyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cd
   writeFileSync(path.join(demo.dir,'money-control.json'),JSON.stringify({at:Date.now(),credits:90,usage:34}));
   await owner.post('/api/credentials/'+credential,{secret:MONEY_KEY(1),allowNoExpiry:true});await waitBalance('224000000');
   await owner.post('/api/currencies/display',{currency:'USD'});await waitBalance('56000000');
-  return {historyRequests:requests.byPath['/api/history']??0,historyBytes:requests.bytesByPath['/api/history']??0,cardMs:card===null?null:card-from,chartMs:chart===null?null:chart-from,problems};
+  return {historyRequests:requests.historyRequests,historyBytes:requests.historyBytes,cardMs:card===null?null:card-from,chartMs:chart===null?null:chart-from,problems};
 }
 
 async function drain(requests: Requests) {
@@ -619,8 +634,8 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
     const at = await demo.nextReport('laptop');
     await sleep(1000); await drain(requests); requests.counting = false;
     const reading = await cdp.evaluate<Reading>('__quotumBench.read()');
-    const reads = requests.byPath['/api/history'] ?? 0;
-    const bytes = requests.bytesByPath['/api/history'] ?? 0;
+    const reads = requests.historyRequests;
+    const bytes = requests.historyBytes;
     reports.push({at, reads, bytes});
     if (reads !== 1 || bytes > HISTORY_BYTES_PER_MEASUREMENT) problems.push(`work report read history ${reads} times, ${bytes} bytes`);
     problems.push(...renderProblems({card: source, renders: reading.renders, mutations: reading.mutations, from, to: Date.now()}));
@@ -638,7 +653,7 @@ async function workPrivate(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, 
     await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
     if(i===2)agent.trackClients([{...session,working:false}],[]);
     const at=await demo.nextReport('laptop');await sleep(1000);await drain(requests);requests.counting=false;
-    const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.byPath['/api/history']??0,bytes=requests.bytesByPath['/api/history']??0;
+    const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.historyRequests,bytes=requests.historyBytes;
     reports.push({at,reads,bytes});
     if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`private work read history ${reads} times, ${bytes} bytes`);
     problems.push(...privateWorkRenderProblems({renders:reading.renders,mutations:reading.mutations,from,to:Date.now(),cellMs:cellOf(86_400_000)}));

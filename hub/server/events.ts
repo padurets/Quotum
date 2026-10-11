@@ -128,7 +128,7 @@ export function clientScript(root = config.clientRoot): string | null {
 export class Events implements Touches {
   /** The history cache hears every touch, also when no board is watched. */
   onClientHistory: ((user: string, since: number) => void) | null = null;
-  onHistory: ((source: string, since: number, scopes?: readonly HistoryScope[]) => void) | null = null;
+  onHistory: ((source: string, since: number, scopes?: readonly HistoryScope[], work?:boolean) => void) | null = null;
   /** When this start of the hub began, base 36: a page tells a restart by it. */
   readonly epoch: string;
   readonly client: string | null;
@@ -283,9 +283,9 @@ export class Events implements Touches {
     this.schedule();
   }
 
-  history(source: string, since: number, scopes: readonly HistoryScope[] = HISTORY_SCOPES) {
+  history(source: string, since: number, scopes: readonly HistoryScope[] = HISTORY_SCOPES, work=false) {
     try {
-      this.onHistory?.(source, since, scopes);
+      this.onHistory?.(source, since, scopes, work);
     } catch (error) {
       trouble(error);
     }
@@ -295,7 +295,8 @@ export class Events implements Touches {
       if (!pending) this.histories.set(watched.id, (pending = new Map()));
       for(const scope of scopes) {
         const key=JSON.stringify([source,scope]);
-        pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??since,since)});
+        const workSince=Math.min(pending.get(key)?.workSince??Infinity,work?since:Infinity);
+        pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??since,since),...(Number.isFinite(workSince)?{workSince}:{})});
       }
     }
     this.schedule();
@@ -473,6 +474,7 @@ export class Events implements Touches {
           const value = ordinary ? JSON.parse(ordinary.data) as {sources: string[]; since: number; changes?: HistoryChange[]} : {sources: [], since: ownSince};
           historyFrames = [...historyFrames.filter(frame => frame.type !== 'history'), frame('history', {...value, since: Math.min(value.since, ownSince), ownSince})];
         }
+        historyFrames = historyFrames.map(item => item.type === 'history' ? frame('history', {...JSON.parse(item.data), workAuthority: watched.work}) : item);
         let frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...(clientFramesByKey.get(sub.user+'\n'+watched.id) ?? []), ...(deviceFramesByUser.get(sub.user) ?? []), ...historyFrames, ...news];
         if (sub.fresh) continue;
         if(!frames.length&&!sub.desktop)continue;
@@ -551,7 +553,7 @@ export class Events implements Touches {
       const work = projection.workKey(watched.id);
       if (watched.work !== null && watched.work !== work) {
         let pending=histories.get(watched.id);if(!pending)histories.set(watched.id,(pending=new Map()));
-        for(const source of ids)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0});
+        for(const source of ids)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0,workSince:0});
         const owner = this.parts.store.privateOwner(watched.id);
         if (owner) {ownHistories.set(owner, 0); this.onClientHistory?.(owner, 0);}
       }
@@ -782,6 +784,7 @@ export class Events implements Touches {
         this.unsubscribe(sub);
         return null;
       }
+      if(watched.work===null)throw new Error('the board work context was not computed');
       const value = (key: string) => watched.base.get(key)?.value;
       this.connections.set(reader.user, this.parts.directory.connectionsRevision(reader.user));
       snapshot = {
@@ -792,6 +795,7 @@ export class Events implements Touches {
         view: value('view'),
         viewRevision: value('viewRevision'),
         historyStart: this.parts.store.historyStart(now),
+        workAuthority: watched.work,
         sources: watched.lineup.map(id => value(`card:${id}`)),
         ...(this.parts.store.privateOwner(reader.board) === reader.user ? {ownSessions: this.projection.ownSessions(reader.user, reader.board, now)!.value} : {}),
         sessions: Object.fromEntries(watched.lineup.map(id => [id, value(`sessions:${id}`)])),
