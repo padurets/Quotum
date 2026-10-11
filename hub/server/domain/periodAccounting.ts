@@ -4,7 +4,7 @@ import {edge} from './quota.js';
 import type {History,HistorySeries} from './history.js';
 import {sampleAt,sampleCount,numberAt,numberBytes,numberColumn,lowerNumber,rateAt,rateObservations,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
 import type {MeterHistory} from './meterHistory.js';
-import {meterStep,plottedAmount,semanticsOf,type ExceptionalStep,type MeterSpan,type Reading,type MeterSemantics} from './meters.js';
+import {locatedIn,meterStep,plottedAmount,semanticsOf,type ExceptionalStep,type MeterSpan,type Reading,type MeterSemantics} from './meters.js';
 import {convertBy} from './currency.js';
 import type {PeriodRange} from './period.js';
 import type {WorkTrace} from './periodWork.js';
@@ -16,6 +16,19 @@ const lower=lowerNumber;
 // Conservative JS storage reserves; typed numeric buffers use their byteLength.
 const arrayBytes=(length:number)=>32+length*16;
 const bigintBytes=(value:bigint)=>32+Math.max(1,Math.ceil((value<0n?-value:value).toString(16).length/16))*8;
+/** Interior cells retain their own spending, but a crossing step belongs to the exact frame. */
+function moneyInterior(points:MeterHistory['points'],range:PeriodRange,cell:number,previous:PeriodRange) {
+  const leftEnd=(Math.floor(range.from/cell)+1)*cell,rightStart=Math.floor((range.to-1)/cell)*cell;
+  return points.filter(p=>p.at>=leftEnd&&p.at<rightStart).map(point=>{
+    if(point.spent===null||!point.steps.length)return point;
+    let spent=BigInt(point.spent);
+    for(const step of point.steps){
+      const before=locatedIn(step,previous.from,previous.to),after=step.to<range.to&&locatedIn(step,range.from,range.to);
+      if(before!==after)spent+=BigInt(step.amount)*(after?1n:-1n);
+    }
+    return {...point,spent:spent.toString()};
+  });
+}
 class Intervals {
   readonly from:Float64Array;
   readonly to:Float64Array;
@@ -137,6 +150,17 @@ class AmountIndex {
     for(let i=edge;i<hi;i++){const step=this.exceptional.get(i);if(this.starts[i]<range.from||step)unlocated.push(step??{from:this.starts[i],to:this.ends[i],amount:(this.sums[i+1]-this.sums[i]).toString(),evidence:'continuous'});}
     return {value:this.missing[hi]>this.missing[edge]?null:hi>lo?(this.sums[hi]-this.sums[lo]).toString():'0',unlocated};
   }
+  /** A boundary observation owns its original step, never a fraction of the interval. */
+  point(at:number,range:PeriodRange,cell:number):Pick<MeterHistory['points'][number],'spent'|'steps'> {
+    const lo=lower(this.ends,at),hi=lower(this.ends,at+1),from=Math.max(range.from,Math.floor(at/cell)*cell),to=Math.min(range.to,(Math.floor(at/cell)+1)*cell);
+    let spent=0n;const steps:ExceptionalStep[]=[];
+    for(let i=lo;i<hi;i++){
+      const step=this.exceptional.get(i)??{from:this.starts[i],to:this.ends[i],amount:(this.sums[i+1]-this.sums[i]).toString(),evidence:'continuous' as const};
+      if(locatedIn(step,range.from,range.to))spent+=BigInt(step.amount);
+      if(!locatedIn(step,from,to))steps.push(step);
+    }
+    return {spent:this.missing[hi]>this.missing[lo]?null:spent.toString(),steps};
+  }
 }
 
 class MoneyIndex {
@@ -231,9 +255,9 @@ class MoneyIndex {
   private value(observation:ReturnType<MoneyIndex['observation']>,at:number) {
     return observation&&at<observation.deadline?this.convert(observation.native,observation.reading,observation.observed):null;
   }
-  plot(range:PeriodRange,cell:number,previous:MeterHistory['points']):MeterHistory['points'] {
+  plot(range:PeriodRange,cell:number,previous:MeterHistory['points'],quantities=range):MeterHistory['points'] {
     const leftEnd=(Math.floor(range.from/cell)+1)*cell,rightStart=Math.floor((range.to-1)/cell)*cell;
-    const points=previous.filter(p=>p.at>=leftEnd&&p.at<rightStart).map(p=>({...p,validUntil:p.validUntil??(Math.floor(p.at/cell)+1)*cell}));
+    const points=moneyInterior(previous,range,cell,quantities).map(p=>({...p,validUntil:p.validUntil??(Math.floor(p.at/cell)+1)*cell}));
     for(const [from,to] of leftEnd>=rightStart?[[range.from,range.to]]:[[range.from,leftEnd],[rightStart,range.to]]) {
       const anchors=[...new Set([from,...this.anchors.slice(lower(this.anchors,from),lower(this.anchors,to))])];
       for(const at of anchors) {
@@ -241,7 +265,8 @@ class MoneyIndex {
         const {reading,span,observed,native,deadline}=observation;
         const until=Math.min(to,this.anchors[lower(this.anchors,at+1)]??Infinity,deadline);
         if(until<=at)continue;
-        points.push({at:reading.kind==='cap'?Math.floor(at/cell)*cell:at,value,knownFrom:at,knownUntil:until,validUntil:until,spent:null,segment:span.from,semantics:this.semantics(reading,observed,native),steps:[]});
+        const spending=reading.kind==='cap'||this.group.accounting?.spending==='unavailable'?{spent:null,steps:[]}:this.spent.point(at,range,cell);
+        points.push({at:reading.kind==='cap'?Math.floor(at/cell)*cell:at,value,knownFrom:at,knownUntil:until,validUntil:until,segment:span.from,semantics:this.semantics(reading,observed,native),...spending});
       }
     }
     return points.sort((a,b)=>a.at-b.at||(a.knownFrom??0)-(b.knownFrom??0));
@@ -329,7 +354,7 @@ export class PeriodAccounting {
       const interior=(at:number)=>at>=leftEnd&&at<rightStart;
       return {...history,exact:true,since:range.from,to:range.to,
         series:fixed.quota.map(row=>({...row,points:[...(history.series.find(s=>s.sourceId===row.sourceId&&s.windowId===row.windowId)?.points??[]).filter(([at])=>interior(at)),...row.points].sort((a,b)=>a[0]-b[0])})),
-        meterSeries:fixed.money.map(row=>({...row,points:[...(history.meterSeries?.find(s=>s.sourceId===row.sourceId&&s.meterId===row.meterId&&s.unit===row.unit)?.points??[]).filter(p=>interior(p.at)),...row.points].sort((a,b)=>a.at-b.at)}))};
+        meterSeries:fixed.money.map(row=>({...row,points:[...moneyInterior(history.meterSeries?.find(s=>s.sourceId===row.sourceId&&s.meterId===row.meterId&&s.unit===row.unit)?.points??[],range,fixed.cell,{from:history.since,to:history.to}),...row.points].sort((a,b)=>a.at-b.at)}))};
     }
     const previous=new Map(history.series.map(s=>[s.sourceId+'\n'+s.windowId,s]));
     const series:HistorySeries[]=[];
@@ -344,7 +369,7 @@ export class PeriodAccounting {
       const summary=index.at(range),points=!history.live?index.plot(range,history.cellMs,old?.points??[],boundaryOnly):old!.points;
       series.push({...old,sourceId:row.source,windowId:row.window,staleAfterMs:sampleAt(row.samples,sampleCount(row.samples)-1)?.staleAfterMs??0,...summary,points,...(!history.live?{pointMode:'observation' as const,windowValue:windowValue??row.windowValue}:{})});
     }
-    return {...history,exact:true,since:range.from,to:range.to,series,meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};
+    return {...history,exact:true,since:range.from,to:range.to,series,meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points,{from:history.since,to:history.to}),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};
   }
   changesAt(now:number,period:number,source?:string):number|null {
     if(this.tape.fixed)return null;
