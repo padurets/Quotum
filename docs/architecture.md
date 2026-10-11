@@ -1097,6 +1097,8 @@ and its limits.
   there (not logged in, too old…); the person names them there. The page has two open
   sections: devices with the one-time connection command, and device tokens with their
   creation and revocation actions. Provider accounts have their own *My connections* page.
+  *Settings → Clients and sources* manages temporal client/source links. Device and
+  source entry points open the same editor with context, without creating a link.
   *Agent activity → Settings → Manage projects* lists the projects their agents worked
   on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are

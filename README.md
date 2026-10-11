@@ -635,7 +635,7 @@ without a project. Generic Node/bun hosts are not detected. Version probes are b
 and never read credentials or make model requests. Working states estimate process CPU
 activity; they are not provider reports of model work.
 
-In **My connections → Client links**, assign a client to a held source on one device
+In **Settings → Clients and sources**, assign a client to a held source on one device
 or all your devices, with an explicit start and optional end date. Optional conditions
 match a reported subscription/API route and known provider. Device rules take priority;
 an unavailable winning source keeps the work unassigned. Correcting a rule changes how

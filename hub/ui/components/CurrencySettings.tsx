@@ -37,7 +37,7 @@ function DisplayCurrency({data,refresh,dirty}:{data:CurrencyManagement;refresh:R
       {save.conflict&&<p className="dialog-text">{t('currencies.current',{currency:currencyLabel(items.find(item=>item.id===data.selected)!,locale,items)})}</p>}
       <div className="currency-notice">{save.notice}</div>
     </form>
-    {!personal(choice)&&<details className="currency-disclosure" open={details} onToggle={event=>setDetails(event.currentTarget.open)}><summary>{t('currencies.referenceRates')}</summary>
+    {!personal(choice)&&<details className="disclosure" open={details} onToggle={event=>setDetails(event.currentTarget.open)}><summary>{t('currencies.referenceRates')}</summary>
       {!detail&&!error&&<p role="status">{t('currencies.loading')}</p>}
       {detail&&detail.definition.id===choice&&<div className="currency-reference"><p className="dialog-text">{t('currencies.precisionValue',{digits:detail.definition.fractionDigits})}</p>{detail.rates.length?<ul className="settings-list currency-list">{detail.rates.slice(0,3).map(quote=><li className="settings-list-row popover-row" key={quote.id}><div className="settings-item-main"><b className="currency-equation">1 {quote.base} = {rateText(quote.rates[detail.definition.id])} {detail.definition.id}</b><small>{quote.source.toUpperCase()}</small></div><span className="settings-item-detail">{stamp(quote.date)}</span></li>)}</ul>:<p className="dialog-text">{t('currencies.noPublicRate')}</p>}</div>}
       <ErrorLine error={error} />

@@ -4,7 +4,7 @@ import {ChevronDown} from 'lucide-react';
 import {t,useLocale} from '../i18n';
 import {ApiError,call} from '../lib/http';
 import {currencyRate,rateText} from '../lib/currencySettings';
-import {ErrorLine,Field} from './Kit';
+import {ErrorLine,Field,SelectField} from './Kit';
 import {Popover} from './Popover';
 
 export type Refresh=()=>Promise<CurrencyManagement>;
@@ -76,11 +76,11 @@ export function useSave(revision:string,changed:boolean,refresh:Refresh,dirty:Di
 
 /** Native choices inside dialogs never compete with their scroll area. */
 export function CurrencySelect({items,value,onChange,title,compact=false}:{items:CurrencyDefinition[];value:string;onChange:(id:string)=>void;title:string;compact?:boolean}) {
-  const id=useId(),locale=useLocale();
-  return <div className="field"><label className={compact?'sr-only':undefined} htmlFor={id}>{title}</label><select id={id} value={value} onChange={event=>onChange(event.target.value)}>
+  const locale=useLocale();
+  return <SelectField label={title} compact={compact} value={value} onChange={event=>onChange(event.target.value)}>
     {!value&&<option value="" disabled>{t('currencies.choose')}</option>}
     {items.map(item=><option key={item.id} value={item.id}>{compact?item.id:currencyLabel(item,locale,items)}</option>)}
-  </select></div>;
+  </SelectField>;
 }
 
 /** Personal currencies quote units per base; provider credits quote their unit price. */
@@ -113,7 +113,7 @@ export function DefinitionForm({data,item,refresh,dirty,onDone,onCancel}:{data:C
       <Field label={t('currencies.name')} value={name} maxLength={64} required onChange={event=>setName(event.target.value)} />
       <div className="currency-metadata-fields"><Field label={t('currencies.symbol')} value={symbol} maxLength={12} required onChange={event=>setSymbol(event.target.value)} />
       <Field label={t('currencies.precision')} type="number" min={0} max={6} step={1} required value={digits} onChange={event=>setDigits(event.target.value)} /></div>
-      {!original&&<><h3>{t('currencies.initialRate')}</h3><RateFields standards={data.standards} base={base} rate={rate} symbol={symbol} onBase={setBase} onRate={setRate} /><p className="dialog-text">{t('currencies.nominalBrief')}</p><details className="currency-disclosure"><summary>{t('currencies.details')}</summary><p className="dialog-text">{t('currencies.nominalHelp')}</p></details></>}
+      {!original&&<><h3>{t('currencies.initialRate')}</h3><RateFields standards={data.standards} base={base} rate={rate} symbol={symbol} onBase={setBase} onRate={setRate} /><p className="dialog-text">{t('currencies.nominalBrief')}</p><details className="disclosure"><summary>{t('currencies.details')}</summary><p className="dialog-text">{t('currencies.nominalHelp')}</p></details></>}
       <div className="button-row currency-actions"><button type="button" className="button" onClick={onCancel}>{t('common.cancel')}</button><button className="button primary" disabled={!edited}>{t(original?'account.save':'currencies.create')}</button></div>
     </fieldset>
     {save.conflict&&original&&<p className="dialog-text">{t('currencies.serverVersion',{name:original.name,symbol:original.symbol,digits:original.fractionDigits})}</p>}
@@ -137,7 +137,7 @@ export function RateForm({data,item,refresh,dirty,seed,onDone,onCancel}:{data:Cu
       <div className="field"><label htmlFor={when}>{t('currencies.effective')}</label><select id={when} value={past?'past':'now'} onChange={event=>setPast(event.target.value==='past')}><option value="now">{t('currencies.fromNow')}</option><option value="past">{t('currencies.fromPast')}</option></select></div>
       {past&&<Field label={t('currencies.localDate')} type="datetime-local" required value={date} onChange={event=>setDate(event.target.value)} />}
       {builtin&&<p className="dialog-text">{t('currencies.creditHelp')}</p>}
-      <p className="dialog-text">{t('currencies.rateBrief')}</p><details className="currency-disclosure"><summary>{t('currencies.details')}</summary><p className="dialog-text">{t('currencies.rateHelp')}</p></details>
+      <p className="dialog-text">{t('currencies.rateBrief')}</p><details className="disclosure"><summary>{t('currencies.details')}</summary><p className="dialog-text">{t('currencies.rateHelp')}</p></details>
       <div className="button-row currency-actions"><button type="button" className="button" onClick={onCancel}>{t('common.cancel')}</button><button className="button primary" disabled={!rate}>{t('account.save')}</button></div>
     </fieldset>
     {save.conflict&&<p className="dialog-text">{t('currencies.current',{currency:current?.rate?builtin?`1 ${t('money.codexCredit')} = ${rateText(current.rate)} ${base}`:`1 ${base} = ${rateText(current.rate)} ${item.definition.symbol}`:`${base} — ${t(current?'currencies.stopped':'currencies.noPair')}`})}</p>}
