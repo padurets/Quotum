@@ -13,7 +13,7 @@ import type {Meter} from '../../server/domain/meters';
 
 test('a superseded money span tail is retired while complete rate transitions remain observable',()=>{
   const path=[{id:'first-proof',source:'manual',base:'USD',date:0,fetchedAt:0,from:'1000000',to:'2000000'}];
-  const group=(to:number):MoneyTape=>({source:'wallet',meter:'balance',displayUnit:'EUR',readings:[{id:'balance',at:0,kind:'balance',unit:'USD',amount:'9007199254741000',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:1000}],spans:[{from:0,to,observedFrom:0,staleAfterMs:1000}]});
+  const group=(to:number):MoneyTape=>({source:'wallet',meter:'balance',displayUnit:'EUR',readings:[{id:'balance',at:0,previousAt:null,kind:'balance',unit:'USD',amount:'9007199254741000',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:1000}],spans:[{from:0,to,observedFrom:0,staleAfterMs:1000}]});
   const tape=(money:MoneyTape,cut:number,replaceFrom=0):PeriodTape=>({from:0,cut,replaceFrom,cursor:'cursor',quota:[],money:[money]});
   const first=group(100);for(const at of [0,100])bindRate(first,'USD\n'+at,path);
   const latest=group(200);for(const at of [0,200])bindRate(latest,'USD\n'+at,path);
