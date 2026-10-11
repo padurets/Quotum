@@ -70,21 +70,37 @@ for(const failure of [false,true])test(`an older ${failure?'failed':'completed'}
   } finally {await h.close();}
 });
 
-test('idle deadline renewal and working deadlines use the latest stream without another read',async t=>{
-  t.mock.method(Date,'now',()=>NOW);const h=await fixture({current:true});
+for(const options of [{},{personal:true},{personal:true,privateWork:true},{personal:true,privateWork:true,unknown:true}])test(`idle renewals stay quiet and real lease transitions reach consumers ${JSON.stringify(options)}`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({...options,current:true});
   try {
-    const before=h.period.get().rows[0],revision=h.period.get().presenceRevision;
-    h.report(false,NOW+1000);await flush();
-    assert.equal(h.frames.filter(f=>f.type==='devices').length,0,'deadline renewal does not invalidate owner-device HTTP disclosures');
-    let row=h.period.get().rows[0];assert.equal(row.currentPresence.through,NOW+1000+KEEP_MS+1);assert.equal(row.workedMs,before.workedMs);
-    assert.ok(h.period.get().presenceRevision>revision,'stream renewal refreshes saved panel and open-dialog props');
-    h.report(true,NOW+2000);await flush();assert.equal(h.period.get().rows[0].working,true);
-    h.advance(NOW+2000+CREDIT_MS);row=h.period.get().rows[0];assert.equal(row.working,false);assert.ok(row.currentPresence);
-    const renewed=h.period.get().presenceRevision;
-    h.advance(NOW+2000+KEEP_MS+1);assert.equal(h.period.get().rows[0].currentPresence,undefined);
-    assert.equal(h.period.get().presenceRevision,renewed,'clock expiry belongs to its labels, not a new stream render');
-    assert.equal(h.requests.length,0);
+    const readDialog=dialog(h),before=h.period.get(),source=h.period.getSource(h.source);assert.ok(readDialog().currentPresence);
+    let panel=0,tray=0;const stop=h.period.subscribe(()=>panel++),stopSource=h.period.subscribeSource(h.source,()=>tray++);
+    for(let i=1;i<=8;i++){h.report(false,NOW+i*1000);await flush();}
+    assert.equal(h.frames.filter(f=>['sessions','ownSessions','devices'].includes(f.type)).length,0);
+    assert.equal(panel,0);assert.equal(tray,0);assert.equal(h.period.get(),before);assert.equal(h.period.getSource(h.source),source);
+    assert.equal(readDialog().currentPresence,before.rows[0].currentPresence);
+    assert.equal('through' in before.rows[0].currentPresence,false,'renewable leases never enter retained UI props');
+    stop();stopSource();
+    h.report(true,NOW+9000);await flush();assert.equal(h.period.get().rows[0].working,true);
+    h.advance(NOW+9000+CREDIT_MS);let row=h.period.get().rows[0];assert.equal(row.working,false);assert.ok(row.currentPresence);
+    assert.equal(readDialog().working,false,'an already open dialog receives actual CREDIT expiry');
+    h.advance(NOW+9000+KEEP_MS+1);row=h.period.get().rows[0];assert.equal(row.currentPresence,undefined);
+    assert.equal(readDialog().currentPresence,undefined,'the hub emits actual KEEP expiry');
+    assert.equal(row.workedMs,before.rows[0].workedMs);assert.equal(h.requests.length,0);
   } finally {await h.close();}
+});
+
+for(const status of ['connecting','retrying','paused'] as const)test(`lost ${status} continuity clears only current presence until an actual snapshot`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({current:true});try{
+    const before=h.period.get().rows[0],readDialog=dialog(h);
+    h.page.dispatch({type:'connection',status,lostAt:NOW});
+    assert.equal(readDialog().currentPresence,undefined);assert.equal(h.period.get().rows[0].workedMs,before.workedMs);
+    for(const healthy of ['live','polling'] as const){h.page.dispatch({type:'connection',status:healthy,lostAt:null});assert.equal(readDialog().currentPresence,undefined,'status before snapshot cannot confirm an old list');}
+    assert.equal(h.requests.length,0);
+    h.disconnect();const gate=h.hold();h.reconnect();await flush();
+    assert.ok(readDialog().currentPresence,'snapshot restores current presence before the analytical baseline');
+    gate.release();await flush();assert.ok(readDialog().currentPresence);
+  }finally{await h.close();}
 });
 
 test('stable binding distinguishes raw contexts and hub lifetimes while legacy identity stays unknown',async t=>{

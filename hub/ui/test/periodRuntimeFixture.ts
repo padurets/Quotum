@@ -32,6 +32,7 @@ import {HistoryTiles} from '../../server/history';
 import {PeriodReader} from '../../server/periodRead';
 import {expandPeriod} from '../../server/domain/periodWire';
 import {createStore} from '../lib/store';
+import {periodTextChangesAt} from '../lib/periodClock';
 import {reduce,INITIAL,type HubEvent} from '../lib/board';
 
 import {Pairing} from '../../server/pairing';
@@ -41,48 +42,51 @@ export const NOW=1_800_000_000_000,H=3_600_000,M=60_000;
 export const flush=async()=>{for(let i=0;i<300;i++)await Promise.resolve();};
 
 /** Actual producer, wire JSON boundary, page reducer, transport and bounded server reader. */
-export async function fixture({personal=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false}={}) {
-  const store=new Store(':memory:',NOW-3*H),directory=new Directory(store.db);
-  const alice=directory.createUser('a@example.com','Alice','unused',NOW-3*H),bob=directory.createUser('b@example.com','Bob','unused',NOW-3*H);
-  const board=personal?directory.boards(alice.id)[0].id:directory.createBoard('Shared',alice.id,NOW-3*H).id;
-  if(!personal)directory.addMember(board,bob.id,NOW-3*H);
-  directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS,'quota-history'],hidden:[ACTIVITY]},alice.id,NOW-3*H);
-  const source=store.source('codex','a'.repeat(24),NOW-3*H);store.hold(source,alice.id,NOW-3*H);store.hold(source,bob.id,NOW-3*H);
-  if(!personal)store.share(board,source,alice.id,NOW-3*H);
+export async function fixture({personal=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M}={}) {
+  const start=NOW-Math.max(3*H,periodOf(periodName).ms+H);
+  const store=new Store(':memory:',start),directory=new Directory(store.db);
+  const alice=directory.createUser('a@example.com','Alice','unused',start),bob=directory.createUser('b@example.com','Bob','unused',start);
+  const board=personal?directory.boards(alice.id)[0].id:directory.createBoard('Shared',alice.id,start).id;
+  if(!personal)directory.addMember(board,bob.id,start);
+  directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS,'quota-history'],hidden:[ACTIVITY]},alice.id,start);
+  const source=store.source('codex','a'.repeat(24),start);store.hold(source,alice.id,start);store.hold(source,bob.id,start);
+  if(!personal)store.share(board,source,alice.id,start);
   store.record(source,{observedAt:NOW-2*M,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:NOW+H}]});
-  const device=directory.saveDevice({userId:personal?alice.id:bob.id,machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},NOW-3*H).id;
-  const funding=privateWork?(unknown?null:store.source('codex','b'.repeat(24),NOW-3*H)):source;
-  const credit=(from=NOW-3*M,to=NOW-2*M)=>store.creditWork(device,from,to,[{source:funding,origin:'terminal',startedAt:NOW-3*H,project:'Work project',folder:'Private folder',client:'codex',identity:stable?{kind:'stable',sessionId:'c'.repeat(32)}:{kind:'legacy',ordinal:0}}]);credit();
+  const device=directory.saveDevice({userId:personal?alice.id:bob.id,machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},start).id;
+  const funding=privateWork?(unknown?null:store.source('codex','b'.repeat(24),start)):source;
+  const credit=(from=creditFrom,to=creditTo)=>store.creditWork(device,from,to,[{source:funding,origin:'terminal',startedAt:start,project:'Work project',folder:'Private folder',client:'codex',identity:stable?{kind:'stable',sessionId:'c'.repeat(32)}:{kind:'legacy',ordinal:0}}]);credit();
   const hub:Hub={store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{}),pairing:new Pairing(directory),setup:new Setup(false,null),local:null};
   let now=NOW;
   const owner=personal?alice.id:bob.id;
-  const live=(working=false)=>({source:funding,clientId:'codex',sessionId:stable?'c'.repeat(32):null,device:{id:device,name:'Work laptop'},origin:'terminal' as const,project:'Work project',folder:'Private folder',startedAt:NOW-3*H,sentStartedAt:NOW-3*H,lastWorkedAt:NOW-2*M,working});
+  const live=(working=false)=>({source:funding,clientId:'codex',sessionId:stable?'c'.repeat(32):null,device:{id:device,name:'Work laptop'},origin:'terminal' as const,project:'Work project',folder:'Private folder',startedAt:start,sentStartedAt:start,lastWorkedAt:NOW-2*M,working});
   if(current)hub.ingest.live.report(device,owner,[live()],NOW);
-  const events=new Events(hub,undefined,{now:()=>now,after:()=>()=>{}},null),tiles=new HistoryTiles(store),reader=new PeriodReader(hub,tiles,events);
+  const timers=new Map<object,{at:number;run:()=>void}>();
+  const events=new Events(hub,undefined,{now:()=>now,after:(ms,run)=>{const token={};timers.set(token,{at:now+ms,run});return ()=>{timers.delete(token);};}},null),tiles=new HistoryTiles(store),reader=new PeriodReader(hub,tiles,events);
   events.onHistory=(source,since,scopes,work)=>{tiles.touch(source,since,scopes);reader.touch(source,since,scopes,work);};
   events.onClientHistory=(user,since)=>{tiles.touchClient(user,since);reader.touchClient(user,since);};events.attach();
   const page=createStore(reduce,INITIAL),frames:Frame[]=[],requests:PeriodRequest[]=[],pool=new HistoryPool();
-  const feed=(batch:Frame[])=>{for(const frame of batch){frames.push(frame);page.dispatch({type:'hub',event:{type:frame.type,data:JSON.parse(frame.data)} as HubEvent});}};
+  const feed=(batch:Frame[])=>{for(const frame of batch){frames.push(frame);if(frame.type==='ping'||frame.type==='bye')continue;if(frame.type==='snapshot')page.dispatch({type:'connection',status:'live',lostAt:null});page.dispatch({type:'hub',event:{type:frame.type,data:JSON.parse(frame.data)} as HubEvent});}};
   const secret='fixture-session';directory.createSession(secret,alice.id,NOW-3*H,24*H);
   const initial=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}});
   if(!initial||initial==='limit')throw new Error('stream did not open');let opened=initial;feed(opened.frames);
-  const settings={range:'1h',kind:'session',money:DEFAULT_MONEY,funds:DEFAULT_MONEY};
+  const settings={range:periodName,kind:'session',money:DEFAULT_MONEY,funds:DEFAULT_MONEY};
   const code=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   let wait:Promise<void>|null=null;
   const context={exports:{} as any,hubNow:()=>now,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body)))));const pending=wait;wait=null;await pending;return reply;},
-    page,pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
+    periodTextChangesAt,page,pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
     packWorkPrepared,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
     timeRange:()=>fixed?{from:NOW-H,to:NOW}:null,prefs:()=>settings,periodOf,cellOf,moneySelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const period=new context.exports.BoardPeriod();page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
   assert.equal(period.get().error,null);assert.equal(period.get().rows.length,1);requests.length=0;frames.length=0;
-  return {hub,device,owner,advance:(at:number)=>{now=at;period.tick();},pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
-    report:(working=false,at=NOW)=>{now=at;hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(at).toISOString(),sessions:[{provider:'codex',...(funding?{account:(privateWork?'b':'a').repeat(24)}:{}),sessionId:stable?'c'.repeat(32):null,origin:'terminal',project:'Work project',folder:'Private folder',startedAt:new Date(NOW-3*H).toISOString(),lastWorkedAt:new Date(NOW-2*M).toISOString(),working}]},at);events.flush();},
+  const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;timers.delete(next[0]);next[1].run();events.flush();}now=at;period.tick();};
+  return {hub,device,owner,advance,settings,pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
+    report:(working=false,at=NOW)=>{now=at;hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(at).toISOString(),sessions:[{provider:'codex',...(funding?{account:(privateWork?'b':'a').repeat(24)}:{}),sessionId:stable?'c'.repeat(32):null,origin:'terminal',project:'Work project',folder:'Private folder',startedAt:new Date(start).toISOString(),lastWorkedAt:new Date(NOW-2*M).toISOString(),working}]},at);events.flush();},
     endIdle:()=>{hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(NOW).toISOString(),sessions:[]},NOW);events.flush();},
     event:(event:HubEvent)=>page.dispatch({type:'hub',event}),
     hold:()=>{let release!:()=>void,reject!:(error:Error)=>void;wait=new Promise<void>((yes,no)=>{release=yes;reject=no;});return {release,reject};},
-    disconnect:()=>opened.close(), reconnect:()=>{opened=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}}) as any;feed(opened.frames);}, remove:()=>{directory.removeMember(board,bob.id);store.unshareOrphans(board);events.flush();},
+    disconnect:()=>{opened.close();page.dispatch({type:'connection',status:'retrying',lostAt:now});}, reconnect:()=>{page.dispatch({type:'connection',status:'connecting',lostAt:now});opened=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}}) as any;feed(opened.frames);}, remove:()=>{directory.removeMember(board,bob.id);store.unshareOrphans(board);events.flush();},
     fresh:()=>expandPeriod(JSON.parse(reader.read(board,alice.id,{version:1,selection:{mode:'live',periodMs:H},evaluatedAt:NOW,sessions:{}}))) as PeriodReply,
     close:async()=>{period.activate(false);opened.close();events.close();await new Promise(resolve=>setImmediate(resolve));store.close();assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);}};
 }
@@ -139,12 +143,12 @@ import {expandHistory} from '../../server/domain/history';
 
 export async function drawings(h:any){
  const loader=new HistoryStore({now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,meta)=>h.period.transport.read('quota',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??''},signal).then((reply:import('../../server/domain/history').HistoryReply)=>expandHistory(reply,meta)),setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,'quota',h.pool);
- const stop=follow(loader,h.page);loader.choose('1h',null);loader.open(h.board);loader.hello(h.events.epoch);
+ const stop=follow(loader,h.page);loader.choose(h.settings.range,null);loader.open(h.board);loader.hello(h.events.epoch);
  const board=h.page.get().board;loader.snapshot(board.lineup,Object.values(board.cards).flatMap((c:any)=>c.windows.map((w:any)=>`${c.id} ${w.id}`)),board.historyStart,board.workAuthority);await flush();
  const slots:any[]=[];let cursor=0;
  const useRef=(current:any)=>slots[cursor++]??(slots[cursor-1]={current});
  const useMemo=(read:any,deps:any[])=>{const box=useRef(null);if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;};
- const context={useRef,useMemo,useSyncExternalStore:(_s:any,read:any)=>read(),usePanning:()=>null,useClock:()=>NOW,fundsHistory:{},page:h.page,timeRange:()=>null,prefs:()=>({range:'1h'}),boardPeriod:h.period,read:null as any};
+ const context={useRef,useMemo,useSyncExternalStore:(_s:any,read:any)=>read(),usePanning:()=>null,useClock:()=>NOW,fundsHistory:{},page:h.page,timeRange:()=>null,prefs:()=>h.settings,boardPeriod:h.period,read:null as any};
  const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
  runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
  const render=()=>{cursor=0;return context.read(loader,true);};

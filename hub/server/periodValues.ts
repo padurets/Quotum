@@ -5,7 +5,9 @@ import type {Meter, KeyPart} from './domain/meters.js';
 import type {MeterContextValue} from './store/meterContexts.js';
 import {convertBy, conversionId, isConvertible} from './domain/currency.js';
 import {HistoryLimit} from './history.js';
-import {spanBefore,spanObservedAt,valuationAt} from './domain/periodMoney.js';
+import {spanBefore,spanDeadline,spanObservedAt,valuationAt} from './domain/periodMoney.js';
+import {admitAvailability} from './domain/periodAdmission.js';
+import {periodAdmission} from './periodAdmission.js';
 
 type WindowRow = {window_id:string;at:number;kind:WindowValue['kind'];label:string|null;used:number;reset_at:number|null;minutes:number|null;stale_after_ms:number};
 type ContextRow = {observed_from:number|null;from_at:number;to_at:number;stale_after_ms:number;payload:string};
@@ -34,7 +36,8 @@ const valueChanges=`WITH changes(at) AS (
 
 /** Neighboring right-edge cells keep their actual observations and availability states. */
 export function nearbyPeriodValues(store:Store,sources:readonly {id:string;provider:string;budget?:BudgetAccess}[],user:string,to:number,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void,evidenceCut=Date.now()):PeriodValues[] {
-  const values=readValues(store,sources,user,to,reserve,undefined,evidenceCut),from=Math.max(0,to-cell),until=to+cell+1;
+  const admit=periodAdmission(store,user,store.currencies.preference(user).id,evidenceCut,reserve);
+  const values=readValues(store,sources,user,to,reserve,undefined,evidenceCut,admit),from=Math.max(0,to-cell),until=to+cell+1;
   // Read each source's boundaries once. Replaying every neighboring state must not
   // rescan its entire retained history for each observation or deadline.
   const edges=store.db.prepare(`${valueChanges} SELECT CASE WHEN at<=:from THEN max(at) ELSE min(at) END AS at
@@ -52,7 +55,7 @@ export function nearbyPeriodValues(store:Store,sources:readonly {id:string;provi
         if(boundaries.at(-1)!<until)add(Number.MAX_SAFE_INTEGER);
         for(let n=0;n+1<boundaries.length;n++){
           const interval={from:boundaries[n],to:boundaries[n+1]};
-          const value=readValues(store,[sources[i]],user,Math.max(from,interval.from),bytes=>{reserve(bytes);scratch+=bytes;},interval,evidenceCut)[0];
+          const value=readValues(store,[sources[i]],user,Math.max(from,interval.from),bytes=>{reserve(bytes);scratch+=bytes;},interval,evidenceCut,admit)[0];
           yield value;
           release(previous);previous=scratch;scratch=0;
         }
@@ -68,7 +71,7 @@ export function nearbyPeriodValues(store:Store,sources:readonly {id:string;provi
 export function periodValues(store:Store, sources:readonly {id:string;provider:string;budget?:BudgetAccess}[], user:string, to:number, reserve:(bytes:number)=>void,evidenceCut=Infinity):PeriodValues[] {
   return readValues(store,sources,user,to,reserve,undefined,evidenceCut);
 }
-function readValues(store:Store,sources:readonly {id:string;provider:string;budget?:BudgetAccess}[],user:string,to:number,reserve:(bytes:number)=>void,interval?:{from:number;to:number},evidenceCut=Infinity):PeriodValues[] {
+function readValues(store:Store,sources:readonly {id:string;provider:string;budget?:BudgetAccess}[],user:string,to:number,reserve:(bytes:number)=>void,interval?:{from:number;to:number},evidenceCut=Infinity,admit=periodAdmission(store,user,store.currencies.preference(user).id,evidenceCut,reserve)):PeriodValues[] {
   // Suitability follows the requested edge; observation admission stops at the evidence cut.
   const admitted=Math.min(to,evidenceCut);
   const target=store.currencies.preference(user).id;
@@ -83,8 +86,8 @@ function readValues(store:Store,sources:readonly {id:string;provider:string;budg
     const owned=!!store.db.prepare('SELECT 1 FROM holders WHERE source_id=? AND user_id=?').get(id,user);
     const windows:WindowValue[]=[];
     for(const raw of batch.iterate(id,id,admitted)) {
-      const r=raw as WindowRow,interrupted=store.quotaAvailability(id,[{at:r.at}],true,reserve)[0].validUntil??Infinity;
-      const validUntil=Math.min(r.at+r.stale_after_ms+1,r.reset_at??Infinity,interrupted<evidenceCut?interrupted:Infinity);
+      const r=raw as WindowRow,interrupted=admitAvailability(store.quotaAvailability(id,[{at:r.at}],true,reserve)[0],evidenceCut).validUntil??Infinity;
+      const validUntil=Math.min(r.at+r.stale_after_ms+1,r.reset_at??Infinity,interrupted);
       reserve(256+(r.label?.length??0)*2);
       windows.push({id:r.window_id,kind:r.kind,label:r.label,used:r.used,remaining:100-r.used,resetAt:r.reset_at,minutes:r.minutes,observedAt:r.at,validUntil,stale:to>=validUntil});
     }
@@ -97,10 +100,8 @@ function readValues(store:Store,sources:readonly {id:string;provider:string;budg
         const row=context.get(id,'key-cap:'+key,admitted) as ContextRow|undefined;
         if(row){reserve(128+row.payload.length*2);const membership=JSON.parse(row.payload) as MeterContextValue;if(membership.type==='key-cap'&&!membership.present)continue;}
       }
-      const spans=store.meters.spans(id,meter,reading.at,admitted,reserve),span=spanBefore(spans,admitted);
-      // A future heartbeat cannot extend availability. Keep the admitted sample's TTL.
-      const deadline=Math.min(span&&span.to<evidenceCut?span.to+span.staleAfterMs+1:reading.at+reading.staleAfterMs+1,reading.resetAt??Infinity,
-        span?.interruptedAt!==undefined&&span.interruptedAt<evidenceCut?span.interruptedAt:Infinity,span?.holdUntil!=null&&span.holdUntil<evidenceCut?span.holdUntil:Infinity);
+      const spans=store.meters.spans(id,meter,reading.at,admitted,reserve),rawSpan=spanBefore(spans,admitted),span=rawSpan?admit(id,meter,rawSpan):undefined;
+      const deadline=Math.min(span?spanDeadline(span):reading.at+reading.staleAfterMs+1,reading.resetAt??Infinity);
       // A compressed span has two known anchors; an interior heartbeat time is not recoverable.
       const at=valuationAt(reading,span,admitted,false,isConvertible(reading.unit)?bindings.observationAt(id,reading.unit,Math.min(admitted-1,span?.to??reading.at)):null);
       reserve(512);
@@ -119,7 +120,7 @@ function readValues(store:Store,sources:readonly {id:string;provider:string;budg
       if(v.type!=='key')continue;
       const at=spanObservedAt({to:row.to_at,observedFrom:row.observed_from??undefined},admitted);if(at===null)continue;
       // A compressed context with a future endpoint cannot prove its former TTL.
-      keys.push({id:v.id,name:owned?v.name:null,disabled:v.disabled,expiresAt:v.expiresAt,includeByok:v.includeByok,at,staleAfterMs:row.stale_after_ms,presence:to>=(row.to_at>=evidenceCut?evidenceCut:row.to_at+row.stale_after_ms+1)?'missing':'observed',missCount:0,periods:v.periods,byokUsage:v.byokUsage,createdAt:v.createdAt,updatedAt:v.updatedAt});
+      keys.push({id:v.id,name:owned?v.name:null,disabled:v.disabled,expiresAt:v.expiresAt,includeByok:v.includeByok,at,staleAfterMs:row.to_at<evidenceCut?row.stale_after_ms:0,presence:to>=(row.to_at<evidenceCut?row.to_at+row.stale_after_ms+1:at+1)?'missing':'observed',missCount:0,periods:v.periods,byokUsage:v.byokUsage,createdAt:v.createdAt,updatedAt:v.updatedAt});
     }
     let creditBalance:CreditBalanceState|undefined;
     const credit=context.get(id,'credit-balance',admitted) as ContextRow|undefined;
@@ -131,7 +132,7 @@ function readValues(store:Store,sources:readonly {id:string;provider:string;budg
         const sample=meters.find(m=>m.id==='balance:credits')?.at;
         if(sample!==undefined&&sample>=anchor&&sample>=(credit.observed_from??credit.from_at)&&sample<=credit.to_at)at=sample;
       }
-      if(saved.type==='credit-balance'&&at!==null&&at>=anchor){const {type:_type,...value}=saved;creditBalance={...value,at,staleAfterMs:credit.stale_after_ms,validUntil:credit.to_at<evidenceCut?credit.to_at+credit.stale_after_ms+1:meters.find(m=>m.id==='balance:credits')?.validUntil??evidenceCut};}
+      if(saved.type==='credit-balance'&&at!==null&&at>=anchor){const {type:_type,...value}=saved;creditBalance={...value,at,staleAfterMs:credit.to_at<evidenceCut?credit.stale_after_ms:0,validUntil:credit.to_at<evidenceCut?credit.to_at+credit.stale_after_ms+1:meters.find(m=>m.id==='balance:credits')?.validUntil??at+1};}
     }
     let currencyUnavailable=false;
     // Keep native cap denominators and provenance; the common money renderer selects the valuation.

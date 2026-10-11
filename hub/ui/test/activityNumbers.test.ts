@@ -1,0 +1,104 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import {createRequire} from 'node:module';
+import ts from 'typescript';
+import {PageClock} from '../lib/clock';
+import {num,workHours,stamp} from '../lib/format';
+import {atOnce,mutedKey} from '../lib/activity';
+import {t,setLocale} from '../i18n';
+import {cellLabel} from '../lib/periods';
+import {PeriodActivity} from '../lib/periodActivity';
+import {PeriodCurves,WorkTimeline} from '../../server/domain/periodCurves';
+import type {History} from '../../server/domain/history';
+import type {WorkTrace} from '../../server/domain/periodWork';
+import {fixture,drawings,NOW,H,M} from './periodRuntimeFixture';
+
+const require=createRequire(import.meta.url),React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
+const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
+const clockSource=readFileSync(new URL('../lib/clock.ts',import.meta.url),'utf8');
+const compile=(code:string)=>ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+
+/** Persistent hook slots, real PageClock subscriptions and the production numerical renderer. */
+function consumer(name:string,clock:PageClock,period:any,initial:any,panning:()=>number|null=()=>null) {
+  let cursor=0,dirty=true,renders=0,props=initial,output='';
+  const slots:any[]=[],effects:(()=>void)[]=[],stops:(()=>void)[]=[];
+  const slot=(create:()=>any)=>{const at=cursor++;return slots[at]??(slots[at]=create());};
+  const useRef=(current:any)=>slot(()=>({current}));
+  const context:any={exports:{},require,memo:(value:any)=>value,useLocale:()=>{},usePanning:panning,boardPeriod:period,
+    useRef,useState:(initial:any)=>{const box=slot(()=>({value:typeof initial==='function'?initial():initial}));return [box.value,(value:any)=>{box.value=value;dirty=true;}];},
+    useSyncExternalStore:(subscribe:any,read:any)=>{const box=slot(()=>{const value={current:read()};stops.push(subscribe(()=>{const next=read();if(!Object.is(next,value.current)){value.current=next;dirty=true;}}));return value;});return box.current=read();},
+    useLayoutEffect:(effect:any)=>effects.push(effect),clock,hubNow:clock.hubNow,num,workHours,stamp,atOnce,mutedKey,t,cellLabel,
+    Tooltip:({children}:any)=>React.createElement('div',{className:'tooltip'},children),
+  };
+  runInNewContext(compile(clockSource.slice(clockSource.indexOf('export function useClock'))),context);context.useClock=context.exports.useClock;
+  const numbers=source.slice(source.indexOf('function Metrics('),source.indexOf('/** Hover and touch'));
+  const totals=source.slice(source.indexOf('const Totals ='),source.indexOf('/**\n * Agent-hours'));
+  const readout=source.slice(source.indexOf('function ActivityReadout('),source.indexOf('const Stacks ='));
+  runInNewContext(compile(numbers+totals+readout+`\nexports.component=${name};`),context);
+  const render=()=>{if(dirty){dirty=false;cursor=0;output=renderToStaticMarkup(context.exports.component(props));renders++;while(effects.length)effects.shift()!();}return output;};
+  return {render,update:(next:any)=>{props=next;dirty=true;return render();},get renders(){return renders;},close:()=>stops.forEach(stop=>stop())};
+}
+
+for(const periodName of ['1h','30d'])test(`${periodName}: PageClock updates final Activity numbers while drawing inputs stay unchanged`,async test=>{
+  test.mock.method(Date,'now',()=>NOW);setLocale('en');
+  const periodMs=periodName==='1h'?H:30*24*H;
+  const from=periodName==='1h'?NOW-3*M:NOW-periodMs+M,to=from+90_000;
+  const h=await fixture({periodName,creditFrom:from,creditTo:to}),d=await drawings(h);
+  let now=NOW;const timers=new Map<object,{at:number;run:()=>void}>();
+  const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);}});
+  const drawn=d.render(),history=drawn.history!;assert.equal(history.activity.agents,1);
+  const group=history.activity.by.project[0],base={history,by:'project',groupKey:group.key,group,muted:{},since:null};
+  const totals=consumer('Totals',clock,h.period,base),amount=consumer('LegendAmount',clock,h.period,base),metrics=consumer('LegendMetrics',clock,h.period,{...base,active:true});
+  const hover=Math.floor(to/history.activity.barMs)*history.activity.barMs;
+  const readout=consumer('ActivityReadout',clock,h.period,{...base,hover,barMs:history.activity.barMs,bar:[hover,90_000,90_000,1],parts:[{key:group.key,name:'Work project',color:'red',ms:90_000}],tipProps:{}});
+  const readers=[totals,amount,metrics,readout];
+  const render=()=>readers.map(reader=>reader.render());
+  const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;h.advance(now);timers.delete(next[0]);next[1].run();render();}now=at;h.advance(now);render();};
+  try {
+    const before=render();assert.match(before[0],/Agents <b>1/);assert.match(before[2],/>1<\/strong>/);assert.ok(before[3]);
+    h.requests.length=0;
+    advance(to+periodMs+250);
+    assert.equal(h.period.get().rows.length,0);
+    assert.equal(totals.render(),'','expired work no longer appears in the final totals');
+    assert.match(amount.render(),new RegExp('>'+workHours(0)+'</b>'));
+    assert.ok(!metrics.render().includes('>1</strong>'),'the already open legend metrics retire membership');
+    assert.equal(readout.render(),'','a stationary readout retires its clipped work');
+    assert.equal(d.render().drawing,drawn.drawing,'numerical wakes retain the prepared drawing input');
+    assert.equal(h.requests.length,0);
+    const counts=readers.map(reader=>reader.renders);advance(now+H);assert.deepEqual(readers.map(reader=>reader.renders),counts,'empty numerical consumers have no polling wake');
+  } finally {readers.forEach(reader=>reader.close());d.close();await h.close();}
+});
+
+test('numerical labels freeze during a gesture and retire on an authority replacement',async test=>{
+  test.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h);let now=NOW,panning:number|null=1;
+  const timers=new Set<object>();const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:()=>{const token={};timers.add(token);return token;},clearTimeout:token=>{timers.delete(token as object);}});
+  const history=d.render().history,props={history,by:'project',muted:{},since:null},totals=consumer('Totals',clock,h.period,props,()=>panning);
+  try {
+    const before=totals.render();assert.ok(before);assert.equal(timers.size,0);
+    now=NOW+H;h.advance(now);assert.equal(totals.render(),before);
+    panning=null;assert.equal(totals.update(props),'');
+    assert.equal(totals.update({...props,history:null}),'','retired input cannot retain old numerical work');
+  }finally{totals.close();d.close();await h.close();}
+});
+
+test('fixed-period numerical consumers never subscribe to a time deadline',async test=>{
+  test.mock.method(Date,'now',()=>NOW);const h=await fixture({fixed:true});let timers=0;
+  const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>{timers++;return {};},clearTimeout:()=>{}});
+  const history={range:`${NOW-H}/${NOW}`,activity:{known:{from:NOW-H,to:NOW},activeMs:M,agentMs:M,agents:1,by:{project:[],source:[],device:[]}}} as unknown as History;
+  history.range=h.period.workRangeKey;
+  const totals=consumer('Totals',clock,h.period,{history,by:'project',muted:{},since:null});
+  try{assert.ok(totals.render());assert.equal(timers,0);}finally{totals.close();await h.close();}
+});
+
+test('many legend groups read only their own contexts rather than every session per group',()=>{
+  const count=96,trace:WorkTrace={anchor:0,knownFrom:0,refs:Array.from({length:count},(_,i)=>({ref:String(i),source:'source',device:{id:'d',name:'Device'},origin:'terminal',project:String(i),folder:null,startedAt:0})),spans:Array.from({length:count},(_,i)=>[i,0,90_000])};
+  const curves=new PeriodCurves(trace),activity=new PeriodActivity(trace,curves),base={known:{from:0,to:90_000},by:{source:[],project:[],device:[]},cells:[],barMs:M,since:0,activeMs:0,agentMs:0,agents:0};
+  let reads=0,nexts=0;const read=WorkTimeline.prototype.read,next=WorkTimeline.prototype.next;
+  WorkTimeline.prototype.read=function(...args){reads++;return read.apply(this,args);};WorkTimeline.prototype.next=function(...args){nexts++;return next.apply(this,args);};
+  try{
+    for(let i=0;i<count;i++){const key=JSON.stringify(String(i));assert.equal(activity.numbers(base,{from:0,to:90_000},'project',key).by.project[0].agents,1);activity.changesAt(90_000,H,'project',key);}
+    assert.ok(reads<=count*5,`${reads} timeline reads for ${count} groups`);assert.equal(nexts,count*2);
+  }finally{WorkTimeline.prototype.read=read;WorkTimeline.prototype.next=next;}
+});

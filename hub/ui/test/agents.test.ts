@@ -48,20 +48,20 @@ const active = [
   session('old unknown', {startedAt: 150}),
 ];
 
-test('retained presence and running labels stay equal until their own clock boundary',()=>{
-  const a=row('A',{ref:'a',currentPresence:{working:false,startedAt:0,through:75_000}});
-  const b=row('B',{ref:'b',currentPresence:{working:false,startedAt:10_000,through:100_000}});
-  assert.equal(sessionPresenceChangesAt(a.session,70_000),75_000);
-  assert.equal(sessionPresent(a.session,74_999),true);assert.equal(sessionPresent(a.session,75_000),false);
+test('stream presence changes through events while running labels own their clock',()=>{
+  const a=row('A',{ref:'a',currentPresence:{working:false,startedAt:0}});
+  const b=row('B',{ref:'b',currentPresence:{working:false,startedAt:10_000}});
+  assert.equal(sessionPresenceChangesAt(a.session,70_000),null);
+  assert.equal(sessionPresent(a.session,75_000),true);
   const rows=[a,b];
   for(let now=0;now<120_000;){
-    const next=runningChangesAt(rows,now),from=runningFrom(rows,now);
-    const read=(at:number)=>{const start=runningFrom(rows,at);return Number.isFinite(start)?since(at-start):null;};
-    if(next===null){assert.equal(from,Infinity);break;}
-    assert.ok(next>now);assert.equal(read(next-1),read(now));
-    now=next;
+    const next=runningChangesAt(rows,now)!;
+    const read=(at:number)=>since(at-runningFrom(rows,at));
+    assert.ok(next>now);assert.equal(read(next-1),read(now));now=next;
   }
+  delete a.session.currentPresence;
   assert.equal(runningFrom(rows,75_000),10_000);
+  delete b.session.currentPresence;
   assert.equal(runningFrom(rows,100_000),Infinity);
   assert.equal(runningChangesAt(rows,100_000),null);
 });

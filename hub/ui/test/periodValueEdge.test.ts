@@ -127,9 +127,9 @@ test('future context endpoints cannot certify key or unlimited-credit freshness,
       assert.ok(cached.validFor!.from<=edge&&edge<cached.validFor!.to);
     }
     assert.equal(fresh.find(v=>v.id===wallet)!.keys[0].at,at);
-    assert.equal(fresh.find(v=>v.id===wallet)!.keys[0].presence,edge>=now?'missing':'observed');
+    assert.equal(fresh.find(v=>v.id===wallet)!.keys[0].presence,'missing');
     assert.equal(fresh.find(v=>v.id===funds)!.creditBalance!.at,at);
-    assert.equal(fresh.find(v=>v.id===funds)!.creditBalance!.validUntil,now);
+    assert.equal(fresh.find(v=>v.id===funds)!.creditBalance!.validUntil,at+1);
   }
 });
 

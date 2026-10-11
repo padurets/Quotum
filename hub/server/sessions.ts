@@ -28,7 +28,7 @@ export type LiveSession = SessionEvidence & {
  */
 export type BoardSession = {
   presenceKey?: string;
-  currentPresence?: {working: boolean; through: number; workingThrough: number; startedAt: number};
+  currentPresence?: {working: boolean; startedAt: number};
   clientId?: string;
   device: {id: string; name: string};
   origin: Origin;
@@ -157,9 +157,9 @@ export class Sessions {
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);
   }
 
-  /** When `of` answers otherwise with no new list: a machine's list shown now stops showing. Null when only a new list changes it. */
+  /** When a current list stops confirming work or presence without another report. */
   ofChangesAt(source: string, people: string[], now: number): number | null {
-    const ends = [...this.machines.values()].filter(m => now - m.at <= KEEP_MS && people.includes(m.user) && this.store.holds(m.user, source) && m.sessions.some(s => s.source === source)).map(m => m.at + KEEP_MS + 1);
+    const ends = [...this.machines.values()].filter(m => now - m.at <= KEEP_MS && people.includes(m.user) && this.store.holds(m.user, source) && m.sessions.some(s => s.source === source)).flatMap(m => this.deadlines(m, now, s => s.source === source));
     return ends.length ? Math.min(...ends) : null;
   }
 
@@ -218,18 +218,25 @@ export class Sessions {
 
   ownChangesAt(user: string, board: string, now: number): number | null {
     if (this.store.privateOwner(board) !== user) return null;
-    const deadlines = [...this.machines.values()].filter(m => m.user === user && now - m.at <= KEEP_MS && m.sessions.some(s => this.store.displaySource(user, s.source) === null)).map(m => m.at + KEEP_MS + 1);
+    const deadlines = [...this.machines.values()].filter(m => m.user === user && now - m.at <= KEEP_MS && m.sessions.some(s => this.store.displaySource(user, s.source) === null)).flatMap(m => this.deadlines(m, now, s => this.store.displaySource(user, s.source) === null));
     return deadlines.length ? Math.min(...deadlines) : null;
+  }
+
+  /** Renewals move the hub's timer, not the board's unchanged presence. */
+  private deadlines(machine: Machine, now: number, selected: (session: StoredSession) => boolean): number[] {
+    return [machine.at + KEEP_MS + 1, ...(now < machine.at + CREDIT_MS && machine.sessions.some(s => selected(s) && s.working) ? [machine.at + CREDIT_MS] : [])];
   }
 
   private presenter(user: string, id: string, now: number, includePresence = true): (session: StoredSession, workedMs: number | null) => BoardSession {
     const names = this.store.projectNames(user);
     const alias = this.store.db.prepare('SELECT COALESCE(label,name) AS name FROM devices WHERE id=?').get(id) as {name:string} | undefined;
+    const workingUntil=this.machines.get(id)!.at+CREDIT_MS;
     return ({clientId, source, sessionId, device, origin, project, folder, startedAt, lastWorkedAt, working}, workedMs) => {
       const presenceKey=includePresence?this.binding(id,clientId,source,sessionId,origin,project,folder):undefined;
-      const currentPresence=presenceKey?this.presence(id,clientId,source,sessionId,origin,project,folder,now):undefined;
+      const evidence=presenceKey?this.presence(id,clientId,source,sessionId,origin,project,folder,now):undefined;
+      const currentPresence=evidence?{working:evidence.working,startedAt:evidence.startedAt}:undefined;
       const shown = project === null ? null : (names.get(project) ?? project);
-      return {...(presenceKey?{presenceKey,currentPresence}:{}),clientId, device: alias ? {...device,name:alias.name} : device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, lastWorkedAt, working, workedMs};
+      return {...(presenceKey?{presenceKey,currentPresence}:{}),clientId, device: alias ? {...device,name:alias.name} : device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, lastWorkedAt, working:includePresence?working&&now<workingUntil:working, workedMs};
     };
   }
 

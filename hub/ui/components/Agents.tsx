@@ -24,7 +24,6 @@ import {
   runningFrom,
   runningChangesAt,
   sessionPresent,
-  sessionPresenceChangesAt,
   since,
   sortedGroups,
   visibleAgentsSort,
@@ -60,9 +59,8 @@ function Mark({session, style}: {session: LiveSession; style?: CSSProperties}) {
 const stateOf = (session: LiveSession,now=hubNow()) =>
   t(!sessionPresent(session,now) ? 'agents.retained' : session.working ? 'agents.working' : session.origin === 'terminal' ? 'agents.idle' : 'agents.window');
 
-function SessionState({session,still=false}:{session:LiveSession;still?:boolean}){
-  const now=useClock(now=>still?null:sessionPresenceChangesAt(session,now));
-  return <span className="sr-only" data-time="presence">, {stateOf(session,now)}</span>;
+function SessionState({session}:{session:LiveSession}){
+  return <span className="sr-only">, {stateOf(session)}</span>;
 }
 
 /** A cut name in full on hover: the project, and the folder on a line of its own. */
@@ -406,7 +404,7 @@ function AgentsRows({
                     <span className="agents-project" title={placeOf(session)}>
                       <span>{projectName(session.project)}</span>
                       {folderOf(session) && <small>{folderOf(session)}</small>}
-                      <SessionState session={session} still={still}/>
+                      <SessionState session={session}/>
                     </span>
                   </>
                 ) : (
@@ -460,7 +458,7 @@ function AgentsRows({
                     <Origin origin={session.origin} />
                     {projectName(session.project)}
                     {folderOf(session) && <small className="agents-folder">{folderOf(session)}</small>}
-                    <SessionState session={session} still={still}/>
+                    <SessionState session={session}/>
                   </td>
                 ) : (
                   <td>{opener(group)}</td>

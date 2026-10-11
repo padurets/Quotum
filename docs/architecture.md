@@ -1184,8 +1184,10 @@ the same object. What shows time (how long ago, how soon, the freshness dot, the
 mark, that the hub cannot be reached) is a small part of its own that tells the page's
 one clock (`hub/ui/lib/clock.ts`) when it reads otherwise, and renders only then: the
 clock keeps one timer for the whole page, none on a hidden tab, and counts in the hub's
-time as the hub's messages tell it. The chart and agent activity move on a cell of the
-history's grid at a time; a label past the chart's right edge counts down on its own, and
+time as the hub's messages tell it. Chart geometry moves on a cell of the history's grid
+at a time. Activity totals, legend amounts and open readouts follow their exact selected
+interval and wake separately when their displayed numbers change; a label past the
+chart's right edge counts down on its own, and
 a forecast's line goes at the moment the table says it runs out, or at the reset; in the
 table, the plan, where the pace leads and the active hours left each read otherwise at
 their own moment. History is read when the hub tells of measurements or credited agent
@@ -1427,7 +1429,12 @@ Monetary steps remain exact integers; a partially
 intersected spending step is uncertain, never divided by elapsed time. A balance's TTL
 does not establish spending coverage beyond its last confirmed observation. Cards and
 analytical boundary values use the same recorded heartbeat valuation; an exchange-rate
-change does not become spending. The page clock
+change does not become spending. Both readers exclude observations and availability
+barriers at or beyond the hub clock captured for the request. A future compressed endpoint
+cannot extend freshness or accounting coverage: only a retained observation anchor may
+replace it, with its own freshness duration when that duration is recoverable. Admission
+precedes currency binding and accounting, without rewriting stored supplier facts.
+The page clock
 advances live boundaries locally through already received evidence, without a request
 or invented work after the evidence cut. Fixed past accounting does not tick. These
 indexes, dictionaries, response staging and cached values share the history readers'
@@ -1554,7 +1561,11 @@ its actual time stale, and the page reads them when a frame needs them.
 Dashboard agent lists contain contexts with credited work intersecting the selected
 period, including contexts absent from the current machine list. Duration is clipped
 to that period, and recency uses the last intersecting work endpoint. Current presence
-is optional and expires separately; it never proves more work or an end time. The
+is optional and expires separately; it never proves more work or an end time. The hub
+keeps renewal deadlines internally and publishes only semantic changes, so an unchanged
+idle confirmation does not wake panels or card trays. The page confirms presence from
+the latest stream snapshot, clears it on lost continuity, and waits for a new snapshot
+before confirming it again. Historical replies cannot renew current presence. The
 card's panel keeps machine groups, ordered by each one's most recent credited work.
 It groups and orders the complete roster before paging. Loading and failure remain
 visible in its tray disclosure even before any sessions arrive; retained rows name their

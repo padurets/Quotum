@@ -1,5 +1,5 @@
 import {AnalyticsPanel} from './AnalyticsPanel';
-import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from 'react';
+import {memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps} from 'react';
 import {createPortal} from 'react-dom';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
@@ -12,6 +12,8 @@ import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view'
 import {usePersonalBoard, useBoardId, useLineup, useTitles, type Title} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
+import {boardPeriod} from '../lib/period';
+import type {History} from '../../server/domain/history';
 import {plotBar, plotGroupsPrepared, type PlotBuffer, type PlotGroup} from '../lib/historyPlot';
 import {usePrepared, usePreparationBasis} from './prepared';
 import {axisNavigation, navigationKey, type AxisNavigation} from '../lib/axisNavigation';
@@ -83,8 +85,31 @@ function Metrics({agentMs, activeMs, agents, shownMs}: {agentMs: number; activeM
   );
 }
 
+const metricsText = (value: {agentMs:number;activeMs:number;agents:number}) => [workHours(value.agentMs),workHours(value.activeMs),num(value.agents),atOnce(value.agentMs,value.activeMs)];
+
+/** Small numerical consumers follow formatted changes, independently of the drawing grid. */
+function useActivityNumbers(history:History|null,by:ActivityDimension,read:(activity:ActivityData)=>string,enabled=true,bar?:number,key?:string) {
+  const panning=usePanning();
+  const at=(now:number)=>history?boardPeriod.activityAt(history,by,now,bar,key):null;
+  const now=useClock(now=>history&&enabled&&panning===null?boardPeriod.activityChangesAt(history,by,now,at=>read(boardPeriod.activityAt(history,by,at,bar,key)),key):null);
+  return panning===null&&enabled?at(now):bar===undefined?history?.activity??null:null;
+}
+
+function LegendAmount({history,by,groupKey,group}:{history:History|null;by:ActivityDimension;groupKey:string;group:ActivityGroup|null}) {
+  const text=(activity:ActivityData)=>workHours(activity.by[by].find(g=>g.key===groupKey)?.agentMs??0);
+  const activity=useActivityNumbers(history,by,text,true,undefined,groupKey);
+  return <b data-time="activity-work">{activity?text(activity):group?workHours(group.agentMs):'—'}</b>;
+}
+
+function LegendMetrics({history,by,groupKey,group,active}:{history:History|null;by:ActivityDimension;groupKey:string;group:ActivityGroup|null;active:boolean}) {
+  const part=(activity:ActivityData)=>activity.by[by].find(g=>g.key===groupKey)??{agentMs:0,activeMs:0,agents:0};
+  const activity=useActivityNumbers(history,by,value=>JSON.stringify(metricsText(part(value))),active,undefined,groupKey);
+  const value=activity?part(activity):group;
+  return <span data-time="activity-metrics">{value?<Metrics agentMs={value.agentMs} activeMs={value.activeMs} agents={value.agents}/>:<span>{t('activity.pendingRange')}</span>}</span>;
+}
+
 /** Hover and touch state belong to one legend entry, leaving the stacks untouched. */
-const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, muted}: {group: ActivityGroup | null; groupKey: string; by: ActivityDimension; name: string; color: string; muted: boolean}) {
+const LegendItem = memo(function LegendItem({history, group, groupKey, by, name, color, muted}: {history:History|null;group: ActivityGroup | null; groupKey: string; by: ActivityDimension; name: string; color: string; muted: boolean}) {
   useLocale();
   const shifting = useShifting();
   const id = useId();
@@ -131,7 +156,7 @@ const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, m
       onClick={event => event.stopPropagation()}
     >
       <span className="tooltip-time">{name}</span>
-      {group ? <Metrics agentMs={group.agentMs} activeMs={group.activeMs} agents={group.agents} /> : <span>{t('activity.pendingRange')}</span>}
+      <LegendMetrics history={history} by={by} groupKey={groupKey} group={group} active={active}/>
     </span>
   );
   return (
@@ -169,7 +194,7 @@ const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, m
       >
         <i className="activity-swatch" style={{background: color}} />
         <span>{name}</span>
-        <b>{group ? workHours(group.agentMs) : '—'}</b>
+        <LegendAmount history={history} by={by} groupKey={groupKey} group={group}/>
       </button>
       {container ? createPortal(bubble, container) : bubble}
     </div>
@@ -177,11 +202,14 @@ const LegendItem = memo(function LegendItem({group, groupKey, by, name, color, m
 });
 
 /** Complete quantities do not render for partial plot arrivals. */
-const Totals = memo(function Totals({activity, shownMs, since}: {activity: ActivityData | null; shownMs: number; since: number | null}) {
+const Totals = memo(function Totals({history,by,muted,since}: {history:History|null;by:ActivityDimension;muted:Record<string,boolean>;since:number|null}) {
   useLocale();
+  const shown=(activity:ActivityData)=>activity.by[by].reduce((sum,group)=>sum+(muted[mutedKey(by,group.key)]?0:group.agentMs),0);
+  const activity=useActivityNumbers(history,by,value=>JSON.stringify([!!value.known,...metricsText(value),shown(value)<value.agentMs,workHours(shown(value))]));
   if (!activity?.known || activity.activeMs <= 0) return null;
+  const shownMs=shown(activity);
   return (
-    <div className="activity-totals">
+    <div className="activity-totals" data-time="activity-totals">
       <span title={t('activity.agentHoursHint')}>
         {t('activity.agentHours')} <b>{workHours(activity.agentMs)}</b>
         {shownMs < activity.agentMs && <span className="activity-since activity-shown">{t('activity.shown', {time: workHours(shownMs)})}</span>}
@@ -261,7 +289,6 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const presentation = prepared.value ?? {identities: [], shown: [], strip: null};
   useLayoutEffect(() => {if (prepared.value) registry.current = prepared.value.registry;}, [prepared.value]);
   const currentGroups=activity?.by[by]??[];
-  const shownMs = useMemo(() => currentGroups.reduce((sum,group) => sum+(prefs.muted[mutedKey(by,group.key)]?0:group.agentMs), 0), [currentGroups,by,prefs.muted]);
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
@@ -281,9 +308,10 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
       settings={<ActivitySettings arrange={arrange}/>}
     >
-      <Totals activity={activity} shownMs={shownMs} since={since} />
+      <Totals history={history} by={by} muted={prefs.muted} since={since} />
       <>
           <Stacks
+            history={history}
             activity={drawnActivity ?? EMPTY_ACTIVITY}
             currentActivity={activity ?? EMPTY_ACTIVITY}
             origin={drawing?.since ?? from}
@@ -304,7 +332,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
           />
           <div className="legend">
             {(emptyFrame ? [] : presentation.identities).map(identity => (
-              <LegendItem key={identity.key} groupKey={identity.key} by={by} group={currentGroups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} />
+              <LegendItem key={identity.key} history={history} groupKey={identity.key} by={by} group={currentGroups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} />
             ))}
           </div>
       </>
@@ -323,7 +351,25 @@ export const stacksHeight = (width: number) => (width < 560 ? 160 : 200);
  */
 const EMPTY_CELLS: PlotGroup['cells'] = [];
 
+/** A stationary readout advances its clipped numbers without waking the SVG. */
+function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps}:{history:History|null;by:ActivityDimension;hover:number;barMs:number;bar:number[];parts:{key:string;name:string;color:string;ms:number}[];tipProps:Omit<ComponentProps<typeof Tooltip>,'children'>}) {
+  const values=(activity:ActivityData)=>parts.map(part=>({...part,ms:activity.by[by].find(group=>group.key===part.key)?.agentMs??0})).filter(part=>part.ms>0);
+  const activity=useActivityNumbers(history,by,value=>{const shown=values(value),sum=shown.reduce((total,part)=>total+part.ms,0);return JSON.stringify([...metricsText(value),sum<value.agentMs,workHours(sum),...shown.map(part=>[part.key,workHours(part.ms)])]);},true,hover);
+  const current=activity?values(activity):parts,agentMs=activity?.agentMs??bar[2],activeMs=activity?.activeMs??bar[1],agents=activity?.agents??bar[3],shownMs=current.reduce((sum,part)=>sum+part.ms,0);
+  if(!current.length)return null;
+  return <Tooltip {...tipProps}>
+    <div className="tooltip-time">{cellLabel(hover,barMs)}</div>
+    <div data-time="activity-readout"><Metrics agentMs={agentMs} activeMs={activeMs} agents={agents} shownMs={shownMs}/>
+      <div className="tooltip-sep"/>
+      <div className="tooltip-grid" style={{gridTemplateColumns:'14px minmax(0, 1fr) auto'}}>
+        {current.map(part=><div className="tooltip-row" key={part.key}><i className="activity-swatch" style={{background:part.color}}/><span className="tooltip-name">{part.name}</span><strong>{workHours(part.ms)}</strong></div>)}
+      </div>
+    </div>
+  </Tooltip>;
+}
+
 const Stacks = memo(function Stacks({
+  history,
   activity: incomingActivity,
   currentActivity,
   origin: incomingOrigin,
@@ -342,6 +388,7 @@ const Stacks = memo(function Stacks({
   allMuted,
   empty,
 }: {
+  history?: History|null;
   activity: ActivityData;
   /** Exact boundary bars and readout advance without rebuilding interior stacks. */
   currentActivity?: ActivityData;
@@ -489,7 +536,6 @@ const Stacks = memo(function Stacks({
   // What the hovered bar draws: over one whose groups are all switched off, nothing tells of it, as over an empty one.
   const parts =
     hover === null ? [] : groups.flatMap(({group, color, name}) => strip ? partialBar?.groups.has(group.key) ? [{key: group.key, color, name, ms: partialBar.groups.get(group.key)!.ms}] : [] : (currentActivity ? activity.by[by].find(g => g.key === group.key)?.cells ?? [] : group.cells).filter(([start]) => start === hover).map(([, ms]) => ({key: group.key, color, name, ms})));
-  const shownMs = parts.reduce((sum, part) => sum + part.ms, 0);
   const hoverX = hover === null ? 0 : axis.screenX(Math.max(from, Math.min(to, hover + barMs / 2)));
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: true, bottom: height * scale});
   // The label of the part not known shows only where it fits within its hatching, measured
@@ -568,21 +614,7 @@ const Stacks = memo(function Stacks({
       {empty && <div className="chart-empty">{empty}</div>}
       {allMuted && <div className="chart-empty">{t('activity.allOff')}</div>}
       {hover !== null && bar && parts.length > 0 && !drag && (
-        <Tooltip tip={tip} className={narrow ? 'is-below' : ''} style={tipStyle}>
-          <div className="tooltip-time">{cellLabel(hover, barMs)}</div>
-          {/* The totals come first: a tooltip cut to the window loses the last of its parts, not them. */}
-          <Metrics agentMs={bar[2]} activeMs={bar[1]} agents={bar[3]} shownMs={shownMs} />
-          <div className="tooltip-sep" />
-          <div className="tooltip-grid" style={{gridTemplateColumns: '14px minmax(0, 1fr) auto'}}>
-            {parts.map(part => (
-              <div className="tooltip-row" key={part.key}>
-                <i className="activity-swatch" style={{background: part.color}} />
-                <span className="tooltip-name">{part.name}</span>
-                <strong>{workHours(part.ms)}</strong>
-              </div>
-            ))}
-          </div>
-        </Tooltip>
+        <ActivityReadout history={history??null} by={by} hover={hover} barMs={barMs} bar={bar} parts={parts} tipProps={{tip,className:narrow?'is-below':'',style:tipStyle}}/>
       )}
     </div>
   );

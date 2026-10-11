@@ -6,7 +6,8 @@ import {prepareAsync,preparations,type Preparation} from './prepare';
 import {useLayoutEffect,useRef,useState,useSyncExternalStore} from 'react';
 import {evaluatedRange,periodKey,type PeriodBasis,type PeriodSelection} from '../../server/domain/period';
 import {hasPeriodValue,periodValueAt,type PeriodValues} from '../../server/domain/periodValues';
-import {mergeWorkPrepared,packWorkPrepared,type WorkedSession,type WorkTrace} from '../../server/domain/periodWork';
+import {mergeWorkPrepared,packWorkPrepared,type WorkedSession as RecordedSession,type WorkTrace} from '../../server/domain/periodWork';
+import type {LiveSession} from './types';
 import type {PeriodReply} from '../../server/domain/periodRead';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
 import {PeriodTransport,fetchPeriod,type PeriodIntent} from './periodTransport';
@@ -31,6 +32,7 @@ import type {History} from '../../server/domain/history';
 import {canShift,shifted} from '../../server/domain/periodShift';
 
 type Reading<T>={value:T|null;basis:PeriodBasis|null;loading:boolean;error:string|null};
+type WorkedSession=Omit<RecordedSession,'currentPresence'>&Pick<LiveSession,'currentPresence'>;
 const empty=<T>():Reading<T>=>({value:null,basis:null,loading:false,error:null});
 const noValue=empty<PeriodValues>(),noSessions:WorkedSession[]=[];
 
@@ -74,9 +76,7 @@ class BoardPeriod {
   private rowsBySource=new Map<string,WorkedSession[]>();
   private listeners=new Set<()=>void>();
   private sourceListeners=new Map<string,Set<()=>void>>();
-  /** Stream confirmations refresh props; clock-only presence labels own their deadlines. */
-  private presenceRevision=0;
-  private workState={...this.work,rows:this.workRows,presenceRevision:this.presenceRevision};
+  private workState={...this.work,rows:this.workRows};
   private readonly watch=clock.watch();
   private bytes=0;
   private cacheKey='';
@@ -128,6 +128,19 @@ class BoardPeriod {
     if(tape?.rangeKey===history.range){const range=evaluatedRange(tape.selection,now),values=new Map<string,PeriodValues>();if(tape.selection.mode==='range')for(const [id,reading] of this.values)if(reading.value&&reading.basis?.range.to===range.to)values.set(id,reading.value);result=tape.accounting.project(history,range,values);}
     if(scope==='quota'&&this.activity&&this.workRangeKey===history.range&&this.work.basis){const range=evaluatedRange(this.workSelection,now);result={...result,since:range.from,to:range.to,activity:this.activity.project(history.activity,range)};}
     return result;
+  }
+  activityAt(history:History,by:import('./types').ActivityDimension,now:number,bar?:number,key?:string) {
+    let fallback=history.activity;
+    if(bar!==undefined){const cell=fallback.cells.find(([at])=>at===bar);fallback={...fallback,activeMs:cell?.[1]??0,agentMs:cell?.[2]??0,agents:cell?.[3]??0,by:{...fallback.by,[by]:fallback.by[by].map(group=>({...group,agentMs:group.cells.find(([at])=>at===bar)?.[1]??0}))}};}
+    if(!this.activity||this.workRangeKey!==history.range||!this.work.basis||this.workSelection.mode==='range')return fallback;
+    const range=evaluatedRange(this.workSelection,now);
+    if(bar!==undefined){range.from=Math.max(range.from,bar);range.to=Math.min(range.to,bar+history.activity.barMs);}
+    return this.activity.numbers(fallback,range,by,key);
+  }
+  activityChangesAt(history:History,by:import('./types').ActivityDimension,now:number,read:(at:number)=>string,key?:string) {
+    if(this.workSelection.mode!=='live'||this.workRangeKey!==history.range||!this.work.basis)return null;
+    const period=this.workSelection.periodMs;
+    return periodTextChangesAt(now,at=>this.activity?.changesAt(at,period,by,key)??null,read);
   }
   quotaAt(line:Line,now:number,rangeKey?:string):Line {
     const tape=this.tapes.get('quota');if(!tape||tape.selection.mode!=='live'||rangeKey!==undefined&&tape.rangeKey!==rangeKey)return line;
@@ -192,7 +205,7 @@ class BoardPeriod {
     return {board:board.id,generation:this.generation,revision:this.revision,proofEpoch:this.proofEpoch,request:{version:1,selection:this.selection,evaluatedAt:hubNow(),...queries,...(pending&&this.valuesNeeded&&this.selection.mode==='range'&&this.sourceIds.length?{values:this.sourceIds}:{}),...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{})}};
   }
   private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
-  private publishWork() {this.workState={...this.work,rows:this.workRows,presenceRevision:this.presenceRevision};for(const listener of this.listeners)listener();}
+  private publishWork() {this.workState={...this.work,rows:this.workRows};for(const listener of this.listeners)listener();}
   private retireWork() {
     this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.workProofEpoch=-1;
     this.tapes.delete('quota');delete this.projectionErrors.quota;this.transport.forgetEvidence('quota');
@@ -276,15 +289,16 @@ class BoardPeriod {
       for(const scope of changedScopes){this.tapes.delete(scope);this.dirtyScopes.delete(scope);delete this.projectionErrors[scope];this.transport.forgetEvidence(scope);}
       this.measureBytes();this.publishProjection(changedScopes);this.transport.change();
     }
+    if(event?.type==='connection'){this.tick();return;}
     if(event?.type==='hub') {
       const hub=event.event;
       if(hub.type==='hello'||hub.type==='snapshot'||hub.type==='mine'||hub.type==='lineup') {
         this.generation++;this.revision++;this.cursor=undefined;this.workNeeded=wantsWork;this.valuesNeeded=selection.mode==='range';
         if(hub.type==='mine'||hub.type==='lineup')this.clear();
-        if(hub.type==='snapshot')this.tick(true,true);
+        if(hub.type==='snapshot'||hub.type==='hello')this.tick();
         this.transport.change();
       }else if(hub.type==='sessions'||hub.type==='ownSessions') {
-        this.tick(true,true);
+        this.tick();
       }else if(hub.type==='history') {
         const included=hub.data.sources.some(id=>sources.includes(id));
         if(included){this.proofEpoch++;this.valueCache.clear();}
@@ -360,6 +374,9 @@ class BoardPeriod {
       if(part&&part.state!=='error')try{
         charge('work',workBytes(part.value)+(part.state==='delta'?workBytes(priorWork):0));
         work=part.state==='delta'&&priorWork?yield*mergeWorkPrepared(priorWork,part.value):part.value;
+        // Current presence belongs to the stream. A delayed analytical response
+        // contributes credited work, never another lease or presence deadline.
+        work={...work,refs:work.refs.map(({currentPresence:_,...ref})=>ref)};
         if(!work.packed&&!work.fixed)work=yield*packWorkPrepared(work);
         charge('work',workBytes(work));index=yield*PeriodIndex.prepare(work);activity=yield*PeriodActivity.prepare(work,index.curves);charge('work',workBytes(work,index.curves.bytes));
       }catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};work=priorWork;index=null;activity=null;discard('work');}
@@ -411,29 +428,28 @@ class BoardPeriod {
     this.bytes=JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
   }
   /** The current stream is authoritative even while an older analytical reply is being prepared. */
-  private present(rows:WorkedSession[],now:number) {
+  private present(rows:WorkedSession[]) {
     const board=page.get().board,live=new Map<string,{source:string|null;device:string;presence:NonNullable<WorkedSession['currentPresence']>}>();
-    if(board){
+    if(board?.presenceConfirmed){
       for(const source of this.sourceIds)for(const session of board.sessions?.[source]??[])if(session.presenceKey&&session.currentPresence)live.set(session.presenceKey,{source,device:session.device.id,presence:session.currentPresence});
       if(board.meta.personal)for(const session of board.ownSessions??[])if(session.presenceKey&&session.currentPresence)live.set(session.presenceKey,{source:null,device:session.device.id,presence:session.currentPresence});
     }
     return rows.map(row=>{
       const current=row.presenceKey?live.get(row.presenceKey):undefined;
-      const presence=current&&current.source===row.source&&current.device===row.device.id&&current.presence.through>now?current.presence:undefined;
-      const working=!!presence&&presence.working&&Math.min(presence.through,presence.workingThrough??Infinity)>now;
+      const presence=current&&current.source===row.source&&current.device===row.device.id?current.presence:undefined;
+      const working=!!presence&&presence.working;
       if(working===row.working&&sameJson(presence,row.currentPresence))return row;
       const {currentPresence:_previous,...rest}=row;return {...rest,working,...(presence?{currentPresence:presence}:{})};
     });
   }
-  private tick(fromClock=true,current=false) {
+  private tick(fromClock=true) {
     if(!this.active)return;
     const now=this.evaluatedAt=hubNow();
     const projected=this.index&&this.work.basis?this.index.advance(evaluatedRange(this.workSelection,now),now):{rows:this.workRows,changed:false,limited:false};
     if(projected.limited){this.work={...this.work,error:'history_range_invalid'};this.publishWork();clock.due(this.watch,null,now);return;}
-    const rows=this.present(projected.rows,now);
+    const rows=this.present(projected.rows);
     const changed=projected.changed||this.workState.value!==this.work.value||rows.length!==this.workRows.length||rows.some((row,i)=>row.ref!==this.workRows[i]?.ref||row.working!==this.workRows[i]?.working||!sameJson(row.currentPresence,this.workRows[i]?.currentPresence));
     if(changed) {
-      if(current)this.presenceRevision++;
       this.workRows=rows;
       this.activity?.update(this.workRows);
       const next=new Map<string,WorkedSession[]>();
@@ -452,8 +468,7 @@ class BoardPeriod {
   private scheduleClock(){
     const now=hubNow();
     const orders=this.active&&this.index&&this.workSelection.mode==='live'?[...this.workOrders].flatMap(read=>read(this.workRows)?.worked??[]):[];
-    let due=this.workSelection.mode==='live'?this.index?.changesAt(now,this.workSelection.periodMs,orders)??null:null;
-    for(const row of this.workRows){const p=row.currentPresence;if(p)for(const at of [p.through,p.working?p.workingThrough??p.through:0])if(at>now)due=Math.min(due??Infinity,at);}
+    const due=this.workSelection.mode==='live'?this.index?.changesAt(now,this.workSelection.periodMs,orders)??null:null;
     clock.due(this.watch,due!==null&&Number.isFinite(due)?due:null,now);
   }
   retryHistory(scope:PeriodScope){
@@ -471,7 +486,8 @@ class BoardPeriod {
   };
 }
 
-const workBytes=(trace:WorkTrace|null,curves?:number)=>trace?JSON.stringify({...trace,spans:[],packed:undefined}).length*2+(trace.packed?trace.packed.blocks.length*8+trace.packed.patterns.reduce((n,p)=>n+p.length*8+32,0)+(curves??trace.packed.blocks.length/3*144+trace.packed.patterns.reduce((n,p)=>n+p.length*128,0)):trace.spans.length*640)+trace.refs.length*768:0;
+// Each context also belongs to three numerical group indexes (arrays of shared curve references).
+const workBytes=(trace:WorkTrace|null,curves?:number)=>trace?JSON.stringify({...trace,spans:[],packed:undefined}).length*2+(trace.packed?trace.packed.blocks.length*8+trace.packed.patterns.reduce((n,p)=>n+p.length*8+32,0)+(curves??trace.packed.blocks.length/3*144+trace.packed.patterns.reduce((n,p)=>n+p.length*128,0)):trace.spans.length*640)+trace.refs.length*864:0;
 const quotaTapeBytes=(series:PeriodTape['quota'][number],wire:boolean)=>JSON.stringify({...series,samples:[]}).length*2+(wire&&!('columns' in series.samples)?series.samples.length*8:sampleBytes(series.samples,series.samplesEncoding==='delta'));
 const tapeBytes=(tape:PeriodTape,wire=false)=>JSON.stringify({...tape,quota:tape.quota.map(s=>({...s,samples:[]})),money:tape.money.map(s=>({...s,readings:[],spans:[],...(s.paired?{paired:{readings:[],spans:[]}}:{})}))}).length*2+tape.quota.reduce((n,s)=>n+(wire&&!('columns' in s.samples)?s.samples.length*8:sampleBytes(s.samples,s.samplesEncoding==='delta')),0)+tape.money.reduce((n,s)=>n+[...s.readings,...s.paired?.readings??[]].reduce((bytes,r)=>bytes+256+2*((r.amount?.length??0)+(r.unit?.length??0)+(r.label?.length??0)+(r.scope?.length??0)+(r.limit?.length??0)),0)+(s.spans.length+(s.paired?.spans.length??0))*192,0);
 
@@ -479,13 +495,13 @@ export const boardPeriod=new BoardPeriod();
 export function followPeriod(){const stop=page.listen((event,state)=>boardPeriod.changed(event,state));const choose=()=>boardPeriod.changed();const stops=[stop,onPrefs(choose),onTimeRange(choose)];choose();return()=>stops.forEach(stop=>stop());}
 export function usePeriodValues(id:string){return useSyncExternalStore(listener=>boardPeriod.subscribeValue(id,listener),()=>boardPeriod.getValue(id));}
 const roster=(rows:readonly WorkedSession[])=>rows.map(({workedMs:_,...row})=>row);
-const panelRoster=(rows:readonly WorkedSession[])=>rows.map(({workedMs:_,currentPresence:_presence,...row})=>row);
+const panelRoster=roster;
 export function usePeriodSessions(order:(rows:WorkedSession[])=>SessionOrder|null=()=>null){
   const latest=useRef(order);latest.current=order;
   const [watch]=useState(()=>(rows:WorkedSession[])=>latest.current(rows));
   useLayoutEffect(()=>boardPeriod.subscribeWorkOrder(watch),[watch]);
   useLayoutEffect(()=>boardPeriod.refreshWorkClock());
-  const [read]=useState(()=>selector(boardPeriod,()=>({select:state=>state,equal:(a,b)=>a.presenceRevision===b.presenceRevision&&a.value===b.value&&a.loading===b.loading&&a.error===b.error&&sameJson(panelRoster(a.rows),panelRoster(b.rows))&&sameJson(latest.current(a.rows)?.key,latest.current(b.rows)?.key)})));
+  const [read]=useState(()=>selector(boardPeriod,()=>({select:state=>state,equal:(a,b)=>a.value===b.value&&a.loading===b.loading&&a.error===b.error&&sameJson(panelRoster(a.rows),panelRoster(b.rows))&&sameJson(latest.current(a.rows)?.key,latest.current(b.rows)?.key)})));
   return useSyncExternalStore(boardPeriod.subscribe,read);
 }
 export type SessionPeriod=Pick<Reading<WorkTrace>,'basis'|'loading'|'error'>;

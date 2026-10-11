@@ -308,8 +308,9 @@ when reliable session identity is unavailable. Older hubs may omit it; the page 
 missing, null or invalid credit as unknown. A group with any unknown counter has an
 unknown total, and unknown totals sort last in either direction. A list that credits work changes
 `workedMs`, so `sessions` comes with each list while an agent works. Stable sessions
-also renew confirmation deadlines under their opaque presence binding as described in
-the session-evidence contract below; an idle confirmation causes no history read.
+carry `currentPresence: {working, startedAt}` under their opaque presence binding.
+The hub keeps confirmation deadlines internally: an unchanged idle confirmation emits
+no session event or history read. Expiry changes working state or removes current presence.
 
 A source's `forecast` is by the id of each of its weekly windows (the page foresees a
 five-hour window itself, by what it spent since it began): where the recent pace of that
@@ -398,7 +399,15 @@ Times are safe integer milliseconds. Period lengths are between fifteen minutes 
 31 days, within retained history. `values` contains at most 2000 visible source ids.
 The hub clamps `evaluatedAt` to its own clock. Live selects
 `[evaluatedAt-periodMs,evaluatedAt)`; a fixed interval keeps its exact endpoints.
-The evidence cut cannot extend into the future. Each history section keeps the existing
+The evidence cut cannot extend into the future. Independently of the selected endpoints,
+cards and analytical tapes admit observations and availability barriers only before the
+hub clock captured for the request, even when ingest accepted a later timestamp within
+its clock tolerance. A compressed span with a future tail
+can recover only retained sample, observation-head or recorded valuation anchors;
+clamping its tail to that clock boundary does not create an observation. A recovered anchor without
+its original freshness duration proves only that instant. Currency binding and
+accounting use this admitted evidence, including both sides of a paired balance.
+Each history section keeps the existing
 cell, selection and eight-tile limits below. `evidence` is its previously returned opaque
 tape cursor; `skip` asks only for cells during progressive panning. Conversely,
 `cells: 'skip'` reads the boundary tape while reusing already cached cells.
@@ -548,13 +557,17 @@ from the live session service, shared by authorized stream sessions and period r
 It covers the device, client, stable producer and original source/context, remains
 unchanged by display renaming, and changes when the hub restarts. It grants no access.
 Legacy contexts without reliable stable identity omit it and cannot borrow a presence
-from an apparently similar session. Stream `sessions` and `ownSessions` attach the same
-optional `currentPresence` deadlines (`through` and `workingThrough`) to that binding.
-The browser overlays the latest stream confirmation on retained work rows at publication:
+from an apparently similar session. Stream `sessions` and `ownSessions` attach optional
+`currentPresence: {working, startedAt}` to that binding. Renewal deadlines remain inside
+the hub; it sends semantic changes when work confirmation or presence expires.
+The browser overlays the latest confirmed stream state on retained work rows:
 an empty current list removes presence without removing credited work or requesting
-history. New confirmations renew deadlines locally; an older analytical reply cannot
-restore an already removed confirmation. Panel, source disclosure and open detail views
-use the same overlay. Private `ownSince` cutoffs invalidate session deltas
+history. A lost connection or new `hello` clears confirmation until an actual snapshot
+arrives; entering `live` or `polling` alone cannot confirm old rows. A delayed analytical
+reply cannot restore current presence, including the optional deadline-bearing presence
+in its retained refs. Panel, source disclosure and open detail views use the same overlay.
+Loss of confirmation means current presence is unknown, not that the session ended.
+Private `ownSince` cutoffs invalidate session deltas
 and quota activity independently of source measurements and financial evidence.
 Fixed selections instead return `fixed` with empty `spans` and no `packed` ledger.
 Every positive-work context remains in the summary. Interior activity bars reuse
@@ -592,8 +605,8 @@ charge the additional path and operation containers before allocating them. The 
 is optional and scoped to a single response; it does not change proof coverage or evidence.
 These optional proofs and nearby value states share existing memory limits and may
 be omitted when they cannot fit. Outside proven positions a new summary is required.
-Only optional current presence
-can expire locally while a fixed selection remains unchanged.
+Only optional current presence can change or lose confirmation while a fixed selection
+remains unchanged.
 Offsets in `spans` are exact milliseconds from `anchor`. Only credited intervals intersecting the
 requested evidence are included, clipped by capture, retention, membership and sharing
 cutoffs. No current list or duration total substitutes for those intervals. Clients

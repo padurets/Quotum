@@ -22,9 +22,9 @@ export const since = (ms: number) => (ms < 60_000 ? t('agents.justNow') : durati
 /** When `since` reads otherwise: at a minute it stops being fresh, then as `duration` rounds. */
 export const sinceChangesAt = (from: number, now: number) => (now - from < 60_000 ? from + 60_000 : durationChangesAt(from, now, true));
 
-/** Retained work confirms current presence only through its own observation deadline. */
-export const sessionPresent = (session:LiveSession,now:number) => !session.ref || !!session.currentPresence&&now<session.currentPresence.through;
-export const sessionPresenceChangesAt = (session:LiveSession,now:number) => session.ref&&session.currentPresence&&now<session.currentPresence.through?session.currentPresence.through:null;
+/** The current stream confirms presence; retained analytical replies cannot renew it. */
+export const sessionPresent = (session:LiveSession,_now:number) => !session.ref || !!session.currentPresence;
+export const sessionPresenceChangesAt = (_session:LiveSession,_now:number):number|null => null;
 
 export const runningFrom = (rows:readonly AgentRow[],now:number) => Math.min(...rows.map(({session})=>session.ref?sessionPresent(session,now)?session.currentPresence!.startedAt:Infinity:session.startedAt));
 export function runningChangesAt(rows:readonly AgentRow[],now:number){

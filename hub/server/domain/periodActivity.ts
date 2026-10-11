@@ -6,7 +6,7 @@ import type {PeriodRange} from './period.js';
 import type {WorkedSession,WorkTrace} from './periodWork.js';
 import {PeriodCurves,type WorkTimeline} from './periodCurves.js';
 
-type Group={name:string|null;curve:WorkTimeline;agentMs:number;agents:number};
+type Group={name:string|null;curve:WorkTimeline;contexts:WorkTimeline[];agentMs:number;agents:number};
 const dimensions:ActivityDimension[]=['source','project','device'];
 const keys=(row:WorkTrace['refs'][number])=>({source:row.source??'unknown',project:JSON.stringify(row.project),device:row.device.id});
 
@@ -14,7 +14,7 @@ export class PeriodActivity {
   private all!:WorkTimeline;
   private readonly groups:Record<ActivityDimension,Map<string,Group>>={source:new Map(),project:new Map(),device:new Map()};
   private readonly contexts=new Map<string,WorkTimeline>();
-  private previous=new Map<string,WorkedSession>();
+  private previous=new Map<string,Omit<WorkedSession,'currentPresence'>>();
   private cut=0;
   constructor(readonly trace:WorkTrace,private curves?:PeriodCurves,deferred=false) {if(!deferred)drain(this.build());}
   static *prepare(trace:WorkTrace,curves?:PeriodCurves):Preparation<PeriodActivity>{const value=new PeriodActivity(trace,curves,true);yield* value.build();return value;}
@@ -25,10 +25,11 @@ export class PeriodActivity {
     this.cut=trace.cut??curves.all.last(Infinity);
     for(let id=0;id<trace.refs.length;id++){this.contexts.set(trace.refs[id].ref,curves.contexts[id]);yield;}
     const devices=new Map(trace.refs.map(r=>[r.device.id,r.device.name]));
-    for(const by of dimensions)for(const [key,curve] of curves.groups[by]){this.groups[by].set(key,{name:by==='source'?null:by==='project'?JSON.parse(key):devices.get(key)??key,curve,agentMs:0,agents:0});yield;}
+    for(const by of dimensions)for(const [key,curve] of curves.groups[by]){this.groups[by].set(key,{name:by==='source'?null:by==='project'?JSON.parse(key):devices.get(key)??key,curve,contexts:[],agentMs:0,agents:0});yield;}
+    for(const ref of trace.refs){const context=this.contexts.get(ref.ref)!;for(const by of dimensions)this.groups[by].get(keys(ref)[by])?.contexts.push(context);yield;}
   }
 
-  update(rows:WorkedSession[]) {
+  update(rows:Omit<WorkedSession,'currentPresence'>[]) {
     if(this.trace.fixed)return;
     const next=new Map(rows.map(row=>[row.ref,row]));
     for(const ref of new Set([...this.previous.keys(),...next.keys()])) {
@@ -37,6 +38,21 @@ export class PeriodActivity {
       for(const by of dimensions){const group=this.groups[by].get(groupKeys[by]);if(!group)continue;group.agentMs+=(row?.workedMs??0)-(old?.workedMs??0);group.agents+=Number(!!row)-Number(!!old);}
     }
     this.previous=next;
+  }
+  /** Numerical labels read exact endpoints without rebuilding any chart cells. */
+  numbers(activity:Activity,range:PeriodRange,dimension:ActivityDimension,key?:string):Activity {
+    if(this.trace.fixed)return activity;
+    const selected=key===undefined?this.groups[dimension]:new Map(this.groups[dimension].has(key)?[[key,this.groups[dimension].get(key)!]]:[]);
+    const groups:ActivityGroup[]=[];let agents=0;
+    for(const [id,group] of selected){const count=range.to>range.from?group.contexts.reduce((sum,curve)=>sum+Number(curve.read(range)>0),0):0;agents+=count;if(count)groups.push({key:id,name:group.name,agentMs:group.curve.read(range),activeMs:group.curve.read(range,true),agents:count,cells:[]});}
+    const from=Math.max(range.from,this.trace.knownFrom),to=Math.min(range.to,this.cut);
+    return {...activity,known:from<to?{from,to}:null,agentMs:key!==undefined?groups[0]?.agentMs??0:agents?this.all.read(range):0,activeMs:key!==undefined?groups[0]?.activeMs??0:agents?this.all.read(range,true):0,agents,by:{...activity.by,[dimension]:groups}};
+  }
+  changesAt(now:number,period:number,dimension:ActivityDimension,key?:string) {
+    if(this.trace.fixed)return null;
+    const contexts=key===undefined?this.contexts.values():this.groups[dimension].get(key)?.contexts??[];
+    let next=Infinity;for(const curve of contexts)next=Math.min(next,curve.next(now-period)+period,curve.next(now));
+    return Number.isFinite(next)?next:null;
   }
   project(activity:Activity,range:PeriodRange):Activity {
     const fixed=this.trace.fixed;
