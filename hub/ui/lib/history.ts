@@ -95,6 +95,7 @@ export class HistoryStore {
   private inheritedExtra = false;
   private plotPending = false;
   private plot: PlotBuffer | null = null;
+  private drawingPlot: PlotBuffer | null = null;
   private strip: Target | null = null;
   private stripToken = 0;
   private version = 0;
@@ -266,6 +267,7 @@ export class HistoryStore {
 
   get = () => this.state;
   getPlot = () => this.plot;
+  getDrawingPlot = () => this.drawingPlot;
   subscribePlot = (listener: () => void) => {this.plotListeners.add(listener); return () => void this.plotListeners.delete(listener);};
 
   /** Geometry changes do not choose a committed target or compose its totals. */
@@ -276,7 +278,7 @@ export class HistoryStore {
     this.plotPending = true;
     const next = this.plotTarget();
     const cell = next.cell;
-    if(this.meters&&this.plot?.cell===cell)this.setPlot(this.plot);
+    if(this.meters&&this.plot?.cell===cell)this.setPlotFrame(this.plot);
     const cohort = `${interest.token}:${this.epoch}:${cell}`;
     if (this.cohort !== cohort) {
       this.cohort = cohort;
@@ -650,6 +652,12 @@ export class HistoryStore {
   private abort(flight: Flight) {this.preparations?.cancel(flight); this.releaseResponse(flight); flight.controller.abort();}
   private abortFlights() {for (const flight of [...this.flights]) this.abort(flight);}
   private setPlot(plot: PlotBuffer | null) {
+    // Both snapshots share the prepared arrays. Moving quantities must not
+    // replace the balance drawing; new data and authority replace both.
+    this.drawingPlot=plot;
+    this.setPlotFrame(plot);
+  }
+  private setPlotFrame(plot: PlotBuffer | null) {
     if(plot&&this.meters&&this.meta) {
       const target=this.plotTarget(),from=target.k0*target.cell,to=Math.min((target.k1+1)*target.cell,this.meta.now);
       if(plot.meterFrame?.from!==from||plot.meterFrame.to!==to)plot={...plot,meterFrame:{from,to}};
@@ -990,7 +998,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false):Shown&{drawing:Hist
 export function useHistory(rolling=false) {return usePeriodHistory(quotaHistory,rolling);}
 export function useBudgetHistory(family:MoneyFamily='budget',rolling=false) {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling);}
 export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
-export function useBudgetHistoryPlot(family: MoneyFamily = 'budget'): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribePlot, reader.getPlot, reader.getPlot);}
+export function useBudgetHistoryPlot(family: MoneyFamily = 'budget', quantities=false): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory,read=quantities?reader.getPlot:reader.getDrawingPlot;return useSyncExternalStore(reader.subscribePlot, read, read);}
 /** A fresh answer from either resource family supersedes the board's initial snapshot. */
 export function historyBegins(board: string | null, snapshot: number | null, answers: readonly (HistoryBoundary | null)[]): number {
   const current = answers.filter((answer): answer is HistoryBoundary => !!answer && answer.board === board);

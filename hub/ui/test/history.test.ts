@@ -1,5 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
 import {follow,followPan, historyBegins, HistoryStore} from '../lib/history';
 import {HistoryPool} from '../lib/historyPool';
 import {Pan} from '../lib/pan';
@@ -158,7 +161,7 @@ test('each history flight captures metadata without crossing boards or hub resta
   h.store.close();
 });
 
-test('a monetary pan exposes newly read points while keeping the complete table answer',async()=>{
+test('a monetary pan exposes new data without notifying balance drawings for quantity changes',async()=>{
   const h=harness();h.store.setMeters({unit:'USD',ids:[['s','balance']]});await h.start();
   const answer=async(read:typeof h.reads[number])=>{
     const chunks:Chunk[]=[];
@@ -174,13 +177,56 @@ test('a monetary pan exposes newly read points while keeping the complete table 
   assert.ok(series[0].points.some(point=>point.at>=range.from&&point.at<range.to));
   assert.equal(series[0].end,'9007199254740993');
   assert.equal(h.store.get().history,complete);
+  // Exercise the actual hook's snapshot choice, as useSyncExternalStore does.
+  const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
+  type Watch={read:HistoryStore['getPlot'];stop:()=>void;changes:number};
+  const watches:Watch[]=[];
+  const context={budgetHistory:h.store,fundsHistory:h.store,useSyncExternalStore:(subscribe:HistoryStore['subscribePlot'],read:HistoryStore['getPlot'])=>{
+    let value=read();const watch:Watch={read,stop:()=>{},changes:0};
+    watch.stop=subscribe(()=>{const next=read();if(next!==value){value=next;watch.changes++;}});watches.push(watch);return value;
+  },hook:null as unknown as (family:string,quantities?:boolean)=>unknown};
+  const hook=source.slice(source.indexOf('export function useBudgetHistoryPlot('),source.indexOf('/** A fresh answer from either resource'));
+  runInNewContext(ts.transpileModule(hook.replace('export function','function')+'\nglobalThis.hook=useBudgetHistoryPlot;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  context.hook('budget');context.hook('funds');context.hook('budget',true);
+  const drawing=watches[0].read()!;
+  assert.equal(watches[1].read(),drawing);
+  for(const field of ['meterChunks','series','coverage','activityCells'] as const)assert.equal(drawing[field],plot[field],'snapshots share prepared arrays');
   const chunks=plot.meterChunks,reads=h.reads.length;
-  h.store.pan({token:1,length:24*H,from:range.from+plot.cell,to:range.to+plot.cell,direction:0});await flush();
+  for(let i=1;i<=3;i++){h.store.pan({token:1,length:24*H,from:range.from+i*plot.cell,to:range.to+i*plot.cell,direction:0});await flush();}
+  assert.deepEqual(watches.map(w=>w.changes),[0,0,3],'cached movement updates spending quantities without rendering balance or funds');
   assert.equal(h.store.getPlot()!.meterChunks,chunks,'cached movement does not rebuild the drawing strip');
-  assert.equal(h.store.getPlot()!.meterFrame!.from,Math.floor((range.from+plot.cell)/plot.cell)*plot.cell);
+  assert.equal(h.store.getPlot()!.meterFrame!.from,Math.floor((range.from+3*plot.cell)/plot.cell)*plot.cell);
   assert.equal(h.reads.length,reads);
+  h.store.pan({token:1,length:24*H,from:range.from+12*H,to:range.to+12*H,direction:0});await flush();
+  const rebased=watches[0].read()!;
+  assert.notEqual(rebased,drawing,'a prepared strip rebase reaches balance readers');
+  assert.equal(rebased.version,drawing.version,'strip geometry can change without a data version');
+  assert.notEqual(rebased.from,drawing.from);
   h.store.choose('24h',range);h.store.endPan(true);await flush();
-  assert.notEqual(h.store.get().history,complete);h.store.close();
+  assert.notEqual(h.store.get().history,complete);
+  assert.equal(watches[0].read(),null,'the complete frame replaces the drawing strip after release');
+  h.store.pan({token:2,length:24*H,from:NOW-80*H,to:NOW-56*H,direction:-1});await flush();
+  const before=watches[0].read(),changes=watches[0].changes;
+  assert.ok(pending(h).length);await answer(pending(h)[0]);
+  assert.notEqual(watches[0].read(),before,'newly read cells reach the drawing snapshot');
+  assert.ok(watches[0].changes>changes);
+  for(const field of ['meterChunks','series','coverage','activityCells'] as const)assert.equal(watches[0].read()![field],h.store.getPlot()![field],'both snapshots release the old prepared arrays');
+  for(const watch of watches)watch.stop();h.store.close();
+  assert.equal(h.store.getDrawingPlot(),null);assert.equal(h.store.getPlot(),null);
+});
+
+test('monetary drawing and quantity snapshots retire together across authority and error boundaries',async()=>{
+  for(const boundary of ['board','run','selection','cancel','limit','not found'] as const){
+    const h=harness();h.store.setMeters({unit:'USD',ids:[['s','balance']]});await h.start();await h.reads[0].answer();
+    h.store.pan({token:1,length:24*H,from:NOW-36*H,to:NOW-12*H,direction:-1});await flush();
+    assert.ok(h.store.getDrawingPlot());assert.ok(h.store.getPlot());
+    if(boundary==='board')h.store.open('other');
+    else if(boundary==='run')h.store.hello('new-run');
+    else if(boundary==='selection')h.store.setMeters({unit:'EUR',ids:[['s','balance']]});
+    else if(boundary==='cancel')h.store.endPan(false);
+    else {assert.ok(pending(h).length);await pending(h)[0].fail(new ApiError(boundary==='limit'?413:404,boundary==='limit'?'history_limit':'not_found'));}
+    assert.equal(h.store.getDrawingPlot(),null,boundary);assert.equal(h.store.getPlot(),null,boundary);h.store.close();
+  }
 });
 
 test('separately bounded monetary responses cannot publish an over-budget assembled frame',async()=>{

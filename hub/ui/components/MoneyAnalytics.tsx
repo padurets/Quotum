@@ -52,7 +52,7 @@ const pointAt=(series:MeterHistory,at:number,cell=60000)=>series.pointMode==='ob
 export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:MoneyFamily}) {
   const context=useCurrencyContext(),board=useBoardId(),locale=useLocale(),{history,drawing,loading,error,presentation:authority}=useBudgetHistory(family,true),prefs=usePrefs(),sources=useNamed(arrange.view.names,family);
   const funds=family==='funds',settings=funds?prefs.funds:prefs.money,reader=funds?fundsHistory:budgetHistory;
-  const strip=useBudgetHistoryPlot(family),panning=usePanning();
+  const strip=useBudgetHistoryPlot(family,settings.view==='spending'),panning=usePanning();
   const selected=useTimeRange(),start=useHistoryBegins(),panel=useRef<HTMLElement>(null),{plot,onBase}=usePlot(panel);
   const now=useClock(now=>frameChangesAt(selected,history?.cellMs??60_000,now));
   const frame=frameOf(selected,{range:prefs.range,horizon:prefs.horizon},now,start),measured=measuredTo(frame,history,selected,prefs.range);
