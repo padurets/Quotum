@@ -1404,7 +1404,11 @@ interpolates fractional values.
 Widgets keep their last complete presentation during replacement, including native panning.
 Cold drawing cells and resource evidence are read separately; live ledgers are split
 by resource family, while compact fixed summaries share one response. Preparation
-replaces scratch reservations as each retained index is completed. Shared pan readers
+replaces scratch reservations as each retained index is completed. Monetary indexes
+retain numeric boundaries in typed buffers and exact amounts in unbounded integer
+prefixes; only uncertain steps need separate amount records. Their retained charge
+includes buffers, collections and integer payloads, while preparation also reserves
+overlapping builders and sorting scratch before allocation. Shared pan readers
 decode one input tile at a time, as do coarse cold reads, so an unread month cannot displace the complete period
 with one large transport body.
 Monetary steps remain exact integers; a partially

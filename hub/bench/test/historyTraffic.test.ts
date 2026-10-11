@@ -302,3 +302,30 @@ test('a missing POST body that Chrome cannot recover fails observation and retai
   assert.deepEqual(observer.errors,[missing]);assert.equal(observer.reads.length,1);assert.equal(observer.reads[0].canceled,true);
   assert.equal(observer.reads[0].count?.complete,false);assert.equal(observer.activeCount,0);
 });
+
+test('warm failure diagnostics distinguish exact reads and gesture stages without exposing identities or bodies',async()=>{
+  const listeners=new Map<string,(event:never)=>void>();
+  let finish!:(value:{postData:string})=>void;
+  const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:<T>()=>new Promise<{postData:string}>(resolve=>{finish=resolve;}) as Promise<T>};
+  const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
+  observer.phase='warm';observer.stage='cached return';
+  emit('Network.requestWillBeSent',{requestId:'private-request',request:{url:'http://localhost/api/boards/private-board/period'}});
+  observer.stage='cached repeat';
+  finish({postData:JSON.stringify({selection:{mode:'live',periodMs:30*86_400_000},evaluatedAt:900,
+    quota:{cell:'1',from:'0',to:'60',cells:'skip',evidence:'private-cursor',meters:'[["private-source","private-meter"]]'},
+    funds:{cell:'1',from:'0',to:'60',evidence:'skip'},values:['private-source'],sessions:{cursor:'private-work-cursor'}})});
+  await Promise.all([...observer.pending]);
+  emit('Network.dataReceived',{requestId:'private-request',encodedDataLength:123});
+  emit('Network.loadingFailed',{requestId:'private-request',canceled:true});
+  emit('Network.requestWillBeSent',{requestId:'private-repeat',request:{url:'http://localhost/api/boards/private-board/period/sessions',postData:JSON.stringify({selection:{mode:'range',from:10,to:20},evaluatedAt:901,refs:['private-ref']})}});
+  emit('Network.loadingFailed',{requestId:'private-repeat',canceled:false});
+  const diagnostic=observer.diagnostic('warm');
+  assert.equal(diagnostic.attempts,2);assert.equal(diagnostic.omitted,0);
+  assert.deepEqual(diagnostic.reads[0],{stage:'cached return',endpoint:'period',request:{selection:{mode:'live',periodMs:30*86_400_000},evaluatedAt:900,
+    sections:[{scope:'quota',cell:1,from:0,to:60,cells:'skip',evidence:'cursor'},{scope:'funds',cell:1,from:0,to:60,cells:'read',evidence:'skip'}],values:1,sessions:true},canceled:true,complete:false,decoded:undefined,encodedLower:123,encodedUpper:undefined});
+  assert.equal(diagnostic.reads[1].stage,'cached repeat');assert.equal(diagnostic.reads[1].endpoint,'period/sessions');
+  assert.deepEqual(diagnostic.reads[1].request?.selection,{mode:'range',from:10,to:20});
+  assert.equal(JSON.stringify(diagnostic).includes('private'),false);
+  for(let n=0;n<70;n++)emit('Network.requestWillBeSent',{requestId:String(n),request:{url:'http://localhost/api/history?board=private-board&scope=budget&cell=1&from=0&to=60'}});
+  assert.equal(observer.diagnostic('warm').reads.length,64);assert.equal(observer.diagnostic('warm').omitted,8);
+});

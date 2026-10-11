@@ -13,11 +13,18 @@ import {spanBefore,spanDeadline,valuationAt} from './periodMoney.js';
 import {PeriodCurves,type WorkTimeline} from './periodCurves.js';
 
 const lower=lowerNumber;
+// Conservative JS storage reserves; typed numeric buffers use their byteLength.
+const arrayBytes=(length:number)=>32+length*16;
+const bigintBytes=(value:bigint)=>32+Math.max(1,Math.ceil((value<0n?-value:value).toString(16).length/16))*8;
 class Intervals {
-  readonly from:number[]=[];
-  readonly to:number[]=[];
-  readonly sums:number[]=[0];
-  constructor(spans:readonly [number,number][]) {for(const [a,b] of spans){this.from.push(a);this.to.push(b);this.sums.push(this.sums.at(-1)!+b-a);}}
+  readonly from:Float64Array;
+  readonly to:Float64Array;
+  readonly sums:Float64Array;
+  constructor(spans:readonly [number,number][]) {
+    this.from=new Float64Array(spans.length);this.to=new Float64Array(spans.length);this.sums=new Float64Array(spans.length+1);
+    for(let i=0;i<spans.length;i++){const [a,b]=spans[i];this.from[i]=a;this.to[i]=b;this.sums[i+1]=this.sums[i]+b-a;}
+  }
+  get bytes(){return 96+3*128+this.from.byteLength+this.to.byteLength+this.sums.byteLength;}
   cumulative(at:number){const i=lower(this.to,at);return this.sums[i]+(i<this.from.length?Math.max(0,at-this.from[i]):0);}
   in(range:PeriodRange){return this.cumulative(range.to)-this.cumulative(range.from);}
 }
@@ -88,17 +95,27 @@ class QuotaIndex {
   }
 }
 
-type AmountStep=ExceptionalStep & {amount:string};
 class AmountIndex {
-  private readonly steps:AmountStep[]=[];
-  private readonly starts:number[]=[];
-  private readonly ends:number[]=[];
+  private retainedBytes=0;
+  get bytes(){return this.retainedBytes;}
+  static preparationBytes(readings:number){
+    const count=Math.max(0,readings-1),prefixes=count+1;
+    const limbs=Math.ceil((64+Math.ceil(Math.log2(Math.max(1,count))))/64);
+    // Three growing numeric builders overlap their final typed buffers. Each
+    // independent accounting branch may retain every step as an exception.
+    return 1024+3*arrayBytes(prefixes)+3*(128+prefixes*8)+arrayBytes(prefixes)
+      +prefixes*(32+limbs*8)+count*(64+64+32+40);
+  }
+  private readonly exceptional=new Map<number,ExceptionalStep>();
+  private starts=new Float64Array(0);
+  private ends=new Float64Array(0);
   private readonly sums:bigint[]=[0n];
-  private readonly missing:number[]=[0];
+  private missing=new Float64Array(0);
   constructor(readings:readonly Reading[],spans:readonly MeterSpan[],convert:(value:string,reading:Reading)=>string|null,topup=false,deferred=false) {if(!deferred)drain(this.build(readings,spans,convert,topup));}
   static *prepare(readings:readonly Reading[],spans:readonly MeterSpan[],convert:(value:string,reading:Reading)=>string|null,topup=false):Preparation<AmountIndex>{const value=new AmountIndex(readings,spans,convert,topup,true);yield*value.build(readings,spans,convert,topup);return value;}
   private *build(readings:readonly Reading[],spans:readonly MeterSpan[],convert:(value:string,reading:Reading)=>string|null,topup:boolean):Preparation<void>{
-    let spanIndex=0;
+    const starts:number[]=[],ends:number[]=[],missing=[0];
+    let spanIndex=0,payloadBytes=bigintBytes(0n),exceptionBytes=0;
     for(let i=1;i<readings.length;i++) {
       yield;const a=readings[i-1],b=readings[i],from=b.previousAt??a.at;
       while(spanIndex+1<spans.length&&spans[spanIndex+1].from<=from)spanIndex++;
@@ -106,42 +123,68 @@ class AmountIndex {
       const step=topup?meterStep({...a,kind:'counter'},{...b,kind:'counter'},covering):meterStep(a,b,covering);
       if(!step)continue;
       const amount=convert(step.amount,b);
-      this.missing.push(this.missing.at(-1)!+Number(amount===null));
-      this.steps.push({...step,amount:amount??'0'});this.starts.push(step.from);this.ends.push(step.to);
-      this.sums.push(this.sums.at(-1)!+(step.evidence==='continuous'&&amount!==null?BigInt(amount):0n));
+      missing.push(missing.at(-1)!+Number(amount===null));
+      if(step.evidence!=='continuous'){this.exceptional.set(starts.length,{...step,amount:amount??'0'});exceptionBytes+=64+64+32+(amount??'0').length*2;}
+      starts.push(step.from);ends.push(step.to);
+      const sum=this.sums.at(-1)!+(step.evidence==='continuous'&&amount!==null?BigInt(amount):0n);this.sums.push(sum);payloadBytes+=bigintBytes(sum);
     }
+    this.starts=Float64Array.from(starts);this.ends=Float64Array.from(ends);this.missing=Float64Array.from(missing);
+    this.retainedBytes=256+arrayBytes(this.sums.length)+3*128+this.starts.byteLength+this.ends.byteLength+this.missing.byteLength+192+exceptionBytes+payloadBytes;
   }
   at(range:PeriodRange) {
     const lo=lower(this.starts,range.from),hi=lower(this.ends,range.to),edge=lower(this.ends,range.from);
     const unlocated:ExceptionalStep[]=[];
-    for(let i=edge;i<hi;i++){const step=this.steps[i];if(step.from<range.from||step.evidence!=='continuous')unlocated.push(step);}
+    for(let i=edge;i<hi;i++){const step=this.exceptional.get(i);if(this.starts[i]<range.from||step)unlocated.push(step??{from:this.starts[i],to:this.ends[i],amount:(this.sums[i+1]-this.sums[i]).toString(),evidence:'continuous'});}
     return {value:this.missing[hi]>this.missing[edge]?null:hi>lo?(this.sums[hi]-this.sums[lo]).toString():'0',unlocated};
   }
 }
 
 class MoneyIndex {
-  private times:number[]=[];
+  private retainedBytes=0;
+  private times=new Float64Array(0);
   private spent!:AmountIndex;
   private topup!:AmountIndex;
   private coverage!:Intervals;
-  private pairedTimes:number[]=[];
-  private valuations=new Map<string,number[]>();
-  private anchors:number[]=[];
-  /** Separate from the tape's objects: exact prefixes, numeric indexes and sorting scratch. */
+  private pairedTimes=new Float64Array(0);
+  private valuations=new Map<string,Float64Array>();
+  private anchors:Float64Array=new Float64Array(0);
+  /** Separate from the tape: reserve construction overlap before any allocation. */
   static bytes(group:MoneyTape) {
-    const readings=group.readings.length+(group.paired?.readings.length??0),spans=group.spans.length+(group.paired?.spans.length??0);
-    const rates=Object.keys(group.rates??{}).length+Object.keys(group.rateBindings?.entries??{}).length;
-    return 1024+readings*448+spans*160+rates*160;
+    const primary=group.readings.length,paired=group.paired?.readings.length??0;
+    const spans=group.spans.length+(group.paired?.spans.length??0);
+    let rates=0,keyChars=0,maxLegs=0;
+    for(const key in group.rates){rates++;keyChars+=key.length;maxLegs=Math.max(maxLegs,group.rates![key]?.length??0);}
+    for(const key in group.rateBindings?.entries){rates++;keyChars+=key.length;}
+    for(const path of group.rateBindings?.paths??[])maxLegs=Math.max(maxLegs,path?.length??0);
+    const anchors=primary+paired+rates+3*spans;
+    // Numeric buffers are exact; JS builders allow two slots per element. The
+    // anchor allowance covers Set entries, typed sorting buffers and iterators
+    // simultaneously. Rate keys include their sliced unit strings and per-unit
+    // builders/typed outputs. Coverage includes mapped spans, union and indexes.
+    const numeric=3*128+8*(primary+paired+anchors);
+    const valuations=512+rates*512+keyChars*4;
+    const anchorScratch=1024+anchors*160;
+    const coverage=1024+spans*320;
+    // A native difference has at most 64 bits. Conversion may temporarily
+    // multiply by every route leg (63 bits each), with up to 60 scale bits.
+    const conversionBits=124+64*maxLegs;
+    const conversion=2048+16*(32+8*Math.ceil(conversionBits/64))+2*conversionBits;
+    const spent=AmountIndex.preparationBytes(group.accounting?.spending==='unavailable'?0:primary);
+    const topup=AmountIndex.preparationBytes(group.accounting?.topups==='unavailable'?0:group.paired?paired:primary);
+    return 4096+numeric+valuations+anchorScratch+coverage+conversion+spent+topup;
   }
-  get bytes(){return MoneyIndex.bytes(this.group);}
+  get bytes(){return this.retainedBytes;}
   constructor(readonly group:MoneyTape,deferred=false) {if(!deferred)drain(this.build());}
   static *prepare(group:MoneyTape):Preparation<MoneyIndex>{const value=new MoneyIndex(group,true);yield*value.build();return value;}
   private *build():Preparation<void>{
     const group=this.group;
-    for(const r of group.readings){this.times.push(r.at);yield;}for(const r of group.paired?.readings??[]){this.pairedTimes.push(r.at);yield;}
-    for(const [unit,at] of rateObservations(group)){const times=this.valuations.get(unit)??[];times.push(at);this.valuations.set(unit,times);yield;}
-    for(const times of this.valuations.values())times.sort((a,b)=>a-b);
-    this.anchors=[...new Set([...this.times,...this.pairedTimes,...[...this.valuations.values()].flat(),...[group,...(group.paired?[group.paired]:[])].flatMap(part=>part.spans.flatMap(span=>[span.from,span.to,...(span.observedFrom===undefined?[]:[span.observedFrom])]))])].sort((a,b)=>a-b);
+    this.times=new Float64Array(group.readings.length);this.pairedTimes=new Float64Array(group.paired?.readings.length??0);
+    for(const [i,r] of group.readings.entries()){this.times[i]=r.at;yield;}for(const [i,r] of (group.paired?.readings??[]).entries()){this.pairedTimes[i]=r.at;yield;}
+    const valuations=new Map<string,number[]>();let valuationBytes=0;
+    for(const [unit,at] of rateObservations(group)){const times=valuations.get(unit)??[];times.push(at);valuations.set(unit,times);yield;}
+    for(const [unit,times] of valuations){const sorted=yield*sortedNumbers(Float64Array.from(times));this.valuations.set(unit,sorted);valuationBytes+=96+32+unit.length*2+128+sorted.byteLength;}
+    valuations.clear();
+    this.anchors=yield*this.buildAnchors();
     const convert=(amount:string,reading:Reading)=>this.convert(amount,reading);
     this.spent=yield* AmountIndex.prepare(group.accounting?.spending==='unavailable'?[]:group.readings,group.spans,convert);
     // Account credits are a monotonically increasing funding counter; balance-only
@@ -150,6 +193,14 @@ class MoneyIndex {
     // Accounting is confirmed only between observations. A held value's TTL is not
     // evidence of zero spending in the unobserved tail.
     this.coverage=new Intervals(union(group.spans.map(s=>({from:Math.max(s.from,group.retainedFrom??0),to:Math.min(s.to,s.holdUntil??Infinity,s.interruptedAt??Infinity)})).filter(s=>s.to>s.from)));
+    this.retainedBytes=512+3*128+this.times.byteLength+this.pairedTimes.byteLength+this.anchors.byteLength+this.spent.bytes+this.topup.bytes+this.coverage.bytes+valuationBytes;
+  }
+  private *buildAnchors():Preparation<Float64Array>{
+    const unique=new Set<number>();
+    for(const times of [this.times,this.pairedTimes,...this.valuations.values()])for(const at of times){unique.add(at);yield;}
+    for(const part of [this.group,...(this.group.paired?[this.group.paired]:[])])for(const span of part.spans){unique.add(span.from);unique.add(span.to);if(span.observedFrom!==undefined)unique.add(span.observedFrom);yield;}
+    const values=new Float64Array(unique.size);let at=0;for(const value of unique){values[at++]=value;yield;}
+    unique.clear();return yield*sortedNumbers(values);
   }
   private convert(value:string,reading:Reading,at=reading.at) {
     if(!this.group.displayUnit||reading.unit===this.group.displayUnit)return value;
@@ -253,12 +304,14 @@ export class PeriodAccounting {
     }
     for(const group of tape.money){
       const key=group.source+'\n'+group.meter+'\n'+(group.displayUnit??group.readings[0]?.unit),old=prior?.money.get(key),reuse=old?.group===group;
-      if(!reuse){preparedBytes+=MoneyIndex.bytes(group);progress?.(preparedBytes);}
-      this.money.set(key,reuse?old!:yield*MoneyIndex.prepare(group));
+      if(!reuse)progress?.(preparedBytes+MoneyIndex.bytes(group));
+      const index=reuse?old!:yield*MoneyIndex.prepare(group);
+      if(!reuse){preparedBytes+=index.bytes;progress?.(preparedBytes);}
+      this.money.set(key,index);
     }
   }
-  get quotaBytes(){return [...this.quota.values()].reduce((n,index)=>n+index.bytes,0);}
-  get bytes(){return this.quotaBytes+[...this.money.values()].reduce((n,index)=>n+index.bytes,0);}
+  get quotaBytes(){let bytes=0;for(const index of this.quota.values())bytes+=index.bytes;return bytes;}
+  get bytes(){let bytes=this.quotaBytes;for(const index of this.money.values())bytes+=index.bytes;return bytes;}
   quotaSummary(source:string,window:string,range:PeriodRange){return this.quota.get(source+'\n'+window)?.at(range);}
   moneySummary(source:string,meter:string,unit:string,range:PeriodRange){return this.money.get(source+'\n'+meter+'\n'+unit)?.at(range);}
   fixed(range:PeriodRange,cell:number):NonNullable<PeriodTape['fixed']> {

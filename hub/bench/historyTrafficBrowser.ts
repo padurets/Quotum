@@ -9,7 +9,8 @@ import {observeReversal} from './reversalDiagnostic';
 
 const DAY = 86_400_000;
 type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
-type Read = {sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
+type RequestDiagnostic={selection?:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number};evaluatedAt?:number;sections:{scope:PeriodScope;from:number;to:number;cell:number;cells:'skip'|'read';evidence:'skip'|'cursor'|'baseline'}[];values:number;sessions:boolean};
+type Read = {endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
 
@@ -49,6 +50,7 @@ export function historyPageScript(period: string) {
 /** Counts encoded bodies only. Chrome's loadingFinished total includes headers. */
 export class HistoryBodies {
   phase = 'seed';
+  stage = 'seed';
   readonly reads: Read[] = [];
   readonly pending = new Set<Promise<unknown>>();
   readonly errors: unknown[] = [];
@@ -56,15 +58,22 @@ export class HistoryBodies {
   private readonly metadata = new Map<string, HistoryBasis>();
   get activeCount() {return this.active.size;}
   get resources():Read[] {return this.reads.flatMap(read=>read.sections?read.sections.map(section=>({...read,...section})):read.cell>0?[read]:[]);}
+  /** Only request shape and body counts: identities, cursors and response contents stay private. */
+  diagnostic(phase:string){
+    const reads=this.reads.filter(read=>read.phase===phase);
+    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
+  }
   constructor(cdp: Pick<Cdp, 'on' | 'send'>) {
     cdp.on<{requestId: string; request: {url: string;postData?:string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
       const url = new URL(event.request.url); if (!accountingPath(url.pathname)) return;
-      const read: Read = {selection: historyReadSelection(url), id: event.requestId, phase: this.phase, from: Number(url.searchParams.get('from')), to: Number(url.searchParams.get('to')), cell: Number(url.searchParams.get('cell')), lower: 0, before: Promise.all([...this.pending]), attemptId: lowerHeaders(event.request.headers ?? {})[HISTORY_ATTEMPT_HEADER]};
+      const read: Read = {endpoint:url.pathname==='/api/history'?'history':url.pathname.endsWith('/sessions')?'period/sessions':'period',stage:this.stage,selection: historyReadSelection(url), id: event.requestId, phase: this.phase, from: Number(url.searchParams.get('from')), to: Number(url.searchParams.get('to')), cell: Number(url.searchParams.get('cell')), lower: 0, before: Promise.all([...this.pending]), attemptId: lowerHeaders(event.request.headers ?? {})[HISTORY_ATTEMPT_HEADER]};
       this.active.set(read.id, read); this.reads.push(read);
       if(url.pathname!=='/api/history'){
         read.sections=[];
         const classify=(postData:string)=>{
           const body=JSON.parse(postData) as PeriodRequest;
+          const selection=body.selection;
+          read.diagnostic={...(selection?{selection:selection.mode==='live'?{mode:'live',periodMs:Number(selection.periodMs)}:{mode:'range',from:Number(selection.from),to:Number(selection.to)}}:{}),evaluatedAt:Number(body.evaluatedAt),sections:PERIOD_SCOPES.flatMap(scope=>{const query=body[scope];return query?[{scope,from:Number(query.from),to:Number(query.to),cell:Number(query.cell),cells:query.cells==='skip'?'skip' as const:'read' as const,evidence:query.evidence==='skip'?'skip' as const:query.evidence?'cursor' as const:'baseline' as const}]:[];}),values:body.values?.length??0,sessions:!!body.sessions};
           for(const scope of PERIOD_SCOPES)if(body[scope]&&body[scope]!.cells!=='skip'){const query=new URL('/api/history',url);query.search=new URLSearchParams({board:decodeURIComponent(url.pathname.split('/')[3]),scope:scope==='funds'?'budget':scope,...body[scope]}).toString();read.sections!.push({scope,selection:historyReadSelection(query),from:Number(body[scope]!.from),to:Number(body[scope]!.to),cell:Number(body[scope]!.cell)});}
           if(read.sections![0])Object.assign(read,read.sections![0]);
         };
@@ -75,7 +84,7 @@ export class HistoryBodies {
           const work=cdp.send<{postData:string}>('Network.getRequestPostData',{requestId:read.id}).then(result=>classify(result.postData)).catch(error=>{this.errors.push(error);});
           read.request=work;this.pending.add(work);void work.then(()=>this.pending.delete(work));
         }
-      }
+      }else read.diagnostic={sections:[{scope:url.searchParams.get('scope')==='budget'?'budget':'quota',from:read.from,to:read.to,cell:read.cell,cells:'read',evidence:'skip'}],values:0,sessions:false};
     });
     cdp.on<{requestId: string; headers: Record<string, string>}>('Network.requestWillBeSentExtraInfo', event => {
       const read = this.reads.find(r => r.id === event.requestId), id = lowerHeaders(event.headers)[HISTORY_ATTEMPT_HEADER];
@@ -193,6 +202,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         observer=await observeReversal(cdp,browser,false);
         const phase = `${name}/cold`; bodies.phase = phase; proxy.phase(phase, latency);
         const scroll = (distance: number,stage:string) => {
+          bodies.stage=stage;
           cdp.at(`${bodies.phase}/${stage}`);
           return observer!.watch(`${bodies.phase}/${stage}`,()=>cdp.send('Input.synthesizeScrollGesture', historyScroll(geometry, fraction, distance)));
         };
@@ -234,7 +244,9 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         await scroll(-(pose.poses[0].origin - pose.to) / length * geometry.width,'cached return'); await settled();
         assert.equal(await cdp.evaluate<boolean>('new URLSearchParams(location.search).has("from")'), false, 'cached return did not reach live');
         await scroll(geometry.width * fraction,'cached repeat'); await settled();
-        const warm = bodies.reads.filter(read => read.phase === warmPhase); assert.equal(warm.length, 0, 'browser cached return/repeat started history');
+        const warm = bodies.reads.filter(read => read.phase === warmPhase);
+        if(warm.length)console.error('bench: warm history diagnostic '+JSON.stringify({name,...bodies.diagnostic(warmPhase)}));
+        assert.equal(warm.length, 0, 'browser cached return/repeat started history');
         const metrics = await cdp.send<{metrics: {name: string; value: number}[]}>('Performance.getMetrics');
         for (const family of families) {
           const report = {...family, warmAttempts: warm.length, series: geometry.series, movement: {tokens: pose.tokens.length, samples: pose.poses.length, pushes: pose.pushes, from: pose.from, to: pose.to}, heapBytes: metrics.metrics.find(m => m.name === 'JSHeapUsedSize')?.value};
