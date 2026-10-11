@@ -22,6 +22,7 @@ function compactJSON(value: unknown): string {
 export class HistoryTiles {
   private readonly key = randomBytes(32);
   private readonly kept = new Map<string, Kept>();
+  private readonly refs = new Map<string, string>();
   private bytes = 0;
   private retentionRevision = 0;
 
@@ -32,11 +33,19 @@ export class HistoryTiles {
   }
 
   ref(board: string, session: number) {
-    return createHmac('sha256', this.key).update(`${board}:${session}`).digest('base64url').slice(0, 8);
+    return this.cachedRef(`${board}:${session}`);
   }
 
   fragmentRef(board: string, session: number, source: string | null) {
-    return createHmac('sha256', this.key).update(JSON.stringify([board, session, source])).digest('base64url').slice(0, 8);
+    return this.cachedRef(JSON.stringify([board, session, source]));
+  }
+
+  /** Partial tiles reuse these immutable pseudonyms without hashing every read. */
+  private cachedRef(input: string) {
+    const value=this.refs.get(input)??createHmac('sha256',this.key).update(input).digest('base64url').slice(0,8);
+    this.refs.delete(input);this.refs.set(input,value);
+    while(this.refs.size>Math.max(1,Math.floor(this.budget/1024)))this.refs.delete(this.refs.keys().next().value!);
+    return value;
   }
 
   touch(source: string, since: number, scopes?: readonly HistoryScope[], options?: {work: true}) {
@@ -57,6 +66,7 @@ export class HistoryTiles {
   read(board: string, cell: number, from: number, to: number, now: number, shown: Shown, meters?: MeterSelection, scope?: HistoryScope, work = false): string[] {
     if (this.retentionRevision !== this.store.retentionRevision) {
       this.kept.clear();
+      this.refs.clear();
       this.bytes = 0;
       this.retentionRevision = this.store.retentionRevision;
     }

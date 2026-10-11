@@ -8,7 +8,7 @@ import {meterCells, type MeterGroup, type MeterSelection, type MeterSeriesCells}
 import type {CurrencyStore} from './currencies.js';
 import {conversionOrigin} from '../domain/currency.js';
 
-type ReadingRow = {meter_id: string; at: bigint; previous_at: bigint | null; kind: Meter['kind']; unit: string; amount: bigint; amount_scale: bigint; limit_amount: bigint | null; reset_at: bigint | null; minutes: bigint | null; scope: string | null; label: string | null; stale_after_ms: bigint};
+type ReadingValues = [at: bigint, previousAt: bigint | null, kind: Meter['kind'], unit: string, amount: bigint, scale: bigint, limit: bigint | null, resetAt: bigint | null, minutes: bigint | null, scope: string | null, label: string | null, staleAfterMs: bigint];
 const numberOf = (value: bigint | null) => value === null ? null : Number(value);
 const keyMeter = (id: string) => /^key:([0-9a-f]{12}):(?:usage|cap)$/.exec(id)?.[1] ?? null;
 
@@ -118,9 +118,10 @@ export class MeterStore {
 
   private nativeReadings(source: string, meter: string, from: number, to: number, dense: boolean): Reading[] {
     const sparse = dense ? '' : ' AND pair_anchor=0';
-    const query = this.db.prepare(`SELECT * FROM readings WHERE source_id=? AND meter_id=?${sparse} AND at<? AND at>=coalesce((SELECT max(at) FROM readings WHERE source_id=? AND meter_id=?${sparse} AND at<?),?) ORDER BY at`);
+    const query = this.db.prepare(`SELECT at,previous_at,kind,unit,amount,amount_scale,limit_amount,reset_at,minutes,scope,label,stale_after_ms FROM readings WHERE source_id=? AND meter_id=?${sparse} AND at<? AND at>=coalesce((SELECT max(at) FROM readings WHERE source_id=? AND meter_id=?${sparse} AND at<?),?) ORDER BY at`);
     query.setReadBigInts(true);
-    return (query.all(source, meter, to, source, meter, from, from) as ReadingRow[]).map(r => ({id: r.meter_id, at: Number(r.at), previousAt: numberOf(r.previous_at), kind: r.kind, unit: r.unit, amount: r.amount.toString(), ...(r.unit === 'credits:codex' ? {scale:Number(r.amount_scale)} : {}), limit: r.limit_amount?.toString() ?? null, resetAt: numberOf(r.reset_at), minutes: numberOf(r.minutes), scope: r.scope, label: r.label, staleAfterMs: Number(r.stale_after_ms)}));
+    query.setReturnArrays(true);
+    return (query.all(source, meter, to, source, meter, from, from) as unknown as ReadingValues[]).map(([at,previousAt,kind,unit,amount,scale,limit,resetAt,minutes,scope,label,staleAfterMs]) => ({id:meter,at:Number(at),previousAt:numberOf(previousAt),kind,unit,amount:amount.toString(),...(unit==='credits:codex'?{scale:Number(scale)}:{}),limit:limit?.toString()??null,resetAt:numberOf(resetAt),minutes:numberOf(minutes),scope,label,staleAfterMs:Number(staleAfterMs)}));
   }
 
   spans(source: string, meter: string, from: number, to: number): MeterSpan[] {

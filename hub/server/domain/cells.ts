@@ -82,6 +82,15 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
     activity.get(at)!.push(part);
   }
   const sessionIndexes = chunks.map(() => new Map<string, number>());
+  const dimensions = ['s', 'p', 'd'] as const;
+  const projects=new Map<string|null,string>();
+  const keyOf=(dim:typeof dimensions[number],s:Stretch)=>{
+    if(dim==='s')return s.source??'unknown';
+    if(dim==='d')return s.device;
+    let key=projects.get(s.project);
+    if(key===undefined){key=JSON.stringify(s.project);projects.set(s.project,key);}
+    return key;
+  };
   for (const [at, spans] of [...activity].sort((a, b) => a[0] - b[0])) {
     const chunk = chunkOf(at);
     const indexes = sessionIndexes[tileOf(at, cell) - firstTile];
@@ -99,8 +108,6 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
     }
     // One chronological pass measures the total and each grouping's union. Sorting
     // every source, project and device separately repeats most of the same work.
-    const dimensions = ['s', 'p', 'd'] as const;
-    const keyOf = (dim: typeof dimensions[number], s: Stretch) => dim === 's' ? s.source ?? 'unknown' : dim === 'p' ? JSON.stringify(s.project) : s.device;
     const unions = {s:new Map<string,{to:number;ms:number}>(),p:new Map<string,{to:number;ms:number}>(),d:new Map<string,{to:number;ms:number}>()};
     let active=0,coveredTo=-Infinity;
     for(const s of spans.slice().sort((a,b)=>a.from-b.from||a.to-b.to)) {
