@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {numericProfile, profileInterval, profilePanning, profileWindow} from '../cpuProfile.js';
 import type {Cdp, Browser} from '../cdp.js';
 import {safeEvidence} from '../evidence.js';
@@ -36,6 +37,58 @@ test('missing, malformed and dangling CPU samples cannot be complete evidence', 
     {...recorded(), startTime: NaN},
   ];
   for (const value of values) assert.equal(numericProfile(value).status, 'insufficient-evidence');
+});
+
+test('renderer script IDs remain distinct from local ordinals and invalid IDs stay unavailable', () => {
+  for (const [scriptId, expected] of [['13', 13], ['9007199254740991', Number.MAX_SAFE_INTEGER], ['0', null], ['013', null], ['-1', null], ['1.5', null], ['9007199254740992', null], ['private-canary', null]] as const) {
+    const value = recorded();
+    value.nodes[0].callFrame.scriptId = '0';
+    value.nodes[1].callFrame = {...frame, scriptId};
+    const result = numericProfile(value);
+    assert.equal(result.status, 'complete'); assert.ok('nodes' in result);
+    assert.equal(result.nodes[1].scriptId, scriptId === '0' ? 1 : 2);
+    assert.equal(result.nodes[1].rendererScriptId, expected);
+    assert.equal(result.nodes[0].rendererScriptId, null);
+    assert.doesNotMatch(JSON.stringify(safeEvidence(result)), /private-canary|https:/);
+  }
+});
+
+test('CPU source binding follows each original family after the profiler is disabled', async () => {
+  const f = fixture(), listeners = new Map<string, Set<(value: unknown) => void>>();
+  const emit = (name: string, value: unknown) => {for (const listener of listeners.get(name) ?? []) listener(value);};
+  f.cdp.on = ((name: string, listener: (value: unknown) => void) => {let set = listeners.get(name); if (!set) listeners.set(name, set = new Set()); set.add(listener);}) as Cdp['on'];
+  f.cdp.off = ((name: string, listener: (value: unknown) => void) => {const set = listeners.get(name); set?.delete(listener); if (!set?.size) listeners.delete(name);}) as Cdp['off'];
+  const body = '/* private-canary */ globalThis.control=1;', hash = createHash('sha256').update(body).digest('hex');
+  const url = 'http://private-canary.invalid/assets/index-control.js', send = f.cdp.send.bind(f.cdp);
+  f.cdp.send = (async (name: string, params: object, signal?: AbortSignal) => {
+    const value = await send(name, params, signal);
+    if (name === 'Network.getResponseBody') return {body, base64Encoded: false};
+    if (name === 'Debugger.enable') emit('Debugger.scriptParsed', {url, hash, scriptId: '13'});
+    return value;
+  }) as Cdp['send'];
+  await profilePanning(f.cdp, f.browser, f.evidence, async cdp => {
+    for (const family of [1, 2, 3]) {
+      emit('Network.responseReceived', {type: 'Script', requestId: 'private-canary', response: {url}});
+      for (let period = 0; period < 2; period++) {
+        await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
+        await cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', deltaX: 12});
+        await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
+        assert.equal(f.sent.filter(v => v.method === 'Debugger.enable').length, family - 1);
+      }
+      await cdp.evaluate(`document.getElementById('quotum-pan-layout')?.remove()`);
+      const methods = f.sent.map(v => v.method);
+      assert.ok(methods.lastIndexOf('Debugger.enable') > methods.lastIndexOf('Profiler.disable'));
+      const binding = f.files.get(`cpu-source-family-${family}`) as {status: string; intervals: number[]; owners: unknown[]; debuggerDisabled: boolean};
+      assert.equal(binding.status, 'complete'); assert.equal(binding.debuggerDisabled, true);
+      assert.deepEqual(binding.intervals, [family * 2 - 1, family * 2]);
+      assert.deepEqual(binding.owners, [{scriptId: 13, parsedHash: hash, receivedAssetHashMatches: true}]);
+      assert.doesNotMatch(JSON.stringify(safeEvidence(binding)), /private-canary|requestId|url/);
+    }
+    return {reports: [], problems: []};
+  }, {status: 'available', name: 'index-control.js', bytes: Buffer.byteLength(body), sha256: hash});
+  assert.equal(listeners.size, 0);
+  assert.equal(f.sent.filter(v => v.method === 'Profiler.stop').length, 6);
+  assert.deepEqual(f.sent.filter(v => v.method === 'Input.dispatchMouseEvent').map(v => v.params), Array(6).fill({type: 'mouseWheel', deltaX: 12}));
 });
 
 test('signed V8 sample deltas keep their original order and positions', () => {

@@ -96,7 +96,12 @@ Profiler setup and stop keep five-second deadlines; an unconfirmed stop closes i
 owned browser and preserves an earlier scenario failure. Page clock brackets retain
 alignment uncertainty. Sample widths include throttling and are not thread CPU time;
 sampling overhead remains unqualified. V8's signed sample deltas and their original
-order are retained; timestamps are never clipped. Fixed busy/timer/busy controls at
+order are retained; timestamps are never clipped.
+The profile's local script ordinals remain separate from browser script IDs. After
+each complete chart family and after profiling stops, the received bundle hash and
+parsed script IDs bind its sample positions to that renderer's actual script.
+Missing or mismatched bindings remain unavailable; IDs from another family or run
+cannot establish a source match. Fixed busy/timer/busy controls at
 rates 1 and 4 follow on an empty owned tab. The unthrottled controls must distinguish function samples
 from timer waiting; contradictory or missing calibration cannot pass. This is a
 diagnostic result and cannot satisfy the canonical gate. If both CPU and trace labels

@@ -2,6 +2,8 @@ import {deadline} from './deadline.js';
 import {panning} from './panning.js';
 import type {Browser, Cdp} from './cdp.js';
 import {openTab} from './cdp.js';
+import {clientIdentity} from './evidence.js';
+import {ScriptBinding} from './scriptBinding.js';
 
 type Profile = {startTime: number; endTime: number; nodes: {
   id: number; hitCount?: number; children?: number[];
@@ -30,7 +32,8 @@ export function numericProfile(profile: Profile) {
     const line = integer(frame.lineNumber, -1) ? frame.lineNumber : null;
     const column = integer(frame.columnNumber, -1) ? frame.columnNumber : null;
     if (line === null || column === null) invalid++;
-    return [{id: node.id, children, scriptId: scripts.get(scriptId), line, column,
+    return [{id: node.id, children, scriptId: scripts.get(scriptId),
+      rendererScriptId: /^[1-9]\d*$/.test(scriptId) && Number.isSafeInteger(Number(scriptId)) ? Number(scriptId) : null, line, column,
       hitCount: integer(node.hitCount) ? node.hitCount : null,
       kind: kinds.has(frame.functionName) ? frame.functionName : 'function',
       sourceRole: typeof frame.url === 'string' && /\/assets\/index-[\w-]+\.js(?:[?#].*)?$/.test(frame.url) ? 1 : frame.url === '' ? 0 : 2}];
@@ -130,10 +133,22 @@ export async function profileInterval<T>(cdp: Cdp, browser: Browser, run: () => 
 }
 
 /** Each original CPU4 scenario owns its profile; no workload or budget is changed. */
-export async function profilePanning(cdp: Cdp, browser: Browser, evidence?: Files, run = panning) {
-  let active: Promise<unknown> | undefined, release = () => {}, interval = 0;
+export async function profilePanning(cdp: Cdp, browser: Browser, evidence?: Files, run = panning, client = clientIdentity()) {
+  if (!browser.owned) throw new Error('CPU profiling requires an owned synthetic browser');
+  let active: Promise<unknown> | undefined, release = () => {}, interval = 0, familyStart = 0;
+  const binding = new ScriptBinding(cdp, client, (name, value) => evidence?.save('cpu-' + name, value));
   const stop = async () => {if (active) {release(); const pending = active; active = undefined; await pending;}};
-  const measured = {on: cdp.on.bind(cdp), off: cdp.off.bind(cdp), evaluate: cdp.evaluate.bind(cdp), at: cdp.at?.bind(cdp),
+  const measured = {on: cdp.on.bind(cdp), off: cdp.off.bind(cdp), at: cdp.at?.bind(cdp),
+    evaluate: async<T>(expression: string, signal?: AbortSignal): Promise<T> => {
+      const value = await cdp.evaluate<T>(expression, signal);
+      // The original cleanup follows both periods and all extra family checks.
+      if (expression === `document.getElementById('quotum-pan-layout')?.remove()`) {
+        await stop();
+        await binding.afterFamily(Array.from({length: interval - familyStart}, (_, index) => familyStart + index + 1));
+        familyStart = interval;
+      }
+      return value;
+    },
     send: async<T = unknown>(method: string, params: object = {}, signal?: AbortSignal): Promise<T> => {
       const rate = (params as {rate?: number}).rate;
       if (method === 'Emulation.setCPUThrottlingRate' && rate === 4) {
@@ -151,7 +166,7 @@ export async function profilePanning(cdp: Cdp, browser: Browser, evidence?: File
   let failed = false;
   try {return await run(measured, undefined, {timeline: true, save: (name, value) => evidence?.save('cpu-' + name, value)});}
   catch (error) {failed = true; throw error;}
-  finally {try {await stop();} catch (error) {if (!failed) throw error;}}
+  finally {binding.close(); try {await stop();} catch (error) {if (!failed) throw error;}}
 }
 
 /** Fixed sampler and clock controls follow the original scenarios on an empty owned tab. */
