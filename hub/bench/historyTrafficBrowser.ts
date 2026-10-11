@@ -150,6 +150,17 @@ export function historyScroll(geometry: {x: number; y: number; width: number}, f
   return {x: geometry.x, y: geometry.y, xDistance: distance, yDistance: 0, speed: Math.max(1, Math.round(geometry.width * fraction / .75)), gestureSourceType: 'mouse', preventFling: true};
 }
 
+/** A hovered legend bubble can cover a ready plot without belonging to its input handler. */
+export async function prepareHistoryTarget(cdp: Pick<Cdp, 'send' | 'evaluate'>, selector: string, point: {x: number; y: number}) {
+  await cdp.send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, modifiers: 0});
+  await cdp.send('Input.dispatchKeyEvent', {type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, modifiers: 0});
+  const reachable = await cdp.evaluate<boolean>(`(() => {
+    const chart=document.querySelector(${JSON.stringify(selector)}),{x,y}=${JSON.stringify(point)};
+    return !!chart&&chart.contains(document.elementFromPoint(x,y))&&chart.contains(document.elementFromPoint(Math.trunc(x),Math.trunc(y)));
+  })()`);
+  assert.ok(reachable, 'native history gesture target is covered');
+}
+
 type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
 
 async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number) {
@@ -183,6 +194,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     await settled();
     const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number}>(`(() => {const svg=document.querySelector(${JSON.stringify(future ? '.history .chart>svg' : '.activity .chart>svg')});svg.scrollIntoView({block:'center'});const r=svg.getBoundingClientRect(),left=${future ? 40 : 48};return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-left-12)/svg.viewBox.baseVal.width,series:document.querySelectorAll('.history .series[d]:not([d=""])').length};})()`);
     assert.ok(geometry.series >= 12, `${name}: fewer than twelve actual series`);
+    await prepareHistoryTarget(cdp, future ? '.history .chart' : '.activity .chart', geometry);
     const seedReads = bodies.resources.filter(read => read.phase === seedPhase && read.count?.complete);
     assert.ok(seedReads.length,`${name}: no complete seed resources: ${JSON.stringify(bodies.reads.map(read=>({phase:read.phase,resources:read.sections?.length,cell:read.cell,complete:read.count?.complete,canceled:read.canceled})))}`); const cell = seedReads[0].cell;
     const seeds = new Map<string, {answer: NonNullable<Read['answer']>; initial: Set<number>}>();

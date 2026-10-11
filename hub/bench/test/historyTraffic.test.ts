@@ -66,8 +66,25 @@ test('the owned proxy measures a real fixed-codec HTTP body without changing JSO
   } finally {await proxy.close(); await new Promise<void>(resolve => upstream.close(() => resolve()));}
 });
 
-import {HistoryBodies, hasSeededHistory, historyReadSelection, historyScroll, stableHistoryReads} from '../historyTrafficBrowser';
+import {HistoryBodies, hasSeededHistory, historyReadSelection, historyScroll, prepareHistoryTarget, stableHistoryReads} from '../historyTrafficBrowser';
 import {readUnion} from '../historyTrafficBudget';
+
+test('native history setup rejects a covered point or a different chart without moving its point', async () => {
+  const surface = {}, other = {}, chart = {contains: (node: unknown) => node === surface};
+  const point = {x: 10.75, y: 20.75};
+  const fixture = (hit: (x: number, y: number) => unknown, present = true) => ({
+    async send<T>() {return {} as T;},
+    async evaluate<T>(source: string) {return runInNewContext(source, {document: {
+      querySelector: (selector: string) => present && selector === '.activity .chart' ? chart : null,
+      elementFromPoint: hit,
+    }}) as T;},
+  });
+  await prepareHistoryTarget(fixture(() => surface), '.activity .chart', point);
+  for (const cdp of [fixture(() => other), fixture(() => surface, false), fixture(x => x === point.x ? surface : other)]) {
+    await assert.rejects(prepareHistoryTarget(cdp, '.activity .chart', point), /native history gesture target is covered/);
+  }
+  assert.deepEqual(point, {x: 10.75, y: 20.75});
+});
 
 test('traffic references preserve each resource selection instead of merging equal time cells', () => {
   const uri = new URL('http://localhost/api/history?board=b&scope=budget&unit=USD&meters=%5B%5B%22wallet%22%2C%22balance%22%5D%5D&cell=1&from=0&to=60&meta=old');
