@@ -3,9 +3,9 @@ import {boardPeriod,followPeriod} from './period';
 import type {HistoryScope} from '../../server/domain/history';
 import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVITY} from '../../server/domain/widgets';
 import {useMemo,useRef,useSyncExternalStore} from 'react';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart,planEventsAt, type Chunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
 import {page, type PageEvent, type PageState} from './board';
-import {hubNow,useClock} from './clock';
+import {clock,hubNow,useClock,type PageClock} from './clock';
 import {HistoryTile} from './historyTiles';
 import {ApiError, UNAUTHORIZED} from './http';
 import {periodOf,frameChangesAt} from './periods';
@@ -27,6 +27,7 @@ const RETRY_MS = 15_000;
 const STORED_BYTES = 15 * 1024 * 1024;
 
 export type HistoryEnv = {
+  clock?:PageClock;
   read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis): Promise<HistoryAnswer>;
   now(): number;
   /** Elapsed time stays independent of corrections to the estimated hub clock. */
@@ -109,13 +110,17 @@ export class HistoryStore {
   private readonly responses = new Map<Flight, ResponseOwner>();
   private readonly reservations = new Map<string, Flight>();
   private readonly plotChunks = new Map<string, {tile: HistoryTile; seq: number; from: number; to: number; chunk: Chunk}>();
+  private readonly planWatch:ReturnType<PageClock['watch']>;
+  private stopPlanClock:(()=>void)|null=null;
+  private planDeadline=Infinity;
 
-  constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES, readonly scope?: HistoryScope, private readonly pool?: HistoryPool) {pool?.register(this);}
+  constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES, readonly scope?: HistoryScope, private readonly pool?: HistoryPool) {this.planWatch=(env.clock??clock).watch();pool?.register(this);}
 
   /** Settings keep the board's live context without reading or preparing its charts. */
   setActive(active: boolean) {
     if (this.active === active) return;
     this.active = active;
+    this.schedulePlanClock();
     if (active) this.schedule();
     else {
       this.cancelProjection();
@@ -265,9 +270,9 @@ export class HistoryStore {
     this.publish();
   }
 
-  get = () => this.state;
-  getPlot = () => this.plot;
-  getDrawingPlot = () => this.drawingPlot;
+  get = () => {if(this.expirePlans())this.publish();return this.state;};
+  getPlot = () => {if(this.expirePlans())this.publish();return this.plot;};
+  getDrawingPlot = () => {if(this.expirePlans())this.publish();return this.drawingPlot;};
   subscribePlot = (listener: () => void) => {this.plotListeners.add(listener); return () => void this.plotListeners.delete(listener);};
 
   /** Geometry changes do not choose a committed target or compose its totals. */
@@ -360,12 +365,40 @@ export class HistoryStore {
   }
 
   private publish() {
+    this.schedulePlanClock();this.expirePlans();
     const history = this.shown;
     const loading = !this.historyLimit && !this.readError && (!history && this.ready || !this.plotPending && !!history && history.range !== this.target().key);
     const error=this.historyLimit?'history_limit' as const:this.readError?'history_failed' as const:undefined;
     if (history === this.state.history && loading === this.state.loading&&error===this.state.error&&this.presentation===this.state.presentation) return;
     this.state = {history, loading,presentation:this.presentation,...(error?{error}:{})};
     for (const listener of this.listeners) listener();
+  }
+  private schedulePlanClock(){
+    if(this.scope==='budget')return;
+    const events=[this.shown?.events,this.plot?.events,this.drawingPlot?.events].flatMap(events=>events??[]);
+    const deadlines=events.map(event=>event.kind==='plan'?Math.min(event.expiresAt,event.previous?event.expiresAt-event.at+event.previous.at:Infinity):Infinity);
+    this.planDeadline=Math.min(...[...this.grids.values()].flatMap(tiles=>[...tiles.values()].map(tile=>tile.planDeadline)),...deadlines,Infinity);
+    const owner=this.env.clock??clock;
+    if(this.active&&this.board&&Number.isFinite(this.planDeadline)){
+      this.stopPlanClock??=owner.subscribe(this.planWatch,()=>{if(this.expirePlans())this.publish();else this.schedulePlanClock();});
+      owner.due(this.planWatch,this.planDeadline,this.env.now());
+    }else{this.stopPlanClock?.();this.stopPlanClock=null;}
+  }
+  private expirePlans(){
+    const now=this.env.now();if(now<this.planDeadline)return false;
+    let changed=false;
+    for(const tiles of this.grids.values())for(const [key,tile] of tiles){const next=tile.retirePlans(now);if(next){tiles.set(key,next);changed=true;}}
+    const shownEvents=this.shown&&planEventsAt(this.shown.events,now),plotEvents=this.plot&&planEventsAt(this.plot.events,now),drawingEvents=this.drawingPlot&&planEventsAt(this.drawingPlot.events,now);
+    const plotChanged=!!this.plot&&plotEvents!==this.plot.events;
+    changed||=!!this.shown&&shownEvents!==this.shown.events||plotChanged||!!this.drawingPlot&&drawingEvents!==this.drawingPlot.events;
+    if(!changed)return false;
+    this.cancelProjection();this.version++;this.plotVersion=-1;this.plotChunks.clear();
+    if(this.shown&&shownEvents!==this.shown.events)this.shown={...this.shown,events:shownEvents!};
+    if(this.plot&&plotChanged)this.plot={...this.plot,events:plotEvents!};
+    if(this.drawingPlot&&drawingEvents!==this.drawingPlot.events)this.drawingPlot={...this.drawingPlot,events:drawingEvents!};
+    this.schedulePlanClock();
+    if(plotChanged)for(const listener of this.plotListeners)listener();
+    return true;
   }
 
   private tiles(cell: number) {
@@ -497,7 +530,7 @@ export class HistoryStore {
         const key = `${tile.cell}:${tile.from}`;
         let saved = store.plotChunks.get(key);
         if (!saved || saved.tile !== tile || saved.seq !== seq || saved.from !== from || saved.to !== to) {
-          const chunk = yield* tile.chunkPrepared(meta.known, true);
+          const chunk = yield* tile.chunkPrepared(meta.known, true,store.env.now());
           saved = {tile, seq, from, to, chunk};
           if (valid()) store.plotChunks.set(key, saved);
         }
@@ -523,7 +556,7 @@ export class HistoryStore {
     const valid = () => !this.interest && this.board === board && this.epoch === epoch && this.version === version && this.windows === windows && this.composeIdentity === identity && this.target().key === target.key && this.pinsValid(pins);
     const work = function* (): Preparation<History> {
       const chunks: Chunk[] = [];
-      for (const {tile} of pins) {chunks.push(yield* tile.chunkPrepared(meta.known)); yield;}
+      for (const {tile} of pins) {chunks.push(yield* tile.chunkPrepared(meta.known,false,target.now)); yield;}
       return {...yield* composePrepared(chunks, meta, target, windows), board};
     };
     prepare(this.composeOwner, work(), valid, history => {
@@ -652,6 +685,7 @@ export class HistoryStore {
   private abort(flight: Flight) {this.preparations?.cancel(flight); this.releaseResponse(flight); flight.controller.abort();}
   private abortFlights() {for (const flight of [...this.flights]) this.abort(flight);}
   private setPlot(plot: PlotBuffer | null) {
+    if(plot){const events=planEventsAt(plot.events,this.env.now());if(events!==plot.events)plot={...plot,events};}
     // Both snapshots share the prepared arrays. Moving quantities must not
     // replace the balance drawing; new data and authority replace both.
     this.drawingPlot=plot;
@@ -719,7 +753,7 @@ export class HistoryStore {
           const admit = (bytes: number) => !store.pool || store.pool.reserve(flight, otherGrowth + Math.max(0, bytes - base.bytes));
           // Include new empty tile headers before preparation can yield, too.
           if (!admit(pin.staged.bytes)) {response.limited = true; completed = true; return;}
-          const staged = yield* pin.staged.staged(chunk, response.answer.known, admit);
+          const staged = yield* pin.staged.staged(chunk, response.answer.known, admit,store.env.now());
           if (!staged) {response.limited = true; completed = true; return;}
           pin.staged = staged;
           pin.chunks.push(chunk);

@@ -15,7 +15,7 @@ function order(sort:AgentsSort,open=false,hidden=false,running=false){
   let select:(rows:WorkedSession[])=>unknown=()=>null;
   const done={};
   const context={exports:{} as {AgentsPanel:(props:unknown)=>unknown},memo:(f:unknown)=>f,useLocale:()=>{},useLineup:()=>['s'],useTitles:()=>({s:{title:'Source',provider:'codex'}}),
-    usePrefs:()=>({agentsSort:sort,agentsBy:'project'}),useState:()=>[open?{group:null}:null,()=>{}],useCallback:(f:unknown)=>f,
+    usePref:(key:string)=>key==='agentsSort'?sort:'project',useState:()=>[open?{group:null}:null,()=>{}],useCallback:(f:unknown)=>f,
     usePeriodSessions:(f:typeof select)=>{select=f;throw done;},columnsOf,columnShown,AGENTS,groupsOf,sortedGroups,visibleAgentsSort,byActivity,
     require:()=>({})};
   runInNewContext(ts.transpileModule(body,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);

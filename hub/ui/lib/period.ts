@@ -155,6 +155,12 @@ class BoardPeriod {
     const summary=tape.accounting.quotaSummary(line.sourceId,line.windowId,evaluatedRange(tape.selection,now));
     return summary?{...line,...summary}:line;
   }
+  quotaOrderAt(line:Line,now:number,rangeKey:string,active:boolean){
+    const tape=this.tapes.get('quota');
+    if(!tape||tape.selection.mode!=='live'||tape.rangeKey!==rangeKey)return {slope:0,next:Infinity};
+    const work=tape.accounting.quotaWorkSlope(line.sourceId,line.windowId,now,tape.selection.periodMs,active);
+    return {slope:work?.slope??0,next:Math.min(work?.next??Infinity,tape.accounting.changesAt(now,tape.selection.periodMs,line.sourceId)??Infinity)};
+  }
   moneyAt(series:MeterHistory,now:number,rangeKey?:string):MeterHistory {
     const tape=this.tapes.get('budget');if(!tape||tape.selection.mode!=='live'||rangeKey!==undefined&&tape.rangeKey!==rangeKey)return series;
     const summary=tape.accounting.moneySummary(series.sourceId,series.meterId,series.unit,evaluatedRange(tape.selection,now));

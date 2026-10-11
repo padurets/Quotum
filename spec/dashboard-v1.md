@@ -353,6 +353,14 @@ shownZero, shownLeft, comfy, points, basis}`, worked out as of `asOf`:
   when the last six hours ran at least twice as fast as usual and would run out before
   the reset at that pace, else null. For `needData`, only `{hours}`; else null.
 
+- `planSince` (optional): the actual observed plan boundary used by the producer at
+  `asOf`, or null when unknown. It is filtered by this board's source visibility,
+  sharing start and retention. It is not the beginning of a subscription. Expiry can
+  send a forecast replacement changing only this provenance, without recalculating
+  the shared forecast or its confirmation time. The compatible weekly forecast's
+  tooltip gives this boundary and explains its confirmation after an hour of
+  observations, including while it needs more data.
+
 The first time after the hub starts, it is worked out on the latest sample, as of the
 last whole hour if the sample came before it (or goes on as the hub kept it, if that took
 the sample in). It is worked out again at the first moment of each hour after a sample
@@ -743,8 +751,27 @@ type Chunk = {
   };
   resets: [source: string, window: string, at: number][];
   grants: [source: string, at: number, count: number][];
+  plans?: [source: string, at: number, plan: string,
+    previous: {at: number; plan: string} | null, expiresAt: number][];
 };
 ```
+
+Quota chunks in both history and board-period replies optionally include the stored
+nonempty plan observations. `at` is the actual observation inside `[from,to)`, never
+a grid boundary. Repeated identical or empty names create no event. `previous` is
+the latest authorized differing nonempty observation within the same source's
+sharing and retention bounds; null means first known to this reader. It does not
+prove the subscription's original plan. Names and predecessor structures count
+towards the existing tile and response byte budgets. Budget and subscription-funds
+history expose no plan events.
+
+`expiresAt` is `at + retentionMs + 1`, an exclusive Unix-millisecond deadline.
+The predecessor expires independently at `expiresAt - at + previous.at`.
+Closed server tiles are reusable only until the earliest deadline. The page removes
+expired events and predecessor names from retained tiles, composed history and plot
+readouts before reuse, including after sleep, through its shared clock and without
+a history request. Replacing an interval replaces its plan facts too. This expiry
+does not depend on physical database pruning or change any forecast values.
 
 Cell indexes are relative to `chunk.from / cell`. Each series contains only cells with
 measurements, in order. Every window with measurements is included, even one the card
@@ -1330,6 +1357,11 @@ are absent from every shared projection. Credential details remain owner-only. T
 `shared` rows and public card names never inherit that label.
 
 ## Privacy
+
+Plan-event names, preceding observations and forecast plan boundaries disclose only
+visible source evidence inside this board's history grant and retention period.
+Predecessors retained for internal housekeeping never extend that grant. These
+fields include no private account labels, owner identities or collector credentials.
 
 Period and session projections expose only authorized board measurements and clipped
 credited work. Opaque refs do not expose producer session ids or database row ids.

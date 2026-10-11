@@ -41,7 +41,7 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
     if(name.endsWith('/board'))return {useBoardId:()=> 'b',useCurrencyContext:()=>budget?.context??defaultCurrencyContext};
     if(name.endsWith('/http'))return {ApiError,call};
     if(name.endsWith('/moneySelection'))return {moneySelection,archivedKeyGroups,keyMeter};
-    if(name.endsWith('/prefs'))return {usePrefs:()=>prefs,setPrefs:(patch:typeof prefs)=>{prefs=patch;}};
+    if(name.endsWith('/prefs'))return {usePref:(key:keyof typeof prefs)=>prefs[key],setPrefs:(patch:typeof prefs)=>{prefs=patch;}};
     if(name.endsWith('/money'))return {keyName,balanceRoleLabel,balanceGroups,referenceBalance,budgetVisible};
     if(name.endsWith('/providers'))return providers;
     if(name==='../../server/domain/currency')return currency;

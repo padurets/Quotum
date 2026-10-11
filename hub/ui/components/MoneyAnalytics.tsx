@@ -5,7 +5,7 @@ import {useMemo,useRef} from 'react';
 import {DEFAULT_CURRENCY,currencySymbol} from '../../server/domain/currency';
 import {useBoardId,useNamed,useServerView,useCurrencyContext} from '../lib/board';
 import {useBudgetHistory,useHistoryBegins,useBudgetHistoryPlot,budgetHistory,fundsHistory} from '../lib/history';
-import {usePrefs,setPrefs,setMuted} from '../lib/prefs';
+import {usePref,setPrefs,setMuted} from '../lib/prefs';
 import {moneySelection} from '../lib/moneySelection';
 import {money,capName,unitLabel} from '../lib/money';
 import {moneyIdentity,moneyPointAt,meterPointIn,moneyTotal,type MeterHistory} from '../lib/moneyView';
@@ -34,8 +34,7 @@ function nameOf(series:MeterHistory,title:string,context:import('../../server/do
   return [title,detail,series.kind==='cap'?t('money.cap'):series.meterId==='balance'?'':t('money.usage')].filter(Boolean).join(' — ');
 }
 function SelectionNotice({family='budget'}:{family?:MoneyFamily}) {
-  const sources=useNamed(undefined,family),view=useServerView(),prefs=usePrefs(),context=useCurrencyContext();
-  const settings=family==='funds'?prefs.funds:prefs.money;
+  const sources=useNamed(undefined,family),view=useServerView(),settings=usePref(family==='funds'?'funds':'money'),context=useCurrencyContext();
   const result=moneySelection(sources,view?.hidden??[],settings,context,family);
   const removed=result.removed||(settings.removed??0);
   return <>{result.omitted>0&&<AnalyticsNote>{t('money.limit',{count:result.omitted})}</AnalyticsNote>}{removed>0&&<AnalyticsNote>{t('money.removed',{count:removed})}</AnalyticsNote>}</>;
@@ -50,7 +49,9 @@ type MoneyColumn = typeof MONEY_COLUMNS[number]['id'];
 const pointAt=(series:MeterHistory,at:number,cell=60000)=>series.pointMode==='observation'?moneyPointAt(series,at):meterPointIn(series,at,cell);
 
 export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:MoneyFamily}) {
-  const context=useCurrencyContext(),board=useBoardId(),locale=useLocale(),{history,drawing,loading,error,presentation:authority}=useBudgetHistory(family,true),prefs=usePrefs(),sources=useNamed(arrange.view.names,family);
+  const context=useCurrencyContext(),board=useBoardId(),locale=useLocale(),{history,drawing,loading,error,presentation:authority}=useBudgetHistory(family,true),sources=useNamed(arrange.view.names,family);
+  const range=usePref('range'),kind=usePref('kind'),horizon=usePref('horizon'),showPlan=usePref('showPlan'),showForecast=usePref('showForecast'),activityBy=usePref('activityBy'),muted=usePref('muted'),moneyPrefs=usePref(family==='funds'?'funds':'money');
+  const prefs=useMemo(()=>({range,kind,horizon,showPlan,showForecast,activityBy,muted,money:moneyPrefs,funds:moneyPrefs}),[range,kind,horizon,showPlan,showForecast,activityBy,muted,moneyPrefs]);
   const funds=family==='funds',settings=funds?prefs.funds:prefs.money,reader=funds?fundsHistory:budgetHistory;
   const strip=useBudgetHistoryPlot(family,settings.view==='spending'),panning=usePanning();
   const selected=useTimeRange(),start=useHistoryBegins(),panel=useRef<HTMLElement>(null),{plot,onBase}=usePlot(panel);
@@ -117,7 +118,8 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   </AnalyticsPanel>;
 }
 export function MoneyTable({arrange}:{arrange:Arrange}) {
-  const context=useCurrencyContext(),locale=useLocale();const {history,loading,error}=useBudgetHistory(),sources=useNamed(arrange.view.names,'budget'),prefs=usePrefs();
+  const context=useCurrencyContext(),locale=useLocale();const {history,loading,error}=useBudgetHistory(),sources=useNamed(arrange.view.names,'budget'),moneyPrefs=usePref('money');
+  const prefs={money:moneyPrefs};
   const unit=prefs.money.unit===DEFAULT_CURRENCY?context.target.id:prefs.money.unit??DEFAULT_CURRENCY;
   const entries=history?.meterSeries?.filter(s=>s.unit===unit)??[];
   const selection=moneySelection(sources,arrange.view.hidden,prefs.money,context).selection;

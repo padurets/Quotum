@@ -573,7 +573,13 @@ them), kept for 90 days.
   advances a private store revision; the next server read clears the tile cache before
   looking for hits. Even a distant tile can depend on a preceding sample of any age.
   This housekeeping emits no history event: observations already read by the page stay
-  until its usual data or connection changes. The page keeps packed buffers within an
+  until its usual data or connection changes. Stored plan events are an exception:
+  quota tiles carry actual nonempty plan observations and the latest authorized
+  differing predecessor. Their independent retention deadlines limit closed-tile
+  reuse; the page redacts expired facts from tiles and readouts with its shared clock,
+  without HTTP or a physical database prune. A first accessible observation means
+  first known to this reader. Plan names count towards the existing byte budgets.
+  The page keeps packed buffers within an
   estimated 15 MiB, protecting the frame on screen and removing dictionaries no retained
   cell uses after replacement. Session references are opaque and
   change with the hub's run, so answers cannot mix runs. A machine's list credits work
@@ -618,6 +624,12 @@ them), kept for 90 days.
   never under its mean hour), so that it would run out before the reset at that pace, put
   a muted arrow up by the words, and how many times and when it would run out in the
   tooltip; the verdict stays.
+
+  The producer records the actual observed plan boundary used at its confirmation
+  hour. Each board filters this provenance by visibility, sharing and retention;
+  expiry updates only the provenance, leaving the shared numeric model intact. A
+  compatible weekly forecast's tooltip gives the plan observation and explains its
+  confirmation after an hour, including a forecast waiting for more data.
 
   A series says nothing until it has an hour of history. Under a day it goes by the hours
   it has, leaning on the window's own mean (once the window ran half an hour when the
@@ -1379,7 +1391,7 @@ is sticky after its last source or series disappears. Explicit hidden intent win
 What
 is only about how one person looks (the board's period and window type, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
-the agents table's sort order, the chosen board and language) stays in their browser.
+the agents and quota tables' sort orders, the chosen board and language) stays in their browser.
 The controls above the mixed widget grid own the common period, quota kind and forecast
 horizon. Shared quota and budget filters are also accessible from the relevant widgets,
 including a table whose chart is hidden. Each widget keeps its display settings, such as
@@ -1630,6 +1642,25 @@ descending, then back to activity;
 a hidden column does not sort. When its owner's chosen columns do not fit the widget's
 own width, it becomes a compact list with a sort menu. State is off by default: the
 mark already tells it. Explicit column choices belong to the board, sorting to the viewer.
+
+The quota table shares one viewer sort with its compact list: ascending, descending,
+then default, with unavailable columns falling back without losing the saved choice.
+Live default order puts exhausted limits first, then absolute exhaustion time,
+then known remaining shares; fixed selections use descending spending. Missing
+values follow known values in either direction, with numeric locale names breaking
+ties. Rolling work, agent hours and plans use existing accounting indexes and the
+shared page clock for exact boundaries and adjacent key crossings. Only a changed
+permutation publishes retained row descriptors; sorting does not wake other widgets.
+
+On charts narrower than 560 SVG units, reset and exhaustion labels show the name
+and countdown, with an arrow only beyond the visible edge. Their backing is bounded
+by 180 units and 60% of usable plot width. Hover and touch retain the full event
+meaning and date in the shared tooltip; the primary image description carries them
+too. Each mounted label caches shaped grapheme-prefix measurements by name and
+font, measures its current countdown separately, and moves with cached local bounds.
+Unavailable mappings, fonts or overflowing shaping use a bounded ellipsis with the
+complete suffix until the next real input changes. Wide label layout and the overflow
+stack keep their existing behavior.
 The table of limits does the same: its owner chooses its columns, and where they do not
 fit it lists each window with what is left, then its other values, each with its heading.
 Agent-hours and the share of spending while active are off by default: adding either can

@@ -1,7 +1,7 @@
 import {AnalyticsPanel, AnalyticsNote} from './AnalyticsPanel';
 import {QuotaSettings} from './Analytics';
-import {AnalyticsTable, TableSettings, type Cell, type TimedCell} from './AnalyticsTable';
-import {memo, useMemo, useRef} from 'react';
+import {AnalyticsTable, TableSettings, type AnalyticsRow, type AnalyticsColumn, type Cell, type TimedCell} from './AnalyticsTable';
+import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
 import {num, rateText} from '../lib/format';
 import {level} from '../lib/quota';
 import {
@@ -19,16 +19,19 @@ import {
   type ForecastColumn,
   type Spent,
 } from '../lib/forecast';
-import {planChangesAt} from '../lib/plan';
+import {planChangesAt,planOrderAt} from '../lib/plan';
 import {lineWork, workLeftChangesAt, workText, type WorkColumn} from '../lib/work';
 import {QUOTA_TABLE, chosenPlanOf, columnShown, planOf, type Arrange} from '../lib/view';
 import {type Line} from '../lib/lines';
 import {subscriptionLinesOf,subscriptionOverflow} from '../lib/subscription';
-import {usePrefs} from '../lib/prefs';
+import {usePref,setPrefs} from '../lib/prefs';
+import {clock,hubNow} from '../lib/clock';
+import {crossingAt,forecastComparator,nextForecastSort,sortValue,visibleForecastSort,type SortColumn,type SortRow} from '../lib/forecastSort';
 import {ofTimeRange} from '../lib/timeRange';
 import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
 import {quotaHistory, useHistory} from '../lib/history';
 import {boardPeriod} from '../lib/period';
+import {observationDeadline} from '../../server/domain/resources';
 import {t, useLocale, type Key} from '../i18n';
 
 const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', {value: num(spent.value, 1)}) : spent.key === 'unused' ? t('table.unused') : '—');
@@ -54,6 +57,49 @@ const HEADINGS: Record<ForecastColumn, {title: Key; range?: Key; hint?: Key}> = 
 
 const heading = (column: ForecastColumn, range: boolean) => t((range && HEADINGS[column].range) || HEADINGS[column].title);
 
+function ForecastSortMenu({columns}:{columns:readonly AnalyticsColumn<ForecastColumn>[]}) {
+  const saved=usePref('forecastSort'),active=visibleForecastSort(saved,columns.map(c=>c.id));
+  return <div className="popover-section"><div className="popover-title">{t('table.sort')}</div>
+    <button className="popover-row" onClick={()=>setPrefs({forecastSort:null})}>{t('table.defaultOrder')}{!active?' ✓':''}</button>
+    {[{id:'limit' as const,title:t('table.limit')},...columns].map(({id,title})=><button key={id} className="popover-row" onClick={()=>setPrefs({forecastSort:nextForecastSort(active,id)})} aria-label={t('table.sortBy',{name:title,order:t(active?.column===id?active.descending?'table.defaultOrder':'table.descending':'table.ascending')})}>{title}{active?.column===id?<span>{active.descending?'↓':'↑'}</span>:null}</button>)}
+  </div>;
+}
+
+/** Clock-only order changes publish retained row descriptors only after a permutation. */
+const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,rangeKey}:{rows:AnalyticsRow<ForecastColumn>[];models:SortRow[];columns:AnalyticsColumn<ForecastColumn>[];fixed:boolean;rangeKey:string}) {
+  const saved=usePref('forecastSort'),locale=useLocale();
+  const active=useMemo(()=>visibleForecastSort(saved,columns.map(c=>c.id)),[saved,columns]);
+  const current=useRef({rows,models,active,fixed,rangeKey,locale});current.current={rows,models,active,fixed,rangeKey,locale};
+  const [watch]=useState(()=>clock.watch()),cached=useRef<AnalyticsRow<ForecastColumn>[]>([]);
+  const evaluate=useCallback(()=>{
+    const {rows,models,active,fixed,rangeKey,locale}=current.current,now=hubNow();
+    const values=models.map(model=>sortValue(model,fixed||model.line.capCells?model.line:boardPeriod.quotaAt(model.line,now,rangeKey),now,fixed)).sort(forecastComparator(active,fixed,locale));
+    let next=Infinity;
+    const linear:{value:number;slope:number}[]=[];
+    if(!fixed)for(const value of values){
+      const row=value.row,work=boardPeriod.quotaOrderAt(row.line,now,rangeKey,active?.column!=='agenthours');
+      next=Math.min(next,work.next,row.validUntil!==undefined&&row.validUntil>now?row.validUntil:Infinity,row.live?.resetAt!=null&&row.live.resetAt>now?row.live.resetAt:Infinity, value.said.key==='runsOut'?Math.ceil(value.said.at):Infinity,workLeftChangesAt(row.line,row.live?.resetAt??null,now)??Infinity);
+      const key=active?.column&&active.column!=='limit'?value.keys[active.column]:null;
+      if(active?.column==='plan'){
+        const plan=planOrderAt(row.live,row.measuredAt,now,row.plan);next=Math.min(next,plan.next);
+        if(key)linear.push({value:key[0],slope:plan.slope});
+      }else if(active?.column==='work'||active?.column==='agenthours'){
+        if(key)linear.push({value:key[1],slope:work.slope});
+      }
+    }
+    clock.due(watch,fixed?null:crossingAt(linear,now,next),now);
+    const byKey=new Map(rows.map(row=>[row.key,row])),ordered=values.map(v=>byKey.get(v.row.line.key)!);
+    if(ordered.length!==cached.current.length||ordered.some((row,i)=>row!==cached.current[i]))cached.current=ordered;
+    return cached.current;
+  },[watch]);
+  const subscribe=useCallback((listener:()=>void)=>clock.subscribe(watch,()=>{evaluate();listener();}),[watch,evaluate]);
+  const ordered=useSyncExternalStore(subscribe,evaluate,evaluate);
+  useLayoutEffect(()=>{evaluate();});
+  const cycle=useCallback((column:SortColumn)=>setPrefs({forecastSort:nextForecastSort(active,column)}),[active]);
+  const sorting=useMemo(()=>({active,cycle}),[active,cycle]);
+  return <AnalyticsTable columns={columns} rows={ordered} name={t('table.limit')} nameWidth={FORECAST_WIDTHS.limit} lead={fixed?'end':'now'} sorting={sorting}/>;
+});
+
 /**
  * The windows of one kind, from what is left to where it leads: what is left and what the
  * plan expects; what the period spent, how long agents worked on each window's
@@ -78,7 +124,7 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
   const news = useResetNews();
   const {view} = arrange;
   const omitted=subscriptionOverflow(sources,view);
-  const {kind} = usePrefs();
+  const kind = usePref('kind');
   const selected = ofTimeRange(history);
   const range = !!selected;
   // Window names are text: they are rebuilt when the language changes.
@@ -95,8 +141,9 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
     const resetAt = live?.resetAt ?? null;
     const edge = (value: number | null): Cell => (value === null ? {content: '—'} : {content: `${num(value)}%`, className: `v-${level(value)}`});
     if(line.capCells) {
-      const cells=Object.fromEntries(Object.keys(HEADINGS).map(key=>[key,{content:'—'}])) as Record<ForecastColumn,Cell>;
-      cells.now=edge(line.current);cells.start=edge(line.remainingAtStart);cells.end=edge(line.remainingAtEnd);
+      const cells=Object.fromEntries(Object.keys(HEADINGS).map(key=>[key,{content:'—'}])) as Record<ForecastColumn,Cell|TimedCell>;
+      const meter=source?.meters?.find(m=>m.id===line.windowId),until=meter?Math.min(observationDeadline(meter),meter.resetAt??Infinity):Infinity;
+      cells.now=range?edge(line.current):{time:'now',changesAt:now=>until>now&&Number.isFinite(until)?until:null,at:now=>edge(now<until?line.current:null)};cells.start=edge(line.remainingAtStart);cells.end=edge(line.remainingAtEnd);
       return cells;
     }
     // A rolling left edge changes credited work locally. Only the affected cell
@@ -127,7 +174,7 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
     const chosen = chosenPlanOf(view, line.sourceId);
     return {
       ...workCells,
-      now: edge(line.current),
+      now: {time:'now',changesAt:now=>resetAt!==null&&resetAt>now?resetAt:null,at:now=>edge(resetAt!==null&&resetAt<=now?null:line.current)},
       plan: {
         time: 'plan',
         changesAt: now => (live ? planChangesAt(live, measuredAt, now, weekly) : null),
@@ -180,13 +227,13 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
   const definitions = modeColumns.map(id => ({id, title: heading(id, range), width: FORECAST_WIDTHS[id], hint: HEADINGS[id].hint ? t(HEADINGS[id].hint!) : undefined}));
   // A pan phase changes the panel's presentation, not its retained rows. Reusing
   // the table also keeps every clock cell from replanning its deadline on input.
-  const table=useMemo(()=><AnalyticsTable columns={definitions.filter(column=>columns.includes(column.id))}
+  const table=useMemo(()=><SortedForecast columns={definitions.filter(column=>columns.includes(column.id))}
     rows={lines.map(line=>({key:line.key,name:line.name,color:line.color,cells:cellsOf(line)}))}
-    name={t('table.limit')} nameWidth={FORECAST_WIDTHS.limit} lead={range?'end':'now'}/>,
+    models={lines.map(line=>{const source=sources.find(s=>s.id===line.sourceId);const meter=source?.meters?.find(m=>m.id===line.windowId);return {line,validUntil:line.capCells&&meter?Math.min(observationDeadline(meter),meter.resetAt??Infinity):undefined,live:source?.windows.find(w=>w.id===line.windowId),measuredAt:source?.successAt??null,ahead:forecasts[lineup.indexOf(line.sourceId)]?.[line.windowId]??null,context:{windows:source?.windows??[],freeResets:source?.resets?.available??0,announced:announcedOf(news,line.provider,source?.successAt??null)},plan:planOf(view,line.sourceId)};})} fixed={range} rangeKey={history?.range??''}/>,
     [lines,columns,range,sources,forecasts,news,history,view,locale]);
   return (
     <AnalyticsPanel ref={panel} className="forecast" title={t('forecast.title')} history={history} loading={loading} error={error} retry={quotaHistory.retry}
-      settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}><QuotaSettings /></TableSettings>}
+      settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}><QuotaSettings /><ForecastSortMenu columns={definitions.filter(column=>columns.includes(column.id))}/></TableSettings>}
     >
       {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}
       {!history ? error ? null : <div className="panel-loading">{t('history.loading')}</div>

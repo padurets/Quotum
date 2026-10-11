@@ -3,7 +3,7 @@ import {DEFAULT_CURRENCY} from '../../server/domain/currency';
 import {useBoardId,useCurrencyContext,type Named} from '../lib/board';
 import {ApiError,call} from '../lib/http';
 import {archivedKeyGroups,keyMeter,moneySelection} from '../lib/moneySelection';
-import {usePrefs,setPrefs} from '../lib/prefs';
+import {usePref,setPrefs} from '../lib/prefs';
 import {referenceBalance,budgetVisible,balanceGroups,balanceRoleLabel,keyName} from '../lib/money';
 import type {MeterHistory} from '../lib/moneyView';
 import {MAX_METERS} from '../../server/domain/meterHistory';
@@ -15,7 +15,8 @@ import type {KeyPage} from '../lib/moneyKeys';
 
 /** The chart and table edit the same reader selection beside their own measurements. */
 export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
-  const context=useCurrencyContext(),board=useBoardId(),prefs=usePrefs(),unit=prefs.money.unit??DEFAULT_CURRENCY;
+  const context=useCurrencyContext(),board=useBoardId(),moneyPrefs=usePref('money'),unit=moneyPrefs.unit??DEFAULT_CURRENCY;
+  const prefs={money:moneyPrefs};
   const accounts=sources.filter(s=>budgetVisible(s)&&!hidden.includes('source:'+s.id)&&(unit===DEFAULT_CURRENCY?!!referenceBalance(s,context.target.id!==DEFAULT_CURRENCY||s.provider==='codex'):s.meters?.some(m=>m.kind==='balance'&&m.unit===unit)));
   const [sourceId,setSource]=useState<string|null>(()=>accounts.length===1?accounts[0].id:null);
   const [loaded,setPage]=useState<KeyPage|null>(null),[after,setAfter]=useState<string|undefined>(),[back,setBack]=useState<(string|undefined)[]>([]),[error,setError]=useState<unknown>(null),[changed,setChanged]=useState(false);
@@ -115,7 +116,7 @@ export const MoneySettings=KeyMoneySettings;
 
 /** Additional subscription funds have their own balance-only series selection. */
 export function FundsSettings({sources,hidden}:{sources:readonly Named[];hidden:readonly string[]}) {
-  const context=useCurrencyContext(),prefs=usePrefs(),settings=prefs.funds,unit=settings.unit??DEFAULT_CURRENCY;
+  const context=useCurrencyContext(),settings=usePref('funds'),unit=settings.unit??DEFAULT_CURRENCY;
   const selected=moneySelection(sources,hidden,settings,context,'funds').selection?.ids??[];
   const available=sources.flatMap(source=>moneySelection([source],hidden,{...settings,selected:{}},context,'funds').selection?.ids??[]);
   const toggle=(source:string,meter:string,on:boolean)=>{

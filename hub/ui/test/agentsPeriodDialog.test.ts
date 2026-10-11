@@ -35,7 +35,7 @@ test('the open sessions dialog keeps the actual period basis, status and retry t
     useState:(initial:unknown)=>{const index=cursor++;if(!(index in slots))slots[index]=index===0?{group:null}:typeof initial==='function'?initial():initial;return [slots[index],(value:unknown)=>{slots[index]=value;}];},
     useMemo:(read:()=>unknown)=>read(),useCallback:(read:unknown)=>read,useLayoutEffect:()=>{},useSyncExternalStore:(_subscribe:unknown,read:()=>unknown)=>read(),
     memo:(component:unknown)=>component,useLocale:()=>{},useLineup:()=>['s'],useTitles:()=>({s:{title:'Source',provider:'codex'}}),
-    usePrefs:()=>({agentsSort:null,agentsBy:'project'}),setPrefs:()=>{},usePeriodSessions:undefined as unknown,PeriodStatus:undefined as unknown,
+    usePref:(key:string)=>key==='agentsSort'?null:'project',setPrefs:()=>{},usePeriodSessions:undefined as unknown,PeriodStatus:undefined as unknown,
     boardPeriod:{get:()=>reading,subscribe:()=>()=>{},retry:()=>{retries++;reading={...reading,loading:true,error:null};}},
     useSizing:()=>null,useAgentsLayout:()=> 'table',Popover:'popover',SlidersIcon:'icon',HideRow:'hide',SwitchRow:'switch',Modal:'modal',AgentsRows:'rows',SortMenu:'sort',projectName:(value:string|null)=>value??t('agents.noProject'),
   };

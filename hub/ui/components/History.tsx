@@ -1,12 +1,12 @@
 import {AnalyticsPanel, AnalyticsNote, SeriesLegendItem} from './AnalyticsPanel';
 import {QuotaSettings} from './Analytics';
-import {memo, useLayoutEffect, useRef} from 'react';
+import {memo, useMemo, useLayoutEffect, useRef} from 'react';
 import {earliest, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLinePrepared} from '../lib/plan';
 import {announcedOf, forecastLinePrepared, type Context} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
-import {setMuted, setPrefs, usePrefs} from '../lib/prefs';
+import {setMuted, setPrefs, usePref} from '../lib/prefs';
 import {setTimeRange, timeRangeKey, useTimeRange} from '../lib/timeRange';
 import {frameChangesAt, frameOf, measuredTo} from '../lib/periods';
 import {QUOTA_HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
@@ -31,7 +31,7 @@ import {historyProjection, type ProjectionHints} from '../lib/historyProjection'
  * something to draw), the shared quota kind, and (for the board's owner) hiding it.
  */
 function HistorySettings({arrange, planAvailable, forecastAvailable}: {arrange: Arrange; planAvailable: boolean; forecastAvailable: boolean}) {
-  const {showPlan, showForecast} = usePrefs();
+  const showPlan=usePref('showPlan'),showForecast=usePref('showForecast');
   return (
     <Popover label={t('history.settings')} icon={<SlidersIcon />}>
       <div className="popover-note">{t('chart.panHint')}</div>
@@ -76,7 +76,8 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const lineup = useLineup();
   const hubForecasts = useForecastsOf(lineup);
   const news = useResetNews();
-  const prefs = usePrefs();
+  const range = usePref('range'), kind = usePref('kind'), horizon = usePref('horizon'), showPlan = usePref('showPlan'), showForecast = usePref('showForecast'), activityBy = usePref('activityBy'), muted = usePref('muted');
+  const prefs = useMemo(() => ({range, kind, horizon, showPlan, showForecast, activityBy, muted}), [range, kind, horizon, showPlan, showForecast, activityBy, muted]);
   const {view} = arrange;
   const omitted=subscriptionOverflow(sources,view);
   // Series names and markers are text: they are rebuilt when the language changes.
@@ -140,7 +141,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
     const hints: ProjectionHints = {plan: planAvailable, forecast: ahead.length > 0, announced: scheduled, zeros: ahead.map(a => a.drawn.zero)};
     const to = historyProjection(frame, measured, prefs, hints, context?.lookAhead);
     const markers: Marker[] = [];
-    if (announced && announced > from) markers.push({key: 'announced-codex', at: announced, label: t('chart.announcedCodex'), color: 'var(--accent)', strong: true});
+    if (announced && announced > from) markers.push({key: 'announced-codex', at: announced, label: t('chart.announcedCodex'), name:PROVIDERS.codex.name,color: 'var(--accent)', strong: true});
     const seen = new Set<string>();
     for (const line of visible) {
       yield;
@@ -153,7 +154,8 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
     }
     for (const {event, lines: shown} of yield* chartEventsPrepared(strip?.events ?? drawing?.events ?? [], visible, strip?.from ?? from)) {
       const source = sources.find(s => s.id === event.sourceId), name = source ? sourceLabel(source) : shown[0].provider;
-      markers.push({key: `${event.kind}-${event.sourceId}-${event.at}`, at: event.at, label: event.kind === 'early_reset' ? t('chart.earlyReset', {source: name}) : t('chart.resetsGranted', {count: event.count, source: name}), color: shown[0].color, past: true}); yield;
+      const until=event.kind==='plan'?Math.min(event.expiresAt,event.previous?event.expiresAt-event.at+event.previous.at:Infinity):undefined;
+      markers.push({key: `${event.kind}-${event.sourceId}-${event.at}`, at: event.at, label: event.kind === 'early_reset' ? t('chart.earlyReset', {source: name}) : event.kind==='plan'?t(event.previous?'chart.planChanged':'chart.planFirst',{source:name,plan:event.plan,previous:event.previous?.plan??''}):t('chart.resetsGranted', {count: event.count, source: name}), color: shown[0].color, past: true,until}); yield;
     }
     for (const {provider, reset, line} of yield* chartResetsPrepared(past, visible, strip?.from ?? from, strip?.to ?? measured)) {
       markers.push({key: `announced-${provider}-${reset.at}`, at: reset.at, label: t('chart.resetForAll', {source: PROVIDERS[provider]?.name ?? provider}), detail: reset.text, color: line.color, past: true}); yield;

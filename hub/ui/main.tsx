@@ -3,7 +3,7 @@ import {createRoot} from 'react-dom/client';
 import '@fontsource-variable/geist';
 import '@fontsource-variable/geist-mono';
 import './style.css';
-import {setPrefs, usePrefs} from './lib/prefs';
+import {setPrefs, usePref} from './lib/prefs';
 import {showBoard} from './lib/timeRange';
 import {navigate, settingsHref, usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
@@ -106,7 +106,8 @@ function Dashboard({
   const viewRevision = useViewRevision();
   const arrange = useView(boardId, snapshotMatches ? serverView : null, snapshotMatches && role === 'owner', snapshotMatches ? viewRevision : 0);
   const titles = useTitles(arrange.view.names);
-  const prefs = usePrefs();
+  const locked = usePref('locked'), filtersVisible = usePref('filtersVisible');
+  const prefs = useMemo(() => ({locked, filtersVisible}), [locked, filtersVisible]);
   const [adding, setAdding] = useState<Board | null>(null);
   useEffect(() => setAdding(null), [boardId, active]);
   const openSettings = () => navigate(settingsHref('/settings', boardId));

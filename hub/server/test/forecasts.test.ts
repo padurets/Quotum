@@ -488,7 +488,7 @@ test('a sample that contradicts a forecast works it out again from the memory th
   const pure = (memory: Memory) => forecastOf({samples, plan: null, since: null}, wake, memory).forecast;
   assert.notEqual(pure(out()).state, pure(left).state, 'the two memories tell apart here');
   // As the hub tells it: points by minutes from the anchor, moments in whole milliseconds.
-  assert.deepEqual(g, told(pure(left)));
+  assert.deepEqual(g, {...told(pure(left)),planSince:null});
 });
 
 test('a restarted hub goes on from what it kept, else from the latest sample: never from the hour before it', () => {

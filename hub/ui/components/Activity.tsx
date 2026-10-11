@@ -5,7 +5,7 @@ import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '.
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {activityEmpty, activityScale, atOnce, groupColors, mutedKey} from '../lib/activity';
-import {ACTIVITY_BY, setMuted, setPrefs, usePrefs} from '../lib/prefs';
+import {ACTIVITY_BY, setMuted, setPrefs, usePref} from '../lib/prefs';
 import {setTimeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
@@ -45,7 +45,7 @@ function groupName(group: Pick<ActivityGroup, 'key' | 'name'>, by: ActivityDimen
 
 /** The widget's own settings, as the chart has its own: what its stacks are split by, and (for the board's owner) hiding it. */
 function ActivitySettings({arrange}: {arrange: Arrange}) {
-  const {activityBy} = usePrefs();
+  const activityBy=usePref('activityBy');
   const [open,setOpen]=useState(false);
   return (
     <>
@@ -245,7 +245,8 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const lineup = useLineup();
   const personal = usePersonalBoard();
   const titles = useTitles(arrange.view.names);
-  const prefs = usePrefs();
+  const range = usePref('range'), kind = usePref('kind'), horizon = usePref('horizon'), showPlan = usePref('showPlan'), showForecast = usePref('showForecast'), activityBy = usePref('activityBy'), muted = usePref('muted');
+  const prefs = useMemo(() => ({range, kind, horizon, showPlan, showForecast, activityBy, muted}), [range, kind, horizon, showPlan, showForecast, activityBy, muted]);
   const by = prefs.activityBy;
   const locale = useLocale();
   const selected = useTimeRange();

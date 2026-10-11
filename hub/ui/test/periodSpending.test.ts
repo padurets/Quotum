@@ -73,7 +73,7 @@ function consumer(sourceId:string,board:string,range:PeriodRange) {
     '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared},
     '../lib/board':{useBoardId:()=>board,useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
     '../lib/history':{useBudgetHistory:()=>({history,drawing:history,loading:false,presentation:0}),useBudgetHistoryPlot:()=>strip,useHistoryBegins:()=>NOW-3*H,budgetHistory:{retry:()=>{}}},
-    '../lib/prefs':{usePrefs:()=>prefs},'../lib/moneySelection':{moneySelection:()=>({selection:{unit:'USD',ids:[[sourceId,'balance']]},omitted:0,removed:0})},
+    '../lib/prefs':{usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection:()=>({selection:{unit:'USD',ids:[[sourceId,'balance']]},omitted:0,removed:0})},
     '../lib/moneyView':moneyView,'../lib/money':money,'../lib/view':{colorOf:()=> '#fff'},
     '../lib/periods':{frameOf:()=>({...range,live:false}),measuredTo:()=>range.to},'../lib/timeRange':{useTimeRange:()=>range,timeRangeKey},
     '../lib/clock':{useClock:()=>NOW},'../lib/pan':{usePanning:()=>strip?1:null},'../lib/axisNavigation':{axisNavigation:()=>({context:board})},

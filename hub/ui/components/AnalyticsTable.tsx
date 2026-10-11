@@ -1,5 +1,5 @@
 /** @jsxRuntime automatic */
-import {Fragment, useLayoutEffect, useRef, useState, type ReactNode} from 'react';
+import {Fragment, memo, useLayoutEffect, useRef, useState, type ReactNode} from 'react';
 import {useClock} from '../lib/clock';
 import {tableLayout} from '../lib/table';
 import {withColumn, withHidden, type Arrange} from '../lib/view';
@@ -9,7 +9,8 @@ import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 export type Cell = {content: ReactNode; title?: string; className?: string};
 export type TimedCell = {time: string; changesAt: (now: number) => number | null; at: (now: number) => Cell};
 export type AnalyticsColumn<Id extends string> = {id: Id; title: string; hint?: string; width: number; align?: 'right'};
-type Row<Id extends string> = {key: string; name: string; color?: string; cells: Record<Id, Cell | TimedCell>};
+export type AnalyticsRow<Id extends string> = {key: string; name: string; color?: string; cells: Record<Id, Cell | TimedCell>};
+export type TableSorting<Id extends string>={active:{column:Id|'limit';descending:boolean}|null;cycle:(column:Id|'limit')=>void};
 
 /** Only the cell reads the clock; its table and unrelated rows remain asleep. */
 function Timed({cell, render}: {cell: TimedCell; render: (cell: Cell, time: string) => ReactNode}) {
@@ -35,9 +36,9 @@ export function TableSettings<Id extends string>({arrange, widget, columns, visi
 }
 
 /** Column widths decide when both tables become labelled rows; cells have one renderer. */
-export function AnalyticsTable<Id extends string>({columns, rows, name, nameWidth, lead}: {
-  columns: readonly AnalyticsColumn<Id>[]; rows: Row<Id>[];
-  name: string; nameWidth: number; lead?: Id;
+function Table<Id extends string>({columns, rows, name, nameWidth, lead, sorting}: {
+  columns: readonly AnalyticsColumn<Id>[]; rows: AnalyticsRow<Id>[];
+  name: string; nameWidth: number; lead?: Id;sorting?:TableSorting<Id>;
 }) {
   const body = useRef<HTMLDivElement | HTMLUListElement>(null);
   const [layout, setLayout] = useState<'table' | 'list'>('table');
@@ -62,12 +63,17 @@ export function AnalyticsTable<Id extends string>({columns, rows, name, nameWidt
     {columns.some(column => column.id !== lead) && <div className="analytics-compact-details">{columns.filter(column => column.id !== lead).map(column => shown(column.id, row.cells[column.id], (cell, time) =>
       <span data-time={time} title={cell.title}>{column.title} <span className={cell.className}>{cell.content}</span></span>))}</div>}
   </li>)}</ul>;
+  const header=(id:Id|'limit',title:string,hint?:string,align?:'right')=>{
+    const active=sorting?.active?.column===id?sorting.active:null;
+    return <th key={id} scope="col" title={hint} className={align&&'is-'+align} aria-sort={active?active.descending?'descending':'ascending':undefined}>{sorting?<button className="table-sort" onClick={()=>sorting.cycle(id)} aria-label={t('table.sortBy',{name:title,order:t(!active?'table.ascending':active.descending?'table.defaultOrder':'table.descending')})}>{title}{active&&<span aria-hidden="true"> {active.descending?'↓':'↑'}</span>}</button>:title}</th>;
+  };
   return <div ref={element => {body.current = element;}} className="table-wrap"><table className="analytics-table">
     <colgroup><col/>{columns.map(column => <col key={column.id} style={{width: column.width}}/>)}</colgroup>
-    <thead><tr><th>{name}</th>{columns.map(column => <th key={column.id} title={column.hint} className={column.align && 'is-' + column.align}>{column.title}</th>)}</tr></thead>
+    <thead><tr>{header('limit',name)}{columns.map(column=>header(column.id,column.title,column.hint,column.align))}</tr></thead>
     <tbody>{rows.map(row => <tr key={row.key}>
       <td><span className="analytics-name">{row.color && <span className="swatch" style={{background: row.color}}/>}<span>{row.name}</span></span></td>
       {columns.map(column => shown(column.id, row.cells[column.id], (cell, time) => <td data-time={time} className={[cell.className, column.align && 'is-' + column.align].filter(Boolean).join(' ') || undefined} title={cell.title}>{cell.content}</td>))}
     </tr>)}</tbody>
   </table></div>;
 }
+export const AnalyticsTable=memo(Table) as typeof Table;

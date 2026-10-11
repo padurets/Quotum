@@ -31,7 +31,7 @@ function dialog(h:Awaited<ReturnType<typeof fixture>>) {
     useState:(initial:any)=>{const i=cursor++;if(!(i in slots))slots[i]=i===0?{group:null}:typeof initial==='function'?initial():initial;return [slots[i],(value:any)=>{slots[i]=value;}];},
     useMemo:(read:any)=>read(),useCallback:(read:any)=>read,useLayoutEffect:()=>{},useSyncExternalStore:(_subscribe:any,read:any)=>read(),
     memo:(component:any)=>component,useLocale:()=>{},useLineup:()=>h.page.get().board!.lineup,useTitles:()=>({[h.source]:{title:'Source',provider:'codex'}}),
-    usePrefs:()=>({agentsSort:null,agentsBy:'project'}),setPrefs:()=>{},usePeriodSessions:undefined as any,PeriodStatus:'status',boardPeriod:h.period,
+    usePref:(key:string)=>key==='agentsSort'?null:'project',setPrefs:()=>{},usePeriodSessions:undefined as any,PeriodStatus:'status',boardPeriod:h.period,
     useSizing:()=>null,useAgentsLayout:()=> 'table',Popover:'popover',SlidersIcon:'icon',HideRow:'hide',SwitchRow:'switch',Modal:'modal',AgentsRows:'rows',SortMenu:'sort',projectName:(value:string|null)=>value??translate('agents.noProject'),
   };
   const run=(body:string)=>runInNewContext(ts.transpileModule(body,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,ctx);

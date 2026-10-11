@@ -1,6 +1,6 @@
 import {useRef, useState, useSyncExternalStore} from 'react';
 import type {Kind} from '../lib/types';
-import {HORIZONS, setPrefs, usePrefs} from '../lib/prefs';
+import {HORIZONS, setPrefs, usePref} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
 import {goTo, setTimeRange, timeRangeLabel, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {hubNow, useClock} from '../lib/clock';
@@ -13,7 +13,7 @@ import {Popover} from './Popover';
 
 /** Weekly or 5-hour windows. */
 function KindSwitch() {
-  const {kind} = usePrefs();
+  const kind = usePref('kind');
   return (
     <Segmented
       value={kind}
@@ -69,7 +69,7 @@ function PeriodName({selected, range}: {selected: TimeRange | null; range: strin
  * reckoned at the click; the clock renders them only when ‹ turns on or off.
  */
 function PeriodSwitch({historyStart}: {historyStart: number}) {
-  const {range} = usePrefs();
+  const range = usePref('range');
   const selected = useTimeRange();
   const now = useClock(now => stepChangesAt(selected, range, now, historyStart));
   const [open, setOpen] = useState(false);
@@ -167,7 +167,7 @@ export function AnalyticsHead({widgets, visible}: {widgets: string[]; visible: b
 }
 
 function ViewingControls({widgets}: {widgets: string[]}) {
-  const {horizon} = usePrefs();
+  const horizon = usePref('horizon');
   const historyStart = useHistoryBegins();
   const quota = QUOTA_WIDGETS.some(id=>widgets.includes(id));
   const charts = [ACTIVITY,QUOTA_HISTORY,BUDGET_HISTORY,SUBSCRIPTION_FUNDS].some(id=>widgets.includes(id));

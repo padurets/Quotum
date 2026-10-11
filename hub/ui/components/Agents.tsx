@@ -37,7 +37,7 @@ import {
 } from '../lib/agents';
 import {recentActivity, stamp, workHours} from '../lib/format';
 import {useLineup, useTitles} from '../lib/board';
-import {setPrefs, usePrefs} from '../lib/prefs';
+import {setPrefs, usePref} from '../lib/prefs';
 import {hubNow,useClock} from '../lib/clock';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
@@ -572,7 +572,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   useLocale();
   const lineup = useLineup();
   const titles = useTitles(arrange.view.names);
-  const {agentsSort, agentsBy} = usePrefs();
+  const agentsSort=usePref('agentsSort'),agentsBy=usePref('agentsBy');
   const view = arrange.view;
   /** The dialog, open on all the groups or on one; and the group whose row opened it, to go back to. */
   const [open, setOpen] = useState<{group: string | null} | null>(null);

@@ -18,7 +18,7 @@ const DROP = 5;
  * they should) and its line as [minutes from the anchor, what is left to a tenth]. A series
  * whose working out failed is `none`, `failed`.
  */
-export type WindowForecast = Omit<SeriesForecast, 'points'> & {points: [number, number][] | null; failed?: true};
+export type WindowForecast = Omit<SeriesForecast, 'points'> & {points: [number, number][] | null; failed?: true;planSince?:number|null};
 
 /** Why a series was worked out: first, a late sample, a sample that contradicts it, or a new hour. */
 export type Why = 'first' | 'late' | 'silent' | 'revived' | 'newWindow' | 'drop' | 'refuted' | 'gap' | 'hour';
@@ -203,8 +203,9 @@ export class Forecasts {
     const before = this.series.get(key);
     let entry: Entry;
     try {
-      const {forecast, memory} = forecastOf({samples: reads.samples(window.id, asOf), plan: reads.weekly(window, asOf), since: planSince(reads.plans(), asOf)}, asOf, memoryIn);
-      entry = {asOf, seen: successAt, memoryIn, memoryOut: memory, forecast: told(forecast), failed: false};
+      const since=planSince(reads.plans(),asOf);
+      const {forecast, memory} = forecastOf({samples: reads.samples(window.id, asOf), plan: reads.weekly(window, asOf), since}, asOf, memoryIn);
+      entry = {asOf, seen: successAt, memoryIn, memoryOut: memory, forecast: {...told(forecast),planSince:since}, failed: false};
       this.unsaved.set(key, {asOf, memoryIn, memoryOut: memory});
     } catch (error) {
       // One series failing fails no other, nor the board; it is tried again on the next hour.

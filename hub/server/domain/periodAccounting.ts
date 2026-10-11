@@ -79,6 +79,13 @@ class QuotaIndex {
     return Math.min((numberAt(this.times,lower(this.times,from))??Infinity)+1+period,(numberAt(this.deadlines,lower(this.deadlines,from+1))??Infinity)+period,deadline>now?deadline:Infinity);
   }
 
+  workSlope(now:number,period:number,active:boolean){
+    const left=Math.max(now-period,this.known),right=now;
+    const slope=(at:number)=>active?Number(this.activity?.working(at)??false):this.activity?.slope(at)??0;
+    const next=Math.min(this.changesAt(now,period),this.activity?.next(right)??Infinity,left===now-period?(this.activity?.next(left)??Infinity)+period:this.known+period);
+    return {slope:slope(right)-(left===now-period?slope(left):0),next};
+  }
+
   plot(range:PeriodRange,cell:number,previous:HistorySeries['points'],boundaryOnly=false):HistorySeries['points'] {
     const leftEnd=(Math.floor(range.from/cell)+1)*cell,rightStart=Math.floor((range.to-1)/cell)*cell;
     const points=previous.filter(([at])=>at>=leftEnd&&at<rightStart).map(([at,value,segment,validUntil])=>[at,value,segment,validUntil??at+cell] as HistorySeries['points'][number]);
@@ -338,6 +345,7 @@ export class PeriodAccounting {
   get quotaBytes(){let bytes=0;for(const index of this.quota.values())bytes+=index.bytes;return bytes;}
   get bytes(){let bytes=this.quotaBytes;for(const index of this.money.values())bytes+=index.bytes;return bytes;}
   quotaSummary(source:string,window:string,range:PeriodRange){return this.quota.get(source+'\n'+window)?.at(range);}
+  quotaWorkSlope(source:string,window:string,now:number,period:number,active:boolean){return this.quota.get(source+'\n'+window)?.workSlope(now,period,active);}
   moneySummary(source:string,meter:string,unit:string,range:PeriodRange){return this.money.get(source+'\n'+meter+'\n'+unit)?.at(range);}
   fixed(range:PeriodRange,cell:number):NonNullable<PeriodTape['fixed']> {
     const blank:History={range:'',live:false,since:range.from,to:range.to,cellMs:cell,historyStart:0,series:[],events:[],activity:{since:range.from,known:null,barMs:cell,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};

@@ -1214,3 +1214,6 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 
 .period-status { display: flex; flex-wrap: wrap; gap: .4rem .8rem; color: var(--muted); font-size: .8rem; }
 .period-pages { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem 0; }
+
+.table-sort { color: inherit; font: inherit; text-align: inherit; cursor: pointer; padding: 0; background: none; border: 0; }
+.table-sort:hover { color: var(--text); }
