@@ -9,11 +9,22 @@ const HOUR = 3_600_000;
 /** Keep one real grid transition inside the existing duration, away from endpoint clock wakes. */
 export function idleWindow(readyAt: number, seconds: number, cellMs: number) {
   const duration = seconds * 1000;
-  if (!Number.isFinite(readyAt) || duration <= 0 || duration > cellMs) throw new Error('invalid idle phase');
-  // Centring a 120 s window exactly makes both CDP snapshots race a minute tick.
-  const lead=duration/2+5_000;
-  const boundary = Math.ceil((readyAt + lead) / cellMs) * cellMs;
-  return {from: boundary - lead, to: boundary - lead + duration, boundary, cellMs, expectedTransitions: 1};
+  const minute = 60_000, margin = 5_000;
+  if (!Number.isFinite(readyAt) || !Number.isFinite(cellMs) || !Number.isFinite(duration) || cellMs <= 0 || duration <= 0 || duration > cellMs) throw new Error('invalid idle phase');
+  if (duration < 2 * margin || cellMs % minute !== 0) throw new Error('unsupported idle phase');
+  // A fixed midpoint can skip a complete eligible window and wait almost a whole cell.
+  let boundary = Math.ceil((readyAt + margin) / cellMs) * cellMs;
+  for (;;) {
+    let from = Math.max(readyAt, boundary - duration + margin);
+    for (;;) {
+      const phases = [from, from + duration].map(at => ((at % minute) + minute) % minute);
+      const unsafe = phases.find(phase => phase < margin || phase > minute - margin);
+      if (unsafe === undefined) break;
+      from += unsafe < margin ? margin - unsafe : minute + margin - unsafe;
+    }
+    if (from <= boundary - margin) return {from, to: from + duration, boundary, cellMs, expectedTransitions: 1};
+    boundary += cellMs;
+  }
 }
 
 export type IdlePhase = {from: number; to: number; monotonicFrom: number; monotonicTo: number; cellMs: number; starts: number[]; ends: number[]; transitions: number[]};

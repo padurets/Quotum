@@ -11,13 +11,24 @@ const HOUR = 60 * MIN;
 
 test('both idle durations include one cell transition and avoid minute ticks at their endpoints', () => {
   const cell = 5 * MIN;
-  for (const seconds of [120, 300]) for (let ready = 0; ready < 2 * cell; ready += 1000) {
+  for (const seconds of [120, 300]) for (let ready = 0; ready < 2 * cell; ready++) {
     const planned = idleWindow(ready, seconds, cell);
     assert.ok(planned.from >= ready && planned.from - ready < cell);
     assert.equal(planned.to - planned.from, seconds * 1000);
     assert.equal(Math.floor(planned.to / cell) - Math.floor(planned.from / cell), 1);
-    assert.equal(planned.boundary - planned.from, seconds * 500+5_000);
+    assert.ok(planned.from < planned.boundary && planned.boundary < planned.to);
+    assert.equal(planned.cellMs, cell);
+    assert.equal(planned.expectedTransitions, 1);
+    assert.ok(planned.from - ready <= (seconds === 120 ? 190_000 : 10_000));
     for(const bound of [planned.from,planned.to])assert.ok(Math.min(bound%MIN,MIN-bound%MIN)>=5_000);
+  }
+});
+
+test('an already eligible idle window starts without waiting for a fixed midpoint', () => {
+  const ready = Date.parse('2026-10-11T13:04:17.139Z');
+  for (let difference = -1000; difference <= 1000; difference++) {
+    const at = ready + difference;
+    assert.equal(idleWindow(at, 120, 5 * MIN).from, at);
   }
 });
 
