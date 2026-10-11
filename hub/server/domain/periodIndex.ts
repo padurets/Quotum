@@ -13,6 +13,7 @@ export class PeriodIndex {
   private now=0;
   constructor(readonly trace:WorkTrace,curves?:PeriodCurves) {this.curves=curves??new PeriodCurves(trace);}
   static *prepare(trace:WorkTrace):Preparation<PeriodIndex>{return new PeriodIndex(trace,yield*PeriodCurves.prepare(trace));}
+  *retain(trace:WorkTrace,reserve:(bytes:number)=>void):Preparation<PeriodIndex>{return new PeriodIndex(trace,yield*this.curves.retain(trace,reserve));}
   advance(range:PeriodRange,now:number):{rows:WorkedSession[];changed:boolean;limited:boolean} {
     if(range.from<this.trace.anchor)return {rows:[...this.rows.values()],changed:false,limited:true};
     let changed=false;this.now=now;

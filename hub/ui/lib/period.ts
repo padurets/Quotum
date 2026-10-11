@@ -466,7 +466,16 @@ class BoardPeriod {
       const charge=(key:string,bytes:number)=>{sizes.set(key,bytes);if(!historyPool.reserve(staging,[...sizes.values()].reduce((a,b)=>a+b,0)))throw limited;};
       const build=function*():Preparation<{work:WorkTrace|null;index:PeriodIndex|null;activity:PeriodActivity|null;tapes:typeof previousTapes;edge:number}> {
         let work=previousWork,index=previousIndex,activity:PeriodActivity|null=null,scratch=0;
-        if(work){work=yield*retention.retainWork(work,from,bytes=>{scratch+=bytes;charge('work',scratch);});if(work!==previousWork){charge('work',workBytes(work,0)+workPreparationBytes(work));index=yield*PeriodIndex.prepare(work);activity=yield*PeriodActivity.prepare(work,index.curves);charge('work',workBytes(work,index.curves.bytes));}else sizes.delete('work');}
+        if(work){
+          work=yield*retention.retainWork(work,from,bytes=>{scratch+=bytes;charge('work',scratch);});
+          if(work!==previousWork){
+            const base=workBytes(work,0)+work.refs.length*512;let scratch=0;
+            charge('work',base);
+            if(index)index=yield*index.retain(work,bytes=>{scratch+=bytes;charge('work',base+scratch);});
+            else {charge('work',workBytes(work,0)+workPreparationBytes(work));index=yield*PeriodIndex.prepare(work);}
+            activity=yield*PeriodActivity.prepare(work,index.curves);charge('work',workBytes(work,index.curves.bytes));
+          }else sizes.delete('work');
+        }
         const changedWork=new Set<string>(),tapes=new Map(previousTapes);let changedBytes=0;
         if(work!==previousWork)for(const refs of [work?.refs??[],previousWork?.refs??[]])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}
         for(const [scope,entry] of previousTapes){

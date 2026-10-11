@@ -1400,12 +1400,13 @@ prefixes. Rolling numeric labels read those prefixes through the shared clock an
 when their formatted value changes. A duration update alone does not wake its roster or
 table; membership and ordering still do. Charts advance at their own grid boundaries.
 As a live window advances, expired work blocks and redundant measurement prefixes
-leave the retained indexes. The last real observation before the boundary, its
-availability bounds and required currency evidence remain intact. This cleanup runs
-through the cancellable preparation scheduler without reading history; widening past
-discarded coverage, including a backward correction of the hub clock, requires a new
-bounded baseline and keeps the previous basis visible until it arrives. Capture and authority cutoffs
-remain independent of the locally retained coverage.
+leave the retained indexes. Work indexes retain unchanged timelines and hour patterns;
+only timelines with an expired prefix copy their remaining buffers. The last real
+observation before the boundary, its availability bounds and required currency evidence
+remain intact. Cleanup uses the cancellable preparation scheduler without reading
+history. Widening past discarded coverage, including a backward correction of the hub
+clock, requires a new bounded baseline and keeps the previous basis visible until it
+arrives. Capture and authority cutoffs remain independent of the locally retained coverage.
 When a continuous monetary span grows, merging retires a superseded heartbeat tail
 only when it is no longer an observation anchor, the new answer omits its binding
 and its complete rate path is unchanged. Explicit bindings and real rate changes

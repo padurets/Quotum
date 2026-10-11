@@ -28,7 +28,13 @@ export class WorkTimeline {
   private readonly agents:Float64Array;
   private readonly active:Float64Array;
   private readonly curves:Curve[]=[];
-  constructor(blocks:readonly [number,Curve][]) {
+  constructor(blocks:readonly [number,Curve][]|WorkTimeline,start=0) {
+    if(blocks instanceof WorkTimeline){
+      this.hours=blocks.hours.slice(start);this.agents=blocks.agents.slice(start);this.active=blocks.active.slice(start);this.curves=blocks.curves.slice(start);
+      const agents=this.agents[0],active=this.active[0];
+      for(let i=0;i<this.agents.length;i++){this.agents[i]-=agents;this.active[i]-=active;}
+      return;
+    }
     this.hours=new Float64Array(blocks.length);this.agents=new Float64Array(blocks.length+1);this.active=new Float64Array(blocks.length+1);
     for(let i=0;i<blocks.length;i++){const [hour,curve]=blocks[i];this.hours[i]=hour*WORK_BLOCK_MS;this.curves.push(curve);this.agents[i+1]=this.agents[i]+curve.at(WORK_BLOCK_MS);this.active[i+1]=this.active[i]+curve.at(WORK_BLOCK_MS,true);}
   }
@@ -39,6 +45,19 @@ export class WorkTimeline {
   next(at:number){const i=upper(this.hours,at)-1;return Math.min(i<0?Infinity:this.hours[i]+this.curves[i].next(at-this.hours[i]),this.hours[i+1]===undefined?Infinity:this.hours[i+1]+this.curves[i+1].times[0]);}
   last(at:number){let i=upper(this.hours,at)-1;if(i<0)return 0;let value=this.curves[i].last(Math.min(WORK_BLOCK_MS,at-this.hours[i]));if(value===null&&i>0){i--;value=this.curves[i].last(WORK_BLOCK_MS);}return value===null?0:this.hours[i]+value;}
   get bytes(){return this.hours.length*32+16;}
+  /** Whole expired hours leave owned buffers; surviving hour patterns stay shared. */
+  retain(from:number,reserve:(bytes:number)=>void) {
+    let start=Math.max(0,upper(this.hours,from)-1);
+    if(start<this.hours.length&&this.hours[start]+this.curves[start].last(WORK_BLOCK_MS)!<=from)start++;
+    if(!start)return this;
+    reserve((this.hours.length-start)*32+144);
+    return new WorkTimeline(this,start);
+  }
+  *measure(curves:Set<Curve>,reserve:(bytes:number)=>void):Preparation<number>{
+    let bytes=this.bytes;
+    for(const curve of this.curves){if(!curves.has(curve)){reserve(64);curves.add(curve);bytes+=curve.bytes;}yield;}
+    return bytes;
+  }
 }
 
 export class PeriodCurves {
@@ -48,6 +67,25 @@ export class PeriodCurves {
   private retainedBytes=0;
   constructor(readonly trace:WorkTrace,deferred=false){if(!deferred)drain(this.build());}
   static *prepare(trace:WorkTrace):Preparation<PeriodCurves>{const value=new PeriodCurves(trace,true);yield*value.build();return value;}
+  /** retainWork preserves reference objects and removes only evidence before its new anchor. */
+  *retain(trace:WorkTrace,reserve:(bytes:number)=>void):Preparation<PeriodCurves>{
+    reserve(256+trace.refs.length*32);
+    const value=new PeriodCurves(trace,true),refs=new Map<WorkTrace['refs'][number],number>();
+    for(const [id,ref] of this.trace.refs.entries()){reserve(64);refs.set(ref,id);yield;}
+    const timelines=new Map<WorkTimeline,WorkTimeline>(),curves=new Set<Curve>();
+    const keep=function*(timeline:WorkTimeline):Preparation<WorkTimeline>{
+      const known=timelines.get(timeline);if(known)return known;
+      reserve(64);const next=timeline.retain(trace.anchor,reserve);timelines.set(timeline,next);
+      value.retainedBytes+=yield*next.measure(curves,reserve);return next;
+    };
+    value.all=yield*keep(this.all);
+    for(const ref of trace.refs){const id=refs.get(ref);if(id===undefined)throw new Error('retained work changed its context');value.contexts.push(yield*keep(this.contexts[id]));yield;}
+    for(const ref of trace.refs){
+      const keys={source:ref.source??'unknown',project:JSON.stringify(ref.project),device:ref.device.id};
+      for(const dimension of ['source','project','device'] as const){const key=keys[dimension];if(!value.groups[dimension].has(key)){reserve(64+key.length*2);value.groups[dimension].set(key,yield*keep(this.groups[dimension].get(key)!));}yield;}
+    }
+    return value;
+  }
   private *build():Preparation<void>{
     const packed=(yield*packWorkPrepared(this.trace)).packed!;
     type Hours=Map<number,Map<number,number>>;
