@@ -74,6 +74,7 @@ class BoardPeriod {
   private workRangeKey='24h';
   private activity:PeriodActivity|null=null;
   private readonly tapes=new Map<PeriodScope,{tape:PeriodTape;accounting:PeriodAccounting;generation:number;proofEpoch:number;selection:PeriodSelection;rangeKey:string;queryKey:string}>();
+  private readonly projectFrames:Partial<Record<PeriodScope,{history:WeakRef<History>;tape:WeakRef<object>;work:WeakRef<object>;activity:WeakRef<PeriodActivity>|null;generation:number;projectionRevision:number;workRangeKey:string;from:number;to:number;value:WeakRef<History>}>>={};
   private readonly projectionRevision={quota:0,budget:0,funds:0};
   private readonly projectionErrors:Partial<Record<PeriodScope,'history_limit'|'history_failed'>>={};
   private readonly projectionListeners={quota:new Set<()=>void>(),budget:new Set<()=>void>(),funds:new Set<()=>void>()};
@@ -129,8 +130,22 @@ class BoardPeriod {
   get=()=>this.workState;
   getProjectionRevision=(scope:PeriodScope)=>this.projectionRevision[scope];
   subscribeProjection=(scope:PeriodScope,listener:()=>void)=>{this.projectionListeners[scope].add(listener);return()=>{this.projectionListeners[scope].delete(listener);};};
-  private publishProjection(scopes:readonly PeriodScope[]=PERIOD_SCOPES){for(const scope of scopes){this.projectionRevision[scope]++;for(const listener of this.projectionListeners[scope])listener();}}
+  private publishProjection(scopes:readonly PeriodScope[]=PERIOD_SCOPES){this.forgetProjection(scopes);for(const scope of scopes){this.projectionRevision[scope]++;for(const listener of this.projectionListeners[scope])listener();}}
+  private forgetProjection(scopes:readonly PeriodScope[]=PERIOD_SCOPES){for(const scope of scopes)delete this.projectFrames[scope];}
   project(history:History,scope:PeriodScope,now=this.evaluatedAt) {
+    // Fixed endpoints share one exact frame across widgets. Weak slots leave
+    // its lifetime with the readers that display it.
+    const tape=this.tapes.get(scope),selection=tape?.selection;
+    const fixed=selection?.mode==='range'&&(scope!=='quota'||!this.activity||this.workSelection.mode==='range')?selection:null;
+    const entry=this.projectFrames[scope];
+    if(fixed&&entry&&entry.history.deref()===history&&entry.tape.deref()===tape&&entry.work.deref()===this.work&&(entry.activity?.deref()??null)===this.activity&&entry.generation===this.generation&&entry.projectionRevision===this.projectionRevision[scope]&&entry.workRangeKey===this.workRangeKey&&entry.from===fixed.from&&entry.to===fixed.to){
+      const value=entry.value.deref();if(value)return value;
+    }
+    const result=this.projectFrame(history,scope,now);
+    if(fixed&&tape&&typeof WeakRef==='function')this.projectFrames[scope]={history:new WeakRef(history),tape:new WeakRef(tape),work:new WeakRef(this.work),activity:this.activity?new WeakRef(this.activity):null,generation:this.generation,projectionRevision:this.projectionRevision[scope],workRangeKey:this.workRangeKey,from:fixed.from,to:fixed.to,value:new WeakRef(result)};
+    return result;
+  }
+  private projectFrame(history:History,scope:PeriodScope,now=this.evaluatedAt) {
     const tape=this.tapes.get(scope);
     let result=history;
     if(tape?.rangeKey===history.range){const range=evaluatedRange(tape.selection,now),values=new Map<string,PeriodValues>();if(tape.selection.mode==='range')for(const [id,reading] of this.values)if(reading.value&&reading.basis?.range.to===range.to)values.set(id,reading.value);result=tape.accounting.project(history,range,values);}
@@ -212,8 +227,8 @@ class BoardPeriod {
     for(const scope of PERIOD_SCOPES)if(queries[scope]&&(this.projectionErrors[scope]&&!this.dirtyScopes.has(scope)||!this.needsTape(scope,this.queryKey(queries[scope]!),range)))delete queries[scope];
     return {board:board.id,generation:this.generation,revision:this.revision,proofEpoch:this.proofEpoch,request:{version:1,selection:this.selection,evaluatedAt:hubNow(),...queries,...(pending&&this.valuesNeeded&&this.selection.mode==='range'&&this.sourceIds.length?{values:this.sourceIds}:{}),...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{})}};
   }
-  private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
-  private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence};for(const listener of this.listeners)listener();}
+  private setValue(id:string,value:Reading<PeriodValues>){this.forgetProjection();this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
+  private publishWork() {this.forgetProjection(['quota']);this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence};for(const listener of this.listeners)listener();}
   private retireWork() {
     this.workEvidence++;this.retirementAt=Infinity;
     this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.workProofEpoch=-1;
@@ -544,6 +559,7 @@ class BoardPeriod {
     const changed=projected.changed||this.workState.value!==this.work.value||rows.length!==this.workRows.length||rows.some((row,i)=>row.ref!==this.workRows[i]?.ref||row.working!==this.workRows[i]?.working||!sameJson(row.currentPresence,this.workRows[i]?.currentPresence));
     if(changed) {
       this.workRows=rows;
+      this.forgetProjection(['quota']);
       this.activity?.update(this.workRows);
       const next=new Map<string,WorkedSession[]>();
       for(const row of this.workRows){if(row.source===null)continue;let list=next.get(row.source);if(!list)next.set(row.source,list=[]);list.push(row);}
