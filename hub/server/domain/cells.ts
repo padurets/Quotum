@@ -86,7 +86,7 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
     const indexes = sessionIndexes[tileOf(at, cell) - firstTile];
     const sessions = new Map<string, {ms: number; s: Stretch}>();
     for (const s of spans) {
-      const key = JSON.stringify([s.session, s.source]);
+      const key = `${s.session}:${s.source??''}`;
       if (!indexes.has(key)) {
         indexes.set(key, chunk.activity.sessions.length);
         chunk.activity.sessions.push([s.session, s.source, s.project, s.device]);
@@ -102,6 +102,10 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
     for (const dim of dimensions) {
       const keyOf = (s: Stretch) => dim === 's' ? s.source ?? 'unknown' : dim === 'p' ? JSON.stringify(s.project) : s.device;
       const grouped = new Map<string, Stretch[]>();
+      const defaults=new Map<string,number>();
+      for(const {s,ms} of sessions.values()) {
+        const key=keyOf(s);defaults.set(key,Math.max(defaults.get(key)??0,ms));
+      }
       for (const s of spans) {
         const key = keyOf(s);
         if (!grouped.has(key)) grouped.set(key, []);
@@ -109,7 +113,7 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
       }
       for (const [key, members] of grouped) {
         const ms = workTime(members);
-        const defaultMs = Math.max(...[...sessions.values()].filter(v => keyOf(v.s) === key).map(v => v.ms));
+        const defaultMs = defaults.get(key)!;
         if (ms !== defaultMs) row[3].push([dim, key, ms]);
       }
     }
