@@ -321,6 +321,21 @@ keeps asking: the hub waits them out, longer each time in a row (15 minutes for
 a healthy device takes it as before. Such a device on duty, or with no other device on
 duty, is answered `onDuty: true` until its pause is over.
 
+A fresh accepted failure answering the current holder's latest command releases
+its starter, measurement and waiting lease protection. The device's own failure
+pause remains. A healthy device can take over on its next eligible check-in; Auto
+asks it to measure immediately, while a fixed frequency keeps its schedule from
+the last successful observation and respects the new device's minimum interval.
+Older, duplicate and off-duty failures cannot release a newer command. This change
+does not alter the validity of retained measurements or send new identity fields.
+An accepted snapshot taken before or exactly at that device's latest failure still
+updates source evidence, but cannot renew its duty. A later successful observation
+proves recovery and can renew duty as before.
+Release also ends the old holder's right to waiting protection. The end of its
+pause, another batch or a newer shared observation from another device does not
+restore that right. Its own successful recovery or a new eligible duty claim can
+restore it; a fixed plan still follows the shared successful-data baseline.
+
 A reader may ask the hub for fresh limits from the subscription's card. The next
 permitted check-in of its current paced holder then asks for a measurement using the
 same fields above. This never bypasses the one-minute minimum, the device's
@@ -630,6 +645,11 @@ ID is kept only in the hub's work ledger; no producer ID, raw native token, PID,
 metadata or salt appears in board state, history, errors or logs.
 
 The measuring-frequency preference is kept on the hub. It adds no information to agent traffic.
+Releasing duty after a fresh failure uses only the existing device, subscription
+binding, corrected observation time and latest command held in hub memory. It sends
+no new identity or failure fields and leaves retained sample validity unchanged.
+Waiting eligibility belongs to that same in-memory holder, independently of the
+subscription's shared observation clock; it adds no device fields or persisted identity.
 
 ### Client discovery privacy
 

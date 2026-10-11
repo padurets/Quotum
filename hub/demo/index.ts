@@ -36,7 +36,7 @@ const SETUP_CODE = 'BCDF-GHJK';
 const ADDRESS = ['QUOTUM_PORT', 'QUOTUM_BIND', 'QUOTUM_ALLOWED_HOSTS', 'QUOTUM_PUBLIC_URL', 'QUOTUM_TRUST_PROXY', 'QUOTUM_FRAME_ANCESTORS'];
 /** How long the hub may take to answer after it starts, and to stop. */
 const READY_MS = 10_000;
-const STOP_MS = 5_000;
+const STOP_MS = 7_000;
 /** How long a signal may take to reach the demo after the hub, stopped by it too, went away. */
 const SETTLE_MS = 1_000;
 /** How often machines tell their lists of running agents, as agents do. */

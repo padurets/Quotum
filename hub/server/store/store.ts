@@ -12,7 +12,8 @@ import type {PlanChange, SeriesSample} from '../domain/forecast.js';
 import type {Origin, SessionRoute} from '../domain/ingest.js';
 import type {Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
-import {afterCommit, transaction, tell, type Touches} from '../touches.js';
+import {afterCommit, transaction, tell, trouble, type Touches} from '../touches.js';
+import {bootstrapAttentionCycles, nextAttentionCycle} from './attention.js';
 import {migrate} from './schema.js';
 import type {QuotaObservation, MeterMeasurement} from '../domain/meters.js';
 import {MeterStore} from './meters.js';
@@ -77,10 +78,13 @@ export class Store {
   private readonly created: number;
   private observer: Touches | null = null;
   private pruned = 0;
+  private readonly attentionCyclesReady: boolean;
 
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
+    this.attentionCyclesReady = bootstrapAttentionCycles(this.db);
+    if (!this.attentionCyclesReady) trouble(new Error('invalid_attention_cycle'));
     this.currencies=new CurrencyStore(this.db);
     this.currencies.onChange=owner=>{if(owner){for(const listener of this.currencyChanges)listener(owner);tell(this.observer,o=>o.touchUser(owner));}};
     importLegacyCurrencies(this.db,this.currencies);
@@ -377,6 +381,11 @@ export class Store {
   attentionCycle(source: string, window: string): number | null {
     const row = this.db.prepare('SELECT cycle FROM attention_windows WHERE source_id = ? AND window_id = ?').get(source, window) as {cycle: number} | undefined;
     return row?.cycle ?? null;
+  }
+
+  newAttentionCycle(): number {
+    if (!this.attentionCyclesReady) throw new Error('invalid_attention_cycle');
+    return nextAttentionCycle(this.db);
   }
 
   /**
@@ -874,8 +883,8 @@ export class Store {
    * a subscription has while it has it.
    */
   prune(now: number) {
-    this.db.prepare('DELETE FROM attention_windows WHERE source_id NOT IN (SELECT id FROM sources)').run();
     const cutoff = now - config.retention.sampleDays * 86_400_000;
+    this.db.prepare('DELETE FROM attention_windows WHERE last_at < ? OR source_id NOT IN (SELECT id FROM sources)').run(cutoff);
     // Each successful deletion counts immediately: a later statement may fail.
     if (this.db.prepare('DELETE FROM samples WHERE at < ?').run(cutoff).changes) this.pruned++;
     if (this.meters.prune(cutoff)) this.pruned++;

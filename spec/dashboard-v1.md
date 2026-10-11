@@ -45,6 +45,20 @@ A stream is answered `200` with `Content-Type: text/event-stream; charset=utf-8`
 `Cache-Control: no-store`, `X-Accel-Buffering: no` and `Connection: close`, besides the
 security headers of every answer.
 
+## Response encoding
+
+Server read projections on `GET`/`HEAD /api/overview`, `/api/history`, `/api/events`
+(JSON long poll), `/api/resets`, `/api/devices`, `/api/projects` and
+`/api/boards/:board/sources/:source/keys` negotiate response-only `br` or `gzip` for
+JSON bodies of at least 1024 bytes. Explicit `q=0` exclusions take precedence over
+wildcards, including aliases and duplicate entries. Malformed or unsupported-only
+preferences keep the existing identity fallback and status. Eligible JSON responses
+carry `Vary: Accept-Encoding` even without compression. Decoded payloads and exact
+decimal amounts are unchanged. SSE and all local/desktop responses are uncompressed;
+no request decompression is enabled.
+Aborting an encoded response closes its input and native encoder without waiting
+for garbage collection. `HEAD` carries no response body.
+
 ## Measuring frequency
 
 `POST /api/boards/:board/sources/:source/frequency` accepts exactly
@@ -1044,7 +1058,12 @@ and when), no names and nothing of people, as long as samples.
 In local mode, so that the app tells of a limit once in each cycle of a window, a restart
 included, the hub keeps on disk for each window its cycle, which of its thresholds it has
 reached in it, and its last sample (what is left and used, the reset time, its kind, label
-and length, when it was measured), with no end: the hub forgets no source it has measured.
+and length, when it was measured), for the sample-retention period (90 days) since
+its last observation. At the exact retention cutoff the ledger is still kept. A
+returning window whose ledger expired starts with a silent baseline. One persisted
+global cycle counter, containing no source, window or person, keeps new notification
+IDs distinct from consumed ones after expiry, source deletion and restart; no
+per-window tombstones remain.
 For each provider it keeps when the latest scheduled reset it has learned of was
 announced, and the links announced then, up to 64. Nothing of people.
 

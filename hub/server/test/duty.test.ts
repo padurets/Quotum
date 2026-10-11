@@ -49,7 +49,7 @@ test('a holder told to measure keeps duty while it does, until it answers', () =
     else if (answer === 'failure') duty.failed('acc', 'laptop', at);
     // A measurement taken before the command, sent late, does not answer it.
     else duty.delivered('acc', 'laptop', t0 + 20_000, 132_000, at);
-    const kept = answer === 'old delivery' ? t0 + 6 * MIN : answer === 'delivery' ? at + 132_000 : t0 + 132_000;
+    const kept = answer === 'old delivery' ? t0 + 6 * MIN : answer === 'delivery' ? at + 132_000 : 0;
     assert.equal(duty.until('acc'), kept);
   }
   // Only the holder is told: another device asking does not move the lease.
@@ -57,6 +57,29 @@ test('a holder told to measure keeps duty while it does, until it answers', () =
   duty.claim('acc', 'laptop', false, t0);
   duty.asked('acc', 'server', t0 + MIN);
   assert.equal(duty.until('acc'), t0 + 5 * MIN);
+});
+
+test('only a failure of the latest holder command releases starter, data and scheduled protection', () => {
+  for (const protection of ['starter', 'data', 'schedule'] as const) {
+    const duty = new Duty();
+    duty.claim('acc', 'broken', false, t0);
+    if (protection !== 'starter') duty.delivered('acc', 'broken', t0, 20 * MIN, t0);
+    duty.asked('acc', 'broken', t0 + MIN);
+    if (protection === 'schedule') duty.schedule('acc', t0 + 30 * MIN);
+    const until = duty.until('acc');
+    assert.equal(duty.failed('acc', 'other', t0 + MIN), false);
+    assert.equal(duty.until('acc'), until, 'off-duty failure changes nothing');
+    assert.equal(duty.failed('acc', 'broken', t0 + 29_999), false);
+    assert.equal(duty.until('acc'), until, 'older than the tolerance changes nothing');
+    assert.equal(duty.failed('acc', 'broken', t0 + 30_000), true);
+    assert.equal(duty.until('acc'), 0, protection);
+    assert.equal(duty.failed('acc', 'broken', t0 + MIN), false, 'one command is released once');
+    assert.equal(duty.claim('acc', 'healthy', false, t0 + MIN + 1).measure, true);
+    duty.asked('acc', 'healthy', t0 + MIN + 1);
+    const next = duty.until('acc');
+    assert.equal(duty.failed('acc', 'broken', t0 + 2 * MIN), false);
+    assert.equal(duty.until('acc'), next, 'the retired holder cannot release new work');
+  }
 });
 
 test('a holder measuring what it was told to is done once it answers within the clock tolerance, or asks again', () => {

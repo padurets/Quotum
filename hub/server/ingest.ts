@@ -107,12 +107,16 @@ export class Ingest {
         if (recorded.unavailable) attention?.unavailable(previous, observedAt);
         afterCommit(() => {
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
+          let onDuty = false;
           if (recorded.delivery) {
             this.cadence.refreshResult(account, device.id, observedAt, true, now);
-            this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now);
+            if (this.cadence.canRenewDuty(account, device.id, observedAt)) {
+              this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now);
+              onDuty = this.duty.holder(account) === device.id;
+            }
           } else this.duty.acknowledge(account, device.id, observedAt);
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
-          if (recorded.delivery) this.cadence.delivered(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,snapshot.staleAfterMs,this.signals(source,account,now).inUse,now);
+          if (recorded.delivery) this.cadence.delivered(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,snapshot.staleAfterMs,this.signals(source,account,now).inUse,now,onDuty);
           else if (recorded.accepted) this.cadence.observed(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,this.signals(source,account,now).inUse,now);
           else this.cadence.acknowledge(account,device.id,observedAt);
         });
@@ -128,8 +132,7 @@ export class Ingest {
         if (key&&at>failureFloor) afterCommit(() => {
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
           if (this.cadence.failed(key, device.id, failure.error, at)) {
-            this.duty.failed(key, device.id, at);
-            if (this.duty.holder(key) === device.id) this.duty.schedule(key, null);
+            if (this.duty.failed(key, device.id, at)) this.cadence.released(key, device.id);
             this.cadence.refreshResult(key, device.id, at, false, now);
           }
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
