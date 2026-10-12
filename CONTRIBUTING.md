@@ -227,8 +227,9 @@ contacted. Use `make info` for the actual address and synthetic sign-in.
 
 `DEV_SET=sessions make dev` opens the session analytics review fixture. Sign in as Ana:
 the default 24h period has 57 projects, five machines, four subscriptions and 125
-recorded contexts. The comparison table and Atlas's 67-context disclosure both have
-two pages. Recent overlapping work, 64 retained Atlas contexts absent from the live
+recorded contexts. The comparison shows every group and follows its content height,
+like the other analytics tables. Atlas's 67-context disclosure has two pages.
+Recent overlapping work, 64 retained Atlas contexts absent from the live
 roster, long names and a projectless context are ready to inspect in either language.
 Live synthetic reports keep measurements fresh. The 7d and 30d periods also have work;
 the latter explains the fixture's seven-day coverage. For a known-empty fixed range,

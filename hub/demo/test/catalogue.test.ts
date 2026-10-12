@@ -904,7 +904,7 @@ test('period catalogue states use the existing retained demo evidence at exclusi
   assert.deepEqual(PERIOD_SCENES.flatMap(s=>s.expect),['past-values','retained-work','exclusive-interval','shared-activity','unknown-value','no-invented-work']);
 });
 
-test('session review starts with populated 24h comparisons and both group and retained-context pages',async t=>{
+test('session review starts with populated 24h comparisons and retained-context pages',async t=>{
   const set=setOf('sessions'),start=Math.floor(Date.now()/MIN)*MIN;
   const {stand}=await bringUp(t,set,start);t.mock.timers.setTime(start);
   const live=new Live(stand,()=>MIN);await live.report(0,start);
@@ -922,7 +922,7 @@ test('session review starts with populated 24h comparisons and both group and re
   };
   for(const periodMs of [24*HOUR,7*24*HOUR]){
     const {rows,summary}=await read({mode:'live',periodMs}),projects=summary('project'),atlas=rows.filter(row=>row.project==='atlas');
-    assert.equal(projects.by.project.length,57,'the comparison has a second 50-row page even in the default period');
+    assert.equal(projects.by.project.length,57,'the default comparison includes every project beyond the former page boundary');
     assert.equal(rows.length,125);assert.equal(projects.agents,125);assert.equal(atlas.length,67,'Atlas fills two disclosure pages');
     assert.equal(atlas.filter(row=>!row.currentPresence).length,64,'retained work remains available without a live context');
     assert.ok(rows.length>current.length);assert.equal(summary('device').by.device.length,5);assert.equal(summary('source').by.source.length,4);
@@ -933,5 +933,5 @@ test('session review starts with populated 24h comparisons and both group and re
   }
   const empty=await read({mode:'range',from:start-4*HOUR,to:start-2*HOUR});assert.equal(empty.rows.length,0);assert.ok(empty.summary('project').known);
   const unknown=await read({mode:'range',from:start-9*24*HOUR,to:start-8*24*HOUR});assert.equal(unknown.summary('project').known,null);
-  assert.deepEqual(SESSION_ACTIVITY_SCENES.find(scene=>scene.id==='review')!.expect,['populated-24h','comparison-pagination','retained-pagination','rich-breakdowns']);
+  assert.deepEqual(SESSION_ACTIVITY_SCENES.find(scene=>scene.id==='review')!.expect,['populated-24h','complete-comparison','retained-pagination','rich-breakdowns']);
 });

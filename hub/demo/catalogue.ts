@@ -63,11 +63,11 @@ export const PERIOD_SCENES=[
 /** Activity-table loading, authority loss, sorting crossings and missing groups are
  * held by ui/test/activityTable.test.ts and ui/test/periodOrderClock.test.ts.
  * The table shares the fixtures' overlapping and retained contexts with Activity.
- * The sessions set opens with populated 24h comparisons and both kinds of pagination.
+ * The sessions set opens with populated 24h comparisons and retained-session pages.
  */
 export const SESSION_ACTIVITY_SCENES=[
   {id:'comparison',expect:['opt-in-table','union-total','retained-contributions','shared-work-index']},
-  {id:'review',expect:['populated-24h','comparison-pagination','retained-pagination','rich-breakdowns']},
+  {id:'review',expect:['populated-24h','complete-comparison','retained-pagination','rich-breakdowns']},
 ] as const;
 
 

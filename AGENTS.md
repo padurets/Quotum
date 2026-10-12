@@ -167,6 +167,9 @@ and platform smoke checks still apply.
   off and on by a click.
 - Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).
+- Board widgets never add a vertical scroller inside the page. Analytics tables follow
+  their content height and show every row, as the quota and budget tables do; they do
+  not introduce Next/Previous controls. Reuse the shared table and its responsive list.
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
   fixed background, and widgets have no `backdrop-filter` (floating surfaces and the
   sticky bars may): whole-window repainting during scroll is expensive, especially

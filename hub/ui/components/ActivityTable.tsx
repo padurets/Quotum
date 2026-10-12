@@ -1,4 +1,4 @@
-import {memo,useCallback,useLayoutEffect,useRef,useState,type CSSProperties,type RefObject} from 'react';
+import {memo,useCallback,useRef,useState,type CSSProperties} from 'react';
 import type {Activity,ActivityDimension,ActivityGroup} from '../lib/types';
 import {activityCoverage,activityGroupName,atOnce,groupColors} from '../lib/activity';
 import {ACTIVITY_COLUMNS,activityKey,effectiveActivitySort,nextActivitySort,sortedActivity,type ActivityColumn} from '../lib/activityTable';
@@ -15,8 +15,7 @@ import {Segmented} from './Kit';
 import {Popover} from './Popover';
 import {AnalyticsTable,TableSettings,type AnalyticsColumn,type AnalyticsRow,type TimedCell} from './AnalyticsTable';
 import {PeriodStatus} from './PeriodStatus';
-import {AgentPages,AgentsDialog,SortIcon} from './Agents';
-import {fillOf,pixels,useSizing} from './sizing';
+import {AgentsDialog,SortIcon} from './Agents';
 
 const LABELS:Record<ActivityDimension,Key>={project:'activity.byProject',device:'activity.byDevice',source:'activity.bySource'};
 const COLUMNS:Record<ActivityColumn,{title:Key;hint:Key;width:number}>={
@@ -27,28 +26,6 @@ const COLUMNS:Record<ActivityColumn,{title:Key;hint:Key;width:number}>={
 };
 const AGENTS_BY:Record<ActivityDimension,AgentsBy>={project:'project',device:'machine',source:'subscription'};
 
-/** Measure only the current page; a chosen height scrolls those rows inside the widget. */
-function useTableSize(panel:RefObject<HTMLElement|null>){
-  const sizing=useSizing(),measure=useRef(()=>{});
-  measure.current=()=>{
-    const root=panel.current,body=root?.querySelector<HTMLElement>('.table-wrap,.analytics-compact');
-    if(!sizing||!root||!body)return;
-    const shown=root.getBoundingClientRect().height-fillOf(root),chrome=shown-body.getBoundingClientRect().height;
-    const natural=chrome+body.scrollHeight;
-    const first=body.querySelector('tbody > tr, :scope > li'),heading=body.querySelector('thead');
-    const minimum=chrome+(first?.getBoundingClientRect().height??0)+(heading?.getBoundingClientRect().height??0);
-    sizing.report({min:pixels(minimum),natural:pixels(natural),shown:pixels(shown)});
-    body.style.maxHeight=sizing.manual?`${pixels(Math.max(minimum-chrome,sizing.allocated-chrome))}px`:'';
-    body.style.overflowY=sizing.manual?'auto':'';
-  };
-  useLayoutEffect(()=>measure.current());
-  useLayoutEffect(()=>{
-    if(!sizing||!panel.current)return;
-    const observer=new ResizeObserver(()=>measure.current());observer.observe(panel.current);
-    return ()=>observer.disconnect();
-  },[panel,sizing?.report]);
-  const report=sizing?.report;useLayoutEffect(()=>()=>report?.(null),[report]);
-}
 const metric=(summary:Activity|null,by:ActivityDimension,column:ActivityColumn,key?:string)=>{
   if(!summary?.known)return '—';
   const value=key===undefined?summary:summary.by[by].find(g=>g.key===key);
@@ -81,7 +58,6 @@ function Contributions({by,chosen,title,arrange,onClose,restore}:{by:ActivityDim
 export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrange}){
   const locale=useLocale(),by=usePref('activityTableBy'),savedSort=usePref('activityTableSort'),range=usePref('range'),selected=useTimeRange();
   const titles=useTitles(arrange.view.names),panel=useRef<HTMLElement>(null);
-  useTableSize(panel);
   const visible=ACTIVITY_COLUMNS.filter(column=>columnShown(arrange.view,ACTIVITY_TABLE,column));
   const active=effectiveActivitySort(savedSort,visible);
   const name=(group:ActivityGroup)=>activityGroupName(group,by,titles);
@@ -97,9 +73,6 @@ export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrang
     return demand;
   });
   const {summary}=period,groups=ordered(summary);
-  const paginationKey=JSON.stringify([by,active,selected?timeRangeKey(selected):range]);
-  const [pagination,setPagination]=useState({key:paginationKey,page:0});
-  const currentPage=Math.min(pagination.key===paginationKey?pagination.page:0,Math.max(0,Math.ceil(groups.length/50)-1));
   const [opened,setOpened]=useState<{by:ActivityDimension;key:string;title:string}|null>(null);
   const sortBy=(column:ActivityColumn|'name')=>setPrefs({activityTableSort:nextActivitySort(savedSort,column)});
   const columns:AnalyticsColumn<ActivityColumn>[]=visible.map(id=>({id,title:t(COLUMNS[id].title),hint:t(COLUMNS[id].hint),width:COLUMNS[id].width,align:'right'}));
@@ -111,7 +84,7 @@ export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrang
     const cell:TimedCell={time:'activity-table',changesAt:now=>boardPeriod.activitySummaryChangesAt(by,now,read,key),at:now=>({content:read(now),title:t(COLUMNS[column].hint)})};
     return [column,cell];
   })) as Record<ActivityColumn,TimedCell>;
-  const rows:AnalyticsRow<ActivityColumn>[]=groups.slice(currentPage*50,currentPage*50+50).map(group=>({key:group.key,name:name(group),color:colorOfGroup.get(group.key),cells:cells(group.key)}));
+  const rows:AnalyticsRow<ActivityColumn>[]=groups.map(group=>({key:group.key,name:name(group),color:colorOfGroup.get(group.key),cells:cells(group.key)}));
   const total:AnalyticsRow<ActivityColumn>={key:'total',name:t('activityTable.total'),cells:cells()};
   const restore=()=>{
     const found=[...panel.current?.querySelectorAll<HTMLElement>('[data-activity-group]')??[]].find(element=>element.dataset.activityGroup===opened?.key);
@@ -135,7 +108,6 @@ export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrang
     {summary&&<AnalyticsTable columns={columns} rows={rows} name={t(LABELS[by])} nameWidth={180} lead="agenthours" total={total} sorting={{...active,onSort:sortBy}}
       onOpen={key=>{const group=groups.find(g=>g.key===key);if(group)setOpened({by,key,title:name(group)});}}/>}
     {summary?.known&&!groups.length&&<p className="analytics-note">{t('activity.none')}</p>}
-    <AgentPages page={currentPage} count={groups.length} onPage={page=>setPagination({key:paginationKey,page})}/>
     {opened&&opened.by===by&&<Contributions key={`${by}:${opened.key}`} by={by} chosen={opened.key} title={opened.title} arrange={arrange} onClose={()=>setOpened(null)} restore={restore}/>}
   </section>;
 });

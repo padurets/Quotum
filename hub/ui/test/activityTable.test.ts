@@ -119,7 +119,8 @@ test('numeric and name sorting preserve independent preferences, hidden-column f
   for(const descending of [false,true])assert.equal(table.sortedActivity(project,{column:'name',descending},name,'en','project').at(-1)!.name,null);
 });
 
-function renderer(){
+function renderer(input:WorkTrace=trace){
+  const trace=input;
   let by:ActivityDimension='device',owner=false,hidden:string[]=[],range={from:25_000,to:125_000},knownFrom=0;
   const index=new PeriodIndex(trace),metrics=new PeriodActivity(trace,index.curves);
   const period={activitySummaryAt:(dimension:ActivityDimension,_now:number,key?:string)=>metrics.summary(range,dimension,key),activitySummaryChangesAt:()=>null,activityRangeAt:()=>range,activityCoverageChangesAt:()=>null};
@@ -127,7 +128,7 @@ function renderer(){
   const modules:Record<string,unknown>={react:React,'react/jsx-runtime':jsxRuntime,'../lib/activityTable':table,'../lib/activity':activity,'../lib/format':format,'../lib/agents':agents,'../lib/view':view,
     '../i18n':{...i18n,useLocale:i18n.useLocale},'../lib/prefs':{ACTIVITY_BY:['project','device','source'],usePref:(key:string)=>key==='activityTableBy'?by:key==='activityTableSort'?null:'1h'},
     '../lib/board':{useTitles:()=>({s:{provider:'codex',title:'Subscription'}})},'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>125_000},
-    '../lib/period':{boardPeriod:period,usePeriodActivity:()=>({summary,basis:{range:{from:range.from-1,to:range.to}},loading:false,error:null})},'./sizing':{useSizing:()=>null},'./PeriodStatus':{PeriodStatus:()=>null},'./Popover':{Popover:()=>null},'./Agents':{AgentPages:()=>null,SortIcon:()=>null},'./Kit':{Segmented:()=>null}};
+    '../lib/period':{boardPeriod:period,usePeriodActivity:()=>({summary,basis:{range:{from:range.from-1,to:range.to}},loading:false,error:null})},'./sizing':{useSizing:()=>null},'./PeriodStatus':{PeriodStatus:()=>null},'./Popover':{Popover:()=>null},'./Agents':{AgentPages:()=>React.createElement('nav',{'data-pages':''}),SortIcon:()=>null},'./Kit':{Segmented:()=>null}};
   const compile=(file:string)=>{
     const context={exports:{} as Record<string,React.ComponentType<any>>,require:(name:string)=>modules[name]??{}};
     runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);return context.exports;
@@ -155,4 +156,13 @@ test('actual shared table renders union totals, session hints, honest unknowns a
       r.set({knownFrom:0});html=r.render();assert.ok(html.includes(i18n.t('activity.none')));
     }
   }finally{i18n.setLocale('en');}
+});
+
+test('the comparison renders every group in the shared table without widget pages',()=>{
+  const refs=Array.from({length:57},(_,i)=>ref('context-'+i,'device-'+i,'Project '+i));
+  const r=renderer({...trace,refs,spans:refs.map((_,i)=>[i,0,100_000])});
+  const html=r.render();
+  assert.equal((html.match(/data-activity-group=/g)??[]).length,57);
+  assert.equal((html.match(/class="analytics-total"/g)??[]).length,1);
+  assert.ok(!html.includes('data-pages'));
 });

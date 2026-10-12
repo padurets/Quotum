@@ -521,7 +521,9 @@ the total never adds group active times. Recorded sessions are positive-work ret
 contexts, so one logical producer can count more than once after a context change.
 The chart explains the same count. Opening a group shows those retained contexts,
 including ones without current presence, with their work clipped to the same period.
-Both lists page at 50 rows. The table is added explicitly, stays when empty, and
+The table shows every group and follows its content height, like the quota and budget
+tables, without widget pagination or an inner vertical scroller. Its session disclosure
+uses the existing 50-row pages. The table is added explicitly, stays when empty, and
 has owner-controlled columns while every reader keeps their own presentation choices.
 Small cells and live sort crossings use the common clock; fixed ranges do not tick.
 Replacement reads keep the last complete summary with its original basis until the

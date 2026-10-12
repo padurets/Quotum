@@ -665,9 +665,9 @@ widening into a discarded prefix requires a complete bounded baseline.
 Its body is `{version:1, selection, evaluatedAt, cursor, refs}`, at most 8 KiB. The cursor
 must still name the current authorized evidence and cover the requested interval;
 otherwise the response is `400 history_range_invalid`. It returns a complete sessions
-section containing the requested clipped rows, or a section error. Dashboard pages use
-50 rows from the complete index, so a clock-driven membership change requires no detail
-request. Detail reads use the same accounting transport and memory limits.
+section containing the requested clipped rows, or a section error. Dashboard session
+disclosures use 50 rows from the complete index, so a clock-driven membership change
+requires no detail request. Detail reads use the same accounting transport and memory limits.
 
 The `history` event's optional `changes` entries are
 `{source, scope:'quota'|'budget', since, workSince?}`. `workSince` identifies actual
