@@ -7,6 +7,39 @@ import {compactJSON} from '../history.js';
 import {withShiftWindow,shifted} from '../domain/periodShift.js';
 import {withValueStates,periodValueAt,type PeriodValues} from '../domain/periodValues.js';
 import {brotliCompressSync,constants} from 'node:zlib';
+import {ValueChanges,applyValueChanges} from '../domain/valueChanges.js';
+
+test('record array tails keep exact changed prefix fields without resending their monetary evidence',()=>{
+  const semantics:MeterSemantics={limit:null,resetAt:null,minutes:null,scope:null,label:null,scale:6,
+    conversion:{original:{meterId:'balance:credits',amount:'9007199254740993001',unit:'credits:codex',at:1001,scale:12},
+      rate:{id:'recorded',source:'manual',base:'credits:codex',from:'1000000',to:'40000',date:3,fetchedAt:4},
+      steps:Array.from({length:6},(_,i)=>({id:`recorded-${i}`,source:'manual',base:'credits:codex',from:'1000000',to:'40000',date:i,fetchedAt:i+1}))}};
+  const point=(at:number)=>({at,value:'360287970189639720',knownFrom:at,knownUntil:at+100,validUntil:at+100,segment:at,semantics:structuredClone(semantics)});
+  const before={points:[point(1000),point(1100)]};
+  const after={points:[{...point(1010),value:'360287970189639721'},point(1100),point(1200)]};
+  const original=JSON.stringify(before),registry=new ValueChanges(()=>{});
+  const parent=registry.pathId(['points']);
+  const at=registry.pathId(['points',0,'at']);
+  const changes=registry.advanced(before,after,[[at,1]],10);
+  assert.ok(JSON.stringify(changes).length<JSON.stringify(after).length/2,'unchanged provenance must not be sent again for prefix points');
+  assert.ok(changes.some(change=>change.length===4&&change[0]===parent&&change[1]===2&&change[2]===0));
+  const start=structuredClone(before);start.points[0].at+=10;
+  const basis={run:'r',revision:'1',evaluatedAt:2010,evidenceCut:2010,range:{from:1010,to:2010}};
+  const fixed={range:basis.range,cell:100,money:[],quota:[],shift:{until:2010,steps:[],window:{paths:registry.paths,slopes:[[]],pieces:[[2010,2110,0,changes]]}}};
+  const reply={basis,budget:{state:'complete',basis,value:{chunks:[],tape:{fixed}}}} as unknown as PeriodReply;
+  const dictionary=periodDictionary(reply,()=>{}),wire=compactJSON(reply,dictionary.replacer);
+  const restored=expandPeriod(JSON.parse(wire));
+  if(restored.budget?.state!=='complete')throw new Error('missing budget');
+  const window=restored.budget.value.tape!.fixed!.shift!.window!;
+  assert.equal(window.pieces[0][3][0][0],parent,'packing puts the parent tail splice before prefix edits');
+  applyValueChanges(start,window.paths,window.pieces[0][3]);assert.deepEqual(start,after);
+  const reversed=structuredClone(before);reversed.points[0].at+=10;
+  applyValueChanges(reversed,registry.paths,changes);assert.deepEqual(reversed,after);
+  const trim=new ValueChanges(()=>{}),trimmed={points:[{...point(1000),value:'360287970189639719'}]};
+  const trimming=trim.between(after,trimmed),copy=structuredClone(after);
+  applyValueChanges(copy,trim.paths,trimming);assert.deepEqual(copy,trimmed);
+  assert.equal(JSON.stringify(before),original,'diffing cannot change retained input or its provenance');
+});
 
 test('period dictionaries preserve exact observations, null inheritance and recorded rate paths',()=>{
   const rate={id:'recorded',source:'manual',base:'credits:codex',from:'1000000',to:'40000',date:3,fetchedAt:4};

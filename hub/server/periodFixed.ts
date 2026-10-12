@@ -11,6 +11,9 @@ import {HistoryLimit} from './history.js';
 import {barOf} from './domain/work.js';
 import type {History} from './domain/history.js';
 
+// Speculative replay follows short pauses, independently of drawing resolution.
+export const PERIOD_REUSE_MS=60_000;
+
 /** A fixed interval needs exact totals and boundary geometry, not a rolling ledger. */
 export function fixedTape(tape:PeriodTape,work:WorkTrace|null,range:PeriodRange,cell:number,reserve:(bytes:number)=>void,release:(bytes:number)=>void=()=>{}):PeriodTape {
   return drain(prepareFixedTape(tape,work,range,cell,reserve,release));
@@ -70,6 +73,14 @@ function* reusable<T extends {range:PeriodRange}>(base:T,read:(offset:number)=>T
   let bytes=0,boundaries:number[]=[];const charge=(size:number)=>{reserve(size);bytes+=size;};
   try{
     boundaries=yield*prepareShiftBoundaries(base.range,Math.max(-cell,from-base.range.from),Math.min(cell+1,to-base.range.to+1),cells,anchors,charge);
+    // Keep actual partition boundaries so narrowing cannot rebase exact slopes.
+    const nearby=Math.min(cell,PERIOD_REUSE_MS);
+    let first=0,last=boundaries.length-1;
+    while(first+1<boundaries.length&&boundaries[first+1]<=-nearby)first++;
+    while(last>first&&boundaries[last-1]>=nearby+1)last--;
+    const discarded=(first+boundaries.length-1-last)*64;
+    boundaries.splice(last+1);boundaries.splice(0,first);
+    release(discarded);bytes-=discarded;
     return yield*prepareShiftWindow(base,read,boundaries,charge);
   }
   catch(error){release(bytes);if(!(error instanceof HistoryLimit))throw error;return withShift(base,read,boundaries.find(offset=>offset>0)??1);}

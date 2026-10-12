@@ -619,11 +619,19 @@ Each `paths` entry is then `[sharedLength,...suffix]`, extending the preceding d
 path (initially empty). The last changes array is removed from each piece; a parallel
 `changes` array has one row per path. Each row contains the original operations with
 their first element replaced by the zero-based piece index. Restore those operations
-into their pieces before replay. Edits within a piece address disjoint fields: a parent
-replacement never accompanies a descendant edit. Restoring them in path order preserves
+into their pieces before replay. A tail splice may accompany field edits in the retained
+prefix; their indices are below the splice start, so either order preserves them. Other
+edits address disjoint fields: a parent replacement never accompanies a descendant edit.
+Restoring them in path order preserves
 the exact result, including deletions, nulls, splices and fractional values. Clients
 charge the additional path and operation containers before allocating them. The encoding
 is optional and scoped to a single response; it does not change proof coverage or evidence.
+The server prepares optional summaries and card states for at most one minute on
+either side of the selected edge, bounded further by evidence coverage. Summary
+pieces retain enclosing partition boundaries and card states retain full actual
+validity intervals; their advertised coverage may therefore be wider. Drawing-cell
+width does not increase this speculative neighborhood. An uncovered position requires
+an ordinary bounded period read, with the same observation admission rules.
 These optional proofs and nearby value states share existing memory limits and may
 be omitted when they cannot fit. Outside proven positions a new summary is required.
 Only optional current presence can change or lose confirmation while a fixed selection

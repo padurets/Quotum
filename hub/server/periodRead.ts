@@ -13,7 +13,7 @@ import {sharedWork,periodWork,preparePeriodWork} from './periodWork.js';
 import {config} from './config.js';
 import {periodTape} from './periodTape.js';
 import {workedSessions} from './domain/periodWork.js';
-import {prepareFixedTape,prepareFixedWork} from './periodFixed.js';
+import {prepareFixedTape,prepareFixedWork,PERIOD_REUSE_MS} from './periodFixed.js';
 import {drain,type Preparation} from './domain/prepare.js';
 import {PeriodPreparation} from './periodPrepare.js';
 import {selectionOf} from './domain/meterHistory.js';
@@ -228,7 +228,7 @@ export class PeriodReader {
       })());
       if(request.values)response.values=yield*section((function*(){
         const sources=store.sources(board).filter(s=>request.values!.includes(s.id));
-        return selection.mode==='range'?yield*prepareNearbyPeriodValues(store,sources,user,range.to,cell,reserve,release,now):periodValues(store,sources,user,cut,reserve,now);
+        return selection.mode==='range'?yield*prepareNearbyPeriodValues(store,sources,user,range.to,Math.min(cell,PERIOD_REUSE_MS),reserve,release,now):periodValues(store,sources,user,cut,reserve,now);
       })());
       if(request.sessions) {
         const covered=selection.mode==='range'?fixedRange:{from:workFrontier.coveredFrom,to:workFrontier.coveredTo};

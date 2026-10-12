@@ -1451,7 +1451,7 @@ Complete live indexes and fixed
 summaries can move into the shared LRU when a different interval is selected. Returning
 to a retained target reuses it; new evidence or authority changes invalidate those entries.
 Fixed summaries also describe exact duration and timestamp changes between
-observation, work, availability and grid boundaries. Nearby endpoint cells use sparse
+observation, work, availability and grid boundaries. Nearby positions use sparse
 changes between those intervals and an immutable starting summary. The initial reply
 borrows that base from its requested projection; shifted copies retain it. A card
 whose validity already spans the neighboring positions needs no extra sequence. Nearby integer
@@ -1459,7 +1459,11 @@ timestamps use exact deltas; fractional readings and money retain their original
 can reuse the proof even when native input moves an endpoint to the other side of a
 boundary. Card states retain their own observation and availability intervals. Amounts
 and spending steps are replaced exactly at changes, never interpolated. Positions
-outside the retained proof require new evidence.
+outside the retained proof require another bounded read. Optional summary and card-state
+preparation considers at most one minute on each side of the selected edge, even when
+drawing cells span hours. Summaries keep the enclosing exact partition boundaries;
+card states keep their full actual validity intervals. This bounds speculative work
+without changing the selected projection, history cells or observation admission.
 On the wire, replay programs group changes by field and share path prefixes. The
 browser charges restored path and patch containers before allocation, then restores
 the same exact edits for replay. This encoding never changes supplier evidence or
