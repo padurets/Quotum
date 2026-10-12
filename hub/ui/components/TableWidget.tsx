@@ -35,8 +35,10 @@ export function useTableLayout(box:RefObject<HTMLElement|null>,columns:readonly 
   const [model,setModel]=useState<{layout:'table'|'list';width:number}>({layout:'table',width:0}),key=columns.join(',');
   useLayoutEffect(()=>{
     const root=box.current?.closest<HTMLElement>('.panel,.dialog');if(!root)return;
-    const fit=()=>{const style=getComputedStyle(root),padding=edges??parseFloat(style.paddingLeft)+parseFloat(style.paddingRight)-20;
-      const width=root.clientWidth,layout=tableLayout(columns,width,nameWidth,padding);
+    let measuredWidth:number|undefined;
+    const fit=()=>{const width=root.clientWidth;if(width===measuredWidth)return;measuredWidth=width;
+      const style=getComputedStyle(root),padding=edges??parseFloat(style.paddingLeft)+parseFloat(style.paddingRight)-20;
+      const layout=tableLayout(columns,width,nameWidth,padding);
       setModel(was=>was.width===width&&was.layout===layout?was:{width,layout});};
     const observer=new ResizeObserver(fit);observer.observe(root);fit();return ()=>observer.disconnect();
   },[box,key,nameWidth,edges,widthKey]);
@@ -49,6 +51,7 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
   const live=useRef<HTMLElement>(null),measured=useRef<HTMLElement>(null),pager=useRef<HTMLElement>(null),measuredPager=useRef<HTMLElement>(null);
   const scope=JSON.stringify([layout,width,columns,nameWidth,edges]);
   const [measurement,setMeasurement]=useState<Measurement|null>(null),[position,setPosition]=useState({key:resetKey,page:0});
+  const seen=useRef<{key:string;outer:number;live:number;layer:number;footer:number}|null>(null);
   const sizes=measurement?.scope===scope?measurement:null;
   const fallback=sizes?.fallback??(layout==='table'?44:90),heights=sizes?.heights??new Map<string,number>();
   let starts:number[];
@@ -63,6 +66,12 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
   update.current=()=>{
     const root=panel.current;if(!root)return;
     const outer=pixels(root.getBoundingClientRect().height-fillOf(root));
+    const signal={key:JSON.stringify([scope,keysKey,resetKey,from,to,sizing?.manual]),outer,live:pixels(live.current?.getBoundingClientRect().height??0),
+      layer:pixels(measured.current?.getBoundingClientRect().height??0),footer:pixels(measuredPager.current?.getBoundingClientRect().height??0)};
+    const last=seen.current;
+    // The grid can change only a panel's fill. Its rows and chrome need no new reads.
+    if(last&&last.key===signal.key&&same(last.outer,signal.outer)&&same(last.live,signal.live)&&same(last.layer,signal.layer)&&same(last.footer,signal.footer))return;
+    seen.current=signal;
     const items=[...(live.current?.children??[])].filter(e=>!(e as HTMLElement).hasAttribute('data-table-total')) as HTMLElement[];
     if(!items.length){
       sizing?.report({min:outer,natural:outer,shown:outer});if(measurement)setMeasurement(null);
@@ -73,7 +82,7 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     const border=layout==='table'?(parseFloat(getComputedStyle(items[0].firstElementChild!).borderBottomWidth)||0)/2:parseFloat(getComputedStyle(items[0]).borderBottomWidth)||0;
     const area=items.at(-1)!.getBoundingClientRect().bottom-items[0].getBoundingClientRect().top;
     const shell=pixels(outer-area-(pager.current?.getBoundingClientRect().height??0));
-    const footer=pixels(measuredPager.current?.getBoundingClientRect().height??0);
+    const footer=signal.footer;
     const nextHeights=new Map(sizes?.heights??[]);
     for(let i=0;i<layer.length;i++){
       const rect=layer[i].getBoundingClientRect(),end=i+1<layer.length?layer[i+1].getBoundingClientRect().top:rect.bottom+border;

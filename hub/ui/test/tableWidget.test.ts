@@ -11,8 +11,9 @@ import type {TableWidget} from '../components/TableWidget';
 
 /** Commit the real hook against measured rows, without a browser or a second React runtime. */
 function widgetFixture(){
-  let cursor=0,changed=false,key='period-a',keys=Array.from({length:57},(_,i)=>'row-'+i);
+  let cursor=0,changed=false,key='period-a',rowReads=0,keys=Array.from({length:57},(_,i)=>'row-'+i);
   const slots:any[]=[],effects:(()=>void)[]=[],reports:{min:number;natural:number;shown:number}[]=[];
+  const observers:{callback:()=>void;targets:Set<unknown>}[]=[];
   const sizing={manual:true,allocated:560,width:'wide',report:(value:any)=>{if(value)reports.push(value);}};
   const root={clientWidth:1200,height:0,fill:0,closest:()=>root,getBoundingClientRect:()=>({height:root.height})};
   const sameDeps=(a:unknown[]|undefined,b:unknown[]|undefined)=>!!a&&!!b&&a.length===b.length&&a.every((x,i)=>Object.is(x,b[i]));
@@ -26,11 +27,14 @@ function widgetFixture(){
     useSizing:()=>sizing,fillOf:()=>root.fill,pixels:(n:number)=>Math.round(n*64)/64,same:(a:number|undefined,b:number|undefined)=>a===b||a!==undefined&&b!==undefined&&Math.abs(a-b)<1,
   }};
   const context={exports:{} as {useTableWidget:typeof import('../components/TableWidget').useTableWidget},require:(name:string)=>modules[name],
-    getComputedStyle:()=>({paddingLeft:'22',paddingRight:'22',borderBottomWidth:'0'}),ResizeObserver:class {observe(){} disconnect(){}},
+    getComputedStyle:()=>({paddingLeft:'22',paddingRight:'22',borderBottomWidth:'0'}),ResizeObserver:class {
+      record:{callback:()=>void;targets:Set<unknown>};constructor(callback:()=>void){this.record={callback,targets:new Set()};observers.push(this.record);}
+      observe(target:unknown){this.record.targets.add(target);}disconnect(){this.record.targets.clear();}
+    },
   };
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/TableWidget.tsx',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,target:ts.ScriptTarget.ES2022}}).outputText,context);
   const height=(id:string)=>id==='row-55'?220:root.clientWidth<800?80:44;
-  const body=(ids:string[])=>{let top=100;return {children:ids.map(id=>{const start=top,h=height(id);top+=h;return {firstElementChild:{},hasAttribute:()=>false,getBoundingClientRect:()=>({top:start,bottom:start+h,height:h})};})};};
+  const body=(ids:string[])=>{let top=100;return {getBoundingClientRect:()=>({height:ids.reduce((sum,id)=>sum+height(id),0)}),children:ids.map(id=>{const start=top,h=height(id);top+=h;return {firstElementChild:{},hasAttribute:()=>false,getBoundingClientRect:()=>{rowReads++;return {top:start,bottom:start+h,height:h};}};})};};
   const render=()=>{
     let widget:TableWidget;
     for(let i=0;i<20;i++){
@@ -49,8 +53,14 @@ function widgetFixture(){
     throw new Error('the shared table did not settle before paint');
   };
   const original=keys;
-  return {render,reports,keys:()=>keys,shown:(widget:TableWidget)=>keys.slice(widget.from,widget.to),resize:(height:number)=>{sizing.allocated=height;},narrow:()=>{root.clientWidth=350;sizing.width='narrow';},reset:()=>{key='period-b';},clear:()=>{keys=[];},limit:(n:number)=>{keys=original.slice(0,n);},height:()=>root.height};
+  return {render,reports,keys:()=>keys,shown:(widget:TableWidget)=>keys.slice(widget.from,widget.to),resize:(height:number)=>{sizing.allocated=height;},narrow:()=>{root.clientWidth=350;sizing.width='narrow';},reset:()=>{key='period-b';},clear:()=>{keys=[];},limit:(n:number)=>{keys=original.slice(0,n);},height:()=>root.height,rowReads:()=>rowReads,
+    fill:()=>{root.height+=48;root.fill+=48;for(const observer of observers)if(observer.targets.has(root))observer.callback();}};
 }
+
+test('a fill-only notification does not reread candidate rows or report another layout',()=>{
+  const f=widgetFixture();f.render();const reads=f.rowReads(),reports=f.reports.length;
+  f.fill();assert.equal(f.rowReads(),reads);assert.equal(f.reports.length,reports);
+});
 
 test('the real shared hook pages all rows once, fits height, resets and clamps before paint',()=>{
   const f=widgetFixture(),seen:string[]=[];let widget=f.render();
