@@ -3,11 +3,36 @@ import assert from 'node:assert/strict';
 import {PeriodActivity} from '../domain/periodActivity.js';
 import type {History} from '../domain/history.js';
 import type {WorkTrace} from '../domain/periodWork.js';
+import {workedSessions} from '../domain/periodWork.js';
 
 type Activity=History['activity'];
 const blank:Activity={since:0,known:{from:0,to:100},barMs:10,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}};
 const range={from:15,to:45};
 const fixed=(activity:Activity,selected=range)=>new PeriodActivity({anchor:0,knownFrom:0,refs:[],spans:[],fixed:{range:selected,totals:[],activity}} satisfies WorkTrace);
+
+test('live activity reuses full cells while reading fractional endpoints from actual work',()=>{
+  for(const count of [1,64]){
+    const size=count===1?6:720,cut=size*10,selected={from:5.25,to:cut-4.25};
+    const trace:WorkTrace={anchor:0,knownFrom:0,cut,refs:Array.from({length:count},(_,i)=>({ref:'r'+i,source:'s'+i,project:'p'+i,device:{id:'d'+i,name:'D'+i},origin:'terminal',folder:null,startedAt:0})),spans:Array.from({length:count},(_,i)=>[i,0,cut])};
+    const projector=new PeriodActivity(trace);projector.update(workedSessions(trace,selected,selected.to));
+    const cells:Activity['cells']=Array.from({length:size},(_,i)=>[i*10,10,10*count,count]);
+    const old={...blank,cells,by:{source:[],project:[],device:[]} as Activity['by']};
+    for(const dimension of ['source','project','device'] as const)old.by[dimension]=trace.refs.map(ref=>({key:dimension==='source'?ref.source!:dimension==='project'?JSON.stringify(ref.project):ref.device.id,name:dimension==='source'?null:dimension==='project'?ref.project:ref.device.name,agentMs:0,activeMs:0,agents:1,cells:cells.map(([at])=>[at,10])}));
+    const before=structuredClone({old,trace}),projected=projector.project(old,selected),total=selected.to-selected.from;
+    assert.equal(projected.activeMs,total);assert.equal(projected.agentMs,total*count);assert.equal(projected.agents,count);
+    assert.deepEqual(projected.cells[0],[0,4.75,4.75*count,count]);
+    assert.deepEqual(projected.cells.at(-1),[cut-10,5.75,5.75*count,count]);
+    assert.notEqual(projected.cells[0],cells[0]);assert.notEqual(projected.cells.at(-1),cells.at(-1));
+    for(let i=1;i<size-1;i++)assert.equal(projected.cells[i],cells[i],'full activity cells retain their tuple');
+    for(const dimension of ['source','project','device'] as const)for(const group of projected.by[dimension]){
+      const original=old.by[dimension].find(old=>old.key===group.key)!;
+      assert.equal(group.agentMs,total);assert.equal(group.activeMs,total);assert.equal(group.agents,1);
+      assert.deepEqual(group.cells[0],[0,4.75]);assert.deepEqual(group.cells.at(-1),[cut-10,5.75]);
+      for(let i=1;i<size-1;i++)assert.equal(group.cells[i],original.cells[i],'full group cells retain their tuple');
+    }
+    assert.deepEqual({old,trace},before);
+  }
+});
 
 test('fixed activity retains interior cells and exact endpoint replacements in every dimension',()=>{
   const cells:Activity['cells']=[[10,1,2,3],[20,4,5,6],[30,7,8,9],[40,10,11,12]];

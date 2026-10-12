@@ -86,8 +86,8 @@ export class PeriodActivity {
       return {...fixed.activity,cells:withEdges(activity.cells,fixed.activity.cells,leftEnd,rightStart),by};
     }
     const part=(at:number)=>({from:Math.max(range.from,at),to:Math.min(range.to,at+activity.barMs)});
-    const cells:Activity['cells']=activity.cells.filter(([at])=>at<range.to&&at+activity.barMs>range.from).map(([at,active,agent,count])=>{
-      const cut=part(at);if(cut.from===at&&cut.to===at+activity.barMs)return [at,active,agent,count];
+    const cells:Activity['cells']=activity.cells.filter(([at])=>at<range.to&&at+activity.barMs>range.from).map(cell=>{
+      const [at]=cell,cut=part(at);if(cut.from===at&&cut.to===at+activity.barMs)return cell;
       let agents=0;for(const curve of this.contexts.values())if(curve.read(cut)>0)agents++;
       return [at,this.all.read(cut,true),this.all.read(cut),agents];
     });
@@ -95,7 +95,7 @@ export class PeriodActivity {
     for(const dimension of dimensions) {
       const old=new Map(activity.by[dimension].map(g=>[g.key,g]));
       for(const [key,group] of this.groups[dimension])if(group.agents) {
-        const cells:ActivityGroup['cells']=(old.get(key)?.cells??[]).filter(([at])=>at<range.to&&at+activity.barMs>range.from).map(([at,ms])=>{const cut=part(at);return [at,cut.from===at&&cut.to===at+activity.barMs?ms:group.curve.read(cut)];});
+        const cells:ActivityGroup['cells']=(old.get(key)?.cells??[]).filter(([at])=>at<range.to&&at+activity.barMs>range.from).map(cell=>{const [at]=cell,cut=part(at);return cut.from===at&&cut.to===at+activity.barMs?cell:[at,group.curve.read(cut)];});
         by[dimension].push({key,name:group.name,agentMs:group.curve.read(range),activeMs:group.curve.read(range,true),agents:group.agents,cells});
       }
       by[dimension].sort((a,b)=>b.agentMs-a.agentMs||a.key.localeCompare(b.key));
