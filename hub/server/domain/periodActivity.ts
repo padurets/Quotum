@@ -10,6 +10,24 @@ type Group={name:string|null;curve:WorkTimeline;contexts:WorkTimeline[];agentMs:
 const dimensions:ActivityDimension[]=['source','project','device'];
 const keys=(row:WorkTrace['refs'][number])=>({source:row.source??'unknown',project:JSON.stringify(row.project),device:row.device.id});
 
+/** Keep ordered interior cells and merge only the exact boundary replacements. */
+function withEdges<T extends [number,...number[]]>(cells:T[],edges:T[],from:number,to:number):T[] {
+  const interior=(at:number)=>at>=from&&at<to;
+  const fallback=()=>[...cells.filter(([at])=>interior(at)),...edges].sort((a,b)=>a[0]-b[0]);
+  if(edges.some(([at])=>!Number.isFinite(at)))return fallback();
+  const boundary=edges.length>1?[...edges].sort((a,b)=>a[0]-b[0]):edges;
+  const result:T[]=[];let next=0,last=-Infinity;
+  for(const cell of cells){
+    const at=cell[0];if(!interior(at))continue;
+    // Unordered inputs retain the original stable ordering, including equal times.
+    if(at<last)return fallback();
+    while(next<boundary.length&&boundary[next][0]<at)result.push(boundary[next++]);
+    result.push(cell);last=at;
+  }
+  while(next<boundary.length)result.push(boundary[next++]);
+  return result;
+}
+
 export class PeriodActivity {
   private all!:WorkTimeline;
   private readonly groups:Record<ActivityDimension,Map<string,Group>>={source:new Map(),project:new Map(),device:new Map()};
@@ -59,8 +77,13 @@ export class PeriodActivity {
     if(fixed){
       if(range.from!==fixed.range.from||range.to!==fixed.range.to||activity.barMs!==fixed.activity.barMs)return activity;
       const {barMs}=activity,leftEnd=(Math.floor(range.from/barMs)+1)*barMs,rightStart=Math.floor((range.to-1)/barMs)*barMs;
-      const interior=(at:number)=>at>=leftEnd&&at<rightStart;
-      return {...fixed.activity,cells:[...activity.cells.filter(([at])=>interior(at)),...fixed.activity.cells].sort((a,b)=>a[0]-b[0]),by:Object.fromEntries(dimensions.map(by=>[by,fixed.activity.by[by].map(group=>({...group,cells:[...(activity.by[by].find(g=>g.key===group.key)?.cells??[]).filter(([at])=>interior(at)),...group.cells].sort((a,b)=>a[0]-b[0])}))])) as Activity['by']};
+      const by:Activity['by']={source:[],project:[],device:[]};
+      for(const dimension of dimensions){
+        const old=new Map<string,ActivityGroup>();
+        for(const group of activity.by[dimension])if(!old.has(group.key))old.set(group.key,group);
+        by[dimension]=fixed.activity.by[dimension].map(group=>({...group,cells:withEdges(old.get(group.key)?.cells??[],group.cells,leftEnd,rightStart)}));
+      }
+      return {...fixed.activity,cells:withEdges(activity.cells,fixed.activity.cells,leftEnd,rightStart),by};
     }
     const part=(at:number)=>({from:Math.max(range.from,at),to:Math.min(range.to,at+activity.barMs)});
     const cells:Activity['cells']=activity.cells.filter(([at])=>at<range.to&&at+activity.barMs>range.from).map(([at,active,agent,count])=>{
