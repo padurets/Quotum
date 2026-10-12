@@ -1,5 +1,5 @@
 /** @jsxRuntime automatic */
-import {Fragment, memo, useLayoutEffect, useRef, useState, type ReactNode} from 'react';
+import {Fragment, memo, useLayoutEffect, useState, type ReactNode, type RefObject} from 'react';
 import {useClock} from '../lib/clock';
 import {tableLayout} from '../lib/table';
 import {withColumn, withHidden, type Arrange} from '../lib/view';
@@ -36,16 +36,12 @@ export function TableSettings<Id extends string>({arrange, widget, columns, visi
   </Popover> : null;
 }
 
-/** Column widths decide when both tables become labelled rows; cells have one renderer. */
-function Table<Id extends string>({columns, rows, name, nameWidth, lead, sorting}: {
-  columns: readonly AnalyticsColumn<Id>[]; rows: AnalyticsRow<Id>[];
-  name: string; nameWidth: number; lead?: Id;sorting?:TableSorting<Id>;
-}) {
-  const body = useRef<HTMLDivElement | HTMLUListElement>(null);
+/** The rows and toolbar use the same fit decision, including column visibility. */
+export function useTableLayout(panel: RefObject<HTMLElement | null>, columns: readonly {width: number}[], nameWidth: number) {
   const [layout, setLayout] = useState<'table' | 'list'>('table');
   const width = nameWidth + columns.reduce((sum, column) => sum + column.width, 0);
   useLayoutEffect(() => {
-    const element = body.current!.parentElement!;
+    const element = panel.current!;
     const fit = () => {
       const style = getComputedStyle(element);
       const edges = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) - 20;
@@ -53,8 +49,16 @@ function Table<Id extends string>({columns, rows, name, nameWidth, lead, sorting
     };
     const observer = new ResizeObserver(fit); observer.observe(element); fit();
     return () => observer.disconnect();
-  }, [width]);
-  if (layout === 'list') return <ul ref={element => {body.current = element;}} className="analytics-compact">{rows.map(row => <li key={row.key}>
+  }, [panel, width]);
+  return layout;
+}
+
+/** Column widths decide when both tables become labelled rows; cells have one renderer. */
+function Table<Id extends string>({columns, rows, name, lead, sorting, layout = 'table'}: {
+  columns: readonly AnalyticsColumn<Id>[]; rows: AnalyticsRow<Id>[];
+  name: string; lead?: Id; sorting?: TableSorting<Id>; layout?: 'table' | 'list';
+}) {
+  if (layout === 'list') return <ul className="analytics-compact">{rows.map(row => <li key={row.key}>
     <div className="analytics-compact-main">
       {row.color && <span className="swatch" style={{background: row.color}}/>}
       <span className="analytics-compact-name" title={row.hint}>{row.name}</span>
@@ -68,7 +72,7 @@ function Table<Id extends string>({columns, rows, name, nameWidth, lead, sorting
     return sorting ? <SortHeader key={id} id={id} title={title} hint={hint} align={align} active={sorting.active} onSort={() => sorting.cycle(id)}/>
       : <th key={id} scope="col" title={hint} className={align && 'is-' + align}>{title}</th>;
   };
-  return <div ref={element => {body.current = element;}} className="table-wrap"><table className="analytics-table">
+  return <div className="table-wrap"><table className="analytics-table">
     <colgroup><col/>{columns.map(column => <col key={column.id} style={{width: column.width}}/>)}</colgroup>
     <thead><tr>{header('limit',name)}{columns.map(column=>header(column.id,column.title,column.hint,column.align))}</tr></thead>
     <tbody>{rows.map(row => <tr key={row.key}>

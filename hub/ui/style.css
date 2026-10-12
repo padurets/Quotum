@@ -444,7 +444,6 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-rows table { table-layout: fixed; }
 /* A cell holds what it says for screen readers: a long project cut short does not push it past the table, which would scroll. */
 .agents-rows td { position: relative; overflow: hidden; text-overflow: ellipsis; }
-.agents-controls { display: flex; gap: 6px; margin-left: auto; }
 .agents-panel .panel-head { gap: 8px; }
 .agents-compact, .analytics-compact { list-style: none; margin: 18px calc(-1 * var(--panel-pad)) 0; padding: 0; }
 .agents-compact > li, .analytics-compact > li { padding: 11px var(--panel-pad); border-bottom: 1px solid var(--hair); color: var(--text-2); }
@@ -518,6 +517,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .history-error { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .panel { --panel-pad: 22px; padding: 20px var(--panel-pad) 22px; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.panel-controls { display: flex; gap: 6px; margin-left: auto; }
 .panel-head h2 { margin: 0; font-size: 15px; font-weight: 560; letter-spacing: -.01em; }
 .panel-heading { flex: 1; min-width: 0; }
 .analytics-note { margin: 6px 0 0; font-size: 11.5px; color: var(--text-4); }

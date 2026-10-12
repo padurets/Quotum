@@ -1,5 +1,4 @@
 import * as panel from '../components/AnalyticsPanel';
-import * as tableSort from '../components/TableSort';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -33,17 +32,33 @@ const native:Card&{title:string}={...cap,id:'codex:fixture',provider:'codex',tit
 const meters=cap.meters!.flatMap(m=>meterCells({source:cap.id,meter:m.id,readings:[{...m,previousAt:null}],spans:[{from:0,to:M,staleAfterMs:10*M}]},m.unit,0,M,M));
 const base:History={range:'24h',live:true,since:0,to:M,cellMs:M,historyStart:0,events:[],series:native.windows.map(w=>({sourceId:native.id,windowId:w.id,points:[[0,70,1]],consumed:2,coveredMs:M,remainingAtStart:72,remainingAtEnd:70,staleAfterMs:10*M,work:null})),meterSeries:composeMeters([{from:0,meterSeries:meters}],M,0,M),activity:{since:0,known:null,barMs:M,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
 let history:History|null=base,kind:Kind='weekly',sources=[cap,native],error:'history_limit'|null=null;
+let layout:'table'|'list'='table';
 const modules:Record<string,unknown>={'../../server/domain/resources':resources,react:React,'react/jsx-runtime':jsxRuntime,'../lib/format':format,'../lib/quota':quota,'../lib/forecast':forecast,'../lib/forecastSort':forecastSort,'../lib/plan':plan,'../lib/work':work,'../lib/view':view,'../lib/subscription':subscription,'../lib/timeRange':timeRange,'../i18n':i18n,
   '../lib/period':{boardPeriod:{quotaAt:(line:unknown)=>line,quotaOrderAt:()=>({slope:0,next:Infinity}),rangeAt:()=>history?{from:history.since,to:history.to}:null,cellChangesAt:()=>null}},
   '../lib/prefs':{usePref:(key:string)=>key==='kind'?kind:null},'../lib/board':{useNamed:()=>sources,useLineup:()=>sources.map(s=>s.id),useForecastsOf:()=>[{},{}],useResetNews:()=>null},'../lib/clock':{hubNow:()=>M,useClock:()=>M,clock:new PageClock({now:()=>M,visible:()=>false,setTimeout:()=>null,clearTimeout:()=>{}})},'../lib/history':{quotaHistory:{retry:()=>{}},useHistory:()=>({history,loading:false,error})},'./AnalyticsPanel':panel,'./Popover':{Popover:()=>null},'./MoneyAnalytics':{MoneyTable:()=>{throw new Error('a subscription reached the money table');}}};
 const tableContext = {exports: {}, require: (name: string) => modules[name] ?? {}};
-modules['./TableSort'] = tableSort;
+const sortingContext={exports:{},require:(name:string)=>name==='./Popover'?{Popover:({label,icon}:{label:string;icon:React.ReactNode})=>React.createElement('button',{'aria-label':label},icon)}:modules[name]??{}};
+runInNewContext(ts.transpileModule(readFileSync(new URL('../components/TableSort.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,sortingContext);
+modules['./TableSort'] = sortingContext.exports;
 runInNewContext(ts.transpileModule(readFileSync(new URL('../components/AnalyticsTable.tsx', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, tableContext);
-modules['./AnalyticsTable'] = tableContext.exports;
+modules['./AnalyticsTable'] = {...tableContext.exports,useTableLayout:()=>layout};
 const context={exports:{} as {Forecast:typeof ForecastComponent},React,require:(name:string)=>modules[name]??{}};
 runInNewContext(ts.transpileModule(readFileSync(new URL('../components/Forecast.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
 const render=()=>renderToStaticMarkup(React.createElement(context.exports.Forecast,{arrange:{view:EMPTY_VIEW,owner:false,update:()=>{}}}));
 const row=(html:string)=>[...html.matchAll(/<tr>(.*?)<\/tr>/g)].find(m=>m[1].includes('Personal'))![1];
+
+test('the quota toolbar exposes the shared sort button only while its rows are a compact list',()=>{
+  try {for(const locale of ['en','ru'] as const){
+    i18n.setLocale(locale);
+    layout='table';const wide=render();
+    assert.ok(wide.includes('table-sort'));
+    assert.ok(!wide.includes(`aria-label="${i18n.t('table.sort')}"`));
+    layout='list';const compact=render();
+    assert.ok(compact.includes('analytics-compact'));
+    assert.ok(!compact.includes('table-sort'));
+    assert.ok(compact.includes(`aria-label="${i18n.t('table.sort')}"`));
+  }}finally{i18n.setLocale('en');layout='table';}
+});
 
 test('the actual percentage table includes both subscription producers in both periods and languages',()=>{
   try {

@@ -1660,7 +1660,10 @@ Agent sessions, quota metrics and budget metrics use the same sortable header an
 menu pieces in `ui/components/TableSort.tsx`, including typography, active colour,
 reserved arrow space and accessible selection. Headers cycle through both directions
 and default; menus expose default as a separate row. Budget sorting is a separate
-viewer preference, available in its compact list too. Names use the reader's locale;
+viewer preference. Wide tables sort through their headers; only compact lists show
+a separate sort button beside settings, and settings contain no sorting choices.
+Rows and controls share the same width decision, preserving the viewer's choice
+when the widget changes between table and list. Names use the reader's locale;
 values, spending and top-ups compare exact integer millionths from the same accounting
 model as their cells. Unknown values stay last in either direction. Hidden columns
 temporarily use default without losing the saved choice. Default preserves the budget

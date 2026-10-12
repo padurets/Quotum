@@ -671,7 +671,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
       <div className="panel-head">
         <h2 ref={heading} tabIndex={-1}>{t('agents.title')}</h2>
         {rows.length > 0 && <span className="panel-note">{t('agents.machineSummary', {working, count: rows.length})}</span>}
-        <div className="agents-controls">
+        <div className="panel-controls">
           {layout === 'list' && <SortMenu {...sorting} />}
           <Popover label={t('agents.settings')} icon={<SlidersIcon />}>
             <div className="popover-section">

@@ -1,5 +1,5 @@
 import {AnalyticsPanel, AnalyticsNote, SeriesLegendItem} from './AnalyticsPanel';
-import {AnalyticsTable, TableSettings, type AnalyticsRow, type AnalyticsColumn, type Cell, type TimedCell} from './AnalyticsTable';
+import {AnalyticsTable, TableSettings, useTableLayout, type AnalyticsRow, type AnalyticsColumn, type Cell, type TimedCell} from './AnalyticsTable';
 import {providerOf,supportsBudget,type MoneyFamily} from '../../server/domain/providers';
 import {memo,useCallback,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore} from 'react';
 import {DEFAULT_CURRENCY,currencySymbol} from '../../server/domain/currency';
@@ -28,7 +28,7 @@ import {usePanning} from '../lib/pan';
 import {boardPeriod} from '../lib/period';
 import {composeMetersPrepared} from '../../server/domain/meterHistory';
 import type {History} from '../lib/types';
-import {SortSection} from './TableSort';
+import {SortMenu} from './TableSort';
 import {useSeriesFocus} from './seriesFocus';
 
 function SelectionNotice({family='budget'}:{family?:MoneyFamily}) {
@@ -43,14 +43,14 @@ const MONEY_COLUMNS = [
   {id: 'topup', label: 'money.topup', width: 140},
 ] as const;
 
-function MoneySortChoices({columns}:{columns:readonly AnalyticsColumn<MoneyColumn>[]}) {
+function MoneySortMenu({columns}:{columns:readonly AnalyticsColumn<MoneyColumn>[]}) {
   const saved=usePref('moneySort'),active=visibleMoneySort(saved,columns.map(column=>column.id));
-  return <SortSection active={active} columns={[{id:'limit' as const,title:t('money.key')},...columns]} defaultLabel={t('table.defaultOrder')}
+  return <SortMenu active={active} columns={[{id:'limit' as const,title:t('money.key')},...columns]} defaultLabel={t('table.defaultOrder')}
     onSort={(column,cycle)=>setPrefs({moneySort:column===null?null:nextMoneySort(active,column,cycle)})}/>;
 }
 
 /** Values and order share the period index; clock changes retain every cell. */
-const SortedMoney=memo(function SortedMoney({rows,entries,columns,history}:{rows:AnalyticsRow<MoneyColumn>[];entries:MeterHistory[];columns:AnalyticsColumn<MoneyColumn>[];history:History}) {
+const SortedMoney=memo(function SortedMoney({rows,entries,columns,history,layout}:{rows:AnalyticsRow<MoneyColumn>[];entries:MeterHistory[];columns:AnalyticsColumn<MoneyColumn>[];history:History;layout?:'table'|'list'}) {
   const saved=usePref('moneySort'),locale=useLocale();
   const active=useMemo(()=>visibleMoneySort(saved,columns.map(column=>column.id)),[saved,columns]);
   const current=useRef({rows,entries,active,history,locale});current.current={rows,entries,active,history,locale};
@@ -72,7 +72,7 @@ const SortedMoney=memo(function SortedMoney({rows,entries,columns,history}:{rows
   useLayoutEffect(()=>{evaluate();});
   const cycle=useCallback((column:MoneyColumn|'limit')=>setPrefs({moneySort:nextMoneySort(active,column)}),[active]);
   const sorting=useMemo(()=>({active,cycle}),[active,cycle]);
-  return <AnalyticsTable columns={columns} rows={ordered} name={t('money.key')} nameWidth={240} lead="value" sorting={sorting}/>;
+  return <AnalyticsTable columns={columns} rows={ordered} name={t('money.key')} lead="value" sorting={sorting} layout={layout}/>;
 });
 
 const pointAt=(series:MeterHistory,at:number,cell=60000)=>series.pointMode==='observation'?moneyPointAt(series,at):meterPointIn(series,at,cell);
@@ -157,6 +157,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
   const definitions = MONEY_COLUMNS.map(({id, label, width}) => ({id, title: t(label), width, align: 'right' as const}));
   const columns = definitions.filter(column => columnShown(arrange.view, BUDGET_TABLE, column.id));
   const panel=useRef<HTMLElement>(null);
+  const layout=useTableLayout(panel,columns,240);
   const cellAt=(original:MeterHistory,id:MoneyColumn,now:number):{content:string;title?:string;partial?:boolean}=>{
     const s=history?.live?boardPeriod.moneyAt(original,now,history.range):original;
     const range=history?.live?boardPeriod.rangeAt('budget',now,history.range):null;
@@ -174,15 +175,16 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
   };
   // Retained rows stay mounted through pan-only panel updates; their cells own
   // the clock and replan only when the table's data or display settings change.
-  const table=useMemo(()=>history&&<SortedMoney columns={columns} entries={entries} history={history}
+  const table=useMemo(()=>history&&<SortedMoney columns={columns} entries={entries} history={history} layout={layout}
     rows={entries.map(series=>{
       const source=sources.find(card=>card.id===series.sourceId);
       return {key:moneyIdentity(series),name:nameOf(series,source?.title??series.sourceId,context),hint:moneySeriesDetail(series,context),
         color:colorOf(arrange.view,series.sourceId,source?.provider??''),
         cells:{value:cellOf(series,'value'),spending:cellOf(series,'spending'),topup:cellOf(series,'topup')}};
-    })}/>,[history,unit,sources,context,arrange.view,locale]);
+    })}/>,[history,unit,sources,context,arrange.view,locale,layout]);
   return <AnalyticsPanel ref={panel} className="budget-table" title={t('widgets.budgetTable')} history={history} loading={loading} error={error} retry={budgetHistory.retry}
-    settings={<TableSettings arrange={arrange} widget={BUDGET_TABLE} columns={definitions} visible={columns.map(column=>column.id)}><MoneySortChoices columns={columns}/><MoneySettings sources={sources} hidden={arrange.view.hidden} series={entries}/></TableSettings>}
+    controls={layout==='list' && <MoneySortMenu columns={columns}/>}
+    settings={<TableSettings arrange={arrange} widget={BUDGET_TABLE} columns={definitions} visible={columns.map(column=>column.id)}><MoneySettings sources={sources} hidden={arrange.view.hidden} series={entries}/></TableSettings>}
   >
     <SelectionNotice/>
     {!history&&!error?<p className="panel-loading">{t('history.loading')}</p>:!entries.length&&!error?<p className="panel-empty">{t(empty)}</p>:null}
