@@ -1,4 +1,4 @@
-param([string]$Mode,[string]$Ready,[string]$Delivered)
+param([string]$Mode,[string]$Ready,[string]$Delivered,[string]$ActivationDiagnostics)
 $ErrorActionPreference='Stop'
 if($Mode){
   Add-Type -Path (Join-Path $PSScriptRoot 'window-receiver.cs')
@@ -74,3 +74,11 @@ try {
   try {[QuotumWindowProbe]::MainRequestThenPause(0,'fixture.exe') | Out-Null} catch {$failed=$true}
   if(-not $failed -or [QuotumWindowProbe]::LastDispatch.Acceptance -ne 'not-sent'){throw 'Missing target was accepted'}
 } finally {Remove-Item -LiteralPath $root -Recurse -Force}
+# Run only after every original probe and its cleanup. Model diagnostics never
+# turn missing native evidence into an app-smoke pass.
+if(-not $ActivationDiagnostics -and $env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_TEMP){
+  $ActivationDiagnostics=Join-Path $env:RUNNER_TEMP 'quotum-ui-diagnostics/loader-activation'
+}
+if($ActivationDiagnostics){
+  & (Join-Path $PSScriptRoot 'loader-activation.ps1') -Diagnostics $ActivationDiagnostics
+}
