@@ -110,7 +110,7 @@ public static class QuotumWindowProbe {
     public bool Paused, ResumeAttempted, Resumed;
   }
   public static DispatchReading LastDispatch { get; private set; }
-  public static void ResetDispatch() { LastDispatch=null; LastUnresponsive=null; }
+  public static void ResetDispatch() { LastDispatch=null; LastUnresponsive=null; LastPanelDispatch=null; }
   public static PauseGuard MainRequestThenPause(int process,string exe) {
     var clock=Stopwatch.StartNew();
     var reading=new DispatchReading();LastDispatch=reading;
@@ -185,10 +185,26 @@ public static class QuotumWindowProbe {
     },IntPtr.Zero);
     return tray;
   }
+  public sealed class PanelDispatchReading {
+    public long Window,ForegroundWindow,FromUtcTicks,ToUtcTicks;
+    public uint Process,Thread,ForegroundProcess,ForegroundThread;
+    public bool Owned,Posted;
+  }
+  public static PanelDispatchReading LastPanelDispatch;
   public static bool OpenPanel(int process) {
+    var reading=new PanelDispatchReading{FromUtcTicks=DateTime.UtcNow.Ticks};
+    LastPanelDispatch=reading;
     var tray=Tray(process);
+    reading.Window=tray.ToInt64();
+    if(tray!=IntPtr.Zero)reading.Thread=GetWindowThreadProcessId(tray,out reading.Process);
+    reading.Owned=reading.Process==(uint)process && reading.Thread!=0;
+    var foreground=GetForegroundWindow();reading.ForegroundWindow=foreground.ToInt64();
+    if(foreground!=IntPtr.Zero)reading.ForegroundThread=GetWindowThreadProcessId(foreground,out reading.ForegroundProcess);
     // The Shell icon's version-4 NIN_SELECT callback (icon 1).
-    return tray!=IntPtr.Zero && PostMessage(tray,0x8002,IntPtr.Zero,new IntPtr(0x10400));
+    // Posting proves delivery to the queue, not acceptance by the tray callback.
+    reading.Posted=tray!=IntPtr.Zero && PostMessage(tray,0x8002,IntPtr.Zero,new IntPtr(0x10400));
+    reading.ToUtcTicks=DateTime.UtcNow.Ticks;
+    return reading.Posted;
   }
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr GetProp(IntPtr window,string name);
   static int? LoadingPhase(IntPtr window) {

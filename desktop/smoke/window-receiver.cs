@@ -34,6 +34,10 @@ public static class QuotumTestReceiver {
       if(held==IntPtr.Zero)throw new Exception("Cannot create native mutex");
     }
     callback=(window,message,w,l)=>{
+      if(mode=="tray" && message==0x8002){
+        Publish(delivered,w==IntPtr.Zero && l==new IntPtr(0x10400)?"valid":"invalid");
+        return IntPtr.Zero;
+      }
       if(message==0x8006 && held!=IntPtr.Zero){
         if(!ReleaseMutex(held))throw new Exception("Cannot release native mutex");
         return IntPtr.Zero;
@@ -49,7 +53,7 @@ public static class QuotumTestReceiver {
       }
       return DefWindowProc(window,message,w,l);
     };
-    var cls=new Class{Size=(uint)Marshal.SizeOf<Class>(),Name="com.padurets.quotum-sic",Procedure=callback};
+    var cls=new Class{Size=(uint)Marshal.SizeOf<Class>(),Name=mode=="tray"?"QuotumTray":"com.padurets.quotum-sic",Procedure=callback};
     if(RegisterClassEx(ref cls)==0)throw new Exception("Cannot register receiver");
     var handle=CreateWindowEx(0,cls.Name,"fixture",0,0,0,1,1,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero);
     if(handle==IntPtr.Zero)throw new Exception("Cannot create receiver");

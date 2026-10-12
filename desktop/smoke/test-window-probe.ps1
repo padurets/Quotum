@@ -9,7 +9,7 @@ Add-Type -Path (Join-Path $PSScriptRoot 'window-probe.cs')
 $root=Join-Path $env:TEMP ('quotum-probe-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $root | Out-Null
 try {
-  foreach($case in @('accepted','rejected','late','unresponsive')){
+  foreach($case in @('accepted','rejected','late','unresponsive','tray')){
     $ready=Join-Path $root ($case+'.ready');$delivered=Join-Path $root ($case+'.delivered')
     $start=New-Object Diagnostics.ProcessStartInfo
     $start.FileName=(Get-Process -Id $PID).Path;$start.UseShellExecute=$false
@@ -21,6 +21,20 @@ try {
       while(-not (Test-Path $ready) -and -not $receiver.HasExited -and (Get-Date) -lt $until){Start-Sleep -Milliseconds 20}
       if(-not (Test-Path $ready)){throw 'Native receiver did not start'}
       $window=[IntPtr]([long]([IO.File]::ReadAllText($ready)))
+      if($case -eq 'tray'){
+        if(-not [QuotumWindowProbe]::OpenPanel($receiver.Id)){throw 'Owned tray callback was not posted'}
+        $posted=[QuotumWindowProbe]::LastPanelDispatch
+        if(-not $posted.Owned -or -not $posted.Posted -or $posted.Window -ne $window.ToInt64() -or $posted.Process -ne $receiver.Id -or -not $posted.Thread -or $posted.FromUtcTicks -gt $posted.ToUtcTicks){throw 'Tray dispatch lost its original target or queue receipt'}
+        $until=(Get-Date).AddSeconds(2)
+        while(-not (Test-Path $delivered) -and (Get-Date) -lt $until){Start-Sleep -Milliseconds 20}
+        if(-not (Test-Path $delivered) -or [IO.File]::ReadAllText($delivered) -ne 'valid'){throw 'Tray callback payload changed'}
+        if([QuotumWindowProbe]::OpenPanel(0)){throw 'Missing tray callback was posted'}
+        $missing=[QuotumWindowProbe]::LastPanelDispatch
+        if($missing.Posted -or $missing.Owned -or $missing.Window -ne 0 -or -not $posted.Posted){throw 'Missing tray lost its failure or rewrote the earlier receipt'}
+        [QuotumWindowProbe]::ResetDispatch()
+        if($null -ne [QuotumWindowProbe]::LastPanelDispatch){throw 'Tray receipt leaked into another smoke run'}
+        continue
+      }
       $caught=$false
       try {
         $guard=[QuotumWindowProbe]::MainRequestThenPause($receiver.Id,'fixture.exe')
@@ -49,7 +63,7 @@ try {
       }
       Write-Host ($reading | ConvertTo-Json -Compress)
       [QuotumWindowProbe]::ResetDispatch()
-      if($null -ne [QuotumWindowProbe]::LastDispatch -or $null -ne [QuotumWindowProbe]::LastUnresponsive){throw 'A new smoke run inherited the previous dispatch or failure'}
+      if($null -ne [QuotumWindowProbe]::LastDispatch -or $null -ne [QuotumWindowProbe]::LastUnresponsive -or $null -ne [QuotumWindowProbe]::LastPanelDispatch){throw 'A new smoke run inherited the previous dispatch or failure'}
     } finally {
       if($guard){$guard.Dispose()}
       if(-not $receiver.HasExited){$receiver.Kill();if(-not $receiver.WaitForExit(5000)){throw 'Receiver cleanup failed'}}

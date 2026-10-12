@@ -63,7 +63,9 @@ function Save-Stage([string]$Stage,[IntPtr]$Window=[IntPtr]::Zero,[Nullable[bool
     $reading=[QuotumWindowProbe]::LastDispatch
     # Copy mutable dispatch fields now; a later resume must not rewrite earlier stages.
     $dispatch=if($reading){[ordered]@{Stage=$reading.Stage;Acceptance=$reading.Acceptance;Window=$reading.Window;ElapsedMs=$reading.ElapsedMs;Process=$reading.Process;Thread=$reading.Thread;Paused=$reading.Paused;ResumeAttempted=$reading.ResumeAttempted;Resumed=$reading.Resumed}}else{$null}
-    $entry=[ordered]@{stage=$Stage;ms=$timelineClock.Elapsed.TotalMilliseconds;utcTicks=[DateTime]::UtcNow.Ticks;dispatch=$dispatch;unresponsive=[QuotumWindowProbe]::LastUnresponsive}
+    $panelReading=[QuotumWindowProbe]::LastPanelDispatch
+    $panelDispatch=if($panelReading){[ordered]@{Window=$panelReading.Window;Process=$panelReading.Process;Thread=$panelReading.Thread;Owned=$panelReading.Owned;Posted=$panelReading.Posted;ForegroundWindow=$panelReading.ForegroundWindow;ForegroundProcess=$panelReading.ForegroundProcess;ForegroundThread=$panelReading.ForegroundThread;FromUtcTicks=$panelReading.FromUtcTicks;ToUtcTicks=$panelReading.ToUtcTicks}}else{$null}
+    $entry=[ordered]@{stage=$Stage;ms=$timelineClock.Elapsed.TotalMilliseconds;utcTicks=[DateTime]::UtcNow.Ticks;dispatch=$dispatch;panelDispatch=$panelDispatch;unresponsive=[QuotumWindowProbe]::LastUnresponsive}
     if($null -ne $Resumed){$entry.resumed=$Resumed}
     if($process){$entry.window=[QuotumWindowProbe]::Snapshot($Window,$process.Id)}
     $timeline.Add($entry)
@@ -328,7 +330,12 @@ try {
       if ($panel -ne [IntPtr]::Zero -and [QuotumWindowProbe]::Responsive($panel,$process.Id)) { break }
       Start-Sleep -Milliseconds 50
     } while ((Get-Date) -lt $deadline)
-    if ($panel -eq [IntPtr]::Zero) { throw 'The tray panel did not become visible' }
+    if ($panel -eq [IntPtr]::Zero) {
+      Save-Stage 'panel-visibility-deadline' $window
+      if($Diagnostics){Save-Stage 'panel-loader-after-deadline' ([QuotumWindowProbe]::Loading($process.Id))}
+      throw 'The tray panel did not become visible'
+    }
+    Save-Stage 'panel-visible' $panel
     Start-Sleep -Seconds 1
     if (-not [QuotumWindowProbe]::IsWindowVisible($panel) -or -not [QuotumWindowProbe]::Responsive($panel,$process.Id)) { throw 'The tray panel disappeared after creation' }
     $bounds = [QuotumWindowProbe]::Bounds($panel)
