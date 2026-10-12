@@ -81,7 +81,7 @@ export function profileWindow(profile: ReturnType<typeof numericProfile>, clocks
 }
 
 /** Sampling reports elapsed sample widths, including throttling; these are not thread CPU clocks. */
-export async function profileInterval<T>(cdp: Cdp, browser: Browser, run: () => Promise<T>, evidence?: Files) {
+export async function profileInterval<T>(cdp: Cdp, browser: Browser, run: () => Promise<T>, evidence?: Files, samplingInterval: 1000 | 2000 = 1000) {
   if (!browser.owned) throw new Error('CPU profiling requires an owned synthetic browser');
   const clocks: Clock[] = [];
   const clock = async (stage: string, signal: AbortSignal) => {
@@ -98,7 +98,7 @@ export async function profileInterval<T>(cdp: Cdp, browser: Browser, run: () => 
     await deadline(5000, async signal => {
       enabled = true;
       await cdp.send('Profiler.enable', {}, signal);
-      await cdp.send('Profiler.setSamplingInterval', {interval: 1000}, signal);
+      await cdp.send('Profiler.setSamplingInterval', {interval: samplingInterval}, signal);
       await clock('start', signal);
       active = true;
       await cdp.send('Profiler.start', {}, signal);
@@ -125,7 +125,7 @@ export async function profileInterval<T>(cdp: Cdp, browser: Browser, run: () => 
     drain.elapsedMs = performance.now() - started;
     const report = {mode: 'diagnostic', kind: 'sampled elapsed widths, not thread CPU time; observer overhead unqualified',
       status: cleanup === 'complete' && stopped && profile?.status === 'complete' && bridge(clocks) ? 'complete' : 'insufficient-evidence',
-      samplingInterval: 1000, clocks, cleanup, drain, profile};
+      samplingInterval, clocks, cleanup, drain, profile};
     if (evidence?.saveTrace) evidence.saveTrace('profile', report); else evidence?.save('profile', report);
     if (cleanup === 'incomplete') try {await deadline(8000, () => browser.close());} catch {browser.owner?.failures.push('CPU diagnostic browser cleanup unconfirmed');}
     if (cleanup === 'incomplete' && succeeded) throw new Error('CPU profile cleanup failed at ' + drain.stage);

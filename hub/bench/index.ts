@@ -25,7 +25,9 @@ import {seedPanningBudgets,panningSet} from './fixture.js';
 import {historyTraffic} from './historyTraffic.js';
 import {diagnoseReversal} from './historyTrafficBrowser.js';
 import {RunOwner} from './runOwner.js';
-import {Evidence} from './evidence.js';
+import {Evidence, clientIdentity} from './evidence.js';
+import {profileInterval} from './cpuProfile.js';
+import {ScriptBinding} from './scriptBinding.js';
 import {Requests} from './requests.js';
 export {Requests} from './requests.js';
 import {doubledIdle} from './idleDiagnostic.js';
@@ -102,6 +104,7 @@ async function main() {
   const evidence = new Evidence();
   const panDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_PANNING;
   const idleDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE;
+  const idleCpuDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_CPU;
   const startupDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP;
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
@@ -110,6 +113,7 @@ async function main() {
     if (startupDiagnostic && (startupDiagnostic !== '1' || options.cdp || panDiagnostic || idleDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup diagnostic mode');
     if (idleDiagnostic && (idleDiagnostic !== 'double' || panDiagnostic)) throw new Stop('Unknown or conflicting idle diagnostic mode');
     if (panDiagnostic && !['pairs', 'trace', 'cpu'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
+    if (idleCpuDiagnostic && (idleCpuDiagnostic !== '1' || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
     await prepare(address);
     chrome = options.cdp ? null : findChrome(process.env);
     if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
@@ -130,7 +134,7 @@ async function main() {
     evidence.begin('cleanup');
     try {await owner.close();} catch (error) {code = 1; say(String(error));}
     try {await demo.stop();} catch {code = 1; say('demo cleanup failed');}
-    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic || idleDiagnostic || startupDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
+    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic || idleDiagnostic || idleCpuDiagnostic || startupDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
     process.exit(code);
   })();
   const set = panningSet(SETS[0]);
@@ -178,6 +182,8 @@ async function main() {
     }
     tab = await openTab(browser);
     const {cdp} = tab;
+    const idleBinding = idleCpuDiagnostic ? new ScriptBinding(cdp, clientIdentity(), (name, value) => evidence.save(name, value)) : undefined;
+    if (idleBinding) owner.resource(async () => idleBinding.close());
     const requests = new Requests(cdp);
     await cdp.send('Page.enable');
     await cdp.send('Network.enable');
@@ -240,23 +246,39 @@ async function main() {
     await cdp.evaluate(idlePhaseScript(cellMs));
     heard.reset();
     requests.counting = true;
-    const before = await metrics(cdp);
-    const firstReading = await cdp.evaluate<Reading>('__quotumBench.read()');
-    await sleep(to - Date.now());
-    const lastReading = await cdp.evaluate<Reading>('__quotumBench.read()');
-    const after = await metrics(cdp);
-    requests.counting = false;
-    const events = heard.counts();
-    const reading = await cdp.evaluate<Reading>('__quotumBench.read()');
-    const phase = await cdp.evaluate<IdlePhase>('(()=>{const p=__quotumIdlePhase.read();__quotumIdlePhase.stop();return p;})()');
-    const actualSeconds = after.Timestamp - before.Timestamp;
-    const phaseProblems = idlePhaseProblems(phase, planned.boundary);
-    if (firstReading.commits || firstReading.mutations.length) phaseProblems.push('idle work crossed the opening measurement boundary');
-    if (reading.commits !== lastReading.commits || JSON.stringify(reading.mutations) !== JSON.stringify(lastReading.mutations)) phaseProblems.push('idle work crossed the closing measurement boundary');
-    if (!Number.isFinite(actualSeconds) || actualSeconds <= 0) phaseProblems.push('idle performance duration unavailable');
-    const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
-    const idle = {from, to, cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
-    evidence.save('idle', {...idle, planned, phase, actualSeconds, phaseProblems});
+    const readIdle = async () => {
+      const before = await metrics(cdp);
+      const firstReading = await cdp.evaluate<Reading>('__quotumBench.read()');
+      await sleep(to - Date.now());
+      const lastReading = await cdp.evaluate<Reading>('__quotumBench.read()');
+      const after = await metrics(cdp);
+      requests.counting = false;
+      const events = heard!.counts();
+      const reading = await cdp.evaluate<Reading>('__quotumBench.read()');
+      const phase = await cdp.evaluate<IdlePhase>('(()=>{const p=__quotumIdlePhase.read();__quotumIdlePhase.stop();return p;})()');
+      const actualSeconds = after.Timestamp - before.Timestamp;
+      const phaseProblems = idlePhaseProblems(phase, planned.boundary);
+      if (firstReading.commits || firstReading.mutations.length) phaseProblems.push('idle work crossed the opening measurement boundary');
+      if (reading.commits !== lastReading.commits || JSON.stringify(reading.mutations) !== JSON.stringify(lastReading.mutations)) phaseProblems.push('idle work crossed the closing measurement boundary');
+      if (!Number.isFinite(actualSeconds) || actualSeconds <= 0) phaseProblems.push('idle performance duration unavailable');
+      const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
+      const idle = {from, to, cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
+      evidence.save('idle', {...idle, planned, phase, actualSeconds, phaseProblems});
+      return {idle, phaseProblems, actualSeconds, events, reading, phase, before, after, scriptMsPerSecond};
+    };
+    const {idle, phaseProblems, actualSeconds, events, reading, phase, before, after, scriptMsPerSecond} = idleCpuDiagnostic
+      ? await profileInterval(cdp, browser, readIdle, {
+        save: (name, value) => evidence.save('idle-cpu-' + name, value),
+        saveTrace: (name, value) => evidence.saveTrace('idle-cpu-' + name, value),
+      }, 2000)
+      : await readIdle();
+    if (idleCpuDiagnostic) {
+      await idleBinding!.afterFamily([1]);
+      const problems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
+      evidence.save('idle-cpu-result', {mode: 'diagnostic', problems: problems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
+      say('original history matrix and CI idle interval captured; profiler overhead is unqualified');
+      await finish(problems.length ? 1 : 0); return;
+    }
     if (idleDiagnostic) {
       const baselineProblems=[...phaseProblems,...idleProblems(idle)];
       if(baselineProblems.length)throw new Stop('idle sensitivity baseline failed: '+baselineProblems.join('; '));

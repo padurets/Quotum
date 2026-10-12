@@ -196,3 +196,21 @@ test('cleanup of a later failing native scenario cannot overwrite its original e
   assert.equal(stopped, 2); assert.equal(f.closed, 1);
   assert.equal((f.files.get('cpu-2-profile') as {status: string}).status, 'insufficient-evidence');
 });
+
+
+test('two-millisecond sampling retains the full CI idle interval within the original profile cap', async () => {
+  const f = fixture(), send = f.cdp.send.bind(f.cdp);
+  const profile = {...recorded(), startTime: 10_000, endTime: 120_010_000, samples: Array<number>(60_000).fill(2), timeDeltas: Array<number>(60_000).fill(2000)};
+  f.cdp.send = (async (method: string, params: object) => method === 'Profiler.stop' ? {profile} : send(method, params)) as Cdp['send'];
+  assert.equal(await profileInterval(f.cdp, f.browser, async () => 17, f.evidence, 2000), 17);
+  assert.deepEqual(f.sent.find(row => row.method === 'Profiler.setSamplingInterval')?.params, {interval: 2000});
+  const report = f.files.get('profile') as {samplingInterval: number; profile: ReturnType<typeof numericProfile>};
+  assert.equal(report.samplingInterval, 2000);
+  assert.equal(report.profile.status, 'complete');
+  assert.ok('samples' in report.profile);
+  assert.equal(report.profile.samples.length, 60_000);
+  const overflow = numericProfile({...profile, samples: Array<number>(120_000).fill(2), timeDeltas: Array<number>(120_000).fill(1000)});
+  assert.equal(overflow.status, 'insufficient-evidence');
+  assert.ok('omittedSamples' in overflow);
+  assert.equal(overflow.omittedSamples, 20_000);
+});
