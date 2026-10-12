@@ -231,7 +231,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
       const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, future);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null, status='failed';
       try {
-        observer=await observeReversal(cdp,browser);
+        observer=await observeReversal(cdp,browser,{postmortem:true,closeTarget:close});
         const phase = `${name}/cold`; bodies.phase = phase; proxy.phase(phase, latency);
         const scroll = (distance: number,stage:string) => {
           bodies.stage=stage;

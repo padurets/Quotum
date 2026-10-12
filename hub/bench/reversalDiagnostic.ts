@@ -95,7 +95,7 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
         ]);
         // A failed owned page can be inspected after its original deadline;
         // accepted commands and attached browsers remain passive.
-        const postmortem=options.postmortem&&browser.owned&&page.snapshot().failure?.method==='Runtime.evaluate'&&report.page==='unresponsive';
+        const postmortem=options.postmortem&&browser.owned&&page.snapshot().failure&&report.page==='unresponsive';
         if (diagnostic||postmortem) {
           if(postmortem)report.postmortem=true;
           if (!intervention) await enable(pending);

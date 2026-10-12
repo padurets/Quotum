@@ -34,7 +34,7 @@ test('canonical commands acknowledged after five seconds retain the thirty-secon
   assert.deepEqual(commands, []);
 });
 
-test('an owned unresponsive page is paused only after its original failure and always released',async t=>{
+for(const method of ['Runtime.evaluate','Input.synthesizeScrollGesture'])test('an owned unresponsive page is inspected after '+method+' fails and always released',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});
   const logs:string[]=[];t.mock.method(console,'error',(line:string)=>logs.push(line));
   t.mock.method(globalThis,'fetch',async()=>new Response('{}'));
@@ -51,7 +51,7 @@ test('an owned unresponsive page is paused only after its original failure and a
   const pending=new Promise<never>((_,fail)=>{reject=fail;});
   const failed=assert.rejects(observer.watch('first delivery',()=>pending),error=>error===original);
   t.mock.timers.tick(5000);await flush();assert.deepEqual(commands,[]);
-  t.mock.timers.tick(25000);page.snapshot=()=>({failure:{method:'Runtime.evaluate'}}) as ReturnType<Cdp['snapshot']>;reject(original);
+  t.mock.timers.tick(25000);page.snapshot=()=>({failure:{method}}) as ReturnType<Cdp['snapshot']>;reject(original);
   await flush();t.mock.timers.tick(2000);await failed;await observer.close();
   assert.deepEqual(commands,['Debugger.enable','Profiler.enable','Profiler.start','Debugger.pause','Profiler.stop','Debugger.resume','Profiler.stop','Debugger.disable']);
   const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
