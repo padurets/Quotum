@@ -150,7 +150,7 @@ import {expandHistory} from '../../server/domain/history';
 
 export async function drawings(h:any){
  const scheduled=new Map<object,{run:()=>void;ms:number}>();
- const loader=new HistoryStore({now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,meta)=>h.period.transport.read('quota',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??''},signal).then((reply:import('../../server/domain/history').HistoryReply)=>expandHistory(reply,meta)),setTimeout:(run,ms)=>{const token={};scheduled.set(token,{run,ms});return token;},clearTimeout:token=>{scheduled.delete(token as object);},dropTimeRange:()=>{}},undefined,'quota',h.pool);
+ const loader=new HistoryStore({sharedTransport:true,now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,meta,owner)=>h.period.transport.read('quota',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??''},signal,owner).then((reply:import('../../server/domain/history').HistoryReply)=>expandHistory(reply,meta)),setTimeout:(run,ms)=>{const token={};scheduled.set(token,{run,ms});return token;},clearTimeout:token=>{scheduled.delete(token as object);},dropTimeRange:()=>{}},undefined,'quota',h.pool);
  const stop=follow(loader,h.page);loader.choose(h.settings.range,null);loader.open(h.board);loader.hello(h.events.epoch);
  const board=h.page.get().board;loader.snapshot(board.lineup,Object.values(board.cards).flatMap((c:any)=>c.windows.map((w:any)=>`${c.id} ${w.id}`)),board.historyStart,board.workAuthority);await flush();
  const slots:any[]=[];let cursor=0;

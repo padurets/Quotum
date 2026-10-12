@@ -90,8 +90,8 @@ test('money preparation keeps cold history reusable across cached return and rep
   for(const [i,scope] of (['quota','budget','budget'] as const).entries()){
    const meter=i===0?undefined:moneySelection(snapshot.sources,board.view.hidden,i===2?settings.funds:settings.money,board.currencies,i===2?'funds':'budget').selection;
    const family=i===2?'funds':scope;
-   const reader=new HistoryStore({now:()=>clockNow,preparations:preparer,setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:t=>clearTimeout(t as any),dropTimeRange:()=>{throw Error('dropRange')},
-    read:(_board,cell,from,to,signal,meters,meta)=>period.transport.read(family,{cell:String(cell),from:String(from),to:String(to),...(panning?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})},signal).then((reply:any)=>expandHistory(reply,meta)),
+   const reader=new HistoryStore({sharedTransport:true,now:()=>clockNow,preparations:preparer,setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:t=>clearTimeout(t as any),dropTimeRange:()=>{throw Error('dropRange')},
+    read:(_board,cell,from,to,signal,meters,meta,owner)=>period.transport.read(family,{cell:String(cell),from:String(from),to:String(to),...(panning?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})},signal,owner).then((reply:any)=>expandHistory(reply,meta)),
    },pool.budget,scope,pool);
    readers.push(reader);reader.choose('30d',null);reader.setMeters(meter);reader.open(board.id);reader.hello(events.epoch);reader.snapshot(board.lineup,quotas.flatMap(id=>store.state(id).windows.map(w=>`${id} ${w.id}`)),NOW-75*DAY);
   }

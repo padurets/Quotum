@@ -1571,9 +1571,11 @@ Unvisited optional cells remain charged to that gesture after an
 abort or reversal; entering them restores the allowance. A disjoint jump inside a
 held tile also reads the minimum unknown or stale bridge to its retained interval,
 without rereading its fresh component. Empty tiles have no head to fill. At most
-one foreground per resource family and one purely speculative flight overall share
-the two aggregate slots; foreground requests take priority; the final
-range uses the same batching without a buffer. Writes to the same tile are
+one foreground read per resource family and one purely speculative flight overall share
+the two aggregate HTTP slots; foreground requests take priority. The shared transport
+collects visible family reads before requesting a slot, so all three families can
+share one response. A waiting reader anchors its hub-clock estimate when HTTP
+actually starts. The final range uses the same batching without a buffer. Writes to the same tile are
 serialized, obsolete requests are aborted and speculative errors cannot drop the
 selection. The existing 15 MiB tile estimate protects the visible frame. On release,
 speculation stops and exact totals switch only after the final frame is complete.
@@ -1595,6 +1597,8 @@ pending result through delegated generators;
 iteration and cancellation retain the native generator lifecycle. Tile responses use private COW staging and publish their
 tiles, read bounds and metadata together. At most two responses are admitted for
 HTTP and processing together, including raw answers waiting for a tile reservation.
+A shared response retains its transport reservation until every family has committed
+or discarded its private preparation; cancelling one family preserves the others.
 Quota, budget and subscription-funds readers share that pool and a 15 MiB retained-tile and staged-growth
 budget. Global eviction considers only nonvisible, unreserved tiles; an incoming frame
 that cannot fit fails losslessly without evicting the other reader's visible frame. Flights and reservations remain owned until commit or

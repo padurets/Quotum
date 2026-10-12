@@ -1,3 +1,4 @@
+import type {HistoryReadOwner} from './periodTransport';
 import {HistoryPool,historyPool} from './historyPool';
 import {boardPeriod,followPeriod} from './period';
 import type {HistoryScope} from '../../server/domain/history';
@@ -27,7 +28,9 @@ const RETRY_MS = 15_000;
 const STORED_BYTES = 15 * 1024 * 1024;
 
 export type HistoryEnv = {
-  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis): Promise<HistoryAnswer>;
+  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis, owner?: HistoryReadOwner): Promise<HistoryAnswer>;
+  /** The shared transport owns HTTP admission until this reader settles its answer. */
+  sharedTransport?: boolean;
   now(): number;
   /** Elapsed time stays independent of corrections to the estimated hub clock. */
   elapsedNow?(): number;
@@ -41,7 +44,7 @@ export type HistoryEnv = {
 };
 export type Shown = {history: History | null; loading: boolean;presentation:number;error?:'history_limit'|'history_failed'};
 type HistoryBoundary = {board: string; at: number; start: number};
-type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead'};
+type Flight = {submitted: boolean; started: boolean; start?: () => void; finish?: () => void; seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead'};
 type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean; limited?: boolean};
 type TilePin = {tile: HistoryTile; seq: number; from: number; to: number};
 export type PlotInterest = {token: number; length: number; from: number; to: number; direction: -1 | 0 | 1};
@@ -430,6 +433,7 @@ export class HistoryStore {
 
   private pump() {
     if (!this.active) return;
+    this.startWaiting();
     this.startResponses();
     if (!this.board || !this.ready || !this.run || this.historyLimit) return;
     if(this.meters||this.pool){this.evict();if(this.historyLimit)return;}
@@ -659,19 +663,28 @@ export class HistoryStore {
   }
 
   private read(target: Target, from: number, to: number, role: Flight['role']) {
-    if(this.pool)for(const waiting of [...this.flights])if(!this.pool.isActive(waiting)&&waiting.role===role)this.abort(waiting);
-    const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role};
+    if(this.pool)for(const waiting of [...this.flights])if(!waiting.started&&waiting.role===role)this.abort(waiting);
+    const flight: Flight = {submitted:false,started:false,seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role};
     this.flights.add(flight);
     const meta = this.meta?.run === this.run ? this.meta : undefined;
     const board=this.board!,meters=this.meters;
+    let finish:(()=>void)|undefined;
+    const finished=this.env.sharedTransport?new Promise<void>(resolve=>{finish=()=>resolve();}):undefined;
+    flight.finish=finish;
+    const owner:HistoryReadOwner|undefined=finished?{finished,started:()=>{flight.started=true;flight.startedAt=this.elapsedNow();},role:()=>this.flights.has(flight)?flight.role:null,cancel:()=>this.abort(flight)}:undefined;
     const start=()=>{
       if(flight.controller.signal.aborted||flight.epoch!==this.epoch){this.abort(flight);return;}
-      flight.startedAt=this.elapsedNow();
-      this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
+      flight.submitted=true;if(!this.env.sharedTransport)flight.started=true;flight.startedAt=this.elapsedNow();
+      this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta, owner).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
     };
-    if(this.pool)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
+    flight.start=start;
+    if(this.env.sharedTransport)this.startWaiting();else if(this.pool)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
   }
 
+  private startWaiting() {
+    if(!this.env.sharedTransport||!this.active)return;
+    for(const flight of this.flights)if(!flight.submitted&&flight.start&&![...this.flights].some(other=>other.submitted&&other.role===flight.role))flight.start();
+  }
   private abort(flight: Flight) {this.preparations?.cancel(flight); this.releaseResponse(flight); flight.controller.abort();}
   private abortFlights() {for (const flight of [...this.flights]) this.abort(flight);}
   private setPlot(plot: PlotBuffer | null) {
@@ -793,7 +806,7 @@ export class HistoryStore {
   }
 
   private releaseResponse(flight: Flight) {
-    this.responses.delete(flight); this.flights.delete(flight); this.pool?.release(flight);
+    this.responses.delete(flight); this.flights.delete(flight); this.pool?.release(flight);flight.finish?.();if(this.env.sharedTransport)this.schedule();
     for (const [key, owner] of this.reservations) if (owner === flight) {
       this.reservations.delete(key);
       const [cell, n] = key.split(':').map(Number), tiles = this.grids.get(cell);
@@ -802,7 +815,7 @@ export class HistoryStore {
   }
 
   private failed(flight: Flight, error: unknown) {
-    this.flights.delete(flight);this.pool?.release(flight);
+    this.flights.delete(flight);this.pool?.release(flight);flight.finish?.();
     if (flight.controller.signal.aborted || flight.epoch !== this.epoch) return;
     if(error instanceof Error&&error.name==='AbortError'){this.schedule();return;}
     if(error instanceof ApiError&&(error.status===401||error.status===403||error.code==='board_not_found')) {
@@ -902,7 +915,8 @@ const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
 export {historyPool} from './historyPool';
 function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
   const value=new HistoryStore({
-    read: (_board, cell, from, to, signal, meters, meta) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})},signal).then(reply=>expandHistory(reply,meta)),
+    sharedTransport:true,
+    read: (_board, cell, from, to, signal, meters, meta, owner) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})},signal,owner).then(reply=>expandHistory(reply,meta)),
     now: hubNow,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
