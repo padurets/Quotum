@@ -37,6 +37,7 @@ if (-not ('QuotumWindowProbe' -as [type])) {
 # Installed and portable smoke can share one PowerShell process and its static types.
 [QuotumWindowProbe]::ResetDispatch()
 . (Join-Path $PSScriptRoot 'wait-observer.ps1')
+. (Join-Path $PSScriptRoot 'windows-progress.ps1')
 
 $manifest=[ordered]@{schemaVersion=1;status='running';sha=((& git rev-parse HEAD).Trim());run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT;platform='windows';packageHash=(Get-FileHash -LiteralPath $appPath -Algorithm SHA256).Hash;files=@();errors=@()}
 function Save-Manifest {
@@ -77,6 +78,18 @@ function Save-Stage([string]$Stage,[IntPtr]$Window=[IntPtr]::Zero,[Nullable[bool
   } catch {Write-Warning 'Native stage evidence unavailable'}
 }
 Save-Stage 'initial'
+
+function Save-PanelProgress([int]$Cycle) {
+  if(-not $Diagnostics){return}
+  try {
+    # Use the original launch and input receipts; log lines contain no PID or request ID.
+    $expected=@{pid=$process.Id;birthUtcTicks=$since.ToUniversalTime().Ticks;sourceSha=$manifest.sha;packageHash=$manifest.packageHash;run=$manifest.run;attempt=$manifest.attempt}
+    $reading=[QuotumWindowProbe]::LastPanelDispatch
+    $binding=@{scope='owned-ui-app-log';deadlineExpired=$true;packetOwned=$(if($reading){$reading.Owned}else{$false});packetPosted=$(if($reading){$reading.Posted}else{$false});pid=$process.Id;packetPid=$(if($reading){$reading.Process}else{0});birthUtcTicks=$expected.birthUtcTicks;sourceSha=$manifest.sha;packageHash=$manifest.packageHash;run=$manifest.run;attempt=$manifest.attempt;cycle=$Cycle}
+    $progress=Get-OwnedWindowProgress $work (Join-Path $work 'app/logs/hub.log') $expected $binding
+    [IO.File]::WriteAllText((Join-Path $Diagnostics 'panel-progress.json'),(ConvertTo-Json -InputObject $progress -Depth 6))
+  } catch {Write-Warning 'Numeric panel progress unavailable'}
+}
 
 function Save-ObservedPause($Observer,[string]$Kind,$From,$To,$Resumed) {
   $observed=Stop-WaitObserver $Observer
@@ -333,6 +346,7 @@ try {
     if ($panel -eq [IntPtr]::Zero) {
       Save-Stage 'panel-visibility-deadline' $window
       if($Diagnostics){Save-Stage 'panel-loader-after-deadline' ([QuotumWindowProbe]::Loading($process.Id))}
+      Save-PanelProgress $cycle
       throw 'The tray panel did not become visible'
     }
     Save-Stage 'panel-visible' $panel

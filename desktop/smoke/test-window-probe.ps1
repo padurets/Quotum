@@ -76,6 +76,7 @@ try {
 } finally {Remove-Item -LiteralPath $root -Recurse -Force}
 # Check fabricated receipts before collecting native model diagnostics.
 & (Join-Path $PSScriptRoot 'test-loader-activation-evidence.ps1')
+& (Join-Path $PSScriptRoot 'test-windows-progress.ps1')
 # Run only after every original probe and its cleanup. Model diagnostics never
 # turn missing native evidence into an app-smoke pass.
 if(-not $ActivationDiagnostics -and $env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_TEMP){

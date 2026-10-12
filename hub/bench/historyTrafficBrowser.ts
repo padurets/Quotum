@@ -293,7 +293,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         invalidated.push({name, reason: error.message, reads: bodies.reads.map(read => ({phase: read.phase, from: read.from, to: read.to, count: read.count}))});
       } finally {
         evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name,status,geometry,cell,
-          reads:trafficReadEvidence(bodies.reads),reports:reports.filter(report=>report.name.startsWith(name+'/')),
+          reads:trafficReadEvidence(bodies.reads),cold:bodies.diagnostic(`${name}/cold`),reports:reports.filter(report=>report.name.startsWith(name+'/')),
           transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),command:cdp.snapshot()});
         await observer?.close();await close();
       }
