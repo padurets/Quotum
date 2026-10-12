@@ -626,12 +626,12 @@ Restoring them in path order preserves
 the exact result, including deletions, nulls, splices and fractional values. Clients
 charge the additional path and operation containers before allocating them. The encoding
 is optional and scoped to a single response; it does not change proof coverage or evidence.
-The server prepares optional summaries and card states for at most one minute on
-either side of the selected edge, bounded further by evidence coverage. Summary
-pieces retain enclosing partition boundaries and card states retain full actual
-validity intervals; their advertised coverage may therefore be wider. Drawing-cell
-width does not increase this speculative neighborhood. An uncovered position requires
-an ordinary bounded period read, with the same observation admission rules.
+The server prepares optional summaries and card states across neighboring endpoint
+cells, bounded further by evidence coverage. Summary pieces retain exact partition
+boundaries and card states retain full actual validity intervals. This covers a repeated
+native gesture whose pixel coordinates move the selected edge within a drawing cell.
+An uncovered position requires an ordinary bounded period read, with the same
+observation admission rules.
 These optional proofs and nearby value states share existing memory limits and may
 be omitted when they cannot fit. Outside proven positions a new summary is required.
 Only optional current presence can change or lose confirmation while a fixed selection

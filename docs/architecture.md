@@ -1460,10 +1460,11 @@ can reuse the proof even when native input moves an endpoint to the other side o
 boundary. Card states retain their own observation and availability intervals. Amounts
 and spending steps are replaced exactly at changes, never interpolated. Positions
 outside the retained proof require another bounded read. Optional summary and card-state
-preparation considers at most one minute on each side of the selected edge, even when
-drawing cells span hours. Summaries keep the enclosing exact partition boundaries;
-card states keep their full actual validity intervals. This bounds speculative work
-without changing the selected projection, history cells or observation admission.
+preparation covers neighboring endpoint cells. Native return/repeat gestures can move
+the selected edge within a cell when the live plot's future area changes its pixel
+scale. Summaries keep exact partition boundaries; card states keep their full actual
+validity intervals. Preparation stays within the existing memory limits without
+changing the selected projection, history cells or observation admission.
 On the wire, replay programs group changes by field and share path prefixes. The
 browser charges restored path and patch containers before allocation, then restores
 the same exact edits for replay. This encoding never changes supplier evidence or

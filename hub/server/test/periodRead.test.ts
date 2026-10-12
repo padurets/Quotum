@@ -148,7 +148,7 @@ test('nearby card states cross exclusive observations and deadlines without inte
   }
 });
 
-test('coarse drawing cells bound speculative states and uncovered positions read their actual history',async t=>{
+test('neighboring endpoint cells retain exact quota, work and cards through a native repeat',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   const wallet=h.store.source('deepseek','b'.repeat(24),now-H);h.store.hold(wallet,h.user.id,now-H);
   for(let i=0;i<12;i++){
@@ -156,26 +156,31 @@ test('coarse drawing cells bound speculative states and uncovered positions read
     h.store.record(h.source,{observedAt:at,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:i+.125,remaining:100-i-.125,resetAt:now+H}]});
     h.store.record(wallet,deepSeekMeasurement({is_available:true,balance_infos:[{currency:'USD',total_balance:`9007199254.7409${String(93-i).padStart(2,'0')}`,granted_balance:'0',topped_up_balance:`9007199254.7409${String(93-i).padStart(2,'0')}`}]},at));
   }
+  h.credit(now-25*M,now-3*M);
   const sources=[{id:h.source,provider:'codex'},{id:wallet,provider:'deepseek'}],edge=now-10*M;
   const read=async(to:number)=>{
-    const response=await h.read({version:1,selection:{mode:'range',from:to-24*H,to},evaluatedAt:now,values:sources.map(s=>s.id),quota:{cell:String(5*M),from:String(now-H),to:String(now),cells:'skip'}});
+    const response=await h.read({version:1,selection:{mode:'range',from:to-24*H,to},evaluatedAt:now,values:sources.map(s=>s.id),sessions:{},quota:{cell:String(5*M),from:String(now-H),to:String(now),cells:'skip'}});
     assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());
-    if(reply.values?.state!=='complete'||reply.quota?.state!=='complete')throw new Error('incomplete period');
-    return {values:reply.values.value,fixed:reply.quota.value.tape!.fixed!};
+    if(reply.values?.state!=='complete'||reply.quota?.state!=='complete'||reply.sessions?.state!=='complete')throw new Error('incomplete period');
+    return {values:reply.values.value,fixed:reply.quota.value.tape!.fixed!,work:reply.sessions.value.fixed!};
   };
   const retained=await read(edge),before=JSON.stringify(retained);
   const plain=<T extends object>(value:T,key:string)=>{const {[key]:_,...rest}=value as Record<string,unknown>;return rest;};
-  for(const offset of [-M,-.25,0,.25,1,M]){
+  // A real return/repeat moved 165,715 ms after the live plot lost its future area.
+  // This remains inside a five-minute cell, but exceeds a one-minute neighborhood.
+  for(const offset of [165715,-165715,-4*M,-M,-.25,0,.25,1,M,4*M]){
     const to=edge+offset,fresh=await read(Math.floor(to));
     assert.ok(canShift(retained.fixed,{from:to-24*H,to}),String(offset));
     assert.deepEqual(plain(shifted(retained.fixed,{from:to-24*H,to})!,'shift'),plain(shifted(fresh.fixed,{from:to-24*H,to})!,'shift'));
+    assert.ok(canShift(retained.work,{from:to-24*H,to}),String(offset));
+    assert.deepEqual(plain(shifted(retained.work,{from:to-24*H,to})!,'shift'),plain(shifted(fresh.work,{from:to-24*H,to})!,'shift'));
     // Protocol positions are integer milliseconds; fractional replay keeps that admission.
     const actual=periodValues(h.store,sources,h.user.id,Math.floor(to),()=>{});
     for(const [i,value]of retained.values.entries())assert.deepEqual(plain(periodValueAt(value,to)!,'states'),actual[i]);
   }
-  const outside=edge+4*M;
-  assert.equal(canShift(retained.fixed,{from:outside-24*H,to:outside}),false,'coarse cells must not retain distant summary speculation');
-  assert.ok(retained.values.every(value=>!hasPeriodValue(value,outside)),'coarse cells must not retain distant card states');
+  const outside=edge+8*M;
+  assert.equal(canShift(retained.fixed,{from:outside-24*H,to:outside}),false);
+  assert.ok(retained.values.some(value=>!hasPeriodValue(value,outside)),'positions beyond retained evidence require another read');
   const fresh=await read(outside),actual=periodValues(h.store,sources,h.user.id,outside,()=>{});
   for(const [i,value]of fresh.values.entries())assert.deepEqual(plain(value,'states'),actual[i]);
   assert.notDeepEqual(fresh.values.map(v=>v.windows),retained.values.map(v=>v.windows));
