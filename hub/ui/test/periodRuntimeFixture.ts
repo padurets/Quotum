@@ -121,7 +121,7 @@ export function consumer(h: any) {
   const prefs={range:'1h',activityBy:'project',muted:{}};
   const context={
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
-    useEffect:()=>{},useId:()=> 'c',useHistory:()=>h.render(),useHistoryPlot:()=>h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
+    useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useHistory:()=>h.render(),useHistoryPlot:()=>h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,
     usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,
     axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>NOW,usePanning:()=>panning,

@@ -166,6 +166,12 @@ and platform smoke checks still apply.
   keeps its own options in its settings, and has its legend under it, each entry switched
   off and on by a click.
 - Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
+- Sortable tables reuse `hub/ui/components/TableSort.tsx` for their headers and menu
+  choices, including active colour, arrow spacing and keyboard behavior. Reader sorting
+  stays separate from the owner's column controls.
+- Chart legends share `hub/ui/components/seriesFocus.ts` to highlight a series under
+  the pointer or keyboard focus. Apply it to every plot layer for that series;
+  highlighting changes paint, never the data, selection or prepared geometry.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
   fixed background, and widgets have no `backdrop-filter` (floating surfaces and the

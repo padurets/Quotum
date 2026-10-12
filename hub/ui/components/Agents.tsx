@@ -44,6 +44,7 @@ import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {RecentActivity} from './Time';
 import {Modal} from './Kit';
 import {fillOf, pixels, useSizing} from './sizing';
+import {SortHeader, SortMenu as TableSortMenu} from './TableSort';
 
 /**
  * One session: filled with the card's colour while it works, outlined while idle; a
@@ -269,31 +270,12 @@ const COLUMNS: Record<AgentColumn, {title: Key; hint?: Key; cell: (group: AgentG
 /** A cut name in full on hover. */
 const fullOf = (group: AgentGroup, column: AgentColumn) => (isDimension(column) ? dimensionName(group, column) : undefined);
 
-const SortIcon = () => (
-  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-    <path d="M4 3v10M1.5 10.5 4 13l2.5-2.5M9 4h5M9 8h3.5M9 12h2" />
-  </svg>
-);
-
 /** How the reader sorts the agents, in this browser: by a column's header, or in a menu where the list has none. */
 type Sorting = {active: AgentsSort; headers: {id: AgentColumn; title: Key}[]; sortBy: (column: AgentColumn, cycle?: boolean) => void};
 
 function SortMenu({active, headers, sortBy}: Sorting) {
-  const direction = active?.descending ? 'descending' : 'ascending';
-  return (
-    <Popover label={t('agents.sort')} icon={<SortIcon />}>
-      <div className="popover-title">{t('agents.sort')}</div>
-      <button type="button" className="popover-row" aria-pressed={!active} onClick={() => setPrefs({agentsSort: null})}>
-        <span>{t('agents.activity')}</span><b aria-hidden="true">{!active ? '✓' : ''}</b>
-      </button>
-      {headers.map(column => (
-        <button type="button" className="popover-row" key={column.id} aria-pressed={active?.column === column.id} onClick={() => sortBy(column.id, false)}>
-          <span>{t(column.title)}</span>
-          {active?.column === column.id && <b><span aria-hidden="true">{active.descending ? '↓' : '↑'}</span><span className="sr-only">{t(`agents.${direction}`)}</span></b>}
-        </button>
-      ))}
-    </Popover>
-  );
+  return <TableSortMenu active={active} columns={headers.map(column => ({id: column.id, title: t(column.title)}))} defaultLabel={t('agents.activity')}
+    onSort={(column, cycle) => column === null ? setPrefs({agentsSort: null}) : sortBy(column, cycle)}/>;
 }
 
 /**
@@ -429,7 +411,6 @@ function AgentsRows({
       </ul>
     );
   }
-  const direction = sorting?.active?.descending ? 'descending' : 'ascending';
   return (
     <div className="table-wrap agents-rows">
       <table>
@@ -438,11 +419,7 @@ function AgentsRows({
           <thead>
             <tr>
               {sorting.headers.map(column => (
-                <th scope="col" key={column.id} aria-sort={sorting.active?.column === column.id ? direction : undefined} title={COLUMNS[column.id].hint && t(COLUMNS[column.id].hint!)}>
-                  <button type="button" onClick={() => sorting.sortBy(column.id)}>
-                    {t(column.title)}<span className="agents-sort-arrow" aria-hidden="true">{sorting.active?.column === column.id ? sorting.active.descending ? '↓' : '↑' : ''}</span>
-                  </button>
-                </th>
+                <SortHeader key={column.id} id={column.id} title={t(column.title)} hint={COLUMNS[column.id].hint && t(COLUMNS[column.id].hint!)} active={sorting.active} onSort={() => sorting.sortBy(column.id)}/>
               ))}
             </tr>
           </thead>

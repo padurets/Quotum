@@ -5,11 +5,12 @@ import {tableLayout} from '../lib/table';
 import {withColumn, withHidden, type Arrange} from '../lib/view';
 import {t} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
+import {SortHeader} from './TableSort';
 
 export type Cell = {content: ReactNode; title?: string; className?: string};
 export type TimedCell = {time: string; changesAt: (now: number) => number | null; at: (now: number) => Cell};
 export type AnalyticsColumn<Id extends string> = {id: Id; title: string; hint?: string; width: number; align?: 'right'};
-export type AnalyticsRow<Id extends string> = {key: string; name: string; color?: string; cells: Record<Id, Cell | TimedCell>};
+export type AnalyticsRow<Id extends string> = {key: string; name: string; hint?: string; color?: string; cells: Record<Id, Cell | TimedCell>};
 export type TableSorting<Id extends string>={active:{column:Id|'limit';descending:boolean}|null;cycle:(column:Id|'limit')=>void};
 
 /** Only the cell reads the clock; its table and unrelated rows remain asleep. */
@@ -56,7 +57,7 @@ function Table<Id extends string>({columns, rows, name, nameWidth, lead, sorting
   if (layout === 'list') return <ul ref={element => {body.current = element;}} className="analytics-compact">{rows.map(row => <li key={row.key}>
     <div className="analytics-compact-main">
       {row.color && <span className="swatch" style={{background: row.color}}/>}
-      <span className="analytics-compact-name">{row.name}</span>
+      <span className="analytics-compact-name" title={row.hint}>{row.name}</span>
       {columns.filter(column => column.id === lead).map(column => shown(column.id, row.cells[column.id], (cell, time) =>
         <span data-time={time} className={cell.className} title={cell.title}><span className="sr-only">{column.title}: </span>{cell.content}</span>))}
     </div>
@@ -64,14 +65,14 @@ function Table<Id extends string>({columns, rows, name, nameWidth, lead, sorting
       <span data-time={time} title={cell.title}>{column.title} <span className={cell.className}>{cell.content}</span></span>))}</div>}
   </li>)}</ul>;
   const header=(id:Id|'limit',title:string,hint?:string,align?:'right')=>{
-    const active=sorting?.active?.column===id?sorting.active:null;
-    return <th key={id} scope="col" title={hint} className={align&&'is-'+align} aria-sort={active?active.descending?'descending':'ascending':undefined}>{sorting?<button className="table-sort" onClick={()=>sorting.cycle(id)} aria-label={t('table.sortBy',{name:title,order:t(!active?'table.ascending':active.descending?'table.defaultOrder':'table.descending')})}>{title}{active&&<span aria-hidden="true"> {active.descending?'↓':'↑'}</span>}</button>:title}</th>;
+    return sorting ? <SortHeader key={id} id={id} title={title} hint={hint} align={align} active={sorting.active} onSort={() => sorting.cycle(id)}/>
+      : <th key={id} scope="col" title={hint} className={align && 'is-' + align}>{title}</th>;
   };
   return <div ref={element => {body.current = element;}} className="table-wrap"><table className="analytics-table">
     <colgroup><col/>{columns.map(column => <col key={column.id} style={{width: column.width}}/>)}</colgroup>
     <thead><tr>{header('limit',name)}{columns.map(column=>header(column.id,column.title,column.hint,column.align))}</tr></thead>
     <tbody>{rows.map(row => <tr key={row.key}>
-      <td><span className="analytics-name">{row.color && <span className="swatch" style={{background: row.color}}/>}<span>{row.name}</span></span></td>
+      <td><span className="analytics-name" title={row.hint}>{row.color && <span className="swatch" style={{background: row.color}}/>}<span>{row.name}</span></span></td>
       {columns.map(column => shown(column.id, row.cells[column.id], (cell, time) => <td data-time={time} className={[cell.className, column.align && 'is-' + column.align].filter(Boolean).join(' ') || undefined} title={cell.title}>{cell.content}</td>))}
     </tr>)}</tbody>
   </table></div>;

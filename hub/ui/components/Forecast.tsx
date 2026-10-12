@@ -33,6 +33,7 @@ import {quotaHistory, useHistory} from '../lib/history';
 import {boardPeriod} from '../lib/period';
 import {observationDeadline} from '../../server/domain/resources';
 import {t, useLocale, type Key} from '../i18n';
+import {SortSection} from './TableSort';
 
 const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', {value: num(spent.value, 1)}) : spent.key === 'unused' ? t('table.unused') : '—');
 
@@ -59,10 +60,7 @@ const heading = (column: ForecastColumn, range: boolean) => t((range && HEADINGS
 
 function ForecastSortMenu({columns}:{columns:readonly AnalyticsColumn<ForecastColumn>[]}) {
   const saved=usePref('forecastSort'),active=visibleForecastSort(saved,columns.map(c=>c.id));
-  return <div className="popover-section"><div className="popover-title">{t('table.sort')}</div>
-    <button className="popover-row" onClick={()=>setPrefs({forecastSort:null})}>{t('table.defaultOrder')}{!active?' ✓':''}</button>
-    {[{id:'limit' as const,title:t('table.limit')},...columns].map(({id,title})=><button key={id} className="popover-row" onClick={()=>setPrefs({forecastSort:nextForecastSort(active,id)})} aria-label={t('table.sortBy',{name:title,order:t(active?.column===id?active.descending?'table.defaultOrder':'table.descending':'table.ascending')})}>{title}{active?.column===id?<span>{active.descending?'↓':'↑'}</span>:null}</button>)}
-  </div>;
+  return <SortSection active={active} columns={[{id:'limit' as const,title:t('table.limit')},...columns]} defaultLabel={t('table.defaultOrder')} onSort={(id,cycle)=>setPrefs({forecastSort:id===null?null:nextForecastSort(active,id,cycle)})}/>;
 }
 
 /** Clock-only order changes publish retained row descriptors only after a permutation. */
@@ -233,7 +231,7 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
     [lines,columns,range,sources,forecasts,news,history,view,locale]);
   return (
     <AnalyticsPanel ref={panel} className="forecast" title={t('forecast.title')} history={history} loading={loading} error={error} retry={quotaHistory.retry}
-      settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}><QuotaSettings /><ForecastSortMenu columns={definitions.filter(column=>columns.includes(column.id))}/></TableSettings>}
+      settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}><ForecastSortMenu columns={definitions.filter(column=>columns.includes(column.id))}/><QuotaSettings /></TableSettings>}
     >
       {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}
       {!history ? error ? null : <div className="panel-loading">{t('history.loading')}</div>

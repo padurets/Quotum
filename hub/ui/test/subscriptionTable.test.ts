@@ -1,4 +1,5 @@
 import * as panel from '../components/AnalyticsPanel';
+import * as tableSort from '../components/TableSort';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -36,6 +37,7 @@ const modules:Record<string,unknown>={'../../server/domain/resources':resources,
   '../lib/period':{boardPeriod:{quotaAt:(line:unknown)=>line,quotaOrderAt:()=>({slope:0,next:Infinity}),rangeAt:()=>history?{from:history.since,to:history.to}:null,cellChangesAt:()=>null}},
   '../lib/prefs':{usePref:(key:string)=>key==='kind'?kind:null},'../lib/board':{useNamed:()=>sources,useLineup:()=>sources.map(s=>s.id),useForecastsOf:()=>[{},{}],useResetNews:()=>null},'../lib/clock':{hubNow:()=>M,useClock:()=>M,clock:new PageClock({now:()=>M,visible:()=>false,setTimeout:()=>null,clearTimeout:()=>{}})},'../lib/history':{quotaHistory:{retry:()=>{}},useHistory:()=>({history,loading:false,error})},'./AnalyticsPanel':panel,'./Popover':{Popover:()=>null},'./MoneyAnalytics':{MoneyTable:()=>{throw new Error('a subscription reached the money table');}}};
 const tableContext = {exports: {}, require: (name: string) => modules[name] ?? {}};
+modules['./TableSort'] = tableSort;
 runInNewContext(ts.transpileModule(readFileSync(new URL('../components/AnalyticsTable.tsx', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, tableContext);
 modules['./AnalyticsTable'] = tableContext.exports;
 const context={exports:{} as {Forecast:typeof ForecastComponent},React,require:(name:string)=>modules[name]??{}};

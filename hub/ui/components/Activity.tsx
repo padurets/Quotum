@@ -30,6 +30,7 @@ import {navigate, settingsHref} from '../lib/router';
 import {useTimeAxis} from './timeAxis';
 import {usePlot} from './sizing';
 import {clipPlot, PlotLayer, PlotOverlay} from './PlotLayer';
+import {seriesFocusStyle, useSeriesFocus} from './seriesFocus';
 
 const MINUTE = 60_000;
 const EMPTY_ACTIVITY: ActivityData = {since: 0, known: null, barMs: MINUTE, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}};
@@ -177,6 +178,8 @@ const LegendItem = memo(function LegendItem({history, group, groupKey, by, name,
         ref={button}
         type="button"
         className="legend-item"
+        data-series-key={mutedKey(by, groupKey)}
+        style={seriesFocusStyle(mutedKey(by, groupKey))}
         aria-describedby={id}
         aria-pressed={!muted}
         onClick={() => setMuted(mutedKey(by, groupKey), !muted)}
@@ -240,6 +243,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const registry = useRef<{authority: number; token: number; by: ActivityDimension; seed: GroupIdentity[]; groups: GroupIdentity[]} | null>(null);
   if (registry.current?.authority !== authority) registry.current = null;
   const panel = useRef<HTMLElement>(null);
+  useSeriesFocus(panel);
   // Made taller by its owner, the widget gives the room to the stacks, as the chart does.
   const {plot, onBase} = usePlot(panel);
   const lineup = useLineup();
@@ -596,14 +600,14 @@ const Stacks = memo(function Stacks({
         <g clipPath={(strip || currentActivity) && !active ? `url(#${CSS.escape(innerClip)})` : undefined}>
           <g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
             {groups.map(({group, color}, i) => (
-              <path key={group.key} d={paths[i]} fill={color} className="activity-stack" />
+              <path key={group.key} d={paths[i]} fill={color} className="activity-stack" style={seriesFocusStyle(mutedKey(by, group.key))}/>
             ))}
           </g>
         </g>
       </PlotLayer>
       {(strip || currentActivity) && (
         <PlotLayer width={width} height={height} scale={scale} left={left} right={right}>
-          <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" />)}</g>
+          <g ref={edges}>{groups.map(({group, color}) => <path key={group.key} fill={color} className="activity-stack" style={seriesFocusStyle(mutedKey(by, group.key))}/>)}</g>
         </PlotLayer>
       )}
       <PlotOverlay width={width} height={height}>

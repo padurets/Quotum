@@ -1508,8 +1508,12 @@ preparation uses the shared cancellable scheduler; aggregate benchmark traffic i
 composite and detail reads, cancellations and responses that finish after measurement.
 
 Quota history, wallet budgets, subscription funds and agent activity read and move along time alike
-(`ui/components/timeAxis.ts`), each with its legend under it. A time range selected on
-any of them becomes the board's period, including card measurements, session lists and
+(`ui/components/timeAxis.ts`), each with its legend under it. Pointing to a legend
+entry or focusing it with the keyboard highlights that series and dims its peers.
+All four charts share `ui/components/seriesFocus.ts`: inherited CSS variables change
+paint without rebuilding prepared paths, updating reader preferences or rendering data
+consumers. Muted entries retain their visibility toggle and do not dim visible series.
+A time range selected on any chart becomes the board's period, including card measurements, session lists and
 accounting tables; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
 ‹ and › beside the period move the board by half its period: back, to a range in
@@ -1651,6 +1655,19 @@ values follow known values in either direction, with numeric locale names breaki
 ties. Rolling work, agent hours and plans use existing accounting indexes and the
 shared page clock for exact boundaries and adjacent key crossings. Only a changed
 permutation publishes retained row descriptors; sorting does not wake other widgets.
+
+Agent sessions, quota metrics and budget metrics use the same sortable header and
+menu pieces in `ui/components/TableSort.tsx`, including typography, active colour,
+reserved arrow space and accessible selection. Headers cycle through both directions
+and default; menus expose default as a separate row. Budget sorting is a separate
+viewer preference, available in its compact list too. Names use the reader's locale;
+values, spending and top-ups compare exact integer millionths from the same accounting
+model as their cells. Unknown values stay last in either direction. Hidden columns
+temporarily use default without losing the saved choice. Default preserves the budget
+series order; live accounting boundaries use the shared page clock and retain cells.
+The budget chart, legend and table name a total balance by its account rather than
+repeating "Available balance". Distinct components and key scopes keep their names;
+balance roles and currency provenance remain reachable in details.
 
 On charts narrower than 560 SVG units, reset and exhaustion labels show the name
 and countdown, with an arrow only beyond the visible edge. Their backing is bounded

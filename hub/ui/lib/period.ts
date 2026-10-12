@@ -167,6 +167,10 @@ class BoardPeriod {
     return summary?{...series,...summary}:series;
   }
   rangeAt(scope:PeriodScope,now:number,rangeKey?:string){const tape=this.tapes.get(scope);return tape&&(rangeKey===undefined||tape.rangeKey===rangeKey)?evaluatedRange(tape.selection,now):null;}
+  moneyOrderAt(now:number,rangeKey:string) {
+    const tape=this.tapes.get('budget');
+    return tape?.selection.mode==='live'&&tape.rangeKey===rangeKey?tape.accounting.changesAt(now,tape.selection.periodMs):null;
+  }
   private workBoundary(now:number,refs?:readonly string[],source?:string) {
     if(!this.index||this.workSelection.mode!=='live')return null;
     let next=Infinity;const period=this.workSelection.periodMs;

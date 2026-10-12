@@ -3,6 +3,7 @@ import {cardId, isHidden} from './view';
 import {sourceLabel} from './quota';
 import {duration, durationChangesAt} from './format';
 import {formatLocale, t} from '../i18n';
+import {nextTableSort} from './tableSort';
 
 /** More sessions than this are counted in a card's tray instead of drawn one by one. */
 export const DRAWN = 10;
@@ -155,8 +156,7 @@ export function readAgentsSort(value: unknown): AgentsSort {
 
 /** Headers cycle ascending, descending, activity. Menus use their activity row to reset. */
 export function nextAgentsSort(sort: AgentsSort, column: AgentColumn, cycle = true): AgentsSort {
-  if (sort?.column !== column) return {column, descending: false};
-  return sort.descending && cycle ? null : {column, descending: !sort.descending};
+  return nextTableSort(sort, column, cycle);
 }
 
 /** A hidden column never sorts the visible rows, but its viewer's choice is kept. */

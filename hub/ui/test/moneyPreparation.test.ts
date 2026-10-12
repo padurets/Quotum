@@ -15,6 +15,7 @@ import * as providers from '../../server/domain/providers';
 import * as currency from '../../server/domain/currency';
 import * as moneyView from '../lib/moneyView';
 import * as money from '../lib/money';
+import * as moneyTable from '../lib/moneyTable';
 import {moneySelection} from '../lib/moneySelection';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import type {Card, History} from '../lib/types';
@@ -113,7 +114,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
     const Chart = () => null;
     const memo = (read: () => unknown, deps: unknown[]) => {const box = outer.useRef(null) as {current: {deps: unknown[]; value: unknown} | null}; if (!box.current || deps.some((v, i) => !Object.is(v, box.current!.deps[i]))) box.current = {deps, value: read()}; return box.current.value;};
     const modules: Record<string, unknown> = {
-      'react/jsx-runtime': jsx, react: {useRef: outer.useRef, useMemo: memo},
+      'react/jsx-runtime': jsx, react: {useRef: outer.useRef, useMemo: memo, memo: (fn:unknown)=>fn},
       '../../server/domain/providers': providers, '../../server/domain/currency': currency, '../../server/domain/meterHistory': {composeMetersPrepared},
       '../lib/board': {useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
       '../lib/history': {useBudgetHistory: () => ({history, drawing: history, loading: !history, presentation}), useBudgetHistoryPlot: (_family: string, quantities=false) => change==='quantity frame'?(quantities?fullStrip:drawingStrip):null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
@@ -122,6 +123,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
       '../lib/timeRange': {useTimeRange: () => null}, '../lib/clock': {useClock: () => 60000}, '../lib/pan': {usePanning: () => null},
       '../lib/axisNavigation': {axisNavigation: () => ({context: 'board'})}, '../i18n': {t: (key: string) => key, useLocale: () => 'en'},
       './prepared': {usePrepared: outer.usePrepared}, './sizing': {usePlot: () => ({plot: {}, onBase: () => {}})}, './Chart': {Chart},
+      './seriesFocus': {useSeriesFocus:()=>{}}, '../lib/moneyTable': moneyTable,
     };
     const component = {exports: {} as {MoneyHistory: (props: unknown) => ReactElement<{children: ReactElement[]}>}, require: (name: string) => modules[name] ?? {}};
     runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneyAnalytics.tsx', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, component);

@@ -3,6 +3,7 @@ import {lineWork,type WorkCell} from './work';
 import type {Line} from './lines';
 import type {SeriesForecast,Win} from './types';
 import type {WeeklyPlan} from './plan';
+import {nextTableSort} from './tableSort';
 
 export type SortColumn='limit'|ForecastColumn;
 export type ForecastSort={column:SortColumn;descending:boolean}|null;
@@ -12,7 +13,7 @@ export function readForecastSort(value:unknown):ForecastSort {
   const sort=value as Record<string,unknown>;
   return SORT_COLUMNS.includes(sort.column as SortColumn)&&typeof sort.descending==='boolean'?{column:sort.column as SortColumn,descending:sort.descending}:null;
 }
-export const nextForecastSort=(sort:ForecastSort,column:SortColumn):ForecastSort=>sort?.column!==column?{column,descending:false}:sort.descending?null:{column,descending:true};
+export const nextForecastSort=nextTableSort<SortColumn>;
 export const visibleForecastSort=(sort:ForecastSort,columns:readonly ForecastColumn[]):ForecastSort=>sort&&(sort.column==='limit'||columns.includes(sort.column))?sort:null;
 
 type Scalar=readonly number[]|null;

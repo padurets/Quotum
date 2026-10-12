@@ -15,6 +15,7 @@ import {covered, type PlotBuffer} from '../lib/historyPlot';
 import {observationRunsPrepared,plotPathPrepared} from '../lib/plotPath';
 import {clipPrepared} from '../lib/forecast';
 import {usePrepared, usePreparationBasis} from './prepared';
+import {seriesFocusStyle} from './seriesFocus';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
@@ -610,6 +611,7 @@ export const Chart = memo(function Chart({
           <path
             key={plan.key}
             className="plan-line"
+            style={seriesFocusStyle(plan.key)}
             stroke={plan.color}
             d={planPaths[i]}
           />
@@ -618,6 +620,7 @@ export const Chart = memo(function Chart({
           <path
             key={forecast.key}
             className="forecast-line"
+            style={seriesFocusStyle(forecast.key)}
             stroke={forecast.color}
             strokeDasharray={forecast.dash || undefined}
             d={forecastPaths[i]}
@@ -644,7 +647,7 @@ export const Chart = memo(function Chart({
           );
         })}
         {lines.map((line, i) => (
-          <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={paths[i]?.latest} stroke={line.color} strokeDasharray={line.dash || undefined}>
+          <g key={line.key} className="series-focus" style={seriesFocusStyle(line.key)} data-series={`${line.sourceId} ${line.windowId}`} data-last={paths[i]?.latest} stroke={line.color} strokeDasharray={line.dash || undefined}>
             {paths[i].parts?.map(part => <path key={part.key} d={part.line} className="series" />) ?? <path d={paths[i].line} className="series" />}
           </g>
         ))}
@@ -657,7 +660,7 @@ export const Chart = memo(function Chart({
           );
         })}
         {hover === null && lines.map((line, i) => paths[i].last ? (
-          <g key={`${line.key}-end`} className="line-end">
+          <g key={`${line.key}-end`} className="line-end series-focus" style={seriesFocusStyle(line.key)}>
             <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
             <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
           </g>

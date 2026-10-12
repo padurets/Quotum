@@ -1,4 +1,5 @@
 import {AnalyticsPanel, AnalyticsNote, SeriesLegendItem} from './AnalyticsPanel';
+import {useSeriesFocus} from './seriesFocus';
 import {QuotaSettings} from './Analytics';
 import {memo, useMemo, useLayoutEffect, useRef} from 'react';
 import {earliest, num} from '../lib/format';
@@ -70,6 +71,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const registry = useRef<{authority: number; token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
   if (registry.current?.authority !== authority) registry.current = null;
   const panel = useRef<HTMLElement>(null);
+  useSeriesFocus(panel);
   // Made taller by its owner, the widget gives the room to the plot, not to empty space under the legend.
   const {plot, onBase} = usePlot(panel);
   const sources = useNamed(arrange.view.names,'quota');
@@ -211,7 +213,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
 
       <div className="legend">
         {lines.map(line => (
-          <SeriesLegendItem key={line.key} name={line.name} color={line.color} dash={line.dash} muted={!!prefs.muted[line.key]} onToggle={() => setMuted(line.key, !prefs.muted[line.key])}>
+          <SeriesLegendItem key={line.key} seriesKey={line.key} name={line.name} color={line.color} dash={line.dash} muted={!!prefs.muted[line.key]} onToggle={() => setMuted(line.key, !prefs.muted[line.key])}>
             <b>{line.current === null ? '—' : `${num(line.current)}%`}</b>
           </SeriesLegendItem>
         ))}
