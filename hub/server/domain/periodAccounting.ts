@@ -61,9 +61,10 @@ class QuotaIndex {
     for(let i=0;i<sampleCount(series.samples);i++){const sample=sampleAt(series.samples,i)!;if(this.times instanceof Float64Array)this.times[i]=sample.at;deadlines[i]=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity);yield;}
     const sorted=yield*sortedNumbers(deadlines);this.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
     const spent=new Float64Array(sampleCount(series.samples)),covered=new Float64Array(spent.length),worked=new Float64Array(spent.length),during=new Float64Array(spent.length);
+    let previous=sampleAt(series.samples,0)!;
     for(let i=1;i<sampleCount(series.samples);i++) {
       yield;spent[i]=spent[i-1];covered[i]=covered[i-1];worked[i]=worked[i-1];during[i]=during[i-1];
-      const a=sampleAt(series.samples,i-1)!,b=sampleAt(series.samples,i)!,step=edge(a,b);if(!step.valid)continue;
+      const a=previous,b=sampleAt(series.samples,i)!;previous=b;const step=edge(a,b);if(!step.valid)continue;
       const work=activity?.read({from:a.at,to:b.at},true)??0;
       spent[i]+=step.delta;covered[i]+=b.at-a.at;
       worked[i]+=a.at>=known?work:0;during[i]+=a.at>=known&&work>0?step.delta:0;
@@ -297,6 +298,10 @@ class MoneyIndex {
 
 /** Two fixed buffers keep cooperative sorting within the retained evidence budget. */
 function* sortedNumbers(input:Float64Array):Preparation<Float64Array> {
+  // Most retained deadlines already follow observation order, including repeated resets.
+  let sorted=true;
+  for(let i=1;i<input.length;i++){if(!(input[i-1]<=input[i])){sorted=false;break;}yield;}
+  if(sorted)return input;
   let rows:Float64Array=input,next:Float64Array=new Float64Array(input.length);
   for(let size=1;size<rows.length;size*=2) {
     for(let start=0;start<rows.length;start+=size*2) {

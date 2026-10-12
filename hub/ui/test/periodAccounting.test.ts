@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {PeriodAccounting} from '../lib/periodAccounting.js';
 import {PeriodActivity} from '../lib/periodActivity.js';
 import {PeriodIndex} from '../lib/periodIndex.js';
-import {packSamples,type PeriodTape} from '../../server/domain/periodTape.js';
+import {packSamples,retainSamplesPrepared,type PeriodTape} from '../../server/domain/periodTape.js';
+import {drain} from '../../server/domain/prepare.js';
 import type {History} from '../lib/types.js';
 import type {Reading} from '../../server/domain/meters.js';
 import {packWork,workedSessions,type WorkTrace} from '../../server/domain/periodWork.js';
@@ -24,6 +25,32 @@ test('shared work curves match exact session sums and concurrent unions across h
 
 const blank:History={range:'1h',live:true,since:0,to:60_000,cellMs:60_000,historyStart:0,events:[],series:[],activity:{since:0,known:{from:0,to:60_000},barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
 const tape=():PeriodTape=>({from:0,cut:60_000,replaceFrom:0,cursor:'cursor',quota:[],money:[]});
+for(const compressed of [false,true])test(`ordered quota deadlines keep retirement preparation linear with ${compressed?'compressed':'flat'} samples`,()=>{
+  const count=2048,cycle=512,step=1000;
+  const samples=packSamples(Array.from({length:count},(_,i)=>({at:i*step,used:10+(i%cycle)*.125,resetAt:(Math.floor(i/cycle)+1)*cycle*step,staleAfterMs:count*step})));
+  const evidence={...tape(),cut:count*step,quota:[{source:'s',window:'w',samples:compressed?drain(retainSamplesPrepared(samples)):samples}]};
+  const before=JSON.stringify(evidence),prepared=PeriodAccounting.prepare(evidence,null);
+  let steps=0,result=prepared.next();while(!result.done){steps++;result=prepared.next();}
+  assert.ok(steps<count*4,`already ordered deadlines took ${steps} cooperative steps for ${count} samples`);
+  assert.deepEqual(result.value.quotaSummary('s','w',{from:0,to:(count-1)*step+1}),{
+    consumed:(count/cycle)*(cycle-1)*.125,coveredMs:(count/cycle)*(cycle-1)*step,
+    remainingAtStart:90,remainingAtEnd:100-10-(cycle-1)*.125,work:null,
+  });
+  assert.equal(JSON.stringify(evidence),before);
+});
+
+test('out-of-order quota deadlines preserve the rolling wake and exclusive availability',()=>{
+  const evidence=tape();evidence.quota=[{source:'s',window:'w',samples:packSamples([
+    {at:0,used:10,resetAt:null,staleAfterMs:20_000},
+    {at:1000,used:20.125,resetAt:null,staleAfterMs:100},
+    {at:2000,used:30.25,resetAt:null,staleAfterMs:5000},
+  ])}];
+  const accounting=drain(PeriodAccounting.prepare(evidence,null));
+  assert.equal(accounting.changesAt(21_001,20_000,'s'),21_101);
+  assert.equal(accounting.quotaSummary('s','w',{from:0,to:1100})!.remainingAtEnd,79.875);
+  assert.equal(accounting.quotaSummary('s','w',{from:0,to:1101})!.remainingAtEnd,null);
+});
+
 test('exact endpoints exclude later samples of the same cell and stop validity at reset',()=>{
   const evidence=tape();evidence.quota=[{source:'s',window:'w',samples:packSamples([{at:0,used:10,resetAt:50_000,staleAfterMs:60_000},{at:20_000,used:25,resetAt:50_000,staleAfterMs:60_000},{at:40_000,used:90,resetAt:50_000,staleAfterMs:60_000}])}];
   const frame={...blank,series:[{sourceId:'s',windowId:'w',consumed:80,coveredMs:40_000,remainingAtStart:90,remainingAtEnd:10,staleAfterMs:60_000,points:[[0,10,1] as [number,number,number]],work:null}]};
