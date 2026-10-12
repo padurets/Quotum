@@ -1,4 +1,5 @@
 import type {PeriodReply} from '../../server/domain/periodRead.js';
+import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire.js';
 import {workedSessions} from '../../server/domain/periodWork.js';
 import {PeriodActivity} from '../../ui/lib/periodActivity.js';
 import {compose, targetOf, type HistoryAnswer} from '../../server/domain/history.js';
@@ -513,7 +514,7 @@ test('a card with agents spends its five hours as its weeks go, before its agent
 });
 
 test('the demo is the same whenever it starts: everything is timed from the start, not by the clock or the calendar', () => {
-  for (const file of ['model.ts', 'catalogue.ts', 'setup.ts', 'trackers.ts']) {
+  for (const file of ['model.ts', 'catalogue.ts', 'sessionAnalytics.ts', 'setup.ts', 'trackers.ts']) {
     const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
     assert.doesNotMatch(source, /Math\.random|Date\.now|new Date\(\)/, file);
   }
@@ -879,7 +880,7 @@ test('session comparison catalogue exposes explicit tables and retained work wit
   assert.equal(summary.agents,rows.length);assert.ok(rows.some(row=>!row.working));
   for(const group of summary.by.project){const contexts=rows.filter(row=>JSON.stringify(row.project)===group.key);
     assert.equal(contexts.length,group.agents);assert.equal(contexts.reduce((sum,r)=>sum+r.workedMs,0),group.agentMs);}
-  assert.deepEqual(SESSION_ACTIVITY_SCENES.flatMap(scene=>scene.expect),['opt-in-table','union-total','retained-contributions','shared-work-index']);
+  assert.deepEqual(SESSION_ACTIVITY_SCENES.find(scene=>scene.id==='comparison')!.expect,['opt-in-table','union-total','retained-contributions','shared-work-index']);
 });
 
 test('period catalogue states use the existing retained demo evidence at exclusive boundaries',async t=>{
@@ -901,4 +902,36 @@ test('period catalogue states use the existing retained demo evidence at exclusi
   if(empty.values?.state!=='complete'||empty.sessions?.state!=='complete')throw new Error('empty period');
   assert.ok(empty.values.value.every(v=>!v.windows.length&&!v.meters.length));assert.equal(empty.sessions.value.spans.length,0);
   assert.deepEqual(PERIOD_SCENES.flatMap(s=>s.expect),['past-values','retained-work','exclusive-interval','shared-activity','unknown-value','no-invented-work']);
+});
+
+test('session review starts with populated 24h comparisons and both group and retained-context pages',async t=>{
+  const set=setOf('sessions'),start=Math.floor(Date.now()/MIN)*MIN;
+  const {stand}=await bringUp(t,set,start);t.mock.timers.setTime(start);
+  const live=new Live(stand,()=>MIN);await live.report(0,start);
+  const reader=stand.people.get('ana')!,board=reader.personalBoard!;
+  const overview=await reader.get<Snapshot>(`/api/overview?board=${board}`);
+  assert.ok(overview.view.shown.includes('activity-table'));
+  const current=Object.values(overview.sessions).flat();assert.equal(current.length,58);
+  const read=async(selection:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number})=>{
+    const reply=expandPeriod(await reader.post<PeriodWireReply>(`/api/boards/${board}/period`,{version:1,selection,evaluatedAt:start,sessions:{}}));
+    if(reply.sessions?.state!=='complete')throw new Error('session review work');
+    assert.equal(reply.quota,undefined);
+    const range=selection.mode==='live'?{from:start-selection.periodMs,to:start}:selection;
+    const rows=workedSessions(reply.sessions.value,range,start),activity=new PeriodActivity(reply.sessions.value);
+    activity.update(rows);return {rows,summary:(by:'project'|'device'|'source')=>activity.summary(range,by)};
+  };
+  for(const periodMs of [24*HOUR,7*24*HOUR]){
+    const {rows,summary}=await read({mode:'live',periodMs}),projects=summary('project'),atlas=rows.filter(row=>row.project==='atlas');
+    assert.equal(projects.by.project.length,57,'the comparison has a second 50-row page even in the default period');
+    assert.equal(rows.length,125);assert.equal(projects.agents,125);assert.equal(atlas.length,67,'Atlas fills two disclosure pages');
+    assert.equal(atlas.filter(row=>!row.currentPresence).length,64,'retained work remains available without a live context');
+    assert.ok(rows.length>current.length);assert.equal(summary('device').by.device.length,5);assert.equal(summary('source').by.source.length,4);
+    assert.ok(rows.some(row=>row.project===null));assert.ok(rows.some(row=>(row.project?.length??0)>100));
+    assert.equal(projects.agentMs,rows.reduce((total,row)=>total+row.workedMs,0));
+    assert.ok(projects.by.project.reduce((total,group)=>total+group.activeMs,0)>projects.activeMs,'the full active total is a union');
+    for(const by of ['device','source'] as const)assert.deepEqual([summary(by).agentMs,summary(by).activeMs,summary(by).agents],[projects.agentMs,projects.activeMs,projects.agents]);
+  }
+  const empty=await read({mode:'range',from:start-4*HOUR,to:start-2*HOUR});assert.equal(empty.rows.length,0);assert.ok(empty.summary('project').known);
+  const unknown=await read({mode:'range',from:start-9*24*HOUR,to:start-8*24*HOUR});assert.equal(unknown.summary('project').known,null);
+  assert.deepEqual(SESSION_ACTIVITY_SCENES.find(scene=>scene.id==='review')!.expect,['populated-24h','comparison-pagination','retained-pagination','rich-breakdowns']);
 });

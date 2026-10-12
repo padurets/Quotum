@@ -225,6 +225,15 @@ Services, encrypted storage, receipts and board events use production code; only
 external answers and device reports are synthetic. No real provider or client is
 contacted. Use `make info` for the actual address and synthetic sign-in.
 
+`DEV_SET=sessions make dev` opens the session analytics review fixture. Sign in as Ana:
+the default 24h period has 57 projects, five machines, four subscriptions and 125
+recorded contexts. The comparison table and Atlas's 67-context disclosure both have
+two pages. Recent overlapping work, 64 retained Atlas contexts absent from the live
+roster, long names and a projectless context are ready to inspect in either language.
+Live synthetic reports keep measurements fresh. The 7d and 30d periods also have work;
+the latter explains the fixture's seven-day coverage. For a known-empty fixed range,
+select four to two hours before startup; nine to eight days before startup is unknown.
+
 `DEV_MODE=hub make dev` starts an ordinary hub on
 isolated persistent data with reset trackers disabled. No mode starts coding clients.
 Hub mode provisions its persistent key automatically in the private `hub-keys`

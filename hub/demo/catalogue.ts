@@ -1,4 +1,5 @@
 import {ONBOARDING} from './onboarding.js';
+import {SESSION_ANALYTICS} from './sessionAnalytics.js';
 import {MEASURE_INTERVAL} from '../server/domain/frequency.js';
 import {
   agentsWork,
@@ -61,10 +62,12 @@ export const PERIOD_SCENES=[
 
 /** Activity-table loading, authority loss, sorting crossings and missing groups are
  * held by ui/test/activityTable.test.ts and ui/test/periodOrderClock.test.ts.
- * The table shares this fixture's overlapping and retained contexts with Activity.
+ * The table shares the fixtures' overlapping and retained contexts with Activity.
+ * The sessions set opens with populated 24h comparisons and both kinds of pagination.
  */
 export const SESSION_ACTIVITY_SCENES=[
   {id:'comparison',expect:['opt-in-table','union-total','retained-contributions','shared-work-index']},
+  {id:'review',expect:['populated-24h','comparison-pagination','retained-pagination','rich-breakdowns']},
 ] as const;
 
 
@@ -1664,4 +1667,4 @@ const machineClients: DemoSet = {id:'clients',about:'OpenCode work and installed
   {kind:'machine',id:'laptop',expect:[{name:'Laptop'}]},
   {kind:'board',id:'team',name:'Shared clients',owner:'ana',members:[],expect:[{state:'onboarding'}]},
 ]};
-export const SETS: DemoSet[] = [all, showcase, activity,money,quotas,analytics, machineClients, ONBOARDING];
+export const SETS: DemoSet[] = [all, showcase, activity,SESSION_ANALYTICS,money,quotas,analytics, machineClients, ONBOARDING];
