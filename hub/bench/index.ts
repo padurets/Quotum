@@ -38,6 +38,7 @@ import {creditSnapshot} from './credits.js';
 import {startupTrials} from './startupDiagnostic.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
+import {timeIdle} from './idleTiming.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -105,6 +106,7 @@ async function main() {
   const panDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_PANNING;
   const idleDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE;
   const idleCpuDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_CPU;
+  const idleTimingDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING;
   const startupDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP;
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
@@ -114,6 +116,7 @@ async function main() {
     if (idleDiagnostic && (idleDiagnostic !== 'double' || panDiagnostic)) throw new Stop('Unknown or conflicting idle diagnostic mode');
     if (panDiagnostic && !['pairs', 'trace', 'cpu'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
     if (idleCpuDiagnostic && (idleCpuDiagnostic !== '1' || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
+    if (idleTimingDiagnostic && (idleTimingDiagnostic !== '1' || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleCpuDiagnostic || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle timing diagnostic mode');
     await prepare(address);
     chrome = options.cdp ? null : findChrome(process.env);
     if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
@@ -134,7 +137,7 @@ async function main() {
     evidence.begin('cleanup');
     try {await owner.close();} catch (error) {code = 1; say(String(error));}
     try {await demo.stop();} catch {code = 1; say('demo cleanup failed');}
-    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic || idleDiagnostic || idleCpuDiagnostic || startupDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
+    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic || idleDiagnostic || idleCpuDiagnostic || idleTimingDiagnostic || startupDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
     process.exit(code);
   })();
   const set = panningSet(SETS[0]);
@@ -182,7 +185,7 @@ async function main() {
     }
     tab = await openTab(browser);
     const {cdp} = tab;
-    const idleBinding = idleCpuDiagnostic ? new ScriptBinding(cdp, clientIdentity(), (name, value) => evidence.save(name, value)) : undefined;
+    const idleBinding = idleCpuDiagnostic || idleTimingDiagnostic ? new ScriptBinding(cdp, clientIdentity(), (name, value) => evidence.save(name, value)) : undefined;
     if (idleBinding) owner.resource(async () => idleBinding.close());
     const requests = new Requests(cdp);
     await cdp.send('Page.enable');
@@ -271,12 +274,12 @@ async function main() {
         save: (name, value) => evidence.save('idle-cpu-' + name, value),
         saveTrace: (name, value) => evidence.saveTrace('idle-cpu-' + name, value),
       }, 2000)
-      : await readIdle();
-    if (idleCpuDiagnostic) {
-      await idleBinding!.afterFamily([1]);
+      : idleTimingDiagnostic ? await timeIdle(cdp, browser, readIdle, evidence) : await readIdle();
+    if (idleCpuDiagnostic || idleTimingDiagnostic) {
+      if (idleBinding) await idleBinding.afterFamily([1]);
       const problems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
-      evidence.save('idle-cpu-result', {mode: 'diagnostic', problems: problems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
-      say('original history matrix and CI idle interval captured; profiler overhead is unqualified');
+      evidence.save(idleTimingDiagnostic ? 'idle-timing-result' : 'idle-cpu-result', {mode: 'diagnostic', problems: problems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
+      say('original history matrix and CI idle interval captured; observer overhead is unqualified');
       await finish(problems.length ? 1 : 0); return;
     }
     if (idleDiagnostic) {

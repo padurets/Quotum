@@ -118,6 +118,19 @@ interval after the complete traffic matrix, retaining its load and 120-second wi
 It samples every two milliseconds to fit the existing 100,000-sample limit, binds
 numeric locations to the received client, and stops after idle. Profiler overhead is
 unqualified; its outcome is diagnostic and cannot satisfy the required benchmark.
+The optional `benchmark-idle-timing-diagnostics` PR label keeps that same traffic
+matrix and original idle interval, without a CPU profiler. A second connection to
+the owned target collects `threadTicks` performance counters before and after the
+original measurement. The required benchmark keeps its default elapsed clock and
+budget. The report retains both sets of raw counters and verifies that the thread
+interval brackets the original interval; missing, reversed or unsupported counters
+remain insufficient evidence. The thread interval includes the probe and diagnostic
+work, whose overhead is unqualified. A difference between elapsed and CPU script
+time does not distinguish a native wait from scheduling delay. Connection, counter
+reads and disable each have a two-second diagnostic bound; the secondary socket
+always closes. This outcome cannot satisfy the required benchmark.
+After that measurement and thread-session cleanup, the diagnostic binds the received
+client bytes and parsed script owner, outside both measured intervals.
 The owned headless browser uses one raster worker: concurrent software raster jobs
 in Chrome 154 can leave a tile unfinished and deadlock an input frame's commit.
 An attached CDP browser retains its own launch settings.
