@@ -51,6 +51,16 @@ foreach($case in @('race','live','identity-unavailable','normal')){
   if((ConvertTo-Json -InputObject $receipt -Depth 7) -match 'hidden-wait-cleanup-canary'){throw 'Cleanup evidence leaked an exception message'}
   Write-Host (ConvertTo-Json -Compress -InputObject @{case=$case;status=$receipt.status;stopped=$receipt.stopped;failure=$receipt.cleanup.failure})
 }
+foreach($case in @('normal','live')){
+  $process=[QuotumWaitStopControl]::new($case)
+  $observer=[pscustomobject]@{Process=$process;Output=$null;Errors=$null;Status='startup-timeout';Started=$false}
+  $initial=Stop-WaitObserver $observer
+  $before=ConvertTo-Json -InputObject $initial -Depth 7 -Compress
+  $waitCount=$process.Waits.Count
+  $later=Stop-WaitObserver $observer
+  if((ConvertTo-Json -InputObject $later -Depth 7 -Compress) -ne $before -or $process.Waits.Count -ne $waitCount){throw 'A later report replaced startup cleanup evidence'}
+  if($later.stopped -ne ($case -eq 'normal') -or $later.cleanup.exited -ne ($case -eq 'normal')){throw 'Startup cleanup lost its actual exit confirmation'}
+}
 
 $root=Join-Path $env:TEMP ('quotum-wait-test-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $root | Out-Null
@@ -96,7 +106,7 @@ Start-Sleep -Seconds 60
         $to=[DateTime]::UtcNow.Ticks
         if($paused -ne [IntPtr]::Zero){[QuotumWindowProbe]::ResumeUi($paused);$paused=[IntPtr]::Zero}
       }
-      if(-not [QuotumWindowProbe]::Responsive($window)){throw 'Observer prevented UI resume'}
+      if(-not [QuotumWindowProbe]::Responsive($window,$receiver.Id)){throw 'Observer prevented UI resume'}
       [void][QuotumWindowProbe]::PostMessage($window,0x8006,[IntPtr]::Zero,[IntPtr]::Zero)
       $stopClock=[Diagnostics.Stopwatch]::StartNew()
       $evidence=Stop-WaitObserver $observer

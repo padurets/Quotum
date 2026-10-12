@@ -110,7 +110,7 @@ public static class QuotumWindowProbe {
     public bool Paused, ResumeAttempted, Resumed;
   }
   public static DispatchReading LastDispatch { get; private set; }
-  public static void ResetDispatch() { LastDispatch=null; }
+  public static void ResetDispatch() { LastDispatch=null; LastUnresponsive=null; }
   public static PauseGuard MainRequestThenPause(int process,string exe) {
     var clock=Stopwatch.StartNew();
     var reading=new DispatchReading();LastDispatch=reading;
@@ -160,12 +160,14 @@ public static class QuotumWindowProbe {
   public sealed class WindowReading {
     public long Window;public uint Process,Thread;public bool Owned,Visible,Foreground,Rounded;
     public int[] Bounds;
+    public int? LoadingPhase;
   }
   public static WindowReading Snapshot(IntPtr window,int process) {
     var reading=new WindowReading{Window=window.ToInt64()};
     reading.Thread=GetWindowThreadProcessId(window,out reading.Process);
     reading.Owned=reading.Process==(uint)process && reading.Thread!=0;
     if(!reading.Owned)return reading;
+    reading.LoadingPhase=LoadingPhase(window);
     Rect rect;
     if(GetWindowRect(window,out rect))reading.Bounds=new int[]{rect.Left,rect.Top,rect.Right,rect.Bottom};
     reading.Visible=IsWindowVisible(window);reading.Foreground=Foreground(window);reading.Rounded=Rounded(window);
@@ -188,9 +190,30 @@ public static class QuotumWindowProbe {
     // The Shell icon's version-4 NIN_SELECT callback (icon 1).
     return tray!=IntPtr.Zero && PostMessage(tray,0x8002,IntPtr.Zero,new IntPtr(0x10400));
   }
-  public static bool Responsive(IntPtr window) {
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr GetProp(IntPtr window,string name);
+  static int? LoadingPhase(IntPtr window) {
+    long value=GetProp(window,"Quotum.LoadingPhase").ToInt64();
+    if(value<1 || value>0xffffff)return null;
+    long digits=value;
+    while(digits>1){long stage=digits&15;if(stage<2 || stage>14)return null;digits>>=4;}
+    return digits==1 ? (int?)value : null;
+  }
+  public sealed class ResponseReading {
+    public long Window,FromUtcTicks,ToUtcTicks;public uint Process,Thread;public bool Owned;public int? LoadingPhase;
+  }
+  public static ResponseReading LastUnresponsive;
+  public static bool Responsive(IntPtr window,int process) {
     IntPtr result;
-    return SendMessageTimeout(window,0,IntPtr.Zero,IntPtr.Zero,2,1000,out result)!=IntPtr.Zero;
+    bool responsive=SendMessageTimeout(window,0,IntPtr.Zero,IntPtr.Zero,2,1000,out result)!=IntPtr.Zero;
+    if(!responsive){
+      var reading=new ResponseReading{Window=window.ToInt64(),FromUtcTicks=DateTime.UtcNow.Ticks};
+      reading.Thread=GetWindowThreadProcessId(window,out reading.Process);
+      reading.Owned=reading.Process==(uint)process && reading.Thread!=0;
+      if(reading.Owned)reading.LoadingPhase=LoadingPhase(window);
+      reading.ToUtcTicks=DateTime.UtcNow.Ticks;
+      LastUnresponsive=reading;
+    }
+    return responsive;
   }
   public static int[] Bounds(IntPtr window) {
     Rect rect;

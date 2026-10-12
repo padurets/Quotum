@@ -23,7 +23,7 @@ public sealed class QuotumWaitCapture {
 '@
 }
 function Start-WaitObserver($Owner,[string]$Worker=(Join-Path $PSScriptRoot 'windows-waitchain.ps1')) {
-  $observer=[pscustomobject]@{Process=$null;Output=$null;Errors=$null;Status='unavailable';Started=$false}
+  $observer=[pscustomobject]@{Process=$null;Output=$null;Errors=$null;Status='unavailable';Started=$false;StopReceipt=$null}
   try {
     $start=New-Object Diagnostics.ProcessStartInfo
     $start.FileName=(Get-Process -Id $PID).Path;$start.UseShellExecute=$false
@@ -64,6 +64,10 @@ function Set-WaitCleanupFailure($Cleanup,$Failure) {
 # Call only after the independent pause guard has resumed the UI.
 function Stop-WaitObserver($Observer) {
   if(-not $Observer){return @{status='unavailable';stopped=$true;samples=@()}}
+  # Startup failure already closes the worker. Keep that receipt when the paused
+  # scenario records its outcome later, after the process handle has been disposed.
+  $saved=$Observer.PSObject.Properties['StopReceipt']
+  if(-not $Observer.Process -and $saved -and $saved.Value){return $saved.Value}
   $status=$Observer.Status;$samples=@();$stopped=$status -ne 'cleanup-unconfirmed'
   $clock=[Diagnostics.Stopwatch]::StartNew()
   $cleanup=@{stage='inactive';inputClosed=$false;waited=$null;beforeKill=$null;killAttempted=$false;killReturned=$false;afterKill=$null;exited=$null;failure=$null;errorKind=$null;errorCode=$null;elapsedMs=0}
@@ -102,5 +106,7 @@ function Stop-WaitObserver($Observer) {
     }
   }
   $cleanup.stage='finished';$cleanup.elapsedMs=$clock.ElapsedMilliseconds
-  return @{status=$status;stopped=$stopped;limitMs=5000;intervalMs=200;samples=$samples;cleanup=$cleanup}
+  $receipt=@{status=$status;stopped=$stopped;limitMs=5000;intervalMs=200;samples=$samples;cleanup=$cleanup}
+  Add-Member -InputObject $Observer -MemberType NoteProperty -Name StopReceipt -Value $receipt -Force
+  return $receipt
 }

@@ -25,18 +25,22 @@ try {
       try {
         $guard=[QuotumWindowProbe]::MainRequestThenPause($receiver.Id,'fixture.exe')
         if($case -ne 'accepted'){throw 'A rejected or timed-out dispatch paused the receiver'}
-        if([QuotumWindowProbe]::Responsive($window)){throw 'Paused receiver remained responsive'}
+        if([QuotumWindowProbe]::Responsive($window,$receiver.Id)){throw 'Paused receiver remained responsive'}
         $snapshot=[QuotumWindowProbe]::Snapshot($window,$receiver.Id)
-        if(-not $snapshot.Owned -or $snapshot.Rounded){throw 'Owned square receiver was misclassified'}
-        if([QuotumWindowProbe]::Snapshot($window,$PID).Owned){throw 'Foreign receiver was classified as owned'}
+        if(-not $snapshot.Owned -or $snapshot.Rounded -or $snapshot.LoadingPhase -ne 0x145){throw 'Owned square receiver or phase was misclassified'}
+        $unresponsive=[QuotumWindowProbe]::LastUnresponsive
+        if(-not $unresponsive.Owned -or $unresponsive.LoadingPhase -ne 0x145 -or $unresponsive.Window -ne $window.ToInt64() -or $unresponsive.FromUtcTicks -gt $unresponsive.ToUtcTicks){throw 'Failed response lost its owned phase before resume'}
+        $foreign=[QuotumWindowProbe]::Snapshot($window,$PID)
+        if($foreign.Owned -or $null -ne $foreign.LoadingPhase){throw 'Foreign receiver was classified as owned'}
         # An exception immediately after acquiring the pause must still resume it.
         throw 'controlled exception after pause'
       } catch {if($case -eq 'accepted' -and $_.Exception.Message -ne 'controlled exception after pause'){throw};$caught=$true} finally {if($guard){$guard.Dispose()}}
       $reading=[QuotumWindowProbe]::LastDispatch
+      if($case -ne 'accepted' -and $null -ne [QuotumWindowProbe]::Snapshot($window,$receiver.Id).LoadingPhase){throw 'Malformed phase was accepted'}
       if(-not $caught -or $reading.ElapsedMs -gt 3500){throw "Unbounded dispatch: $case"}
       $expected=switch($case){accepted {'accepted'} rejected {'rejected'} late {'unknown'} unresponsive {'not-sent'}}
       if($reading.Acceptance -ne $expected -or $reading.Paused -ne ($case -eq 'accepted')){throw "Incorrect acceptance/pause: $case"}
-      if($case -eq 'accepted' -and (-not $guard.Resumed -or -not [QuotumWindowProbe]::Responsive($window))){throw 'Exception did not resume the owned UI'}
+      if($case -eq 'accepted' -and (-not $guard.Resumed -or -not [QuotumWindowProbe]::Responsive($window,$receiver.Id))){throw 'Exception did not resume the owned UI'}
       if($reading.ResumeAttempted -ne ($case -eq 'accepted') -or $reading.Resumed -ne ($case -eq 'accepted')){throw 'Resume evidence disagrees with the actual native thread'}
       if($case -eq 'late'){
         $until=(Get-Date).AddSeconds(4)
@@ -45,7 +49,7 @@ try {
       }
       Write-Host ($reading | ConvertTo-Json -Compress)
       [QuotumWindowProbe]::ResetDispatch()
-      if($null -ne [QuotumWindowProbe]::LastDispatch){throw 'A new smoke run inherited the previous dispatch'}
+      if($null -ne [QuotumWindowProbe]::LastDispatch -or $null -ne [QuotumWindowProbe]::LastUnresponsive){throw 'A new smoke run inherited the previous dispatch or failure'}
     } finally {
       if($guard){$guard.Dispose()}
       if(-not $receiver.HasExited){$receiver.Kill();if(-not $receiver.WaitForExit(5000)){throw 'Receiver cleanup failed'}}

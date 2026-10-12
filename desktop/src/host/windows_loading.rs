@@ -19,6 +19,37 @@ pub struct Panel {
     font: Cell<HFONT>,
     text: RefCell<Vec<u16>>,
     started: Cell<Option<Instant>>,
+    probe: bool,
+}
+const PHASE_PROPERTY: *const u16 = windows_sys::w!("Quotum.LoadingPhase");
+// Each nibble names a nested operation; 1 is the idle surface. The smoke observer
+// can read it without sending a message to the possibly blocked tray thread.
+struct Phase {
+    hwnd: HWND,
+    previous: HANDLE,
+    published: bool,
+}
+impl Phase {
+    fn new(hwnd: HWND, stage: usize) -> Self {
+        unsafe {
+            let previous = GetPropW(hwnd, PHASE_PROPERTY);
+            if previous as usize > 0xfffff {
+                return Self { hwnd, previous, published: false };
+            }
+            let value = ((previous as usize) << 4) | stage;
+            let published = SetPropW(hwnd, PHASE_PROPERTY, value as HANDLE) != 0;
+            Self { hwnd, previous, published }
+        }
+    }
+}
+impl Drop for Phase {
+    fn drop(&mut self) {
+        if self.published {
+            unsafe {
+                SetPropW(self.hwnd, PHASE_PROPERTY, self.previous);
+            }
+        }
+    }
 }
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
@@ -32,9 +63,15 @@ impl Panel {
             font: Cell::new(std::ptr::null_mut()),
             text: RefCell::default(),
             started: Cell::new(None),
+            probe: std::env::var("QUOTUM_WINDOW_PROBE").ok().as_deref() == Some("1"),
         }
     }
+    fn observed<R>(&self, hwnd: HWND, stage: usize, action: impl FnOnce() -> R) -> R {
+        let _phase = self.probe.then(|| Phase::new(hwnd, stage));
+        action()
+    }
     pub fn show(&self, anchor: Option<RECT>) {
+        let _phase = (self.probe && !self.hwnd.get().is_null()).then(|| Phase::new(self.hwnd.get(), 14));
         let Some(shell) = self.shell.upgrade().filter(|s| !s.exiting()) else {
             return;
         };
@@ -73,6 +110,9 @@ impl Panel {
                 }
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, self as *const Self as isize);
                 self.hwnd.set(hwnd);
+                if self.probe {
+                    SetPropW(hwnd, PHASE_PROPERTY, 1usize as HANDLE);
+                }
                 disable_transitions(hwnd);
             }
             let anchor = anchor.unwrap_or_else(|| {
@@ -130,13 +170,13 @@ impl Panel {
             *self.text.borrow_mut() = wide(native_text::text(shell.locale(), "desktop.loading"));
             self.started.set(Some(Instant::now()));
             self.visible.set(true);
-            SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
-            round(hwnd);
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
-            SetFocus(hwnd);
-            SetTimer(hwnd, 1, 80, None);
-            UpdateWindow(hwnd);
+            self.observed(hwnd, 2, || SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE));
+            self.observed(hwnd, 3, || round(hwnd));
+            self.observed(hwnd, 4, || ShowWindow(hwnd, SW_SHOW));
+            self.observed(hwnd, 5, || SetForegroundWindow(hwnd));
+            self.observed(hwnd, 6, || SetFocus(hwnd));
+            self.observed(hwnd, 7, || SetTimer(hwnd, 1, 80, None));
+            self.observed(hwnd, 8, || UpdateWindow(hwnd));
         }
     }
     pub fn hide(&self) {
@@ -145,11 +185,12 @@ impl Panel {
         if !hwnd.is_null() {
             unsafe {
                 KillTimer(hwnd, 1);
-                ShowWindow(hwnd, SW_HIDE);
+                self.observed(hwnd, 9, || ShowWindow(hwnd, SW_HIDE));
             }
         }
     }
     pub fn complete(&self, handle: u64) {
+        let _phase = self.probe.then(|| Phase::new(self.hwnd.get(), 10));
         let Some(shell) = self.shell.upgrade().filter(|s| !s.exiting()) else {
             return;
         };
@@ -167,12 +208,14 @@ impl Panel {
         }
     }
     fn dismiss(&self, blur: bool) {
+        let _phase = self.probe.then(|| Phase::new(self.hwnd.get(), 11));
         if let Some(shell) = self.shell.upgrade() {
             crate::tauri_window::dismiss_panel(&shell, blur);
         }
         self.hide();
     }
     unsafe fn paint(&self, hwnd: HWND) {
+        let _phase = self.probe.then(|| Phase::new(hwnd, 12));
         unsafe {
             let mut paint: PAINTSTRUCT = std::mem::zeroed();
             let dc = BeginPaint(hwnd, &mut paint);
@@ -224,6 +267,9 @@ impl Drop for Panel {
             let hwnd = self.hwnd.get();
             if !hwnd.is_null() {
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                if self.probe {
+                    RemovePropW(hwnd, PHASE_PROPERTY);
+                }
                 DestroyWindow(hwnd);
             }
             let font = self.font.get();
@@ -240,6 +286,12 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
     }
     let panel = unsafe { &*ptr };
     match message {
+        WM_NCDESTROY => {
+            if panel.probe {
+                unsafe { RemovePropW(hwnd, PHASE_PROPERTY) };
+            }
+            unsafe { DefWindowProcW(hwnd, message, w, l) }
+        }
         WM_PAINT => {
             unsafe { panel.paint(hwnd) };
             0
@@ -270,6 +322,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             0
         }
         WM_ACTIVATE if w & 0xffff == WA_INACTIVE as usize => {
+            let _phase = panel.probe.then(|| Phase::new(hwnd, 13));
             if panel.visible.get() {
                 let handoff = panel.shell.upgrade().is_some_and(|s| {
                     let ready = s.host.panel_ready.load(std::sync::atomic::Ordering::SeqCst);

@@ -12,7 +12,7 @@ $work = Join-Path $env:TEMP ('quotum-ui-' + [guid]::NewGuid().ToString('N'))
 $stateFile = Join-Path $env:APPDATA 'com.padurets.quotum/.window-state.json'
 $savedState = if (Test-Path -LiteralPath $stateFile) { [IO.File]::ReadAllBytes($stateFile) } else { $null }
 $environment = @{}
-$names = @('QUOTUM_APP_DATA_DIR', 'QUOTUM_STATE_DIR', 'QUOTUM_CONFIG', 'QUOTUM_RESETS')
+$names = @('QUOTUM_APP_DATA_DIR', 'QUOTUM_STATE_DIR', 'QUOTUM_CONFIG', 'QUOTUM_RESETS', 'QUOTUM_WINDOW_PROBE')
 foreach ($name in $names) { $environment[$name] = [Environment]::GetEnvironmentVariable($name) }
 $webviewRoot = Join-Path $env:LOCALAPPDATA 'com.padurets.quotum'
 $webview = Join-Path $webviewRoot 'EBWebView'
@@ -63,7 +63,7 @@ function Save-Stage([string]$Stage,[IntPtr]$Window=[IntPtr]::Zero,[Nullable[bool
     $reading=[QuotumWindowProbe]::LastDispatch
     # Copy mutable dispatch fields now; a later resume must not rewrite earlier stages.
     $dispatch=if($reading){[ordered]@{Stage=$reading.Stage;Acceptance=$reading.Acceptance;Window=$reading.Window;ElapsedMs=$reading.ElapsedMs;Process=$reading.Process;Thread=$reading.Thread;Paused=$reading.Paused;ResumeAttempted=$reading.ResumeAttempted;Resumed=$reading.Resumed}}else{$null}
-    $entry=[ordered]@{stage=$Stage;ms=$timelineClock.Elapsed.TotalMilliseconds;utcTicks=[DateTime]::UtcNow.Ticks;dispatch=$dispatch}
+    $entry=[ordered]@{stage=$Stage;ms=$timelineClock.Elapsed.TotalMilliseconds;utcTicks=[DateTime]::UtcNow.Ticks;dispatch=$dispatch;unresponsive=[QuotumWindowProbe]::LastUnresponsive}
     if($null -ne $Resumed){$entry.resumed=$Resumed}
     if($process){$entry.window=[QuotumWindowProbe]::Snapshot($Window,$process.Id)}
     $timeline.Add($entry)
@@ -89,7 +89,7 @@ function Wait-Window {
   do {
     if ($process.HasExited) { throw "App exited before showing a window: $($process.ExitCode)" }
     $window = [QuotumWindowProbe]::Find($process.Id)
-    if ($window -ne [IntPtr]::Zero -and [QuotumWindowProbe]::Responsive($window)) { return $window }
+    if ($window -ne [IntPtr]::Zero -and [QuotumWindowProbe]::Responsive($window,$process.Id)) { return $window }
     Start-Sleep -Milliseconds 100
   } while ((Get-Date) -lt $deadline)
   throw 'Ordinary startup did not show a responsive window within 20 seconds'
@@ -191,7 +191,7 @@ function Test-MainPanelHandoff([IntPtr]$Main) {
       do {$loader=[QuotumWindowProbe]::Loading($process.Id);if($loader -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 10}while((Get-Date) -lt $deadline)
       Save-Stage 'main-handoff-loader' $loader
       if($loader -eq [IntPtr]::Zero){throw 'Main handoff: loader missing within 3s'}
-      if(-not [QuotumWindowProbe]::Responsive($loader)){throw 'Main handoff: loader unresponsive'}
+      if(-not [QuotumWindowProbe]::Responsive($loader,$process.Id)){throw 'Main handoff: loader unresponsive'}
     } finally {
       $resumeFrom=[DateTime]::UtcNow.Ticks
       try {if($paused){$paused.Dispose()}} finally {
@@ -207,7 +207,7 @@ function Test-MainPanelHandoff([IntPtr]$Main) {
     Save-Stage 'main-handoff-panel' $panel
     if($panel -eq [IntPtr]::Zero){throw 'Main handoff: panel missing within 15s'}
     if(-not [QuotumWindowProbe]::Rounded($panel)){throw 'Main handoff: panel shape wrong'}
-    if(-not [QuotumWindowProbe]::Responsive($panel)){throw 'Main handoff: panel unresponsive'}
+    if(-not [QuotumWindowProbe]::Responsive($panel,$process.Id)){throw 'Main handoff: panel unresponsive'}
     Start-Sleep -Seconds 1
     Save-Stage 'main-handoff-focus' $panel
     if(-not [QuotumWindowProbe]::Foreground($panel)){throw 'Main handoff: panel lost foreground'}
@@ -236,6 +236,7 @@ try {
   $env:QUOTUM_STATE_DIR = "$work/state"
   $env:QUOTUM_CONFIG = "$work/config.toml"
   $env:QUOTUM_RESETS = 'off'
+  $env:QUOTUM_WINDOW_PROBE = $(if($Diagnostics){'1'}else{$null})
   # No accounts or clients, and no changes to the runner's start-at-login entry.
   [IO.File]::WriteAllText("$work/app/app.json", '{"autostartDefaulted":true}')
   [IO.File]::WriteAllText($env:QUOTUM_CONFIG, "sessions = false`n[providers.claude]`nenabled = false`n[providers.codex]`nenabled = false`n[providers.antigravity]`nenabled = false`n")
@@ -324,12 +325,12 @@ try {
     $panel = [IntPtr]::Zero
     do {
       $panel = [QuotumWindowProbe]::FindOther($process.Id, $window)
-      if ($panel -ne [IntPtr]::Zero -and [QuotumWindowProbe]::Responsive($panel)) { break }
+      if ($panel -ne [IntPtr]::Zero -and [QuotumWindowProbe]::Responsive($panel,$process.Id)) { break }
       Start-Sleep -Milliseconds 50
     } while ((Get-Date) -lt $deadline)
     if ($panel -eq [IntPtr]::Zero) { throw 'The tray panel did not become visible' }
     Start-Sleep -Seconds 1
-    if (-not [QuotumWindowProbe]::IsWindowVisible($panel) -or -not [QuotumWindowProbe]::Responsive($panel)) { throw 'The tray panel disappeared after creation' }
+    if (-not [QuotumWindowProbe]::IsWindowVisible($panel) -or -not [QuotumWindowProbe]::Responsive($panel,$process.Id)) { throw 'The tray panel disappeared after creation' }
     $bounds = [QuotumWindowProbe]::Bounds($panel)
     if ($bounds[0] -lt $bounds[4] -or $bounds[1] -lt $bounds[5] -or $bounds[2] -gt $bounds[6] -or $bounds[3] -gt $bounds[7]) { throw "Panel exceeds its monitor work area: $bounds" }
     $result.panels += ,$bounds
@@ -385,7 +386,7 @@ try {
       do {$loader=[QuotumWindowProbe]::Loading($process.Id);if($loader -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 10}while($loadingClock.ElapsedMilliseconds -lt 3000)
       Save-Stage 'paused-ui-loader' $loader
       if($loader -eq [IntPtr]::Zero){throw 'Paused UI: loader missing within 3s'}
-      if(-not [QuotumWindowProbe]::Responsive($loader)){throw 'Paused UI: loader unresponsive'}
+      if(-not [QuotumWindowProbe]::Responsive($loader,$process.Id)){throw 'Paused UI: loader unresponsive'}
       if(-not [QuotumWindowProbe]::Rounded($loader)){throw 'Native loader has square corners'}
       $result.loadingMs=$loadingClock.ElapsedMilliseconds
       if($cancel){
@@ -417,7 +418,7 @@ try {
       $deadline=(Get-Date).AddSeconds(2)
       while([QuotumWindowProbe]::Loading($process.Id) -ne [IntPtr]::Zero -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 10}
       if([QuotumWindowProbe]::Loading($process.Id) -ne [IntPtr]::Zero){throw 'Loader stayed over the ready panel'}
-      if(-not [QuotumWindowProbe]::IsWindowVisible($panel) -or -not [QuotumWindowProbe]::Responsive($panel)){throw 'The panel disappeared during handoff'}
+      if(-not [QuotumWindowProbe]::IsWindowVisible($panel) -or -not [QuotumWindowProbe]::Responsive($panel,$process.Id)){throw 'The panel disappeared during handoff'}
       [void][QuotumWindowProbe]::PostMessage($panel,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
       $deadline=(Get-Date).AddSeconds(5)
       while([QuotumWindowProbe]::IsWindowVisible($panel) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}

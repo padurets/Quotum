@@ -193,6 +193,8 @@ artifacts exclude lock names and foreign thread identities, and retain partial s
 A successful WCT call with only its root thread is inconclusive: unsupported waits
 can hide their dependencies. It does not establish responsiveness or exclude a lock
 dependency; native window checks still establish responsiveness independently.
+If an observer cannot start, later artifact capture retains its original worker
+cleanup receipt, including an unconfirmed exit, after disposing the process handle.
 A manual run of the Desktop workflow takes `ui-runs`, how many times
 the UI smoke runs on the installed app and on the portable one each.
 The queued-close check runs with the main window open and with only the compact
@@ -203,6 +205,16 @@ preflight/acceptance deadline; a timeout leaves acceptance unknown and never pau
 the UI. The native probe's accepted, rejected, unresponsive and late-response cases
 run through `desktop/smoke/test-window-probe.ps1`. That newer panel must keep focus; an obsolete main creation
 must leave no hidden WebView after it is cancelled.
+With `-Diagnostics`, Windows UI smoke also enables `QUOTUM_WINDOW_PROBE=1` for
+the owned app and reads its loader's numeric window property. Its hexadecimal
+nibbles retain nested operations: 1 idle, 2 position, 3 rounding, 4 show,
+5 foreground, 6 focus, 7 timer, 8 update, 9 hide, A completion, B dismissal,
+C paint, D blur and E repeated show. The failed one-second response check
+captures this property before the mandatory UI resume, without sending another
+message to the tray thread. The original failure remains a failure. Missing,
+malformed and foreign readings are unavailable. These best-effort markers identify
+the last published operations; they do not establish a wait dependency or qualify
+the diagnostic's timing overhead. Ordinary app runs do not publish them.
 
 Run `node --test desktop/electron/policy.test.cjs` for the Linux bridge/navigation
 policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-in client

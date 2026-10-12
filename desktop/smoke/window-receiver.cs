@@ -17,6 +17,7 @@ public static class QuotumTestReceiver {
   [DllImport("user32.dll")] static extern int GetMessage(out Message message,IntPtr window,uint min,uint max);
   [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref Message message);
   [DllImport("user32.dll")] static extern IntPtr DefWindowProc(IntPtr window,uint message,IntPtr w,IntPtr l);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern bool SetProp(IntPtr window,string name,IntPtr value);
   [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] static extern IntPtr CreateMutex(IntPtr attributes,bool owned,string name);
   [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr handle,uint timeout);
@@ -52,6 +53,7 @@ public static class QuotumTestReceiver {
     if(RegisterClassEx(ref cls)==0)throw new Exception("Cannot register receiver");
     var handle=CreateWindowEx(0,cls.Name,"fixture",0,0,0,1,1,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero);
     if(handle==IntPtr.Zero)throw new Exception("Cannot create receiver");
+    if(mode!="wait-chain" && !SetProp(handle,"Quotum.LoadingPhase",new IntPtr(mode=="accepted"?0x145:0x10)))throw new Exception("Cannot publish receiver phase");
     Publish(ready,handle.ToInt64().ToString());
     if(held!=IntPtr.Zero){
       var waiter=new Thread(()=>{
