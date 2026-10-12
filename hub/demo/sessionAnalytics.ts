@@ -32,10 +32,11 @@ const subscriptions=[
 export const SESSION_ANALYTICS:DemoSet={
   id:'sessions',about:'Session comparisons: 57 projects, five machines, four subscriptions and retained-session pagination',scene:'quiet',workHistoryMs:7*DAY,
   entries:[
-    {kind:'person',id:'ana',name:'Ana',agents:true,agentsPlace:{x:0,y:20,w:6,h:18},
-      places:{'activity-table':{x:0,y:0,w:6},activity:{x:0,y:1,w:6,h:12},'quota-history':{x:0,y:2,w:6,h:12},'quota-table':{x:0,y:3,w:6}},
+    {kind:'person',id:'ana',name:'Ana',agents:true,agentsPlace:{x:0,y:1,w:6,h:12},
+      places:{'activity-table':{x:0,y:0,w:6,h:12},activity:{x:0,y:2,w:6,h:12},'quota-history':{x:0,y:3,w:6,h:12},'quota-table':{x:0,y:4,w:6,h:12}},
       expect:[{state:'widgets'}],look:[
-        'The default 24h period has 57 projects and 125 recorded contexts; Session activity shows all groups and the full-period total, following the shared analytics tables without widget pagination or inner scrolling.',
+        'The default 24h period has 57 projects and 125 recorded contexts. Session activity and Agent sessions share whole-row height fitting and the bottom-right pager; the activity total covers all pages.',
+        'Wide tables sort in their headers; the third activation clears the chosen sort. Only narrow lists show the sort menu. No widget has an inner vertical scroller or a more/all popup.',
         'Atlas has 67 contributing contexts, including 64 absent from the current roster; its disclosure has two pages. Harbor has three retained contexts with overlapping work.',
         'Machine and subscription grouping show five and four populated rows. All three breakdowns retain the same total; active time is a union rather than a sum of rows.',
         'The chart legend can mute Atlas without changing the table. Both table and chart remain populated over 7d, while 30d explains the seven-day coverage.',

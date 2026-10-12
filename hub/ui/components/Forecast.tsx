@@ -1,6 +1,7 @@
 import {AnalyticsPanel, AnalyticsNote} from './AnalyticsPanel';
 import {QuotaSettings} from './Analytics';
 import {AnalyticsTable, TableSettings, type Cell, type TimedCell} from './AnalyticsTable';
+import {useTableWidget,WidgetPages,TableMeasure} from './TableWidget';
 import {memo, useMemo, useRef} from 'react';
 import {num, rateText} from '../lib/format';
 import {level} from '../lib/quota';
@@ -24,7 +25,7 @@ import {lineWork, workLeftChangesAt, workText, type WorkColumn} from '../lib/wor
 import {QUOTA_TABLE, chosenPlanOf, columnShown, planOf, type Arrange} from '../lib/view';
 import {type Line} from '../lib/lines';
 import {subscriptionLinesOf,subscriptionOverflow} from '../lib/subscription';
-import {usePrefs} from '../lib/prefs';
+import {usePref} from '../lib/prefs';
 import {ofTimeRange} from '../lib/timeRange';
 import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
 import {quotaHistory, useHistory} from '../lib/history';
@@ -78,7 +79,7 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
   const news = useResetNews();
   const {view} = arrange;
   const omitted=subscriptionOverflow(sources,view);
-  const {kind} = usePrefs();
+  const kind=usePref('kind');
   const selected = ofTimeRange(history);
   const range = !!selected;
   // Window names are text: they are rebuilt when the language changes.
@@ -180,10 +181,15 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
   const definitions = modeColumns.map(id => ({id, title: heading(id, range), width: FORECAST_WIDTHS[id], hint: HEADINGS[id].hint ? t(HEADINGS[id].hint!) : undefined}));
   // A pan phase changes the panel's presentation, not its retained rows. Reusing
   // the table also keeps every clock cell from replanning its deadline on input.
-  const table=useMemo(()=><AnalyticsTable columns={definitions.filter(column=>columns.includes(column.id))}
-    rows={lines.map(line=>({key:line.key,name:line.name,color:line.color,cells:cellsOf(line)}))}
-    name={t('table.limit')} nameWidth={FORECAST_WIDTHS.limit} lead={range?'end':'now'}/>,
+  const rows=useMemo(()=>lines.map(line=>({key:line.key,name:line.name,color:line.color,cells:cellsOf(line)})),
     [lines,columns,range,sources,forecasts,news,history,view,locale]);
+  const selectedColumns=definitions.filter(column=>columns.includes(column.id));
+  const widget=useTableWidget(panel,selectedColumns.map(column=>column.width),FORECAST_WIDTHS.limit,rows.map(row=>row.key),history?.range??'');
+  const table=useMemo(()=><>
+    <AnalyticsTable columns={selectedColumns} rows={rows.slice(widget.from,widget.to)} name={t('table.limit')} layout={widget.layout} body={widget.live} lead={range?'end':'now'}/>
+    <WidgetPages table={widget} count={rows.length}/>
+    <TableMeasure table={widget}><AnalyticsTable columns={selectedColumns} rows={rows.slice(widget.measureFrom,widget.measureTo)} name={t('table.limit')} layout={widget.layout} body={widget.measured} lead={range?'end':'now'} still/></TableMeasure>
+  </>,[rows,columns,widget,range,locale]);
   return (
     <AnalyticsPanel ref={panel} className="forecast" title={t('forecast.title')} history={history} loading={loading} error={error} retry={quotaHistory.retry}
       settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}><QuotaSettings /></TableSettings>}

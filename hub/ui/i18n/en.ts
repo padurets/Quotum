@@ -7,6 +7,8 @@ import type {Message} from './types';
  * monetary measurements keep their explicit units and never become window percentages.
  */
 export const en = {
+  'table.pages': 'Table pages',
+  'table.page': 'Page {page} of {pages}',
   'money.codexCredits': 'Codex credits',
   'money.codexCredit': 'Codex credit',
   'money.codexCreditUnit': 'Codex credits',
@@ -512,10 +514,6 @@ export const en = {
   'agents.descending': 'Descending',
   'agents.columns': 'Columns',
   'agents.detailsColumns': 'Agent details',
-  'agents.more': {one: '{count} more agent', other: '{count} more agents'},
-  'agents.moreProjects': {one: '{count} more project', other: '{count} more projects'},
-  'agents.moreMachines': {one: '{count} more machine', other: '{count} more machines'},
-  'agents.moreSubscriptions': {one: '{count} more subscription', other: '{count} more subscriptions'},
   'agents.agents': 'Agents',
   'agents.worked': 'Agent-hours',
   'agents.workedHint': 'Retained work credited to the current subscription, each agent counted: three at once for an hour make three agent-hours',

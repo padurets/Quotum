@@ -1,0 +1,107 @@
+/** @jsxRuntime automatic */
+import {useLayoutEffect,useMemo,useRef,useState,type RefObject,type ReactNode} from 'react';
+import {tableLayout,tablePages,TABLE_PAGE_ROWS,TABLE_MEASURE_ROWS,type TableSort} from '../lib/table';
+import {t,useLocale} from '../i18n';
+import {Popover} from './Popover';
+import {fillOf,pixels,same,useSizing} from './sizing';
+
+export const SortIcon=()=> <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M4 3v10M1.5 10.5 4 13l2.5-2.5M9 4h5M9 8h3.5M9 12h2"/></svg>;
+export type TableSorting<Id extends string>={active:TableSort<Id>;headers:readonly {id:Id;title:string}[];label:string;defaultLabel:string;onSort:(column:Id|null,cycle?:boolean)=>void};
+export function TableSortMenu<Id extends string>({active,headers,label,defaultLabel,onSort}:TableSorting<Id>){
+  return <Popover label={label} icon={<SortIcon/>}>
+    <div className="popover-title">{label}</div>
+    <button type="button" className="popover-row" aria-pressed={!active} onClick={()=>onSort(null)}><span>{defaultLabel}</span><b aria-hidden="true">{!active?'✓':''}</b></button>
+    {headers.map(column=><button type="button" className="popover-row" key={column.id} aria-pressed={active?.column===column.id} onClick={()=>onSort(column.id,false)}><span>{column.title}</span>{active?.column===column.id&&<b><span aria-hidden="true">{active.descending?'↓':'↑'}</span><span className="sr-only">{t(active.descending?'agents.descending':'agents.ascending')}</span></b>}</button>)}
+  </Popover>;
+}
+export function TableHeading<Id extends string>({id,title,hint,align,sorting}:{id:Id;title:string;hint?:string;align?:'right';sorting?:Pick<TableSorting<Id>,'active'|'onSort'>}){
+  const active=sorting?.active?.column===id?sorting.active:null;
+  return <th scope="col" title={hint} className={align&&'is-'+align} aria-sort={active?(active.descending?'descending':'ascending'):undefined}>
+    {sorting?<button type="button" className="table-sort" onClick={()=>sorting.onSort(id)}>{title}<span className="table-sort-arrow" aria-hidden="true">{active?(active.descending?'↓':'↑'):''}</span></button>:title}
+  </th>;
+}
+
+/** The page control is always measured, but only real multiple pages show it. */
+export function TablePages({page,pages,onPage,range,body,reserve=false}:{page:number;pages:number;onPage:(page:number)=>void;range?:string;body?:RefObject<HTMLElement|null>;reserve?:boolean}){
+  return <nav ref={body} className="table-pages" hidden={!reserve&&pages<2} aria-label={t('table.pages')}>
+    <button type="button" className="icon-button" aria-label={t('period.previous')} disabled={page===0} onClick={()=>onPage(page-1)}><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="m10 3-5 5 5 5"/></svg></button>
+    <span title={range} aria-label={t('table.page',{page:page+1,pages})}>{page+1} / {pages}</span>
+    <button type="button" className="icon-button" aria-label={t('period.next')} disabled={page+1>=pages} onClick={()=>onPage(page+1)}><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="m6 3 5 5-5 5"/></svg></button>
+  </nav>;
+}
+
+type Measurement={scope:string;heights:ReadonlyMap<string,number>;fallback:number;shell:number;footer:number;border:number};
+export function useTableLayout(box:RefObject<HTMLElement|null>,columns:readonly number[],nameWidth:number,edges?:number,widthKey?:string){
+  const [model,setModel]=useState<{layout:'table'|'list';width:number}>({layout:'table',width:0}),key=columns.join(',');
+  useLayoutEffect(()=>{
+    const root=box.current?.closest<HTMLElement>('.panel,.dialog');if(!root)return;
+    const fit=()=>{const style=getComputedStyle(root),padding=edges??parseFloat(style.paddingLeft)+parseFloat(style.paddingRight)-20;
+      const width=root.clientWidth,layout=tableLayout(columns,width,nameWidth,padding);
+      setModel(was=>was.width===width&&was.layout===layout?was:{width,layout});};
+    const observer=new ResizeObserver(fit);observer.observe(root);fit();return ()=>observer.disconnect();
+  },[box,key,nameWidth,edges,widthKey]);
+  return model;
+}
+/** All board tables share width, height, row measurement and page ownership. */
+export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonly number[],nameWidth:number,keys:readonly string[],resetKey:string,edges?:number){
+  useLocale();
+  const sizing=useSizing(),{layout,width}=useTableLayout(panel,columns,nameWidth,edges,sizing?.width);
+  const live=useRef<HTMLElement>(null),measured=useRef<HTMLElement>(null),pager=useRef<HTMLElement>(null),measuredPager=useRef<HTMLElement>(null);
+  const scope=JSON.stringify([layout,width,columns,nameWidth,edges]);
+  const [measurement,setMeasurement]=useState<Measurement|null>(null),[position,setPosition]=useState({key:resetKey,page:0});
+  const sizes=measurement?.scope===scope?measurement:null;
+  const fallback=sizes?.fallback??(layout==='table'?44:90),heights=sizes?.heights??new Map<string,number>();
+  let starts:number[];
+  if(sizing?.manual&&sizes){
+    const room=sizing.allocated-sizes.shell;
+    starts=tablePages(keys,heights,fallback,room,sizes.border);
+    if(starts.length>1)starts=tablePages(keys,heights,fallback,room-sizes.footer,sizes.border);
+  }else starts=Array.from({length:Math.max(1,Math.ceil(keys.length/TABLE_PAGE_ROWS))},(_,i)=>i*TABLE_PAGE_ROWS);
+  const page=Math.min(position.key===resetKey?position.page:0,starts.length-1),from=starts[page],to=starts[page+1]??keys.length;
+  useLayoutEffect(()=>{if(position.key!==resetKey||((sizes||!sizing?.manual)&&position.page!==page))setPosition({key:resetKey,page});},[resetKey,page,position,!!sizes,sizing?.manual]);
+  const update=useRef(()=>{});
+  update.current=()=>{
+    const root=panel.current;if(!root)return;
+    const outer=pixels(root.getBoundingClientRect().height-fillOf(root));
+    const items=[...(live.current?.children??[])].filter(e=>!(e as HTMLElement).hasAttribute('data-table-total')) as HTMLElement[];
+    if(!items.length){
+      sizing?.report({min:outer,natural:outer,shown:outer});if(measurement)setMeasurement(null);
+      if(position.page!==0||position.key!==resetKey)setPosition({key:resetKey,page:0});return;
+    }
+    const layer=sizing?.manual?[...(measured.current?.children??[])] as HTMLElement[]:items;
+    if(!layer.length)return;
+    const border=layout==='table'?(parseFloat(getComputedStyle(items[0].firstElementChild!).borderBottomWidth)||0)/2:parseFloat(getComputedStyle(items[0]).borderBottomWidth)||0;
+    const area=items.at(-1)!.getBoundingClientRect().bottom-items[0].getBoundingClientRect().top;
+    const shell=pixels(outer-area-(pager.current?.getBoundingClientRect().height??0));
+    const footer=pixels(measuredPager.current?.getBoundingClientRect().height??0);
+    const nextHeights=new Map(sizes?.heights??[]);
+    for(let i=0;i<layer.length;i++){
+      const rect=layer[i].getBoundingClientRect(),end=i+1<layer.length?layer[i+1].getBoundingClientRect().top:rect.bottom+border;
+      const key=keys[from+i];if(key!==undefined)nextHeights.set(key,pixels(end-rect.top));
+    }
+    const retained=new Set(keys);for(const key of nextHeights.keys())if(!retained.has(key))nextHeights.delete(key);
+    const ordered=[...nextHeights.values()].sort((a,b)=>a-b),base=ordered[Math.floor(ordered.length/2)]??fallback;
+    const min=shell+Math.max(base,...ordered)-border+(keys.length>1?footer:0);
+    const natural=shell+keys.slice(0,TABLE_PAGE_ROWS).reduce((sum,key)=>sum+(nextHeights.get(key)??base),0)-border+(keys.length>TABLE_PAGE_ROWS?footer:0);
+    sizing?.report({min:pixels(min),natural:pixels(Math.max(min,natural)),shown:outer});
+    if(!sizes||!same(sizes.shell,shell)||!same(sizes.footer,footer)||!same(sizes.border,border)||!same(sizes.fallback,base)||nextHeights.size!==sizes.heights.size||[...nextHeights].some(([key,height])=>!same(sizes.heights.get(key),height)))
+      setMeasurement({scope,heights:nextHeights,fallback:base,shell,footer,border});
+  };
+  const keysKey=keys.join('\n'),columnsKey=columns.join(',');
+  useLayoutEffect(()=>update.current(),[layout,scope,keysKey,resetKey,page,from,to,sizing?.manual,sizing?.allocated,columnsKey]);
+  useLayoutEffect(()=>{
+    const observer=new ResizeObserver(()=>update.current());
+    for(const element of [panel.current,live.current,measured.current])if(element)observer.observe(element);
+    return ()=>observer.disconnect();
+  },[panel,layout,!!keys.length,sizing?.manual]);
+  const report=sizing?.report;useLayoutEffect(()=>()=>report?.(null),[report]);
+  return useMemo(()=>({layout,from,to,page,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,pager,measuredPager,
+    measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,from+TABLE_MEASURE_ROWS):from}),[layout,from,to,page,starts.length,resetKey,sizing?.manual,keys.length]);
+}
+export type TableWidget=ReturnType<typeof useTableWidget>;
+export function TableMeasure({table,children}:{table:TableWidget;children:ReactNode}){
+  return <div className="table-measure" aria-hidden="true" inert>{children}<TablePages page={0} pages={2} onPage={()=>{}} body={table.measuredPager} reserve/></div>;
+}
+export function WidgetPages({table,count}:{table:TableWidget;count:number}){
+  return <TablePages page={table.page} pages={table.pages} onPage={table.onPage} range={`${table.from+1}–${table.to} / ${count}`} body={table.pager}/>;
+}

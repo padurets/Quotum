@@ -521,8 +521,8 @@ the total never adds group active times. Recorded sessions are positive-work ret
 contexts, so one logical producer can count more than once after a context change.
 The chart explains the same count. Opening a group shows those retained contexts,
 including ones without current presence, with their work clipped to the same period.
-The table shows every group and follows its content height, like the quota and budget
-tables, without widget pagination or an inner vertical scroller. Its session disclosure
+The table uses the common whole-row pages and bottom-right pager, like the agent,
+quota and budget tables, without an inner vertical scroller. Its session disclosure
 uses the existing 50-row pages. The table is added explicitly, stays when empty, and
 has owner-controlled columns while every reader keeps their own presentation choices.
 Small cells and live sort crossings use the common clock; fixed ranges do not tick.
@@ -1296,7 +1296,7 @@ React render of the grid or neighbouring widgets. Only a widget whose own alloca
 height changes hears a sizing update; layout edits still reconcile through React.
 Each widget fills the fewest whole rows that contain its content, with any spare room
 above a card's tray or at the bottom of a panel, unless the owner chose a height for it
-(`h`, in rows). A chosen height is a request, not what shows: a card or the table never
+(`h`, in rows). A chosen height is a request, not what shows: a card never
 gets shorter than its content, and grows past the chosen rows while its content needs
 more, back to them when it needs less, without the view changing. All four charts give a
 chosen height to their plot, never drawing it lower than they do by themselves, their
@@ -1315,9 +1315,15 @@ the group. A folder stays under the project in the same table cell, wrapping lon
 worktree names. Their default columns fit a wide dialog as a table with rows highlighted
 edge to edge; a narrow dialog uses an inset compact list. The dialog has no repeated
 count or work total above its rows; its toolbar holds only Back and list sorting when
-needed. The list can be shorter than its rows: it
-shows the most whole rows that fit, in its own order, and a last row saying how many
-more, which opens them all in a dialog; to know how many fit, it measures at most fifty candidate rows unseen beside it, their times standing still.
+needed. Board tables share `ui/components/TableWidget.tsx`: one width decision,
+height measurement, page model, pager and sort presentation. Natural pages contain
+ten rows; a chosen height fits complete rows, up to fifty per page. Variable row
+heights follow row identities through ordering and paging. At most fifty candidate
+rows are measured unseen with static cells and no clock subscriptions. A compact
+pager sits at the bottom right instead of a more/all dialog. Wide headers cycle
+ascending, descending, reset; a reset leaves no header selected and restores the
+table's default order. Only the compact list shows a sort menu. Activity totals
+cover the complete period on every page. No table uses an inner vertical scroller.
 Its disclosure pages through the complete retained roster in batches of fifty. Such a widget tells the grid
 through a context of its own (`ui/components/sizing.ts`) the least it can show, what it
 needs whole and, as it lays itself out anew, how tall it shows, so the grid fills the

@@ -2,6 +2,8 @@ import type {Catalog} from './index';
 
 /** Русский. Разница двух долей лимита тоже в «%»: всё здесь — доля лимита. */
 export const ru = {
+  'table.pages': 'Страницы таблицы',
+  'table.page': 'Страница {page} из {pages}',
   'money.codexCredits': 'Кредиты Codex',
   'money.codexCredit': 'кредит Codex',
   'money.codexCreditUnit': 'кред. Codex',
@@ -507,10 +509,6 @@ export const ru = {
   'agents.descending': 'По убыванию',
   'agents.columns': 'Колонки',
   'agents.detailsColumns': 'Детали агентов',
-  'agents.more': {one: 'Ещё {count} агент', few: 'Ещё {count} агента', many: 'Ещё {count} агентов', other: 'Ещё {count} агента'},
-  'agents.moreProjects': {one: 'Ещё {count} проект', few: 'Ещё {count} проекта', many: 'Ещё {count} проектов', other: 'Ещё {count} проекта'},
-  'agents.moreMachines': {one: 'Ещё {count} машина', few: 'Ещё {count} машины', many: 'Ещё {count} машин', other: 'Ещё {count} машины'},
-  'agents.moreSubscriptions': {one: 'Ещё {count} подписка', few: 'Ещё {count} подписки', many: 'Ещё {count} подписок', other: 'Ещё {count} подписки'},
   'agents.agents': 'Агенты',
   'agents.worked': 'Агенто-часы',
   'agents.workedHint': 'Сохранённое время работы, зачтённое текущей подписке, каждый агент отдельно: трое сразу за час — три агенто-часа',

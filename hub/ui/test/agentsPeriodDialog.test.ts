@@ -35,9 +35,9 @@ test('the open sessions dialog keeps the actual period basis, status and retry t
     useState:(initial:unknown)=>{const index=cursor++;if(!(index in slots))slots[index]=index===0?{group:null}:typeof initial==='function'?initial():initial;return [slots[index],(value:unknown)=>{slots[index]=value;}];},
     useMemo:(read:()=>unknown)=>read(),useCallback:(read:unknown)=>read,useLayoutEffect:()=>{},useSyncExternalStore:(_subscribe:unknown,read:()=>unknown)=>read(),
     memo:(component:unknown)=>component,useLocale:()=>{},useLineup:()=>['s'],useTitles:()=>({s:{title:'Source',provider:'codex'}}),
-    usePrefs:()=>({agentsSort:null,agentsBy:'project'}),setPrefs:()=>{},usePeriodSessions:undefined as unknown,PeriodStatus:undefined as unknown,
+    usePref:(key:'agentsSort'|'agentsBy'|'range')=>({agentsSort:null,agentsBy:'project',range:'24h'})[key],setPrefs:()=>{},usePeriodSessions:undefined as unknown,PeriodStatus:undefined as unknown,
     boardPeriod:{get:()=>reading,subscribe:()=>()=>{},retry:()=>{retries++;reading={...reading,loading:true,error:null};}},
-    useSizing:()=>null,useAgentsLayout:()=> 'table',Popover:'popover',SlidersIcon:'icon',HideRow:'hide',SwitchRow:'switch',Modal:'modal',AgentsRows:'rows',SortMenu:'sort',projectName:(value:string|null)=>value??t('agents.noProject'),
+    useSizing:()=>null,useTimeRange:()=>null,useTableWidget:(_panel:unknown,_columns:unknown,_name:unknown,keys:string[])=>({layout:'table',from:0,to:Math.min(10,keys.length),measureFrom:0,measureTo:0}),TableMeasure:'measurement',WidgetPages:'pages',TablePages:'pager',useAgentsLayout:()=> 'table',Popover:'popover',SlidersIcon:'icon',HideRow:'hide',SwitchRow:'switch',Modal:'modal',AgentsRows:'rows',SortMenu:'sort',projectName:(value:string|null)=>value??t('agents.noProject'),
   };
   const run=(body:string)=>runInNewContext(ts.transpileModule(body,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const period=code('../lib/period.ts');run(period.slice(period.indexOf('const roster=')));context.usePeriodSessions=context.exports.usePeriodSessions;

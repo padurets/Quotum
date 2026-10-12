@@ -1,7 +1,7 @@
 import {memo,useCallback,useRef,useState,type CSSProperties} from 'react';
 import type {Activity,ActivityDimension,ActivityGroup} from '../lib/types';
 import {activityCoverage,activityGroupName,atOnce,groupColors} from '../lib/activity';
-import {ACTIVITY_COLUMNS,activityKey,effectiveActivitySort,nextActivitySort,sortedActivity,type ActivityColumn} from '../lib/activityTable';
+import {ACTIVITY_COLUMNS,activityKey,effectiveActivitySort,visibleActivitySort,nextActivitySort,sortedActivity,type ActivityColumn} from '../lib/activityTable';
 import {boardPeriod,usePeriodActivity,usePeriodSessions,type SessionOrder} from '../lib/period';
 import {workHours,num} from '../lib/format';
 import {useClock} from '../lib/clock';
@@ -12,10 +12,10 @@ import {timeRangeKey,useTimeRange} from '../lib/timeRange';
 import {columnsOf,groupsOf,nextAgentsSort,type AgentRow,type AgentsBy,type AgentsSort} from '../lib/agents';
 import {t,useLocale,type Key} from '../i18n';
 import {Segmented} from './Kit';
-import {Popover} from './Popover';
 import {AnalyticsTable,TableSettings,type AnalyticsColumn,type AnalyticsRow,type TimedCell} from './AnalyticsTable';
 import {PeriodStatus} from './PeriodStatus';
-import {AgentsDialog,SortIcon} from './Agents';
+import {AgentsDialog} from './Agents';
+import {useTableWidget,WidgetPages,TableMeasure,TableSortMenu,type TableSorting} from './TableWidget';
 
 const LABELS:Record<ActivityDimension,Key>={project:'activity.byProject',device:'activity.byDevice',source:'activity.bySource'};
 const COLUMNS:Record<ActivityColumn,{title:Key;hint:Key;width:number}>={
@@ -60,6 +60,7 @@ export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrang
   const titles=useTitles(arrange.view.names),panel=useRef<HTMLElement>(null);
   const visible=ACTIVITY_COLUMNS.filter(column=>columnShown(arrange.view,ACTIVITY_TABLE,column));
   const active=effectiveActivitySort(savedSort,visible);
+  const chosenSort=visibleActivitySort(savedSort,visible);
   const name=(group:ActivityGroup)=>activityGroupName(group,by,titles);
   const ordered=(summary:Activity|null)=>sortedActivity(summary?.by[by]??[],active,name,locale,by);
   const period=usePeriodActivity(by,rows=>{
@@ -74,7 +75,7 @@ export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrang
   });
   const {summary}=period,groups=ordered(summary);
   const [opened,setOpened]=useState<{by:ActivityDimension;key:string;title:string}|null>(null);
-  const sortBy=(column:ActivityColumn|'name')=>setPrefs({activityTableSort:nextActivitySort(savedSort,column)});
+  const sortBy=(column:ActivityColumn|'name'|null,cycle=true)=>setPrefs({activityTableSort:nextActivitySort(chosenSort,column,cycle)});
   const columns:AnalyticsColumn<ActivityColumn>[]=visible.map(id=>({id,title:t(COLUMNS[id].title),hint:t(COLUMNS[id].hint),width:COLUMNS[id].width,align:'right'}));
   const ranked=sortedActivity(summary?.by[by]??[],{column:'agenthours',descending:true},name,locale,by);
   const colors=groupColors(ranked,by,arrange.view,id=>titles[id]?.provider??'');
@@ -86,6 +87,8 @@ export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrang
   })) as Record<ActivityColumn,TimedCell>;
   const rows:AnalyticsRow<ActivityColumn>[]=groups.map(group=>({key:group.key,name:name(group),color:colorOfGroup.get(group.key),cells:cells(group.key)}));
   const total:AnalyticsRow<ActivityColumn>={key:'total',name:t('activityTable.total'),cells:cells()};
+  const table=useTableWidget(panel,columns.map(column=>column.width),180,rows.map(row=>row.key),JSON.stringify([by,chosenSort,selected?timeRangeKey(selected):range]));
+  const sorting:TableSorting<ActivityColumn|'name'>={active:chosenSort,headers:[{id:'name',title:t(LABELS[by])},...columns],label:t('activityTable.sort'),defaultLabel:t('activityTable.defaultSort'),onSort:sortBy};
   const restore=()=>{
     const found=[...panel.current?.querySelectorAll<HTMLElement>('[data-activity-group]')??[]].find(element=>element.dataset.activityGroup===opened?.key);
     return found??panel.current?.querySelector<HTMLElement>('button')??null;
@@ -94,9 +97,7 @@ export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrang
     data-history-range={period.loading||period.error?undefined:selected&&period.basis?timeRangeKey(period.basis.range):range}>
     <div className="panel-head"><h2 className="panel-heading">{t('activityTable.title')}</h2>
       <div className="activity-table-controls">
-        <Popover label={t('activityTable.sort')} icon={<SortIcon/>}><button type="button" className="popover-row" onClick={()=>setPrefs({activityTableSort:null})}><span>{t('activityTable.defaultSort')}</span>{!savedSort&&<b>✓</b>}</button>
-          {(['name',...visible] as const).map(column=><button type="button" className="popover-row" key={column} aria-pressed={active.column===column} onClick={()=>sortBy(column)}><span>{column==='name'?t(LABELS[by]):t(COLUMNS[column].title)}</span>{active.column===column&&<b aria-label={t(active.descending?'agents.descending':'agents.ascending')}>{active.descending?'↓':'↑'}</b>}</button>)}
-        </Popover>
+        {table.layout==='list'&&<TableSortMenu {...sorting}/>}
         <TableSettings arrange={arrange} widget={ACTIVITY_TABLE} columns={ACTIVITY_COLUMNS.map(id=>({id,title:t(COLUMNS[id].title),width:COLUMNS[id].width}))} visible={visible}>
           <div className="popover-section"><div className="popover-title">{t('activity.by')}</div><div className="popover-pad"><Segmented value={by} onChange={activityTableBy=>{setOpened(null);setPrefs({activityTableBy});}} options={ACTIVITY_BY.map(id=>[id,t(LABELS[id])])} label={t('activity.by')}/></div></div>
         </TableSettings>
@@ -105,9 +106,11 @@ export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrang
     <PeriodStatus {...period}/>
     <Coverage by={by}/>
     {!summary&&period.loading&&<p className="panel-loading">{t('period.loading')}</p>}
-    {summary&&<AnalyticsTable columns={columns} rows={rows} name={t(LABELS[by])} nameWidth={180} lead="agenthours" total={total} sorting={{...active,onSort:sortBy}}
+    {summary&&<AnalyticsTable columns={columns} rows={rows.slice(table.from,table.to)} name={t(LABELS[by])} layout={table.layout} body={table.live} lead="agenthours" total={total} sorting={sorting}
       onOpen={key=>{const group=groups.find(g=>g.key===key);if(group)setOpened({by,key,title:name(group)});}}/>}
     {summary?.known&&!groups.length&&<p className="analytics-note">{t('activity.none')}</p>}
+    <WidgetPages table={table} count={rows.length}/>
+    <TableMeasure table={table}><AnalyticsTable columns={columns} rows={rows.slice(table.measureFrom,table.measureTo)} name={t(LABELS[by])} layout={table.layout} body={table.measured} lead="agenthours" still/></TableMeasure>
     {opened&&opened.by===by&&<Contributions key={`${by}:${opened.key}`} by={by} chosen={opened.key} title={opened.title} arrange={arrange} onClose={()=>setOpened(null)} restore={restore}/>}
   </section>;
 });

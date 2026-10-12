@@ -933,5 +933,5 @@ test('session review starts with populated 24h comparisons and retained-context 
   }
   const empty=await read({mode:'range',from:start-4*HOUR,to:start-2*HOUR});assert.equal(empty.rows.length,0);assert.ok(empty.summary('project').known);
   const unknown=await read({mode:'range',from:start-9*24*HOUR,to:start-8*24*HOUR});assert.equal(unknown.summary('project').known,null);
-  assert.deepEqual(SESSION_ACTIVITY_SCENES.find(scene=>scene.id==='review')!.expect,['populated-24h','complete-comparison','retained-pagination','rich-breakdowns']);
+  assert.deepEqual(SESSION_ACTIVITY_SCENES.find(scene=>scene.id==='review')!.expect,['populated-24h','paged-comparison','height-fit-pages','narrow-sort-menu','header-sort-reset','retained-pagination','rich-breakdowns']);
 });

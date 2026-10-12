@@ -1,7 +1,7 @@
 import {boardPeriod,usePeriodSessions,type SessionPeriod} from '../lib/period';
 import {PeriodStatus} from './PeriodStatus';
 import {WarningIcon} from './StatusMark';
-import {timeRangeLabel} from '../lib/timeRange';
+import {timeRangeLabel,timeRangeKey,useTimeRange} from '../lib/timeRange';
 import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject} from 'react';
 import type {LiveSession} from '../lib/types';
 import {clientName} from '../../server/domain/clients';
@@ -9,11 +9,10 @@ import {agentSourceLabel} from '../lib/agents';
 import {AGENTS, colorOf, columnShown, withColumn, withHidden, type Arrange} from '../lib/view';
 import {
   AGENT_WIDTHS,
+  NAME_WIDTH,
   AGENTS_BY,
   DIMENSIONS,
   agentRows,
-  agentsFit,
-  agentsLayout,
   byActivity,
   columnsOf,
   drawn,
@@ -37,13 +36,14 @@ import {
 } from '../lib/agents';
 import {recentActivity, stamp, workHours} from '../lib/format';
 import {useLineup, useTitles} from '../lib/board';
-import {setPrefs, usePrefs} from '../lib/prefs';
+import {setPrefs, usePref} from '../lib/prefs';
 import {hubNow,useClock} from '../lib/clock';
 import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {RecentActivity} from './Time';
 import {Modal} from './Kit';
-import {fillOf, pixels, useSizing} from './sizing';
+import {useTableWidget,useTableLayout,TableSortMenu,TableHeading,TablePages,WidgetPages,TableMeasure} from './TableWidget';
+export {SortIcon} from './TableWidget';
 
 /**
  * One session: filled with the card's colour while it works, outlined while idle; a
@@ -269,31 +269,10 @@ const COLUMNS: Record<AgentColumn, {title: Key; hint?: Key; cell: (group: AgentG
 /** A cut name in full on hover. */
 const fullOf = (group: AgentGroup, column: AgentColumn) => (isDimension(column) ? dimensionName(group, column) : undefined);
 
-export const SortIcon = () => (
-  <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-    <path d="M4 3v10M1.5 10.5 4 13l2.5-2.5M9 4h5M9 8h3.5M9 12h2" />
-  </svg>
-);
-
-/** How the reader sorts the agents, in this browser: by a column's header, or in a menu where the list has none. */
-type Sorting = {active: AgentsSort; headers: {id: AgentColumn; title: Key}[]; sortBy: (column: AgentColumn, cycle?: boolean) => void};
-
-function SortMenu({active, headers, sortBy}: Sorting) {
-  const direction = active?.descending ? 'descending' : 'ascending';
-  return (
-    <Popover label={t('agents.sort')} icon={<SortIcon />}>
-      <div className="popover-title">{t('agents.sort')}</div>
-      <button type="button" className="popover-row" aria-pressed={!active} onClick={() => setPrefs({agentsSort: null})}>
-        <span>{t('agents.activity')}</span><b aria-hidden="true">{!active ? '✓' : ''}</b>
-      </button>
-      {headers.map(column => (
-        <button type="button" className="popover-row" key={column.id} aria-pressed={active?.column === column.id} onClick={() => sortBy(column.id, false)}>
-          <span>{t(column.title)}</span>
-          {active?.column === column.id && <b><span aria-hidden="true">{active.descending ? '↓' : '↑'}</span><span className="sr-only">{t(`agents.${direction}`)}</span></b>}
-        </button>
-      ))}
-    </Popover>
-  );
+/** Headers and the narrow menu share the same nullable column selection. */
+type Sorting = {active: AgentsSort; headers: {id: AgentColumn; title: Key}[]; sortBy: (column: AgentColumn|null, cycle?: boolean) => void};
+function SortMenu({active,headers,sortBy}:Sorting){
+  return <TableSortMenu active={active} headers={headers.map(column=>({...column,title:t(column.title)}))} onSort={sortBy} label={t('agents.sort')} defaultLabel={t('agents.activity')}/>;
 }
 
 /**
@@ -302,47 +281,25 @@ function SortMenu({active, headers, sortBy}: Sorting) {
  * it), decided before they are first drawn, and again as it is resized: before that paints
  * too where the board gives the widget another width (`width`, its key of the board's sizing).
  */
-function useAgentsLayout(box: RefObject<HTMLElement | null>, columns: readonly AgentColumn[], width?: string) {
-  const [layout, setLayout] = useState<'table' | 'list'>('list');
-  const key = columns.join();
-  useLayoutEffect(() => {
-    // The table runs edge to edge of the widget or the dialog: as wide as it is inside its border.
-    const element = box.current!.closest<HTMLElement>('.dialog, .panel')!;
-    const chosen = key ? (key.split(',') as AgentColumn[]) : [];
-    const fit = () => {
-      const next = agentsLayout(chosen, element.clientWidth);
-      setLayout(before => (before === next ? before : next));
-    };
-    const observer = new ResizeObserver(fit);
-    observer.observe(element);
-    fit();
-    return () => observer.disconnect();
-  }, [box, key, width]);
-  return layout;
+function useAgentsLayout(box:RefObject<HTMLElement|null>,columns:readonly AgentColumn[]){
+  return useTableLayout(box,columns.map(column=>AGENT_WIDTHS[column]),NAME_WIDTH,0).layout;
 }
-
-/** The last row of a list made shorter than its rows: how many more there are, of what it gathers. */
-const MORE: Record<AgentsBy, Key> = {project: 'agents.moreProjects', machine: 'agents.moreMachines', subscription: 'agents.moreSubscriptions', none: 'agents.more'};
 
 /**
  * Rows of the list as a table or a compact list, in the order given, with the columns
  * given after the name (`name`, the dimension it shows): a group's name opens its agents
  * (`onOpen`), and a row of one agent (`single`) shows its mark, where it runs, its project
- * and its folder instead. In the widget, all of them in its dialog, and, unseen, laid out to
- * be measured (`still`). `more`, when some are left out, is a last row that says how many
- * and opens the rest (`onMore`). `body` is the list's or the table's rows, that last one included.
+ * and its folder instead. The widget and dialog share these cells; the unseen sizing
+ * copy (`still`) subscribes to no clocks. `body` contains only data rows.
  */
 function AgentsRows({
   groups,
   name,
   columns,
   single,
-  by,
   layout,
   color,
   sorting,
-  more = 0,
-  onMore,
   onOpen,
   still = false,
   body,
@@ -351,24 +308,15 @@ function AgentsRows({
   name: Dimension;
   columns: AgentColumn[];
   single: boolean;
-  /** What the rows gather, as the row saying how many more names it. */
-  by: AgentsBy;
   layout: 'table' | 'list';
   color: Context['color'];
   /** The table's headers, which sort it; the rows measured have none. */
   sorting?: Sorting;
-  more?: number;
-  onMore?: () => void;
   onOpen?: (key: string) => void;
   still?: boolean;
   body?: RefObject<HTMLElement | null>;
 }) {
   const context: Context = {still, color};
-  const rest = more > 0 && (
-    <button type="button" className="agents-more-button" data-agents-more={still ? undefined : ''} tabIndex={still ? -1 : undefined} onClick={onMore}>
-      {t(MORE[single ? 'none' : by], {count: more})}
-    </button>
-  );
   const open = (group: AgentGroup) => (single || still || !onOpen ? undefined : () => onOpen(group.key));
   const rowClass = (group: AgentGroup) => `${group.working ? 'is-working' : ''} ${single || still || !onOpen ? '' : 'is-group'}`;
   // A row of one agent takes its card's colour, for its mark; a group's marks each take their own.
@@ -425,11 +373,9 @@ function AgentsRows({
             </li>
           );
         })}
-        {rest && <li key="more" className="agents-more">{rest}</li>}
       </ul>
     );
   }
-  const direction = sorting?.active?.descending ? 'descending' : 'ascending';
   return (
     <div className="table-wrap agents-rows">
       <table>
@@ -438,11 +384,7 @@ function AgentsRows({
           <thead>
             <tr>
               {sorting.headers.map(column => (
-                <th scope="col" key={column.id} aria-sort={sorting.active?.column === column.id ? direction : undefined} title={COLUMNS[column.id].hint && t(COLUMNS[column.id].hint!)}>
-                  <button type="button" onClick={() => sorting.sortBy(column.id)}>
-                    {t(column.title)}<span className="agents-sort-arrow" aria-hidden="true">{sorting.active?.column === column.id ? sorting.active.descending ? '↓' : '↑' : ''}</span>
-                  </button>
-                </th>
+                <TableHeading key={column.id} id={column.id} title={t(column.title)} hint={COLUMNS[column.id].hint&&t(COLUMNS[column.id].hint!)} sorting={{active:sorting.active,onSort:sorting.sortBy}}/>
               ))}
             </tr>
           </thead>
@@ -469,11 +411,6 @@ function AgentsRows({
               </tr>
             );
           })}
-          {rest && (
-            <tr key="more" className="agents-more">
-              <td colSpan={columns.length + 1}>{rest}</td>
-            </tr>
-          )}
         </tbody>
       </table>
     </div>
@@ -508,7 +445,7 @@ export function AgentsDialog({
   by: AgentsBy;
   arrangement: Arrangement;
   agentsSort: AgentsSort;
-  sortBy: (active: AgentsSort, column: AgentColumn, cycle?: boolean) => void;
+  sortBy: (active: AgentsSort, column: AgentColumn|null, cycle?: boolean) => void;
   color: Context['color'];
   empty: 'none' | 'noneShown' | null;
   period: SessionPeriod;
@@ -555,7 +492,7 @@ export function AgentsDialog({
         {empty||missing ? (
           !period.loading&&!period.error&&period.basis&&<p className="panel-empty">{t(`agents.${empty??'none'}`)}</p>
         ) : (
-          <AgentsRows groups={ordered.slice(currentPage*50,currentPage*50+50)} name={name} columns={columns} single={group !== null || by === 'none'} by={by} layout={layout} color={color} sorting={sorting} onOpen={key=>{setChosen(key);setPage(0);}} />
+          <AgentsRows groups={ordered.slice(currentPage*50,currentPage*50+50)} name={name} columns={columns} single={group !== null || by === 'none'} layout={layout} color={color} sorting={sorting} onOpen={key=>{setChosen(key);setPage(0);}} />
         )}
         <AgentPages page={currentPage} count={ordered.length} onPage={setPage}/>
       </div>
@@ -570,14 +507,15 @@ export function AgentsDialog({
  * and opens its agents in a dialog. It reads the agents of every source of the board and
  * their names, not their cards: a new measurement does not render it. What shows time is
  * a part of its own. In a widget made shorter than its rows it shows the first of them that
- * fit whole and a last row saying how many more, which opens them all in a dialog; it tells
- * the board what it needs (`useSizing`), measuring at most fifty rows beside the ones it shows.
+ * fit whole in a page, with the shared pager at the bottom right. Layout, fitting and
+ * measurement belong to the common table widget; a group still opens its own sessions.
  */
 export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrange}) {
   useLocale();
   const lineup = useLineup();
   const titles = useTitles(arrange.view.names);
-  const {agentsSort, agentsBy} = usePrefs();
+  const agentsSort=usePref('agentsSort'),agentsBy=usePref('agentsBy'),range=usePref('range');
+  const selected=useTimeRange();
   const view = arrange.view;
   /** The dialog, open on all the groups or on one; and the group whose row opened it, to go back to. */
   const [open, setOpen] = useState<{group: string | null} | null>(null);
@@ -608,90 +546,37 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     () => {const bySource=new Map<string,LiveSession[]>();for(const row of period.rows){if(row.source===null)continue;let rows=bySource.get(row.source);if(!rows)bySource.set(row.source,rows=[]);rows.push(row);}return lineup.flatMap((id):AgentSource[]=>titles[id]?[{id,provider:titles[id].provider,title:titles[id].title,sessions:bySource.get(id)??[]}]:[]);},
     [lineup, period.rows, titles],
   );
-  const sizing = useSizing();
-  const manual = sizing?.manual ?? false;
   const panel = useRef<HTMLElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
-  const live = useRef<HTMLElement>(null);
-  const unseen = useRef<HTMLElement>(null);
   const opener = useRef<string | null>(null);
-  /** How many of the rows fit a height chosen for the widget, as last measured. */
-  const [fit, setFit] = useState<number | null>(null);
   // Only what the board shows: a subscription whose card is hidden is left out here too.
   const {rows, empty} = agentRows(sources, arrange.view,period.rows.filter(row=>row.source===null));
   const working = rows.filter(row => row.session.working).length;
   const groups = groupsOf(rows, agentsBy);
   const {name, columns} = arrangement(false);
-  const layout = useAgentsLayout(panel, columns, sizing?.width);
   const shown = [name, ...columns];
   const active = visibleAgentsSort(agentsSort, shown);
   const ordered = sortedGroups(groups, active, shown);
   const color = useCallback((source: AgentSource | null) => ({'--card-color': source ? colorOf(view, source.id, source.provider) : 'var(--other)'}) as CSSProperties, [view]);
-  const sortBy = useCallback((from: AgentsSort, column: AgentColumn, cycle = true) => setPrefs({agentsSort: nextAgentsSort(from, column, cycle)}), []);
+  const sortBy = useCallback((from: AgentsSort, column: AgentColumn|null, cycle = true) => setPrefs({agentsSort: nextAgentsSort(from, column, cycle)}), []);
   const sorting: Sorting = {active, headers: shown.map(id => ({id, title: COLUMNS[id].title})), sortBy: (column, cycle) => sortBy(active, column, cycle)};
   const single = agentsBy === 'none';
-  // With two rows or more a row may say how many more there are: it is measured unseen, and in a chosen height every row with it.
-  const measured = ordered.length >= 2;
-  const count = manual && measured ? Math.min(fit ?? 50, ordered.length,50) : Math.min(50,ordered.length);
+  const table=useTableWidget(panel,columns.map(column=>AGENT_WIDTHS[column]),NAME_WIDTH,ordered.map(group=>group.key),JSON.stringify([agentsBy,active,selected?timeRangeKey(selected):range]),0);
+  const layout=table.layout;
   // Who may change what: every viewer how the list gathers, the owner its columns and whether it shows.
   const toggles = columnsOf(agentsBy).rest;
   const detailToggles = single ? [] : columnsOf(agentsBy, true).rest.filter(column => !toggles.includes(column));
 
-  const measure = useRef(() => {});
-  measure.current = () => {
-    const root = panel.current;
-    if (!sizing || !root) return;
-    const outer = root.getBoundingClientRect().height - fillOf(root);
-    const items = [...(live.current?.children ?? [])] as HTMLElement[];
-    const layer = [...(unseen.current?.children ?? [])] as HTMLElement[];
-    if (!measured || !items.length || !layer.length) {
-      sizing.report({min: pixels(outer), natural: pixels(outer), shown: pixels(outer)});
-      return setFit(null);
-    }
-    const tops = (list: HTMLElement[]) => list.map(item => item.getBoundingClientRect().top);
-    // All but the rows and the last one: the head, a table's headers, the spacing.
-    const shell = outer - (items.at(-1)!.getBoundingClientRect().bottom - items[0].getBoundingClientRect().top);
-    const footer = layer.at(-1)!.getBoundingClientRect().height;
-    // A table's rows share the border between them, so the last one gives up only its half.
-    const border = layout === 'table' ? (parseFloat(getComputedStyle(items[0].firstElementChild!).borderBottomWidth) || 0) / 2 : parseFloat(getComputedStyle(items[0]).borderBottomWidth) || 0;
-    let heights: number[];
-    if (manual) {
-      const at = tops(layer);
-      heights = at.slice(0, -1).map((top, i) => at[i + 1] - top);
-      // The first row as it shows: under a table's headers it has half of theirs, which the unseen table has not.
-      if (items.length > 1) heights[0] = items[1].getBoundingClientRect().top - items[0].getBoundingClientRect().top;
-    } else {
-      // Following its content the widget shows every row, the last one without its border.
-      const at = tops(items);
-      heights = items.map((item, i) => (i + 1 < items.length ? at[i + 1] : item.getBoundingClientRect().bottom + border) - at[i]);
-    }
-    const result = agentsFit({shell, rows: heights, footer, border, budget: manual ? sizing.allocated : Infinity});
-    sizing.report({min: pixels(result.min), natural: pixels(result.natural), shown: pixels(outer)});
-    if (manual) setFit(was => (was === result.shown ? was : result.shown));
-  };
-  // After every render, before paint: what it shows and what it needs follow the rows at once.
-  useLayoutEffect(() => measure.current());
-  useLayoutEffect(() => {
-    const observer = new ResizeObserver(() => measure.current());
-    observer.observe(panel.current!);
-    return () => observer.disconnect();
-  }, []);
-  const report = sizing?.report;
-  useLayoutEffect(() => () => report?.(null), [report]);
   const close = useCallback(() => setOpen(null), []);
   const openGroup = useCallback((key: string) => {
     opener.current = key;
     setOpen({group: key});
   }, []);
-  const openAll = () => {
-    opener.current = null;
-    setOpen({group: null});
-  };
   // The row that opened the dialog may be gone when it closes, or drawn anew as a list or a table: then the one there is now, or the title.
   const restore = useCallback(() => {
     const root = panel.current;
     const row = opener.current === null ? null : root?.querySelector<HTMLElement>(`[data-agents-group="${CSS.escape(opener.current)}"]`);
-    return row ?? root?.querySelector<HTMLElement>('[data-agents-more]') ?? heading.current;
+    return row ?? heading.current;
   }, []);
 
   return (
@@ -742,25 +627,19 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
         !period.loading&&!period.error&&period.basis&&<p className="panel-empty">{t(`agents.${empty}`)}</p>
       ) : (
         <AgentsRows
-          groups={ordered.slice(0, count)}
+          groups={ordered.slice(table.from,table.to)}
           name={name}
           columns={columns}
           single={single}
-          by={agentsBy}
           layout={layout}
           color={color}
           sorting={sorting}
-          more={ordered.length - count}
-          onMore={openAll}
           onOpen={openGroup}
-          body={live}
+          body={table.live}
         />
       )}
-      {measured && (
-        <div className="agents-measure" aria-hidden="true" inert>
-          <AgentsRows groups={manual ? ordered.slice(0,50) : []} name={name} columns={columns} single={single} by={agentsBy} layout={layout} color={color} more={ordered.length - 1} still body={unseen} />
-        </div>
-      )}
+      <WidgetPages table={table} count={ordered.length}/>
+      <TableMeasure table={table}><AgentsRows groups={ordered.slice(table.measureFrom,table.measureTo)} name={name} columns={columns} single={single} layout={layout} color={color} still body={table.measured}/></TableMeasure>
       {open && (
         <AgentsDialog
           groups={ordered}
@@ -781,10 +660,5 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
 });
 
 export function AgentPages({page,count,onPage}:{page:number;count:number;onPage:(page:number)=>void}) {
-  if(count<=50)return null;
-  return <div className="period-pages">
-    <button type="button" className="button" disabled={page===0} onClick={()=>onPage(page-1)}>{t('period.previous')}</button>
-    <span>{page*50+1}–{Math.min(count,page*50+50)} / {count}</span>
-    <button type="button" className="button" disabled={(page+1)*50>=count} onClick={()=>onPage(page+1)}>{t('period.next')}</button>
-  </div>;
+  return <TablePages page={page} pages={Math.max(1,Math.ceil(count/50))} onPage={onPage} range={`${page*50+1}–${Math.min(count,page*50+50)} / ${count}`}/>;
 }

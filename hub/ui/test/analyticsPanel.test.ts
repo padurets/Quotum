@@ -18,7 +18,7 @@ test('every analytics panel names a retained answer only while a different range
   const context = {exports: {} as {AnalyticsPanel: React.ComponentType<any>}, require: (name: string) => modules[name]};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/AnalyticsPanel.tsx', import.meta.url), 'utf8'), {compilerOptions: {module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, context);
   const history = {range: '24h', since: Date.parse('2026-10-06T12:00Z'), to: Date.parse('2026-10-07T12:00Z')} as History;
-  const table = React.createElement(AnalyticsTable, {columns: [{id: 'value', title: 'Amount', width: 120}], rows: [{key: 'one', name: 'Wallet', cells: {value: {content: '$37'}}}], name: 'Balance', nameWidth: 240, lead: 'value'});
+  const table = React.createElement(AnalyticsTable, {columns: [{id: 'value', title: 'Amount', width: 120}], rows: [{key: 'one', name: 'Wallet', cells: {value: {content: '$37'}}}], name: 'Balance', layout: 'table', lead: 'value'});
   const render = (className: string, loading: boolean, error?: 'history_failed') => renderToStaticMarkup(React.createElement(context.exports.AnalyticsPanel, {className, title: 'Metrics', history, loading, error, retry: () => {}, children: table}));
   for (const className of ['history', 'forecast', 'activity', 'budget-history', 'budget-table']) {
     selected = null;

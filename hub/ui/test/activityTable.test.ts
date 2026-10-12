@@ -9,6 +9,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {PeriodIndex} from '../lib/periodIndex';
 import {PeriodActivity} from '../lib/periodActivity';
 import * as table from '../lib/activityTable';
+import * as sharedTable from '../lib/table';
 import * as activity from '../lib/activity';
 import * as format from '../lib/format';
 import * as agents from '../lib/agents';
@@ -121,21 +122,27 @@ test('numeric and name sorting preserve independent preferences, hidden-column f
 
 function renderer(input:WorkTrace=trace){
   const trace=input;
+  let savedSort:table.ActivitySort=null;
+  const clicks=new Map<string,()=>void>();
   let by:ActivityDimension='device',owner=false,hidden:string[]=[],range={from:25_000,to:125_000},knownFrom=0;
   const index=new PeriodIndex(trace),metrics=new PeriodActivity(trace,index.curves);
   const period={activitySummaryAt:(dimension:ActivityDimension,_now:number,key?:string)=>metrics.summary(range,dimension,key),activitySummaryChangesAt:()=>null,activityRangeAt:()=>range,activityCoverageChangesAt:()=>null};
   let summary=metrics.summary(range,by);
-  const modules:Record<string,unknown>={react:React,'react/jsx-runtime':jsxRuntime,'../lib/activityTable':table,'../lib/activity':activity,'../lib/format':format,'../lib/agents':agents,'../lib/view':view,
-    '../i18n':{...i18n,useLocale:i18n.useLocale},'../lib/prefs':{ACTIVITY_BY:['project','device','source'],usePref:(key:string)=>key==='activityTableBy'?by:key==='activityTableSort'?null:'1h'},
-    '../lib/board':{useTitles:()=>({s:{provider:'codex',title:'Subscription'}})},'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>125_000},
+  const modules:Record<string,unknown>={react:React,'react/jsx-runtime':jsxRuntime,'../lib/activityTable':table,'../lib/table':sharedTable,'../lib/activity':activity,'../lib/format':format,'../lib/agents':agents,'../lib/view':view,
+    '../i18n':{...i18n,useLocale:i18n.useLocale},'../lib/prefs':{ACTIVITY_BY:['project','device','source'],setPrefs:(change:{activityTableSort?:table.ActivitySort})=>{if('activityTableSort' in change)savedSort=change.activityTableSort!;},usePref:(key:string)=>key==='activityTableBy'?by:key==='activityTableSort'?savedSort:'1h'},
+    '../lib/board':{useTitles:()=>({s:{provider:'codex',title:'Subscription'}})},'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>125_000,hubNow:()=>125_000},
     '../lib/period':{boardPeriod:period,usePeriodActivity:()=>({summary,basis:{range:{from:range.from-1,to:range.to}},loading:false,error:null})},'./sizing':{useSizing:()=>null},'./PeriodStatus':{PeriodStatus:()=>null},'./Popover':{Popover:()=>null},'./Agents':{AgentPages:()=>React.createElement('nav',{'data-pages':''}),SortIcon:()=>null},'./Kit':{Segmented:()=>null}};
   const compile=(file:string)=>{
     const context={exports:{} as Record<string,React.ComponentType<any>>,require:(name:string)=>modules[name]??{}};
     runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);return context.exports;
   };
+  const common=compile('../components/TableWidget.tsx');
+  const NativeHeading=common.TableHeading;
+  modules['./TableWidget']={...common,TableHeading:(props:any)=>{if(props.sorting)clicks.set(props.id,()=>props.sorting.onSort(props.id));return React.createElement(NativeHeading,props);}};
   modules['./AnalyticsTable']=compile('../components/AnalyticsTable.tsx');
   const {ActivityTable}=compile('../components/ActivityTable.tsx');
   return {set:(options:Partial<{by:ActivityDimension;owner:boolean;hidden:string[];range:typeof range;knownFrom:number}>)=>{by=options.by??by;owner=options.owner??owner;hidden=options.hidden??hidden;range=options.range??range;knownFrom=options.knownFrom??knownFrom;summary=new PeriodActivity({...trace,knownFrom},index.curves).summary(range,by);period.activitySummaryAt=(dimension,_now,key)=>new PeriodActivity({...trace,knownFrom},index.curves).summary(range,dimension,key);},
+    click:(column:string)=>clicks.get(column)!(),
     render:()=>renderToStaticMarkup(React.createElement(ActivityTable,{arrange:{owner,view:{...EMPTY_VIEW,columns:{[ACTIVITY_TABLE]:hidden}},update:()=>{}}}))};
 }
 
@@ -146,9 +153,9 @@ test('actual shared table renders union totals, session hints, honest unknowns a
       assert.ok(html.includes(i18n.t('activityTable.title'))&&html.includes(i18n.t('activity.agents')));
       assert.ok(!html.includes(i18n.t('activity.notKnown',{time:format.stamp(25_000)})),'a one-millisecond stale basis must not label complete coverage as unknown');
       assert.equal((html.match(/data-activity-group/g)??[]).length,2);
-      const total=html.match(/<tr class="analytics-total">(.*?)<\/tr>/)![1];
+      const total=html.match(/<tr[^>]*class="analytics-total"[^>]*>(.*?)<\/tr>/)![1];
       assert.ok(total.includes(format.workHours(150_000))&&total.includes(format.workHours(100_000))&&total.includes(activity.atOnce(150_000,100_000)));
-      assert.ok(html.includes('aria-sort="descending"')&&html.includes(i18n.t('activity.agentsHint')));
+      assert.ok(!html.includes('aria-sort=')&&html.includes(i18n.t('activity.agentsHint')));
       r.set({hidden:['sessions','concurrency']});html=r.render();assert.ok(!html.includes('data-time="activity-table" title="'+i18n.t('activity.agentsHint')));
       r.set({hidden:[],range:{from:160_000,to:170_000},knownFrom:175_000});html=r.render();
       assert.ok(html.includes(i18n.t('activity.knownFrom',{time:format.stamp(175_000)})));
@@ -158,11 +165,25 @@ test('actual shared table renders union totals, session hints, honest unknowns a
   }finally{i18n.setLocale('en');}
 });
 
-test('the comparison renders every group in the shared table without widget pages',()=>{
+test('the comparison uses the shared bounded first page and a complete total',()=>{
   const refs=Array.from({length:57},(_,i)=>ref('context-'+i,'device-'+i,'Project '+i));
   const r=renderer({...trace,refs,spans:refs.map((_,i)=>[i,0,100_000])});
   const html=r.render();
-  assert.equal((html.match(/data-activity-group=/g)??[]).length,57);
+  assert.equal((html.match(/data-activity-group=/g)??[]).length,sharedTable.TABLE_PAGE_ROWS);
   assert.equal((html.match(/class="analytics-total"/g)??[]).length,1);
+  assert.ok(html.includes('1 / 6'));
+  assert.ok(html.includes('57'));
   assert.ok(!html.includes('data-pages'));
+});
+
+
+test('three real activity headers activations clear the selection and restore the default order',()=>{
+  const r=renderer(),order=(html:string)=>[...html.matchAll(/data-activity-group="([^"]+)"/g)].map(match=>match[1]);
+  const initial=r.render(),expected=order(initial);
+  for(const column of ['name',...table.ACTIVITY_COLUMNS]){
+    r.click(column);let html=r.render();assert.ok(html.includes('aria-sort="ascending"'));
+    r.click(column);html=r.render();assert.ok(html.includes('aria-sort="descending"'));
+    r.click(column);html=r.render();assert.ok(!html.includes('aria-sort='),'reset must not mark a different header as selected');
+    assert.deepEqual(order(html),expected);
+  }
 });

@@ -3,6 +3,7 @@ import {cardId, isHidden} from './view';
 import {sourceLabel} from './quota';
 import {duration, durationChangesAt} from './format';
 import {formatLocale, t} from '../i18n';
+import {nextTableSort,visibleTableSort,tableLayout} from './table';
 
 /** More sessions than this are counted in a card's tray instead of drawn one by one. */
 export const DRAWN = 10;
@@ -154,14 +155,11 @@ export function readAgentsSort(value: unknown): AgentsSort {
 }
 
 /** Headers cycle ascending, descending, activity. Menus use their activity row to reset. */
-export function nextAgentsSort(sort: AgentsSort, column: AgentColumn, cycle = true): AgentsSort {
-  if (sort?.column !== column) return {column, descending: false};
-  return sort.descending && cycle ? null : {column, descending: !sort.descending};
-}
+export const nextAgentsSort = (sort: AgentsSort, column: AgentColumn|null, cycle = true): AgentsSort => nextTableSort(sort,column,cycle);
 
 /** A hidden column never sorts the visible rows, but its viewer's choice is kept. */
 export const visibleAgentsSort = (sort: AgentsSort, columns: readonly AgentColumn[]): AgentsSort =>
-  sort && columns.includes(sort.column) ? sort : null;
+  visibleTableSort(sort,columns);
 
 /** How recently a group worked, the more the sooner: now while one of its agents works, else when one last did. */
 const recency = (group: AgentGroup) => (group.working&&!group.rows[0]?.session.ref ? Infinity : (group.lastWorkedAt ?? -Infinity));
@@ -202,31 +200,7 @@ export const NAME_WIDTH = 180;
 export const AGENT_WIDTHS: Record<AgentColumn, number> = {project: 150, machine: 116, subscription: 132, agents: 160, worked: 120, activity: 210, running: 120};
 /** A table where the name and the columns after it (`columns`) fit `width`, else a list. */
 export function agentsLayout(columns: readonly AgentColumn[], width: number): 'table' | 'list' {
-  return columns.reduce((sum, column) => sum + AGENT_WIDTHS[column], NAME_WIDTH) <= width ? 'table' : 'list';
-}
-
-/**
- * How many of the agents a list shows in a widget of `budget` CSS pixels, in its own order:
- * all where they fit whole, otherwise the most whole rows that fit with a last row saying
- * how many more there are (`footer` high), and at least one. `rows` are the rows' heights as
- * they stand one above another, each with the border under it, which the last row shown
- * without a row after it does not have (`border`); `shell` is the rest of the widget. The
- * least the widget needs is its first row and the one saying the rest, or all of them where
- * that is less; `natural`, all of them.
- */
-export function agentsFit({shell, rows, footer, border, budget}: {shell: number; rows: number[]; footer: number; border: number; budget: number}) {
-  const natural = shell + rows.reduce((sum, row) => sum + row, 0) - (rows.length ? border : 0);
-  if (rows.length < 2) return {shown: rows.length, hidden: 0, min: natural, natural};
-  const min = Math.min(natural, shell + rows[0] + footer);
-  // Measured pixels are fractions: what fits to half a pixel fits.
-  const fits = (height: number) => height <= budget + 0.5;
-  let shown = rows.length;
-  if (!fits(natural)) {
-    shown = 1;
-    let used = shell + rows[0];
-    while (shown < rows.length - 1 && fits(used + rows[shown] + footer)) used += rows[shown++];
-  }
-  return {shown, hidden: rows.length - shown, min, natural};
+  return tableLayout(columns.map(column=>AGENT_WIDTHS[column]),width,NAME_WIDTH,0);
 }
 
 export const agentSourceLabel = (source: AgentSource | null) => source ? sourceLabel(source) : t('agents.unknownSource');

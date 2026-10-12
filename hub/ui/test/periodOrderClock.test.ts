@@ -36,7 +36,7 @@ function agentOrder({by='project',hidden=[] as string[],open=false,sort={column:
   let order:Order=()=>null;const done={};
   const source=readFileSync(new URL('../components/Agents.tsx',import.meta.url),'utf8');
   const context={exports:{} as {AgentsPanel:(props:unknown)=>unknown},memo:(f:unknown)=>f,useLocale:()=>{},useLineup:()=>['s','hidden'],useTitles:()=>({s:{title:'Source',provider:'codex'},hidden:{title:'Hidden',provider:'codex'}}),
-    usePrefs:()=>({agentsSort:sort,agentsBy:by as AgentsBy}),useState:()=>[open?{group:null}:null,()=>{}],useCallback:(f:unknown)=>f,
+    usePref:(key:'agentsSort'|'agentsBy'|'range')=>({agentsSort:sort,agentsBy:by as AgentsBy,range:'1h'})[key],useTimeRange:()=>null,useState:()=>[open?{group:null}:null,()=>{}],useCallback:(f:unknown)=>f,
     usePeriodSessions:(read:Order)=>{order=read;throw done;},columnsOf,columnShown,AGENTS,groupsOf,sortedGroups,visibleAgentsSort,byActivity,require:()=>({})};
   runInNewContext(compile(source.slice(source.indexOf('export const AgentsPanel'))),context);
   try{context.exports.AgentsPanel({arrange:{view:{...EMPTY_VIEW,hidden}}});}catch(error){assert.equal(error,done);}

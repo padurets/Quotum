@@ -67,7 +67,7 @@ export const PERIOD_SCENES=[
  */
 export const SESSION_ACTIVITY_SCENES=[
   {id:'comparison',expect:['opt-in-table','union-total','retained-contributions','shared-work-index']},
-  {id:'review',expect:['populated-24h','complete-comparison','retained-pagination','rich-breakdowns']},
+  {id:'review',expect:['populated-24h','paged-comparison','height-fit-pages','narrow-sort-menu','header-sort-reset','retained-pagination','rich-breakdowns']},
 ] as const;
 
 
@@ -643,7 +643,7 @@ const all: DemoSet = {
       kind: 'board', id: 'grid', name: 'Grid', owner: 'ana', members: [], agents: true,
       agentsPlace: {x: 0, y: 0, w: 3, h: 16}, expect: [{state: 'widgets'}],
       look: [
-        'The agents stand on the left half, 16 rows tall: the first projects that fit whole, then "N more projects"; Claude, Codex and Antigravity stack on the right, their trays at the bottom of their rows',
+        'The agents stand on the left half, 16 rows tall: whole project rows with a compact pager at the bottom right; Claude, Codex and Antigravity stack on the right, their trays at the bottom of their rows',
         'Claude is as tall as its content; Codex is taller, with room over its tray; Antigravity was made 8 rows tall but shows its five windows whole',
         'Hiding three of Antigravity\'s windows brings it to its 8 rows, showing them again makes it as tall as they are',
       ],
@@ -1646,7 +1646,7 @@ const activity: DemoSet = {
     {kind: 'person', id: 'ana', name: 'Ana', agents: true, expect: [{rows: 12}, {firstMachines: ['workstation', 'workstation', 'laptop', 'laptop'], from: 2 * MIN, to: 10 * MIN}], look: ['At full width, sortable headers; a project a row, an agent in each; those of two agents on workstation rise to the top after a minute']},
     {
       kind: 'board', id: 'compact', name: 'Compact agents', owner: 'ana', members: [], agents: true, agentsPlace: {x: 3, y: 1, w: 2, h: 8}, expect: [{rows: 12}],
-      look: ['At a third of the grid the widget is a compact list, with a sort menu, eight rows tall: the first projects and "N more projects"; the dialog shows them all as a table'],
+      look: ['At a third of the grid the widget is a compact list, with a sort menu, eight rows tall: whole project rows and the bottom-right pager; each project opens its sessions'],
     },
     {
       kind: 'card', id: 'activity', provider: 'codex', plan: 'pro', machines: ['workstation', 'laptop', 'server'], history: DAY,
