@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {attachedChrome, Cdp, openTab,nativeProcesses, threadWait} from '../cdp.js';
+import {attachedChrome, Cdp, openTab,nativeProcesses, threadWait,threadCall} from '../cdp.js';
 import {Requests} from '../index.js';
 import {safeEvidence} from '../evidence.js';
 
@@ -14,6 +14,17 @@ function browser() {
     emit: (method: string, params: unknown) => listeners.get(method)?.forEach(listener => listener(params)),
   };
 }
+
+test('native wait evidence keeps syscall numbers and distinguishes missing kernel symbols',()=>{
+  assert.deepEqual(threadWait('0\n'),{kind:'unavailable'});
+  assert.deepEqual(threadWait('futex_wait_queue\n'),{kind:'futex'});
+  assert.deepEqual(threadCall('202 0x12345678 0x80 0x0 0x0 0x0 0x0 0x7fff 0xabc\n'),{status:'available',number:202});
+  assert.deepEqual(threadCall('-1 0x7fff 0xabc'),{status:'available',number:-1});
+  assert.deepEqual(threadCall('running'),{status:'running'});
+  for(const value of ['unavailable','202','202 token=private 0x80 0x0 0x0 0x0 0x0 0x7fff 0xabc','123456789 0x1 0x2 0x3 0x4 0x5 0x6 0x7 0x8'])assert.deepEqual(threadCall(value),{status:'unavailable'});
+  const saved=safeEvidence({call:threadCall('202 0x12345678 0x80 0x0 0x0 0x0 0x0 0x7fff 0xabc')});
+  assert.deepEqual(saved,{call:{status:'available',number:202}});
+});
 
 test('native diagnostics inspect an owned process and exclude a process outside its ancestry',{skip:process.platform!=='linux'},async()=>{
   const owned=await nativeProcesses(process.pid,[process.pid,999999999]);
@@ -47,7 +58,7 @@ test('an owned blocked thread keeps its wait category in the saved evidence', {s
 test('known native waits keep fixed categories while unknown symbols expose no raw text', () => {
   assert.deepEqual(safeEvidence({wait: threadWait('futex_wait_queue')}), {wait: {kind: 'futex'}});
   assert.deepEqual(safeEvidence({wait: threadWait('ep_poll')}), {wait: {kind: 'poll'}});
-  assert.deepEqual(safeEvidence({wait: threadWait('0')}), {wait: {kind: 'unknown'}});
+  assert.deepEqual(safeEvidence({wait: threadWait('0')}), {wait: {kind: 'unavailable'}});
   assert.deepEqual(safeEvidence({wait: threadWait('unavailable')}), {wait: {kind: 'unavailable'}});
   const saved = safeEvidence({wait: threadWait('/private-canary/kernel-symbol')});
   assert.deepEqual(saved, {wait: {kind: 'unknown'}}); assert.doesNotMatch(JSON.stringify(saved), /private-canary|kernel-symbol/);

@@ -4,7 +4,7 @@ import {safeEvidence} from './evidence.js';
 
 type DocumentMark={atMs:number;frame?:string;loader?:string};
 export type DiagnosticOrigin={startedAt:number;navigation:()=>{requested?:DocumentMark;committed?:DocumentMark;loadAtMs:number|null}};
-type Options = {mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
+type Options = {mode?: 'canonical' | 'diagnostic'; profileBeforeInput?: boolean; postmortem?:boolean; closeTarget?: () => Promise<void>;signal?:AbortSignal;origin?:DiagnosticOrigin};
 type Process = {type: string; id: number; cpuTime: number};
 let serial = 0;
 
@@ -18,6 +18,16 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
   const id = ++serial, signal = options.signal&&browser.owner?AbortSignal.any([options.signal,browser.owner.signal]):options.signal??browser.owner?.signal;
   let intervention = false, capture: Promise<void> | undefined, released = false;
   const report: Record<string, unknown> = {id, mode: diagnostic ? 'diagnostic' : 'canonical', ownedBrowser: Boolean(browser.owned)};
+  if(diagnostic||options.postmortem&&browser.owned){
+    const sources:{scriptId:string;sourceHash:string;sourceLength:number}[]=[];
+    page.on<{scriptId:string;url:string;hash:string;length:number}>('Debugger.scriptParsed',event=>{
+      let pathname:string;try{const url=new URL(event.url);if(!['http:','https:'].includes(url.protocol))return;pathname=url.pathname;}catch{return;}
+      if(/^\/assets\/index-[\w-]+\.js$/.test(pathname)&&/^[\da-f]{64}$/i.test(event.hash)&&sources.length<4){sources.push({scriptId:event.scriptId,sourceHash:event.hash.toLowerCase(),sourceLength:event.length});report.sources=sources;}
+    });
+    page.on<{reason:string;callFrames:{location:{scriptId:string;lineNumber:number;columnNumber:number}}[]}>('Debugger.paused',event=>{
+      report.pause={reason:event.reason,frames:event.callFrames.slice(0,16).map(({location:{scriptId,lineNumber,columnNumber}})=>({scriptId,lineNumber,columnNumber})),omitted:Math.max(0,event.callFrames.length-16)};
+    });
+  }
   const store = () => {
     const safe = safeEvidence(report);
     browser.owner?.evidence?.save('cdp-' + id, safe);
@@ -83,7 +93,11 @@ export async function observeReversal(page: Cdp, browser: Browser, options: Opti
             report.page = await page.evaluate('({visibility:document.visibilityState,focus:document.hasFocus(),ready:document.readyState})', probe);
           }, 2000, pending).catch(() => {report.page = 'unresponsive';}),
         ]);
-        if (diagnostic) {
+        // A failed owned page can be inspected after its original deadline;
+        // accepted commands and attached browsers remain passive.
+        const postmortem=options.postmortem&&browser.owned&&page.snapshot().failure?.method==='Runtime.evaluate'&&report.page==='unresponsive';
+        if (diagnostic||postmortem) {
+          if(postmortem)report.postmortem=true;
           if (!intervention) await enable(pending);
           await send('Debugger.pause', pending);
           const profile = await page.send<{profile: {samples?: number[]; timeDeltas?: number[]}}>('Profiler.stop', {}, pending);

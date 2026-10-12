@@ -325,7 +325,7 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
     const wheel = (pixels: number) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: pixels, deltaY: 0, modifiers: 8});
     try {
       // The canonical failing page is observed without changing V8 before input.
-      observer=await observeReversal(cdp,browser,{mode:diagnostic?'diagnostic':'canonical',profileBeforeInput,closeTarget:close});
+      observer=await observeReversal(cdp,browser,{mode:diagnostic?'diagnostic':'canonical',profileBeforeInput,postmortem:true,closeTarget:close});
       bodies.phase = phase; proxy.phase(phase, mode === 'after-delivery' ? 0 : 400);
       await step('shift down', () => key('keyDown', 'Shift', 16, 8));
       await step('first wheel', () => wheel(-geometry.width * .1));

@@ -172,8 +172,16 @@ export function threadWait(value: string) {
     : /^(?:pipe_read|pipe_write)$/.test(symbol) ? 'pipe'
     : symbol === 'do_wait' ? 'child'
     : /^(?:io_schedule|folio_wait_bit_common)$/.test(symbol) ? 'io'
-    : !symbol || symbol === 'unavailable' ? 'unavailable' : 'unknown';
+    : !symbol || symbol === '0' || symbol === 'unavailable' ? 'unavailable' : 'unknown';
   return {kind};
+}
+
+/** The syscall number locates a native wait without retaining arguments or addresses. */
+export function threadCall(value:string){
+  const fields=value.trim().split(/\s+/);
+  if(fields.length===1&&fields[0]==='running')return {status:'running' as const};
+  if((fields.length===9&&/^\d{1,6}$/.test(fields[0])||fields.length===3&&fields[0]==='-1')&&fields.slice(1).every(field=>/^0x[\da-f]{1,16}$|^-?\d{1,20}$/i.test(field)))return {status:'available' as const,number:Number(fields[0])};
+  return {status:'unavailable' as const};
 }
 
 /** Only a launched browser's descendants may expose native thread state. */
@@ -195,7 +203,8 @@ export async function nativeProcesses(owner:number,pids:number[],signal?:AbortSi
       if(signal?.aborted)break;
       const text=await readFile(`/proc/${pid}/task/${id}/status`,{encoding:'utf8',signal}).catch(()=> '');
       const wait=await readFile(`/proc/${pid}/task/${id}/wchan`,{encoding:'utf8',signal}).catch(()=> 'unavailable');
-      threads.push({id:Number(id),state:text.split('\n').filter(line=>/^(Name|State):/.test(line)),wait:threadWait(wait)});
+      const syscall=await readFile(`/proc/${pid}/task/${id}/syscall`,{encoding:'utf8',signal}).catch(()=> 'unavailable');
+      threads.push({id:Number(id),state:text.split('\n').filter(line=>/^(Name|State):/.test(line)),wait:threadWait(wait),call:threadCall(syscall)});
     }
     processes.push({pid,state,threads});
   }

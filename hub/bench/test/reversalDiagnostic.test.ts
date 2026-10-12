@@ -10,7 +10,7 @@ function pageFixture(send: (method: string, signal?: AbortSignal) => Promise<unk
     snapshot: () => ({pending: [{id: 1, method: 'Input.dispatchMouseEvent', started: 1, deadline: 30001}]}),
     send: async (method: string, _params: object, signal?: AbortSignal) => {commands.push(method); return send(method, signal);},
     evaluate: async (_expression: string, signal?: AbortSignal) => send('Runtime.evaluate', signal),
-    close() {},
+    on() {},close() {},
   } as unknown as Cdp};
 }
 
@@ -32,6 +32,33 @@ test('canonical commands acknowledged after five seconds retain the thirty-secon
   const result = observer.watch('slow acknowledgement', () => new Promise<void>(resolve => {release = resolve;}));
   t.mock.timers.tick(6000); release(); await result; await observer.close();
   assert.deepEqual(commands, []);
+});
+
+test('an owned unresponsive page is paused only after its original failure and always released',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const logs:string[]=[];t.mock.method(console,'error',(line:string)=>logs.push(line));
+  t.mock.method(globalThis,'fetch',async()=>new Response('{}'));
+  const listeners=new Map<string,(event:unknown)=>void>();let reject!:(error:Error)=>void;
+  const {page,commands}=pageFixture(async(method,signal)=>{
+    if(method==='Runtime.evaluate')return new Promise((_,reject)=>signal!.addEventListener('abort',()=>reject(signal!.reason),{once:true}));
+    if(method==='Debugger.enable')listeners.get('Debugger.scriptParsed')?.({scriptId:'7',url:'https://private-canary.invalid/assets/index-fixture.js',hash:'a'.repeat(64),length:1000});
+    if(method==='Debugger.pause')listeners.get('Debugger.paused')?.({reason:'debugCommand',callFrames:[{location:{scriptId:'7',lineNumber:12,columnNumber:34},url:'https://private-canary.invalid',functionName:'private-canary'}]});
+    return method==='Profiler.stop'?{profile:{samples:[1],timeDeltas:[1000]}}:{};
+  });
+  page.on=(method,listener)=>{listeners.set(method,listener as (event:unknown)=>void);};
+  const original=new Error('original command deadline');
+  const observer=await observeReversal(page,{owned:true,endpoint:'fixture',close:async()=>{}},{postmortem:true});
+  const pending=new Promise<never>((_,fail)=>{reject=fail;});
+  const failed=assert.rejects(observer.watch('first delivery',()=>pending),error=>error===original);
+  t.mock.timers.tick(5000);await flush();assert.deepEqual(commands,[]);
+  t.mock.timers.tick(25000);page.snapshot=()=>({failure:{method:'Runtime.evaluate'}}) as ReturnType<Cdp['snapshot']>;reject(original);
+  await flush();t.mock.timers.tick(2000);await failed;await observer.close();
+  assert.deepEqual(commands,['Debugger.enable','Profiler.enable','Profiler.start','Debugger.pause','Profiler.stop','Debugger.resume','Profiler.stop','Debugger.disable']);
+  const report=JSON.parse(logs.at(-1)!.slice('reversal diagnostic '.length));
+  assert.equal(report.postmortem,true);assert.equal(report.resumed,true);
+  assert.deepEqual(report.pause,{reason:'debugCommand',frames:[{scriptId:'7',lineNumber:12,columnNumber:34}],omitted:0});
+  assert.deepEqual(report.sources,[{scriptId:'7',sourceHash:'a'.repeat(64),sourceLength:1000}]);
+  assert.doesNotMatch(logs.join(''),/private-canary/);
 });
 
 test('failed canonical input retains its error and bounds probes without debugger or foreign process inspection', async t => {
