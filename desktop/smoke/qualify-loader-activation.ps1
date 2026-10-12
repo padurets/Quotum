@@ -18,6 +18,7 @@ function Test-LoaderActivationEvidence($Reading,$Worker,[string]$Policy,[string]
   if($created.Count -ne 2 -or @($created.Thread | Select-Object -Unique).Count -ne 2 -or @($created.Window | Select-Object -Unique).Count -ne 2 -or @($created.Process | Select-Object -Unique).Count -ne 1 -or @($created | Where-Object {$_.Process -ne $Worker.pid -or -not $_.Thread -or -not $_.Window -or $_.CurrentThread -ne $_.Thread}).Count){$problems.Add('two-owned-native-threads-unqualified')}
   $initial=@($rows | Where-Object {$_.Kind -eq 'initial-main-observed'})
   $shown=@($rows | Where-Object {$_.Kind -eq 'transition-main-loader'})
+  # Destruction can add another cancellation. Judge the trial before its cleanup.
   $final=@($rows | Where-Object {$_.Kind -eq 'final-snapshot'})
   if($initial.Count -ne 1 -or $shown.Count -ne 1 -or $final.Count -ne 1){$problems.Add('initial-or-final-snapshot-unavailable')}
   else {
@@ -46,18 +47,18 @@ function Test-LoaderActivationEvidence($Reading,$Worker,[string]$Policy,[string]
       }
       if($Reading.transitions -ne 3 -or $Reading.gateStarted -ne 1 -or $Reading.gateReturned -ne 1 -or $Reading.linkedStaleObserved -lt 1){$problems.Add('three-real-transitions-unqualified')}
       if($Policy -eq 'baseline'){
-        if($Reading.cancelled -ne 1 -or $final[0].Cancellations -ne 1 -or $final[0].Wanted -ne $false -or $final[0].Visible -ne $false -or $final[0].NativeVisible -ne $false){$behavior.Add('baseline-did-not-reproduce-cancellation')}
-      } elseif($Reading.cancelled -ne 0 -or $Reading.staleIgnored -lt 1 -or $final[0].Cancellations -ne 0 -or $final[0].Wanted -ne $true -or $final[0].Visible -ne $true -or $final[0].NativeVisible -ne $true -or $final[0].Foreground -ne $loader){$behavior.Add('guard-did-not-preserve-open')}
+        if($final[0].Cancellations -ne 1 -or $final[0].Wanted -ne $false -or $final[0].Visible -ne $false -or $final[0].NativeVisible -ne $false){$behavior.Add('baseline-did-not-reproduce-cancellation')}
+      } elseif($Reading.staleIgnored -lt 1 -or $final[0].Cancellations -ne 0 -or $final[0].Wanted -ne $true -or $final[0].Visible -ne $true -or $final[0].NativeVisible -ne $true -or $final[0].Foreground -ne $loader){$behavior.Add('guard-did-not-preserve-open')}
     } elseif($Scenario -in @('blur','handoff')){
       if(-not @($native | Where-Object {($_.W -band 65535) -eq 0 -and $_.Foreground -eq $main -and $_.Visible -eq $true -and $_.Wanted -eq $true}).Count){$problems.Add('actual-foreground-leave-unqualified')}
       if($Scenario -eq 'handoff' -and (-not @($rows | Where-Object {$_.Kind -eq 'ready-target' -and $_.Ready -eq $main}).Count -or $final[0].Ready -ne $main)){$problems.Add('ready-handoff-target-unqualified')}
       $expected=if($Scenario -eq 'blur'){'cancel'}else{'handoff'}
       if(-not @($rows | Where-Object {$_.Kind -eq $expected}).Count){$behavior.Add('leave-policy-unmatched')}
-      if($final[0].Visible -ne $false -or $final[0].NativeVisible -ne $false -or $Reading.cancelled -ne $(if($Scenario -eq 'blur'){1}else{0}) -or $final[0].Wanted -ne ($Scenario -eq 'handoff')){$behavior.Add('leave-state-unmatched')}
+      if($final[0].Visible -ne $false -or $final[0].NativeVisible -ne $false -or $final[0].Cancellations -ne $(if($Scenario -eq 'blur'){1}else{0}) -or $final[0].Wanted -ne ($Scenario -eq 'handoff')){$behavior.Add('leave-state-unmatched')}
     } elseif($Scenario -eq 'escape'){
       if(-not @($rows | Where-Object {$_.Kind -eq 'escape-input' -and $_.Foreground -eq $loader}).Count){$problems.Add('escape-input-unqualified')}
       if(-not @($rows | Where-Object {$_.Kind -eq 'native-message' -and $_.Message -eq 0x100 -and $_.W -eq 27 -and $_.Owned -eq $true -and $_.CurrentThread -eq $_.Thread}).Count){$problems.Add('native-escape-delivery-unqualified')}
-      if($Reading.cancelled -ne 1 -or $final[0].Cancellations -ne 1 -or $final[0].Wanted -ne $false -or $final[0].Visible -ne $false -or $final[0].NativeVisible -ne $false){$behavior.Add('escape-did-not-cancel')}
+      if($final[0].Cancellations -ne 1 -or $final[0].Wanted -ne $false -or $final[0].Visible -ne $false -or $final[0].NativeVisible -ne $false){$behavior.Add('escape-did-not-cancel')}
     } else {$problems.Add('unknown-scenario')}
   }
   $qualified=$problems.Count -eq 0

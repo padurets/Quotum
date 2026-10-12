@@ -74,6 +74,8 @@ try {
   try {[QuotumWindowProbe]::MainRequestThenPause(0,'fixture.exe') | Out-Null} catch {$failed=$true}
   if(-not $failed -or [QuotumWindowProbe]::LastDispatch.Acceptance -ne 'not-sent'){throw 'Missing target was accepted'}
 } finally {Remove-Item -LiteralPath $root -Recurse -Force}
+# Check fabricated receipts before collecting native model diagnostics.
+& (Join-Path $PSScriptRoot 'test-loader-activation-evidence.ps1')
 # Run only after every original probe and its cleanup. Model diagnostics never
 # turn missing native evidence into an app-smoke pass.
 if(-not $ActivationDiagnostics -and $env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_TEMP){
