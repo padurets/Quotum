@@ -190,8 +190,9 @@ notifications also stay live, independently of the board's historical range.
   to a third, a half, two thirds or the whole width. Each fills only the rows its content
   needs, so cards stack beside a tall list, unless the owner drags its bottom edge (or
   a bottom corner) to make it taller, or the list of agents shorter: the charts grow
-  with it, a card never gets shorter than its content, and a shorter list ends with how
-  many more rows it has, which opens them all. Either side edge changes the width. A
+  with it, a card never gets shorter than its content, and tables fit whole rows to
+  their height, with a pager at the bottom right for the remaining rows. Either side
+  edge changes the width. A
   double click on the bottom edge or a bottom corner, or Enter or Space on the bottom
   edge, gives a widget back the height of its content. The owner names the cards,
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
@@ -244,11 +245,13 @@ day, not a script thrown together over a weekend. In practice that meant:
   and folder (`sessions = false` and `projects = false` turn that off). With each
   question to the hub, whether its client is in use on the machine: a card tells the
   members of its boards that the subscription is in use right now, whatever those
-  settings say. Where a board shows that subscription, whoever brought it, and the
-  person whose agents they are is on the board, its members see them with the name of
-  the machine they run on, each project under the name that person gave it, and when and
-  how long they worked, by project and machine, from the later of when that person joined
-  the board and when the subscription came to it (on their own board, all of it). The hub
+  settings say. Shared boards admit each member's device sessions independently of
+  subscriptions, enabled by default and managed per device in Board settings → Provided data.
+  Members see the client, machine, project and folder names and their credited work.
+  Shared work begins no earlier than membership and retained capture; re-enabling a
+  device starts a fresh boundary. Personal boards keep all of their owner's captured work.
+  Funding is identified only while held and provided; otherwise its identity is redacted.
+  Quota attribution additionally respects the subscription's separate grant boundary. The hub
   keeps when each agent worked, with its machine, project and folder names, for 90 days,
   and the names you give your projects until you undo them; you see and correct your
   projects through *Agent activity → Settings → Manage projects*. The full list is in the [spec](spec/ingest-v1.md#privacy).

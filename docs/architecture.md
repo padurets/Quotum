@@ -1157,7 +1157,8 @@ and its limits.
   given to cards, the hidden widgets (and those
   off by default, the list of agents, turned on), the columns hidden in a widget's table,
   the agents' and the limits' (and those off by default turned on), the windows hidden inside cards and the spending
-  plans, or that a card has none. The list of agents shows only the subscriptions whose cards are shown.
+  plans, or that a card has none. Agent sessions and activity include admitted device
+  work independently of card visibility or subscription sharing.
   It is stored once per board, like a dashboard in Grafana: the owner arranges it and
   names the cards the way the team calls them, and everyone sees the same board. Nothing
   in the view changes what is measured or stored.

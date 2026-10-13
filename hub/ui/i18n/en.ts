@@ -807,7 +807,7 @@ export const en = {
   'device.deniedText': 'The device gets no access, and the code no longer works.',
 
   'invite.title': 'Invitation',
-  'invite.text': 'You are invited to the board “{board}”. Its members see each other’s limits, and on the subscriptions shown there that you measure, your agents and when they worked.',
+  'invite.text': 'You are invited to the board “{board}”. Members see subscriptions provided to this board. Joining also provides sessions from all your devices by default from that moment: client, project, folder, machine and credited work, independently of subscriptions. Manage each device in Board settings → Provided data.',
   'invite.checking': 'Checking the invitation…',
   'invite.join': 'Join as {name}',
 

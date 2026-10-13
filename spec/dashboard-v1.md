@@ -830,14 +830,19 @@ Recovery exactly at a cell boundary starts an ordinary new cell. Spending totals
 include only proven steps; the aggregate does not invent intra-cell sample positions.
 
 A field is omitted only when its rounded value equals the decoded default. `f` is
-omitted while `open` is not null. The subscription's known threshold is
-`S = max(known.work, known.sources[source])`. Work stretches are selected by the board's
-holders and cut at the later of each holder's joining threshold and `S`. For proven
-steps starting at or after `S`, `w` adds the delta, overlap with the subscription's
-union of selected work, and the whole delta when that overlap is positive. Work before
-`S` is not attributed; a hidden card has no work record in the frame.
+omitted while `open` is not null. With `known.sourceWork`, the subscription's known
+threshold is `S = max(known.work, known.sourceWork[source])`; an absent source entry
+means unavailable work, with `S` treated as infinity for decoding. Legacy metadata
+omitting the whole field keeps `S = max(known.work, known.sources[source])`.
+Quota work uses device-admitted stretches with currently held, disclosed funding,
+additionally cut at each device's admission and the source's grant. For proven steps
+starting at or after `S`, `w` adds the delta, overlap with that subscription's quota
+work union, and the whole delta when that overlap is positive. Work before `S` is not
+attributed. Hidden cards have no quota series in the frame; their admitted sessions
+remain in Activity. The released tuple shapes and omission defaults are unchanged.
 
-Activity includes those same selected stretches within each cell. `active` is their
+Activity includes the full device-admitted stretches within each cell, independently
+of card visibility and source grant boundaries. `active` is their
 union. Each session's time is additive, so parallel agents count separately. A session
 is its index in the chunk's `sessions`; when its time equals `active`, that index alone
 is written. Groups are subscriptions (`s`, source id), projects (`p`, the project name
@@ -846,6 +851,8 @@ longest time of its member sessions in the cell, and is written only when it dif
 Machine names are in `devices`. Only admitted sessions with work in the chunk appear.
 The sparse sourceWork override is emitted only when a source’s quota union/additive
 work differs from the full admitted activity in that cell, including explicit zero.
+It replaces only that source's quota totals for the cell; without an override those
+totals use its full activity values. It never changes the full Activity totals.
 Legacy composition, fixed summaries, tile merging and wire dictionaries preserve it.
 The activity source keys unknown and notProvided are neutral, without synthetic sources.
 

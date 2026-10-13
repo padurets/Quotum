@@ -503,8 +503,8 @@ const all: DemoSet = {
       id: 'ana',
       name: 'Ana',
       agents: true, agentsColumns: ['active', 'concurrency'],
-      // Heights she chose, which the benchmark renders too: the list after all her cards however many, 32 rows tall, so most of its
-      // agents show with their work totals and a few are left to the dialog; the analytics taller than drawn by themselves.
+      // Heights she chose, which the benchmark renders too: sessions after all her cards, 32 grid rows tall,
+      // fitting whole rows with the rest on widget pages; the analytics taller than drawn by themselves.
       agentsPlace: {x: 0, y: 99, w: 6, h: 32},
       places: {activity: {x: 0, y: 0, w: 6, h: 12}, 'quota-history': {x: 0, y: 2, w: 6, h: 16}, 'quota-table': {x: 0, y: 3, w: 6, h: 30}},
       projects: {'docs-site': 'docs'},
@@ -547,7 +547,7 @@ const all: DemoSet = {
         'At the wide dialog width, default agent details form a table whose rows highlight from edge to edge; on a narrow screen they form an inset list',
         'Each agent\'s directory appears below its project in the details table, without a separate column; long worktree names wrap and stay readable',
         'The card tray\'s agents panel labels its right column Agent-hours and shows each session\'s credited work rather than its running duration; infra has zero work although its client is open',
-        'The list of agents is 32 rows tall: the first projects that fit whole, then "N more projects", which opens them all in a dialog, in the same order and columns, sorted there as in the widget',
+        'Agent sessions is 32 grid rows tall: projects fit as whole rows, with a pager and row count at the bottom right; the remaining projects stay on widget pages, whole-period totals stay above the pager, and a project opens its own session details',
         'Agent activity and the chart are taller than they draw themselves: the room goes to the plot, the totals, heads and legends stay whole',
         'The table is 30 rows tall: room under it on a wide screen; on a narrow one, where it is a list, it is as tall as its rows',
         'The chart\'s tooltip has a row for every line in the legend\'s order, with what is left, the plan and the gap in columns up to now, and after it the plan and where each forecast leads; on a phone it stays whole on the screen',

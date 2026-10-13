@@ -436,11 +436,13 @@ all accepted sessions are retained; board admission and funding disclosure are i
 upgraded). A `404` without that body comes from something in front of the hub and is
 tried again like any failure.
 
-A board shows a session on the card of its subscription, with its project (as its person
-named it in the dashboard, else as reported) and folder, and the name of its machine
-(as its person named it in the dashboard, else as the machine reports it), only to the
-members of a board the session's person is on (their personal board, or a shared board)
-where that subscription is shown, whoever brought it.
+A board shows admitted device sessions with their project (as their person named it
+in the dashboard, else as reported), folder and machine name (as their person named
+it, else as the machine reports it). Shared boards admit members' device sessions
+independently of subscriptions, enabled by default and managed per device in Provided
+data. A session also appears on a subscription's card only while its funding is held
+and provided; other admitted sessions use a neutral redacted association. The Privacy
+section below defines admission and history boundaries.
 
 The hub keeps when each session worked, with its machine, subscription, where it runs,
 since when and its project and folder names: each list counts until the next one, for at
@@ -618,10 +620,11 @@ running agents say. About running agents (unless turned
 off): which client, where it runs, since when, whether it works and when it last did,
 and the name of its project (the repository its folder is in, else the folder) and of
 its folder when that differs (unless that is turned off too). The members of a board you
-are on where a subscription you measure is shown, whoever brought it, see these, as they
-see its limits, with each project under the name its person gave it, and with them the
-name of the machine each agent runs on. The agent also sends an optional opaque
-process ID to the hub's work ledger; board readers never receive it. Raw native birth
+are on see sessions from admitted devices independently of subscriptions, with each
+project under the name its person gave it and the name of the machine each session
+runs on. Shared device sessions default on from joining; their owner controls each
+device in Provided data, with the boundaries described below. The agent also sends an
+optional opaque process ID to the hub's work ledger; board readers never receive it. Raw native birth
 metadata and the installation salt stay on the machine.
 
 What the hub keeps of plans: the plan name each subscription was reported with, from
