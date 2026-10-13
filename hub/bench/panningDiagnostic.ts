@@ -83,20 +83,32 @@ export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceE
   }
 }
 
-export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promise<T>, evidence?: TraceEvidence) {
+export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promise<T>, evidence?: TraceEvidence, timers = false) {
   if(!browser.owned)throw new Error('browser-wide tracing requires an owned synthetic browser');
   const events:SafeTrace[]=[];
-  const sanitize=traceSanitizer();
+  const sanitize=traceSanitizer(timers);
+  const timerEvidence=timers?{install:0,remove:0,fire:0,invalid:0,missingInstallOwners:0,invalidOwners:0,omittedOwners:0,omittedEvents:0}:undefined;
   let omitted=0,bytes=0,ended=false,succeeded=false;
   const collection={chunks:0,sourceEvents:0,handlerMs:0,maxHandlerMs:0};
   const collected=(message:{value:Parameters<typeof sanitize>[0][]})=>{
     const started=performance.now();
     collection.chunks++;collection.sourceEvents+=message.value.length;
     for(const event of message.value) {
+      const timerKind=timerEvidence?(event.name==='TimerInstall'?'install':event.name==='TimerRemove'?'remove':event.name==='TimerFire'?'fire':undefined):undefined;
+      if(timerEvidence&&timerKind)timerEvidence[timerKind]++;
       const safe=sanitize(event);
+      if(timerEvidence&&timerKind) {
+        if(!safe?.timer)timerEvidence.invalid++;
+        else {
+          timerEvidence.invalid+=safe.timer.invalid+Number(safe.ts===undefined)+Number(safe.pid===undefined)+Number(safe.tid===undefined);
+          timerEvidence.missingInstallOwners+=Number(timerKind==='install'&&safe.timer.ownerFrames.status!=='available');
+          timerEvidence.invalidOwners+=safe.timer.ownerFrames.invalid;
+          timerEvidence.omittedOwners+=safe.timer.ownerFrames.omitted;
+        }
+      }
       if(!safe)continue;
       const size=Buffer.byteLength(JSON.stringify(safe));
-      if(events.length>=100_000 || bytes+size>32*1024*1024){omitted++;continue;}
+      if(events.length>=100_000 || bytes+size>32*1024*1024){omitted++;if(timerEvidence&&timerKind)timerEvidence.omittedEvents++;continue;}
       bytes+=size;events.push(safe);
     }
     const elapsed=performance.now()-started;
@@ -118,7 +130,7 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
     await deadline(5000,async signal=>{
       // Broad task instrumentation can outgrow the unchanged drain deadline.
       // Timeline and compositor events retain the measured work and thread clocks.
-      await cdp.send('Tracing.start',{categories:'cc,devtools.timeline',transferMode:'ReportEvents'},signal);
+      await cdp.send('Tracing.start',{categories:timers?'cc,devtools.timeline,disabled-by-default-devtools.timeline.stack':'cc,devtools.timeline',transferMode:'ReportEvents'},signal);
       await clock('start',signal);
     },browser.owner?.signal);
     const result=await run();succeeded=true;return result;
@@ -143,6 +155,9 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
     if(cleanup==='incomplete'&&typeof cdp.snapshot==='function')drain.command=cdp.snapshot();
     cdp.off('Tracing.dataCollected',collected);cdp.off('Tracing.tracingComplete',complete);
     const report={mode:'diagnostic',status:omitted||!ended?'insufficient-evidence':'complete',scheduler:'unavailable',threadClock:{status:events.some(event=>event.threadTs!==undefined)?'available':'unavailable'},omitted,bytes,cleanup,collection,drain,events};
+    if(timerEvidence)Object.assign(report,{timerEvidence:{...timerEvidence,
+      status:ended&&cleanup==='complete'&&!omitted&&timerEvidence.install>0&&!timerEvidence.invalid&&!timerEvidence.missingInstallOwners&&!timerEvidence.invalidOwners&&!timerEvidence.omittedOwners?'captured':'insufficient-evidence',
+      kind:'Raw timer fields; source ownership, coordinate convention, carry-in lifetimes and observer and extra stack-capture overhead remain unqualified'}});
     if(evidence?.saveTrace)evidence.saveTrace('trace',report);else evidence?.save('trace',report);
     if(cleanup==='incomplete')try {await deadline(8000,()=>browser.close());}catch {browser.owner?.failures.push('diagnostic browser cleanup unconfirmed');}
     // Stop at the failed drain instead of issuing another command to a browser

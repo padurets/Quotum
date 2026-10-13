@@ -38,7 +38,7 @@ import {creditSnapshot} from './credits.js';
 import {startupTrials} from './startupDiagnostic.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
-import {timeIdle} from './idleTiming.js';
+import {traceIdle} from './idleTiming.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -248,6 +248,7 @@ async function main() {
     await cdp.evaluate(idlePhaseScript(cellMs));
     heard.reset();
     requests.counting = true;
+    let originalIdleTimingProblems: string[] | undefined;
     const readIdle = async () => {
       const before = await metrics(cdp);
       const firstReading = await cdp.evaluate<Reading>('__quotumBench.read()');
@@ -266,6 +267,10 @@ async function main() {
       const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
       const idle = {from, to, cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
       evidence.save('idle', {...idle, planned, phase, actualSeconds, phaseProblems});
+      if (idleTimingDiagnostic) {
+        originalIdleTimingProblems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
+        evidence.save('idle-timing-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
+      }
       return {idle, phaseProblems, actualSeconds, events, reading, phase, before, after, scriptMsPerSecond};
     };
     const {idle, phaseProblems, actualSeconds, events, reading, phase, before, after, scriptMsPerSecond} = idleCpuDiagnostic
@@ -273,10 +278,10 @@ async function main() {
         save: (name, value) => evidence.save('idle-cpu-' + name, value),
         saveTrace: (name, value) => evidence.saveTrace('idle-cpu-' + name, value),
       }, 2000)
-      : idleTimingDiagnostic ? await timeIdle(cdp, browser, readIdle, evidence) : await readIdle();
+      : idleTimingDiagnostic ? await traceIdle(cdp, browser, readIdle, evidence) : await readIdle();
     if (idleCpuDiagnostic || idleTimingDiagnostic) {
       if (idleBinding) await idleBinding.afterFamily([1]);
-      const problems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
+      const problems = originalIdleTimingProblems ?? [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
       evidence.save(idleTimingDiagnostic ? 'idle-timing-result' : 'idle-cpu-result', {mode: 'diagnostic', problems: problems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
       say('original history matrix and CI idle interval captured; observer overhead is unqualified');
       await finish(problems.length ? 1 : 0); return;
