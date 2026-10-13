@@ -229,8 +229,10 @@ contacted. Use `make info` for the actual address and synthetic sign-in.
 the default 24h period has 57 projects, five machines, four subscriptions and 125
 recorded contexts. Agent sessions includes active time and average concurrency,
 fits whole rows to its height and has a compact pager at the bottom right. Its separate
-footer labels totals across the
-entire selected period, including rows on other pages. Grouping uses shared segments.
+footer shows totals across the entire selected period, including rows on other pages,
+on a separate line above the pager and row count. Wide totals reuse the table's columns
+and headings; narrow totals use a fixed grid. The current working count is a subtitle.
+Grouping uses shared segments; None comes first while Project stays the default.
 Increasing the height fits more rows without a fifty-row page cap or another API read;
 when every row fits, the pager disappears. Wide tables sort through their headers, with the
 third click clearing the selected sort; only narrow lists show a sort menu.

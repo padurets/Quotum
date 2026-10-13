@@ -169,8 +169,9 @@ and platform smoke checks still apply.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).
 - Board widgets never add a vertical scroller inside the page. Table widgets share
   `TableWidget` for responsive layout, whole-row height fitting and the compact pager
-  at the bottom right. A separate footer labels the complete-period summary beside
-  the pager; narrow lists put it above. Row capacity follows height without a fixed
+  at the bottom right. A separate footer puts complete-period totals above the pager
+  and row count. Wide totals align with their columns without repeating headings;
+  narrow lists label them in a fixed grid. Row capacity follows height without a fixed
   page cap, using the complete shared index without new reads. Session grouping uses
   the shared segmented control. No more/all popup substitutes for paging. Wide tables sort in
   their headers; only narrow lists show a sort icon. Headers cycle ascending,
