@@ -461,15 +461,19 @@ td.muted, small.muted { color: var(--text-3); }
 .table-pages .icon-button:disabled { opacity: .35; pointer-events: none; }
 .table-footer { display: flex; align-items: flex-end; gap: 20px; padding-top: 14px; border-top: 1px solid var(--hair); }
 .table-summary { flex: 1; min-width: 0; }
-.table-summary-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; color: var(--text-3); font-size: 12px; }
-.table-summary-heading small { font-size: 11px; color: var(--text-4); }
+.table-summary-heading { color: var(--text-3); font-size: 12px; }
 .table-summary dl { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 10px 0 0; }
 .table-summary dl > div { min-width: 0; }
 .table-summary dt { font-size: 11px; color: var(--text-3); }
 .table-summary dd { margin: 3px 0 0; font-size: 13px; font-weight: 550; color: var(--text-2); font-variant-numeric: tabular-nums; }
-.table-footer > .table-pages { flex-shrink: 0; padding-top: 0; }
+.table-footer-pages { display: flex; align-items: center; justify-content: flex-end; flex-shrink: 0; gap: 12px; }
+.table-footer-pages small { font-size: 11px; color: var(--text-4); font-variant-numeric: tabular-nums; }
+.table-footer-pages .table-pages { padding-top: 0; }
 .table-footer.is-list { display: block; }
-.table-footer.is-list > .table-pages { margin-top: 12px; }
+.table-footer.is-list .table-summary dl { display: grid; gap: 6px; }
+.table-footer.is-list .table-summary dl > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; }
+.table-footer.is-list .table-summary dd { margin: 0; text-align: right; }
+.table-footer.is-list .table-footer-pages { margin-top: 12px; }
 .widget-body > .panel:has(> .table-footer)::after { display: none; }
 .widget-body > .panel > .table-footer { margin-top: calc(var(--fill, 0px) + 14px); }
 /* All the agents in a dialog: its list's rows light up inset, as a menu's do. */

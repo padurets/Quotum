@@ -524,7 +524,7 @@ export const ru = {
   'agents.lastActivityHint': 'Когда эти агенты в последний раз работали; сейчас, если кто-то работает',
   'agents.activityUnknown': 'Время активности неизвестно',
   'agents.groupBy': 'Группировка',
-  'agents.byNone': 'Каждый агент',
+  'agents.byNone': 'Нет',
   'agents.openGroup': 'Показать агентов',
   'agents.allGroups': 'Все',
   'card.freeResets': {one: '{count} бесплатный сброс', few: '{count} бесплатных сброса', many: '{count} бесплатных сбросов', other: '{count} бесплатного сброса'},

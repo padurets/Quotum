@@ -1321,11 +1321,14 @@ ten rows; a chosen height fits as many complete rows as its space allows. Variab
 heights follow row identities through ordering and paging. Static measurement starts
 with fifty candidates and expands to the fitting page and its next row, without clock
 subscriptions. A separate footer puts the whole-selection summary on the left and
-the compact pager on the right; a narrow list puts the summary above the pager.
+the matching row count beside the compact pager on the right. A narrow list shows
+summary metrics as aligned name/value rows above the count and pager.
 Each value names its metric and scope. The sessions table shows whole-period work and
 context counts; quota and budget tables show matching row counts without summing
 unrelated percentages or overlapping wallet components. One-page tables hide the
-pager. Grouping uses the shared labelled segmented control.
+pager. Grouping uses the shared labelled segmented control, with None first and
+Project still the default. Optional activity and concurrency columns do not add
+details to the compact session rows.
 Wide headers cycle
 ascending, descending, reset; a reset leaves no header selected and restores the
 table's default order. Only the compact list shows a sort menu. Activity totals

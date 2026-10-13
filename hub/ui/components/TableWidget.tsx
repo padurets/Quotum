@@ -38,10 +38,10 @@ export function TablePages({page,pages,onPage,range,body,reserve=false}:{page:nu
 export type TableMetric={id:string;label:string;cell:Cell|TimedCell};
 function TableFooter({table,count,metrics=[],still=false,single=false,body}:{table:TableWidget;count:number;metrics?:readonly TableMetric[];still?:boolean;single?:boolean;body?:RefObject<HTMLElement|null>}){
   return <footer ref={body} className={`table-footer${table.layout==='list'?' is-list':''}`} aria-label={t('table.summary')}>
-    <div className="table-summary"><div className="table-summary-heading" title={t('table.summaryHint')}><span>{t('table.summary')}</span><small>{t('table.rows',{count})}</small></div>
+    <div className="table-summary"><div className="table-summary-heading" title={t('table.summaryHint')}>{t('table.summary')}</div>
       {metrics.length>0&&<dl>{metrics.map(metric=><div key={metric.id}><dt>{metric.label}</dt>{tableCell(metric.id,metric.cell,(cell,time)=><dd data-time={time} data-table-metric={metric.id} className={cell.className} title={cell.title}>{cell.content}</dd>,still)}</div>)}</dl>}
     </div>
-    {!single&&<TablePages page={still?0:table.page} pages={still?2:table.pages} onPage={table.onPage} range={`${table.from+1}–${table.to} / ${count}`}/>}
+    <div className="table-footer-pages"><small title={t('table.summaryHint')}>{t('table.rows',{count})}</small>{!single&&<TablePages page={still?0:table.page} pages={still?2:table.pages} onPage={table.onPage} range={`${table.from+1}–${table.to} / ${count}`}/>}</div>
   </footer>;
 }
 

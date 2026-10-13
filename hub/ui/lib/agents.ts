@@ -42,7 +42,7 @@ export type AgentRow = {source: AgentSource | null; session: LiveSession};
 export const DIMENSIONS = ['project', 'machine', 'subscription'] as const;
 export type Dimension = (typeof DIMENSIONS)[number];
 /** What the list gathers its agents by, each viewer for themselves: a dimension, or nothing (a row per agent). */
-export const AGENTS_BY = [...DIMENSIONS, 'none'] as const;
+export const AGENTS_BY = ['none', ...DIMENSIONS] as const;
 export type AgentsBy = (typeof AGENTS_BY)[number];
 export const AGENT_COLUMNS = [...DIMENSIONS, 'agents', 'worked', 'active', 'concurrency', 'activity', 'running'] as const;
 export type AgentColumn = (typeof AGENT_COLUMNS)[number];

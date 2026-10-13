@@ -368,7 +368,7 @@ function AgentsRows({
   if (layout === 'list') {
     // What a row tells on its first line beside its name: a group, how many of its agents work; an agent, when it last worked.
     const lead: AgentColumn = single ? 'activity' : 'agents';
-    const details = columns.filter(column => column !== lead);
+    const details = columns.filter(column => column !== lead && column !== 'active' && column !== 'concurrency');
     return (
       <ul className={`agents-compact agents-rows ${single ? '' : 'is-grouped'}`} ref={body as RefObject<HTMLUListElement | null>}>
         {groups.map(group => {
@@ -392,10 +392,10 @@ function AgentsRows({
                 {columns.includes(lead) && <span className="agents-age">{COLUMNS[lead].cell(group, context)}</span>}
               </div>
               {details.length > 0 && (
-                <div className={`agents-compact-details${details.some(column=>column==='active'||column==='concurrency')?' analytics-compact-details':''}`}>
+                <div className="agents-compact-details">
                   {details.map(column => (
                     <span key={column} title={fullOf(group, column)}>
-                      {column==='active'||column==='concurrency'?`${t(COLUMNS[column].title)}: `:<span className="sr-only">{t(COLUMNS[column].title)}: </span>}
+                      <span className="sr-only">{t(COLUMNS[column].title)}: </span>
                       {column === 'worked' ? <WorkTime ms={group.workedMs} refs={group.rows.flatMap(row=>row.session.ref?[row.session.ref]:[])} still={still} labeled /> : COLUMNS[column].cell(group, context)}
                     </span>
                   ))}

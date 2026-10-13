@@ -73,8 +73,11 @@ test('the actual sessions table renders union metrics and separate whole-period 
       r.set({by:'machine',range:{from:160_000,to:170_000},knownFrom:175_000});html=r.render();assert.ok(html.includes(i18n.t('activity.knownFrom',{time:format.stamp(175_000)})));
       for(const id of ['sessions','worked','active','concurrency','working'])assert.match(html,new RegExp('<dd[^>]*data-table-metric="'+id+'"[^>]*>—</dd>'));
       r.set({narrow:true,range:{from:25_000,to:125_000},knownFrom:0});html=r.render();
-      assert.ok(html.includes('>'+i18n.t('activity.active')+': <span'));
-      assert.ok(html.includes('>'+i18n.t('agents.concurrency')+': <span'));
+      const compact=html.match(/<ul class="agents-compact[^>]*>(.*?)<\/ul>/s)![1];
+      assert.ok(compact.includes(i18n.t('agents.worked'))&&compact.includes(i18n.t('agents.lastActivity')),compact);
+      assert.ok(!compact.includes(i18n.t('activity.active'))&&!compact.includes(i18n.t('agents.concurrency')));
+      assert.ok(!compact.includes('data-time="session-activity"'));
+      assert.ok(html.includes('data-table-metric="active"')&&html.includes('data-table-metric="concurrency"'));
       r.set({narrow:false});
     }
   }finally{i18n.setLocale('en');}
@@ -86,6 +89,8 @@ test('one sessions table fits a bounded page while its footer counts the complet
   assert.equal((html.match(/data-agents-group=/g)??[]).length,sharedTable.TABLE_PAGE_ROWS);
   assert.ok(footer.includes('data-table-metric="sessions"')&&/<dd[^>]*data-table-metric="sessions"[^>]*>57<\/dd>/.test(footer));
   assert.ok(html.includes('1 / 6'));
+  const pages=footer.match(/<div class="table-footer-pages">(.*?)<\/nav><\/div>/)![1];
+  assert.ok(pages.includes(i18n.t('table.rows',{count:57}))&&pages.includes('1 / 6'));
 });
 
 test('every grouped header uses the existing ascending, descending, reset cycle',()=>{

@@ -529,7 +529,7 @@ export const en = {
   'agents.lastActivityHint': 'When these agents were last seen working; now while any works',
   'agents.activityUnknown': 'Activity time is unknown',
   'agents.groupBy': 'Group by',
-  'agents.byNone': 'Each agent',
+  'agents.byNone': 'None',
   'agents.openGroup': 'Show its agents',
   'agents.allGroups': 'All',
   'card.freeResets': {one: '{count} free reset', other: '{count} free resets'},
