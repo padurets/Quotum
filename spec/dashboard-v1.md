@@ -521,7 +521,9 @@ the exact replacement, deletion, integer delta and array splice operations of fi
 Each piece retains its own `validFor` interval, including actual observations and
 availability changes. Without `start`, replay starts from the value carrying the sequence;
 the first patch reaches the first interval. A restored value retains that immutable
-starting projection for subsequent replays. No numeric
+starting projection for subsequent replays. Candidate lookup also checks that starting
+projection's own `validFor` interval. Reusing it retains its full recorded values and
+the same sequence without extending its interval. No numeric
 interpolation or nested state sequences occur. Candidate lookup checks intervals
 without allocating a replay; staging accounts for copies before they are built.
 Current errors, credentials, actions, forecasts

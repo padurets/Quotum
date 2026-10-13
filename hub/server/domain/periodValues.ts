@@ -18,14 +18,18 @@ export type PeriodValues = {
   currencyUnavailable?:boolean;
 };
 
+const contains=(range:PeriodValues['validFor'],to:number)=>!!range&&range.from<=to&&to<range.to;
+
 /** Availability lookup does not allocate a replay while the LRU is finding a candidate. */
 export function hasPeriodValue(value:PeriodValues|null|undefined,to:number):boolean {
-  return !!value&&(!!value.validFor&&value.validFor.from<=to&&to<value.validFor.to||!!value.states?.pieces.some(([from,until])=>from<=to&&to<until));
+  return !!value&&(contains(value.validFor,to)||contains(value.states?.start?.validFor,to)||!!value.states?.pieces.some(([from,until])=>from<=to&&to<until));
 }
 export function periodValueAt(value:PeriodValues|null|undefined,to:number):PeriodValues|undefined {
   if(!value||!hasPeriodValue(value,to))return;
-  if(value.validFor&&value.validFor.from<=to&&to<value.validFor.to)return value;
-  const {states:sequence,...base}=value,start=sequence!.start??base,states=sequence!.start?sequence!:{...sequence!,start},copy=structuredClone(start);
+  if(contains(value.validFor,to))return value;
+  const {states:sequence,...base}=value,start=sequence!.start??base,states=sequence!.start?sequence!:{...sequence!,start};
+  if(contains(start.validFor,to))return {...start,states};
+  const copy=structuredClone(start);
   for(const [from,until,changes] of states.pieces){
     applyValueChanges(copy,states.paths,changes);
     if(from<=to&&to<until)return {...copy,states};
