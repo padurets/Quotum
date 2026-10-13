@@ -1,4 +1,4 @@
-import {valueIn, type PlotLine as Line} from './lines';
+import {pointIndex, valueIn, type PlotLine as Line} from './lines';
 import type {Coverage} from './historyPlot';
 import {PLAN_TOLERANCE} from './plan';
 
@@ -42,11 +42,10 @@ export const chartMoments = (markers: {at: number; strong?: boolean; past?: bool
 export function valueAt(runs: [number, number][][], at: number) {
   for (const run of runs) {
     if (at < run[0][0] || at > run.at(-1)![0]) continue;
-    for (let i = 1; i < run.length; i++) {
-      const [t0, v0] = run[i - 1];
-      const [t1, v1] = run[i];
-      if (at <= t1) return t1 === t0 ? v1 : v0 + ((v1 - v0) * (at - t0)) / (t1 - t0);
-    }
+    const i = pointIndex(run, at, 1);
+    if (i >= run.length || !(at <= run[i][0])) continue;
+    const [t0, v0] = run[i - 1], [t1, v1] = run[i];
+    return t1 === t0 ? v1 : v0 + ((v1 - v0) * (at - t0)) / (t1 - t0);
   }
   return undefined;
 }

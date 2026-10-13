@@ -1,7 +1,7 @@
 import {Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
-import {preciseReadout, type PlotBlock, type PlotLine as Line} from '../lib/lines';
+import {pointIndex, preciseReadout, type PlotBlock, type PlotLine as Line} from '../lib/lines';
 import {useClock} from '../lib/clock';
 import {gapText, gapTone, readout as readCell, runOutPast, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
@@ -291,7 +291,7 @@ export const Chart = memo(function Chart({
   onSelect?: (range: TimeRange) => void;
   plot?: number;
   onBase?: (height: number) => void;
-  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;detail?:(key:string,at:number)=>ReactNode};
+  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;observation?:(key:string,at:number)=>{at:number;value:string}|undefined;detail?:(key:string,at:number)=>ReactNode};
   stepped?:boolean;
   strip?: PlotBuffer | null;
   prepared?: boolean;
@@ -320,17 +320,23 @@ export const Chart = memo(function Chart({
     const bx = (at: number) => x(Math.min(drawNow, at + cellMs / 2));
     const y = (value: number) => top + (1 - (value-(valueAxis?.min??0)) / ((valueAxis?.max??100)-(valueAxis?.min??0))) * (height - top - bottom);
     const geometry = `${basis.from}:${basis.to}:${drawNow}:${width}:${height}:${cellMs}:${valueAxis?.min??0}:${valueAxis?.max??100}:${stepped}`;
-    const paths: {line: string; last: [number, number] | null; parts: {key: string; line: string}[] | null; latest: string | undefined}[] = [];
+    const paths: {line: string; last: [number, number] | null; parts: {key: string; line: string}[] | null; latest: string | undefined; observation?:string}[] = [];
     for (const line of incomingLines) {
       let latest: string | undefined;
+      let observation: string | undefined;
       let lastAt:number|undefined;
       for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; lastAt=at; yield;}
-      if(lastAt!==undefined&&valueAxis?.rawValue)latest=`${lastAt}:${valueAxis.rawValue(line.key,lastAt)}`;
+      if(lastAt!==undefined&&valueAxis?.rawValue){
+        const value=valueAxis.rawValue(line.key,lastAt);latest=`${lastAt}:${value}`;
+        // An unchanged balance can advance its observation without moving its drawing cell.
+        const proof=line.pointMode==='observation'?valueAxis.observation?.(line.key,lastAt):undefined;
+        if(proof&&Number.isSafeInteger(proof.at)&&proof.at>=0&&proof.at<=drawNow&&proof.value===value)observation=`${proof.at}:${value}`;
+      }
       if(line.pointMode==='observation') {
         const observed=yield* observationRunsPrepared(line.points,incomingStrip?.from??drawFrom,incomingStrip?.to??basis.to,drawNow);
         const runs:[number,number][][]=[];
         for(const run of observed.runs){const mapped:[number,number][]=[];for(const [at,value] of run){mapped.push([x(at),y(value)]);yield;}runs.push(mapped);}
-        paths.push({line:yield* plotPathPrepared(runs,true),last:observed.last?[x(observed.last[0]),y(observed.last[1])]:null,parts:null,latest});
+        paths.push({line:yield* plotPathPrepared(runs,true),last:observed.last?[x(observed.last[0]),y(observed.last[1])]:null,parts:null,latest,observation:observed.runs.length?observation:undefined});
       } else if(line.capCells) {
         let path='',last:[number,number]|null=null;
         for(const cell of line.capCells) {
@@ -479,8 +485,8 @@ export const Chart = memo(function Chart({
     let low = 0;
     let high = 0;
     for (const line of lines) {
-      for (const [at, value] of line.points) {
-        if (at < a || at > b) continue;
+      for (let i = pointIndex(line.points, a); i < line.points.length && line.points[i][0] <= b; i++) {
+        const value = line.points[i][1];
         if (value < LABEL_BAND) low++;
         else if (value > 100 - LABEL_BAND) high++;
       }
@@ -503,7 +509,9 @@ export const Chart = memo(function Chart({
       if (value < band) low++;
       else if (value > 100 - band) high++;
     };
-    for (const line of lines) for (const [at, value] of line.points) if (at >= a && at <= b) count(value);
+    for (const line of lines) {
+      for (let i = pointIndex(line.points, a); i < line.points.length && line.points[i][0] <= b; i++) count(line.points[i][1]);
+    }
     const across = [0, 0.25, 0.5, 0.75, 1].map(share => a + (b - a) * share);
     for (const forecast of forecasts) for (const at of across) count(valueAt([forecast.points], at));
     for (const plan of plans) for (const at of across) count(valueAt(plan.runs, at));
@@ -630,7 +638,7 @@ export const Chart = memo(function Chart({
           );
         })}
         {lines.map((line, i) => (
-          <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={paths[i]?.latest} stroke={line.color} strokeDasharray={line.dash || undefined}>
+          <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={paths[i]?.latest} data-observation={paths[i]?.observation} stroke={line.color} strokeDasharray={line.dash || undefined}>
             {paths[i].parts?.map(part => <path key={part.key} d={part.line} className="series" />) ?? <path d={paths[i].line} className="series" />}
           </g>
         ))}

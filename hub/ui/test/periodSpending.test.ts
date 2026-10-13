@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import * as jsx from 'react/jsx-runtime';
-import type {ReactElement} from 'react';
+import {memo as reactMemo,type ReactElement} from 'react';
 import {Store} from '../../server/store/store';
 import {Directory} from '../../server/store/directory';
 import {buildApp} from '../../server/api';
@@ -69,7 +69,7 @@ function consumer(sourceId:string,board:string,range:PeriodRange) {
   const prefs={money:{view:'balance',unit:'USD'},muted:{},range:'1h',horizon:'auto'};
   const memo=(read:()=>unknown,deps:unknown[])=>{const ref=hooks.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!ref.current||deps.some((v,i)=>!Object.is(v,ref.current!.deps[i])))ref.current={deps,value:read()};return ref.current.value;};
   const modules:Record<string,unknown>={
-    'react/jsx-runtime':jsx,react:{useRef:hooks.useRef,useMemo:memo},
+    'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:hooks.useRef,useMemo:memo},
     '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared},
     '../lib/board':{useBoardId:()=>board,useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
     '../lib/history':{useBudgetHistory:()=>({history,drawing:history,loading:false,presentation:0}),useBudgetHistoryPlot:()=>strip,useHistoryBegins:()=>NOW-3*H,budgetHistory:{retry:()=>{}}},
