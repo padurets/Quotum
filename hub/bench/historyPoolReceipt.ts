@@ -49,3 +49,90 @@ export function historyPoolReceiptScript() {
     window.fetch=function(resource,init){observe(()=>{const uri=resource instanceof Request?resource.url:String(resource),path=new URL(uri,location.href).pathname;if(!/^\\/api\\/boards\\/[^/]+\\/period(?:\\/sessions)?$/.test(path))return;const attemptId=new Headers(init?.headers??(resource instanceof Request?resource.headers:undefined)).get('x-quotum-bench-attempt');emit('http',{attemptId:attemptId&&/^b\\d+:\\d+$/.test(attemptId)?attemptId:null});});return originalFetch(resource,init);};
   })()`;
 }
+
+/** CPU-prefix diagnostics omit ordinary flights; only pressure, freshness and original checkpoints are observed. */
+export function historyPoolCriticalReceiptScript() {
+  return `(() => {
+    const limit=4096,tileLimit=1024,entryByteLimit=131072,nearByteLimit=262144,tileByteLimit=262144,depthLimit=8;
+    const entries=[],nearRows=[],tiles=[],members=[],ids=new WeakMap(),versions=new WeakMap(),contexts=Array.from({length:depthLimit},()=>[0,null,null,null,0,false,null,false]);
+    let nextId=0,count=0,entryBytes=0,nearBytes=0,tileBytes=0,nextSnapshot=0,nextVersion=0,omitted=0,nearOmitted=0,tileOmitted=0,errors=0,reserveCalls=0,chargeCalls=0,chargeThrows=0,nearCalls=0,ordinaryCalls=0,ownerLookups=0,depth=0,depthOmitted=0,peakCharge=null,attached=false,ready=false,lastPhase=null,lastStep=null;
+    const n=value=>typeof value==='number'&&Number.isFinite(value)?value:null;
+    const id=value=>value&&typeof value==='object'?(ids.has(value)?ids.get(value):(ids.set(value,++nextId),nextId)):null;
+    const observe=run=>{try{return run();}catch{errors++;return null;}};
+    // A JSON number is shorter than 32 bytes. The conservative bound requires no hot-path serialization.
+    const emit=(kind,row,values=[])=>{count++;const size=96+32*(row.length+values.length);if(entries.length>=limit||entryBytes+size>entryByteLimit){omitted++;return;}entryBytes+=size;entries.push({id:count,kind,row,values});};
+    const interest=member=>{const p=member.interest;return p?[n(p.token),n(p.length),n(p.from),n(p.to),n(p.direction)]:[null,null,null,null,null];};
+    const snapshot=(record,range)=>{
+      const member=record.ref.deref(),snapshotId=++nextSnapshot,values=[],tileIds=[];let total=0,lost=0;
+      if(!member){errors++;return {snapshotId,total:0,lost:0,tileIds};}
+      const add=(entry,row)=>{
+        total++;const tileId=id(entry);tileIds.push(tileId);let previous=versions.get(entry);
+        if(previous&&previous.row.length===row.length&&previous.row.every((value,index)=>value===row[index])){values.push(previous.version);return;}
+        const size=96+32*(row.length+4);if(tiles.length>=tileLimit||tileBytes+size>tileByteLimit){tileOmitted++;lost++;values.push(null);return;}
+        const version=++nextVersion;tileBytes+=size;tiles.push([version,record.id,tileId,...row]);versions.set(entry,{version,row});values.push(version);
+      };
+      if(member.grids instanceof Map)for(const [cell,grid]of member.grids)for(const [index,tile]of grid){if(range&&(cell!==range.cell||tile.to<=range.from||tile.from>=range.to))continue;add(tile,[0,n(cell),n(index),n(tile.from),n(tile.to),n(tile.readFrom),n(tile.readTo),n(tile.validTo),n(tile.bytes),n(tile.shownAt),member.reservations.has(cell+':'+index),n(tile.writeSeq)]);}
+      else for(const [code,map]of [[1,member.valueCache],[2,member.retained]])if(map instanceof Map)for(const entry of map.values())add(entry,[code,null,null,null,null,null,null,null,n(entry.bytes),n(entry.at),null,null]);
+      emit('retained',[snapshotId,record.id,total,lost,...record.target,...interest(member),n(member.epoch),n(member.cutTo),n(member.meta?.now)],values);
+      return {snapshotId,total,lost,tileIds};
+    };
+    const owner=(pool,flight)=>{
+      ownerLookups++;const active=pool.active.get(flight)?.owner;
+      if(active)for(const record of members){const member=record.ref.deref();if(member&&(member===active||member.transport===active))return [record,member.transport===active?1:2];}
+      for(const record of members){const member=record.ref.deref();if(record.kind==='chart'&&member&&(member.flights.has(flight)||member.responses.has(flight)||[...member.reservations.values()].includes(flight)))return [record,3];}
+      return [null,0];
+    };
+    window.__quotumHistoryPoolReceipt={mark:(phase,step)=>observe(()=>{
+      if(lastPhase===phase&&lastStep===step)return;lastPhase=phase;lastStep=step;
+      const snapshots=members.map(record=>snapshot(record));emit('checkpoint',[phase,step],snapshots.map(state=>state.snapshotId));
+    }),read:()=>{
+      observe(()=>{const snapshots=members.map(record=>snapshot(record));emit('final',[],snapshots.map(state=>state.snapshotId));});
+      const order=members.length===4&&members[0].kind==='period'&&members.slice(1).every(record=>record.kind==='chart'&&record.sharedTransport)&&members[1].scope==='quota'&&members[2].scope==='budget'&&members[3].scope==='budget';
+      const receipt={mode:'diagnostic',scope:{kind:'critical-only'},status:attached&&ready&&order&&lastPhase===2&&lastStep===3&&!omitted&&!nearOmitted&&!tileOmitted&&!errors&&!depthOmitted?'critical-scope-complete':'insufficient-evidence',attached,ready,registrationOrderQualified:order,members:members.map((record,index)=>({id:record.id,ordinal:index+1,kind:record.kind,scope:record.scope,sharedTransport:record.sharedTransport})),ordinary:{status:'unobserved',reserveCalls:ordinaryCalls},clock:{status:'unobserved'},reserveCalls,chargeCalls,chargeThrows,nearCalls,peakCharge,ownerLookups,weakIdsCreated:nextId,snapshotCalls:nextSnapshot,depthOmitted,errors,omitted,nearOmitted,tileOmitted,count,entryBytes,nearBytes,tileBytes,limit,tileLimit,entryByteLimit,nearByteLimit,tileByteLimit,depthLimit,nearBudgetRatio:.95,lastPhase,lastStep,lastCheckpoint:lastPhase===2&&lastStep===3,entries,nearRows,tiles};
+      const size=JSON.stringify(receipt).length;if(size>900000)return{mode:'diagnostic',scope:{kind:'critical-only'},status:'insufficient-evidence',reason:'receipt size',originalBytes:size,attached,ready,reserveCalls,chargeCalls,chargeThrows,nearCalls,ordinary:{status:'unobserved',reserveCalls:ordinaryCalls},omitted,nearOmitted,tileOmitted,depthOmitted,errors,omittedReceipt:true,lastPhase,lastStep};return receipt;
+    }};
+    window.__quotumInspectHistoryPool=pool=>{
+      if(attached){errors++;return;}attached=true;
+      observe(()=>{
+        if(!(pool.members instanceof Set)||pool.members.size!==0)throw Error();
+        const charge=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(pool),'estimatedBytes'),threshold=pool.budget*.95;
+        if(!charge?.get)throw Error();
+        Object.defineProperty(pool,'estimatedBytes',{get(){
+          chargeCalls++;let value;try{value=charge.get.call(this);}catch(error){chargeThrows++;throw error;}
+          const current=contexts[depth-1];if(current)current[3]=current[3]===null?value:Math.max(current[3],value);
+          if(typeof value==='number'&&Number.isFinite(value)){peakCharge=peakCharge===null?value:Math.max(peakCharge,value);if(value>=threshold){nearCalls++;if(current)current[7]=true;else observe(()=>emit('charge-pressure',[n(value),n(pool.budget),depth]));}}
+          return value;
+        }});
+        const originalReserve=pool.reserve;
+        pool.reserve=function(flight,bytes){
+          reserveCalls++;const index=depth++,current=contexts[index];if(current){current[0]=reserveCalls;current[1]=flight;current[2]=bytes;current[3]=null;current[4]=0;current[5]=false;current[6]=null;current[7]=false;}else depthOmitted++;
+          try{const result=originalReserve.call(this,flight,bytes);if(current){current[5]=true;current[6]=result;}return result;}
+          finally{
+            if(current){
+              if(current[7]||current[4]||!current[5]||current[6]!==true)observe(()=>{
+                const [record,kind]=owner(pool,flight),member=record?.ref.deref(),flightId=id(flight),row=[current[0],flightId,n(bytes),n(current[3]),typeof current[6]==='boolean'?current[6]:null,current[5],current[4],record?.id??null,kind,n(pool.reservations.get(flight)??0),...(record?.target??[null,null,null,null]),...(member?interest(member):[null,null,null,null,null])];
+                if(current[7]){const size=16+32*row.length;if(nearRows.length>=limit||nearBytes+size>nearByteLimit)nearOmitted++;else{nearBytes+=size;nearRows.push(row);}}
+                if(current[4]||!current[5]||current[6]!==true){const snapshots=members.map(value=>snapshot(value));emit('reserve-critical',row,snapshots.map(value=>value.snapshotId));}
+              });else ordinaryCalls++;
+              current[1]=null;current[2]=current[3]=current[6]=null;
+            }
+            depth--;
+          }
+        };
+        const originalRegister=pool.register;
+        pool.register=function(member){const result=originalRegister.call(this,member);observe(()=>{
+          const chart=member.grids instanceof Map,period=member.transport&&member.retained instanceof Map&&member.valueCache instanceof Map;
+          const record={ref:new WeakRef(member),id:id(member),kind:chart?'chart':period?'period':'unknown',scope:member.scope==='quota'?'quota':member.scope==='budget'?'budget':null,sharedTransport:member.env?.sharedTransport===true,target:[null,null,null,null]};members.push(record);emit('register',[record.id,members.length]);
+          const originalCandidates=member.evictionCandidates;
+          member.evictionCandidates=function(...args){const candidates=originalCandidates.apply(this,args);for(const candidate of candidates){const originalDrop=candidate.drop;candidate.drop=function(...args){const current=contexts[depth-1];if(current)current[4]++;let before=null;observe(()=>{before=snapshot(record);emit('drop-before',[record.id,current?.[0]??null,n(candidate.bytes),n(candidate.shownAt),typeof member.active==='boolean'?member.active:null,before.snapshotId,...record.target,...interest(member)]);});let complete=false;try{const value=originalDrop.apply(this,args);complete=true;return value;}finally{observe(()=>{const after=snapshot(record),kept=new Set(after.tileIds);emit('drop-after',[record.id,current?.[0]??null,complete,after.snapshotId],before?.tileIds.filter(value=>!kept.has(value))??[]);});}};}return candidates;};
+          if(chart){
+            for(const [name,kind]of [['target',1],['plotTarget',2]]){const original=member[name];member[name]=function(...args){const value=original.apply(this,args);try{record.target[0]=kind;record.target[1]=n(value.cell);record.target[2]=n(value.k0*value.cell);record.target[3]=n((value.k1+1)*value.cell);}catch{errors++;}return value;};}
+            const originalBad=member.bad;member.bad=function(target){const value=originalBad.call(this,target);if(value.length)observe(()=>{const state=snapshot(record,{cell:target.cell,from:target.k0*target.cell,to:(target.k1+1)*target.cell});emit('first-bad',[record.id,n(target.cell),n(target.k0*target.cell),n((target.k1+1)*target.cell),n(value[0]),value.length,state.snapshotId,...interest(member)]);});return value;};
+            const originalRead=member.env.read;member.env.read=function(board,cell,from,to,...args){observe(()=>{const state=snapshot(record,{cell,from,to});emit('read',[record.id,n(cell),n(from),n(to),state.snapshotId,...record.target,...interest(member)]);});return originalRead.call(this,board,cell,from,to,...args);};
+          }
+        });return result;};
+        ready=true;
+      });
+    };
+  })()`;
+}

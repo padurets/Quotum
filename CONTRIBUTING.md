@@ -110,6 +110,11 @@ CPU diagnostics also match the exact successfully injected native sampler to ano
 parsed script IDs in the same window after the input family. Missing or conflicting
 owners and collection limits remain insufficient evidence. Matching source bytes
 does not establish a callback instance or its execution cost.
+CPU mode also observes cache pressure, eviction and read freshness on the original
+`browser/30d/activity/0ms/0.5/take1` page. Ordinary reservations are counted but remain
+unobserved; they add no flight records, owner scans, timestamps or serialization.
+A complete critical scope does not imply complete ordinary-flight evidence or
+qualified observer overhead. Failed or pending renderer commands still close directly.
 `QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL=1` (the
 `benchmark-history-pool-diagnostics` PR label) keeps the original benchmark phases
 and full traffic matrix. Only its `browser/30d/activity/0ms/0.5/take1` page records
