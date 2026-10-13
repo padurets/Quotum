@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
 import {readFileSync,readdirSync} from 'node:fs';
 import path from 'node:path';
 import type {Cdp} from './cdp.js';
@@ -31,6 +32,14 @@ export function clientIdentity(directory=path.join(import.meta.dirname,'../dist/
     const bytes=readFileSync(path.join(directory,names[0]));
     return{status:'available',name:names[0],bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
   }catch{return{status:'unavailable'};}
+}
+
+/** A manually selected checkout can differ from the workflow event's commit. */
+export function sourceIdentity(env:NodeJS.ProcessEnv=process.env,readHead=()=>execFileSync('git',['rev-parse','--verify','HEAD'],{encoding:'utf8'}).trim()) {
+  const sha=(value:string|undefined)=>value&&/^[a-f0-9]{40}$/.test(value)?value:null;
+  let checkoutSha:string|null=null;
+  try{checkoutSha=sha(readHead());}catch{/* Keep unavailable provenance explicit. */}
+  return{mode:'diagnostic',status:checkoutSha?'complete':'insufficient-evidence',sourceHead:sha(env.QUOTUM_BENCH_SOURCE_SHA),checkoutSha,eventSha:sha(env.GITHUB_SHA),run:env.GITHUB_RUN_ID??null,attempt:env.GITHUB_RUN_ATTEMPT??null};
 }
 
 /** Waiting happens before the profiler and the original counter interval. */

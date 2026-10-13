@@ -28,7 +28,7 @@ import {diagnoseReversal} from './historyTrafficBrowser.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
 import {creditSnapshot} from './credits.js';
-import {IdleCpuDiagnostic,clientIdentity,idleGeometry,planIdleEdge,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
+import {IdleCpuDiagnostic,clientIdentity,sourceIdentity,idleGeometry,planIdleEdge,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -187,7 +187,7 @@ async function main() {
     await cdp.send('Performance.enable');
     if(idleCpuMode){
       idleCpu=new IdleCpuDiagnostic(cdp,saveDiagnostic,clientIdentity(),!options.cdp);
-      saveDiagnostic('idle-cpu-source',{mode:'diagnostic',sourceHead:process.env.QUOTUM_BENCH_SOURCE_SHA??null,checkoutSha:process.env.GITHUB_SHA??null,run:process.env.GITHUB_RUN_ID??null,attempt:process.env.GITHUB_RUN_ATTEMPT??null});
+      saveDiagnostic('idle-cpu-source',sourceIdentity());
     }
     await cdp.send('Emulation.setFocusEmulationEnabled', {enabled: true});
     const split = ana.cookie.indexOf('=');

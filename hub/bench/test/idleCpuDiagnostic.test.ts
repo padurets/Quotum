@@ -2,10 +2,20 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import type {Cdp} from '../cdp.js';
-import {IdleCpuDiagnostic,idleEdgeProblems,ownedClockFires,planIdleEdge,type IdleGeometry} from '../idleCpuDiagnostic.js';
+import {IdleCpuDiagnostic,sourceIdentity,idleEdgeProblems,ownedClockFires,planIdleEdge,type IdleGeometry} from '../idleCpuDiagnostic.js';
 import {numericProfile,profileWindow} from '../cpuProfile.js';
 
 type Saved={name:string;value:unknown;large?:boolean};
+test('manual control reports its checked out source separately from the workflow event',()=>{
+  const source='1'.repeat(40),event='2'.repeat(40),receipt=sourceIdentity({QUOTUM_BENCH_SOURCE_SHA:source,GITHUB_SHA:event},()=>source);
+  assert.equal(receipt.status,'complete');assert.equal(receipt.sourceHead,source);assert.equal(receipt.checkoutSha,source);assert.equal(receipt.eventSha,event);
+});
+test('unavailable checkout never borrows the event SHA as source evidence',()=>{
+  const env={GITHUB_SHA:'2'.repeat(40)};
+  for(const read of [()=>{throw Error('unavailable');},()=> 'invalid']){
+    const receipt=sourceIdentity(env,read);assert.equal(receipt.status,'insufficient-evidence');assert.equal(receipt.checkoutSha,null);assert.equal(receipt.eventSha,env.GITHUB_SHA);
+  }
+});
 type Options={wrongHash?:boolean;missingClockSource?:boolean;failStop?:boolean};
 type RawProfile=Parameters<typeof numericProfile>[0];
 type Clock=Parameters<typeof profileWindow>[1][number];
