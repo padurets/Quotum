@@ -8,6 +8,10 @@ import {openTab, type Browser, type Cdp} from './cdp';
 import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
 import {observeReversal} from './reversalDiagnostic';
+import {historyPoolReceiptScript} from './historyPoolReceipt';
+import {ScriptBinding} from './scriptBinding';
+import {clientIdentity} from './evidence';
+import {deadline} from './deadline';
 
 const DAY = 86_400_000;
 type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
@@ -170,9 +174,31 @@ export async function prepareHistoryTarget(cdp: Pick<Cdp, 'send' | 'evaluate'>, 
 
 type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
 
-async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number) {
+async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>) {
   const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp);
+  const poolName=name.replace(/[^a-zA-Z0-9_-]/g,'-');
+  const poolBinding=poolEvidence?new ScriptBinding(cdp,clientIdentity(),(file,value)=>poolEvidence.save('pool-'+poolName+'-'+file,value)):null;
+  let poolCaptured=false;
   cdp.at(`${name}/seed`);
+  const capturePool = async () => {
+    if(!poolEvidence||poolCaptured)return;
+    poolCaptured=true;
+    try{
+      // A failed or pending original command must release its target without another renderer wait.
+      const command=cdp.snapshot(),available=command.socketState===1&&!command.terminal&&!command.failure&&!command.pending.length;
+      poolEvidence.save('pool-original-'+poolName,{name,status:'partial',reads:trafficReadEvidence(bodies.reads),command});
+      let receipt:unknown={status:'insufficient-evidence',reason:'original renderer unavailable'};
+      if(available){
+        try{receipt=await deadline(2000,signal=>cdp.evaluate('window.__quotumHistoryPoolReceipt?.read()??({status:"unavailable"})',signal));}
+        catch{receipt={status:'insufficient-evidence',reason:'pool receipt unavailable'};}
+      }
+      poolEvidence.save('pool-receipt-'+poolName,{name,mode:'diagnostic',receipt});
+      if(available){
+        try{await poolBinding!.afterFamily([1]);}
+        catch{poolEvidence.save('pool-binding-'+poolName,{status:'insufficient-evidence',reason:'source binding cleanup unconfirmed'});}
+      }
+    }finally{poolBinding?.close();}
+  };
   // Closing this owned target discards its observers and overrides. A stalled
   // renderer cannot acknowledge a cleanup evaluation before its target closes.
   const close = async () => {cdp.at(`${name}/cleanup`); await tab.close();};
@@ -182,13 +208,14 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     await cdp.send('Emulation.setFocusEmulationEnabled', {enabled: true});
     await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 900, deviceScaleFactor: 1, mobile: false});
     const split = cookie.indexOf('='); await cdp.send('Network.setCookie', {name: cookie.slice(0, split), value: cookie.slice(split + 1), url: proxy.url, httpOnly: true, sameSite: 'Lax'});
+    if(poolEvidence)await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:historyPoolReceiptScript()});
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: historyPageScript(length === DAY ? '24h' : '30d')});
     await cdp.send('Page.navigate', {url: proxy.url});
     const settled = async (seed = false) => {
       const deadline = Date.now() + 20_000;
       for (;;) {
         if (bodies.errors.length) throw bodies.errors[0];
-        if ((!seed||hasSeededHistory(bodies.reads,seedPhase))&&!bodies.activeCount && !bodies.pending.size && await cdp.evaluate<boolean>(`['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning')`)) {
+        if ((!seed||hasSeededHistory(bodies.reads,seedPhase))&&!bodies.activeCount && !bodies.pending.size && await cdp.evaluate<boolean>(poolEvidence?`(()=>{window.__quotumHistoryPoolReceipt?.mark(${seed?0:bodies.phase.endsWith('/warm')?2:1},${bodies.stage==='cold scroll'?1:bodies.stage==='cached return'?2:bodies.stage==='cached repeat'?3:0});return ['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning');})()`:`['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning')`)) {
           await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,250))');
           if (!bodies.activeCount && !bodies.pending.size) return;
         }
@@ -217,8 +244,8 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
       history.pushState=function(...args){p.pushes++;return originalPush.apply(this,args);};
       const frame=()=>{if(!p.running)return;if(root.dataset.panEnd){const token=root.dataset.panToken;if(p.tokens.at(-1)!==token)p.tokens.push(token);const end=Number(root.dataset.panEnd),origin=Number(root.dataset.panOrigin);if(p.poses.at(-1)?.end!==end)p.poses.push({end,origin});}p.raf=requestAnimationFrame(frame);};p.raf=requestAnimationFrame(frame);
     })()`);
-    return {cdp, bodies, settled, geometry, cell, seeds, close};
-  } catch (error) {await close(); throw error;}
+    return {cdp, bodies, settled, geometry, cell, seeds, close,capturePool};
+  } catch (error) {poolBinding?.close();await close(); throw error;}
 }
 
 /** Separate tabs use the fixed-codec proxy; this never changes the native perf route. */
@@ -228,7 +255,8 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
     for (let take = 1; take <= 3; take++) {
       const name = `browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
       evidence?.save('traffic-stage', {name, stage: 'seed'});
-      const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, future);
+      const poolEvidence=process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&name==='browser/30d/activity/0ms/0.5/take1'?evidence:undefined;
+      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null, status='failed';
       try {
         observer=await observeReversal(cdp,browser,{postmortem:true,closeTarget:close});
@@ -295,7 +323,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name,status,geometry,cell,
           reads:trafficReadEvidence(bodies.reads),cold:bodies.diagnostic(`${name}/cold`),reports:reports.filter(report=>report.name.startsWith(name+'/')),
           transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),command:cdp.snapshot()});
-        await observer?.close();await close();
+        try{await capturePool();}finally{await observer?.close();await close();}
       }
     }
   }

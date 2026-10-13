@@ -196,7 +196,7 @@ jobs:
           if-no-files-found: warn
 
   panning-trace:
-    if: contains(github.event.pull_request.labels.*.name, 'benchmark-trace-diagnostics') || contains(github.event.pull_request.labels.*.name, 'benchmark-cpu-diagnostics')
+    if: contains(github.event.pull_request.labels.*.name, 'benchmark-trace-diagnostics') || contains(github.event.pull_request.labels.*.name, 'benchmark-cpu-diagnostics') || contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -215,12 +215,13 @@ jobs:
       - run: npm run build
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
         env:
-          QUOTUM_BENCH_DIAGNOSE_PANNING: ${{ contains(github.event.pull_request.labels.*.name, 'benchmark-cpu-diagnostics') && 'cpu' || 'trace' }}
+          QUOTUM_BENCH_DIAGNOSE_PANNING: ${{ !contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics') && (contains(github.event.pull_request.labels.*.name, 'benchmark-cpu-diagnostics') && 'cpu' || 'trace') || '' }}
+          QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL: ${{ contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics') && '1' || '' }}
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-panning-trace
       - name: Original interval diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: panning-${{ contains(github.event.pull_request.labels.*.name, 'benchmark-cpu-diagnostics') && 'cpu' || 'trace' }}-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: panning-${{ contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics') && 'pool' || contains(github.event.pull_request.labels.*.name, 'benchmark-cpu-diagnostics') && 'cpu' || 'trace' }}-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/quotum-panning-trace
           if-no-files-found: warn

@@ -106,6 +106,17 @@ rates 1 and 4 follow on an empty owned tab. The unthrottled controls must distin
 from timer waiting; contradictory or missing calibration cannot pass. This is a
 diagnostic result and cannot satisfy the canonical gate. If both CPU and trace labels
 are present, the existing diagnostic job runs the CPU mode.
+`QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL=1` (the
+`benchmark-history-pool-diagnostics` PR label) keeps the original benchmark phases
+and full traffic matrix. Only its `browser/30d/activity/0ms/0.5/take1` page records
+shared cache reservations, actual evictions, missing cells and history requests.
+The observer attaches before that page initializes its pool; ordinary pages retain
+their original methods. Its received and parsed client source is bound after the
+input family, outside the gesture. Missing receipts, exceeded collection limits and
+observer errors remain insufficient evidence. Collector overhead is unqualified,
+and this diagnostic cannot satisfy the canonical gate. The existing diagnostic
+job uses this mode when its label is present, ahead of CPU or trace mode. Its
+20-minute timeout, operation deadlines, loads and assertions are unchanged.
 `QUOTUM_BENCH_DIAGNOSE_IDLE=double` (the `benchmark-idle-diagnostics` PR
 label) checks one idle board, then two independent live copies over the same
 real cell transition. The sum of their measured script costs must exceed the

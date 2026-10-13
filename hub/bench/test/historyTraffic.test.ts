@@ -27,6 +27,25 @@ test('history cleanup releases its owned target when the renderer cannot answer'
   await result;
 });
 
+test('pool diagnostics preserve an unavailable original renderer without another command', async () => {
+  const source=readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8');
+  const start=source.indexOf('  const capturePool = async () =>'),end=source.indexOf('\n  // Closing this owned target',start);
+  assert.ok(start>=0&&end>start);
+  for(const command of [{socketState:1,terminal:null,failure:null,pending:[{id:1}]},
+    {socketState:1,terminal:null,failure:{id:1},pending:[]},
+    {socketState:3,terminal:null,failure:null,pending:[]}]){
+    let evaluations=0,bindings=0,closed=0;const saved:{name:string;value:unknown}[]=[];
+    const fixture={poolEvidence:{save:(name:string,value:unknown)=>saved.push({name,value})},poolCaptured:false,poolName:'fixture',name:'fixture',
+      bodies:{reads:[]},trafficReadEvidence,cdp:{snapshot:()=>command,evaluate:()=>{evaluations++;return new Promise(()=>{});}},
+      poolBinding:{afterFamily:()=>{bindings++;return new Promise(()=>{});},close:()=>{closed++;}},capturePool:null as unknown as ()=>Promise<void>};
+    runInNewContext(ts.transpileModule(`${source.slice(start,end)}\nglobalThis.capturePool=capturePool;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fixture);
+    await fixture.capturePool();
+    assert.equal(evaluations,0);assert.equal(bindings,0);assert.equal(closed,1);
+    assert.equal((saved.find(entry=>entry.name.startsWith('pool-receipt'))!.value as {receipt:{status:string}}).receipt.status,'insufficient-evidence');
+    assert.equal((saved[0].value as {command:unknown}).command,command);
+  }
+});
+
 test('traffic evidence retains attempted ranges and body uncertainty without selection text or payloads', () => {
   const read={selection:'board=private-canary',id:'1',phase:'cold',from:0,to:60,cell:1,lower:12,
     before:Promise.resolve(['private-canary']),payload:'private-canary',count:{complete:false,lower:12,coding:'br'}};
