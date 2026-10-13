@@ -104,7 +104,7 @@ test('actual synchronous binding qualifies all families without a production Env
  `);
  assert.deepEqual(Array.from(h.context.sameResults),[true,true,true]);
  const receipt=h.read();assert.equal(receipt.status,'complete');
- assert.deepEqual(JSON.parse(JSON.stringify(receipt.members.slice(1).map(m=>[m.transportBound,m.transportScope,m.bindingMismatch]))),[[true,'quota',false],[true,'budget',false],[true,'funds',false]]);
+ assert.deepEqual(JSON.parse(JSON.stringify(receipt.members.slice(1).map((m:{transportBound:boolean;transportScope:string|null;bindingMismatch:boolean})=>[m.transportBound,m.transportScope,m.bindingMismatch]))),[[true,'quota',false],[true,'budget',false],[true,'funds',false]]);
  assert.equal(h.context.budget.env.sharedTransport,undefined);
  const json=JSON.stringify(receipt);assert.ok(!json.includes('secret-board'));assert.ok(!json.includes('do-not-record'));
 });
@@ -145,7 +145,7 @@ test('current production PeriodTransport binds quota, wallet and subscription fu
  h.run(`for(const value of [quota,budget,funds])value.signal=signal;actualResults=[quota,budget,funds].map(value=>value.env.read('synthetic',60,0,60));__quotumHistoryPoolReceipt.mark(2,3);`);
  const settled=Promise.allSettled(Array.from(h.context.actualResults));
  const receipt=h.read();assert.equal(receipt.status,'complete');assert.equal(receipt.registrationOrderQualified,true);
- assert.deepEqual(JSON.parse(JSON.stringify(receipt.members.slice(1).map(m=>m.transportScope))),['quota','budget','funds']);
+ assert.deepEqual(JSON.parse(JSON.stringify(receipt.members.slice(1).map((m:{transportScope:string|null})=>m.transportScope))),['quota','budget','funds']);
  assert.equal(h.context.transport.queue.length,3);
  controller.abort();await settled;assert.equal(h.context.transport.queue.length,0);
 });

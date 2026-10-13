@@ -3,7 +3,6 @@ type Profile = {startTime: number; endTime: number; nodes: {
   id: number; hitCount?: number; children?: number[];
   callFrame: {functionName: string; scriptId: string; url: string; lineNumber: number; columnNumber: number};
 }[]; samples?: number[]; timeDeltas?: number[]};
-type Files = {save(name: string, value: unknown): void; saveTrace?(name: string, value: unknown): void};
 type Clock = {stage: string; before: number | null; page: number; after: number | null; valid: boolean};
 const LIMIT = 100_000;
 const integer = (value: unknown, minimum = 0): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
