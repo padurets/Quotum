@@ -2,7 +2,7 @@ import * as retention from '../../server/domain/periodRetention';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {PeriodAccounting} from '../lib/periodAccounting.js';
-import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/domain/periodTape.js';
+import {retainSamplesPrepared,sampleBytes,mergeTapePrepared,packSamples} from '../../server/domain/periodTape.js';
 import {drain} from '../lib/prepare.js';
 import {PeriodIndex} from '../lib/periodIndex.js';
 import {PeriodTransport,fetchPeriod,type PeriodIntent} from '../lib/periodTransport.js';
@@ -20,9 +20,63 @@ import {canShift,shifted} from '../../server/domain/periodShift.js';
 import {periodTextChangesAt} from '../lib/periodClock.js';
 import {selector,sameJson} from '../lib/store.js';
 import {activityEmpty} from '../lib/activity.js';
+import {workHours} from '../lib/format.js';
 
 const ref=(id:string)=>({ref:id,source:'s',device:{id:'d',name:'Laptop'},origin:'terminal' as const,project:id,folder:null,startedAt:0});
 const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
+
+test('a refused quota replacement keeps its retained work clock independent of a newer empty index',async()=>{
+  const span=86_400_000,now=span+1,selection={mode:'live' as const,periodMs:span};
+  let refuse=false,accountingPreparing=false;
+  class Accounting extends PeriodAccounting {
+    static *prepare(...args:Parameters<typeof PeriodAccounting.prepare>):ReturnType<typeof PeriodAccounting.prepare>{
+      accountingPreparing=true;try{return yield*super.prepare(...args);}finally{accountingPreparing=false;}
+    }
+  }
+  type Coordinator={selection:PeriodRequest['selection'];receive(reply:PeriodReply,intent:PeriodIntent):Promise<void>;quotaAt(line:{sourceId:string;windowId:string},at:number,key:string):{work:{ms:number}};cellChangesAt(scope:string,at:number,read:(at:number)=>string,extra?:()=>number|null,source?:string,key?:string,window?:string):number|null;tapes:Map<string,{accounting:PeriodAccounting}>;index:PeriodIndex;workSelection:PeriodRequest['selection']};
+  const context={exports:{} as {BoardPeriod:new()=>Coordinator},
+    hubNow:()=>now,retention,historyPool:{register:()=>{},reserve:()=>!refuse||!accountingPreparing,release:()=>{}},clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},
+    PeriodTransport:class{},fetchPeriod:()=>{},page:{get:()=>({})},pan:{get:()=>null},preparations:()=>null,
+    prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),
+    evaluatedRange,periodKey,PeriodAccounting:Accounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,periodTextChangesAt,empty:()=>({value:null,basis:null,loading:false,error:null}),
+    sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),prefs:()=>({range:'24h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{},
+  };
+  const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8'),body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
+  runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const period=new context.exports.BoardPeriod();period.selection=selection;
+  const basis={run:'r',revision:'1',evaluatedAt:now,evidenceCut:now,range:{from:1,to:now}};
+  const intent:PeriodIntent={board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:now}};
+  const work={anchor:0,cut:now,knownFrom:0,refs:[ref('a')],spans:[[0,10_000,1_000_000] as [number,number,number]],cursor:'work'};
+  await period.receive({basis,sessions:{state:'complete',basis,value:work},quota:{state:'complete',basis,value:{run:'r',now,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:0,cut:now,replaceFrom:0,cursor:'c',quota:[{source:'s',window:'w',samples:packSamples([{at:0,used:17,resetAt:null,staleAfterMs:0}])}],money:[]}}}},intent);
+  const kept=period.tapes.get('quota')!.accounting;
+  refuse=true;
+  const replacement:PeriodReply={basis,sessions:{state:'complete',basis,value:{...work,refs:[],spans:[],cursor:'new'}}};
+  await period.receive(replacement,intent);
+  assert.equal(replacement.quota?.state,'error','only quota accounting is refused');
+  assert.equal(period.tapes.get('quota')!.accounting,kept);
+  assert.equal(period.index.trace.refs.length,0,'the new empty work index was adopted');
+  const read=(at:number)=>workHours(period.quotaAt({sourceId:'s',windowId:'w'},at,'24h').work.ms);
+  assert.equal(read(now),'17m');
+  const due=period.cellChangesAt('quota',now,read,undefined,'s','24h','w');
+  assert.equal(due,span+10_001);assert.equal(read(due!-1),'17m');assert.equal(read(due!),'16m');
+  assert.equal(period.cellChangesAt('quota',now,at=>at<now+3?'before':'after',()=>now+3,'s','24h','w'),now+3,'an exact window keeps its additional reset deadline');
+  assert.equal(period.cellChangesAt('quota',now,read,()=>now+3,undefined,'other','w'),now+3,'a mismatched range keeps the extra deadline');
+  const retained=period.tapes.get('quota')! as unknown as {selection:PeriodRequest['selection']};
+  retained.selection={mode:'range',from:1,to:now};
+  assert.equal(period.cellChangesAt('quota',now,read,()=>now+5,'s','24h','w'),now+5,'a selected range retains only its independent extra deadline');
+  retained.selection=selection;
+
+  // Missing rows and callers without an exact window keep the prior context path.
+  const next=period.index.curves.all.next.bind(period.index.curves.all);
+  let contextReads=0;
+  period.index.curves.contexts.push(Object.assign(Object.create(period.index.curves.all),{next:(at:number)=>{contextReads++;return next(at);}}));
+  period.index.trace.refs.push(ref('new'));
+  for(const [sourceId,window] of [['s','missing'],['missing','w'],['s',undefined]]){
+    const before=contextReads;
+    assert.equal(period.cellChangesAt('quota',now,()=>'',undefined,sourceId,'24h',window),null);
+    if(sourceId==='s')assert.ok(contextReads>before,'missing windows and unscoped callers keep the legacy path');
+  }
+});
 
 test('the session panel preserves equal semantic presence and refreshes actual disappearance',()=>{
   const before={...ref('a'),workedMs:100,lastWorkedAt:100,working:false,currentPresence:{working:false,startedAt:0}};

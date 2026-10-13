@@ -1425,8 +1425,11 @@ active time and agent-hours. Hour blocks share identical work patterns without l
 gaps or millisecond boundaries; the roster, activity and quota accounting share their
 curves. Numeric columns use constant values, piecewise integer progressions or exact integer offsets where possible,
 with 64-bit values for fractions and wider ranges. Changed series rebuild only their own
-prefixes. Rolling numeric labels read those prefixes through the shared clock and wake
-when their formatted value changes. A duration update alone does not wake its roster or
+prefixes. Rolling quota cells plan their next formatted change from the same retained
+window and source work curve they display, including the knowledge boundary. A partial
+replacement refusal keeps that clock with the retained accounting, independently of a
+newer roster index. Other rolling numeric labels read their prefixes through the shared
+clock and wake when their formatted value changes. A duration update alone does not wake its roster or
 table; membership and ordering still do. Charts advance at their own grid boundaries.
 As a live window advances, expired work blocks and redundant measurement prefixes
 leave the retained indexes. Work indexes retain unchanged timelines and hour patterns;

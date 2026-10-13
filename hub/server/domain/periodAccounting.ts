@@ -77,7 +77,10 @@ class QuotaIndex {
   changesAt(now:number,period:number){
     const from=now-period,last=sampleAt(this.series.samples,sampleCount(this.series.samples)-1);
     const deadline=last?Math.min(last.at+last.staleAfterMs+1,last.resetAt??Infinity,last.validUntil??Infinity):Infinity;
-    return Math.min((numberAt(this.times,lower(this.times,from))??Infinity)+1+period,(numberAt(this.deadlines,lower(this.deadlines,from+1))??Infinity)+period,deadline>now?deadline:Infinity);
+    // Work and its clock use the same captured source curve, including after a
+    // replacement could not fit. Knowledge changes even without a work interval.
+    const work=Number.isFinite(this.known)?Math.min(this.activity?this.activity.next(from)+period:Infinity,this.activity?.next(now)??Infinity,this.known+1>now?this.known+1:Infinity,this.known+period>now?this.known+period:Infinity):Infinity;
+    return Math.min((numberAt(this.times,lower(this.times,from))??Infinity)+1+period,(numberAt(this.deadlines,lower(this.deadlines,from+1))??Infinity)+period,deadline>now?deadline:Infinity,work);
   }
 
   plot(range:PeriodRange,cell:number,previous:HistorySeries['points'],boundaryOnly=false):HistorySeries['points'] {
@@ -376,6 +379,11 @@ export class PeriodAccounting {
       series.push({...old,sourceId:row.source,windowId:row.window,staleAfterMs:sampleAt(row.samples,sampleCount(row.samples)-1)?.staleAfterMs??0,...summary,points,...(!history.live?{pointMode:'observation' as const,windowValue:windowValue??row.windowValue}:{})});
     }
     return {...history,exact:true,since:range.from,to:range.to,series,meterSeries:history.meterSeries?.map(series=>{const index=this.money.get(series.sourceId+'\n'+series.meterId+'\n'+series.unit);return index?{...series,...index.at(range),...(!history.live?{points:index.plot(range,history.cellMs,series.points,{from:history.since,to:history.to}),...(series.kind!=='cap'?{pointMode:'observation' as const}:{})}:{})}:series;})};
+  }
+  /** Undefined leaves a missing window's captured fallback with its existing clock. */
+  quotaChangesAt(source:string,window:string,now:number,period:number):number|null|undefined {
+    const index=this.quota.get(source+'\n'+window);if(!index)return undefined;
+    const next=index.changesAt(now,period);return Number.isFinite(next)?next:null;
   }
   changesAt(now:number,period:number,source?:string):number|null {
     if(this.tape.fixed)return null;

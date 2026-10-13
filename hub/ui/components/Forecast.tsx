@@ -108,7 +108,7 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
       return cells&&value.work?workText(column,cells[column],value.work,since,resetAt,perWork):{content:'—'};
     };
     const timed=(column:WorkColumn):Cell|TimedCell=>range?workCell(column,0):{time:column,
-      changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>JSON.stringify(workCell(column,at)),column==='workleft'?at=>workLeftChangesAt(lineAt(at),resetAt,at):undefined,line.sourceId,history!.range),at:now=>workCell(column,now)};
+      changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>JSON.stringify(workCell(column,at)),column==='workleft'?at=>workLeftChangesAt(lineAt(at),resetAt,at):undefined,line.sourceId,history!.range,line.windowId),at:now=>workCell(column,now)};
     const workCells:Record<WorkColumn,Cell|TimedCell>={work:timed('work'),agenthours:timed('agenthours'),perwork:timed('perwork'),during:timed('during'),workleft:timed('workleft')};
     if (range) {
       return {
@@ -152,7 +152,7 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
           };
         },
       },
-      spent: {time:'spent',changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>spentText(spentOf(lineAt(at))),undefined,line.sourceId,history!.range),at:now=>({content:spentText(spentOf(lineAt(now)))})},
+      spent: {time:'spent',changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>spentText(spentOf(lineAt(at))),undefined,line.sourceId,history!.range,line.windowId),at:now=>({content:spentText(spentOf(lineAt(now)))})},
       forecast: {
         time: 'forecast',
         changesAt: now => cellChangesAt(live, measuredAt, now, ahead, context, chosen),
