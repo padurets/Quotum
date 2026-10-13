@@ -284,7 +284,7 @@ change as it was.
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
 | `sourceAccess` | `{<source id>: {error, expiresAt, expiryKind, canRefresh, credentialIds}}` | The reader's own connector access changed, cleared when the holding or board access ends. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
-| `history` | `{sources: string[], since, changes?, workSince?, workAuthority?}` | Measurements or admitted credited work changed from `since` (see [Reading history](#reading-history)); `since: 0` invalidates the affected history evidence. Changed work or financial authority and project or machine names replace the next delta with a fresh `snapshot`. Hiding or showing a card changes the `view` without changing admitted work or sending `history`. |
+| `history` | `{sources: string[], since, changes?, workSince?, workAuthority?}` | Measurements or admitted credited work changed from `since` (see [Reading history](#reading-history)); `since: 0` invalidates the affected history evidence. Changed work authority and relevant project or machine names replace the next delta with a fresh `snapshot`. Current financial updates keep the delta protocol; prepared or queued financial updates whose authority has changed are rechecked before delivery and replaced with a current `snapshot`. Hiding or showing a card changes the `view` without changing admitted work or sending `history`. |
 | `resets` | `{resets, trackers, past}` | The reset trackers' news changed. |
 | `ping` | `{now}` | Every `heartbeatMs`, with the hub's clock. |
 | `bye` | `{reason}` | Last: the hub lets the reader go (see below). |
