@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {nextTableSort,tablePages,TABLE_MEASURE_ROWS,visibleTableSort,type TableSort} from '../lib/table';
+import {nextTableSort,tablePages,visibleTableSort,type TableSort} from '../lib/table';
 import {nextActivitySort,type ActivityColumn} from '../lib/activityTable';
 import {nextAgentsSort,type AgentColumn} from '../lib/agents';
 import {readFileSync} from 'node:fs';
@@ -40,13 +40,14 @@ function widgetFixture(){
     for(let i=0;i<20;i++){
       changed=false;cursor=0;effects.length=0;
       widget=context.exports.useTableWidget({current:root as unknown as HTMLElement},[120,120,180,180],180,keys,key);
-      const current=keys.slice(widget.from,widget.to),footer=widget.pages>1?34:0;
+      const current=keys.slice(widget.from,widget.to),footer=widget.pages>1?80:46;
       const natural=140+current.reduce((sum,id)=>sum+height(id),0)+footer;
       root.height=Math.max(sizing.allocated,natural);root.fill=root.height-natural;
       widget.live.current=body(current) as unknown as HTMLElement;
       widget.measured.current=body(keys.slice(widget.measureFrom,widget.measureTo)) as unknown as HTMLElement;
-      widget.pager.current={getBoundingClientRect:()=>({height:footer})} as HTMLElement;
-      widget.measuredPager.current={getBoundingClientRect:()=>({height:34})} as HTMLElement;
+      widget.footer.current={getBoundingClientRect:()=>({height:footer})} as HTMLElement;
+      widget.measuredFooter.current={getBoundingClientRect:()=>({height:80})} as HTMLElement;
+      widget.measuredSingleFooter.current={getBoundingClientRect:()=>({height:46})} as HTMLElement;
       for(const effect of effects)effect();
       if(!changed)return widget;
     }
@@ -76,6 +77,15 @@ test('the real shared hook pages all rows once, fits height, resets and clamps b
   assert.ok(f.reports.every(report=>Number.isFinite(report.min)&&report.natural>=report.min));
 });
 
+test('a tall widget fits more than fifty rows and removes pages when the whole selection fits',()=>{
+  const f=widgetFixture();f.render();f.resize(3000);const widget=f.render();
+  assert.equal(widget.pages,1);assert.equal(widget.from,0);assert.equal(widget.to,57);
+  assert.equal(widget.measureTo,57,'every fitting row was measured, including the late tall row');
+  assert.equal(f.height(),3000);
+  f.resize(2500);const smaller=f.render();assert.ok(smaller.pages>1);assert.ok(smaller.to>50);
+  assert.equal(f.height(),2500);
+});
+
 test('both session tables use ascending, descending, reset and explicit menu reset',()=>{
   function cycle<Id extends string>(next:(sort:TableSort<Id>,column:Id|null,cycle?:boolean)=>TableSort<Id>,column:Id){
     const up=next(null,column);assert.deepEqual(up,{column,descending:false});
@@ -99,7 +109,7 @@ test('page boundaries fit whole variable-height rows with no gaps or duplicates'
   const many=Array.from({length:125},(_,i)=>'row-'+i),starts=tablePages(many,new Map(),44,176);
   const pages=starts.map((from,i)=>many.slice(from,starts[i+1]??many.length));
   assert.deepEqual(pages.flat(),many);assert.ok(pages.every(page=>page.length<=4));
-  assert.deepEqual(tablePages(many,new Map(),44,Infinity),[0,TABLE_MEASURE_ROWS,TABLE_MEASURE_ROWS*2]);
+  assert.deepEqual(tablePages(many,new Map(),44,Infinity),[0]);
   assert.deepEqual(tablePages([],new Map(),44,100),[0]);
 });
 

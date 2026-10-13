@@ -67,7 +67,10 @@ export const PERIOD_SCENES=[
  */
 export const SESSION_ACTIVITY_SCENES=[
   {id:'comparison',expect:['opt-in-table','union-total','retained-contributions','shared-work-index']},
-  {id:'review',expect:['populated-24h','paged-comparison','height-fit-pages','narrow-sort-menu','header-sort-reset','retained-pagination','rich-breakdowns']},
+  {id:'review',expect:['populated-24h','paged-comparison','height-fit-pages','narrow-sort-menu','header-sort-reset','retained-pagination','rich-breakdowns'],
+    look:['The separate footer labels complete-period totals to the left of its pager; narrow lists stack them.',
+      'Increasing either session table height fits all 57 projects and hides its pager.',
+      'Both grouping controls use Project, Machine and Subscription segments in that order; Agent sessions also offers Each agent.']},
 ] as const;
 
 

@@ -33,6 +33,9 @@ let history:History|null=base,kind:Kind='weekly',sources=[cap,native],error:'his
 const modules:Record<string,unknown>={react:React,'react/jsx-runtime':jsxRuntime,'../lib/format':format,'../lib/quota':quota,'../lib/forecast':forecast,'../lib/plan':plan,'../lib/work':work,'../lib/view':view,'../lib/subscription':subscription,'../lib/timeRange':timeRange,'../i18n':i18n,
   '../lib/period':{boardPeriod:{quotaAt:(line:unknown)=>line,rangeAt:()=>history?{from:history.since,to:history.to}:null,cellChangesAt:()=>null}},
   '../lib/prefs':{usePref:(key:string)=>key==='kind'?kind:{unit:null}},'../lib/board':{useNamed:()=>sources,useLineup:()=>sources.map(s=>s.id),useForecastsOf:()=>[{},{}],useResetNews:()=>null},'../lib/clock':{hubNow:()=>M,useClock:()=>M},'../lib/history':{quotaHistory:{retry:()=>{}},useHistory:()=>({history,loading:false,error})},'./AnalyticsPanel':panel,'./TableWidget':tableWidget,'./Popover':{Popover:()=>null},'./MoneyAnalytics':{MoneyTable:()=>{throw new Error('a subscription reached the money table');}}};
+const cellContext = {exports: {}, require: (name: string) => modules[name] ?? {}};
+runInNewContext(ts.transpileModule(readFileSync(new URL('../components/TableCell.tsx', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, cellContext);
+modules['./TableCell'] = cellContext.exports;
 const tableContext = {exports: {}, require: (name: string) => modules[name] ?? {}};
 runInNewContext(ts.transpileModule(readFileSync(new URL('../components/AnalyticsTable.tsx', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, tableContext);
 modules['./AnalyticsTable'] = tableContext.exports;

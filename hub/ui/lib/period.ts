@@ -182,14 +182,14 @@ class BoardPeriod {
   rangeAt(scope:PeriodScope,now:number,rangeKey?:string){const tape=this.tapes.get(scope);return tape&&(rangeKey===undefined||tape.rangeKey===rangeKey)?evaluatedRange(tape.selection,now):null;}
   private workBoundary(now:number,refs?:readonly string[],source?:string) {
     if(!this.index||this.workSelection.mode!=='live')return null;
-    let next=Infinity;const period=this.workSelection.periodMs;
-    for(const [i,curve] of this.index.curves.contexts.entries())if((!refs||refs.includes(this.index.trace.refs[i].ref))&&(!source||this.index.trace.refs[i].source===source))next=Math.min(next,curve.next(now-period)+period,curve.next(now));
+    let next=Infinity;const period=this.workSelection.periodMs,selected=refs?new Set(refs):null;
+    for(const [i,curve] of this.index.curves.contexts.entries())if((!selected||selected.has(this.index.trace.refs[i].ref))&&(!source||this.index.trace.refs[i].source===source))next=Math.min(next,curve.next(now-period)+period,curve.next(now));
     return Number.isFinite(next)?next:null;
   }
   workedAt(refs:readonly string[],fallback:number|null,now:number) {
     if(!refs.length||!this.index||this.workSelection.mode!=='live')return fallback;
-    const range=evaluatedRange(this.workSelection,now);
-    return this.index.trace.refs.reduce((sum,ref,i)=>sum+(refs.includes(ref.ref)?this.index!.curves.contexts[i].read(range):0),0);
+    const range=evaluatedRange(this.workSelection,now),selected=new Set(refs);
+    return this.index.trace.refs.reduce((sum,ref,i)=>sum+(selected.has(ref.ref)?this.index!.curves.contexts[i].read(range):0),0);
   }
   workedChangesAt(refs:readonly string[],now:number,read:(now:number)=>string){return refs.length?periodTextChangesAt(now,at=>this.workBoundary(at,refs),read):null;}
   cellChangesAt(scope:PeriodScope,now:number,read:(now:number)=>string,extra?:(now:number)=>number|null,source?:string,rangeKey?:string){

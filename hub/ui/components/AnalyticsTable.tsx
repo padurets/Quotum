@@ -1,22 +1,14 @@
 /** @jsxRuntime automatic */
-import {Fragment, type ReactNode, type RefObject} from 'react';
-import {hubNow,useClock} from '../lib/clock';
+import {type ReactNode,type RefObject} from 'react';
 import {withColumn, withHidden, type Arrange} from '../lib/view';
 import {t} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {TableHeading,type TableSorting} from './TableWidget';
+import {tableCell as shown,type Cell,type TimedCell} from './TableCell';
+export type {Cell,TimedCell} from './TableCell';
 
-export type Cell = {content: ReactNode; title?: string; className?: string};
-export type TimedCell = {time: string; changesAt: (now: number) => number | null; at: (now: number) => Cell};
 export type AnalyticsColumn<Id extends string> = {id: Id; title: string; hint?: string; width: number; align?: 'right'};
 export type AnalyticsRow<Id extends string> = {key: string; name: string; color?: string; cells: Record<Id, Cell | TimedCell>};
-
-/** Only the cell reads the clock; its table and unrelated rows remain asleep. */
-function Timed({cell, render}: {cell: TimedCell; render: (cell: Cell, time: string) => ReactNode}) {
-  return render(cell.at(useClock(cell.changesAt)), cell.time);
-}
-const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: string) => ReactNode,still=false) =>
-  'at' in cell&&!still ? <Timed key={key} cell={cell} render={render}/> : <Fragment key={key}>{render('at' in cell?cell.at(hubNow()):cell)}</Fragment>;
 
 export function TableSettings<Id extends string>({arrange, widget, columns, visible, children}: {
   arrange: Arrange; widget: string; columns: readonly AnalyticsColumn<Id>[]; visible: readonly Id[];
@@ -35,16 +27,15 @@ export function TableSettings<Id extends string>({arrange, widget, columns, visi
 }
 
 /** Shared cells in the layout and page supplied by the common table widget. */
-export function AnalyticsTable<Id extends string>({columns, rows, name, lead, total, sorting, onOpen,layout,body,still=false}: {
+export function AnalyticsTable<Id extends string>({columns, rows, name, lead, sorting, onOpen,layout,body,still=false}: {
   columns: readonly AnalyticsColumn<Id>[]; rows: AnalyticsRow<Id>[];
-  name: string; lead?: Id; total?: AnalyticsRow<Id>;layout:'table'|'list';body?:RefObject<HTMLElement|null>;still?:boolean;
+  name: string; lead?: Id;layout:'table'|'list';body?:RefObject<HTMLElement|null>;still?:boolean;
   sorting?: Pick<TableSorting<Id|'name'>,'active'|'onSort'>;
   onOpen?:(key:string)=>void;
 }) {
-  const all=total?[...rows,total]:rows;
-  const rowName=(row:AnalyticsRow<Id>)=>onOpen&&row!==total&&!still?<button type="button" className="agents-open" data-activity-group={row.key} onClick={()=>onOpen(row.key)}>{row.name}</button>:<span>{row.name}</span>;
-  const openRow=(row:AnalyticsRow<Id>,target:EventTarget)=>{if(onOpen&&row!==total&&!(target as Element).closest('button'))onOpen(row.key);};
-  if (layout === 'list') return <ul ref={body as RefObject<HTMLUListElement|null>} className="analytics-compact">{all.map(row => <li key={row.key} data-table-total={row===total?'':undefined} className={row===total?'analytics-total':undefined} onClick={event=>openRow(row,event.target)}>
+  const rowName=(row:AnalyticsRow<Id>)=>onOpen&&!still?<button type="button" className="agents-open" data-activity-group={row.key} onClick={()=>onOpen(row.key)}>{row.name}</button>:<span>{row.name}</span>;
+  const openRow=(row:AnalyticsRow<Id>,target:EventTarget)=>{if(onOpen&&!(target as Element).closest('button'))onOpen(row.key);};
+  if (layout === 'list') return <ul ref={body as RefObject<HTMLUListElement|null>} className="analytics-compact">{rows.map(row => <li key={row.key} onClick={event=>openRow(row,event.target)}>
     <div className="analytics-compact-main">
       {row.color && <span className="swatch" style={{background: row.color}}/>}
       <span className="analytics-compact-name">{rowName(row)}</span>
@@ -57,7 +48,7 @@ export function AnalyticsTable<Id extends string>({columns, rows, name, lead, to
   return <div className="table-wrap"><table className="analytics-table">
     <colgroup><col/>{columns.map(column => <col key={column.id} style={{width: column.width}}/>)}</colgroup>
     <thead><tr><TableHeading id={'name' as Id|'name'} title={name} sorting={sorting}/>{columns.map(column => <TableHeading key={column.id} {...column} sorting={sorting}/>)}</tr></thead>
-    <tbody ref={body as RefObject<HTMLTableSectionElement|null>}>{all.map(row => <tr key={row.key} data-table-total={row===total?'':undefined} className={row===total?'analytics-total':undefined} onClick={event=>openRow(row,event.target)}>
+    <tbody ref={body as RefObject<HTMLTableSectionElement|null>}>{rows.map(row => <tr key={row.key} onClick={event=>openRow(row,event.target)}>
       <td><span className="analytics-name">{row.color && <span className="swatch" style={{background: row.color}}/>}{rowName(row)}</span></td>
       {columns.map(column => shown(column.id, row.cells[column.id], (cell, time) => <td data-time={time} className={[cell.className, column.align && 'is-' + column.align].filter(Boolean).join(' ') || undefined} title={cell.title}>{cell.content}</td>,still))}
     </tr>)}</tbody>

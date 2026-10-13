@@ -170,7 +170,9 @@ notifications also stay live, independently of the board's historical range.
   same period. Active totals count overlapping work once. Recorded sessions count
   work contexts, so a logical session can count more than once after a context change.
   Table widgets fit whole rows to their chosen height and share a compact pager at the
-  bottom right. Sortable tables use their wide headers to cycle ascending, descending,
+  bottom right. The separate footer labels its summary for the entire selected period,
+  across all pages. Both session tables choose grouping with the same segmented control.
+  Sortable tables use their wide headers to cycle ascending, descending,
   then reset; narrow lists use the sort menu. There is no inner vertical scrolling.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You

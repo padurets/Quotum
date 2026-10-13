@@ -1317,13 +1317,21 @@ edge to edge; a narrow dialog uses an inset compact list. The dialog has no repe
 count or work total above its rows; its toolbar holds only Back and list sorting when
 needed. Board tables share `ui/components/TableWidget.tsx`: one width decision,
 height measurement, page model, pager and sort presentation. Natural pages contain
-ten rows; a chosen height fits complete rows, up to fifty per page. Variable row
-heights follow row identities through ordering and paging. At most fifty candidate
-rows are measured unseen with static cells and no clock subscriptions. A compact
-pager sits at the bottom right instead of a more/all dialog. Wide headers cycle
+ten rows; a chosen height fits as many complete rows as its space allows. Variable row
+heights follow row identities through ordering and paging. Static measurement starts
+with fifty candidates and expands to the fitting page and its next row, without clock
+subscriptions. A separate footer puts the whole-selection summary on the left and
+the compact pager on the right; a narrow list puts the summary above the pager.
+Each value names its metric and scope. Session tables show whole-period work and
+context counts; quota and budget tables show matching row counts without summing
+unrelated percentages or overlapping wallet components. One-page tables hide the
+pager. Grouping uses the same labelled segmented control in both session tables.
+Wide headers cycle
 ascending, descending, reset; a reset leaves no header selected and restores the
 table's default order. Only the compact list shows a sort menu. Activity totals
-cover the complete period on every page. No table uses an inner vertical scroller.
+cover the complete period on every page. Height and paging select rows from the
+already complete shared index; neither changes the API request nor starts another
+history read. No table uses an inner vertical scroller.
 Its disclosure pages through the complete retained roster in batches of fifty. Such a widget tells the grid
 through a context of its own (`ui/components/sizing.ts`) the least it can show, what it
 needs whole and, as it lays itself out anew, how tall it shows, so the grid fills the

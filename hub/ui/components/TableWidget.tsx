@@ -1,11 +1,16 @@
 /** @jsxRuntime automatic */
 import {useLayoutEffect,useMemo,useRef,useState,type RefObject,type ReactNode} from 'react';
-import {tableLayout,tablePages,TABLE_PAGE_ROWS,TABLE_MEASURE_ROWS,type TableSort} from '../lib/table';
+import {tableLayout,tablePages,TABLE_PAGE_ROWS,TABLE_MEASURE_MIN_ROWS,type TableSort} from '../lib/table';
 import {t,useLocale} from '../i18n';
 import {Popover} from './Popover';
+import {Segmented} from './Kit';
 import {fillOf,pixels,same,useSizing} from './sizing';
+import {tableCell,type Cell,type TimedCell} from './TableCell';
 
 export const SortIcon=()=> <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M4 3v10M1.5 10.5 4 13l2.5-2.5M9 4h5M9 8h3.5M9 12h2"/></svg>;
+export function TableGrouping<Id extends string>({value,options,onChange}:{value:Id;options:[Id,string][];onChange:(value:Id)=>void}){
+  return <div className="popover-section"><div className="popover-title">{t('table.groupBy')}</div><div className="popover-pad"><Segmented value={value} options={options} onChange={onChange} label={t('table.groupBy')}/></div></div>;
+}
 export type TableSorting<Id extends string>={active:TableSort<Id>;headers:readonly {id:Id;title:string}[];label:string;defaultLabel:string;onSort:(column:Id|null,cycle?:boolean)=>void};
 export function TableSortMenu<Id extends string>({active,headers,label,defaultLabel,onSort}:TableSorting<Id>){
   return <Popover label={label} icon={<SortIcon/>}>
@@ -30,7 +35,17 @@ export function TablePages({page,pages,onPage,range,body,reserve=false}:{page:nu
   </nav>;
 }
 
-type Measurement={scope:string;heights:ReadonlyMap<string,number>;fallback:number;shell:number;footer:number;border:number};
+export type TableMetric={id:string;label:string;cell:Cell|TimedCell};
+function TableFooter({table,count,metrics=[],still=false,single=false,body}:{table:TableWidget;count:number;metrics?:readonly TableMetric[];still?:boolean;single?:boolean;body?:RefObject<HTMLElement|null>}){
+  return <footer ref={body} className={`table-footer${table.layout==='list'?' is-list':''}`} aria-label={t('table.summary')}>
+    <div className="table-summary"><div className="table-summary-heading" title={t('table.summaryHint')}><span>{t('table.summary')}</span><small>{t('table.rows',{count})}</small></div>
+      {metrics.length>0&&<dl>{metrics.map(metric=><div key={metric.id}><dt>{metric.label}</dt>{tableCell(metric.id,metric.cell,(cell,time)=><dd data-time={time} data-table-metric={metric.id} className={cell.className} title={cell.title}>{cell.content}</dd>,still)}</div>)}</dl>}
+    </div>
+    {!single&&<TablePages page={still?0:table.page} pages={still?2:table.pages} onPage={table.onPage} range={`${table.from+1}–${table.to} / ${count}`}/>}
+  </footer>;
+}
+
+type Measurement={scope:string;heights:ReadonlyMap<string,number>;fallback:number;shell:number;footer:number;singleFooter:number;border:number};
 export function useTableLayout(box:RefObject<HTMLElement|null>,columns:readonly number[],nameWidth:number,edges?:number,widthKey?:string){
   const [model,setModel]=useState<{layout:'table'|'list';width:number}>({layout:'table',width:0}),key=columns.join(',');
   useLayoutEffect(()=>{
@@ -48,16 +63,16 @@ export function useTableLayout(box:RefObject<HTMLElement|null>,columns:readonly 
 export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonly number[],nameWidth:number,keys:readonly string[],resetKey:string,edges?:number){
   useLocale();
   const sizing=useSizing(),{layout,width}=useTableLayout(panel,columns,nameWidth,edges,sizing?.width);
-  const live=useRef<HTMLElement>(null),measured=useRef<HTMLElement>(null),pager=useRef<HTMLElement>(null),measuredPager=useRef<HTMLElement>(null);
+  const live=useRef<HTMLElement>(null),measured=useRef<HTMLElement>(null),footer=useRef<HTMLElement>(null),measuredFooter=useRef<HTMLElement>(null),measuredSingleFooter=useRef<HTMLElement>(null);
   const scope=JSON.stringify([layout,width,columns,nameWidth,edges]);
   const [measurement,setMeasurement]=useState<Measurement|null>(null),[position,setPosition]=useState({key:resetKey,page:0});
-  const seen=useRef<{key:string;outer:number;live:number;layer:number;footer:number}|null>(null);
+  const seen=useRef<{key:string;outer:number;live:number;layer:number;footer:number;singleFooter:number}|null>(null);
   const sizes=measurement?.scope===scope?measurement:null;
   const fallback=sizes?.fallback??(layout==='table'?44:90),heights=sizes?.heights??new Map<string,number>();
   let starts:number[];
   if(sizing?.manual&&sizes){
     const room=sizing.allocated-sizes.shell;
-    starts=tablePages(keys,heights,fallback,room,sizes.border);
+    starts=tablePages(keys,heights,fallback,room-sizes.singleFooter,sizes.border);
     if(starts.length>1)starts=tablePages(keys,heights,fallback,room-sizes.footer,sizes.border);
   }else starts=Array.from({length:Math.max(1,Math.ceil(keys.length/TABLE_PAGE_ROWS))},(_,i)=>i*TABLE_PAGE_ROWS);
   const page=Math.min(position.key===resetKey?position.page:0,starts.length-1),from=starts[page],to=starts[page+1]??keys.length;
@@ -67,10 +82,10 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     const root=panel.current;if(!root)return;
     const outer=pixels(root.getBoundingClientRect().height-fillOf(root));
     const signal={key:JSON.stringify([scope,keysKey,resetKey,from,to,sizing?.manual]),outer,live:pixels(live.current?.getBoundingClientRect().height??0),
-      layer:pixels(measured.current?.getBoundingClientRect().height??0),footer:pixels(measuredPager.current?.getBoundingClientRect().height??0)};
+      layer:pixels(measured.current?.getBoundingClientRect().height??0),footer:pixels(measuredFooter.current?.getBoundingClientRect().height??0),singleFooter:pixels(measuredSingleFooter.current?.getBoundingClientRect().height??0)};
     const last=seen.current;
     // The grid can change only a panel's fill. Its rows and chrome need no new reads.
-    if(last&&last.key===signal.key&&same(last.outer,signal.outer)&&same(last.live,signal.live)&&same(last.layer,signal.layer)&&same(last.footer,signal.footer))return;
+    if(last&&last.key===signal.key&&same(last.outer,signal.outer)&&same(last.live,signal.live)&&same(last.layer,signal.layer)&&same(last.footer,signal.footer)&&same(last.singleFooter,signal.singleFooter))return;
     seen.current=signal;
     const items=[...(live.current?.children??[])].filter(e=>!(e as HTMLElement).hasAttribute('data-table-total')) as HTMLElement[];
     if(!items.length){
@@ -81,8 +96,8 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     if(!layer.length)return;
     const border=layout==='table'?(parseFloat(getComputedStyle(items[0].firstElementChild!).borderBottomWidth)||0)/2:parseFloat(getComputedStyle(items[0]).borderBottomWidth)||0;
     const area=items.at(-1)!.getBoundingClientRect().bottom-items[0].getBoundingClientRect().top;
-    const shell=pixels(outer-area-(pager.current?.getBoundingClientRect().height??0));
-    const footer=signal.footer;
+    const shell=pixels(outer-area-(footer.current?.getBoundingClientRect().height??0));
+    const {footer:multiFooter,singleFooter}=signal;
     const nextHeights=new Map(sizes?.heights??[]);
     for(let i=0;i<layer.length;i++){
       const rect=layer[i].getBoundingClientRect(),end=i+1<layer.length?layer[i+1].getBoundingClientRect().top:rect.bottom+border;
@@ -90,27 +105,27 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     }
     const retained=new Set(keys);for(const key of nextHeights.keys())if(!retained.has(key))nextHeights.delete(key);
     const ordered=[...nextHeights.values()].sort((a,b)=>a-b),base=ordered[Math.floor(ordered.length/2)]??fallback;
-    const min=shell+Math.max(base,...ordered)-border+(keys.length>1?footer:0);
-    const natural=shell+keys.slice(0,TABLE_PAGE_ROWS).reduce((sum,key)=>sum+(nextHeights.get(key)??base),0)-border+(keys.length>TABLE_PAGE_ROWS?footer:0);
+    const min=shell+Math.max(base,...ordered)-border+(keys.length>1?multiFooter:singleFooter);
+    const natural=shell+keys.slice(0,TABLE_PAGE_ROWS).reduce((sum,key)=>sum+(nextHeights.get(key)??base),0)-border+(keys.length>TABLE_PAGE_ROWS?multiFooter:singleFooter);
     sizing?.report({min:pixels(min),natural:pixels(Math.max(min,natural)),shown:outer});
-    if(!sizes||!same(sizes.shell,shell)||!same(sizes.footer,footer)||!same(sizes.border,border)||!same(sizes.fallback,base)||nextHeights.size!==sizes.heights.size||[...nextHeights].some(([key,height])=>!same(sizes.heights.get(key),height)))
-      setMeasurement({scope,heights:nextHeights,fallback:base,shell,footer,border});
+    if(!sizes||!same(sizes.shell,shell)||!same(sizes.footer,multiFooter)||!same(sizes.singleFooter,singleFooter)||!same(sizes.border,border)||!same(sizes.fallback,base)||nextHeights.size!==sizes.heights.size||[...nextHeights].some(([key,height])=>!same(sizes.heights.get(key),height)))
+      setMeasurement({scope,heights:nextHeights,fallback:base,shell,footer:multiFooter,singleFooter,border});
   };
   const keysKey=keys.join('\n'),columnsKey=columns.join(',');
   useLayoutEffect(()=>update.current(),[layout,scope,keysKey,resetKey,page,from,to,sizing?.manual,sizing?.allocated,columnsKey]);
   useLayoutEffect(()=>{
     const observer=new ResizeObserver(()=>update.current());
-    for(const element of [panel.current,live.current,measured.current])if(element)observer.observe(element);
+    for(const element of [panel.current,live.current,measured.current,footer.current,measuredFooter.current,measuredSingleFooter.current])if(element)observer.observe(element);
     return ()=>observer.disconnect();
   },[panel,layout,!!keys.length,sizing?.manual]);
   const report=sizing?.report;useLayoutEffect(()=>()=>report?.(null),[report]);
-  return useMemo(()=>({layout,from,to,page,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,pager,measuredPager,
-    measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,from+TABLE_MEASURE_ROWS):from}),[layout,from,to,page,starts.length,resetKey,sizing?.manual,keys.length]);
+  return useMemo(()=>({layout,from,to,page,count:keys.length,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,footer,measuredFooter,measuredSingleFooter,
+    measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,Math.max(from+TABLE_MEASURE_MIN_ROWS,to+1)):from}),[layout,from,to,page,starts.length,resetKey,sizing?.manual,keys.length]);
 }
 export type TableWidget=ReturnType<typeof useTableWidget>;
-export function TableMeasure({table,children}:{table:TableWidget;children:ReactNode}){
-  return <div className="table-measure" aria-hidden="true" inert>{children}<TablePages page={0} pages={2} onPage={()=>{}} body={table.measuredPager} reserve/></div>;
+export function TableMeasure({table,children,metrics}:{table:TableWidget;children:ReactNode;metrics?:readonly TableMetric[]}){
+  return <div className="table-measure" aria-hidden="true" inert>{children}<TableFooter table={table} count={table.count} metrics={metrics} still body={table.measuredFooter}/><TableFooter table={table} count={table.count} metrics={metrics} still single body={table.measuredSingleFooter}/></div>;
 }
-export function WidgetPages({table,count}:{table:TableWidget;count:number}){
-  return <TablePages page={table.page} pages={table.pages} onPage={table.onPage} range={`${table.from+1}–${table.to} / ${count}`} body={table.pager}/>;
+export function WidgetPages({table,count,metrics}:{table:TableWidget;count:number;metrics?:readonly TableMetric[]}){
+  return <TableFooter table={table} count={count} metrics={metrics} body={table.footer}/>;
 }

@@ -8,6 +8,11 @@ import type {Message} from './types';
  */
 export const en = {
   'table.pages': 'Table pages',
+  'table.groupBy': 'Group by',
+  'table.summary': 'Entire selected period',
+  'table.summaryHint': 'All matching rows across every page, with the current filters.',
+  'table.rows': {one:'{count} row',other:'{count} rows'},
+  'table.workingNow': 'Working now',
   'table.page': 'Page {page} of {pages}',
   'money.codexCredits': 'Codex credits',
   'money.codexCredit': 'Codex credit',
@@ -707,7 +712,7 @@ export const en = {
   'activity.settings': 'Activity settings',
   'activity.pendingRange': 'Totals will update when the final range has loaded.',
   'activity.label': 'Agent-hours over the period',
-  'activity.by': 'Split by',
+  'activity.by': 'Group by',
   'activity.bySource': 'Subscription',
   'activity.byProject': 'Project',
   'activity.byDevice': 'Machine',

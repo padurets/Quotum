@@ -11,11 +11,10 @@ import {useTitles} from '../lib/board';
 import {timeRangeKey,useTimeRange} from '../lib/timeRange';
 import {columnsOf,groupsOf,nextAgentsSort,type AgentRow,type AgentsBy,type AgentsSort} from '../lib/agents';
 import {t,useLocale,type Key} from '../i18n';
-import {Segmented} from './Kit';
 import {AnalyticsTable,TableSettings,type AnalyticsColumn,type AnalyticsRow,type TimedCell} from './AnalyticsTable';
 import {PeriodStatus} from './PeriodStatus';
 import {AgentsDialog} from './Agents';
-import {useTableWidget,WidgetPages,TableMeasure,TableSortMenu,type TableSorting} from './TableWidget';
+import {useTableWidget,WidgetPages,TableMeasure,TableSortMenu,TableGrouping,type TableSorting} from './TableWidget';
 
 const LABELS:Record<ActivityDimension,Key>={project:'activity.byProject',device:'activity.byDevice',source:'activity.bySource'};
 const COLUMNS:Record<ActivityColumn,{title:Key;hint:Key;width:number}>={
@@ -86,7 +85,7 @@ export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrang
     return [column,cell];
   })) as Record<ActivityColumn,TimedCell>;
   const rows:AnalyticsRow<ActivityColumn>[]=groups.map(group=>({key:group.key,name:name(group),color:colorOfGroup.get(group.key),cells:cells(group.key)}));
-  const total:AnalyticsRow<ActivityColumn>={key:'total',name:t('activityTable.total'),cells:cells()};
+  const totals=cells(),metrics=visible.map(id=>({id,label:t(COLUMNS[id].title),cell:totals[id]}));
   const table=useTableWidget(panel,columns.map(column=>column.width),180,rows.map(row=>row.key),JSON.stringify([by,chosenSort,selected?timeRangeKey(selected):range]));
   const sorting:TableSorting<ActivityColumn|'name'>={active:chosenSort,headers:[{id:'name',title:t(LABELS[by])},...columns],label:t('activityTable.sort'),defaultLabel:t('activityTable.defaultSort'),onSort:sortBy};
   const restore=()=>{
@@ -99,18 +98,18 @@ export const ActivityTable=memo(function ActivityTable({arrange}:{arrange:Arrang
       <div className="activity-table-controls">
         {table.layout==='list'&&<TableSortMenu {...sorting}/>}
         <TableSettings arrange={arrange} widget={ACTIVITY_TABLE} columns={ACTIVITY_COLUMNS.map(id=>({id,title:t(COLUMNS[id].title),width:COLUMNS[id].width}))} visible={visible}>
-          <div className="popover-section"><div className="popover-title">{t('activity.by')}</div><div className="popover-pad"><Segmented value={by} onChange={activityTableBy=>{setOpened(null);setPrefs({activityTableBy});}} options={ACTIVITY_BY.map(id=>[id,t(LABELS[id])])} label={t('activity.by')}/></div></div>
+          <TableGrouping value={by} onChange={activityTableBy=>{setOpened(null);setPrefs({activityTableBy});}} options={ACTIVITY_BY.map(id=>[id,t(LABELS[id])])}/>
         </TableSettings>
       </div>
     </div>
     <PeriodStatus {...period}/>
     <Coverage by={by}/>
     {!summary&&period.loading&&<p className="panel-loading">{t('period.loading')}</p>}
-    {summary&&<AnalyticsTable columns={columns} rows={rows.slice(table.from,table.to)} name={t(LABELS[by])} layout={table.layout} body={table.live} lead="agenthours" total={total} sorting={sorting}
+    {summary&&<AnalyticsTable columns={columns} rows={rows.slice(table.from,table.to)} name={t(LABELS[by])} layout={table.layout} body={table.live} lead="agenthours" sorting={sorting}
       onOpen={key=>{const group=groups.find(g=>g.key===key);if(group)setOpened({by,key,title:name(group)});}}/>}
     {summary?.known&&!groups.length&&<p className="analytics-note">{t('activity.none')}</p>}
-    <WidgetPages table={table} count={rows.length}/>
-    <TableMeasure table={table}><AnalyticsTable columns={columns} rows={rows.slice(table.measureFrom,table.measureTo)} name={t(LABELS[by])} layout={table.layout} body={table.measured} lead="agenthours" still/></TableMeasure>
+    {summary&&<WidgetPages table={table} count={rows.length} metrics={metrics}/>}
+    <TableMeasure table={table} metrics={metrics}><AnalyticsTable columns={columns} rows={rows.slice(table.measureFrom,table.measureTo)} name={t(LABELS[by])} layout={table.layout} body={table.measured} lead="agenthours" still/></TableMeasure>
     {opened&&opened.by===by&&<Contributions key={`${by}:${opened.key}`} by={by} chosen={opened.key} title={opened.title} arrange={arrange} onClose={()=>setOpened(null)} restore={restore}/>}
   </section>;
 });

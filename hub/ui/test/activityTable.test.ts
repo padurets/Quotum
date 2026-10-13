@@ -136,6 +136,7 @@ function renderer(input:WorkTrace=trace){
     const context={exports:{} as Record<string,React.ComponentType<any>>,require:(name:string)=>modules[name]??{}};
     runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);return context.exports;
   };
+  modules['./TableCell']=compile('../components/TableCell.tsx');
   const common=compile('../components/TableWidget.tsx');
   const NativeHeading=common.TableHeading;
   modules['./TableWidget']={...common,TableHeading:(props:any)=>{if(props.sorting)clicks.set(props.id,()=>props.sorting.onSort(props.id));return React.createElement(NativeHeading,props);}};
@@ -153,13 +154,15 @@ test('actual shared table renders union totals, session hints, honest unknowns a
       assert.ok(html.includes(i18n.t('activityTable.title'))&&html.includes(i18n.t('activity.agents')));
       assert.ok(!html.includes(i18n.t('activity.notKnown',{time:format.stamp(25_000)})),'a one-millisecond stale basis must not label complete coverage as unknown');
       assert.equal((html.match(/data-activity-group/g)??[]).length,2);
-      const total=html.match(/<tr[^>]*class="analytics-total"[^>]*>(.*?)<\/tr>/)![1];
+      const total=html.match(/<footer[^>]*class="table-footer"[^>]*>(.*?)<\/footer>/)![1];
+      assert.ok(total.includes(i18n.t('table.summary')));
+      assert.ok(!/<tbody[^>]*>.*?analytics-total/.test(html),'the whole-period summary is outside the page rows');
       assert.ok(total.includes(format.workHours(150_000))&&total.includes(format.workHours(100_000))&&total.includes(activity.atOnce(150_000,100_000)));
       assert.ok(!html.includes('aria-sort=')&&html.includes(i18n.t('activity.agentsHint')));
       r.set({hidden:['sessions','concurrency']});html=r.render();assert.ok(!html.includes('data-time="activity-table" title="'+i18n.t('activity.agentsHint')));
       r.set({hidden:[],range:{from:160_000,to:170_000},knownFrom:175_000});html=r.render();
       assert.ok(html.includes(i18n.t('activity.knownFrom',{time:format.stamp(175_000)})));
-      assert.equal((html.match(/>—</g)??[]).length,4);
+      assert.equal((html.match(/<footer[^>]*class="table-footer"[^>]*>(.*?)<\/footer>/)![1].match(/>—</g)??[]).length,4);
       r.set({knownFrom:0});html=r.render();assert.ok(html.includes(i18n.t('activity.none')));
     }
   }finally{i18n.setLocale('en');}
@@ -170,7 +173,9 @@ test('the comparison uses the shared bounded first page and a complete total',()
   const r=renderer({...trace,refs,spans:refs.map((_,i)=>[i,0,100_000])});
   const html=r.render();
   assert.equal((html.match(/data-activity-group=/g)??[]).length,sharedTable.TABLE_PAGE_ROWS);
-  assert.equal((html.match(/class="analytics-total"/g)??[]).length,1);
+  const footer=html.match(/<footer[^>]*class="table-footer"[^>]*>(.*?)<\/footer>/)![1];
+  assert.ok(footer.includes(i18n.t('table.summary'))&&footer.includes('data-table-metric="sessions"'));
+  assert.ok(footer.includes('>57</dd>'),'the first page retains all 57 contributing contexts in its summary');
   assert.ok(html.includes('1 / 6'));
   assert.ok(html.includes('57'));
   assert.ok(!html.includes('data-pages'));

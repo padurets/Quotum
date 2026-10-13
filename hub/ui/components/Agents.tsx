@@ -42,7 +42,7 @@ import {t, useLocale, type Key} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {RecentActivity} from './Time';
 import {Modal} from './Kit';
-import {useTableWidget,useTableLayout,TableSortMenu,TableHeading,TablePages,WidgetPages,TableMeasure} from './TableWidget';
+import {useTableWidget,useTableLayout,TableSortMenu,TableHeading,TablePages,WidgetPages,TableMeasure,TableGrouping,type TableMetric} from './TableWidget';
 export {SortIcon} from './TableWidget';
 
 /**
@@ -563,6 +563,14 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const single = agentsBy === 'none';
   const table=useTableWidget(panel,columns.map(column=>AGENT_WIDTHS[column]),NAME_WIDTH,ordered.map(group=>group.key),JSON.stringify([agentsBy,active,selected?timeRangeKey(selected):range]),0);
   const layout=table.layout;
+  const refs=rows.flatMap(row=>row.session.ref?[row.session.ref]:[]);
+  const worked=rows.some(row=>row.session.workedMs===null)?null:rows.reduce((sum,row)=>sum+row.session.workedMs!,0);
+  const workedText=(now:number)=>worked===null?'—':workHours(boardPeriod.workedAt(refs,worked,now)!);
+  const metrics:TableMetric[]=[
+    {id:'sessions',label:t('activity.agents'),cell:{content:rows.length}},
+    ...(columns.includes('worked')?[{id:'worked',label:t('agents.worked'),cell:{time:'worked',changesAt:(now:number)=>worked===null?null:boardPeriod.workedChangesAt(refs,now,workedText),at:(now:number)=>({content:workedText(now),title:t('agents.workedHint')})}}]:[]),
+    {id:'working',label:t('table.workingNow'),cell:{content:working}},
+  ];
   // Who may change what: every viewer how the list gathers, the owner its columns and whether it shows.
   const toggles = columnsOf(agentsBy).rest;
   const detailToggles = single ? [] : columnsOf(agentsBy, true).rest.filter(column => !toggles.includes(column));
@@ -583,19 +591,10 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     <section ref={panel} className="panel agents-panel" aria-label={t('agents.title')}>
       <div className="panel-head">
         <h2 ref={heading} tabIndex={-1}>{t('agents.title')}</h2>
-        {rows.length > 0 && <span className="panel-note">{t('agents.machineSummary', {working, count: rows.length})}</span>}
         <div className="agents-controls">
           {layout === 'list' && <SortMenu {...sorting} />}
           <Popover label={t('agents.settings')} icon={<SlidersIcon />}>
-            <div className="popover-section">
-              <div className="popover-title">{t('agents.groupBy')}</div>
-              {AGENTS_BY.map(by => (
-                <button type="button" className="popover-row" key={by} aria-pressed={agentsBy === by} onClick={() => setPrefs({agentsBy: by})}>
-                  <span>{t(by === 'none' ? 'agents.byNone' : COLUMNS[by].title)}</span>
-                  <b aria-hidden="true">{agentsBy === by ? '✓' : ''}</b>
-                </button>
-              ))}
-            </div>
+            <TableGrouping value={agentsBy} options={AGENTS_BY.map(by=>[by,t(by==='none'?'agents.byNone':COLUMNS[by].title)])} onChange={agentsBy=>setPrefs({agentsBy})}/>
             {arrange.owner && (
               <>
                 <div className="popover-section">
@@ -638,8 +637,8 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
           body={table.live}
         />
       )}
-      <WidgetPages table={table} count={ordered.length}/>
-      <TableMeasure table={table}><AgentsRows groups={ordered.slice(table.measureFrom,table.measureTo)} name={name} columns={columns} single={single} layout={layout} color={color} still body={table.measured}/></TableMeasure>
+      {period.basis&&<WidgetPages table={table} count={ordered.length} metrics={metrics}/>}
+      <TableMeasure table={table} metrics={metrics}><AgentsRows groups={ordered.slice(table.measureFrom,table.measureTo)} name={name} columns={columns} single={single} layout={layout} color={color} still body={table.measured}/></TableMeasure>
       {open && (
         <AgentsDialog
           groups={ordered}

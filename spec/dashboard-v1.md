@@ -427,6 +427,12 @@ The body is at most 76 KiB:
 }
 ```
 
+Table height, grouping, sorting and page size do not change this read contract.
+The sessions section carries the complete authorized index for the period within
+the existing history budget, or an explicit error; it does not silently truncate
+the roster to a display page. Widgets page that index locally and label their
+footer summary for the complete selected period across all pages.
+
 Times are safe integer milliseconds. Period lengths are between fifteen minutes and
 31 days, within retained history. `values` contains at most 2000 visible source ids.
 The hub clamps `evaluatedAt` to its own clock. Live selects

@@ -228,7 +228,10 @@ contacted. Use `make info` for the actual address and synthetic sign-in.
 `DEV_SET=sessions make dev` opens the session analytics review fixture. Sign in as Ana:
 the default 24h period has 57 projects, five machines, four subscriptions and 125
 recorded contexts. Session activity and Agent sessions share height fitting and the
-compact pager at the bottom right. Wide tables sort through their headers, with the
+compact pager at the bottom right. Their separate footer labels totals across the
+entire selected period, including rows on other pages. Grouping uses shared segments.
+Increasing the height fits more rows without a fifty-row page cap or another API read;
+when every row fits, the pager disappears. Wide tables sort through their headers, with the
 third click clearing the selected sort; only narrow lists show a sort menu.
 Atlas's 67-context disclosure has two pages.
 Recent overlapping work, 64 retained Atlas contexts absent from the live
