@@ -168,7 +168,7 @@ async function main() {
     // The unchanged traffic matrix runs while the seeded measurements age. Its
     // temporary pages close before the idle board opens or any script budget starts.
     let traffic:Awaited<ReturnType<typeof historyTraffic>>|undefined;
-    if(!panDiagnostic&&!idleDiagnostic){
+    if((!panDiagnostic||panDiagnostic==='cpu')&&!idleDiagnostic){
       say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
       evidence.begin('history-traffic');
       const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
@@ -202,11 +202,11 @@ async function main() {
       if (Date.now() > shownBy) throw new Stop(`The board showed no cards in ${SHOWN_MS / 1000} s.`);
       await sleep(250);
     }
-    if (panDiagnostic) {
+    if (panDiagnostic && panDiagnostic !== 'cpu') {
       evidence.begin('diagnostic-panning-'+panDiagnostic);
       say('diagnostic panning '+panDiagnostic+'; canonical benchmark is not run');
       await cdp.evaluate('__quotumBench.pause()');
-      const result = panDiagnostic === 'pairs' ? await panningPairs(cdp, browser, evidence) : panDiagnostic === 'cpu' ? await profilePanning(cdp, browser, evidence) : await tracePanning(cdp, browser, evidence);
+      const result = panDiagnostic === 'pairs' ? await panningPairs(cdp, browser, evidence) : await tracePanning(cdp, browser, evidence);
       evidence.save('diagnostic-panning-result', 'attempts' in result ? result : {
         mode:'diagnostic',problems:result.problems.map(reason=>({reason})),
         reports:result.reports.map(report=>({initiator:report.initiator,period:report.period,
@@ -215,7 +215,6 @@ async function main() {
           omitted:report.timeline?.omitted??0,cost:report.cost})),
       });
       if(panDiagnostic==='trace')await traceControls(browser,evidence);
-      if(panDiagnostic==='cpu')await profileControls(browser,evidence);
       say('diagnostic panning completed; all outcomes remain in artifacts');
       await finish('attempts' in result && result.attempts.some(attempt => attempt.status === 'failed') ? 1 : 0); return;
     }
@@ -325,13 +324,25 @@ async function main() {
     await cdp.evaluate('__quotumBench.pause()');
     say('checking native continuous wheel and Shift-drag from quota, budget and subscription funds at 24h and 30d, CPU ×4');
     evidence.begin('panning');
-    const panned = await panning(cdp, undefined, evidence, async(label,signal,origin)=>{
+    const runPanning: typeof panning = (target, pace, output) => panning(target, pace, output, async(label,signal,origin)=>{
       await Promise.all([reloadHubProbe(address.base,signal,origin),(async()=>{
         const observer=await observeReversal(cdp,browser!,{signal,origin});
         try{await observer.diagnose(label);}finally{await observer.close();}
       })()]);
     });
-    evidence.save('panning', panned);
+    // Profile at the original phase, after its unchanged traffic, idle and update
+    // workload. Starting on a fresh board would capture a different fixture state.
+    const panned = panDiagnostic === 'cpu'
+      ? await profilePanning(cdp, browser, evidence, runPanning)
+      : await runPanning(cdp, undefined, evidence);
+    // Full CPU timelines already have one file per scenario. Duplicating them
+    // across aggregate files would exceed the summary cap and lose all readings.
+    const panningReadings = panned.reports.map(report => {
+      if (panDiagnostic !== 'cpu' || !report.timeline) return report;
+      const {entries, ...timeline} = report.timeline;
+      return {...report, timeline: {...timeline, storedEntries: entries.length}};
+    });
+    evidence.save('panning', {...panned, reports: panningReadings});
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95))})), problems: panned.problems})}`);
     if(!traffic)throw new Stop('canonical history traffic readings unavailable');
@@ -375,7 +386,7 @@ async function main() {
       money:monetary,
       credits,
       historyTraffic: traffic,
-      panning: panned.reports.map(report => ({...report,
+      panning: panningReadings.map(report => ({...report,
         frames: {count: report.frames.length, p95Ms: round(percentile(report.frames, .95)), p99Ms: round(percentile(report.frames, .99))},
         latency: {count: report.latency.length, p95Ms: round(percentile(report.latency, .95))},
       })),
@@ -383,6 +394,13 @@ async function main() {
     };
     console.log(JSON.stringify(result, null, 2));
     evidence.save('result', result);
+    if (panDiagnostic === 'cpu') {
+      evidence.save('diagnostic-panning-result', {mode: 'diagnostic', problems: problems.map(reason => ({reason})), reports: result.panning});
+      // Empty-tab sampler controls follow every original phase; they cannot warm
+      // the captured page or replace a failed original budget with a control pass.
+      await profileControls(browser, evidence);
+      say('original benchmark phases captured with CPU sampling; observer overhead is unqualified');
+    }
     if (problems.length) say(`over budget:\n- ${problems.join('\n- ')}`);
     await finish(problems.length ? 1 : 0);
   } catch (error) {
