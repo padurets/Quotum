@@ -1236,7 +1236,15 @@ test('what each change of data touches reaches the boards it shows on: people jo
       ['snapshot'],
       [],
     ],
-    ['the machine that told of agents is disconnected', () => h.call('DELETE', `/api/devices/${laptop}`, {as: 'alice'}), ['sessions','refresh','connections','devices'],['unattributedSessions','connections','devices'],[]],
+    ['the machine that told of agents is disconnected', async () => {
+      const before = [h.store.workKey(personal), h.store.workKey(team)];
+      assert.equal(h.store.agentWork(0, Date.now()).length, 0, 'these idle sessions have no retained work');
+      const response = await h.call('DELETE', `/api/devices/${laptop}`, {as: 'alice'});
+      assert.notEqual(h.store.workKey(personal), before[0]);
+      assert.notEqual(h.store.workKey(team), before[1]);
+      assert.equal(h.store.workAccess(team).devices.has(laptop), false);
+      return response;
+    }, ['snapshot'], ['snapshot'], []],
     ['a machine tells of its agents',()=>agents('desk',[session]),['sessions','devices'],['unattributedSessions','devices'],[]],
     ['and then of none',()=>agents('desk',[]),['sessions','devices'],['unattributedSessions','devices'],[]],
     ['the trackers asked', () => h.resets.round(), ['resets'], ['resets'], ['resets']],
@@ -1244,8 +1252,18 @@ test('what each change of data touches reaches the boards it shows on: people jo
   for (const [what, act, onOwn, onShared, onCarols] of rows) {
     const done = await act();
     if (done && typeof done === 'object' && 'status' in done) assert.ok((done as {status: number}).status < 300, `${what}: ${JSON.stringify(done)}`);
-    const [a, b, c] = await Promise.all([own.types(), shared.types(), carols.types()]);
-    assert.deepEqual({own: a, shared: b, carols: c}, {own: onOwn, shared: onShared, carols: onCarols}, what);
+    const [a, b, c] = await Promise.all([own.within(), shared.within(), carols.within()]);
+    assert.deepEqual({own: a.map(e => e.type), shared: b.map(e => e.type), carols: c.map(e => e.type)}, {own: onOwn, shared: onShared, carols: onCarols}, what);
+    if (what === 'the machine that told of agents is disconnected') {
+      for (const event of [a[0], b[0]]) {
+        const snapshot = event.data;
+        assert.equal(snapshot.workAuthority, h.store.workKey(snapshot.board.id));
+        assert.equal(snapshot.connectionsRevision, h.directory.connectionsRevision(id('alice')));
+        assert.deepEqual(Object.values(snapshot.sessions).flat(), []);
+        assert.deepEqual(snapshot.unattributedSessions, []);
+        assert.deepEqual(snapshot.sources.map((s: {id: string}) => s.id), h.store.sources(snapshot.board.id).map(s => s.id), 'the replacement preserves subscriptions');
+      }
+    }
   }
 });
 
