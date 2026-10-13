@@ -392,10 +392,10 @@ function AgentsRows({
                 {columns.includes(lead) && <span className="agents-age">{COLUMNS[lead].cell(group, context)}</span>}
               </div>
               {details.length > 0 && (
-                <div className="agents-compact-details">
+                <div className={`agents-compact-details${details.some(column=>column==='active'||column==='concurrency')?' analytics-compact-details':''}`}>
                   {details.map(column => (
                     <span key={column} title={fullOf(group, column)}>
-                      <span className="sr-only">{t(COLUMNS[column].title)}: </span>
+                      {column==='active'||column==='concurrency'?`${t(COLUMNS[column].title)}: `:<span className="sr-only">{t(COLUMNS[column].title)}: </span>}
                       {column === 'worked' ? <WorkTime ms={group.workedMs} refs={group.rows.flatMap(row=>row.session.ref?[row.session.ref]:[])} still={still} labeled /> : COLUMNS[column].cell(group, context)}
                     </span>
                   ))}
@@ -605,7 +605,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     {id:'sessions',label:t('activity.agents'),cell:{time:'session-count',changesAt:now=>boardPeriod.activityCoverageChangesAt(now),at:now=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?rows.length:'—',title:t('activity.agentsHint')})}},
     ...(columns.includes('worked')?[{id:'worked',label:t('agents.worked'),cell:{time:'worked',changesAt:(now:number)=>withCoverage(now,worked===null?null:boardPeriod.workedChangesAt(refs,now,workedText)),at:(now:number)=>({content:workedText(now),title:t('agents.workedHint')})}}]:[]),
     ...(['active','concurrency'] as const).filter(column=>columns.includes(column)).map(column=>({id:column,label:t(COLUMNS[column].title),cell:activityCell(by,column)})),
-    {id:'working',label:t('table.workingNow'),cell:{content:working}},
+    {id:'working',label:t('table.workingNow'),cell:{time:'working-count',changesAt:now=>boardPeriod.activityCoverageChangesAt(now),at:now=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?working:'—'})}},
   ];
   // Who may change what: every viewer how the list gathers, the owner its columns and whether it shows.
   const toggles = columnsOf(agentsBy).rest;

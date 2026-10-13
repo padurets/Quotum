@@ -40,7 +40,7 @@ test('grouped columns sort union time and concurrency with unknowns last',()=>{
 });
 
 function renderer(input:WorkTrace=trace){
-  let savedSort:agents.AgentsSort=null,by:agents.AgentsBy='machine',owner=false,hidden:string[]=[],range={from:25_000,to:125_000},knownFrom=0;
+  let savedSort:agents.AgentsSort=null,by:agents.AgentsBy='machine',owner=false,narrow=false,hidden:string[]=[],range={from:25_000,to:125_000},knownFrom=0;
   const clicks=new Map<string,()=>void>();
   const model=()=>{const work={...input,knownFrom},index=new PeriodIndex(work),rows=index.advance(range,200_000).rows,metrics=new PeriodActivity(work,index.curves);metrics.update(rows);return {rows,metrics};};
   const period={activitySummaryAt:(dimension:ActivityDimension,_now?:number,key?:string)=>model().metrics.summary(range,dimension,key),activitySummaryChangesAt:()=>null,activityRangeAt:()=>range,activityCoverageChangesAt:()=>null,workedAt:(_refs:string[],ms:number)=>ms,workedChangesAt:()=>null};
@@ -51,10 +51,10 @@ function renderer(input:WorkTrace=trace){
     './Popover':{Popover:()=>null},'./Kit':{Modal:()=>null}};
   const compile=(file:string)=>{const context={exports:{} as Record<string,React.ComponentType<any>>,require:(name:string)=>modules[name]??{}};runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);return context.exports;};
   modules['./TableCell']=compile('../components/TableCell.tsx');
-  const common=compile('../components/TableWidget.tsx'),NativeHeading=common.TableHeading;
-  modules['./TableWidget']={...common,TableHeading:(props:any)=>{if(props.sorting)clicks.set(props.id,()=>props.sorting.onSort(props.id));return React.createElement(NativeHeading,props);}};
+  const common=compile('../components/TableWidget.tsx'),NativeHeading=common.TableHeading,NativeWidget=common.useTableWidget as (...args:any[])=>any;
+  modules['./TableWidget']={...common,useTableWidget:(...args:any[])=>{const widget=NativeWidget(...args);return {...widget,layout:narrow?'list':widget.layout};},TableHeading:(props:any)=>{if(props.sorting)clicks.set(props.id,()=>props.sorting.onSort(props.id));return React.createElement(NativeHeading,props);}};
   const {AgentsPanel}=compile('../components/Agents.tsx');
-  return {set:(options:Partial<{by:agents.AgentsBy;owner:boolean;hidden:string[];range:typeof range;knownFrom:number}>)=>{by=options.by??by;owner=options.owner??owner;hidden=options.hidden??hidden;range=options.range??range;knownFrom=options.knownFrom??knownFrom;},click:(column:string)=>clicks.get(column)!(),
+  return {set:(options:Partial<{by:agents.AgentsBy;owner:boolean;narrow:boolean;hidden:string[];range:typeof range;knownFrom:number}>)=>{by=options.by??by;owner=options.owner??owner;narrow=options.narrow??narrow;hidden=options.hidden??hidden;range=options.range??range;knownFrom=options.knownFrom??knownFrom;},click:(column:string)=>clicks.get(column)!(),
     render:()=>renderToStaticMarkup(React.createElement(AgentsPanel,{arrange:{owner,view:{...EMPTY_VIEW,columns:{[AGENTS]:hidden},shownColumns:{[AGENTS]:['active','concurrency'].filter(id=>!hidden.includes(id))}},update:()=>{}}}))};
 }
 
@@ -71,7 +71,11 @@ test('the actual sessions table renders union metrics and separate whole-period 
       r.set({hidden:['active','concurrency']});html=r.render();assert.ok(!html.includes('data-table-metric="active"')&&!html.includes('data-time="session-activity"'));
       r.set({hidden:[],by:'none'});html=r.render();assert.ok(!html.includes('data-time="session-activity"'));
       r.set({by:'machine',range:{from:160_000,to:170_000},knownFrom:175_000});html=r.render();assert.ok(html.includes(i18n.t('activity.knownFrom',{time:format.stamp(175_000)})));
-      assert.ok(/<dd[^>]*data-table-metric="active"[^>]*>—<\/dd>/.test(html));
+      for(const id of ['sessions','worked','active','concurrency','working'])assert.match(html,new RegExp('<dd[^>]*data-table-metric="'+id+'"[^>]*>—</dd>'));
+      r.set({narrow:true,range:{from:25_000,to:125_000},knownFrom:0});html=r.render();
+      assert.ok(html.includes('>'+i18n.t('activity.active')+': <span'));
+      assert.ok(html.includes('>'+i18n.t('agents.concurrency')+': <span'));
+      r.set({narrow:false});
     }
   }finally{i18n.setLocale('en');}
 });
