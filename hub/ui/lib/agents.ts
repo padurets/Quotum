@@ -214,7 +214,7 @@ export function sortedGroups(groups: AgentGroup[], sort: AgentsSort, columns: re
 /** The first column, whatever it names: room for a name to read. */
 export const NAME_WIDTH = 180;
 /** Room for the widest heading in either language and a readable, possibly shortened value. */
-export const AGENT_WIDTHS: Record<AgentColumn, number> = {project: 150, machine: 116, subscription: 132, agents: 160, worked: 120, active: 120, concurrency: 180, activity: 210, running: 120};
+export const AGENT_WIDTHS: Record<AgentColumn, number> = {project: 150, machine: 116, subscription: 132, agents: 190, worked: 120, active: 170, concurrency: 210, activity: 210, running: 120};
 /** A table where the name and the columns after it (`columns`) fit `width`, else a list. */
 export function agentsLayout(columns: readonly AgentColumn[], width: number): 'table' | 'list' {
   return tableLayout(columns.map(column=>AGENT_WIDTHS[column]),width,NAME_WIDTH,0);

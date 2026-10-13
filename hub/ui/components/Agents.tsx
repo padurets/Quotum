@@ -227,7 +227,7 @@ function SessionCoverage({by,empty,showEmpty}: {by: Dimension; empty: 'none' | '
   const summary = boardPeriod.activitySummaryAt(activityDimension(by), now);
   const coverage = range ? activityCoverage(summary, range.from) : null;
   const text = coverage ?? (showEmpty && empty && summary?.known && !summary.agents ? t(`agents.${empty}`) : null);
-  return <p className={coverage?'analytics-note':'panel-empty'} data-time="activity-coverage" hidden={!text}>{text}</p>;
+  return text ? <p className={coverage?'analytics-note':'panel-empty'} data-time="activity-coverage">{text}</p> : null;
 }
 
 /** Credited time is unknown without a reliable producer identity. */

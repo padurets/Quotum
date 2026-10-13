@@ -194,7 +194,7 @@ test('layout follows the widget’s width and the owner’s columns at either si
   }
   assert.equal(agentsLayout(columnsOf('project').rest, 320), 'list');
   assert.equal(agentsLayout([], 320), 'table');
-  assert.equal(agentsLayout(columnsOf('project').rest.filter(id=>!['active','concurrency'].includes(id)), 700), 'table', 'the grouped overview reserves room for all ten tally marks');
+  assert.equal(agentsLayout(columnsOf('project').rest.filter(id=>!['active','concurrency'].includes(id)), 700), 'table', 'the grouped overview reserves room for its labels and all ten tally marks');
   const details = columnsOf('project', true).rest.filter(column => column !== 'running');
   assert.equal(agentsLayout(details, 758), 'table', 'default details fit the wide dialog, without an inset list fallback');
 });

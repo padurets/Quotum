@@ -63,6 +63,7 @@ test('the actual sessions table renders union metrics and separate whole-period 
     for(const locale of ['en','ru'] as const){
       i18n.setLocale(locale);r.set({by:'machine',hidden:[],range:{from:25_000,to:125_000},knownFrom:0});let html=r.render();
       assert.ok(html.includes(i18n.t('agents.title'))&&html.includes(i18n.t('agents.concurrency')));
+      assert.ok(!html.includes('class="panel-empty"'), 'a populated table must not reserve an empty-state block');
       assert.equal((html.match(/data-agents-group=/g)??[]).length,2);
       const footer=html.match(/<footer[^>]*class="table-footer"[^>]*>(.*?)<\/footer>/)![1];
       assert.ok(footer.includes(i18n.t('table.summary'))&&footer.includes(format.workHours(150_000))&&footer.includes(format.workHours(100_000))&&footer.includes(activity.atOnce(150_000,100_000)));
