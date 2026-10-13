@@ -1,12 +1,25 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {nextTableSort,tablePages,visibleTableSort,type TableSort} from '../lib/table';
-import {nextAgentsSort,type AgentColumn} from '../lib/agents';
+import {nextAgentsSort,agentsLayout,columnsOf,type AgentColumn} from '../lib/agents';
+import {columnShown} from '../lib/view';
+import {EMPTY_VIEW} from '../../server/domain/view';
+import {AGENTS} from '../../server/domain/widgets';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import * as tables from '../lib/table';
 import type {TableWidget} from '../components/TableWidget';
+
+test('default session disclosure columns fit the shared wide dialog and stay compact on a narrow screen',()=>{
+  const css=readFileSync(new URL('../style.css',import.meta.url),'utf8'),maximum=Number(css.match(/\.dialog\.is-wide\s*\{\s*max-width:\s*(\d+)px/)![1]);
+  for(const by of ['project','machine','subscription'] as const){
+    const columns=columnsOf(by,true).rest.filter(column=>columnShown(EMPTY_VIEW,AGENTS,column));
+    assert.ok(columns.includes('client'),'default Client participates in the real disclosure geometry');
+    for(const viewport of [1024,1280])assert.equal(agentsLayout(columns,Math.min(maximum,viewport-32)-2),'table',`${by} disclosure fits its default columns at ${viewport}`);
+    assert.equal(agentsLayout(columns,Math.min(maximum,390-32)-2),'list',`${by} uses the existing narrow list`);
+  }
+});
 
 /** Commit the real hook against measured rows, without a browser or a second React runtime. */
 function widgetFixture(){
