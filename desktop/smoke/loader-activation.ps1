@@ -20,6 +20,33 @@ function Save-ActivationManifest {
   [IO.File]::WriteAllText((Join-Path $Diagnostics 'manifest.json.tmp'),(ConvertTo-Json -InputObject $manifest -Depth 7))
   Move-Item -LiteralPath (Join-Path $Diagnostics 'manifest.json.tmp') -Destination (Join-Path $Diagnostics 'manifest.json') -Force
 }
+# This deliberately recognizes a narrow source shape, not arbitrary Rust syntax.
+function Test-ActivationVisibilityGuard([string]$Branch) {
+  $head="        WM_ACTIVATE if w & 0xffff == WA_INACTIVE as usize => {`n"
+  $tail="            0`n        }`n"
+  if(-not $Branch.StartsWith($head,[StringComparison]::Ordinal) -or -not $Branch.EndsWith($tail,[StringComparison]::Ordinal)){return $false}
+  # Comments or literals could make source-looking text a false match.
+  if($Branch -match '//|/\*|\*/|["'']'){return $false}
+  $depth=0
+  foreach($character in $Branch.ToCharArray()){
+    if($character -eq '{'){$depth++}elseif($character -eq '}'){$depth--;if($depth -lt 0){return $false}}
+  }
+  if($depth -ne 0 -or [regex]::Matches($Branch,'panel\.visible\.get\(\)').Count -ne 1){return $false}
+  $direct=[regex]::Matches($Branch,'(?m)^            if panel\.visible\.get\(\) \{$')
+  if($direct.Count -eq 1){return $true}
+  $prefix=(@(
+    '        WM_ACTIVATE if w & 0xffff == WA_INACTIVE as usize => {'
+    '            let _phase = panel.probe.then(|| Phase::new(hwnd, 13));'
+    '            let visible = panel.visible.get();'
+    '            let mut activation = panel.request_probe.activation(panel.request.get(), hwnd, w, l, visible);'
+    '            if visible {'
+  ) -join "`n")+"`n"
+  if(-not $Branch.StartsWith($prefix,[StringComparison]::Ordinal)){return $false}
+  # The immutable alias must reach that condition without a shadow or assignment.
+  # Any additional use is unsupported, even when it might be harmless Rust.
+  return -not [regex]::IsMatch($Branch.Substring($prefix.Length),'\bvisible\b')
+}
+
 function Source-ActivationManifest {
   $start=[Diagnostics.ProcessStartInfo]::new()
   $start.FileName='git';$start.UseShellExecute=$false;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
@@ -43,7 +70,7 @@ function Source-ActivationManifest {
   }
   $body=[IO.File]::ReadAllText((Join-Path $repository 'desktop/src/host/windows_loading.rs')).Replace("`r`n","`n")
   $branch=[regex]::Match($body,'(?s)        WM_ACTIVATE if w & 0xffff == WA_INACTIVE as usize => \{.*?(?=        _ => unsafe \{ DefWindowProcW)')
-  if($branch.Success -and $branch.Value.Contains('if panel.visible.get()') -and $branch.Value.Contains('panel.dismiss(true)')){
+  if($branch.Success -and (Test-ActivationVisibilityGuard $branch.Value) -and $branch.Value.Contains('panel.dismiss(true)')){
     $manifest.branchHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($branch.Value))).ToLowerInvariant()
   }else{$manifest.errors+=@('production-branch-unavailable')}
 }
