@@ -134,6 +134,18 @@ client bytes and parsed script owner, outside both measured intervals.
 The owned headless browser uses one raster worker: concurrent software raster jobs
 in Chrome 154 can leave a tile unfinished and deadlock an input frame's commit.
 An attached CDP browser retains its own launch settings.
+The optional `benchmark-startup-wait-diagnostics` PR label runs the original CI
+workload with `QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS=1`. It samples only the owned
+browser root at the existing 500-ms checkpoints, with one pending collector and no
+additional timer or readiness await. Both identity reads must match the captured PID,
+birth, parent, group and session. Bounded I/O and scheduler counters and numeric
+kernel-symbol categories retain unavailable, overflowing and pending observations.
+Counters and categories do not prove a waiting cause; observer cost and units remain
+unqualified. The snapshot freezes at the original startup outcome, and later reads
+cannot revise it. The 20-second deadline, launch flags, cleanup and benchmark phases
+are unchanged. Without the flag, no extra process reads or samples run. This outcome
+is diagnostic and cannot satisfy the required benchmark. The `make bench` wrapper
+forwards the flag without loading preview configuration.
 The optional `benchmark-startup-diagnostics` PR label runs a fixed first/repeat launch
 pair on three runners after the same benchmark fixture preparation. Each launch keeps
 the 20-second deadline and a fresh profile. Numeric process, scheduler, I/O and pressure
