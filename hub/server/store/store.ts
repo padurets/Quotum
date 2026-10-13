@@ -38,7 +38,7 @@ export type WorkKey = WorkContext & {identity: {kind: 'legacy'; ordinal: number}
  * of it.
  */
 export type Shown = Map<string, {since: number; holders: {user: string; from: number}[]}>;
-export type WorkRead = ((from: number, to: number) => Stretch[]) & {access?:WorkAccess;reserve?:(bytes:number)=>void;ensureAccess?:()=>WorkAccess};
+export type WorkRead = ((from: number, to: number) => Stretch[]) & {access?:WorkAccess;authority?:string;reserve?:(bytes:number)=>void;release?:(bytes:number)=>void;ensureAccess?:()=>WorkAccess};
 export type SessionDevice = {id:string;name:string;disconnected:boolean;enabled:boolean;since:number|null;revision:string};
 
 /** Settings, admission and funding use the same connected or retained device inventory. */
@@ -198,12 +198,29 @@ export class Store {
    * Work continuity follows device admission, funding disclosure and retained names.
    * Card visibility and financial policy have their own resource authority.
    */
-  workKey(board: string, _shown?: Shown, access=this.workAccess(board)): string {
+  workKey(board: string, _shown?: Shown, access=this.workAccess(board),reserve?:(bytes:number)=>void,release?:(bytes:number)=>void): string {
+    const scratch=512+access.devices.size*512+access.sources.size*256+[...access.sources.values()].reduce((sum,source)=>sum+source.holders.size*128,0);
+    reserve?.(scratch);
+    try{
     const ids=[...access.devices.keys()];
-    const names=this.db.prepare('SELECT user_id,reported,name FROM project_names n WHERE n.user_id IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM devices d WHERE d.id IN (SELECT value FROM json_each(?)) AND d.user_id=n.user_id AND EXISTS(SELECT 1 FROM agent_sessions s WHERE s.device_id=d.id AND s.project=n.reported)) ORDER BY user_id,reported').all(JSON.stringify([...new Set([...access.devices.values()].map(device=>device.owner))]),JSON.stringify(ids));
-    const devices=this.db.prepare('SELECT id,COALESCE(label,name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id').all(JSON.stringify(ids));
+    const names=this.db.prepare('SELECT user_id,reported,name FROM project_names n WHERE n.user_id IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM devices d WHERE d.id IN (SELECT value FROM json_each(?)) AND d.user_id=n.user_id AND EXISTS(SELECT 1 FROM agent_sessions s WHERE s.device_id=d.id AND s.project=n.reported)) ORDER BY user_id,reported').iterate(JSON.stringify([...new Set([...access.devices.values()].map(device=>device.owner))]),JSON.stringify(ids));
+    const devices=this.db.prepare('SELECT id,COALESCE(label,name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id').iterate(JSON.stringify(ids));
     const coverage=[...access.sources].filter(([id,s])=>s.holders.size>0&&supportsQuota(providerOf(id.split(':')[0]))).map(([id,s])=>[id,s.since,[...s.holders].sort()]);
-    return createHash('sha256').update(JSON.stringify([access.knownFrom,[...access.devices],access.fundingRevision??'',coverage,names,devices])).digest('base64url').slice(0,16);
+    const hash=createHash('sha256').update(JSON.stringify([access.knownFrom,[...access.devices],access.fundingRevision??'',coverage]).slice(0,-1));
+    // Names cover retained work beyond this read's range. Hash the same JSON a row
+    // at a time, with room for escaping, instead of retaining the whole collection.
+    for(const rows of [names,devices]){
+      hash.update(',[');let first=true;
+      for(const row of rows){
+        const bytes=512+Object.values(row).reduce<number>((sum,value)=>sum+(typeof value==='string'?value.length*24:32),0);
+        reserve?.(bytes);
+        try{if(!first)hash.update(',');hash.update(JSON.stringify(row));first=false;}
+        finally{release?.(bytes);}
+      }
+      hash.update(']');
+    }
+    return hash.update(']').digest('base64url').slice(0,16);
+    }finally{release?.(scratch);}
   }
 
   privateOwner(board: string): string | null {

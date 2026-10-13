@@ -59,9 +59,9 @@ export class PeriodReader {
       return JSON.parse(Buffer.from(body,'base64url').toString()) as Cursor;
     }catch{return null;}
   }
-  private identity(board:string,user:string,access?:import('./domain/workAccess.js').WorkAccess) {
+  private identity(board:string,user:string,access?:import('./domain/workAccess.js').WorkAccess,reservation?:{add(bytes:number):void;remove(bytes:number):void},authority?:string) {
     const {store}=this.hub;
-    return createHash('sha256').update(JSON.stringify([board,user,store.workKey(board,undefined,access)])).digest('base64url');
+    return createHash('sha256').update(JSON.stringify([board,user,authority??store.workKey(board,undefined,access,reservation?bytes=>reservation.add(bytes):undefined,reservation?bytes=>reservation.remove(bytes):undefined)])).digest('base64url');
   }
   private detailRequest(board:string,user:string,raw:unknown) {
     if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||typeof raw.cursor!=='string'||!Array.isArray(raw.refs)||raw.refs.length>100||raw.refs.some(ref=>typeof ref!=='string'||!/^[-_A-Za-z0-9]{8}$/.test(ref))||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','cursor','refs'].includes(k)))fail(400,'invalid_request');
@@ -71,7 +71,7 @@ export class PeriodReader {
     const reservation=this.history.reservation();
     try{
     const access=store.workAccess(board,Date.now(),bytes=>reservation.add(bytes));
-    const identity=this.identity(board,user,access);
+    const identity=this.identity(board,user,access,reservation);
     const range=evaluatedRange(selection,raw.evaluatedAt);
     const changed=this.workChanges.some(c=>c.revision>cursor.revision&&c.since<cursor.cut&&(c.owner?c.device?access?.devices.get(c.device)?.owner===c.owner:[...(access?.devices.values()??[])].some(d=>d.owner===c.owner):access.sources.has(c.source)));
     if(cursor.identity!==identity||cursor.revision<this.workFloor||cursor.revision>this.revision||changed||cursor.from>range.from||cursor.cut<Math.min(range.to,raw.evaluatedAt))fail(400,'history_range_invalid');
@@ -128,7 +128,7 @@ export class PeriodReader {
     const work:import('./store/store.js').WorkRead=request.sessions||request.quota?sharedWork(self.hub,shown,()=>workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now,board):()=>[],access=work.access;
     if(request.values?.some(id=>!shown.has(id)))fail(404,'not_found');
     const workRequested=!!(request.sessions||request.quota);
-    const identity=workRequested&&access?self.identity(board,user,access):'';
+    const identity=workRequested&&access?self.identity(board,user,access,reservation,work.authority):'';
     const resourceKey=()=>JSON.stringify([[...store.shown(board,directory.view(board).hidden)].map(([id,s])=>[id,s.since]),request.budget||request.funds||request.values?store.sources(board).map(s=>[s.id,s.budget]):null]);
     const capturedResources=resourceKey();
     const previous=self.decode(request.sessions?.cursor);
@@ -177,7 +177,7 @@ export class PeriodReader {
             let bytes=0;
             try{
               const current=store.workAccess(board,now,size=>{reservation.add(size);bytes+=size;});
-              if(self.identity(board,user,current)!==identity)throw new PeriodChanged();
+              if(self.identity(board,user,current,reservation)!==identity)throw new PeriodChanged();
             }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}
             finally{reservation.remove(bytes);}
           }

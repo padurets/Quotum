@@ -87,7 +87,7 @@ export class HistoryTiles {
       parts.push({from: at, to: end, tile, key: `${board} ${scope ?? 'legacy'} ${cell} ${tile}${meters ? ' '+JSON.stringify(meters) : ''}`, eligible: at === tileStart(tile, cell) && end === tileEnd(tile, cell) && end <= now && at >= oldest});
       at = end;
     }
-    const workKey = (scope !== 'budget' && parts.some(p => p.eligible) ? this.store.workKey(board, shown,access!)+JSON.stringify([...shown]) : '') + (meters ? this.store.financialKey(board) : '');
+    const workKey = (scope !== 'budget' && parts.some(p => p.eligible) ? (work!.authority??this.store.workKey(board, shown,access!,work!.reserve,work!.release))+JSON.stringify([...shown]) : '') + (meters ? this.store.financialKey(board) : '');
     for (const part of parts) {
       const hit = part.eligible ? this.kept.get(part.key) : undefined;
       if (hit?.workKey !== workKey) continue;

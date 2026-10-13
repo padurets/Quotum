@@ -7,6 +7,7 @@ import {PeriodReader} from '../periodRead.js';
 import {readHistory,ReadError} from '../historyRead.js';
 import {Store} from '../store/store.js';
 import {PeriodAccounting} from '../domain/periodAccounting.js';
+import {createHash} from 'node:crypto';
 const M=60_000,H=60*M;
 
 async function fixture(t:TestContext,ceiling?:number,devices=1){
@@ -20,6 +21,34 @@ async function fixture(t:TestContext,ceiling?:number,devices=1){
  const quota={cell:String(M),from:String(at),to:String(at+H)},body={version:1,selection:{mode:'live',periodMs:2*H},evaluatedAt:at+2*H,sessions:{},quota};
  return {...h,events,tiles,period,source,calls,quota,body};
 }
+
+for(const ceiling of [5000,50_000])test(`retained authority names share the ${ceiling} byte read ceiling without a bulk allocation`,async t=>{
+ const h=await fixture(t,ceiling),names:{user_id:string;reported:string;name:string}[]=[];
+ for(let i=0;i<200;i++){
+  const reported='project-'+String(i).padStart(4,'0')+'x'.repeat(100),name='name-'+String(i).padStart(4,'0')+'n'.repeat(105);
+  h.store.creditWork(h.device.id,at,at+1000,[{client:'opencode',source:null,origin:'terminal',project:reported,folder:'',startedAt:at,identity:{kind:'stable',sessionId:String(i).padStart(32,'0')}}]);
+  h.store.db.prepare('INSERT INTO project_names VALUES (?,?,?)').run(h.owner.id,reported,name);names.push({user_id:h.owner.id,reported,name});
+ }
+ assert.ok(Buffer.byteLength(JSON.stringify(names))>ceiling,'authority metadata exceeds the requested ceiling although the selected ledger is empty');
+ const access=h.store.workAccess(h.board),expected=createHash('sha256').update(JSON.stringify([access.knownFrom,[...access.devices],access.fundingRevision??'',[[h.source,at-M,[h.owner.id]]],names,[{id:h.device.id,name:'Laptop'}]])).digest('base64url').slice(0,16);
+ assert.equal(h.store.workKey(h.board,undefined,access),expected,'incremental hashing preserves the existing JSON authority namespace');
+ const prepare=h.store.db.prepare.bind(h.store.db);
+ t.mock.method(h.store.db,'prepare',(sql:string)=>{
+  const statement=prepare(sql);
+  if(sql.startsWith('SELECT user_id,reported,name FROM project_names')){
+   const all=statement.all.bind(statement);
+   t.mock.method(statement,'all',(...args:Parameters<typeof all>)=>{const rows=all(...args);assert.ok(Buffer.byteLength(JSON.stringify(rows))<=ceiling,'a native bulk authority allocation must fit the read ceiling');return rows;});
+  }
+  return statement;
+ });
+ const body={...h.body,selection:{mode:'live',periodMs:H},quota:undefined,budget:{...h.quota,unit:'USD',meters:'[]'}};
+ const reply=JSON.parse(h.period.read(h.board,h.owner.id,body));
+ if(ceiling===5000)assert.deepEqual(reply.sessions,{state:'error',error:'history_limit'},'authority overflow is a normal dependent-section error');
+ else {assert.equal(reply.sessions.state,'complete');assert.deepEqual(reply.sessions.value.refs,[],'streaming all retained names does not enlarge the selected cohort');}
+ assert.equal(reply.budget.state,'complete','independent financial sections survive authority failure');
+ const reservation=h.tiles.reservation();try{reservation.add(ceiling);}finally{reservation.close();}
+ if(ceiling===5000){assert.throws(()=>readHistory(h.hub,h.tiles,h.events,h.board,h.owner.id,h.quota),(error:unknown)=>error instanceof ReadError&&error.statusCode===413&&error.code==='history_limit');}
+});
 
 test('composite quota, closed tile keys, metadata and tape share one reserved access snapshot',async t=>{
  const h=await fixture(t);let cells=0;const read=h.store.cells.bind(h.store);t.mock.method(h.store,'cells',(...args:Parameters<Store['cells']>)=>{cells++;return read(...args);});

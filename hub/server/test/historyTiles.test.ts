@@ -78,8 +78,8 @@ test('late work and renames invalidate closed tiles, while hiding retains admitt
 });
 
 test('missing adjacent tiles use one pass, and the cache evicts its least used entries', () => {
-  // The request's admitted access and dependency sets fit beside one retained tile.
-  const h=fixture(4000); h.sample(start, 20);
+  // Admitted access, authority scratch and dependency sets leave room for a cached tile.
+  const h=fixture(5500); h.sample(start, 20);
   h.read(start, start + 3 * H, start + 4 * H); assert.equal(h.calls(), 1);
   h.read(start + 2 * H, start + 3 * H, start + 4 * H); assert.equal(h.calls(), 1, 'last tile still fits');
   h.read(start, start + H, start + 4 * H); assert.equal(h.calls(), 2, 'first tile was evicted');

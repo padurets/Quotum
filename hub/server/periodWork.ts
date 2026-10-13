@@ -11,8 +11,9 @@ import {workKnownFrom} from './domain/history.js';
 /** A composite read extracts work once for charts and the temporal index. */
 export function sharedWork(hub:Pick<Hub,'store'>,_shown:Shown,range:PeriodRange|null|(()=>PeriodRange|null),reserve:(bytes:number)=>void,release:(bytes:number)=>void,_owner:string|null=null,now=Date.now(),board:string):WorkRead {
   let kept:{from:number;to:number;rows:Stretch[]}|null=null,bytes=0;
-  let access:import('./domain/workAccess.js').WorkAccess|undefined,accessError:unknown,snapshotBytes=0;
-  try{access=hub.store.workAccess(board,now,size=>{reserve(size);snapshotBytes+=size;});}catch(error){release(snapshotBytes);accessError=error;}
+  let access:import('./domain/workAccess.js').WorkAccess|undefined,authority:string|undefined,accessError:unknown,snapshotBytes=0;
+  try{access=hub.store.workAccess(board,now,size=>{reserve(size);snapshotBytes+=size;});authority=hub.store.workKey(board,undefined,access,reserve,release);}
+  catch(error){access=undefined;release(snapshotBytes);accessError=error;}
   const ensureAccess=()=>{if(accessError)throw accessError;return access!;};
   const read:WorkRead=(from,to)=>{
     if(!kept||from<kept.from||to>kept.to){
@@ -24,7 +25,7 @@ export function sharedWork(hub:Pick<Hub,'store'>,_shown:Shown,range:PeriodRange|
     }
     return kept.rows.flatMap(s=>s.to>from&&s.from<to?[s.from>=from&&s.to<=to?s:{...s,from:Math.max(from,s.from),to:Math.min(to,s.to)}]:[]);
   };
-  read.access=access;read.ensureAccess=ensureAccess;read.reserve=reserve;return read;
+  read.access=access;read.authority=authority;read.ensureAccess=ensureAccess;read.reserve=reserve;read.release=release;return read;
 }
 
 export function periodWork(hub:Hub,history:HistoryTiles,board:string,shown:Shown,range:PeriodRange,work:WorkRead,now:number,reserve:(bytes:number)=>void,release?:(bytes:number)=>void):WorkTrace {
