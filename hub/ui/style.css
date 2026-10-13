@@ -459,21 +459,24 @@ td.muted, small.muted { color: var(--text-3); }
 .table-pages { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 8px; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .table-pages[hidden] { display: none; }
 .table-pages .icon-button:disabled { opacity: .35; pointer-events: none; }
-.table-footer { display: flex; align-items: center; gap: 20px; padding-top: 10px; border-top: 1px solid var(--hair); }
+.table-footer { padding-top: 10px; border-top: 1px solid var(--hair); }
 .table-summary { display: flex; align-items: center; gap: 18px; flex: 1; min-width: 0; }
 .table-summary-heading { flex-shrink: 0; color: var(--text-4); font-size: 11px; }
 .table-summary dl { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; }
 .table-summary dl > div { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
 .table-summary dt { font-size: 11px; color: var(--text-3); }
 .table-summary dd { margin: 0; font-size: 13px; font-weight: 550; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.table-footer-pages { display: flex; align-items: center; justify-content: flex-end; flex-shrink: 0; gap: 12px; }
+.table-summary.is-aligned { display: grid; gap: 0; align-items: baseline; }
+.table-summary.is-aligned .table-summary-heading { grid-column: 1; grid-row: 1; }
+.table-summary.is-aligned dl { display: contents; }
+.table-summary.is-aligned dl > div { display: block; padding: 0 10px; }
+.table-footer-pages { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 8px; }
 .table-footer-pages small { font-size: 11px; color: var(--text-4); font-variant-numeric: tabular-nums; }
+.table-footer-pages:first-child { margin-top: 0; }
 .table-footer-pages .table-pages { padding-top: 0; }
-.table-footer.is-list { display: block; }
 .table-footer.is-list .table-summary { display: block; }
 .table-footer.is-list .table-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin-top: 8px; }
 .table-footer.is-list .table-summary dl > div { justify-content: space-between; }
-.table-footer.is-list .table-footer-pages { margin-top: 8px; }
 .widget-body > .panel:has(> .table-footer)::after { display: none; }
 .widget-body > .panel > .table-footer { margin-top: calc(var(--fill, 0px) + 14px); }
 /* All the agents in a dialog: its list's rows light up inset, as a menu's do. */

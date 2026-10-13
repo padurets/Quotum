@@ -1321,9 +1321,11 @@ ten rows; a chosen height fits as many complete rows as its space allows. Variab
 heights follow row identities through ordering and paging. Static measurement starts
 with fifty candidates and expands to the fitting page and its next row, without clock
 subscriptions. A separate footer puts the whole-selection summary on the left and
-the matching row count beside the compact pager on the right. Wide footers show
-scope and name/value pairs on one line immediately below their dividing rule;
-a narrow list uses a fixed two-column metric grid above the count and pager.
+the matching row count beside the compact pager on a separate line below it.
+Wide totals align with their table columns, using the same widths and showing only
+values under the dividing rule; column headings are not repeated. A narrow list uses
+a fixed two-column metric grid above the count and pager. Tables without aggregate
+metrics show only the count and pager.
 Each value names its metric and scope. The sessions table shows whole-period work and
 context counts; quota and budget tables show matching row counts without summing
 unrelated percentages or overlapping wallet components. One-page tables hide the

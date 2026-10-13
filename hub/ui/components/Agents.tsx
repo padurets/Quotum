@@ -602,7 +602,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const worked=rows.some(row=>row.session.workedMs===null)?null:rows.reduce((sum,row)=>sum+row.session.workedMs!,0);
   const workedText=(now:number)=>!boardPeriod.activitySummaryAt(activityDimension(by),now)?.known||worked===null?'—':workHours(boardPeriod.workedAt(refs,worked,now)!);
   const metrics:TableMetric[]=[
-    {id:'sessions',label:t('activity.agents'),cell:{time:'session-count',changesAt:now=>boardPeriod.activityCoverageChangesAt(now),at:now=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?rows.length:'—',title:t('activity.agentsHint')})}},
+    {id:'sessions',column:'agents',label:t('activity.agents'),cell:{time:'session-count',changesAt:now=>boardPeriod.activityCoverageChangesAt(now),at:now=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?rows.length:'—',title:t('activity.agentsHint')})}},
     ...(columns.includes('worked')?[{id:'worked',label:t('agents.worked'),cell:{time:'worked',changesAt:(now:number)=>withCoverage(now,worked===null?null:boardPeriod.workedChangesAt(refs,now,workedText)),at:(now:number)=>({content:workedText(now),title:t('agents.workedHint')})}}]:[]),
     ...(['active','concurrency'] as const).filter(column=>columns.includes(column)).map(column=>({id:column,label:t(COLUMNS[column].title),compactLabel:column==='concurrency'?t('activity.atOnce'):undefined,cell:activityCell(by,column)})),
   ];
@@ -678,8 +678,8 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
           body={table.live}
         />
       )}
-      {period.basis&&<WidgetPages table={table} count={ordered.length} metrics={metrics}/>}
-      <TableMeasure table={table} metrics={metrics}><AgentsRows groups={ordered.slice(table.measureFrom,table.measureTo)} name={name} columns={columns} single={single} layout={layout} color={color} still body={table.measured}/></TableMeasure>
+      {period.basis&&<WidgetPages table={table} count={ordered.length} metrics={metrics} columns={[name,...columns]}/>}
+      <TableMeasure table={table} metrics={metrics} columns={[name,...columns]}><AgentsRows groups={ordered.slice(table.measureFrom,table.measureTo)} name={name} columns={columns} single={single} layout={layout} color={color} still body={table.measured}/></TableMeasure>
       {open && (
         <AgentsDialog
           groups={ordered}

@@ -67,6 +67,7 @@ test('the actual sessions table renders union metrics and separate whole-period 
       assert.match(html,/<p class="analytics-note" data-time="working-count">/);
       assert.equal((html.match(/data-agents-group=/g)??[]).length,2);
       const footer=html.match(/<footer[^>]*class="table-footer"[^>]*>(.*?)<\/footer>/)![1];
+      assert.equal((footer.match(/<dt class="sr-only"/g)??[]).length,4, 'wide totals reuse their column headings');
       assert.ok(footer.includes(i18n.t('table.summary'))&&footer.includes(format.workHours(150_000))&&footer.includes(format.workHours(100_000))&&footer.includes(activity.atOnce(150_000,100_000)));
       assert.ok(!html.includes('aria-sort='));
       r.set({hidden:['active','concurrency']});html=r.render();assert.ok(!html.includes('data-table-metric="active"')&&!html.includes('data-time="session-activity"'));
@@ -80,6 +81,8 @@ test('the actual sessions table renders union metrics and separate whole-period 
       assert.ok(!compact.includes(i18n.t('activity.active'))&&!compact.includes(i18n.t('agents.concurrency')));
       assert.ok(!compact.includes('data-time="session-activity"'));
       assert.ok(html.includes('data-table-metric="active"')&&html.includes('data-table-metric="concurrency"'));
+      const compactFooter=html.match(/<footer[^>]*class="table-footer is-list"[^>]*>(.*?)<\/footer>/)![1];
+      assert.ok(!compactFooter.includes('<dt class="sr-only"'), 'compact totals retain their labels');
       r.set({narrow:false});
     }
   }finally{i18n.setLocale('en');}

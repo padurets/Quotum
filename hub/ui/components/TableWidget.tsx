@@ -35,12 +35,16 @@ export function TablePages({page,pages,onPage,range,body,reserve=false}:{page:nu
   </nav>;
 }
 
-export type TableMetric={id:string;label:string;compactLabel?:string;cell:Cell|TimedCell};
-function TableFooter({table,count,metrics=[],still=false,single=false,body}:{table:TableWidget;count:number;metrics?:readonly TableMetric[];still?:boolean;single?:boolean;body?:RefObject<HTMLElement|null>}){
+export type TableMetric={id:string;column?:string;label:string;compactLabel?:string;cell:Cell|TimedCell};
+function TableFooter({table,count,metrics=[],columns,still=false,single=false,body}:{table:TableWidget;count:number;metrics?:readonly TableMetric[];columns?:readonly string[];still?:boolean;single?:boolean;body?:RefObject<HTMLElement|null>}){
+  const aligned=table.layout==='table'&&!!columns;
+  const shown=aligned?metrics.filter(metric=>columns!.includes(metric.column??metric.id)):metrics;
+  // The table reaches the panel edges; the footer's last column ends at its inner padding.
+  const gridColumns=aligned?`minmax(0, 1fr) ${table.columnWidths.map((width,index)=>index===table.columnWidths.length-1?`calc(${width}px - var(--panel-pad))`:width+'px').join(' ')}`:undefined;
   return <footer ref={body} className={`table-footer${table.layout==='list'?' is-list':''}`} aria-label={t('table.summary')}>
-    <div className="table-summary"><div className="table-summary-heading" title={t('table.summaryHint')}>{t('table.summary')}</div>
-      {metrics.length>0&&<dl>{metrics.map(metric=><div key={metric.id}><dt title={metric.label}>{table.layout==='list'?metric.compactLabel??metric.label:metric.label}</dt>{tableCell(metric.id,metric.cell,(cell,time)=><dd data-time={time} data-table-metric={metric.id} className={cell.className} title={cell.title}>{cell.content}</dd>,still)}</div>)}</dl>}
-    </div>
+    {shown.length>0&&<div className={`table-summary${aligned?' is-aligned':''}`} style={gridColumns?{gridTemplateColumns:gridColumns}:undefined}><div className="table-summary-heading" title={t('table.summaryHint')}>{t('table.summary')}</div>
+      {shown.length>0&&<dl>{shown.map(metric=><div key={metric.id} style={aligned?{gridColumn:columns!.indexOf(metric.column??metric.id)+1,gridRow:1}:undefined}><dt className={aligned?'sr-only':undefined} title={metric.label}>{table.layout==='list'?metric.compactLabel??metric.label:metric.label}</dt>{tableCell(metric.id,metric.cell,(cell,time)=><dd data-time={time} data-table-metric={metric.id} className={cell.className} title={cell.title}>{cell.content}</dd>,still)}</div>)}</dl>}
+    </div>}
     <div className="table-footer-pages"><small title={t('table.summaryHint')}>{t('table.rows',{count})}</small>{!single&&<TablePages page={still?0:table.page} pages={still?2:table.pages} onPage={table.onPage} range={`${table.from+1}–${table.to} / ${count}`}/>}</div>
   </footer>;
 }
@@ -119,13 +123,13 @@ export function useTableWidget(panel:RefObject<HTMLElement|null>,columns:readonl
     return ()=>observer.disconnect();
   },[panel,layout,!!keys.length,sizing?.manual]);
   const report=sizing?.report;useLayoutEffect(()=>()=>report?.(null),[report]);
-  return useMemo(()=>({layout,from,to,page,count:keys.length,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,footer,measuredFooter,measuredSingleFooter,
-    measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,Math.max(from+TABLE_MEASURE_MIN_ROWS,to+1)):from}),[layout,from,to,page,starts.length,resetKey,sizing?.manual,keys.length]);
+  return useMemo(()=>({layout,columnWidths:columns,from,to,page,count:keys.length,pages:starts.length,onPage:(page:number)=>setPosition({key:resetKey,page}),live,measured,footer,measuredFooter,measuredSingleFooter,
+    measureFrom:from,measureTo:sizing?.manual?Math.min(keys.length,Math.max(from+TABLE_MEASURE_MIN_ROWS,to+1)):from}),[layout,columnsKey,from,to,page,starts.length,resetKey,sizing?.manual,keys.length]);
 }
 export type TableWidget=ReturnType<typeof useTableWidget>;
-export function TableMeasure({table,children,metrics}:{table:TableWidget;children:ReactNode;metrics?:readonly TableMetric[]}){
-  return <div className="table-measure" aria-hidden="true" inert>{children}<TableFooter table={table} count={table.count} metrics={metrics} still body={table.measuredFooter}/><TableFooter table={table} count={table.count} metrics={metrics} still single body={table.measuredSingleFooter}/></div>;
+export function TableMeasure({table,children,metrics,columns}:{table:TableWidget;children:ReactNode;metrics?:readonly TableMetric[];columns?:readonly string[]}){
+  return <div className="table-measure" aria-hidden="true" inert>{children}<TableFooter table={table} count={table.count} metrics={metrics} columns={columns} still body={table.measuredFooter}/><TableFooter table={table} count={table.count} metrics={metrics} columns={columns} still single body={table.measuredSingleFooter}/></div>;
 }
-export function WidgetPages({table,count,metrics}:{table:TableWidget;count:number;metrics?:readonly TableMetric[]}){
-  return <TableFooter table={table} count={count} metrics={metrics} body={table.footer}/>;
+export function WidgetPages({table,count,metrics,columns}:{table:TableWidget;count:number;metrics?:readonly TableMetric[];columns?:readonly string[]}){
+  return <TableFooter table={table} count={count} metrics={metrics} columns={columns} body={table.footer}/>;
 }
