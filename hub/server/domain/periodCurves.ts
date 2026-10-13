@@ -1,3 +1,4 @@
+import {sourceKey} from './workAccess.js';
 import {drain,ordered,type Preparation} from './prepare.js';
 import {packWorkPrepared,WORK_BLOCK_MS,type WorkTrace} from './periodWork.js';
 import type {PeriodRange} from './period.js';
@@ -81,7 +82,7 @@ export class PeriodCurves {
     value.all=yield*keep(this.all);
     for(const ref of trace.refs){const id=refs.get(ref);if(id===undefined)throw new Error('retained work changed its context');value.contexts.push(yield*keep(this.contexts[id]));yield;}
     for(const ref of trace.refs){
-      const keys={source:ref.source??'unknown',project:JSON.stringify(ref.project),device:ref.device.id};
+      const keys={source:sourceKey(ref),project:JSON.stringify(ref.project),device:ref.device.id};
       for(const dimension of ['source','project','device'] as const){const key=keys[dimension];if(!value.groups[dimension].has(key)){reserve(64+key.length*2);value.groups[dimension].set(key,yield*keep(this.groups[dimension].get(key)!));}yield;}
     }
     return value;
@@ -91,7 +92,7 @@ export class PeriodCurves {
     type Hours=Map<number,Map<number,number>>;
     const byRef:number[][]=this.trace.refs.map(()=>[]);for(let i=0;i<packed.blocks.length;i+=3){byRef[packed.blocks[i]].push(i);yield;}
     const groups={source:new Map<string,Set<number>>(),project:new Map<string,Set<number>>(),device:new Map<string,Set<number>>()};
-    for(let id=0;id<this.trace.refs.length;id++){const ref=this.trace.refs[id],keys={source:ref.source??'unknown',project:JSON.stringify(ref.project),device:ref.device.id};for(const dimension of ['source','project','device'] as const){let ids=groups[dimension].get(keys[dimension]);if(!ids)groups[dimension].set(keys[dimension],ids=new Set());ids.add(id);}yield;}
+    for(let id=0;id<this.trace.refs.length;id++){const ref=this.trace.refs[id],keys={source:sourceKey(ref),project:JSON.stringify(ref.project),device:ref.device.id};for(const dimension of ['source','project','device'] as const){let ids=groups[dimension].get(keys[dimension]);if(!ids)groups[dimension].set(keys[dimension],ids=new Set());ids.add(id);}yield;}
     const curves=new Map<string,Curve>(),timelines=new Map<string,WorkTimeline>();let retained=0;
     function* timeline(ids?:ReadonlySet<number>):Preparation<WorkTimeline>{
       // Only one group's hour buckets exist at a time; overlapping dimensions

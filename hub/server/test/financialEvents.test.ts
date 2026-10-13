@@ -158,7 +158,7 @@ test('a coalesced financial invalidation starts at the new grant admission, whil
   h.store.hold(wallet, h.owner.id, admittedAt);
   h.store.share(h.board.id, wallet, h.owner.id, admittedAt);
   h.events.flush();
-  assert.deepEqual(changes(frames).filter(c => c.scope === 'budget'), [{source: h.source, scope: 'budget', since: admittedAt}]);
+  const current=replacement(frames);assert.equal(current.sources.find(s=>s.id===h.source)?.budget?.anchor,admittedAt);assert.deepEqual(current,h.snapshot());
   frames.length = 0;
   h.events.history(h.source, h.firstBalanceAt, ['budget']);
   h.events.history(wallet, h.firstBalanceAt - 1000, ['budget']); h.events.flush();

@@ -273,7 +273,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     const seed = groups.map((group, i) => ({key: group.key, name: group.name, color: colors[i]}));
     if (!strip) return {identities: seed, shown, strip, registry: null};
     const previous = registry.current?.authority === authority && registry.current.token === strip.token && registry.current.by === by ? registry.current : {authority, token: strip.token, by, seed, groups: seed};
-    const identities = groupRegistry(previous.seed, previous.groups, [...found.values()], by === 'source' ? key => key === 'unknown' ? 'var(--other)' : colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
+    const identities = groupRegistry(previous.seed, previous.groups, [...found.values()], by === 'source' ? key => key==='unknown'||key==='notProvided'?'var(--other)' : colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
     const plotted: {group: PlotGroup; color: string; name: string}[] = [];
     for (const identity of identities) {if (!prefs.muted[mutedKey(by, identity.key)]) plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
     return {identities, shown: plotted, strip, registry: {authority, token: strip.token, by, seed: previous.seed, groups: identities}};

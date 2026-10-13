@@ -110,8 +110,11 @@ and platform smoke checks still apply.
   and owner IDs never enter shared projections.
 - **Clients and collectors are independent.** The client catalogue owns discovery and
   activity; only explicitly mapped collectors measure subscriptions. Preserve legacy
-  session order and cap priority. Unknown or unheld work belongs only to the owner's
-  personal board and devices, never shared projections or source activity signals.
+  session order and cap priority. Device sessions are admitted independently of subscriptions, defaulting on for every
+  member's saved devices on each shared board. Unknown or unheld funding is redacted;
+  known held funding is disclosed only while the source is provided to that board.
+  Hiding a card never filters the admitted cohort. Unknown or unheld work never affects source activity signals. Board funding
+  redaction does not change collector identity or source duty.
   Evidence metadata never changes producer identity or retrospectively attributes work.
 - **The provider catalogue defines authority.** Known hub-measured providers are
   dropped from agent snapshots, failures and sessions before their other fields are

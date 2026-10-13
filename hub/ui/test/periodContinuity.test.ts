@@ -68,16 +68,16 @@ test('overview, stream, new and lost leases and financial replacement snapshots 
   } finally {await h.close();}
 });
 
-test('a known lease retains the authority cutoff instead of replacing it with a snapshot',async t=>{
+test('a known lease withdraws the old cohort through a fresh snapshot before its replacement index arrives',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture();
   try {
     const reader={user:h.alice.id,secret:'fixture-session',board:h.board};
     const first=await h.events.poll(reader,undefined);assert.ok(first&&first!=='limit');
     h.disconnect();h.remove();const gate=h.hold(),next=await h.events.poll(reader,first.lease);assert.ok(next&&next!=='limit');
-    const changes=next.frames.filter(f=>f.type==='history').map(f=>JSON.parse(f.data));
-    assert.ok(changes.some(c=>c.changes.some((x:any)=>x.workSince===0)));
+    assert.equal(next.frames[0].type,'snapshot');const replacement=JSON.parse(next.frames[0].data);
+    assert.deepEqual(Object.values(replacement.sessions).flat(),[]);assert.deepEqual(replacement.unattributedSessions,[]);assert.notEqual(replacement.workAuthority,h.page.get().board!.workAuthority);
     for(const f of next.frames)h.event({type:f.type,data:JSON.parse(f.data)} as any);
-    await flush();assert.equal(h.period.get().rows.length,0);assert.equal(h.page.get().board!.workAuthority,changes[0].workAuthority);
+    await flush();assert.equal(h.period.get().rows.length,0);assert.equal(h.page.get().board!.workAuthority,replacement.workAuthority);
     gate.release();await flush();
   } finally {await h.close();}
 });

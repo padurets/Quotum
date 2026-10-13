@@ -10,6 +10,7 @@ import {config} from './config.js';
 import type {Ingest} from './ingest.js';
 import type {WindowForecast} from './forecasts.js';
 import type {ResetFeed, TrackerHealth} from './resets.js';
+import type {WorkAccess} from './domain/workAccess.js';
 import type {BoardSession} from './sessions.js';
 import type {Why} from './cadence.js';
 import type {MeasureIntervalMs} from './domain/frequency.js';
@@ -55,7 +56,7 @@ export type Snapshot = Omit<BoardPart, 'lineup'> & {
   workAuthority: string;
   sources: Card[];
   sessions: Record<string, BoardSession[]>;
-  ownSessions?: BoardSession[];
+  unattributedSessions: BoardSession[];
   cadence: Record<string, Cadence>;
   refresh: Record<string, Refresh>;
   forecast: Record<string, ForecastPart>;
@@ -96,10 +97,7 @@ export class Projection {
    * Whose agents' work the board's history shows, from when and under which names
    * (Store.workKey): when it changes, all of that history reads otherwise.
    */
-  workKey(board: string): string {
-    const {store, directory} = this.hub;
-    return store.workKey(board, store.shown(board, directory.view(board).hidden));
-  }
+  workKey(board:string,access?:WorkAccess):string {return this.hub.store.workKey(board,undefined,access);}
 
   /** The people on a board, by id, with their names: whose each source is, and whose agents it shows. */
   members(board: string): Map<string, string> {
@@ -107,7 +105,7 @@ export class Projection {
   }
 
   /** One source of a board: its card, the agents running on it on the machines of its people there, and its pace. */
-  sourcePart(source: BoardSource, members: Map<string, string>, now: number): Timed<SourcePart> {
+  sourcePart(source: BoardSource, members: Map<string, string>, now: number,roster?:ReturnType<Ingest['live']['board']>): Timed<SourcePart> {
     const {store, ingest} = this.hub;
     const state = publicSourceState(store.state(source.id),source.budget?.enabled!==false);
     const stale = state.successAt === null || state.staleAfterMs === null || now - state.successAt > state.staleAfterMs || !!state.resources?.windows && state.resources.windows.status!=='observed';
@@ -126,13 +124,13 @@ export class Projection {
       const accounting=monetaryOf(card.provider);
       if(accounting&&source.budget?.enabled!==false)card.spending=accounting.spending==='counter'?store.meters.calendar(source.id,now,state.successAt??utcPeriods(now).day):null;
     }
-    const people = source.holders.filter(id => members.has(id));
+
     const byHub=providerOf(source.provider)?.measuredBy==='hub';
     const refresh = byHub?this.hub.hubSources?.refresh(source.id,now)??{value:{by:'hub' as const,unavailable:'no_access' as const,availableAt:null,retryAt:null,request:null},changesAt:null}:ingest.refresh(source.id, now);
     const cadence = byHub?this.hub.hubSources?.cadence(source.id)??{value:null,changesAt:null}:ingest.nextMeasurement(source.id, source.account, now);
     return {
-      value: {card, sessions: ingest.live.of(source.id, people, now), cadence: cadence.value, refresh: refresh.value},
-      changesAt: earliest(state.creditBalance&&now<=state.creditBalance.at+state.creditBalance.staleAfterMs?state.creditBalance.at+state.creditBalance.staleAfterMs+1:null,state.balanceStatus&&now<=state.balanceStatus.at+state.balanceStatus.staleAfterMs?state.balanceStatus.at+state.balanceStatus.staleAfterMs+1:null,...state.windows.map(w => w.resetAt !== null && w.resetAt > now ? w.resetAt : null),...(card.meters??[]).map(m=>m.stale?null:m.at+m.staleAfterMs+1),...(card.meters??[]).map(m=>m.resetAt!==null&&m.resetAt>now?m.resetAt:null),card.spending?utcPeriods(now).day+86_400_000:null,this.hub.credentials?.nextExpiry(source.id,now)??null, stale ? null : state.successAt! + state.staleAfterMs! + 1, ingest.live.ofChangesAt(source.id, people, now), cadence.changesAt, refresh.changesAt),
+      value: {card, sessions: roster?.sessions.get(source.id)??[], cadence: cadence.value, refresh: refresh.value},
+      changesAt: earliest(state.creditBalance&&now<=state.creditBalance.at+state.creditBalance.staleAfterMs?state.creditBalance.at+state.creditBalance.staleAfterMs+1:null,state.balanceStatus&&now<=state.balanceStatus.at+state.balanceStatus.staleAfterMs?state.balanceStatus.at+state.balanceStatus.staleAfterMs+1:null,...state.windows.map(w => w.resetAt !== null && w.resetAt > now ? w.resetAt : null),...(card.meters??[]).map(m=>m.stale?null:m.at+m.staleAfterMs+1),...(card.meters??[]).map(m=>m.resetAt!==null&&m.resetAt>now?m.resetAt:null),card.spending?utcPeriods(now).day+86_400_000:null,this.hub.credentials?.nextExpiry(source.id,now)??null, stale ? null : state.successAt! + state.staleAfterMs! + 1, roster?.changesAt??null, cadence.changesAt, refresh.changesAt),
     };
   }
 
@@ -218,10 +216,7 @@ export class Projection {
     return {value: {...this.hub.resets.snapshot(), past}, changesAt: oldest === null ? null : oldest + kept + 1};
   }
 
-  ownSessions(user: string, board: string, now: number): Timed<BoardSession[]> | null {
-    if (this.hub.store.privateOwner(board) !== user) return null;
-    return {value: this.hub.ingest.live.own(user, board, now), changesAt: this.hub.ingest.live.ownChangesAt(user, board, now)};
-  }
+  roster(board:string,now:number) {const access=this.hub.store.workAccess(board,now);return {...this.hub.ingest.live.board(access,now),access};}
 
   /** The board as the reader sees it now; null once it is gone. */
   snapshot(user: string, board: string, now: number): Snapshot | null {
@@ -229,7 +224,8 @@ export class Projection {
     const part = this.boardPart(board, lineup);
     if (!part) return null;
     const members = this.members(board);
-    const sources = lineup.map(source => this.sourcePart(source, members, now).value);
+    const roster=this.roster(board,now);
+    const sources = lineup.map(source => this.sourcePart(source, members, now,roster).value);
     return {
       providers: catalogue,
       sourceAccess:this.sourceAccess(user,lineup,now),
@@ -238,9 +234,9 @@ export class Projection {
       view: part.view,
       viewRevision: part.viewRevision,
       historyStart: this.hub.store.historyStart(now),
-      workAuthority: this.workKey(board),
+      workAuthority: this.workKey(board,roster.access),
       sources: sources.map(s => s.card),
-      ...(this.hub.store.privateOwner(board) === user ? {ownSessions: this.ownSessions(user, board, now)!.value} : {}),
+      unattributedSessions:roster.unattributedSessions,
       sessions: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].sessions])),
       cadence: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].cadence])),
       refresh: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].refresh])),

@@ -318,6 +318,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       const shared = store.sources(access.board.id);
       const ids = new Set(shared.map(s => s.id));
       return {
+        sessionDevices:store.sessionDevices(access.board.id,access.user.id),
         shared: shared.map(s => ({
           source: s.id,
           provider: s.provider,
@@ -360,6 +361,15 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       const {enabled,expectedRevision}=request.body??{};
       if(typeof enabled!=='boolean'||typeof expectedRevision!=='string'||!/^[0-9a-f]{32}$/.test(expectedRevision))return reply.code(400).send({error:'invalid_request'});
       try{return {budget:store.setBudget(access.board.id,request.params.source,access.user.id,enabled,expectedRevision,Date.now())};}
+      catch(error){const code=error instanceof Error?error.message:'';return reply.code(code==='share_conflict'?409:code==='not_found'?404:400).send({error:code==='share_conflict'||code==='not_found'?code:'invalid_request'});}
+    });
+
+    app.put<{Params:{board:string;device:string};Body:Body}>('/api/boards/:board/shares/devices/:device/sessions',(request,reply)=>{
+      const access=guards.board(request,reply,request.params.board);if(!access)return reply;
+      if(access.board.personal)return forbidden(reply);
+      const body=request.body??{}, {enabled,expectedRevision}=body;
+      if(Object.keys(body).some(k=>k!=='enabled'&&k!=='expectedRevision')||typeof enabled!=='boolean'||typeof expectedRevision!=='string'||!/^[0-9a-f]{32}$/.test(expectedRevision))return reply.code(400).send({error:'invalid_request'});
+      try{return {device:store.setDeviceSessions(access.board.id,request.params.device,access.user.id,enabled,expectedRevision,Date.now())};}
       catch(error){const code=error instanceof Error?error.message:'';return reply.code(code==='share_conflict'?409:code==='not_found'?404:400).send({error:code==='share_conflict'||code==='not_found'?code:'invalid_request'});}
     });
 

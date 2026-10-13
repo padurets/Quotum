@@ -83,7 +83,7 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
         if(chunks.reduce((sum,json)=>sum+Buffer.byteLength(json),0)>16*1024*1024)fail(413, 'history_limit');
       }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}finally{reservation.close();}
     }
-    const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown,scope==='budget'?null:store.privateOwner(board))};
+    const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown,scope==='budget'?null:store.privateOwner(board),scope==='budget'?undefined:work?.access??store.workAccess(board,now))};
     const tag = query.meta === undefined ? undefined : history.metadata(board, basis, scope);
     const meta = JSON.stringify(tag && query.meta === tag ? {now, run: events.epoch, meta: tag} : {now, ...basis, ...(tag ? {meta: tag} : {})});
 

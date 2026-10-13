@@ -30,23 +30,26 @@ const subscriptions=[
 
 /** A review starts with populated 24h tables, without choosing a special past week. */
 export const SESSION_ANALYTICS:DemoSet={
-  id:'sessions',about:'Session comparisons: 57 projects, five machines, four subscriptions and retained-session pagination',scene:'quiet',workHistoryMs:7*DAY,
+  id:'sessions',about:'Session comparisons: 57 projects, six machines, mixed clients and four subscriptions and retained-session pagination',scene:'quiet',workHistoryMs:7*DAY,
   entries:[
-    {kind:'person',id:'ana',name:'Ana',agents:true,agentsPlace:{x:0,y:0,w:6,h:12},agentsColumns:['active','concurrency'],
+    {kind:'person',id:'ana',name:'Ana',agents:true,agentsPlace:{x:0,y:0,w:6,h:12},agentsColumns:['client','subscription','active','concurrency'],
       places:{activity:{x:0,y:1,w:6,h:12},'quota-history':{x:0,y:2,w:6,h:12},'quota-table':{x:0,y:3,w:6,h:12}},
       expect:[{state:'widgets'}],look:[
-        'The default 24h period has 57 projects and 125 recorded contexts. Agent sessions includes active time and average concurrency alongside its existing columns, with whole-row height fitting and a bottom-right pager; all totals cover the entire selected period.',
+        'The default 24h period has 57 projects and 129 recorded contexts (125 mapped sessions plus four OpenCode and other-client contexts). Agent sessions includes active time and average concurrency alongside its existing columns, with whole-row height fitting and a bottom-right pager; all totals cover the entire selected period.',
         'Wide tables sort in their headers; the third activation clears the chosen sort. Only narrow lists show the sort menu. No widget has an inner vertical scroller or a more/all popup.',
         'Atlas has 67 contributing contexts, including 64 absent from the current roster; its disclosure has two pages. Harbor has three retained contexts with overlapping work.',
-        'Machine and subscription grouping show five and four populated rows. All three groupings retain the same total; active time is a union rather than a sum of rows.',
+        'Machine and subscription grouping show six and five populated rows on the personal board. All three groupings retain the same total; active time is a union rather than a sum of rows.',
         'The chart legend can mute Atlas without changing the table. Both table and chart remain populated over 7d, while 30d explains the seven-day coverage.',
         'The long project and worktree names wrap on a narrow screen. A projectless context uses the shared No project label.',
+        'Sessions only has no cards and uses neutral Not provided and Not identified categories. Subscriptions only keeps quota cards while every device’s sessions are off. The hidden-card board retains all admitted sessions; Subscription provided later keeps pre-grant work outside quota attribution. OpenCode and review-assistant share quotum with mapped clients, including a disconnected retained device.',
         'The fixed interval from four to two hours before the stand started is known and empty; the interval nine to eight days before it is unknown.',
       ]},
+    {kind:'person',id:'boris',name:'Boris',expect:[{state:'onboarding'}]},
+    ...['sessions-only','quota-only','both','off','hidden','historical'].map(id=>({kind:'board' as const,id,name:{'sessions-only':'Sessions only','quota-only':'Subscriptions only',both:'Sessions and subscriptions',off:'Device sessions off',hidden:'Hidden subscription cards',historical:'Subscription provided later'}[id]!,owner:'ana',members:['boris'],agents:true,agentsColumns:['client','subscription','active','concurrency'],expect:[{state:'widgets' as const}],look:['Device session access defaults on independently of subscriptions; Provided data lists the owner’s devices, including disconnected retained history.']})),
     ...devices.map((id,i)=>({kind:'machine' as const,id,renamed:['Laptop','Workstation','Build server','Mac Studio','Windows workstation'][i],
       os:i===3?'macos' as const:i===4?'windows' as const:'linux' as const,expect:[{via:'token' as const}]})),
     ...subscriptions.map((s,i)=>({kind:'card' as const,id:s.id,provider:s.provider,account:'pseudonym' as const,plan:s.plan,machines:devices,history:7*DAY,
       windows:[weekly({since:-6*DAY,use:steady(0,5+i*2)})],agents:sessions.filter((_,index)=>index%subscriptions.length===i),
-      on:{ana:{name:s.name}},expect:[{title:s.name}]})),
+      on:{ana:{name:s.name},'quota-only':{name:s.name},both:{name:s.name},hidden:{name:s.name,hidden:true},historical:{name:s.name}},expect:[{title:s.name}]})),
   ],
 };

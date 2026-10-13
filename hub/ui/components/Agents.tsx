@@ -280,12 +280,13 @@ function LastActivity({group, still}: {group: AgentGroup; still: boolean}) {
 
 /** A dimension shown in a row: shared by the group, or belonging to its one agent. */
 const dimensionName = ({rows: [row]}: AgentGroup, column: Dimension) =>
-  column === 'project' ? projectName(row.session.project) : column === 'machine' ? row.session.device.name : agentSourceLabel(row.source);
+  column === 'project' ? projectName(row.session.project) : column === 'machine' ? row.session.device.name : agentSourceLabel(row.source,row.session.sourceStatus,true);
 
 const isDimension = (column: AgentColumn): column is Dimension => (DIMENSIONS as readonly AgentColumn[]).includes(column);
 
 /** Every column of the list: its heading, its hint where the heading needs one, and what it says of a group (an agent's row being a group of one). */
 const COLUMNS: Record<AgentColumn, {title: Key; hint?: Key; cell: (group: AgentGroup, context: Context) => ReactNode}> = {
+  client:{title:'agents.client',cell:({rows:[row]})=>row.session.clientId?clientName(row.session.clientId):'—'},
   project: {title: 'agents.project', cell: group => dimensionName(group, 'project')},
   machine: {title: 'agents.machine', cell: group => dimensionName(group, 'machine')},
   subscription: {title: 'agents.subscription', cell: group => dimensionName(group, 'subscription')},
@@ -368,7 +369,7 @@ function AgentsRows({
   if (layout === 'list') {
     // What a row tells on its first line beside its name: a group, how many of its agents work; an agent, when it last worked.
     const lead: AgentColumn = single ? 'activity' : 'agents';
-    const details = columns.filter(column => column !== lead && column !== 'active' && column !== 'concurrency');
+    const details = columns.filter(column => column!=='client'&&column !== lead && column !== 'active' && column !== 'concurrency');
     return (
       <ul className={`agents-compact agents-rows ${single ? '' : 'is-grouped'}`} ref={body as RefObject<HTMLUListElement | null>}>
         {groups.map(group => {
@@ -381,7 +382,7 @@ function AgentsRows({
                     <Mark session={session} />
                     <Origin origin={session.origin} />
                     <span className="agents-project" title={placeOf(session)}>
-                      <span>{projectName(session.project)}</span>
+                      <span>{projectName(session.project)}{columns.includes('client')&&<small className="agents-client">{session.clientId?clientName(session.clientId):'—'}</small>}</span>
                       {folderOf(session) && <small>{folderOf(session)}</small>}
                       <SessionState session={session}/>
                     </span>
@@ -561,7 +562,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     // Duration and presence labels have their own clock. Only their visible
     // sorts can reorder the panel or its open detail dialog as time passes.
     if(!agentsSort||!['worked','running','active','concurrency'].includes(agentsSort.column))return null;
-    const entries=rows.flatMap((session):AgentRow[]=>session.source===null?[{session,source:null}]:titles[session.source]&&!view.hidden.includes('source:'+session.source)?[{session,source:{id:session.source,...titles[session.source],sessions:[]}}]:[]).sort((a,b)=>byActivity(a.session,b.session)||(a.source?.id??'').localeCompare(b.source?.id??''));
+    const entries=rows.flatMap((session):AgentRow[]=>session.source===null?[{session,source:null}]:titles[session.source]?[{session,source:{id:session.source,...titles[session.source],sessions:[]}}]:[]).sort((a,b)=>byActivity(a.session,b.session)||(a.source?.id??'').localeCompare(b.source?.id??''));
     const worked:string[][][]=[];
     let activity:SessionOrder['activity'];
     const order=(rows:AgentRow[],by:AgentsBy,inGroup:boolean)=>{
@@ -582,7 +583,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const panel = useRef<HTMLElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const opener = useRef<string | null>(null);
-  // Only what the board shows: a subscription whose card is hidden is left out here too.
+  // All admitted contexts remain in the table, independently of card placement.
   const {rows, empty} = agentRows(sources, arrange.view,period.rows.filter(row=>row.source===null));
   const working = rows.filter(row => row.session.working).length;
   const by = agentsBy === 'none' ? 'project' : agentsBy;

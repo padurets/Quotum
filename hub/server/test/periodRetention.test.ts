@@ -48,7 +48,7 @@ async function fixture(t:TestContext){
   };
   return {get store(){return store;},get directory(){return directory;},user,board,read,history,
     source(provider:Parameters<Store['source']>[0]='deepseek'){const id=store.source(provider,(++sequence).toString().padStart(24,'a'),cutoff-86_400_000);store.hold(id,user.id,cutoff-86_400_000);return id;},
-    async reopen(legacy=false){await app.close();if(legacy){store.db.exec('ALTER TABLE meter_spans DROP COLUMN observed_from; ALTER TABLE meter_contexts DROP COLUMN observed_from; PRAGMA user_version=23;');}store.close();store=new Store(file,now);directory=new Directory(store.db);app=await build();},
+    async reopen(legacy=false){await app.close();if(legacy){store.db.exec('ALTER TABLE meter_spans DROP COLUMN observed_from; ALTER TABLE meter_contexts DROP COLUMN observed_from; DROP TABLE board_device_sessions; PRAGMA user_version=23;');}store.close();store=new Store(file,now);directory=new Directory(store.db);app=await build();},
   };
 }
 

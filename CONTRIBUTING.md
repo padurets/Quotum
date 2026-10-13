@@ -226,8 +226,9 @@ external answers and device reports are synthetic. No real provider or client is
 contacted. Use `make info` for the actual address and synthetic sign-in.
 
 `DEV_SET=sessions make dev` opens the session analytics review fixture. Sign in as Ana:
-the default 24h period has 57 projects, five machines, four subscriptions and 125
-recorded contexts. Agent sessions includes active time and average concurrency,
+the default 24h period has 57 projects, six machines, four subscriptions and 129
+recorded contexts, including OpenCode and another client alongside mapped sessions.
+Agent sessions includes active time and average concurrency,
 fits whole rows to its height and has a compact pager at the bottom right. Its separate
 footer shows totals across the entire selected period, including rows on other pages,
 on a separate line above the pager and row count. Wide totals reuse the table's columns
@@ -239,6 +240,10 @@ third click clearing the selected sort; only narrow lists show a sort menu.
 Atlas's 67-context disclosure has two pages.
 Recent overlapping work, 64 retained Atlas contexts absent from the live
 roster, long names and a projectless context are ready to inspect in either language.
+Client and subscription columns are available in individual rows and disclosures.
+Shared variants show sessions without subscriptions, subscriptions without sessions,
+both permissions, disabled devices, hidden cards and a later subscription grant.
+Provided data includes a disconnected device with retained history.
 Live synthetic reports keep measurements fresh. The 7d and 30d periods also have work;
 the latter explains the fixture's seven-day coverage. For a known-empty fixed range,
 select four to two hours before startup; nine to eight days before startup is unknown.

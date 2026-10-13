@@ -516,6 +516,7 @@ td.muted, small.muted { color: var(--text-3); }
 /* Positioned, so the state named for screen readers after a long project is cut with it rather than widening the page. */
 .agents-project { position: relative; min-width: 0; overflow: hidden; }
 .agents-project > span, .agents-project small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agents-project .agents-client { display: inline; margin-inline-start: 8px; }
 .agents-project small, .agents-rows td .agents-folder { color: var(--text-4); font-size: 11.5px; }
 /* A folder identifies the worktree: keep its full name below the project in the same cell. */
 .agents-rows td .agents-folder { display: block; padding-left: 38px; color: var(--text-3); white-space: normal; overflow-wrap: anywhere; }

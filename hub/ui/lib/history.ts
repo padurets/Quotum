@@ -58,6 +58,7 @@ export class HistoryStore {
   private newsSeq = 0;
   private lineupKey = '';
   private workAuthority: string | undefined;
+  private snapshotEvidence:string|undefined;
   private windowsKey = '';
   private windows = new Set<string>();
   private meters: MeterSelection | undefined;
@@ -169,7 +170,8 @@ export class HistoryStore {
     this.publish();
   }
 
-  hello(run: string) {
+  hello(run:string) {
+    this.snapshotEvidence=undefined;
     if (run === this.run) return;
     this.run = run;
     this.setBoundary(null);
@@ -177,9 +179,11 @@ export class HistoryStore {
     this.ready = false;
   }
 
-  snapshot(lineup: string[], windows: Iterable<string> = this.windows, historyStart = 0, workAuthority?: string) {
-    const changedWork = this.scope !== 'budget' && this.lineupKey !== '' && (!workAuthority || workAuthority !== this.workAuthority);
+  snapshot(lineup: string[], windows: Iterable<string> = this.windows, historyStart=0,workAuthority?:string,evidence?:string) {
+    const changedWork = this.scope !== 'budget' && this.workAuthority!==undefined&&(!workAuthority||workAuthority!==this.workAuthority);
     this.workAuthority = workAuthority;
+    const unchanged=evidence!==undefined&&evidence===this.snapshotEvidence;this.snapshotEvidence=evidence;
+    if(this.ready&&unchanged&&!changedWork&&this.lineupKey===keyOf(lineup)&&historyStart<=this.historyStart)return;
     if(changedWork||this.removesSource(lineup)||historyStart>this.historyStart){this.retirePresentation();this.grids.clear();}
     this.historyStart=historyStart;
     this.setBoundary(null);
@@ -914,14 +918,18 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
     else if (event.type === 'hub') {
       const hub = event.event;
       if (hub.type === 'hello') loader.hello(hub.data.epoch);
-      else if (hub.type === 'snapshot') loader.snapshot(state.board?.lineup ?? [], scope==='quota'?windowsOf(state):[], state.board?.historyStart, state.board?.workAuthority);
+      else if(hub.type==='snapshot'){
+        const board=state.board,ids=board?.lineup??[];
+        const evidence=JSON.stringify([ids.map(id=>{const card=board?.cards[id];return scope==='quota'?[id,card?.windows,card?.resources?.windows,card?.successAt]:[id,card?.budget,card?.meters,card?.creditBalance,card?.balanceStatus];}),scope==='budget'?board?.currencies:null]);
+        loader.snapshot(ids,scope==='quota'?windowsOf(state):[],board?.historyStart,board?.workAuthority,evidence);
+      }
       else if (hub.type === 'lineup') {loader.lineup(state.board?.lineup ?? []); if(scope==='quota')loader.setWindows(windowsOf(state));}
       else if (hub.type === 'card'&&scope==='quota') loader.setWindows(windowsOf(state));
       else if (hub.type === 'history') {
         const selected=scope==='budget'?new Set(selectedMeters(state,scope,family)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
         const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source));
-        const ownSince = scope === 'quota' && state.board?.meta.personal ? hub.data.ownSince : undefined;
-        if(changes?.length || ownSince !== undefined)loader.news(Math.min(...(changes ?? []).map(change=>change.since), ownSince ?? Infinity), hub.data.workAuthority);
+        const workSince = scope==='quota'?hub.data.workSince : undefined;
+        if(changes?.length || workSince !== undefined)loader.news(Math.min(...(changes ?? []).map(change=>change.since), workSince ?? Infinity), hub.data.workAuthority);
         else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since, hub.data.workAuthority);
       }
     }

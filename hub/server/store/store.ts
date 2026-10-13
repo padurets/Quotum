@@ -24,6 +24,7 @@ import {budgetAccess, type BudgetAccess} from '../domain/resources.js';
 import {exactDecimal} from '../domain/amount.js';
 import {CurrencyStore} from './currencies.js';
 import {importLegacyCurrencies} from './legacyCurrencies.js';
+import {admitted,fundingOf,sessionsKnownFrom,sourceWorkFrom,type WorkAccess} from '../domain/workAccess.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
 export type WorkContext = SessionEvidence & {client?: string; source: string | null; origin: Origin; startedAt: number; project: string; folder: string};
@@ -37,27 +38,13 @@ export type WorkKey = WorkContext & {identity: {kind: 'legacy'; ordinal: number}
  * of it.
  */
 export type Shown = Map<string, {since: number; holders: {user: string; from: number}[]}>;
-export type WorkRead = (from: number, to: number) => Stretch[];
+export type WorkRead = ((from: number, to: number) => Stretch[]) & {access?:WorkAccess;reserve?:(bytes:number)=>void;ensureAccess?:()=>WorkAccess};
+export type SessionDevice = {id:string;name:string;disconnected:boolean;enabled:boolean;since:number|null;revision:string};
 
 export type DeviceFailure = {device: string; provider: Provider; error: string; detail: string | null; at: number};
 
 /** A reset for everyone as a community tracker reported it. */
 export type Announcement = {at: number; url: string; text: string};
-
-/**
- * The names a board's history is keyed by (`Store.workKey`), for its people (a JSON list,
- * given twice) and its subscriptions (likewise): each project a person named that worked
- * on one of them, and each machine that did. It is read with every answer of history and
- * whenever the hub works out a watched board whole (at least every `recheckMs`), so a
- * machine's sessions are found by project (schema step 4) rather than read through.
- * Fields and entries are JSON arrays: names may themselves contain any separators.
- */
-export const WORK_NAMES =
-  'SELECT json_group_array(json(name)) AS names FROM (' +
-  'SELECT json_array(n.user_id, n.reported, n.name) AS name FROM project_names n WHERE n.user_id IN (SELECT value FROM json_each(?))' +
-  ' AND EXISTS (SELECT 1 FROM devices d JOIN agent_sessions s ON s.device_id = d.id JOIN holders h ON h.user_id = d.user_id AND h.source_id = s.source_id WHERE d.user_id = n.user_id AND s.project = n.reported AND s.source_id IN (SELECT value FROM json_each(?)))' +
-  ' UNION ALL SELECT json_array(d.id, COALESCE(d.label, d.name)) FROM devices d WHERE d.user_id IN (SELECT value FROM json_each(?))' +
-  ' AND EXISTS (SELECT 1 FROM agent_sessions s JOIN holders h ON h.user_id = d.user_id AND h.source_id = s.source_id WHERE s.device_id = d.id AND s.source_id IN (SELECT value FROM json_each(?))) ORDER BY 1)';
 
 /** A source as a board shows it: with the people who measure it and whether they shared it here. */
 export type BoardSource = Source & {holders: string[]; sharedBy: string | null; budget?: BudgetAccess};
@@ -183,35 +170,14 @@ export class Store {
   }
 
   /**
-   * What the history of a board's agent work depends on besides the data: its subscriptions,
-   * whose work it shows from when (`shown`), and the names their people gave the projects
-   * and machines that worked on them. A change of any of these asks for the history anew, on
-   * the hub and on the page. A project or machine that never worked on the board's
-   * subscriptions does not; one that worked on them only before the board shows its work
-   * does, as which did is found without reading when (WORK_NAMES).
+   * Work continuity follows device admission, funding disclosure and retained names.
+   * Card visibility and financial policy have their own resource authority.
    */
-  workKey(board: string, shown: Shown): string {
-    const people = JSON.stringify([...new Set([...shown.values()].flatMap(s => s.holders.map(h => h.user)))].sort());
-    const sources = JSON.stringify([...shown.keys()]);
-    const names = this.db.prepare(WORK_NAMES).get(people, sources, people, sources) as {names: string};
-    const owner = this.privateOwner(board);
-    const privateNames = owner === null ? null : this.db.prepare(
-      'SELECT json_group_array(json(name)) AS names FROM (' +
-      'SELECT json_array(n.user_id,n.reported,n.name) AS name FROM project_names n WHERE n.user_id=?' +
-      ' AND EXISTS (SELECT 1 FROM devices d JOIN agent_sessions s ON s.device_id=d.id WHERE d.user_id=n.user_id AND s.project=n.reported' +
-      ' AND (s.source_id IS NULL OR NOT EXISTS(SELECT 1 FROM holders h WHERE h.user_id=d.user_id AND h.source_id=s.source_id)))' +
-      ' UNION ALL SELECT json_array(d.id,COALESCE(d.label,d.name)) FROM devices d WHERE d.user_id=?' +
-      ' AND EXISTS (SELECT 1 FROM agent_sessions s WHERE s.device_id=d.id' +
-      ' AND (s.source_id IS NULL OR NOT EXISTS(SELECT 1 FROM holders h WHERE h.user_id=d.user_id AND h.source_id=s.source_id))) ORDER BY 1)'
-    ).get(owner, owner) as {names: string} | null;
-    // Held and private work share names. A new reported project adds data, not a rename
-    // dependency or a second machine entry that would reload every historical cell.
-    const nameKey = privateNames === null ? names.names : [...new Set(
-      [...JSON.parse(names.names) as string[][], ...JSON.parse(privateNames.names) as string[][]].map(name => JSON.stringify(name))
-    )].sort();
-    const holdings = owner === null ? null : this.held(owner).map(s => s.id).sort();
-    const key = JSON.stringify([this.agentWorkSince(), this.sources(board).map(s => s.id), [...shown].map(([id, s]) => [id, s.since, s.holders]), nameKey, holdings]);
-    return createHash('sha256').update(key).digest('base64url').slice(0, 16);
+  workKey(board: string, _shown?: Shown, access=this.workAccess(board)): string {
+    const ids=[...access.devices.keys()];
+    const names=this.db.prepare('SELECT user_id,reported,name FROM project_names n WHERE n.user_id IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM devices d WHERE d.id IN (SELECT value FROM json_each(?)) AND d.user_id=n.user_id AND EXISTS(SELECT 1 FROM agent_sessions s WHERE s.device_id=d.id AND s.project=n.reported)) ORDER BY user_id,reported').all(JSON.stringify([...new Set([...access.devices.values()].map(device=>device.owner))]),JSON.stringify(ids));
+    const devices=this.db.prepare('SELECT id,COALESCE(label,name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id').all(JSON.stringify(ids));
+    return createHash('sha256').update(JSON.stringify([access.knownFrom,[...access.devices], [...access.holdings].map(([user,sources])=>[user,[...sources].sort()]),[...access.sources].map(([id,s])=>[id,s.since,[...s.holders].sort()]),names,devices])).digest('base64url').slice(0,16);
   }
 
   privateOwner(board: string): string | null {
@@ -219,11 +185,54 @@ export class Store {
     return row?.owner ?? null;
   }
 
+  /** Sparse policies inherit ON from membership; saved OFF survives reconnection. */
+  sessionDevices(board:string,user:string):SessionDevice[] {
+    const member=this.db.prepare('SELECT m.joined_at FROM members m JOIN boards b ON b.id=m.board_id WHERE m.board_id=? AND m.user_id=? AND b.personal=0').get(board,user);
+    if(!member)return [];
+    const rows=this.db.prepare('SELECT d.id,COALESCE(d.label,d.name) AS name,d.revoked_at,p.enabled_since,p.revision FROM devices d LEFT JOIN board_device_sessions p ON p.board_id=? AND p.device_id=d.id WHERE d.user_id=? AND (d.revoked_at IS NULL OR EXISTS(SELECT 1 FROM agent_sessions s JOIN agent_work w ON w.session_id=s.id WHERE s.device_id=d.id)) ORDER BY d.last_seen_at DESC,d.id').all(board,user);
+    return rows.map(r=>{const since=r.revision===null?Number(member.joined_at):r.enabled_since===null?null:Math.max(Number(member.joined_at),Number(r.enabled_since));return {id:String(r.id),name:String(r.name),disconnected:r.revoked_at!==null,enabled:since!==null,since,revision:r.revision===null?this.defaultSessionRevision(board,String(r.id),user,Number(member.joined_at)):String(r.revision)};});
+  }
+
+  private defaultSessionRevision(board:string,device:string,owner:string,joined:number) {
+    return createHash('sha256').update(JSON.stringify(['device-sessions-default-on',board,device,owner,joined])).digest('hex').slice(0,32);
+  }
+
+  setDeviceSessions(board:string,device:string,user:string,enabled:boolean,revision:string,now:number):SessionDevice {
+    return transaction(this.db,()=>{
+      const policy=this.sessionDevices(board,user).find(d=>d.id===device);
+      if(!policy)throw new Error('not_found');
+      if(policy.revision!==revision)throw new Error('share_conflict');
+      if(policy.enabled===enabled)return policy;
+      const next={...policy,enabled,since:enabled?now:null,revision:randomBytes(16).toString('hex')};
+      this.db.prepare('INSERT INTO board_device_sessions VALUES (?,?,?,?) ON CONFLICT(board_id,device_id) DO UPDATE SET enabled_since=excluded.enabled_since,revision=excluded.revision').run(board,device,next.since,next.revision);
+      this.db.prepare('INSERT INTO account_revisions(user_id,revision) VALUES (?,1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1').run(user);
+      tell(this.observer,o=>{o.touchBoards([board]);o.touchUser(user);});
+      return next;
+    });
+  }
+
+  /** One immutable snapshot supplies every session projection in a read. */
+  workAccess(board:string,_now=Date.now(),reserve?:(bytes:number)=>void):WorkAccess {
+    const owner=this.privateOwner(board),knownFrom=Math.max(this.agentWorkSince(),Number(this.db.prepare("SELECT value FROM meta WHERE key='workRetentionFrom'").get()?.value??0));
+    const devices=new Map<string,{owner:string;from:number;revision:string}>();
+    reserve?.(512);
+    const rows=this.db.prepare('SELECT d.id,d.user_id,m.joined_at,p.enabled_since,p.revision FROM members m JOIN devices d ON d.user_id=m.user_id LEFT JOIN board_device_sessions p ON p.board_id=m.board_id AND p.device_id=d.id WHERE m.board_id=? ORDER BY d.id').iterate(board);
+    for(const r of rows)if(owner!==null||r.revision===null||r.enabled_since!==null){reserve?.(512);const user=String(r.user_id),id=String(r.id),joined=Number(r.joined_at);devices.set(id,{owner:user,from:owner!==null?knownFrom:Math.max(knownFrom,joined,r.revision===null?joined:Number(r.enabled_since)),revision:owner!==null?'personal':r.revision===null?this.defaultSessionRevision(board,id,user,joined):String(r.revision)});}
+    const holders=new Map<string,ReadonlySet<string>>();
+    for(const user of new Set([...devices.values()].map(d=>d.owner))){const sources=new Set<string>();reserve?.(128);for(const row of this.db.prepare('SELECT source_id FROM holders WHERE user_id=?').iterate(user)){reserve?.(128);sources.add(String(row.source_id));}holders.set(user,sources);}
+    const sources=new Map<string,{since:number;holders:Set<string>}>();
+    reserve?.(128*holders.size);
+    const admittedOwners=JSON.stringify([...holders.keys()]);
+    const provided=owner!==null?this.db.prepare('SELECT selected.source_id,0 AS since,h.user_id FROM holders selected LEFT JOIN holders h ON h.source_id=selected.source_id AND h.user_id IN (SELECT value FROM json_each(?)) WHERE selected.user_id=? ORDER BY selected.source_id,h.user_id').iterate(admittedOwners,owner):this.db.prepare('SELECT s.source_id,s.shared_at AS since,h.user_id FROM shares s LEFT JOIN holders h ON h.source_id=s.source_id AND h.user_id IN (SELECT value FROM json_each(?)) WHERE s.board_id=? ORDER BY s.source_id,h.user_id').iterate(admittedOwners,board);
+    for(const row of provided){const id=String(row.source_id);let source=sources.get(id);if(!source){reserve?.(256+id.length*2);sources.set(id,source={since:Number(row.since),holders:new Set()});}if(row.user_id!==null){reserve?.(128);source.holders.add(String(row.user_id));}}
+    return {owner,knownFrom,devices,holdings:holders,sources};
+  }
+
   displaySource(owner: string, source: string | null): string | null {
     return source !== null && this.holds(owner, source) ? source : null;
   }
 
-  clientSessionsChanged(user: string) { tell(this.observer, o => o.touchClientSessions?.(user)); }
+  clientSessionsChanged(user:string,device?:string) {tell(this.observer,o=>o.touchClientSessions?.(user,device));}
 
   holds(userId: string, source: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM holders WHERE user_id = ? AND source_id = ?').get(userId, source);
@@ -544,8 +553,17 @@ export class Store {
   }
 
   /** The board's known work thresholds, independent of the tiles read. */
-  historyKnown(shown: Shown, owner: string | null = null): HistoryMeta['known'] {
-    return {...(owner ? {own: this.agentWorkSince()} : {}), work: this.agentWorkSince(), sources: Object.fromEntries([...shown].map(([id, value]) => [id, value.since]))};
+  historyKnown(shown: Shown, _owner: string | null = null, access?:WorkAccess): HistoryMeta['known'] {
+    return {work:this.agentWorkSince(),sources:Object.fromEntries([...shown].map(([id,value])=>[id,value.since])),...(access?{sessions:sessionsKnownFrom(access),sourceWork:sourceWorkFrom(access)}:{})};
+  }
+
+  admittedWork(access:WorkAccess,from:number,to:number,reserve?:(bytes:number)=>void):Stretch[] {
+    if(!access.devices.size)return [];
+    return this.agentWork(from,to,undefined,null,reserve,[...access.devices.keys()]).flatMap(row=>{
+      const scope=admitted(access,row.device,row.user);if(!scope||row.to<=scope.from)return [];
+      const funding=fundingOf(access,row.user,row.source);
+      return [{...row,...funding,from:Math.max(row.from,scope.from),...(funding.source!==null?{quotaFrom:Math.max(scope.from,access.sources.get(funding.source)!.since)}:{})}];
+    });
   }
 
   /** Complete cells of every measured window, read once through a run of missing tiles. */
@@ -589,20 +607,13 @@ export class Store {
       const rows = read.all(id, w, to, from, id, w, from) as unknown as [number, number, number | null, number][];
       groups.push({source: id, window: w, samples: this.quotaAvailability(id, rows.map(([at, used, resetAt, staleAfterMs]) => ({at, used, resetAt, staleAfterMs})))});
     }
-    const owner = this.privateOwner(board);
-    const known = this.historyKnown(shown, owner);
-    const readFrom = workFrom(groups, from);
-    const holders = new Map([...shown].map(([source, value]) => [source, new Map(value.holders.map(h => [h.user, Math.max(h.from, value.since, known.work)]))]));
-    const stretches: Stretch[] = [];
-    for (const s of shown.size || owner ? (work ? work(readFrom, Math.min(to, now)) : this.agentWork(readFrom, Math.min(to, now), [...shown.keys()], owner)) : []) {
-      const privateWork = owner === s.user && this.displaySource(owner, s.source) === null;
-      const after = privateWork ? known.work : s.source === null ? undefined : holders.get(s.source)?.get(s.user);
-      if (after === undefined || s.to <= after) continue;
-      stretches.push({...s, source: privateWork ? null : s.source, from: Math.max(s.from, after)});
-    }
+    const access=work?.ensureAccess?.()??work?.access??this.workAccess(board,now);
+    const known=this.historyKnown(shown,access.owner,access);
+    const readFrom=workFrom(groups,from);
+    const stretches=work?work(readFrom,Math.min(to,now)):this.admittedWork(access,readFrom,Math.min(to,now));
     const devices = Object.fromEntries((this.db.prepare('SELECT id, COALESCE(label, name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?))')
       .all(JSON.stringify([...new Set(stretches.map(s => s.device))])) as {id: string; name: string}[]).map(d => [d.id, d.name]));
-    const chunks = cellsOf(groups, stretches, devices, cellMs, from, to, known);
+    const chunks = cellsOf(groups,stretches,devices,cellMs,from,to,known,work?.reserve);
     const grants = this.db.prepare("SELECT source_id, at, detail FROM events WHERE source_id IN (SELECT value FROM json_each(?)) AND kind = 'resets_granted' AND at >= ? AND at < ?")
       .all(JSON.stringify(sources.map(s => s.id)), from, to) as {source_id: string; at: number; detail: string}[];
     for (const event of grants) chunks[tileOf(event.at, cellMs) - tileOf(from, cellMs)].grants.push([event.source_id, event.at, Number(event.detail)]);
@@ -739,7 +750,7 @@ export class Store {
     const extend = this.db.prepare('UPDATE agent_work SET to_at = ? WHERE session_id = ? AND to_at = ?');
     const begin = this.db.prepare('INSERT INTO agent_work VALUES (?, ?, ?) ON CONFLICT (session_id, from_at) DO UPDATE SET to_at = max(to_at, excluded.to_at)');
     const credited = new Map<string, number>();
-    const privateCredit = new Map<string, number>();
+    let changedFrom=Infinity;
     const owner = (this.db.prepare('SELECT user_id AS user FROM devices WHERE id=?').get(device) as {user: string} | undefined)?.user;
     const evidence = this.db.prepare('SELECT account_by AS accountBy,route_class AS class,route_by AS by,route_host AS host,route_provider AS provider FROM agent_sessions WHERE id=?');
     const saveEvidence = this.db.prepare('UPDATE agent_sessions SET account_by=?,route_class=?,route_by=?,route_host=?,route_provider=? WHERE id=?');
@@ -764,7 +775,7 @@ export class Store {
         if (until <= start) continue;
         if (!extend.run(until, id, start).changes) begin.run(id, start, until);
         if (source !== null && owner && this.holds(owner, source)) credited.set(source, Math.min(credited.get(source) ?? start, start));
-        else if (owner) privateCredit.set(owner, Math.min(privateCredit.get(owner) ?? start, start));
+        changedFrom=Math.min(changedFrom,start);
       }
       this.db.exec('RELEASE credit');
     } catch (error) {
@@ -772,49 +783,48 @@ export class Store {
       this.db.exec('RELEASE credit');
       throw error;
     }
-    for (const [source, start] of credited) tell(this.observer, o => o.history(source, start, ['quota'], true));
-    for (const [user, start] of privateCredit) tell(this.observer, o => o.clientHistory?.(user, start));
+    if(owner&&Number.isFinite(changedFrom))tell(this.observer,o=>o.clientHistory?.(owner,changedFrom,device,[...credited.keys()]));
   }
 
   /** Retained credit of an identified session on its current subscription; legacy identity is unknown. */
-  worked(device: string, keys: WorkKey[]): (number | null)[] {
+  worked(device: string, keys: WorkKey[],from?:number): (number | null)[] {
     if (!keys.length) return [];
     const read = this.db.prepare(
-      'SELECT COALESCE(sum(w.to_at - w.from_at), 0) AS ms FROM agent_sessions s JOIN agent_work w ON w.session_id = s.id' +
+      'SELECT COALESCE(sum(max(0,w.to_at-max(w.from_at,?))), 0) AS ms FROM agent_sessions s JOIN agent_work w ON w.session_id = s.id' +
         ' WHERE s.device_id = ? AND s.client = ? AND s.producer_id = ? AND s.source_id IS ?',
     );
-    return keys.map(({source, client, identity}) => identity.kind === 'legacy' ? null : (read.get(device, client ?? source?.split(':')[0] ?? 'unknown', identity.sessionId, source) as {ms: number}).ms);
+    return keys.map(({source, client, identity}) => identity.kind === 'legacy' ? null : (read.get(from??0,device, client ?? source?.split(':')[0] ?? 'unknown', identity.sessionId, source) as {ms: number}).ms);
   }
 
   /** Every stretch agents worked within [from, to), of the given subscriptions or all, projects named as their people corrected them. */
-  agentWork(from: number, to: number, sources?: string[], owner: string | null = null, reserve?: (bytes:number)=>void): Stretch[] {
+  agentWork(from: number, to: number, sources?: string[], owner: string | null = null, reserve?: (bytes:number)=>void, devices?:readonly string[]): Stretch[] {
     // A month of a busy board is tens of thousands of rows, read as arrays: half the time of objects. The
     // index on time, even for the order: else a day would go through every stretch the hub keeps.
     const read = this.db.prepare(
       'SELECT w.session_id, max(w.from_at, ?), min(w.to_at, ?) FROM agent_work w INDEXED BY agent_work_by_end JOIN agent_sessions s ON s.id = w.session_id' +
         ' WHERE w.to_at > ? AND w.from_at < ?' +
-        (sources ? ' AND (s.source_id IN (SELECT value FROM json_each(?)) OR (? IS NOT NULL AND EXISTS(SELECT 1 FROM devices d WHERE d.id=s.device_id AND d.user_id=? AND (s.source_id IS NULL OR NOT EXISTS(SELECT 1 FROM holders h WHERE h.user_id=d.user_id AND h.source_id=s.source_id)))))' : '') +
+        (devices?' AND s.device_id IN (SELECT value FROM json_each(?))':sources ? ' AND (s.source_id IN (SELECT value FROM json_each(?)) OR (? IS NOT NULL AND EXISTS(SELECT 1 FROM devices d WHERE d.id=s.device_id AND d.user_id=? AND (s.source_id IS NULL OR NOT EXISTS(SELECT 1 FROM holders h WHERE h.user_id=d.user_id AND h.source_id=s.source_id)))))' : '') +
         ' ORDER BY w.session_id, w.from_at',
     );
     read.setReturnArrays(true);
     const rows: [number,number,number][]=[];
-    for(const row of read.iterate(from,to,from,to,...(sources?[JSON.stringify(sources),owner,owner]:[]))) {
+    for(const row of read.iterate(from,to,from,to,...(devices?[JSON.stringify(devices)]:sources?[JSON.stringify(sources),owner,owner]:[]))) {
       reserve?.(256); rows.push(row as unknown as [number,number,number]);
     }
     // What is said of a session is read once rather than with each of its stretches: that takes most of the time.
     const sessions=new Map<number,Omit<Stretch,'session'|'from'|'to'>>();
     const contexts=this.db.prepare(
       "SELECT s.id, s.source_id AS source, s.device_id AS device, d.user_id AS user, s.origin, COALESCE(n.name, NULLIF(s.project, '')) AS project,"+
-      " NULLIF(s.folder, '') AS folder, s.started_at AS startedAt FROM agent_sessions s JOIN devices d ON d.id = s.device_id"+
+      " NULLIF(s.folder, '') AS folder, s.started_at AS startedAt,s.client,s.producer_id,s.project AS raw_project,s.folder AS raw_folder,COALESCE(d.label,d.name) AS device_name FROM agent_sessions s JOIN devices d ON d.id = s.device_id"+
       ' LEFT JOIN project_names n ON n.user_id = d.user_id AND n.reported = s.project WHERE s.id IN (SELECT value FROM json_each(?))');
     for(const raw of contexts.iterate(JSON.stringify([...new Set(rows.map(([id])=>id))]))) {
-      const {id,...session}=raw as {id:number}&Omit<Stretch,'session'|'from'|'to'>;
-      reserve?.(512+2*((session.project?.length??0)+(session.folder?.length??0)));
-      sessions.set(id,session);
+      const {id,client,producer_id,raw_project,raw_folder,device_name,...session}=raw as unknown as {id:number;client:string;producer_id:string|null;raw_project:string;raw_folder:string;device_name:string}&Omit<Stretch,'session'|'from'|'to'>;
+      reserve?.(512+2*((session.project?.length??0)+(session.folder?.length??0)+(devices?(session.source?.length??0)+(producer_id?.length??0)+raw_project.length+raw_folder.length+device_name.length:0)));
+      sessions.set(id,{...session,...(devices?{rawContext:{source:session.source,client,producer:producer_id,project:raw_project,folder:raw_folder,deviceName:device_name}}:{})});
     }
     return rows.map(([id, start, end]) => {
       const s = sessions.get(id)!;
-      return {session: id, source: s.source, device: s.device, user: s.user, origin: s.origin, project: s.project, folder: s.folder, startedAt: s.startedAt, from: start, to: end};
+      return {session:id,...s,from:start,to:end};
     });
   }
 
@@ -893,7 +903,7 @@ export class Store {
     // Each successful deletion counts immediately: a later statement may fail.
     if (this.db.prepare('DELETE FROM samples WHERE at < ?').run(cutoff).changes) this.pruned++;
     if (this.meters.prune(cutoff)) this.pruned++;
-    if (this.db.prepare('DELETE FROM agent_work WHERE to_at < ?').run(cutoff).changes) this.pruned++;
+    if (this.db.prepare('DELETE FROM agent_work WHERE to_at < ?').run(cutoff).changes) {this.pruned++;this.db.prepare("INSERT INTO meta VALUES ('workRetentionFrom',?) ON CONFLICT(key) DO UPDATE SET value=max(CAST(value AS INTEGER),CAST(excluded.value AS INTEGER))").run(cutoff);}
     // A session without work is not needed; one still running is made again when credited.
     this.db.prepare('DELETE FROM agent_sessions WHERE NOT EXISTS (SELECT 1 FROM agent_work WHERE session_id = agent_sessions.id)').run();
     if (this.db

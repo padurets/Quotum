@@ -142,7 +142,7 @@ test('one established sessions widget keeps placements, v3 aliases and independe
   assert.equal(view.columnShown(enabled,AGENTS,'concurrency'),true);
   assert.deepEqual(decodeView(encodeView(enabled)),enabled);
   assert.equal(decodeView([3,[[0,3],[1,3],[2,3],[3,3],[4,3],[5,3],[6,3]],4,[127]])!.shown.length,7);
-  assert.deepEqual(agents.columnsOf('none').rest,['worked','activity','machine','subscription','running']);
+  assert.deepEqual(agents.columnsOf('none').rest,['client','worked','activity','machine','subscription','running']);
 });
 
 test('table-only private work uses the existing sessions transport with no quota cells or second read',async t=>{
@@ -184,7 +184,7 @@ test('the shared table summary keeps its old complete basis through delayed rang
     assert.ok(activity.activityCoverage(h.period.activitySummaryAt('project',deadline-1),h.period.activityRangeAt(deadline-1).from));
     assert.equal(h.period.activityCoverageChangesAt(NOW),deadline);
     assert.equal(activity.activityCoverage(h.period.activitySummaryAt('project',deadline),h.period.activityRangeAt(deadline).from),null);
-    h.event({type:'history',data:{sources:[],since:NOW,ownSince:NOW,workAuthority:'replacement'}});await flush();
+    h.event({type:'history',data:{sources:[],since:NOW,workSince:NOW,workAuthority:'replacement'}});await flush();
     h.period.activate(false);assert.equal(h.period.activitySummaryAt('project',NOW),null);
   }finally{await h.close();}
 });

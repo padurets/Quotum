@@ -6,7 +6,7 @@ import type {MeterSelection} from './domain/meterHistory.js';
 
 export class HistoryLimit extends Error { constructor() {super('history_limit');} }
 
-type Kept = {owner: string | null;scope?: HistoryScope; workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
+type Kept = {owner:string|null;devices:Set<string>;users:Set<string>;scope?: HistoryScope; workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
 
 /** JSON permits shorter exact integer spellings (300000 is 3e5); names stay untouched. */
 export function compactJSON(value: unknown, replacer?: (this: unknown, key: string, value: unknown) => unknown): string {
@@ -54,8 +54,8 @@ export class HistoryTiles {
     for (const [key, tile] of this.kept) if ((!tile.scope || !scopes || scopes.includes(tile.scope)) && tile.sources.has(source) && tileEnd(tile.tile, tile.cell) > since) this.drop(key);
   }
 
-  touchClient(user: string, since: number) {
-    for (const [key, tile] of this.kept) if (tile.owner === user && (!tile.scope || tile.scope === 'quota') && tileEnd(tile.tile, tile.cell) > since) this.drop(key);
+  touchClient(user:string,since:number,device?:string) {
+    for (const [key,tile] of this.kept) if ((device?tile.devices.has(device):tile.users.has(user)) && (!tile.scope || tile.scope === 'quota') && tileEnd(tile.tile, tile.cell) > since) this.drop(key);
   }
 
   private drop(key: string) {
@@ -72,6 +72,7 @@ export class HistoryTiles {
       this.retentionRevision = this.store.retentionRevision;
     }
     const sources = new Set(this.store.sources(board).map(s => s.id));
+    const access=scope==='budget'?null:work?.ensureAccess?.()??work?.access??this.store.workAccess(board,now),devices=new Set(access?.devices.keys()),users=new Set([...(access?.devices.values()??[])].map(d=>d.owner));
     const oldest = now - (config.retention.sampleDays - 1) * 86_400_000;
     const parts: {from: number; to: number; tile: number; key: string; eligible: boolean; json?: string}[] = [];
     for (let at = from; at < to;) {
@@ -80,7 +81,7 @@ export class HistoryTiles {
       parts.push({from: at, to: end, tile, key: `${board} ${scope ?? 'legacy'} ${cell} ${tile}${meters ? ' '+JSON.stringify(meters) : ''}`, eligible: at === tileStart(tile, cell) && end === tileEnd(tile, cell) && end <= now && at >= oldest});
       at = end;
     }
-    const workKey = (scope !== 'budget' && parts.some(p => p.eligible) ? this.store.workKey(board, shown) : '') + (meters ? this.store.financialKey(board) : '');
+    const workKey = (scope !== 'budget' && parts.some(p => p.eligible) ? this.store.workKey(board, shown)+JSON.stringify([...shown]) : '') + (meters ? this.store.financialKey(board) : '');
     for (const part of parts) {
       const hit = part.eligible ? this.kept.get(part.key) : undefined;
       if (hit?.workKey !== workKey) continue;
@@ -100,8 +101,8 @@ export class HistoryTiles {
         if (meters && Buffer.byteLength(json) > this.budget / 2) throw new HistoryLimit();
         if (part.eligible) {
           this.drop(part.key);
-          const bytes = Buffer.byteLength(json);
-          this.kept.set(part.key, {owner: this.store.privateOwner(board), scope, workKey, sources, cell, tile: part.tile, json, bytes});
+          const bytes=Buffer.byteLength(json)+256+devices.size*128+users.size*128+sources.size*128+workKey.length*2+part.key.length*2;
+          this.kept.set(part.key, {owner:this.store.privateOwner(board),devices,users,scope,workKey,sources,cell,tile:part.tile,json,bytes});
           this.bytes += bytes;
           while (this.bytes + this.reserved > this.budget && this.kept.size) this.drop(this.kept.keys().next().value!);
         }

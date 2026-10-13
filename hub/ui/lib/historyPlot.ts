@@ -1,3 +1,4 @@
+import {sourceKey} from '../../server/domain/workAccess';
 import {cellStart, resetEventsPrepared, type Chunk, type HistoryMeta, type SourceEvent, type SeriesCells, type Target} from '../../server/domain/history';
 import {barOf} from '../../server/domain/work';
 import type {ActivityDimension} from './types';
@@ -72,8 +73,8 @@ function* activityOf(chunk: Chunk, cell: number): Preparation<Map<number, PlotBa
   const saved = activityDecoded.get(activity);
   if (saved && saved.from === chunk.from && saved.cell === cell) return saved.rows;
   const sessions: {ref: string; keys: Record<ActivityDimension, string>; names: Record<ActivityDimension, string | null>}[] = [];
-  for (const [ref, source, project, device] of activity.sessions) {
-    sessions.push({ref, keys: {source: source ?? 'unknown', project: JSON.stringify(project), device}, names: {source: null, project, device: activity.devices[device] ?? null}}); yield;
+  for (const [ref, source, project, device,sourceStatus] of activity.sessions) {
+    sessions.push({ref, keys: {source:sourceKey({source,sourceStatus}), project: JSON.stringify(project), device}, names: {source: null, project, device: activity.devices[device] ?? null}}); yield;
   }
   const rows = new Map<number, PlotBar>();
   for (const [i, active, members] of activity.cells) {
@@ -145,7 +146,7 @@ export function* plotPrepared(chunks: readonly Chunk[], meta: HistoryMeta, targe
   }
   return {token, epoch, version, from, to, cell: target.cell, length: target.length, coverage, series: lines,
     ...(chunks.some(c=>c.meterSeries!==undefined)?{meterChunks:chunks}:{}),
-    events: yield* ordered(events, (a, b) => a.at - b.at), activityCells, barMs: barOf(target.cell, target.length), knownFrom: Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []))};
+    events: yield* ordered(events, (a, b) => a.at - b.at), activityCells, barMs: barOf(target.cell, target.length), knownFrom:meta.known.sessions===null?target.now:meta.known.sessions??Math.max(meta.known.work, ...(Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []))};
 }
 
 /** A bar is all of its contributing whole cells, or unknown; never a partial stack. */

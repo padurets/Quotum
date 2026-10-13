@@ -125,10 +125,10 @@ test('groups show counts and work; machines and subscriptions belong to individu
   assert.deepEqual(columnsOf('project'), {name: 'project', rest: ['agents', 'worked', 'active', 'concurrency', 'activity']});
   assert.deepEqual(columnsOf('machine'), {name: 'machine', rest: ['agents', 'worked', 'active', 'concurrency', 'activity']});
   assert.deepEqual(columnsOf('subscription'), {name: 'subscription', rest: ['agents', 'worked', 'active', 'concurrency', 'activity']});
-  assert.deepEqual(columnsOf('none'), {name: 'project', rest: ['worked', 'activity', 'machine', 'subscription', 'running']});
+  assert.deepEqual(columnsOf('none'), {name: 'project', rest: ['client','worked','activity', 'machine', 'subscription', 'running']});
   assert.deepEqual(columnsOf('project', true), columnsOf('none'));
-  assert.deepEqual(columnsOf('machine', true).rest, ['worked', 'activity', 'subscription', 'running']);
-  assert.deepEqual(columnsOf('subscription', true).rest, ['worked', 'activity', 'machine', 'running']);
+  assert.deepEqual(columnsOf('machine', true).rest,['client','worked','activity', 'subscription', 'running']);
+  assert.deepEqual(columnsOf('subscription', true).rest,['client','worked','activity', 'machine', 'running']);
 });
 
 test('every column sorts in both directions and equal values keep activity order', () => {
@@ -196,7 +196,8 @@ test('layout follows the widget’s width and the owner’s columns at either si
   assert.equal(agentsLayout([], 320), 'table');
   assert.equal(agentsLayout(columnsOf('project').rest.filter(id=>!['active','concurrency'].includes(id)), 700), 'table', 'the grouped overview reserves room for its labels and all ten tally marks');
   const details = columnsOf('project', true).rest.filter(column => column !== 'running');
-  assert.equal(agentsLayout(details, 758), 'table', 'default details fit the wide dialog, without an inset list fallback');
+  assert.equal(agentsLayout(details,758),'list','the client column participates in the shared width fitting');
+  assert.equal(agentsLayout(details.filter(c=>c!=='client'),758),'table','hiding Client restores the previous width');
 });
 
 
@@ -208,11 +209,11 @@ test('unknown agent-hours propagate to groups and sort last in both directions',
   assert.deepEqual(projects(sort(groups, 'worked', true)), ['known', 'zero', 'mixed', 'unknown']);
 });
 
-test('own client rows remain available without cards while hidden held sessions keep their filter',()=>{
+test('admitted client rows remain available independently of card hiding',()=>{
   const own={device:{id:'d',name:'Laptop'},clientId:'opencode',origin:'terminal' as const,project:'Quotum',folder:null,startedAt:0,lastWorkedAt:null,working:true,workedMs:60_000};
   const view={...EMPTY,hidden:['source:held']};
   const result=agentRows([{id:'held',provider:'codex',sessions:[own]}],view,[own]);
-  assert.equal(result.rows.length,1);assert.equal(result.rows[0].source,null);
-  const grouped=groupsOf(result.rows,'subscription');assert.equal(grouped[0].key,'unknown');
+  assert.equal(result.rows.length,2);assert.ok(result.rows.some(r=>r.source===null));
+  const grouped=groupsOf(result.rows,'subscription');assert.deepEqual(grouped.map(g=>g.key).sort(),['held','unknown']);
   assert.equal(agentRows([],view,[own]).rows.length,1);
 });

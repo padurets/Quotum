@@ -194,7 +194,7 @@ answers. A program started from the desktop does not see the PATH a shell sets u
 the desktop app finds a client only in these places; one elsewhere is given by `path` in
 the settings.
 
-### Coding clients and private work
+### Coding clients and board session access
 
 The Rust client catalogue owns executable discovery and process tracking independently
 of quota collectors. Claude Code, Codex and Antigravity map explicitly to their existing
@@ -206,13 +206,30 @@ Legacy sessions retain their released subset and cap priority. Supplemental sess
 carry work that cannot enter that subset. Schema 21 adds a client namespace, nullable
 source and evidence metadata to session contexts, preserving ledger row/producer IDs
 and every work interval; device inventory is stored separately. Evidence is neither a
-resolver nor identity. Source-less and unheld work is private to the machine owner's
-personal board. Current holdings normalize private source references at read time;
-shared projections and source activity signals require a current holding.
+resolver nor identity. A single immutable WorkAccess snapshot admits saved-device
+work independently of subscriptions. Personal boards always admit their owner's work.
+Schema 25 appends sparse board_device_sessions overrides: absent means on from joining,
+NULL means off, and an explicit timestamp means on from a new cutoff. Every effective
+change receives a fresh opaque revision for CAS, including same-millisecond OFF/ON.
+The saved device owner controls its setting; disconnect keeps retained history and its
+policy, while leaving a board removes overrides and rejoining starts a new cutoff.
 
-Private ownSessions and ownSince events update the corresponding page slices and
-quota/activity history without card or financial updates. Closed tiles invalidate even
-without readers. Empty boards use the same explicit Add widget flow and saved visibility.
+Funding disclosure is separate: current held sources provided to the board retain their
+public source ID; held sources not provided become null with sourceStatus:notProvided;
+unknown or unheld sources become plain null. Hidden cards never filter admitted work.
+The immutable raw ledger and presence binding retain their original source/context.
+No source, holding, duty or retrospective attribution is created.
+
+Every board uses the released source sessions map plus one disjoint unattributedSessions
+slice, without a second full roster. Source-free workSince events update the shared
+work index without financial updates, clipped to device admission before publication.
+An opaque workAuthority changes only with relevant access, names or actual retained
+evidence boundaries; ordinary time and measurements do not change it. Revocation
+replaces queued stream/poll data with a fresh snapshot and retires the browser's work
+index, staged replies, drawings, gestures and retained summaries immediately. Closed
+tiles, including empty source-less tiles, invalidate even without watchers; their
+dependency metadata is counted within the existing 32 MiB cache budget. Empty boards
+use the same explicit Add widget flow and saved visibility.
 An account-private devices hint invalidates an open owner-device disclosure on any
 board without sending session data; opening or reconnecting also reads the owner API.
 The same presence deadline clears the disclosure even when its only sessions use held,
@@ -456,8 +473,8 @@ send theirs again), files each session under its subscription (the account the c
 the machine last delivered for that client; only one its person holds; the agent leaves
 out a session of a client signed in anew since it last measured, until it knows which
 account that is). This list supplies current presence by project (as that person named
-it) and folder, visible to members of a board the person is on where the subscription
-is shown, whoever brought it. The compact panel uses current sessions; dashboard lists
+it) and folder, visible to members of boards admitting that saved device's sessions.
+Source disclosure follows the board's provided subscriptions separately. The compact panel uses current sessions; dashboard lists
 use retained work in the board's period, with this presence attached when known.
 Each list also counts until the next one, for at most 200 seconds: the hub
 keeps when each session worked, with its machine, subscription, where it runs, since
@@ -484,8 +501,9 @@ migration preserves every historical row ID and work interval. Identified work h
 persisted high-water end across its contextual rows; crossing legacy and identified
 namespaces clips against the opposite namespace's retained device-wide end, snapshotted
 before writes. On rollback this can conservatively undercount parallel work until that
-end. History keeps its sharing/joining cutoff; live counters for allowed sessions include
-retained current-subscription credit before that cutoff too. Dashboard session lists
+end. Shared session history and live counters are clipped to the device's current
+joining or re-enable cutoff. Source quota attribution is additionally clipped to its
+sharing cutoff; personal live counters retain their own captured credit. Dashboard session lists
 and the agents panel opened from a card's tray use authorized work intersecting the
 board's selected period, clipped to that period and those cutoffs. They include retained
 contexts absent from the current machine list. The tray panel shows that period's work
@@ -511,8 +529,9 @@ a legend entry's glass bubble gives the group's agent-hours, active time, averag
 once and recorded sessions. Hover or keyboard focus opens it, Escape dismisses it; a
 tap also switches the group and keeps the bubble for four seconds. Switching groups
 off recomputes stacks, scale and the shown agent-hours; active time, agents and at
-once still cover all the board's agents. A subscription's agent-hours equal its
-windows' Agent-hours column, and its active time equals their Active time column.
+once still cover all the board's agents. A subscription's activity grouping includes all admitted work. Its quota work columns
+use the separate source-grant cutoff, so work before a subscription was provided can
+appear in Activity without entering quota attribution.
 The Agent sessions table compares the same work by project, machine or subscription,
 with reader grouping and sorting independent of the activity chart. Its existing
 count, credited work and last-activity columns can be accompanied by union active time
@@ -526,10 +545,16 @@ shows those retained contexts, including ones without current presence, with the
 clipped to the same period. The table uses common whole-row pages and a bottom-right
 pager without an inner vertical scroller. Its disclosure uses existing 50-row pages.
 Small cells and visible raw-value sort crossings use the common clock; fixed ranges
-do not tick. Replacement reads keep the last complete summary with its original basis
+do not tick. Ratio ordering uses shared exact BigInt cross-products, and its scheduler
+searches bounded discrete polynomial segments around their integer vertex. It never
+uses floating roots or polling. The existing nearest 250 ms batching applies. Replacement reads keep the last complete summary with its original basis
 until new evidence is accepted, and access or work-authority loss clears retained work.
-What is known of a period begins with `agentWorkSince`, and on a shared board no earlier than the
-subscription came to it: the part before is said to be unknown, not drawn as idle. The
+Session coverage begins with retained capture and the earliest admitted device cutoff;
+no admitted devices means unavailable, distinct from known zero. Source quota coverage
+also observes its source grant. A backward clock correction behind discarded evidence
+keeps one complete prior range for rows, scalar work, coverage, summaries, order and
+geometry through wait/error/retry; operational presence stays independent. Revocation
+clears that basis instead of retaining it. The
 pace and the share while active are taken over the activity within the steps between
 samples whose spending counts, so a gap counts neither, and need half an hour of it. Work that
 would outlast the reset, or a whole window where no reset time comes first (a range),
@@ -583,7 +608,7 @@ them), kept for 90 days.
   The chart, table and activity are composed on the page from the same cells. A whole
   tile ending before now is cached on the hub, within 32 MiB. Every measurement and
   credited work invalidates tiles it can affect, including an empty tile of that source;
-  a changed `Store.workKey` (lineup, work selection, project or machine names) recounts it.
+  a changed `Store.workKey` (device admission, funding disclosure or relevant project/machine names) recounts it. Resource selection and financial proof remain separate.
   Tiles near retention's edge are never cached. Deleting retained samples, work or events
   advances a private store revision; the next server read clears the tile cache before
   looking for hits. Even a distant tile can depend on a preceding sample of any age.
@@ -1302,7 +1327,9 @@ more, back to them when it needs less, without the view changing. All four chart
 chosen height to their plot, never drawing it lower than they do by themselves, their
 heads, totals and legends whole. The Agent sessions widget gathers the period's sessions
 by project (one name across people, as agent activity counts it), machine or subscription,
-each viewer for themselves, or lists each agent. A group tells how many of its agents
+each viewer for themselves, or lists each agent with None first. Client is shown by
+default in individual and disclosure rows; its owner column setting is independent
+of chart series, and narrow ordinary rows keep it quietly on their existing first line. A group tells how many of its agents
 are currently known to work, their credited work within the period and the date and
 time of their last intersecting work endpoint, using `stamp` in `ui/lib/format.ts`.
 An unknown time is a dash. Presence and rolling work labels have separate clocks;
@@ -1442,9 +1469,11 @@ currency, resource selections, visible consumers and request generations prevent
 response from acquiring a newer label. Superseded period reads leave the transport queue;
 retrying an analytical widget repeats its failed exact evidence as well as its drawing cells.
 A bounded signed frontier lets the next read replace changed work and measurement
-intervals or extend missing older evidence. All change journals share a monotonic
-admission boundary: once any required proof is discarded, an older cursor needs a
-complete bounded baseline. Quota cells and the session projection share
+intervals or extend missing older evidence. Each bounded work and measurement journal
+has its own monotonic proof boundary. Session cursors require the work proof, quota
+tapes require both proofs, and financial tapes require measurement proof independently
+of work. Once a required proof is discarded, its older cursor needs a complete bounded
+baseline. Quota cells and the session projection share
 one authorized work extraction within a composite read. The request captures one clock,
 expires quiet sessions at that time, then captures the evidence revision. Nested readers
 use that same clock, and every section and cursor names that revision.

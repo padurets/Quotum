@@ -49,7 +49,7 @@ for(const options of [{},{personal:true},{personal:true,privateWork:true},{perso
   try {
     const readDialog=dialog(h),before=h.period.get().rows[0];assert.ok(readDialog().currentPresence);assert.ok(before.currentPresence);assert.ok(before.presenceKey);
     assert.equal(visible(before).state,'waiting in terminal');assert.match(visible(before).running,/3h/);
-    const stream=h.page.get().board!,live=before.source===null?stream.ownSessions![0]:stream.sessions[h.source][0];
+    const stream=h.page.get().board!,live=before.source===null?stream.unattributedSessions![0]:stream.sessions[h.source][0];
     assert.equal(live.presenceKey,before.presenceKey,'private display-source mapping preserves the original authorized binding');
     h.endIdle();await flush();
     const after=h.period.get().rows[0];assert.equal(readDialog().currentPresence,undefined,'the already open dialog receives current presence');assert.equal(after.currentPresence,undefined);assert.equal(after.workedMs,before.workedMs);assert.equal(after.ref,before.ref);
@@ -77,7 +77,7 @@ for(const options of [{},{personal:true},{personal:true,privateWork:true},{perso
     const readDialog=dialog(h),before=h.period.get(),source=h.period.getSource(h.source);assert.ok(readDialog().currentPresence);
     let panel=0,tray=0;const stop=h.period.subscribe(()=>panel++),stopSource=h.period.subscribeSource(h.source,()=>tray++);
     for(let i=1;i<=8;i++){h.report(false,NOW+i*1000);await flush();}
-    assert.equal(h.frames.filter(f=>['sessions','ownSessions','devices'].includes(f.type)).length,0);
+    assert.equal(h.frames.filter(f=>['sessions','unattributedSessions','devices'].includes(f.type)).length,0);
     assert.equal(panel,0);assert.equal(tray,0);assert.equal(h.period.get(),before);assert.equal(h.period.getSource(h.source),source);
     assert.equal(readDialog().currentPresence,before.rows[0].currentPresence);
     assert.equal('through' in before.rows[0].currentPresence,false,'renewable leases never enter retained UI props');
@@ -144,7 +144,7 @@ test('display project renaming keeps the stable binding after the authorized bas
   t.mock.method(Date,'now',()=>NOW);const h=await fixture({current:true,personal:true,privateWork:true});try{
     const before=h.period.get().rows[0];h.store.nameProjects(h.owner,['Work project'],'Renamed project');h.events.flush();await flush();
     const row=h.period.get().rows[0];assert.equal(row.project,'Renamed project');assert.equal(row.presenceKey,before.presenceKey);assert.ok(row.currentPresence);
-    assert.equal(h.page.get().board!.ownSessions![0].presenceKey,row.presenceKey);
+    assert.equal(h.page.get().board!.unattributedSessions![0].presenceKey,row.presenceKey);
   }finally{await h.close();}
 });
 

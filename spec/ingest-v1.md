@@ -414,7 +414,7 @@ of running agents for five minutes after its last request, then forgets it.
 | Field | Meaning |
 |---|---|
 | `provider` | As in a snapshot. |
-| `account`, `accountName` | The subscription, as in a check-in, as far as the agent knows it. Without them the hub takes the subscription this machine last delivered for that provider; the reference agent leaves out a session of a client that names its account while it does not know which one that is (signed in anew since it measured). Unknown or unheld attribution is retained privately. |
+| `account`, `accountName` | The subscription, as in a check-in, as far as the agent knows it. Without them the hub takes the subscription this machine last delivered for that provider; the reference agent leaves out a session of a client that names its account while it does not know which one that is (signed in anew since it measured). Unknown or unheld attribution is retained with its funding redacted in admitted board views. |
 | `origin` | Where it runs: `terminal`, `editor` (a client an editor runs, one per window) or `app` (a provider's desktop app, one client for all its chats). |
 | `project` | The project it works in, never a path. The reference agent leaves project and folder absent for a proven shared runtime or one without a proven client/window owner; an inherited working directory is not project authority. For an owned session: the name of the git repository its folder is in (for a worktree, of the repository it belongs to), else the name of the folder. Absent when the folder that names it (the repository's main folder, else the folder itself) is the home folder, above it or temporary. A repository is looked for in the folder and the folders above it, stopping before the home folder (neither it nor anything above it is looked at), and on macOS not in or through the folders the system guards (Desktop, Documents, Downloads, iCloud Drive, other volumes): there the project is the folder. Paths are checked as git writes them; a chain of links made by hand may still lead there. The hub counts time under this name, and boards show it. A longer name than 120 characters is cut, not refused. |
 | `folder` | The name of the folder it works in, when that is not `project` (a subfolder or a worktree), and the folder is not the home folder, above it or temporary. Boards show it under the project in the lists of running agents, so agents of one project stay apart; where the agent tells none and its person renamed the project, the name reported for the project is shown there instead. Cut like `project`. |
@@ -431,7 +431,7 @@ in a worktree, the `.git` file leads to the main repository's git folder through
 At most 200 sessions (the reference agent keeps the working ones first, then those that
 worked most recently, then the newest), in at most 512 KiB. Without `lastWorkedAt`,
 working ones come first, then the newest. Clocks are as in a batch. `200` with `{"accepted": n}`:
-all accepted sessions are retained; unknown or unheld attribution is private as described below. Errors are as for check-ins; a hub without this request answers `404` with
+all accepted sessions are retained; board admission and funding disclosure are independent as described below. Errors are as for check-ins; a hub without this request answers `404` with
 `{"error": "not_found"}`, and the agent asks it again an hour later (it may have been
 upgraded). A `404` without that body comes from something in front of the hub and is
 tried again like any failure.
@@ -524,11 +524,15 @@ not process identity. Stronger evidence replaces weaker; equal-strength route co
 become unknown with identifying details removed. Updates never split a work context.
 
 Accepted work with no known source is stored with a null source. A known source the
-owner does not hold remains stored internally but is projected as unknown. Only the
-owner's personal board and authenticated device view include these sessions and work;
-shared boards exclude them even for the owner. They cannot affect a source's working
-state, measuring cadence, forecasts or attention. Held work under a hidden card retains
-its existing filter. No placeholder source, holding or duty is created.
+owner does not hold remains stored internally but is projected as unknown. Personal
+boards and authenticated device views include the owner's work. Shared boards admit
+member devices independently of subscriptions, defaulting on from joining. The device
+owner may turn a device off per board; re-enabling starts a fresh history cutoff. A
+known held source not provided to that board is redacted as Not provided. Hidden cards
+do not filter admitted sessions. Unknown or unheld work cannot affect a source's working
+state, measuring cadence, forecasts or attention. No placeholder source, holding or
+duty is created. Board funding redaction does not change held-source measurement
+authority or collector identity; the agent request and reply shapes are unchanged.
 
 Ledger contexts include the client and a nullable source while keeping released row IDs,
 producer IDs, legacy ordinals and intervals. Stable high water is scoped to device,
@@ -633,13 +637,19 @@ where it ran, since when and its project and folder names, as long as samples (9
 and the names a person gave or merged their projects under, until they undo it. The
 person whose machines they are sees their projects, and corrects them, in the settings
 of *Agent activity*.
-The members of a shared board see when and for how long your agents worked on a
-subscription you measure that is shown there, whoever brought it, as precisely as the hub
-credits it (not rounded to the minute), with how many of them worked, by project and by
-machine, from the later of when you joined the board and when the subscription came to
-it; you see all of it on your own board. This cutoff applies to history. For a running
-session the board is allowed to list, its live `workedMs` includes retained credited
-work on its current subscription across contexts, including before that history cutoff.
+Members of a shared board see admitted device sessions and their precise credited work,
+projects, folders, client and machine, independently of provided subscriptions. Device
+sessions default on from joining; each member controls only their own saved devices
+in that board's Provided data settings. OFF survives heartbeat, restart and reconnect
+of the same saved device. Re-enabling begins a fresh cutoff; leaving and rejoining also
+begins a new cutoff. Disconnect removes current presence while retained history stays
+manageable. Personal boards always include the owner's own work. Shared history and
+live workedMs are clipped to the device's admission cutoff. Only a currently held
+source provided to the board is identified; held sources not provided use a neutral
+Not provided marker and unknown or unheld sources use Not identified. Hidden cards
+do not hide sessions. Source quota attribution is also clipped to the source's grant.
+No raw undisclosed source, account, owner or producer identity is sent in fallback
+rows, proofs, errors or events, and evidence never retrospectively rebinds work.
 Without reliable session identity it is null, not a guessed zero. The opaque producer
 ID is kept only in the hub's work ledger; no producer ID, raw native token, PID, boot
 metadata or salt appears in board state, history, errors or logs.

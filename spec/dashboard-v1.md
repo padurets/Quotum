@@ -241,8 +241,14 @@ code redemption binds the exact device atomically. Ordinary CLI confirmation sta
 personal action. The owner may instead explicitly select an existing device.
 `POST /api/device-onboarding/:id/selection {requestId, deviceId, sourceIds}` freezes
 only a delivered subset of that live own device and links the same addition receipt.
-Publishing that subset and completing the intent commit together. Neither later accounts
-nor other devices become shared. Owner GET/list routes permit recovery for 30 days;
+An empty sourceIds array is accepted only by onboarding: it completes the device receipt
+without saving a view or placing widgets/cards, and frees the unfinished-intent slot.
+Generic source additions still require one to 100 IDs. The owner-only operation adds
+optional deviceId so Completion says Device connected and offers Open board. Publishing
+a nonempty subset and completing the intent commit together. Device session access
+already follows its independent default-on policy; reconnect preserves saved OFF and
+Cancel never revokes or changes it. Neither later accounts nor other devices gain
+subscription access. Owner GET/list routes permit recovery for 30 days;
 unfinished intents expire after 24 hours. Codes, tokens and provider secrets are absent
 from these projections. Local desktop does not expose device onboarding.
 
@@ -263,7 +269,7 @@ change as it was.
 | `event` | `data` | When |
 |---|---|---|
 | `hello` | `{epoch, now, client, heartbeatMs}` | First. `epoch`: when this start of the hub began, base 36. `now`: the hub's clock. `client`: the path of the page's entry script the hub serves (`/assets/index-<hash>.js`), null without a build. `heartbeatMs`: 25000. |
-| `snapshot` | `{providers, sourceAccess, board, view, viewRevision, connectionsRevision, historyStart, workAuthority, sources, sessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
+| `snapshot` | `{providers, sourceAccess, board, view, viewRevision, connectionsRevision, historyStart, workAuthority, sources, sessions, unattributedSessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
 | `board` | `{board: {id, name, personal}}` | The board was renamed. |
 | `view` | `{view, revision}` | The board's view was saved. The monotonic revision belongs to this board. |
 | `connections` | `{revision}` | Only this reader's connection structure or access health changed; no private IDs or labels. Successful measurements and unchanged device heartbeats do not increment it. |
@@ -271,13 +277,14 @@ change as it was.
 | `lineup` | `{sources: string[]}` | The board's sources, in order, changed. |
 | `card` | a card | A source's state changed. |
 | `sessions` | `{id, sessions}` | The agents running on a source, on the machines of its people on this board, changed. |
+| `unattributedSessions` | `{sessions: [...]}` | The disjoint admitted current sessions without disclosed source funding changed, on every board. |
 | `cadence` | `{id, cadence}` | When a source is measured next, or why, changed. |
 | `refresh` | `{id, refresh}` | A source's refresh availability, request or cooldown changed. |
 | `forecast` | `{id, forecast}` | Where the recent pace of the source's weekly windows leads, as the hub works it out, changed. |
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
 | `sourceAccess` | `{<source id>: {error, expiresAt, expiryKind, canRefresh, credentialIds}}` | The reader's own connector access changed, cleared when the holding or board access ends. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
-| `history` | `{sources: string[], since}` | History of these sources changed from `since`: a measurement or credited agent work (see [Reading history](#reading-history)); with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
+| `history` | `{sources: string[], since, changes?, workSince?, workAuthority?}` | History of these sources changed from `since`: a measurement or credited agent work (see [Reading history](#reading-history)); with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
 | `resets` | `{resets, trackers, past}` | The reset trackers' news changed. |
 | `ping` | `{now}` | Every `heartbeatMs`, with the hub's clock. |
 | `bye` | `{reason}` | Last: the hub lets the reader go (see below). |
@@ -303,7 +310,9 @@ In a `snapshot`, `sources` are the cards of the board's sources in its order; `s
 role}`, as it is theirs alone. `resets` is what `GET /api/resets` answers. `historyStart`
 is when the board's history begins as of the snapshot; `GET /api/history` tells it later.
 `workAuthority` is the existing opaque identity of the board's permitted work context:
-its sources, holders and sharing cutoffs, project/device names and personal holdings.
+its saved-device admission and retained capture cutoffs, source disclosure, current
+holdings and relevant project/device names. Card visibility and financial policy use
+independent authority. Ordinary time and unrelated measurements do not change it.
 Every snapshot producer includes it: overview, streams, new or lost poll leases and
 financial replacements. A new stream starts with a snapshot, without replaying missed
 history events. Changed or missing legacy authority retires retained work, quota/activity
@@ -329,7 +338,7 @@ it says so: a card sent when its numbers get too old.
 
 A source's `sessions` are the agents running on it, on the machines of its people on the
 board, each `{device, origin, project, folder, startedAt, lastWorkedAt, working,
-workedMs, presenceKey?, currentPresence?}`: its machine (`{id, name}`), where it runs, its project as its person named it
+workedMs, clientId?, sourceStatus?, presenceKey?, currentPresence?}`: its machine (`{id, name}`), where it runs, its project as its person named it
 and its folder where that is another, when it started and when an idle one last worked
 (both on the hub's clock), whether it works, and how long it has worked: the hub's
 credited work of an identified session on this current subscription across its contexts
@@ -481,7 +490,8 @@ Tapes, card values and the standalone history route retain their existing shape.
 Quota, wallet budget and subscription-funds values contain the compatible history reply below and, unless skipped,
 a `tape`. A tape contains exact native sample anchors and monetary readings, availability
 spans, original allowances and recorded currency bindings. Native quota series also
-carry `workFrom`, the source's authorized work boundary. An absent work section does
+carry `workFrom: number | null`, the separate source quota-work boundary; null means
+no admitted source work, not zero. An absent work section does
 not project zero work or a fictional date; work columns remain unavailable until it arrives. Its `from` and `cut` delimit
 retained evidence; `replaceFrom` and optional `replaceTo` delimit the interval replaced
 by a delta. Each native series stores `samples` as a flat numeric array of five-value rows:
@@ -554,9 +564,9 @@ Session evidence is a complete temporal index:
 
 ```ts
 {
-  anchor: number; cut: number; knownFrom: number; cursor: string;
+  anchor: number; cut: number; knownFrom: number; available?: false; cursor: string;
   refs: {
-    ref: string; source: string | null; clientId: string; device: {id: string; name: string};
+    ref: string; source: string | null; sourceStatus?: 'notProvided'; clientId: string; device: {id: string; name: string};
     origin: 'terminal' | 'editor' | 'app'; project: string | null; folder: string | null;
     startedAt: number; presenceKey?: string;
     currentPresence?: {working: boolean; through: number; workingThrough: number; startedAt: number};
@@ -592,16 +602,17 @@ Dense evidence uses `packed` with empty `spans`. Each block's hour is multiplied
 3,600,000, then its pattern's millisecond pairs give the original credited intervals.
 Repeated patterns share storage; gaps and boundary fragments are never approximated.
 Both representations have identical replacement and projection semantics.
-On the owner's personal board, retained unknown or unheld work has a null `source`
-and keeps its `clientId`; shared boards omit these contexts. A held hidden source
-remains excluded. Presence enrichment matches the device, client, stable producer
+Every board retains its admitted work and clientId independently of subscription
+cards. Current held sources provided to the board use their public source ID. Held
+sources not provided have null source plus sourceStatus:notProvided; unknown or unheld
+sources have plain null. Card hiding never changes this cohort. Presence enrichment matches the device, client, stable producer
 and complete retained context, including its original funding, without exposing that
 funding or producer identifier. Its optional `presenceKey` is a keyed opaque binding
 from the live session service, shared by authorized stream sessions and period refs.
 It covers the device, client, stable producer and original source/context, remains
 unchanged by display renaming, and changes when the hub restarts. It grants no access.
 Legacy contexts without reliable stable identity omit it and cannot borrow a presence
-from an apparently similar session. Stream `sessions` and `ownSessions` attach optional
+from an apparently similar session. Stream `sessions` and `unattributedSessions` attach optional
 `currentPresence: {working, startedAt}` to that binding. Renewal deadlines remain inside
 the hub; it sends semantic changes when work confirmation or presence expires.
 The browser overlays the latest confirmed stream state on retained work rows:
@@ -611,8 +622,8 @@ arrives; entering `live` or `polling` alone cannot confirm old rows. A delayed a
 reply cannot restore current presence, including the optional deadline-bearing presence
 in its retained refs. Panel, source disclosure and open detail views use the same overlay.
 Loss of confirmation means current presence is unknown, not that the session ended.
-Private `ownSince` cutoffs invalidate session deltas
-and quota activity independently of source measurements and financial evidence.
+Source-free workSince cutoffs invalidate session deltas and quota activity independently
+of source measurements and financial evidence on all boards.
 Fixed selections instead return `fixed` with empty `spans` and no `packed` ledger.
 Every positive-work context remains in the summary. Interior activity bars reuse
 the history cells; boundary bars and group totals are exact. Fixed summaries are
@@ -659,7 +670,9 @@ and derive grouping and ordering from that result. Optional current presence req
 a stable authorized identity match; its absence is not an inferred session end.
 A delta replaces its named interval, making retries idempotent. Cursors are signed and
 bound to the board, user, hub run, authority, retention and evidence revision. Currency
-and resource selections also bind a tape cursor. An unprovable frontier returns a
+and resource selections also bind a tape cursor. Work and measurement journals keep
+separate bounded proof floors: session cursors require work proof, quota requires both,
+and financial tapes require only measurement proof. An unprovable frontier returns a
 complete bounded baseline. It never silently returns a partial index.
 Live clients may discard expired work and redundant measurement prefixes while keeping
 the real boundary predecessor and its availability and currency evidence. Such cleanup
@@ -677,13 +690,16 @@ requires no detail request. Detail reads use the same accounting transport and m
 The `history` event's optional `changes` entries are
 `{source, scope:'quota'|'budget', since, workSince?}`. `workSince` identifies actual
 credited-work invalidation; the legacy `sources` and earliest `since` remain present.
-When the board's permitted work or its names change, its quota entries carry
-`since:0, workSince:0`. History events also carry the current `workAuthority`, so a
+A source-free top-level workSince covers all admitted work, even with an empty sources
+array. Its public bound is clipped to the device admission cutoff; scoped source quota
+work is additionally clipped to the source grant. When permitted work or its names
+change, workSince is zero and the first authority-bearing stream/poll frame is a fresh
+snapshot, withdrawing old presence and cohort together. History events also carry the current `workAuthority`, so a
 subsequent snapshot can confirm continuity with the newly accepted baseline. This retires the previous session index and quota/activity
 presentation immediately, including prepared drawings and gesture legends, and asks
 for a fresh session baseline. Older quota zero-cutoff events without `workSince`, or
-without `changes`, have the same meaning. A personal `ownSince:0` also retires private
-work, even with no sources; shared readers ignore private cutoffs. Budget-only and
+without `changes`, have the same meaning. A top-level workSince:0 retires work even
+with no sources on a shared or personal board. Budget-only and
 unselected-source changes do not retire the work index. Positive work cutoffs refresh
 credited work while retaining the last complete frame under the same authority.
 Consumers coalesce affected sections into one foreground read. All accounting endpoint
@@ -718,7 +734,8 @@ retention period. The hub credits machines that went quiet before reading the ce
   now: number,
   run: string, // this start of the hub, the same as hello.epoch
   historyStart: number,
-  known: {own?: number, work: number, sources: Record<string, number>},
+  known: {work: number, sources: Record<string, number>,
+    sessions?: number | null, sourceWork?: Record<string, number>},
   meta?: string, // opaque metadata token, only when the request opts in
   chunks: Chunk[]
 }
@@ -734,9 +751,12 @@ captured when that request started, requiring both its token and `run` to match;
 it never borrows a later reply's metadata. Requests without `meta` keep the full
 answer shape, and a full answer is accepted without a token.
 
-`known.work` is when the hub began keeping work. A personal board's quota/activity
-history also includes `known.own`, the lower bound for its owner's private work,
-independently of the selected subscriptions. Shared and financial history omit it.
+`known.work` is `agentWorkSince`, the original capture boundary. `known.sessions` is
+the earliest admitted retained device boundary, or null when no device is admitted.
+`known.sourceWork` maps disclosed source work to its independently clipped boundary;
+an absent entry is unavailable. These two fields appear in quota and legacy combined
+history. Budget-only history omits them and does not read device session access.
+The browser accepts legacy metadata but new replies do not send a private-work alias.
 `known.sources` gives when each shown
 subscription came to the board; hidden cards are absent. The chunks cover the cut
 `[from, to)` whole, including empty cells, in time order, cut at tile edges. A whole tile
@@ -758,7 +778,8 @@ type Chunk = {
     }][];
   }[];
   activity: {
-    sessions: [ref: string, source: string | null, project: string | null, device: string][];
+    sessions: [ref: string, source: string | null, project: string | null, device: string, sourceStatus?: 'notProvided'][];
+    sourceWork?: [source: string, cellIndex: number, activeMs: number, agentMs: number][];
     devices: Record<string, string>;
     cells: [index: number, active: number,
       sessions: (number | [sessionIndex: number, agentMs: number])[],
@@ -822,7 +843,11 @@ is its index in the chunk's `sessions`; when its time equals `active`, that inde
 is written. Groups are subscriptions (`s`, source id), projects (`p`, the project name
 or null as JSON) and machines (`d`, device id). A group's active time defaults to the
 longest time of its member sessions in the cell, and is written only when it differs.
-Machine names are in `devices`. Only sessions with selected work in the chunk appear.
+Machine names are in `devices`. Only admitted sessions with work in the chunk appear.
+The sparse sourceWork override is emitted only when a source’s quota union/additive
+work differs from the full admitted activity in that cell, including explicit zero.
+Legacy composition, fixed summaries, tile merging and wire dictionaries preserve it.
+The activity source keys unknown and notProvided are neutral, without synthetic sources.
 
 The page adds cell activity into bars of a length chosen from the requested frame's
 length (`barOf`), keeping a set of session references to count recorded contexts in each
@@ -1363,7 +1388,11 @@ Neither field exposes raw producer IDs, original private funding or owner IDs.
 Private key labels are absent for other owners; raw meter context/state, owner ids,
 credentials and private currency registries are never included. Currency results retain
 only the selected measurement's permitted valuation provenance. Cursors confer no
-capability and are rechecked after access, visibility or attribution changes.
+capability and are rechecked after relevant access, names or attribution changes. Work
+continuity is independent of card visibility and financial/currency policy; financial
+and resource proofs remain separately guarded. One physical admitted-work extraction
+supplies all requested work sections. Work snapshots, context metadata and cache
+dependencies count within the existing server and browser memory/transport limits.
 
 
 Declared account IDs/names, connector credential records, hints, abilities and key fingerprints are never part of
@@ -1385,9 +1414,9 @@ from sign-in sessions. A restart changes the references and `run` together.
 Metadata tokens are scoped to the board, hub instance and exact visible metadata.
 They grant no access: every history request checks board membership and visibility
 before deciding whether it may omit unchanged metadata.
-The joining and sharing cutoff applies to history. For a running session the board is
-allowed to list, its live `workedMs` includes retained credited work on its current
-subscription across contexts, including before that history cutoff. Without reliable
+The device joining or re-enable cutoff applies to shared session history and live
+workedMs. Source quota work also obeys its source grant; a hidden card never hides
+admitted sessions. Personal boards retain their own captured credit. Without reliable
 session identity it is null, not a guessed zero. Unidentified history is never matched
 by inference, and another subscription's work is never included. The opaque producer
 ID is kept only in the hub's work ledger; no producer ID, raw native token, PID, boot
@@ -1571,30 +1600,48 @@ credit history separately from wallet budgets. Spending and top-ups are unavaila
 for credits, and quota analytics remain percentage-based.
 
 
-## Private machine clients
+## Device sessions and coding clients
 
-Only the owner's personal snapshot has `ownSessions`, an array of running sessions
-without a currently held source. Each session includes `clientId`, machine ID/name,
-origin, project/folder, start, last work, working, credited `workedMs` and optional opaque
-presence binding/deadlines; it contains no
-producer ID, raw source attribution or provenance. Shared snapshots omit this field.
-The private `ownSessions` event is `{sessions: [...]}` and replaces this slice only.
-Normal source `sessions` also carry `clientId` and retain their visibility rules.
+Shared boards admit every member's saved-device sessions by default, independently of
+subscription sharing. Personal boards always admit the owner's own work. Schema 25
+stores sparse per-board/device overrides: absent is on from joining, explicit NULL is
+off, and a timestamp is a fresh re-enable cutoff. Every effective mutation has a new
+128-bit opaque revision; same-value writes preserve it. OFF survives heartbeat,
+restart and same-ID reconnect. Disconnect removes current presence while retained
+history and the owner's control remain. Leaving removes overrides; rejoining starts
+a new membership cutoff. No second consent or global switch is involved.
 
-A personal `history` event may include `ownSince`, independently of `sources`, `since`
-and scoped `changes`. The quota/activity reader invalidates from this cutoff even when
-no sources are selected; budget and subscription funds readers ignore it. Private and
-source history coalesce into one frame using their earliest independent cutoffs. No
-synthetic source ID is used. Closed history tiles invalidate on private credit even
-without watchers. Names, ownership and visibility changes invalidate from zero; quiet
-presence expires on the usual five-minute deadline. Shared streams never receive this
-private slice or cutoff, including when the owner is a member.
+GET /api/boards/:board/shares adds owner-private sessionDevices rows
+{id, name, disconnected, enabled, since, revision}. They include the reader's connected
+devices and disconnected devices with retained work. Another member's device controls
+are absent. PUT /api/boards/:board/shares/devices/:device/sessions accepts exactly
+{enabled: boolean, expectedRevision: string}. The current saved-device owner must be
+a member of that shared board; personal boards reject controls with 403. Missing or
+foreign devices are 404, a stale revision is 409 share_conflict, malformed fields are
+400 invalid_request. The policy change and CAS happen in one transaction. Successful
+effective mutations also increment the existing connections revision so another open
+settings tab rereads; unchanged values and heartbeats do not. GET resolves conflicts
+or lost replies without replaying an unconfirmed intention.
 
-Personal quota history includes activity without cards. Unknown and unheld work uses a
-null source in activity cells and the reserved `unknown` source group; it produces no
-quota series, spending correlation or forecast. A held source under a hidden card keeps
-its existing exclusion. The Agents and Agent activity widgets can be placed through
-Add widget on empty or budget-only boards; explicit hiding remains authoritative.
+Every snapshot contains unattributedSessions and the event replaces that slice with
+{sessions:[...]}, alongside the released source sessions map. These disjoint slices
+cover the admitted current roster exactly once. Fallback rows contain the same safe
+session fields and clientId; held but unprovided funding is null with sourceStatus:
+notProvided, while unknown or unheld funding is plain null. No raw funding, provider,
+account, producer, evidence or owner is inferred or disclosed. Source disclosure uses
+current holdings and provided sources, independently of whether a card is hidden.
+Presence bindings still use the immutable original context and source internally.
+
+WorkTrace has optional available:false and a finite knownFrom at the requested end
+when no device is admitted. This is unavailable, distinct from known zero. Full
+Activity includes admitted work before source sharing; quota work remains separately
+clipped to source grant. Unknown or unheld work creates no quota series, spending attribution, source attention,
+duty or measuring demand. Redacting held funding does not change its independent
+source measurement authority. Agent sessions and Agent activity use the
+ordinary explicit Add widget flow on empty and source-less shared boards. None is the
+first grouping choice; Project remains the default. Client is visible by default in individual and disclosure rows,
+owner-hideable independently of chart selection; narrow ordinary rows keep it quietly
+on the existing first line. Unknown and Not provided labels remain neutral everywhere.
 
 `GET /api/devices` adds owner-private `clients` entries (`clientId`, nullable `version`,
 `seenAt`) and current `sessions` with the safe board fields plus a held source ID or null.

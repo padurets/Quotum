@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {fixture,flush,NOW,H,M} from './periodRuntimeFixture';
+import {fixture,drawings,flush,NOW,H,M} from './periodRuntimeFixture';
 import {expandPeriod} from '../../server/domain/periodWire';
 import {workedSessions} from '../../server/domain/periodWork';
 import {PeriodAccounting} from '../../server/domain/periodAccounting';
@@ -234,4 +234,19 @@ for(const periodName of ['1h','30d'])test(`${periodName}: rolling quota, paired 
       assert.equal(h.requests.find((request,index)=>index>=requests&&request.sessions)?.sessions?.cursor,undefined);
     }
   }finally{await h.close();}
+});
+
+
+test('positive thirty-day work retains one complete analytical basis through a discarded-prefix wait, error and retry',async t=>{
+ const periodMs=30*24*H;let now=NOW;t.mock.method(Date,'now',()=>now);const h=await fixture({periodName:'30d',clocked:true,creditFrom:NOW-periodMs,creditTo:NOW,sessionMs:60*24*H}),d=await drawings(h);
+ const history=d.render().history;assert.ok(history);const refs=h.period.get().rows.map((r:any)=>r.ref);
+ const facts=()=>{const at=h.clock.hubNow(),project=h.period.project(history,'quota',at);return JSON.parse(JSON.stringify({basis:h.period.get().basis.range,rows:h.period.get().rows.map((r:any)=>[r.ref,r.workedMs]),worked:h.period.workedAt(refs,null,at),range:h.period.activityRangeAt(at),quotaRange:h.period.rangeAt('quota',at),summary:h.period.activitySummaryAt('project',at),activity:h.period.activityAt(history,'project',at),geometry:{since:project.since,to:project.to,activity:project.activity}}));};
+ try{
+  now+=H;h.jump(now);await flush();assert.ok(h.period.get().value.anchor>=NOW-periodMs+H);const retained=facts();assert.ok(retained.worked>0);assert.equal(retained.worked,periodMs-H);
+  const waiting=h.hold();h.clock.heard(now-2*H);await flush();assert.equal(h.period.get().loading,true);assert.deepEqual(facts(),retained,'all positive scalars, coverage, ranges and geometry keep the same complete basis');
+  waiting.reject(new Error('baseline unavailable'));await flush();assert.ok(h.period.get().error);assert.deepEqual(facts(),retained,'an error keeps the complete basis until retry succeeds');
+  const retry=h.hold();h.period.retry();await flush();assert.equal(h.period.get().loading,true);assert.deepEqual(facts(),retained);retry.release();await flush();
+  assert.equal(h.period.get().error,null);assert.equal(h.period.get().loading,false);const at=h.clock.hubNow(),reply=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'live',periodMs},evaluatedAt:at,sessions:{}})));
+  assert.ok(reply.sessions&&reply.sessions.state!=='error');const expected=workedSessions(reply.sessions.value,reply.basis.range,at);assert.equal(h.period.get().rows[0].workedMs,expected[0].workedMs);assert.equal(h.period.workedAt(refs,null,at),expected[0].workedMs);assert.deepEqual(h.period.activityRangeAt(at),reply.basis.range);assert.equal(h.period.activitySummaryAt('project',at).agentMs,expected[0].workedMs);
+ }finally{d.close();await h.close();}
 });

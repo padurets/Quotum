@@ -323,7 +323,7 @@ export class PeriodAccounting {
       const activity=workCurves?.groups.source.get(series.source);
       const key=series.source+'\n'+series.window,old=prior?.quota.get(key),reuse=old?.series===series&&!changedWork.has(series.source);
       if(!reuse)progress?.(preparedBytes+sampleCount(series.samples)*88+1024);
-      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,Math.max(work?.knownFrom??Infinity,series.workFrom??0));
+      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,series.workFrom===null||work?.available===false?Infinity:Math.max(work?.knownFrom??Infinity,series.workFrom??0));
       if(!reuse){preparedBytes+=index.bytes;progress?.(preparedBytes);}
       this.quota.set(key,index);this.sampleTimes.set(key,index.times);
     }

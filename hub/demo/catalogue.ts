@@ -68,9 +68,9 @@ export const PERIOD_SCENES=[
 export const SESSION_ACTIVITY_SCENES=[
   {id:'comparison',expect:['opt-in-table','union-total','retained-contributions','shared-work-index']},
   {id:'review',expect:['populated-24h','paged-comparison','height-fit-pages','narrow-sort-menu','header-sort-reset','retained-pagination','rich-breakdowns'],
-    look:['The separate footer labels complete-period totals to the left of its pager; narrow lists stack them.',
-      'Increasing either session table height fits all 57 projects and hides its pager.',
-      'Both grouping controls use Project, Machine and Subscription segments in that order; Agent sessions also offers Each agent.']},
+    look:['Complete-period totals have their own line above the separate row count and pager; wide totals align with columns and narrow totals use a fixed two-by-two grid.',
+      'Increasing the session table height fits all 57 projects and hides its pager.',
+      'Agent sessions starts with None, then Project, Machine and Subscription. Client is visible by default in ordinary rows and the disclosure, and its switch is independent of chart selections.']},
 ] as const;
 
 
@@ -607,16 +607,16 @@ const all: DemoSet = {
       agentsPlace: {x: 0, y: 99, w: 6, h: 5},
       expect: [
         {state: 'widgets'},
-        {rows: 3},
-        // The work of its members on what it shows, Ben's only since he joined; none of the hidden
-        // Claude Max, and none of Dan's on Ben's Codex, Dan not being on Team.
-        {activity: 'device', range: '24h', groups: {laptop: 0.6, 'ben-mac': 0.6}, from: 0, to: 0},
-        {activity: 'source', range: '7d', groups: {'team-claude': 1.2}, from: 0, to: 0},
+        {mappedRows:13},{admittedRoster:true},
+        // All Ana/Ben devices are admitted; hidden cards remain disclosed, unprovided
+        // subscriptions have a neutral category, and Dan is outside this board.
+        {activity:'device',range:'24h',groups:{laptop:33.1,'Build server':11.6,'win-desktop':7.7,'old-nuc':3,'frequency-15':1,pacer:1,'ben-mac':0.6,'mac-mini':0.2},from:0,to:0},
+        {activity:'source',range:'7d',groups:{notProvided:50.9,'claude-max':6.2,'team-claude':1.2},from:0,to:0},
       ],
       look: [
         'Cards are named with their owners',
-        'Ben sees Team as a member: no arranging, no invites; the list of agents, chosen five rows tall, gathers its three into two projects, shared-infra with two of them, and he opens their agents too',
-        'Agent activity by machine: the laptop and ben-mac, nothing of Dan; Ben\'s from an hour before the start',
+        'Ben sees Team as a member: no arranging or invites. The five-row session widget pages through 26 recorded positive-work contexts at the start; all admitted device work stays visible, including neutral Not provided groups and the hidden Claude Max card’s work.',
+        'Agent activity includes all Ana’s machines and Ben’s from an hour before the start, with no Dan. The initial current roster has 41 contexts, 13 disclosed through source slices; Activity has 26 positive-work contexts.',
       ],
     },
     {
@@ -638,9 +638,9 @@ const all: DemoSet = {
       members: [],
       agents: true,
       agentsPlace: {x: 0, y: 99, w: 6, h: 2},
-      // No agent on it: over a month, only from when work was known.
-      look: ['The empty list of agents, chosen two rows tall, says so whole'],
-      expect: [{rows: 'none'}, {activityEmpty: 'none', range: '24h', from: 0, to: 0}, {activityEmpty: 'noneSince', range: '30d', from: 0, to: 0}],
+      // The quiet subscription has no agents; independent device admission remains on.
+      look:['A quiet subscription does not silence device sessions. The two-row session widget pages through 25 recorded positive-work contexts at the start; Activity includes it under neutral Not provided without inventing quota attribution.'],
+      expect:[{mappedRows:0},{admittedRoster:true},{activityEmpty:null,range:'24h',from:0,to:0},{activityEmpty:null,range:'30d',from:0,to:0}],
     },
     {
       kind: 'board', id: 'grid', name: 'Grid', owner: 'ana', members: [], agents: true,
@@ -651,7 +651,7 @@ const all: DemoSet = {
         'Hiding three of Antigravity\'s windows brings it to its 8 rows, showing them again makes it as tall as they are',
       ],
     },
-    {kind: 'board', id: 'night', name: 'Night shift', owner: 'ana', members: [], agents: true, expect: [{rows: 'noneShown'}, {activityEmpty: 'noSources', range: '24h', from: 0, to: 0}]},
+    {kind:'board',id:'night',name:'Night shift',owner:'ana',members:[],agents:true,expect:[{mappedRows:11,to:5*MIN},{mappedRows:12,from:5*MIN+15*SECOND,to:10*MIN},{mappedRows:11,from:10*MIN+15*SECOND},{admittedRoster:true},{activityEmpty:null,range:'24h',from:0,to:0}],look:['Hiding the Codex Pro card keeps its admitted work and current sessions. The initial current stream roster has 40 contexts, including 11 disclosed Codex Pro contexts; the dashboard period contains 25 positive-work contexts; the other funding is neutrally Not provided.']},
     {kind: 'board', id: 'empty', name: 'Empty board', owner: 'ana', members: ['cleo'], expect: [{state: 'onboarding'}]},
 
     // Machines with something of their own; the rest are Ana's, on Linux, with her machine token.
@@ -1132,10 +1132,10 @@ const all: DemoSet = {
         {forecast: 'weekly', outlook: 'runsOut', tone: 'v-crit'},
         {board: 'team', title: 'Codex · Ben'},
         // Dan's hours on it show on his board, where its measurements while he worked were too few for a pace;
-        // Team does not show him, and says so of the agents it shows: over a month, since work is known.
+        // Team excludes Dan; Ben’s current source-work coverage begins at his one-hour joining cutoff.
         {work: 'weekly', board: 'dan', range: '7d', hours: 5, paceWhy: 'short', leftWhy: 'short', from: 0, to: 0},
-        {work: 'weekly', board: 'team', range: '7d', none: 'none', from: 0, to: 0},
-        {work: 'weekly', board: 'team', range: '30d', none: 'noneSince', since: -10 * DAY, from: 0, to: 0},
+        {work:'weekly',board:'team',range:'7d',none:'noneSince',since:-HOUR,from:0,to:0},
+        {work:'weekly',board:'team',range:'30d',none:'noneSince',since:-HOUR,from:0,to:0},
         // Nor a share of the spending while active, on With Dan, where it is on; over a day, when none worked, none at all.
         {work: 'weekly', board: 'with-dan', range: '7d', duringWhy: 'short', from: 0, to: 0},
         {work: 'weekly', board: 'with-dan', range: '24h', duringWhy: 'none', from: 0, to: 0},
@@ -1663,11 +1663,11 @@ const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter an
 const analytics:DemoSet={...all,id:'analytics',about:'Quota and wallet analytics with a separate subscription-funds chart, native quotas, z.ai, OpenRouter and DeepSeek'};
 const quotas:DemoSet={...all,id:'quotas',about:'Personal z.ai subscription quotas in credits, unknown resets and partial readings'};
 export const CLIENT_SCENES = [
-  {id:'unknown',expect:['private-work','unknown-source','inventory','empty-widgets','shared-exclusion']},
+  {id:'unknown',expect:['admitted-work','unknown-source','inventory','empty-widgets','shared-sessions']},
 ] as const;
-const machineClients: DemoSet = {id:'clients',about:'OpenCode work and installed clients on an empty personal board',scene:'quiet',workHistoryMs:2*HOUR,entries:[
-  {kind:'person',id:'ana',name:'Ana',agents:true,expect:[{state:'widgets'}],look:['Unknown source in Agents and Agent activity; installed OpenCode with version in Devices']},
+const machineClients: DemoSet = {id:'clients',about:'OpenCode sessions and installed clients independent of subscription cards',scene:'quiet',workHistoryMs:2*HOUR,entries:[
+  {kind:'person',id:'ana',name:'Ana',agents:true,expect:[{state:'widgets'}],look:['Not identified in Agent sessions and Agent activity; installed OpenCode with version in Devices']},
   {kind:'machine',id:'laptop',expect:[{name:'Laptop'}]},
-  {kind:'board',id:'team',name:'Shared clients',owner:'ana',members:[],expect:[{state:'onboarding'}]},
+  {kind:'board',id:'team',name:'Shared clients',owner:'ana',members:[],agents:true,expect:[{state:'widgets'}]},
 ]};
 export const SETS: DemoSet[] = [all, showcase, activity,SESSION_ANALYTICS,money,quotas,analytics, machineClients, ONBOARDING];

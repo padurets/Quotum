@@ -170,9 +170,11 @@ notifications also stay live, independently of the board's historical range.
   period. Active totals count overlapping work once. Recorded sessions count work
   contexts, so a logical session can count more than once after a context change.
   Table widgets fit whole rows to their chosen height and share a compact pager at the
-  bottom right, beside the matching row count. The separate footer labels its summary
-  for the entire selected period, across all pages. Grouping uses the shared segmented
-  control. Wide sortable headers cycle ascending, descending, then reset; narrow lists use the
+  bottom right, beside the matching row count. Whole-period totals have their own line
+  above them, aligned with columns on wide tables and labelled in a two-by-two grid on
+  narrow lists. None is the first grouping choice; Client is visible by default in
+  individual rows and group disclosures and can be hidden in column settings. Grouping
+  uses the shared segmented control. Wide sortable headers cycle ascending, descending, then reset; narrow lists use the
   sort menu. There is no inner vertical scrolling.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
@@ -209,8 +211,10 @@ notifications also stay live, independently of the board's historical range.
   Every reader of a shared card can use it.
 - **Your data, shared when you choose.** Everything your machines measure is on your
   personal board. On a shared board a team sees the limits its members share with it:
-  each person decides which of their subscriptions it shows. A team subscription
-  measured by several people is one card.
+  each person decides which of their subscriptions it shows. Device sessions are
+  provided by default, independently of subscriptions. Each member can turn their
+  devices off or on per board in Board settings → Provided data; turning one on again
+  starts a new history boundary. A team subscription measured by several people is one card.
 
 The interface is available in English and Russian.
 
@@ -653,9 +657,11 @@ agent running in the background keeps its version until it is started again.
 
 Coding clients are tracked independently of subscription measurement. OpenCode native
 CLI sessions and installed client versions appear in My connections → Devices. Work
-without a known held subscription remains on your personal Agents and Agent activity
-widgets, including on an empty board; add them through Add widget. Shared boards never
-show that private work. `[clients.<id>] enabled = false` disables one client's tracking;
+is admitted on personal and shared boards independently of subscription cards. Shared
+boards default to including every member's device sessions; each member controls their
+own devices in Board settings → Provided data. An unknown subscription is Not identified;
+a known held subscription absent from the board is Not provided, with its identity hidden.
+Add Agent sessions and Agent activity through Add widget on an empty board. `[clients.<id>] enabled = false` disables one client's tracking;
 `[providers.<id>] enabled = false` disables only its measurements. A client's `path`
 overrides its legacy provider path. Native OpenCode local project attribution is
 available on Linux; shared or unproven invocations, and macOS/Windows, report presence

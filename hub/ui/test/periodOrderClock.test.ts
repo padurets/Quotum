@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
+import {compareWorkRatio,firstPolynomialChange} from '../../server/domain/workRatio';
 import {PageClock} from '../lib/clock';
 import {PeriodIndex} from '../lib/periodIndex';
 import {PeriodActivity} from '../lib/periodActivity';
@@ -41,8 +42,8 @@ function agentOrder({by='project',hidden=[] as string[],open=false,sort={column:
   return order;
 }
 
-async function harness(trace:WorkTrace){
-  let now=H+1000,visible=true,reads=0;
+async function harness(trace:WorkTrace,periodName='1h',initialNow=H+1000){
+  let now=initialNow,visible=true,reads=0;
   const timers=new Map<object,{at:number;run:()=>void}>(),pool=new HistoryPool();
   const clock=new PageClock({now:()=>now,visible:()=>visible,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);}});
   const board={id:'b',meta:{personal:true},lineup:['s','hidden'],view:EMPTY_VIEW,cards:{s:{id:'s'},hidden:{id:'hidden'}}};
@@ -50,7 +51,7 @@ async function harness(trace:WorkTrace){
     fetchPeriod:async(_board:string,request:PeriodRequest)=>{reads++;const basis={run:'r',revision:'1',evaluatedAt:now,evidenceCut:now,range:evaluatedRange(request.selection,now)};return {basis,sessions:{state:'complete',basis,value:trace}};},
     page:{get:()=>({board}),dispatch:()=>{}},pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:unknown,work:Preparation<unknown>)=>drain(work),
     evaluatedRange,periodKey,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,sampleBytes,periodTextChangesAt,
-    empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>null,prefs:()=>({range:'1h'}),periodOf,cellOf:()=>60_000,
+    empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>null,prefs:()=>({range:periodName}),periodOf,cellOf:()=>60_000,
     PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible:(_view:unknown,id:string)=>id===AGENTS,noSessions:[],noValue:{}};
   runInNewContext(compile(coordinator.slice(coordinator.indexOf('class BoardPeriod'),coordinator.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod')),context);
   const period=new context.exports.BoardPeriod();period.activate(true);
@@ -105,8 +106,8 @@ test('visible subgroup sums and an opened dialog register their own crossing dem
   // the hidden A context prevents the full prepared project curve from crossing.
   const trace:WorkTrace={anchor:0,knownFrom:0,refs:[ref('a1','A'),ref('a2','A',null),ref('hidden','A','hidden'),ref('b','B')],spans:[[0,0,90_000],[1,0,90_000],[2,300_000,900_000],[3,300_000,470_000]]};
   const h=await harness(trace),order=agentOrder({hidden:['source:hidden']}),consumer=panel(h.period,order);
-  assert.deepEqual(JSON.parse(JSON.stringify(order(consumer.rows())!.worked)),[[['a1','a2'],['b']]]);
-  h.advance(H+10_250);assert.deepEqual(JSON.parse(JSON.stringify(order(consumer.render().rows)!.key))[0],['"B"','"A"']);
+  assert.deepEqual(JSON.parse(JSON.stringify(order(consumer.rows())!.worked)),[[['hidden','a1','a2'],['b']]]);
+  h.advance(H+10_250);assert.deepEqual(JSON.parse(JSON.stringify(order(consumer.render().rows)!.key))[0],['"A"','"B"'],'hiding its source card preserves the full A cohort');
   consumer.close();h.close();
 
   const dialog=await harness({anchor:0,knownFrom:0,refs:[ref('a','A'),ref('b','A')],spans:[[0,0,160_000],[1,300_000,455_000]]});
@@ -181,4 +182,22 @@ test('grouped sessions ratio sorting handles quadratic equality and inversion, r
   assert.equal(h.reads(),1);assert.ok(h.pool.estimatedBytes<=h.pool.budget);
   consumer.setOrder(()=>null);assert.equal(h.period.workOrders.size,1);
   consumer.close();assert.equal(h.period.workOrders.size,0);h.close();
+});
+
+
+test('thirty-day close fractions use exact raw work facts through AgentsPanel demand and the common clock',async()=>{
+ const N=2_000_000_000,period=30*24*H;
+ assert.equal(N/(N-1),(N-1)/(N-2),'the old division cannot distinguish these permitted integer facts');
+ assert.equal(compareWorkRatio(N,N-1,N-1,N-2),-1);
+ const h=await harness({anchor:0,knownFrom:0,refs:[ref('a1','A'),ref('a2','A'),ref('b1','B'),ref('b2','B')],spans:[[0,0,N-1],[1,N/2,N/2+1],[2,0,N-2],[3,N/2,N/2+1]]},'30d',period);
+ const order=activityOrder(h.period,'concurrency'),consumer=panel(h.period,order),keys=()=>JSON.parse(JSON.stringify(consumer.render().order[0]));
+ try{assert.deepEqual(keys(),['"B"','"A"'],'the exact ratio wins over A’s later activity tie-break');h.advance(period+250);assert.deepEqual(keys(),['"B"','"A"']);assert.equal(h.reads(),1);consumer.strictRemount();assert.equal(h.period.workOrders.size,1);consumer.setOrder(()=>null);assert.equal(h.reads(),1);}finally{consumer.close();h.close();}
+});
+
+test('the discrete polynomial crossing search matches an integer oracle through vertices, equality and strict inversion',()=>{
+ for(let a=-8;a<=8;a++)for(let b=-8;b<=8;b++)for(let c=-4;c<=4;c++){
+  const sign=(v:bigint)=>v<0n?-1:v>0n?1:0,A=BigInt(a),B=BigInt(b),C=BigInt(c),before=sign(A),limit=80;
+  let expected:number|null=null;for(let t=1;t<=limit;t++)if(sign(A+B*BigInt(t)+C*BigInt(t*t))!==before){expected=t;break;}
+  assert.equal(firstPolynomialChange(A,B,C,limit,before),expected,`${a},${b},${c}`);
+ }
 });

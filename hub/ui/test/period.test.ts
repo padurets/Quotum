@@ -97,15 +97,15 @@ test('monetary evidence refreshes only the selected resource family',()=>{
     assert.deepEqual([...period.dirtyScopes],scope?[scope]:[]);
   }
   period.dirtyScopes.clear();period.workNeeded=false;period.valuesNeeded=false;
-  const privateEvent={type:'hub',event:{type:'history',data:{sources:[],since:4_000_000,ownSince:4_000_000,changes:[]}}};
-  period.changed(privateEvent);
+  const workEvent={type:'hub',event:{type:'history',data:{sources:[],since:4_000_000,workSince:4_000_000,changes:[]}}};
+  period.changed(workEvent);
   assert.deepEqual([...period.dirtyScopes],['quota']);assert.equal(period.workNeeded,true);assert.equal(period.valuesNeeded,false);
   board.meta.personal=false;period.dirtyScopes.clear();period.workNeeded=false;
-  period.changed(privateEvent);
-  assert.deepEqual([...period.dirtyScopes],[]);assert.equal(period.workNeeded,false,'private history cannot wake a shared-board reader');
+  period.changed(workEvent);
+  assert.deepEqual([...period.dirtyScopes],['quota']);assert.equal(period.workNeeded,true,'source-free work invalidates admitted shared history independently of subscriptions');
 });
 
-test('private work uses the unknown activity group without attributing quota consumption',()=>{
+test('unidentified work uses the unknown activity group without attributing quota consumption',()=>{
   const trace:WorkTrace={anchor:0,knownFrom:0,refs:[{...ref('private'),source:null,clientId:'opencode'},ref('held')],spans:[[0,5,25],[1,10,20]]};
   const range={from:7,to:22},index=new PeriodIndex(trace),rows=index.advance(range,30).rows,activity=new PeriodActivity(trace,index.curves);
   activity.update(rows);
@@ -258,7 +258,7 @@ test('a sibling chart reply cannot cancel the coordinator preparation of histori
   runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const period=new context.exports.BoardPeriod(),selection={mode:'range' as const,from:1_400_000,to:5_000_000};
   const basis={run:'r',revision:'1',evaluatedAt:5_000_000,evidenceCut:5_000_000,range:selection};
-  const intent:PeriodIntent={board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:5_000_000}};
+  const intent:PeriodIntent={board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:5_000_000,values:['s'],funds:{cell:'60000',from:'1380000',to:'5040000',cells:'skip',unit:'USD',meters:'[]'}}};
   const first=period.receive({basis,values:{state:'complete',basis,value:[value]}},intent);await settle();
   const second=period.receive({basis,funds:{state:'complete',basis,value:{run:'r',now:5_000_000,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:1_400_000,cut:5_000_000,replaceFrom:1_400_000,cursor:'c',quota:[],money:[]}}}},intent);await settle();
   assert.equal(pending.length,1,'only the first reply owns the preparation slot');
@@ -289,13 +289,13 @@ test('a dense retained month adopts its decoded reservation within the shared me
   for(let id=0;id<trace.refs.length;id++)for(let at=0;at<selection.to;at+=1_200_000)trace.spans.push([id,at+id*1000,at+id*1000+600_000]);
   reply.sessions={state:'complete',basis,value:{...packWork(trace),cursor:'work'}};
   assert.equal(pool.reserve(flight,JSON.stringify(reply).length*3),true);
-  await period.receive(reply,{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:selection.to}},bytes=>pool.reserve(flight,bytes));
+  await period.receive(reply,{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:selection.to,sessions:{},quota:{cell:'7200000',from:'0',to:String(selection.to),cells:'skip'}}},bytes=>pool.reserve(flight,bytes));
   assert.equal(reply.quota!.state,'complete','lossless evidence must fit without dropping the period');
   assert.equal(reply.quota!.state==='complete'&&reply.quota!.value.tape!.quota.reduce((n,s)=>n+s.samples.length/5,0),108000);assert.ok(pool.estimatedBytes<=15*1024*1024);
   pool.release(flight);
   const delta:PeriodReply={basis,quota:{state:'complete',basis,value:{run:'r',now:selection.to,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:0,cut:selection.to,replaceFrom:2_699_000_000,cursor:'b',money:[],quota:[{source:'0',window:'w',samples:[2_699_400_000,12.5,-1,600000,-1]}]}}}};
   assert.equal(pool.reserve(flight,JSON.stringify(delta).length*3),true);
-  await period.receive(delta,{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:selection.to}},bytes=>pool.reserve(flight,bytes));
+  await period.receive(delta,{board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:selection.to,sessions:{},quota:{cell:'7200000',from:'0',to:String(selection.to),cells:'skip'}}},bytes=>pool.reserve(flight,bytes));
   assert.equal(delta.quota!.state,'complete','the next observation must rebuild exact prefixes while the old presentation stays available');
   assert.equal(reply.sessions!.state,'complete','the complete month of credited intervals shares the same ceiling');
   assert.ok(pool.estimatedBytes<=15*1024*1024);pool.release(flight);

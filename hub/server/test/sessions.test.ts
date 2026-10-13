@@ -47,24 +47,25 @@ const count = (store: Store, table: string) => (store.db.prepare(`SELECT count(*
 
 test('reports and quiet-machine sweeps tell history of exactly the credited work, without readers', () => {
   const {store, live, ann, laptop} = setup();
-  const news: [string, number][] = [];
+  const news:{owner:string;since:number;device?:string;sources?:readonly string[]}[]=[];let sourceNews=0;
   const nothing = () => {};
-  const observer: Touches = {touchSources: nothing, touchBoards: nothing, touchUser: nothing, touchHub: nothing, history: (source, since) => news.push([source, since]), dropSessions: nothing, dropMember: nothing, dropBoard: nothing};
+  const observer: Touches = {touchSources: nothing, touchBoards: nothing, touchUser: nothing, touchHub: nothing, history:()=>{sourceNews++;},clientHistory:(owner,since,device,sources)=>news.push({owner,since,device,sources}), dropSessions: nothing, dropMember: nothing, dropBoard: nothing};
   store.setObserver(observer);
   const working = session(laptop);
   live.report(laptop, ann, [working], start);
   assert.deepEqual(news, []);
   live.report(laptop, ann, [working], start + 15_000);
-  assert.deepEqual(news, [['codex:1', start]]);
+  assert.deepEqual(news, [{owner:ann,since:start,device:laptop,sources:['codex:1']}]);
   news.length = 0;
   live.sweep(start + 60 * minute);
-  assert.deepEqual(news, [['codex:1', start + 15_000]], 'late credit starts at the old report, not at the sweep');
+  assert.deepEqual(news, [{owner:ann,since:start+15_000,device:laptop,sources:['codex:1']}], 'late credit starts at the old report, not at the sweep');
   news.length = 0;
   store.creditWork(laptop, start, start + 10_000, [{source: 'codex:1', origin: 'terminal', startedAt: working.sentStartedAt, project: '', folder: '', identity: {kind: 'legacy' as const, ordinal: 0}}]);
   assert.deepEqual(news, [], 'already credited time tells nothing');
   live.report(laptop, ann, [session(laptop, {working: false})], start + 60 * minute);
   live.report(laptop, ann, [], start + 61 * minute);
   assert.deepEqual(news, [], 'an idle session credits no work');
+  assert.equal(sourceNews,0,'each physical credit uses one source-free owner/device notification, without duplicate source history');
   store.close();
 });
 
