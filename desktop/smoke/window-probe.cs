@@ -271,6 +271,7 @@ public static class QuotumWindowProbe {
     public bool CallbackObserved,CallbackAccepted,WantedCompact;
     public bool OriginalPostedInputAccepted=false,FreshWorkerAtFailedDeadline=false,ProductionAcceptance=false,CausalPass=false,VisibilityProved=false,WholePipelineQualified=false;
     public RequestFrame Frame;
+    public RequestHeader Baseline;
   }
   static string RequestKey(int row,int field) {return "Quotum.Request."+row.ToString("D2")+"."+field.ToString("D2");}
   static long RequestValue(IntPtr window,int row,int field) {return GetProp(window,RequestKey(row,field)).ToInt64();}
@@ -338,7 +339,7 @@ public static class QuotumWindowProbe {
     return row.Status=="qualified" && row.Sequence>0 && row.Values[0]==evidence.Request?row:null;
   }
   public static RequestEvidence QualifyRequests(RequestFrame frame,RequestHeader baseline,int process,long birth) {
-    var e=new RequestEvidence{Frame=frame};
+    var e=new RequestEvidence{Frame=frame,Baseline=baseline};
     if(frame==null || frame.Before==null || frame.After==null)return e;
     if(!frame.BeforeCleanup){e.Status="unknown-cleanup";return e;}
     if(!HeaderEqual(frame.Before,frame.After,process,birth)){e.Status="unknown-header";return e;}
