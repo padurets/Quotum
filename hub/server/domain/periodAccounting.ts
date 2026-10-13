@@ -236,7 +236,7 @@ class MoneyIndex {
     const original=semanticsOf(reading),converted=this.group.displayUnit&&this.group.displayUnit!==reading.unit;
     if(!converted)return original.conversion?{...original,conversion:{...original.conversion,original:{...original.conversion.original,at}}}:original;
     const steps=rateAt(this.group,reading.unit+'\n'+at);
-    return {...original,scale:6,limit:reading.limit===null?null:this.convert(reading.limit,reading,at),...(steps?.length?{conversion:{original:{meterId:this.group.meter,amount:native,unit:reading.unit,at,...(reading.scale===undefined?{}:{scale:reading.scale}),limit:reading.limit},rate:steps.at(-1)!,steps}}:{})};
+    return {...original,scale:6,limit:reading.limit===null?null:this.convert(reading.limit,reading,at),...(steps?.length?{conversion:{original:{meterId:this.group.meter,amount:native,unit:reading.unit,at,...(reading.scale===undefined?{}:{scale:reading.scale}),limit:reading.limit},rate:steps.at(-1)!,...(steps.length>1?{steps}:{})}}:{})};
   }
   private observation(at:number,inclusive=false) {
     const group=this.group,edge=at+(inclusive?1:0),reading=group.readings[lower(this.times,edge)-1];

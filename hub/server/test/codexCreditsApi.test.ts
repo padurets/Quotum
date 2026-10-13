@@ -100,7 +100,10 @@ test('the shared period keeps exact credit scale and grant anchors in values, ce
   assert.equal(summary.semantics.conversion.original.at,at);
   assert.equal(summary.semantics.conversion.original.scale,12);
   assert.equal(summary.semantics.conversion.original.amount,'2500000000001');
-  assert.ok(summary.semantics.conversion.steps.length);
+  const conversion=summary.semantics.conversion,shown=value.meters.find((m:any)=>m.conversion).conversion;
+  assert.equal(conversion.steps,undefined);assert.deepEqual(conversion.steps??[conversion.rate],shown.steps??[shown.rate]);
+  assert.equal(conversion.rate.source,'codex-default');assert.equal(conversion.rate.base,'credits:codex');
+  assert.equal(conversion.rate.from,'1000000');assert.equal(conversion.rate.to,'40000');
   const cursor=reply.funds.value.tape.cursor;
   const removed=(await h.grant(h.bob.id,false,enabled.revision)).json().budget;
   assert.equal((await period({funds:{...query,evidence:cursor}})).statusCode,404);
