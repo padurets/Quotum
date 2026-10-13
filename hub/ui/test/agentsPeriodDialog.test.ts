@@ -11,6 +11,7 @@ import {t,setLocale} from '../i18n';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import type {WorkedSession} from '../../server/domain/periodWork';
 import type {SessionPeriod} from '../lib/period';
+import {tableCell} from '../components/TableCell';
 
 type Node={type:unknown;props:Record<string,unknown>};
 const jsx=(type:unknown,props:Record<string,unknown>):Node=>({type,props});
@@ -29,7 +30,7 @@ test('the open sessions dialog keeps the actual period basis, status and retry t
   let reading:SessionPeriod&{rows:WorkedSession[];value:object|null}={rows:[retained],basis,value:{},loading:false,error:null};
   let cursor=0,retries=0;
   const slots:unknown[]=[];
-  const context={exports:{} as Record<string,(props:unknown)=>Node>,require:()=>runtime,...agents,selector,sameJson,AGENTS,columnShown,colorOf,t,timeRangeLabel,
+  const context={exports:{} as Record<string,(props:unknown)=>Node>,require:()=>runtime,...agents,selector,sameJson,AGENTS,columnShown,colorOf,t,timeRangeLabel,tableCell,
     COLUMNS:Object.fromEntries(agents.AGENT_COLUMNS.map(id=>[id,{title:'agents.'+id}])),
     useRef:(initial:unknown)=>{const index=cursor++;return slots[index]??(slots[index]={current:initial});},
     useState:(initial:unknown)=>{const index=cursor++;if(!(index in slots))slots[index]=index===0?{group:null}:typeof initial==='function'?initial():initial;return [slots[index],(value:unknown)=>{slots[index]=value;}];},

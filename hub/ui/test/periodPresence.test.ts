@@ -12,6 +12,7 @@ import {columnShown,colorOf,AGENTS} from '../lib/view';
 import {timeRangeLabel} from '../lib/timeRange';
 import {t as translate} from '../i18n';
 import {fixture,flush,NOW,M} from './periodRuntimeFixture';
+import {tableCell} from '../components/TableCell';
 
 const require=createRequire(import.meta.url),React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
 const agentCode=readFileSync(new URL('../components/Agents.tsx',import.meta.url),'utf8');
@@ -25,7 +26,7 @@ function dialog(h:Awaited<ReturnType<typeof fixture>>) {
   const jsx=(type:unknown,props:Record<string,any>):Node=>({type,props});
   const nodes=(value:any):Node[]=>Array.isArray(value)?value.flatMap(nodes):value&&typeof value==='object'?[value,...nodes(value.props?.children)]:[];
   let cursor=0;const slots:any[]=[];
-  const ctx={exports:{} as any,require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),...agents,selector,sameJson,AGENTS,columnShown,colorOf,t:translate,timeRangeLabel,
+  const ctx={exports:{} as any,require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),...agents,selector,sameJson,AGENTS,columnShown,colorOf,t:translate,timeRangeLabel,tableCell,
     COLUMNS:Object.fromEntries(agents.AGENT_COLUMNS.map(id=>[id,{title:'agents.'+id}])),
     useRef:(initial:any)=>slots[cursor++]??(slots[cursor-1]={current:initial}),
     useState:(initial:any)=>{const i=cursor++;if(!(i in slots))slots[i]=i===0?{group:null}:typeof initial==='function'?initial():initial;return [slots[i],(value:any)=>{slots[i]=value;}];},

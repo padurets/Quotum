@@ -604,9 +604,12 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const metrics:TableMetric[]=[
     {id:'sessions',label:t('activity.agents'),cell:{time:'session-count',changesAt:now=>boardPeriod.activityCoverageChangesAt(now),at:now=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?rows.length:'—',title:t('activity.agentsHint')})}},
     ...(columns.includes('worked')?[{id:'worked',label:t('agents.worked'),cell:{time:'worked',changesAt:(now:number)=>withCoverage(now,worked===null?null:boardPeriod.workedChangesAt(refs,now,workedText)),at:(now:number)=>({content:workedText(now),title:t('agents.workedHint')})}}]:[]),
-    ...(['active','concurrency'] as const).filter(column=>columns.includes(column)).map(column=>({id:column,label:t(COLUMNS[column].title),cell:activityCell(by,column)})),
-    {id:'working',label:t('table.workingNow'),cell:{time:'working-count',changesAt:now=>boardPeriod.activityCoverageChangesAt(now),at:now=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?working:'—'})}},
+    ...(['active','concurrency'] as const).filter(column=>columns.includes(column)).map(column=>({id:column,label:t(COLUMNS[column].title),compactLabel:column==='concurrency'?t('activity.atOnce'):undefined,cell:activityCell(by,column)})),
   ];
+  const workingSummary:TimedCell={time:'working-count',changesAt:now=>boardPeriod.activityCoverageChangesAt(now),at:now=>{
+    const known=boardPeriod.activitySummaryAt(activityDimension(by),now)?.known;
+    return {content:t('agents.machineSummary',{working:known?working:'—',count:known?rows.length:'—'})};
+  }};
   // Who may change what: every viewer how the list gathers, the owner its columns and whether it shows.
   const toggles = columnsOf(agentsBy).rest;
   const detailToggles = single ? [] : columnsOf(agentsBy, true).rest.filter(column => !toggles.includes(column));
@@ -627,7 +630,9 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
     <section ref={panel} className={`panel agents-panel${period.loading?' is-loading':''}`} aria-label={t('agents.title')} aria-busy={period.loading}
       data-history-range={period.loading||period.error?undefined:selected&&period.basis?timeRangeKey(period.basis.range):range}>
       <div className="panel-head">
-        <h2 ref={heading} tabIndex={-1}>{t('agents.title')}</h2>
+        <div className="panel-heading"><h2 ref={heading} tabIndex={-1}>{t('agents.title')}</h2>
+          {period.basis&&tableCell('working',workingSummary,(cell,time)=><p className="analytics-note" data-time={time}>{cell.content}</p>)}
+        </div>
         <div className="agents-controls">
           {layout === 'list' && <SortMenu {...sorting} />}
           <Popover label={t('agents.settings')} icon={<SlidersIcon />}>

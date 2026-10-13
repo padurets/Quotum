@@ -64,6 +64,7 @@ test('the actual sessions table renders union metrics and separate whole-period 
       i18n.setLocale(locale);r.set({by:'machine',hidden:[],range:{from:25_000,to:125_000},knownFrom:0});let html=r.render();
       assert.ok(html.includes(i18n.t('agents.title'))&&html.includes(i18n.t('agents.concurrency')));
       assert.ok(!html.includes('class="panel-empty"'), 'a populated table must not reserve an empty-state block');
+      assert.match(html,/<p class="analytics-note" data-time="working-count">/);
       assert.equal((html.match(/data-agents-group=/g)??[]).length,2);
       const footer=html.match(/<footer[^>]*class="table-footer"[^>]*>(.*?)<\/footer>/)![1];
       assert.ok(footer.includes(i18n.t('table.summary'))&&footer.includes(format.workHours(150_000))&&footer.includes(format.workHours(100_000))&&footer.includes(activity.atOnce(150_000,100_000)));
@@ -71,7 +72,8 @@ test('the actual sessions table renders union metrics and separate whole-period 
       r.set({hidden:['active','concurrency']});html=r.render();assert.ok(!html.includes('data-table-metric="active"')&&!html.includes('data-time="session-activity"'));
       r.set({hidden:[],by:'none'});html=r.render();assert.ok(!html.includes('data-time="session-activity"'));
       r.set({by:'machine',range:{from:160_000,to:170_000},knownFrom:175_000});html=r.render();assert.ok(html.includes(i18n.t('activity.knownFrom',{time:format.stamp(175_000)})));
-      for(const id of ['sessions','worked','active','concurrency','working'])assert.match(html,new RegExp('<dd[^>]*data-table-metric="'+id+'"[^>]*>—</dd>'));
+      for(const id of ['sessions','worked','active','concurrency'])assert.match(html,new RegExp('<dd[^>]*data-table-metric="'+id+'"[^>]*>—</dd>'));
+      assert.ok(html.includes(i18n.t('agents.machineSummary',{working:'—',count:'—'})));
       r.set({narrow:true,range:{from:25_000,to:125_000},knownFrom:0});html=r.render();
       const compact=html.match(/<ul class="agents-compact[^>]*>(.*?)<\/ul>/s)![1];
       assert.ok(compact.includes(i18n.t('agents.worked'))&&compact.includes(i18n.t('agents.lastActivity')),compact);
@@ -88,6 +90,8 @@ test('one sessions table fits a bounded page while its footer counts the complet
   const html=r.render(),footer=html.match(/<footer[^>]*class="table-footer"[^>]*>(.*?)<\/footer>/)![1];
   assert.equal((html.match(/data-agents-group=/g)??[]).length,sharedTable.TABLE_PAGE_ROWS);
   assert.ok(footer.includes('data-table-metric="sessions"')&&/<dd[^>]*data-table-metric="sessions"[^>]*>57<\/dd>/.test(footer));
+  assert.ok(html.includes(i18n.t('agents.machineSummary',{working:0,count:57})));
+  assert.ok(!footer.includes('working-count'));
   assert.ok(html.includes('1 / 6'));
   const pages=footer.match(/<div class="table-footer-pages">(.*?)<\/nav><\/div>/)![1];
   assert.ok(pages.includes(i18n.t('table.rows',{count:57}))&&pages.includes('1 / 6'));

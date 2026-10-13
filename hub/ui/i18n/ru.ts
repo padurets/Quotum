@@ -7,7 +7,6 @@ export const ru = {
   'table.summary': 'За весь выбранный период',
   'table.summaryHint': 'Все строки со всех страниц с учётом выбранных фильтров.',
   'table.rows': {one:'{count} строка',few:'{count} строки',many:'{count} строк',other:'{count} строки'},
-  'table.workingNow': 'Работают сейчас',
   'table.page': 'Страница {page} из {pages}',
   'money.codexCredits': 'Кредиты Codex',
   'money.codexCredit': 'кредит Codex',

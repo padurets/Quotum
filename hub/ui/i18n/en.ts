@@ -12,7 +12,6 @@ export const en = {
   'table.summary': 'Entire selected period',
   'table.summaryHint': 'All matching rows across every page, with the current filters.',
   'table.rows': {one:'{count} row',other:'{count} rows'},
-  'table.workingNow': 'Working now',
   'table.page': 'Page {page} of {pages}',
   'money.codexCredits': 'Codex credits',
   'money.codexCredit': 'Codex credit',
