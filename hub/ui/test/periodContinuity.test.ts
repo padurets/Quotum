@@ -24,6 +24,7 @@ for(const failure of [false,true])test(`an unchanged work identity preserves all
   t.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h);
   try {
     const c=consumer({...h,...d}),before=c.settle(),quota=quotaCells(h,d),presentation=d.loader.get().presentation;
+    assert.ok(before.paths.some(path=>path.length>0),'continuity starts from prepared geometry');
     h.disconnect();const gate=h.hold();h.reconnect();await flush();
     if(failure){gate.reject(new Error('unavailable'));await flush();}
     assert.deepEqual(c.settle(),before);assert.deepEqual(quotaCells(h,d),quota);

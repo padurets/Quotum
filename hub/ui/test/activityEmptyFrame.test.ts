@@ -23,7 +23,9 @@ test('the actual empty activity result keeps its time axis and legend container 
   const source = readFileSync(new URL('../components/Activity.tsx', import.meta.url), 'utf8');
   const start = source.indexOf('  const said = activityEmpty(', source.indexOf('export const Activity ='));
   const end = source.indexOf('\n  );', start) + 5;
-  const drawing = source.slice(source.indexOf('const Stacks = memo(function Stacks(')) + '\nfunction draw(){' + source.slice(start, end) + '}\nglobalThis.draw=draw;';
+  const stacksStart = source.indexOf('const StackArtwork = memo(function StackArtwork(');
+  assert.ok(stacksStart >= 0, 'the fixture includes the actual prepared stack artwork');
+  const drawing = source.slice(stacksStart) + '\nfunction draw(){' + source.slice(start, end) + '}\nglobalThis.draw=draw;';
   const M = 60_000, H = 60 * M, DAY = 24 * H, NOW = 100 * DAY;
   const range = {from: NOW - 72 * H, to: NOW - 48 * H};
   const history: History = {since: range.from, to: range.to, range: `${range.from}-${range.to}`, live: false, cellMs: 5 * M, historyStart: 0, series: [], events: [], activity: {known: {from: range.from, to: range.to}, since: 0, barMs: H, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}};

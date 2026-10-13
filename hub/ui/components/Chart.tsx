@@ -299,6 +299,19 @@ const EdgeLabel = memo(function EdgeLabel({
   );
 });
 
+/** Gesture state changes the pose without replacing the prepared series artwork. */
+const SeriesArtwork = memo(function SeriesArtwork({model}: {model: {
+  lines: Line[];
+  paths: {line: string; parts: {key: string; line: string}[] | null; latest: string | undefined}[];
+} | null}) {
+  if (!model) return null;
+  return <>{model.lines.map((line, i) => (
+    <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={model.paths[i]?.latest} stroke={line.color} strokeDasharray={line.dash || undefined}>
+      {model.paths[i].parts?.map(part => <path key={part.key} d={part.line} className="series" />) ?? <path d={model.paths[i].line} className="series" />}
+    </g>
+  ))}</>;
+});
+
 /** How tall the chart draws its plot by itself, in its units: lower on a narrow chart. */
 export const plotHeight = (width: number) => (width < 560 ? 220 : 300);
 
@@ -699,11 +712,7 @@ export const Chart = memo(function Chart({
             </g>
           );
         })}
-        {lines.map((line, i) => (
-          <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={paths[i]?.latest} stroke={line.color} strokeDasharray={line.dash || undefined}>
-            {paths[i].parts?.map(part => <path key={part.key} d={part.line} className="series" />) ?? <path d={paths[i].line} className="series" />}
-          </g>
-        ))}
+        <SeriesArtwork model={model} />
         {/* Announcements are read over the lines, each on its own backing. */}
         {announced.map(marker => {
           const mx = x(marker.at);
