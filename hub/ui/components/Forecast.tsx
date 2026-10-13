@@ -102,8 +102,9 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
     // A rolling left edge changes credited work locally. Only the affected cell
     // reads its exact summary; its table and the other lines remain asleep.
     const lineAt=(now:number)=>range?line:boardPeriod.quotaAt(line,now,history!.range);
+    const rangeCells=range?lineWork(line,true,resetAt,0):null;
     const workCell = (column: WorkColumn, now: number): Cell => {
-      const value=lineAt(now),cells=lineWork(value,range,resetAt,now),perWork=cells&&'value' in cells.perwork?cells.perwork.value:null;
+      const value=lineAt(now),cells=range?rangeCells:lineWork(value,range,resetAt,now),perWork=cells&&'value' in cells.perwork?cells.perwork.value:null;
       const since=range?history!.since:boardPeriod.rangeAt('quota',now,history!.range)?.from??history!.since;
       return cells&&value.work?workText(column,cells[column],value.work,since,resetAt,perWork):{content:'—'};
     };
