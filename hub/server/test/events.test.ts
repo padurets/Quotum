@@ -1190,7 +1190,8 @@ test('what each change of data touches reaches the boards it shows on: people jo
   // The same subscription from a second machine: the first can go and the subscription stays.
   await h.measure(desk, Date.now() - 19 * MIN, {device: 'desk'});
   await h.measure(bobsSecret, Date.now() - 20 * MIN, {account: 'b0b0b0b0b0b0b0b0b0b0b0b0', device: 'bobs'});
-  await h.call('POST', `/api/boards/${team}/shares`, {as: 'bob', body: {source: h.store.sources(bobs)[0].id}});
+  const bobsSource = h.store.sources(bobs)[0].id;
+  await h.call('POST', `/api/boards/${team}/shares`, {as: 'bob', body: {source: bobsSource}});
   const agent = (device: string) => ({version: 1, agent: 'quotum/0.4.0', machine: h.machine(device)});
   const session = {
     provider: 'codex',
@@ -1218,7 +1219,15 @@ test('what each change of data touches reaches the boards it shows on: people jo
     ['someone joins a board', () => h.directory.addMember(team, id('carol'), Date.now()), [], [], ['boards']],
     // Whose agents' work the board shows changes too: its history reads otherwise.
     ['someone leaves it, what they shared left behind for now: they no longer own it there', ()=>h.directory.removeMember(team,id('bob')),[],['snapshot'],[]],
-    ['what nobody on the board holds leaves it, while session disclosure updates', ()=>h.store.unshareOrphans(team),[],['snapshot'],[]],
+    ['what nobody on the board holds leaves the lineup without changing admitted work', () => {
+      const authority = h.store.workKey(team), projection = new Projection(h), roster = projection.roster(team, Date.now());
+      assert.equal(h.store.workAccess(team).sources.get(bobsSource)!.holders.size, 0, 'Bob already left with his device admission');
+      h.store.unshareOrphans(team);
+      assert.deepEqual(h.store.sources(team), []);
+      assert.equal(h.store.workKey(team), authority, 'orphan resource cleanup has no remaining work dependency');
+      const current = projection.roster(team, Date.now());
+      assert.deepEqual([current.sessions, current.unattributedSessions], [roster.sessions, roster.unattributedSessions]);
+    },[],['lineup'],[]],
     [
       'a subscription measured for the first time',
       () => h.measure(desk, Date.now() - MIN, {account: 'c0c0c0c0c0c0c0c0c0c0c0c0', device: 'box'}),
