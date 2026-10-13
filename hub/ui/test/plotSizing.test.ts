@@ -46,7 +46,8 @@ function fixture() {
   return {pan, start, reports, observers, get legend() {return legend;}, get reads() {return reads;}, mutate: () => mutations.forEach(run => run()),
     resize: (height: number, border = true) => {legend.height = height; observers.forEach(observer => observer.deliver(legend, height, border));},
     replace: (height: number) => {legend = makeLegend(height); mutations.forEach(run => run());}, fold: (on: boolean) => {folding = on; mutations.forEach(run => run());},
-    paint: () => frames.splice(0).forEach(run => run()), flush: () => microtasks.splice(0).forEach(run => run()), cleanup: () => cleanups.reverse().forEach(run => run())};
+    select: (value: {from: number; to: number} | null) => {range = value; rangeListeners.forEach(run => run());},
+    paint: () => frames.splice(0).forEach(run => run()), flush: () => microtasks.splice(0).forEach(run => run()), flushOne: () => microtasks.shift()?.(), cleanup: () => cleanups.reverse().forEach(run => run())};
 }
 
 test('a painted legend holds its observed height through a gesture without reading layout', () => {
@@ -92,4 +93,55 @@ test('observed zero and the content-box fallback retain their measured sizes', (
     const f = fixture(); f.resize(height, false); f.start();
     assert.equal(f.legend.style.height, `${height}px`); assert.equal(f.reads, 0); f.cleanup();
   }
+});
+
+test('repeated completion deliveries restore and measure a held legend once', () => {
+  const f = fixture(); f.resize(130.5);
+  const before = f.reports.length, geometry = f.reports.at(-1);
+  const token = f.start();
+  f.pan.cancel(token); f.mutate();
+  assert.equal(f.reports.length, before, 'completion waits for the queued release');
+  f.flush();
+  assert.equal(f.legend.style.height, '');
+  assert.equal(f.reports.length - before, 1, 'two completion callbacks must not repeat synchronous layout measurement');
+  assert.deepEqual(f.reports.at(-1), geometry, 'restoration preserves plot allocation');
+  f.cleanup();
+});
+
+test('a queued completion cannot release a legend held by a new gesture', () => {
+  const f = fixture(); f.resize(130.5);
+  const first = f.start(); f.pan.cancel(first);
+  const second = f.start(), before = f.reports.length;
+  f.flush();
+  assert.equal(f.legend.style.height, '130.5px');
+  assert.equal(f.reports.length, before);
+  f.pan.cancel(second); f.flush();
+  assert.equal(f.legend.style.height, '');
+  assert.equal(f.reports.length - before, 1);
+  f.cleanup();
+});
+
+test('a completion queued before unmount performs no later measurement', () => {
+  const f = fixture(); f.resize(130.5);
+  const token = f.start(); f.pan.cancel(token); f.mutate();
+  f.cleanup(); const before = f.reports.length;
+  f.flush();
+  assert.equal(f.reports.length, before);
+  assert.equal(f.legend.style.height, '');
+});
+
+test('a stale completion cannot restore a later gesture after navigation', () => {
+  const f = fixture(); f.resize(130.5);
+  const first = f.start(); f.pan.cancel(first);
+  f.select({from: 90 * 3_600_000, to: 91 * 3_600_000});
+  assert.equal(f.legend.style.height, '', 'navigation restores the first held viewport');
+  const second = f.start(); f.pan.cancel(second);
+  const before = f.reports.length;
+  f.flushOne();
+  assert.equal(f.legend.style.height, '130.5px', 'the first queued release does not own the second held viewport');
+  assert.equal(f.reports.length, before);
+  f.flush();
+  assert.equal(f.legend.style.height, '');
+  assert.equal(f.reports.length - before, 1);
+  f.cleanup();
 });
