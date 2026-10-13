@@ -1,12 +1,12 @@
 import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {ChromeLaunchError, launchedChrome, launchChrome, probeFailure, safeStream, type LaunchReport} from '../chrome.js';
+import {ChromeLaunchError, launchedChrome, launchChrome, probeFailure, safeStream, StartupSpans, type LaunchReport} from '../chrome.js';
 
 const until = async (ready: () => boolean) => {
   const deadline = Date.now() + 4_000;
@@ -78,6 +78,66 @@ test('silent real DevTools readiness and idempotent cleanup close the endpoint a
   await assert.rejects(fetch(browser.endpoint + '/json/version'));
 });
 
+test('a port file timestamp cannot authorize publication or replace real silent readiness', async t => {
+  const {profile, launch, publishPort} = fixture(t, 'ready', true);
+  const reports: LaunchReport[] = [];
+  const pending = launch(undefined, report => {reports.push(report);});
+  await until(() => existsSync(profile + '/started') && reports.some(report => report.failure === 'no-port'));
+  publishPort();
+  const future = new Date('2099-01-01T00:00:00Z');
+  utimesSync(profile + '/DevToolsActivePort', future, future);
+  const browser = await pending, report = browser.launchReport!() as LaunchReport;
+  assert.equal(report.stage, 'ready'); assert.equal(report.version, 'Chrome/fixture');
+  assert.ok(reports.length > 0 && reports.every(value => value.startupSpans === undefined), 'polling does not export the passive ring');
+  const spans = report.startupSpans!;
+  assert.equal(spans.status, 'observed'); assert.equal(spans.publicationProof, false);
+  assert.equal(spans.clockMapping.status, 'unknown'); assert.equal(spans.observerOverheadMs, null);
+  const scan = spans.scans.find(value => value.metadata?.status === 'available')!;
+  assert.ok(scan && scan.observeFrom && scan.observeTo && scan.portFrom && scan.portTo);
+  assert.ok(scan.observeTo.monoAfterMs <= scan.portFrom.monoBeforeMs);
+  assert.equal(scan.metadata!.before!.modifiedWallMs, future.getTime());
+  assert.ok(scan.metadata!.before!.modifiedWallMs > scan.portTo.wallMs, 'mtime remains a proxy outside the observed wall bracket');
+  const probe = spans.probes.at(-1)!;
+  assert.ok(probe.from && probe.headers && probe.body && probe.parse && probe.jsonTo && probe.to);
+  assert.ok(probe.headers.monoBeforeMs <= probe.body.monoBeforeMs && probe.body.monoBeforeMs <= probe.parse.monoBeforeMs
+    && probe.parse.monoBeforeMs <= probe.jsonTo.monoBeforeMs && probe.jsonTo.monoBeforeMs <= probe.to.monoBeforeMs);
+  const frozen = JSON.stringify(spans);
+  await browser.close(); await browser.close();
+  assert.equal(JSON.stringify((browser.launchReport!() as LaunchReport).startupSpans), frozen, 'cleanup cannot revise startup observations');
+  assert.equal(existsSync(profile), false);
+  await assert.rejects(fetch(browser.endpoint + '/json/version'));
+});
+
+test('startup span tails retain omissions and cannot rewrite a terminal receipt', () => {
+  const spans = new StartupSpans();
+  let last: ReturnType<StartupSpans['scan']>;
+  for (let i = 0; i < 51; i++) {last = spans.scan(); last.observeTo = spans.clock();}
+  for (let i = 0; i < 66; i++) {const probe = spans.probe(); probe.to = spans.clock();}
+  const report = spans.freeze(), frozen = JSON.stringify(report);
+  assert.equal(report.status, 'incomplete'); assert.equal(report.scans.length, 48); assert.equal(report.omittedScans, 3);
+  assert.equal(report.probes.length, 64); assert.equal(report.omittedProbes, 2);
+  assert.equal(report.scans.at(-1)!.id, 51); assert.equal(report.probes.at(-1)!.id, 66);
+  last!.observeTo = null; spans.scan(); spans.probe();
+  assert.equal(spans.freeze(), report); assert.equal(JSON.stringify(report), frozen);
+  assert.equal(report.publicationProof, false);
+
+  const pending = new StartupSpans(), scan = pending.scan(), probe = pending.probe(), completed = pending.clock();
+  const partial = pending.freeze(), partialJSON = JSON.stringify(partial);
+  assert.equal(partial.status, 'incomplete'); assert.equal(partial.omittedScans, 0); assert.equal(partial.omittedProbes, 0);
+  assert.equal(partial.scans[0].observeTo, null); assert.equal(partial.probes[0].to, null);
+  scan.observeTo = completed; probe.to = completed;
+  assert.equal(JSON.stringify(pending.freeze()), partialJSON, 'late completion cannot fill a censored operation');
+});
+
+test('an invalid diagnostic wall clock stays unavailable without a publication claim', t => {
+  t.mock.method(Date, 'now', () => NaN);
+  const spans = new StartupSpans(); spans.scan();
+  const report = spans.freeze();
+  assert.equal(report.status, 'unavailable'); assert.ok(report.unavailableClocks > 0);
+  assert.equal(report.scans[0].observeFrom, null); assert.equal(report.terminal, null);
+  assert.equal(report.publicationProof, false); assert.equal(report.clockMapping.status, 'unknown');
+});
+
 test('early process exit and missing executable fail promptly and remove owned profiles', async t => {
   const {profile, launch} = fixture(t, 'exit');
   await assert.rejects(launch(), /early-exit/);
@@ -105,6 +165,12 @@ for (const mode of ['no-port', 'invalid', 'mismatch', 'redirect', 'headers-hang'
         assert.equal(error.report.probes?.stage,mode==='headers-hang'?'headers':'body');
         assert.ok(error.report.probes!.attempts>0);
         assert.ok(error.report.port!>0);
+        const spans = error.report.startupSpans!, probe = spans.probes.at(-1)!;
+        assert.ok(spans.scans.length > 0 && spans.scans.length <= 48 && spans.probes.length > 0 && spans.probes.length <= 64);
+        assert.ok(probe.headers); assert.equal(probe.parse, null); assert.equal(probe.jsonTo, null);
+        if (mode === 'headers-hang') assert.equal(probe.body, null); else assert.ok(probe.body);
+        if (probe.to === null) assert.equal(spans.status, 'incomplete', 'cancellation cannot invent an operation end');
+        assert.equal(spans.publicationProof, false); assert.equal(spans.clockMapping.status, 'unknown');
       }
       return true;
     });
