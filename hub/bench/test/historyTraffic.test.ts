@@ -326,6 +326,9 @@ test('warm failure diagnostics distinguish exact reads and gesture stages withou
   assert.equal(diagnostic.reads[1].stage,'cached repeat');assert.equal(diagnostic.reads[1].endpoint,'period/sessions');
   assert.deepEqual(diagnostic.reads[1].request?.selection,{mode:'range',from:10,to:20});
   assert.equal(JSON.stringify(diagnostic).includes('private'),false);
+  observer.reads[0].attemptId='b2:34';observer.reads[1].attemptId='private-attempt';
+  assert.equal(observer.diagnostic('warm').reads[0].attemptId,'b2:34');
+  assert.equal(JSON.stringify(observer.diagnostic('warm')).includes('private'),false);
   for(let n=0;n<70;n++)emit('Network.requestWillBeSent',{requestId:String(n),request:{url:'http://localhost/api/history?board=private-board&scope=budget&cell=1&from=0&to=60'}});
   assert.equal(observer.diagnostic('warm').reads.length,64);assert.equal(observer.diagnostic('warm').omitted,8);
 });
