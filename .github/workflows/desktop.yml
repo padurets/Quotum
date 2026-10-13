@@ -93,7 +93,26 @@ jobs:
         run: |
           echo "QUOTUM_COMMIT=${COMMIT::7}" >> "$GITHUB_ENV"
           echo "VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' desktop/Cargo.toml | head -n 1)" >> "$GITHUB_ENV"
+      - name: Node archive preparation tests
+        run: node --test desktop/prepare-node.test.mjs
+      - name: Restore Node archives
+        id: node-archives
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        continue-on-error: true
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: '2'
+        with:
+          path: ~/.cache/quotum-build/node
+          key: desktop-node-${{ runner.os }}-${{ hashFiles('desktop/prepare.mjs', 'desktop/prepare-node.mjs') }}
       - run: node desktop/prepare.mjs --target ${{ matrix.target }}
+      # Save verified archives before later build or smoke failures can discard them.
+      - name: Save Node archives
+        if: steps.node-archives.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        continue-on-error: true
+        with:
+          path: ~/.cache/quotum-build/node
+          key: ${{ steps.node-archives.outputs.cache-primary-key }}
       - name: Bundled hub startup diagnostics
         working-directory: hub
         env:
