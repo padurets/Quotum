@@ -8,6 +8,7 @@ import type {Cdp} from '../cdp.js';
 
 const body='/* private-canary */ globalThis.bound=true;',hash=createHash('sha256').update(body).digest('hex');
 const url='http://private-canary.invalid/assets/index-test.js?private-canary',client={status:'available' as const,name:'index-test.js',bytes:Buffer.byteLength(body),sha256:hash};
+const sampler='/* private-canary */ const nativeSampler=true;',samplerHash=createHash('sha256').update(sampler).digest('hex');
 function fixture(parsed:unknown[]=[{url,hash,scriptId:'4'}],reply:unknown={body,base64Encoded:false}) {
   const listeners=new Map<string,Set<(value:unknown)=>void>>(),sent:string[]=[],files=new Map<string,unknown>();
   const emit=(name:string,value:unknown)=>{for(const listener of listeners.get(name)??[])listener(value);};
@@ -33,6 +34,37 @@ test('received body and parsed owner both match, with bounded numeric private-fr
 
 test('binary response preserves the received byte hash',async()=>{
   const f=fixture(undefined,{body:Buffer.from(body).toString('base64'),base64Encoded:true});f.receive();await f.binding.afterFamily([1,2]);assert.equal(f.report().status,'complete');f.binding.close();
+});
+
+test('successful injected sources bind separately from the received client',async()=>{
+  const second=sampler+'\n',secondHash=createHash('sha256').update(second).digest('hex');
+  const f=fixture([{url,hash,scriptId:'4'},{url:'',hash:samplerHash,scriptId:'21'},{url:'',hash:secondHash,scriptId:'22'}]);
+  f.binding.rememberInjected(1,sampler);f.binding.rememberInjected(2,second);f.receive();await f.binding.afterFamily([1,2]);
+  const r=f.report();assert.equal(r.status,'complete');assert.equal(r.injected.status,'complete');
+  assert.deepEqual(r.injected.owners.map((owner:any)=>[owner.scriptId,owner.parsedHash,owner.intervals,owner.expectedHashMatches]),[[21,samplerHash,[1],true],[22,secondHash,[2],true]]);
+  const saved=safeEvidence(r) as any;assert.equal(saved.injected.status,'complete');assert.equal(saved.injected.expected[0].sourceHash,samplerHash);
+  assert.deepEqual(saved.injected.owners[0].intervals,[1]);assert.doesNotMatch(JSON.stringify(saved),/private-canary|scriptSource/);
+  assert.deepEqual(f.sent,['Network.getResponseBody','Debugger.enable','Debugger.disable']);f.binding.close();
+});
+
+test('missing and conflicting injected owners remain unknown without changing the client verdict',async()=>{
+  const other='1'.repeat(64);
+  for(const owners of [[],[{url:'',hash:samplerHash,scriptId:'21'},{url:'',hash:other,scriptId:'21'}],[{url:'',hash:other,scriptId:'21'},{url:'',hash:samplerHash,scriptId:'21'}]]){
+    const f=fixture([{url,hash,scriptId:'4'},...owners]);f.binding.rememberInjected(1,sampler);f.receive();await f.binding.afterFamily([1]);
+    const r=f.report();assert.equal(r.status,'complete');assert.equal(r.injected.status,'insufficient-evidence');assert.deepEqual(r.injected.unmatchedIntervals,[1]);
+    assert.ok(r.injected.owners.every((owner:any)=>!owner.expectedHashMatches));
+    f.receive();await f.binding.afterFamily([2]);assert.equal((f.files.get('source-family-2')as any).injected.status,'not-requested');
+    assert.deepEqual(f.sent,['Network.getResponseBody','Debugger.enable','Debugger.disable','Network.getResponseBody','Debugger.enable','Debugger.disable']);f.binding.close();
+  }
+});
+
+test('an injected owner beyond the anonymous limit cannot retain a positive match',async()=>{
+  const unrelated=Array.from({length:256},(_,i)=>({url:'',hash:'0'.repeat(64),scriptId:String(i+10)}));
+  const f=fixture([{url,hash,scriptId:'4'},...unrelated,{url:'',hash:samplerHash,scriptId:'300'},{url:'',hash:'1'.repeat(64),scriptId:'300'}]);
+  f.binding.rememberInjected(1,sampler);f.receive();await f.binding.afterFamily([1]);const r=f.report();
+  assert.equal(r.status,'complete');assert.equal(r.injected.status,'insufficient-evidence');assert.equal(r.injected.omittedAnonymous,2);
+  assert.equal(r.injected.owners[0].expectedHashMatches,false);assert.deepEqual(r.injected.unmatchedIntervals,[1]);
+  assert.deepEqual(f.sent,['Network.getResponseBody','Debugger.enable','Debugger.disable']);f.binding.close();
 });
 
 test('matching expected body cannot credit a different parsed hash or URL',async()=>{

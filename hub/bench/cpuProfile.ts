@@ -141,6 +141,7 @@ export async function profilePanning(cdp: Cdp, browser: Browser, evidence?: File
   const measured = {on: cdp.on.bind(cdp), off: cdp.off.bind(cdp), at: cdp.at?.bind(cdp),
     evaluate: async<T>(expression: string, signal?: AbortSignal): Promise<T> => {
       const value = await cdp.evaluate<T>(expression, signal);
+      if (expression.startsWith('(() => {\n        const initiator=') && expression.includes('const probe=window.__quotumPan={') && expression.includes('probe.raf=schedule(tick);')) binding.rememberInjected(interval + 1, expression);
       // The original cleanup follows both periods and all extra family checks.
       if (expression === `document.getElementById('quotum-pan-layout')?.remove()`) {
         await stop();

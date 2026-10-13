@@ -106,6 +106,10 @@ rates 1 and 4 follow on an empty owned tab. The unthrottled controls must distin
 from timer waiting; contradictory or missing calibration cannot pass. This is a
 diagnostic result and cannot satisfy the canonical gate. If both CPU and trace labels
 are present, the existing diagnostic job runs the CPU mode.
+CPU diagnostics also match the exact successfully injected native sampler to anonymous
+parsed script IDs in the same window after the input family. Missing or conflicting
+owners and collection limits remain insufficient evidence. Matching source bytes
+does not establish a callback instance or its execution cost.
 `QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL=1` (the
 `benchmark-history-pool-diagnostics` PR label) keeps the original benchmark phases
 and full traffic matrix. Only its `browser/30d/activity/0ms/0.5/take1` page records
