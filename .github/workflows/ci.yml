@@ -63,6 +63,14 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+        env:
+          QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL: ${{ contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics') && '1' || '' }}
+      - uses: actions/upload-artifact@v7
+        if: ${{ always() && contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics') }}
+        with:
+          name: history-pool-receipt
+          path: /tmp/quotum-bench-history-pool.json
+          if-no-files-found: warn
 
   managed-keys:
     strategy:
