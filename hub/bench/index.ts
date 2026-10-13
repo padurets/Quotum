@@ -28,7 +28,7 @@ import {diagnoseReversal} from './historyTrafficBrowser.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
 import {creditSnapshot} from './credits.js';
-import {IdleCpuDiagnostic,clientIdentity} from './idleCpuDiagnostic.js';
+import {IdleCpuDiagnostic,clientIdentity,idleGeometry,planIdleEdge,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -220,7 +220,15 @@ async function main() {
     await sleep(warm - Date.now());
     if (heard.counts().history) throw new Stop('The stand credited agent work during warmup; its agents must be idle.');
 
-    if(idleCpu)await idleCpu.start();
+    let edgePlan:IdleEdgePlan|undefined,geometryBefore:IdleGeometry|undefined;
+    if(idleCpu){
+      edgePlan=planIdleEdge(Date.now(),seconds,cellOf(86_400_000));
+      saveDiagnostic('idle-cpu-plan',{mode:'diagnostic',kind:'Temporally aligned diagnostic only; no canonical benchmark timing change.',...edgePlan});
+      say(`diagnostic only: waiting until ${new Date(edgePlan.from).toISOString()} to capture the natural ${new Date(edgePlan.boundary).toISOString()} edge`);
+      await sleep(edgePlan.from-Date.now());
+      geometryBefore=await idleGeometry(cdp);
+      await idleCpu.start();
+    }
     const from = Date.now();
     const to = from + seconds * 1000;
     const moving = stillProblems(await overview(), from, to);
@@ -231,7 +239,9 @@ async function main() {
     heard.reset();
     requests.counting = true;
     const before = await metrics(cdp);
+    const counterFrom=idleCpu?Date.now():null;
     await sleep(to - Date.now());
+    const counterTo=idleCpu?Date.now():null;
     const after = await metrics(cdp);
     requests.counting = false;
     const events = heard.counts();
@@ -242,11 +252,13 @@ async function main() {
 
     if(idleCpu){
       const diagnosticProblems=idleProblems(idle);
-      saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:'Original CI idle phase observed; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,reading,problems:diagnosticProblems}});
+      const geometryAfter=await idleGeometry(cdp);
+      saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:'Temporally aligned natural edge using the unchanged120s CI idle protocol; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,reading,problems:diagnosticProblems}});
       await idleCpu.stop({before,after,instrumentMs:reading.instrumentMs,seconds});
       await idleCpu.bindAndClose();
-      say('diagnostic only: original CI idle captured; observer overhead is unqualified');
-      await finish(diagnosticProblems.length?1:0);return;
+      const edge=idleCpu.edgeReceipt(edgePlan!,from,to,counterFrom!,counterTo!,geometryBefore!,geometryAfter,{before,after,instrumentMs:reading.instrumentMs,seconds});
+      say(`diagnostic only: aligned natural edge ${edge.status}; observer overhead is unqualified`);
+      await finish(diagnosticProblems.length||edge.status!=='complete'?1:0);return;
     }
 
     const measured = await measure(stand, cdp);

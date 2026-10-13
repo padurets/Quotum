@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import type {Cdp} from '../cdp.js';
-import {IdleCpuDiagnostic} from '../idleCpuDiagnostic.js';
+import {IdleCpuDiagnostic,idleEdgeProblems,ownedClockFires,planIdleEdge,type IdleGeometry} from '../idleCpuDiagnostic.js';
 import {numericProfile,profileWindow} from '../cpuProfile.js';
 
 type Saved={name:string;value:unknown;large?:boolean};
@@ -134,4 +134,56 @@ test('profile windows reject a missing clock bridge',()=>{assert.equal(profileWi
 test('profile windows reject incompatible clock brackets',()=>{
   const incompatible=[clocks[0],{...clocks[1],before:5000,after:5002}];
   assert.equal(profileWindow(numericProfile(numericBase),incompatible,1000,1004).status,'insufficient-evidence');
+});
+
+const edgePlan=planIdleEdge(500_000,120,300_000);
+const edgeGeometry=(after=false):IdleGeometry=>({now:after?660_000:540_000,selected:false,charts:(['quota','activity','budget','funds'] as const).map(widget=>({widget,count:1,axisEnd:after?600_000:540_000,from:0,to:86_400_000,ready:true,panning:false,visibleFrom:after?60_000:0,visibleTo:after?86_460_000:86_400_000}))});
+const edgeProblems=(before=edgeGeometry(),after=edgeGeometry(true),counterFrom=540_010,counterTo=660_000)=>idleEdgeProblems(edgePlan,540_000,660_000,counterFrom,counterTo,before,after);
+test('aligned idle planning selects a future start and centres the existing120s window',()=>{
+  assert.deepEqual(edgePlan,{boundary:600_000,from:540_000,to:660_000,cellMs:300_000,seconds:120,marginMs:30_000});
+  for(const now of [0,1,239_999,240_000,299_999,500_000,539_999,540_000,599_999]){
+    const plan=planIdleEdge(now,120,300_000);assert.ok(plan.from>now);assert.ok(plan.from-now<=300_000);assert.equal(plan.to-plan.from,120_000);assert.equal(plan.boundary%300_000,0);
+  }
+  assert.throws(()=>planIdleEdge(1,300,300_000));assert.throws(()=>planIdleEdge(1,120,60_000));
+});
+test('natural idle edge needs actual movement with a stable drawing basis',()=>{assert.deepEqual(edgeProblems(),[]);});
+test('a late start or early finish cannot credit the planned edge',()=>{
+  assert.match(edgeProblems(undefined,undefined,570_001)[0],/margins/);
+  assert.match(edgeProblems(undefined,undefined,undefined,629_999)[0],/margins/);
+  assert.match(idleEdgeProblems(edgePlan,620_000,740_000,620_010,740_000,edgeGeometry(),edgeGeometry(true))[0],/margins/);
+});
+test('an absent or duplicate chart cannot credit four-chart movement',()=>{
+  const absent=edgeGeometry(true);absent.charts=absent.charts.filter(chart=>chart.widget!=='funds');assert.ok(edgeProblems(undefined,absent).some(problem=>problem.startsWith('funds')));
+  const duplicate=edgeGeometry(true);duplicate.charts.push({...duplicate.charts[0]});assert.ok(edgeProblems(undefined,duplicate).some(problem=>problem.startsWith('quota')));
+});
+test('wrong chart movement cannot replace the missing expected chart',()=>{
+  const wrong=edgeGeometry(true);wrong.charts[3]={...wrong.charts[3],widget:'budget'};
+  assert.ok(edgeProblems(undefined,wrong).some(problem=>problem.startsWith('funds')));
+});
+test('render counts or shifted axis labels alone cannot prove plotted movement',()=>{
+  const unchanged=edgeGeometry(true);unchanged.charts[1].visibleFrom=0;unchanged.charts[1].visibleTo=86_400_000;
+  assert.ok(edgeProblems(undefined,unchanged).some(problem=>problem.startsWith('activity')));
+});
+test('panning, unready geometry and a non-crossed axis remain insufficient',()=>{
+  for(const patch of [{panning:true},{ready:false},{axisEnd:599_999},{visibleTo:null}]){
+    const after=edgeGeometry(true);Object.assign(after.charts[2],patch);assert.ok(edgeProblems(undefined,after).some(problem=>problem.startsWith('budget')));
+  }
+  const selected=edgeGeometry(true);selected.selected=true;assert.match(edgeProblems(undefined,selected)[0],/natural live/);
+});
+
+const clockSource={sha256:hash,lineNumber:9,columnNumber:250_437};
+const clockBinding={status:'complete',receivedHash:hash,clientHash:hash,debuggerDisabled:true,owners:[{scriptId:11,parsedHash:hash,receivedAssetHashMatches:true}]};
+const clockEvents=[
+  {name:'TimerFire',frame:1,pid:1,tid:2,ts:2_000_000,duration:8000,source:null,timer:{id:10}},
+  {name:'FunctionCall',frame:1,pid:1,tid:2,ts:2_000_001,duration:7000,source:{scriptId:11,lineNumber:9,columnNumber:250_437},timer:null},
+];
+test('own Clock TimerFire joins only an exact received-client callback inside counters',()=>{assert.equal(ownedClockFires(clockEvents,clockBinding,clockSource,1,3).length,1);});
+test('a generic, injected, foreign or asynchronous callback cannot prove a Clock TimerFire',()=>{
+  const call=clockEvents[1];
+  for(const patch of [{frame:2},{pid:2},{tid:3},{ts:2_008_001},{source:{...call.source!,scriptId:3}},{source:{...call.source!,columnNumber:250_438}}])assert.equal(ownedClockFires([clockEvents[0],{...call,...patch}],clockBinding,clockSource,1,3).length,0);
+  assert.equal(ownedClockFires(clockEvents,clockBinding,clockSource,3,4).length,0);
+});
+test('missing or mismatched source binding cannot credit Clock ownership',()=>{
+  assert.equal(ownedClockFires(clockEvents,clockBinding,null,1,3).length,0);
+  for(const patch of [{status:'mismatch'},{receivedHash:'0'.repeat(64)},{debuggerDisabled:false},{owners:[]}])assert.equal(ownedClockFires(clockEvents,{...clockBinding,...patch},clockSource,1,3).length,0);
 });

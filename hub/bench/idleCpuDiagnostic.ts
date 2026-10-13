@@ -11,6 +11,10 @@ type RawEvent={name:string;ph:string;ts?:number;dur?:number;tts?:number;tdur?:nu
 type CounterWindow={before:Record<string,number>;after:Record<string,number>;instrumentMs:number;seconds:number};
 type Save=(name:string,value:unknown,large?:boolean)=>void;
 type Profile=Parameters<typeof numericProfile>[0];
+export type IdleEdgePlan={boundary:number;from:number;to:number;cellMs:number;seconds:number;marginMs:30_000};
+export type IdleChartGeometry={widget:'quota'|'activity'|'budget'|'funds';count:number;axisEnd:number|null;from:number|null;to:number|null;ready:boolean;panning:boolean;visibleFrom:number|null;visibleTo:number|null};
+export type IdleGeometry={now:number;selected:boolean;charts:IdleChartGeometry[]};
+type ClockSource={sha256:string;lineNumber:number;columnNumber:number}|null;
 const MAX_EVENTS=100_000,MAX_BYTES=32*1024*1024;
 const finite=(value:unknown)=>typeof value==='number'&&Number.isFinite(value)&&value>=0;
 const location=(value:any)=>{
@@ -27,6 +31,63 @@ export function clientIdentity(directory=path.join(import.meta.dirname,'../dist/
     const bytes=readFileSync(path.join(directory,names[0]));
     return{status:'available',name:names[0],bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
   }catch{return{status:'unavailable'};}
+}
+
+/** Waiting happens before the profiler and the original counter interval. */
+export function planIdleEdge(now:number,seconds:number,cellMs:number):IdleEdgePlan {
+  if(!Number.isSafeInteger(now)||seconds!==120||cellMs!==300_000)throw Error('Aligned diagnostics require the existing120s/5min idle phase');
+  const half=seconds*500,boundary=(Math.floor((now+half)/cellMs)+1)*cellMs;
+  return{boundary,from:boundary-half,to:boundary+half,cellMs,seconds,marginMs:30_000};
+}
+
+/** Trace callback coordinates are one-based; CPU sample coordinates are separate. */
+export function clockTimerSource(client:Client,directory=path.join(import.meta.dirname,'../dist/client/assets')):ClockSource {
+  if(client.status!=='available')return null;
+  try{
+    const bytes=readFileSync(path.join(directory,client.name));
+    if(bytes.length!==client.bytes||createHash('sha256').update(bytes).digest('hex')!==client.sha256)return null;
+    const text=bytes.toString('utf8'),body='()=>{this.timer=null,this.wakeDue()}',at=text.indexOf(body);
+    if(at<0||text.indexOf(body,at+1)>=0)return null;
+    return{sha256:client.sha256,lineNumber:text.slice(0,at).split('\n').length,columnNumber:at-text.lastIndexOf('\n',at)};
+  }catch{return null;}
+}
+
+/** Two passive snapshots reuse the native panning readout, outside elapsed counters. */
+export function idleGeometry(cdp:Pick<Cdp,'evaluate'>):Promise<IdleGeometry> {
+  return cdp.evaluate(`(() => {
+    const numeric=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
+    return {now:Date.now(),selected:new URLSearchParams(location.search).has('from'),charts:[['quota','.history',40],['activity','.activity',48],['budget','.budget-history',76],['funds','.subscription-funds',76]].map(([widget,selector,left])=>{
+      const all=document.querySelectorAll(selector+' .chart'),chart=all[0],svg=chart?.querySelector(':scope > svg');
+      const empty={widget,count:all.length,axisEnd:numeric(chart?.dataset.axisEnd),from:numeric(svg?.dataset.drawFrom),to:numeric(svg?.dataset.drawTo),ready:svg?.dataset.drawReady==='true',panning:!!svg?.classList.contains('is-panning'),visibleFrom:null,visibleTo:null};
+      const slides=chart?.querySelector(widget==='activity'?'.plot-clip.is-band .plot-move .slides':'.plot-move[data-plot-main] .slides');
+      if(!svg||!slides||empty.from===null||empty.to===null)return empty;
+      const box=svg.viewBox.baseVal.width,r=svg.getBoundingClientRect(),scale=r.width/box,matrix=slides.getScreenCTM(),inner=box-left-12;
+      if(!matrix||!(matrix.a>0)||!(scale>0)||!(inner>0))return empty;
+      const timeAt=x=>empty.from+((x-matrix.e)/matrix.a-left)/inner*Math.max(60000,empty.to-empty.from);
+      return {...empty,visibleFrom:timeAt(r.left+left*scale),visibleTo:timeAt(r.right-12*scale)};
+    })};
+  })()`);
+}
+
+/** Planned wall time alone cannot credit an edge or a different chart. */
+export function idleEdgeProblems(plan:IdleEdgePlan,from:number,to:number,counterFrom:number,counterTo:number,before:IdleGeometry,after:IdleGeometry):string[] {
+  const problems:string[]=[];
+  if(to-from!==plan.seconds*1000||![from,to,counterFrom,counterTo].every(Number.isFinite)||counterFrom<from||counterTo<counterFrom||plan.boundary-counterFrom<plan.marginMs||counterTo-plan.boundary<plan.marginMs)problems.push('actual counter window missed the30s edge margins');
+  if(before.selected||after.selected||before.now>=plan.boundary||after.now<plan.boundary)problems.push('snapshots do not bracket a natural live edge');
+  for(const widget of ['quota','activity','budget','funds'] as const){
+    const previous=before.charts.filter(chart=>chart.widget===widget),next=after.charts.filter(chart=>chart.widget===widget),a=previous[0],b=next[0];
+    if(previous.length!==1||next.length!==1||!a||!b||a.count!==1||b.count!==1||!a.ready||!b.ready||a.panning||b.panning||![a.axisEnd,a.from,a.to,a.visibleFrom,a.visibleTo,b.axisEnd,b.from,b.to,b.visibleFrom,b.visibleTo].every(value=>typeof value==='number'&&Number.isFinite(value))||a.axisEnd!>=plan.boundary||b.axisEnd!<plan.boundary||!(a.to!>a.from!)||!(b.to!>b.from!)||!(b.visibleFrom!>a.visibleFrom!)||!(b.visibleTo!>a.visibleTo!))problems.push(widget+' actual chart geometry did not cross the selected edge');
+  }
+  return problems;
+}
+
+/** A TimerFire owns only its directly nested callback, not later asynchronous work. */
+export function ownedClockFires(events:readonly unknown[],binding:unknown,source:ClockSource,before:number,after:number) {
+  const receipt=binding as {status?:unknown;receivedHash?:unknown;clientHash?:unknown;debuggerDisabled?:unknown;owners?:{scriptId:number;parsedHash:string;receivedAssetHashMatches:boolean}[]}|undefined;
+  if(!source||receipt?.status!=='complete'||receipt.debuggerDisabled!==true||receipt.receivedHash!==source.sha256||receipt.clientHash!==source.sha256||!Array.isArray(receipt.owners))return[];
+  const owners=new Set(receipt.owners.filter(owner=>owner.receivedAssetHashMatches&&owner.parsedHash===source.sha256).map(owner=>owner.scriptId));
+  const rows=events as {name:string;frame:number;pid:number;tid:number;ts:number;duration:number|null;source:{scriptId:number;lineNumber:number;columnNumber:number}|null;timer:{id:number|null}|null}[];
+  return rows.filter(fire=>fire.name==='TimerFire'&&fire.frame===1&&finite(fire.duration)&&fire.ts>=before*1e6&&fire.ts+fire.duration!<=after*1e6&&rows.some(call=>call.name==='FunctionCall'&&call.frame===1&&call.pid===fire.pid&&call.tid===fire.tid&&call.ts>=fire.ts&&finite(call.duration)&&call.ts+call.duration!<=fire.ts+fire.duration!&&call.source&&owners.has(call.source.scriptId)&&call.source.lineNumber===source.lineNumber&&call.source.columnNumber===source.columnNumber)).map(fire=>({timerId:fire.timer?.id??null,ts:fire.ts,duration:fire.duration,pid:fire.pid,tid:fire.tid,source}));
 }
 
 /** One original idle interval, observed only in the benchmark's own synthetic browser. */
@@ -48,6 +109,9 @@ export class IdleCpuDiagnostic {
   private omittedOwners=0;
   private timerFires=0;
   private sourceCallbacks=0;
+  private sourceBinding:unknown;
+  private profileStatus='unavailable';
+  private readonly clockSource:ClockSource;
   private readonly clocks:{stage:string;before:number|null;page:number;after:number|null;valid:boolean}[]=[];
   private readonly collected=(message:{value:RawEvent[]})=>{
     if(!this.active)return;
@@ -78,8 +142,9 @@ export class IdleCpuDiagnostic {
 
   constructor(private readonly cdp:Cdp,private readonly save:Save,client:Client,ownedSynthetic:boolean){
     if(!ownedSynthetic)throw Error('Idle CPU diagnostics require an owned synthetic browser');
-    this.binding=new ScriptBinding(cdp,client,(name,value)=>save('idle-cpu-'+name,value));
-    save('idle-cpu-client',{mode:'diagnostic',client});
+    this.clockSource=clockTimerSource(client);
+    this.binding=new ScriptBinding(cdp,client,(name,value)=>{if(name.startsWith('source-family-'))this.sourceBinding=value;save('idle-cpu-'+name,value);});
+    save('idle-cpu-client',{mode:'diagnostic',client,clockSource:this.clockSource});
   }
 
   private async clock(stage:string){
@@ -120,6 +185,7 @@ export class IdleCpuDiagnostic {
       this.cdp.off('Tracing.dataCollected',this.collected);this.cdp.off('Tracing.tracingComplete',this.completed);
       if(this.profiler)try{await this.cdp.send('Profiler.stop');await this.cdp.send('Profiler.disable');this.profiler=false;}catch{cleanup='incomplete';}
       if(this.tracing)try{await this.cdp.send('Tracing.end');this.tracing=false;}catch{cleanup='incomplete';}
+      this.profileStatus=cleanup==='complete'&&profile?.status==='complete'?'complete':'insufficient-evidence';
       this.save('idle-cpu-profile',{mode:'diagnostic',kind:'Sampled elapsed widths, not thread CPU time; observer overhead unqualified.',
         status:cleanup==='complete'&&profile?.status==='complete'?'complete':'insufficient-evidence',samplingInterval:2000,clocks:this.clocks,cleanup,profile},true);
       this.save('idle-cpu-window',{mode:'diagnostic',kind:'Original elapsed counters and existing probe cost; collection order and budget are unchanged.',...window});
@@ -132,6 +198,14 @@ export class IdleCpuDiagnostic {
   }
 
   async bindAndClose(){try{await this.binding.afterFamily([1]);}finally{this.binding.close();}}
+  edgeReceipt(plan:IdleEdgePlan,from:number,to:number,counterFrom:number,counterTo:number,before:IdleGeometry,after:IdleGeometry,window:CounterWindow){
+    const problems=idleEdgeProblems(plan,from,to,counterFrom,counterTo,before,after);
+    const fires=ownedClockFires(this.events,this.sourceBinding,this.clockSource,window.before.Timestamp,window.after.Timestamp);
+    if(!fires.length)problems.push('no received-source-bound own Clock TimerFire in the original counter interval');
+    if(this.profileStatus!=='complete'||!this.ended||this.omitted||this.invalid)problems.push('CPU or owned-frame trace is incomplete');
+    const receipt={mode:'diagnostic',kind:'Temporally aligned natural edge; required benchmark timing is unchanged. Observer overhead and asynchronous attribution remain unqualified.',status:problems.length?'insufficient-evidence':'complete',plan,actual:{from,to,counterFrom,counterTo,marginBeforeMs:plan.boundary-counterFrom,marginAfterMs:counterTo-plan.boundary},before,after,clockFires:fires,problems};
+    this.save('idle-cpu-edge',receipt);return receipt;
+  }
   async close(){
     this.active=false;this.binding.close();
     this.cdp.off('Tracing.dataCollected',this.collected);this.cdp.off('Tracing.tracingComplete',this.completed);
