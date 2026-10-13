@@ -633,7 +633,7 @@ export const Chart = memo(function Chart({
     addEventListener('scroll', scrolled, {passive: true});
     return () => removeEventListener('scroll', scrolled);
   }, [edgeShown]);
-  const bandWidth = Math.max(1, axis.screenX(Math.min(to, (hover ?? 0) + cellMs)) - axis.screenX(hover ?? 0));
+  const bandWidth = hover === null ? 0 : Math.max(1, axis.screenX(Math.min(to, hover + cellMs)) - axis.screenX(hover));
 
   return (
     <div className="chart" ref={box} {...handlers}>

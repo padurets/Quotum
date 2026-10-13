@@ -135,7 +135,7 @@ test('the actual cursor follows shared Shift state after visibility-only cancell
 test('starting from a settled axis avoids a style flush but samples an interrupted fold', () => {
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
   const start = source.indexOf('  const readPose = ');
-  const body = source.slice(start, source.indexOf('  const geometry = ', start)) + '\nglobalThis.read=visualGeometry;';
+  const body = source.slice(start, source.indexOf('  useLayoutEffect(() => pan.register(', start)) + '\nglobalThis.read=visualGeometry;';
   let reads = 0;
   const layer = {getAnimations: () => {throw new Error('animation lookup must not flush styles');}};
   const animations = {current: new Map()};
@@ -219,7 +219,7 @@ test('the actual drawing commit holds pending geometry and starts its final fold
 
 test('sampling and freezing an owned fold keeps its matrix after cancelling the animation', () => {
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('  const readPose = '), body = source.slice(start, source.indexOf('  const geometry = ', start));
+  const start = source.indexOf('  const readPose = '), body = source.slice(start, source.indexOf('  useLayoutEffect(() => pan.register(', start));
   const layer = {style: {transform: ''}}, other = {style: {transform: ''}}, animations = {current: new Map([[layer, {}]])};
   const pose = {current: {a: 1, b: 0, offset: 17}};
   const context = {box: {current: {querySelector: () => layer, querySelectorAll: () => [layer, other]}}, animations, pose, animationPoses: {current: new WeakMap()},
@@ -233,7 +233,7 @@ test('sampling and freezing an owned fold keeps its matrix after cancelling the 
 
 test('an interrupted HTML fold composes its CSS matrix with the final SVG pose before restoring strokes', () => {
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
-  const body = source.slice(source.indexOf('  const readPose = '), source.indexOf('  const geometry = '));
+  const body = source.slice(source.indexOf('  const readPose = '), source.indexOf('  useLayoutEffect(() => pan.register('));
   for (const scale of [.5, .731, 1]) {
     const owner = {}, layer = {style: {transform: ''}}, other = {style: {transform: ''}};
     const pose = {current: {a: 1.25, b: -31, offset: 0}}, base = {from: 0, to: 3_600_000, end: 3_000_000};
@@ -315,7 +315,7 @@ test('the actual last-input RAF uses the gesture CSS scale rather than the mount
 for (const mode of ['idle', 'cancel', 'shift']) test(`all four axes retain accepted input on ${mode} before the final RAF`, () => {
   const source = readFileSync(new URL('../components/timeAxis.ts', import.meta.url), 'utf8');
   const region = (start: string, end: string) => {const i = source.indexOf(start), j = source.indexOf(end, i); assert.ok(i >= 0 && j > i); return source.slice(i, j);};
-  const actual = [region('  const startPan = ', '  const wheelPan = '), region('  const readPose = ', '  const geometry = '), region('  const paint = () => {', '\n  useLayoutEffect(() => {\n    const unsubscribe'), region('  useLayoutEffect(() => pan.onStop(stop => {', '  useEffect(() => () => {\n    foldTicket.current++')].join('\n');
+  const actual = [region('  const startPan = ', '  const wheelPan = '), region('  const readPose = ', '  useLayoutEffect(() => pan.register('), region('  const paint = () => {', '\n  useLayoutEffect(() => {\n    const unsubscribe'), region('  useLayoutEffect(() => pan.onStop(stop => {', '  useEffect(() => () => {\n    foldTicket.current++')].join('\n');
   const H = 3_600_000, now = 100 * H;
   const frames = new Map<number, () => void>(), timers = new Map<number, () => void>();
   const commits: ({from: number; to: number} | null)[] = [];
