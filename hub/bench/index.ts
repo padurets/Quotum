@@ -2,7 +2,7 @@ import {accountingPath,accountingTotal} from './accountingTraffic';
 import {cellOf, cellStart} from '../server/domain/history.js';
 import {createServer} from 'node:net';
 import {DatabaseSync} from 'node:sqlite';
-import {realpathSync,writeFileSync} from 'node:fs';
+import {mkdirSync,realpathSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {MONEY_KEY} from '../demo/money.js';
 import type {Credential} from '../server/store/credentials.js';
@@ -28,6 +28,7 @@ import {diagnoseReversal} from './historyTrafficBrowser.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
 import {creditSnapshot} from './credits.js';
+import {IdleCpuDiagnostic,clientIdentity} from './idleCpuDiagnostic.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -127,6 +128,16 @@ async function metrics(cdp: Cdp): Promise<Metrics> {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  const idleCpuMode=process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_CPU;
+  if(idleCpuMode&&(idleCpuMode!=='1'||!options.ci||options.cdp||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1'))throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
+  let idleCpu:IdleCpuDiagnostic|undefined;
+  const diagnosticDirectory=path.join('/tmp/quotum-idle-cpu-diagnostic',`${process.env.GITHUB_RUN_ID??'local'}-${process.env.GITHUB_RUN_ATTEMPT??'1'}-${process.pid}`);
+  const saveDiagnostic=(name:string,value:unknown,large=false)=>{
+    if(!/^idle-cpu-[a-z0-9-]+$/.test(name))throw Error('Invalid diagnostic artifact name');
+    const data=JSON.stringify(value),limit=large?32*1024*1024:1024*1024;
+    mkdirSync(diagnosticDirectory,{recursive:true});
+    writeFileSync(path.join(diagnosticDirectory,name+'.json'),Buffer.byteLength(data)<=limit?data:JSON.stringify({mode:'diagnostic',status:'insufficient-evidence',reason:'artifact size',bytes:Buffer.byteLength(data),limit}));
+  };
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
   const address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
   await prepare(address);
@@ -142,6 +153,7 @@ async function main() {
     if (finished) return;
     finished = true;
     heard?.close();
+    try{await idleCpu?.close();}catch{saveDiagnostic('idle-cpu-cleanup',{mode:'diagnostic',status:'insufficient-evidence'});code=1;}
     await tab?.close().catch(() => undefined);
     await browser?.close().catch(() => undefined);
     await demo.stop();
@@ -173,15 +185,21 @@ async function main() {
     await cdp.send('Page.enable');
     await cdp.send('Network.enable');
     await cdp.send('Performance.enable');
+    if(idleCpuMode){
+      idleCpu=new IdleCpuDiagnostic(cdp,saveDiagnostic,clientIdentity(),!options.cdp);
+      saveDiagnostic('idle-cpu-source',{mode:'diagnostic',sourceHead:process.env.QUOTUM_BENCH_SOURCE_SHA??null,checkoutSha:process.env.GITHUB_SHA??null,run:process.env.GITHUB_RUN_ID??null,attempt:process.env.GITHUB_RUN_ATTEMPT??null});
+    }
     await cdp.send('Emulation.setFocusEmulationEnabled', {enabled: true});
     const split = ana.cookie.indexOf('=');
     await cdp.send('Network.setCookie', {name: ana.cookie.slice(0, split), value: ana.cookie.slice(split + 1), url: address.base, httpOnly: true, sameSite: 'Lax'});
     // Historical work leaves the rolling window even with every agent idle.
     // Name order keeps this phase still; clock-driven numeric crossings have
     // their own subscribed-selector tests, including equal displayed labels.
-    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: `localStorage.setItem('quotum.locale','en');
+    const bootstrapSource=`localStorage.setItem('quotum.locale','en');
       localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),agentsSort:{column:'project',descending:false}}));
-      ${probeScript()}`});
+      ${probeScript()}`;
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source:bootstrapSource});
+    idleCpu?.binding.rememberInjected(1,bootstrapSource);
     await cdp.send('Page.navigate', {url: `${address.base}/`});
 
     const shownBy = Date.now() + SHOWN_MS;
@@ -202,6 +220,7 @@ async function main() {
     await sleep(warm - Date.now());
     if (heard.counts().history) throw new Stop('The stand credited agent work during warmup; its agents must be idle.');
 
+    if(idleCpu)await idleCpu.start();
     const from = Date.now();
     const to = from + seconds * 1000;
     const moving = stillProblems(await overview(), from, to);
@@ -220,6 +239,15 @@ async function main() {
     const cellMs = cellOf(86_400_000);
     const scriptMsPerSecond = round(scriptPerSecond(before, after, reading.instrumentMs, seconds));
     const idle = {from, to, cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
+
+    if(idleCpu){
+      const diagnosticProblems=idleProblems(idle);
+      saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:'Original CI idle phase observed; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,reading,problems:diagnosticProblems}});
+      await idleCpu.stop({before,after,instrumentMs:reading.instrumentMs,seconds});
+      await idleCpu.bindAndClose();
+      say('diagnostic only: original CI idle captured; observer overhead is unqualified');
+      await finish(diagnosticProblems.length?1:0);return;
+    }
 
     const measured = await measure(stand, cdp);
     const worked = await work(demo, stand, cdp);

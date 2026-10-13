@@ -1,0 +1,137 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import type {Cdp} from '../cdp.js';
+import {IdleCpuDiagnostic} from '../idleCpuDiagnostic.js';
+import {numericProfile,profileWindow} from '../cpuProfile.js';
+
+type Saved={name:string;value:unknown;large?:boolean};
+type Options={wrongHash?:boolean;missingClockSource?:boolean;failStop?:boolean};
+type RawProfile=Parameters<typeof numericProfile>[0];
+type Clock=Parameters<typeof profileWindow>[1][number];
+const body='console.log(1);',hash=createHash('sha256').update(body).digest('hex');
+const client={status:'available' as const,name:'index-test.js',bytes:Buffer.byteLength(body),sha256:hash};
+const asset='https://example.test/assets/index-test.js';
+const profile:RawProfile={startTime:1_000_000,endTime:121_010_000,nodes:[
+  {id:1,children:[2],callFrame:{functionName:'(root)',scriptId:'11',url:asset,lineNumber:0,columnNumber:0}},
+  {id:2,children:[],callFrame:{functionName:'project',scriptId:'11',url:asset,lineNumber:0,columnNumber:1}},
+],samples:[2,2,2],timeDeltas:[2000,-50,2050]};
+
+/** The current transport surface; no browser, accounts, network or replacement helper. */
+class CurrentCdpFake {
+  readonly commands:string[]=[];
+  readonly listeners=new Map<string,((value:unknown)=>void)[]>();
+  timestamp=1;
+  stopCalls=0;
+  constructor(readonly options:Options={}){}
+  on<T>(name:string,listener:(value:T)=>void){const rows=this.listeners.get(name)??[];rows.push(listener as (value:unknown)=>void);this.listeners.set(name,rows);}
+  off<T>(name:string,listener:(value:T)=>void){this.listeners.set(name,(this.listeners.get(name)??[]).filter(value=>value!==listener));}
+  emit(name:string,value:unknown){for(const listener of this.listeners.get(name)??[])listener(value);}
+  async evaluate<T>(expression:string):Promise<T>{assert.equal(arguments.length,1);this.commands.push('evaluate');assert.equal(expression,'performance.now()');return this.timestamp*1000 as T;}
+  async send<T=unknown>(method:string,params:object={}):Promise<T>{
+    assert.ok(arguments.length<=2,'the current transport has no signal third argument');this.commands.push(method);
+    let value:unknown={};
+    if(method==='Performance.getMetrics')value={metrics:[{name:'Timestamp',value:this.timestamp},{name:'ScriptDuration',value:.08}]};
+    if(method==='Page.getFrameTree')value={frameTree:{frame:{id:'own-frame'}}};
+    if(method==='Profiler.setSamplingInterval')assert.equal((params as {interval:number}).interval,2000);
+    if(method==='Profiler.stop'){
+      if(this.options.failStop&&this.stopCalls++===0)throw Error('synthetic stop failure');
+      value={profile};
+    }
+    if(method==='Tracing.end')this.emit('Tracing.tracingComplete',{});
+    if(method==='Network.getResponseBody')value={body,base64Encoded:false};
+    if(method==='Debugger.enable')this.emit('Debugger.scriptParsed',{url:asset,scriptId:'11',hash:this.options.wrongHash?'0'.repeat(64):hash});
+    return value as T;
+  }
+}
+
+const ownEvents=[
+  {name:'TimerFire',ph:'X',ts:2_000_000,dur:8000,pid:1,tid:2,args:{data:{frame:'own-frame',timerId:10}}},
+  {name:'FunctionCall',ph:'X',ts:2_000_001,dur:7000,pid:1,tid:2,args:{data:{frame:'own-frame',scriptId:'11',lineNumber:1,columnNumber:2}}},
+  {name:'TimerFire',ph:'X',ts:2_000_000,dur:999999,pid:3,tid:4,args:{data:{frame:'foreign-frame',timerId:99}}},
+  {name:'FunctionCall',ph:'X',ts:2_000_002,dur:7000,pid:1,tid:2,args:{data:{scriptId:'11',lineNumber:1,columnNumber:2}}},
+];
+const record=(value:unknown):Record<string,unknown>=>{assert.ok(value&&typeof value==='object');return value as Record<string,unknown>;};
+const result=(saved:Saved[],name:string)=>{const found=saved.find(row=>row.name===name);assert.ok(found);return record(found.value);};
+
+async function capture(options:Options={}){
+  const cdp=new CurrentCdpFake(options),saved:Saved[]=[];
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value,large)=>saved.push({name,value,large}),client,true);
+  cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
+  await diagnostic.start();
+  assert.ok(!cdp.commands.includes('Debugger.enable'),'source binding does not activate the debugger during measurement');
+  cdp.commands.push('ORIGINAL.before-metrics');cdp.timestamp=121;cdp.commands.push('ORIGINAL.after-metrics','ORIGINAL.readout');
+  cdp.emit('Tracing.dataCollected',{value:options.missingClockSource?ownEvents.filter(event=>event.name!=='FunctionCall'):ownEvents});
+  let failure:unknown;
+  try{await diagnostic.stop({before:{Timestamp:1,ScriptDuration:0},after:{Timestamp:121,ScriptDuration:.08},instrumentMs:1,seconds:120});}catch(error){failure=error;}
+  await diagnostic.bindAndClose();await diagnostic.close();
+  return{cdp,saved,failure};
+}
+
+test('idle CPU diagnostics refuse an attached target',()=>{
+  assert.throws(()=>new IdleCpuDiagnostic(new CurrentCdpFake() as unknown as Cdp,()=>{},client,false),/owned synthetic/);
+});
+test('idle CPU diagnostics preserve signed samples and original120s counters',async()=>{
+  const {saved}=await capture(),numeric=record(result(saved,'idle-cpu-profile').profile);
+  assert.equal(numeric.reversedDeltas,1);assert.deepEqual(numeric.timeDeltas,[2000,-50,2050]);
+  assert.equal(result(saved,'idle-cpu-window').seconds,120);
+});
+test('idle CPU diagnostics serialize after original counters and readout',async()=>{
+  const {cdp}=await capture();
+  assert.ok(cdp.commands.indexOf('Profiler.stop')>cdp.commands.indexOf('ORIGINAL.readout'));
+  assert.ok(cdp.commands.indexOf('Debugger.enable')>cdp.commands.indexOf('Profiler.stop'));
+  assert.ok(!cdp.commands.includes('Performance.enable'),'the original metric domain stays unchanged');
+});
+test('idle CPU diagnostics exclude foreign and unscoped callbacks',async()=>{
+  const {saved}=await capture(),timers=result(saved,'idle-cpu-timers');
+  assert.equal(timers.status,'complete');assert.equal((timers.events as unknown[]).length,2);
+  assert.equal(timers.rejectedForeign,1);assert.equal(timers.unscoped,1);
+});
+test('idle CPU diagnostics bind received bytes to parsed script IDs',async()=>{
+  const {saved}=await capture(),binding=result(saved,'idle-cpu-source-family-1');
+  assert.equal(binding.status,'complete');assert.equal(record((binding.owners as unknown[])[0]).scriptId,11);
+});
+test('idle CPU diagnostics preserve mismatched source hashes',async()=>{
+  const {saved}=await capture({wrongHash:true});assert.equal(result(saved,'idle-cpu-source-family-1').status,'mismatch');
+});
+test('idle timer evidence needs an owned source callback',async()=>{
+  const {saved}=await capture({missingClockSource:true});assert.equal(result(saved,'idle-cpu-timers').status,'insufficient-evidence');
+});
+test('idle CPU stop failure keeps the original window and incomplete result',async()=>{
+  const {saved,failure}=await capture({failStop:true});assert.ok(failure);
+  assert.equal(result(saved,'idle-cpu-profile').status,'insufficient-evidence');assert.equal(result(saved,'idle-cpu-window').seconds,120);
+});
+test('idle CPU cleanup unsubscribes the current transport',async()=>{
+  const {cdp}=await capture();for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
+});
+
+const numericBase:RawProfile={...profile,startTime:2_000_000,endTime:2_006_000};
+const clocks:Clock[]=[{stage:'start',before:2000,page:1000,after:2002,valid:true},{stage:'end',before:3000,page:2000,after:3002,valid:true}];
+test('numeric profiles retain signed sample positions',()=>{
+  const value=numericProfile(numericBase);assert.equal(value.status,'complete');assert.ok('timeDeltas'in value);
+  assert.equal(value.reversedDeltas,1);assert.deepEqual(value.timeDeltas,[2000,-50,2050]);
+});
+test('whole120s at2ms stays within the original sample bound',()=>{
+  const value=numericProfile({...numericBase,startTime:0,endTime:120_000_000,samples:Array(60_000).fill(2),timeDeltas:Array(60_000).fill(2000)});
+  assert.equal(value.status,'complete');assert.ok('samples'in value);assert.equal(value.samples.length,60_000);
+});
+test('whole120s at1ms cannot silently truncate',()=>{
+  const value=numericProfile({...numericBase,startTime:0,endTime:120_000_000,samples:Array(120_000).fill(2),timeDeltas:Array(120_000).fill(1000)});
+  assert.equal(value.status,'insufficient-evidence');assert.ok('omittedSamples'in value);assert.equal(value.omittedSamples,20_000);
+});
+test('numeric profiles reject unknown sampled nodes',()=>{assert.equal(numericProfile({...numericBase,samples:[999,2,2]}).status,'insufficient-evidence');});
+test('numeric profiles reject invalid time bounds',()=>{assert.equal(numericProfile({...numericBase,endTime:1}).status,'insufficient-evidence');});
+test('numeric profiles reject omitted child locations',()=>{
+  const nodes=numericBase.nodes.map(node=>node.id===1?{...node,children:[999]}:node);
+  assert.equal(numericProfile({...numericBase,nodes}).status,'insufficient-evidence');
+});
+test('profile clock brackets keep certain and possible samples separate',()=>{
+  const value=profileWindow(numericProfile(numericBase),clocks,1000,1004);
+  assert.equal(value.status,'observed');assert.ok('certainFunctionSamples'in value);
+  assert.equal(value.certainFunctionSamples,2);assert.equal(value.possibleFunctionSamples,3);
+});
+test('profile windows reject a missing clock bridge',()=>{assert.equal(profileWindow(numericProfile(numericBase),clocks.slice(0,1),1000,1004).status,'insufficient-evidence');});
+test('profile windows reject incompatible clock brackets',()=>{
+  const incompatible=[clocks[0],{...clocks[1],before:5000,after:5002}];
+  assert.equal(profileWindow(numericProfile(numericBase),incompatible,1000,1004).status,'insufficient-evidence');
+});

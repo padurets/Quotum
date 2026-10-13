@@ -70,6 +70,12 @@ export class Cdp {
     this.listeners.set(method, [...(this.listeners.get(method) ?? []), listener as (params: never) => void]);
   }
 
+  off<T>(method: string, listener: (params: T) => void) {
+    const remaining = (this.listeners.get(method) ?? []).filter(value => value !== listener as (params: never) => void);
+    if (remaining.length) this.listeners.set(method, remaining);
+    else this.listeners.delete(method);
+  }
+
   /** The value of an expression in the page, awaited when it is a promise. */
   async evaluate<T>(expression: string): Promise<T> {
     const answer = await this.send<{result: {value: T}; exceptionDetails?: {text: string; exception?: {description?: string}}}>('Runtime.evaluate', {

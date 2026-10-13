@@ -72,6 +72,35 @@ jobs:
           path: /tmp/quotum-bench-history-pool.json
           if-no-files-found: warn
 
+  idle-cpu-diagnostic:
+    if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark-cpu-diagnostics') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+        env:
+          QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: '1'
+          QUOTUM_BENCH_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: idle-cpu-diagnostic
+          path: |
+            /tmp/quotum-idle-cpu-diagnostic/
+            hub/dist/client/assets/index-*.js
+          if-no-files-found: warn
+
   managed-keys:
     strategy:
       fail-fast: false
