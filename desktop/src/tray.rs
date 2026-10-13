@@ -94,6 +94,7 @@ struct Context {
     status: RefCell<Status>,
     restart: u32,
     loading: crate::windows_loading::Panel,
+    probe: std::rc::Rc<crate::windows_loading::RequestOwner>,
 }
 
 pub fn create(_: &tauri::AppHandle, shell: &Arc<Shell>) {
@@ -102,6 +103,7 @@ pub fn create(_: &tauri::AppHandle, shell: &Arc<Shell>) {
     let hwnd = Arc::new(AtomicIsize::new(0));
     let control = hwnd.clone();
     let weak = Arc::downgrade(shell);
+    let probe_records = shell.host.window_probe.clone();
     let worker = std::thread::spawn(move || unsafe {
         let name = wide("QuotumTray");
         let instance = GetModuleHandleW(std::ptr::null());
@@ -132,9 +134,11 @@ pub fn create(_: &tauri::AppHandle, shell: &Arc<Shell>) {
             }
             return;
         }
+        let probe = std::rc::Rc::new(crate::windows_loading::RequestOwner::new(control, probe_records));
         let status = weak.upgrade().map(|s| s.attention.status()).unwrap_or_default();
         let context = Box::new(Context {
-            loading: crate::windows_loading::Panel::new(weak.clone()),
+            loading: crate::windows_loading::Panel::new(weak.clone(), probe.clone()),
+            probe: probe.clone(),
             shell: weak,
             queue: receive,
             icon: Cell::new(std::ptr::null_mut()),
@@ -144,6 +148,7 @@ pub fn create(_: &tauri::AppHandle, shell: &Arc<Shell>) {
         SetWindowLongPtrW(control, GWLP_USERDATA, (&*context as *const Context) as isize);
         hwnd.store(control as isize, Ordering::SeqCst);
         if context.shell.upgrade().is_none_or(|s| s.exiting()) {
+            probe.close();
             DestroyWindow(control);
             hwnd.store(0, Ordering::SeqCst);
             return;
@@ -155,6 +160,7 @@ pub fn create(_: &tauri::AppHandle, shell: &Arc<Shell>) {
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
+        probe.close();
         hwnd.store(0, Ordering::SeqCst);
         let data = identity(control);
         Shell_NotifyIconW(NIM_DELETE, &data);
@@ -228,6 +234,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
     }
     match message {
         COMMAND => {
+            context.probe.publish(hwnd, 6);
             loop {
                 let command = context.queue.lock().unwrap_or_else(|e| e.into_inner()).pop();
                 let Some(command) = command else { break };
@@ -284,8 +291,24 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, w: WPARAM, l: LPAR
             if let Some(shell) = context.shell.upgrade() {
                 match (l as u32) & 0xffff {
                     NIN_BALLOONUSERCLICK => window::open(&shell, "a notification"),
-                    NIN_SELECT => crate::host::toggle_panel(&shell, cursor_position()),
-                    NIN_KEYSELECT => crate::host::toggle_panel(&shell, None),
+                    NIN_SELECT => {
+                        let _callback = shell
+                            .host
+                            .window_probe
+                            .callback(crate::windows_loading::request_thread(&shell.host.window_probe));
+                        context.probe.publish(hwnd, 1);
+                        crate::host::toggle_panel(&shell, cursor_position());
+                        context.probe.publish(hwnd, 2);
+                    }
+                    NIN_KEYSELECT => {
+                        let _callback = shell
+                            .host
+                            .window_probe
+                            .callback(crate::windows_loading::request_thread(&shell.host.window_probe));
+                        context.probe.publish(hwnd, 1);
+                        crate::host::toggle_panel(&shell, None);
+                        context.probe.publish(hwnd, 2);
+                    }
                     WM_CONTEXTMENU => unsafe {
                         let menu = CreatePopupMenu();
                         AppendMenuW(

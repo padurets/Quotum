@@ -51,6 +51,8 @@ function Save-Manifest {
 Save-Manifest
 $timelineClock=[Diagnostics.Stopwatch]::StartNew()
 $timeline=New-Object 'System.Collections.Generic.List[object]'
+$requestSnapshots=0
+$requestStages=@('panel-visibility-deadline','panel-visible','main-accepted-paused','main-handoff-loader','main-handoff-unresponsive-before-resume','main-handoff-before-resume','paused-ui-loader','paused-ui-unresponsive-before-resume','ui-before-resume','failed')
 $waitObservers=New-Object 'System.Collections.Generic.List[object]'
 function Prepare-WaitObserver {
   if(-not $Diagnostics){return $null}
@@ -67,12 +69,18 @@ function Save-Stage([string]$Stage,[IntPtr]$Window=[IntPtr]::Zero,[Nullable[bool
     $panelReading=[QuotumWindowProbe]::LastPanelDispatch
     $panelDispatch=if($panelReading){[ordered]@{Window=$panelReading.Window;Process=$panelReading.Process;Thread=$panelReading.Thread;Owned=$panelReading.Owned;Posted=$panelReading.Posted;ForegroundWindow=$panelReading.ForegroundWindow;ForegroundProcess=$panelReading.ForegroundProcess;ForegroundThread=$panelReading.ForegroundThread;FromUtcTicks=$panelReading.FromUtcTicks;ToUtcTicks=$panelReading.ToUtcTicks}}else{$null}
     $entry=[ordered]@{stage=$Stage;ms=$timelineClock.Elapsed.TotalMilliseconds;utcTicks=[DateTime]::UtcNow.Ticks;dispatch=$dispatch;panelDispatch=$panelDispatch;unresponsive=[QuotumWindowProbe]::LastUnresponsive}
+    if($Diagnostics -and ($requestStages -contains $Stage)){
+      if($requestSnapshots -lt 32){
+        $script:requestSnapshots++
+        $entry.requestEvidence=if($process){[QuotumWindowProbe]::Requests($process.Id,$true)}else{$null}
+      }else{$entry.requestEvidence=@{status='unavailable-truncated';scope='last-natural-owner-snapshot';originalPostedInputAccepted=$false;freshWorkerAtFailedDeadline=$false}}
+    }
     if($null -ne $Resumed){$entry.resumed=$Resumed}
     if($process){$entry.window=[QuotumWindowProbe]::Snapshot($Window,$process.Id)}
     $timeline.Add($entry)
     if($Diagnostics){
       New-Item -ItemType Directory -Force $Diagnostics | Out-Null
-      [IO.File]::WriteAllText((Join-Path $Diagnostics 'timeline.json.tmp'),(ConvertTo-Json -InputObject $timeline.ToArray() -Depth 6))
+      [IO.File]::WriteAllText((Join-Path $Diagnostics 'timeline.json.tmp'),(ConvertTo-Json -InputObject $timeline.ToArray() -Depth 10))
       Move-Item -LiteralPath (Join-Path $Diagnostics 'timeline.json.tmp') -Destination (Join-Path $Diagnostics 'timeline.json') -Force
     }
   } catch {Write-Warning 'Native stage evidence unavailable'}
@@ -206,9 +214,10 @@ function Test-MainPanelHandoff([IntPtr]$Main) {
       do {$loader=[QuotumWindowProbe]::Loading($process.Id);if($loader -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 10}while((Get-Date) -lt $deadline)
       Save-Stage 'main-handoff-loader' $loader
       if($loader -eq [IntPtr]::Zero){throw 'Main handoff: loader missing within 3s'}
-      if(-not [QuotumWindowProbe]::Responsive($loader,$process.Id)){throw 'Main handoff: loader unresponsive'}
+      if(-not [QuotumWindowProbe]::Responsive($loader,$process.Id)){Save-Stage 'main-handoff-unresponsive-before-resume';throw 'Main handoff: loader unresponsive'}
     } finally {
       $resumeFrom=[DateTime]::UtcNow.Ticks
+      if($Diagnostics){Save-Stage 'main-handoff-before-resume'}
       try {if($paused){$paused.Dispose()}} finally {
         Save-Stage 'main-handoff-resume' $Main $(if($paused){$paused.Resumed}else{$null})
         $kind=if($Main -eq [IntPtr]::Zero){'only-panel'}else{'with-main'}
@@ -272,6 +281,7 @@ try {
   $clock = [Diagnostics.Stopwatch]::StartNew()
   $process = Start-Process -FilePath $appPath -PassThru
   $null = $process.Handle
+  if($Diagnostics){[QuotumWindowProbe]::ObserveRequests($process)}
   $since = $process.StartTime
   $window = Wait-Window
   $result.firstWindowMs = $clock.ElapsedMilliseconds
@@ -407,7 +417,7 @@ try {
       do {$loader=[QuotumWindowProbe]::Loading($process.Id);if($loader -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 10}while($loadingClock.ElapsedMilliseconds -lt 3000)
       Save-Stage 'paused-ui-loader' $loader
       if($loader -eq [IntPtr]::Zero){throw 'Paused UI: loader missing within 3s'}
-      if(-not [QuotumWindowProbe]::Responsive($loader,$process.Id)){throw 'Paused UI: loader unresponsive'}
+      if(-not [QuotumWindowProbe]::Responsive($loader,$process.Id)){Save-Stage 'paused-ui-unresponsive-before-resume';throw 'Paused UI: loader unresponsive'}
       if(-not [QuotumWindowProbe]::Rounded($loader)){throw 'Native loader has square corners'}
       $result.loadingMs=$loadingClock.ElapsedMilliseconds
       if($cancel){
@@ -419,6 +429,7 @@ try {
     } finally {
       $resumed=$false
       $resumeFrom=[DateTime]::UtcNow.Ticks
+      if($Diagnostics){Save-Stage 'ui-before-resume'}
       try {if($paused){[QuotumWindowProbe]::ResumeUi($paused);$resumed=$true}} finally {
         Save-Stage 'ui-resume' $window $resumed
         $kind=if($cancel){'cancel-loading'}else{'ready-loading'}
@@ -549,6 +560,15 @@ try {
       $safe=[ordered]@{passed=$result.passed;firstWindowMs=$result.firstWindowMs;windows=$result.windows;cycles=$result.cycles;panels=$result.panels;errorCount=$result.errors.Count;failed=$failed;leftovers=$result.leftovers}
       [IO.File]::WriteAllText((Join-Path $Diagnostics 'report.json'), (ConvertTo-Json -InputObject $safe -Depth 6))
       Copy-Item -LiteralPath "$work/processes.json" -Destination $Diagnostics -ErrorAction SilentlyContinue
+      $manifest.requestProbeScope='last-natural-owner-snapshot'
+      $manifest.requestProbeOriginalPostedInputAccepted=$false
+      $manifest.requestProbeFreshWorkerAtFailedDeadline=$false
+      $manifest.requestProbeSources=@()
+      $sourceRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+      foreach($relative in @('desktop/src/main.rs','desktop/src/host/tauri.rs','desktop/src/host/tauri_window.rs','desktop/src/host/windows_loading.rs','desktop/src/host/windows_request.rs','desktop/src/tray.rs','desktop/smoke/window-probe.cs','desktop/smoke/windows-ui.ps1')){
+        $sourcePath=Join-Path $sourceRoot $relative
+        if(Test-Path -LiteralPath $sourcePath){$item=Get-Item -LiteralPath $sourcePath;$manifest.requestProbeSources+=@{path=$relative;bytes=$item.Length;sha256=(Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash}}
+      }
       $manifest.status=if($result.passed){'passed'}else{'failed'}
       $manifest.files=@(Get-ChildItem -LiteralPath $Diagnostics -Filter '*.json' | Where-Object {$_.Name -ne 'manifest.json'} | ForEach-Object {
         [ordered]@{name=$_.Name;bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}

@@ -18,6 +18,7 @@ use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_autostart::ManagerExt;
 pub struct Host {
     pub app: AppHandle,
+    pub window_probe: Arc<crate::windows_request::Records>,
     pub tray: Mutex<Option<crate::tray::Handle>>,
     pub panel_height: Mutex<f64>,
     pub panel_ready: AtomicU64,
@@ -97,6 +98,9 @@ pub fn run(args: Args) {
                 lock,
                 Host {
                     app: handle.clone(),
+                    window_probe: Arc::new(crate::windows_request::Records::new(
+                        usize::BITS == 64 && std::env::var("QUOTUM_WINDOW_PROBE").ok().as_deref() == Some("1"),
+                    )),
                     tray: Mutex::default(),
                     panel_height: Mutex::new(180.0),
                     panel_ready: AtomicU64::new(0),

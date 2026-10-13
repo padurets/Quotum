@@ -25,6 +25,7 @@ pub fn open(shell: &Arc<Shell>, from: &'static str) {
         toggle.close();
         toggle.revision()
     };
+    observe_accepted(shell, request, false);
     crate::tray::loading(shell, false);
     close_unwanted_panel(shell);
     open_role(shell, from, Role::Main, request);
@@ -36,6 +37,7 @@ pub fn open_panel(shell: &Arc<Shell>) {
         shell.host.panel_ready.store(0, Ordering::SeqCst);
         toggle.revision()
     };
+    observe_accepted(shell, request, true);
     crate::tray::loading(shell, true);
     open_role(shell, "the tray", Role::Compact, request);
 }
@@ -48,6 +50,7 @@ pub fn toggle_panel(shell: &Arc<Shell>, point: Option<(i32, i32)>) {
         }
         (show, toggle.revision())
     };
+    observe_accepted(shell, request, show);
     if show {
         crate::tray::loading(shell, true);
         open_role(shell, "the tray", Role::Compact, request);
@@ -135,10 +138,13 @@ fn reveal_panel(shell: &Arc<Shell>, window: &tauri::WebviewWindow, gate: &Arc<Pa
             }
             // Tauri owns this HWND and its visibility state. Showing it from the
             // tray thread races focus messages with WebView2 destruction.
+            observe_request(&showing, 5, paint.request, 1, handle, 1, 0);
             if let Err(error) = ready.show() {
+                observe_request(&showing, 5, paint.request, 3, handle, 1, 0);
                 showing.hub_log.line(&format!("app: the panel could not be shown: {error}"));
                 return;
             }
+            observe_request(&showing, 5, paint.request, 2, handle, 1, 0);
             // Showing can dispatch native messages before it returns. A new tray
             // request can retire this presentation even while its HWND is visible.
             if paint.cancelled.load(Ordering::SeqCst)
@@ -147,7 +153,9 @@ fn reveal_panel(shell: &Arc<Shell>, window: &tauri::WebviewWindow, gate: &Arc<Pa
             {
                 return;
             }
+            observe_request(&showing, 5, paint.request, 4, handle, 1, 0);
             let _ = ready.set_focus();
+            observe_request(&showing, 5, paint.request, 5, handle, 1, 0);
             crate::tray::present_panel(&showing, handle);
         });
     }
@@ -181,11 +189,22 @@ fn ms(start: Instant) -> u128 {
 fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role, request: u64) {
     let label = role.label();
     let start = Instant::now();
+    observe_request(shell, 1, request, 1, 0, usize::from(role == Role::Compact), 0);
     if shell.exiting() {
         return;
     }
     shell.hub_log.line(&format!("app: {from} asks for the window"));
+    shell.host.window_probe.waiting(
+        request,
+        crate::windows_loading::request_thread(&shell.host.window_probe),
+        role == Role::Compact,
+    );
     let _creating = shell.window_lock.lock().unwrap_or_else(|e| e.into_inner());
+    let _probe_lock = shell.host.window_probe.acquired(
+        request,
+        crate::windows_loading::request_thread(&shell.host.window_probe),
+        role == Role::Compact,
+    );
     if !foreground_requested(shell, role, request) {
         return;
     }
@@ -235,12 +254,17 @@ fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role, request: u64) {
                         if !foreground_requested(&showing, role, request) {
                             return;
                         }
+                        observe_request(&showing, 5, request, 1, 0, 0, 0);
                         let _ = window.show();
+                        observe_request(&showing, 5, request, 2, 0, 0, 0);
                         if foreground_requested(&showing, role, request) {
+                            observe_request(&showing, 5, request, 4, 0, 0, 0);
                             let _ = window.set_focus();
+                            observe_request(&showing, 5, request, 5, 0, 0, 0);
                         }
                     });
                 }
+                drop(_probe_lock);
                 drop(_creating);
                 follow(shell);
                 return;
@@ -283,6 +307,7 @@ fn open_now(shell: &Arc<Shell>, from: &'static str, role: Role, request: u64) {
         let (state, generation) = shell.hub();
         match build(shell, &state, generation, start, role, request) {
             Ok(_) => {
+                drop(_probe_lock);
                 drop(_creating);
                 if shell.generation() != generation {
                     follow(shell);
@@ -397,6 +422,7 @@ fn build(
                 }
                 if compact && !loaded_paint.cancelled.load(Ordering::SeqCst) {
                     loaded_paint.loaded.store(true, Ordering::SeqCst);
+                    observe_request(&loading, 4, loaded_paint.request, 1, 0, 1, 0);
                     reveal_panel(&loading, &view, &loaded_paint);
                 }
                 if let Some(smoke) = loading.smoke.as_ref().filter(|_| !compact) {
@@ -407,7 +433,10 @@ fn build(
     if let Some(dir) = &shell.dirs.webview {
         builder = builder.data_directory(dir.clone());
     }
-    let window = builder.build()?;
+    observe_request(shell, 2, request, 1, 0, usize::from(compact), 0);
+    let built = builder.build();
+    observe_request(shell, 2, request, if built.is_ok() { 2 } else { 3 }, 0, usize::from(compact), 0);
+    let window = built?;
     if compact {
         let hwnd = window.hwnd()?.0 as usize;
         let escape_shell = Arc::downgrade(shell);
@@ -501,7 +530,9 @@ fn build(
                 if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                     // Publish the closed intent before the HWND becomes hidden.
                     // Focus must leave while the WebView2 controller still exists.
+                    observe_request(&resizing, 5, closing_paint.request, 6, hwnd as u64, 1, 0);
                     let _ = closing.hide();
+                    observe_request(&resizing, 5, closing_paint.request, 7, hwnd as u64, 1, 0);
                 }
                 if matches!(event, tauri::WindowEvent::Destroyed) {
                     let mut current = resizing.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner());
@@ -534,9 +565,14 @@ fn build(
     window.run_on_main_thread(move || {
         // `build` returns before the event loop creates the window, and Tauri tells a failure
         // only to `log`. Here, after that, a getter of a window never created fails at once.
+        observe_request(&shell, 3, request, 1, 0, usize::from(compact), 0);
         match ready.is_visible() {
-            Ok(_) => shell.hub_log.line(&format!("app: the window {label} is up after {} ms", ms(start))),
+            Ok(visible) => {
+                observe_request(&shell, 3, request, 2, 0, usize::from(compact), usize::from(visible));
+                shell.hub_log.line(&format!("app: the window {label} is up after {} ms", ms(start)));
+            }
             Err(e) => {
+                observe_request(&shell, 3, request, 3, 0, usize::from(compact), 0);
                 shell.hub_log.line(&format!("app: the window {label} was not created at {} ms: {e}", ms(start)));
                 return;
             }
@@ -551,6 +587,7 @@ fn build(
         if !compact && shell.smoke.is_none() {
             let _ = ready.restore_state(StateFlags::all() & !StateFlags::VISIBLE);
         }
+        observe_request(&shell, 3, request, 4, 0, usize::from(compact), 0);
         if let Err(error) = fit_on_screen(&ready) {
             shell.hub_log.line(&format!("app: the window could not be fitted to the screen: {error}"));
         }
@@ -566,15 +603,23 @@ fn build(
                 crate::windows_loading::round(hwnd.0);
             }
             paint.placed.store(true, Ordering::SeqCst);
+            observe_request(&shell, 3, paint.request, 5, 0, 1, 0);
             reveal_panel(&shell, &ready, &paint);
             return;
         }
         if !foreground_requested(&shell, role, request) {
             discard_created(&shell, &ready, role, &paint);
-        } else if let Err(error) = ready.show() {
+        } else if let Err(error) = {
+            observe_request(&shell, 5, request, 1, 0, 0, 0);
+            let result = ready.show();
+            observe_request(&shell, 5, request, if result.is_ok() { 2 } else { 3 }, 0, 0, 0);
+            result
+        } {
             shell.hub_log.line(&format!("app: the window could not be shown: {error}"));
         } else if foreground_requested(&shell, role, request) {
+            observe_request(&shell, 5, request, 4, 0, 0, 0);
             let _ = ready.set_focus();
+            observe_request(&shell, 5, request, 5, 0, 0, 0);
         } else {
             discard_created(&shell, &ready, role, &paint);
         }
@@ -723,6 +768,7 @@ pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64) {
             toggle.closed_at(paint.request);
             toggle.revision()
         };
+        observe_accepted(&shell, request, false);
         open_now(&shell, "the compact panel", Role::Main, request);
         retire_panel(&shell, paint);
     });
@@ -782,4 +828,21 @@ fn place_panel(shell: &Shell, window: &tauri::WebviewWindow) {
     if window.outer_position().is_ok_and(|current| current != position) {
         let _ = window.set_position(position);
     }
+}
+
+// Worker and UI hooks touch only the process-lifetime atomic store.
+fn observe_request(shell: &Shell, lane: usize, request: u64, stage: usize, subject: u64, detail: usize, value: usize) {
+    let records = &shell.host.window_probe;
+    records.mark(
+        lane,
+        request,
+        crate::windows_loading::request_thread(records),
+        stage as u64,
+        subject,
+        [detail as u64, value as u64],
+    );
+}
+fn observe_accepted(shell: &Shell, request: u64, compact: bool) {
+    let records = &shell.host.window_probe;
+    records.accepted(request, crate::windows_loading::request_thread(records), compact);
 }
