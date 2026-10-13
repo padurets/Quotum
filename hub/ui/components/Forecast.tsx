@@ -29,7 +29,7 @@ import {ofTimeRange} from '../lib/timeRange';
 import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
 import {quotaHistory, useHistory} from '../lib/history';
 import {boardPeriod} from '../lib/period';
-import {t, useLocale, type Key} from '../i18n';
+import {formatLocale, t, useLocale, type Key} from '../i18n';
 
 const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', {value: num(spent.value, 1)}) : spent.key === 'unused' ? t('table.unused') : '—');
 
@@ -107,8 +107,20 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
       const since=range?history!.since:boardPeriod.rangeAt('quota',now,history!.range)?.from??history!.since;
       return cells&&value.work?workText(column,cells[column],value.work,since,resetAt,perWork):{content:'—'};
     };
-    const timed=(column:WorkColumn):Cell|TimedCell=>range?workCell(column,0):{time:column,
-      changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>JSON.stringify(workCell(column,at)),column==='workleft'?at=>workLeftChangesAt(lineAt(at),resetAt,at):undefined,line.sourceId,history!.range,line.windowId),at:now=>workCell(column,now)};
+    const timed=(column:WorkColumn):Cell|TimedCell=>{
+      if(range)return workCell(column,0);
+      // Reuse the displayed value once, while its accounting and locale still match.
+      let stamp:{now:number;cell:Cell;locale:string;basis:WeakRef<object>}|undefined;
+      return {time:column,
+        changesAt:(now:number,shown?:Cell)=>{
+          const captured=stamp;stamp=undefined;
+          const basis=captured?.basis.deref();
+          const initial=captured&&basis!==undefined&&captured.now===now&&captured.cell===shown&&captured.locale===formatLocale()&&basis===boardPeriod.cellBasis('quota')?JSON.stringify(shown):undefined;
+          return boardPeriod.cellChangesAt('quota',now,at=>JSON.stringify(workCell(column,at)),column==='workleft'?at=>workLeftChangesAt(lineAt(at),resetAt,at):undefined,line.sourceId,history!.range,line.windowId,initial);
+        },
+        at:(now:number)=>{const cell=workCell(column,now),basis=boardPeriod.cellBasis('quota');stamp=basis&&typeof WeakRef==='function'?{now,cell,locale:formatLocale(),basis:new WeakRef(basis)}:undefined;return cell;}
+      };
+    };
     const workCells:Record<WorkColumn,Cell|TimedCell>={work:timed('work'),agenthours:timed('agenthours'),perwork:timed('perwork'),during:timed('during'),workleft:timed('workleft')};
     if (range) {
       return {

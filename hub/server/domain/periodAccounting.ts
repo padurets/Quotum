@@ -2,7 +2,7 @@ import type {PeriodValues} from './periodValues.js';
 import {drain,type Preparation} from './prepare.js';
 import {edge} from './quota.js';
 import type {History,HistorySeries} from './history.js';
-import {sampleAt,sampleCount,numberAt,numberBytes,numberColumn,lowerNumber,rateAt,rateObservations,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
+import {sampleAt,sampleDeadlineAt,sampleCount,SAMPLE_WIDTH,numberAt,numberBytes,numberColumn,lowerNumber,rateAt,rateObservations,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
 import type {MeterHistory} from './meterHistory.js';
 import {locatedIn,meterStep,plottedAmount,semanticsOf,type ExceptionalStep,type MeterSpan,type Reading,type MeterSemantics} from './meters.js';
 import {convertBy} from './currency.js';
@@ -58,7 +58,10 @@ class QuotaIndex {
   private *build():Preparation<void>{
     const series=this.series,{activity,known}=this;
     const deadlines=new Float64Array(sampleCount(series.samples));
-    for(let i=0;i<sampleCount(series.samples);i++){const sample=sampleAt(series.samples,i)!;if(this.times instanceof Float64Array)this.times[i]=sample.at;deadlines[i]=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity);yield;}
+    for(let i=0;i<sampleCount(series.samples);i++){
+      if(this.times instanceof Float64Array)this.times[i]='columns' in series.samples?numberAt(series.samples.columns[0],i)!:series.samples[i*SAMPLE_WIDTH];
+      deadlines[i]=sampleDeadlineAt(series.samples,i)!;yield;
+    }
     const sorted=yield*sortedNumbers(deadlines);this.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
     const spent=new Float64Array(sampleCount(series.samples)),covered=new Float64Array(spent.length),worked=new Float64Array(spent.length),during=new Float64Array(spent.length);
     let previous=sampleAt(series.samples,0)!;
@@ -75,8 +78,7 @@ class QuotaIndex {
 
   get bytes(){return [this.deadlines,this.spent,this.covered,this.worked,this.during].reduce((n,c)=>n+numberBytes(c),0)+(this.times instanceof Float64Array?numberBytes(this.times):0);}
   changesAt(now:number,period:number){
-    const from=now-period,last=sampleAt(this.series.samples,sampleCount(this.series.samples)-1);
-    const deadline=last?Math.min(last.at+last.staleAfterMs+1,last.resetAt??Infinity,last.validUntil??Infinity):Infinity;
+    const from=now-period,deadline=sampleDeadlineAt(this.series.samples,sampleCount(this.series.samples)-1)??Infinity;
     // Work and its clock use the same captured source curve, including after a
     // replacement could not fit. Knowledge changes even without a work interval.
     const work=Number.isFinite(this.known)?Math.min(this.activity?this.activity.next(from)+period:Infinity,this.activity?.next(now)??Infinity,this.known+1>now?this.known+1:Infinity,this.known+period>now?this.known+period:Infinity):Infinity;

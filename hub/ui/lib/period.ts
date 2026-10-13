@@ -188,14 +188,15 @@ class BoardPeriod {
     return this.index.trace.refs.reduce((sum,ref,i)=>sum+(refs.includes(ref.ref)?this.index!.curves.contexts[i].read(range):0),0);
   }
   workedChangesAt(refs:readonly string[],now:number,read:(now:number)=>string){return refs.length?periodTextChangesAt(now,at=>this.workBoundary(at,refs),read):null;}
-  cellChangesAt(scope:PeriodScope,now:number,read:(now:number)=>string,extra?:(now:number)=>number|null,source?:string,rangeKey?:string,window?:string){
+  cellBasis(scope:PeriodScope):object|undefined{return this.tapes.get(scope);}
+  cellChangesAt(scope:PeriodScope,now:number,read:(now:number)=>string,extra?:(now:number)=>number|null,source?:string,rangeKey?:string,window?:string,initial?:string){
     const tape=this.tapes.get(scope);if(!tape||tape.selection.mode!=='live'||rangeKey!==undefined&&tape.rangeKey!==rangeKey)return extra?.(now)??null;
     const period=tape.selection.periodMs;
     return periodTextChangesAt(now,at=>{
       const own=scope==='quota'&&source!==undefined&&window!==undefined?tape.accounting.quotaChangesAt(source,window,at,period):undefined;
       const next=Math.min(own===undefined?tape.accounting.changesAt(at,period,source)??Infinity:own??Infinity,own===undefined&&scope==='quota'?this.workBoundary(at,undefined,source)??Infinity:Infinity,extra?.(at)??Infinity);
       return Number.isFinite(next)?next:null;
-    },read);
+    },read,initial);
   }
   projectionState(history:History,scope:PeriodScope){const tape=this.tapes.get(scope),range=evaluatedRange(this.selection,this.evaluatedAt);return {ready:!!tape&&tape.queryKey===this.scopeKeys[scope]&&tape.rangeKey===history.range&&this.tapeCovers(tape.tape,range),error:this.projectionErrors[scope]};}
   getSource=(id:string)=>this.rowsBySource.get(id)??noSessions;

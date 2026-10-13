@@ -7,13 +7,16 @@ import {t} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 
 export type Cell = {content: ReactNode; title?: string; className?: string};
-export type TimedCell = {time: string; changesAt: (now: number) => number | null; at: (now: number) => Cell};
+export type TimedCell = {time: string; changesAt: (now: number, shown?: Cell) => number | null; at: (now: number) => Cell};
 export type AnalyticsColumn<Id extends string> = {id: Id; title: string; hint?: string; width: number; align?: 'right'};
 type Row<Id extends string> = {key: string; name: string; color?: string; cells: Record<Id, Cell | TimedCell>};
 
 /** Only the cell reads the clock; its table and unrelated rows remain asleep. */
 function Timed({cell, render}: {cell: TimedCell; render: (cell: Cell, time: string) => ReactNode}) {
-  return render(cell.at(useClock(cell.changesAt)), cell.time);
+  let shown:Cell|undefined;
+  const now=useClock(at=>cell.changesAt(at,shown));
+  shown=cell.at(now);
+  return render(shown,cell.time);
 }
 const shown = (key: string, cell: Cell | TimedCell, render: (cell: Cell, time?: string) => ReactNode) =>
   'at' in cell ? <Timed key={key} cell={cell} render={render}/> : <Fragment key={key}>{render(cell)}</Fragment>;

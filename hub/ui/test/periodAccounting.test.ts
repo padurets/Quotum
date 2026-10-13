@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {PeriodAccounting} from '../lib/periodAccounting.js';
 import {PeriodActivity} from '../lib/periodActivity.js';
 import {PeriodIndex} from '../lib/periodIndex.js';
-import {packSamples,retainSamplesPrepared,type PeriodTape} from '../../server/domain/periodTape.js';
+import {packSamples,sampleDeadlineAt,retainSamplesPrepared,type PeriodTape,type SampleRows} from '../../server/domain/periodTape.js';
 import {drain} from '../../server/domain/prepare.js';
 import type {History} from '../lib/types.js';
 import type {Reading} from '../../server/domain/meters.js';
@@ -41,16 +41,46 @@ for(const compressed of [false,true])test(`ordered quota deadlines keep retireme
   assert.equal(JSON.stringify(evidence),before);
 });
 
+test('quota deadlines keep exact stale, reset and exclusive supplier bounds in every sample representation',()=>{
+  const samples=packSamples([
+    {at:1000.125,used:17,resetAt:null,staleAfterMs:2000.25},
+    {at:2000.125,used:31,resetAt:4000.5,staleAfterMs:10_000,validUntil:3000.75},
+    {at:3000.125,used:49,resetAt:3500.5,staleAfterMs:10_000,validUntil:4000.75},
+    {at:4000.125,used:53,resetAt:0,staleAfterMs:10_000},
+    {at:5000.125,used:61,resetAt:null,staleAfterMs:10_000,validUntil:0},
+  ]);
+  const versions:SampleRows[]=[samples,new Float64Array(samples),drain(retainSamplesPrepared(samples))];
+  for(const rows of versions){
+    assert.deepEqual([0,1,2,3,4].map(i=>sampleDeadlineAt(rows,i)),[3001.375,3000.75,3500.5,0,0]);
+    assert.equal(sampleDeadlineAt(rows,-1),undefined);assert.equal(sampleDeadlineAt(rows,5),undefined);
+  }
+  for(const empty of [[],new Float64Array(0),drain(retainSamplesPrepared([]))])assert.equal(sampleDeadlineAt(empty,0),undefined);
+});
+
+for(const cadence of [0,1000])test(`quota deadlines read ${cadence?'run-compressed':'constant'} columns without decoding the quota value`,()=>{
+  const rows=drain(retainSamplesPrepared(packSamples(Array.from({length:128},(_,i)=>({at:1000+i*cadence,used:17,resetAt:null,staleAfterMs:1000})))));
+  if(!('columns' in rows))throw new Error('samples were not packed');
+  if(cadence)assert.ok(rows.columns[0].runs);else assert.equal(rows.columns[0].values,null);
+  let usedReads=0;const used=rows.columns[1];
+  Object.defineProperty(rows.columns,1,{get(){usedReads++;return used;}});
+  const expected=cadence?[2001,65001,129001]:[2001,2001,2001];
+  assert.deepEqual([0,63,127].map(i=>sampleDeadlineAt(rows,i)),expected);
+  assert.equal(usedReads,0,'a deadline needs observation and validity fields only');
+});
+
 test('out-of-order quota deadlines preserve the rolling wake and exclusive availability',()=>{
-  const evidence=tape();evidence.quota=[{source:'s',window:'w',samples:packSamples([
+  const samples=packSamples([
     {at:0,used:10,resetAt:null,staleAfterMs:20_000},
     {at:1000,used:20.125,resetAt:null,staleAfterMs:100},
     {at:2000,used:30.25,resetAt:null,staleAfterMs:5000},
-  ])}];
-  const accounting=drain(PeriodAccounting.prepare(evidence,null));
-  assert.equal(accounting.changesAt(21_001,20_000,'s'),21_101);
-  assert.equal(accounting.quotaSummary('s','w',{from:0,to:1100})!.remainingAtEnd,79.875);
-  assert.equal(accounting.quotaSummary('s','w',{from:0,to:1101})!.remainingAtEnd,null);
+  ]);
+  for(const rows of [samples,new Float64Array(samples),drain(retainSamplesPrepared(samples))]){
+    const evidence=tape();evidence.quota=[{source:'s',window:'w',samples:rows}];
+    const accounting=drain(PeriodAccounting.prepare(evidence,null));
+    assert.equal(accounting.changesAt(21_001,20_000,'s'),21_101);
+    assert.equal(accounting.quotaSummary('s','w',{from:0,to:1100})!.remainingAtEnd,79.875);
+    assert.equal(accounting.quotaSummary('s','w',{from:0,to:1101})!.remainingAtEnd,null);
+  }
 });
 
 test('a quota clock includes both knowledge boundaries without any working context',()=>{
