@@ -284,7 +284,7 @@ change as it was.
 | `mine` | `{sources: string[]}` | Which sources of the board the reader's devices measure changed. |
 | `sourceAccess` | `{<source id>: {error, expiresAt, expiryKind, canRefresh, credentialIds}}` | The reader's own connector access changed, cleared when the holding or board access ends. |
 | `boards` | `{boards}` | The reader's boards changed: made, deleted, renamed, joined, left. |
-| `history` | `{sources: string[], since, changes?, workSince?, workAuthority?}` | History of these sources changed from `since`: a measurement or credited agent work (see [Reading history](#reading-history)); with `since` 0, all of the board's history reads otherwise: whose agents' work it shows, or under which names, changed (a card hidden or shown, someone joining or leaving, a project or a machine renamed). |
+| `history` | `{sources: string[], since, changes?, workSince?, workAuthority?}` | Measurements or admitted credited work changed from `since` (see [Reading history](#reading-history)); `since: 0` invalidates the affected history evidence. Changed work or financial authority and project or machine names replace the next delta with a fresh `snapshot`. Hiding or showing a card changes the `view` without changing admitted work or sending `history`. |
 | `resets` | `{resets, trackers, past}` | The reset trackers' news changed. |
 | `ping` | `{now}` | Every `heartbeatMs`, with the hub's clock. |
 | `bye` | `{reason}` | Last: the hub lets the reader go (see below). |

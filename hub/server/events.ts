@@ -517,9 +517,10 @@ export class Events implements Touches {
   /**
    * The events of one board: its name and view when touched as a whole, then the touched
    * sources, sources new to it first, then its sources when they changed. Null once the
-   * board is gone: its readers are let go. Touched as a whole, it also says whether whose
-   * agents' work its history shows, or under which names, changed: then all of its
-   * history is news (`histories`), from its start.
+   * board is gone: its readers are let go. Touched as a whole, it also checks the work
+   * authority, invalidating credited history when it changes. Delivery replaces an
+   * authority-changing delta with a snapshot, including changed presentation names;
+   * view-only changes preserve admitted work.
    */
   private refresh(
     watched: Watched,
