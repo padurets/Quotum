@@ -7,12 +7,20 @@ import path from 'node:path';
 const LIMIT = 1024 * 1024;
 const forbidden = /cookie|authorization|password|secret|credential|commandLine|expression|scriptSource|environment|stdout|stderr|stack/i;
 const labels = new Set(['status', 'stage', 'mode', 'method', 'scenario', 'phase', 'kind', 'event', 'name', 'period', 'initiator', 'segment', 'version', 'executable', 'platform', 'failure', 'reason', 'context', 'node', 'region', 'coding', 'type', 'state', 'birth', 'signal', 'spawnCode', 'native', 'cleanup', 'collection', 'livenessStatus', 'page', 'scheduler', 'byteVerdict', 'stagingDisposition', 'mechanism', 'metricsStatus']);
+const requestLabels = new Map([
+  ['scope', new Set(['quota', 'budget', 'funds'])],
+  ['cells', new Set(['skip', 'read'])],
+  ['evidence', new Set(['skip', 'cursor', 'baseline'])],
+  ['endpoint', new Set(['history', 'period', 'period/sessions'])],
+]);
 
 /** Diagnostic payloads are numeric evidence and synthetic identifiers, never arbitrary text. */
 export function safeEvidence(value: unknown, key = '', depth = 0, entryLimit = 10_000): unknown {
   if (depth > 24) return '[depth limit]';
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
   if (typeof value === 'string') {
+    // Request classifications survive without admitting resource names or cursor text.
+    if (requestLabels.get(key)?.has(value)) return value;
     if (!labels.has(key) && !/^(id|.*Id|.*Hash|sha|tree|run|attempt|fixture)$/.test(key)) return '[text omitted]';
     if (value.length > 240 || /https?:\/\/|wss?:\/\/|(?:^|\s)(?:\/[\w.-]+){2,}|[A-Z]:\\|(?:token|cookie|secret|password)\s*[:=]/i.test(value)) return '[text omitted]';
     return value;

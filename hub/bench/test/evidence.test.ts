@@ -30,6 +30,25 @@ test('unsafe data is omitted and evidence overflow remains explicit', () => {
   assert.equal((value as {values: {omittedEntries: number}}).values.omittedEntries, 3);
 });
 
+test('saved cold request classifications survive while identities and cursor text stay omitted', t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-evidence-test-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const evidence = new Evidence(dir), root = path.join(dir, evidence.id);
+  const sections = [
+    {scope: 'quota', from: 0, to: 300_000, cell: 300_000, cells: 'read', evidence: 'skip'},
+    {scope: 'budget', from: 0, to: 300_000, cell: 300_000, cells: 'skip', evidence: 'cursor'},
+    {scope: 'funds', from: 0, to: 300_000, cell: 300_000, cells: 'skip', evidence: 'baseline'},
+  ];
+  evidence.save('cold', {attempts: 1, omitted: 0, reads: [{endpoint: 'period', request: {sections, values: 69, sessions: true}}],
+    unsafe: {scope: 'canary-resource', cells: 'canary-cell', evidence: 'canary-cursor', endpoint: 'canary-endpoint',
+      resource: 'canary-id', meta: 'canary-meta', body: 'canary-body'}});
+  const body = readFileSync(path.join(root, 'cold.json'), 'utf8'), saved = JSON.parse(body);
+  assert.deepEqual(saved.reads[0], {endpoint: 'period', request: {sections, values: 69, sessions: true}});
+  assert.doesNotMatch(body, /canary/);
+  assert.deepEqual(saved.unsafe, {scope: '[text omitted]', cells: '[text omitted]', evidence: '[text omitted]',
+    endpoint: '[text omitted]', resource: '[text omitted]', meta: '[text omitted]', body: '[text omitted]'});
+});
+
 test('an unavailable diagnostic destination cannot interrupt resource cleanup', t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-evidence-test-'));
   t.after(() => rmSync(dir, {recursive: true, force: true}));
