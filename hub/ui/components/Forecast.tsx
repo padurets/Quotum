@@ -122,16 +122,22 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
         at:(now:number)=>{const cell=workCell(column,now),basis=boardPeriod.cellBasis('quota');stamp=basis&&typeof WeakRef==='function'?{now,cell,locale:formatLocale(),basis:new WeakRef(basis)}:undefined;return cell;}
       };
     };
-    const workCells:Record<WorkColumn,Cell|TimedCell>={work:timed('work'),agenthours:timed('agenthours'),perwork:timed('perwork'),during:timed('during'),workleft:timed('workleft')};
     if (range) {
-      return {
-        ...workCells,
-        start: edge(line.remainingAtStart),
-        end: edge(line.remainingAtEnd),
-        spent: {content: spentText(spentOf(line))},
-        pace: {content: line.coveredMs >= PACE_FROM ? t('table.perHour', {value: rateText(line.consumed / (line.coveredMs / 3_600_000))}) : '—'},
-      } as Record<ForecastColumn, Cell>;
+      // Hidden range columns do not need their values formatted.
+      const cells: Partial<Record<ForecastColumn, Cell>> = {};
+      for (const column of columns) {
+        switch (column) {
+          case 'start': cells.start = edge(line.remainingAtStart); break;
+          case 'end': cells.end = edge(line.remainingAtEnd); break;
+          case 'spent': cells.spent = {content: spentText(spentOf(line))}; break;
+          case 'pace': cells.pace = {content: line.coveredMs >= PACE_FROM ? t('table.perHour', {value: rateText(line.consumed / (line.coveredMs / 3_600_000))}) : '—'}; break;
+          case 'work': case 'agenthours': case 'perwork': case 'during': case 'workleft':
+            cells[column] = workCell(column, 0); break;
+        }
+      }
+      return cells as Record<ForecastColumn, Cell>;
     }
+    const workCells:Record<WorkColumn,Cell|TimedCell>={work:timed('work'),agenthours:timed('agenthours'),perwork:timed('perwork'),during:timed('during'),workleft:timed('workleft')};
     const weekly = planOf(view, line.sourceId);
     // A weekly window as the hub foresees it; a five-hour one the table foresees itself.
     const ahead = live?.kind === 'weekly' ? (forecasts[lineup.indexOf(line.sourceId)]?.[line.windowId] ?? null) : null;
