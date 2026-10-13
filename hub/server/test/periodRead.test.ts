@@ -196,9 +196,13 @@ test('a chart-only past tile reads only its work, and extraction replacement rel
   t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{ranges.push(args.slice(0,2) as number[]);return original(...args);});
   const response=await h.read({version:1,selection:{mode:'range',from:now-2*H,to:now-M},evaluatedAt:now,quota:{cell:String(M),from:String(now-2*H),to:String(now-H),evidence:'skip'}});
   assert.equal(response.json<PeriodReply>().quota?.state,'complete');assert.deepEqual(ranges,[[now-2*H,now-H]]);
-  let used=0,peak=0;
+  let used=0,peak=0,accessBytes=0;
+  const capture=h.store.workAccess.bind(h.store);
+  t.mock.method(h.store,'workAccess',(...args:Parameters<Store['workAccess']>)=>capture(args[0],args[1],bytes=>{accessBytes+=bytes;args[2]?.(bytes);}));
   const read=sharedWork(h.hub,h.store.shown(h.board,[]),null,bytes=>{used+=bytes;peak=Math.max(peak,used);},bytes=>{used-=bytes;assert.ok(used>=0);},null,now,h.board);
   const metadata=used;assert.ok(metadata>0,'the common captured access is charged before extraction');
+  assert.equal(metadata,accessBytes,'only the captured access remains charged after authority hashing');
+  assert.ok(peak>metadata,'temporary authority hashing is released before extraction starts');peak=used;
   const first=read(now-2*H,now-H),before=used;
   assert.equal(first.length,1);assert.ok(before>0);
   const second=read(now-2*H,now);
