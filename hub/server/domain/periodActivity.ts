@@ -109,6 +109,6 @@ export class PeriodActivity {
       by[dimension].sort((a,b)=>b.agentMs-a.agentMs||a.key.localeCompare(b.key));
     }
     const from=Math.max(range.from,this.trace.knownFrom),to=Math.min(range.to,this.cut);
-    return {...activity,since:this.trace.knownFrom,known:this.trace.available!==false&&from<to?{from,to}:null,activeMs:this.all.read(range,true),agentMs:this.all.read(range),agents:this.previous.size,cells,by};
+    return {...activity,...(this.trace.available===false?{available:false as const}:{}),since:this.trace.knownFrom,known:this.trace.available!==false&&from<to?{from,to}:null,activeMs:this.all.read(range,true),agentMs:this.all.read(range),agents:this.previous.size,cells,by};
   }
 }

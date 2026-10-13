@@ -4,10 +4,49 @@ import {centralFixture as fixture,at} from '../../server/test/centralFixture.js'
 import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire.js';
 import {PeriodActivity} from '../../server/domain/periodActivity.js';
 import {readHistory} from '../../server/test/historyRead.js';
-import {activityEmpty} from '../lib/activity';
+import {activityEmpty,activityCoverage} from '../lib/activity';
 import {agentActivityValue} from '../lib/agents';
+import {shifted} from '../../server/domain/periodShift.js';
+import {fixture as runtime,flush,NOW} from './periodRuntimeFixture';
+import {setLocale,t as text} from '../i18n';
 
 const M=60_000;
+
+for(const fixed of [false,true])test(`${fixed?'fixed':'live'} wire activity distinguishes disabled access from known empty work`,async t=>{
+ const now=at+2*M;t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+ const shares=`/api/boards/${h.board}/shares`,period=`/api/boards/${h.board}/period`;
+ const selection=fixed?{mode:'range',from:at-59*M,to:at+M}:{mode:'live',periodMs:60*M},body={version:1,selection,evaluatedAt:now,sessions:{}};
+ const read=async()=>{const response=await h.call('POST',period,body);assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());if(reply.sessions?.state!=='complete')throw new Error('missing session baseline');return {trace:reply.sessions.value,range:reply.basis.range};};
+ const empty=await read(),known=new PeriodActivity(empty.trace).summary(empty.range,'project');
+ assert.notEqual(known.available,false);assert.ok(known.known);assert.deepEqual(activityEmpty({since:empty.range.from,activity:known},0),{key:'noneSince',at:known.known.from});
+ const policy=(await h.call('GET',shares)).json().sessionDevices[0];
+ assert.equal((await h.call('PUT',shares+`/devices/${policy.id}/sessions`,{enabled:false,expectedRevision:policy.revision})).statusCode,200);
+ const unavailable=await read();assert.equal(unavailable.trace.available,false);
+ const traces=[unavailable.trace];
+ if(fixed){const moved=shifted(unavailable.trace.fixed!,{from:unavailable.range.from+1,to:unavailable.range.to+1});assert.ok(moved,'an evidence-free neighbor is reusable');traces.push({...unavailable.trace,fixed:moved});}
+ for(const trace of traces){
+  const range=trace.fixed?.range??unavailable.range,projection=new PeriodActivity(trace),summary=projection.summary(range,'project');
+  const blank={...summary,available:undefined,cells:[]},drawing=projection.project(blank,range);
+  for(const activity of [summary,drawing]){
+   assert.equal(activity.available,false);assert.equal(activity.known,null);assert.equal(activity.agentMs,0);assert.equal(activity.activeMs,0);
+   assert.equal(agentActivityValue(activity,'project','active'),null);assert.deepEqual(activityEmpty({since:range.from,activity},0),{key:'noSessions'});
+   for(const locale of ['en','ru'] as const){setLocale(locale);assert.equal(activityCoverage(activity,range.from),text('activity.noSessions'));}
+  }
+ }
+ setLocale('en');assert.equal(readHistory(h.store,h.board,at-M,M,{to:at+M}).activity.available,false);
+});
+
+for(const fixed of [false,true])test(`${fixed?'fixed':'live'} coordinator preserves revoked device availability through replacement`,async t=>{
+ t.mock.method(Date,'now',()=>NOW);const h=await runtime({fixed});t.after(()=>h.close());
+ const policy=h.store.sessionDevices(h.board,h.owner)[0];
+ h.store.setDeviceSessions(h.board,h.device,h.owner,false,policy.revision,NOW);h.events.flush();await flush();
+ const state=h.period.get(),activity=h.period.activitySummaryAt('project',NOW);
+ assert.equal(state.loading,false);assert.equal(state.error,null);assert.equal(state.rows.length,0);assert.equal(state.value.available,false);
+ assert.equal(activity.available,false);assert.equal(activity.known,null);
+ assert.deepEqual(activityEmpty({since:state.basis.range.from,activity},1),{key:'noSessions'});
+ assert.equal(activityCoverage(activity,state.basis.range.from),text('activity.noSessions'));
+ assert.equal(h.requests.length,1,'one authority replacement supplies the corrected summary');
+});
 
 for(const retained of [false,true])test(`all managed devices OFF makes sessions unavailable with a disconnected ${retained?'retained':'unused'} device`,async t=>{
  const now=at+2*M;t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
