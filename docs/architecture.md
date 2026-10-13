@@ -208,6 +208,9 @@ source and evidence metadata to session contexts, preserving ledger row/producer
 and every work interval; device inventory is stored separately. Evidence is neither a
 resolver nor identity. A single immutable WorkAccess snapshot admits saved-device
 work independently of subscriptions. Personal boards always admit their owner's work.
+Settings, admission and funding dependencies use the same device inventory: connected
+devices and disconnected devices with retained work. A disconnected device without
+retained work cannot establish coverage or invalidate the session cursor.
 Schema 25 appends sparse board_device_sessions overrides: absent means on from joining,
 NULL means off, and an explicit timestamp means on from a new cutoff. Every effective
 change receives a fresh opaque revision for CAS, including same-millisecond OFF/ON.

@@ -1609,9 +1609,11 @@ for credits, and quota analytics remain percentage-based.
 
 ## Device sessions and coding clients
 
-Shared boards admit every member's saved-device sessions by default, independently of
-subscription sharing. Personal boards always admit the owner's own work. Schema 25
-stores sparse per-board/device overrides: absent is on from joining, explicit NULL is
+Shared boards admit every member's connected devices and disconnected devices with
+retained work by default, independently of subscription sharing. Settings, session
+coverage and funding dependencies use this same inventory. Personal boards always
+admit the owner's own work. Schema 25 stores sparse per-board/device overrides:
+absent is on from joining, explicit NULL is
 off, and a timestamp is a fresh re-enable cutoff. Every effective mutation has a new
 128-bit opaque revision; same-value writes preserve it. OFF survives heartbeat,
 restart and same-ID reconnect. Disconnect removes current presence while retained

@@ -37,6 +37,16 @@ test('disconnected retained devices remain manageable without erasing history',t
  h.directory.deleteBoard(h.board);assert.equal(h.store.db.prepare('SELECT count(*) n FROM board_device_sessions').get()?.n,0);assert.equal(h.store.agentWork(at,at+1000).length,1);
 });
 
+test('physical retirement removes disconnected devices from management, admission and funding together',t=>{
+ const h=setup();t.after(()=>h.store.close());t.mock.method(Date,'now',()=>at+1000);
+ h.store.creditWork(h.device.id,at+200,at+300,[{client:'opencode',source:null,origin:'terminal',project:'P',folder:'',startedAt:at,identity:{kind:'stable',sessionId:'c'.repeat(32)}}]);h.directory.revokeDevice(h.other.id,h.device.id,at+400);
+ assert.equal(h.store.sessionDevices(h.board,h.other.id).length,1);assert.equal(h.store.workAccess(h.board).devices.size,1);
+ h.store.prune(at+config.retention.sampleDays*86_400_000+1000);
+ assert.deepEqual(h.store.sessionDevices(h.board,h.other.id),[]);assert.equal(h.store.workAccess(h.board).devices.size,0);assert.equal(sessionsKnownFrom(h.store.workAccess(h.board)),null);
+ const key=h.store.workKey(h.board),funding=h.store.workAccess(h.board).fundingRevision,source=h.store.source('codex','e'.repeat(24),at+1000);
+ h.store.hold(source,h.other.id,at+1000);h.store.share(h.board,source,h.other.id,at+1000);assert.equal(h.store.workAccess(h.board).fundingRevision,funding);assert.equal(h.store.workKey(h.board),key);
+});
+
 test('work authority ignores advancing clocks and unrelated sample capture but records physical work retirement',t=>{
  const h=setup();t.after(()=>h.store.close());const before=h.store.workKey(h.board);
  assert.equal(h.store.workAccess(h.board,at+100*86_400_000).knownFrom,at);assert.equal(h.store.workKey(h.board),before);

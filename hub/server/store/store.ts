@@ -41,6 +41,9 @@ export type Shown = Map<string, {since: number; holders: {user: string; from: nu
 export type WorkRead = ((from: number, to: number) => Stretch[]) & {access?:WorkAccess;reserve?:(bytes:number)=>void;ensureAccess?:()=>WorkAccess};
 export type SessionDevice = {id:string;name:string;disconnected:boolean;enabled:boolean;since:number|null;revision:string};
 
+/** Settings, admission and funding use the same connected or retained device inventory. */
+const sessionDeviceWhere='(d.revoked_at IS NULL OR EXISTS(SELECT 1 FROM agent_sessions s JOIN agent_work w ON w.session_id=s.id WHERE s.device_id=d.id))';
+
 export type DeviceFailure = {device: string; provider: Provider; error: string; detail: string | null; at: number};
 
 /** A reset for everyone as a community tracker reported it. */
@@ -106,7 +109,7 @@ export class Store {
     const quota=supportsQuota(providerOf(source.split(':')[0]));
     const captured=this.db.prepare('SELECT 1 FROM agent_sessions s WHERE s.device_id=? AND s.source_id=? AND EXISTS(SELECT 1 FROM agent_work w WHERE w.session_id=s.id AND w.to_at>?) LIMIT 1');
     const provided=this.db.prepare('SELECT 1 FROM shares WHERE board_id=? AND source_id=?');
-    const rows=this.db.prepare('SELECT b.id,b.personal,d.id AS device,d.user_id,m.joined_at,p.enabled_since,p.revision FROM boards b JOIN members m ON m.board_id=b.id JOIN devices d ON d.user_id=m.user_id LEFT JOIN board_device_sessions p ON p.board_id=b.id AND p.device_id=d.id WHERE (? IS NULL OR m.user_id=?) AND (? IS NULL OR b.id=?)').iterate(user??null,user??null,board??null,board??null);
+    const rows=this.db.prepare('SELECT b.id,b.personal,d.id AS device,d.user_id,m.joined_at,p.enabled_since,p.revision FROM boards b JOIN members m ON m.board_id=b.id JOIN devices d ON d.user_id=m.user_id LEFT JOIN board_device_sessions p ON p.board_id=b.id AND p.device_id=d.id WHERE '+sessionDeviceWhere+' AND (? IS NULL OR m.user_id=?) AND (? IS NULL OR b.id=?)').iterate(user??null,user??null,board??null,board??null);
     for(const row of rows){
       const id=String(row.id);if(found.has(id)||!row.personal&&row.revision!==null&&row.enabled_since===null)continue;
       const owner=String(row.user_id);if(user===undefined&&!this.holds(owner,source))continue;
@@ -212,7 +215,7 @@ export class Store {
   sessionDevices(board:string,user:string):SessionDevice[] {
     const member=this.db.prepare('SELECT m.joined_at FROM members m JOIN boards b ON b.id=m.board_id WHERE m.board_id=? AND m.user_id=? AND b.personal=0').get(board,user);
     if(!member)return [];
-    const rows=this.db.prepare('SELECT d.id,COALESCE(d.label,d.name) AS name,d.revoked_at,p.enabled_since,p.revision FROM devices d LEFT JOIN board_device_sessions p ON p.board_id=? AND p.device_id=d.id WHERE d.user_id=? AND (d.revoked_at IS NULL OR EXISTS(SELECT 1 FROM agent_sessions s JOIN agent_work w ON w.session_id=s.id WHERE s.device_id=d.id)) ORDER BY d.last_seen_at DESC,d.id').all(board,user);
+    const rows=this.db.prepare('SELECT d.id,COALESCE(d.label,d.name) AS name,d.revoked_at,p.enabled_since,p.revision FROM devices d LEFT JOIN board_device_sessions p ON p.board_id=? AND p.device_id=d.id WHERE d.user_id=? AND '+sessionDeviceWhere+' ORDER BY d.last_seen_at DESC,d.id').all(board,user);
     return rows.map(r=>{const since=r.revision===null?Number(member.joined_at):r.enabled_since===null?null:Math.max(Number(member.joined_at),Number(r.enabled_since));return {id:String(r.id),name:String(r.name),disconnected:r.revoked_at!==null,enabled:since!==null,since,revision:r.revision===null?this.defaultSessionRevision(board,String(r.id),user,Number(member.joined_at)):String(r.revision)};});
   }
 
@@ -239,7 +242,7 @@ export class Store {
     const owner=this.privateOwner(board),knownFrom=Math.max(this.agentWorkSince(),Number(this.db.prepare("SELECT value FROM meta WHERE key='workRetentionFrom'").get()?.value??0));
     const devices=new Map<string,{owner:string;from:number;revision:string}>();
     reserve?.(512);
-    const rows=this.db.prepare('SELECT d.id,d.user_id,m.joined_at,p.enabled_since,p.revision FROM members m JOIN devices d ON d.user_id=m.user_id LEFT JOIN board_device_sessions p ON p.board_id=m.board_id AND p.device_id=d.id WHERE m.board_id=? ORDER BY d.id').iterate(board);
+    const rows=this.db.prepare('SELECT d.id,d.user_id,m.joined_at,p.enabled_since,p.revision FROM members m JOIN devices d ON d.user_id=m.user_id LEFT JOIN board_device_sessions p ON p.board_id=m.board_id AND p.device_id=d.id WHERE m.board_id=? AND '+sessionDeviceWhere+' ORDER BY d.id').iterate(board);
     for(const r of rows)if(owner!==null||r.revision===null||r.enabled_since!==null){reserve?.(512);const user=String(r.user_id),id=String(r.id),joined=Number(r.joined_at);devices.set(id,{owner:user,from:owner!==null?knownFrom:Math.max(knownFrom,joined,r.revision===null?joined:Number(r.enabled_since)),revision:owner!==null?'personal':r.revision===null?this.defaultSessionRevision(board,id,user,joined):String(r.revision)});}
     const holders=new Map<string,ReadonlySet<string>>();
     for(const user of new Set([...devices.values()].map(d=>d.owner))){const sources=new Set<string>();reserve?.(128);for(const row of this.db.prepare('SELECT source_id FROM holders WHERE user_id=?').iterate(user)){reserve?.(128);sources.add(String(row.source_id));}holders.set(user,sources);}
