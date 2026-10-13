@@ -1,4 +1,4 @@
-import type {LiveSession, View} from './types';
+import type {Activity, ActivityDimension, LiveSession, View} from './types';
 import {cardId, isHidden} from './view';
 import {sourceLabel} from './quota';
 import {duration, durationChangesAt} from './format';
@@ -44,12 +44,22 @@ export type Dimension = (typeof DIMENSIONS)[number];
 /** What the list gathers its agents by, each viewer for themselves: a dimension, or nothing (a row per agent). */
 export const AGENTS_BY = [...DIMENSIONS, 'none'] as const;
 export type AgentsBy = (typeof AGENTS_BY)[number];
-export const AGENT_COLUMNS = [...DIMENSIONS, 'agents', 'worked', 'activity', 'running'] as const;
+export const AGENT_COLUMNS = [...DIMENSIONS, 'agents', 'worked', 'active', 'concurrency', 'activity', 'running'] as const;
 export type AgentColumn = (typeof AGENT_COLUMNS)[number];
 export type AgentsSort = {column: AgentColumn; descending: boolean} | null;
 
 /** Saved preferences are untrusted: anything but a known choice gathers by project. */
 export const readAgentsBy = (value: unknown): AgentsBy => (AGENTS_BY.includes(value as AgentsBy) ? (value as AgentsBy) : 'project');
+
+export const activityDimension = (by: Dimension): ActivityDimension => by === 'machine' ? 'device' : by === 'subscription' ? 'source' : 'project';
+
+/** Union time and concurrency belong to a group, not a sum of its rows. */
+export function agentActivityValue(summary: Activity | null, by: Dimension, column: 'active' | 'concurrency', key?: string): number | null {
+  if (!summary?.known) return null;
+  const group = key === undefined ? summary : summary.by[activityDimension(by)].find(group => group.key === key);
+  if (!group) return null;
+  return column === 'active' ? group.activeMs : group.activeMs ? group.agentMs / group.activeMs : 0;
+}
 
 /**
  * Agents that share what the list gathers them by, as one row: in activity order, how
@@ -64,6 +74,8 @@ export type AgentGroup = {
   rows: AgentRow[];
   working: number;
   workedMs: number | null;
+  /** Period union time, supplied only for grouped analytics. */
+  activeMs?: number | null;
   /** When one of its agents was last seen working, the working ones aside; null when none was. */
   lastWorkedAt: number | null;
   startedAt: number;
@@ -88,7 +100,7 @@ function groupOf(key: string, name: string | null, rows: AgentRow[]): AgentGroup
  * name as its people named it (one group across people, as agent activity counts it), a
  * machine, a subscription; a group per agent when there is nothing to gather by.
  */
-export function groupsOf(rows: AgentRow[], by: AgentsBy): AgentGroup[] {
+export function groupsOf(rows: AgentRow[], by: AgentsBy, summary?: Activity | null): AgentGroup[] {
   const groups = new Map<string, {name: string | null; rows: AgentRow[]}>();
   rows.forEach((row, i) => {
     const [key, name] =
@@ -100,19 +112,21 @@ export function groupsOf(rows: AgentRow[], by: AgentsBy): AgentGroup[] {
     if (group) group.rows.push(row);
     else groups.set(key, {name, rows: [row]});
   });
-  return [...groups].map(([key, {name, rows}]) => groupOf(key, name, rows));
+  const activity = by === 'none' || !summary?.known ? null : new Map(summary.by[activityDimension(by)].map(group => [group.key, group.activeMs]));
+  return [...groups].map(([key, {name, rows}]) => ({...groupOf(key, name, rows), ...(by !== 'none' && summary !== undefined ? {activeMs: activity?.get(key) ?? null} : {})}));
 }
 
 /**
  * The columns of the list gathered `by` (`inGroup`: the agents of one of its groups, in a
  * dialog), before the owner hides any: the first names a row, always there; the rest
- * follow. A group tells how many agents it has, their worked time and last activity;
+ * follow. A group tells its session count, worked time, optional union time and
+ * concurrency, and last activity;
  * an agent also tells its machine and subscription, the one its group already names
  * left out, and how long it has run.
  */
 export function columnsOf(by: AgentsBy, inGroup = false): {name: Dimension; rest: AgentColumn[]} {
   if (by === 'none' || inGroup) return {name: 'project', rest: ['worked', 'activity', ...(['machine', 'subscription'] as const).filter(column => column !== by), 'running']};
-  return {name: by, rest: ['agents', 'worked', 'activity']};
+  return {name: by, rest: ['agents', 'worked', 'active', 'concurrency', 'activity']};
 }
 
 /** Working now, idle since known work, then never seen working; newest first in each group. */
@@ -185,8 +199,11 @@ export function sortedGroups(groups: AgentGroup[], sort: AgentsSort, columns: re
     const activity = at.get(a)! - at.get(b)!;
     if (nameless(a) || nameless(b)) return Number(nameless(a)) - Number(nameless(b)) || activity;
     if (column === 'worked' && (a.workedMs === null || b.workedMs === null)) return Number(a.workedMs === null) - Number(b.workedMs === null) || activity;
+    if ((column === 'active' || column === 'concurrency') && (a.activeMs == null || b.activeMs == null)) return Number(a.activeMs == null) - Number(b.activeMs == null) || activity;
     const order = column === 'agents' ? a.rows.length - b.rows.length || a.working - b.working
       : column === 'worked' ? a.workedMs! - b.workedMs!
+      : column === 'active' ? a.activeMs! - b.activeMs!
+      : column === 'concurrency' ? (a.activeMs ? a.workedMs! / a.activeMs : 0) - (b.activeMs ? b.workedMs! / b.activeMs : 0)
       : column === 'activity' ? compare(recency(a), recency(b))
       : column === 'running' ? b.startedAt - a.startedAt
       : text(name(a), name(b));
@@ -197,7 +214,7 @@ export function sortedGroups(groups: AgentGroup[], sort: AgentsSort, columns: re
 /** The first column, whatever it names: room for a name to read. */
 export const NAME_WIDTH = 180;
 /** Room for the widest heading in either language and a readable, possibly shortened value. */
-export const AGENT_WIDTHS: Record<AgentColumn, number> = {project: 150, machine: 116, subscription: 132, agents: 160, worked: 120, activity: 210, running: 120};
+export const AGENT_WIDTHS: Record<AgentColumn, number> = {project: 150, machine: 116, subscription: 132, agents: 160, worked: 120, active: 120, concurrency: 180, activity: 210, running: 120};
 /** A table where the name and the columns after it (`columns`) fit `width`, else a list. */
 export function agentsLayout(columns: readonly AgentColumn[], width: number): 'table' | 'list' {
   return tableLayout(columns.map(column=>AGENT_WIDTHS[column]),width,NAME_WIDTH,0);

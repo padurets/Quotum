@@ -1,4 +1,4 @@
-import {boardPeriod,usePeriodSessions,type SessionPeriod} from '../lib/period';
+import {boardPeriod,usePeriodSessions,type SessionOrder,type SessionPeriod} from '../lib/period';
 import {PeriodStatus} from './PeriodStatus';
 import {WarningIcon} from './StatusMark';
 import {timeRangeLabel,timeRangeKey,useTimeRange} from '../lib/timeRange';
@@ -11,6 +11,8 @@ import {
   AGENT_WIDTHS,
   NAME_WIDTH,
   AGENTS_BY,
+  activityDimension,
+  agentActivityValue,
   DIMENSIONS,
   agentRows,
   byActivity,
@@ -34,7 +36,8 @@ import {
   type AgentsSort,
   type Dimension,
 } from '../lib/agents';
-import {recentActivity, stamp, workHours} from '../lib/format';
+import {num, recentActivity, stamp, workHours} from '../lib/format';
+import {activityCoverage} from '../lib/activity';
 import {useLineup, useTitles} from '../lib/board';
 import {setPrefs, usePref} from '../lib/prefs';
 import {hubNow,useClock} from '../lib/clock';
@@ -43,6 +46,7 @@ import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {RecentActivity} from './Time';
 import {Modal} from './Kit';
 import {useTableWidget,useTableLayout,TableSortMenu,TableHeading,TablePages,WidgetPages,TableMeasure,TableGrouping,type TableMetric} from './TableWidget';
+import {tableCell, type Cell, type TimedCell} from './TableCell';
 export {SortIcon} from './TableWidget';
 
 /**
@@ -199,7 +203,32 @@ export function Agents({sessions, roomy = true, period}: {sessions: LiveSession[
 const projectName = (project: string | null) => project ?? t('agents.noProject');
 
 /** How a row is drawn: laid out unseen to be measured (`still`: nothing that moves on, nothing to press), its marks each in its card's colour. */
-type Context = {still: boolean; color: (source: AgentSource | null) => CSSProperties};
+type Context = {still: boolean; color: (source: AgentSource | null) => CSSProperties; by: Dimension};
+
+const activityText = (by: Dimension, column: 'active' | 'concurrency', now: number, key?: string) => {
+  const value = agentActivityValue(boardPeriod.activitySummaryAt(activityDimension(by), now, key), by, column, key);
+  return value === null ? '—' : column === 'active' ? workHours(value) : num(value, 1);
+};
+
+function withCoverage(now: number, next: number | null) {
+  const coverage = boardPeriod.activityCoverageChangesAt(now);
+  return next === null ? coverage : coverage === null ? next : Math.min(next, coverage);
+}
+
+function activityCell(by: Dimension, column: 'active' | 'concurrency', key?: string): TimedCell {
+  const read = (now: number) => activityText(by, column, now, key);
+  return {time:'session-activity',changesAt:now=>withCoverage(now,boardPeriod.activitySummaryChangesAt(activityDimension(by),now,read,key)),at:now=>({content:read(now),title:t(column==='active'?'activity.activeHint':'activity.atOnceHint')})};
+}
+
+const metricCell = (cell: Cell, time?: string) => <span data-time={time} title={cell.title}>{cell.content}</span>;
+
+function SessionCoverage({by,empty,showEmpty}: {by: Dimension; empty: 'none' | 'noneShown' | null; showEmpty: boolean}) {
+  const now = useClock(now => boardPeriod.activityCoverageChangesAt(now)), range = boardPeriod.activityRangeAt(now);
+  const summary = boardPeriod.activitySummaryAt(activityDimension(by), now);
+  const coverage = range ? activityCoverage(summary, range.from) : null;
+  const text = coverage ?? (showEmpty && empty && summary?.known && !summary.agents ? t(`agents.${empty}`) : null);
+  return <p className={coverage?'analytics-note':'panel-empty'} data-time="activity-coverage" hidden={!text}>{text}</p>;
+}
 
 /** Credited time is unknown without a reliable producer identity. */
 function WorkTime({ms,refs=[],still=false,labeled=false}: {ms:number|null;refs?:string[];still?:boolean;labeled?:boolean}) {
@@ -260,8 +289,10 @@ const COLUMNS: Record<AgentColumn, {title: Key; hint?: Key; cell: (group: AgentG
   project: {title: 'agents.project', cell: group => dimensionName(group, 'project')},
   machine: {title: 'agents.machine', cell: group => dimensionName(group, 'machine')},
   subscription: {title: 'agents.subscription', cell: group => dimensionName(group, 'subscription')},
-  agents: {title: 'agents.agents', cell: (group, {color}) => <Tally group={group} color={color} />},
+  agents: {title: 'activity.agents', hint: 'activity.agentsHint', cell: (group, {color}) => <Tally group={group} color={color} />},
   worked: {title: 'agents.worked', hint: 'agents.workedHint', cell: (group,{still}) => <WorkTime ms={group.workedMs} refs={group.rows.flatMap(row=>row.session.ref?[row.session.ref]:[])} still={still}/>},
+  active: {title: 'activity.active', hint: 'activity.activeHint', cell: (group,{by,still}) => tableCell('active',activityCell(by,'active',group.key),metricCell,still)},
+  concurrency: {title: 'agents.concurrency', hint: 'activity.atOnceHint', cell: (group,{by,still}) => tableCell('concurrency',activityCell(by,'concurrency',group.key),metricCell,still)},
   activity: {title: 'agents.lastActivity', hint: 'agents.lastActivityHint', cell: (group, {still}) => <LastActivity group={group} still={still} />},
   running: {title: 'agents.running', cell: (group, {still}) => <RunningTime group={group} still={still}/>},
 };
@@ -316,7 +347,7 @@ function AgentsRows({
   still?: boolean;
   body?: RefObject<HTMLElement | null>;
 }) {
-  const context: Context = {still, color};
+  const context: Context = {still, color, by: name};
   const open = (group: AgentGroup) => (single || still || !onOpen ? undefined : () => onOpen(group.key));
   const rowClass = (group: AgentGroup) => `${group.working ? 'is-working' : ''} ${single || still || !onOpen ? '' : 'is-group'}`;
   // A row of one agent takes its card's colour, for its mark; a group's marks each take their own.
@@ -529,18 +560,20 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const period=usePeriodSessions(rows=>{
     // Duration and presence labels have their own clock. Only their visible
     // sorts can reorder the panel or its open detail dialog as time passes.
-    if(agentsSort?.column!=='worked'&&agentsSort?.column!=='running')return null;
+    if(!agentsSort||!['worked','running','active','concurrency'].includes(agentsSort.column))return null;
     const entries=rows.flatMap((session):AgentRow[]=>session.source===null?[{session,source:null}]:titles[session.source]&&!view.hidden.includes('source:'+session.source)?[{session,source:{id:session.source,...titles[session.source],sessions:[]}}]:[]).sort((a,b)=>byActivity(a.session,b.session)||(a.source?.id??'').localeCompare(b.source?.id??''));
     const worked:string[][][]=[];
+    let activity:SessionOrder['activity'];
     const order=(rows:AgentRow[],by:AgentsBy,inGroup:boolean)=>{
       const {name,columns}=arrangement(inGroup),shown=[name,...columns];
       const sort=visibleAgentsSort(agentsSort,shown);if(!sort)return null;
-      const groups=sortedGroups(groupsOf(rows,by),sort,shown);
+      const groups=sortedGroups(groupsOf(rows,by,by!=='none'&&(sort.column==='active'||sort.column==='concurrency')?boardPeriod.activitySummaryAt(activityDimension(by)):undefined),sort,shown);
       if(sort.column==='worked')worked.push(groups.filter(group=>group.workedMs!==null).map(group=>group.rows.flatMap(row=>row.session.ref?[row.session.ref]:[])));
+      if(by!=='none'&&(sort.column==='active'||sort.column==='concurrency'))activity={by:activityDimension(by),column:sort.column,keys:groups.map(group=>group.key)};
       return groups.map(group=>group.key);
     };
     const key=[order(entries,agentsBy,false),open&&agentsBy!=='none'?groupsOf(entries,agentsBy).map(group=>[group.key,order(group.rows,'none',true)]):null];
-    return {key,worked};
+    return {key,worked,...(activity?{activity}:{})};
   });
   const sources = useMemo(
     () => {const bySource=new Map<string,LiveSession[]>();for(const row of period.rows){if(row.source===null)continue;let rows=bySource.get(row.source);if(!rows)bySource.set(row.source,rows=[]);rows.push(row);}return lineup.flatMap((id):AgentSource[]=>titles[id]?[{id,provider:titles[id].provider,title:titles[id].title,sessions:bySource.get(id)??[]}]:[]);},
@@ -552,7 +585,9 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   // Only what the board shows: a subscription whose card is hidden is left out here too.
   const {rows, empty} = agentRows(sources, arrange.view,period.rows.filter(row=>row.source===null));
   const working = rows.filter(row => row.session.working).length;
-  const groups = groupsOf(rows, agentsBy);
+  const by = agentsBy === 'none' ? 'project' : agentsBy;
+  const summary = boardPeriod.activitySummaryAt(activityDimension(by));
+  const groups = groupsOf(rows, agentsBy, agentsBy === 'none' ? undefined : summary);
   const {name, columns} = arrangement(false);
   const shown = [name, ...columns];
   const active = visibleAgentsSort(agentsSort, shown);
@@ -565,10 +600,11 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const layout=table.layout;
   const refs=rows.flatMap(row=>row.session.ref?[row.session.ref]:[]);
   const worked=rows.some(row=>row.session.workedMs===null)?null:rows.reduce((sum,row)=>sum+row.session.workedMs!,0);
-  const workedText=(now:number)=>worked===null?'—':workHours(boardPeriod.workedAt(refs,worked,now)!);
+  const workedText=(now:number)=>!boardPeriod.activitySummaryAt(activityDimension(by),now)?.known||worked===null?'—':workHours(boardPeriod.workedAt(refs,worked,now)!);
   const metrics:TableMetric[]=[
-    {id:'sessions',label:t('activity.agents'),cell:{content:rows.length}},
-    ...(columns.includes('worked')?[{id:'worked',label:t('agents.worked'),cell:{time:'worked',changesAt:(now:number)=>worked===null?null:boardPeriod.workedChangesAt(refs,now,workedText),at:(now:number)=>({content:workedText(now),title:t('agents.workedHint')})}}]:[]),
+    {id:'sessions',label:t('activity.agents'),cell:{time:'session-count',changesAt:now=>boardPeriod.activityCoverageChangesAt(now),at:now=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?rows.length:'—',title:t('activity.agentsHint')})}},
+    ...(columns.includes('worked')?[{id:'worked',label:t('agents.worked'),cell:{time:'worked',changesAt:(now:number)=>withCoverage(now,worked===null?null:boardPeriod.workedChangesAt(refs,now,workedText)),at:(now:number)=>({content:workedText(now),title:t('agents.workedHint')})}}]:[]),
+    ...(['active','concurrency'] as const).filter(column=>columns.includes(column)).map(column=>({id:column,label:t(COLUMNS[column].title),cell:activityCell(by,column)})),
     {id:'working',label:t('table.workingNow'),cell:{content:working}},
   ];
   // Who may change what: every viewer how the list gathers, the owner its columns and whether it shows.
@@ -588,7 +624,8 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   }, []);
 
   return (
-    <section ref={panel} className="panel agents-panel" aria-label={t('agents.title')}>
+    <section ref={panel} className={`panel agents-panel${period.loading?' is-loading':''}`} aria-label={t('agents.title')} aria-busy={period.loading}
+      data-history-range={period.loading||period.error?undefined:selected&&period.basis?timeRangeKey(period.basis.range):range}>
       <div className="panel-head">
         <h2 ref={heading} tabIndex={-1}>{t('agents.title')}</h2>
         <div className="agents-controls">
@@ -622,9 +659,8 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
         </div>
       </div>
       <PeriodStatus {...period}/>
-      {empty ? (
-        !period.loading&&!period.error&&period.basis&&<p className="panel-empty">{t(`agents.${empty}`)}</p>
-      ) : (
+      <SessionCoverage by={by} empty={empty} showEmpty={!period.loading&&!period.error}/>
+      {!empty && (
         <AgentsRows
           groups={ordered.slice(table.from,table.to)}
           name={name}

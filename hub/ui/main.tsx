@@ -7,7 +7,7 @@ import {setPrefs, usePrefs} from './lib/prefs';
 import {showBoard} from './lib/timeRange';
 import {navigate, settingsHref, usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {ACTIVITY, ACTIVITY_TABLE, AGENTS, ANALYTICS, boardState, cardId, QUOTA_TABLE, QUOTA_HISTORY, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE, isHidden, useView} from './lib/view';
+import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, QUOTA_TABLE, QUOTA_HISTORY, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE, isHidden, useView} from './lib/view';
 import {withSparseArrangement} from './lib/grid';
 import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles, useViewRevision} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
@@ -29,7 +29,6 @@ import {MoneyHistory,MoneyTable} from './components/MoneyAnalytics';
 import {widgetVisible} from '../server/domain/widgets';
 import {Forecast} from './components/Forecast';
 import {Activity} from './components/Activity';
-import {ActivityTable} from './components/ActivityTable';
 import {AnalyticsHead} from './components/Analytics';
 import {Widgets, type Widget} from './components/Widgets';
 import {AuthScreen} from './components/AuthScreen';
@@ -139,7 +138,6 @@ function Dashboard({
     content: <AgentsPanel arrange={arrange} />,
   });
   const panels = new Map<string, Widget>([
-    [ACTIVITY_TABLE,{id:ACTIVITY_TABLE,name:t('activityTable.title'),content:<ActivityTable arrange={arrange}/>}],
     [SUBSCRIPTION_FUNDS,{id:SUBSCRIPTION_FUNDS,name:t('widgets.subscriptionFunds'),content:<MoneyHistory arrange={arrange} family="funds"/>}],
     [BUDGET_HISTORY,{id:BUDGET_HISTORY,name:t('widgets.budgetHistory'),content:<MoneyHistory arrange={arrange}/>}],
     [BUDGET_TABLE,{id:BUDGET_TABLE,name:t('widgets.budgetTable'),content:<MoneyTable arrange={arrange}/>}],

@@ -481,7 +481,7 @@ export type Machine = {
 };
 
 /** Where a board's owner put agent activity, the chart and the table, with the heights they chose, where not as they come. */
-export type AnalyticsPlaces = Partial<Record<'activity' | 'activity-table' | 'quota-history' | 'quota-table' | 'subscription-funds' | 'budget-history' | 'budget-table', Place>>;
+export type AnalyticsPlaces = Partial<Record<'activity' | 'quota-history' | 'quota-table' | 'subscription-funds' | 'budget-history' | 'budget-table', Place>>;
 
 /**
  * Someone on the hub; their codes are read on their personal board, where `agents` turns the
@@ -494,6 +494,8 @@ export type Person = {
   name: string;
   agents?: boolean;
   agentsPlace?: Place;
+  /** Optional grouped session columns enabled on this board. */
+  agentsColumns?: string[];
   forecastWidth?: number;
   places?: AnalyticsPlaces;
   projects?: Record<string, string>;
@@ -510,6 +512,8 @@ export type Board = {
   /** The table of running agents is turned on. */
   agents?: boolean;
   agentsPlace?: Place;
+  /** Optional grouped session columns enabled on this board. */
+  agentsColumns?: string[];
   forecastWidth?: number;
   places?: AnalyticsPlaces;
   /** When members joined it, from `start`, where later than it was made: work before is not the board's. */

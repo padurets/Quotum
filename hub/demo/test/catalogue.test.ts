@@ -861,13 +861,13 @@ test('seed and live credit share producer IDs and expose known positive, zero, l
 });
 
 
-test('session comparison catalogue exposes explicit tables and retained work with a whole union total',async t=>{
+test('session comparison catalogue exposes grouped session columns and retained work with a whole union total',async t=>{
   const set=setOf('all'),start=Math.floor(Date.now()/MIN)*MIN;
   const {stand}=await bringUp(t,set,start);t.mock.timers.setTime(start);
   const reader=stand.people.get('dan')!,board=reader.personalBoard!;
   const overview=await reader.get<Snapshot>('/api/overview');
-  assert.ok(overview.view.shown.includes('activity-table'));
-  assert.equal(overview.view.layout.places['activity-table'].w,6);
+  assert.ok(overview.view.shown.includes('agents'));
+  assert.equal(overview.view.layout.places.agents.w,6);
   const selection={mode:'range',from:start-7*24*HOUR,to:start};
   const reply=await reader.post<PeriodReply>(`/api/boards/${board}/period`,{version:1,selection,evaluatedAt:start,sessions:{}});
   if(reply.sessions?.state!=='complete')throw new Error('comparison work');
@@ -910,7 +910,7 @@ test('session review starts with populated 24h comparisons and retained-context 
   const live=new Live(stand,()=>MIN);await live.report(0,start);
   const reader=stand.people.get('ana')!,board=reader.personalBoard!;
   const overview=await reader.get<Snapshot>(`/api/overview?board=${board}`);
-  assert.ok(overview.view.shown.includes('activity-table'));
+  assert.ok(overview.view.shown.includes('agents'));
   const current=Object.values(overview.sessions).flat();assert.equal(current.length,58);
   const read=async(selection:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number})=>{
     const reply=expandPeriod(await reader.post<PeriodWireReply>(`/api/boards/${board}/period`,{version:1,selection,evaluatedAt:start,sessions:{}}));

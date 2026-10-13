@@ -180,7 +180,7 @@ async function main() {
     // Name order keeps this phase still; clock-driven numeric crossings have
     // their own subscribed-selector tests, including equal displayed labels.
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: `localStorage.setItem('quotum.locale','en');
-      localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),activityTableSort:{column:'name',descending:false}}));
+      localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),agentsSort:{column:'project',descending:false}}));
       ${probeScript()}`});
     await cdp.send('Page.navigate', {url: `${address.base}/`});
 

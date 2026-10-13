@@ -164,21 +164,21 @@ notifications also stay live, independently of the board's historical range.
   make 4 agent-hours: the legend adds up to the total. Active time (at least one agent
   working), recorded sessions and the average at once are in the totals and
   tooltips. It zooms and moves through time as the chart does.
-- **Session activity:** an optional table comparing projects, machines or subscriptions
-  by agent-hours, active time, recorded sessions and average concurrency. Add it through
-  *Add widget*, sort any column and open a group to see its retained sessions over the
-  same period. Active totals count overlapping work once. Recorded sessions count
-  work contexts, so a logical session can count more than once after a context change.
+- **Agent sessions:** one table for projects, machines or subscriptions, or a row per
+  agent. Grouped rows can also show active time and average concurrency; enable those
+  columns in its settings. Open a group to see its retained sessions over the same
+  period. Active totals count overlapping work once. Recorded sessions count work
+  contexts, so a logical session can count more than once after a context change.
   Table widgets fit whole rows to their chosen height and share a compact pager at the
   bottom right. The separate footer labels its summary for the entire selected period,
-  across all pages. Both session tables choose grouping with the same segmented control.
-  Sortable tables use their wide headers to cycle ascending, descending,
-  then reset; narrow lists use the sort menu. There is no inner vertical scrolling.
+  across all pages. Grouping uses the shared segmented control. Sortable tables use
+  their wide headers to cycle ascending, descending, then reset; narrow lists use the
+  sort menu. There is no inner vertical scrolling.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
 - **Boards made of widgets**, like a dashboard in Grafana: source cards, agent activity,
-  charts, tables and an optional Agent sessions list share one grid. The list gathers
+  charts, tables and an optional Agent sessions table share one grid. The table gathers
   sessions by project, machine or subscription, with work within the selected period,
   the date and time of their last recorded work in it and current working counts when
   known. Individual agents with their machines and subscriptions are a click away.

@@ -36,7 +36,7 @@ test('the open sessions dialog keeps the actual period basis, status and retry t
     useMemo:(read:()=>unknown)=>read(),useCallback:(read:unknown)=>read,useLayoutEffect:()=>{},useSyncExternalStore:(_subscribe:unknown,read:()=>unknown)=>read(),
     memo:(component:unknown)=>component,useLocale:()=>{},useLineup:()=>['s'],useTitles:()=>({s:{title:'Source',provider:'codex'}}),
     usePref:(key:'agentsSort'|'agentsBy'|'range')=>({agentsSort:null,agentsBy:'project',range:'24h'})[key],setPrefs:()=>{},usePeriodSessions:undefined as unknown,PeriodStatus:undefined as unknown,
-    boardPeriod:{get:()=>reading,subscribe:()=>()=>{},retry:()=>{retries++;reading={...reading,loading:true,error:null};}},
+    SessionCoverage:'coverage',activityText:()=>'—',boardPeriod:{activitySummaryAt:()=>null,get:()=>reading,subscribe:()=>()=>{},retry:()=>{retries++;reading={...reading,loading:true,error:null};}},
     useSizing:()=>null,useTimeRange:()=>null,useTableWidget:(_panel:unknown,_columns:unknown,_name:unknown,keys:string[])=>({layout:'table',from:0,to:Math.min(10,keys.length),measureFrom:0,measureTo:0}),TableGrouping:'grouping',TableMeasure:'measurement',WidgetPages:'pages',TablePages:'pager',useAgentsLayout:()=> 'table',Popover:'popover',SlidersIcon:'icon',HideRow:'hide',SwitchRow:'switch',Modal:'modal',AgentsRows:'rows',SortMenu:'sort',projectName:(value:string|null)=>value??t('agents.noProject'),
   };
   const run=(body:string)=>runInNewContext(ts.transpileModule(body,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);

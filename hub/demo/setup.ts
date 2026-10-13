@@ -199,7 +199,7 @@ export function viewOf(stand: Stand, key: string) {
     unplanned: [] as string[],
     colors: {} as Record<string, string>,
     columns: {},
-    shownColumns: board?.kind === 'board' && board.tableColumns ? {'quota-table': board.tableColumns} : {},
+    shownColumns: {...(board?.kind === 'board' && board.tableColumns ? {'quota-table': board.tableColumns} : {}), ...(board?.agentsColumns ? {agents: board.agentsColumns} : {})},
   };
   let cursor = 0;
   let rank = 0;
@@ -226,9 +226,7 @@ export function viewOf(stand: Stand, key: string) {
     const auto = place(id === 'quota-table' ? board?.forecastWidth ?? COLUMNS : COLUMNS);
     view.layout.places[id] = board?.places?.[id] ?? auto;
   }
-  const migrated=migrateUnified({...view,version:2},shown.map(card=>({id:stand.sources.get(card.id)!,provider:card.provider})));
-  const activityTable=board?.places?.['activity-table'];
-  return activityTable?{...migrated,shown:[...migrated.shown,'activity-table'],layout:{...migrated.layout,places:{...migrated.layout.places,'activity-table':activityTable}}}:migrated;
+  return migrateUnified({...view,version:2},shown.map(card=>({id:stand.sources.get(card.id)!,provider:card.provider})));
 }
 
 /**

@@ -261,7 +261,7 @@ class BoardPeriod {
     if(snapshot||!this.identity||event?.type==='hub'&&event.event.type==='history'&&event.event.data.workAuthority)this.workAuthority=board.workAuthority;
     const selected=timeRange(),selection:PeriodSelection=selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(prefs().range).ms};
     const sources=board.lineup.filter(id=>!board.view.hidden.includes('source:'+id));
-    const wantsWork=sources.length>0||[AGENTS,ACTIVITY,'activity-table'].some(id=>widgetVisible(board.view,id,board.lineup.length));
+    const wantsWork=sources.length>0||[AGENTS,ACTIVITY].some(id=>widgetVisible(board.view,id,board.lineup.length));
     const scopeKeys=Object.fromEntries(Object.entries(this.queries(board,evaluatedRange(selection,hubNow()))).map(([scope,query])=>[scope,this.queryKey(query)]));
     const changedScopes=PERIOD_SCOPES.filter(scope=>scopeKeys[scope]!==this.scopeKeys[scope]);
     const identity=JSON.stringify([board.id,periodKey(selection),sources,wantsWork,board.currencies?.target.id,board.currencies?.revision,board.currencies?.registryRevision,sources.map(id=>[id,board.cards[id]?.budget])]);
@@ -621,26 +621,12 @@ export function usePeriodSessions(order:(rows:WorkedSession[])=>SessionOrder|nul
   const [watch]=useState(()=>(rows:WorkedSession[])=>latest.current(rows));
   useLayoutEffect(()=>boardPeriod.subscribeWorkOrder(watch),[watch]);
   useLayoutEffect(()=>boardPeriod.refreshWorkClock());
-  const [read]=useState(()=>selector(boardPeriod,()=>({select:({value:_value,...state})=>state,equal:(a,b)=>a.evidence===b.evidence&&a.loading===b.loading&&a.error===b.error&&sameJson(panelRoster(a.rows),panelRoster(b.rows))&&sameJson(latest.current(a.rows)?.key,latest.current(b.rows)?.key)})));
+  // Capture the order with its reading: union sorts also depend on the common clock,
+  // so recomputing both old and new keys at the new time would hide a crossing.
+  const [read]=useState(()=>selector(boardPeriod,()=>({select:({value:_value,...state})=>({...state,order:latest.current(state.rows)?.key}),equal:(a,b)=>a.evidence===b.evidence&&a.loading===b.loading&&a.error===b.error&&sameJson(panelRoster(a.rows),panelRoster(b.rows))&&sameJson(a.order,b.order)})));
   return useSyncExternalStore(boardPeriod.subscribe,read);
 }
 export type SessionPeriod=Pick<Reading<WorkTrace>,'basis'|'loading'|'error'>;
-/** Scalar activity needs no quota cells, plot preparation or presence subscription. */
-export function usePeriodActivity(by:import('./types').ActivityDimension,order:(rows:WorkedSession[])=>SessionOrder|null){
-  const latest=useRef({by,order});latest.current={by,order};
-  const [watch]=useState(()=>(rows:WorkedSession[])=>latest.current.order(rows));
-  useLayoutEffect(()=>boardPeriod.subscribeWorkOrder(watch),[watch]);
-  useLayoutEffect(()=>boardPeriod.refreshWorkClock());
-  const [read]=useState(()=>selector(boardPeriod,()=>({
-    select:state=>({basis:state.basis,loading:state.loading,error:state.error,evidence:state.evidence,by:latest.current.by,selection:boardPeriod.activitySelection(),
-      summary:boardPeriod.activitySummaryAt(latest.current.by),order:latest.current.order(state.rows)?.key}),
-    equal:(a,b)=>a.by===b.by&&a.loading===b.loading&&a.error===b.error&&sameJson(a.order,b.order)&&sameJson(a.selection,b.selection)
-      &&sameJson(a.selection.mode==='range'||a.loading||a.error?a.basis?.range:null,b.selection.mode==='range'||b.loading||b.error?b.basis?.range:null)
-      &&sameJson(a.summary&&[a.summary.since,!!a.summary.known,a.summary.by[a.by].map(g=>[g.key,g.name,g.agents])],b.summary&&[b.summary.since,!!b.summary.known,b.summary.by[b.by].map(g=>[g.key,g.name,g.agents])])
-      &&(a.evidence===b.evidence||sameJson(a.summary,b.summary)),
-  })));
-  return useSyncExternalStore(boardPeriod.subscribe,read);
-}
 export function useSourcePeriodSessions(id:string){
   const current=useRef(id);current.current=id;
   const [read]=useState(()=>selector({get:()=>({rows:boardPeriod.getSource(current.current),value:boardPeriod.getWorkEvidence()})},()=>({select:state=>state,equal:(a,b)=>a.value===b.value&&sameJson(roster(a.rows),roster(b.rows))})));

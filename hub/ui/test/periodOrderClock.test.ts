@@ -14,7 +14,7 @@ import {evaluatedRange,periodKey} from '../../server/domain/period';
 import {PERIOD_SCOPES,type PeriodRequest} from '../../server/domain/periodRead';
 import {packWorkPrepared,workPreparationBytes,mergeWorkPrepared,type WorkedSession,type WorkTrace} from '../../server/domain/periodWork';
 import {sampleBytes} from '../../server/domain/periodTape';
-import {byActivity,columnsOf,groupsOf,sortedGroups,visibleAgentsSort,type AgentsBy,type AgentsSort} from '../lib/agents';
+import {activityDimension,byActivity,columnsOf,groupsOf,sortedGroups,visibleAgentsSort,type AgentsBy,type AgentsSort} from '../lib/agents';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS} from '../../server/domain/widgets';
 import {columnShown} from '../lib/view';
 import {EMPTY_VIEW} from '../../server/domain/view';
@@ -23,8 +23,6 @@ import {periodOf} from '../lib/periods';
 import {periodTextChangesAt} from '../lib/periodClock';
 import {workHours} from '../lib/format';
 import type {SessionOrder} from '../lib/period';
-import type {ActivityDimension} from '../lib/types';
-import {sortedActivity} from '../lib/activityTable';
 
 const H=3_600_000,ref=(id:string,project:string,source:string|null='s')=>({ref:id,source,device:{id:project,name:project},origin:'terminal' as const,project,folder:null,startedAt:0});
 const compile=(body:string)=>ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
@@ -32,14 +30,14 @@ const coordinator=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8
 type Order=(rows:WorkedSession[])=>SessionOrder|null;
 
 /** Read the component's actual filtered group/dialog demand, before DOM hooks. */
-function agentOrder({by='project',hidden=[] as string[],open=false,sort={column:'worked',descending:true} as AgentsSort}={}):Order{
+function agentOrder({by='project',hidden=[] as string[],open=false,sort={column:'worked',descending:true} as AgentsSort,period={activitySummaryAt:()=>null} as any}={}):Order{
   let order:Order=()=>null;const done={};
   const source=readFileSync(new URL('../components/Agents.tsx',import.meta.url),'utf8');
   const context={exports:{} as {AgentsPanel:(props:unknown)=>unknown},memo:(f:unknown)=>f,useLocale:()=>{},useLineup:()=>['s','hidden'],useTitles:()=>({s:{title:'Source',provider:'codex'},hidden:{title:'Hidden',provider:'codex'}}),
     usePref:(key:'agentsSort'|'agentsBy'|'range')=>({agentsSort:sort,agentsBy:by as AgentsBy,range:'1h'})[key],useTimeRange:()=>null,useState:()=>[open?{group:null}:null,()=>{}],useCallback:(f:unknown)=>f,
-    usePeriodSessions:(read:Order)=>{order=read;throw done;},columnsOf,columnShown,AGENTS,groupsOf,sortedGroups,visibleAgentsSort,byActivity,require:()=>({})};
+    usePeriodSessions:(read:Order)=>{order=read;throw done;},columnsOf,columnShown,AGENTS,groupsOf,sortedGroups,visibleAgentsSort,byActivity,activityDimension,boardPeriod:period,require:()=>({})};
   runInNewContext(compile(source.slice(source.indexOf('export const AgentsPanel'))),context);
-  try{context.exports.AgentsPanel({arrange:{view:{...EMPTY_VIEW,hidden}}});}catch(error){assert.equal(error,done);}
+  try{context.exports.AgentsPanel({arrange:{view:{...EMPTY_VIEW,hidden,shownColumns:{[AGENTS]:['active','concurrency']}}}});}catch(error){assert.equal(error,done);}
   return order;
 }
 
@@ -69,11 +67,11 @@ async function harness(trace:WorkTrace){
 }
 
 /** Effects and external-store equality from the actual hook, including remount. */
-function panel(period:any,initial:Order,by?:ActivityDimension){
+function panel(period:any,initial:Order){
   let order=initial,cursor=0,dirty=false,renders=0,value:any;
   const slots:any[]=[],pending:(()=>void)[]=[];
   const slot=(make:()=>any)=>{const i=cursor++;return slots[i]??(slots[i]=make());};
-  const context={exports:{} as {usePeriodSessions:(order:Order)=>unknown;usePeriodActivity:(by:ActivityDimension,order:Order)=>unknown},boardPeriod:period,selector,sameJson,
+  const context={exports:{} as {usePeriodSessions:(order:Order)=>unknown},boardPeriod:period,selector,sameJson,
     useRef:(current:unknown)=>slot(()=>({current})),useState:(make:()=>unknown)=>[slot(()=>({value:make()})).value],
     useLayoutEffect:(effect:()=>void|(()=>void),deps?:unknown[])=>{const state=slot(()=>({deps:null,stop:null,effect}));state.effect=effect;if(!deps||!state.deps||deps.some((v,i)=>!Object.is(v,state.deps[i]))){state.deps=deps;pending.push(()=>{state.stop?.();state.stop=effect();});}},
     useSyncExternalStore:(subscribe:(listener:()=>void)=>()=>void,read:()=>unknown)=>{
@@ -81,7 +79,7 @@ function panel(period:any,initial:Order,by?:ActivityDimension){
       state.value=read();return state.value;
     }};
   runInNewContext(compile(coordinator.slice(coordinator.indexOf('const roster='),coordinator.indexOf('export function useSourcePeriodSessions'))),context);
-  function render(){for(let i=0;;i++){assert.ok(i<5,'selector and clock effects cannot render in a loop');cursor=0;dirty=false;value=by?context.exports.usePeriodActivity(by,order):context.exports.usePeriodSessions(order);renders++;while(pending.length)pending.shift()!();if(!dirty)break;}return value;}
+  function render(){for(let i=0;;i++){assert.ok(i<5,'selector and clock effects cannot render in a loop');cursor=0;dirty=false;value=context.exports.usePeriodSessions(order);renders++;while(pending.length)pending.shift()!();if(!dirty)break;}return value;}
   render();
   return {render:()=>dirty?render():value,setOrder:(next:Order)=>{order=next;return render();},rows:()=>value.rows as WorkedSession[],renders:()=>renders,
     strictRemount:()=>{for(const state of slots)if(state.effect){state.stop?.();state.stop=state.effect();}},
@@ -143,22 +141,13 @@ test('domain crossing boundaries cover ties and future membership without minute
   later.advance({from:2000,to:H+2000},H+2000);assert.equal(later.changesAt(H+2000,H),H+2001,'a context enters on the first credited millisecond');
 });
 
-function activityOrder(period:any,column:'active'|'concurrency'):Order{
-  return ()=>{
-    const summary=period.activitySummaryAt('project');
-    const groups=sortedActivity(summary?.by.project??[],{column,descending:true},g=>g.name??g.key,'en','project');
-    return {key:groups.map(g=>g.key),activity:{by:'project',column,keys:groups.map(g=>g.key)}};
-  };
-}
+function activityOrder(period:any,column:'active'|'concurrency'):Order{return agentOrder({period,sort:{column,descending:true}});}
 
 test('idle historical work can reorder equal activity labels, while name order leaves the parent asleep',async()=>{
   const h=await harness({anchor:0,knownFrom:0,refs:[ref('a','A'),ref('b','B')],spans:[[0,0,160_000],[1,300_000,455_000]]});
-  const order=(column:'name'|'agenthours'):Order=>rows=>{
-    const groups=sortedActivity(h.period.activitySummaryAt('project')?.by.project??[],{column,descending:column==='agenthours'},g=>g.name??g.key,'en','project');
-    return {key:groups.map(g=>g.key),...(column==='agenthours'?{worked:[groups.map(g=>rows.filter(row=>JSON.stringify(row.project)===g.key).map(row=>row.ref))]}:{})};
-  };
-  const numeric=panel(h.period,order('agenthours'),'project'),named=panel(h.period,order('name'),'project'),baseline=named.renders();
-  const keys=(consumer:ReturnType<typeof panel>)=>JSON.parse(JSON.stringify(consumer.render().order));
+  const order=(column:'name'|'agenthours'):Order=>agentOrder({period:h.period,sort:{column:column==='name'?'project':'worked',descending:column==='agenthours'}});
+  const numeric=panel(h.period,order('agenthours')),named=panel(h.period,order('name')),baseline=named.renders();
+  const keys=(consumer:ReturnType<typeof panel>)=>consumer.render().order?JSON.parse(JSON.stringify(consumer.render().order[0])):sortedGroups(groupsOf(h.period.get().rows.map((session:WorkedSession)=>({session,source:null})),'project'),{column:'project',descending:false},['project']).map(g=>g.key);
   const labels=()=>h.period.activitySummaryAt('project').by.project.map((g:any)=>workHours(g.agentMs));
   assert.deepEqual(keys(numeric),['"A"','"B"']);assert.deepEqual(labels(),['3m','3m']);
   h.advance(H+5250);
@@ -167,25 +156,27 @@ test('idle historical work can reorder equal activity labels, while name order l
   assert.equal(h.reads(),1);numeric.close();named.close();h.close();
 });
 
-test('activity table union sorting crosses on the real common clock rather than additive session time',async()=>{
+test('grouped sessions union sorting crosses on the real common clock rather than additive session time',async()=>{
   const h=await harness({anchor:0,knownFrom:0,refs:[ref('a1','A'),ref('a2','A'),ref('b','B')],spans:[[0,0,160_000],[1,0,160_000],[2,300_000,455_000]]});
-  const order=activityOrder(h.period,'active'),consumer=panel(h.period,order,'project'),passive=panel(h.period,()=>null,'project');
-  const keys=()=>JSON.parse(JSON.stringify(consumer.render().order));
+  const order=activityOrder(h.period,'active'),consumer=panel(h.period,order),passive=panel(h.period,()=>null);
+  const keys=()=>JSON.parse(JSON.stringify(consumer.render().order[0]));
   assert.deepEqual(keys(),['"A"','"B"']);const baseline=passive.renders();
-  h.advance(H+5000);consumer.render();assert.deepEqual(keys(),['"A"','"B"']);
+  h.advance(H+4999);assert.deepEqual(keys(),['"A"','"B"']);
+  h.advance(H+5000);consumer.render();assert.deepEqual(keys(),['"B"','"A"'],'ties retain the existing last-activity order');
   h.advance(H+5250);assert.deepEqual(keys(),['"B"','"A"']);consumer.render();
   assert.ok(consumer.renders()>1);passive.render();assert.equal(passive.renders(),baseline,'duration-only changes leave the parent table asleep');
   assert.equal(h.reads(),1);consumer.close();passive.close();h.close();
 });
 
-test('activity table ratio sorting handles quadratic equality and inversion, remount and disposal without HTTP',async()=>{
+test('grouped sessions ratio sorting handles quadratic equality and inversion, remount and disposal without HTTP',async()=>{
   const h=await harness({anchor:0,knownFrom:0,refs:[ref('a1','A'),ref('a2','A'),ref('b1','B'),ref('b2','B'),ref('b3','B')],
     spans:[[0,0,200_000],[1,0,120_000],[2,0,100_000],[3,300_000,400_000],[4,300_000,350_000]]});
-  const order=activityOrder(h.period,'concurrency'),consumer=panel(h.period,order,'project');
-  const keys=()=>JSON.parse(JSON.stringify(consumer.render().order));
+  const order=activityOrder(h.period,'concurrency'),consumer=panel(h.period,order);
+  const keys=()=>JSON.parse(JSON.stringify(consumer.render().order[0]));
   assert.deepEqual(keys(),['"A"','"B"']);
   consumer.strictRemount();assert.equal(h.period.workOrders.size,1);
-  h.advance(H+70_000);consumer.render();assert.deepEqual(keys(),['"A"','"B"']);
+  h.advance(H+69_999);assert.deepEqual(keys(),['"A"','"B"']);
+  h.advance(H+70_000);consumer.render();assert.deepEqual(keys(),['"B"','"A"'],'equal ratios keep the existing activity tie-break');
   h.advance(H+70_250);consumer.render();assert.deepEqual(keys(),['"B"','"A"']);
   assert.equal(h.reads(),1);assert.ok(h.pool.estimatedBytes<=h.pool.budget);
   consumer.setOrder(()=>null);assert.equal(h.period.workOrders.size,1);

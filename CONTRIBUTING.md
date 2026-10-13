@@ -227,8 +227,9 @@ contacted. Use `make info` for the actual address and synthetic sign-in.
 
 `DEV_SET=sessions make dev` opens the session analytics review fixture. Sign in as Ana:
 the default 24h period has 57 projects, five machines, four subscriptions and 125
-recorded contexts. Session activity and Agent sessions share height fitting and the
-compact pager at the bottom right. Their separate footer labels totals across the
+recorded contexts. Agent sessions includes active time and average concurrency,
+fits whole rows to its height and has a compact pager at the bottom right. Its separate
+footer labels totals across the
 entire selected period, including rows on other pages. Grouping uses shared segments.
 Increasing the height fits more rows without a fifty-row page cap or another API read;
 when every row fits, the pager disappears. Wide tables sort through their headers, with the

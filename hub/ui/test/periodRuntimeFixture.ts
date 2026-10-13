@@ -53,7 +53,7 @@ export async function fixture({personal=false,privateWork=false,unknown=false,cu
   if(!personal)directory.addMember(board,bob.id,start);
   directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS,'quota-history'],hidden:[ACTIVITY]},alice.id,start);
   const source=store.source('codex','a'.repeat(24),start);store.hold(source,alice.id,start);store.hold(source,bob.id,start);
-  if(tableOnly)directory.saveView(board,{...EMPTY_VIEW,shown:['activity-table'],hidden:[ACTIVITY,'quota-history','quota-table','subscription-funds','budget-history','budget-table','source:'+source]},alice.id,start);
+  if(tableOnly)directory.saveView(board,{...EMPTY_VIEW,shown:[AGENTS],enabledWhenEmpty:[AGENTS],hidden:[ACTIVITY,'quota-history','quota-table','subscription-funds','budget-history','budget-table','source:'+source]},alice.id,start);
   if(!personal)store.share(board,source,alice.id,start);
   store.record(source,{observedAt:NOW-2*M,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:NOW+H}]});
   const device=directory.saveDevice({userId:personal?alice.id:bob.id,machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},start).id;

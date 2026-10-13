@@ -513,21 +513,21 @@ tap also switches the group and keeps the bubble for four seconds. Switching gro
 off recomputes stacks, scale and the shown agent-hours; active time, agents and at
 once still cover all the board's agents. A subscription's agent-hours equal its
 windows' Agent-hours column, and its active time equals their Active time column.
-The optional Session activity table compares the same work by project, machine or
-subscription, with independent reader grouping and sorting. It reads the shared
-period work index without quota history or plot preparation. Its rows and whole-period
-total show agent-hours, union active time, recorded sessions and average concurrency;
-the total never adds group active times. Recorded sessions are positive-work retained
-contexts, so one logical producer can count more than once after a context change.
-The chart explains the same count. Opening a group shows those retained contexts,
-including ones without current presence, with their work clipped to the same period.
-The table uses the common whole-row pages and bottom-right pager, like the agent,
-quota and budget tables, without an inner vertical scroller. Its session disclosure
-uses the existing 50-row pages. The table is added explicitly, stays when empty, and
-has owner-controlled columns while every reader keeps their own presentation choices.
-Small cells and live sort crossings use the common clock; fixed ranges do not tick.
-Replacement reads keep the last complete summary with its original basis until the
-new evidence is accepted, and access or work-authority loss clears retained work.
+The Agent sessions table compares the same work by project, machine or subscription,
+with reader grouping and sorting independent of the activity chart. Its existing
+count, credited work and last-activity columns can be accompanied by union active time
+and average concurrency. These two grouped columns are off by default and enabled in
+owner settings; individual-agent rows and disclosures retain their contextual fields.
+It reads the shared period work index without quota history or plot preparation.
+Whole-period totals never add group active times or average row concurrency. Recorded
+sessions are positive-work retained contexts, so one logical producer can count more
+than once after a context change. The chart explains the same count. Opening a group
+shows those retained contexts, including ones without current presence, with their work
+clipped to the same period. The table uses common whole-row pages and a bottom-right
+pager without an inner vertical scroller. Its disclosure uses existing 50-row pages.
+Small cells and visible raw-value sort crossings use the common clock; fixed ranges
+do not tick. Replacement reads keep the last complete summary with its original basis
+until new evidence is accepted, and access or work-authority loss clears retained work.
 What is known of a period begins with `agentWorkSince`, and on a shared board no earlier than the
 subscription came to it: the part before is said to be unknown, not drawn as idle. The
 pace and the share while active are taken over the activity within the steps between
@@ -1322,10 +1322,10 @@ heights follow row identities through ordering and paging. Static measurement st
 with fifty candidates and expands to the fitting page and its next row, without clock
 subscriptions. A separate footer puts the whole-selection summary on the left and
 the compact pager on the right; a narrow list puts the summary above the pager.
-Each value names its metric and scope. Session tables show whole-period work and
+Each value names its metric and scope. The sessions table shows whole-period work and
 context counts; quota and budget tables show matching row counts without summing
 unrelated percentages or overlapping wallet components. One-page tables hide the
-pager. Grouping uses the same labelled segmented control in both session tables.
+pager. Grouping uses the shared labelled segmented control.
 Wide headers cycle
 ascending, descending, reset; a reset leaves no header selected and restores the
 table's default order. Only the compact list shows a sort menu. Activity totals

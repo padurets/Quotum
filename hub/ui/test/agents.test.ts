@@ -122,9 +122,9 @@ test('agents gather by project, machine or subscription in the order of their mo
 });
 
 test('groups show counts and work; machines and subscriptions belong to individual agents', () => {
-  assert.deepEqual(columnsOf('project'), {name: 'project', rest: ['agents', 'worked', 'activity']});
-  assert.deepEqual(columnsOf('machine'), {name: 'machine', rest: ['agents', 'worked', 'activity']});
-  assert.deepEqual(columnsOf('subscription'), {name: 'subscription', rest: ['agents', 'worked', 'activity']});
+  assert.deepEqual(columnsOf('project'), {name: 'project', rest: ['agents', 'worked', 'active', 'concurrency', 'activity']});
+  assert.deepEqual(columnsOf('machine'), {name: 'machine', rest: ['agents', 'worked', 'active', 'concurrency', 'activity']});
+  assert.deepEqual(columnsOf('subscription'), {name: 'subscription', rest: ['agents', 'worked', 'active', 'concurrency', 'activity']});
   assert.deepEqual(columnsOf('none'), {name: 'project', rest: ['worked', 'activity', 'machine', 'subscription', 'running']});
   assert.deepEqual(columnsOf('project', true), columnsOf('none'));
   assert.deepEqual(columnsOf('machine', true).rest, ['worked', 'activity', 'subscription', 'running']);
@@ -194,7 +194,7 @@ test('layout follows the widget’s width and the owner’s columns at either si
   }
   assert.equal(agentsLayout(columnsOf('project').rest, 320), 'list');
   assert.equal(agentsLayout([], 320), 'table');
-  assert.equal(agentsLayout(columnsOf('project').rest, 700), 'table', 'the grouped overview reserves room for all ten tally marks');
+  assert.equal(agentsLayout(columnsOf('project').rest.filter(id=>!['active','concurrency'].includes(id)), 700), 'table', 'the grouped overview reserves room for all ten tally marks');
   const details = columnsOf('project', true).rest.filter(column => column !== 'running');
   assert.equal(agentsLayout(details, 758), 'table', 'default details fit the wide dialog, without an inset list fallback');
 });

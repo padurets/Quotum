@@ -1,7 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {nextTableSort,tablePages,visibleTableSort,type TableSort} from '../lib/table';
-import {nextActivitySort,type ActivityColumn} from '../lib/activityTable';
 import {nextAgentsSort,type AgentColumn} from '../lib/agents';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
@@ -86,7 +85,7 @@ test('a tall widget fits more than fifty rows and removes pages when the whole s
   assert.equal(f.height(),2500);
 });
 
-test('both session tables use ascending, descending, reset and explicit menu reset',()=>{
+test('session table columns use ascending, descending, reset and explicit menu reset',()=>{
   function cycle<Id extends string>(next:(sort:TableSort<Id>,column:Id|null,cycle?:boolean)=>TableSort<Id>,column:Id){
     const up=next(null,column);assert.deepEqual(up,{column,descending:false});
     const down=next(up,column);assert.deepEqual(down,{column,descending:true});
@@ -94,7 +93,7 @@ test('both session tables use ascending, descending, reset and explicit menu res
     assert.equal(next(down,null),null);
     assert.deepEqual(next(down,column,false),up);
   }
-  cycle<AgentColumn>(nextAgentsSort,'project');cycle<ActivityColumn|'name'>(nextActivitySort,'active');
+  cycle<AgentColumn>(nextAgentsSort,'project');cycle<AgentColumn>(nextAgentsSort,'active');
   const saved={column:'a',descending:true};assert.equal(visibleTableSort(saved,['b']),null);assert.equal(visibleTableSort(saved,['a','b']),saved);
   assert.equal(nextTableSort(null,null),null);
 });
