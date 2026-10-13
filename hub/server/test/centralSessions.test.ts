@@ -80,3 +80,23 @@ test('source holdings outside the admitted-owner cohort cannot change work autho
  }
  h.store.release(source,h.owner.id);assert.notEqual(h.store.workKey(h.board),key,'the captured device owner’s holding changes actual funding disclosure');const changed=expandPeriod((await h.call('POST',`/api/boards/${h.board}/period`,{...body,sessions:{cursor}})).json<PeriodWireReply>());assert.equal(changed.sessions?.state,'complete');
 });
+
+test('related funding revisions commit atomically, remain immutable in captured access and are deleted with their board',async t=>{
+ t.mock.method(Date,'now',()=>at+M);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});const source=h.store.source('codex','f'.repeat(24),at);
+ h.store.creditWork(h.device.id,at,at+M,[{source,client:'opencode',origin:'terminal',project:'P',folder:'',startedAt:at,identity:{kind:'stable',sessionId:'f'.repeat(32)}}]);
+ const captured=h.store.workAccess(h.board),before=h.store.workKey(h.board,undefined,captured);
+ assert.throws(()=>h.directory.transaction(()=>{h.store.hold(source,h.owner.id,at+M);throw new Error('rollback');}),/rollback/);assert.equal(h.store.holds(h.owner.id,source),false);assert.equal(h.store.workKey(h.board),before);
+ h.store.hold(source,h.owner.id,at+M);const held=h.store.workKey(h.board);assert.notEqual(held,before);assert.equal(h.store.workKey(h.board,undefined,captured),before);
+ h.store.hold(source,h.owner.id,at+M);assert.equal(h.store.workKey(h.board),held,'a no-op holding never advances funding authority');
+ h.store.share(h.board,source,h.owner.id,at+M);const shared=h.store.workKey(h.board);h.store.share(h.board,source,h.owner.id,at+M);assert.equal(h.store.workKey(h.board),shared,'a no-op share keeps authority');
+ h.store.release(source,h.owner.id);assert.equal(h.store.sources(h.board).length,0,'orphan cleanup withdraws the supplied association');assert.notEqual(h.store.workKey(h.board),shared);
+ assert.ok(h.store.db.prepare("SELECT value FROM meta WHERE key=?").get('workFunding::'+h.board));h.directory.deleteBoard(h.board);assert.equal(h.store.db.prepare("SELECT value FROM meta WHERE key=?").get('workFunding::'+h.board),undefined);
+});
+
+test('provided quota sources without admitted devices preserve the empty work cursor until device admission',async t=>{
+ t.mock.method(Date,'now',()=>at+M);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});const policy=h.store.sessionDevices(h.board,h.owner.id)[0],off=h.store.setDeviceSessions(h.board,h.device.id,h.owner.id,false,policy.revision,at);
+ const body={version:1,selection:{mode:'live',periodMs:60*M},evaluatedAt:at+M,sessions:{}},first=expandPeriod((await h.call('POST',`/api/boards/${h.board}/period`,body)).json<PeriodWireReply>());if(first.sessions?.state!=='complete')throw new Error('missing baseline');const cursor=first.sessions.value.cursor,key=h.store.workKey(h.board),source=h.store.source('codex','e'.repeat(24),at);
+ h.store.hold(source,h.owner.id,at);h.store.share(h.board,source,h.owner.id,at);assert.equal(h.store.workAccess(h.board).sources.get(source)!.holders.size,0);assert.equal(h.store.workKey(h.board),key,'a provided source has no work coverage while every device is OFF');
+ const next=expandPeriod((await h.call('POST',`/api/boards/${h.board}/period`,{...body,sessions:{cursor}})).json<PeriodWireReply>());assert.equal(next.sessions?.state,'delta');
+ h.store.setDeviceSessions(h.board,h.device.id,h.owner.id,true,off.revision,at+M);assert.notEqual(h.store.workKey(h.board),key);const admitted=expandPeriod((await h.call('POST',`/api/boards/${h.board}/period`,{...body,sessions:{cursor}})).json<PeriodWireReply>());assert.equal(admitted.sessions?.state,'complete');
+});

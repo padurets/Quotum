@@ -7,7 +7,7 @@ import {Duty} from '../duty.js';
 import {Cadence} from '../cadence.js';
 import {ResetFeed} from '../resets.js';
 import {Events,type Frame} from '../events.js';
-import {HistoryTiles} from '../history.js';
+import {HistoryTiles,HistoryLimit} from '../history.js';
 import {PeriodReader} from '../periodRead.js';
 import {config} from '../config.js';
 import {Projection} from '../projection.js';
@@ -61,7 +61,7 @@ test('empty closed tiles charge retained device dependencies; financial tiles ke
  const h=fixture();t.after(h.close);for(let i=0;i<100;i++)h.directory.saveDevice({userId:h.owner.id,machine:{id:'extra-machine-'+i,name:'Saved '+i,os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},at-M);
  const cache=new HistoryTiles(h.store,5000);let reads=0;const cells=h.store.cells.bind(h.store);t.mock.method(h.store,'cells',(...args:Parameters<Store['cells']>)=>{reads++;return cells(...args);});
  const read=(scope?:'budget')=>cache.read(h.board,M,at-60*M,at,at,h.store.shown(h.board,[]),undefined,scope);
- assert.equal(read()[0],read()[0]);assert.equal(reads,2,'tiny empty JSON cannot hide an over-budget dependency set');read('budget');read('budget');assert.equal(reads,3,'budget-only tiles retain their independent small footprint');
+ assert.throws(()=>read(),HistoryLimit);assert.throws(()=>read(),HistoryLimit);assert.equal(reads,0,'an over-budget access snapshot fails before cells or cache allocation');read('budget');read('budget');assert.equal(reads,1,'budget-only tiles retain their independent small footprint');
  const bounded=new HistoryTiles(h.store,5000),reader=new PeriodReader(h.hub,bounded,h.events),body={version:1,selection:{mode:'live',periodMs:60*M},evaluatedAt:at,sessions:{},budget:{cell:String(M),from:String(at-M),to:String(at),unit:'USD',meters:'[]'}};
  const result=JSON.parse(reader.read(h.board,h.reader.id,body));assert.equal(result.sessions.state,'error');assert.equal(result.sessions.error,'history_limit');assert.equal(result.budget.state,'complete');assert.equal(JSON.parse(reader.read(h.board,h.reader.id,{...body,sessions:undefined})).budget.state,'complete','failed snapshot reservations are released');
 });

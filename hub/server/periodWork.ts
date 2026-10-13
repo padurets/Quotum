@@ -9,7 +9,7 @@ import type {Sessions} from './sessions.js';
 import {workKnownFrom} from './domain/history.js';
 
 /** A composite read extracts work once for charts and the temporal index. */
-export function sharedWork(hub:Hub,_shown:Shown,range:PeriodRange|null|(()=>PeriodRange|null),reserve:(bytes:number)=>void,release:(bytes:number)=>void,_owner:string|null=null,now=Date.now(),board:string):WorkRead {
+export function sharedWork(hub:Pick<Hub,'store'>,_shown:Shown,range:PeriodRange|null|(()=>PeriodRange|null),reserve:(bytes:number)=>void,release:(bytes:number)=>void,_owner:string|null=null,now=Date.now(),board:string):WorkRead {
   let kept:{from:number;to:number;rows:Stretch[]}|null=null,bytes=0;
   let access:import('./domain/workAccess.js').WorkAccess|undefined,accessError:unknown,snapshotBytes=0;
   try{access=hub.store.workAccess(board,now,size=>{reserve(size);snapshotBytes+=size;});}catch(error){release(snapshotBytes);accessError=error;}
@@ -31,7 +31,7 @@ export function periodWork(hub:Hub,history:HistoryTiles,board:string,shown:Shown
   return drain(preparePeriodWork(hub,history,board,shown,range,work,now,reserve,release));
 }
 export function* preparePeriodWork(hub:Hub,history:HistoryTiles,board:string,shown:Shown,range:PeriodRange,work:WorkRead,now:number,reserve:(bytes:number)=>void,release?:(bytes:number)=>void,presence:Sessions['presence']=hub.ingest.live.presence.bind(hub.ingest.live)):Preparation<WorkTrace> {
-  const access=work.ensureAccess?.()??work.access??hub.store.workAccess(board,now),known=hub.store.historyKnown(shown,access.owner,access),anchor=range.from;
+  const access=work.ensureAccess?.()??work.access??hub.store.workAccess(board,now,reserve),known=hub.store.historyKnown(shown,access.owner,access),anchor=range.from;
   const from=workKnownFrom(known);
   const trace:WorkTrace={anchor,cut:range.to,knownFrom:from??range.to,...(from===null?{available:false}:{}),refs:[],spans:[]};
   const indices=new Map<number,number>();

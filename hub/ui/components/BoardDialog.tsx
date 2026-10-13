@@ -102,9 +102,9 @@ export function SharesTab({board,userId=''}:{board:Board;userId?:string}) {
         <h2>{t('shares.sessionDevices')}</h2>
         <p className="dialog-text">{t('shares.sessionDevicesHelp')}</p>
         {shares.sessionDevices?.length?<ul className="settings-list">{shares.sessionDevices.map(device=><li key={device.id} className="popover-row settings-list-row">
-          <b className="settings-item-main">{device.name}</b>
+          <span className="settings-item-main"><b>{device.name}</b></span>
           <small className="settings-item-detail">{device.disconnected?t('shares.disconnected'):null}</small>
-          <label className="settings-item-actions"><input type="checkbox" checked={device.enabled} disabled={pending!==null} onChange={event=>void sessions(device,event.target.checked)}/>{t('shares.deviceSessions')}</label>
+          <div className="settings-item-actions"><label><input type="checkbox" checked={device.enabled} disabled={pending!==null} onChange={event=>void sessions(device,event.target.checked)}/>{t('shares.deviceSessions')}</label></div>
         </li>)}</ul>:<p className="dialog-text">{t('shares.noDevices')}</p>}
       </section>
       <ErrorLine error={error} />

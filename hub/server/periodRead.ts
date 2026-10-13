@@ -173,7 +173,15 @@ export class PeriodReader {
         if(workRequested&&revision<self.workFloor||sources.size&&revision<self.measurementFloor)throw new PeriodChanged();
         if(changes.get()!.value!==checkedChanges||store.retentionRevision!==checkedRetention){
           if(!directory.boards(user).some(part=>part.id===board))fail(404,'board_not_found');
-          if(workRequested&&access&&self.identity(board,user)!==identity||resourceKey()!==capturedResources||currency()!==currencyKey)throw new PeriodChanged();
+          if(workRequested&&access){
+            let bytes=0;
+            try{
+              const current=store.workAccess(board,now,size=>{reservation.add(size);bytes+=size;});
+              if(self.identity(board,user,current)!==identity)throw new PeriodChanged();
+            }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}
+            finally{reservation.remove(bytes);}
+          }
+          if(resourceKey()!==capturedResources||currency()!==currencyKey)throw new PeriodChanged();
           checkedChanges=changes.get()!.value;checkedRetention=store.retentionRevision;
         }
         if(checkedRevision!==self.revision){
@@ -228,11 +236,11 @@ export class PeriodReader {
         const tapeShown=delta?new Map([...shown].filter(([id])=>changed.has(id))):shown;
         const cursor=self.encode({identity:tapeIdentity,revision,from:patch.coveredFrom,cut:patch.coveredTo});
         if(selection.mode==='range'){
-          const work=scope==='quota'?yield*retainedWork():null;
-          const tape=yield*temporary(()=>prepareFixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release,true,now),work,range,Number(query.cell),reserve,release));
+          const trace=scope==='quota'?yield*retainedWork():null;
+          const tape=yield*temporary(()=>prepareFixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release,true,now,work),trace,range,Number(query.cell),reserve,release));
           reserve(Buffer.byteLength(JSON.stringify(tape))*3);return {...value,tape};
         }
-        const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut,bytes=>{reservation.remove(bytes);replyBytes-=bytes;},false,now);
+        const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut,bytes=>{reservation.remove(bytes);replyBytes-=bytes;},false,now,work);
         return {...value,tape:{...tape,cut:patch.coveredTo,...(delta?{replaceTo:patch.to}:{})}};
       })());
       if(request.values)response.values=yield*section((function*(){

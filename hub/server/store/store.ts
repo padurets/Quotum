@@ -19,12 +19,12 @@ import type {QuotaObservation, MeterMeasurement} from '../domain/meters.js';
 import {MeterStore} from './meters.js';
 import type {MeterSelection} from '../domain/meterHistory.js';
 import {DEFAULT_CURRENCY} from '../domain/currency.js';
-import {providerOf, quotaMeter, supportsBudget} from '../domain/providers.js';
+import {providerOf, quotaMeter, supportsBudget,supportsQuota} from '../domain/providers.js';
 import {budgetAccess, type BudgetAccess} from '../domain/resources.js';
 import {exactDecimal} from '../domain/amount.js';
 import {CurrencyStore} from './currencies.js';
 import {importLegacyCurrencies} from './legacyCurrencies.js';
-import {admitted,fundingOf,sessionsKnownFrom,sourceWorkFrom,type WorkAccess} from '../domain/workAccess.js';
+import {admitted,fundingOf,sessionsKnownFrom,sourceWorkFrom,workFundingKey,type WorkAccess} from '../domain/workAccess.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
 export type WorkContext = SessionEvidence & {client?: string; source: string | null; origin: Origin; startedAt: number; project: string; folder: string};
@@ -65,6 +65,7 @@ export class Store {
   /** When this database was made. */
   private readonly created: number;
   private observer: Touches | null = null;
+  private currentFunding:(device:string,owner:string,source:string,now:number)=>boolean=()=>false;
   private pruned = 0;
   private readonly attentionCyclesReady: boolean;
 
@@ -96,6 +97,27 @@ export class Store {
   /** Tells `observer` what every change touches (events of open dashboards). */
   setObserver(observer: Touches) {
     this.observer = observer;
+  }
+  /** Current source facts stay in the session service; no second roster is retained. */
+  setCurrentFunding(read:Store['currentFunding']){this.currentFunding=read;}
+
+  private fundingBoards(source:string,user?:string,board?:string):string[]{
+    const found=new Set<string>(),now=Date.now(),known=Math.max(this.agentWorkSince(),Number(this.db.prepare("SELECT value FROM meta WHERE key='workRetentionFrom'").get()?.value??0));
+    const quota=supportsQuota(providerOf(source.split(':')[0]));
+    const captured=this.db.prepare('SELECT 1 FROM agent_sessions s WHERE s.device_id=? AND s.source_id=? AND EXISTS(SELECT 1 FROM agent_work w WHERE w.session_id=s.id AND w.to_at>?) LIMIT 1');
+    const provided=this.db.prepare('SELECT 1 FROM shares WHERE board_id=? AND source_id=?');
+    const rows=this.db.prepare('SELECT b.id,b.personal,d.id AS device,d.user_id,m.joined_at,p.enabled_since,p.revision FROM boards b JOIN members m ON m.board_id=b.id JOIN devices d ON d.user_id=m.user_id LEFT JOIN board_device_sessions p ON p.board_id=b.id AND p.device_id=d.id WHERE (? IS NULL OR m.user_id=?) AND (? IS NULL OR b.id=?)').iterate(user??null,user??null,board??null,board??null);
+    for(const row of rows){
+      const id=String(row.id);if(found.has(id)||!row.personal&&row.revision!==null&&row.enabled_since===null)continue;
+      const owner=String(row.user_id);if(user===undefined&&!this.holds(owner,source))continue;
+      const from=row.personal?known:Math.max(known,Number(row.joined_at),row.revision===null?0:Number(row.enabled_since));
+      if(quota&&(row.personal||board!==undefined||provided.get(id,source))||captured.get(String(row.device),source,from)||this.currentFunding(String(row.device),owner,source,now))found.add(id);
+    }
+    return [...found];
+  }
+  private fundingChanged(boards:readonly string[]){
+    const write=this.db.prepare('INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
+    for(const board of boards)write.run(workFundingKey(board),randomBytes(16).toString('hex'));
   }
   onMonetaryRecord(listener:(source:string,state:SourceState)=>void){this.monetaryRecords.add(listener);return()=>{this.monetaryRecords.delete(listener);};}
   onCurrencyChange(listener:(owner:string)=>void){this.currencyChanges.add(listener);return()=>{this.currencyChanges.delete(listener);};}
@@ -177,7 +199,8 @@ export class Store {
     const ids=[...access.devices.keys()];
     const names=this.db.prepare('SELECT user_id,reported,name FROM project_names n WHERE n.user_id IN (SELECT value FROM json_each(?)) AND EXISTS(SELECT 1 FROM devices d WHERE d.id IN (SELECT value FROM json_each(?)) AND d.user_id=n.user_id AND EXISTS(SELECT 1 FROM agent_sessions s WHERE s.device_id=d.id AND s.project=n.reported)) ORDER BY user_id,reported').all(JSON.stringify([...new Set([...access.devices.values()].map(device=>device.owner))]),JSON.stringify(ids));
     const devices=this.db.prepare('SELECT id,COALESCE(label,name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id').all(JSON.stringify(ids));
-    return createHash('sha256').update(JSON.stringify([access.knownFrom,[...access.devices], [...access.holdings].map(([user,sources])=>[user,[...sources].sort()]),[...access.sources].map(([id,s])=>[id,s.since,[...s.holders].sort()]),names,devices])).digest('base64url').slice(0,16);
+    const coverage=[...access.sources].filter(([id,s])=>s.holders.size>0&&supportsQuota(providerOf(id.split(':')[0]))).map(([id,s])=>[id,s.since,[...s.holders].sort()]);
+    return createHash('sha256').update(JSON.stringify([access.knownFrom,[...access.devices],access.fundingRevision??'',coverage,names,devices])).digest('base64url').slice(0,16);
   }
 
   privateOwner(board: string): string | null {
@@ -225,7 +248,8 @@ export class Store {
     const admittedOwners=JSON.stringify([...holders.keys()]);
     const provided=owner!==null?this.db.prepare('SELECT selected.source_id,0 AS since,h.user_id FROM holders selected LEFT JOIN holders h ON h.source_id=selected.source_id AND h.user_id IN (SELECT value FROM json_each(?)) WHERE selected.user_id=? ORDER BY selected.source_id,h.user_id').iterate(admittedOwners,owner):this.db.prepare('SELECT s.source_id,s.shared_at AS since,h.user_id FROM shares s LEFT JOIN holders h ON h.source_id=s.source_id AND h.user_id IN (SELECT value FROM json_each(?)) WHERE s.board_id=? ORDER BY s.source_id,h.user_id').iterate(admittedOwners,board);
     for(const row of provided){const id=String(row.source_id);let source=sources.get(id);if(!source){reserve?.(256+id.length*2);sources.set(id,source={since:Number(row.since),holders:new Set()});}if(row.user_id!==null){reserve?.(128);source.holders.add(String(row.user_id));}}
-    return {owner,knownFrom,devices,holdings:holders,sources};
+    const fundingRevision=String(this.db.prepare('SELECT value FROM meta WHERE key=?').get(workFundingKey(board))?.value??'');
+    return {owner,knownFrom,devices,holdings:holders,sources,fundingRevision};
   }
 
   displaySource(owner: string, source: string | null): string | null {
@@ -271,22 +295,27 @@ export class Store {
 
   /** A person's device measures a source: it is theirs to see and share from now on. */
   hold(source: string, userId: string, now: number) {
+    return transaction(this.db,()=>{
     if (this.db.prepare('INSERT OR IGNORE INTO holders VALUES (?, ?, ?)').run(source, userId, now).changes) {
+      this.fundingChanged(this.fundingBoards(source,userId));
       // It comes to their personal board, and its owners change where it is shared.
       tell(this.observer, o => {
         o.touchBoards(this.boardsOf(source));
         o.touchUser(userId);
         o.touchClientSessions?.(userId);
-        o.clientHistory?.(userId, 0);
       });
     }
+    });
   }
 
   release(source:string,userId:string) {
+    return transaction(this.db,()=>{
     const boards=this.boardsOf(source);
     if(!this.db.prepare('DELETE FROM holders WHERE source_id=? AND user_id=?').run(source,userId).changes)return;
+    this.fundingChanged(this.fundingBoards(source,userId));
     for(const {board_id} of this.db.prepare('SELECT board_id FROM shares WHERE source_id=?').all(source) as {board_id:string}[])this.unshareOrphans(board_id);
-    tell(this.observer,o=>{o.touchBoards(boards);o.touchUser(userId);o.touchClientSessions?.(userId);o.clientHistory?.(userId,0);});
+    tell(this.observer,o=>{o.touchBoards(boards);o.touchUser(userId);o.touchClientSessions?.(userId);});
+    });
   }
 
   /**
@@ -304,27 +333,21 @@ export class Store {
       .all(userId, userId) as {source_id: string}[];
     for (const {source_id: source} of orphans) {
       if(providerOf(this.state(source).provider)?.measuredBy==='hub')continue;
-      const shown = this.observer ? this.boardsOf(source) : [];
-      if (!this.db.prepare('DELETE FROM holders WHERE source_id = ? AND user_id = ?').run(source, userId).changes) continue;
-      tell(this.observer, o => {
-        o.touchBoards(shown);
-        o.touchUser(userId);
-        o.touchClientSessions?.(userId);
-        o.clientHistory?.(userId, 0);
-      });
-      const shared = this.db.prepare('SELECT board_id FROM shares WHERE source_id = ?').all(source) as {board_id: string}[];
-      for (const {board_id: board} of shared) this.unshareOrphans(board);
+      this.release(source,userId);
     }
   }
 
   // ---------- sharing ----------
 
   share(board: string, source: string, userId: string, now: number, includeBudget = false) {
+    return transaction(this.db,()=>{
     const provider = this.state(source).provider, wallet = provider === 'openrouter' || provider === 'deepseek';
     const since = wallet ? 0 : provider === 'codex' && includeBudget ? now : null;
     if (this.db.prepare('INSERT OR IGNORE INTO shares (board_id,source_id,shared_by,shared_at,budget_since,budget_anchor_at,budget_revision) VALUES (?,?,?,?,?,?,?)').run(board,source,userId,now,since,wallet?0:null,randomBytes(16).toString('hex')).changes) {
+      this.fundingChanged(this.fundingBoards(source,undefined,board));
       tell(this.observer, o => o.touchBoards([board]));
     }
+    });
   }
 
   setBudget(board:string,source:string,user:string,enabled:boolean,revision:string,now:number) {
@@ -345,29 +368,29 @@ export class Store {
   financialKey(board:string) {return JSON.stringify(this.sources(board).filter(s=>s.provider==='codex').map(s=>[s.id,s.budget]));}
 
   unshare(board: string, source: string): boolean {
+    return transaction(this.db,()=>{
+    const affected=this.fundingBoards(source,undefined,board);
     const removed = this.db.prepare('DELETE FROM shares WHERE board_id = ? AND source_id = ?').run(board, source).changes > 0;
     if (removed) {
+      this.fundingChanged(affected);
       tell(this.observer, o => o.touchBoards([board]));
     }
     return removed;
+    });
   }
 
   /** Takes off a board what none of its remaining members holds: someone who left takes their data along. */
   unshareOrphans(board: string) {
-    const removed = this.db
-      .prepare(
-        'DELETE FROM shares WHERE board_id = ? AND source_id NOT IN' +
-          ' (SELECT h.source_id FROM holders h JOIN members m ON m.user_id = h.user_id WHERE m.board_id = ?)',
-      )
-      .run(board, board).changes;
-    if (removed) {
-      tell(this.observer, o => o.touchBoards([board]));
-    }
+    return transaction(this.db,()=>{
+      const rows=this.db.prepare('SELECT source_id FROM shares WHERE board_id=? AND source_id NOT IN (SELECT h.source_id FROM holders h JOIN members m ON m.user_id=h.user_id WHERE m.board_id=?)').iterate(board,board);
+      for(const row of rows)this.unshare(board,String(row.source_id));
+    });
   }
 
   /** Forgets what a deleted board showed; the sources stay with their people (Directory.deleteBoard does the rest). */
   removeBoard(board: string) {
     this.db.prepare('DELETE FROM shares WHERE board_id = ?').run(board);
+    this.db.prepare('DELETE FROM meta WHERE key=?').run(workFundingKey(board));
   }
 
   // ---------- measurements ----------

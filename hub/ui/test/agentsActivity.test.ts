@@ -188,3 +188,15 @@ test('the shared table summary keeps its old complete basis through delayed rang
     h.period.activate(false);assert.equal(h.period.activitySummaryAt('project',NOW),null);
   }finally{await h.close();}
 });
+
+test('hiding Recorded sessions removes grouped footer metrics in both layouts while keeping row count, paging and None totals',()=>{
+ const r=renderer();try{
+  for(const locale of ['en','ru'] as const)for(const narrow of [false,true])for(const by of ['project','machine','subscription'] as const){
+   i18n.setLocale(locale);r.set({by,owner:true,narrow,hidden:[]});let html=r.render();assert.ok(html.includes('data-table-metric="sessions"'));
+   r.set({hidden:['agents']});html=r.render();assert.ok(!html.includes('data-table-metric="sessions"'),`${locale}/${by}/${narrow}: hidden metric stays hidden in the footer`);
+   assert.ok(html.includes('data-table-metric="worked"'));assert.ok(html.includes(i18n.t('table.rows',{count:by==='machine'?2:1})));assert.ok(html.includes('class="table-pages"'));
+   r.set({hidden:[]});assert.ok(r.render().includes('data-table-metric="sessions"'));
+  }
+  r.set({by:'none',narrow:true,hidden:['agents']});assert.ok(r.render().includes('data-table-metric="sessions"'),'None keeps its deliberate complete-context summary without a grouped count column');
+ }finally{i18n.setLocale('en');}
+});

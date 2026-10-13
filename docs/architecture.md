@@ -224,7 +224,14 @@ Every board uses the released source sessions map plus one disjoint unattributed
 slice, without a second full roster. Source-free workSince events update the shared
 work index without financial updates, clipped to device admission before publication.
 An opaque workAuthority changes only with relevant access, names or actual retained
-evidence boundaries; ordinary time and measurements do not change it. Revocation
+evidence boundaries; ordinary time, measurements and new contexts do not change it.
+One board funding revision in existing metadata changes atomically with relevant
+holding or sharing mutations. Retained admitted evidence, current session source facts
+and quota work coverage determine relevance; unrelated wallet holdings stay independent.
+The revision belongs to the captured WorkAccess, alongside its maps. History cells,
+metadata, cache keys and quota tapes reuse that single reserved snapshot; an allocation
+failure is shared by dependent sections. Actual database changes revalidate authority
+with a fresh bounded snapshot before delivery. Revocation
 replaces queued stream/poll data with a fresh snapshot and retires the browser's work
 index, staged replies, drawings, gestures and retained summaries immediately. Closed
 tiles, including empty source-less tiles, invalidate even without watchers; their

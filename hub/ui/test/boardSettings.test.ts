@@ -4,14 +4,17 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {centralFixture,at} from '../../server/test/centralFixture.js';
-import {Projection} from '../../server/projection.js';
+import {Events,type Frame} from '../../server/events.js';
+import {Live} from '../lib/live.js';
+import {createStore} from '../lib/store.js';
+import {reduce,INITIAL} from '../lib/board.js';
 import {ApiError} from '../lib/http';
 import {preparationFixture} from './preparationFixture';
 
 type Node={type:unknown;props:Record<string,unknown>};
 const nodes=(value:unknown):Node[]=>Array.isArray(value)?value.flatMap(nodes):value&&typeof value==='object'&&'props' in value?[value as Node,...nodes((value as Node).props.children)]:[];
 const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
-function sharesFixture(){
+function sharesFixture(currentRevision?:()=>number){
   const hooks=preparationFixture(),requests:{method:string;path:string;body:unknown;resolve:(value:unknown)=>void;reject:(error:unknown)=>void}[]=[];let refreshes=0,revision=0;
   const callback=(fn:unknown,deps:unknown[])=>{const saved=hooks.useRef({fn,deps}) as {current:{fn:unknown;deps:unknown[]}};if(deps.some((value,i)=>!Object.is(value,saved.current.deps[i])))saved.current={fn,deps};return saved.current.fn;};
   const context={AbortController,exports:{} as {SharesTab:(props:unknown)=>Node},require:(name:string)=>{
@@ -19,7 +22,7 @@ function sharesFixture(){
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props})};
     if(name.endsWith('/http'))return {ApiError,call:(method:string,path:string,body:unknown)=>new Promise((resolve,reject)=>requests.push({method,path,body,resolve,reject}))};
     if(name.endsWith('/session'))return {rereadSession:()=>{refreshes++;}};
-    if(name.endsWith('/board'))return {useTitles:()=>({}),useConnectionsRevision:()=>revision};
+    if(name.endsWith('/board'))return {useTitles:()=>({}),useConnectionsRevision:()=>currentRevision?.()??revision};
     if(name.endsWith('/providers'))return {PROVIDERS:{}};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key};
     if(name==='./Kit'||name==='./logos')return {};
@@ -111,14 +114,20 @@ test('Members discards rows, invitations and delayed pre-revocation replies afte
 });
 
 test('an external device-policy API change reaches the mounted Shares form through the production connections revision',async t=>{
-  t.mock.method(Date,'now',()=>at+60_000);const h=await centralFixture(),ui=sharesFixture();t.after(async()=>{await h.app.close();h.store.close();});
-  const projection=new Projection(h.hub),snapshot=()=>projection.snapshot(h.owner.id,h.board,at+60_000)!;
+  t.mock.method(Date,'now',()=>at+60_000);const h=await centralFixture(),page=createStore(reduce,INITIAL),ui=sharesFixture(()=>page.get().board?.connectionsRevision??0);
+  const events=new Events(h.hub,undefined,{now:()=>at+60_000,after:()=>()=>{}},null);events.attach();h.directory.createSession('shares-live-reader',h.owner.id,at,86_400_000);
+  let control!:ReadableStreamDefaultController<Uint8Array>;
+  const live=new Live({fetch:async()=>new Response(new ReadableStream<Uint8Array>({start:c=>{control=c;}}),{headers:{'content-type':'text/event-stream'}}),now:()=>at+60_000,setTimeout:()=>0,clearTimeout:()=>{},random:()=>0.5,visible:()=>true,hubNow:()=>at+60_000,heard:()=>{},dispatch:e=>page.dispatch(e),unauthorized:()=>{},gone:()=>{},epochChanged:()=>{},script:null,reload:()=>{},storage:()=>({getItem:()=>null,setItem:()=>{}})});
+  live.open(h.board);const feed=(frames:Frame[])=>control.enqueue(new TextEncoder().encode(frames.map(f=>`event: ${f.type}\ndata: ${f.data}\n\n`).join('')));
+  const opened=events.open({user:h.owner.id,secret:'shares-live-reader',board:h.board,kind:'stream',send:feed,end:()=>{}});assert.ok(opened&&opened!=='limit');feed(opened.frames);await flush();
+  t.after(async()=>{live.close();control.close();opened.close();events.close();await h.app.close();h.store.close();});
+  const snapshot=()=>page.get().board!;
   const answer=async(index:number)=>{const request=ui.requests[index],response=await h.call(request.method as 'GET'|'PUT',request.path,request.body as object|undefined);if(response.statusCode>=400)request.reject(new ApiError(response.statusCode,response.json().error));else request.resolve(response.json());await flush();};
-  ui.revision(snapshot().connectionsRevision);ui.render(h.board);await answer(0);
+  ui.render(h.board);await answer(0);
   assert.equal(ui.render(h.board).find(node=>node.type==='input')!.props.checked,true);
   const policy=(await h.call('GET',`/api/boards/${h.board}/shares`)).json().sessionDevices[0],before=snapshot().connectionsRevision;
   const changed=await h.call('PUT',`/api/boards/${h.board}/shares/devices/${h.device.id}/sessions`,{enabled:false,expectedRevision:policy.revision});assert.equal(changed.statusCode,200);
-  const after=snapshot().connectionsRevision;assert.ok(after>before);ui.revision(after);ui.render(h.board);assert.equal(ui.requests.length,2);await answer(1);
+  events.flush();await flush();const after=snapshot().connectionsRevision;assert.ok(after!>before!);ui.render(h.board);assert.equal(ui.requests.length,2);await answer(1);
   assert.equal(ui.render(h.board).find(node=>node.type==='input')!.props.checked,false);
   await h.call('PUT',`/api/boards/${h.board}/shares/devices/${h.device.id}/sessions`,{enabled:false,expectedRevision:changed.json().device.revision});assert.equal(snapshot().connectionsRevision,after,'an effective no-op cannot reload every form');
   toggle(ui.render(h.board),true);toggle(ui.render(h.board),true);assert.equal(ui.requests.length,3,'two events before a render still have one mutation');

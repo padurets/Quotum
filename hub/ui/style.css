@@ -1065,7 +1065,9 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .settings-item-main small { display: block; margin-top: 3px; color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
 .settings-list-row .settings-item-main { white-space: normal; overflow: visible; }
 .settings-item-detail { max-width: 24ch; color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
-.settings-item-actions { display: flex; align-items: center; justify-content: flex-end; }
+.settings-item-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.settings-item-actions label { display: flex; align-items: flex-start; gap: 8px; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.settings-item-actions input { flex-shrink: 0; }
 .view-save-notice { margin: 16px 28px; padding: 16px; border: 1px solid var(--hair-2); border-radius: 12px; overflow-wrap: anywhere; }
 .view-save-notice > b { font-size: 13px; }
 .settings-content > .drawer-section:first-child { border-top: 0; padding-top: 0; }
@@ -1128,7 +1130,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
   .settings-nav { flex-direction: row; flex-wrap: wrap; gap: 4px; }
   .settings-nav a { padding: 8px 10px; font-size: 12px; }
   .settings-content { padding: 18px; }
-  .settings-list { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
+  .settings-list { grid-template-columns: minmax(0, 1fr) fit-content(50%); column-gap: 12px; }
   .settings-list-row { column-gap: 12px; }
   .settings-item-detail { grid-column: 1; }
   .settings-item-actions { grid-column: 2; grid-row: 1 / 3; }

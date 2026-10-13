@@ -1,12 +1,15 @@
 /** Device admission and source disclosure are independent board permissions. */
 export type PublicFunding = {source:string|null;sourceStatus?:'notProvided'};
 export type WorkAccess = {
+  fundingRevision?:string;
   owner:string|null;
   knownFrom:number;
   devices:ReadonlyMap<string,{owner:string;from:number;revision:string}>;
   holdings:ReadonlyMap<string,ReadonlySet<string>>;
   sources:ReadonlyMap<string,{since:number;holders:ReadonlySet<string>}>;
 };
+
+export const workFundingKey=(board:string)=>'workFunding::'+board;
 
 export const sourceKey=(funding:PublicFunding)=>funding.source??funding.sourceStatus??'unknown';
 

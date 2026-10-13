@@ -86,7 +86,9 @@ export class Sessions {
   private readonly machines = new Map<string, Machine>();
   private readonly presenceSecret = randomBytes(32);
 
-  constructor(private readonly store: Store) {}
+  constructor(private readonly store: Store) {
+    store.setCurrentFunding((device,owner,source,now)=>{const machine=this.machines.get(device);return !!machine&&machine.user===owner&&now<=machine.at+KEEP_MS&&machine.sessions.some(session=>session.source===source);});
+  }
 
   /** A machine's new list, from its person `user`, each session filed under its subscription. */
   report(device: string, user: string, sessions: (LiveSession & {source: string | null})[], now: number) {

@@ -4,6 +4,7 @@ import type {DatabaseSync} from 'node:sqlite';
 import {newId, secretHash} from '../domain/auth.js';
 import {EMPTY_VIEW, encodeView, decodeView, sameView, viewBytes, VIEW_BODY_LIMIT, type View} from '../domain/view.js';
 import {tell, transaction, type Touches} from '../touches.js';
+import {workFundingKey} from '../domain/workAccess.js';
 
 export type User = {id: string; email: string; name: string; createdAt: number};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
@@ -259,6 +260,7 @@ export class Directory {
     for (const table of ['board_device_sessions','members', 'invites', 'views', 'boards']) {
       this.db.prepare(`DELETE FROM ${table} WHERE ${table === 'boards' ? 'id' : 'board_id'} = ?`).run(id);
     }
+    this.db.prepare('DELETE FROM meta WHERE key=?').run(workFundingKey(id));
     tell(this.observer, o => {
       o.dropBoard(id);
       for (const member of members) o.touchUser(member);
