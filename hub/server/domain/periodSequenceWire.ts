@@ -37,7 +37,7 @@ export function packPeriodSequences(reply:PeriodReply,reserve:(bytes:number)=>vo
   return packed;
 }
 
-/** Charge new paths and tuple containers before restoring the original replay program. */
+/** Charge path clones, piece arrays and references before reusing owned wire tuples. */
 export function expandPeriodSequences(reply:PeriodReply,reserve:(bytes:number)=>void){
   for(const sequence of sequences(reply)){
     const value=sequence as Packed;if(value.pathEncoding===undefined)continue;
@@ -52,7 +52,7 @@ export function expandPeriodSequences(reply:PeriodReply,reserve:(bytes:number)=>
       if(!Array.isArray(row))throw new Error('invalid_period_sequence');
       for(const change of row){
         if(!Array.isArray(change)||change.length<1||change.length>4||!Number.isSafeInteger(change[0])||change[0]<0||change[0]>=value.pieces.length)throw new Error('invalid_period_sequence');
-        bytes+=96+change.length*16;
+        bytes+=16;
       }
     }
     reserve(bytes);
@@ -61,7 +61,7 @@ export function expandPeriodSequences(reply:PeriodReply,reserve:(bytes:number)=>
     for(const piece of value.pieces)piece.push([]);
     // A diff replaces a parent or its descendants, never both in one piece.
     // Its independent edits can therefore be restored in path order.
-    for(const [path,row] of value.changes.entries())for(const change of row)(value.pieces[change[0]].at(-1) as ValueChange[]).push([path,...change.slice(1)] as ValueChange);
+    for(const [path,row] of value.changes.entries())for(const change of row){const piece=change[0];change[0]=path;(value.pieces[piece].at(-1) as ValueChange[]).push(change);}
     delete (value as Partial<Packed>).pathEncoding;delete (value as Partial<Packed>).changes;
   }
 }

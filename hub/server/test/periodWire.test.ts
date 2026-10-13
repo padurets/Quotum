@@ -69,3 +69,17 @@ test('field-grouped replay programs preserve exact fixed summaries and card stat
   const malformed=JSON.parse(json);malformed.quota.value.tape.fixed.shift.window.paths[0][0]=100;
   assert.throws(()=>expandPeriod(malformed),/invalid_period_sequence/);
 });
+
+test('owned JSON restores every replay change without allocating replacement tuples',()=>{
+  const window={pathEncoding:'prefix',paths:[[0,'removed'],[0,'amount'],[0,'count'],[0,'items']],
+    pieces:[[1000,2000,0],[2000,3000,1]],changes:[[[0]],[[0,'900719925474099312345']],[[1,-3,0]],[[1,0,1,[{amount:'900719925474099399999'}]]]]};
+  const wire=JSON.parse(JSON.stringify({quota:{state:'complete',value:{tape:{fixed:{shift:{window}}}}}}));
+  const sequence=wire.quota.value.tape.fixed.shift.window,tuples:unknown[][]=sequence.changes.flat();
+  let reserved=0;expandPeriod(wire,bytes=>{reserved+=bytes;});assert.ok(reserved>0);
+  assert.deepEqual(sequence.paths,[['removed'],['amount'],['count'],['items']]);
+  assert.deepEqual(sequence.pieces,[[1000,2000,0,[[0],[1,'900719925474099312345']]],
+    [2000,3000,1,[[2,-3,0],[3,0,1,[{amount:'900719925474099399999'}]]]]]);
+  const restored:unknown[][]=sequence.pieces.flatMap((piece:unknown[])=>piece.at(-1));
+  for(const tuple of tuples)assert.ok(restored.includes(tuple),'the output retains the already decoded tuple');
+  assert.equal(sequence.changes,undefined);assert.equal(sequence.pathEncoding,undefined);
+});
