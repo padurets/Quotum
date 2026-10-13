@@ -280,7 +280,8 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${authority}:${history?.board}:${by}`);
   const presentation = prepared.value ?? {identities: [], shown: [], strip: null};
   useLayoutEffect(() => {if (prepared.value) registry.current = prepared.value.registry;}, [prepared.value]);
-  const currentGroups=activity?.by[by]??[];
+  // Numerical consumers keep the evidence basis and own their exact clock wakes.
+  const currentGroups=drawnActivity?.by[by]??[];
   const shownSources = lineup.filter(id => titles[id] && !isHidden(arrange.view, cardId(id)));
   // Known from later than the period the hub answered begins (not the page's frame, whose clock may be a minute behind).
   const since = history && activity?.known && activity.known.from > history.since ? activity.known.from : null;
@@ -300,7 +301,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     <AnalyticsPanel ref={panel} className="activity" title={t('activity.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
       settings={<ActivitySettings arrange={arrange}/>}
     >
-      <Totals history={history} by={by} muted={prefs.muted} since={since} />
+      <Totals history={drawing} by={by} muted={prefs.muted} since={since} />
       <>
           <Stacks
             history={history}
@@ -324,7 +325,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
           />
           <div className="legend">
             {(emptyFrame ? [] : presentation.identities).map(identity => (
-              <LegendItem key={identity.key} history={history} groupKey={identity.key} by={by} group={currentGroups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} />
+              <LegendItem key={identity.key} history={drawing} groupKey={identity.key} by={by} group={currentGroups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} />
             ))}
           </div>
       </>
