@@ -14,6 +14,7 @@ const H=3_600_000;
 const series=(sourceId:string,end:string|null):MeterHistory=>({sourceId,meterId:'balance',kind:'balance',unit:'USD',role:'total',start:end,end,spent:'0',topup:'0',coveredMs:H,semantics:null,unlocated:[],topupUnlocated:[],points:[]});
 
 test('money sorting keeps integer precision, unavailable accounting last, and hidden reader choices',()=>{
+  assert.deepEqual(readMoneySort({column:'limit',descending:true}),{column:'name',descending:true},'the previous name-column preference survives the shared table contract');
   const huge=9007199254740993000000n;
   const entries=[series('2',(huge+1n).toString()),series('10',huge.toString()),{...series('unknown',null),spent:null,topup:null},series('zero','0')];
   const rows=entries.map(entry=>({key:entry.sourceId,name:'Wallet '+entry.sourceId,values:moneyTableValues(entry,0,H)}));
@@ -53,15 +54,15 @@ test('actual money order follows an exclusive availability boundary without repl
   const rows=entries.map(entry=>({key:entry.sourceId,name:entry.sourceId,cells:{value:{content:'kept'}}}));
   const props={rows,entries,columns:[{id:'value'}],history:{live:true,range:'1h',since:0,to:H}};
   const slot=(make:()=>any)=>{const at=index++;return slots[at]??(slots[at]=make());};
-  const context={exports:{} as {SortedMoney:(props:unknown)=>{props:{rows:typeof rows}}},require:()=>({jsx:(_type:unknown,props:unknown)=>({props})}),memo:(fn:unknown)=>fn,
+  const context={exports:{} as {SortedMoney:(props:unknown)=>{props:{children:any[]}}},require:()=>({jsxs:(_type:unknown,props:unknown)=>({props}),jsx:(_type:unknown,props:unknown)=>({props})}),memo:(fn:unknown)=>fn,
     usePref:()=>sort,useLocale:()=> 'en',useRef:(current:unknown)=>slot(()=>({current})),useState:(make:()=>unknown)=>[slot(make)],useMemo:(make:()=>unknown)=>make(),useCallback:(fn:unknown)=>fn,
     useLayoutEffect:(run:()=>void)=>effects.push(run),useSyncExternalStore:(subscribe:(notify:()=>void)=>()=>void,read:()=>unknown)=>{const state=slot(()=>{const state={value:read(),stop:()=>{}};state.stop=subscribe(()=>{const next=read();if(next!==state.value){state.value=next;dirty=true;}});return state;});state.value=read();return state.value;},
     clock,hubNow:()=>now,moneyTableValues,moneyComparator,nextMoneySort,visibleMoneySort,
     boardPeriod:{moneyAt:(entry:MeterHistory,at:number)=>({...entry,...accounting.moneySummary(entry.sourceId,entry.meterId,entry.unit,{from:at-H,to:at})}),rangeAt:(_scope:string,at:number)=>({from:at-H,to:at}),moneyOrderAt:(at:number)=>accounting.changesAt(at,H)},
-    AnalyticsTable:()=>{},setPrefs:()=>{},t:()=> 'Account'};
+    AnalyticsPanel:()=>{},TableSortMenu:()=>{},TableMeasure:()=>{},WidgetPages:()=>{},useTableWidget:(_panel:unknown,_columns:unknown,_name:unknown,keys:string[])=>({layout:'table',from:0,to:keys.length,measureFrom:0,measureTo:0}),AnalyticsTable:()=>{},setPrefs:()=>{},t:()=> 'Account'};
   const source=readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8'),start=source.indexOf('const SortedMoney=');
   runInNewContext(ts.transpileModule(`export ${source.slice(start,source.indexOf('const pointAt=',start))}`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
-  const render=()=>{index=0;dirty=false;const value=context.exports.SortedMoney(props).props.rows;effects.splice(0).forEach(run=>run());return value;};
+  const render=()=>{index=0;dirty=false;const value=context.exports.SortedMoney(props).props.children[1].props.children[0].props.rows as typeof rows;effects.splice(0).forEach(run=>run());return value;};
   assert.deepEqual(Array.from(render(),row=>row.key),['A','B']);
   now=H+4999;clock.wakeDue();assert.equal(dirty,false);
   now++;clock.wakeDue();assert.equal(dirty,true);const ordered=render();assert.deepEqual(Array.from(ordered,row=>row.key),['B','A']);assert.equal(ordered[1],rows[0]);assert.equal(ordered[1].cells,rows[0].cells);

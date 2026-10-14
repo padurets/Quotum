@@ -66,10 +66,10 @@ export class BoardAdditions {
       visible:!hidden(this.directory.view(board.id),cardId(record.sourceId!)),canUnshare:!board.personal&&(board.role==='owner'||this.store.holds(owner,record.sourceId!))}));
   }
 
-  private normalize(owner: string, boardId: string | null, item: AdditionItem): AdditionItem {
+  private normalize(owner: string, boardId: string | null, item:AdditionItem,onboarding?:string):AdditionItem {
     const board = boardId === null ? null : this.board(owner, boardId);
     if (item.kind === 'sources') {
-      if (!board) throw new AdditionError('addition_invalid');
+      if(!board||!item.sourceIds.length&&!onboarding)throw new AdditionError('addition_invalid');
       const sourceIds = [...new Set(item.sourceIds)].sort(); this.eligible(owner, board, sourceIds);
       const includeBudget=[...new Set(item.includeBudget??[])].sort();
       if(includeBudget.some(id=>!sourceIds.includes(id)||!this.store.holds(owner,id)||this.store.state(id).provider!=='codex'))throw new AdditionError('addition_invalid');
@@ -94,9 +94,10 @@ export class BoardAdditions {
     return {kind: 'replace', credentialId: record.id, provider: record.provider, sourceId: record.sourceId, expectedRevision: record.revision};
   }
 
-  reserve(owner: string, requestId: string, boardId: string | null, item: AdditionItem) {
+  reserve(owner: string, requestId: string, boardId: string | null, item:AdditionItem,onboarding?:string) {
     return this.directory.transaction(() => {
       this.prune();
+      if(onboarding&&!this.store.db.prepare('SELECT 1 FROM device_onboarding WHERE id=? AND user_id=? AND board_id IS ?').get(onboarding,owner,boardId))throw new AdditionError('addition_permission');
       const previous = this.store.db.prepare('SELECT * FROM board_additions WHERE owner_id=? AND request_id=?').get(owner, requestId) as Row | undefined;
       if (previous) {
         const saved = JSON.parse(previous.item) as AdditionItem;
@@ -105,7 +106,7 @@ export class BoardAdditions {
         if (previous.board_id !== boardId || JSON.stringify(binding) !== JSON.stringify(normalized)) throw new AdditionError('addition_conflict');
         return this.answer(previous);
       }
-      const normalized = this.normalize(owner, boardId, item);
+      const normalized = this.normalize(owner,boardId,item,onboarding);
       const count = (this.store.db.prepare("SELECT count(*) AS n FROM board_additions WHERE owner_id=? AND state IN ('ready','verifying','needs_input')").get(owner) as {n: number}).n;
       if (count >= 20) throw new AdditionError('addition_limit');
       const id = randomUUID(), now = this.now();
@@ -154,6 +155,7 @@ export class BoardAdditions {
     const credential=result?.credentialId?this.credentials.list(row.owner_id).find(record=>record.id===result.credentialId):undefined;
     return {id:row.id,boardId:row.board_id,item,state:row.state,createdAt:row.created_at,updatedAt:row.updated_at,expiresAt:row.expires_at,retainedUntil:row.updated_at+30*DAY,
       ...(item.kind==='widget'?{widgetIds:this.targets(row)}:{}),
+      ...(row.onboarding_id?{deviceId:this.store.db.prepare('SELECT device_id FROM device_onboarding WHERE id=? AND user_id=?').get(row.onboarding_id,row.owner_id)?.device_id as string|undefined}:{}),
       ...(result?{result}:{}),...(row.error?{error:row.error}:{}),
       ...(result?.maintenance==='pending'?{warning:'credential_cleanup_pending'}:{}),
       current:{boardAccessible:row.board_id===null?null:accessible,
@@ -207,7 +209,7 @@ export class BoardAdditions {
             connection:saved.connection,expiresAt:saved.credential.expiresAt,expiryKind:saved.credential.expiryKind,...(item.kind==='replace'?{maintenance:'pending' as const}:{})};
           if(saved.connection==='reused'&&(saved.credential.unreadable||permanentAccess(saved.credential.lastError??'')||saved.credential.expiresAt!==null&&saved.credential.expiresAt<=now))result.replacementRequired=true;
         } else if(item.kind==='sources') result.sourceIds=item.sourceIds;
-        if(board) {
+        if(board&&(item.kind!=='sources'||result.sourceIds.length>0)) {
           if(item.kind==='widget'&&board.role!=='owner')throw new AdditionError('addition_permission');
           this.eligible(owner,board,result.sourceIds);
           const view=this.directory.view(board.id),existing=this.store.sources(board.id);
@@ -216,7 +218,7 @@ export class BoardAdditions {
           if(!board.personal)for(const source of result.sourceIds)if(this.store.holds(owner,source))this.store.share(board.id,source,owner,now,item.kind==='sources'&&item.includeBudget?.includes(source)===true);
           result.viewRevision=this.directory.saveView(board.id,shown(this.directory.view(board.id),ids),owner,now);
           result.placement=already?'already_visible':'added';
-        } else result.placement='personal';
+        }else if(!board)result.placement='personal';
         if(row.onboarding_id)this.completeOnboarding(row.onboarding_id,owner,id,result.sourceIds);
         this.store.db.prepare("UPDATE board_additions SET state='complete',result=?,error=NULL,updated_at=?,run_id=NULL,verify_until=NULL WHERE id=?").run(JSON.stringify(result),now,id);
       });

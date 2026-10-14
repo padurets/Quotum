@@ -133,7 +133,7 @@ export async function additionRoutes(app: FastifyInstance, hub: Hub, guards: Gua
       const user=guards.user(request,reply);if(!user)return reply;
       if(request.headers[VIEW_VERSION_HEADER.toLowerCase()]!==String(VIEW_VERSION))return reply.code(428).send({error:'view_reload_required'});
       const input=fields(request.body,['requestId','deviceId','sourceIds'],['includeBudget']);
-      if(!uuid(request.params.id)||!uuid(input.requestId)||!boardId(input.deviceId)||!Array.isArray(input.sourceIds)||input.sourceIds.length<1||input.sourceIds.length>100||!input.sourceIds.every(sourceId))throw new AdditionError('addition_invalid');
+      if(!uuid(request.params.id)||!uuid(input.requestId)||!boardId(input.deviceId)||!Array.isArray(input.sourceIds)||input.sourceIds.length>100||!input.sourceIds.every(sourceId))throw new AdditionError('addition_invalid');
       if(input.includeBudget!==undefined&&(!Array.isArray(input.includeBudget)||input.includeBudget.length>100||!input.includeBudget.every(sourceId)))throw new AdditionError('addition_invalid');
       return onboarding.select(user.id,request.params.id,input.deviceId,input.sourceIds,input.requestId,input.includeBudget as string[]|undefined);
     });

@@ -183,6 +183,8 @@ export function probe(tools: {rendered: typeof rendered; nodeOf: typeof nodeOf},
       if (!series) return;
       const key = `${series.getAttribute('data-series')}\n${series.getAttribute('data-last')}`;
       seriesChanged[key] ??= at;
+      const observation = series.getAttribute('data-observation');
+      if (observation !== null) seriesChanged[`${series.getAttribute('data-series')}\nobservation:${observation}`] ??= at;
     };
     const changedMoney = (value: Element | null | undefined) => {
       const amount = value?.getAttribute('data-money'), card = value?.closest('[data-card]')?.getAttribute('data-card');

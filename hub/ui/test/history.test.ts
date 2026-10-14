@@ -1455,7 +1455,7 @@ test('family followers invalidate only their evidence and preserve selections be
   const selected:{USD:[string,string][]}={USD:[['wallet','balance'],['another-board','balance']]};
   setPrefs({money:{unit:'USD',view:'balance',selected}});
   const base={plan:'',resets:null,owners:[],error:null,successAt:NOW,stale:false,staleAfterMs:10*M,measureIntervalMs:null};
-  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:EMPTY_VIEW,historyStart:0,sources:[
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:EMPTY_VIEW,historyStart:0,workAuthority:'original-device-policy',sources:[
     {...base,id:'s',provider:'codex',windows:[{id:'w',kind:'weekly',label:null,used:20,remaining:80,resetAt:null,minutes:10080}]},
     {...base,id:'wallet',provider:'openrouter',windows:[],meters:[{id:'balance',kind:'balance',unit:'USD',amount:'10000000',at:NOW,staleAfterMs:10*M,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null}]}
   ],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
@@ -1465,9 +1465,16 @@ test('family followers invalidate only their evidence and preserve selections be
     page.dispatch({type:'hub',event:{type:'history',data:{sources:['s'],since:NOW,changes:[{source:'s',scope:'quota',since:NOW}]}}});await flush();
     assert.equal(q.reads.length,2);assert.equal(b.reads.length,1);await q.reads[1].answer();
     page.dispatch({type:'hub',event:{type:'history',data:{sources:['wallet'],since:NOW,changes:[{source:'wallet',scope:'budget',since:NOW}]}}});await flush();
-    assert.equal(q.reads.length,2);assert.equal(b.reads.length,2);
+    assert.equal(q.reads.length,2);assert.equal(b.reads.length,2);await b.reads[1].answer();
+    const financialFrame=b.store.get().history;
+    page.dispatch({type:'hub',event:{type:'snapshot',data:{...snapshot,workAuthority:'new-device-policy'}}});await flush();
+    assert.equal(q.store.get().history,null,'work revoke retires the quota work projection immediately');
+    assert.equal(q.reads.length,3);assert.equal(b.reads.length,2,'a new work epoch keeps financial evidence and its transport idle');
+    assert.equal(b.store.get().history,financialFrame);
+    page.dispatch({type:'hub',event:{type:'history',data:{sources:[],since:0,workSince:0}}});await flush();
+    assert.equal(b.reads.length,2,'source-free work news cannot wake financial history');
     assert.deepEqual(prefs().money.selected,selected,'admission filters do not destroy saved choices');
-    page.dispatch({type:'board-close'});assert.equal(b.reads[1].signal?.aborted,true);assert.equal(q.store.get().history,null);
+    page.dispatch({type:'board-close'});assert.equal(q.reads.at(-1)?.signal?.aborted,true);assert.equal(q.store.get().history,null);
   }finally{stopQ();stopB();q.store.close();b.store.close();setPrefs(before);}
 });
 
@@ -1566,17 +1573,17 @@ test('subscription funds read independently from wallet budgets and retire on fi
   }finally{stopB();stopF();b.store.close();f.store.close();setPrefs(before);}
 });
 
-test('private cutoffs reread empty personal activity while financial readers and shared boards stay unchanged',async()=>{
+test('source-free cutoffs reread admitted activity on personal and shared boards without financial reads',async()=>{
   const q=harness(undefined,undefined,'quota'),b=harness(undefined,undefined,'budget'),page=createStore(reduce,INITIAL);
   const stopQ=follow(q.store,page),stopB=follow(b.store,page);
-  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:{...EMPTY_VIEW,enabledWhenEmpty:['activity']},historyStart:0,sources:[],sessions:{},ownSessions:[],cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:{...EMPTY_VIEW,enabledWhenEmpty:['activity']},historyStart:0,sources:[],sessions:{},unattributedSessions:[],cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
   try {
     page.dispatch({type:'board-open',id:'b'});page.dispatch({type:'hub',event:{type:'hello',data:{epoch:'run'}}});page.dispatch({type:'hub',event:{type:'snapshot',data:snapshot}});await flush();
     await q.reads[0].answer();const financial=b.reads.length;
-    page.dispatch({type:'hub',event:{type:'history',data:{sources:[],since:NOW,ownSince:NOW}}});await flush();
+    page.dispatch({type:'hub',event:{type:'history',data:{sources:[],since:NOW,workSince:NOW}}});await flush();
     assert.equal(q.reads.length,2);assert.equal(b.reads.length,financial);await q.reads[1].answer();
     page.dispatch({type:'hub',event:{type:'snapshot',data:{...snapshot,board:{...snapshot.board,personal:false}}}});await flush();
-    const before=q.reads.length;page.dispatch({type:'hub',event:{type:'history',data:{sources:[],since:0,ownSince:0}}});await flush();
-    assert.equal(q.reads.length,before);
+    const before=q.reads.length;page.dispatch({type:'hub',event:{type:'history',data:{sources:[],since:0,workSince:0}}});await flush();
+    assert.equal(q.reads.length,before+1);
   }finally{stopQ();stopB();q.store.close();b.store.close();}
 });

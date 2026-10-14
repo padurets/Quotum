@@ -68,3 +68,7 @@ export class HistoryPool {
 }
 
 export const historyPool = new HistoryPool();
+
+// An opt-in benchmark installs this before navigation; normal pages expose no pool.
+const inspectHistoryPool=(globalThis as typeof globalThis & {__quotumInspectHistoryPool?:(pool:HistoryPool)=>void}).__quotumInspectHistoryPool;
+if(typeof inspectHistoryPool==='function')try{inspectHistoryPool(historyPool);}catch{/* Diagnostics must not interrupt initialization. */}

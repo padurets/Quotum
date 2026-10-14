@@ -3,7 +3,7 @@ import type {Directory} from '../server/store/directory.js';
 import {showWidgets} from '../server/domain/widgets.js';
 import type {Stand} from './setup.js';
 
-/** Private synthetic work uses the same contextual ledger and report transport. */
+/** Synthetic client work uses the same contextual ledger and report transport. */
 export async function seedClients(store: Store, directory: Directory, stand: Stand) {
   const owner = [...stand.people.values()][0], agent = [...stand.agents.values()][0];
   if (!owner || !agent) return;
@@ -17,4 +17,5 @@ export async function seedClients(store: Store, directory: Directory, stand: Sta
   const view=showWidgets(directory.view(owner.personalBoard),['agents','activity']);
   view.layout.places.agents={x:0,y:0,w:6};view.layout.places.activity={x:0,y:0,w:6};
   directory.saveView(owner.personalBoard,view,owner.id,start);
+  for(const board of stand.boards?.values()??[])if(board!==owner.personalBoard)directory.saveView(board,showWidgets(directory.view(board),['agents','activity']),owner.id,start);
 }

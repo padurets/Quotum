@@ -68,6 +68,7 @@ export type LiveSession = {
   presenceKey?: string;
   currentPresence?: {working:boolean;startedAt:number};
   clientId?: string;
+  sourceStatus?:'notProvided';
   device: {id: string; name: string};
   /** A terminal; an editor or the provider's app, which run one client per window. */
   origin: 'terminal' | 'editor' | 'app';

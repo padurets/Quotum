@@ -20,6 +20,7 @@ import * as view from '../lib/view';
 import * as subscription from '../lib/subscription';
 import * as timeRange from '../lib/timeRange';
 import * as i18n from '../i18n';
+import * as tableWidget from '../components/TableWidget';
 import type {Card,History,Kind} from '../lib/types';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import {mapZai,decodeZai} from '../../server/connectors/zai';
@@ -36,12 +37,15 @@ let layout:'table'|'list'='table';
 const modules:Record<string,unknown>={'../../server/domain/resources':resources,react:React,'react/jsx-runtime':jsxRuntime,'../lib/format':format,'../lib/quota':quota,'../lib/forecast':forecast,'../lib/forecastSort':forecastSort,'../lib/plan':plan,'../lib/work':work,'../lib/view':view,'../lib/subscription':subscription,'../lib/timeRange':timeRange,'../i18n':i18n,
   '../lib/period':{boardPeriod:{quotaAt:(line:unknown)=>line,quotaOrderAt:()=>({slope:0,next:Infinity}),rangeAt:()=>history?{from:history.since,to:history.to}:null,cellChangesAt:()=>null}},
   '../lib/prefs':{usePref:(key:string)=>key==='kind'?kind:null},'../lib/board':{useNamed:()=>sources,useLineup:()=>sources.map(s=>s.id),useForecastsOf:()=>[{},{}],useResetNews:()=>null},'../lib/clock':{hubNow:()=>M,useClock:()=>M,clock:new PageClock({now:()=>M,visible:()=>false,setTimeout:()=>null,clearTimeout:()=>{}})},'../lib/history':{quotaHistory:{retry:()=>{}},useHistory:()=>({history,loading:false,error})},'./AnalyticsPanel':panel,'./Popover':{Popover:()=>null},'./MoneyAnalytics':{MoneyTable:()=>{throw new Error('a subscription reached the money table');}}};
+const cellContext = {exports: {}, require: (name: string) => modules[name] ?? {}};
+runInNewContext(ts.transpileModule(readFileSync(new URL('../components/TableCell.tsx', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, cellContext);
+modules['./TableCell'] = cellContext.exports;
 const tableContext = {exports: {}, require: (name: string) => modules[name] ?? {}};
 const sortingContext={exports:{},require:(name:string)=>name==='./Popover'?{Popover:({label,icon}:{label:string;icon:React.ReactNode})=>React.createElement('button',{'aria-label':label},icon)}:modules[name]??{}};
-runInNewContext(ts.transpileModule(readFileSync(new URL('../components/TableSort.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,sortingContext);
-modules['./TableSort'] = sortingContext.exports;
+runInNewContext(ts.transpileModule(readFileSync(new URL('../components/TableWidget.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,sortingContext);
+modules['./TableWidget'] = {...tableWidget,...sortingContext.exports,useTableWidget:(...args:Parameters<typeof tableWidget.useTableWidget>)=>({...tableWidget.useTableWidget(...args),layout})};
 runInNewContext(ts.transpileModule(readFileSync(new URL('../components/AnalyticsTable.tsx', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, tableContext);
-modules['./AnalyticsTable'] = {...tableContext.exports,useTableLayout:()=>layout};
+modules['./AnalyticsTable'] = tableContext.exports;
 const context={exports:{} as {Forecast:typeof ForecastComponent},React,require:(name:string)=>modules[name]??{}};
 runInNewContext(ts.transpileModule(readFileSync(new URL('../components/Forecast.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
 const render=()=>renderToStaticMarkup(React.createElement(context.exports.Forecast,{arrange:{view:EMPTY_VIEW,owner:false,update:()=>{}}}));

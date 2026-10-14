@@ -6,12 +6,28 @@ on:
     branches: [main]
   pull_request:
   workflow_call:
+  workflow_dispatch:
+    inputs:
+      diagnostic_ref:
+        description: Full public commit SHA for the independent idle CPU control
+        required: true
+        type: string
+      expected_client_sha256:
+        description: SHA256 of the previously received compiled client
+        required: true
+        type: string
+      trace_only:
+        description: Observe the original idle window without CPU sampling or alignment
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   dev-tooling:
+    if: ${{ !inputs.diagnostic_ref }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -22,6 +38,7 @@ jobs:
       - run: make dev-test
 
   hub:
+    if: ${{ !inputs.diagnostic_ref }}
     runs-on: ubuntu-latest
     # It takes about a minute; a test that hangs fails it instead of holding the runner.
     timeout-minutes: 15
@@ -45,7 +62,7 @@ jobs:
   # What an open dashboard costs, measured in Chrome on the built hub and page (hub/bench).
   # A release does not wait for it: the commit it tags already passed it.
   bench:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     # Allow the full traffic matrix and subsequent credit/currency checks to finish.
     # Individual operation deadlines and performance budgets remain enforced.
@@ -63,8 +80,90 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+        env:
+          QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL: ${{ contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics') && '1' || '' }}
+      - uses: actions/upload-artifact@v7
+        if: ${{ always() && contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics') }}
+        with:
+          name: history-pool-receipt
+          path: /tmp/quotum-bench-history-pool.json
+          if-no-files-found: warn
+
+  idle-cpu-diagnostic:
+    if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'benchmark-cpu-diagnostics') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+        env:
+          QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: '1'
+          QUOTUM_BENCH_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: idle-cpu-diagnostic
+          path: |
+            /tmp/quotum-idle-cpu-diagnostic/
+            hub/dist/client/assets/index-*.js
+          if-no-files-found: warn
+
+  idle-cpu-control:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.diagnostic_ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Verify the requested source and received-client identity
+        run: |
+          node --import tsx --input-type=module <<'JS'
+          import {execFileSync} from 'node:child_process';
+          import {clientIdentity} from './bench/idleCpuDiagnostic.ts';
+          const requested=process.env.QUOTUM_BENCH_SOURCE_SHA,expected=process.env.EXPECTED_CLIENT_SHA256;
+          const actual=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),client=clientIdentity();
+          if(!/^[a-f0-9]{40}$/.test(requested??'')||actual!==requested||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected)throw Error('Diagnostic control source or client mismatch');
+          console.log('Diagnostic control source and compiled client verified');
+          JS
+        env:
+          QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
+          EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+        env:
+          QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.trace_only && 'trace' || '1' }}
+          QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: idle-cpu-control
+          path: |
+            /tmp/quotum-idle-cpu-diagnostic/
+            hub/dist/client/assets/index-*.js
+          if-no-files-found: warn
 
   managed-keys:
+    if: ${{ !inputs.diagnostic_ref }}
     strategy:
       fail-fast: false
       matrix:
@@ -86,6 +185,7 @@ jobs:
 
   # On every system the agent ships for: its process handling differs between them.
   agent:
+    if: ${{ !inputs.diagnostic_ref }}
     strategy:
       fail-fast: false
       matrix:
@@ -112,6 +212,7 @@ jobs:
   # The installers run on people's machines straight from a download: they must at least
   # be sound as scripts (shellcheck is on the runner; pwsh parses without running).
   installers:
+    if: ${{ !inputs.diagnostic_ref }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

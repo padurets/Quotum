@@ -312,12 +312,17 @@ for (const legacy of [false, true])
     now = T + 62_000;
     events.flush();
     const before = frames.length;
+    const authority = h.store.workKey(h.board);
     h.directory.revokeDevice(h.user.id, holder, now);
     h.ingest.forget([holder], now);
     events.flush();
-    const sent = frames.slice(before).filter(f => f.type === 'refresh');
-    assert.equal(sent.length, 1);
-    assert.equal(JSON.parse(sent[0].data).refresh.unavailable, 'no_device');
+    const sent = frames.slice(before);
+    assert.deepEqual(sent.map(f => f.type), ['snapshot']);
+    const snapshot = JSON.parse(sent[0].data);
+    assert.notEqual(snapshot.workAuthority, authority, 'the unused revoked device leaves admission');
+    assert.equal(snapshot.connectionsRevision, h.directory.connectionsRevision(h.user.id));
+    assert.deepEqual(snapshot.sessions[h.source()], []);
+    assert.equal(snapshot.refresh[h.source()].unavailable, 'no_device');
   });
 
 test('revoking a device with no sessions tells the boards at once', t => {
@@ -336,11 +341,21 @@ test('revoking a device with no sessions tells the boards at once', t => {
   now = T + 10_000;
   h.request(10_000);
   events.flush();
+  const before = frames.length, authority = h.store.workKey(h.board);
   now = T + 11_000;
   h.directory.revokeDevice(h.user.id, h.device(), now);
   h.ingest.forget([h.device()], now);
   events.flush();
-  assert.equal(JSON.parse(frames.filter(f => f.type === 'refresh').at(-1)!.data).refresh.request.status, 'unavailable');
+  const sent = frames.slice(before);
+  assert.deepEqual(sent.map(f => f.type), ['snapshot']);
+  const snapshot = JSON.parse(sent[0].data);
+  assert.notEqual(snapshot.workAuthority, authority);
+  assert.equal(snapshot.connectionsRevision, h.directory.connectionsRevision(h.user.id));
+  assert.deepEqual(snapshot.sessions[h.source()], []);
+  const refresh = snapshot.refresh[h.source()];
+  assert.equal(refresh.unavailable, 'no_device');
+  assert.equal(refresh.request.status, 'unavailable');
+  assert.equal(refresh.request.finishedAt, now, 'revocation closes the request at the event time');
 });
 
 test('projection changesAt remains a future boundary through silence, deadline and terminal expiry', t => {

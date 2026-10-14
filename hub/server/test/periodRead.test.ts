@@ -11,6 +11,7 @@ import {Setup} from '../setup.js';
 import {ResetFeed} from '../resets.js';
 import {newSecret} from '../domain/auth.js';
 import type {PeriodReply,PeriodRequest} from '../domain/periodRead.js';
+import {mergeTape,type PeriodTape} from '../domain/periodTape.js';
 import {mergeWork,workedSessions} from '../domain/periodWork.js';
 import {deepSeekMeasurement} from '../connectors/deepseek.js';
 import {periodValues,nearbyPeriodValues} from '../periodValues.js';
@@ -48,7 +49,7 @@ test('a period response rechecks authentication after cooperative preparation',a
   assert.equal(response.statusCode,401);assert.deepEqual(response.json(),{error:'unauthorized'});
 });
 
-test('private client periods retain exact work, client identity and late changes only on the personal board',async t=>{
+test('device-admitted client periods retain exact work and identity on personal and shared boards',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   const foreign=h.store.source('codex','f'.repeat(24),now-H),shared=h.directory.createBoard('Shared',h.user.id,now-H).id;
   const contexts=[{client:'opencode',source:null},{client:'codex',source:foreign}];
@@ -64,7 +65,7 @@ test('private client periods retain exact work, client identity and late changes
   const rows=workedSessions(reply.sessions.value,reply.basis.range,now);
   assert.deepEqual(rows.map(r=>[r.clientId,r.source,r.workedMs,r.currentPresence?.working]),[['opencode',null,M,true],['codex',null,M,false]]);
   assert.equal(new Set(rows.map(r=>r.ref)).size,2,'client namespaces never share presence or identity');
-  assert.ok('known' in reply.quota.value&&reply.quota.value.known.own!==undefined);
+  assert.ok('known' in reply.quota.value&&reply.quota.value.known.sessions!==null);assert.equal(reply.quota.value.known.own,undefined,'new replies use the common sessions boundary without a private alias');
   const wire=JSON.stringify(reply);assert.ok(!wire.includes(foreign)&&!wire.includes('same-producer'));
   const cutoff=now-150_000;
   const fixed=(await h.read({...body,selection:{mode:'range',from:now-H,to:cutoff}})).json<PeriodReply>();
@@ -73,7 +74,7 @@ test('private client periods retain exact work, client identity and late changes
   assert.deepEqual(fixed.sessions.value.fixed?.activity.by.source.map(g=>g.key),['unknown']);
   const other=(await h.read(body,shared)).json<PeriodReply>();
   if(other.sessions?.state!=='complete'||other.quota?.state!=='complete')throw new Error('incomplete shared period');
-  assert.deepEqual(other.sessions.value.refs,[]);assert.ok('known' in other.quota.value);assert.equal(other.quota.value.known.own,undefined);
+  assert.equal(other.sessions.value.refs.length,2);assert.ok('known' in other.quota.value);assert.equal(other.quota.value.known.own,undefined);
   h.store.creditWork(h.device,now-M,now-30_000,keys);
   const delta=(await h.read({...body,sessions:{cursor:reply.sessions.value.cursor}})).json<PeriodReply>();
   if(delta.sessions?.state!=='delta')throw new Error('missing private delta');
@@ -83,14 +84,14 @@ test('private client periods retain exact work, client identity and late changes
   h.directory.saveView(h.board,{...view,hidden:[...view.hidden,'source:'+foreign]},h.user.id,now);
   const hidden=(await h.read(body)).json<PeriodReply>();
   if(hidden.sessions?.state!=='complete')throw new Error('incomplete hidden period');
-  assert.deepEqual(hidden.sessions.value.refs.map(r=>r.clientId),['opencode'],'a held hidden source is excluded instead of becoming private');
+  assert.deepEqual(hidden.sessions.value.refs.map(r=>r.clientId),['opencode','codex'],'hiding a quota card preserves admitted work');
 });
 
 test('converted credit changes and heartbeats retain one bounded exact period tail',async t=>{
   const current=now+12345;t.mock.method(Date,'now',()=>current);
   const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   const query={cell:String(5*M),from:String(Math.floor((current-M)/(5*M))*5*M),to:String(Math.ceil(current/(5*M))*5*M),unit:'USD',currency:'USD',meters:JSON.stringify([[h.source,'balance:credits']])};
-  let evidence:string|undefined,meta='';
+  let evidence:string|undefined,meta='',retained:PeriodTape|null=null;
   for(const [i,amount] of ['2500','2499','2498','2498','2498'].entries()){
     const at=current-25000+i*2000;
     h.store.record(h.source,{observedAt:at,staleAfterMs:H,plan:'pro',resets:null,windows:[],resourceStatus:{windows:'missing',resets:'missing'},balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount,hasCredits:true}]});
@@ -104,7 +105,7 @@ test('converted credit changes and heartbeats retain one bounded exact period ta
     assert.equal(extra.semantics!.conversion!.original.amount,amount);
     assert.equal(extra.semantics!.conversion!.original.at,at);
     assert.equal(extra.semantics!.conversion!.rate.to,'40000');
-    assert.equal(part.value.tape!.money[0].readings.at(-1)!.amount,amount);
+    retained=retained?mergeTape(retained,part.value.tape!):part.value.tape!;assert.equal(retained.money[0].readings.at(-1)!.amount,amount,'complete and delta replies preserve one exact retained ledger');
     evidence=part.value.tape!.cursor;meta=part.value.meta??'';
   }
   assert.equal(h.store.db.prepare('SELECT count(*) n FROM readings WHERE source_id=?').get(h.source)?.n,3,'heartbeats do not invent ledger readings');
@@ -195,15 +196,20 @@ test('a chart-only past tile reads only its work, and extraction replacement rel
   t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{ranges.push(args.slice(0,2) as number[]);return original(...args);});
   const response=await h.read({version:1,selection:{mode:'range',from:now-2*H,to:now-M},evaluatedAt:now,quota:{cell:String(M),from:String(now-2*H),to:String(now-H),evidence:'skip'}});
   assert.equal(response.json<PeriodReply>().quota?.state,'complete');assert.deepEqual(ranges,[[now-2*H,now-H]]);
-  let used=0,peak=0;
-  const read=sharedWork(h.hub,h.store.shown(h.board,[]),null,bytes=>{used+=bytes;peak=Math.max(peak,used);},bytes=>{used-=bytes;assert.ok(used>=0);});
+  let used=0,peak=0,accessBytes=0;
+  const capture=h.store.workAccess.bind(h.store);
+  t.mock.method(h.store,'workAccess',(...args:Parameters<Store['workAccess']>)=>capture(args[0],args[1],bytes=>{accessBytes+=bytes;args[2]?.(bytes);}));
+  const read=sharedWork(h.hub,h.store.shown(h.board,[]),null,bytes=>{used+=bytes;peak=Math.max(peak,used);},bytes=>{used-=bytes;assert.ok(used>=0);},null,now,h.board);
+  const metadata=used;assert.ok(metadata>0,'the common captured access is charged before extraction');
+  assert.equal(metadata,accessBytes,'only the captured access remains charged after authority hashing');
+  assert.ok(peak>metadata,'temporary authority hashing is released before extraction starts');peak=used;
   const first=read(now-2*H,now-H),before=used;
   assert.equal(first.length,1);assert.ok(before>0);
   const second=read(now-2*H,now);
   assert.equal(second.length,2);assert.equal(peak,used,'replacement does not retain the former extraction');
   read(now-90*M,now-M);assert.equal(peak,used,'contained reads reuse the extraction');
   const final=used;t.mock.method(h.store,'agentWork',(_from:number,_to:number,_sources?:string[],_owner?:string|null,reserve?:(bytes:number)=>void)=>{reserve?.(64);throw new HistoryLimit();});
-  assert.throws(()=>read(now-3*H,now),HistoryLimit);assert.equal(used,0);assert.equal(peak,final);
+  assert.throws(()=>read(now-3*H,now),HistoryLimit);assert.equal(used,metadata,'failed extraction releases every raw byte while its request keeps the common access');assert.equal(peak,final);
 });
 
 test('money retains exact amounts, compressed anchors and accepted interruption',()=>{
@@ -259,17 +265,17 @@ test('period access is rechecked, malformed sections fail, and the legacy route 
   assert.equal((await h.read(request)).statusCode,404);
 });
 
-test('fixed work keeps the board sharing boundary instead of declaring earlier time idle',async t=>{
+test('fixed work follows device admission independently of later subscription sharing',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   const shared=h.directory.createBoard('Shared',h.user.id,now-3*H).id;
   h.store.share(shared,h.source,h.user.id,now-2*H);h.credit(now-3*H,now-H);
   const selection={mode:'range' as const,from:now-3*H,to:now-150*M};
   const reply=(await h.read({version:1,selection,evaluatedAt:now,sessions:{}},shared)).json<PeriodReply>();
   if(reply.sessions?.state!=='complete')throw new Error('incomplete shared period');
-  assert.equal(reply.sessions.value.knownFrom,now-2*H);
-  assert.equal(reply.sessions.value.fixed?.activity.since,now-2*H);
-  assert.equal(reply.sessions.value.fixed?.activity.known,null);
-  assert.deepEqual(workedSessions(reply.sessions.value,selection,now),[]);
+  assert.equal(reply.sessions.value.knownFrom,now-3*H);
+  assert.equal(reply.sessions.value.fixed?.activity.since,now-3*H);
+  assert.deepEqual(reply.sessions.value.fixed?.activity.known,{from:selection.from,to:selection.to});
+  assert.deepEqual(workedSessions(reply.sessions.value,selection,now).map(r=>r.workedMs),[30*M]);
 });
 
 
@@ -292,7 +298,8 @@ test('a fixed range summarizes its own work without rewriting the retained live 
   const detail=await h.details(detailRequest);assert.equal(detail.statusCode,200,detail.body);assert.equal(detail.json().sessions.value[0].workedMs,H);
   assert.equal((await h.details({...detailRequest,refs:Array(101).fill(value.refs[0].ref)})).statusCode,400);
   h.credit(now-10*M,now-5*M,'another');
-  assert.equal((await h.details(detailRequest)).statusCode,400,'a stale detail cursor cannot name current evidence');
+  assert.equal((await h.details(detailRequest)).statusCode,200,'later credit outside a fixed cursor’s cut does not revoke its evidence');
+  h.credit(now-90*M,now-89*M,'intersecting');assert.equal((await h.details(detailRequest)).statusCode,400,'credit inside its cut revokes a stale detail cursor');
 });
 
 

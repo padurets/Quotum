@@ -4,6 +4,7 @@ import type {DatabaseSync} from 'node:sqlite';
 import {newId, secretHash} from '../domain/auth.js';
 import {EMPTY_VIEW, encodeView, decodeView, sameView, viewBytes, VIEW_BODY_LIMIT, type View} from '../domain/view.js';
 import {tell, transaction, type Touches} from '../touches.js';
+import {workFundingKey} from '../domain/workAccess.js';
 
 export type User = {id: string; email: string; name: string; createdAt: number};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
@@ -256,9 +257,10 @@ export class Directory {
    */
   deleteBoard(id: string) {
     const members = this.observer ? this.members(id).map(m => m.id) : [];
-    for (const table of ['members', 'invites', 'views', 'boards']) {
+    for (const table of ['board_device_sessions','members', 'invites', 'views', 'boards']) {
       this.db.prepare(`DELETE FROM ${table} WHERE ${table === 'boards' ? 'id' : 'board_id'} = ?`).run(id);
     }
+    this.db.prepare('DELETE FROM meta WHERE key=?').run(workFundingKey(id));
     tell(this.observer, o => {
       o.dropBoard(id);
       for (const member of members) o.touchUser(member);
@@ -267,7 +269,12 @@ export class Directory {
 
   /** Someone leaves a board, or its owner removes them. What they shared goes with them (Store.unshareOrphans). */
   removeMember(boardId: string, userId: string) {
-    if (!this.db.prepare("DELETE FROM members WHERE board_id = ? AND user_id = ? AND role <> 'owner'").run(boardId, userId).changes) return;
+    const removed=transaction(this.db,()=>{
+      if(!this.db.prepare("DELETE FROM members WHERE board_id = ? AND user_id = ? AND role <> 'owner'").run(boardId,userId).changes)return false;
+      this.db.prepare('DELETE FROM board_device_sessions WHERE board_id=? AND device_id IN (SELECT id FROM devices WHERE user_id=?)').run(boardId,userId);
+      return true;
+    });
+    if(!removed)return;
     tell(this.observer, o => {
       o.dropMember(boardId, userId);
       o.touchBoards([boardId]);

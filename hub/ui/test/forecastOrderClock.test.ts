@@ -20,16 +20,16 @@ test('actual Forecast order consumer crosses rolling union and agent hours witho
   const rows=models.map(model=>({key:model.line.key,name:model.line.name,cells:{work:{content:'kept'},agenthours:{content:'kept'}}}));
   const props={rows,models,columns:[{id:'work',title:'Work'},{id:'agenthours',title:'Agent hours'}],fixed:false,rangeKey:'1h'};
   const slot=(make:()=>any)=>{const at=index++;return slots[at]??(slots[at]=make());};
-  const context={exports:{} as {SortedForecast:(props:unknown)=>{props:{rows:typeof rows}}},require:()=>({jsx:(_type:unknown,props:unknown)=>({props})}),memo:(fn:unknown)=>fn,
+  const context={exports:{} as {SortedForecast:(props:unknown)=>{props:{children:any[]}}},require:()=>({jsxs:(_type:unknown,props:unknown)=>({props}),jsx:(_type:unknown,props:unknown)=>({props})}),memo:(fn:unknown)=>fn,
     usePref:()=>sort,useLocale:()=> 'en',useRef:(current:unknown)=>slot(()=>({current})),useState:(make:()=>unknown)=>[slot(make)],useMemo:(make:()=>unknown)=>make(),useCallback:(fn:unknown)=>fn,
     useLayoutEffect:(run:()=>void)=>effects.push(run),
     useSyncExternalStore:(subscribe:(notify:()=>void)=>()=>void,read:()=>unknown)=>{const state=slot(()=>{const state={value:read(),stop:()=>{}};state.stop=subscribe(()=>{const next=read();if(next!==state.value){state.value=next;dirty=true;}});return state;});state.value=read();return state.value;},
     clock,hubNow:()=>now,sortValue,forecastComparator,crossingAt,nextForecastSort,visibleForecastSort,planOrderAt,workLeftChangesAt,
     boardPeriod:{quotaAt:(line:SortRow['line'],at:number)=>({...line,...accounting.quotaSummary(line.sourceId,line.windowId,{from:at-H,to:at})}),quotaOrderAt:(line:SortRow['line'],at:number,_range:string,active:boolean)=>accounting.quotaWorkSlope(line.sourceId,line.windowId,at,H,active)},
-    FORECAST_WIDTHS:{limit:100},AnalyticsTable:()=>{},setPrefs:()=>{},t:()=> 'Limit'};
+    FORECAST_WIDTHS:{limit:100},AnalyticsPanel:()=>{},TableSortMenu:()=>{},TableMeasure:()=>{},WidgetPages:()=>{},useTableWidget:(_panel:unknown,_columns:unknown,_name:unknown,keys:string[])=>({layout:'table',from:0,to:keys.length,measureFrom:0,measureTo:0}),AnalyticsTable:()=>{},setPrefs:()=>{},t:()=> 'Limit'};
   const source=readFileSync(new URL('../components/Forecast.tsx',import.meta.url),'utf8'),start=source.indexOf('const SortedForecast=');
   runInNewContext(ts.transpileModule(`export ${source.slice(start,source.indexOf('/**',start))}`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
-  const render=()=>{index=0;dirty=false;renders++;const value=context.exports.SortedForecast(props).props.rows;effects.splice(0).forEach(run=>run());return value;};
+  const render=()=>{index=0;dirty=false;renders++;const value=context.exports.SortedForecast(props).props.children[1].props.children[0].props.rows as typeof rows;effects.splice(0).forEach(run=>run());return value;};
   let ordered=render();assert.deepEqual(Array.from(ordered,row=>row.key),['A','B']);
   now=H+5000;clock.wakeDue();assert.equal(dirty,false,'equality keeps the existing default tie');
   now++;clock.wakeDue();assert.equal(dirty,true);ordered=render();assert.deepEqual(Array.from(ordered,row=>row.key),['B','A']);assert.equal(ordered[0],rows[1]);assert.equal(ordered[1].cells,rows[0].cells);

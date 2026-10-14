@@ -107,7 +107,7 @@ function hub() {
     );
   const part = (now: number) => {
     const source = store.sources(board)[0];
-    return projection.sourcePart(source, projection.members(board), now);
+    return projection.sourcePart(source, projection.members(board), now, projection.roster(board,now));
   };
   return {store, directory, projection, alice, board, ask, deliver, running, part};
 }

@@ -1,3 +1,5 @@
+import {compareWorkRatio,firstPolynomialChange} from './workRatio.js';
+import {sourceKey} from './workAccess.js';
 import {drain,type Preparation} from './prepare.js';
 import type {History} from './history.js';
 import type {Dimension as ActivityDimension,ActivityGroup} from './work.js';
@@ -8,7 +10,8 @@ import {PeriodCurves,type WorkTimeline} from './periodCurves.js';
 
 type Group={name:string|null;curve:WorkTimeline;contexts:WorkTimeline[];agentMs:number;agents:number};
 const dimensions:ActivityDimension[]=['source','project','device'];
-const keys=(row:WorkTrace['refs'][number])=>({source:row.source??'unknown',project:JSON.stringify(row.project),device:row.device.id});
+const keys=(row:WorkTrace['refs'][number])=>({source:sourceKey(row),project:JSON.stringify(row.project),device:row.device.id});
+export type ActivityOrder={by:ActivityDimension;column:'active'|'concurrency';keys:readonly string[]};
 
 export class PeriodActivity {
   private all!:WorkTimeline;
@@ -46,12 +49,40 @@ export class PeriodActivity {
     const groups:ActivityGroup[]=[];let agents=0;
     for(const [id,group] of selected){const count=range.to>range.from?group.contexts.reduce((sum,curve)=>sum+Number(curve.read(range)>0),0):0;agents+=count;if(count)groups.push({key:id,name:group.name,agentMs:group.curve.read(range),activeMs:group.curve.read(range,true),agents:count,cells:[]});}
     const from=Math.max(range.from,this.trace.knownFrom),to=Math.min(range.to,this.cut);
-    return {...activity,known:from<to?{from,to}:null,agentMs:key!==undefined?groups[0]?.agentMs??0:agents?this.all.read(range):0,activeMs:key!==undefined?groups[0]?.activeMs??0:agents?this.all.read(range,true):0,agents,by:{...activity.by,[dimension]:groups}};
+    return {...activity,...(this.trace.available===false?{available:false as const}:{}),known:this.trace.available!==false&&from<to?{from,to}:null,agentMs:key!==undefined?groups[0]?.agentMs??0:agents?this.all.read(range):0,activeMs:key!==undefined?groups[0]?.activeMs??0:agents?this.all.read(range,true):0,agents,by:{...activity.by,[dimension]:groups}};
   }
   changesAt(now:number,period:number,dimension:ActivityDimension,key?:string) {
     if(this.trace.fixed)return null;
     const contexts=key===undefined?this.contexts.values():this.groups[dimension].get(key)?.contexts??[];
     let next=Infinity;for(const curve of contexts)next=Math.min(next,curve.next(now-period)+period,curve.next(now));
+    return Number.isFinite(next)?next:null;
+  }
+  /** Both scalar presentations use the same exact group and whole-period curves. */
+  summary(range:PeriodRange,dimension:ActivityDimension,key?:string):Activity {
+    const empty:Activity={...(this.trace.available===false?{available:false as const}:{}),since:this.trace.knownFrom,known:null,barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}};
+    if(this.trace.fixed)return this.trace.fixed.activity;
+    return this.numbers(empty,range,dimension,key);
+  }
+  /** Union and ratio sorts can cross between ledger endpoints, without a report. */
+  orderChangesAt(now:number,period:number,orders:readonly ActivityOrder[]):number|null {
+    if(this.trace.fixed||!orders.length)return null;
+    const range={from:now-period,to:now};let next=Infinity;
+    for(const order of orders){
+      const pieces=order.keys.flatMap(key=>{const curve=this.groups[order.by].get(key)?.curve;if(!curve)return [];
+        return [{curve,agent:curve.read(range),active:curve.read(range,true),agentSlope:curve.slope(now)-curve.slope(range.from),activeSlope:Number(curve.working(now))-Number(curve.working(range.from))}];});
+      for(let i=1;i<pieces.length;i++){
+        const a=pieces[i-1],b=pieces[i];
+        const boundary=Math.min(a.curve.next(now),b.curve.next(now),a.curve.next(range.from)+period,b.curve.next(range.from)+period);
+        const before=order.column==='active'?Math.sign(a.active-b.active):compareWorkRatio(a.agent,a.active,b.agent,b.active);
+        const A=BigInt(a.agent),E=BigInt(a.active),B=BigInt(b.agent),F=BigInt(b.active),da=BigInt(a.agentSlope),de=BigInt(a.activeSlope),db=BigInt(b.agentSlope),df=BigInt(b.activeSlope);
+        const c0=order.column==='active'?E-F:A*F-B*E;
+        const c1=order.column==='active'?de-df:da*F+A*df-db*E-B*de;
+        const c2=order.column==='active'?0n:da*df-db*de;
+        const change=firstPolynomialChange(c0,c1,c2,boundary-now,before);
+        if(change!==null)next=Math.min(next,now+change);
+
+      }
+    }
     return Number.isFinite(next)?next:null;
   }
   project(activity:Activity,range:PeriodRange):Activity {
@@ -78,6 +109,6 @@ export class PeriodActivity {
       by[dimension].sort((a,b)=>b.agentMs-a.agentMs||a.key.localeCompare(b.key));
     }
     const from=Math.max(range.from,this.trace.knownFrom),to=Math.min(range.to,this.cut);
-    return {...activity,since:this.trace.knownFrom,known:from<to?{from,to}:null,activeMs:this.all.read(range,true),agentMs:this.all.read(range),agents:this.previous.size,cells,by};
+    return {...activity,...(this.trace.available===false?{available:false as const}:{}),since:this.trace.knownFrom,known:this.trace.available!==false&&from<to?{from,to}:null,activeMs:this.all.read(range,true),agentMs:this.all.read(range),agents:this.previous.size,cells,by};
   }
 }

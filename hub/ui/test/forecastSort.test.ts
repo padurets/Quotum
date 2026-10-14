@@ -9,6 +9,7 @@ const H=3_600_000;
 const row=(name:string,current:number|null,changes:Partial<Line>={}):SortRow=>({line:{sourceId:name,windowId:'w',key:name,provider:'codex',kind:'weekly',label:null,minutes:10080,name,color:'blue',dash:'',current,points:[[0,current??0,1]],remainingAtStart:current,remainingAtEnd:current,consumed:0,coveredMs:H,staleAfterMs:H,work:null,...changes},live:current===null?undefined:{id:'w',kind:'weekly',label:null,minutes:10080,resetAt:10*H,remaining:current,used:100-current},measuredAt:3*H,ahead:null,plan:null,context:{windows:[],freeResets:0,announced:null}});
 const sorted=(rows:SortRow[],sort:ForecastSort=null,fixed=false,now=3*H)=>rows.map(r=>sortValue(r,r.line,now,fixed)).sort(forecastComparator(sort,fixed,'en')).map(v=>v.row.line.name);
 test('reader preference parsing, cycling and hidden-column recovery',()=>{
+  assert.deepEqual(readForecastSort({column:'limit',descending:true}),{column:'name',descending:true},'the previous name-column preference survives the shared table contract');
   for(const bad of [null,{},[],{column:'money',descending:false},{column:'spent',descending:'false'}])assert.equal(readForecastSort(bad),null);
   const up=nextForecastSort(null,'spent'),down=nextForecastSort(up,'spent');assert.deepEqual(up,{column:'spent',descending:false});assert.deepEqual(down,{column:'spent',descending:true});assert.equal(nextForecastSort(down,'spent'),null);
   assert.equal(visibleForecastSort(down,['now']),null);assert.equal(visibleForecastSort(down,['spent']),down);
@@ -24,7 +25,7 @@ test('live importance, missed resets, caps and fixed spending use distinct evide
 });
 test('unknowns stay last in both directions and numeric names and ties remain stable',()=>{
   const rows=[row('Series 10',10),row('Unknown',null),row('Series 2',20)];
-  assert.deepEqual(sorted(rows,{column:'limit',descending:false}),['Series 2','Series 10','Unknown']);
+  assert.deepEqual(sorted(rows,{column:'name',descending:false}),['Series 2','Series 10','Unknown']);
   for(const descending of [false,true])assert.equal(sorted(rows,{column:'now',descending}).at(-1),'Unknown');
   const bounded=row('bounded',10,{work:{from:0,ms:H,agentMs:H,coveredMs:H,consumed:1,duringWork:1}}),numeric=row('numeric',10,{work:{from:0,ms:H,agentMs:H,coveredMs:H,consumed:10,duringWork:10}});
   for(const descending of [false,true])assert.deepEqual(sorted([bounded,numeric],{column:'workleft',descending}),['numeric','bounded']);

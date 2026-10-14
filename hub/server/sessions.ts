@@ -2,6 +2,7 @@ import {createHmac, randomBytes} from 'node:crypto';
 import type {SessionEvidence} from './domain/sessionEvidence.js';
 import type {Origin} from './domain/ingest.js';
 import type {Store, WorkKey} from './store/store.js';
+import {admitted,fundingOf,type WorkAccess} from './domain/workAccess.js';
 
 /** A running coding agent as its machine reported it, on the subscription it spends. */
 export type LiveSession = SessionEvidence & {
@@ -27,6 +28,7 @@ export type LiveSession = SessionEvidence & {
  * stay apart; and how long it has worked, as credited by its machine's lists so far.
  */
 export type BoardSession = {
+  sourceStatus?:'notProvided';
   presenceKey?: string;
   currentPresence?: {working: boolean; startedAt: number};
   clientId?: string;
@@ -84,7 +86,9 @@ export class Sessions {
   private readonly machines = new Map<string, Machine>();
   private readonly presenceSecret = randomBytes(32);
 
-  constructor(private readonly store: Store) {}
+  constructor(private readonly store: Store) {
+    store.setCurrentFunding((device,owner,source,now)=>{const machine=this.machines.get(device);return !!machine&&machine.user===owner&&now<=machine.at+KEEP_MS&&machine.sessions.some(session=>session.source===source);});
+  }
 
   /** A machine's new list, from its person `user`, each session filed under its subscription. */
   report(device: string, user: string, sessions: (LiveSession & {source: string | null})[], now: number) {
@@ -94,7 +98,7 @@ export class Sessions {
     const normalized = sessions.map(s => ({...s, clientId: s.clientId ?? s.source?.split(':')[0] ?? 'unknown'}));
     if (normalized.length) this.machines.set(device, {at: now, user, sessions: normalized});
     else this.machines.delete(device);
-    this.store.clientSessionsChanged(user);
+    this.store.clientSessionsChanged(user,device);
 
   }
 
@@ -104,7 +108,7 @@ export class Sessions {
       if (now - machine.at <= KEEP_MS) continue;
       this.credit(device, machine, machine.at + CREDIT_MS);
       this.machines.delete(device);
-      this.store.clientSessionsChanged(machine.user);
+      this.store.clientSessionsChanged(machine.user,device);
     }
   }
 
@@ -113,7 +117,7 @@ export class Sessions {
     for (const device of devices) {
       const before = this.machines.get(device);
       this.machines.delete(device);
-      if (before) this.store.clientSessionsChanged(before.user);
+      if (before) this.store.clientSessionsChanged(before.user,device);
     }
   }
 
@@ -134,11 +138,11 @@ export class Sessions {
   }
 
   /** Reports replace these lists, so a retained map keeps one request's presence cut. */
-  presenceSnapshot(reserve:(bytes:number)=>void,include:(user:string,source:string|null)=>boolean):Sessions['presence'] {
+  presenceSnapshot(reserve:(bytes:number)=>void,include:(device:string,user:string,source:string|null)=>boolean):Sessions['presence'] {
     const machines=new Map<string,Machine>();
     for(const [id,machine] of this.machines){
       let sessions:StoredSession[]|undefined;
-      for(const session of machine.sessions)if(include(machine.user,session.source)){
+      for(const session of machine.sessions)if(include(id,machine.user,session.source)){
         const bytes=768+2*(session.project?.length??0)+2*(session.folder?.length??0)+2*session.device.name.length;
         reserve(bytes+(sessions?0:128));(sessions??=[]).push(session);
       }
@@ -174,6 +178,22 @@ export class Sessions {
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);
   }
 
+  /** One admitted collection is split once into disjoint subscription and fallback slices. */
+  board(access:WorkAccess,now:number) {
+    const sessions=new Map<string,BoardSession[]>(),unattributedSessions:BoardSession[]=[],ends:number[]=[];
+    for(const [id,machine] of this.machines){
+      const scope=admitted(access,id,machine.user);if(!scope||now-machine.at>KEEP_MS)continue;
+      const keys=keysOf(machine),worked=this.store.worked(id,keys,access.owner===null?scope.from:undefined),present=this.presenter(machine.user,id,now);
+      machine.sessions.forEach((s,i)=>{const funding=fundingOf(access,machine.user,s.source),row={...present(s,worked[i]),...(funding.sourceStatus?{sourceStatus:funding.sourceStatus}:{})};
+        if(funding.source===null)unattributedSessions.push(row);else {let list=sessions.get(funding.source);if(!list)sessions.set(funding.source,list=[]);list.push(row);}
+      });
+      ends.push(...this.deadlines(machine,now,()=>true));
+    }
+    const sort=(a:BoardSession,b:BoardSession)=>a.device.name.localeCompare(b.device.name)||a.device.id.localeCompare(b.device.id)||a.startedAt-b.startedAt;
+    for(const list of sessions.values())list.sort(sort);unattributedSessions.sort(sort);
+    return {sessions,unattributedSessions,changesAt:ends.length?Math.min(...ends):null};
+  }
+
   /** When a current list stops confirming work or presence without another report. */
   ofChangesAt(source: string, people: string[], now: number): number | null {
     const ends = [...this.machines.values()].filter(m => now - m.at <= KEEP_MS && people.includes(m.user) && this.store.holds(m.user, source) && m.sessions.some(s => s.source === source)).flatMap(m => this.deadlines(m, now, s => s.source === source));
@@ -194,25 +214,6 @@ export class Sessions {
     return ends.length ? Math.min(...ends) : null;
   }
 
-  /** Unknown and unheld work is private to the owner's personal board. */
-  own(user: string, board: string, now: number): BoardSession[] {
-    if (this.store.privateOwner(board) !== user) return [];
-    return this.privateSessions(user, now);
-  }
-
-  privateSessions(user: string, now: number, device?: string): BoardSession[] {
-    const found: BoardSession[] = [];
-    for (const [id, machine] of this.machines) {
-      if (machine.user !== user || now - machine.at > KEEP_MS || device !== undefined && id !== device) continue;
-      const keys = keysOf(machine);
-      const selected = machine.sessions.flatMap((s, i) => this.store.displaySource(user, s.source) === null ? [{s, key: keys[i]}] : []);
-      const worked = this.store.worked(id, selected.map(s => s.key));
-      const present = this.presenter(user, id, now);
-      selected.forEach(({s}, i) => found.push(present(s, worked[i])));
-    }
-    return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);
-  }
-
   deviceSessions(user: string, device: string, now: number): (BoardSession & {source: string | null})[] {
     const machine = this.machines.get(device);
     if (!machine || machine.user !== user || now - machine.at > KEEP_MS) return [];
@@ -230,12 +231,6 @@ export class Sessions {
 
   devicesChangesAt(user: string, now: number): number | null {
     const deadlines = [...this.machines.values()].filter(m => m.user === user && now-m.at <= KEEP_MS).map(m => m.at+KEEP_MS+1);
-    return deadlines.length ? Math.min(...deadlines) : null;
-  }
-
-  ownChangesAt(user: string, board: string, now: number): number | null {
-    if (this.store.privateOwner(board) !== user) return null;
-    const deadlines = [...this.machines.values()].filter(m => m.user === user && now - m.at <= KEEP_MS && m.sessions.some(s => this.store.displaySource(user, s.source) === null)).flatMap(m => this.deadlines(m, now, s => this.store.displaySource(user, s.source) === null));
     return deadlines.length ? Math.min(...deadlines) : null;
   }
 

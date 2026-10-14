@@ -34,6 +34,7 @@ export function Completion({
     view = useServerView(),
     currentBoard = useBoardId();
   const path = usePath();
+  const deviceOnly=!!operation.deviceId&&operation.item.kind==='sources'&&!operation.item.sourceIds.length;
   const widgets = operation.item.kind === 'widget' ? operation.widgetIds ?? [operation.item.widgetId] : [];
   const widget = widgets[0] ?? null;
   const visible =
@@ -67,9 +68,9 @@ export function Completion({
       <span className="completion-symbol" aria-hidden="true">
         <Check size={24} />
       </span>
-      <h3>{t(changed ? 'add.changed' : personal ? 'add.connected' : visible ? 'add.complete' : 'add.waiting')}</h3>
+      <h3>{t(deviceOnly?'add.deviceComplete':changed ? 'add.changed' : personal ? 'add.connected' : visible ? 'add.complete' : 'add.waiting')}</h3>
       <p>
-        {t(changed ? 'add.changedText' : personal ? 'add.personalResult' : 'add.boardResult', {
+        {t(deviceOnly?'add.deviceCompleteText':changed ? 'add.changedText' : personal ? 'add.personalResult' : 'add.boardResult', {
           board: board ? boardTitle(board) : t('boards.personalName'),
         })}
       </p>
@@ -99,7 +100,7 @@ export function Completion({
         </p>
       )}
       <button className="button primary" disabled={!board || operation.current?.boardAccessible === false} onClick={focus}>
-        {t(personal || !visible ? 'add.openBoard' : 'add.viewWidget')}
+        {t(deviceOnly||personal||!visible?'add.openBoard':'add.viewWidget')}
       </button>
     </div>
   );
@@ -730,7 +731,7 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
       </select>
       {chosen && (
         <fieldset className="source-selection" disabled={selecting || addition.busy || !!intent?.additionId}>
-          <legend>{t('add.selectSources')}</legend>
+          <legend>{t('add.optionalSources')}</legend>
           {chosen.sources
             .filter(source => available.includes(source.source) || intent?.sourceIds.includes(source.source))
             .map(source => (
@@ -761,10 +762,10 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
         </button>
         <button
           className="button primary"
-          disabled={!intent || !selected.length || addition.busy || selecting || ['expired', 'complete'].includes(intent.status)}
+          disabled={!intent || !chosen || addition.busy || selecting || ['expired', 'complete'].includes(intent.status)}
           onClick={() => void finish()}
         >
-          {t('add.selection')}
+          {t(selected.length?'add.selection':'add.finishDevice')}
         </button>
       </div>
     </div>

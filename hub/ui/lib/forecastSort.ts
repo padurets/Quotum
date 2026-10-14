@@ -3,18 +3,19 @@ import {lineWork,type WorkCell} from './work';
 import type {Line} from './lines';
 import type {SeriesForecast,Win} from './types';
 import type {WeeklyPlan} from './plan';
-import {nextTableSort} from './tableSort';
+import {nextTableSort,visibleTableSort} from './table';
 
-export type SortColumn='limit'|ForecastColumn;
+export type SortColumn='name'|ForecastColumn;
 export type ForecastSort={column:SortColumn;descending:boolean}|null;
-export const SORT_COLUMNS:readonly SortColumn[]=['limit',...new Set([...LIVE_COLUMNS,...RANGE_COLUMNS])];
+export const SORT_COLUMNS:readonly SortColumn[]=['name',...new Set([...LIVE_COLUMNS,...RANGE_COLUMNS])];
 export function readForecastSort(value:unknown):ForecastSort {
   if(!value||typeof value!=='object')return null;
   const sort=value as Record<string,unknown>;
-  return SORT_COLUMNS.includes(sort.column as SortColumn)&&typeof sort.descending==='boolean'?{column:sort.column as SortColumn,descending:sort.descending}:null;
+  const column = sort.column === 'limit' ? 'name' : sort.column;
+  return SORT_COLUMNS.includes(column as SortColumn)&&typeof sort.descending==='boolean'?{column:column as SortColumn,descending:sort.descending}:null;
 }
 export const nextForecastSort=nextTableSort<SortColumn>;
-export const visibleForecastSort=(sort:ForecastSort,columns:readonly ForecastColumn[]):ForecastSort=>sort&&(sort.column==='limit'||columns.includes(sort.column))?sort:null;
+export const visibleForecastSort=(sort:ForecastSort,columns:readonly ForecastColumn[]):ForecastSort=>visibleTableSort(sort,['name',...columns]);
 
 type Scalar=readonly number[]|null;
 export type SortRow={line:Line;live?:Win;validUntil?:number;measuredAt:number|null;ahead:SeriesForecast|null;context:Context;plan:WeeklyPlan|null};
@@ -45,7 +46,7 @@ export function forecastComparator(sort:ForecastSort,fixed:boolean,locale:string
   return (a:SortValue,b:SortValue)=>{
     if(!sort)return defaults(a,b);
     const direction=sort.descending?-1:1;
-    if(sort.column==='limit')return direction*collator.compare(a.row.line.name,b.row.line.name)||defaults(a,b);
+    if(sort.column==='name')return direction*collator.compare(a.row.line.name,b.row.line.name)||defaults(a,b);
     const av=a.keys[sort.column]??null,bv=b.keys[sort.column]??null;
     // Bounded hours follow numeric hours in either direction.
     const groups=sort.column==='workleft'&&av&&bv?av[0]-bv[0]:0;

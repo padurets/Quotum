@@ -3,22 +3,23 @@ import type {MoneyFamily} from '../../server/domain/providers';
 import {t} from '../i18n';
 import {capName, unitLabel} from './money';
 import {moneyTotal, type MeterHistory} from './moneyView';
-import {nextTableSort, type TableSort} from './tableSort';
+import {nextTableSort, visibleTableSort, type TableSort} from './table';
 
 export const MONEY_COLUMNS = ['value', 'spending', 'topup'] as const;
 export type MoneyColumn = typeof MONEY_COLUMNS[number];
-export type MoneySort = TableSort<MoneyColumn | 'limit'>;
-export const nextMoneySort = nextTableSort<MoneyColumn | 'limit'>;
+export type MoneySort = TableSort<MoneyColumn | 'name'>;
+export const nextMoneySort = nextTableSort<MoneyColumn | 'name'>;
 
 export function readMoneySort(value: unknown): MoneySort {
   if (!value || typeof value !== 'object') return null;
   const sort = value as Record<string, unknown>;
-  return ['limit', ...MONEY_COLUMNS].includes(sort.column as string) && typeof sort.descending === 'boolean'
-    ? {column: sort.column as NonNullable<MoneySort>['column'], descending: sort.descending} : null;
+  const column = sort.column === 'limit' ? 'name' : sort.column;
+  return ['name', ...MONEY_COLUMNS].includes(column as string) && typeof sort.descending === 'boolean'
+    ? {column: column as NonNullable<MoneySort>['column'], descending: sort.descending} : null;
 }
 
 export const visibleMoneySort = (sort: MoneySort, columns: readonly MoneyColumn[]): MoneySort =>
-  sort && (sort.column === 'limit' || columns.includes(sort.column)) ? sort : null;
+  visibleTableSort(sort, ['name', ...columns]);
 
 /** The account name already identifies its total; only distinct scopes need a suffix. */
 export function moneySeriesName(series: MeterHistory, title: string, _context: CurrencyContext, family: MoneyFamily = 'budget') {
@@ -47,7 +48,7 @@ export function moneyComparator(sort: NonNullable<MoneySort>, locale: string) {
   const collator = new Intl.Collator(locale, {numeric: true, sensitivity: 'base'});
   return (a: {key: string; name: string; values: Record<MoneyColumn, string | null>}, b: typeof a) => {
     const names = collator.compare(a.name, b.name) || a.key.localeCompare(b.key);
-    if (sort.column === 'limit') return (sort.descending ? -1 : 1) * collator.compare(a.name, b.name) || a.key.localeCompare(b.key);
+    if (sort.column === 'name') return (sort.descending ? -1 : 1) * collator.compare(a.name, b.name) || a.key.localeCompare(b.key);
     const av = a.values[sort.column], bv = b.values[sort.column];
     if (av === null || bv === null) return av === bv ? names : av === null ? 1 : -1;
     const delta = BigInt(av) - BigInt(bv);

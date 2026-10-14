@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {creditChartAnchors,creditSnapshot} from '../credits.js';
+import {creditSnapshot} from '../credits.js';
+import {cellStart} from '../../server/domain/history.js';
 import {cards} from '../../demo/model.js';
 import {stillSnapshot} from '../still.js';
 import {SETS} from '../../demo/catalogue.js';
@@ -29,7 +30,7 @@ test('the live credit benchmark wire updates only independent balances behind ne
   }
 });
 
-for(const offset of [10_000,40_000])test(`credit chart expectations follow actual cells for late observations at +${offset}ms`,t=>{
+for(const offset of [10_000,40_000])test(`late credit observations retain their exact value in later drawing cells at +${offset}ms`,t=>{
   const cell=300_000,boundary=Date.parse('2026-10-08T12:00:00Z'),now=boundary+offset,from=boundary-cell;
   const card=cards(SETS[0]).find(card=>card.provider==='codex'&&card.windows.length)!;
   const store=new Store(':memory:',from),source=store.source('codex','a'.repeat(24),from);
@@ -46,8 +47,8 @@ for(const offset of [10_000,40_000])test(`credit chart expectations follow actua
       const points=composeMeters(shown,cell,from,drawnAt)[0].points;
       const latest=points.at(-1)!;
       assert.equal(latest.value,String(BigInt(amount)*40_000n));
-      assert.ok(creditChartAnchors(at,now,drawnAt,cell).includes(latest.at),'changed balances and unchanged heartbeats match the rendered anchor');
-      if(at<boundary)assert.ok(!creditChartAnchors(at,now,drawnAt,cell).includes(at),'the previous cell cannot be mistaken for the current drawing');
+      assert.equal(latest.at,Math.max(at,cellStart(drawnAt,cell)),'a held balance reaches the latest drawing cell');
+      assert.equal(latest.semantics?.conversion?.original.at,at,'the cell retains its distinct native observation anchor');
     }
   }
 });

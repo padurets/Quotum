@@ -1,3 +1,4 @@
+import {EMPTY_VIEW} from '../../server/domain/view';
 import * as widgets from '../../server/domain/widgets';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,18 +17,18 @@ const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
 
 function fixture(initialOwner='u',local=false,boards:Session['boards']=[]){
   const hooks=preparationFixture(),errorLine={},field={},reads:{url:string;body:unknown;resolve:(value:unknown)=>void;reject:(error:Error)=>void}[]=[];
-  const cleanups=new Set<()=>void>(),modal={};let userId=initialOwner;
+  const cleanups=new Set<()=>void>(),modal={},navigation:string[]=[];let userId=initialOwner;
   const memo=(read:()=>unknown,deps:unknown[])=>{const box=hooks.useRef(undefined) as {current?:{deps:unknown[];value:unknown}};if(!box.current||deps.some((value,i)=>!Object.is(value,box.current!.deps[i])))box.current={deps,value:read()};return box.current.value;};
   let scopeActive=true;
   const modules: Record<string, Record<string, unknown>> = {};
-  const context={exports:{} as {ConnectionsPage:(props:unknown)=>Node;KeyForm:(props:unknown)=>Node;useAddition:()=>{submit:(board:string,item:unknown,secret?:string)=>Promise<void>}},crypto:{randomUUID:()=> 'request'},AbortController,require:(name:string)=>{
+  const context={exports:{} as {ConnectionsPage:(props:unknown)=>Node;KeyForm:(props:unknown)=>Node;Completion:(props:unknown)=>Node;DeviceAdd:(props:unknown)=>Node;useAddition:()=>{submit:(board:string,item:unknown,secret?:string)=>Promise<void>}},crypto:{randomUUID:()=> 'request'},AbortController,require:(name:string)=>{
     if(name==='react')return {createContext:()=>({}),useContext:()=>()=>scopeActive,useState:hooks.useState,useRef:hooks.useRef,useCallback:(fn:unknown,deps:unknown[])=>memo(()=>fn,deps),useEffect:(effect:()=>void|(()=>void),deps:unknown[])=>hooks.useLayoutEffect(()=>{const cleanup=effect();if(!cleanup)return;cleanups.add(cleanup);return()=>{cleanups.delete(cleanup);cleanup();};},deps)};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'};
     if(name.endsWith('/widgets'))return widgets;
     if(name.endsWith('/http'))return {ApiError,call:(_method:string,url:string,body:unknown)=>new Promise((resolve,reject)=>reads.push({url,body,resolve,reject}))};
-    if(name.endsWith('/board'))return {};
+    if(name.endsWith('/board'))return {useLineup:()=>[],useServerView:()=>EMPTY_VIEW,useBoardId:()=> 'board',useConnectionsRevision:()=>0};
     if(name.endsWith('/view'))return {flushView:async()=>{}};
-    if(name.endsWith('/router'))return {};
+    if(name.endsWith('/router'))return {usePath:()=>'/settings/connections',boardHref:(id:string)=>'/boards/'+id,navigate:(path:string)=>navigation.push(path)};
     if(name.endsWith('/session'))return {boardTitle:(board:{name:string})=>board.name};
     if(name.endsWith('/providers'))return {PROVIDERS:{openrouter:{name:'OpenRouter'},deepseek:{name:'DeepSeek'},zai:{name:'z.ai'}},catalogue:[{id:'openrouter',name:'OpenRouter',measuredBy:'hub'},{id:'deepseek',name:'DeepSeek',measuredBy:'hub'},{id:'zai',name:'z.ai',measuredBy:'hub'}]};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key};
@@ -53,7 +54,7 @@ function fixture(initialOwner='u',local=false,boards:Session['boards']=[]){
   const keyForm=(props:unknown)=>{hooks.begin();const tree=context.exports.KeyForm(props);hooks.commit();return nodes(tree);};
   const reply={connections:[{id:'c',provider:'openrouter',sourceId:null,hint:'abcd',lastError:null,expiresAt:null,label:'OpenRouter',lastSuccessAt:null,placements:[]}]};
   const addition=()=>{hooks.begin();const value=context.exports.useAddition();hooks.commit();return value;};
-  return {reads,reply,render,keyForm,addition,endScope:()=>{scopeActive=false;},errorLine,event:()=>{const refresh=render().find(n=>n.type==='button'&&n.props.children==='refresh.action')!;(refresh.props.onClick as ()=>void)();},errors:()=>render().filter(n=>n.type===errorLine&&n.props.error),rows:()=>render().filter(n=>n.type==='article'&&n.props.className==='connection-record'),owner:(next:string)=>{userId=next;},unmount:()=>{for(const cleanup of cleanups)cleanup();cleanups.clear();},removing:()=>render().some(n=>n.type===modal)};
+  return {reads,reply,render,keyForm,addition,navigation,completion:(props:unknown)=>{hooks.begin();const tree=context.exports.Completion(props);hooks.commit();return nodes(tree);},deviceAdd:(props:unknown)=>{hooks.begin();const tree=context.exports.DeviceAdd(props);hooks.commit();return nodes(tree);},endScope:()=>{scopeActive=false;},errorLine,event:()=>{const refresh=render().find(n=>n.type==='button'&&n.props.children==='refresh.action')!;(refresh.props.onClick as ()=>void)();},errors:()=>render().filter(n=>n.type===errorLine&&n.props.error),rows:()=>render().filter(n=>n.type==='article'&&n.props.className==='connection-record'),owner:(next:string)=>{userId=next;},unmount:()=>{for(const cleanup of cleanups)cleanup();cleanups.clear();},removing:()=>render().some(n=>n.type===modal)};
 }
 
 test('a recovered owner credential list clears the earlier network error',async()=>{
@@ -166,4 +167,18 @@ test('unavailable connection forms retain matching-key and damaged-storage recov
     assert.equal(rendered.some(node=>reason==='secret_key_mismatch'?node.props.children==='trustedKeys.serverMismatch':node.type===f.errorLine&&(node.props.error as ApiError)?.code===reason),true);
     assert.equal(rendered.some(node=>node.props.children==='trustedKeys.serverMissing'),false);f.unmount();
   }
+});
+
+
+test('source-less completion names the connected device and opens the board without a widget target',()=>{
+ const f=fixture(),props={operation:{id:'receipt',deviceId:'own-device',boardId:'board',state:'complete',item:{kind:'sources',sourceIds:[]},result:{sourceIds:[]}},board:{id:'board',name:'Team',personal:false,role:'owner'},personal:false,onClose:()=>{}};
+ const tree=f.completion(props);assert.equal(tree.find(n=>n.type==='h3')!.props.children,'add.deviceComplete');const button=tree.find(n=>n.type==='button')!;assert.equal(button.props.children,'add.openBoard');(button.props.onClick as ()=>void)();assert.deepEqual(f.navigation,['/boards/board']);
+});
+
+test('DeviceAdd submits an empty optional selection through onboarding and the ordinary receipt runner',async()=>{
+ const f=fixture(),props={board:{id:'board',name:'Team',personal:false,role:'owner'},demo:false,onClose:()=>{}},intent={id:'intent',boardId:'board',deviceId:null,sourceIds:[],additionId:null,status:'ready',createdAt:1};
+ f.deviceAdd(props);assert.equal(f.reads.length,4);f.reads.find(r=>r.url==='/api/device-onboarding')!.resolve(intent);f.reads.find(r=>r.url.includes('?limit'))!.resolve({intents:[]});f.reads.find(r=>r.url==='/api/devices')!.resolve([{id:'own-device',name:'Laptop',sources:[]}]);f.reads.find(r=>r.url.includes('/catalogue'))!.resolve({sources:[]});await flush();
+ (f.deviceAdd(props).find(n=>n.type==='select')!.props.onChange as (e:unknown)=>void)({target:{value:'own-device'}});const finish=f.deviceAdd(props).find(n=>n.type==='button'&&n.props.children==='add.finishDevice')!;assert.equal(finish.props.disabled,false);(finish.props.onClick as ()=>void)();await flush();
+ const selecting=f.reads.at(-1)!;assert.equal(selecting.url,'/api/device-onboarding/intent/selection');assert.deepEqual(Array.from((selecting.body as {sourceIds:string[]}).sourceIds),[]);
+ const operation={id:'receipt',deviceId:'own-device',boardId:'board',state:'ready',item:{kind:'sources',sourceIds:[]}};selecting.resolve(operation);await flush();assert.equal(f.reads.at(-1)!.url,'/api/additions/receipt/run');f.unmount();f.reads.at(-1)!.resolve({...operation,state:'complete',result:{sourceIds:[]}});await flush();assert.equal(f.reads.length,6,'close keeps the reserved run and creates no second addition');
 });

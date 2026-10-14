@@ -136,7 +136,7 @@ test('the widget says why it has no stacks, and never calls a period idle before
     ...change,
   });
   assert.deepEqual(activityEmpty(null, 1), {key: 'loading'});
-  assert.deepEqual(activityEmpty({since, activity: activity({})}, 0), {key: 'noSources'});
+  assert.deepEqual(activityEmpty({since, activity: activity({})},0),{key:'none'});
   assert.deepEqual(activityEmpty({since, activity: activity({known: null, since: since + HOUR})}, 1), {key: 'knownFrom', at: since + HOUR});
   assert.deepEqual(activityEmpty({since, activity: activity({})}, 1), {key: 'none'});
   assert.deepEqual(activityEmpty({since, activity: activity({known: {from: since + 20 * 24 * HOUR, to: since + 30 * 24 * HOUR}})}, 1), {

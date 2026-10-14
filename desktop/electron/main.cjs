@@ -160,9 +160,12 @@ function destination(role) {
 function navigate(entry) {
   const url = destination(entry.role);
   const window = entry.window;
-  // Error messages can include the entry key. Log only an error code, never the URL.
+  // Error messages can include the entry key. Use only the code or a safe numeric errno.
   window.loadURL(url).catch(error => {
-    if (!quitting && !entry.dismissed && !window.isDestroyed() && error.code !== 'ERR_ABORTED') send({type: 'fault', process: 'navigation', reason: error.code || 'load failed'});
+    if (!quitting && !entry.dismissed && !window.isDestroyed() && error.code !== 'ERR_ABORTED' && error.errno !== -3) {
+      const reason = error.code || (Number.isSafeInteger(error.errno) ? `load failed (errno ${error.errno})` : 'load failed');
+      send({type: 'fault', process: 'navigation', reason});
+    }
   });
 }
 

@@ -225,6 +225,29 @@ Services, encrypted storage, receipts and board events use production code; only
 external answers and device reports are synthetic. No real provider or client is
 contacted. Use `make info` for the actual address and synthetic sign-in.
 
+`DEV_SET=sessions make dev` opens the session analytics review fixture. Sign in as Ana:
+the default 24h period has 57 projects, six machines, four subscriptions and 129
+recorded contexts, including OpenCode and another client alongside mapped sessions.
+Agent sessions includes active time and average concurrency,
+fits whole rows to its height and has a compact pager at the bottom right. Its separate
+footer shows totals across the entire selected period, including rows on other pages,
+on a separate line above the pager and row count. Wide totals reuse the table's columns
+and headings; narrow totals use a fixed grid. The current working count is a subtitle.
+Grouping uses shared segments; None comes first while Project stays the default.
+Increasing the height fits more rows without a fifty-row page cap or another API read;
+when every row fits, the pager disappears. Wide tables sort through their headers, with the
+third click clearing the selected sort; only narrow lists show a sort menu.
+Atlas's 67-context disclosure has two pages.
+Recent overlapping work, 64 retained Atlas contexts absent from the live
+roster, long names and a projectless context are ready to inspect in either language.
+Client and subscription columns are available in individual rows and disclosures.
+Shared variants show sessions without subscriptions, subscriptions without sessions,
+both permissions, disabled devices, hidden cards and a later subscription grant.
+Provided data includes a disconnected device with retained history.
+Live synthetic reports keep measurements fresh. The 7d and 30d periods also have work;
+the latter explains the fixture's seven-day coverage. For a known-empty fixed range,
+select four to two hours before startup; nine to eight days before startup is unknown.
+
 `DEV_MODE=hub make dev` starts an ordinary hub on
 isolated persistent data with reset trackers disabled. No mode starts coding clients.
 Hub mode provisions its persistent key automatically in the private `hub-keys`

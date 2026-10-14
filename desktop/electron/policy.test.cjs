@@ -70,7 +70,7 @@ async function mainProcess({cursor = () => ({x: 790, y: 590}), displays = [{work
     setPosition(x, y) { this.position = [x, y]; }
     getContentSize() { return this.size; }
     setContentSize(w, h) { this.size = [w, h]; }
-    loadURL(url) { navigations.push(url); return new Promise((_, reject) => { this.failNavigation = code => reject(Object.assign(new Error('private entry URL'), {code})); }); }
+    loadURL(url) { navigations.push(url); return new Promise((_, reject) => { this.failNavigation = (code, errno) => reject(Object.assign(new Error('PRIVATE_ENTRY_KEY in the error message'), {code, errno, url:'http://127.0.0.1/local?key=PRIVATE_ENTRY_KEY'})); }); }
   }
   const context = vm.createContext({
     require(name) {
@@ -579,4 +579,29 @@ test('a coalesced new compact head retires the old presentation without relabell
   assert.equal(current.visible, true);
   assert.equal(current.destroyed, false);
   assert.deepEqual(main.traffic.filter(m => m.type === 'panel_closed').map(m => m.request), [1]);
+});
+
+test('the real navigation handler recognizes numeric cancellation with a blank Electron description', async () => {
+  for (const [code, errno] of [['', -3], ['ERR_ABORTED', -3], ['ERR_ABORTED', -2]]) {
+    const main = await mainProcess(); main.deliver({type:'state', generation:1, url:hub});
+    main.windows[0].failNavigation(code, errno); await new Promise(setImmediate);
+    assert.deepEqual(main.traffic.filter(m => m.type === 'fault'), [], `${code}/${errno}: cancellation is not fatal`);
+  }
+});
+
+test('blank navigation failures remain fatal with only safe integer diagnostics and no private error fields', async () => {
+  for (const errno of [-2, -102, undefined, '-3', NaN, Infinity, -2.5, Number.MAX_SAFE_INTEGER + 1, {toString() { throw new Error('PRIVATE_ENTRY_KEY'); }}]) {
+    const main = await mainProcess(); main.deliver({type:'state', generation:1, url:hub});
+    main.windows[0].failNavigation('', errno); await new Promise(setImmediate);
+    const faults = main.traffic.filter(m => m.type === 'fault'), reason = Number.isSafeInteger(errno) ? `load failed (errno ${errno})` : 'load failed';
+    assert.deepEqual(faults, [{type:'fault', process:'navigation', reason}]);
+    assert.ok(!JSON.stringify(main.traffic).includes('PRIVATE_ENTRY_KEY'), 'error.message and URL never enter diagnostics');
+  }
+});
+
+test('blank numeric navigation failures retain dismissed, destroyed and quitting guards', async () => {
+  const dismissed = await mainProcess({deferClose:true}); dismissed.deliver({type:'state', generation:1, url:hub}, {type:'foreground', head:{target:'compact'}});
+  const panel = dismissed.windows[1]; panel.close(); assert.equal(panel.isDestroyed(), false); panel.failNavigation('', -2); await new Promise(setImmediate); assert.deepEqual(dismissed.traffic.filter(m => m.type === 'fault'), []);
+  const destroyed = await mainProcess(); destroyed.deliver({type:'state', generation:1, url:hub}); destroyed.windows[0].destroyed = true; destroyed.windows[0].failNavigation('', -102); await new Promise(setImmediate); assert.deepEqual(destroyed.traffic.filter(m => m.type === 'fault'), []);
+  const quitting = await mainProcess({deferClose:true}); quitting.deliver({type:'state', generation:1, url:hub}, {type:'close'}); quitting.windows[0].failNavigation('', -2); await new Promise(setImmediate); assert.deepEqual(quitting.traffic.filter(m => m.type === 'fault'), []);
 });

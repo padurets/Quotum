@@ -6,6 +6,8 @@ import {openTab, type Browser, type Cdp} from './cdp';
 import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
 import {observeReversal} from './reversalDiagnostic';
+import {writeFileSync} from 'node:fs';
+import {historyPoolReceiptScript} from './historyPoolReceipt';
 
 const DAY = 86_400_000;
 type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
@@ -61,7 +63,7 @@ export class HistoryBodies {
   /** Only request shape and body counts: identities, cursors and response contents stay private. */
   diagnostic(phase:string){
     const reads=this.reads.filter(read=>read.phase===phase);
-    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
+    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({...read.attemptId&&/^b\d+:\d+$/.test(read.attemptId)?{attemptId:read.attemptId}:{},stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
   }
   constructor(cdp: Pick<Cdp, 'on' | 'send'>) {
     cdp.on<{requestId: string; request: {url: string;postData?:string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
@@ -142,7 +144,7 @@ export function historyScroll(geometry: {x: number; y: number; width: number}, f
 
 type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
 
-async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number) {
+async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence=false) {
   const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp);
   cdp.at(`${name}/seed`);
   const close = async () => {cdp.at(`${name}/cleanup`); await cdp.evaluate('(()=>{const p=window.__historyTraffic;if(p){p.running=false;cancelAnimationFrame(p.raf);history.pushState=p.originalPush;}})()').catch(() => {}); await tab.close();};
@@ -152,13 +154,14 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     await cdp.send('Emulation.setFocusEmulationEnabled', {enabled: true});
     await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 900, deviceScaleFactor: 1, mobile: false});
     const split = cookie.indexOf('='); await cdp.send('Network.setCookie', {name: cookie.slice(0, split), value: cookie.slice(split + 1), url: proxy.url, httpOnly: true, sameSite: 'Lax'});
+    if(poolEvidence)await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:historyPoolReceiptScript()});
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: historyPageScript(length === DAY ? '24h' : '30d')});
     await cdp.send('Page.navigate', {url: proxy.url});
     const settled = async (seed = false) => {
       const deadline = Date.now() + 20_000;
       for (;;) {
         if (bodies.errors.length) throw bodies.errors[0];
-        if ((!seed||hasSeededHistory(bodies.reads,seedPhase))&&!bodies.activeCount && !bodies.pending.size && await cdp.evaluate<boolean>(`['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning')`)) {
+        if ((!seed||hasSeededHistory(bodies.reads,seedPhase))&&!bodies.activeCount && !bodies.pending.size && await cdp.evaluate<boolean>(poolEvidence?`(()=>{window.__quotumHistoryPoolReceipt?.mark(${seed?0:bodies.phase.endsWith('/warm')?2:1},${bodies.stage==='cold scroll'?1:bodies.stage==='cached return'?2:bodies.stage==='cached repeat'?3:0});return ['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning');})()`:`['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))&&!!document.querySelector('.history .series[d]:not([d=""])')&&!document.querySelector('.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-pan-end],.chart>svg[data-draw-ready="false"],.chart>svg.is-panning')`)) {
           await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,250))');
           if (!bodies.activeCount && !bodies.pending.size) return;
         }
@@ -196,7 +199,8 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
   for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
     for (let take = 1; take <= 3; take++) {
       const name = `browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
-      const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, future);
+      const poolEvidence=process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&name==='browser/30d/activity/0ms/0.5/take1';
+      const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null;
       try {
         observer=await observeReversal(cdp,browser,false);
@@ -257,7 +261,14 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
       } catch (error) {
         if (!(error instanceof HistoryCutChanged) || take === 3) throw new Error(`${name}: ${String(error)}`, {cause: error});
         invalidated.push({name, reason: error.message, reads: bodies.reads.map(read => ({phase: read.phase, from: read.from, to: read.to, count: read.count}))});
-      } finally {await observer?.close();await close();}
+      } finally {
+        if(poolEvidence)try{
+          const receipt=await cdp.evaluate('window.__quotumHistoryPoolReceipt?.read()??({status:"unavailable"})');
+          writeFileSync('/tmp/quotum-bench-history-pool.json',JSON.stringify({name,mode:'diagnostic',seed:bodies.diagnostic(`${name}/seed`),cold:bodies.diagnostic(`${name}/cold`),reads:bodies.diagnostic(`${name}/warm`),receipt}));
+          console.error('bench: history pool receipt saved');
+        }catch(error){console.error('bench: history pool receipt unavailable: '+String(error));}
+        await observer?.close();await close();
+      }
     }
   }
   return {reports, invalidated, problems};

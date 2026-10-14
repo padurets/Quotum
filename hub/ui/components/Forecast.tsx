@@ -1,7 +1,7 @@
 import {AnalyticsPanel, AnalyticsNote} from './AnalyticsPanel';
 import {QuotaSettings} from './Analytics';
-import {AnalyticsTable, TableSettings, useTableLayout, type AnalyticsRow, type AnalyticsColumn, type Cell, type TimedCell} from './AnalyticsTable';
-import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore} from 'react';
+import {AnalyticsTable, TableSettings, type AnalyticsRow, type AnalyticsColumn, type Cell, type TimedCell} from './AnalyticsTable';
+import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type RefObject} from 'react';
 import {num, rateText} from '../lib/format';
 import {level} from '../lib/quota';
 import {
@@ -33,7 +33,7 @@ import {quotaHistory, useHistory} from '../lib/history';
 import {boardPeriod} from '../lib/period';
 import {observationDeadline} from '../../server/domain/resources';
 import {t, useLocale, type Key} from '../i18n';
-import {SortMenu} from './TableSort';
+import {useTableWidget, WidgetPages, TableMeasure, TableSortMenu} from './TableWidget';
 
 const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', {value: num(spent.value, 1)}) : spent.key === 'unused' ? t('table.unused') : '—');
 
@@ -58,13 +58,8 @@ const HEADINGS: Record<ForecastColumn, {title: Key; range?: Key; hint?: Key}> = 
 
 const heading = (column: ForecastColumn, range: boolean) => t((range && HEADINGS[column].range) || HEADINGS[column].title);
 
-function ForecastSortMenu({columns}:{columns:readonly AnalyticsColumn<ForecastColumn>[]}) {
-  const saved=usePref('forecastSort'),active=visibleForecastSort(saved,columns.map(c=>c.id));
-  return <SortMenu active={active} columns={[{id:'limit' as const,title:t('table.limit')},...columns]} defaultLabel={t('table.defaultOrder')} onSort={(id,cycle)=>setPrefs({forecastSort:id===null?null:nextForecastSort(active,id,cycle)})}/>;
-}
-
 /** Clock-only order changes publish retained row descriptors only after a permutation. */
-const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,rangeKey,layout}:{rows:AnalyticsRow<ForecastColumn>[];models:SortRow[];columns:AnalyticsColumn<ForecastColumn>[];fixed:boolean;rangeKey:string;layout?:'table'|'list'}) {
+const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,rangeKey,panel,children,...panelProps}:{rows:AnalyticsRow<ForecastColumn>[];models:SortRow[];columns:AnalyticsColumn<ForecastColumn>[];fixed:boolean;rangeKey:string;panel:RefObject<HTMLElement|null>} & Omit<ComponentProps<typeof AnalyticsPanel>,'ref'|'controls'>) {
   const saved=usePref('forecastSort'),locale=useLocale();
   const active=useMemo(()=>visibleForecastSort(saved,columns.map(c=>c.id)),[saved,columns]);
   const current=useRef({rows,models,active,fixed,rangeKey,locale});current.current={rows,models,active,fixed,rangeKey,locale};
@@ -77,7 +72,7 @@ const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,ran
     if(!fixed)for(const value of values){
       const row=value.row,work=boardPeriod.quotaOrderAt(row.line,now,rangeKey,active?.column!=='agenthours');
       next=Math.min(next,work.next,row.validUntil!==undefined&&row.validUntil>now?row.validUntil:Infinity,row.live?.resetAt!=null&&row.live.resetAt>now?row.live.resetAt:Infinity, value.said.key==='runsOut'?Math.ceil(value.said.at):Infinity,workLeftChangesAt(row.line,row.live?.resetAt??null,now)??Infinity);
-      const key=active?.column&&active.column!=='limit'?value.keys[active.column]:null;
+      const key=active?.column&&active.column!=='name'?value.keys[active.column]:null;
       if(active?.column==='plan'){
         const plan=planOrderAt(row.live,row.measuredAt,now,row.plan);next=Math.min(next,plan.next);
         if(key)linear.push({value:key[0],slope:plan.slope});
@@ -93,9 +88,16 @@ const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,ran
   const subscribe=useCallback((listener:()=>void)=>clock.subscribe(watch,()=>{evaluate();listener();}),[watch,evaluate]);
   const ordered=useSyncExternalStore(subscribe,evaluate,evaluate);
   useLayoutEffect(()=>{evaluate();});
-  const cycle=useCallback((column:SortColumn)=>setPrefs({forecastSort:nextForecastSort(active,column)}),[active]);
-  const sorting=useMemo(()=>({active,cycle}),[active,cycle]);
-  return <AnalyticsTable columns={columns} rows={ordered} name={t('table.limit')} lead={fixed?'end':'now'} sorting={sorting} layout={layout}/>;
+  const onSort=useCallback((column:SortColumn|null,cycle?:boolean)=>setPrefs({forecastSort:nextForecastSort(active,column,cycle)}),[active]);
+  const sorting={active,onSort,headers:[{id:'name' as const,title:t('table.limit')},...columns],label:t('table.sort'),defaultLabel:t('table.defaultOrder')};
+  const widget=useTableWidget(panel,columns.map(column=>column.width),FORECAST_WIDTHS.limit,ordered.map(row=>row.key),JSON.stringify([rangeKey,active]));
+  return <AnalyticsPanel {...panelProps} ref={panel} controls={widget.layout==='list'&&<TableSortMenu {...sorting}/>}>{children}
+    {ordered.length>0&&<>
+      <AnalyticsTable columns={columns} rows={ordered.slice(widget.from,widget.to)} name={t('table.limit')} lead={fixed?'end':'now'} sorting={sorting} layout={widget.layout} body={widget.live}/>
+      <WidgetPages table={widget} count={ordered.length}/>
+      <TableMeasure table={widget}><AnalyticsTable columns={columns} rows={ordered.slice(widget.measureFrom,widget.measureTo)} name={t('table.limit')} lead={fixed?'end':'now'} layout={widget.layout} body={widget.measured} still/></TableMeasure>
+    </>}
+  </AnalyticsPanel>;
 });
 
 /**
@@ -133,7 +135,6 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
   const panel = useRef<HTMLElement>(null);
   const definitions = modeColumns.map(id => ({id, title: heading(id, range), width: FORECAST_WIDTHS[id], hint: HEADINGS[id].hint ? t(HEADINGS[id].hint!) : undefined}));
   const visible = definitions.filter(column => columns.includes(column.id));
-  const layout = useTableLayout(panel, visible, FORECAST_WIDTHS.limit);
   /** Every cell of a line, by column. */
   const cellsOf = (line: Line): Record<ForecastColumn, Cell | TimedCell> => {
     const source = sources.find(s => s.id === line.sourceId);
@@ -227,22 +228,15 @@ const WindowForecast = memo(function WindowForecast({arrange}: {arrange: Arrange
 
   // A pan phase changes the panel's presentation, not its retained rows. Reusing
   // the table also keeps every clock cell from replanning its deadline on input.
-  const table=useMemo(()=><SortedForecast columns={visible} layout={layout}
-    rows={lines.map(line=>({key:line.key,name:line.name,color:line.color,cells:cellsOf(line)}))}
-    models={lines.map(line=>{const source=sources.find(s=>s.id===line.sourceId);const meter=source?.meters?.find(m=>m.id===line.windowId);return {line,validUntil:line.capCells&&meter?Math.min(observationDeadline(meter),meter.resetAt??Infinity):undefined,live:source?.windows.find(w=>w.id===line.windowId),measuredAt:source?.successAt??null,ahead:forecasts[lineup.indexOf(line.sourceId)]?.[line.windowId]??null,context:{windows:source?.windows??[],freeResets:source?.resets?.available??0,announced:announcedOf(news,line.provider,source?.successAt??null)},plan:planOf(view,line.sourceId)};})} fixed={range} rangeKey={history?.range??''}/>,
-    [lines,columns,range,sources,forecasts,news,history,view,locale,layout]);
-  return (
-    <AnalyticsPanel ref={panel} className="forecast" title={t('forecast.title')} history={history} loading={loading} error={error} retry={quotaHistory.retry}
-      controls={layout==='list' && <ForecastSortMenu columns={visible}/>}
-      settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}><QuotaSettings /></TableSettings>}
-    >
-      {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}
-      {!history ? error ? null : <div className="panel-loading">{t('history.loading')}</div>
-        : !lines.length ? <p className="panel-empty">{t('forecast.empty')}</p>
-        : table
-      }
-    </AnalyticsPanel>
-  );
+  const data=useMemo(()=>({rows:lines.map(line=>({key:line.key,name:line.name,color:line.color,cells:cellsOf(line)})),
+    models:lines.map(line=>{const source=sources.find(s=>s.id===line.sourceId);const meter=source?.meters?.find(m=>m.id===line.windowId);return {line,validUntil:line.capCells&&meter?Math.min(observationDeadline(meter),meter.resetAt??Infinity):undefined,live:source?.windows.find(w=>w.id===line.windowId),measuredAt:source?.successAt??null,ahead:forecasts[lineup.indexOf(line.sourceId)]?.[line.windowId]??null,context:{windows:source?.windows??[],freeResets:source?.resets?.available??0,announced:announcedOf(news,line.provider,source?.successAt??null)},plan:planOf(view,line.sourceId)};})}),[lines,columns,range,sources,forecasts,news,history,view,locale]);
+  return <SortedForecast {...data} columns={visible} fixed={range} rangeKey={history?.range??''} panel={panel}
+    className="forecast" title={t('forecast.title')} history={history} loading={loading} error={error} retry={quotaHistory.retry}
+    settings={<TableSettings arrange={arrange} widget={QUOTA_TABLE} columns={definitions} visible={columns}><QuotaSettings /></TableSettings>}
+  >
+    {omitted>0&&<AnalyticsNote>{t('history.quotaOverflow',{count:omitted})}</AnalyticsNote>}
+    {!history?error?null:<div className="panel-loading">{t('history.loading')}</div>:!lines.length?<p className="panel-empty">{t('forecast.empty')}</p>:null}
+  </SortedForecast>;
 });
 
 export const Forecast = WindowForecast;
