@@ -2,23 +2,25 @@ import {accountingPath} from './accountingTraffic';
 import {PERIOD_SCOPES,type PeriodScope,type PeriodReply,type PeriodRequest} from '../server/domain/periodRead';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import {promisify} from 'node:util';
+import {brotliCompress} from 'node:zlib';
 import type {Evidence} from './evidence';
 import {cellStart, expandHistory, type HistoryAnswer, type HistoryBasis, type HistoryReply} from '../server/domain/history';
 import {openTab, type Browser, type Cdp} from './cdp';
 import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
-import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
+import {HISTORY_ATTEMPT_HEADER, HISTORY_CODEC_PARAMS, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
 import {observeReversal} from './reversalDiagnostic';
 import {historyPoolReceiptScript,historyPoolCriticalReceiptScript} from './historyPoolReceipt';
 import {ScriptBinding} from './scriptBinding';
 import {clientIdentity} from './evidence';
 import {deadline} from './deadline';
 import {compactJSON} from '../server/history';
-import type {PeriodWireReply} from '../server/domain/periodWire';
+import {expandPeriod,periodDictionary,type PeriodWireReply} from '../server/domain/periodWire';
 
 const DAY = 86_400_000;
 type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
 type RequestDiagnostic={selection?:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number};evaluatedAt?:number;sections:{scope:PeriodScope;from:number;to:number;cell:number;cells:'skip'|'read';evidence:'skip'|'cursor'|'baseline'}[];values:number;sessions:boolean};
-type Read = {httpStatus?:number;endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;wireParts?:ReturnType<typeof periodWireParts>;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
+type Read = {httpStatus?:number;endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;wireParts?:ReturnType<typeof periodWireParts>;wireAlternative?:Awaited<ReturnType<typeof periodWireAlternative>>;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
 
@@ -51,6 +53,39 @@ export function periodWireParts(raw:PeriodReply,text:string) {
     if(!keys.every(key=>allowed.includes(key))||topResidual!==syntax||scopes.some(row=>row[5]<0)||values[3]<0||sessions[4]<0)return missing;
     return {qualified:true as const,states,whole,basis,dictionaries,topResidual,scopes,values,sessions};
   }catch{return missing;}
+}
+
+const compressWire=promisify(brotliCompress);
+/** Measure a final base-covered replay omission on owned JSON, never the live response. */
+export async function periodWireAlternative(text:string,encoded:number|undefined,coding:string|undefined){
+  const started=performance.now();
+  let layout:{packedValues:number;plainValues:number}|undefined;
+  // 1 measured, 2 shape unavailable, 3 roundtrip mismatch, 4 codec mismatch, 5 failed.
+  const unavailable=(status:number)=>({status,ms:performance.now()-started,...layout});
+  try{
+    if(coding!=='br'||!Number.isSafeInteger(encoded)||encoded!<0)return unavailable(4);
+    const raw=JSON.parse(text) as PeriodWireReply,values=raw.values as PeriodReply['values'];
+    // Fresh producer replies have no cached anchor to lose when states becomes empty.
+    if(values?.state!=='complete'||values.value.some(value=>value.states?.start!==undefined))return unavailable(2);
+    const programs=values.value.filter(value=>value.states),packedValues=programs.filter(value=>(value.states as {pathEncoding?:string}).pathEncoding==='prefix').length;
+    layout={packedValues,plainValues:programs.length-packedValues};
+    const reply=expandPeriod(raw);
+    if(reply.values?.state!=='complete')return unavailable(2);
+    const serialize=()=>{const dictionary=periodDictionary(reply,()=>{});return compactJSON({...reply,...(dictionary.moneySemantics.length?{moneySemantics:dictionary.moneySemantics}:{}),...(dictionary.rateLegs.length?{rateLegs:dictionary.rateLegs}:{})},dictionary.replacer);};
+    if(serialize()!==text)return unavailable(3);
+    const original=await compressWire(Buffer.from(text),{params:HISTORY_CODEC_PARAMS});
+    if(original.length!==encoded)return unavailable(4);
+    let omitted=0;
+    // Only the final interval: removing a middle patch would change its successors.
+    for(const value of reply.values.value){
+      const states=value.states,last=states?.pieces.at(-1),range=value.validFor;
+      if(!last||!range||!Number.isFinite(range.from)||!Number.isFinite(range.to)||!Number.isFinite(last[0])||!Number.isFinite(last[1])||last[0]>=last[1]||range.from>last[0]||range.to<last[1])continue;
+      states!.pieces.pop();omitted++;
+      if(!states!.pieces.length)delete value.states;
+    }
+    const alternative=serialize(),wire=await compressWire(Buffer.from(alternative),{params:HISTORY_CODEC_PARAMS});
+    return {status:1,ms:performance.now()-started,...layout,omitted,decoded:Buffer.byteLength(text),encoded:original.length,alternativeDecoded:Buffer.byteLength(alternative),alternativeEncoded:wire.length};
+  }catch{return unavailable(5);}
 }
 
 /** Time coordinates and borrowed metadata do not identify a resource selection. */
@@ -100,9 +135,9 @@ export class HistoryBodies {
   /** Only request shape and body counts: identities, cursors and response contents stay private. */
   diagnostic(phase:string){
     const reads=this.reads.filter(read=>read.phase===phase);
-    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({...read.attemptId&&/^b\d+:\d+$/.test(read.attemptId)?{attemptId:read.attemptId}:{},stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,...(read.wireParts?{wireParts:read.wireParts}:{}),httpStatus:read.httpStatus??null,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
+    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({...read.attemptId&&/^b\d+:\d+$/.test(read.attemptId)?{attemptId:read.attemptId}:{},stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,...(read.wireParts?{wireParts:read.wireParts}:{}),...(read.wireAlternative?{wireAlternative:read.wireAlternative}:{}),httpStatus:read.httpStatus??null,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
   }
-  constructor(cdp: Pick<Cdp, 'on' | 'send'>) {
+  constructor(cdp: Pick<Cdp, 'on' | 'send'>,wireAlternative=false) {
     cdp.on<{requestId: string; request: {url: string;postData?:string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
       const url = new URL(event.request.url); if (!accountingPath(url.pathname)) return;
       const read: Read = {endpoint:url.pathname==='/api/history'?'history':url.pathname.endsWith('/sessions')?'period/sessions':'period',stage:this.stage,selection: historyReadSelection(url), id: event.requestId, phase: this.phase, from: Number(url.searchParams.get('from')), to: Number(url.searchParams.get('to')), cell: Number(url.searchParams.get('cell')), lower: 0, before: Promise.all([...this.pending]), attemptId: lowerHeaders(event.request.headers ?? {})[HISTORY_ATTEMPT_HEADER]};
@@ -154,7 +189,10 @@ export class HistoryBodies {
         const text=decoded.toString(),raw=JSON.parse(text) as HistoryReply|PeriodReply,d=read.diagnostic;
         if(/^browser\/1d\/activity\/(100|400)ms\/0\.5\/take1\/cold$/.test(read.phase)&&d?.selection?.mode==='range'&&d.values===69&&d.sessions&&
           d.sections.length===3&&PERIOD_SCOPES.every(scope=>d.sections.some(part=>part.scope===scope&&part.cells==='skip'&&part.evidence==='baseline'))&&
-          this.reads.filter(part=>part.phase===read.phase).slice(0,64).includes(read))read.wireParts=periodWireParts(raw as PeriodReply,text);
+          this.reads.filter(part=>part.phase===read.phase).slice(0,64).includes(read)){
+          read.wireParts=periodWireParts(raw as PeriodReply,text);
+          if(wireAlternative&&read.wireParts.qualified)read.wireAlternative=await periodWireAlternative(text,read.length,read.coding);
+        }
         const parts=read.sections??[read];
         for(const part of parts){
           const scope='scope' in part?part.scope:undefined;
@@ -211,7 +249,7 @@ export async function prepareHistoryTarget(cdp: Pick<Cdp, 'send' | 'evaluate'>, 
 type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
 
 async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>,poolMode:'full'|'critical'='full') {
-  const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp);
+  const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp,process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING==='1');
   const poolName=name.replace(/[^a-zA-Z0-9_-]/g,'-');
   const poolBinding=poolEvidence?new ScriptBinding(cdp,clientIdentity(),(file,value)=>poolEvidence.save('pool-'+poolName+'-'+file,value)):null;
   let poolCaptured=false;

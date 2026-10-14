@@ -8,7 +8,7 @@ const compress = promisify(brotliCompress), decompress = promisify(brotliDecompr
 export const HISTORY_CODEC = {quality: 4, mode: 'text', lgwin: 22, node: process.version} as const;
 export const HISTORY_ATTEMPT_HEADER = 'x-quotum-bench-attempt';
 let requestSerial = 0;
-const params = {[constants.BROTLI_PARAM_QUALITY]: HISTORY_CODEC.quality, [constants.BROTLI_PARAM_MODE]: constants.BROTLI_MODE_TEXT, [constants.BROTLI_PARAM_LGWIN]: HISTORY_CODEC.lgwin};
+export const HISTORY_CODEC_PARAMS = {[constants.BROTLI_PARAM_QUALITY]: HISTORY_CODEC.quality, [constants.BROTLI_PARAM_MODE]: constants.BROTLI_MODE_TEXT, [constants.BROTLI_PARAM_LGWIN]: HISTORY_CODEC.lgwin};
 export type Transfer = {id: string; phase: string; cell: number; from: number; to: number; started: number; status?: number; decoded?: number; encoded?: number; sent: boolean; finished: boolean; aborted: boolean};
 
 /** The benchmark owns this loopback forwarder, its fixed upstream and every socket. */
@@ -54,7 +54,7 @@ export async function historyProxy(upstream: string, owner?: RunOwner) {
     if (response.headers['content-encoding'] && response.headers['content-encoding'] !== 'identity') throw new Error('unexpected upstream history coding');
     const body = Buffer.concat(chunks); chunks.length = 0;
     transfer.decoded = body.length;
-    const encoded = await compress(body, {params}); transfer.encoded = encoded.length;
+    const encoded = await compress(body, {params:HISTORY_CODEC_PARAMS}); transfer.encoded = encoded.length;
     if (wait) await new Promise<void>(resolve => {const timer = setTimeout(() => {delays.delete(timer); resolve();}, wait); delays.set(timer, resolve);});
     if (outgoing.destroyed) return;
     const headers: IncomingHttpHeaders = {...response.headers, 'content-encoding': 'br', 'content-length': String(encoded.length), vary: 'Accept-Encoding', 'x-quotum-bench-id': transfer.id};

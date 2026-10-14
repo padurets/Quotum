@@ -635,6 +635,16 @@ states remain visible when a baseline is incomplete. Counts use the original com
 JSON before expansion and must conserve its whole size; they do not allocate Brotli
 bytes to individual sections or change the budget verdict. These observations share
 the existing 64-read diagnostic limit and retain no response text.
+In idle timing diagnostics only, those same baselines also measure a shadow reply
+with each final card replay interval omitted when the base value fully covers it.
+The original reply must survive a byte-exact expand/repack round trip, and its
+recompressed size must match the observed body under the proxy's exact codec.
+Cached card-state anchors make the whole packet unavailable to this fresh-reply model.
+Numeric readings retain the original and alternative whole-body sizes, omitted
+interval count, card-program layouts and observation time; mismatches stay unavailable.
+The live reply, reference reads and original verdict are unchanged. This measures
+one packet alternative, not a shipped producer fix or compatibility with older
+readers. Its extra serialization/compression work has unqualified observer overhead.
 Independent whole-cell composition also checks series, activity and events. Each
 history attempt gets its
 fixture identity before HTTP starts, so aborts before response headers cannot borrow
