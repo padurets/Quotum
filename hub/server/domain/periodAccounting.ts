@@ -2,7 +2,7 @@ import type {PeriodValues} from './periodValues.js';
 import {drain,type Preparation} from './prepare.js';
 import {edge} from './quota.js';
 import type {History,HistorySeries} from './history.js';
-import {sampleAt,sampleDeadlineAt,sampleCount,SAMPLE_WIDTH,numberAt,numberBytes,numberColumn,lowerNumber,rateAt,rateObservations,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
+import {sampleAt,sampleDeadlineAt,sampleCount,numberAt,numberBytes,numberColumn,lowerNumber,rateAt,rateObservations,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
 import type {MeterHistory} from './meterHistory.js';
 import {locatedIn,meterStep,plottedAmount,semanticsOf,type ExceptionalStep,type MeterSpan,type Reading,type MeterSemantics} from './meters.js';
 import {convertBy} from './currency.js';
@@ -56,24 +56,31 @@ class QuotaIndex {
   }
   static *prepare(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number):Preparation<QuotaIndex>{const value=new QuotaIndex(series,activity,known,true);yield*value.build();return value;}
   private *build():Preparation<void>{
-    const series=this.series,{activity,known}=this;
-    const deadlines=new Float64Array(sampleCount(series.samples));
-    for(let i=0;i<sampleCount(series.samples);i++){
-      if(this.times instanceof Float64Array)this.times[i]='columns' in series.samples?numberAt(series.samples.columns[0],i)!:series.samples[i*SAMPLE_WIDTH];
-      deadlines[i]=sampleDeadlineAt(series.samples,i)!;yield;
+    const series=this.series,{known}=this,activity=known===Infinity?undefined:this.activity,count=sampleCount(series.samples);
+    const deadlines=new Float64Array(count),spent=new Float64Array(count),covered=new Float64Array(count),worked=activity?new Float64Array(count):null,during=activity?new Float64Array(count):null;
+    let previous:ReturnType<typeof sampleAt>;
+    // Decode each observation once; unavailable work keeps constant zero prefixes.
+    for(let i=0;i<count;i++) {
+      yield;
+      const sample=sampleAt(series.samples,i)!;
+      if(this.times instanceof Float64Array)this.times[i]=sample.at;
+      deadlines[i]=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity);
+      if(i) {
+        spent[i]=spent[i-1];covered[i]=covered[i-1];
+        if(worked&&during){worked[i]=worked[i-1];during[i]=during[i-1];}
+        const a=previous!,b=sample,step=edge(a,b);
+        if(step.valid) {
+          const work=a.at>=known?activity?.read({from:a.at,to:b.at},true)??0:0;
+          spent[i]+=step.delta;covered[i]+=b.at-a.at;
+          if(worked&&during){worked[i]+=work;during[i]+=work>0?step.delta:0;}
+        }
+      }
+      previous=sample;
     }
     const sorted=yield*sortedNumbers(deadlines);this.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
-    const spent=new Float64Array(sampleCount(series.samples)),covered=new Float64Array(spent.length),worked=new Float64Array(spent.length),during=new Float64Array(spent.length);
-    let previous=sampleAt(series.samples,0)!;
-    for(let i=1;i<sampleCount(series.samples);i++) {
-      yield;spent[i]=spent[i-1];covered[i]=covered[i-1];worked[i]=worked[i-1];during[i]=during[i-1];
-      const a=previous,b=sampleAt(series.samples,i)!;previous=b;const step=edge(a,b);if(!step.valid)continue;
-      const work=activity?.read({from:a.at,to:b.at},true)??0;
-      spent[i]+=step.delta;covered[i]+=b.at-a.at;
-      worked[i]+=a.at>=known?work:0;during[i]+=a.at>=known&&work>0?step.delta:0;
-    }
     this.spent=yield*numberColumn(spent.length,i=>spent[i]);this.covered=yield*numberColumn(covered.length,i=>covered[i]);
-    this.worked=yield*numberColumn(worked.length,i=>worked[i]);this.during=yield*numberColumn(during.length,i=>during[i]);
+    this.worked=worked?yield*numberColumn(count,i=>worked[i]):{length:count,base:0,values:null};
+    this.during=during?yield*numberColumn(count,i=>during[i]):{length:count,base:0,values:null};
   }
 
   get bytes(){return [this.deadlines,this.spent,this.covered,this.worked,this.during].reduce((n,c)=>n+numberBytes(c),0)+(this.times instanceof Float64Array?numberBytes(this.times):0);}

@@ -33,11 +33,28 @@ for(const compressed of [false,true])test(`ordered quota deadlines keep retireme
   const evidence={...tape(),cut:count*step,quota:[{source:'s',window:'w',samples:compressed?drain(retainSamplesPrepared(samples)):samples}]};
   const before=JSON.stringify(evidence),prepared=PeriodAccounting.prepare(evidence,null);
   let steps=0,result=prepared.next();while(!result.done){steps++;result=prepared.next();}
-  assert.ok(steps<count*4,`already ordered deadlines took ${steps} cooperative steps for ${count} samples`);
+  assert.ok(steps<count*2.25,`already ordered deadlines took ${steps} cooperative steps for ${count} samples`);
   assert.deepEqual(result.value.quotaSummary('s','w',{from:0,to:(count-1)*step+1}),{
     consumed:(count/cycle)*(cycle-1)*.125,coveredMs:(count/cycle)*(cycle-1)*step,
     remainingAtStart:90,remainingAtEnd:100-10-(cycle-1)*.125,work:null,
   });
+  assert.equal(JSON.stringify(evidence),before);
+});
+
+test('unavailable work does not read its captured curve while preparing quota accounting',t=>{
+  const count=512,evidence=tape();
+  evidence.cut=count*1000;
+  evidence.quota=[{source:'s',window:'w',samples:drain(retainSamplesPrepared(packSamples(Array.from({length:count},(_,i)=>({at:i*1000,used:10+(i%128)*.1,resetAt:(Math.floor(i/128)+1)*128000,staleAfterMs:count*1000})))))}];
+  const work:WorkTrace={anchor:0,cut:count*1000,knownFrom:0,available:false,
+    refs:[{ref:'r',source:'s',device:{id:'d',name:'Laptop'},origin:'terminal',project:null,folder:null,startedAt:0}],spans:[[0,0,count*1000]]};
+  const curves=new PeriodIndex(work).curves,activity=curves.groups.source.get('s');
+  assert.ok(activity);
+  t.mock.method(activity,'read',()=>{throw new Error('unavailable work was read');});
+  const before=JSON.stringify(evidence),accounting=drain(PeriodAccounting.prepare(evidence,work,curves)),reference=new PeriodAccounting(evidence,null);
+  for(const range of [{from:0,to:1001},{from:117.125,to:128001},{from:128001,to:evidence.cut}]){
+    assert.equal(accounting.quotaSummary('s','w',range)!.work,null);
+    assert.deepEqual(accounting.fixed(range,1000),reference.fixed(range,1000));
+  }
   assert.equal(JSON.stringify(evidence),before);
 });
 
