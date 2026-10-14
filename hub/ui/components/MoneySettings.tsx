@@ -126,7 +126,7 @@ export function FundsSettings({sources,hidden}:{sources:readonly Named[];hidden:
   </>;
 }
 
-/** Data selection is shared by the wallet pair; ordinary funds visibility lives in the legend. */
+/** Data selection is shared by wallet widgets; ordinary funds visibility lives in the legend. */
 export function MoneyDataControl({sources,hidden,series,family='budget'}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[];family?:MoneyFamily}) {
   const context=useCurrencyContext(),settings=usePref(family==='funds'?'funds':'money'),unit=settings.unit??DEFAULT_CURRENCY;
   const available=sources.flatMap(source=>moneySelection([source],hidden,{...settings,selected:{}},context,family).selection?.ids??[]);

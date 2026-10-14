@@ -392,9 +392,9 @@ rate cache contains no credentials or account information. Historical estimates 
 their original rate. Without a usable rate, CNY is retained and USD stays unknown or stale.
 All original balances, estimates, rate provenance, funds status and safe provider
 context are retained within the history retention period. Budget history and its table
-share the board's grid and time range. Totals are selected by default; components can
-be added from either the chart's or the table's settings, using their shared series
-selection. The total is not added to its components. Reported USD and converted CNY
+share the board's grid and time range. **Accounts and keys** in any wallet widget
+selects the account's total for all four wallet widgets. Balance components remain
+in the card's disclosure. Reported USD and converted CNY
 are never summed. Spending and top-up events
 are **unavailable** because the endpoint has no spending counter; a balance change
 cannot establish spending. An omitted currency keeps its last value as stale and

@@ -390,7 +390,7 @@ export const ru = {
   "analytics.retry": "Повторить",
   "analytics.allMuted": "Все ряды скрыты. Включите нужный в легенде.",
   "analytics.noBudget": "На этой доске нет источников бюджета",
-  "analytics.noSelection": "Ряды не выбраны. Выберите их в настройках графика.",
+  "analytics.noSelection": "Ряды не выбраны.",
   'funds.subscriptions': 'Подписки',
   'funds.allSubscriptions': 'Все подписки',
   'widgets.subscriptionFunds': 'Динамика дополнительных средств подписок',

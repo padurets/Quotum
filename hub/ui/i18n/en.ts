@@ -395,7 +395,7 @@ export const en = {
   "analytics.retry": "Try again",
   "analytics.allMuted": "All series are hidden. Select one in the legend.",
   "analytics.noBudget": "No budget sources on this board",
-  "analytics.noSelection": "No series selected. Choose them in the chart settings.",
+  "analytics.noSelection": "No series selected.",
   'funds.subscriptions': 'Subscriptions',
   'funds.allSubscriptions': 'All subscriptions',
   'widgets.subscriptionFunds': 'Subscription extra funds trends',
