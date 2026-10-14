@@ -402,6 +402,7 @@ export class HistoryStore {
     if(this.drawingPlot&&drawingEvents!==this.drawingPlot.events)this.drawingPlot={...this.drawingPlot,events:drawingEvents!};
     this.schedulePlanClock();
     if(plotChanged)for(const listener of this.plotListeners)listener();
+    this.schedule();
     return true;
   }
 
