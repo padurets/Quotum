@@ -454,3 +454,27 @@ test('the actual clock hook keeps a preparation intent stable through completion
   clock.heard(now + 5_000); assert.equal(render([fresh]), now + 5_000, 'a hub clock correction remains observable');
   now += 250; assert.equal(render(), now + 5_000, 'ordinary clock consumers retain their render-time behavior');
 });
+
+test('the shared timed table cell retains its deadline and value through layout renders, then refreshes on evidence and clock wakes',()=>{
+  let now=T0,index=0,subscribed=false,deadlines=0,values=0,value=1;
+  const slots:unknown[]=[];
+  const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:()=>null,clearTimeout:()=>{}});
+  const context={clock,hubNow:clock.hubNow,exports:{} as {useClock:unknown},useClock:undefined as unknown,Timed:undefined as unknown,
+    useState:(initial:()=>unknown)=>{const at=index++;if(!(at in slots))slots[at]=initial();return [slots[at]];},
+    useRef:(initial:unknown)=>slots[index++]??(slots[index-1]={current:initial}),
+    useSyncExternalStore:(subscribe:(listen:()=>void)=>unknown,get:()=>number)=>{if(!subscribed){subscribed=true;subscribe(()=>{});}return get();},
+    useLayoutEffect:(run:()=>void,deps?:unknown[])=>{const at=index++,old=slots[at] as unknown[]|undefined;if(!deps||!old||deps.some((v,i)=>!Object.is(v,old[i]))){slots[at]=deps;run();}},
+    useMemo:(read:()=>unknown,deps:unknown[])=>{const at=index++,old=slots[at] as {deps:unknown[];value:unknown}|undefined;if(!old||deps.some((v,i)=>!Object.is(v,old.deps[i])))slots[at]={deps,value:read()};return (slots[at] as {value:unknown}).value;},
+  };
+  const source=readFileSync(new URL('../lib/clock.ts',import.meta.url),'utf8');
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export function useClock(')),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  context.useClock=context.exports.useClock;
+  const cellSource=readFileSync(new URL('../components/TableCell.tsx',import.meta.url),'utf8');
+  runInNewContext(ts.transpileModule(cellSource.slice(cellSource.indexOf('function Timed('),cellSource.indexOf('export const tableCell'))+'\nglobalThis.Timed=Timed;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  let cell={time:'work',changesAt:(at:number)=>{deadlines++;return at+MIN;},at:(at:number)=>{values++;return {content:value+' at '+at};}};
+  const render=(label='work')=>{index=0;return (context.Timed as (props:unknown)=>string)({cell,render:(shown:{content:string})=>label+': '+shown.content});};
+  assert.equal(render(),'work: 1 at '+T0);assert.equal(deadlines,1);assert.equal(values,1);
+  now+=5_000;assert.equal(render('hours'),'hours: 1 at '+T0);assert.equal(deadlines,1);assert.equal(values,1,'layout changes do not rescan rolling accounting');
+  value=2;cell={...cell};assert.equal(render(),'work: 2 at '+now);assert.equal(deadlines,2);assert.equal(values,2);
+  now+=MIN;clock.wakeDue();assert.equal(render(),'work: 2 at '+now);assert.equal(deadlines,3);assert.equal(values,3,'the retained cell still advances exactly when its shared clock wakes');
+});
