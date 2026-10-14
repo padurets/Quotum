@@ -96,7 +96,9 @@ only the board owner may show another member's hidden card or add a standard wid
 `{kind:"sources", sourceIds:[...]}`, `{kind:"widget", widgetId}`,
 `{kind:"connection", provider, account?: {kind:"new"} | {kind:"existing", id}}`, or `{kind:"replace", credentialId}`.
 Source selections contain one to 100 unique IDs. Standard widgets are `agents`,
-`activity`, `quota-history`, `subscription-funds`, `budget-history`, `quota-table`, `budget-table`. Replacement is personal; the server captures its
+`activity`, `quota-history`, `quota-session-history`, `quota-table`, `quota-session-table`,
+`budget-history`, `budget-spending-history`, `budget-table`, `budget-spending-table`,
+`subscription-funds`. Replacement is personal; the server captures its
 provider, source and access revision. Reusing a request ID with another destination or
 selection returns `409 addition_conflict`. No secret goes into reservation or storage.
 

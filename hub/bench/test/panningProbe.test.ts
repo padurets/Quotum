@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {panningProblems, type PanReading} from '../panningBudget';
+const edgeSeries=():PanReading['edgeSeries']=>['wheel','drag'].map(stage=>({stage:stage as 'wheel'|'drag',series:12,sessionSeries:12,budgetSeries:12,spendingSeries:12,fundsSeries:12}));
 
 // Run the production browser probe with the browser's ordered RAF queue.
 const source = readFileSync(new URL('../panning.ts', import.meta.url), 'utf8');
@@ -97,7 +98,7 @@ function run(moves: boolean, synchronized: boolean, proportional = true, history
     f.requestFrame(() => f.update(i, i * 16.7, moves, synchronized, proportional, historyMoves, edgeMoves));
     f.runFrame(i * 16.7);
   }
-  return {...f.reading, initiator: 'quota', period: '24h', series: 12, budgetSeries: 12, fundsSeries: 12, sessionSeries:12,spendingSeries:12,charts: 6, rate: 4, expectedPushes: 0, coldReads: 1};
+  return {...f.reading, initiator: 'quota', period: '24h', wheelGapMs:16.7,edgeSeries:edgeSeries(),series: 12, budgetSeries: 12, fundsSeries: 12, sessionSeries:12,spendingSeries:12,charts: 6, rate: 4, expectedPushes: 0, coldReads: 1};
 }
 
 test('the actual probe measures input only after all six charts move on the same time frame', () => {
@@ -110,6 +111,12 @@ test('the actual probe measures input only after all six charts move on the same
     ['stationary Activity edges must fail while the band moves', run(true, true, true, true, false)],
   ];
   for (const [reason, reading] of failures) assert.ok(panningProblems(reading).some(problem => problem.includes('all six charts')), reason);
+});
+
+test('physical injection time keeps renderer queue stalls in the native latency budget',()=>{
+  const f=fixture();f.wheel(0,600);f.requestFrame(()=>f.update(1,616.7));f.runFrame(616.7);
+  assert.equal(f.reading.latency[0],616.7,'delivery time cannot replace the older native input timestamp');
+  f.wheel(250,650);assert.equal(f.reading.wheelGapMs,250,'a coalesced idle gap is visible to the continuous-input gate');
 });
 
 test('stationary budget data cannot be credited by matching time metadata', () => {
@@ -218,7 +225,7 @@ test('the actual probe rejects a wrong frozen SVG scale or a changed domain behi
       f.requestFrame(() => {f.update(i, i * 16.7); if (wrong === 'svg') f.historyLayer.slides.style.transform = 'scaleX(2)'; else f.activitySvg.dataset.drawFrom = '40';});
       f.runFrame(i * 16.7);
     }
-    const reading = {...f.reading, initiator: 'quota' as const, period: '24h', series: 12, budgetSeries: 12, fundsSeries: 12, sessionSeries:12,spendingSeries:12,charts: 6, rate: 4, expectedPushes: 0, coldReads: 1};
+    const reading = {...f.reading, initiator: 'quota' as const, period: '24h', wheelGapMs:16.7,edgeSeries:edgeSeries(),series: 12, budgetSeries: 12, fundsSeries: 12, sessionSeries:12,spendingSeries:12,charts: 6, rate: 4, expectedPushes: 0, coldReads: 1};
     assert.ok(panningProblems(reading).some(problem => problem.includes('all six charts')), wrong);
     assert.equal(f.reading.latency.length, 0, 'a reached HTML offset alone cannot credit the wrong composed drawing');
   }

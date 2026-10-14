@@ -287,7 +287,7 @@ async function main() {
     // Panning has its own movement and mutation probe. Traversing React and the
     // DOM for the finished measurement phase would add unrelated work to every frame.
     await cdp.evaluate('__quotumBench.pause()');
-    say('checking native continuous wheel and Shift-drag from quota, budget and subscription funds at 24h and 30d, CPU ×4');
+    say('checking native continuous wheel and Shift-drag from all six charts at 24h and 30d, CPU ×4');
     const panningBrowser=browser;
     const panned = await panning(cdp,undefined,async(label,signal,origin)=>{
       await Promise.all([reloadHubProbe(address.base,signal,origin),(async()=>{
@@ -297,8 +297,8 @@ async function main() {
     });
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95)),pushesDuring:report.pushesDuring,pushesAfter:report.pushesAfter,forbiddenMutations:report.forbiddenMutations})), problems: panned.problems})}`);
-    // Capture any movement failure before the later phases change the selection.
-    if (panned.problems.length) {
+    // A diagnostic replay must not consume the deadline of the remaining gates.
+    if (panned.problems.length && process.env.QUOTUM_BENCH_PROFILE_PANNING==='1') {
       try {await profilePanning(cdp);}
       catch (error) {say(`panning diagnostic failed: ${(error as Error).message}`);}
     }

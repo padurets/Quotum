@@ -7,6 +7,8 @@ export type PanReading = {
   peakFlights: number; maxTiles: number; duplicateReads: number;
   pushesDuring: number; pushesAfter: number; expectedPushes: number;
   forbiddenMutations: number; coldReads: number; undimmed: boolean; sizeStable: boolean;
+  edgeSeries: {stage:'wheel'|'drag';series:number;sessionSeries:number;budgetSeries:number;spendingSeries:number;fundsSeries:number}[];
+  wheelGapMs:number;
   segments?: Record<string, {count: number; p95: number; max: number}>;
   outliers?: {ms: number; segment: string; pending: number; requests: number}[];
   responses?: {ms: number; queued: number; processed: number; segment: string; requests: number}[];
@@ -17,6 +19,8 @@ export function panningProblems(reading: PanReading): string[] {
   const found: string[] = [];
   const label = `${reading.initiator}/${reading.period}`;
   if (reading.series < 12 || reading.budgetSeries < 12 || reading.fundsSeries < 12 || reading.sessionSeries<12 || reading.spendingSeries<12 || reading.charts !== 6 || reading.rate !== 4) found.push('panning needs six visible charts, twelve real series per resource family and CPU throttle ×4');
+  if (reading.edgeSeries?.length!==2 || !['wheel','drag'].every(stage=>reading.edgeSeries.some(edge=>edge.stage===stage)) || reading.edgeSeries.some(edge=>[edge.series,edge.sessionSeries,edge.budgetSeries,edge.spendingSeries,edge.fundsSeries].some(count=>!Number.isFinite(count)||count<12))) found.push('panning lost twelve real series at an unread or rebuilt history edge');
+  if(!Number.isFinite(reading.wheelGapMs)||reading.wheelGapMs>=200)found.push('native wheel input did not stay continuous');
   if (reading.frames.length < 30 || reading.updated < 30 || reading.inputs === 0 || reading.latency.length !== reading.inputs) found.push('panning did not measure every input reaching an updated chart frame');
   if (reading.chartUpdates.length !== 6 || reading.chartUpdates.some(count => count < 30) || !reading.synchronized) found.push('panning did not move all six charts on the same time frame');
   if (!(percentile(reading.frames, .95) <= 34)) found.push(`${label} moving-frame p95 exceeds 34 ms`);
