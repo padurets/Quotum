@@ -1,8 +1,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import {runInNewContext} from 'node:vm';
+import ts from 'typescript';
 import type {Cdp} from '../cdp.js';
-import {IdleCpuDiagnostic,sourceIdentity,idleEdgeProblems,ownedClockFires,planIdleEdge,type IdleGeometry} from '../idleCpuDiagnostic.js';
+import type {Reading} from '../probe.js';
+import {IdleCpuDiagnostic,sourceIdentity,idleEdgeProblems,originalTraceProblems,ownedClockFires,planIdleEdge,type IdleGeometry} from '../idleCpuDiagnostic.js';
 import {numericProfile,profileWindow} from '../cpuProfile.js';
 
 type Saved={name:string;value:unknown;large?:boolean};
@@ -16,7 +20,7 @@ test('unavailable checkout never borrows the event SHA as source evidence',()=>{
     const receipt=sourceIdentity(env,read);assert.equal(receipt.status,'insufficient-evidence');assert.equal(receipt.checkoutSha,null);assert.equal(receipt.eventSha,env.GITHUB_SHA);
   }
 });
-type Options={wrongHash?:boolean;missingClockSource?:boolean;failStop?:boolean};
+type Options={wrongHash?:boolean;missingClockSource?:boolean;failStop?:boolean;failTraceStop?:boolean;forbidProfiler?:boolean};
 type RawProfile=Parameters<typeof numericProfile>[0];
 type Clock=Parameters<typeof profileWindow>[1][number];
 const body='console.log(1);',hash=createHash('sha256').update(body).digest('hex');
@@ -33,6 +37,7 @@ class CurrentCdpFake {
   readonly listeners=new Map<string,((value:unknown)=>void)[]>();
   timestamp=1;
   stopCalls=0;
+  traceStopCalls=0;
   constructor(readonly options:Options={}){}
   on<T>(name:string,listener:(value:T)=>void){const rows=this.listeners.get(name)??[];rows.push(listener as (value:unknown)=>void);this.listeners.set(name,rows);}
   off<T>(name:string,listener:(value:T)=>void){this.listeners.set(name,(this.listeners.get(name)??[]).filter(value=>value!==listener));}
@@ -40,6 +45,7 @@ class CurrentCdpFake {
   async evaluate<T>(expression:string):Promise<T>{assert.equal(arguments.length,1);this.commands.push('evaluate');assert.equal(expression,'performance.now()');return this.timestamp*1000 as T;}
   async send<T=unknown>(method:string,params:object={}):Promise<T>{
     assert.ok(arguments.length<=2,'the current transport has no signal third argument');this.commands.push(method);
+    if(this.options.forbidProfiler)assert.ok(!method.startsWith('Profiler.'),'trace-only must never send a profiler command');
     let value:unknown={};
     if(method==='Performance.getMetrics')value={metrics:[{name:'Timestamp',value:this.timestamp},{name:'ScriptDuration',value:.08}]};
     if(method==='Page.getFrameTree')value={frameTree:{frame:{id:'own-frame'}}};
@@ -48,7 +54,10 @@ class CurrentCdpFake {
       if(this.options.failStop&&this.stopCalls++===0)throw Error('synthetic stop failure');
       value={profile};
     }
-    if(method==='Tracing.end')this.emit('Tracing.tracingComplete',{});
+    if(method==='Tracing.end'){
+      if(this.options.failTraceStop&&this.traceStopCalls++===0)throw Error('synthetic trace stop failure');
+      this.emit('Tracing.tracingComplete',{});
+    }
     if(method==='Network.getResponseBody')value={body,base64Encoded:false};
     if(method==='Debugger.enable')this.emit('Debugger.scriptParsed',{url:asset,scriptId:'11',hash:this.options.wrongHash?'0'.repeat(64):hash});
     return value as T;
@@ -64,9 +73,9 @@ const ownEvents=[
 const record=(value:unknown):Record<string,unknown>=>{assert.ok(value&&typeof value==='object');return value as Record<string,unknown>;};
 const result=(saved:Saved[],name:string)=>{const found=saved.find(row=>row.name===name);assert.ok(found);return record(found.value);};
 
-async function capture(options:Options={}){
+async function capture(options:Options={},collection:'profile'|'trace'='profile'){
   const cdp=new CurrentCdpFake(options),saved:Saved[]=[];
-  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value,large)=>saved.push({name,value,large}),client,true);
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value,large)=>saved.push({name,value,large}),client,true,collection);
   cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
   await diagnostic.start();
   assert.ok(!cdp.commands.includes('Debugger.enable'),'source binding does not activate the debugger during measurement');
@@ -75,11 +84,12 @@ async function capture(options:Options={}){
   let failure:unknown;
   try{await diagnostic.stop({before:{Timestamp:1,ScriptDuration:0},after:{Timestamp:121,ScriptDuration:.08},instrumentMs:1,seconds:120});}catch(error){failure=error;}
   await diagnostic.bindAndClose();await diagnostic.close();
-  return{cdp,saved,failure};
+  return{cdp,saved,failure,diagnostic};
 }
 
 test('idle CPU diagnostics refuse an attached target',()=>{
   assert.throws(()=>new IdleCpuDiagnostic(new CurrentCdpFake() as unknown as Cdp,()=>{},client,false),/owned synthetic/);
+  assert.throws(()=>new IdleCpuDiagnostic(new CurrentCdpFake() as unknown as Cdp,()=>{},client,false,'trace'),/owned synthetic/);
 });
 test('idle CPU diagnostics preserve signed samples and original120s counters',async()=>{
   const {saved}=await capture(),numeric=record(result(saved,'idle-cpu-profile').profile);
@@ -113,6 +123,88 @@ test('idle CPU stop failure keeps the original window and incomplete result',asy
 });
 test('idle CPU cleanup unsubscribes the current transport',async()=>{
   const {cdp}=await capture();for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
+});
+
+test('trace-only never enables, samples, starts or stops the Profiler',async()=>{
+  const {cdp,saved}=await capture({forbidProfiler:true},'trace'),profile=result(saved,'idle-cpu-profile');
+  assert.ok(!cdp.commands.some(command=>command.startsWith('Profiler.')));
+  assert.equal(profile.status,'not-collected-by-design');assert.equal(profile.samplingInterval,null);assert.equal(profile.profile,null);
+  assert.equal(profile.cleanup,'complete');assert.equal(result(saved,'idle-cpu-window').seconds,120);
+});
+test('trace-only starts before counters and stops and binds after the frozen readout',async()=>{
+  const {cdp}=await capture({forbidProfiler:true},'trace');
+  assert.ok(cdp.commands.indexOf('Tracing.start')<cdp.commands.indexOf('ORIGINAL.before-metrics'));
+  assert.ok(cdp.commands.indexOf('Tracing.end')>cdp.commands.indexOf('ORIGINAL.readout'));
+  assert.ok(cdp.commands.indexOf('Debugger.enable')>cdp.commands.indexOf('Tracing.end'));
+  const interval=cdp.commands.slice(cdp.commands.indexOf('ORIGINAL.before-metrics'),cdp.commands.indexOf('ORIGINAL.readout')+1);
+  assert.deepEqual(interval,['ORIGINAL.before-metrics','ORIGINAL.after-metrics','ORIGINAL.readout']);
+  assert.ok(!cdp.commands.includes('Performance.enable'));
+});
+test('trace-only retains source mismatch and removes every current listener',async()=>{
+  const {cdp,saved}=await capture({forbidProfiler:true,wrongHash:true},'trace');
+  assert.equal(result(saved,'idle-cpu-source-family-1').status,'mismatch');
+  for(const listeners of cdp.listeners.values())assert.equal(listeners.length,0);
+});
+test('trace cleanup failure cannot turn an uncollected profile into complete evidence',async()=>{
+  const {saved,failure,diagnostic}=await capture({forbidProfiler:true,failTraceStop:true},'trace');assert.ok(failure);
+  const profile=result(saved,'idle-cpu-profile');assert.equal(profile.status,'not-collected-by-design');assert.equal(profile.cleanup,'incomplete');
+  const receipt=diagnostic.traceReceipt(540_000,660_000,300_000,traceWindow,traceReading);
+  assert.equal(receipt.status,'insufficient-evidence');assert.ok(receipt.problems.some(problem=>problem.includes('incomplete')));
+});
+
+const traceWindow={before:{Timestamp:1,ScriptDuration:0},after:{Timestamp:121,ScriptDuration:.05},instrumentMs:.5,seconds:120};
+const traceRows:Reading['renders']=(['quota','activity','budget','funds'] as const).map(widget=>({node:widget,time:true,kind:'chart',region:'analytics',widget,count:1}));
+const traceReading:Reading={instrumentMs:.5,commits:1,cardChanged:{},renders:traceRows,mutations:traceRows};
+const traceFires=[{timerId:10,ts:2_000_000,duration:8000,pid:1,tid:2,source:{sha256:hash,lineNumber:9,columnNumber:250_437},threadTs:1000,threadDuration:5000}];
+test('original trace accepts chart commits and separate thread timing without a geometry claim',()=>{
+  assert.deepEqual(originalTraceProblems(540_000,660_000,300_000,traceWindow,traceReading,traceFires),[]);
+  assert.notEqual(traceFires[0].duration,traceFires[0].threadDuration);
+});
+test('original trace preserves a missed edge, missing chart and unavailable thread clock',()=>{
+  assert.ok(originalTraceProblems(610_000,730_000,300_000,traceWindow,traceReading,traceFires).some(problem=>problem.includes('missed')));
+  assert.ok(originalTraceProblems(540_000,660_000,300_000,traceWindow,{...traceReading,mutations:[]},traceFires).some(problem=>problem.includes('mutation')));
+  assert.ok(originalTraceProblems(540_000,660_000,300_000,traceWindow,traceReading,[]).some(problem=>problem.includes('source-bound')));
+  assert.ok(originalTraceProblems(540_000,660_000,300_000,traceWindow,traceReading,[{...traceFires[0],threadDuration:null}]).some(problem=>problem.includes('thread')));
+});
+
+/** Execute the actual index interval with the real collector and a passive transport. */
+async function originalIndex(collection:''|'1'|'trace') {
+  let wall=540_000,plans=0,geometry=0,metricCalls=0;
+  const saved:Saved[]=[],cdp=new class extends CurrentCdpFake {
+    override async evaluate<T>(expression:string):Promise<T>{
+      if(expression==='__quotumBench.reset()'){this.commands.push('ORIGINAL.reset');return undefined as T;}
+      if(expression==='__quotumBench.read()'){this.commands.push('ORIGINAL.readout');return traceReading as T;}
+      return super.evaluate<T>(expression);
+    }
+  }({forbidProfiler:collection==='trace'});
+  const idleCpu=collection?new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,collection==='trace'?'trace':'profile'):undefined;
+  cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
+  const source=readFileSync(new URL('../index.ts',import.meta.url),'utf8'),start=source.indexOf('    let edgePlan:'),end=source.indexOf('    const measured =',start);
+  assert.ok(start>=0&&end>start);
+  const context={Date:class extends Date{static override now(){return wall;}},idleCpu,idleCpuMode:collection,seconds:120,cdp,reading:traceReading,
+    planIdleEdge:(...args:Parameters<typeof planIdleEdge>)=>{plans++;return planIdleEdge(...args);},idleGeometry:async()=>{geometry++;return edgeGeometry(geometry>1);},
+    cellOf:()=>300_000,sleep:async(ms:number)=>{cdp.commands.push('ORIGINAL.sleep:'+ms);wall+=Math.max(0,ms);cdp.timestamp=121;},
+    overview:async()=>[],stillProblems:()=>[],Stop:Error,say:()=>{},heard:{reset:()=>{cdp.commands.push('ORIGINAL.heard-reset');},counts:()=>({ping:5})},requests:{counting:false,count:0,byPath:{}},
+    metrics:async()=>{cdp.commands.push(metricCalls++?'ORIGINAL.after-metrics':'ORIGINAL.before-metrics');return metricCalls===1?traceWindow.before:traceWindow.after;},
+    round:(value:number)=>value,scriptPerSecond:()=>.1,idleProblems:()=>[],saveDiagnostic:(name:string,value:unknown)=>saved.push({name,value}),finish:async()=>{},run:undefined as unknown as()=>Promise<unknown>};
+  runInNewContext(ts.transpileModule(`async function run(){${source.slice(start,end)}\nreturn {from,to};}globalThis.run=run;`,{compilerOptions:{target:ts.ScriptTarget.ES2023}}).outputText,context);
+  await context.run();await idleCpu?.close();return{cdp,plans,geometry,saved};
+}
+test('actual trace index skips alignment and all geometry while preserving the original counter sequence',async()=>{
+  const {cdp,plans,geometry,saved}=await originalIndex('trace');assert.equal(plans,0);assert.equal(geometry,0);
+  assert.ok(!cdp.commands.some(command=>command.startsWith('Profiler.')));
+  assert.deepEqual(cdp.commands.slice(cdp.commands.indexOf('ORIGINAL.reset'),cdp.commands.indexOf('ORIGINAL.readout')+1),['ORIGINAL.reset','ORIGINAL.heard-reset','ORIGINAL.before-metrics','ORIGINAL.sleep:120000','ORIGINAL.after-metrics','ORIGINAL.readout']);
+  assert.equal(result(saved,'idle-cpu-window').seconds,120);assert.ok(saved.some(row=>row.name==='idle-cpu-original-trace'));
+});
+test('actual ordinary index installs no diagnostic and retains the original120s sequence',async()=>{
+  const {cdp,plans,geometry,saved}=await originalIndex('');assert.equal(plans,0);assert.equal(geometry,0);assert.equal(saved.length,0);
+  assert.ok(!cdp.commands.some(command=>/^(Profiler|Tracing|Debugger)\./.test(command)));
+  assert.deepEqual(cdp.commands,['ORIGINAL.reset','ORIGINAL.heard-reset','ORIGINAL.before-metrics','ORIGINAL.sleep:120000','ORIGINAL.after-metrics','ORIGINAL.readout']);
+});
+test('actual mode1 index retains aligned geometry and the existing2ms profiler',async()=>{
+  const {cdp,plans,geometry,saved}=await originalIndex('1');assert.equal(plans,1);assert.equal(geometry,2);
+  assert.ok(cdp.commands.includes('Profiler.start'));assert.ok(cdp.commands.includes('Profiler.stop'));
+  assert.equal(result(saved,'idle-cpu-profile').samplingInterval,2000);assert.ok(saved.some(row=>row.name==='idle-cpu-edge'));
 });
 
 const numericBase:RawProfile={...profile,startTime:2_000_000,endTime:2_006_000};

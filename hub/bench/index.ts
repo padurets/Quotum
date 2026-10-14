@@ -129,7 +129,7 @@ async function metrics(cdp: Cdp): Promise<Metrics> {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const idleCpuMode=process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_CPU;
-  if(idleCpuMode&&(idleCpuMode!=='1'||!options.ci||options.cdp||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1'))throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
+  if(idleCpuMode&&(!['1','trace'].includes(idleCpuMode)||!options.ci||options.cdp||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1'))throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
   let idleCpu:IdleCpuDiagnostic|undefined;
   const diagnosticDirectory=path.join('/tmp/quotum-idle-cpu-diagnostic',`${process.env.GITHUB_RUN_ID??'local'}-${process.env.GITHUB_RUN_ATTEMPT??'1'}-${process.pid}`);
   const saveDiagnostic=(name:string,value:unknown,large=false)=>{
@@ -186,7 +186,7 @@ async function main() {
     await cdp.send('Network.enable');
     await cdp.send('Performance.enable');
     if(idleCpuMode){
-      idleCpu=new IdleCpuDiagnostic(cdp,saveDiagnostic,clientIdentity(),!options.cdp);
+      idleCpu=new IdleCpuDiagnostic(cdp,saveDiagnostic,clientIdentity(),!options.cdp,idleCpuMode==='trace'?'trace':'profile');
       saveDiagnostic('idle-cpu-source',sourceIdentity());
     }
     await cdp.send('Emulation.setFocusEmulationEnabled', {enabled: true});
@@ -221,14 +221,14 @@ async function main() {
     if (heard.counts().history) throw new Stop('The stand credited agent work during warmup; its agents must be idle.');
 
     let edgePlan:IdleEdgePlan|undefined,geometryBefore:IdleGeometry|undefined;
-    if(idleCpu){
+    if(idleCpuMode==='1'){
       edgePlan=planIdleEdge(Date.now(),seconds,cellOf(86_400_000));
       saveDiagnostic('idle-cpu-plan',{mode:'diagnostic',kind:'Temporally aligned diagnostic only; no canonical benchmark timing change.',...edgePlan});
       say(`diagnostic only: waiting until ${new Date(edgePlan.from).toISOString()} to capture the natural ${new Date(edgePlan.boundary).toISOString()} edge`);
       await sleep(edgePlan.from-Date.now());
       geometryBefore=await idleGeometry(cdp);
-      await idleCpu.start();
     }
+    if(idleCpu)await idleCpu.start();
     const from = Date.now();
     const to = from + seconds * 1000;
     const moving = stillProblems(await overview(), from, to);
@@ -252,12 +252,12 @@ async function main() {
 
     if(idleCpu){
       const diagnosticProblems=idleProblems(idle);
-      const geometryAfter=await idleGeometry(cdp);
-      saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:'Temporally aligned natural edge using the unchanged120s CI idle protocol; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,reading,problems:diagnosticProblems}});
+      const geometryAfter=idleCpuMode==='1'?await idleGeometry(cdp):undefined;
+      saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='trace'?'Original unaligned120s CI idle protocol; no CPU sampling, tracing overhead is unqualified.':'Temporally aligned natural edge using the unchanged120s CI idle protocol; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,reading,problems:diagnosticProblems}});
       await idleCpu.stop({before,after,instrumentMs:reading.instrumentMs,seconds});
       await idleCpu.bindAndClose();
-      const edge=idleCpu.edgeReceipt(edgePlan!,from,to,counterFrom!,counterTo!,geometryBefore!,geometryAfter,{before,after,instrumentMs:reading.instrumentMs,seconds});
-      say(`diagnostic only: aligned natural edge ${edge.status}; observer overhead is unqualified`);
+      const edge=idleCpuMode==='trace'?idleCpu.traceReceipt(from,to,cellMs,{before,after,instrumentMs:reading.instrumentMs,seconds},reading):idleCpu.edgeReceipt(edgePlan!,from,to,counterFrom!,counterTo!,geometryBefore!,geometryAfter!,{before,after,instrumentMs:reading.instrumentMs,seconds});
+      say(`diagnostic only: ${idleCpuMode==='trace'?'original idle trace':'aligned natural edge'} ${edge.status}; observer overhead is unqualified`);
       await finish(diagnosticProblems.length||edge.status!=='complete'?1:0);return;
     }
 
