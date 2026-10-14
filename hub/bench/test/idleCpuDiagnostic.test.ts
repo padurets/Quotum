@@ -169,7 +169,7 @@ test('original trace preserves a missed edge, missing chart and unavailable thre
 });
 
 /** Execute the actual index interval with the real collector and a passive transport. */
-async function originalIndex(collection:''|'1'|'trace',boundaryFailure?:'opening'|'closing',failTraceStop=false) {
+async function originalIndex(collection:''|'1'|'trace'|'profile',boundaryFailure?:'opening'|'closing',failTraceStop=false,failProfileStop=false) {
   let wall=540_000,plans=0,geometry=0,metricCalls=0,readingCalls=0,phaseFrom=0;
   const saved:Saved[]=[],evidenceSaved:Saved[]=[],cdp=new class extends CurrentCdpFake {
     override async evaluate<T>(expression:string):Promise<T>{
@@ -186,7 +186,7 @@ async function originalIndex(collection:''|'1'|'trace',boundaryFailure?:'opening
       }
       return super.evaluate<T>(expression);
     }
-  }({forbidProfiler:collection==='trace',failTraceStop});
+  }({forbidProfiler:collection==='trace',failTraceStop,failStop:failProfileStop});
   const idleCpu=collection?new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,collection==='trace'?'trace':'profile'):undefined;
   cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
   const source=readFileSync(new URL('../index.ts',import.meta.url),'utf8'),start=source.indexOf('    let edgePlan:'),end=source.indexOf('    const measured =',start);
@@ -212,6 +212,15 @@ test('actual trace index skips alignment and all geometry while preserving the o
   assert.deepEqual(cdp.commands.slice(cdp.commands.indexOf('ORIGINAL.reset'),cdp.commands.indexOf('ORIGINAL.phase-stop')+1),canonicalCounterSequence);
   assert.equal(result(saved,'idle-cpu-window').seconds,120);assert.ok(saved.some(row=>row.name==='idle-cpu-original-trace'));
 });
+test('actual original-profile index preserves the counter sequence and samples without alignment or geometry reads',async()=>{
+  const {cdp,plans,geometry,saved,failure}=await originalIndex('profile');assert.equal(failure,undefined);assert.equal(plans,0);assert.equal(geometry,0);
+  assert.deepEqual(cdp.commands.slice(cdp.commands.indexOf('ORIGINAL.reset'),cdp.commands.indexOf('ORIGINAL.phase-stop')+1),canonicalCounterSequence);
+  assert.ok(cdp.commands.indexOf('Profiler.start')<cdp.commands.indexOf('ORIGINAL.reset'));
+  assert.ok(cdp.commands.indexOf('Profiler.stop')>cdp.commands.indexOf('ORIGINAL.phase-stop'));
+  assert.ok(cdp.commands.indexOf('Debugger.enable')>cdp.commands.indexOf('Profiler.stop'));
+  assert.equal(result(saved,'idle-cpu-profile').samplingInterval,2000);
+  assert.equal(result(saved,'idle-cpu-original-trace').profileStatus,'complete');
+});
 test('actual ordinary index installs no diagnostic and retains the original120s sequence',async()=>{
   const {cdp,plans,geometry,saved,failure}=await originalIndex('');assert.equal(failure,undefined);assert.equal(plans,0);assert.equal(geometry,0);assert.equal(saved.length,0);
   assert.ok(!cdp.commands.some(command=>/^(Profiler|Tracing|Debugger)\./.test(command)));
@@ -229,6 +238,13 @@ for(const boundary of ['opening','closing'] as const)test(`actual index retains 
   assert.ok((original.problems as string[]).some(problem=>problem.includes(boundary+' measurement boundary')));
   const idle=result(evidenceSaved,'idle');assert.equal(idle.actualSeconds,120);
   assert.ok((idle.phaseProblems as string[]).some(problem=>problem.includes(boundary+' measurement boundary')));
+});
+for(const boundary of ['opening','closing'] as const)test(`original-profile index retains ${boundary} measurement-boundary failures when profiler stop fails`,async()=>{
+  const {saved,evidenceSaved,failure}=await originalIndex('profile',boundary,false,true);assert.ok(failure);
+  assert.equal((failure as Error).message,'synthetic stop failure');
+  assert.equal(result(saved,'idle-cpu-profile').status,'insufficient-evidence');
+  assert.ok((record(result(saved,'idle-cpu-result').original).problems as string[]).some(problem=>problem.includes(boundary+' measurement boundary')));
+  assert.ok((result(evidenceSaved,'idle').phaseProblems as string[]).some(problem=>problem.includes(boundary+' measurement boundary')));
 });
 
 const numericBase:RawProfile={...profile,startTime:2_000_000,endTime:2_006_000};

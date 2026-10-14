@@ -91,7 +91,8 @@ jobs:
       - run: npm run build
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
         env:
-          QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: '1'
+          # Keep the original window: aligning it can miss conditional preparation.
+          QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: 'profile'
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-idle-cpu
       - name: Original-load idle CPU evidence
         if: always()

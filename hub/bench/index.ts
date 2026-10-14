@@ -126,7 +126,7 @@ async function main() {
     if (startupWaitDiagnostic && (startupWaitDiagnostic !== '1' || !options.ci || process.platform !== 'linux' || options.cdp || startupDiagnostic || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup wait diagnostic mode');
     if (idleDiagnostic && (idleDiagnostic !== 'double' || panDiagnostic)) throw new Stop('Unknown or conflicting idle diagnostic mode');
     if (panDiagnostic && !['pairs', 'trace', 'cpu'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
-    if (idleCpuMode && (!['1','trace'].includes(idleCpuMode) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
+    if (idleCpuMode && (!['1','trace','profile'].includes(idleCpuMode) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
     if (idleTimingDiagnostic && (idleTimingDiagnostic !== '1' || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleCpuMode || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle timing diagnostic mode');
     if(poolDiagnostic&&(poolDiagnostic!=='1'||!options.ci||options.cdp||panDiagnostic||idleDiagnostic||idleCpuMode||idleTimingDiagnostic||startupDiagnostic||startupWaitDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE))throw new Stop('Unknown or conflicting history pool diagnostic mode');
     await prepare(address);
@@ -307,7 +307,7 @@ async function main() {
         originalIdleTimingProblems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
         evidence.save(idleCpu?'idle-cpu-result':'idle-timing-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
       }
-      if(idleCpu)saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='trace'?'Original CI idle protocol; no CPU sampling, tracing overhead is unqualified.':'Temporally aligned natural edge using the unchanged120s CI idle protocol; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,reading,problems:originalIdleTimingProblems}});
+      if(idleCpu)saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='1'?'Temporally aligned natural edge using the unchanged120s CI idle protocol; profiler and trace overhead is unqualified.':idleCpuMode==='trace'?'Original CI idle protocol; no CPU sampling, tracing overhead is unqualified.':'Original CI idle protocol with CPU sampling; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,reading,problems:originalIdleTimingProblems}});
       return {idle, phaseProblems, actualSeconds, events, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo};
     };
     const {idle, phaseProblems, actualSeconds, events, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo} = idleTimingDiagnostic ? await traceIdle(cdp, browser, readIdle, evidence) : await readIdle();
@@ -317,8 +317,8 @@ async function main() {
       const window={before,after,instrumentMs:reading.instrumentMs,seconds};
       await idleCpu.stop(window);
       await idleCpu.bindAndClose();
-      const edge=idleCpuMode==='trace'?idleCpu.traceReceipt(from,to,cellMs,window,reading):idleCpu.edgeReceipt(edgePlan!,from,to,counterFrom!,counterTo!,geometryBefore!,geometryAfter!,window);
-      say(`diagnostic only: ${idleCpuMode==='trace'?'original idle trace':'aligned natural edge'} ${edge.status}; observer overhead is unqualified`);
+      const edge=idleCpuMode==='1'?idleCpu.edgeReceipt(edgePlan!,from,to,counterFrom!,counterTo!,geometryBefore!,geometryAfter!,window):idleCpu.traceReceipt(from,to,cellMs,window,reading);
+      say(`diagnostic only: ${idleCpuMode==='1'?'aligned natural edge':'original idle '+idleCpuMode} ${edge.status}; observer overhead is unqualified`);
       await finish(diagnosticProblems.length||edge.status!=='complete'?1:0);return;
     }
     if (idleTimingDiagnostic) {
