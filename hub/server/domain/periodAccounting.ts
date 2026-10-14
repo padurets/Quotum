@@ -49,36 +49,41 @@ class QuotaIndex {
   private covered:Numbers=new Float64Array(0);
   private worked:Numbers=new Float64Array(0);
   private during:Numbers=new Float64Array(0);
-  constructor(readonly series:PeriodTape['quota'][number],private readonly activity:WorkTimeline|undefined,private readonly known:number,deferred=false) {
+  constructor(readonly series:PeriodTape['quota'][number],private readonly activity:WorkTimeline|undefined,private readonly known:number,deferred=false,prior?:QuotaIndex) {
     const count=sampleCount(series.samples);
-    this.times='columns' in series.samples?series.samples.columns[0]:new Float64Array(count);
-    if(!deferred)drain(this.build());
+    this.times=prior?.series===series?prior.times:'columns' in series.samples?series.samples.columns[0]:new Float64Array(count);
+    if(!deferred)drain(this.build(prior));
   }
-  static *prepare(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number):Preparation<QuotaIndex>{const value=new QuotaIndex(series,activity,known,true);yield*value.build();return value;}
-  private *build():Preparation<void>{
+  static *prepare(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number,prior?:QuotaIndex):Preparation<QuotaIndex>{const value=new QuotaIndex(series,activity,known,true,prior);yield*value.build(prior);return value;}
+  private *build(prior?:QuotaIndex):Preparation<void>{
     const series=this.series,{known}=this,activity=known===Infinity?undefined:this.activity,count=sampleCount(series.samples);
-    const deadlines=new Float64Array(count),spent=new Float64Array(count),covered=new Float64Array(count),worked=activity?new Float64Array(count):null,during=activity?new Float64Array(count):null;
+    // Work retirement can leave quota observations untouched. Keep their exact prefixes.
+    const reuse=prior?.series===series;
+    const deadlines=reuse?null:new Float64Array(count),spent=reuse?null:new Float64Array(count),covered=reuse?null:new Float64Array(count),worked=activity?new Float64Array(count):null,during=activity?new Float64Array(count):null;
     let previous:ReturnType<typeof sampleAt>;
     // Decode each observation once; unavailable work keeps constant zero prefixes.
-    for(let i=0;i<count;i++) {
+    for(let i=0;i<count&&(!reuse||activity);i++) {
       yield;
       const sample=sampleAt(series.samples,i)!;
-      if(this.times instanceof Float64Array)this.times[i]=sample.at;
-      deadlines[i]=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity);
+      if(!reuse&&this.times instanceof Float64Array)this.times[i]=sample.at;
+      if(deadlines)deadlines[i]=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity);
       if(i) {
-        spent[i]=spent[i-1];covered[i]=covered[i-1];
+        if(spent&&covered){spent[i]=spent[i-1];covered[i]=covered[i-1];}
         if(worked&&during){worked[i]=worked[i-1];during[i]=during[i-1];}
         const a=previous!,b=sample,step=edge(a,b);
         if(step.valid) {
           const work=a.at>=known?activity?.read({from:a.at,to:b.at},true)??0:0;
-          spent[i]+=step.delta;covered[i]+=b.at-a.at;
+          if(spent&&covered){spent[i]+=step.delta;covered[i]+=b.at-a.at;}
           if(worked&&during){worked[i]+=work;during[i]+=work>0?step.delta:0;}
         }
       }
       previous=sample;
     }
-    const sorted=yield*sortedNumbers(deadlines);this.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
-    this.spent=yield*numberColumn(spent.length,i=>spent[i]);this.covered=yield*numberColumn(covered.length,i=>covered[i]);
+    if(reuse){this.deadlines=prior.deadlines;this.spent=prior.spent;this.covered=prior.covered;}
+    else if(deadlines&&spent&&covered){
+      const sorted=yield*sortedNumbers(deadlines);this.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
+      this.spent=yield*numberColumn(spent.length,i=>spent[i]);this.covered=yield*numberColumn(covered.length,i=>covered[i]);
+    }
     this.worked=worked?yield*numberColumn(count,i=>worked[i]):{length:count,base:0,values:null};
     this.during=during?yield*numberColumn(count,i=>during[i]):{length:count,base:0,values:null};
   }
@@ -341,7 +346,7 @@ export class PeriodAccounting {
       const activity=workCurves?.groups.source.get(series.source);
       const key=series.source+'\n'+series.window,old=prior?.quota.get(key),reuse=old?.series===series&&!changedWork.has(series.source);
       if(!reuse)progress?.(preparedBytes+sampleCount(series.samples)*88+1024);
-      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,series.workFrom===null||work?.available===false?Infinity:Math.max(work?.knownFrom??Infinity,series.workFrom??0));
+      const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,series.workFrom===null||work?.available===false?Infinity:Math.max(work?.knownFrom??Infinity,series.workFrom??0),old?.series===series?old:undefined);
       if(!reuse){preparedBytes+=index.bytes;progress?.(preparedBytes);}
       this.quota.set(key,index);this.sampleTimes.set(key,index.times);
     }

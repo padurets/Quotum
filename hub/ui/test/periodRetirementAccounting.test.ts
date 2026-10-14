@@ -16,7 +16,7 @@ test('clock retirement reuses unchanged source accounting and replaces trimmed o
   try{
     for(const source of [unchanged,trimmed]){
       h.store.hold(source,h.alice.id,start-H);
-      for(let i=0;i<12;i++)h.store.record(source,{observedAt:start+M+i*10*M,plan:'',resets:null,staleAfterMs:2*periodMs,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:10+i,remaining:90-i,resetAt:NOW+periodMs}]});
+      for(let i=0;i<12;i++)h.store.record(source,{observedAt:start+M+i*10*M,plan:'',resets:null,staleAfterMs:2*periodMs,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:10+i*.1,remaining:90-i*.1,resetAt:NOW+periodMs}]});
     }
     // The first context expires inside an hour whose source still has other work.
     credit(unchanged,'b'.repeat(32),start+2*M,start+5*M);
@@ -43,7 +43,11 @@ test('clock retirement reuses unchanged source accounting and replaces trimmed o
     assert.ok(nextGroups.has(trimmed));
     assert.equal(nextGroups.has(removed),false);
     assert.equal(after.accounting.quota.get(unchanged+'\nw'),indexes.get(unchanged),'an unchanged source timeline must retain its quota index');
-    for(const source of [trimmed,removed])assert.notEqual(after.accounting.quota.get(source+'\nw'),indexes.get(source),'trimmed and removed source timelines must replace their quota indexes');
+    for(const source of [trimmed,removed]){
+      const index=after.accounting.quota.get(source+'\nw'),previous=indexes.get(source);
+      assert.notEqual(index,previous,'trimmed and removed source timelines must replace their quota indexes');
+      for(const field of ['times','deadlines','spent','covered'])assert.strictEqual(index[field],previous[field],'work-only retirement preserves exact quota columns without rebuilding them');
+    }
     assert.equal(h.period.getProjectionRevision('quota'),revision,'storage retirement does not invalidate chart geometry');
     assert.equal(h.requests.length,requests,'the shared clock retires work without reading history');
     assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes,'retirement releases every temporary reservation');
