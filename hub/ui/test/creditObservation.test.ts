@@ -128,9 +128,11 @@ function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page
     incomingPlans:[],incomingForecasts:[],incomingMarkers:[],incomingStrip:null,desiredFrom:initial.now-DAY,desiredTo:initial.now,desiredNow:initial.now,desiredLive:true,navigation:undefined,stepped:true,cellMs:h.cell,
     width:1240,height:160,left:76,right:12,top:12,bottom:28,clipPrepared,plotPathPrepared,observationRunsPrepared,draw:null as unknown as ()=>Drawn};
   runInNewContext(ts.transpileModule(`function draw(){${region}\nreturn prepared;}\nglobalThis.draw=draw;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,child);
-  const groupStart=chartSource.indexOf('        {lines.map((line, i) => ('),groupEnd=chartSource.indexOf('        {/* Announcements',groupStart),expression=chartSource.slice(groupStart,groupEnd).trim().slice(1,-1);
-  const groups={seriesFocusStyle,exports:{},require:(name:string)=>name==='react/jsx-runtime'?jsx:{},groups:null as unknown as (lines:Line[],paths:Model['paths'])=>ReactElement<SeriesProps>[]};
-  runInNewContext(ts.transpileModule(`function groups(lines,paths){return ${expression};}\nglobalThis.groups=groups;`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,groups);
+  const groupStart=chartSource.indexOf('  const seriesArtwork='),groupEnd=chartSource.indexOf('  const seriesEnds=',groupStart);
+  assert.ok(groupStart>=0&&groupEnd>groupStart,'the observation probe binds the actual retained series artwork');
+  let keptGroup:{deps:unknown[];value:unknown}|null=null;
+  const groups={seriesFocusStyle,useMemo:(read:()=>unknown,deps:unknown[])=>{if(!keptGroup||deps.some((value,i)=>!Object.is(value,keptGroup!.deps[i])))keptGroup={deps,value:read()};return keptGroup.value;},exports:{},require:(name:string)=>name==='react/jsx-runtime'?jsx:{},groups:null as unknown as (lines:Line[],paths:Model['paths'])=>ReactElement<SeriesProps>[]};
+  runInNewContext(ts.transpileModule(`function groups(lines,paths){${chartSource.slice(groupStart,groupEnd)}\nreturn seriesArtwork;}\nglobalThis.groups=groups;`,{fileName:'series.tsx',compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,groups);
   let pathChanges=0,observationChanges=0;
   const commit=(model:Model|null)=>{
     const props=model?groups.groups(model.lines,model.paths)[0]?.props:undefined;
