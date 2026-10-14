@@ -10,7 +10,7 @@ import {stamp} from '../lib/format';
 test('current clock presentation keeps paired future paths, raw marker coordinates and composed overlays', () => {
   const H = 3_600_000, minute = 60_000, source = readFileSync(new URL('../components/Chart.tsx', import.meta.url), 'utf8');
   const start = source.indexOf('  const model = '), head = source.slice(start, source.indexOf('  const none = ', start));
-  const markerStart = source.indexOf('markers.map(marker => {'), markerEnd = source.indexOf('\n        {lines.map', markerStart);
+  const markerStart = source.indexOf('markers.map(marker => {'), markerEnd = source.indexOf('\n        {seriesArtwork}', markerStart);
   const markerRender = source.slice(markerStart, markerEnd).trim().slice(0, -1);
   const observationHover=source.split('\n').find(line=>line.startsWith('  const observationHover='));
   const hoverX = source.split('\n').find(line => line.startsWith('  const hoverX = '));

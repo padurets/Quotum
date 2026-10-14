@@ -1,11 +1,17 @@
 import {useEffect, useLayoutEffect, useRef, type CSSProperties, type RefObject} from 'react';
 
 const variable = (key: string) => '--series-' + Array.from(key, letter => letter.codePointAt(0)!.toString(16)).join('-');
+const styles=new Map<string,CSSProperties>();
+const STYLE_LIMIT=512;
 
 /** One inherited variable dims peers, another restores the chosen series in every layer. */
 export const seriesFocusStyle = (key: string | readonly string[]): CSSProperties => {
-  const keys=typeof key==='string'?[key]:key,values=keys.map(id=>`var(${variable(id)}, var(--chart-focus, 1))`);
-  return {'--series-focus':values.length>1?`max(${values.join(', ')})`:values[0]??'var(--chart-focus, 1)'} as CSSProperties;
+  const keys=typeof key==='string'?[key]:key,identity=JSON.stringify(keys),kept=styles.get(identity);
+  if(kept){styles.delete(identity);styles.set(identity,kept);return kept;}
+  const values=keys.map(id=>`var(${variable(id)}, var(--chart-focus, 1))`);
+  const style=Object.freeze({'--series-focus':values.length>1?`max(${values.join(', ')})`:values[0]??'var(--chart-focus, 1)'}) as CSSProperties;
+  styles.set(identity,style);if(styles.size>STYLE_LIMIT)styles.delete(styles.keys().next().value!);
+  return style;
 };
 
 /** Legend interaction changes paint only; prepared data and React consumers stay asleep. */

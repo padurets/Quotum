@@ -36,3 +36,21 @@ test('legend focus paints only its widget, respects hover/keyboard/muted state, 
   send('pointerover',b);cleanup();assert.equal(properties.size,0);assert.equal(events.size,0);
   assert.notDeepEqual(seriesFocusStyle('a:b'),seriesFocusStyle('ab'),'series variables retain identity');
 });
+
+test('focus styles reuse immutable values without encoding retained keys and keep bounded recent identities',()=>{
+  let encodings=0;
+  const context={exports:{} as {seriesFocusStyle:typeof seriesFocusStyle},require:()=>({}),Array:{from:(...args:Parameters<typeof Array.from>)=>{encodings++;return Array.from(...args);}},size:()=>0};
+  const source=readFileSync(new URL('../components/seriesFocus.ts',import.meta.url),'utf8');
+  runInNewContext(ts.transpileModule(source+'\nglobalThis.size=()=>styles.size;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const style=context.exports.seriesFocusStyle,first=style('source 😀 / window'),group=style(['source 😀 / window','other']);
+  assert.ok(Object.isFrozen(first));const count=encodings;
+  for(let i=0;i<100;i++){assert.equal(style('source 😀 / window'),first);assert.equal(style(['source 😀 / window','other']),group);}
+  assert.equal(encodings,count,'clock and gesture renders do not encode the same CSS identity again');
+  assert.equal(style(['source 😀 / window']),first,'one associated line has the same paint as that line');
+  assert.notDeepEqual(style(['a,b','c']),style(['a','b,c']),'group identities cannot collide through delimiters');
+  assert.notDeepEqual(style('😀'),style('\ud83d'),'whole codepoints and unmatched surrogates stay distinct');
+  for(let i=0;i<512;i++){style('recent-'+i);style('source 😀 / window');}
+  assert.equal(context.size(),512);assert.equal(style('source 😀 / window'),first,'a frequently used series survives the bounded recent cache');
+  assert.notEqual(style(['source 😀 / window','other']),group,'an unused old group is evicted');
+  assert.equal(context.size(),512);
+});

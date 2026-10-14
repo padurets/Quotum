@@ -1,4 +1,4 @@
-import {Fragment, memo, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
+import {Fragment, memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
 import {pointIndex, preciseReadout, type PlotBlock, type PlotLine as Line} from '../lib/lines';
@@ -574,6 +574,19 @@ export const Chart = memo(function Chart({
   }, [edgeShown]);
   const bandWidth = Math.max(1, axis.screenX(Math.min(to, (hover ?? 0) + cellMs)) - axis.screenX(hover ?? 0));
 
+  // Clock and gesture renders move the retained artwork through its owner.
+  // Only new prepared data needs to visit every series and path again.
+  const seriesArtwork=useMemo(()=>lines.map((line,i)=>(
+    <g key={line.key} className="series-focus" style={seriesFocusStyle(line.key)} data-series={`${line.sourceId} ${line.windowId}`} data-last={paths[i]?.latest} data-observation={paths[i]?.observation} stroke={line.color} strokeDasharray={line.dash||undefined}>
+      {paths[i].parts?.map(part=><path key={part.key} d={part.line} className="series"/>)??<path d={paths[i].line} className="series"/>}
+    </g>
+  )),[lines,paths]);
+  const seriesEnds=useMemo(()=>lines.map((line,i)=>paths[i].last?(
+    <g key={`${line.key}-end`} className="line-end series-focus" style={seriesFocusStyle(line.key)}>
+      <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18}/>
+      <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color}/>
+    </g>
+  ):null),[lines,paths]);
   return (
     <div className="chart" ref={box} {...handlers}>
       {to > now && (
@@ -654,11 +667,7 @@ export const Chart = memo(function Chart({
             </g>
           );
         })}
-        {lines.map((line, i) => (
-          <g key={line.key} className="series-focus" style={seriesFocusStyle(line.key)} data-series={`${line.sourceId} ${line.windowId}`} data-last={paths[i]?.latest} data-observation={paths[i]?.observation} stroke={line.color} strokeDasharray={line.dash || undefined}>
-            {paths[i].parts?.map(part => <path key={part.key} d={part.line} className="series" />) ?? <path d={paths[i].line} className="series" />}
-          </g>
-        ))}
+        {seriesArtwork}
         {/* Announcements are read over the lines, each on its own backing. */}
         {announced.map(marker => {
           const mx = x(marker.at);
@@ -667,12 +676,7 @@ export const Chart = memo(function Chart({
             <InsideLabel key={marker.key} marker={marker} x={lx} y={stackRows.get(marker.key) ?? labelY(lx,end)} end={end} room={room} fonts={fonts} compact={narrow} onEdge={panning?()=>{}:setEdge}/>
           );
         })}
-        {hover === null && lines.map((line, i) => paths[i].last ? (
-          <g key={`${line.key}-end`} className="line-end series-focus" style={seriesFocusStyle(line.key)}>
-            <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
-            <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
-          </g>
-        ) : null)}
+        {hover === null && seriesEnds}
       </PlotLayer>
       <PlotOverlay width={width} height={height}>
         <g>
