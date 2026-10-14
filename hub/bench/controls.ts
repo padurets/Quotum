@@ -35,7 +35,7 @@ export async function frequencyKeys(cdp: Cdp) {
 
 /** Each phase keeps its intended monetary selection across the page reload. */
 export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'budget'|'funds'='budget') {
-  const panel=family==='funds'?'.subscription-funds':'.budget-history';
+  const panel=family==='funds'?'[data-widget="subscription-funds"]':'[data-widget="budget-history"]';
   await cdp.evaluate(`(() => {
     const prefs = JSON.parse(localStorage.getItem('quotum.prefs') || '{}');
     prefs.${family==='funds'?'funds':'money'} = {version:1,unit: 'USD', selected: {USD: ${JSON.stringify(ids)}}};
