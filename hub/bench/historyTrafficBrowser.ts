@@ -3,7 +3,7 @@ import {PERIOD_SCOPES,type PeriodScope,type PeriodReply,type PeriodRequest} from
 import assert from 'node:assert/strict';
 import {cellStart, expandHistory, type HistoryAnswer, type HistoryBasis, type HistoryReply} from '../server/domain/history';
 import {openTab, type Browser, type Cdp} from './cdp';
-import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
+import {HISTORY_COHORT_TAKES, historyCutInvalidation, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
 import {observeReversal} from './reversalDiagnostic';
 import {writeFileSync} from 'node:fs';
@@ -197,7 +197,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
 export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProxy, cookie: string, board: string) {
   const reports = [], invalidated = [], problems: string[] = [];
   for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
-    for (let take = 1; take <= 3; take++) {
+    for (let take = 1; take <= HISTORY_COHORT_TAKES; take++) {
       const name = `browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
       const poolEvidence=process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&name==='browser/30d/activity/0ms/0.5/take1';
       const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence);
@@ -259,8 +259,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         }
         break;
       } catch (error) {
-        if (!(error instanceof HistoryCutChanged) || take === 3) throw new Error(`${name}: ${String(error)}`, {cause: error});
-        invalidated.push({name, reason: error.message, reads: bodies.reads.map(read => ({phase: read.phase, from: read.from, to: read.to, count: read.count}))});
+        invalidated.push({...historyCutInvalidation(error,name,take),reads:bodies.reads.map(read=>({phase:read.phase,from:read.from,to:read.to,count:read.count}))});
       } finally {
         if(poolEvidence)try{
           const receipt=await cdp.evaluate('window.__quotumHistoryPoolReceipt?.read()??({status:"unavailable"})');
@@ -276,72 +275,75 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
 
 /** Native cancellation/reversal keeps one Shift-wheel token while responses are owned. */
 export async function browserCancellationTraffic(browser: Browser, proxy: TrafficProxy, cookie: string,diagnostic=false,profileBeforeInput=false) {
-  const reports = [];
+  const reports = [], invalidated = [];
   for (const length of [DAY, 30 * DAY]) for (const mode of ['before-headers', 'after-delivery', 'reversal'] as const) {
     if(diagnostic&&(length!==DAY||mode!=='reversal'))continue;
-    const name = `browser/${length / DAY}d/${mode}`;
-    console.error(`bench: ${name}: opening seed page`);
-    const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, DAY);
-    let observer:Awaited<ReturnType<typeof observeReversal>>|null=null;
-    console.error(`bench: ${name}: seed page ready`);
-    const phase = `${name}/gesture`, reads = () => bodies.reads.filter(r => r.phase === phase);
-    let stage = 'start';
-    const step = async <T>(value: string, run: () => Promise<T>) => {
-      stage = value; cdp.at(`${name}/${stage}`);
-      console.error(`bench: ${name}: ${stage}`);
-      return diagnostic && observer ? observer.watch(value, run) : run();
-    };
-    const until = async (predicate: () => boolean | Promise<boolean>) => {const end = Date.now() + 10_000; while (!await predicate()) {if (bodies.errors.length) throw bodies.errors[0]; if (Date.now() > end) throw new Error(`${name}: lifecycle boundary not reached`); await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,10))');}};
-    const key = (type: string, name: string, code: number, modifiers: number) => cdp.send('Input.dispatchKeyEvent', {type, key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers});
-    const wheel = (pixels: number) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: pixels, deltaY: 0, modifiers: 8});
-    try {
-      // The canonical failing page is observed without changing V8 before input.
-      observer=mode==='reversal'?await observeReversal(cdp,browser,profileBeforeInput):null;
-      bodies.phase = phase; proxy.phase(phase, mode === 'after-delivery' ? 0 : 400);
-      await step('shift down', () => key('keyDown', 'Shift', 16, 8));
-      await step('first wheel', () => wheel(-geometry.width * .1));
-      await step('first request', () => until(() => reads()[0]?.attemptId !== undefined && proxy.transfers.some(t => t.id === reads()[0].attemptId)));
-      if (mode === 'after-delivery') await step('first delivery', () => until(() => reads()[0]?.count?.complete === true));
-      if (mode === 'reversal') {
-        await step('reverse wheel', () => wheel(geometry.width * .1));
-        await step('first cancellation', () => until(() => reads()[0]?.canceled === true));
-        await step('reversal frame', () => cdp.evaluate('new Promise(requestAnimationFrame)'));
-        await step('repeat wheel', () => !diagnostic&&observer?observer.watch('repeat wheel',()=>wheel(-geometry.width * .1)):wheel(-geometry.width * .1));
-        await step('repeat delivery', () => until(() => reads().length >= 2 && reads().slice(1).some(r => r.count?.complete)));
-        await step('shift up', () => key('keyUp', 'Shift', 16, 0));
-        await step('drawings settled', settled);
-        assert.equal(reads()[0].from, reads()[1].from); assert.equal(reads()[0].to, reads()[1].to, 'a repeated range needs a new attempt identity');
-      } else {
-        await step('escape down', () => key('keyDown', 'Escape', 27, 8));
-        await step('escape up', () => key('keyUp', 'Escape', 27, 8));
-        await step('shift up', () => key('keyUp', 'Shift', 16, 0));
-        await step('drawings settled', settled);
+    for (let take = 1; take <= HISTORY_COHORT_TAKES; take++) {
+      const name = `browser/${length / DAY}d/${mode}/take${take}`;
+      console.error(`bench: ${name}: opening seed page`);
+      const {cdp, bodies, settled, geometry, cell, seeds, close} = await historyPage(browser, proxy, cookie, name, length, DAY);
+      let observer:Awaited<ReturnType<typeof observeReversal>>|null=null;
+      console.error(`bench: ${name}: seed page ready`);
+      const phase = `${name}/gesture`, reads = () => bodies.reads.filter(r => r.phase === phase);
+      let stage = 'start';
+      const step = async <T>(value: string, run: () => Promise<T>) => {
+        stage = value; cdp.at(`${name}/${stage}`);
+        console.error(`bench: ${name}: ${stage}`);
+        return diagnostic && observer ? observer.watch(value, run) : run();
+      };
+      const until = async (predicate: () => boolean | Promise<boolean>) => {const end = Date.now() + 10_000; while (!await predicate()) {if (bodies.errors.length) throw bodies.errors[0]; if (Date.now() > end) throw new Error(`${name}: lifecycle boundary not reached`); await cdp.evaluate('new Promise(resolve=>setTimeout(resolve,10))');}};
+      const key = (type: string, name: string, code: number, modifiers: number) => cdp.send('Input.dispatchKeyEvent', {type, key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers});
+      const wheel = (pixels: number) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: pixels, deltaY: 0, modifiers: 8});
+      try {
+        // The canonical failing page is observed without changing V8 before input.
+        observer=mode==='reversal'?await observeReversal(cdp,browser,profileBeforeInput):null;
+        bodies.phase = phase; proxy.phase(phase, mode === 'after-delivery' ? 0 : 400);
+        await step('shift down', () => key('keyDown', 'Shift', 16, 8));
+        await step('first wheel', () => wheel(-geometry.width * .1));
+        await step('first request', () => until(() => reads()[0]?.attemptId !== undefined && proxy.transfers.some(t => t.id === reads()[0].attemptId)));
+        if (mode === 'after-delivery') await step('first delivery', () => until(() => reads()[0]?.count?.complete === true));
+        if (mode === 'reversal') {
+          await step('reverse wheel', () => wheel(geometry.width * .1));
+          await step('first cancellation', () => until(() => reads()[0]?.canceled === true));
+          await step('reversal frame', () => cdp.evaluate('new Promise(requestAnimationFrame)'));
+          await step('repeat wheel', () => !diagnostic&&observer?observer.watch('repeat wheel',()=>wheel(-geometry.width * .1)):wheel(-geometry.width * .1));
+          await step('repeat delivery', () => until(() => reads().length >= 2 && reads().slice(1).some(r => r.count?.complete)));
+          await step('shift up', () => key('keyUp', 'Shift', 16, 0));
+          await step('drawings settled', settled);
+          assert.equal(reads()[0].from, reads()[1].from); assert.equal(reads()[0].to, reads()[1].to, 'a repeated range needs a new attempt identity');
+        } else {
+          await step('escape down', () => key('keyDown', 'Escape', 27, 8));
+          await step('escape up', () => key('keyUp', 'Escape', 27, 8));
+          await step('shift up', () => key('keyUp', 'Shift', 16, 0));
+          await step('drawings settled', settled);
+        }
+        await step('proxy settled', () => proxy.settled(phase));
+        const attempts = reads(); assert.ok(attempts.every(r => r.count?.id));
+        const totals = bodyTotals(attempts.map(r => ({count: r.count!, transfer: transferFor(r.count!, proxy.transfers)})));
+        stableHistoryReads(bodies.resources.filter(r=>r.phase===phase), seeds, cell);
+        const state = await step('read final state', () => cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; selected: boolean; attempts: Record<string, {aborted: boolean}>}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,selected:new URLSearchParams(location.search).has("from"),attempts:__quotumHistoryAttempts})'));
+        assert.equal(state.tokens.length, 1); assert.ok(state.poses.some(p => p.end < p.origin));
+        assert.equal(state.pushes, mode === 'reversal' ? 1 : 0); assert.equal(state.selected, mode === 'reversal');
+        const aborted = attempts.filter(r => r.canceled || state.attempts[r.count!.id!]?.aborted).length;
+        assert.ok(mode === 'after-delivery' || aborted > 0, 'cancel-before-delivery must exercise abort');
+        const report = {name, attempted: attempts.length, completed: attempts.filter(r => r.count?.complete).length, failed: attempts.filter(r => !r.count?.complete && !r.canceled && !state.attempts[r.count!.id!]?.aborted).length, aborted, transportAbortedDelivered: attempts.filter(r => r.count?.complete && state.attempts[r.count!.id!]?.aborted).length, stagingDisposition: 'not-observed', ...totals, finalComplete: true, movement: {tokens: state.tokens.length, poses: state.poses.length, pushes: state.pushes}, requests: attempts.map(r => ({from: r.from, to: r.to, id: r.count!.id, canceled: r.canceled}))};
+        reports.push(report); console.error(`bench: ${name}: ${report.attempted} attempts, ${aborted} aborted, ${totals.byteVerdict} body proof`);
+        break;
+      } catch (error) {
+        console.error(`bench: ${name}: failed at ${stage}; HTTP ${JSON.stringify({active: bodies.activeCount, pending: bodies.pending.size, reads: reads().map(r => ({from: r.from, to: r.to, canceled: r.canceled, complete: r.count?.complete}))})}`);
+        cdp.at(`${name}/failure state`);
+        const state = await cdp.evaluate('({visibility:document.visibilityState,ready:document.readyState,charts:[...document.querySelectorAll(".chart>svg")].map(svg=>({...svg.dataset})),selected:new URLSearchParams(location.search).has("from")})').catch(cause => String(cause));
+        console.error(`bench: ${name}: failure state ${JSON.stringify(state)}`);
+        invalidated.push({...historyCutInvalidation(error,name,take),reads:reads().map(r=>({from:r.from,to:r.to,count:r.count}))});
+      } finally {
+        await observer?.close();
+        cdp.at(`${name}/release shift`);
+        await key('keyUp', 'Shift', 16, 0).catch(() => {}); await close();
+        console.error(`bench: ${name}: page closed`);
       }
-      await step('proxy settled', () => proxy.settled(phase));
-      const attempts = reads(); assert.ok(attempts.every(r => r.count?.id));
-      const totals = bodyTotals(attempts.map(r => ({count: r.count!, transfer: transferFor(r.count!, proxy.transfers)})));
-      stableHistoryReads(bodies.resources.filter(r=>r.phase===phase), seeds, cell);
-      const state = await step('read final state', () => cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; selected: boolean; attempts: Record<string, {aborted: boolean}>}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,selected:new URLSearchParams(location.search).has("from"),attempts:__quotumHistoryAttempts})'));
-      assert.equal(state.tokens.length, 1); assert.ok(state.poses.some(p => p.end < p.origin));
-      assert.equal(state.pushes, mode === 'reversal' ? 1 : 0); assert.equal(state.selected, mode === 'reversal');
-      const aborted = attempts.filter(r => r.canceled || state.attempts[r.count!.id!]?.aborted).length;
-      assert.ok(mode === 'after-delivery' || aborted > 0, 'cancel-before-delivery must exercise abort');
-      const report = {name, attempted: attempts.length, completed: attempts.filter(r => r.count?.complete).length, failed: attempts.filter(r => !r.count?.complete && !r.canceled && !state.attempts[r.count!.id!]?.aborted).length, aborted, transportAbortedDelivered: attempts.filter(r => r.count?.complete && state.attempts[r.count!.id!]?.aborted).length, stagingDisposition: 'not-observed', ...totals, finalComplete: true, movement: {tokens: state.tokens.length, poses: state.poses.length, pushes: state.pushes}, requests: attempts.map(r => ({from: r.from, to: r.to, id: r.count!.id, canceled: r.canceled}))};
-      reports.push(report); console.error(`bench: ${name}: ${report.attempted} attempts, ${aborted} aborted, ${totals.byteVerdict} body proof`);
-    } catch (error) {
-      console.error(`bench: ${name}: failed at ${stage}; HTTP ${JSON.stringify({active: bodies.activeCount, pending: bodies.pending.size, reads: reads().map(r => ({from: r.from, to: r.to, canceled: r.canceled, complete: r.count?.complete}))})}`);
-      cdp.at(`${name}/failure state`);
-      const state = await cdp.evaluate('({visibility:document.visibilityState,ready:document.readyState,charts:[...document.querySelectorAll(".chart>svg")].map(svg=>({...svg.dataset})),selected:new URLSearchParams(location.search).has("from")})').catch(cause => String(cause));
-      console.error(`bench: ${name}: failure state ${JSON.stringify(state)}`);
-      throw error;
-    } finally {
-      await observer?.close();
-      cdp.at(`${name}/release shift`);
-      await key('keyUp', 'Shift', 16, 0).catch(() => {}); await close();
-      console.error(`bench: ${name}: page closed`);
     }
   }
-  return reports;
+  return {reports,invalidated};
 }
 
 /** An instrumented replay diagnoses an earlier failure and never replaces its verdict. */

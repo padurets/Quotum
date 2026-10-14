@@ -3,7 +3,7 @@ import {cellStart, compose, expandHistory, targetOf, tileOf, type Chunk, type Hi
 import {followPan, HistoryStore} from '../ui/lib/history';
 import {Pan} from '../ui/lib/pan';
 import type {HistoryTile} from '../ui/lib/historyTiles';
-import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
+import {HISTORY_COHORT_TAKES, historyCutInvalidation, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_CODEC, historyBody, historyProxy, type BodyCount} from './historyProxy';
 import {browserCancellationTraffic, browserHistoryTraffic} from './historyTrafficBrowser';
 import type {Browser} from './cdp';
@@ -21,7 +21,7 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
   const proxy = await historyProxy(upstream), reports = [], invalidated = [], problems: string[] = [];
   try {
     for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
-      for (let take = 1; take <= 3; take++) {
+      for (let take = 1; take <= HISTORY_COHORT_TAKES; take++) {
         const name = `${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`, anchor = cellStart(Date.now() - 60_000, 60_000);
         let selected: {from: number; to: number} | null = {from: anchor - length, to: anchor};
         let phase = `${name}/seed`, inFlight = 0, peakFlights = 0, latest: HistoryAnswer | undefined;
@@ -117,8 +117,7 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
           console.error(`bench: ${name}: ${report.attempts} GETs, ${report.warmAttempts} warm GETs, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / referenceEncoded}`);
           break;
         } catch (error) {
-          if (!(error instanceof HistoryCutChanged) || take === 3) throw new Error(`${name}: ${String(error)}`, {cause: error});
-          invalidated.push({name, reason: error.message, attempts, bodies});
+          invalidated.push({...historyCutInvalidation(error,name,take),attempts,bodies});
         } finally {store.close(); await Promise.allSettled([...pending]);}
       }
     }
