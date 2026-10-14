@@ -85,12 +85,15 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
           gesture.finish(token); await settle();
           assert.ok(store.get().history); assert.equal(store.get().history!.range, `${selected!.from}-${selected!.to}`);
           const final = store.get().history!, meta = latest!;
-          stableHistory(meta, seed, cell);
-          assert.equal(freshOverlap, 0, 'fresh cells were read again'); assert.equal(ownershipOverlap, 0, 'conflicting tile writers'); assert.ok(peakFlights <= 2);
+          assert.equal(ownershipOverlap, 0, 'conflicting tile writers'); assert.ok(peakFlights <= 2);
           assert.ok([...requested].filter(at => !visited.has(at) && !bridges.has(at)).length <= Math.min(60, Math.ceil(length / cell / 4)), 'unvisited optional cells exceeded the buffer');
           const coldBodies = bodies.filter(b => b.phase === phase);
           await proxy.settled(phase);
           const totals = bodyTotals(coldBodies.map(({count}) => ({count, transfer: transferFor(count, proxy.transfers)})));
+          const maxAttempts = fraction === .04 ? 2 : future ? 7 : 5;
+          assert.ok(coldBodies.length <= maxAttempts, 'controlled history exceeded its request cap');
+          stableHistory(meta, seed, cell);
+          assert.equal(freshOverlap, 0, 'fresh cells were read again');
           proxy.phase(`${name}/reference`);
           let referenceDecoded = 0, referenceEncoded = 0;
           const readReference = async (from: number, to: number) => {
@@ -112,7 +115,7 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
             store.pan({token: 10, length, from: anchor - length - delta, to: Math.min(anchor, anchor - delta + DAY), direction}); await flush();
           }
           assert.equal(attempts.length, warmStart, 'warm return and repeat must start zero GETs');
-          const report = {name, attempts: attempts.filter(r => r.phase.endsWith('/cold')).length, maxAttempts: fraction === .04 ? 2 : future ? 7 : 5, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, warmAttempts: attempts.length - warmStart, bridgeCells: bridges.size, optionalUnvisitedCells: [...requested].filter(at => !visited.has(at) && !bridges.has(at)).length, peakFlights, freshOverlap, ownershipOverlap, series: final.series.length, range: final.range, requests: attempts.filter(r => r.phase.endsWith('/cold'))};
+          const report = {name, attempts: attempts.filter(r => r.phase.endsWith('/cold')).length, maxAttempts, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, warmAttempts: attempts.length - warmStart, bridgeCells: bridges.size, optionalUnvisitedCells: [...requested].filter(at => !visited.has(at) && !bridges.has(at)).length, peakFlights, freshOverlap, ownershipOverlap, series: final.series.length, range: final.range, requests: attempts.filter(r => r.phase.endsWith('/cold'))};
           reports.push(report); problems.push(...trafficProblems(report)); unsubscribe();
           console.error(`bench: ${name}: ${report.attempts} GETs, ${report.warmAttempts} warm GETs, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / referenceEncoded}`);
           break;

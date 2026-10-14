@@ -13,8 +13,11 @@ export function historyCutInvalidation(error:unknown,name:string,take:number) {
   if (!(error instanceof HistoryCutChanged) || take >= HISTORY_COHORT_TAKES) throw new Error(`${name}: ${String(error)}`, {cause:error});
   return {name,reason:error.message,...error.cut};
 }
-export function stableHistory(answer: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, cell: number) {
+export function historyIdentity(answer: Pick<HistoryAnswer, 'run' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'known'>) {
   assert.equal(answer.run, seed.run); assert.deepEqual(answer.known, seed.known);
+}
+export function stableHistory(answer: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, cell: number) {
+  historyIdentity(answer, seed);
   const answerCut=cellStart(answer.now+CLOCK_TOLERANCE_MS,cell),seedCut=cellStart(seed.now+CLOCK_TOLERANCE_MS,cell);
   if (answerCut !== seedCut) throw new HistoryCutChanged({seedNow:seed.now,answerNow:answer.now,cell,seedCut,answerCut});
 }

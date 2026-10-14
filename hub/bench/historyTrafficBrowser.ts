@@ -3,7 +3,7 @@ import {PERIOD_SCOPES,type PeriodScope,type PeriodReply,type PeriodRequest} from
 import assert from 'node:assert/strict';
 import {cellStart, expandHistory, type HistoryAnswer, type HistoryBasis, type HistoryReply} from '../server/domain/history';
 import {openTab, type Browser, type Cdp} from './cdp';
-import {HISTORY_COHORT_TAKES, historyCutInvalidation, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
+import {HISTORY_COHORT_TAKES, historyCutInvalidation, historyIdentity, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_ATTEMPT_HEADER, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
 import {observeReversal} from './reversalDiagnostic';
 import {writeFileSync} from 'node:fs';
@@ -28,7 +28,10 @@ export function historyReadSelection(url: URL) {
 export function stableHistoryReads(reads: readonly Pick<Read, 'selection' | 'answer'>[], seeds: ReadonlyMap<string, {answer: NonNullable<Read['answer']>}>, cell: number) {
   for (const read of reads) {
     const seed = seeds.get(read.selection); assert.ok(seed, 'the gesture must retain its seeded resource selection');
-    if (read.answer) stableHistory(read.answer, seed.answer, cell);
+    if (read.answer) historyIdentity(read.answer, seed.answer);
+  }
+  for (const read of reads) {
+    if (read.answer) stableHistory(read.answer, seeds.get(read.selection)!.answer, cell);
   }
 }
 
@@ -216,8 +219,11 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         assert.ok(Math.abs(pose.to - pose.poses[0].origin + (length + future) * fraction) <= 3 * (length + future) / geometry.width, 'native gesture did not move by its named fraction');
         const physical=bodies.reads.filter(read=>read.phase===phase),cold = bodies.resources.filter(read => read.phase === phase);
         await proxy.settled(phase);
-        const families = [];
-        for (const selection of new Set(cold.map(read => read.selection))) {
+        assert.ok(physical.every(read=>read.count),'every attempt needs a terminal body count');
+        const physicalTotals=bodyTotals(physical.map(read=>({count:read.count!,transfer:transferFor(read.count!,proxy.transfers)})));
+        const maxAttempts = fraction === .04 ? 2 : future ? 7 : 5;
+        // Check every resource before a changed cutoff can discard this cohort.
+        const groups = [...new Set(cold.map(read => read.selection))].map(selection => {
           const group = seeds.get(selection); assert.ok(group, 'the gesture must retain its seeded resource selection: '+JSON.stringify({selection,seeds:[...seeds.keys()]}));
           assert.equal(new URLSearchParams(selection).get('board'), board);
           const scope = new URLSearchParams(selection).get('scope'), reads = cold.filter(read => read.selection === selection);
@@ -225,21 +231,26 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
           for (const {end, origin} of pose.poses) for (let at = cellStart(end - length, cell); at < Math.ceil(Math.min(origin, end + ahead) / cell) * cell; at += cell) visited.add(at);
           // Release can commit its final coalesced input before the observer's RAF.
           for (let at = cellStart(pose.from, cell); at < Math.ceil(Math.min(pose.poses[0].origin, pose.to + ahead) / cell) * cell; at += cell) visited.add(at);
-          for (const read of reads) {
-            assert.ok(read.count, 'every attempt needs a terminal body count');
-            if (read.answer) stableHistory(read.answer, group.answer, cell);
-            for (let at = read.from; at < read.to; at += cell) {assert.ok(!group.initial.has(at), 'browser reread fresh seed data in the same selection'); requested.add(at);}
-          }
+          assert.ok(reads.every(read=>read.count),'every attempt needs a terminal body count');
           const totals = bodyTotals(reads.map(read => ({count: read.count!, transfer: transferFor(read.count!, proxy.transfers)})));
+          for (const read of reads) {
+            for (let at = read.from; at < read.to; at += cell) requested.add(at);
+          }
           const optional = [...requested].filter(at => !visited.has(at)); assert.ok(optional.length <= Math.min(60, Math.ceil(length / cell / 4)), 'browser traffic has an unbounded optional footprint');
+          assert.ok(reads.length <= maxAttempts, 'browser history exceeded its request cap');
+          return {selection, group, scope, reads, requested, optional, totals};
+        });
+        stableHistoryReads(cold, seeds, cell);
+        const families = [];
+        for (const {selection, group, scope, reads, requested, optional, totals} of groups) {
+          for (const at of requested) assert.ok(!group.initial.has(at), 'browser reread fresh seed data in the same selection');
           proxy.phase(`${name}/reference/${scope}`); let referenceDecoded = 0, referenceEncoded = 0;
           for (const [from, to] of readUnion(requested, cell)) {
             const answer = await historyBody(`${proxy.url}/api/history?${selection}&cell=${cell}&from=${from}&to=${to}`, cookie, undefined, body => {assert.ok(body.complete); referenceDecoded += body.decoded!; referenceEncoded += body.lower;}) as HistoryAnswer;
             stableHistory(answer, group.answer, cell);
           }
-          families.push({name: `${name}/${scope}`, attempts: reads.length, maxAttempts: fraction === .04 ? 2 : future ? 7 : 5, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, optionalUnvisitedCells: optional.length});
+          families.push({name: `${name}/${scope}`, attempts: reads.length, maxAttempts, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, optionalUnvisitedCells: optional.length});
         }
-        const physicalTotals=bodyTotals(physical.map(read=>({count:read.count!,transfer:transferFor(read.count!,proxy.transfers)})));
         const aggregate={name:name+'/all-accounting',attempts:physical.length,...physicalTotals,referenceDecoded:families.reduce((n,f)=>n+f.referenceDecoded,0),referenceEncoded:families.reduce((n,f)=>n+f.referenceEncoded,0),ratios:fraction===.5};
         problems.push(...trafficProblems(aggregate));reports.push(aggregate);
         console.error(`bench: ${aggregate.name}: ${JSON.stringify(aggregate)}`);
@@ -320,12 +331,13 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
         await step('proxy settled', () => proxy.settled(phase));
         const attempts = reads(); assert.ok(attempts.every(r => r.count?.id));
         const totals = bodyTotals(attempts.map(r => ({count: r.count!, transfer: transferFor(r.count!, proxy.transfers)})));
-        stableHistoryReads(bodies.resources.filter(r=>r.phase===phase), seeds, cell);
         const state = await step('read final state', () => cdp.evaluate<{tokens: string[]; poses: {end: number; origin: number}[]; pushes: number; selected: boolean; attempts: Record<string, {aborted: boolean}>}>('({tokens:__historyTraffic.tokens,poses:__historyTraffic.poses,pushes:__historyTraffic.pushes,selected:new URLSearchParams(location.search).has("from"),attempts:__quotumHistoryAttempts})'));
         assert.equal(state.tokens.length, 1); assert.ok(state.poses.some(p => p.end < p.origin));
         assert.equal(state.pushes, mode === 'reversal' ? 1 : 0); assert.equal(state.selected, mode === 'reversal');
         const aborted = attempts.filter(r => r.canceled || state.attempts[r.count!.id!]?.aborted).length;
         assert.ok(mode === 'after-delivery' || aborted > 0, 'cancel-before-delivery must exercise abort');
+        // A changed reference must not hide a failed native gesture or cancellation.
+        stableHistoryReads(bodies.resources.filter(r=>r.phase===phase), seeds, cell);
         const report = {name, attempted: attempts.length, completed: attempts.filter(r => r.count?.complete).length, failed: attempts.filter(r => !r.count?.complete && !r.canceled && !state.attempts[r.count!.id!]?.aborted).length, aborted, transportAbortedDelivered: attempts.filter(r => r.count?.complete && state.attempts[r.count!.id!]?.aborted).length, stagingDisposition: 'not-observed', ...totals, finalComplete: true, movement: {tokens: state.tokens.length, poses: state.poses.length, pushes: state.pushes}, requests: attempts.map(r => ({from: r.from, to: r.to, id: r.count!.id, canceled: r.canceled}))};
         reports.push(report); console.error(`bench: ${name}: ${report.attempted} attempts, ${aborted} aborted, ${totals.byteVerdict} body proof`);
         break;
