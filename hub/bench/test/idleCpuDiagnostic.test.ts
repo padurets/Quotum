@@ -9,6 +9,8 @@ import type {Reading} from '../probe.js';
 import {IdleCpuDiagnostic,sourceIdentity,idleEdgeProblems,originalTraceProblems,ownedClockFires,planIdleEdge,type IdleGeometry} from '../idleCpuDiagnostic.js';
 import {numericProfile,profileWindow} from '../cpuProfile.js';
 import {idleWindow,idlePhaseScript,idlePhaseProblems} from '../still.js';
+import {encodeSamples} from '../../server/domain/periodTape.js';
+import {safeEvidence} from '../evidence.js';
 
 type Saved={name:string;value:unknown;large?:boolean};
 test('manual control reports its checked out source separately from the workflow event',()=>{
@@ -39,6 +41,8 @@ class CurrentCdpFake {
   timestamp=1;
   stopCalls=0;
   traceStopCalls=0;
+  readonly responseBodies=new Map<string,string>();
+  readonly responseReads:string[]=[];
   constructor(readonly options:Options={}){}
   on<T>(name:string,listener:(value:T)=>void){const rows=this.listeners.get(name)??[];rows.push(listener as (value:unknown)=>void);this.listeners.set(name,rows);}
   off<T>(name:string,listener:(value:T)=>void){this.listeners.set(name,(this.listeners.get(name)??[]).filter(value=>value!==listener));}
@@ -59,7 +63,7 @@ class CurrentCdpFake {
       if(this.options.failTraceStop&&this.traceStopCalls++===0)throw Error('synthetic trace stop failure');
       this.emit('Tracing.tracingComplete',{});
     }
-    if(method==='Network.getResponseBody')value={body,base64Encoded:false};
+    if(method==='Network.getResponseBody'){const id=(params as {requestId:string}).requestId;this.responseReads.push(id);value={body:this.responseBodies.get(id)??body,base64Encoded:false};}
     if(method==='Debugger.enable')this.emit('Debugger.scriptParsed',{url:asset,scriptId:'11',hash:this.options.wrongHash?'0'.repeat(64):hash});
     return value as T;
   }
@@ -102,6 +106,63 @@ test('idle CPU diagnostics serialize after original counters and readout',async(
   assert.ok(cdp.commands.indexOf('Profiler.stop')>cdp.commands.indexOf('ORIGINAL.readout'));
   assert.ok(cdp.commands.indexOf('Debugger.enable')>cdp.commands.indexOf('Profiler.stop'));
   assert.ok(!cdp.commands.includes('Performance.enable'),'the original metric domain stays unchanged');
+});
+test('original period input capture keeps the latest resource replies outside the counters and excludes private fields',async()=>{
+  const cdp=new CurrentCdpFake(),saved:Saved[]=[];
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value:safeEvidence(value)}),client,true,'profile',{base:'https://example.test',fixtureStart:300_000});
+  const basis={run:'PRIVATE_CANARY',revision:'PRIVATE_CANARY',evaluatedAt:400_000,evidenceCut:300_000,range:{from:100_000,to:400_000}};
+  const samples=encodeSamples([10,20,30].map(at=>({at,used:99,resetAt:null,staleAfterMs:60_000})));
+  const section={state:'complete',basis,value:{tape:{from:10,cut:30,replaceFrom:10,cursor:'PRIVATE_CANARY',quota:[{source:'PRIVATE_CANARY',window:'PRIVATE_CANARY',samples,samplesEncoding:'delta'}],money:[]}}};
+  const initial={basis,quota:section,budget:section,funds:section,sessions:{state:'complete',basis,value:{anchor:10,cut:30,knownFrom:10,refs:[{project:'PRIVATE_CANARY'}],spans:[]}}};
+  const request=(id:string,scopes:object,origin='https://example.test',finish=true)=>{
+    cdp.responseBodies.set(id,JSON.stringify(initial));
+    cdp.emit('Network.requestWillBeSent',{requestId:id,request:{url:origin+'/api/boards/PRIVATE_CANARY/period',postData:JSON.stringify({version:1,selection:{mode:'live',periodMs:900_000},evaluatedAt:400_000,...scopes})}});
+    if(finish)cdp.emit('Network.loadingFinished',{requestId:id});
+  };
+  request('initial-private-id',{quota:{},budget:{},funds:{},sessions:{}});
+  for(let i=0;i<10;i++)request('quota-private-'+i,{quota:{}});
+  request('foreign-private-id',{quota:{}},'https://foreign.test');
+  await diagnostic.start();
+  request('during-counter-private-id',{quota:{}});
+  await diagnostic.stop({before:{Timestamp:1},after:{Timestamp:121},instrumentMs:0,seconds:120});
+  assert.deepEqual(cdp.responseReads,[]);
+  await diagnostic.captureInputs();
+  assert.deepEqual(cdp.responseReads,['quota-private-9','initial-private-id']);
+  const snapshot=result(saved,'idle-cpu-main-period-inputs');
+  assert.equal(snapshot.status,'complete');assert.equal(snapshot.fixtureStart,300_000);
+  assert.deepEqual((snapshot.rows as unknown[]).map(row=>record(row).resource),[0,1,2,3]);
+  assert.equal(record((snapshot.rows as unknown[])[3]).status,'complete');
+  assert.deepEqual(record(record((snapshot.rows as unknown[])[0]).value).quota,[{samples:3,first:10,next:20,last:30}]);
+  assert.ok(!JSON.stringify(snapshot).includes('PRIVATE_CANARY'));
+  assert.ok(!JSON.stringify(snapshot).includes('private-id'));assert.ok(!JSON.stringify(snapshot).includes('foreign.test'));
+  await diagnostic.close();
+});
+test('missing, unfinished or unreadable original inputs stay explicit and never fall back to older replies',async()=>{
+  const cdp=new CurrentCdpFake(),saved:Saved[]=[];
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,'trace',{base:'https://example.test',fixtureStart:0});
+  const event=(id:string,postData?:string)=>cdp.emit('Network.requestWillBeSent',{requestId:id,request:{url:'https://example.test/api/boards/private/period',postData}});
+  event('missing');event('old',JSON.stringify({selection:{mode:'live',periodMs:900_000},quota:{},budget:{}}));cdp.emit('Network.loadingFinished',{requestId:'old'});
+  event('unfinished',JSON.stringify({selection:{mode:'live',periodMs:900_000},quota:{}}));
+  await diagnostic.start();await diagnostic.stop({before:{Timestamp:1},after:{Timestamp:121},instrumentMs:0,seconds:120});
+  await diagnostic.captureInputs();
+  const snapshot=result(saved,'idle-cpu-main-period-inputs');assert.equal(snapshot.status,'insufficient-evidence');assert.equal(snapshot.missingInputRequests,1);
+  assert.deepEqual(cdp.responseReads,['old']);
+  assert.deepEqual(snapshot.rows,[0,1,2,3].map(resource=>({resource,status:'unavailable'})));
+  assert.ok(!JSON.stringify(snapshot).includes('console.log'));await diagnostic.close();
+});
+test('synchronous original input work cannot claim complete evidence after the existing5s deadline',async t=>{
+  const cdp=new CurrentCdpFake(),saved:Saved[]=[];
+  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,'trace',{base:'https://example.test',fixtureStart:0});
+  const basis={evaluatedAt:1,evidenceCut:1,range:{from:0,to:1}},section={state:'complete',basis,value:{tape:{from:0,cut:1,replaceFrom:0,quota:[],money:[]}}};
+  cdp.responseBodies.set('input',JSON.stringify({basis,quota:section,budget:section,funds:section,sessions:{state:'complete',basis,value:{anchor:0,knownFrom:0,refs:[],spans:[]}}}));
+  cdp.emit('Network.requestWillBeSent',{requestId:'input',request:{url:'https://example.test/api/boards/private/period',postData:JSON.stringify({selection:{mode:'live',periodMs:900_000},quota:{},budget:{},funds:{},sessions:{}})}});
+  cdp.emit('Network.loadingFinished',{requestId:'input'});
+  await diagnostic.start();await diagnostic.stop({before:{Timestamp:1},after:{Timestamp:121},instrumentMs:0,seconds:120});
+  let now=0;t.mock.method(performance,'now',()=>now);
+  const send=cdp.send.bind(cdp);
+  t.mock.method(cdp,'send',async<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>=>{const value=await send<T>(method,params,signal);if(method==='Network.getResponseBody')now=5001;return value;});
+  await diagnostic.captureInputs();assert.equal(result(saved,'idle-cpu-main-period-inputs').status,'insufficient-evidence');
+  assert.deepEqual(cdp.responseReads,['input']);await diagnostic.close();
 });
 test('idle CPU diagnostics exclude foreign and unscoped callbacks',async()=>{
   const {saved}=await capture(),timers=result(saved,'idle-cpu-timers');
