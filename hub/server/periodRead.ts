@@ -22,7 +22,7 @@ import {cellOf} from './domain/history.js';
 class PeriodChanged extends Error {}
 
 type Cursor = {identity:string;revision:number;from:number;cut:number};
-type Change = {revision:number;source:string;since:number;owner?:string};
+type Change = {revision:number;source:string;since:number;owner?:string;device?:string};
 const object=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const number=(v:unknown):v is number=>Number.isSafeInteger(v)&&(v as number)>=0;
 
@@ -33,21 +33,20 @@ export class PeriodReader {
   private revision=0;
   private workChanges:Change[]=[];
   private measurements:(Change&{scopes?:readonly HistoryScope[]})[]=[];
-  private floor=0;
+  private workFloor=0;
+  private measurementFloor=0;
   constructor(private readonly hub:Hub,private readonly history:HistoryTiles,private readonly events:Events) {}
   private append<T extends Change>(journal:T[],change:T) {
     journal.push(change);
-    // All journals share the cursor admission frontier. Evicting an older
-    // change cannot recover proof already discarded by another journal.
-    if(journal.length>2048)this.floor=Math.max(this.floor,journal.shift()!.revision);
+    if(journal.length>2048){const revision=journal.shift()!.revision;if(journal===this.workChanges)this.workFloor=Math.max(this.workFloor,revision);else this.measurementFloor=Math.max(this.measurementFloor,revision);}
   }
   touch(source:string,since:number,_scopes?:readonly HistoryScope[],work=false) {
     this.revision++;
     if(work)this.append(this.workChanges,{revision:this.revision,source,since});
     else this.append(this.measurements,{revision:this.revision,source,since,scopes:_scopes});
   }
-  touchClient(owner:string,since:number) {
-    this.revision++;this.append(this.workChanges,{revision:this.revision,source:'',owner,since});
+  touchClient(owner:string,since:number,device?:string) {
+    this.revision++;this.append(this.workChanges,{revision:this.revision,source:'',owner,device,since});
   }
   private tag(body:string){return createHmac('sha256',this.key).update(body).digest();}
   private encode(value:Cursor){const body=Buffer.from(JSON.stringify(value)).toString('base64url');return body+'.'+this.tag(body).toString('base64url');}
@@ -60,19 +59,24 @@ export class PeriodReader {
       return JSON.parse(Buffer.from(body,'base64url').toString()) as Cursor;
     }catch{return null;}
   }
-  private identity(board:string,user:string,shown=this.hub.store.shown(board,this.hub.directory.view(board).hidden)) {
+  private identity(board:string,user:string,access?:import('./domain/workAccess.js').WorkAccess,reservation?:{add(bytes:number):void;remove(bytes:number):void},authority?:string) {
     const {store}=this.hub;
-    return createHash('sha256').update(JSON.stringify([board,user,store.workKey(board,shown),store.retentionRevision,store.sources(board).map(s=>[s.id,s.budget])])).digest('base64url');
+    return createHash('sha256').update(JSON.stringify([board,user,authority??store.workKey(board,undefined,access,reservation?bytes=>reservation.add(bytes):undefined,reservation?bytes=>reservation.remove(bytes):undefined)])).digest('base64url');
   }
   private detailRequest(board:string,user:string,raw:unknown) {
     if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||typeof raw.cursor!=='string'||!Array.isArray(raw.refs)||raw.refs.length>100||raw.refs.some(ref=>typeof ref!=='string'||!/^[-_A-Za-z0-9]{8}$/.test(ref))||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','cursor','refs'].includes(k)))fail(400,'invalid_request');
     const selection=parsePeriod(raw.selection),cursor=this.decode(raw.cursor);
     if(!selection||!cursor)fail(400,'history_range_invalid');
-    const {store,directory}=this.hub,shown=store.shown(board,directory.view(board).hidden);
-    const identity=this.identity(board,user,shown);
+    const {store}=this.hub;
+    const reservation=this.history.reservation();
+    try{
+    const access=store.workAccess(board,Date.now(),bytes=>reservation.add(bytes));
+    const identity=this.identity(board,user,access,reservation);
     const range=evaluatedRange(selection,raw.evaluatedAt);
-    if(cursor.identity!==identity||cursor.revision!==this.revision||cursor.from>range.from||cursor.cut<Math.min(range.to,raw.evaluatedAt))fail(400,'history_range_invalid');
+    const changed=this.workChanges.some(c=>c.revision>cursor.revision&&c.since<cursor.cut&&(c.owner?c.device?access?.devices.get(c.device)?.owner===c.owner:[...(access?.devices.values()??[])].some(d=>d.owner===c.owner):access.sources.has(c.source)));
+    if(cursor.identity!==identity||cursor.revision<this.workFloor||cursor.revision>this.revision||changed||cursor.from>range.from||cursor.cut<Math.min(range.to,raw.evaluatedAt))fail(400,'history_range_invalid');
     return {request:{version:1 as const,selection,evaluatedAt:raw.evaluatedAt,sessions:{}},refs:new Set(raw.refs as string[])};
+    }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}finally{reservation.close();}
   }
   details(board:string,user:string,raw:unknown):string {
     const {request,refs}=this.detailRequest(board,user,raw);
@@ -118,21 +122,27 @@ export class PeriodReader {
     const evaluatedAt=Math.min(request.evaluatedAt,now),range=evaluatedRange(selection,evaluatedAt);
     if(range.from<now-config.retention.sampleDays*86_400_000||range.from>=now)fail(400,'history_range_invalid');
     const cut=Math.min(range.to,now),shown=store.shown(board,directory.view(board).hidden),owner=store.privateOwner(board);
+    const reservation=self.history.reservation();
+    try{
+    let workRange:import('./domain/period.js').PeriodRange|null=null;
+    const work:import('./store/store.js').WorkRead=request.sessions||request.quota?sharedWork(self.hub,shown,()=>workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now,board):()=>[],access=work.access;
     if(request.values?.some(id=>!shown.has(id)))fail(404,'not_found');
-    const identity=self.identity(board,user,shown);
+    const workRequested=!!(request.sessions||request.quota);
+    const identity=workRequested&&access?self.identity(board,user,access,reservation,work.authority):'';
+    const resourceKey=()=>JSON.stringify([[...store.shown(board,directory.view(board).hidden)].map(([id,s])=>[id,s.since]),request.budget||request.funds||request.values?store.sources(board).map(s=>[s.id,s.budget]):null]);
+    const capturedResources=resourceKey();
     const previous=self.decode(request.sessions?.cursor);
-    const delta=selection.mode==='live'&&!!previous&&previous.identity===identity&&previous.revision>=self.floor&&previous.revision<=revision&&range.from>=previous.from;
-    const frontier=(before:Cursor|null,changes:Change[])=>{
+    const delta=selection.mode==='live'&&!!previous&&previous.identity===identity&&previous.revision>=self.workFloor&&previous.revision<=revision&&range.from>=previous.from;
+    const frontier=(before:Cursor|null,changes:Change[],work=false)=>{
       if(!before)return {from:range.from,to:cut,coveredFrom:range.from,coveredTo:cut};
       const coveredFrom=range.from,coveredTo=Math.max(cut,before.cut);
-      const dirty=changes.filter(c=>c.revision>before.revision&&c.revision<=revision&&(c.owner?c.owner===owner:shown.has(c.source))&&c.since<coveredTo);
+      const dirty=changes.filter(c=>c.revision>before.revision&&c.revision<=revision&&(c.owner?c.device?access?.devices.get(c.device)?.owner===c.owner:[...(access?.devices.values()??[])].some(d=>d.owner===c.owner):(work?access?.sources.has(c.source):shown.has(c.source)))&&c.since<coveredTo);
       const from=Math.min(cut>before.cut?before.cut:coveredTo,...dirty.map(c=>c.since));
       return {from:Math.max(coveredFrom,from),to:coveredTo,coveredFrom,coveredTo};
     };
-    const workFrontier=frontier(delta?previous:null,self.workChanges),replaceFrom=workFrontier.from;
+    const workFrontier=frontier(delta?previous:null,self.workChanges,true),replaceFrom=workFrontier.from;
     const basis:PeriodBasis={run:self.events.epoch,revision:String(revision),evaluatedAt,evidenceCut:cut,range};
     const response:PeriodReply={basis};
-    const reservation=self.history.reservation();
     let replyBytes=0;
     const reserve=(bytes:number)=>{reservation.add(bytes);replyBytes+=bytes;};
     const release=(bytes:number)=>{reservation.remove(bytes);replyBytes-=bytes;};
@@ -160,21 +170,28 @@ export class PeriodReader {
       const changes=store.db.prepare('SELECT total_changes() AS value');
       let checkedChanges=changes.get()!.value,checkedRetention=store.retentionRevision,checkedRevision=revision;
       guard(()=>{
-        if(revision<self.floor)throw new PeriodChanged();
+        if(workRequested&&revision<self.workFloor||sources.size&&revision<self.measurementFloor)throw new PeriodChanged();
         if(changes.get()!.value!==checkedChanges||store.retentionRevision!==checkedRetention){
           if(!directory.boards(user).some(part=>part.id===board))fail(404,'board_not_found');
-          if(self.identity(board,user)!==identity||currency()!==currencyKey)throw new PeriodChanged();
+          if(workRequested&&access){
+            let bytes=0;
+            try{
+              const current=store.workAccess(board,now,size=>{reservation.add(size);bytes+=size;});
+              if(self.identity(board,user,current,reservation)!==identity)throw new PeriodChanged();
+            }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}
+            finally{reservation.remove(bytes);}
+          }
+          if(resourceKey()!==capturedResources||currency()!==currencyKey)throw new PeriodChanged();
           checkedChanges=changes.get()!.value;checkedRetention=store.retentionRevision;
         }
         if(checkedRevision!==self.revision){
           if(self.measurements.some(c=>c.revision>revision&&c.since<upper&&sources.has(c.source)&&(!c.scopes||c.scopes.some(scope=>sources.get(c.source)!.has(scope)))))throw new PeriodChanged();
-          if(workUpper&&self.workChanges.some(c=>c.revision>revision&&c.since<workUpper&&(c.owner?c.owner===owner:shown.has(c.source))))throw new PeriodChanged();
+          if(workUpper&&self.workChanges.some(c=>c.revision>revision&&c.since<workUpper&&(c.owner?c.device?access?.devices.get(c.device)?.owner===c.owner:[...(access?.devices.values()??[])].some(d=>d.owner===c.owner):access?.sources.has(c.source))))throw new PeriodChanged();
           checkedRevision=self.revision;
         }
       });
     }
-    const workRange=selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip')?fixedRange:request.sessions?{from:replaceFrom,to:workFrontier.to}:null;
-    const work=sharedWork(self.hub,shown,workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now);
+    workRange=selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip')?fixedRange:request.sessions?{from:replaceFrom,to:workFrontier.to}:null;
     function* section<T>(read:Preparation<T>):Preparation<PeriodSection<T>> {
       const before=replyBytes;
       try {return {state:'complete',basis,value:yield*read};}
@@ -201,7 +218,7 @@ export class PeriodReader {
     try {
       if(request.quota||request.sessions){
         let bytes=0;
-        try{presence=self.hub.ingest.live.presenceSnapshot(size=>{reservation.add(size);bytes+=size;},(person,source)=>person===owner||source!==null&&!!shown.get(source)?.holders.some(holder=>holder.user===person));}
+        try{work.ensureAccess?.();presence=self.hub.ingest.live.presenceSnapshot(size=>{reservation.add(size);bytes+=size;},(device,person)=>work.access?.devices.get(device)?.owner===person);}
         catch(error){reservation.remove(bytes);if(!(error instanceof HistoryLimit))throw error;presenceLimited=true;}
       }
       yield;
@@ -210,20 +227,20 @@ export class PeriodReader {
         const query=request[scope]!,json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},work,query.cells!=='skip',now);
         reserve(Buffer.byteLength(json)*2);const value=JSON.parse(json) as HistoryReply;
         if(query.evidence==='skip')return value;
-        const tapeIdentity=createHash('sha256').update(JSON.stringify([identity,scope,query.meters,query.unit,query.currency,store.currencies.registryRevision(user)])).digest('base64url');
+        const tapeIdentity=createHash('sha256').update(JSON.stringify([board,user,scope,scope==='quota'?identity:null,[...shown].map(([id,s])=>[id,s.since]),scope==='quota'?null:store.financialKey(board),query.meters,query.unit,query.currency,store.currencies.registryRevision(user)])).digest('base64url');
         const previous=self.decode(query.evidence);
-        const delta=selection.mode==='live'&&previous&&previous.identity===tapeIdentity&&previous.revision>=self.floor&&previous.revision<=revision&&range.from>=previous.from;
+        const delta=selection.mode==='live'&&previous&&previous.identity===tapeIdentity&&previous.revision>=Math.max(self.measurementFloor,scope==='quota'?self.workFloor:0)&&previous.revision<=revision&&range.from>=previous.from;
         const changes=delta?self.measurements.filter(c=>c.revision>previous.revision&&c.revision<=revision&&shown.has(c.source)&&(!c.scopes||c.scopes.includes(historyScope))):[];
         const patch=frontier(delta?previous:null,changes);
         const changed=new Set(changes.map(c=>c.source));
         const tapeShown=delta?new Map([...shown].filter(([id])=>changed.has(id))):shown;
         const cursor=self.encode({identity:tapeIdentity,revision,from:patch.coveredFrom,cut:patch.coveredTo});
         if(selection.mode==='range'){
-          const work=scope==='quota'?yield*retainedWork():null;
-          const tape=yield*temporary(()=>prepareFixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release,true,now),work,range,Number(query.cell),reserve,release));
+          const trace=scope==='quota'?yield*retainedWork():null;
+          const tape=yield*temporary(()=>prepareFixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release,true,now,work),trace,range,Number(query.cell),reserve,release));
           reserve(Buffer.byteLength(JSON.stringify(tape))*3);return {...value,tape};
         }
-        const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut,bytes=>{reservation.remove(bytes);replyBytes-=bytes;},false,now);
+        const tape=periodTape(store,board,tapeShown,user,historyScope,query,{from:patch.coveredFrom,to:patch.to},cursor,patch.from,reserve,cut,bytes=>{reservation.remove(bytes);replyBytes-=bytes;},false,now,work);
         return {...value,tape:{...tape,cut:patch.coveredTo,...(delta?{replaceTo:patch.to}:{})}};
       })());
       if(request.values)response.values=yield*section((function*(){
@@ -250,6 +267,7 @@ export class PeriodReader {
         // Optional wire sharing cannot discard a section that already fits.
         reservation.remove(replyBytes-before);replyBytes=before;return compactJSON(response);
       }
+    }finally{reservation.close();}
     }finally{reservation.close();}
   }
 }

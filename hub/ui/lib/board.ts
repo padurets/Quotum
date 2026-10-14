@@ -36,7 +36,7 @@ export type Snapshot = {
   historyStart: number;
   workAuthority?: string;
   sources: Card[];
-  ownSessions?: LiveSession[];
+  unattributedSessions?: LiveSession[];
   sessions: Record<string, LiveSession[]>;
   cadence: Record<string, Pace>;
   refresh: Record<string, Refresh>;
@@ -56,7 +56,7 @@ export type HubEvent =
   | {type: 'connections'; data: {revision: number}}
   | {type: 'lineup'; data: {sources: string[]}}
   | {type: 'card'; data: Card}
-  | {type: 'ownSessions'; data: {sessions: LiveSession[]}}
+  | {type: 'unattributedSessions'; data: {sessions: LiveSession[]}}
   | {type: 'sessions'; data: {id: string; sessions: LiveSession[]}}
   | {type: 'cadence'; data: {id: string; cadence: Pace}}
   | {type: 'refresh'; data: {id: string; refresh: Refresh}}
@@ -65,7 +65,7 @@ export type HubEvent =
   | {type:'sourceAccess';data:Record<string,SourceAccess>}
   | {type:'currencies';data:CurrencyContext}
   | {type: 'boards'; data: {boards: Board[]}}
-  | {type: 'history'; data: {sources: string[]; since: number; ownSince?: number; workAuthority?: string; changes?: import('../../server/domain/history').HistoryChange[]}}
+  | {type: 'history'; data: {sources: string[]; since: number; workSince?: number; workAuthority?: string; changes?: import('../../server/domain/history').HistoryChange[]}}
   | {type: 'resets'; data: HubResets};
 
 export type ConnectionStatus = 'connecting' | 'live' | 'polling' | 'retrying' | 'paused';
@@ -84,7 +84,7 @@ export type BoardState = {
   workAuthority?: string;
   lineup: string[];
   cards: Record<string, Card>;
-  ownSessions?: LiveSession[];
+  unattributedSessions?: LiveSession[];
   sessions: Record<string, LiveSession[]>;
   cadence: Record<string, Pace>;
   refresh: Record<string, Refresh>;
@@ -175,7 +175,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
     ),
     cards: keepEach(old?.cards, Object.fromEntries(data.sources.map(card => [card.id, card]))),
     sessions: keepEach(old?.sessions, Object.fromEntries(Object.entries(data.sessions).map(([id, sessions]) => [id, normalizedSessions(sessions)]))),
-    ownSessions: keep(old?.ownSessions, normalizedSessions(data.board.personal ? data.ownSessions ?? [] : [])),
+    unattributedSessions: keep(old?.unattributedSessions, normalizedSessions(data.unattributedSessions??[])),
     cadence: keepEach(old?.cadence, data.cadence),
     refresh: keepEach(old?.refresh, data.refresh),
     forecast: keepEach(old?.forecast, data.forecast),
@@ -240,11 +240,10 @@ function hub(state: PageState, event: HubEvent): PageState {
       });
     case 'card':
       return patch(state, board => set(board, 'cards', event.data.id, event.data));
-    case 'ownSessions':
+    case 'unattributedSessions':
       return patch(state, board => {
-        if (!board.meta.personal) return board;
-        const ownSessions = keep(board.ownSessions, normalizedSessions(event.data.sessions));
-        return ownSessions === board.ownSessions ? board : {...board, ownSessions};
+        const unattributedSessions = keep(board.unattributedSessions, normalizedSessions(event.data.sessions));
+        return unattributedSessions === board.unattributedSessions ? board : {...board, unattributedSessions};
       });
     case 'sessions':
       return patch(state, board => set(board, 'sessions', event.data.id, normalizedSessions(event.data.sessions)));
@@ -434,5 +433,5 @@ export function usePastResets(): PastResets {
   return shown ? past : NO_PAST;
 }
 
-export const useOwnSessions = () => usePage(s => s.board?.ownSessions ?? NONE);
+export const useUnattributedSessions = () => usePage(s => s.board?.unattributedSessions ?? NONE);
 export const usePersonalBoard = () => usePage(s => s.board?.meta.personal ?? false);

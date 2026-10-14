@@ -106,7 +106,9 @@ export class Cdp {
   }
 
   off<T>(method: string, listener: (params: T) => void) {
-    this.listeners.set(method, (this.listeners.get(method) ?? []).filter(value => value !== listener));
+    const remaining = (this.listeners.get(method) ?? []).filter(value => value !== listener as (params: never) => void);
+    if (remaining.length) this.listeners.set(method, remaining);
+    else this.listeners.delete(method);
   }
 
   /** The value of an expression in the page, awaited when it is a promise. */

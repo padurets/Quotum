@@ -5,7 +5,7 @@ import type {Cdp} from './cdp.js';
 type Client = {status:'available';name:string;bytes:number;sha256:string} | {status:'unavailable'};
 type Response = {requestId?:unknown;type?:unknown;response?:{url?:unknown}};
 type Parsed = {url?:unknown;hash?:unknown;scriptId?:unknown};
-type Injected = {interval:number;kind:'native-sampler';bytes:number;sourceHash:string};
+type Injected = {interval:number;kind:'native-sampler'|'idle-probe';bytes:number;sourceHash:string};
 const digest=(value:unknown):value is string=>typeof value==='string'&&/^[a-f\d]{64}$/i.test(value);
 const scriptId=(value:unknown)=>typeof value==='string'&&/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value))?Number(value):null;
 
@@ -25,15 +25,15 @@ export class ScriptBinding {
     this.received.push({requestId:event.requestId,url:event.response.url});
   };
   constructor(private readonly cdp:Pick<Cdp,'on'|'off'|'send'>,private readonly client:Client,private readonly save:(name:string,value:unknown)=>void){cdp.on('Network.responseReceived',this.response);}
-  /** Only the CPU wrapper calls this, after the original sampler evaluation succeeded. */
-  rememberInjected(interval:number,expression:string){
+  /** Binds an existing page probe only after its installation succeeds. */
+  rememberInjected(interval:number,expression:string,kind:Injected['kind']='native-sampler'){
     if(!Number.isSafeInteger(interval)||interval<1||typeof expression!=='string'){this.injectedOmitted++;return;}
     const bytes=Buffer.byteLength(expression);
     if(bytes>64*1024){this.injectedOmitted++;return;}
     const sourceHash=createHash('sha256').update(expression).digest('hex'),prior=this.injected.find(value=>value.interval===interval);
     if(prior){if(prior.sourceHash!==sourceHash)this.injectedConflicts++;return;}
     if(this.injected.length>=2){this.injectedOmitted++;return;}
-    this.injected.push({interval,kind:'native-sampler',bytes,sourceHash});
+    this.injected.push({interval,kind,bytes,sourceHash});
   }
   close(){
     this.cdp.off('Network.responseReceived',this.response);this.received=[];

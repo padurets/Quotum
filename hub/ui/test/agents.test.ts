@@ -5,7 +5,6 @@ import {
   AGENT_WIDTHS,
   NAME_WIDTH,
   agentRows,
-  agentsFit,
   agentsLayout,
   byActivity,
   columnsOf,
@@ -123,13 +122,13 @@ test('agents gather by project, machine or subscription in the order of their mo
 });
 
 test('groups show counts and work; machines and subscriptions belong to individual agents', () => {
-  assert.deepEqual(columnsOf('project'), {name: 'project', rest: ['agents', 'worked', 'activity']});
-  assert.deepEqual(columnsOf('machine'), {name: 'machine', rest: ['agents', 'worked', 'activity']});
-  assert.deepEqual(columnsOf('subscription'), {name: 'subscription', rest: ['agents', 'worked', 'activity']});
-  assert.deepEqual(columnsOf('none'), {name: 'project', rest: ['worked', 'activity', 'machine', 'subscription', 'running']});
+  assert.deepEqual(columnsOf('project'), {name: 'project', rest: ['agents', 'worked', 'active', 'concurrency', 'activity']});
+  assert.deepEqual(columnsOf('machine'), {name: 'machine', rest: ['agents', 'worked', 'active', 'concurrency', 'activity']});
+  assert.deepEqual(columnsOf('subscription'), {name: 'subscription', rest: ['agents', 'worked', 'active', 'concurrency', 'activity']});
+  assert.deepEqual(columnsOf('none'), {name: 'project', rest: ['client','worked','activity', 'machine', 'subscription', 'running']});
   assert.deepEqual(columnsOf('project', true), columnsOf('none'));
-  assert.deepEqual(columnsOf('machine', true).rest, ['worked', 'activity', 'subscription', 'running']);
-  assert.deepEqual(columnsOf('subscription', true).rest, ['worked', 'activity', 'machine', 'running']);
+  assert.deepEqual(columnsOf('machine', true).rest,['client','worked','activity', 'subscription', 'running']);
+  assert.deepEqual(columnsOf('subscription', true).rest,['client','worked','activity', 'machine', 'running']);
 });
 
 test('every column sorts in both directions and equal values keep activity order', () => {
@@ -195,34 +194,12 @@ test('layout follows the widget’s width and the owner’s columns at either si
   }
   assert.equal(agentsLayout(columnsOf('project').rest, 320), 'list');
   assert.equal(agentsLayout([], 320), 'table');
-  assert.equal(agentsLayout(columnsOf('project').rest, 700), 'table', 'the grouped overview reserves room for all ten tally marks');
+  assert.equal(agentsLayout(columnsOf('project').rest.filter(id=>!['active','concurrency'].includes(id)), 700), 'table', 'the grouped overview reserves room for its labels and all ten tally marks');
   const details = columnsOf('project', true).rest.filter(column => column !== 'running');
-  assert.equal(agentsLayout(details, 758), 'table', 'default details fit the wide dialog, without an inset list fallback');
+  assert.equal(agentsLayout(details,758),'list','the client column participates in the shared width fitting');
+  assert.equal(agentsLayout(details.filter(c=>c!=='client'),758),'table','hiding Client restores the previous width');
 });
 
-test('a list made shorter than its agents shows the most whole rows that fit, in its order, and says how many more', () => {
-  const fit = (budget: number, rows = [40, 60, 50, 30], border = 0) => agentsFit({shell: 30, rows, footer: 20, border, budget});
-  assert.deepEqual(fit(180), {shown: 2, hidden: 2, min: 90, natural: 210});
-  assert.deepEqual(fit(210), {shown: 4, hidden: 0, min: 90, natural: 210}, 'all fit: no row says more');
-  assert.equal(fit(209).shown, 3, 'a pixel short: the last row gives way to the one saying it');
-  assert.equal(fit(209.5).shown, 4, 'measured pixels are fractions: half a pixel over still fits');
-  assert.equal(fit(209.4).shown, 3);
-  assert.equal(fit(149.5).shown, 2, 'so it does for the rows over the one saying the rest');
-  assert.equal(fit(149.4).shown, 1);
-  // Rows as they stand in the list have a border under each; the last one shown alone has none.
-  assert.equal(fit(213, [41, 61, 51, 31], 1).shown, 4, 'exactly as tall as all of them without the last border');
-  assert.equal(fit(212, [41, 61, 51, 31], 1).shown, 3);
-  // A row does not stand in for a shorter one later on: the rest is said, in order.
-  assert.deepEqual(fit(150, [40, 80, 10, 10]), {shown: 1, hidden: 3, min: 90, natural: 170});
-  assert.deepEqual(fit(100, [200, 40]), {shown: 1, hidden: 1, min: 250, natural: 270}, 'a first row taller than the room: the widget grows to it');
-  assert.deepEqual(agentsFit({shell: 30, rows: [200, 40], footer: 20, border: 0, budget: 100}).min, 250);
-  assert.deepEqual(fit(10, [40]), {shown: 1, hidden: 0, min: 70, natural: 70}, 'one row is all there is to show');
-  assert.deepEqual(fit(10, []), {shown: 0, hidden: 0, min: 30, natural: 30});
-  // Two rows that need less than one and the row saying the rest: their least is all of them.
-  assert.deepEqual(fit(0, [10, 10]), {shown: 1, hidden: 1, min: 50, natural: 50});
-  assert.deepEqual(fit(50, [10, 10]).shown, 2);
-  assert.ok(fit(Infinity, Array(37).fill(64)).natural > fit(Infinity, Array(37).fill(64)).min, 'the least of a long list is not all of it');
-});
 
 
 test('unknown agent-hours propagate to groups and sort last in both directions', () => {
@@ -232,11 +209,11 @@ test('unknown agent-hours propagate to groups and sort last in both directions',
   assert.deepEqual(projects(sort(groups, 'worked', true)), ['known', 'zero', 'mixed', 'unknown']);
 });
 
-test('own client rows remain available without cards while hidden held sessions keep their filter',()=>{
+test('admitted client rows remain available independently of card hiding',()=>{
   const own={device:{id:'d',name:'Laptop'},clientId:'opencode',origin:'terminal' as const,project:'Quotum',folder:null,startedAt:0,lastWorkedAt:null,working:true,workedMs:60_000};
   const view={...EMPTY,hidden:['source:held']};
   const result=agentRows([{id:'held',provider:'codex',sessions:[own]}],view,[own]);
-  assert.equal(result.rows.length,1);assert.equal(result.rows[0].source,null);
-  const grouped=groupsOf(result.rows,'subscription');assert.equal(grouped[0].key,'unknown');
+  assert.equal(result.rows.length,2);assert.ok(result.rows.some(r=>r.source===null));
+  const grouped=groupsOf(result.rows,'subscription');assert.deepEqual(grouped.map(g=>g.key).sort(),['held','unknown']);
   assert.equal(agentRows([],view,[own]).rows.length,1);
 });

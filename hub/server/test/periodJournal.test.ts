@@ -61,13 +61,13 @@ for(const [older,newer] of orders)test(`overflow in ${older} cannot restore a cu
   const answer=h.read(before),fresh=h.read(),merged=h.merge(before,answer);
   assert.deepEqual(h.summary(merged),h.summary(fresh),'a lost journal entry must not disappear from exact accounting');
   assert.equal(answer.tape.replaceTo,undefined,'an expired tape cursor requires a complete bounded baseline');
-  assert.equal(answer.sessions.state,'complete','the same admission frontier protects the work cursor');
+  assert.equal(answer.sessions.state,newer==='measurement'?'delta':'complete','only an expired work journal retires the work cursor; quota also requires its measurement proof');
   if(newer==='measurement'){assert.equal(h.summary(merged).quota?.remainingAtEnd,10);assert.equal(h.summary(merged).quota?.consumed,80);}
   else assert.equal(h.summary(merged).work[0].ms,2*M);
 
   h.change(newer,NOW-10*M,95);
   const delta=h.read(answer),complete=h.read();assert.equal(delta.sessions.state,'delta');assert.notEqual(delta.tape.replaceTo,undefined,'a newly issued cursor remains usable');
-  assert.deepEqual(h.summary(h.merge(answer,delta)),h.summary(complete));
+  assert.deepEqual(h.summary(h.merge(merged,delta)),h.summary(complete));
 });
 
 for(const producer of ['measurement','work','private'] as const)test(`a ${producer} cursor at the retained frontier still admits all later changes`,t=>{

@@ -109,6 +109,22 @@ test('members add only their sources; an empty analytic does not expose the othe
   assert.deepEqual(h.directory.view(h.board.id).shown, ['quota-history']);
 });
 
+test('the sessions table is an owner-only explicit placement and receipt replay preserves a subsequent hide',async t=>{
+  const h=await harness();t.after(h.close);
+  assert.equal(h.directory.view(h.board.id).shown.includes('agents'),false);
+  assert.equal((await h.reserve({kind:'widget',widgetId:'agents'},h.member.id)).error,'addition_permission');
+  const receipt=await h.reserve({kind:'widget',widgetId:'agents'});
+  assert.equal((await h.call('POST','/api/additions/'+receipt.id+'/run',{})).json().state,'complete');
+  const placed=h.directory.view(h.board.id);assert.deepEqual(placed.shown,['agents']);
+  assert.equal(placed.layout.places['agents'],undefined,'the normal client arrangement materializes geometry');
+  h.directory.saveView(h.board.id,{...placed,hidden:['agents']},h.owner.id,Date.now());
+  await h.call('POST','/api/additions/'+receipt.id+'/run',{});
+  assert.ok(h.directory.view(h.board.id).hidden.includes('agents'));
+  const readd=await h.reserve({kind:'widget',widgetId:'agents'});
+  await h.call('POST','/api/additions/'+readd.id+'/run',{});
+  assert.ok(!h.directory.view(h.board.id).hidden.includes('agents'));
+});
+
 for (const first of ['codex', 'deepseek'] as const) test(`a new board waits for its first ${first} source before placing only that analytics pair`, async t => {
   const h = await harness(); t.after(h.close);
   const pair = first === 'codex' ? QUOTA_WIDGETS : BUDGET_WIDGETS;

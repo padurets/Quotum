@@ -88,8 +88,7 @@ for(const failed of [false,true])test(`removing a shared member retires work bef
     const gate=h.hold();h.remove();
     assert.equal(h.period.get().rows.length,0,'the actual producer event revokes project/folder/work immediately');assert.equal(h.period.getSource(h.source).length,0);
     assert.equal(h.period.get().value,null);assert.equal(h.period.get().loading,true);
-    await flush();const news=JSON.parse(h.frames.find(frame=>frame.type==='history')!.data);
-    assert.deepEqual(news.changes,[{source:h.source,scope:'quota',since:0,workSince:0}]);
+    await flush();assert.equal(h.frames[0].type,'snapshot');const news=JSON.parse(h.frames[0].data);assert.equal(news.workAuthority,h.store.workKey(h.board));assert.deepEqual(news.sessions[h.source]??[],[]);
     assert.ok(h.requests[0].sessions);assert.equal(h.requests[0].sessions!.cursor,undefined,'revoked evidence cannot become a delta base');
     assert.equal(h.requests.some(request=>request.budget||request.funds),false);
     const fresh=h.fresh();if(fresh.sessions?.state!=='complete')throw new Error('incomplete fresh baseline');assert.equal(workedSessions(fresh.sessions.value,fresh.basis.range,NOW).length,0);
@@ -106,18 +105,18 @@ test('a late work reply cannot restore a member after its work authority is revo
   }finally{await h.close();}
 });
 
-for(const legacy of ['scoped','unscoped','personal'] as const)test(`${legacy} zero work cutoff retires the same source IDs`,async t=>{
+for(const legacy of ['scoped','unscoped','personal','shared'] as const)test(`${legacy} zero work cutoff retires the same source IDs`,async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture(legacy==='personal');try{
-    const gate=h.hold();h.event({type:'history',data:legacy==='personal'?{sources:[],since:NOW,ownSince:0}:{sources:[h.source],since:0,...(legacy==='scoped'?{changes:[{source:h.source,scope:'quota',since:0}]}:{})}});
+    const gate=h.hold();h.event({type:'history',data:legacy==='personal'||legacy==='shared'?{sources:[],since:NOW,workSince:0}:{sources:[h.source],since:0,...(legacy==='scoped'?{changes:[{source:h.source,scope:'quota',since:0}]}:{})}});
     assert.equal(h.period.get().rows.length,0);await flush();assert.ok(h.requests[0].sessions);assert.equal(h.requests[0].sessions!.cursor,undefined);
     gate.release();await flush();assert.equal(h.period.get().rows.length,1,'fresh evidence under the current authority can return');
   }finally{await h.close();}
 });
 
-test('budget-only, inaccessible and private shared cutoffs do not retire the visible work index',async t=>{
+test('budget-only and inaccessible resource cutoffs preserve visible work',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture();try{
     const original=h.period.get().rows;
-    for(const data of [{sources:[h.source],since:0,changes:[{source:h.source,scope:'budget' as const,since:0,workSince:0}]},{sources:['foreign'],since:0,changes:[{source:'foreign',scope:'quota' as const,since:0,workSince:0}]},{sources:[],since:0,ownSince:0}]){
+    for(const data of [{sources:[h.source],since:0,changes:[{source:h.source,scope:'budget' as const,since:0,workSince:0}]},{sources:['foreign'],since:0,changes:[{source:'foreign',scope:'quota' as const,since:0,workSince:0}]}]){
       h.event({type:'history',data});await flush();assert.equal(h.period.get().rows,original);
     }
     assert.equal(h.requests.some(request=>request.sessions),false);
@@ -126,4 +125,14 @@ test('budget-only, inaccessible and private shared cutoffs do not retire the vis
     const work=h.hold();h.credit(NOW-M,NOW);h.events.flush();await flush();assert.equal(h.period.get().rows,original,'ordinary credit keeps the authorized completed roster');
     assert.ok(h.requests[0].sessions?.cursor);assert.equal(h.requests.some(request=>request.budget||request.funds),false);work.release();await flush();
   }finally{await h.close();}
+});
+
+test('an unrelated global source holder changes no actual browser work epoch, retained rows or transport demand',async t=>{
+ t.mock.method(Date,'now',()=>NOW);const h=await fixture();
+ try{
+  const outsider=h.directory.createUser('outside@example.test','Outside','x',NOW-M),key=h.store.workKey(h.board),rows=h.period.get().rows,requests=h.requests.length;
+  h.store.hold(h.source,outsider.id,NOW);h.events.flush();await flush();assert.equal(h.store.workKey(h.board),key);assert.equal(h.period.get().rows,rows);assert.equal(h.requests.length,requests,'a nonmember holding sends no work reset or analytical HTTP');
+  h.store.release(h.source,outsider.id);h.events.flush();await flush();assert.equal(h.store.workKey(h.board),key);assert.equal(h.period.get().rows,rows);assert.equal(h.requests.length,requests);
+  h.store.release(h.source,h.bob.id);h.events.flush();await flush();assert.notEqual(h.store.workKey(h.board),key,'the admitted producer owner’s holding changes its funding');assert.ok(h.requests.length>requests);
+ }finally{await h.close();}
 });

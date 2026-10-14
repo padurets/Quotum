@@ -16,6 +16,17 @@ type LineName = Pick<Win, 'kind' | 'label' | 'minutes'> & {provider: string; key
 export type PlotLine = PlotSeries & LineName;
 export type Line = HistorySeries & LineName & {pointMode?:'cell'|'observation';capCells?:readonly CapCell[]};
 
+/** First point at or after a timestamp in an ordered series. */
+export function pointIndex(points: readonly (readonly [number, ...unknown[]])[], at: number, start = 0): number {
+  let low = start, high = points.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (points[middle][0] < at) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
 const boundedPoints = new WeakMap<PlotSeries['points'], boolean>();
 /** Published points are immutable; pointer motion never rescans a native history. */
 export function preciseReadout(line: Pick<PlotSeries,'pointMode'|'capCells'|'points'>): boolean {

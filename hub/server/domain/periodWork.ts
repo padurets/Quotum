@@ -3,7 +3,7 @@ import type {Origin} from './ingest.js';
 import type {PeriodRange} from './period.js';
 
 export type WorkRef = {
-  ref:string;source:string|null;clientId?:string;device:{id:string;name:string};origin:Origin;
+  ref:string;source:string|null;sourceStatus?:'notProvided';clientId?:string;device:{id:string;name:string};origin:Origin;
   project:string|null;folder:string|null;startedAt:number;
   presenceKey?:string;
   currentPresence?:{working:boolean;through:number;workingThrough?:number;startedAt:number};
@@ -11,7 +11,7 @@ export type WorkRef = {
 /** Offsets are exact milliseconds, with one shared origin and no repeated context metadata. */
 export const WORK_BLOCK_MS=3_600_000;
 export type WorkBlocks={patterns:number[][];blocks:number[]};
-export type WorkTrace = {anchor:number;cut?:number;knownFrom:number;refs:WorkRef[];spans:[number,number,number][];packed?:WorkBlocks;fixed?:{range:PeriodRange;shift?:import('./periodShift.js').PeriodShift;totals:[number,number,number][];activity:import('./history.js').History['activity']}};
+export type WorkTrace = {anchor:number;cut?:number;knownFrom:number;available?:false;refs:WorkRef[];spans:[number,number,number][];packed?:WorkBlocks;fixed?:{range:PeriodRange;shift?:import('./periodShift.js').PeriodShift;totals:[number,number,number][];activity:import('./history.js').History['activity']}};
 export type WorkDelta = WorkTrace & {replaceFrom:number;replaceTo?:number};
 export type WorkedSession = WorkRef & {workedMs:number;lastWorkedAt:number;working:boolean};
 
@@ -117,7 +117,7 @@ export function* mergeWorkPrepared(trace:WorkTrace, delta:WorkDelta):Preparation
       const pattern:number[]=[];for(const [a,b] of yield*ordered(pairs,(a,b)=>a[0]-b[0])){if(pattern.length&&pattern.at(-1)!>=a)pattern[pattern.length-1]=Math.max(pattern.at(-1)!,b);else pattern.push(a,b);yield;}
       const key=pattern.join(','),pid=dictionary.get(key)??patterns.length;if(pid===patterns.length){dictionary.set(key,pid);patterns.push(pattern);}if(ref<0){ref=retained.length;retained.push(refs[id]);}blocks.push(ref,hour,pid);yield;
     }}
-    return {anchor,...(delta.cut!==undefined?{cut:delta.cut}:{}),knownFrom:delta.knownFrom,refs:retained,spans:[],packed:{patterns,blocks}};
+    return {anchor,...(delta.cut!==undefined?{cut:delta.cut}:{}),knownFrom:delta.knownFrom,...(delta.available===false?{available:false as const}:{}),refs:retained,spans:[],packed:{patterns,blocks}};
   }
   const spans:WorkTrace['spans']=[];
   for(const [id,a,b] of trace.spans){const from=Math.max(delta.knownFrom,a+trace.anchor),to=b+trace.anchor;if(to<=from){yield;continue;}
@@ -130,5 +130,5 @@ export function* mergeWorkPrepared(trace:WorkTrace, delta:WorkDelta):Preparation
   for(const row of sorted){const last=compact.at(-1);if(last&&last[0]===row[0]&&last[2]>=row[1])last[2]=Math.max(last[2],row[2]);else compact.push(row);yield;}
   const retained:WorkRef[]=[],remap=new Map<number,number>();
   for(const row of compact){let id=remap.get(row[0]);if(id===undefined){id=retained.length;retained.push(refs[row[0]]);remap.set(row[0],id);}row[0]=id;yield;}
-  return {anchor,...(delta.cut!==undefined?{cut:delta.cut}:{}),knownFrom:delta.knownFrom,refs:retained,spans:compact};
+  return {anchor,...(delta.cut!==undefined?{cut:delta.cut}:{}),knownFrom:delta.knownFrom,...(delta.available===false?{available:false as const}:{}),refs:retained,spans:compact};
 }

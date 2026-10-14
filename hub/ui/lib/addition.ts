@@ -50,6 +50,7 @@ export type Operation = {
   boardId: string | null;
   item: Item;
   widgetIds?: WidgetId[];
+  deviceId?:string;
   createdAt: number;
   state: 'ready' | 'verifying' | 'needs_input' | 'complete' | 'failed' | 'expired';
   current?: {

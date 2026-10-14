@@ -155,8 +155,9 @@ function harness(options: {visible?: boolean; skew?: number; script?: string | n
   };
   /** The last request answers with a stream that brings the board live: hello and snapshot. */
   const answer = async () => {
+    const board=new URL(last().url,'http://localhost').searchParams.get('board')!;
     const stream = last().stream();
-    await stream.write(frame('hello', {epoch: 'e1', now: timers.t, client: '/assets/index-a.js', heartbeatMs: HEARTBEAT}) + frame('snapshot', SNAPSHOT));
+    await stream.write(frame('hello', {epoch: 'e1', now: timers.t, client: '/assets/index-a.js', heartbeatMs: HEARTBEAT}) + frame('snapshot', {...SNAPSHOT,board:{...SNAPSHOT.board,id:board}}));
     return stream;
   };
   /** Opens the board and brings a stream live. */
@@ -1120,4 +1121,22 @@ test('a skew of ten minutes between the page and the hub opens nothing again', a
     }
     assert.equal(h.asked.length, 1, `skew ${skew}`);
   }
+});
+
+test('a live replacement snapshot leaves the handshake and first-ping deadline intact',async()=>{
+  const h=harness(),stream=await h.golive();await h.timers.advance(20*S);
+  await stream.write(frame('snapshot',{...SNAPSHOT,workAuthority:'replacement'}));
+  assert.deepEqual(h.hubEvents(),['hello','snapshot','snapshot']);
+  assert.equal(h.events.filter(e=>e.type==='connection'&&e.status==='live').length,1,'a replacement is no new connection');
+  await h.timers.advance(15*S);assert.match(h.last().url,/mode=poll$/,'replacement traffic cannot postpone the first ping');h.live.close();
+});
+
+test('snapshot adoption requires the current hello, board and stream attempt',async()=>{
+  const h=harness();h.live.open('b1');const old=h.last().stream();await old.write(frame('snapshot',SNAPSHOT));assert.deepEqual(h.hubEvents(),[]);
+  await old.write(frame('hello',{epoch:'e1',now:h.timers.t,client:null,heartbeatMs:HEARTBEAT})+frame('snapshot',{...SNAPSHOT,board:{...SNAPSHOT.board,id:'foreign'}}));assert.equal(h.connection()?.status,'connecting');
+  await old.write(frame('snapshot',SNAPSHOT));await old.write(frame('snapshot',{...SNAPSHOT,board:{...SNAPSHOT.board,id:'foreign'}}));assert.deepEqual(h.hubEvents(),['hello','snapshot']);
+  h.live.open('b2');await flush();await old.write(frame('snapshot',SNAPSHOT)).catch(()=>{});
+  const next=h.last().stream();await next.write(frame('hello',{epoch:'e2',now:h.timers.t,client:null,heartbeatMs:HEARTBEAT})+frame('snapshot',{...SNAPSHOT,board:{...SNAPSHOT.board,id:'b2'}}));
+  await old.write(frame('snapshot',SNAPSHOT)).catch(()=>{});
+  assert.deepEqual(h.events.flatMap(e=>e.type==='hub'&&e.event.type==='snapshot'?[e.event.data.board.id]:[]),['b1','b2']);assert.equal(h.connection()?.status,'live');h.live.close();
 });

@@ -14,6 +14,8 @@ import {PeriodCurves,WorkTimeline} from '../../server/domain/periodCurves';
 import type {History} from '../../server/domain/history';
 import type {WorkTrace} from '../../server/domain/periodWork';
 import {fixture,drawings,NOW,H,M} from './periodRuntimeFixture';
+import {preparationFixture} from './preparationFixture';
+import {activityEmpty,groupColors} from '../lib/activity';
 
 const require=createRequire(import.meta.url),React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
 const source=readFileSync(new URL('../components/Activity.tsx',import.meta.url),'utf8');
@@ -57,7 +59,7 @@ for(const periodName of ['1h','30d'])test(`${periodName}: PageClock updates fina
   const render=()=>readers.map(reader=>reader.render());
   const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;h.advance(now);timers.delete(next[0]);next[1].run();render();}now=at;h.advance(now);render();};
   try {
-    const before=render();assert.match(before[0],/Agents <b>1/);assert.match(before[2],/>1<\/strong>/);assert.ok(before[3]);
+    const before=render();assert.match(before[0],/Recorded sessions <b>1/);assert.match(before[2],/>1<\/strong>/);assert.ok(before[3]);
     h.requests.length=0;
     advance(to+periodMs+250);
     assert.equal(h.period.get().rows.length,0);
@@ -91,10 +93,10 @@ test('closed legend metrics follow current work while retaining the drawing and 
   const props=(available=true)=>{const current=h.period.project(history,'quota',now).activity.by.project.find((value:any)=>value.key===group.key);return {history,by:'project',groupKey:group.key,group,active:false,available,agentMs:current?.agentMs??0,activeMs:current?.activeMs??0,agents:current?.agents??0};};
   const metrics=consumer('LegendMetrics',clock,h.period,props());
   try {
-    assert.match(metrics.render(),/>Agents<\/span><strong>1<\/strong>/);
+    assert.ok(metrics.render().includes(`>${t('activity.agents')}</span><strong>1</strong>`));
     now=NOW+H;h.advance(now);
     assert.equal(h.period.get().rows.length,0);
-    assert.match(metrics.update(props()),/>Agents<\/span><strong>0<\/strong>/,'expired work cannot survive in the closed tooltip');
+    assert.ok(metrics.update(props()).includes(`>${t('activity.agents')}</span><strong>0</strong>`),'expired work cannot survive in the closed tooltip');
     assert.ok(metrics.update(props(false)).includes(t('activity.pendingRange')),'unavailable work is distinct from confirmed zero');
     assert.equal(timers,0,'closed metrics do not poll their retained drawing');
   }finally{metrics.close();d.close();await h.close();}
@@ -118,4 +120,31 @@ test('many legend groups read only their own contexts rather than every session 
     for(let i=0;i<count;i++){const key=JSON.stringify(String(i));assert.equal(activity.numbers(base,{from:0,to:90_000},'project',key).by.project[0].agents,1);activity.changesAt(90_000,H,'project',key);}
     assert.ok(reads<=count*5,`${reads} timeline reads for ${count} groups`);assert.equal(nexts,count*2);
   }finally{WorkTimeline.prototype.read=read;WorkTimeline.prototype.next=next;}
+});
+
+test('the Activity clock advances the plot without invalidating unchanged numerical consumers',async test=>{
+  test.mock.method(Date,'now',()=>NOW);const h=await fixture(),d=await drawings(h),hooks=preparationFixture();
+  let now=NOW,shown={...d.render(),presentation:0};
+  const prefs={range:'1h',activityBy:'project',muted:{}},titles={},view=h.page.get().board!.view;
+  const context:any={exports:{},require,memo:(value:any)=>value,...hooks,
+    useMemo:(read:any,deps:any[])=>{const box=hooks.useRef(null) as any;if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;},
+    useHistory:()=>shown,useHistoryPlot:()=>null,usePlot:()=>({}),useLineup:()=>[],usePersonalBoard:()=>false,useTitles:()=>titles,
+    usePrefs:()=>prefs,useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,useClock:()=>now,usePanning:()=>null,useHistoryBegins:()=>0,
+    axisNavigation:()=>({context:h.board,range:'1h'}),frameOf:()=>({from:now-H,to:now}),measuredTo:()=>now,
+    activityEmpty,groupColors,groupName:(group:any)=>group.name,mutedKey,stamp,t,useLayoutEffect:hooks.useLayoutEffect,
+    isHidden:()=>false,cardId:(id:string)=>id,quotaHistory:{},setTimeRange:()=>{},pan:{get:()=>null},
+    AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,Stacks:()=>null,LegendItem:()=>null,EMPTY_ACTIVITY:shown.history!.activity,
+  };
+  runInNewContext(compile(source.slice(source.indexOf('export const Activity ='),source.indexOf('/** How tall'))),context);
+  const find=(node:any,type:any):any=>Array.isArray(node)?node.flatMap(part=>find(part,type)):React.isValidElement(node)?[...(node.type===type?[node]:[]),...find((node.props as any).children,type)]:[];
+  const render=()=>{hooks.begin();const node=context.exports.Activity({arrange:{view}});hooks.commit();return {totals:find(node,context.Totals)[0].props,legend:find(node,context.LegendItem).map((entry:any)=>entry.props),plot:find(node,context.Stacks)[0].props};};
+  try{
+    render();hooks.finish();const before=render();assert.equal(before.legend.length,1);
+    now+=5*M;h.advance(now);shown={...shown,history:h.period.project(shown.history,'quota',now)};
+    const moved=render();assert.ok(moved.plot.to>before.plot.to,'the actual plot still advances at its grid edge');
+    for(const name of ['history','group'] as const)assert.equal(moved.legend[0][name],before.legend[0][name],`${name} cannot restart a legend formatted deadline on a drawing-only wake`);
+    assert.equal(moved.totals.history,before.totals.history,'exact totals keep their independent numerical deadline');
+    shown={...shown,history:null,drawing:null,presentation:1};const retired=render();
+    assert.equal(retired.legend.length,0);assert.equal(retired.totals.history,null,'a new authority cannot retain withdrawn numerical evidence');
+  }finally{d.close();await h.close();}
 });

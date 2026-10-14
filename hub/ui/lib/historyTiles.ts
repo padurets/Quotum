@@ -24,6 +24,7 @@ export class HistoryTile {
   private activity = new ArrayBuffer(HEAD);
   private resets: Chunk['resets'] = [];
   private grants: Chunk['grants'] = [];
+  private sourceWork:NonNullable<Chunk['activity']['sourceWork']>=[];
   private meters: MeterTile;
   private hasMeters=false;
 
@@ -35,7 +36,7 @@ export class HistoryTile {
   get to() {return this.from + TILE_CELLS * this.cell;}
 
   get bytes() {
-    return this.activity.byteLength + this.meters.bytes + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + 1024;
+    return this.activity.byteLength + this.meters.bytes + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192+this.sourceWork.length*192 + 1024;
   }
 
   /** A private COW tile keeps every published buffer untouched until response commit. */
@@ -50,7 +51,7 @@ export class HistoryTile {
     for (const group of this.groups) {copy.groups.push(group); yield;}
     for (const key in this.devices) {copy.devices[key] = this.devices[key]; yield;}
     copy.hasMeters = this.hasMeters; copy.meters = yield* this.meters.clonePrepared();
-    copy.activity = this.activity; copy.resets = this.resets; copy.grants = this.grants;
+    copy.activity = this.activity; copy.resets = this.resets; copy.grants = this.grants;copy.sourceWork=this.sourceWork;
     // Earlier chunks of this response remain owned while their replacement is copied.
     let reserved = this.bytes;
     const fits = () => {
@@ -74,6 +75,8 @@ export class HistoryTile {
     this.hasMeters ||= chunk.meterSeries!==undefined;
     yield* this.meters.mergePrepared(chunk.from,chunk.to,chunk.meterSeries??[]);
     const first = (chunk.from - this.from) / this.cell;
+    this.sourceWork=this.sourceWork.filter(([,i])=>this.from+i*this.cell<chunk.from||this.from+i*this.cell>=chunk.to);
+    for(const [source,index,active,agent] of chunk.activity.sourceWork??[]){this.sourceWork.push([source,first+index,active,agent]);yield;}
     const last = (chunk.to - this.from) / this.cell;
     for (const [key, s] of this.series) {
       const values = new Float64Array(s.values.length);
@@ -91,7 +94,7 @@ export class HistoryTile {
         this.series.set(key, (packed = {source: s.source, window: s.window, values}));
         this.seriesBytes += values.byteLength + 256;
       }
-      const since = Math.max(known.work, known.sources[s.source] ?? Infinity);
+      const since = Math.max(known.work, known.sourceWork?.[s.source]??(known.sourceWork?Infinity:known.sources[s.source]??Infinity));
       for (const v of yield* decodeCellsPrepared(s, chunk.from, this.cell, since)) {
         yield;
         const i = (v.at - this.from) / this.cell * FIELDS;
@@ -205,6 +208,7 @@ export class HistoryTile {
   *chunkPrepared(known: HistoryMeta['known'], plot = false): Preparation<Chunk> {
     const first = (this.readFrom - this.from) / this.cell;
     const chunk: Chunk = {from: this.readFrom, to: this.readTo, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
+    for(const [source,index,active,agent] of this.sourceWork){if(index>=first&&this.from+index*this.cell<this.readTo)(chunk.activity.sourceWork??=[]).push([source,index-first,active,agent]);yield;}
     for (const session of this.sessions) {chunk.activity.sessions.push([...session]); yield;}
     for (const key in this.devices) {chunk.activity.devices[key] = this.devices[key]; yield;}
     for (const row of this.resets) {if (row[2] >= this.readFrom && row[2] < this.readTo) chunk.resets.push([...row]); yield;}
@@ -232,7 +236,7 @@ export class HistoryTile {
         const end = s.ends?.[i];
         cells.push({at: this.from + i * this.cell, low: v[0], first: v[1], last: v[2], open: Number.isNaN(v[3]) ? null : v[3], gap: !!v[4], hold: v[5], spent: v[6], covered: v[7], work: [v[8], v[9], v[10]], ...(end !== undefined && !Number.isNaN(end) ? {validUntil:end} : {})});
       }
-      if (cells.length) chunk.series.push(yield* encodeCellsPrepared(s.source, s.window, this.readFrom, this.cell, Math.max(known.work, known.sources[s.source] ?? Infinity), cells));
+      if (cells.length) chunk.series.push(yield* encodeCellsPrepared(s.source, s.window, this.readFrom, this.cell, Math.max(known.work, known.sourceWork?.[s.source]??(known.sourceWork?Infinity:known.sources[s.source]??Infinity)), cells));
     }
     const rows = yield* this.activityRowsPrepared();
     for (let i = 0; i < rows.length; i++) {

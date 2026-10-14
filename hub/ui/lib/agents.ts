@@ -1,8 +1,11 @@
-import type {LiveSession, View} from './types';
-import {cardId, isHidden} from './view';
+import type {Activity, ActivityDimension, LiveSession, View} from './types';
+import {sourceKey} from '../../server/domain/workAccess';
+import {compareWorkRatio} from '../../server/domain/workRatio';
+import {clientName} from '../../server/domain/clients';
 import {sourceLabel} from './quota';
 import {duration, durationChangesAt} from './format';
 import {formatLocale, t} from '../i18n';
+import {nextTableSort,visibleTableSort,tableLayout} from './table';
 
 /** More sessions than this are counted in a card's tray instead of drawn one by one. */
 export const DRAWN = 10;
@@ -41,14 +44,24 @@ export type AgentRow = {source: AgentSource | null; session: LiveSession};
 export const DIMENSIONS = ['project', 'machine', 'subscription'] as const;
 export type Dimension = (typeof DIMENSIONS)[number];
 /** What the list gathers its agents by, each viewer for themselves: a dimension, or nothing (a row per agent). */
-export const AGENTS_BY = [...DIMENSIONS, 'none'] as const;
+export const AGENTS_BY = ['none', ...DIMENSIONS] as const;
 export type AgentsBy = (typeof AGENTS_BY)[number];
-export const AGENT_COLUMNS = [...DIMENSIONS, 'agents', 'worked', 'activity', 'running'] as const;
+export const AGENT_COLUMNS = [...DIMENSIONS,'client', 'agents', 'worked', 'active', 'concurrency', 'activity', 'running'] as const;
 export type AgentColumn = (typeof AGENT_COLUMNS)[number];
 export type AgentsSort = {column: AgentColumn; descending: boolean} | null;
 
 /** Saved preferences are untrusted: anything but a known choice gathers by project. */
 export const readAgentsBy = (value: unknown): AgentsBy => (AGENTS_BY.includes(value as AgentsBy) ? (value as AgentsBy) : 'project');
+
+export const activityDimension = (by: Dimension): ActivityDimension => by === 'machine' ? 'device' : by === 'subscription' ? 'source' : 'project';
+
+/** Union time and concurrency belong to a group, not a sum of its rows. */
+export function agentActivityValue(summary: Activity | null, by: Dimension, column: 'active' | 'concurrency', key?: string): number | null {
+  if (!summary?.known) return null;
+  const group = key === undefined ? summary : summary.by[activityDimension(by)].find(group => group.key === key);
+  if (!group) return null;
+  return column === 'active' ? group.activeMs : group.activeMs ? group.agentMs / group.activeMs : 0;
+}
 
 /**
  * Agents that share what the list gathers them by, as one row: in activity order, how
@@ -63,6 +76,8 @@ export type AgentGroup = {
   rows: AgentRow[];
   working: number;
   workedMs: number | null;
+  /** Period union time, supplied only for grouped analytics. */
+  activeMs?: number | null;
   /** When one of its agents was last seen working, the working ones aside; null when none was. */
   lastWorkedAt: number | null;
   startedAt: number;
@@ -87,31 +102,33 @@ function groupOf(key: string, name: string | null, rows: AgentRow[]): AgentGroup
  * name as its people named it (one group across people, as agent activity counts it), a
  * machine, a subscription; a group per agent when there is nothing to gather by.
  */
-export function groupsOf(rows: AgentRow[], by: AgentsBy): AgentGroup[] {
+export function groupsOf(rows: AgentRow[], by: AgentsBy, summary?: Activity | null): AgentGroup[] {
   const groups = new Map<string, {name: string | null; rows: AgentRow[]}>();
   rows.forEach((row, i) => {
     const [key, name] =
       by === 'project' ? [JSON.stringify(row.session.project), row.session.project]
       : by === 'machine' ? [row.session.device.id, row.session.device.name]
-      : by === 'subscription' ? [row.source?.id ?? 'unknown', agentSourceLabel(row.source)]
+      : by === 'subscription' ? [sourceKey({source:row.source?.id??null,sourceStatus:row.session.sourceStatus}),agentSourceLabel(row.source,row.session.sourceStatus)]
       : [row.session.ref ?? String(i), row.session.project];
     const group = groups.get(key);
     if (group) group.rows.push(row);
     else groups.set(key, {name, rows: [row]});
   });
-  return [...groups].map(([key, {name, rows}]) => groupOf(key, name, rows));
+  const activity = by === 'none' || !summary?.known ? null : new Map(summary.by[activityDimension(by)].map(group => [group.key, group.activeMs]));
+  return [...groups].map(([key, {name, rows}]) => ({...groupOf(key, name, rows), ...(by !== 'none' && summary !== undefined ? {activeMs: activity?.get(key) ?? null} : {})}));
 }
 
 /**
  * The columns of the list gathered `by` (`inGroup`: the agents of one of its groups, in a
  * dialog), before the owner hides any: the first names a row, always there; the rest
- * follow. A group tells how many agents it has, their worked time and last activity;
+ * follow. A group tells its session count, worked time, optional union time and
+ * concurrency, and last activity;
  * an agent also tells its machine and subscription, the one its group already names
  * left out, and how long it has run.
  */
 export function columnsOf(by: AgentsBy, inGroup = false): {name: Dimension; rest: AgentColumn[]} {
-  if (by === 'none' || inGroup) return {name: 'project', rest: ['worked', 'activity', ...(['machine', 'subscription'] as const).filter(column => column !== by), 'running']};
-  return {name: by, rest: ['agents', 'worked', 'activity']};
+  if (by === 'none' || inGroup) return {name: 'project', rest: ['client','worked', 'activity', ...(['machine', 'subscription'] as const).filter(column => column !== by), 'running']};
+  return {name: by, rest: ['agents', 'worked', 'active', 'concurrency', 'activity']};
 }
 
 /** Working now, idle since known work, then never seen working; newest first in each group. */
@@ -137,12 +154,10 @@ export function machinesOf(sessions: LiveSession[]): {id: string; name: string; 
 
 const rowActivity = (a: AgentRow, b: AgentRow) => byActivity(a.session, b.session) || (a.source?.id ?? '').localeCompare(b.source?.id ?? '');
 
-/** Every agent on the cards shown, by activity; when empty, whether hiding cards caused it. */
-export function agentRows(sources: AgentSource[], view: View, own: LiveSession[] = []): {rows: AgentRow[]; empty: 'none' | 'noneShown' | null} {
-  const shown = sources.filter(source => !isHidden(view, cardId(source.id)));
-  const rows: AgentRow[] = [...shown.flatMap(source => source.sessions.map(session => ({source, session}))), ...own.map(session => ({source: null, session}))].sort(rowActivity);
-  if (rows.length) return {rows, empty: null};
-  return {rows, empty: sources.some(source => source.sessions.length && !shown.includes(source)) ? 'noneShown' : 'none'};
+/** All admitted mapped and unattributed agents, in activity order. */
+export function agentRows(sources:AgentSource[],_view:View,unattributed:LiveSession[]=[]):{rows:AgentRow[];empty:'none'|'noneShown'|null} {
+  const rows=[...sources.flatMap(source=>source.sessions.map(session=>({source,session}))),...unattributed.map(session=>({source:null,session}))].sort(rowActivity);
+  return {rows,empty:rows.length?null:'none'};
 }
 
 /** Saved preferences are untrusted and can come from a different dashboard version. */
@@ -154,14 +169,11 @@ export function readAgentsSort(value: unknown): AgentsSort {
 }
 
 /** Headers cycle ascending, descending, activity. Menus use their activity row to reset. */
-export function nextAgentsSort(sort: AgentsSort, column: AgentColumn, cycle = true): AgentsSort {
-  if (sort?.column !== column) return {column, descending: false};
-  return sort.descending && cycle ? null : {column, descending: !sort.descending};
-}
+export const nextAgentsSort = (sort: AgentsSort, column: AgentColumn|null, cycle = true): AgentsSort => nextTableSort(sort,column,cycle);
 
 /** A hidden column never sorts the visible rows, but its viewer's choice is kept. */
 export const visibleAgentsSort = (sort: AgentsSort, columns: readonly AgentColumn[]): AgentsSort =>
-  sort && columns.includes(sort.column) ? sort : null;
+  visibleTableSort(sort,columns);
 
 /** How recently a group worked, the more the sooner: now while one of its agents works, else when one last did. */
 const recency = (group: AgentGroup) => (group.working&&!group.rows[0]?.session.ref ? Infinity : (group.lastWorkedAt ?? -Infinity));
@@ -181,14 +193,17 @@ export function sortedGroups(groups: AgentGroup[], sort: AgentsSort, columns: re
   const text = (a: string, b: string) => a.localeCompare(b, formatLocale());
   const name = ({rows: [row]}: AgentGroup) =>
     column === 'project' ? row.session.project ?? ''
-      : column === 'machine' ? row.session.device.name : agentSourceLabel(row.source);
+      : column === 'client'?row.session.clientId?clientName(row.session.clientId):'':column === 'machine' ? row.session.device.name : agentSourceLabel(row.source,row.session.sourceStatus);
   const nameless = (group: AgentGroup) => column === 'project' && group.name === null;
   return [...groups].sort((a, b) => {
     const activity = at.get(a)! - at.get(b)!;
     if (nameless(a) || nameless(b)) return Number(nameless(a)) - Number(nameless(b)) || activity;
     if (column === 'worked' && (a.workedMs === null || b.workedMs === null)) return Number(a.workedMs === null) - Number(b.workedMs === null) || activity;
+    if ((column === 'active' || column === 'concurrency') && (a.activeMs == null || b.activeMs == null)) return Number(a.activeMs == null) - Number(b.activeMs == null) || activity;
     const order = column === 'agents' ? a.rows.length - b.rows.length || a.working - b.working
       : column === 'worked' ? a.workedMs! - b.workedMs!
+      : column === 'active' ? a.activeMs! - b.activeMs!
+      : column === 'concurrency' ? compareWorkRatio(a.workedMs??0,a.activeMs??0,b.workedMs??0,b.activeMs??0)
       : column === 'activity' ? compare(recency(a), recency(b))
       : column === 'running' ? b.startedAt - a.startedAt
       : text(name(a), name(b));
@@ -199,34 +214,10 @@ export function sortedGroups(groups: AgentGroup[], sort: AgentsSort, columns: re
 /** The first column, whatever it names: room for a name to read. */
 export const NAME_WIDTH = 180;
 /** Room for the widest heading in either language and a readable, possibly shortened value. */
-export const AGENT_WIDTHS: Record<AgentColumn, number> = {project: 150, machine: 116, subscription: 132, agents: 160, worked: 120, activity: 210, running: 120};
+export const AGENT_WIDTHS: Record<AgentColumn, number> = {project:150,client:120,machine: 116, subscription: 132, agents: 190, worked: 120, active: 170, concurrency: 210, activity: 210, running: 120};
 /** A table where the name and the columns after it (`columns`) fit `width`, else a list. */
 export function agentsLayout(columns: readonly AgentColumn[], width: number): 'table' | 'list' {
-  return columns.reduce((sum, column) => sum + AGENT_WIDTHS[column], NAME_WIDTH) <= width ? 'table' : 'list';
+  return tableLayout(columns.map(column=>AGENT_WIDTHS[column]),width,NAME_WIDTH,0);
 }
 
-/**
- * How many of the agents a list shows in a widget of `budget` CSS pixels, in its own order:
- * all where they fit whole, otherwise the most whole rows that fit with a last row saying
- * how many more there are (`footer` high), and at least one. `rows` are the rows' heights as
- * they stand one above another, each with the border under it, which the last row shown
- * without a row after it does not have (`border`); `shell` is the rest of the widget. The
- * least the widget needs is its first row and the one saying the rest, or all of them where
- * that is less; `natural`, all of them.
- */
-export function agentsFit({shell, rows, footer, border, budget}: {shell: number; rows: number[]; footer: number; border: number; budget: number}) {
-  const natural = shell + rows.reduce((sum, row) => sum + row, 0) - (rows.length ? border : 0);
-  if (rows.length < 2) return {shown: rows.length, hidden: 0, min: natural, natural};
-  const min = Math.min(natural, shell + rows[0] + footer);
-  // Measured pixels are fractions: what fits to half a pixel fits.
-  const fits = (height: number) => height <= budget + 0.5;
-  let shown = rows.length;
-  if (!fits(natural)) {
-    shown = 1;
-    let used = shell + rows[0];
-    while (shown < rows.length - 1 && fits(used + rows[shown] + footer)) used += rows[shown++];
-  }
-  return {shown, hidden: rows.length - shown, min, natural};
-}
-
-export const agentSourceLabel = (source: AgentSource | null) => source ? sourceLabel(source) : t('agents.unknownSource');
+export const agentSourceLabel=(source:AgentSource|null,status?:'notProvided',short=false)=>source?sourceLabel(source):t(status==='notProvided'?short?'agents.notProvidedShort':'agents.notProvided':short?'agents.notIdentifiedShort':'agents.unknownSource');

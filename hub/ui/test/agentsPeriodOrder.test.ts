@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
-import {byActivity,columnsOf,groupsOf,sortedGroups,visibleAgentsSort,type AgentsSort} from '../lib/agents';
+import {activityDimension,byActivity,columnsOf,groupsOf,sortedGroups,visibleAgentsSort,type AgentsSort} from '../lib/agents';
 import {columnShown,AGENTS} from '../lib/view';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import type {WorkedSession} from '../../server/domain/periodWork';
@@ -15,8 +15,8 @@ function order(sort:AgentsSort,open=false,hidden=false,running=false){
   let select:(rows:WorkedSession[])=>unknown=()=>null;
   const done={};
   const context={exports:{} as {AgentsPanel:(props:unknown)=>unknown},memo:(f:unknown)=>f,useLocale:()=>{},useLineup:()=>['s'],useTitles:()=>({s:{title:'Source',provider:'codex'}}),
-    usePrefs:()=>({agentsSort:sort,agentsBy:'project'}),useState:()=>[open?{group:null}:null,()=>{}],useCallback:(f:unknown)=>f,
-    usePeriodSessions:(f:typeof select)=>{select=f;throw done;},columnsOf,columnShown,AGENTS,groupsOf,sortedGroups,visibleAgentsSort,byActivity,
+    usePref:(key:'agentsSort'|'agentsBy'|'range')=>({agentsSort:sort,agentsBy:'project',range:'1h'})[key],useTimeRange:()=>null,useState:()=>[open?{group:null}:null,()=>{}],useCallback:(f:unknown)=>f,
+    usePeriodSessions:(f:typeof select)=>{select=f;throw done;},columnsOf,columnShown,AGENTS,groupsOf,sortedGroups,visibleAgentsSort,byActivity,activityDimension,boardPeriod:{activitySummaryAt:()=>null},
     require:()=>({})};
   runInNewContext(ts.transpileModule(body,{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   try{context.exports.AgentsPanel({arrange:{view:{...EMPTY_VIEW,columns:hidden?{[AGENTS]:['worked']}:{},shownColumns:running?{[AGENTS]:['running']}:{}}}});}catch(error){assert.equal(error,done);}

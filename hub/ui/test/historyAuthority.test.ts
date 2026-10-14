@@ -8,13 +8,13 @@ import {harness, card, H, NOW, type Frame} from './historyAuthorityFixture';
 const quotaIds = (history: History | null) => history?.series.map(s => `${s.sourceId}/${s.windowId}`).sort() ?? [];
 const meterIds = (history: History | null) => history?.meterSeries?.map(s => `${s.sourceId}/${s.meterId}/${s.unit}`).sort() ?? [];
 
-for (const scope of ['work', 'legacy', 'personal'] as const) test(`a ${scope} zero cutoff retires the final history frame while its replacement waits`, async () => {
+for (const scope of ['work','legacy','personal','shared'] as const) test(`a ${scope} zero cutoff retires the final history frame while its replacement waits`, async () => {
   const h = harness(); try {
     const initial = await h.start();
     if (scope === 'personal') h.event({type: 'snapshot', data: {...h.snapshot(), board: {id: 'b', name: '', personal: true}}});
     h.exact(false);
-    h.event({type: 'history', data: scope === 'personal'
-      ? {sources: [], since: NOW, ownSince: 0}
+    h.event({type: 'history', data: scope==='personal'||scope==='shared'
+      ? {sources: [], since: NOW, workSince: 0}
       : {sources: ['kept'], since: 0, ...(scope === 'work' ? {changes: [{source: 'kept', scope: 'quota', since: 0, workSince: 0}]} : {})}});
     assert.ok(h.loader.get().presentation > initial.presentation);
     emptyFrame(h.render(), 'work authority changed'); await h.answerCells();
@@ -23,10 +23,10 @@ for (const scope of ['work', 'legacy', 'personal'] as const) test(`a ${scope} ze
   } finally {h.close();}
 });
 
-test('budget, foreign-source and shared private zero cutoffs leave authorized quota presentation intact', async () => {
+test('budget and inaccessible resource zero cutoffs leave authorized quota presentation intact', async () => {
   const h = harness(); try {
     const initial = await h.start();
-    for (const data of [{sources: ['kept'], since: 0, changes: [{source: 'kept', scope: 'budget' as const, since: 0}]}, {sources: ['foreign'], since: 0}, {sources: [], since: 0, ownSince: 0}]) {
+    for (const data of [{sources: ['kept'], since: 0, changes: [{source: 'kept', scope: 'budget' as const, since: 0}]}, {sources: ['foreign'], since: 0}]) {
       h.event({type: 'history', data}); assert.equal(h.render().history, initial.history); assert.equal(h.loader.get().presentation, initial.presentation);
     }
   } finally {h.close();}

@@ -2,7 +2,7 @@ import {cellOf, cellStart} from '../server/domain/history.js';
 import {createServer} from 'node:net';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
-import {realpathSync,writeFileSync} from 'node:fs';
+import {mkdirSync,realpathSync,writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {MONEY_KEY} from '../demo/money.js';
 import type {Credential} from '../server/store/credentials.js';
@@ -26,7 +26,6 @@ import {historyTraffic} from './historyTraffic.js';
 import {diagnoseReversal} from './historyTrafficBrowser.js';
 import {RunOwner} from './runOwner.js';
 import {Evidence, clientIdentity} from './evidence.js';
-import {profileInterval} from './cpuProfile.js';
 import {ScriptBinding} from './scriptBinding.js';
 import {Requests} from './requests.js';
 export {Requests} from './requests.js';
@@ -39,6 +38,7 @@ import {startupTrials} from './startupDiagnostic.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
 import {traceIdle} from './idleTiming.js';
+import {IdleCpuDiagnostic,sourceIdentity,idleGeometry,planIdleEdge,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -105,22 +105,30 @@ async function main() {
   const evidence = new Evidence();
   const panDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_PANNING;
   const idleDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE;
-  const idleCpuDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_CPU;
+  const idleCpuMode = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_CPU;
   const idleTimingDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING;
   const startupDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP;
   const startupWaitDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS;
   const poolDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
+  let idleCpu:IdleCpuDiagnostic|undefined;
+  const diagnosticDirectory=path.join('/tmp/quotum-idle-cpu-diagnostic',`${process.env.GITHUB_RUN_ID??'local'}-${process.env.GITHUB_RUN_ATTEMPT??'1'}-${process.pid}`);
+  const saveDiagnostic=(name:string,value:unknown,large=false)=>{
+    if(!/^idle-cpu-[a-z0-9-]+$/.test(name))throw Error('Invalid diagnostic artifact name');
+    const data=JSON.stringify(value),limit=large?32*1024*1024:1024*1024;
+    mkdirSync(diagnosticDirectory,{recursive:true});
+    writeFileSync(path.join(diagnosticDirectory,name+'.json'),Buffer.byteLength(data)<=limit?data:JSON.stringify({mode:'diagnostic',status:'insufficient-evidence',reason:'artifact size',bytes:Buffer.byteLength(data),limit}));
+  };
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
   try {
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
     if (startupDiagnostic && (startupDiagnostic !== '1' || options.cdp || panDiagnostic || idleDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup diagnostic mode');
-    if (startupWaitDiagnostic && (startupWaitDiagnostic !== '1' || !options.ci || process.platform !== 'linux' || options.cdp || startupDiagnostic || panDiagnostic || idleDiagnostic || idleCpuDiagnostic || idleTimingDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup wait diagnostic mode');
+    if (startupWaitDiagnostic && (startupWaitDiagnostic !== '1' || !options.ci || process.platform !== 'linux' || options.cdp || startupDiagnostic || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup wait diagnostic mode');
     if (idleDiagnostic && (idleDiagnostic !== 'double' || panDiagnostic)) throw new Stop('Unknown or conflicting idle diagnostic mode');
     if (panDiagnostic && !['pairs', 'trace', 'cpu'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
-    if (idleCpuDiagnostic && (idleCpuDiagnostic !== '1' || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
-    if (idleTimingDiagnostic && (idleTimingDiagnostic !== '1' || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleCpuDiagnostic || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle timing diagnostic mode');
-    if(poolDiagnostic&&(poolDiagnostic!=='1'||!options.ci||options.cdp||panDiagnostic||idleDiagnostic||idleCpuDiagnostic||idleTimingDiagnostic||startupDiagnostic||startupWaitDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE))throw new Stop('Unknown or conflicting history pool diagnostic mode');
+    if (idleCpuMode && (!['1','trace'].includes(idleCpuMode) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
+    if (idleTimingDiagnostic && (idleTimingDiagnostic !== '1' || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleCpuMode || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle timing diagnostic mode');
+    if(poolDiagnostic&&(poolDiagnostic!=='1'||!options.ci||options.cdp||panDiagnostic||idleDiagnostic||idleCpuMode||idleTimingDiagnostic||startupDiagnostic||startupWaitDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE))throw new Stop('Unknown or conflicting history pool diagnostic mode');
     await prepare(address);
     chrome = options.cdp ? null : findChrome(process.env);
     if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
@@ -139,9 +147,13 @@ async function main() {
   const finish = (code: number): Promise<void> => finishing ??= (async () => {
     heard?.close();
     evidence.begin('cleanup');
+    try{await idleCpu?.close();}catch{
+      code=1;owner.failures.push('Idle CPU cleanup unconfirmed');
+      try{saveDiagnostic('idle-cpu-cleanup',{mode:'diagnostic',status:'insufficient-evidence'});}catch{/* Continue owned browser cleanup if receipt writing fails. */}
+    }
     try {await owner.close();} catch (error) {code = 1; say(String(error));}
     try {await demo.stop();} catch {code = 1; say('demo cleanup failed');}
-    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic || idleDiagnostic || idleCpuDiagnostic || idleTimingDiagnostic || startupDiagnostic || startupWaitDiagnostic || poolDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
+    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || startupDiagnostic || startupWaitDiagnostic || poolDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
     process.exit(code);
   })();
   const set = panningSet(SETS[0]);
@@ -189,16 +201,27 @@ async function main() {
     }
     tab = await openTab(browser);
     const {cdp} = tab;
-    const idleBinding = idleCpuDiagnostic || idleTimingDiagnostic ? new ScriptBinding(cdp, clientIdentity(), (name, value) => evidence.save(name, value)) : undefined;
+    const idleBinding = idleTimingDiagnostic ? new ScriptBinding(cdp, clientIdentity(), (name, value) => evidence.save(name, value)) : undefined;
     if (idleBinding) owner.resource(async () => idleBinding.close());
     const requests = new Requests(cdp);
     await cdp.send('Page.enable');
     await cdp.send('Network.enable');
     await cdp.send('Performance.enable');
+    if(idleCpuMode){
+      idleCpu=new IdleCpuDiagnostic(cdp,saveDiagnostic,clientIdentity(),!options.cdp,idleCpuMode==='trace'?'trace':'profile');
+      saveDiagnostic('idle-cpu-source',sourceIdentity());
+    }
     await cdp.send('Emulation.setFocusEmulationEnabled', {enabled: true});
     const split = ana.cookie.indexOf('=');
     await cdp.send('Network.setCookie', {name: ana.cookie.slice(0, split), value: ana.cookie.slice(split + 1), url: address.base, httpOnly: true, sameSite: 'Lax'});
-    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: `localStorage.setItem('quotum.locale','en');\n${probeScript()}`});
+    // Historical work leaves the rolling window even with every agent idle.
+    // Name order keeps this phase still; clock-driven numeric crossings have
+    // their own subscribed-selector tests, including equal displayed labels.
+    const bootstrapSource=`localStorage.setItem('quotum.locale','en');
+      localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),agentsSort:{column:'project',descending:false}}));
+      ${probeScript()}`;
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source:bootstrapSource});
+    idleCpu?.binding.rememberInjected(1,bootstrapSource,'idle-probe');
     await cdp.send('Page.navigate', {url: `${address.base}/`});
 
     const shownBy = Date.now() + SHOWN_MS;
@@ -236,11 +259,18 @@ async function main() {
     await sleep(warm - Date.now());
     if (heard.counts().history) throw new Stop('The stand credited agent work during warmup; its agents must be idle.');
 
+    let edgePlan:IdleEdgePlan|undefined,geometryBefore:IdleGeometry|undefined;
     const cellMs = cellOf(86_400_000);
-    const planned = idleWindow(Date.now(), seconds, cellMs);
+    if(idleCpuMode==='1')edgePlan=planIdleEdge(Date.now(),seconds,cellMs);
+    const planned = edgePlan?{...edgePlan,expectedTransitions:1}:idleWindow(Date.now(), seconds, cellMs);
     evidence.save('idle-plan', planned);
     say(`waiting ${Math.round((planned.from-Date.now())/1000)} s to include one real chart-cell transition`);
     await sleep(planned.from-Date.now());
+    if(edgePlan){
+      saveDiagnostic('idle-cpu-plan',{mode:'diagnostic',kind:'Temporally aligned diagnostic only; no canonical benchmark timing change.',...edgePlan});
+      geometryBefore=await idleGeometry(cdp);
+    }
+    if(idleCpu)await idleCpu.start();
     const from = Date.now();
     const to = from + seconds * 1000;
     const moving = stillProblems(await overview(), from, to);
@@ -255,9 +285,11 @@ async function main() {
     let originalIdleTimingProblems: string[] | undefined;
     const readIdle = async () => {
       const before = await metrics(cdp);
+      const counterFrom=idleCpu?Date.now():null;
       const firstReading = await cdp.evaluate<Reading>('__quotumBench.read()');
       await sleep(to - Date.now());
       const lastReading = await cdp.evaluate<Reading>('__quotumBench.read()');
+      const counterTo=idleCpu?Date.now():null;
       const after = await metrics(cdp);
       requests.counting = false;
       const events = heard!.counts();
@@ -271,22 +303,28 @@ async function main() {
       const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
       const idle = {from, to, cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
       evidence.save('idle', {...idle, planned, phase, actualSeconds, phaseProblems});
-      if (idleTimingDiagnostic) {
+      if (idleTimingDiagnostic || idleCpu) {
         originalIdleTimingProblems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
-        evidence.save('idle-timing-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
+        evidence.save(idleCpu?'idle-cpu-result':'idle-timing-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
       }
-      return {idle, phaseProblems, actualSeconds, events, reading, phase, before, after, scriptMsPerSecond};
+      if(idleCpu)saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='trace'?'Original CI idle protocol; no CPU sampling, tracing overhead is unqualified.':'Temporally aligned natural edge using the unchanged120s CI idle protocol; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,reading,problems:originalIdleTimingProblems}});
+      return {idle, phaseProblems, actualSeconds, events, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo};
     };
-    const {idle, phaseProblems, actualSeconds, events, reading, phase, before, after, scriptMsPerSecond} = idleCpuDiagnostic
-      ? await profileInterval(cdp, browser, readIdle, {
-        save: (name, value) => evidence.save('idle-cpu-' + name, value),
-        saveTrace: (name, value) => evidence.saveTrace('idle-cpu-' + name, value),
-      }, 2000)
-      : idleTimingDiagnostic ? await traceIdle(cdp, browser, readIdle, evidence) : await readIdle();
-    if (idleCpuDiagnostic || idleTimingDiagnostic) {
+    const {idle, phaseProblems, actualSeconds, events, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo} = idleTimingDiagnostic ? await traceIdle(cdp, browser, readIdle, evidence) : await readIdle();
+    if(idleCpu){
+      const diagnosticProblems=originalIdleTimingProblems!;
+      const geometryAfter=idleCpuMode==='1'?await idleGeometry(cdp):undefined;
+      const window={before,after,instrumentMs:reading.instrumentMs,seconds};
+      await idleCpu.stop(window);
+      await idleCpu.bindAndClose();
+      const edge=idleCpuMode==='trace'?idleCpu.traceReceipt(from,to,cellMs,window,reading):idleCpu.edgeReceipt(edgePlan!,from,to,counterFrom!,counterTo!,geometryBefore!,geometryAfter!,window);
+      say(`diagnostic only: ${idleCpuMode==='trace'?'original idle trace':'aligned natural edge'} ${edge.status}; observer overhead is unqualified`);
+      await finish(diagnosticProblems.length||edge.status!=='complete'?1:0);return;
+    }
+    if (idleTimingDiagnostic) {
       if (idleBinding) await idleBinding.afterFamily([1]);
       const problems = originalIdleTimingProblems ?? [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
-      evidence.save(idleTimingDiagnostic ? 'idle-timing-result' : 'idle-cpu-result', {mode: 'diagnostic', problems: problems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
+      evidence.save('idle-timing-result', {mode: 'diagnostic', problems: problems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
       say('original history matrix and CI idle interval captured; observer overhead is unqualified');
       await finish(problems.length ? 1 : 0); return;
     }
@@ -508,7 +546,8 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
       const value=String(BigInt(amount)*40_000n);
       let chart:number|null=null,changed:number|null=null;
       while(Date.now()<sent+SHOWN_WITHIN&&(chart===null||!heartbeat&&changed===null)) {
-        chart=await cdp.evaluate<number|null>(`__quotumBench.seriesChanged(${JSON.stringify(source+' balance:credits')},${JSON.stringify(at+':'+value)})`);
+        const last=`observation:${at}:${value}`;
+        chart=await cdp.evaluate<number|null>(`__quotumBench.seriesChanged(${JSON.stringify(source+' balance:credits')},${JSON.stringify(last)})`);
         changed=await cdp.evaluate<number|null>(`__quotumBench.moneyChanged(${JSON.stringify(source)},${JSON.stringify(value)})`);
         if(chart===null||!heartbeat&&changed===null)await sleep(20);
       }

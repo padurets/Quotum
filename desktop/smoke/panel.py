@@ -1,7 +1,6 @@
 """Native popup lifecycle, on tray.sh's private bus and an isolated Xvfb display."""
 import ctypes as C
 import inspect
-from pathlib import Path
 import re
 import subprocess
 import time
@@ -195,8 +194,18 @@ def check_panel(bus, item, child, root, env, evidence):
         open_main()
         pid = wait(engine)
         board = wait(lambda: next((w for w in visible(pid) if not w.override), None))
+        # Mapping can precede the initial show/focus completing. Resume must test
+        # the queued newer requests after the original main already owned focus.
+        initial_focus = wait(lambda: focused_inside(board.id))
         x.XSelectInput(display, board.id, 1 << 21)  # FocusChangeMask
-        with paused(identity(pid), controller, evidence.record):
+        paused_engine = identity(pid)
+        with paused(paused_engine, controller, evidence.record):
+            def stopped_engine():
+                current = identity(pid)
+                return current and current['birth'] == paused_engine['birth'] and current['state'] == 'T'
+            stopped = wait(stopped_engine)
+            print({'mainPanelHandoff': {'engine': pid, 'main': board.id,
+                                       'initialMainFocus': int(initial_focus), 'stopAcknowledged': int(stopped)}}, flush=True)
             open_main()
             activate()
             loader = wait(lambda: visible(child.pid))

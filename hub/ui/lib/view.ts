@@ -34,10 +34,11 @@ export const withHidden = (view: View, id: string, hidden: boolean): View => ({
 
 /**
  * Columns off until the owner turns them on: how long each agent has run, which tells less
- * than when it last worked and how long it worked; the table's share of spending during work, which does not fit a widget as wide as
+ * than when it last worked and how long it worked; grouped union time and concurrency,
+ * which add detail without changing existing layouts; the table's share of spending during work, which does not fit a widget as wide as
  * the board beside the rest, nor do agent-hours (see FORECAST_WIDTHS).
  */
-const OFF_BY_DEFAULT_COLUMNS: Record<string, string[]> = {[AGENTS]: ['running'], [QUOTA_TABLE]: ['during', 'agenthours']};
+const OFF_BY_DEFAULT_COLUMNS: Record<string, string[]> = {[AGENTS]: ['running', 'active', 'concurrency'], [QUOTA_TABLE]: ['during', 'agenthours']};
 const columnOffByDefault = (widget: string, column: string) => OFF_BY_DEFAULT_COLUMNS[widget]?.includes(column) ?? false;
 
 /** Whether a column of a widget's table is shown. */

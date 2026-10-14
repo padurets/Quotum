@@ -46,7 +46,7 @@ function setup() {
   return {store, directory, owner, other, board, otherBoard, shared, ingest, credential};
 }
 
-test('unknown and known unheld work survives privately; ownership gates live, history and inventory', t => {
+test('unknown and unheld work is admitted by device while ownership protects source disclosure and inventory', t => {
   const h = setup(); t.after(() => h.store.close());
   const foreign = h.store.source('codex', 'f'.repeat(24), at); h.store.hold(foreign, h.other.id, at);
   h.store.db.prepare('INSERT INTO members VALUES (?,?,?,?)').run(h.shared,h.other.id,'member',at);
@@ -54,9 +54,9 @@ test('unknown and known unheld work survives privately; ownership gates live, hi
   const packet = {...report, sessions: [], clientSessions: [session, {...session, clientId: 'codex', sessionId: 'c'.repeat(32), source: {provider: 'codex', account: 'f'.repeat(24)}}]};
   assert.equal(h.ingest.sessions(h.credential, packet, at).accepted, 2);
   const device = h.directory.devices(h.owner.id)[0].id;
-  assert.equal(h.ingest.live.own(h.owner.id, h.board, at).length, 2);
-  assert.equal(h.ingest.live.own(h.owner.id, h.shared, at).length, 0);
-  assert.equal(h.ingest.live.own(h.other.id, h.board, at).length, 0);
+  assert.equal(h.ingest.live.board(h.store.workAccess(h.board,at),at).unattributedSessions.length, 2);
+  assert.equal(h.ingest.live.board(h.store.workAccess(h.shared,at),at).unattributedSessions.length, 2);
+  assert.equal(h.ingest.live.board(h.store.workAccess(h.otherBoard,at),at).unattributedSessions.length, 0);
   assert.equal(h.ingest.live.working(foreign, at), false);
   assert.deepEqual(h.ingest.live.of(foreign, [h.owner.id], at), []);
   assert.deepEqual(h.ingest.live.deviceSessions(h.other.id, device, at), []);
@@ -67,17 +67,18 @@ test('unknown and known unheld work survives privately; ownership gates live, hi
   const history = readHistory(h.store, h.board, at, 60_000, {to: at+60_000});
   assert.equal(history.activity.agentMs, 120_000); assert.equal(history.activity.activeMs, 60_000);
   assert.deepEqual(history.activity.by.source.map(s => s.key), ['unknown']);
-  for (const board of [h.shared, h.otherBoard]) assert.equal(readHistory(h.store, board, at, 60_000, {to: at+60_000}).activity.agentMs, 0);
+  assert.equal(readHistory(h.store,h.shared,at,60_000,{to:at+60_000}).activity.agentMs,120_000);
+  assert.equal(readHistory(h.store,h.otherBoard,at,60_000,{to:at+60_000}).activity.agentMs,0);
   h.store.hold(foreign, h.owner.id, at+60_000);
-  assert.equal(h.ingest.live.own(h.owner.id, h.board, at+60_000).length, 1);
+  assert.equal(h.ingest.live.board(h.store.workAccess(h.board,at+60_000),at+60_000).unattributedSessions.length, 1);
   const shown = h.store.shown(h.board, [`source:${foreign}`]);
-  assert.equal(readHistory(h.store, h.board, at, 60_000, {to: at+60_000, shown}).activity.agentMs, 60_000, 'held hidden cards keep their existing work filter');
+  assert.equal(readHistory(h.store, h.board, at, 60_000, {to: at+60_000, shown}).activity.agentMs,120_000,'hiding preserves every device-admitted context');
   h.ingest.sessions(h.credential, {...packet, clients: undefined, clientSessions: [], sentAt: iso(at+60_000)}, at+60_000);
   assert.equal(h.directory.deviceClients(device).length, 1, 'older agents preserve inventory');
-  assert.equal(h.ingest.live.own(h.owner.id, h.board, at+60_000).length, 0, 'full-list replacement clears private presence');
+  assert.equal(h.ingest.live.board(h.store.workAccess(h.board,at+60_000),at+60_000).unattributedSessions.length, 0, 'full-list replacement clears admitted presence');
 });
 
-test('private events coalesce across subscribers and closed history tiles invalidate without watchers', t => {
+test('source-free work events coalesce across subscribers and closed history tiles invalidate without watchers', t => {
   const h = setup(), clock = {now: () => at+60_000, after: (_ms: number, _run: () => void) => () => {}};
   const events = new Events({store: h.store, directory: h.directory, ingest: h.ingest, resets: new ResetFeed(undefined, () => {})}, undefined, clock);
   events.attach(); const tiles = new HistoryTiles(h.store); events.onClientHistory = (user, since) => tiles.touchClient(user, since);
@@ -92,9 +93,9 @@ test('private events coalesce across subscribers and closed history tiles invali
   h.ingest.sessions(h.credential, {...report, sessions: [], clientSessions: [{...session, working: false}], sentAt: iso(at+120_000)}, at+120_000);
   events.flush();
   assert.deepEqual(frames[0],frames[1]); assert.equal(frames[0].filter(f=>f.type==='history').length,1);
-  assert.equal(JSON.parse(frames[0].find(f=>f.type==='history')!.data).ownSince,at+60_000);
-  assert.ok(frames[0].some(f=>f.type==='ownSessions'));
-  assert.ok(!frames[2].some(f=>f.type==='ownSessions'||f.type==='history'));
+  assert.equal(JSON.parse(frames[0].find(f=>f.type==='history')!.data).workSince,at+60_000);
+  assert.ok(frames[0].some(f=>f.type==='unattributedSessions'));
+  assert.ok(frames[2].some(f=>f.type==='unattributedSessions'));assert.equal(JSON.parse(frames[2].find(f=>f.type==='history')!.data).workSince,at+60_000);
 });
 
 test('a new private project keeps closed tiles warm and board rechecks incremental; renames refresh history', t => {
@@ -120,7 +121,7 @@ test('a new private project keeps closed tiles warm and board rechecks increment
   const privateKey = {client: 'opencode', source: null, origin: 'terminal' as const, startedAt: at+2*hour, project: 'New private project', folder: '', identity: {kind: 'stable' as const, sessionId: 'e'.repeat(32)}};
   h.store.creditWork(device, at+2*hour, at+2*hour+15_000, [privateKey]);
   events.flush();
-  assert.equal(JSON.parse(frames.find(f => f.type === 'history')!.data).ownSince, at+2*hour);
+  assert.equal(JSON.parse(frames.find(f => f.type === 'history')!.data).workSince, at+2*hour);
   assert.equal(h.store.workKey(h.board, shown), before, 'a new reported project is data, not a name change');
   read(); assert.equal(reads, 1, 'credit after a closed tile does not recount its quota or work');
   frames.splice(0);
@@ -130,10 +131,10 @@ test('a new private project keeps closed tiles warm and board rechecks increment
   h.store.nameProjects(h.owner.id, ['New private project'], 'Renamed project');
   events.flush();
   assert.notEqual(h.store.workKey(h.board, shown), before);
-  assert.equal(JSON.parse(frames.find(f => f.type === 'history')!.data).ownSince, 0);
+  assert.deepEqual(frames.map(f=>f.type),['snapshot']);assert.equal(JSON.parse(frames[0].data).workAuthority,h.store.workKey(h.board));
   frames.splice(0);
   h.directory.renameDevice(h.owner.id, device, 'Renamed laptop'); events.flush();
-  assert.equal(JSON.parse(frames.find(f => f.type === 'history')!.data).ownSince, 0);
+  assert.deepEqual(frames.map(f=>f.type),['snapshot']);assert.equal(JSON.parse(frames[0].data).workAuthority,h.store.workKey(h.board));
   assert.equal(JSON.parse(read()[0]).activity.devices[device], 'Renamed laptop');
 });
 
@@ -146,7 +147,7 @@ test('evidence strengthens without splitting work and equal-strength conflict lo
   assert.deepEqual(mergeEvidence(conflict,first),conflict);
 });
 
-test('private known-unheld work and names leave shared history dependencies and closed tiles unchanged', t => {
+test('admitted unheld work keeps funding private and refreshes names under its shared device authority', t => {
   const h=setup(),hour=60*60_000;let now=at+3*hour;
   h.store.db.prepare('INSERT INTO members VALUES (?,?,?,?)').run(h.shared,h.other.id,'member',at);
   const owned=h.store.source('claude','a'.repeat(24),at),foreign=h.store.source('codex','f'.repeat(24),at);
@@ -164,15 +165,15 @@ test('private known-unheld work and names leave shared history dependencies and 
   const privateSession={...session,clientId:'codex',source:{provider:'codex',account:'f'.repeat(24)},project:'Private project',startedAt:iso(at+2*hour)};
   h.ingest.sessions(h.credential,{...packet,sentAt:iso(at+2*hour),clientSessions:[privateSession]},at+2*hour);
   h.ingest.sessions(h.credential,{...packet,sentAt:iso(at+2*hour+15_000),clientSessions:[privateSession]},at+2*hour+15_000);
-  assert.equal(h.store.workKey(h.shared,shown),key,'a source held by another member does not make this device public');
+  assert.equal(h.store.workKey(h.shared,shown),key,'an existing admitted device stays admitted without disclosing a foreign source');
   assert.deepEqual(read(),before);assert.equal(reads,1,'private credit keeps the shared closed tile warm');
-  events.touchBoards([h.shared]);events.flush();assert.ok(!frames.some(frame=>frame.type==='history'));
+  events.touchBoards([h.shared]);events.flush();assert.ok(frames.some(frame=>frame.type==='history'));frames.length=0;
   h.store.nameProjects(h.owner.id,['Private project'],'Private rename');events.touchBoards([h.shared]);events.flush();
-  assert.equal(h.store.workKey(h.shared,shown),key);assert.deepEqual(read(),before);assert.equal(reads,1);
-  assert.ok(!frames.some(frame=>frame.type==='history'));assert.equal(readHistory(h.store,h.shared,at,60_000,{to:now}).activity.agentMs,0);
+  assert.notEqual(h.store.workKey(h.shared,shown),key);assert.deepEqual(read(),before);assert.equal(reads,2);
+  assert.deepEqual(frames.map(f=>f.type),['snapshot']);assert.equal(readHistory(h.store,h.shared,at,60_000,{to:now}).activity.agentMs,15_000);frames.length=0;
   h.store.hold(foreign,h.owner.id,now);events.touchBoards([h.shared]);events.flush();
   assert.notEqual(h.store.workKey(h.shared,h.store.shown(h.shared,[])),key,'a real holding makes the names visible');
-  assert.ok(frames.some(frame=>frame.type==='history'));
+  assert.deepEqual(frames.map(f=>f.type),['snapshot']);
   assert.equal(readHistory(h.store,h.shared,at,60_000,{to:now}).activity.agentMs,15_000);
 });
 
@@ -252,8 +253,8 @@ test('device presence hints reach only the owner on every board and expire held-
   const changed=()=>{
     events.flush();
     for(const i of [0,1]) assert.deepEqual(frames[i].filter(frame=>frame.type==='devices').map(frame=>JSON.parse(frame.data)),[{}]);
-    assert.ok(!frames[2].some(frame=>frame.type==='devices'||frame.type==='ownSessions'));
-    assert.ok(!frames[1].some(frame=>frame.type==='ownSessions'));
+    assert.ok(!frames[2].some(frame=>frame.type==='devices'));
+    assert.ok(frames[1].some(frame=>frame.type==='unattributedSessions'));
     assert.equal(h.directory.connectionsRevision(h.owner.id),revision);
     frames.forEach(list=>list.splice(0));
   };
@@ -271,7 +272,7 @@ test('device presence hints reach only the owner on every board and expire held-
 });
 
 test('device presence recovers for every owner reader after projection failures', t => {
-  for(const fault of ['devices','deadline','own','ownDeadline'] as const) {
+  for(const fault of ['devices','deadline','board','boardDeadline'] as const) {
     const h=setup(); let now=at;
     h.store.db.prepare('INSERT INTO members VALUES (?,?,?,?)').run(h.shared,h.other.id,'member',at);
     const source=h.store.source('codex','f'.repeat(24),at);h.store.hold(source,h.owner.id,at);
@@ -286,26 +287,26 @@ test('device presence recovers for every owner reader after projection failures'
       events.open({user,secret,board,kind:'stream',send:batch=>frames[i].push(...batch),end:()=>{}});
     }
     frames.forEach(list=>list.splice(0));
-    const live=h.ingest.live,devices=live.devices.bind(live),deadline=live.devicesChangesAt.bind(live),own=live.own.bind(live),ownDeadline=live.ownChangesAt.bind(live);
+    const live=h.ingest.live,devices=live.devices.bind(live),deadline=live.devicesChangesAt.bind(live),board=live.board.bind(live);
     let fail=true;
     const once=()=>{if(fail){fail=false;throw new Error('synthetic presence read failure');}};
     if(fault==='devices')live.devices=(...args)=>{if(args[0]===h.owner.id)once();return devices(...args);};
     if(fault==='deadline')live.devicesChangesAt=(...args)=>{if(args[0]===h.owner.id)once();return deadline(...args);};
-    if(fault==='own')live.own=(...args)=>{if(args[0]===h.owner.id&&args[1]===h.board)once();return own(...args);};
-    if(fault==='ownDeadline')live.ownChangesAt=(...args)=>{if(args[0]===h.owner.id&&args[1]===h.board)once();return ownDeadline(...args);};
-    const privateFault=fault==='own'||fault==='ownDeadline';
+    if(fault==='board'||fault==='boardDeadline')live.board=(...args)=>{if(args[0].owner===h.owner.id&&fault==='board')once();const value=board(...args);if(args[0].owner===h.owner.id&&fault==='boardDeadline')once();return value;};
+    const privateFault=fault==='board'||fault==='boardDeadline';
     const started={...session,working:false,...(privateFault?{}:{clientId:'codex',source:{provider:'codex',account:'f'.repeat(24)}})};
     now+=15_000;h.ingest.sessions(h.credential,{...packet,sentAt:iso(now),clientSessions:[started]},now);
-    assert.ok(events.flush().users.has(h.owner.id),fault);
+    const failures=events.flush();assert.ok(privateFault?failures.boards.has(h.board):failures.users.has(h.owner.id),fault);
     assert.equal(live.deviceSessions(h.owner.id,device,now).length,1);
-    assert.ok(!frames[3].some(frame=>frame.type==='devices'||frame.type==='ownSessions'));
+    assert.ok(!frames[3].some(frame=>frame.type==='devices'));
     const hints=()=>frames.slice(0,3).map(list=>list.filter(frame=>frame.type==='devices').map(frame=>JSON.parse(frame.data)));
-    if(privateFault)assert.deepEqual(hints(),[[{}],[{}],[{}]],'a board failure cannot suppress account presence');
-    frames.forEach(list=>list.splice(0));live.devices=devices;live.devicesChangesAt=deadline;live.own=own;live.ownChangesAt=ownDeadline;
+    if(privateFault)assert.deepEqual(hints(),[[],[],[{}]],'the healthy shared board still receives account presence while failed boards reconnect');
+    frames.forEach(list=>list.splice(0));live.devices=devices;live.devicesChangesAt=deadline;live.board=board;
+    if(privateFault)for(const i of [0,1]){const opened=events.open({user:h.owner.id,secret:`recovery-${fault}-${i}`,board:h.board,kind:'stream',send:batch=>frames[i].push(...batch),end:()=>{}});assert.ok(opened&&opened!=='limit');assert.equal(JSON.parse(opened.frames[1].data).unattributedSessions.length,1);}
     events.touchBoards([h.board,h.shared]);events.flush();
     if(!privateFault)assert.deepEqual(hints(),[[{}],[{}],[{}]],'recovery reaches every existing owner reader');
-    if(privateFault)assert.deepEqual(frames.slice(0,2).map(list=>list.filter(frame=>frame.type==='ownSessions').map(frame=>JSON.parse(frame.data).sessions.length)),[[1],[1]],'private recovery reaches both personal readers');
-    assert.ok(!frames[3].some(frame=>frame.type==='devices'||frame.type==='ownSessions'));
+    if(privateFault)assert.ok(!frames.slice(0,2).some(list=>list.some(frame=>frame.type==='unattributedSessions')),'fresh snapshots already restored the current admitted roster');
+    assert.ok(!frames[3].some(frame=>frame.type==='devices'));
     frames.forEach(list=>list.splice(0));now+=15_000;
     h.ingest.sessions(h.credential,{...packet,sentAt:iso(now),clientSessions:[started]},now);events.flush();
     assert.deepEqual(hints(),[[],[],[]],'successful recovery does not turn unchanged presence into repeated invalidation');
@@ -313,7 +314,7 @@ test('device presence recovers for every owner reader after projection failures'
   }
 });
 
-test('private presence expires without a quota card, while shared streams receive no private frame', t => {
+test('admitted source-less presence expires on both personal and shared streams', t => {
   const h = setup(); let now = at;
   const timers = new Set<{at: number; run: () => void}>();
   const clock = {now: () => now, after: (ms: number, run: () => void) => {const timer = {at: now+ms, run}; timers.add(timer); return () => {timers.delete(timer);};}};
@@ -324,15 +325,15 @@ test('private presence expires without a quota card, while shared streams receiv
   for (let i=0; i<2; i++) {const secret='expiry-'+i; h.directory.createSession(secret,h.owner.id,at,1_000_000); events.open({user:h.owner.id,secret,board:i===0?h.board:h.shared,kind:'stream',send:batch=>frames[i].push(...batch),end:()=>{}});}
   frames.forEach(f=>f.splice(0));
   const workExpiry = [...timers].find(timer=>timer.at===at+CREDIT_MS); assert.ok(workExpiry, 'working confirmation arms the first semantic deadline');
-  now = workExpiry.at; timers.delete(workExpiry); workExpiry.run(); events.flush();
-  const idle = JSON.parse(frames[0].find(f=>f.type==='ownSessions')!.data).sessions;
+  now=workExpiry.at;for(const timer of [...timers].filter(t=>t.at<=now)){timers.delete(timer);timer.run();}events.flush();
+  const idle = JSON.parse(frames[0].find(f=>f.type==='unattributedSessions')!.data).sessions;
   assert.equal(idle.length,1); assert.equal(idle[0].working,false); assert.equal(idle[0].currentPresence.working,false);
-  assert.ok(!frames[1].some(f=>f.type==='ownSessions'||f.type==='history'));
+  assert.equal(JSON.parse(frames[1].find(f=>f.type==='unattributedSessions')!.data).sessions[0].working,false);
   frames.forEach(f=>f.splice(0));
   const expiry = [...timers].find(timer=>timer.at===at+KEEP_MS+1); assert.ok(expiry, 'idle confirmation retains its presence deadline');
-  now = expiry.at; expiry.run(); events.flush();
-  assert.deepEqual(JSON.parse(frames[0].find(f=>f.type==='ownSessions')!.data), {sessions: []});
-  assert.ok(!frames[1].some(f=>f.type==='ownSessions'||f.type==='history'));
+  now=expiry.at;for(const timer of [...timers].filter(t=>t.at<=now)){timers.delete(timer);timer.run();}events.flush();
+  assert.deepEqual(JSON.parse(frames[0].find(f=>f.type==='unattributedSessions')!.data), {sessions: []});
+  assert.deepEqual(JSON.parse(frames[1].find(f=>f.type==='unattributedSessions')!.data),{sessions:[]});
 });
 
 test('client high water is independent and stronger metadata never creates another work context', t => {

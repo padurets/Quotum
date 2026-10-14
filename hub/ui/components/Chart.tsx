@@ -1,7 +1,7 @@
 import {Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
-import {preciseReadout, type PlotBlock, type PlotLine as Line} from '../lib/lines';
+import {pointIndex, preciseReadout, type PlotBlock, type PlotLine as Line} from '../lib/lines';
 import {useClock} from '../lib/clock';
 import {gapText, gapTone, readout as readCell, runOutPast, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
@@ -24,16 +24,6 @@ export type Marker = {key: string; at: number; label: string; color: string; str
 
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
-
-/** Sorted plot points let a label inspect only the interval it covers. */
-function firstAt(points: Line['points'], at: number): number {
-  let low = 0, high = points.length;
-  while (low < high) {
-    const middle = low + Math.floor((high - low) / 2);
-    if (points[middle][0] < at) low = middle + 1; else high = middle;
-  }
-  return low;
-}
 
 /** How wide an announcement's label is taken to be, and how near an edge a value hides under it (percent). */
 const LABEL_WIDTH = 220;
@@ -302,11 +292,11 @@ const EdgeLabel = memo(function EdgeLabel({
 /** Gesture state changes the pose without replacing the prepared series artwork. */
 const SeriesArtwork = memo(function SeriesArtwork({model}: {model: {
   lines: Line[];
-  paths: {line: string; parts: {key: string; line: string}[] | null; latest: string | undefined}[];
+  paths: {line: string; parts: {key: string; line: string}[] | null; latest: string | undefined; observation?: string}[];
 } | null}) {
   if (!model) return null;
   return <>{model.lines.map((line, i) => (
-    <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={model.paths[i]?.latest} stroke={line.color} strokeDasharray={line.dash || undefined}>
+    <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={model.paths[i]?.latest} data-observation={model.paths[i]?.observation} stroke={line.color} strokeDasharray={line.dash || undefined}>
       {model.paths[i].parts?.map(part => <path key={part.key} d={part.line} className="series" />) ?? <path d={model.paths[i].line} className="series" />}
     </g>
   ))}</>;
@@ -363,7 +353,7 @@ export const Chart = memo(function Chart({
   onSelect?: (range: TimeRange) => void;
   plot?: number;
   onBase?: (height: number) => void;
-  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;observedAt?:(key:string,at:number)=>number|undefined;detail?:(key:string,at:number)=>ReactNode};
+  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;observation?:(key:string,at:number)=>{at:number;value:string}|undefined;detail?:(key:string,at:number)=>ReactNode};
   stepped?:boolean;
   strip?: PlotBuffer | null;
   prepared?: boolean;
@@ -392,18 +382,23 @@ export const Chart = memo(function Chart({
     const bx = (at: number) => x(Math.min(drawNow, at + cellMs / 2));
     const y = (value: number) => top + (1 - (value-(valueAxis?.min??0)) / ((valueAxis?.max??100)-(valueAxis?.min??0))) * (height - top - bottom);
     const geometry = `${basis.from}:${basis.to}:${drawNow}:${width}:${height}:${cellMs}:${valueAxis?.min??0}:${valueAxis?.max??100}:${stepped}`;
-    const paths: {line: string; last: [number, number] | null; parts: {key: string; line: string}[] | null; latest: string | undefined}[] = [];
+    const paths: {line: string; last: [number, number] | null; parts: {key: string; line: string}[] | null; latest: string | undefined; observation?:string}[] = [];
     for (const line of incomingLines) {
       let latest: string | undefined;
+      let observation: string | undefined;
       let lastAt:number|undefined;
       for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; lastAt=at; yield;}
-      // A carried balance can receive a new observation without changing its outline.
-      if(lastAt!==undefined&&valueAxis?.rawValue)latest=`${valueAxis.observedAt?.(line.key,lastAt)??lastAt}:${valueAxis.rawValue(line.key,lastAt)}`;
+      if(lastAt!==undefined&&valueAxis?.rawValue){
+        const value=valueAxis.rawValue(line.key,lastAt);latest=`${lastAt}:${value}`;
+        // An unchanged balance can advance its observation without moving its drawing cell.
+        const proof=line.pointMode==='observation'?valueAxis.observation?.(line.key,lastAt):undefined;
+        if(proof&&Number.isSafeInteger(proof.at)&&proof.at>=0&&proof.at<=drawNow&&proof.value===value)observation=`${proof.at}:${value}`;
+      }
       if(line.pointMode==='observation') {
         const observed=yield* observationRunsPrepared(line.points,incomingStrip?.from??drawFrom,incomingStrip?.to??basis.to,drawNow);
         const runs:[number,number][][]=[];
         for(const run of observed.runs){const mapped:[number,number][]=[];for(const [at,value] of run){mapped.push([x(at),y(value)]);yield;}runs.push(mapped);}
-        paths.push({line:yield* plotPathPrepared(runs,true),last:observed.last?[x(observed.last[0]),y(observed.last[1])]:null,parts:null,latest});
+        paths.push({line:yield* plotPathPrepared(runs,true),last:observed.last?[x(observed.last[0]),y(observed.last[1])]:null,parts:null,latest,observation:observed.runs.length?observation:undefined});
       } else if(line.capCells) {
         let path='',last:[number,number]|null=null;
         for(const cell of line.capCells) {
@@ -553,10 +548,10 @@ export const Chart = memo(function Chart({
     let low = 0;
     let high = 0;
     for (const line of lines) {
-      const points = line.points;
-      for (let i = firstAt(points, a); i < points.length; i++) {
-        const [at, value] = points[i];
-        if (at > b) break;
+      const points=line.points;
+      for (let i = pointIndex(points, a); i < points.length; i++) {
+        const [at,value]=points[i];
+        if(at>b)break;
         if (value < LABEL_BAND) low++;
         else if (value > 100 - LABEL_BAND) high++;
       }
@@ -579,11 +574,11 @@ export const Chart = memo(function Chart({
       if (value < band) low++;
       else if (value > 100 - band) high++;
     };
-    if (a <= b) for (const line of lines) {
-      const points = line.points;
-      for (let i = firstAt(points, a); i < points.length; i++) {
-        const [at, value] = points[i];
-        if (at > b) break;
+    if(a<=b)for (const line of lines) {
+      const points=line.points;
+      for (let i = pointIndex(points, a); i < points.length; i++) {
+        const [at,value]=points[i];
+        if(at>b)break;
         count(value);
       }
     }

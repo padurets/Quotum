@@ -1,5 +1,6 @@
+import {sourceWorkFrom} from './domain/workAccess.js';
 import type {CellSamples} from './domain/cells.js';
-import type {Store,Shown} from './store/store.js';
+import type {Store,Shown,WorkRead} from './store/store.js';
 import type {PeriodRange} from './domain/period.js';
 import {encodeSamples,decodeSamples,sampleBytes,bindRate,type PeriodTape,type MoneyTape} from './domain/periodTape.js';
 import type {HistoryScope} from './domain/history.js';
@@ -10,12 +11,13 @@ import {readingBefore,valuationAt} from './domain/periodMoney.js';
 import {admitAvailability} from './domain/periodAdmission.js';
 import {periodAdmission} from './periodAdmission.js';
 
-export function periodTape(store:Store,board:string,shown:Shown,user:string,scope:HistoryScope,query:HistoryQuery,range:PeriodRange,cursor:string,replaceFrom:number,reserve:(bytes:number)=>void,membershipAt=range.to,release:(bytes:number)=>void=()=>{},compact=false,evidenceCut=Date.now()):PeriodTape {
+export function periodTape(store:Store,board:string,shown:Shown,user:string,scope:HistoryScope,query:HistoryQuery,range:PeriodRange,cursor:string,replaceFrom:number,reserve:(bytes:number)=>void,membershipAt=range.to,release:(bytes:number)=>void=()=>{},compact=false,evidenceCut=Date.now(),work?:WorkRead):PeriodTape {
   const admitted=Math.min(range.to,evidenceCut);
   membershipAt=Math.min(membershipAt,evidenceCut);
   const tape:PeriodTape={from:range.from,cut:range.to,cursor,replaceFrom,quota:[],money:[]};
   if(replaceFrom>=range.to)return tape;
   if(scope==='quota') {
+    const sourceWork=sourceWorkFrom(work?.ensureAccess?.()??work?.access??store.workAccess(board,evidenceCut,reserve));
     const windows=store.db.prepare('SELECT DISTINCT window_id FROM samples WHERE source_id=? AND at<?');
     const descriptor=store.db.prepare('SELECT window_id,kind,label,minutes,at=(SELECT max(at) FROM samples WHERE source_id=? AND at<?) AS member FROM samples WHERE source_id=? AND window_id=? AND at<? ORDER BY at DESC LIMIT 1');
     const read=store.db.prepare('SELECT at,used,reset_at,stale_after_ms,kind,label,minutes FROM samples WHERE source_id=? AND window_id=? AND at<? AND at>=coalesce((SELECT max(at) FROM samples WHERE source_id=? AND window_id=? AND at<?),?) ORDER BY at');
@@ -37,7 +39,7 @@ export function periodTape(store:Store,board:string,shown:Shown,user:string,scop
         if(compact)temporary(samples.length*120);else reserve(samples.length*80);
         const encoded=encodeSamples(store.quotaAvailability(id,samples,true,temporary).map(sample=>admitAvailability(sample,evidenceCut))),retained=compact?decodeSamples(encoded):encoded;
         if(compact)reserve(sampleBytes(retained));
-        tape.quota.push({source:id,window,workFrom:shown.get(id)!.since,...(!compact?{samplesEncoding:'delta' as const}:{}),samples:retained,descriptors,member:!!row.member,windowValue:{id:window,kind:row.kind as 'session'|'weekly'|'other',label:row.label as string|null,minutes:row.minutes as number|null}});
+        tape.quota.push({source:id,window,workFrom:sourceWork[id]??null,...(!compact?{samplesEncoding:'delta' as const}:{}),samples:retained,descriptors,member:!!row.member,windowValue:{id:window,kind:row.kind as 'session'|'weekly'|'other',label:row.label as string|null,minutes:row.minutes as number|null}});
       }
       release(transient);
     }

@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {valueAt} from '../lib/readout';
+import {pointIndex} from '../lib/lines';
 
 type Point = [number, number, number];
 type Input = {
@@ -14,12 +15,10 @@ type Input = {
 
 function draw(input: Input) {
   const source = readFileSync(new URL('../components/Chart.tsx', import.meta.url), 'utf8');
-  const ast = ts.createSourceFile('Chart.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const helper = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'firstAt');
   const start = source.indexOf('  const labelY = '), end = source.indexOf('  // Stacked from ', start);
   assert.ok(start > 0 && end > start, 'load the production label calculations');
-  const context = {valueAt, calculate: null as unknown as (input: Input) => {stackTop: boolean; labelY: (anchor: number, end: boolean) => number}};
-  runInNewContext(ts.transpileModule(`${helper?.getText(ast) ?? ''}
+  const context = {valueAt, pointIndex, calculate: null as unknown as (input: Input) => {stackTop: boolean; labelY: (anchor: number, end: boolean) => number}};
+  runInNewContext(ts.transpileModule(`
     function calculate(input) {
       const {lines, forecasts = [], plans = []} = input;
       const width = 900, height = 220, top = 12, bottom = 28, right = 12;

@@ -14,8 +14,8 @@ test('a committed credit heartbeat retains its observation when the carried outl
     points:[{at:cell,value:'99920000',validUntil:2*cell,semantics:{conversion:{original:{at:observedAt}}}}]});
   const moneySource=readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8');
   const start=moneySource.indexOf('  const axis=useMemo('),region=moneySource.slice(start,moneySource.indexOf('  const answered=',start));
-  type Axis={min:number;max:number;rawValue:(key:string,at:number)=>string|undefined;observedAt?:(key:string,at:number)=>number|undefined};
-  const money={moneyIdentity,moneyPointAt,meterPointIn,useMemo:(work:()=>unknown)=>work(),t:()=>'',symbol:'$',unit:'USD',locale:'en',context:{},strip:null,history:{cellMs:cell},
+  type Axis={min:number;max:number;rawValue:(key:string,at:number)=>string|undefined;observation?:(key:string,at:number)=>{at:number;value:string}|undefined};
+  const money={moneyIdentity,moneyPointAt,meterPointIn,useMemo:(work:()=>unknown)=>work(),t:()=>'',symbol:'$',unit:'USD',locale:'en',context:{},strip:null,history:{cellMs:cell},settings:{view:'balance'},
     makeAxis:null as unknown as (entries:ReturnType<typeof series>[])=>Axis};
   const pointStart=moneySource.indexOf('const pointAt='),pointEnd=moneySource.indexOf('\n',pointStart);
   runInNewContext(ts.transpileModule(`${moneySource.slice(pointStart,pointEnd)}
@@ -24,7 +24,7 @@ test('a committed credit heartbeat retains its observation when the carried outl
   const firstAt=cell-7000,nextAt=cell-5000;
   const line=()=>({key,pointMode:'observation',points:[[cell,0,1,2*cell]]});
   const hook=preparationFixture();
-  type Model={paths:{line:string;last:[number,number]|null;latest:string}[]};
+  type Model={paths:{line:string;last:[number,number]|null;latest:string;observation?:string}[]};
   const chart={...hook,axis:{active:false,basis:{from:now-86400000,to:now,end:now}},incomingLines:[line()],incomingPlans:[],incomingForecasts:[],incomingMarkers:[],incomingStrip:null,
     desiredFrom:now-86400000,desiredTo:now,desiredNow:now,desiredLive:true,incomingReady:true,modelContext:'funds',navigation:undefined,
     valueAxis:money.makeAxis([series(firstAt)]),stepped:true,cellMs:cell,width:900,height:220,left:76,right:12,top:12,bottom:28,
@@ -34,12 +34,13 @@ test('a committed credit heartbeat retains its observation when the carried outl
   runInNewContext(ts.transpileModule(`function draw(){${chartRegion}\nreturn prepared;}globalThis.draw=draw;`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,chart);
   const render=()=>{hook.begin();return chart.draw();};
   assert.equal(render().value,null);hook.commit();hook.finish();
-  const before=render().value!;assert.equal(before.paths[0].latest,firstAt+':99920000');
+  const before=render().value!;assert.equal(before.paths[0].observation,firstAt+':99920000');
   chart.incomingLines=[line()];chart.valueAxis=money.makeAxis([series(nextAt)]);
   assert.equal(render().value,before,'new data cannot claim a commit before preparation finishes');
   hook.commit();hook.finish();const after=render();assert.equal(after.ready,true);
   assert.equal(after.value!.paths[0].line,before.paths[0].line,'both heartbeats draw exactly the same outline');
   assert.deepEqual(after.value!.paths[0].last,before.paths[0].last);
-  assert.equal(after.value!.paths[0].latest,nextAt+':99920000','the committed model identifies the new observation');
-  assert.equal(money.makeAxis([series(nextAt,false)]).observedAt?.(key,cell),undefined,'aggregate cells retain their grid marker');
+  assert.equal(after.value!.paths[0].latest,before.paths[0].latest,'the grid marker still describes the same carried outline');
+  assert.equal(after.value!.paths[0].observation,nextAt+':99920000','the committed model identifies the new observation');
+  assert.equal(money.makeAxis([series(nextAt,false)]).observation?.(key,cell),undefined,'aggregate cells retain their grid marker');
 });

@@ -67,7 +67,7 @@ test('presence snapshots keep their captured operational state across reports',t
   const device=h.directory.saveDevice({userId:h.user.id,machine:{id:'snapshot-device-0123456789',name:'Laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.7.0',tokenId:null},NOW).id;
   const session={clientId:'codex',source:h.source,sessionId:'stable',device:{id:device,name:'Laptop'},origin:'terminal' as const,project:'Project',folder:null,startedAt:NOW-H,sentStartedAt:NOW-H,lastWorkedAt:NOW,working:true};
   h.hub.ingest.live.report(device,h.user.id,[session],NOW);
-  let held=0;const snapshot=h.hub.ingest.live.presenceSnapshot(bytes=>{held+=bytes;},owner=>owner===h.user.id);
+  let held=0;const snapshot=h.hub.ingest.live.presenceSnapshot(bytes=>{held+=bytes;},(_device,owner)=>owner===h.user.id);
   h.hub.ingest.live.report(device,h.user.id,[{...session,working:false}],NOW+1);
   assert.ok(held>0);
   const args=[device,'codex',h.source,'stable','terminal','Project',null,NOW] as const;
@@ -75,7 +75,7 @@ test('presence snapshots keep their captured operational state across reports',t
   assert.equal(h.hub.ingest.live.presence(...args)?.working,false);
 });
 
-test('details revalidate their original cursor after waiting for another preparation',async t=>{
+test('details keep their work cursor through unrelated resource updates while queued',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=fixture();t.after(h.close);
   const initial=JSON.parse(h.reader.read(h.board,h.user.id,{...h.request,sessions:{}})) as PeriodReply;
   if(initial.sessions?.state!=='complete')throw new Error('sessions');
@@ -86,9 +86,8 @@ test('details revalidate their original cursor after waiting for another prepara
   });
   const active=h.read();await began;
   const details=h.reader.detailsAsync(h.board,h.user.id,{version:1,selection:h.request.selection,evaluatedAt:NOW,cursor:initial.sessions.value.cursor,refs:[]});
-  const rejected=assert.rejects(details,error=>error instanceof ReadError&&error.code==='history_range_invalid');
   h.reader.touch('unrelated-source',NOW,['quota']);
-  await active;await rejected;h.released();
+  await active;const response=JSON.parse(await details);assert.equal(response.sessions.state,'complete');h.released();
 });
 
 test('a financial grant revoked between sections discards the captured preparation',async t=>{

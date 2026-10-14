@@ -113,8 +113,11 @@ and platform smoke checks still apply.
   and owner IDs never enter shared projections.
 - **Clients and collectors are independent.** The client catalogue owns discovery and
   activity; only explicitly mapped collectors measure subscriptions. Preserve legacy
-  session order and cap priority. Unknown or unheld work belongs only to the owner's
-  personal board and devices, never shared projections or source activity signals.
+  session order and cap priority. Device sessions are admitted independently of subscriptions, defaulting on for every
+  member's saved devices on each shared board. Unknown or unheld funding is redacted;
+  known held funding is disclosed only while the source is provided to that board.
+  Hiding a card never filters the admitted cohort. Unknown or unheld work never affects source activity signals. Board funding
+  redaction does not change collector identity or source duty.
   Evidence metadata never changes producer identity or retrospectively attributes work.
 - **The provider catalogue defines authority.** Known hub-measured providers are
   dropped from agent snapshots, failures and sessions before their other fields are
@@ -170,6 +173,15 @@ and platform smoke checks still apply.
   off and on by a click.
 - Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).
+- Board widgets never add a vertical scroller inside the page. Table widgets share
+  `TableWidget` for responsive layout, whole-row height fitting and the compact pager
+  at the bottom right. A separate footer puts complete-period totals above the pager
+  and row count. Wide totals align with their columns without repeating headings;
+  narrow lists label them in a fixed grid. Row capacity follows height without a fixed
+  page cap, using the complete shared index without new reads. Session grouping uses
+  the shared segmented control. No more/all popup substitutes for paging. Wide tables sort in
+  their headers; only narrow lists show a sort icon. Headers cycle ascending,
+  descending, reset; reset clears the selected header and restores the default order.
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
   fixed background, and widgets have no `backdrop-filter` (floating surfaces and the
   sticky bars may): whole-window repainting during scroll is expensive, especially

@@ -9,6 +9,7 @@ import {displayHistory} from './currencies/history.js';
 import type {WorkRead} from './store/store.js';
 import {conversionOrigin} from './domain/currency.js';
 import {readingBefore,spanBefore,valuationAt} from './domain/periodMoney.js';
+import {sharedWork} from './periodWork.js';
 
 import type {HistoryQuery} from './domain/periodRead.js';
 export type {HistoryQuery} from './domain/periodRead.js';
@@ -51,6 +52,10 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
       if(meters.ids.some(([source,id])=>!(scope==='quota'?quotaMeter:budgetMeter)(sources.get(source),id)))fail(400, 'invalid_request');
     }
     if (to <= from || from < oldest) fail(400, scope ? 'history_range_invalid' : 'invalid_request');
+    const reservation=!work&&scope!=='budget'?history.reservation():null;
+    try{
+    if(reservation)work=sharedWork(hub,shown,{from,to},reservation.add,reservation.remove,null,now,board);
+    const access=scope==='budget'?undefined:work!.ensureAccess!();
     let chunks: string[];
     try {chunks=cells?history.read(board, cell, from, to, now, shown, meters, scope, work):[];}
     catch(error){if(error instanceof HistoryLimit)fail(413, 'history_limit');throw error;}
@@ -83,9 +88,11 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
         if(chunks.reduce((sum,json)=>sum+Buffer.byteLength(json),0)>16*1024*1024)fail(413, 'history_limit');
       }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}finally{reservation.close();}
     }
-    const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown,scope==='budget'?null:store.privateOwner(board))};
+    const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown,access?.owner??null,access)};
     const tag = query.meta === undefined ? undefined : history.metadata(board, basis, scope);
     const meta = JSON.stringify(tag && query.meta === tag ? {now, run: events.epoch, meta: tag} : {now, ...basis, ...(tag ? {meta: tag} : {})});
 
     return `${meta.slice(0, -1)},"chunks":[${chunks.join(',')}]}`;
+    }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}
+    finally{reservation?.close();}
 }

@@ -2,13 +2,15 @@ import {useCallback, useEffect, useRef, useState} from 'react';
 import {PROVIDERS} from '../lib/providers';
 import {ApiError, call} from '../lib/http';
 import {rereadSession, type Board} from '../lib/session';
-import {useTitles} from '../lib/board';
+import {useConnectionsRevision,useTitles} from '../lib/board';
 import {logoOf} from './logos';
 import {CopyField, ErrorLine} from './Kit';
 import {t} from '../i18n';
 import type {BudgetAccess} from '../../server/domain/resources';
 
+type SessionDevice={id:string;name:string;disconnected:boolean;enabled:boolean;since:number|null;revision:string};
 type Shares = {
+  sessionDevices?:SessionDevice[];
   shared: {source: string; provider: string; sharedBy: string; mine: boolean;budget?:BudgetAccess}[];
   mine: {source: string; provider: string; shared: boolean; devices: string[]; accountLabel?: string}[];
 };
@@ -22,7 +24,9 @@ const Logo = ({provider}: {provider: string}) => <img className="share-logo" src
  * their own devices measure; the board's owner, or whoever shared a card, takes it off.
  * The board shows the change when the hub tells it.
  */
-export function SharesTab({board}: {board: Board}) {
+export function SharesTab({board,userId=''}:{board:Board;userId?:string}) {
+  const revision=useConnectionsRevision();
+  const reading=useRef<AbortController|null>(null);
   const titles = useTitles();
   const [shares, setShares] = useState<Shares | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -34,43 +38,41 @@ export function SharesTab({board}: {board: Board}) {
       generation.current++;
       budgetRequest.current=null;
       setPending(null);
-      setShares(null);
+      reading.current?.abort();setShares(null);
       rereadSession();
     }
     setError(failure);
   };
-  const load = useCallback(() => {
-    const own = ++generation.current;
-    call<Shares>('GET', `/api/boards/${encodeURIComponent(board.id)}/shares`).then(
-      value => {if (own === generation.current) setShares(value);},
-      failure => {if (own === generation.current) failed(failure);},
+  const load=useCallback(()=>{
+    reading.current?.abort();const abort=new AbortController();reading.current=abort;
+    const own=++generation.current;
+    call<Shares>('GET',`/api/boards/${encodeURIComponent(board.id)}/shares`,undefined,12_000,abort.signal).then(
+      value=>{if(!abort.signal.aborted&&own===generation.current)setShares(value);},
+      failure=>{if(!abort.signal.aborted&&own===generation.current)failed(failure);},
     );
-  }, [board.id]);
-  useEffect(() => {setShares(null);setPending(null); load(); return () => {generation.current++;budgetRequest.current=null;};}, [load]);
+  },[board.id,userId]);
+  useEffect(()=>{setShares(null);setPending(null);setError(null);budgetRequest.current=null;load();return()=>{generation.current++;budgetRequest.current=null;reading.current?.abort();};},[load]);
+  const seenRevision=useRef(revision);
+  useEffect(()=>{if(seenRevision.current!==revision){seenRevision.current=revision;load();}},[load,revision]);
 
-  const change = async (source: string, share: boolean) => {
-    setError(null);
-    try {
-      const path = `/api/boards/${encodeURIComponent(board.id)}/shares`;
-      await (share ? call('POST', path, {source}) : call('DELETE', `${path}/${encodeURIComponent(source)}`));
-      load();
-    } catch (failure) {
-      failed(failure);
-    }
-  };
-
-  const budget=async(source:string,enabled:boolean,expectedRevision:string)=>{
+  const mutate=async(method:'POST'|'PUT'|'DELETE',path:string,body?:object,item?:string)=>{
     if(budgetRequest.current)return;
-    const own={};budgetRequest.current=own;setPending(source);setError(null);
-    try{await call('PUT',`/api/boards/${encodeURIComponent(board.id)}/shares/${encodeURIComponent(source)}/budget`,{enabled,expectedRevision});}
-    catch(failure){if(budgetRequest.current===own)failed(failure);}
+    const own={};budgetRequest.current=own;setPending(item??path);setError(null);
+    try{await call(method,path,body);}
+    catch(failure){if(budgetRequest.current===own){if(failure instanceof ApiError&&failure.status===404&&failure.code!=='board_not_found'&&item)setError(failure);else failed(failure);}}
     finally{if(budgetRequest.current===own){budgetRequest.current=null;setPending(null);load();}}
   };
+  const change=(source:string,share:boolean)=>{
+    const path=`/api/boards/${encodeURIComponent(board.id)}/shares`;
+    return mutate(share?'POST':'DELETE',share?path:`${path}/${encodeURIComponent(source)}`,share?{source}:undefined,source);
+  };
+  const budget=(source:string,enabled:boolean,expectedRevision:string)=>mutate('PUT',`/api/boards/${encodeURIComponent(board.id)}/shares/${encodeURIComponent(source)}/budget`,{enabled,expectedRevision},source);
+  const sessions=(device:SessionDevice,enabled:boolean)=>mutate('PUT',`/api/boards/${encodeURIComponent(board.id)}/shares/devices/${encodeURIComponent(device.id)}/sessions`,{enabled,expectedRevision:device.revision},device.id);
   if (!shares) return <ErrorLine error={error} />;
   return (
     <>
       <section className="settings-section">
-        <h2>{t('boardSettings.data')}</h2>
+        <h2>{t('shares.subscriptions')}</h2>
         {shares.shared.some(s=>s.mine&&s.provider==='codex')&&<p className="dialog-text">{t('shares.budgetHelp')}</p>}
         {shares.shared.length ? (
           <ul className="settings-list">
@@ -84,7 +86,7 @@ export function SharesTab({board}: {board: Board}) {
                 <div className="settings-item-actions">
                   {s.mine&&s.provider==='codex'&&s.budget&&<label title={t('shares.budgetHelp')}><input type="checkbox" checked={s.budget.enabled} disabled={pending!==null} onChange={event=>void budget(s.source,event.target.checked,s.budget!.revision)}/>{t('shares.includeBudget')}</label>}
                   {(board.role === 'owner' || s.mine) && (
-                    <button type="button" className="button" onClick={() => change(s.source, false)}>
+                    <button type="button" className="button" disabled={pending!==null} onClick={()=>void change(s.source,false)}>
                       {t('shares.remove')}
                     </button>
                   )}
@@ -95,6 +97,15 @@ export function SharesTab({board}: {board: Board}) {
         ) : (
           <p className="dialog-text">{t('shares.none')}</p>
         )}
+      </section>
+      <section className="settings-section">
+        <h2>{t('shares.sessionDevices')}</h2>
+        <p className="dialog-text">{t('shares.sessionDevicesHelp')}</p>
+        {shares.sessionDevices?.length?<ul className="settings-list">{shares.sessionDevices.map(device=><li key={device.id} className="popover-row settings-list-row">
+          <span className="settings-item-main"><b>{device.name}</b></span>
+          <small className="settings-item-detail">{device.disconnected?t('shares.disconnected'):null}</small>
+          <div className="settings-item-actions"><label><input type="checkbox" checked={device.enabled} disabled={pending!==null} onChange={event=>void sessions(device,event.target.checked)}/>{t('shares.deviceSessions')}</label></div>
+        </li>)}</ul>:<p className="dialog-text">{t('shares.noDevices')}</p>}
       </section>
       <ErrorLine error={error} />
     </>

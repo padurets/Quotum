@@ -94,7 +94,8 @@ test('global work publication never wakes unrelated source cards but a source ev
 
 function agents(page=0,retry=()=>{}) {
   const status=component('../components/PeriodStatus.tsx','PeriodStatus','export function PeriodStatus',undefined,{timeRangeLabel,boardPeriod:{retry}});
-  const pages=component('../components/Agents.tsx','AgentPages','function AgentPages(');
+  const sharedPages=component('../components/TableWidget.tsx','TablePages','export function TablePages(','\ntype Measurement=');
+  const pages=component('../components/Agents.tsx','AgentPages','function AgentPages(',undefined,{TablePages:sharedPages});
   return component('../components/Agents.tsx','Agents','export function Agents(','/** A project as',{
     useState:()=>[page,()=>{}],machinesOf,drawn,timeRangeLabel,Popover:'popover',PeriodStatus:status,AgentPages:pages,
     TerminalIcon:'terminal',WarningIcon:'warning',Mark:'mark',Origin:'origin',WorkTime:'worked',stateOf:()=>'',placeOf:()=>'',folderOf:()=>null,

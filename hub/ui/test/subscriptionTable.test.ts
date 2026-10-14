@@ -17,6 +17,7 @@ import * as view from '../lib/view';
 import * as subscription from '../lib/subscription';
 import * as timeRange from '../lib/timeRange';
 import * as i18n from '../i18n';
+import * as tableWidget from '../components/TableWidget';
 import type {Card,History,Kind} from '../lib/types';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import {mapZai,decodeZai} from '../../server/connectors/zai';
@@ -31,7 +32,10 @@ const base:History={range:'24h',live:true,since:0,to:M,cellMs:M,historyStart:0,e
 let history:History|null=base,kind:Kind='weekly',sources=[cap,native],error:'history_limit'|null=null;
 const modules:Record<string,unknown>={react:React,'react/jsx-runtime':jsxRuntime,'../lib/format':format,'../lib/quota':quota,'../lib/forecast':forecast,'../lib/plan':plan,'../lib/work':work,'../lib/view':view,'../lib/subscription':subscription,'../lib/timeRange':timeRange,'../i18n':i18n,
   '../lib/period':{boardPeriod:{quotaAt:(line:unknown)=>line,rangeAt:()=>history?{from:history.since,to:history.to}:null,cellBasis:()=>undefined,cellChangesAt:()=>null}},
-  '../lib/prefs':{usePrefs:()=>({kind}),usePref:()=>({unit:null})},'../lib/board':{useNamed:()=>sources,useLineup:()=>sources.map(s=>s.id),useForecastsOf:()=>[{},{}],useResetNews:()=>null},'../lib/clock':{hubNow:()=>M,useClock:()=>M},'../lib/history':{quotaHistory:{retry:()=>{}},useHistory:()=>({history,loading:false,error})},'./AnalyticsPanel':panel,'./Popover':{Popover:()=>null},'./MoneyAnalytics':{MoneyTable:()=>{throw new Error('a subscription reached the money table');}}};
+  '../lib/prefs':{usePref:(key:string)=>key==='kind'?kind:{unit:null}},'../lib/board':{useNamed:()=>sources,useLineup:()=>sources.map(s=>s.id),useForecastsOf:()=>[{},{}],useResetNews:()=>null},'../lib/clock':{hubNow:()=>M,useClock:()=>M},'../lib/history':{quotaHistory:{retry:()=>{}},useHistory:()=>({history,loading:false,error})},'./AnalyticsPanel':panel,'./TableWidget':tableWidget,'./Popover':{Popover:()=>null},'./MoneyAnalytics':{MoneyTable:()=>{throw new Error('a subscription reached the money table');}}};
+const cellContext = {exports: {}, require: (name: string) => modules[name] ?? {}};
+runInNewContext(ts.transpileModule(readFileSync(new URL('../components/TableCell.tsx', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, cellContext);
+modules['./TableCell'] = cellContext.exports;
 const tableContext = {exports: {}, require: (name: string) => modules[name] ?? {}};
 runInNewContext(ts.transpileModule(readFileSync(new URL('../components/AnalyticsTable.tsx', import.meta.url), 'utf8'), {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, tableContext);
 modules['./AnalyticsTable'] = tableContext.exports;

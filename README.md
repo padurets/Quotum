@@ -162,13 +162,25 @@ notifications also stay live, independently of the board's historical range.
 - **Agent activity:** agent-hours over the same period, stacked by subscription, project
   or machine in bars of up to an hour (two hours over a month). Four agents over an hour
   make 4 agent-hours: the legend adds up to the total. Active time (at least one agent
-  working), how many agents worked and the average at once are in the totals and
+  working), recorded sessions and the average at once are in the totals and
   tooltips. It zooms and moves through time as the chart does.
+- **Agent sessions:** one table for projects, machines or subscriptions, or a row per
+  agent. Grouped rows can also show active time and average concurrency; enable those
+  columns in its settings. Open a group to see its retained sessions over the same
+  period. Active totals count overlapping work once. Recorded sessions count work
+  contexts, so a logical session can count more than once after a context change.
+  Table widgets fit whole rows to their chosen height and share a compact pager at the
+  bottom right, beside the matching row count. Whole-period totals have their own line
+  above them, aligned with columns on wide tables and labelled in a two-by-two grid on
+  narrow lists. None is the first grouping choice; Client is visible by default in
+  individual rows and group disclosures and can be hidden in column settings. Grouping
+  uses the shared segmented control. Wide sortable headers cycle ascending, descending, then reset; narrow lists use the
+  sort menu. There is no inner vertical scrolling.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
 - **Boards made of widgets**, like a dashboard in Grafana: source cards, agent activity,
-  charts, tables and an optional Agent sessions list share one grid. The list gathers
+  charts, tables and an optional Agent sessions table share one grid. The table gathers
   sessions by project, machine or subscription, with work within the selected period,
   the date and time of their last recorded work in it and current working counts when
   known. Individual agents with their machines and subscriptions are a click away.
@@ -178,8 +190,9 @@ notifications also stay live, independently of the board's historical range.
   to a third, a half, two thirds or the whole width. Each fills only the rows its content
   needs, so cards stack beside a tall list, unless the owner drags its bottom edge (or
   a bottom corner) to make it taller, or the list of agents shorter: the charts grow
-  with it, a card never gets shorter than its content, and a shorter list ends with how
-  many more rows it has, which opens them all. Either side edge changes the width. A
+  with it, a card never gets shorter than its content, and tables fit whole rows to
+  their height, with a pager at the bottom right for the remaining rows. Either side
+  edge changes the width. A
   double click on the bottom edge or a bottom corner, or Enter or Space on the bottom
   edge, gives a widget back the height of its content. The owner names the cards,
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
@@ -199,8 +212,10 @@ notifications also stay live, independently of the board's historical range.
   Every reader of a shared card can use it.
 - **Your data, shared when you choose.** Everything your machines measure is on your
   personal board. On a shared board a team sees the limits its members share with it:
-  each person decides which of their subscriptions it shows. A team subscription
-  measured by several people is one card.
+  each person decides which of their subscriptions it shows. Device sessions are
+  provided by default, independently of subscriptions. Each member can turn their
+  devices off or on per board in Board settings → Provided data; turning one on again
+  starts a new history boundary. A team subscription measured by several people is one card.
 
 The interface is available in English and Russian.
 
@@ -230,11 +245,13 @@ day, not a script thrown together over a weekend. In practice that meant:
   and folder (`sessions = false` and `projects = false` turn that off). With each
   question to the hub, whether its client is in use on the machine: a card tells the
   members of its boards that the subscription is in use right now, whatever those
-  settings say. Where a board shows that subscription, whoever brought it, and the
-  person whose agents they are is on the board, its members see them with the name of
-  the machine they run on, each project under the name that person gave it, and when and
-  how long they worked, by project and machine, from the later of when that person joined
-  the board and when the subscription came to it (on their own board, all of it). The hub
+  settings say. Shared boards admit each member's device sessions independently of
+  subscriptions, enabled by default and managed per device in Board settings → Provided data.
+  Members see the client, machine, project and folder names and their credited work.
+  Shared work begins no earlier than membership and retained capture; re-enabling a
+  device starts a fresh boundary. Personal boards keep all of their owner's captured work.
+  Funding is identified only while held and provided; otherwise its identity is redacted.
+  Quota attribution additionally respects the subscription's separate grant boundary. The hub
   keeps when each agent worked, with its machine, project and folder names, for 90 days,
   and the names you give your projects until you undo them; you see and correct your
   projects through *Agent activity → Settings → Manage projects*. The full list is in the [spec](spec/ingest-v1.md#privacy).
@@ -643,9 +660,11 @@ agent running in the background keeps its version until it is started again.
 
 Coding clients are tracked independently of subscription measurement. OpenCode native
 CLI sessions and installed client versions appear in My connections → Devices. Work
-without a known held subscription remains on your personal Agents and Agent activity
-widgets, including on an empty board; add them through Add widget. Shared boards never
-show that private work. `[clients.<id>] enabled = false` disables one client's tracking;
+is admitted on personal and shared boards independently of subscription cards. Shared
+boards default to including every member's device sessions; each member controls their
+own devices in Board settings → Provided data. An unknown subscription is Not identified;
+a known held subscription absent from the board is Not provided, with its identity hidden.
+Add Agent sessions and Agent activity through Add widget on an empty board. `[clients.<id>] enabled = false` disables one client's tracking;
 `[providers.<id>] enabled = false` disables only its measurements. A client's `path`
 overrides its legacy provider path. Native OpenCode local project attribution is
 available on Linux; shared or unproven invocations, and macOS/Windows, report presence

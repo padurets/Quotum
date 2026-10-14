@@ -368,19 +368,23 @@ export type ProjectCheck = Span & ({project: string | null; machines?: string[];
 export type BoardCheck = Span &
   (
     | {state: 'onboarding' | 'widgets' | 'allHidden'}
-    /** The table of running agents: how many rows, or why it is empty. */
+    /** Current admitted roster entries, including idle contexts; separate from retained period rows. */
     | {rows: number | 'none' | 'noneShown'}
+    /** Current cohort checked against every member device, independently of cards. */
+    | {admittedRoster: true}
+    /** The released source-map subset, before the disjoint unattributed slice. */
+    | {mappedRows: number}
     /** Machines of the first rows after activity ordering. */
     | {firstMachines: string[]}
     /** Weekly series on the chart over the last 24 hours, at least. */
     | {weeklySeries: number}
     /**
-     * Rows of the table of running agents under the project `agentsOf` (as the person named
+     * Current roster contexts under the project `agentsOf` (as the person named
      * it): the folders shown under it, by name, none where the folder is the project.
      */
     | {agentsOf: string; folders: (string | null)[]}
     /**
-     * The list of running agents gathered by project: the group of `agentGroup` (as the person
+     * Current roster grouped by project: the group of `agentGroup` (as the person
      * named it), how many agents it has, and whether the hub has credited them any work.
      */
     | {agentGroup: string; agents: number; worked?: boolean | null}
@@ -494,6 +498,8 @@ export type Person = {
   name: string;
   agents?: boolean;
   agentsPlace?: Place;
+  /** Optional grouped session columns enabled on this board. */
+  agentsColumns?: string[];
   forecastWidth?: number;
   places?: AnalyticsPlaces;
   projects?: Record<string, string>;
@@ -510,6 +516,8 @@ export type Board = {
   /** The table of running agents is turned on. */
   agents?: boolean;
   agentsPlace?: Place;
+  /** Optional grouped session columns enabled on this board. */
+  agentsColumns?: string[];
   forecastWidth?: number;
   places?: AnalyticsPlaces;
   /** When members joined it, from `start`, where later than it was made: work before is not the board's. */

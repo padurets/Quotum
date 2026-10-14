@@ -199,7 +199,7 @@ export function viewOf(stand: Stand, key: string) {
     unplanned: [] as string[],
     colors: {} as Record<string, string>,
     columns: {},
-    shownColumns: board?.kind === 'board' && board.tableColumns ? {'quota-table': board.tableColumns} : {},
+    shownColumns: {...(board?.kind === 'board' && board.tableColumns ? {'quota-table': board.tableColumns} : {}), ...(board?.agentsColumns ? {agents: board.agentsColumns} : {})},
   };
   let cursor = 0;
   let rank = 0;

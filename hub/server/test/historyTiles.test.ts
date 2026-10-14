@@ -20,7 +20,7 @@ function fixture(budget?: number) {
   store.hold(source, user.id, start);
   const tiles = new HistoryTiles(store, budget);
   const nothing = () => {};
-  const observer: Touches = {touchSources: nothing, touchBoards: nothing, touchUser: nothing, touchHub: nothing, history: (source, since, scopes) => tiles.touch(source, since, scopes), dropSessions: nothing, dropMember: nothing, dropBoard: nothing};
+  const observer: Touches = {touchSources: nothing, touchBoards: nothing, touchUser: nothing, touchHub: nothing, history:(source,since,scopes)=>tiles.touch(source,since,scopes),clientHistory:(user,since,device)=>tiles.touchClient(user,since,device), dropSessions: nothing, dropMember: nothing, dropBoard: nothing};
   store.setObserver(observer);
   const sample = (at: number, used: number, window = 'weekly') => store.record(source, {observedAt: at, staleAfterMs: 5 * M, plan: '', resets: null, windows: [{id: window, kind: 'weekly', label: null, used, remaining: 100 - used, resetAt: start + 24 * H, minutes: 10080}]});
   let calls = 0;
@@ -59,7 +59,7 @@ test('measurements invalidate from their time, including a source that had no sa
   h.store.close();
 });
 
-test('late work, hidden cards and renamed devices invalidate closed tiles, while opaque refs are stable', () => {
+test('late work and renames invalidate closed tiles, while hiding retains admitted contexts and stable opaque refs', () => {
   const h = fixture(); h.sample(start, 20); h.read();
   h.store.creditWork(h.device, start + M, start + 2 * M, [{source: h.source, origin: 'terminal', startedAt: start, project: 'P', folder: '', identity: {kind: 'legacy' as const, ordinal: 0}}]);
   const [json] = h.read(); assert.equal(h.calls(), 2);
@@ -69,7 +69,7 @@ test('late work, hidden cards and renamed devices invalidate closed tiles, while
   assert.equal(h.tiles.ref(h.board, 1), ref);
   assert.notEqual(h.tiles.ref('other', 1), ref);
   assert.notEqual(new HistoryTiles(h.store).ref(h.board, 1), ref);
-  assert.equal(JSON.parse(h.read(start, start + H, start + 3 * H, [`source:${h.source}`])[0]).activity.sessions.length, 0);
+  assert.equal(JSON.parse(h.read(start, start + H, start + 3 * H, [`source:${h.source}`])[0]).activity.sessions.length,1);
   assert.equal(h.calls(), 3);
   h.read(); assert.equal(h.calls(), 4);
   h.store.db.prepare('UPDATE devices SET label = ? WHERE id = ?').run('Desk', h.device);
@@ -78,7 +78,8 @@ test('late work, hidden cards and renamed devices invalidate closed tiles, while
 });
 
 test('missing adjacent tiles use one pass, and the cache evicts its least used entries', () => {
-  const h = fixture(250); h.sample(start, 20);
+  // Admitted access, authority scratch and dependency sets leave room for a cached tile.
+  const h=fixture(5500); h.sample(start, 20);
   h.read(start, start + 3 * H, start + 4 * H); assert.equal(h.calls(), 1);
   h.read(start + 2 * H, start + 3 * H, start + 4 * H); assert.equal(h.calls(), 1, 'last tile still fits');
   h.read(start, start + H, start + 4 * H); assert.equal(h.calls(), 2, 'first tile was evicted');

@@ -312,15 +312,15 @@ test('snapshot and session events normalize old or invalid credit before retaini
   }
 });
 
-test('private sessions replace only their slice, clear on shared snapshots and survive older personal hubs',()=>{
+test('unattributed sessions replace their slice on every board and tolerate older hubs',()=>{
   const privateSession={...session,clientId:'opencode'};
-  const first=run(hub({type:'snapshot',data:snapshot({ownSessions:[privateSession]})}));
-  const next=reduce(first,hub({type:'ownSessions',data:{sessions:[{...privateSession,workedMs:60_000}]}}));
+  const first=run(hub({type:'snapshot',data:snapshot({unattributedSessions:[privateSession]})}));
+  const next=reduce(first,hub({type:'unattributedSessions',data:{sessions:[{...privateSession,workedMs:60_000}]}}));
   assert.equal(next.board!.cards,first.board!.cards);assert.equal(next.board!.sessions,first.board!.sessions);
-  assert.notEqual(next.board!.ownSessions,first.board!.ownSessions);
-  assert.equal(reduce(next,hub({type:'ownSessions',data:{sessions:next.board!.ownSessions!}})),next);
-  const shared=reduce(next,hub({type:'snapshot',data:snapshot({board:{id:'team',name:'Team',personal:false},ownSessions:[privateSession]})}));
-  assert.deepEqual(shared.board!.ownSessions,[]);
-  assert.equal(reduce(shared,hub({type:'ownSessions',data:{sessions:[privateSession]}})),shared);
-  assert.deepEqual(run(hub({type:'snapshot',data:snapshot()})).board!.ownSessions,[]);
+  assert.notEqual(next.board!.unattributedSessions,first.board!.unattributedSessions);
+  assert.equal(reduce(next,hub({type:'unattributedSessions',data:{sessions:next.board!.unattributedSessions!}})),next);
+  const shared=reduce(next,hub({type:'snapshot',data:snapshot({board:{id:'team',name:'Team',personal:false},unattributedSessions:[privateSession]})}));
+  assert.deepEqual(shared.board!.unattributedSessions,[privateSession]);
+  assert.equal(reduce(shared,hub({type:'unattributedSessions',data:{sessions:[privateSession]}})),shared);
+  assert.deepEqual(run(hub({type:'snapshot',data:snapshot()})).board!.unattributedSessions,[]);
 });

@@ -19,7 +19,7 @@ import {moneySelection} from '../lib/moneySelection';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import type {Card, History} from '../lib/types';
 import type {Chart as ChartComponent} from '../components/Chart';
-import type {ComponentProps, ReactElement} from 'react';
+import {memo as reactMemo, type ComponentProps, type ReactElement} from 'react';
 
 test('balance and funds drawing facts do not depend on the visible quantity frame',()=>{
   const minute=60_000,huge=9007199254740993n;
@@ -113,7 +113,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
     const Chart = () => null;
     const memo = (read: () => unknown, deps: unknown[]) => {const box = outer.useRef(null) as {current: {deps: unknown[]; value: unknown} | null}; if (!box.current || deps.some((v, i) => !Object.is(v, box.current!.deps[i]))) box.current = {deps, value: read()}; return box.current.value;};
     const modules: Record<string, unknown> = {
-      'react/jsx-runtime': jsx, react: {useRef: outer.useRef, useMemo: memo},
+      'react/jsx-runtime': jsx, react: {memo: reactMemo, useRef: outer.useRef, useMemo: memo},
       '../../server/domain/providers': providers, '../../server/domain/currency': currency, '../../server/domain/meterHistory': {composeMetersPrepared},
       '../lib/board': {useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
       '../lib/history': {useBudgetHistory: () => ({history, drawing: history, loading: !history, presentation}), useBudgetHistoryPlot: (_family: string, quantities=false) => change==='quantity frame'?(quantities?fullStrip:drawingStrip):null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},

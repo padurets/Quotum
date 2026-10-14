@@ -122,6 +122,7 @@ export function DeviceCode() {
 export function ConnectDevice({onboardingId}: {onboardingId?: string} = {}) {
   return (
     <div className="dialog-form">
+      <p className="sharing-disclosure">{t('connect.sessionSharing')}</p>
       <DeviceCode />
       <details className="connection-tokens">
         <summary>{t('connect.tokenTitle')}</summary>

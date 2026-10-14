@@ -151,14 +151,26 @@ test('SSE rechecks authority between preparing a batch and sending it to each re
 });
 
 test('a coalesced financial invalidation starts at the new grant admission, while wallet history stays unrestricted', t => {
-  const h = fixture(t), frames = h.stream();
+  const h = fixture(t), frames = h.stream(), authority = h.snapshot().workAuthority;
   h.balance('9911.23'); h.grant(false); h.grant(true);
   const admittedAt = h.balance('7777');
   const wallet = h.store.source('deepseek', 'b'.repeat(24), admittedAt);
   h.store.hold(wallet, h.owner.id, admittedAt);
   h.store.share(h.board.id, wallet, h.owner.id, admittedAt);
   h.events.flush();
-  assert.deepEqual(changes(frames).filter(c => c.scope === 'budget'), [{source: h.source, scope: 'budget', since: admittedAt}]);
+  const current = h.snapshot(), cards = frames.filter(f => f.type === 'card').map(f => JSON.parse(f.data));
+  assert.deepEqual(cards, current.sources, 'the prepared cards contain only the current grants and values');
+  const subscription = cards.find(s => s.id === h.source)!;
+  assert.ok(subscription.budget);
+  assert.ok(subscription.meters);
+  assert.equal(subscription.budget.anchor, admittedAt);
+  assert.equal(subscription.meters[0].amount, '7777');
+  assert.deepEqual(JSON.parse(frames.find(f => f.type === 'currencies')!.data), current.currencies);
+  assert.deepEqual(current.currencies.sources[h.source].map(b => b.at), [admittedAt], 'old private conversion bindings are replaced');
+  assert.equal(sse(frames).includes('991123'), false, 'the undelivered old-grant balance cannot enter the current batch');
+  assert.equal(current.workAuthority, authority, 'unrelated wallet placement does not replace work authority');
+  assert.ok(changes(frames).some(c => c.source === h.source && c.scope === 'budget' && c.since === admittedAt));
+  assert.equal(changes(frames).some(c => c.source === h.source && c.scope === 'budget' && c.since < admittedAt), false);
   frames.length = 0;
   h.events.history(h.source, h.firstBalanceAt, ['budget']);
   h.events.history(wallet, h.firstBalanceAt - 1000, ['budget']); h.events.flush();

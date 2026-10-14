@@ -81,7 +81,7 @@ export type Reader = {
 };
 
 /** A reader the hub keeps; a `fresh` one is being given its snapshot and gets no events yet. */
-type Subscriber = Reader & {id: number; fresh: boolean; stopPing: () => void; seq: number; baselineAt: number; attentionKey: string; pending: Candidate[]; invalidations: Map<string, Invalidation>; pendingBytes: number; rebaseline: boolean};
+type Subscriber = Reader & {id: number; fresh: boolean; stopPing: () => void; seq: number; baselineAt:number;workKey:string; attentionKey: string; pending: Candidate[]; invalidations: Map<string, Invalidation>; pendingBytes: number; rebaseline: boolean};
 
 /** A board someone looks at: what its readers last got of each part, and when those parts change by themselves. */
 type Watched = {
@@ -106,7 +106,8 @@ type Lease = {
   board: string;
   subscriber: Subscriber | null;
   /** Financial authority when this lease's last snapshot or delta was delivered. */
-  financialKey: string;
+  financialKey:string;
+  workKey:string;
   queue: Frame[];
   bytes: number;
   /** The request held until events come. */
@@ -127,7 +128,7 @@ export function clientScript(root = config.clientRoot): string | null {
 
 export class Events implements Touches {
   /** The history cache hears every touch, also when no board is watched. */
-  onClientHistory: ((user: string, since: number) => void) | null = null;
+  onClientHistory: ((user:string,since:number,device?:string)=>void) | null = null;
   onHistory: ((source: string, since: number, scopes?: readonly HistoryScope[], work?:boolean) => void) | null = null;
   /** When this start of the hub began, base 36: a page tells a restart by it. */
   readonly epoch: string;
@@ -146,8 +147,7 @@ export class Events implements Touches {
   private readonly dirtyUsers = new Set<string>();
   private dirtyHub = false;
   private readonly dirtyClientUsers = new Set<string>();
-  private readonly ownHistories = new Map<string, number>();
-  private readonly ownSessions = new Map<string, {json: string; changesAt: number | null}>();
+  private readonly workHistories = new Map<string, number>();
   private readonly deviceSessions = new Map<string, {json: string; changesAt: number | null}>();
   private ownDeadline: {at: number; cancel: () => void} | null = null;
   private readonly histories = new Map<string, Map<string, HistoryChange>>();
@@ -264,17 +264,32 @@ export class Events implements Touches {
 
   touchUser(user: string) {
     if ([...this.subscribers.values()].some(s => s.user === user)) this.dirtyUsers.add(user);
+    for(const board of this.parts.directory.boards(user))if(this.watched.has(board.id))this.dirtyBoards.add(board.id);
     this.schedule();
   }
 
-  touchClientSessions(user: string) {
-    if ([...this.subscribers.values()].some(s => s.user === user)) this.dirtyClientUsers.add(user);
+  touchClientSessions(user:string,device?:string) {
+    if([...this.subscribers.values()].some(s=>s.user===user))this.dirtyClientUsers.add(user);
+    for(const watched of this.watched.values()){
+      const access=this.parts.store.workAccess(watched.id,this.clock.now());
+      if(device?access.devices.get(device)?.owner===user:[...access.devices.values()].some(d=>d.owner===user))this.dirtyBoards.add(watched.id);
+    }
     this.schedule();
   }
 
-  clientHistory(user: string, since: number) {
-    try { this.onClientHistory?.(user, since); } catch (error) { trouble(error); }
-    if ([...this.subscribers.values()].some(s => s.user === user && this.parts.store.privateOwner(s.board) === user)) this.ownHistories.set(user, Math.min(this.ownHistories.get(user) ?? since, since));
+  clientHistory(user:string,since:number,device?:string,sources:readonly string[]=[]) {
+    try{this.onClientHistory?.(user,since,device);}catch(error){trouble(error);}
+    for(const watched of this.watched.values()){
+      const access=this.parts.store.workAccess(watched.id,this.clock.now());
+      if(!(device?access.devices.get(device)?.owner===user:[...access.devices.values()].some(d=>d.owner===user)))continue;
+      const from=device?access.devices.get(device)!.from:Math.min(...[...access.devices.values()].filter(d=>d.owner===user).map(d=>d.from));
+      const admittedSince=since===0&&!device?0:Math.max(since,from);
+      this.workHistories.set(watched.id,Math.min(this.workHistories.get(watched.id)??admittedSince,admittedSince));
+      for(const source of sources)if(access.sources.get(source)?.holders.has(user)){
+        let pending=this.histories.get(watched.id);if(!pending)this.histories.set(watched.id,pending=new Map());
+        const key=JSON.stringify([source,'quota']),quotaSince=admittedSince===0?0:Math.max(admittedSince,access.sources.get(source)!.since);pending.set(key,{source,scope:'quota',since:Math.min(pending.get(key)?.since??quotaSince,quotaSince),workSince:Math.min(pending.get(key)?.workSince??quotaSince,quotaSince)});
+      }
+    }
     this.schedule();
   }
 
@@ -327,7 +342,7 @@ export class Events implements Touches {
 
   private schedule() {
     if (this.stopFlush || this.closed) return;
-    if (!this.dirtyBoards.size && !this.dirtySources.size && !this.dirtyUsers.size && !this.dirtyHub && !this.histories.size && !this.dirtyClientUsers.size && !this.ownHistories.size) return;
+    if (!this.dirtyBoards.size && !this.dirtySources.size && !this.dirtyUsers.size && !this.dirtyHub && !this.histories.size && !this.dirtyClientUsers.size && !this.workHistories.size) return;
     this.stopFlush = this.later(this.options.smoothMs, () => {
       this.stopFlush = null;
       this.flush();
@@ -351,14 +366,14 @@ export class Events implements Touches {
     const users = new Set(this.dirtyUsers);
     const histories = new Map(this.histories);
     const clientUsers = new Set(this.dirtyClientUsers);
-    const ownHistories = new Map(this.ownHistories);
+    const workHistories = new Map(this.workHistories);
     const hubTouched = this.dirtyHub;
     this.dirtyBoards.clear();
     this.dirtySources.clear();
     this.dirtyUsers.clear();
     this.histories.clear();
     this.dirtyClientUsers.clear();
-    this.ownHistories.clear();
+    this.workHistories.clear();
     this.dirtyHub = false;
 
     const heads = new Map<string, Frame[]>();
@@ -366,12 +381,12 @@ export class Events implements Touches {
     const lineups = new Map<string, BoardSource[]>();
     const financialKeys = new Map<string, string>();
     const failed: Failed = {boards: new Set(), users: new Set(), hub: false};
-    for (const id of new Set([...whole, ...sources.keys(), ...histories.keys()])) {
+    for (const id of new Set([...whole, ...sources.keys(), ...histories.keys(),...workHistories.keys()])) {
       const watched = this.watched.get(id);
       if (!watched) continue;
       try {
         if (whole.has(id) || sources.has(id)) {
-          const head = this.refresh(watched, whole.has(id), sources.get(id) ?? new Set(), now, lineups, histories, ownHistories);
+          const head = this.refresh(watched, whole.has(id), sources.get(id) ?? new Set(), now, lineups, histories, workHistories);
           if (!head) continue;
           heads.set(id, head);
         }
@@ -417,7 +432,6 @@ export class Events implements Touches {
     const currencies=new Map<string,Frame[]>();
     const lists = new Map<string, Frame[]>();
     const connectionFrames = new Map<string, Frame[]>();
-    const clientFramesByKey = new Map<string, Frame[]>();
     const deviceFramesByUser = new Map<string, Frame[]>();
     // Work out presence before sending any board, so one reader cannot hide another's recovery.
     for (const watched of this.watched.values()) for (const sub of watched.subscribers) {
@@ -428,13 +442,7 @@ export class Events implements Touches {
         catch (error) { trouble(error); failed.users.add(sub.user); this.deviceSessions.delete(sub.user); }
         deviceFramesByUser.set(sub.user, frames);
       }
-      const key = sub.user+'\n'+watched.id;
-      if (!clientFramesByKey.has(key)) {
-        let frames: Frame[] = [];
-        try { frames = this.refreshOwnSessions(sub.user, watched.id, now); }
-        catch (error) { trouble(error); failed.users.add(sub.user); this.ownSessions.delete(key); }
-        clientFramesByKey.set(key, frames);
-      }
+
     }
     for (const watched of this.watched.values()) {
       const financialKey=financialKeys.get(watched.id)??this.parts.store.financialKey(watched.id);
@@ -468,19 +476,20 @@ export class Events implements Touches {
           }
         }
         let historyFrames = tails.get(watched.id) ?? [];
-        const ownSince = this.parts.store.privateOwner(watched.id) === sub.user ? ownHistories.get(sub.user) : undefined;
-        if (ownSince !== undefined) {
+        const workSince = workHistories.get(watched.id);
+        if (workSince !== undefined) {
           const ordinary = historyFrames.find(frame => frame.type === 'history');
-          const value = ordinary ? JSON.parse(ordinary.data) as {sources: string[]; since: number; changes?: HistoryChange[]} : {sources: [], since: ownSince};
-          historyFrames = [...historyFrames.filter(frame => frame.type !== 'history'), frame('history', {...value, since: Math.min(value.since, ownSince), ownSince})];
+          const value = ordinary ? JSON.parse(ordinary.data) as {sources: string[]; since: number; changes?: HistoryChange[]} : {sources: [], since: workSince};
+          historyFrames = [...historyFrames.filter(frame => frame.type !== 'history'), frame('history', {...value, since: Math.min(value.since, workSince), workSince})];
         }
         historyFrames = historyFrames.map(item => item.type === 'history' ? frame('history', {...JSON.parse(item.data), workAuthority: watched.work}) : item);
-        let frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...(clientFramesByKey.get(sub.user+'\n'+watched.id) ?? []), ...(deviceFramesByUser.get(sub.user) ?? []), ...historyFrames, ...news];
+        let frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...(deviceFramesByUser.get(sub.user) ?? []), ...historyFrames, ...news];
         if (sub.fresh) continue;
         if(!frames.length&&!sub.desktop)continue;
         try {
-          const replacement=this.financialSnapshot(sub,financialKey);
+          const replacement=this.financialSnapshot(sub,financialKey,sub.workKey);
           if(replacement)frames=[frame('snapshot',replacement.snapshot)];
+          sub.workKey=this.projection.workKey(sub.board);
         }catch(error){trouble(error);this.end(sub,'restart');continue;}
         if (sub.desktop && (sources.has(watched.id) || whole.has(watched.id) || frames.length || sub.pending.length || sub.invalidations.size || sub.rebaseline)) {
           const attention = this.attentionFrames(sub, sub.rebaseline, now);
@@ -508,9 +517,10 @@ export class Events implements Touches {
   /**
    * The events of one board: its name and view when touched as a whole, then the touched
    * sources, sources new to it first, then its sources when they changed. Null once the
-   * board is gone: its readers are let go. Touched as a whole, it also says whether whose
-   * agents' work its history shows, or under which names, changed: then all of its
-   * history is news (`histories`), from its start.
+   * board is gone: its readers are let go. Touched as a whole, it also checks the work
+   * authority, invalidating credited history when it changes. Delivery replaces an
+   * authority-changing delta with a snapshot, including changed presentation names;
+   * view-only changes preserve admitted work.
    */
   private refresh(
     watched: Watched,
@@ -519,14 +529,18 @@ export class Events implements Touches {
     now: number,
     lineups: Map<string, BoardSource[]>,
     histories: Map<string, Map<string, HistoryChange>>,
-    ownHistories: Map<string, number>,
+    workHistories: Map<string, number>,
   ): Frame[] | null {
     const {projection} = this;
     const lineup = projection.lineup(watched.id);
     lineups.set(watched.id, lineup);
     const frames: Frame[] = [];
     const {base} = watched;
-    let computed = lineup.filter(s => touched.has(s.id));
+    const roster=projection.roster(watched.id,now);
+    const fallback=this.changed(base,'unattributedSessions',roster.unattributedSessions);
+    if(fallback!==null)frames.push({type:'unattributedSessions',data:`{"sessions":${fallback}}`});
+    if(roster.changesAt===null)watched.changes.delete('__sessions');else watched.changes.set('__sessions',roster.changesAt);
+    let computed = touched.has('__sessions')?lineup:lineup.filter(s=>touched.has(s.id));
     let ids: string[] | null = null;
     if (whole) {
       const part = projection.boardPart(watched.id, lineup);
@@ -550,19 +564,18 @@ export class Events implements Touches {
       ids = part.lineup;
       watched.lineup = ids;
       computed = lineup;
-      const work = projection.workKey(watched.id);
+      const work = projection.workKey(watched.id,roster.access);
       if (watched.work !== null && watched.work !== work) {
         let pending=histories.get(watched.id);if(!pending)histories.set(watched.id,(pending=new Map()));
         for(const source of ids)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0,workSince:0});
-        const owner = this.parts.store.privateOwner(watched.id);
-        if (owner) {ownHistories.set(owner, 0); this.onClientHistory?.(owner, 0);}
+        workHistories.set(watched.id,0);
       }
       watched.work = work;
     }
     if (computed.length) {
       const members = projection.members(watched.id);
       for (const source of computed) {
-        const {value, changesAt} = projection.sourcePart(source, members, now);
+        const {value, changesAt} = projection.sourcePart(source,members,now,roster);
         const id = JSON.stringify(source.id);
         const card = this.changed(base, `card:${source.id}`, value.card);
         if (card !== null) frames.push({type: 'card', data: card});
@@ -633,26 +646,14 @@ export class Events implements Touches {
     return news ? [{type: 'resets', data: json}] : [];
   }
 
-  private refreshOwnSessions(user: string, board: string, now: number): Frame[] {
-    const part = this.projection.ownSessions(user, board, now);
-    if (!part) return [];
-    const key = user+'\n'+board;
-    const json = JSON.stringify({sessions: part.value});
-    const changed = this.ownSessions.get(key)?.json !== json;
-    this.ownSessions.set(key, {json, changesAt: part.changesAt});
-    this.armOwn(now);
-    return changed ? [{type: 'ownSessions', data: json}] : [];
-  }
-
   private armOwn(now: number) {
-    const at = earliest(...[...this.ownSessions.values(), ...this.deviceSessions.values()].map(value => value.changesAt));
+    const at = earliest(...[...this.deviceSessions.values()].map(value => value.changesAt));
     if (this.ownDeadline?.at === at) return;
     this.ownDeadline?.cancel();
     this.ownDeadline = null;
     if (at === null) return;
     this.ownDeadline = {at, cancel: this.later(Math.max(1000, at-now), () => {
       this.ownDeadline = null;
-      for (const [key, value] of this.ownSessions) if (value.changesAt !== null && value.changesAt <= this.clock.now()) this.touchClientSessions(key.split('\n')[0]);
       for (const [user, value] of this.deviceSessions) if (value.changesAt !== null && value.changesAt <= this.clock.now()) this.touchClientSessions(user);
       this.schedule();
     })};
@@ -765,7 +766,7 @@ export class Events implements Touches {
       this.watched.set(id, watched);
     }
     const financialKey=this.parts.store.financialKey(reader.board);
-    const sub: Subscriber = {...reader, id: this.next++, fresh: true, stopPing: () => {}, seq: 0, baselineAt: 0, attentionKey: '', pending: [], invalidations: new Map(), pendingBytes: 0, rebaseline: false};
+    const sub: Subscriber = {...reader, id: this.next++, fresh: true, stopPing: () => {}, seq:0,baselineAt:0,workKey:this.projection.workKey(reader.board),attentionKey: '', pending: [], invalidations: new Map(), pendingBytes: 0, rebaseline: false};
     this.subscribers.set(sub.id, sub);
     watched.subscribers.add(sub);
     if (!this.stopHubRecheck) this.stopHubRecheck = this.every(this.options.recheckMs, () => this.touchHub());
@@ -797,7 +798,7 @@ export class Events implements Touches {
         historyStart: this.parts.store.historyStart(now),
         workAuthority: watched.work,
         sources: watched.lineup.map(id => value(`card:${id}`)),
-        ...(this.parts.store.privateOwner(reader.board) === reader.user ? {ownSessions: this.projection.ownSessions(reader.user, reader.board, now)!.value} : {}),
+        unattributedSessions:value('unattributedSessions')??[],
         sessions: Object.fromEntries(watched.lineup.map(id => [id, value(`sessions:${id}`)])),
         cadence: Object.fromEntries(watched.lineup.map(id => [id, value(`cadence:${id}`)])),
         refresh: Object.fromEntries(watched.lineup.map(id => [id, value(`refresh:${id}`)])),
@@ -807,8 +808,9 @@ export class Events implements Touches {
         connectionsRevision: this.parts.directory.connectionsRevision(reader.user),
         resets: this.hub?.value,
       };
-      const replacement=this.financialSnapshot(sub,financialKey);
+      const replacement=this.financialSnapshot(sub,financialKey,sub.workKey);
       if(replacement)snapshot=replacement.snapshot;
+      sub.workKey=this.projection.workKey(sub.board);
     } catch (error) {
       // Refused with an error, and nothing of it is left behind.
       this.unsubscribe(sub);
@@ -866,7 +868,7 @@ export class Events implements Touches {
     const watched = this.watched.get(sub.board);
     watched?.subscribers.delete(sub);
     const all = [...this.subscribers.values()];
-    if (!all.some(s => s.user === sub.user && s.board === sub.board)) {this.mines.delete(`${sub.user}\n${sub.board}`);this.sourceAccess.delete(sub.user+'\n'+sub.board);this.currencyContexts.delete(sub.user+'\n'+sub.board);this.ownSessions.delete(sub.user+'\n'+sub.board);this.armOwn(this.clock.now());}
+    if (!all.some(s => s.user === sub.user && s.board === sub.board)) {this.mines.delete(`${sub.user}\n${sub.board}`);this.sourceAccess.delete(sub.user+'\n'+sub.board);this.currencyContexts.delete(sub.user+'\n'+sub.board);this.armOwn(this.clock.now());}
     if (!all.some(s => s.user === sub.user)) {this.boardLists.delete(sub.user);this.connections.delete(sub.user);this.deviceSessions.delete(sub.user);this.armOwn(this.clock.now());}
     if (watched && !watched.subscribers.size) {
       watched.deadline?.cancel();
@@ -927,7 +929,7 @@ export class Events implements Touches {
       return {lease: known.id, now: this.clock.now(), frames};
     }
 
-    const lease: Lease = {...reader, id: randomBytes(16).toString('base64url'), subscriber: null, financialKey:this.parts.store.financialKey(reader.board), queue: [], bytes: 0, waiting: null, stopExpiry: () => {}, tomb: null};
+    const lease: Lease = {...reader, id: randomBytes(16).toString('base64url'), subscriber: null, financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board), queue: [], bytes: 0, waiting: null, stopExpiry: () => {}, tomb: null};
     const opened = this.subscribe({
       ...reader,
       kind: 'lease',
@@ -966,19 +968,20 @@ export class Events implements Touches {
     const reason=this.gone(lease);
     if(reason){this.expire(lease);return [bye(reason)];}
     try {
-      const replacement=this.financialSnapshot(lease,lease.financialKey);
-      if(replacement){lease.financialKey=replacement.key;return [frame('snapshot',replacement.snapshot)];}
+      const replacement=this.financialSnapshot(lease,lease.financialKey,lease.workKey);
+      if(replacement){lease.financialKey=replacement.key;lease.workKey=replacement.workKey;return [frame('snapshot',replacement.snapshot)];}
     }catch(error){trouble(error);this.expire(lease);return [bye('restart')];}
+    lease.workKey=this.projection.workKey(lease.board);
     return frames;
   }
 
   /** Prepared frames are not yet disclosed: replace their dataset and private bindings together. */
-  private financialSnapshot(reader: Pick<Reader,'user'|'board'>, previous: string) {
-    const key=this.parts.store.financialKey(reader.board);
-    if(key===previous)return null;
+  private financialSnapshot(reader: Pick<Reader,'user'|'board'>, previous:string,previousWork:string) {
+    const key=this.parts.store.financialKey(reader.board),workKey=this.projection.workKey(reader.board);
+    if(key===previous&&workKey===previousWork)return null;
     const snapshot=this.projection.snapshot(reader.user,reader.board,this.clock.now());
     if(!snapshot)throw new Error('the board could not be worked out');
-    return {key,snapshot};
+    return {key,workKey,snapshot};
   }
 
   /** A lease nobody asked on for `leaseMs`, or too far behind: its reader is gone. */

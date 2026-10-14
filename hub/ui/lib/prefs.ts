@@ -44,7 +44,7 @@ export type Prefs = {
 
 const KEY = 'quotum.prefs';
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
-export const ACTIVITY_BY: ActivityDimension[] = ['source', 'project', 'device'];
+export const ACTIVITY_BY: ActivityDimension[] = ['project', 'device', 'source'];
 const DEFAULTS: Prefs = {funds:DEFAULT_MONEY,money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', filtersVisible: false, showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
 
 function read(): Prefs {

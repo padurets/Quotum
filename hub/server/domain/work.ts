@@ -9,6 +9,11 @@ import type {Origin} from './ingest.js';
 export type Stretch = {
   session: number;
   source: string | null;
+  sourceStatus?:'notProvided';
+  /** Internal quota attribution cutoff; never serialized as session metadata. */
+  quotaFrom?:number;
+  /** Request-local immutable ledger identity, omitted from public projections. */
+  rawContext?:{source:string|null;client:string;producer:string|null;project:string;folder:string;deviceName:string};
   device: string;
   user: string;
   origin: Origin;

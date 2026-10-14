@@ -1,4 +1,7 @@
+import {currentCohort,capturedCohort} from './sessionOracle.js';
+import {seedSessionClients} from '../sessionClients.js';
 import type {PeriodReply} from '../../server/domain/periodRead.js';
+import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire.js';
 import {workedSessions} from '../../server/domain/periodWork.js';
 import {PeriodActivity} from '../../ui/lib/periodActivity.js';
 import {compose, targetOf, type HistoryAnswer} from '../../server/domain/history.js';
@@ -33,7 +36,7 @@ import {resetLabel, type Resets, type TrackerHealth} from '../../ui/lib/resets.j
 import {ANALYTICS_KINDS, type History, type LiveSession, type Pace, type SourceForecast, type View} from '../../ui/lib/types.js';
 import type {Snapshot} from '../../ui/lib/board.js';
 import {ACTIVITY, AGENTS, boardState, cardId, columnShown, QUOTA_TABLE, QUOTA_HISTORY, isHidden, isWindowHidden, planOf} from '../../ui/lib/view.js';
-import {SCENES, SETS,PERIOD_SCENES} from '../catalogue.js';
+import {SCENES, SETS,PERIOD_SCENES,SESSION_ACTIVITY_SCENES} from '../catalogue.js';
 import {
   awake,
   cards,
@@ -112,7 +115,7 @@ const within = (entry: Entry, check: Span, t: number) => {
 };
 
 /** A board as the page puts it together from its snapshot: each card named from the whole board, with its agents and its pace. */
-type Overview = {view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace; refresh: Snapshot['refresh'][string]; forecast: SourceForecast})[]};
+type Overview = {unattributedSessions?:LiveSession[];view: View; historyStart: number; sources: (Snapshot['sources'][number] & {title: string; sessions: LiveSession[]; cadence: Pace; refresh: Snapshot['refresh'][string]; forecast: SourceForecast})[]};
 
 /** What the hub shows at one moment, read once per board as the page would. */
 class Reading {
@@ -147,11 +150,11 @@ class Reading {
               refresh: data.refresh[card.id],
               forecast: data.forecast[card.id] ?? {},
             }));
-            const overview: Overview = {view: data.view, historyStart: data.historyStart, sources};
+            const overview:Overview={view:data.view,historyStart:data.historyStart,sources,unattributedSessions:data.unattributedSessions??[]};
             const ordered = (sessions: LiveSession[]) => {
               for (let i = 1; i < sessions.length; i++) assert.ok(byActivity(sessions[i - 1], sessions[i]) <= 0, `${board}: activity order`);
             };
-            ordered(agentRows(overview.sources, overview.view).rows.map(r => r.session));
+            ordered(agentRows(overview.sources,overview.view,overview.unattributedSessions??[]).rows.map(r=>r.session));
             for (const source of overview.sources) {
               const groups = machinesOf(source.sessions);
               ordered(groups.map(m => m.sessions[0]));
@@ -270,7 +273,9 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     // A widget hidden on the board shows none of its codes.
     if (('rows' in check || 'agentsOf' in check || 'agentGroup' in check) && isHidden(overview.view, AGENTS)) return `the table of running agents is hidden on the board ${entry.id}`;
     if ('weeklySeries' in check && isHidden(overview.view, QUOTA_HISTORY)) return `the chart is hidden on the board ${entry.id}`;
-    const {rows, empty} = agentRows(overview.sources, overview.view);
+    const {rows,empty}=agentRows(overview.sources,overview.view,overview.unattributedSessions??[]);
+    if('admittedRoster' in check){const actual:Record<string,number>={};for(const row of rows)actual[row.session.device.name]=(actual[row.session.device.name]??0)+1;return {admittedRoster:JSON.stringify(Object.entries(actual).sort())===JSON.stringify(Object.entries(currentCohort(set,entry.id,now-stand.start)).sort())};}
+    if('mappedRows' in check)return {mappedRows:overview.sources.reduce((count,source)=>count+source.sessions.length,0)};
     if ('agentGroup' in check) {
       const {agentGroup} = check as {agentGroup: string};
       const group = groupsOf(rows, 'project').find(g => g.name === agentGroup);
@@ -450,6 +455,7 @@ async function bringUp(t: TestContext, set: DemoSet, start: number) {
   });
   const stand = await setUp(hub.base, set, start, SETUP, () => Date.now());
   seedWork(hub.store, stand);
+  if(set.id==='sessions')await seedSessionClients(hub.store,new Directory(hub.store.db),stand);
   return {stand, trackers, hub};
 }
 
@@ -513,7 +519,7 @@ test('a card with agents spends its five hours as its weeks go, before its agent
 });
 
 test('the demo is the same whenever it starts: everything is timed from the start, not by the clock or the calendar', () => {
-  for (const file of ['model.ts', 'catalogue.ts', 'setup.ts', 'trackers.ts']) {
+  for (const file of ['model.ts', 'catalogue.ts', 'sessionAnalytics.ts', 'setup.ts', 'trackers.ts']) {
     const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
     assert.doesNotMatch(source, /Math\.random|Date\.now|new Date\(\)/, file);
   }
@@ -571,6 +577,17 @@ test('every entry of the whole catalogue shows what it claims over its span', {t
       for (const [i, id, h] of [[0, 'claude-max'], [1, 'codex-pro', 9], [2, 'antigravity', 8]] as const) {
         assert.deepEqual(layout.places[cardId(stand.sources.get(id)!)], {x: 3, y: i + 1, w: 3, ...(h ? {h} : {})});
       }
+      for(const board of ['team','night','quiet']){
+        const expected=capturedCohort(set,board,24*HOUR),history=await reading.history(board);
+        assert.deepEqual([history.activity.agentMs,history.activity.activeMs,history.activity.agents],[expected.agentMs,expected.activeMs,expected.agents],board+': exact additive/union/context cohort comes from the declared waves and member cutoffs');
+        const owner=stand.people.get('ana')!,target=stand.boards.get(board)!,reply=expandPeriod(await owner.post<PeriodWireReply>(`/api/boards/${target}/period`,{version:1,selection:{mode:'live',periodMs:24*HOUR},evaluatedAt:start,sessions:{}}));
+        if(reply.sessions?.state!=='complete')throw new Error(board+': missing dashboard period cohort');
+        const rows=workedSessions(reply.sessions.value,reply.basis.range,start),activity=new PeriodActivity(reply.sessions.value);activity.update(rows);const summary=activity.summary(reply.basis.range,'source');
+        assert.deepEqual([rows.length,summary.agentMs,summary.activeMs],[expected.agents,expected.agentMs,expected.activeMs],board+': actual dashboard period transport preserves the distinct positive-work cohort');
+
+      }
+      const quota=(await reading.history('team','7d')).series.find(series=>series.sourceId===stand.sources.get('ben-codex')&&series.windowId==='weekly')!.work!;
+      assert.deepEqual([quota.from,quota.ms,quota.agentMs],[start-HOUR,0,0],'Ben’s quota work begins at joining, excluding Dan’s older nonmember work');
       // The heights chosen on the boards the benchmark and the look go through.
       const ana = (await reading.overview('ana')).view.layout.places;
       assert.deepEqual([ana.agents, ana.activity, ana['quota-history'], ana['quota-table']].map(place => place.h), [32, 12, 16, 30]);
@@ -860,6 +877,28 @@ test('seed and live credit share producer IDs and expose known positive, zero, l
 });
 
 
+test('session comparison catalogue exposes grouped session columns and retained work with a whole union total',async t=>{
+  const set=setOf('all'),start=Math.floor(Date.now()/MIN)*MIN;
+  const {stand}=await bringUp(t,set,start);t.mock.timers.setTime(start);
+  const reader=stand.people.get('dan')!,board=reader.personalBoard!;
+  const overview=await reader.get<Snapshot>('/api/overview');
+  assert.ok(overview.view.shown.includes('agents'));
+  assert.equal(overview.view.layout.places.agents.w,6);
+  const selection={mode:'range',from:start-7*24*HOUR,to:start};
+  const reply=await reader.post<PeriodReply>(`/api/boards/${board}/period`,{version:1,selection,evaluatedAt:start,sessions:{}});
+  if(reply.sessions?.state!=='complete')throw new Error('comparison work');
+  assert.equal(reply.quota,undefined);
+  const rows=workedSessions(reply.sessions.value,selection,start),metrics=new PeriodActivity(reply.sessions.value);
+  metrics.update(rows);const summary=metrics.summary(selection,'project');
+  assert.ok(summary.by.project.length>=2);
+  assert.ok(summary.by.project.reduce((sum,g)=>sum+g.activeMs,0)>summary.activeMs);
+  assert.equal(summary.agentMs,rows.reduce((sum,r)=>sum+r.workedMs,0));
+  assert.equal(summary.agents,rows.length);assert.ok(rows.some(row=>!row.working));
+  for(const group of summary.by.project){const contexts=rows.filter(row=>JSON.stringify(row.project)===group.key);
+    assert.equal(contexts.length,group.agents);assert.equal(contexts.reduce((sum,r)=>sum+r.workedMs,0),group.agentMs);}
+  assert.deepEqual(SESSION_ACTIVITY_SCENES.find(scene=>scene.id==='comparison')!.expect,['opt-in-table','union-total','retained-contributions','shared-work-index']);
+});
+
 test('period catalogue states use the existing retained demo evidence at exclusive boundaries',async t=>{
   const set=setOf('activity'),start=Math.floor(Date.now()/MIN)*MIN;
   const {stand}=await bringUp(t,set,start);t.mock.timers.setTime(start);
@@ -879,4 +918,51 @@ test('period catalogue states use the existing retained demo evidence at exclusi
   if(empty.values?.state!=='complete'||empty.sessions?.state!=='complete')throw new Error('empty period');
   assert.ok(empty.values.value.every(v=>!v.windows.length&&!v.meters.length));assert.equal(empty.sessions.value.spans.length,0);
   assert.deepEqual(PERIOD_SCENES.flatMap(s=>s.expect),['past-values','retained-work','exclusive-interval','shared-activity','unknown-value','no-invented-work']);
+});
+
+test('session review starts with populated 24h comparisons and retained-context pages',async t=>{
+  const set=setOf('sessions'),start=Math.floor(Date.now()/MIN)*MIN;
+  const {stand,hub}=await bringUp(t,set,start);t.mock.timers.setTime(start);
+  const live=new Live(stand,()=>MIN);await live.report(0,start);
+  const reader=stand.people.get('ana')!,board=reader.personalBoard!;
+  const overview=await reader.get<Snapshot>(`/api/overview?board=${board}`);
+  assert.ok(overview.view.shown.includes('agents'));
+  const current=[...Object.values(overview.sessions).flat(),...(overview.unattributedSessions??[])];assert.equal(current.length,60);
+  const read=async(selection:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number})=>{
+    const reply=expandPeriod(await reader.post<PeriodWireReply>(`/api/boards/${board}/period`,{version:1,selection,evaluatedAt:start,sessions:{}}));
+    if(reply.sessions?.state!=='complete')throw new Error('session review work');
+    assert.equal(reply.quota,undefined);
+    const range=selection.mode==='live'?{from:start-selection.periodMs,to:start}:selection;
+    const rows=workedSessions(reply.sessions.value,range,start),activity=new PeriodActivity(reply.sessions.value);
+    activity.update(rows);return {rows,summary:(by:'project'|'device'|'source')=>activity.summary(range,by)};
+  };
+  for(const periodMs of [24*HOUR,7*24*HOUR]){
+    const {rows,summary}=await read({mode:'live',periodMs}),projects=summary('project'),atlas=rows.filter(row=>row.project==='atlas');
+    assert.equal(projects.by.project.length,57,'the default comparison includes every project beyond the former page boundary');
+    assert.equal(rows.length,129);assert.equal(projects.agents,129);assert.equal(atlas.length,67,'Atlas fills two disclosure pages');
+    assert.equal(atlas.filter(row=>!row.currentPresence).length,64,'retained work remains available without a live context');
+    assert.ok(rows.length>current.length);assert.equal(summary('device').by.device.length,6);assert.equal(summary('source').by.source.length,5);
+    assert.ok(rows.some(row=>row.project===null));assert.ok(rows.some(row=>(row.project?.length??0)>100));
+    assert.equal(projects.agentMs,rows.reduce((total,row)=>total+row.workedMs,0));
+    assert.ok(projects.by.project.reduce((total,group)=>total+group.activeMs,0)>projects.activeMs,'the full active total is a union');
+    for(const by of ['device','source'] as const)assert.deepEqual([summary(by).agentMs,summary(by).activeMs,summary(by).agents],[projects.agentMs,projects.activeMs,projects.agents]);
+  }
+  const member=stand.people.get('boris')!;
+  for(const key of ['sessions-only','quota-only','both','off','hidden','historical']){
+    const target=stand.boards.get(key)!,snapshot=await member.get<Snapshot>(`/api/overview?board=${target}`),reply=expandPeriod(await member.post<PeriodWireReply>(`/api/boards/${target}/period`,{version:1,selection:{mode:'live',periodMs:24*HOUR},evaluatedAt:start,sessions:{}}));
+    if(reply.sessions?.state!=='complete')throw new Error(key+': missing sessions');
+    const rows=workedSessions(reply.sessions.value,reply.basis.range,start),off=key==='quota-only'||key==='off';assert.equal(rows.length,off?0:129,key);assert.equal([...Object.values(snapshot.sessions).flat(),...(snapshot.unattributedSessions??[])].length,off?0:60,key+' current');
+    assert.equal(snapshot.sources.length,['sessions-only','off'].includes(key)?0:4,key+' cards');
+    if(off)assert.equal(reply.sessions.value.available,false);else assert.equal(reply.sessions.value.available,undefined);
+    if(key==='sessions-only'){assert.equal(rows.filter(row=>row.source===null&&row.sourceStatus==='notProvided').length,127);assert.equal(rows.filter(row=>row.source===null&&!row.sourceStatus).length,2);assert.equal(Object.keys(snapshot.sessions).length,0);}
+    if(key==='hidden')assert.equal(snapshot.view.hidden.filter(id=>id.startsWith('source:')).length,4);
+    if(key==='historical'){
+      const quota=expandPeriod(await member.post<PeriodWireReply>(`/api/boards/${target}/period`,{version:1,selection:{mode:'live',periodMs:24*HOUR},evaluatedAt:start,sessions:{},quota:{cell:String(MIN),from:String(start-2*HOUR),to:String(start)}}));
+      if(quota.quota?.state!=='complete')throw new Error('historical quota');assert.equal(quota.quota.value.tape!.quota.length,4);assert.ok(quota.quota.value.tape!.quota.every(series=>series.workFrom===start-HOUR));assert.ok(rows.some(row=>row.lastWorkedAt<start-HOUR),'pre-source-grant work stays in full Activity');
+    }
+  }
+  const policies=hub.store.sessionDevices(stand.boards.get('both')!,reader.id);assert.equal(policies.length,6);assert.equal(policies.filter(device=>device.disconnected&&device.enabled).length,1);assert.equal(hub.store.sessionDevices(stand.boards.get('quota-only')!,reader.id).every(device=>!device.enabled),true);
+  const empty=await read({mode:'range',from:start-4*HOUR,to:start-2*HOUR});assert.equal(empty.rows.length,0);assert.ok(empty.summary('project').known);
+  const unknown=await read({mode:'range',from:start-9*24*HOUR,to:start-8*24*HOUR});assert.equal(unknown.summary('project').known,null);
+  assert.deepEqual(SESSION_ACTIVITY_SCENES.find(scene=>scene.id==='review')!.expect,['populated-24h','paged-comparison','height-fit-pages','narrow-sort-menu','header-sort-reset','retained-pagination','rich-breakdowns']);
 });

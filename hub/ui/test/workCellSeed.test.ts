@@ -12,6 +12,7 @@ import {PeriodAccounting} from '../lib/periodAccounting';
 import {PeriodIndex} from '../lib/periodIndex';
 import {PeriodActivity} from '../lib/periodActivity';
 import {evaluatedRange,periodKey} from '../../server/domain/period';
+import {cellOf} from '../../server/domain/history';
 import {packWorkPrepared,workPreparationBytes,mergeWorkPrepared} from '../../server/domain/periodWork';
 import {packSamples,retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/domain/periodTape';
 import {drain} from '../lib/prepare';
@@ -25,7 +26,7 @@ const compile=(body:string)=>ts.transpileModule(body,{compilerOptions:{target:ts
 const region=(body:string,from:string,to:string)=>body.slice(body.indexOf(from),body.indexOf(to,body.indexOf(from)));
 const cellSource=region(code('../components/Forecast.tsx'),'    const lineAt=','    const workCells:');
 const hookSource=code('../lib/clock.ts').slice(code('../lib/clock.ts').indexOf('export function useClock('));
-const timedSource=region(code('../components/AnalyticsTable.tsx'),'function Timed(','\nconst shown =');
+const timedSource=region(code('../components/TableCell.tsx'),'function Timed(','\nexport const tableCell=');
 const cellContext={exports:{} as {make:(period:any,line:Line,history:{range:string;since:number},column:WorkColumn,resetAt:number|null)=>TimedCell},lineWork,workText,workLeftChangesAt,formatLocale,WeakRef};
 runInNewContext(compile(`export function make(boardPeriod:any,line:Line,history:any,column:WorkColumn,resetAt:number|null){const range=false;${cellSource}return timed(column);}`),cellContext);
 const make=cellContext.exports.make;
@@ -109,7 +110,7 @@ async function reservedOwner() {
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson:(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b),prefs:()=>({range:'24h'}),PERIOD_SCOPES:['quota','budget','funds'],noSessions:[],noValue:{}};
   runInNewContext(compile(region(code('../lib/period.ts'),'class BoardPeriod','export const boardPeriod').replace('class BoardPeriod','export class BoardPeriod')),context);
   const period=new context.exports.BoardPeriod();period.selection=selection;
-  const basis={run:'r',revision:'1',evaluatedAt:now,evidenceCut:now,range:{from:1,to:now}},intent={board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:now}};
+  const cell=cellOf(periodMs),basis={run:'r',revision:'1',evaluatedAt:now,evidenceCut:now,range:{from:1,to:now}},intent={board:'b',generation:0,revision:0,request:{version:1,selection,evaluatedAt:now,quota:{cell:String(cell),from:'0',to:String(Math.ceil(now/cell)*cell),cells:'skip'},sessions:{}}};
   const work={anchor:0,cut:now,knownFrom:0,refs:[{ref:'a',source:'s',device:{id:'d',name:'Device'},origin:'terminal',project:'Project',folder:null,startedAt:0}],spans:[[0,10_000,1_000_000]],cursor:'work'};
   await period.receive({basis,sessions:{state:'complete',basis,value:work},quota:{state:'complete',basis,value:{run:'r',now,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:{from:0,cut:now,replaceFrom:0,cursor:'c',quota:[{source:'s',window:'w',samples:packSamples([{at:0,used:17,resetAt:null,staleAfterMs:0}])}],money:[]}}}},intent);
   return {period,now,periodMs,replace:async(rejected:boolean)=>{refuse=rejected;try{await period.receive({basis,sessions:{state:'complete',basis,value:{...work,refs:[],spans:[],cursor:'new'}}},intent);}finally{refuse=false;}}};

@@ -362,6 +362,11 @@ export const STEPS = [
       AND r.meter_id=meter_spans.meter_id AND r.at=meter_spans.from_at);
   UPDATE meter_contexts SET observed_from=to_at WHERE from_at=to_at;
   `,
+  // 25 — session sharing belongs to the board and device, independently of subscriptions.
+  `CREATE TABLE board_device_sessions (
+    board_id TEXT NOT NULL, device_id TEXT NOT NULL, enabled_since INTEGER,
+    revision TEXT NOT NULL, PRIMARY KEY(board_id,device_id)) WITHOUT ROWID;
+  CREATE INDEX board_device_sessions_by_device ON board_device_sessions(device_id);`,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

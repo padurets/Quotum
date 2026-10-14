@@ -98,7 +98,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: idle-cpu-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/quotum-idle-cpu
+          path: |
+            ${{ runner.temp }}/quotum-idle-cpu
+            /tmp/quotum-idle-cpu-diagnostic
           if-no-files-found: warn
 
   browser-startup:
