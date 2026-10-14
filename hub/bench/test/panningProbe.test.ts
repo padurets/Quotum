@@ -13,7 +13,7 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'spending'|'fu
   let time = 0;
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
   const schedule = (callback: (stamp: number) => void) => {callbacks.push(callback); return callbacks.length;};
-  const layer = (data = false) => {const slides = {style: {transform: 'none'}, getAnimations: () => []}; return {style: {transform: 'none'}, slides, querySelector: (selector: string) => selector === '.activity-stack' ? data ? {} : null : slides};};
+  const layer = (data = false) => {const slides = {isConnected:true,style: {transform: 'none'}, getAnimations: () => []}; return {isConnected:true,style: {transform: 'none'}, slides, querySelector: (selector: string) => selector === '.activity-stack' ? data ? {} : null : slides};};
   const fundsLayer = layer(), budgetLayer = layer(), spendingLayer=layer(),sessionLayer=layer(),historyLayer = layer(), activityLayer = layer(true), activityTicks = layer(), activityEdge = layer(true);
   const restoreClip = {style: {transform: 'none'}, firstElementChild: activityLayer};
   const endClip = {style: {transform: 'none'}, firstElementChild: restoreClip};
@@ -27,8 +27,8 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'spending'|'fu
     getBoundingClientRect: () => ({width: 450}), viewBox: {baseVal: {width: 900}},
     parentElement: {
       dataset: {axisEnd: '0'},
-      querySelector: (selector: string) => (slides === budgetLayer || slides === fundsLayer||slides===spendingLayer) ? slides : (slides === historyLayer||slides===sessionLayer) ? historyLayer : selector === '.plot-clip.is-band' ? activityClip : selector === '.plot-clip.is-band .plot-move' ? activityLayer : activityTicks,
-      querySelectorAll: () => (slides === historyLayer||slides===sessionLayer) ? [historyLayer] : [activityTicks, activityLayer, activityEdge],
+      querySelector: (selector: string) => (slides === budgetLayer || slides === fundsLayer||slides===spendingLayer||slides===historyLayer||slides===sessionLayer) ? slides : selector === '.plot-clip.is-band' ? activityClip : selector === '.plot-clip.is-band .plot-move' ? activityLayer : activityTicks,
+      querySelectorAll: () => (slides === historyLayer||slides===sessionLayer) ? [slides] : [activityTicks, activityLayer, activityEdge],
       addEventListener: (name: string, fn: (event: object) => void) => listeners.set((slides === fundsLayer ? 'funds' : slides === budgetLayer ? 'budget' : slides===spendingLayer?'spending':slides===sessionLayer?'session':slides===activityLayer?'activity':'quota') + ':' + name, fn), removeEventListener: () => {},
     },
   });
@@ -91,6 +91,26 @@ test('a hidden activity band cannot be credited as moving data', () => {
   assert.equal(f.reading.synchronized, false); assert.equal(f.reading.latency.length, 0);
 });
 
+test('the moving probe reads retained matrix owners without traversing the chart trees',()=>{
+  const f=fixture();
+  const unexpected=()=>{throw new Error('DOM traversal inside the moving probe');};
+  for(const layer of [f.historyLayer,f.activityLayer,f.budgetLayer,f.fundsLayer,f.sessionLayer,f.spendingLayer])layer.querySelector=unexpected;
+  for(const svg of [f.historySvg,f.activitySvg,f.budgetSvg,f.fundsSvg,f.sessionSvg,f.spendingSvg]){svg.parentElement.querySelector=unexpected;svg.parentElement.querySelectorAll=unexpected;}
+  f.wheel(0,0);f.requestFrame(()=>f.update(1,16.7));f.runFrame(16.7);
+  assert.equal(f.reading.synchronized,true);assert.equal(f.reading.latency.length,1);
+});
+
+test('a detached retained owner cannot supply a painted frame',()=>{
+  const f=fixture();f.wheel(0,0);f.historyLayer.isConnected=false;
+  f.requestFrame(()=>f.update(1,16.7));f.runFrame(16.7);
+  assert.equal(f.reading.synchronized,false);assert.equal(f.reading.sizeStable,false);assert.equal(f.reading.latency.length,0);
+});
+
+test('the five-hour drawing has its own owner and cannot borrow the weekly transform',()=>{
+  const f=fixture('session');f.wheel(0,0);f.requestFrame(()=>{f.update(1,16.7);f.sessionLayer.style.transform='none';});f.runFrame(16.7);
+  assert.equal(f.reading.synchronized,false);assert.equal(f.reading.latency.length,0);
+});
+
 function run(moves: boolean, synchronized: boolean, proportional = true, historyMoves = true, edgeMoves = true): PanReading {
   const f = fixture();
   for (let i = 1; i <= 100; i++) {
@@ -139,6 +159,18 @@ test('the probe observes the production update in its own RAF and credits only r
   f.requestFrame(() => f.update(2, 49)); f.runFrame(48);
   assert.equal(f.reading.latency[1], 29);
   assert.equal(f.reading.pending.length, 0);
+});
+
+test('unrelated RAF callbacks do not resample unchanged drawing owners',()=>{
+  const f=fixture();let reads=0;
+  for(const svg of [f.historySvg,f.sessionSvg,f.activitySvg,f.budgetSvg,f.spendingSvg,f.fundsSvg])svg.getAttribute=()=>{reads++;return '0 0 900 200';};
+  f.wheel(0,0);
+  for(let i=0;i<30;i++)f.requestFrame(()=>{});
+  f.requestFrame(()=>f.update(1,16.7));
+  for(let i=0;i<30;i++)f.requestFrame(()=>{});
+  f.runFrame(16.7);
+  assert.equal(reads,6,'only the actual production movement samples all six retained drawings');
+  assert.equal(f.reading.latency.length,1);assert.equal(f.reading.synchronized,true);
 });
 
 test('input-free gaps are excluded but pending input keeps delayed frames measurable', () => {
