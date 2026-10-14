@@ -1,3 +1,4 @@
+import {planEventsAt,planEventsDeadline} from '../../server/domain/history';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -6,6 +7,7 @@ import ts from 'typescript';
 import {PeriodActivity} from '../lib/periodActivity';
 import {PeriodIndex} from '../lib/periodIndex';
 import type {History} from '../lib/types';
+import {shallowEqual} from '../lib/store';
 
 test('the actual period hook advances exact rolling work without invalidating drawing evidence', () => {
   const trace = {anchor: 0, cut: 60_000, knownFrom: 0, refs: [{ref: 'r', source: 's', device: {id: 'd', name: 'Laptop'}, origin: 'terminal' as const, project: null, folder: null, startedAt: 0}], spans: [[0, 0, 40_000]] as [number, number, number][]};
@@ -23,7 +25,7 @@ test('the actual period hook advances exact rolling work without invalidating dr
     return box.current.value;
   };
   const loader = {scope: 'quota', subscribe: () => () => {}, get: () => shown};
-  const context = {useRef, useMemo, useSyncExternalStore: (_subscribe: unknown, read: () => unknown) => read(), usePanning: () => panning, useClock: () => now,
+  const context = {useRef, useMemo, useSyncExternalStore: (_subscribe: unknown, read: () => unknown) => read(),pan:{active:()=>panning,onPhase:()=>()=>{}},hubNow:()=>now,planEventsAt,planEventsDeadline,shallowEqual,useClock: () => now,
     fundsHistory: {}, page: {get: () => ({board: {id: board}})}, timeRange: () => null, prefs: () => ({range: '1m'}),
     boardPeriod: {getProjectionRevision: () => revision, projectionState: () => ({ready, error: null}), project: (base: History, _scope: string, at: number) => {
       const range = {from: at - 60_000, to: at}; activity.update(index.advance(range, at).rows);

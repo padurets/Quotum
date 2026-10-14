@@ -99,6 +99,11 @@ export function planEventsAt(events:SourceEvent[],now:number):SourceEvent[] {
   const result=events.flatMap(event=>{const value=planEventAt(event,now);return value?[value]:[];});
   return result.length===events.length&&result.every((event,i)=>event===events[i])?events:result;
 }
+export function planEventsDeadline(events:readonly SourceEvent[]):number {
+  let deadline=Infinity;
+  for(const event of events)if(event.kind==='plan')deadline=Math.min(deadline,event.expiresAt,event.previous?event.expiresAt-event.at+event.previous.at:Infinity);
+  return deadline;
+}
 export type HistorySeries = {
   windowValue?:Pick<import('./quota.js').Win,'id'|'kind'|'label'|'minutes'>;
   pointMode?:'cell'|'observation';
