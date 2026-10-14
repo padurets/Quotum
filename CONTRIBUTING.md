@@ -115,6 +115,12 @@ CPU mode also observes cache pressure, eviction and read freshness on the origin
 unobserved; they add no flight records, owner scans, timestamps or serialization.
 A complete critical scope does not imply complete ordinary-flight evidence or
 qualified observer overhead. Failed or pending renderer commands still close directly.
+The same CPU observer follows one fixed physical tile, binding its chart family only
+through an actual chart read reaching the shared transport with the same owner and
+range. Numeric state changes distinguish retained coverage from synchronous clears,
+including a history-limit clear without eviction. Asynchronous publication or clearing
+between observations remains unknown; absence alone cannot prove that a tile never
+committed. Shared collection limits and omitted observations remain explicit.
 `QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL=1` (the
 `benchmark-history-pool-diagnostics` PR label) keeps the original benchmark phases
 and full traffic matrix. Only its `browser/30d/activity/0ms/0.5/take1` page records

@@ -2,6 +2,12 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {HistoryPool} from '../../ui/lib/historyPool';
+import {HistoryStore} from '../../ui/lib/history';
+import {PeriodTransport} from '../../ui/lib/periodTransport';
+import type {PeriodScope} from '../../server/domain/periodRead';
+import {Preparations} from '../../ui/lib/prepare';
+import {ApiError} from '../../ui/lib/http';
+import {expandHistory,tileOf,type HistoryAnswer} from '../../server/domain/history';
 import {safeEvidence} from '../evidence';
 import {historyPoolReceiptScript,historyPoolCriticalReceiptScript} from '../historyPoolReceipt';
 
@@ -176,4 +182,140 @@ test('critical tile limits cannot qualify an incomplete freshness snapshot',()=>
   assert.ok(receipt.tiles.length<=receipt.tileLimit);
   assert.ok(receipt.tileBytes<=receipt.tileByteLimit);
   assert.equal(h.context.budget.grids.get(60).size,2048);
+});
+
+// The new controls execute the real store, tile preparation and transport; no copied cache planner.
+const WATCH_CELL=7200000,WATCH_FROM=1790640000000,WATCH_TO=1791072000000;
+const CONTROL_NOW=WATCH_FROM+30*86400000;
+type Entry={id:number;kind:string;row:any[];values:any[]};
+function actualFixture(){
+  const pool=new HistoryPool(),jobs:(()=>void)[]=[],micro:(()=>void)[]=[],timers=new Map<object,()=>void>();let quantum=0,sendError:unknown=null,currentScope:PeriodScope='funds',nested:(()=>void)|null=null;
+  const preparations=new Preparations({now:()=>++quantum,post:run=>jobs.push(run)});
+  const sent:{body:any;resolve:(reply:any)=>void;reject:(error:unknown)=>void;done:boolean}[]=[];
+  const transport=new PeriodTransport(pool,()=>({board:'synthetic',generation:1,revision:1,request:{version:1,selection:{mode:'live',periodMs:30*86400000},evaluatedAt:CONTROL_NOW}}),()=>{},(_board,body)=>new Promise((resolve,reject)=>{
+    const call={body,resolve,reject,done:false};sent.push(call);
+    call.done=true;if(sendError)reject(sendError);else resolve(answer(body));
+  }));
+  const transportSpy=transport as any,oldRead=transport.read;let originalError:unknown=null,lastTransportPromise:unknown=null,transportReceiver:unknown=null,transportArgs:unknown[]=[];
+  transportSpy.read=function(...args:unknown[]){transportReceiver=this;transportArgs=args;if(originalError)throw originalError;const value=oldRead.apply(this,args as any);lastTransportPromise=value;return value;};
+  const context=vm.createContext({Map,Set,WeakMap,WeakRef,Headers,Request,URL,location:{href:'http://fixture.invalid/'},performance:{now:()=>{throw Error('unexpected timing observation');}}});
+  vm.runInContext('window=globalThis;',context);vm.runInContext(historyPoolCriticalReceiptScript(),context);context.__quotumInspectHistoryPool(pool);
+  const period={transport,retained:new Map(),valueCache:new Map(),get estimatedBytes(){return 0;},evictionCandidates(){return [];}};pool.register(period);
+  let lastEnvPromise:unknown=null,envReceiver:unknown=null;
+  const make=(scope:'quota'|'budget',family:'quota'|'budget'|'funds')=>{
+    const env:any={sharedTransport:true,preparations,schedule:(run:()=>void)=>micro.push(run),now:()=>CONTROL_NOW,elapsedNow:()=>0,
+      setTimeout:(run:()=>void)=>{const key={};timers.set(key,run);return key;},clearTimeout:(key:object)=>timers.delete(key),dropTimeRange:()=>{throw Error('unexpected range rejection');},
+      read:function(_board:string,cell:number,from:number,to:number,signal:AbortSignal,meters:any,metadata:any,owner:any,...extra:any[]){
+        envReceiver=this;if(nested&&family==='funds'){const run=nested;nested=null;run();}const query={cell:String(cell),from:String(from),to:String(to),...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids)}:{})};
+        const value=(transport as any).read(family==='funds'?currentScope:family,query,signal,owner,...extra).then((reply:HistoryAnswer)=>expandHistory(reply,metadata));lastEnvPromise=value;return value;
+      }};
+    const store=new HistoryStore(env,undefined,scope,pool);store.setActive(false);store.choose('30d',null);store.open('synthetic');store.hello('run');store.snapshot(['fund'],[],0);return store;
+  };
+  const quota=make('quota','quota'),funds=make('budget','funds'),budget=make('budget','budget');
+  // Register funds before budget: an ordinal-based funds guess would identify the wrong store.
+  funds.setMeters({unit:'USD',ids:[['fund','balance']]});
+  function answer(body:any){
+    const parts:any={};for(const scope of ['quota','budget','funds'])if(body[scope]){
+      const query=body[scope],cell=Number(query.cell),from=Number(query.from),to=Number(query.to);
+      parts[scope]={state:'complete',value:{run:'run',now:CONTROL_NOW,historyStart:0,known:{work:0,sources:{fund:0}},chunks:[{from,to,series:[],meterSeries:Array.from({length:12},(_,i)=>({source:'fund-'+i,meter:'balance',kind:'balance',unit:'USD',semantics:null,cells:[[0,'9000000','0','0',cell]]})),activity:{sessions:[],devices:{},cells:[]},resets:[],grants:[]}]}};
+    }return parts;
+  }
+  const flush=async()=>{for(let i=0;i<24;i++)await Promise.resolve();};
+  const step=async()=>{await flush();micro.shift()?.();jobs.shift()?.();await flush();};
+  const settle=async()=>{for(let i=0;i<4000;i++){await step();if(!micro.length&&!jobs.length&&!pool.activeFlights&&!sent.some(s=>!s.done))return;}throw Error('finite real store preparation did not settle');};
+  const direct=(owner:any,extra?:unknown)=>((funds as any).env.read('synthetic',WATCH_CELL,WATCH_FROM,WATCH_TO,undefined,(funds as any).meters,(funds as any).meta,owner,...(extra===undefined?[]:[extra])));
+  const read=()=>context.__quotumHistoryPoolReceipt.read();
+  const tile=()=>((funds as any).grids.get(WATCH_CELL)?.get(tileOf(WATCH_FROM,WATCH_CELL)));
+  const close=()=>{for(const store of [quota,funds,budget])store.close();preparations.dispose();assert.equal(preparations.size,0);assert.equal(jobs.every(run=>typeof run==='function'),true);jobs.length=0;micro.length=0;assert.equal(timers.size,0);assert.equal(pool.activeFlights,0);};
+  return {pool,context,quota,funds,budget,transport,preparations,jobs,sent,step,settle,direct,read,tile,close,
+    nested(run:()=>void){nested=run;},fail(value:unknown){sendError=value;},scope(value:PeriodScope){currentScope=value;},error(value:unknown){originalError=value;},
+    identities:()=>({lastEnvPromise,lastTransportPromise,envReceiver,transportReceiver,transportArgs})};
+}
+const stateRows=(receipt:any,id:number)=>receipt.entries.filter((e:Entry)=>e.kind==='watched-tile'&&e.row[0]===id) as Entry[];
+const memberId=(h:ReturnType<typeof actualFixture>,scope:number)=>h.read().watched.members.find((m:any)=>m.semanticScope===scope)?.id;
+
+test('watched actual committed tile survives same-range and live-range-live choices',async()=>{
+  const h=actualFixture();try{
+    h.funds.setActive(true);await h.settle();const tile=h.tile();assert.ok(tile);assert.ok(tile.writeSeq>0);assert.ok(tile.readFrom<=WATCH_FROM&&tile.readTo>=WATCH_TO&&tile.validTo>=WATCH_TO);
+    const seq=tile.writeSeq,epoch=(h.funds as any).epoch,reads=h.sent.length;
+    h.context.__quotumHistoryPoolReceipt.mark(0,0);
+    h.funds.choose('30d',null);await h.settle();h.funds.choose('30d',{from:CONTROL_NOW-30*86400000,to:CONTROL_NOW});await h.settle();h.funds.choose('30d',null);await h.settle();
+    assert.equal(h.tile(),tile);assert.equal(h.tile().writeSeq,seq);assert.equal((h.funds as any).epoch,epoch);assert.equal(h.sent.length,reads);
+    h.context.__quotumHistoryPoolReceipt.mark(2,3);const receipt=h.read(),id=memberId(h,3);assert.ok(id);assert.notEqual(id,4,'actual funds scope must not depend on registration ordinal');
+    assert.equal(receipt.watched.status,'observed-state-transitions');assert.equal(receipt.watched.omitted,0);assert.equal(JSON.stringify(safeEvidence(receipt.watched)),JSON.stringify(receipt.watched));
+    assert.ok(stateRows(receipt,id).some(e=>e.row[6]===true&&e.row[8]>0&&e.row[9]<=WATCH_FROM&&e.row[10]>=WATCH_TO&&e.row[11]>=WATCH_TO));
+  }finally{h.close();}
+});
+
+test('watched real history_limit clears a committed tile without candidate drop',async()=>{
+  const h=actualFixture();try{
+    h.funds.setActive(true);await h.settle();assert.ok(h.tile()?.writeSeq>0);h.context.__quotumHistoryPoolReceipt.mark(0,0);const id=memberId(h,3);assert.ok(id);
+    h.fail(new ApiError(413,'history_limit'));h.funds.news(WATCH_FROM);await h.settle();h.context.__quotumHistoryPoolReceipt.mark(2,3);const receipt=h.read();
+    assert.equal(h.tile(),undefined);assert.equal((h.funds as any).historyLimit,true);assert.equal(receipt.entries.filter((e:Entry)=>e.kind==='drop-after').length,0);
+    const cleared=stateRows(receipt,id).find(e=>e.row[1]===7&&e.row[5]===true&&e.row[6]===false&&e.values[2]===true);assert.ok(cleared,'real limit method clears the actual prior committed tile');
+  }finally{h.close();}
+});
+
+test('watched pending cancelled real preparation never becomes a committed seed',async()=>{
+  const h=actualFixture();try{
+    h.funds.setActive(true);
+    for(let i=0;i<60&&!h.jobs.length;i++)await h.step();
+    assert.ok(h.sent.length,'the real transport must start');assert.ok(h.preparations.size>0,'an actual preparation remains pending');
+    h.funds.setActive(false);await h.settle();h.context.__quotumHistoryPoolReceipt.mark(0,0);const receipt=h.read(),id=memberId(h,3);assert.ok(id);
+    assert.ok(!h.tile()||h.tile().writeSeq===0);assert.ok(!stateRows(receipt,id).some(e=>e.row[6]===true&&e.row[8]>0));
+  }finally{h.close();}
+});
+
+test('watched scope is unknown before actual handoff and conflicts remain unqualified',async()=>{
+  const h=actualFixture();try{
+    const before=h.read();assert.ok(before.watched.members.every((m:any)=>m.semanticScope===0));
+    const unknown=h.direct(undefined);await h.settle();await unknown;const unqualified=h.read();assert.ok(unqualified.watched.members.every((m:any)=>m.semanticScope===0));assert.equal(unqualified.entries.filter((e:Entry)=>e.kind==='watched-read-scope').length,0);
+    const unknownRow=unqualified.entries.find((e:Entry)=>e.kind==='watched-tile'&&e.row[0]===3);assert.ok(unknownRow);assert.equal(unknownRow.row[3],0);
+    h.funds.setActive(true);await h.settle();h.funds.setActive(false);h.scope('budget');
+    const owner={finished:Promise.resolve(),role:()=>'visible',cancel:()=>{}};const result=h.direct(owner);assert.equal(result,h.identities().lastEnvPromise);await h.settle();await result;
+    const receipt=h.read();assert.ok(receipt.watched.members.some((m:any)=>m.semanticScope===4));
+    const conflict=receipt.entries.find((e:Entry)=>e.kind==='watched-read-scope'&&e.row[3]===4);assert.ok(conflict);assert.equal(conflict.row[2],2);assert.equal(unknownRow.row[3],0,'later family evidence cannot rewrite an earlier unknown handoff');
+  }finally{h.close();}
+});
+
+test('watched original receivers, extra arguments, Promise and error identities survive',async()=>{
+  const h=actualFixture();try{
+    const owner={finished:Promise.resolve(),role:()=>'visible',cancel:()=>{}},extra={marker:1};const value=h.direct(owner,extra);
+    assert.equal(value,h.identities().lastEnvPromise);assert.equal(h.identities().envReceiver,(h.funds as any).env);assert.equal(h.identities().transportReceiver,h.transport);assert.equal(h.identities().transportArgs[4],extra);
+    await h.settle();await value;
+    const error=new Error('original');h.error(error);assert.throws(()=>h.direct(owner),e=>e===error);h.error(null);
+    const before=h.read(),own=before.watched.members.find((m:any)=>m.semanticScope===3).id;
+    const oldEpoch=(h.budget as any).epoch;(h.funds as any).setMeters.call(h.budget,{unit:'USD',ids:[['peer','balance']]});
+    assert.ok((h.budget as any).epoch>oldEpoch);const after=h.read();assert.ok(after.watched.errors>before.watched.errors);assert.equal(after.watched.status,'insufficient-evidence');
+    assert.ok(!after.entries.slice(before.entries.length).some((e:Entry)=>e.kind==='watched-tile'&&e.row[0]===own&&e.row[1]===4),'foreign receiver must not create a funds setter reason');
+    Object.defineProperty(h.funds,'historyLimit',{configurable:true,get(){throw error;}});assert.equal(h.funds.hello('getter-test'),undefined);const promise=h.direct(owner);assert.equal(promise,h.identities().lastEnvPromise);Object.defineProperty(h.funds,'historyLimit',{configurable:true,writable:true,value:false});await h.settle();await promise;assert.ok(h.read().watched.errors>after.watched.errors);
+  }finally{h.close();}
+});
+
+test('watched entry-byte saturation is explicit even below its own row cap',async()=>{
+  const h=actualFixture();try{
+    const q=h.quota as any,target={cell:WATCH_CELL,k0:0,k1:0};
+    // Real bad() and the existing snapshots fill entryByteLimit; no watched mutation is fabricated.
+    for(let i=0;i<1000;i++)q.bad(target);
+    const before=h.read();assert.ok(before.omitted>0);assert.equal(before.watched.omitted,0);assert.ok(before.watched.changes<64);
+    h.funds.hello('next-run');const after=h.read();assert.ok(after.watched.omitted>0);assert.equal(after.watched.status,'insufficient-evidence');assert.ok(after.watched.changes<64);
+  }finally{h.close();}
+});
+
+
+test('watched nested actual env reads restore the outer owner and query context',async()=>{
+  const h=actualFixture();try{
+    const innerOwner={finished:Promise.resolve(),role:()=>'visible',cancel:()=>{}},outerOwner={finished:Promise.resolve(),role:()=>'visible',cancel:()=>{}};let inner:Promise<unknown>|null=null;
+    h.nested(()=>{inner=(h.budget as any).env.read('synthetic',WATCH_CELL,WATCH_FROM+WATCH_CELL,WATCH_TO,undefined,undefined,undefined,innerOwner);});
+    const outer=h.direct(outerOwner);await h.settle();await inner;await outer;
+    const rows=h.read().entries.filter((e:Entry)=>e.kind==='watched-read-scope');assert.equal(rows.length,2);assert.equal(rows[0].row[2],2);assert.equal(rows[1].row[2],3);assert.notEqual(rows[0].row[0],rows[1].row[0]);assert.notEqual(rows[0].row[7],rows[1].row[7]);assert.equal(rows[0].row[5],WATCH_FROM+WATCH_CELL);assert.equal(rows[1].row[5],WATCH_FROM);assert.ok(rows[0].row[1]>rows[1].row[1]);
+  }finally{h.close();}
+});
+
+test('watched absence after an unhooked real not_found clear is only an observation',async()=>{
+  const h=actualFixture();try{
+    h.funds.setActive(true);await h.settle();assert.ok(h.tile()?.writeSeq>0);h.context.__quotumHistoryPoolReceipt.mark(0,0);const id=memberId(h,3);assert.ok(id);
+    h.fail(new ApiError(404,'not_found'));h.funds.news(WATCH_FROM);await h.settle();h.context.__quotumHistoryPoolReceipt.mark(2,3);const receipt=h.read(),rows=stateRows(receipt,id);
+    assert.equal(h.tile(),undefined);assert.equal((h.funds as any).historyLimit,false);assert.ok(rows.some(e=>e.row[6]===true&&e.row[8]>0));assert.ok(rows.some(e=>e.row[1]===0&&e.row[6]===false));assert.equal(receipt.watched.publicationTimestampObserved,false);assert.equal(receipt.watched.unobservedPublicationOrClearPossible,true);assert.equal(receipt.watched.CausalPass,false);
+  }finally{h.close();}
 });
