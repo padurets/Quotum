@@ -90,7 +90,7 @@ test('the released v3 aliases remain frozen and only v4 is accepted by the activ
 const v3Bytes=(view:UnifiedView)=>bytes(encodeUnifiedView(view));
 const maximumFields=():UnifiedView=>{
   const columns=Array.from({length:20},(_,i)=>String.fromCharCode(97+i)+'x'.repeat(19));
-  const maps=Object.fromEntries([...parents.filter(id=>id.endsWith('table')).map(id=>[id,columns]),...Array.from({length:202},(_,i)=>['c'+i,[]])]);
+  const maps=Object.fromEntries([...parents.map(id=>[id,columns]),...Array.from({length:200},(_,i)=>['c'+i,[]])]);
   return {...old(),shown:['agents','activity','quota-history','budget-history','quota-table','budget-table','subscription-funds',...Array.from({length:204},(_,i)=>'s'+i)],hidden:[...parents,...Array.from({length:200},(_,i)=>'h'+i)],columns:maps,shownColumns:structuredClone(maps),
     layout:{columns:6,places:Object.fromEntries(parents.map((id,i)=>[id,{x:0,w:6,y:i,h:200}]))}};
 };
@@ -112,14 +112,30 @@ test('combined legacy encoded, decoded and collection maxima migrate, reload and
   if(128*1024-bytes(decoded)<=overhead)decoded=decodeUnifiedView(encodeUnifiedView(draft(--low)))!;
   decoded={...decoded,names:{pad:'x'.repeat(128*1024-bytes(decoded)-overhead)}};
   assert.equal(bytes(decoded),128*1024);
-  for(const input of [encoded,decoded]) {
+  for(const input of [decoded,encoded]) {
     assert.ok(decodeUnifiedView(encodeUnifiedView(input)));
     const next=migrateFixed(input,resources);
     assert.ok(bytes(encodeView(next))<=VIEW_BODY_LIMIT);assert.ok(bytes(next)<=VIEW_DECODED_LIMIT);
     assert.ok(next.hidden.length<=211&&next.shown.length<=215&&Object.keys(next.columns).length<=211);
     assert.deepEqual({...decodeView(encodeView(next)),shown:next.shown},next);
     for(const key of ['names','windows','plans','colors','unplanned'] as const)assert.deepEqual(next[key],input[key]);
-    for(const [id,columns] of Object.entries(input.columns))assert.deepEqual(next.columns[id],columns);
+    for(const field of ['columns','shownColumns'] as const) {
+      for(const [id,columns] of Object.entries(input[field]))assert.deepEqual(next[field][id],columns);
+      assert.deepEqual(next[field]['quota-session-table'],input[field]['quota-table']);
+      assert.deepEqual(next[field]['budget-spending-table'],input[field]['budget-table']);
+    }
+    const db=new DatabaseSync(':memory:');
+    try {
+      for(const step of STEPS.slice(0,25))db.exec(step);
+      db.exec("PRAGMA user_version=25; INSERT INTO boards VALUES('b','',1,'u',0)");
+      db.prepare('INSERT INTO views VALUES(?,?,?,?,?)').run('b',JSON.stringify(encodeUnifiedView(input)),'u',0,7);
+      migrate(db,10);
+      const saved=db.prepare('SELECT payload,revision FROM views WHERE board_id=?').get('b') as {payload:string;revision:number};
+      assert.equal(saved.revision,8);
+      assert.deepEqual({...decodeView(JSON.parse(saved.payload)),shown:next.shown},next);
+      migrate(db,11);
+      assert.deepEqual(db.prepare('SELECT payload,revision FROM views WHERE board_id=?').get('b'),saved);
+    } finally {db.close();}
   }
 });
 
