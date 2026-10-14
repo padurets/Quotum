@@ -1,10 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {decodeView, encodeView, EMPTY_VIEW, parseSplitView, sameView, VIEW_BODY_LIMIT, type SplitView} from '../domain/view.js';
+import {decodeUnifiedView as decodeView, encodeUnifiedView as encodeView, EMPTY_VIEW, parseSplitView, VIEW_BODY_LIMIT, type SplitView} from '../domain/view.js';
+import {encodeView as encodeCurrent} from '../domain/view.js';
 import {migrateUnified} from '../domain/unifiedView.js';
 import {ordered} from '../domain/layout.js';
-import {ANALYTICS, WIDGETS, widgetVisible} from '../domain/widgets.js';
+import {LEGACY_ANALYTICS as ANALYTICS, LEGACY_WIDGETS as WIDGETS, widgetVisible} from '../domain/widgets.js';
 import {reconcileAnalytics} from '../domain/analyticsView.js';
 import {STEPS,migrate} from '../store/schema.js';
 import {Directory} from '../store/directory.js';
@@ -24,7 +25,7 @@ test('hidden saved positions cannot move implicit visible neighbours during unif
   assert.deepEqual({...next.layout.places['source:B'],y:10},old.layout.places['source:B']);
   assert.equal(next.layout.places['source:C'],undefined);
   assert.equal(migrateUnified(next,resources),next);
-  assert.equal(sameView(next,decodeView(encodeView(next))!),true);
+  assert.equal(JSON.stringify(encodeView(next))===JSON.stringify(encodeView(decodeView(encodeView(next))!)),true);
 });
 
 test('all builtin shown subsets and 204 other ids survive the compact codec', () => {
@@ -32,10 +33,10 @@ test('all builtin shown subsets and 204 other ids survive the compact codec', ()
   const other = Array.from({length:204},(_,i)=>String(i));
   for (let mask=0;mask<128;mask++) {
     const shown = builtins.filter((_,i)=>mask & 1<<i).concat(other);
-    const view = {...EMPTY_VIEW,shown};
+    const view = {...EMPTY_VIEW,version:3 as const,shown};
     const decoded = decodeView(encodeView(view));
     assert.ok(decoded); assert.deepEqual(new Set(decoded.shown),new Set(shown));
-    assert.equal(sameView(view,decoded),true);
+    assert.equal(JSON.stringify(encodeView(view))===JSON.stringify(encodeView(decoded)),true);
   }
   assert.equal(decodeView([3,[[0,3],['agents',3]],0]),null);
   assert.equal(decodeView([3,[['x',3],['x',3]],0]),null);
@@ -50,7 +51,7 @@ test('all builtin shown subsets and 204 other ids survive the compact codec', ()
 
 for(const version of [19,21])test(`the largest sparse accepted v2 retains its owner fields through layout ${version} migration`, () => {
   const input = {version:2,layout:{columns:6,places:{}},names:Object.fromEntries(Array.from({length:200},(_,i)=>['source:'+String(i).padStart(12,'0'),'я'.repeat(60)])),windows:[...Array.from({length:399},(_,i)=>'я'.repeat(58)+String(i).padStart(3,'0')),'a'.repeat(73)]};
-  assert.equal(bytes(input),VIEW_BODY_LIMIT); assert.ok(parseSplitView(input));
+  assert.equal(bytes(input),77824); assert.ok(parseSplitView(input));
   const db = new DatabaseSync(':memory:');
   try {
     for (const step of STEPS.slice(0,version)) db.exec(step);
@@ -61,11 +62,11 @@ for(const version of [19,21])test(`the largest sparse accepted v2 retains its ow
     const directory=new Directory(db), state=directory.viewState('b');
     assert.equal(state.revision,8);
     assert.deepEqual(state.view.names,input.names); assert.deepEqual(state.view.windows,input.windows);
-    assert.equal(bytes(encodeView(state.view)),77808);
+    assert.ok(bytes(encodeCurrent(state.view))<=VIEW_BODY_LIMIT);
     assert.equal(directory.saveView('b',state.view,'u',2),8);
     assert.deepEqual(directory.viewState('b'),state);
     migrate(db,3); assert.deepEqual(directory.viewState('b'),state);
-    const tooLarge={...state.view,windows:[...state.view.windows,'b'.repeat(120)]};
+    const tooLarge={...state.view,names:{...state.view.names,...Object.fromEntries(Array.from({length:200},(_,i)=>['overflow'+i,'b'.repeat(120)]))}};
     assert.throws(()=>directory.saveView('b',tooLarge,'u',4),/view_limit/);
     assert.deepEqual(directory.viewState('b'),state);
   } finally {db.close();}

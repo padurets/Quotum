@@ -1,4 +1,6 @@
-import {migrateUnified} from '../domain/unifiedView.js';
+import {migrateFixed} from '../domain/fixedView.js';
+import {migrateUnified as migrateSplit} from '../domain/unifiedView.js';
+const migrateUnified=(...args:Parameters<typeof migrateSplit>)=>migrateFixed(migrateSplit(...args),args[1]);
 import {decodeView, encodeView, parseView, VIEW_VERSION, VIEW_VERSION_HEADER} from '../domain/view.js';
 import {cellOf, compose, targetOf, tileOf, tileStart, type HistoryAnswer} from '../domain/history.js';
 import {test} from 'node:test';
@@ -27,7 +29,7 @@ const periodOf = (id: string) => PERIODS.find(p => p.id === id)!;
 const iso = (ms: number) => new Date(ms).toISOString();
 const ORIGIN = 'http://localhost';
 const SETUP = 'BCDF-GHJK';
-const EMPTY = {version: 3 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}, enabledWhenEmpty: []};
+const EMPTY = {version: 4 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}, enabledWhenEmpty: []};
 
 async function hub() {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-api-')), 'db.sqlite'));
@@ -300,8 +302,8 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   store.db.prepare('INSERT OR REPLACE INTO views (board_id,payload,updated_by,updated_at) VALUES (?, ?, ?, ?)').run(team, JSON.stringify(encodeView(migrateUnified({order: ['history'], sizes: {history: 3}},store.sources(team)))), 'alice', Date.now());
   const old = (await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view;
   assert.deepEqual(old, decodeView(encodeView(migrateUnified({order: ['history'], sizes: {history: 3}},store.sources(team)))), 'migration is shared by every reader');
-  assert.deepEqual(shared.view.shown, ['quota-history','quota-table'], 'applicable analytics are placed when the first source appears');
-  const view = decodeView(encodeView({...EMPTY, layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}, [`source:${source}`]: {x: 0, y: 0, w: 3}}}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], shown: ['agents','quota-history','quota-table'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}, unplanned: [source], colors: {[source]: '#1fa89c'}, columns: {agents: ['machine', 'origin']}, shownColumns: {agents: ['state']}}))!;
+  assert.deepEqual(shared.view.shown, ['quota-history','quota-table','quota-session-history','quota-session-table'], 'applicable analytics are placed when the first source appears');
+  const view = decodeView(encodeView({...EMPTY, layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}, [`source:${source}`]: {x: 0, y: 0, w: 3}}}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], shown: ['agents','quota-history','quota-table','quota-session-history','quota-session-table'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}, unplanned: [source], colors: {[source]: '#1fa89c'}, columns: {agents: ['machine', 'origin']}, shownColumns: {agents: ['state']}}))!;
   assert.deepEqual((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: view})).body.view, view);
   assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view, view);
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'bob', body: EMPTY})).status, 403, 'a member only looks');
@@ -361,10 +363,10 @@ test('a migrated view can save new neighbours after 400 retained places, within 
   const old = (await call('GET', `/api/overview?board=${board}`, {as: 'alice'})).body.view;
   const ids = ['source:s0', 'source:new'];
   const migrated = legacyLayout(parseView(old)!, {cards: ids, analytics: []}, []);
-  assert.equal(Object.keys(migrated.layout.places).length, 403);
+  assert.equal(Object.keys(migrated.layout.places).length, 405);
   const origin = settle(ordered(migrated.layout, ids).map(item => ({...item, h: 7})), 6);
   const changed = withPlaces(migrated, placesOf(widened(origin, 'source:s0', 4, 6)));
-  assert.equal(Object.keys(changed.layout.places).length, 404);
+  assert.equal(Object.keys(changed.layout.places).length, 406);
   assert.deepEqual(changed.layout.places['source:s0'], {x: 0, y: 0, w: 4});
   assert.deepEqual(changed.layout.places['source:new'], {x: 2, y: 7, w: 3}, 'the neighbour moves down, not sideways');
   assert.ok(Object.keys(migrated.layout.places).every(id => Object.hasOwn(changed.layout.places, id)), 'all retained settings survive');
@@ -1075,7 +1077,7 @@ test('changes from another origin, unknown hosts and other methods are refused',
 });
 
 
-test('view writes require an independent current writer header even when an old page echoes v3',async t=>{
+test('view writes require an independent current writer header even when an old page echoes v4',async t=>{
   const {app,call,person,store}=await hub();t.after(()=>app.close());const board=await person('alice');
   const current=(await call('GET','/api/overview?board='+board,{as:'alice'})).body.view;
   const before=store.db.prepare('SELECT * FROM views WHERE board_id=?').get(board);
@@ -1084,7 +1086,7 @@ test('view writes require an independent current writer header even when an old 
     assert.equal(reply.status,428);assert.equal(reply.body.error,'view_reload_required');
     assert.deepEqual(store.db.prepare('SELECT * FROM views WHERE board_id=?').get(board),before);
   }
-  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:4}})).status,400);
+  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:5}})).status,400);
   assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:1}})).status,400);
   assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:current,headers:{'If-Match':'"0"'}})).status,409);
 });

@@ -436,10 +436,12 @@ Spending belongs to analytics.
 Settings show at most ten keys per page. Access turns amber seven days before expiry;
 expired, revoked or forbidden access is red. Working keys without expiry have no expiry
 mark. Temporary read failures are amber.
-The budget chart and table share a selection of key usage and remaining limits,
-editable from either widget's settings. The chart's balance/spending mode and the
-table's columns remain separate display settings.
-Account balances are selected by default; at most 32 logical series are drawn, with
+Five-hour and weekly subscription limits each have their own chart and table.
+Budget balance and cumulative spending also have separate chart/table pairs.
+All four budget widgets share **Accounts and keys**: an account selects its total,
+and a key selects its available usage and cap together. Table columns and each
+chart's legend visibility remain independent display settings.
+Account balances are selected by default; at most 32 metrics are selected, with
 visible overflow. The chart uses
 one unit per axis and keeps the same time range and gestures as subscription history.
 Wallet balances have no percentage; only positive key limits do.

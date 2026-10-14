@@ -7,6 +7,9 @@ import {nextTableSort, visibleTableSort, type TableSort} from './table';
 
 export const MONEY_COLUMNS = ['value', 'spending', 'topup'] as const;
 export type MoneyColumn = typeof MONEY_COLUMNS[number];
+export type MoneyPurpose = 'balance' | 'spending';
+export const moneySeriesForPurpose=(series:MeterHistory,purpose:MoneyPurpose)=>
+  series.kind==='balance'&&(!series.role||series.role==='total') || (purpose==='balance'?series.kind==='cap':series.kind==='counter'&&(series.meterId==='usage'||series.meterId.endsWith(':usage')));
 export type MoneySort = TableSort<MoneyColumn | 'name'>;
 export const nextMoneySort = nextTableSort<MoneyColumn | 'name'>;
 
@@ -26,7 +29,7 @@ export function moneySeriesName(series: MeterHistory, title: string, _context: C
   if (family === 'funds' || series.role === 'total' || !series.role && series.meterId === 'balance') return title;
   if (series.role) return [title, t(`money.${series.role}`)].join(' — ');
   const detail = series.kind === 'cap' ? capName({id: series.meterId, scope: series.semantics?.scope ?? null, label: series.semantics?.label ?? null}) : series.semantics?.label ?? series.meterId;
-  return [title, detail, t(series.kind === 'cap' ? 'money.cap' : 'money.usage')].filter(Boolean).join(' — ');
+  return [title, detail].filter(Boolean).join(' — ');
 }
 
 /** Currency provenance stays reachable without lengthening every name. */

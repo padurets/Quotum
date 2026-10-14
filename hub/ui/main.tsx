@@ -7,7 +7,7 @@ import {setPrefs, usePref} from './lib/prefs';
 import {showBoard} from './lib/timeRange';
 import {navigate, settingsHref, usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
-import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, QUOTA_TABLE, QUOTA_HISTORY, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE, isHidden, useView} from './lib/view';
+import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, QUOTA_TABLE, QUOTA_HISTORY, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE, BUDGET_SPENDING_HISTORY, BUDGET_SPENDING_TABLE, isHidden, useView} from './lib/view';
 import {withSparseArrangement} from './lib/grid';
 import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles, useViewRevision} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
@@ -139,6 +139,10 @@ function Dashboard({
     content: <AgentsPanel arrange={arrange} />,
   });
   const panels = new Map<string, Widget>([
+    [QUOTA_SESSION_HISTORY,{id:QUOTA_SESSION_HISTORY,name:t('history.sessionTitle'),content:<History arrange={arrange} kind="session"/>}],
+    [QUOTA_SESSION_TABLE,{id:QUOTA_SESSION_TABLE,name:t('forecast.sessionTitle'),content:<Forecast arrange={arrange} kind="session"/>}],
+    [BUDGET_SPENDING_HISTORY,{id:BUDGET_SPENDING_HISTORY,name:t('widgets.spendingHistory'),content:<MoneyHistory arrange={arrange} purpose="spending"/>}],
+    [BUDGET_SPENDING_TABLE,{id:BUDGET_SPENDING_TABLE,name:t('widgets.spendingTable'),content:<MoneyTable arrange={arrange} purpose="spending"/>}],
     [SUBSCRIPTION_FUNDS,{id:SUBSCRIPTION_FUNDS,name:t('widgets.subscriptionFunds'),content:<MoneyHistory arrange={arrange} family="funds"/>}],
     [BUDGET_HISTORY,{id:BUDGET_HISTORY,name:t('widgets.budgetHistory'),content:<MoneyHistory arrange={arrange}/>}],
     [BUDGET_TABLE,{id:BUDGET_TABLE,name:t('widgets.budgetTable'),content:<MoneyTable arrange={arrange}/>}],

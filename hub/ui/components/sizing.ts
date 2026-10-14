@@ -107,7 +107,7 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
     let context = prefs();
     const preferences = onPrefs(() => {
       const next = prefs();
-      if (next.range !== context.range || next.kind !== context.kind || next.activityBy !== context.activityBy) {restore(); measure.current();}
+      if (next.range !== context.range || next.activityBy !== context.activityBy) {restore(); measure.current();}
       context = next;
     });
     const board = page.listen(event => {

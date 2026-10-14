@@ -38,7 +38,7 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'bud
   const panel=family==='funds'?'.subscription-funds':'.budget-history';
   await cdp.evaluate(`(() => {
     const prefs = JSON.parse(localStorage.getItem('quotum.prefs') || '{}');
-    prefs.${family==='funds'?'funds':'money'} = {unit: 'USD', view: 'balance', selected: {USD: ${JSON.stringify(ids)}}};
+    prefs.${family==='funds'?'funds':'money'} = {version:1,unit: 'USD', selected: {USD: ${JSON.stringify(ids)}}};
     prefs.muted = {};
     localStorage.setItem('quotum.prefs', JSON.stringify(prefs));
   })()`);
@@ -66,28 +66,17 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'bud
   })()`);
 }
 
-/** A zero cap keeps the scale's origin unchanged when balances become spending. */
+/** Both fixed monetary purposes retain their own valid scale and resource scope. */
 export async function moneyView(cdp: Cdp, source: string, cappedSource: string, cap: string) {
   await selectMoney(cdp, [[source, 'balance'], [cappedSource, cap]]);
-  await cdp.evaluate(`document.querySelector('.budget-history .panel-head .picker > button').click()`);
-  for (const label of ['Spending', 'Balance', 'Spending']) {
-    await cdp.evaluate(`(async () => {
-      const button = Array.from(document.querySelectorAll('.popover .segmented button')).find(b => b.textContent === ${JSON.stringify(label)});
-      if (!button) throw new Error('no money view control');
-      button.click();
-      const end = Date.now() + 5000;
-      let frames = 0;
-      do {
-        await new Promise(requestAnimationFrame);
-        const series = document.querySelector('[data-series="${source} balance"]');
-        const paths = series?.matches('path') ? [series] : Array.from(series?.querySelectorAll('path.series') || []);
-        if (!paths.some(path => path.getAttribute('d'))) throw new Error('money line disappeared while selecting ${label}');
-        const box = series.getBBox(), height = series.ownerSVGElement.viewBox.baseVal.height;
-        if (box.y < 0 || box.y + box.height > height) throw new Error('switching money view left the line outside its new scale');
-        if (Date.now() > end) throw new Error('money view did not commit ${label}');
-      } while (++frames < 2 || document.querySelector('.budget-history .chart > svg')?.dataset.drawReady !== 'true');
-    })()`);
-  }
-  await cdp.send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
-  await cdp.send('Input.dispatchKeyEvent', {type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
+  await cdp.evaluate(`(() => {
+    for(const widget of ['budget-history','budget-spending-history']){
+      const panel=document.querySelector('[data-widget="'+widget+'"]'),svg=panel?.querySelector('.chart>svg');
+      if(svg?.dataset.drawReady!=='true')throw new Error('fixed budget plot is not ready: '+widget);
+      const paths=Array.from(panel.querySelectorAll('.series[d]:not([d=""])'));
+      if(!paths.length)throw new Error('fixed budget plot has no account line: '+widget);
+      for(const path of paths){const box=path.getBBox();if(box.y<0||box.y+box.height>svg.viewBox.baseVal.height)throw new Error('fixed budget line left its scale: '+widget);}
+      if(widget==='budget-spending-history'&&panel.querySelector('[data-series="${cappedSource} ${cap}"]'))throw new Error('spending includes a scoped allowance');
+    }
+  })()`);
 }

@@ -1,3 +1,5 @@
+import * as widgets from '../../server/domain/widgets';
+import {chartSeriesMuted} from '../lib/prefs';
 import {test,type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -66,7 +68,7 @@ async function fixture(t:TestContext) {
 function consumer(sourceId:string,board:string,range:PeriodRange) {
   const hooks=preparationFixture(),Chart=()=>null;
   const sources=[{id:sourceId,title:'Wallet',provider:'openrouter'}];
-  let history:History|null=null,strip:PlotBuffer|null=null;
+  let history:History|null=null,strip:PlotBuffer|null=null,purpose:'balance'|'spending'='spending';
   const prefs={money:{view:'balance',unit:'USD'},muted:{},range:'1h',horizon:'auto'};
   const memo=(read:()=>unknown,deps:unknown[])=>{const ref=hooks.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!ref.current||deps.some((v,i)=>!Object.is(v,ref.current!.deps[i])))ref.current={deps,value:read()};return ref.current.value;};
   const modules:Record<string,unknown>={
@@ -74,8 +76,8 @@ function consumer(sourceId:string,board:string,range:PeriodRange) {
     '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared},
     '../lib/board':{useBoardId:()=>board,useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
     '../lib/history':{useBudgetHistory:()=>({history,drawing:history,loading:false,presentation:0}),useBudgetHistoryPlot:()=>strip,useHistoryBegins:()=>NOW-3*H,budgetHistory:{retry:()=>{}}},
-    '../lib/prefs':{usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection:()=>({selection:{unit:'USD',ids:[[sourceId,'balance']]},omitted:0,removed:0})},
-    '../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},'../lib/view':{colorOf:()=> '#fff'},
+    '../lib/prefs':{useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection:()=>({selection:{unit:'USD',ids:[[sourceId,'balance']]},omitted:0,removed:0})},
+    '../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},'../lib/view':{...widgets,colorOf:()=> '#fff'},
     '../lib/periods':{frameOf:()=>({...range,live:false}),measuredTo:()=>range.to},'../lib/timeRange':{useTimeRange:()=>range,timeRangeKey},
     '../lib/clock':{useClock:()=>NOW},'../lib/pan':{usePanning:()=>strip?1:null},'../lib/axisNavigation':{axisNavigation:()=>({context:board})},
     '../i18n':{t:(key:string)=>key,useLocale:()=> 'en'},'./prepared':{usePrepared:hooks.usePrepared},'./sizing':{usePlot:()=>({plot:{},onBase:()=>{}})},'./Chart':{Chart},
@@ -83,8 +85,8 @@ function consumer(sourceId:string,board:string,range:PeriodRange) {
   type Drawing={lines:Line[];prepared:boolean;axis:{rawValue:(key:string,at:number)=>string|undefined}};
   const context={exports:{} as {MoneyHistory:(props:unknown)=>ReactElement<{children:ReactElement[]}>},require:(name:string)=>modules[name]??{}};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
-  const render=()=>{hooks.begin();const tree=context.exports.MoneyHistory({arrange:{view:EMPTY_VIEW,owner:false}});hooks.commit();return (tree.props.children.find(node=>node?.type===Chart) as ReactElement<Drawing>).props;};
-  return (next:History,plot:PlotBuffer|null,view='spending')=>{history=next;strip=plot;prefs.money.view=view;for(let i=0;i<3;i++){render();hooks.finish();}return render();};
+  const render=()=>{hooks.begin();const tree=context.exports.MoneyHistory({arrange:{view:EMPTY_VIEW,owner:false},purpose});hooks.commit();return (tree.props.children.find(node=>node?.type===Chart) as ReactElement<Drawing>).props;};
+  return (next:History,plot:PlotBuffer|null,view:'balance'|'spending'='spending')=>{history=next;strip=plot;purpose=view;for(let i=0;i<3;i++){render();hooks.finish();}return render();};
 }
 
 for(const amount of ['3000000','9007199254740993'])test(`the actual historical Spending consumer keeps ${amount} through the production pan fold`,async t=>{

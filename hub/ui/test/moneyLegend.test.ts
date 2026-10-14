@@ -12,9 +12,11 @@ import * as money from '../lib/money';
 import * as moneyTable from '../lib/moneyTable';
 import * as periods from '../lib/periods';
 import * as i18n from '../i18n';
-import {DEFAULT_MONEY,moneySelection} from '../lib/moneySelection';
+import {DEFAULT_MONEY,moneySelection,fundsLegacyMuted} from '../lib/moneySelection';
 import {PeriodAccounting} from '../../server/domain/periodAccounting';
 import * as meterHistory from '../../server/domain/meterHistory';
+import * as widgets from '../../server/domain/widgets';
+import {chartMuteKey,chartSeriesMuted} from '../lib/prefs';
 import * as views from '../../server/domain/view';
 import * as preparation from './preparationFixture';
 import type {Card,History} from '../lib/types';
@@ -52,7 +54,8 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     let now=NOW,index=new PeriodAccounting(tape(false),null);
     let history:History|null=index.project(base,{from:NOW-H,to:NOW}),drawing:History|null=history;
     let sources=cards,context=currency.defaultCurrencyContext,locale:i18n.Locale='en',authority=0;
-    let prefs:Pick<Prefs,'money'|'funds'|'muted'|'range'|'horizon'>={money:{...DEFAULT_MONEY,unit:'USD',view:'balance'},funds:{...DEFAULT_MONEY},muted:{},range:'1h',horizon:'auto'};
+    let prefs:Pick<Prefs,'money'|'funds'|'muted'|'range'|'horizon'>={money:{...DEFAULT_MONEY,unit:'USD'},funds:{...DEFAULT_MONEY},muted:{},range:'1h',horizon:'auto'};
+    let purpose:'balance'|'spending'='balance';
     let view=views.EMPTY_VIEW,calls=0,activeLeaf:Leaf|null=null;
     const toggles:{key:string;value:boolean}[]=[];
     const Chart=()=>null,SeriesLegendItem=()=>null;
@@ -63,10 +66,10 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
       '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared:meterHistory.composeMetersPrepared},
       '../lib/board':{useBoardId:()=> 'b',useCurrencyContext:()=>context,useNamed:()=>sources},
       '../lib/history':{useBudgetHistory:()=>({history,drawing,loading:!history,presentation:authority}),useBudgetHistoryPlot:()=>null,useHistoryBegins:()=>0,budgetHistory:{retry(){}},fundsHistory:{retry(){}}},
-      '../lib/prefs':{usePref:(key:keyof typeof prefs)=>prefs[key],setMuted:(key:string,value:boolean)=>toggles.push({key,value})},
+      '../lib/prefs':{useChartMuted:()=>prefs.muted,chartMuteKey,chartSeriesMuted,usePref:(key:keyof typeof prefs)=>prefs[key],setMuted:(key:string,value:boolean)=>toggles.push({key,value})},
       '../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
-      '../lib/moneySelection':{moneySelection},'../lib/moneyView':moneyView,'../lib/money':{...money,money:(...args:Parameters<typeof money.money>)=>{calls++;return money.money(...args);}},
-      '../lib/view':{colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>now},'../lib/pan':{usePanning:()=>null},
+      '../lib/moneySelection':{moneySelection,fundsLegacyMuted},'../lib/moneyView':moneyView,'../lib/money':{...money,money:(...args:Parameters<typeof money.money>)=>{calls++;return money.money(...args);}},
+      '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>now},'../lib/pan':{usePanning:()=>null},
       '../lib/axisNavigation':{axisNavigation:()=>({context:'b'})},'../i18n':{t:i18n.t,useLocale},'./prepared':{usePrepared:hooks.usePrepared},'./sizing':{usePlot:()=>({plot:160,onBase(){}})},'./Chart':{Chart},'./AnalyticsPanel':{SeriesLegendItem},
     };
     const vm={exports:{} as {MoneyHistory:(props:unknown)=>ReactElement<{children:unknown[]}>},require:(n:string)=>modules[n]??{}};
@@ -87,7 +90,7 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     }
     function render() {
       i18n.setLocale(locale,false);calls=0;hooks.begin();
-      const tree=vm.exports.MoneyHistory({arrange:{view,owner:false}});
+      const tree=vm.exports.MoneyHistory({arrange:{view,owner:false},purpose});
       const chart=tree.props.children.find((child):child is ReactElement<ChartProps>=>nodeOf(child)?.type===Chart);
       const legend=tree.props.children.find((child):child is ReactElement<{className:string;children:unknown[]}>=>{const node=nodeOf(child);return node?.type==='div'&&node.props.className==='legend';});
       assert.ok(chart);assert.ok(legend);
@@ -105,9 +108,9 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
       if(phase==='rename')sources=sources.map((s,i)=>i?s:{...s,title:'Renamed'});
       if(phase==='currency')context={...context,definitions:context.definitions.map(d=>d.id==='USD'?{...d,symbol:'USDx'}:d)};
       if(phase==='locale')locale='ru';
-      if(phase==='mute')prefs={...prefs,muted:{[moneyView.moneyIdentity(base.meterSeries![0])]:true}};
-      if(phase==='balance')prefs={...prefs,money:{...prefs.money,view:'balance'}};
-      if(phase==='spending')prefs={...prefs,money:{...prefs.money,view:'spending'}};
+      if(phase==='mute')prefs={...prefs,muted:{[chartMuteKey(widgets.BUDGET_HISTORY,'wallet0','balance')]:true}};
+      if(phase==='balance')purpose='balance';
+      if(phase==='spending')purpose='spending';
       if(phase==='zero')replaceFirst({end:'0',spent:'0',coveredMs:history!.to-history!.since,unlocated:[]});
       if(phase==='unknown')replaceFirst({end:null,spent:null,coveredMs:0});
       if(phase==='unavailable')replaceFirst({end:'0',spent:null,coveredMs:history!.to-history!.since});
@@ -145,7 +148,7 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     if(phase==='unknown'&&rows.some(row=>row.phase==='balance'))assert.match(r.display,/—/);
     if(phase==='unavailable')assert.ok(r.display.includes(i18n.t('money.unavailable')));
     if(phase==='partial'){assert.match(r.display,/money-partial/);assert.ok(r.display.includes(i18n.t('money.partial')));}
-    if(phase==='cap')assert.match(r.display,/Cap/);
+    if(phase==='cap')assert.doesNotMatch(r.display,/Cap/,'spending excludes scoped allowances');
     rows.push({phase,moneyCalls:r.calls,prepared:r.chart.props.prepared,lines:r.chart.props.lines.length});
     retained=h.settle().chart.props.lines;
   }

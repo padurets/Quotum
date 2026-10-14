@@ -112,7 +112,7 @@ test('leaving the dashboard aborts its history read and a later board cannot rec
 
 test('the ordinary history follower loads subscription caps once with native windows and keeps period switches cached',async()=>{
   const before=prefs(),h=harness(),page=createStore(reduce,INITIAL),stop=follow(h.store,page);
-  setPrefs({money:DEFAULT_MONEY,kind:'weekly'});
+  setPrefs({money:DEFAULT_MONEY});
   const base={plan:'',resets:null,owners:[],error:null,successAt:NOW,stale:false,staleAfterMs:10*M,measureIntervalMs:null};
   const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:EMPTY_VIEW,historyStart:0,
     sources:[{...base,id:'s',provider:'codex',windows:[{id:'w',kind:'weekly',label:null,used:20,remaining:80,resetAt:null,minutes:10080}]},{...base,id:'zai:fixture',provider:'zai',windows:[]}],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
@@ -129,7 +129,7 @@ test('the ordinary history follower loads subscription caps once with native win
     await read.answer({chunks,known:{work:0,sources:{s:0,'zai:fixture':0}}});
     assert.equal(h.store.get().history?.series.length,1);assert.equal(h.store.get().history?.meterSeries?.length,2);
     const count=h.reads.length,answer=h.store.get().history;
-    setPrefs({kind:'session'});page.dispatch({type:'hub',event:{type:'card',data:{...snapshot.sources[1],successAt:NOW+100}}});await flush();
+    setPrefs({showSessionForecast:false});page.dispatch({type:'hub',event:{type:'card',data:{...snapshot.sources[1],successAt:NOW+100}}});await flush();
     assert.equal(h.reads.length,count);assert.equal(h.store.get().history,answer,'a card heartbeat and period switch retain the complete answer');
     page.dispatch({type:'hub',event:{type:'history',data:{sources:['zai:fixture'],since:NOW}}});await flush();
     assert.equal(h.reads.length,count+1);assert.ok(h.reads.at(-1)!.to-h.reads.at(-1)!.from<=2*read.cell,'an accepted quota event reads only the tail');
@@ -1453,7 +1453,7 @@ test('family followers invalidate only their evidence and preserve selections be
   const before=prefs(),pool=new HistoryPool(),q=harness(undefined,undefined,'quota',pool),b=harness(undefined,undefined,'budget',pool),page=createStore(reduce,INITIAL);
   const stopQ=follow(q.store,page),stopB=follow(b.store,page);
   const selected:{USD:[string,string][]}={USD:[['wallet','balance'],['another-board','balance']]};
-  setPrefs({money:{unit:'USD',view:'balance',selected}});
+  setPrefs({money:{...DEFAULT_MONEY,unit:'USD',selected}});
   const base={plan:'',resets:null,owners:[],error:null,successAt:NOW,stale:false,staleAfterMs:10*M,measureIntervalMs:null};
   const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:EMPTY_VIEW,historyStart:0,workAuthority:'original-device-policy',sources:[
     {...base,id:'s',provider:'codex',windows:[{id:'w',kind:'weekly',label:null,used:20,remaining:80,resetAt:null,minutes:10080}]},

@@ -166,11 +166,11 @@ test('board additions append to the integrated currency layout while analytics m
     const grant=db.prepare('SELECT budget_since,budget_anchor_at,budget_revision FROM shares').get()!;assert.equal(grant.budget_since,0);assert.equal(grant.budget_anchor_at,0);assert.match(String(grant.budget_revision),/^[0-9a-f]{32}$/);
     const credential=db.prepare('SELECT * FROM credentials').get()!;assert.equal(credential.access_revision,0);delete credential.access_revision;assert.deepEqual([credential],before.credentials);
     const saved=db.prepare('SELECT payload,revision,updated_by,updated_at FROM views').get()!;
-    assert.deepEqual({...saved,payload:undefined},{payload:undefined,revision:2,updated_by:'owner',updated_at:1});
-    const view=decodeView(JSON.parse(String(saved.payload)))!; assert.equal(view.version,3);
+    assert.deepEqual({...saved,payload:undefined},{payload:undefined,revision:1,updated_by:'owner',updated_at:1});
+    const view=decodeView(JSON.parse(String(saved.payload)))!; assert.equal(view.version,4);
     assert.deepEqual(view.names,{legacy:'Kept'});
     assert.deepEqual(view.hidden,['source:deepseek:123456789abc']);
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,25);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,26);
   }finally{db.close();}
 });
 

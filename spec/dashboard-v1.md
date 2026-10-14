@@ -145,10 +145,10 @@ with 32-KiB bodies and ten key-verification attempts per minute per user and add
 Status and reservation have a separate bounded request limit. Credentials cannot be
 submitted in a query. Closed panels do not poll or read catalogue/history data.
 
-`POST /api/boards/:board/view` is owner-only and accepts the compact v3 view described
-below, up to 76 KiB (77,824 UTF-8 bytes including JSON syntax). The independent
-writer header `X-Quotum-View-Version: 3` is required, even when a previous page echoes
-a received v3 view. Missing or incompatible writer headers return
+`POST /api/boards/:board/view` is owner-only and accepts the compact v4 view described
+below, up to 80 KiB (81,920 UTF-8 bytes including JSON syntax). The independent
+writer header `X-Quotum-View-Version: 4` is required, even when a previous page echoes
+a received v4 view. Missing or incompatible writer headers return
 `428 view_reload_required` without mutation; malformed or unsupported body
 versions return `400 invalid_request`. `If-Match: "<revision>"` remains required:
 missing is `428 view_reload_required`, malformed is `400 invalid_request`, and stale
@@ -156,20 +156,21 @@ is `409 view_conflict` with the authorized current `{view, revision}`.
 Success returns `{view, revision}`. Semantic changes increment revision; no-op saves
 do not. Snapshots and view events carry that revision.
 
-Storage and POST use `[3, places, mask, ...fields]`; events, snapshots and conflict
-responses use the semantic object with `version: 3`. Each place is `[id, geometry]`
+Storage and POST use `[4, places, mask, ...fields]`; events, snapshots and conflict
+responses use the semantic object with `version: 4`. Each place is `[id, geometry]`
 or `[id, geometry, h]`, in reading order. Integer ids 0 through 6 stand for `agents`,
-`activity`, `quota-history`, `budget-history`, `quota-table`, `budget-table`, `subscription-funds`; other ids
+`activity`, `quota-history`, `budget-history`, `quota-table`, `budget-table`, `subscription-funds`; aliases 7 through 10 are `quota-session-history`,
+`quota-session-table`, `budget-spending-history`, `budget-spending-table`; other ids
 are unchanged strings (including the distinct string `"0"`). Geometry 0 through 9
 indexes `(x,w)` pairs `(0,2),(0,3),(0,4),(0,6),(2,2),(2,3),(2,4),(3,2),(3,3),(4,2)`.
 The array position restores `y`; vertical gaps are not persisted height requests.
 The ten mask bits select nonempty `names`, `hidden`, `shown`, `windows`, `plans`,
 `unplanned`, `colors`, `columns`, `shownColumns`, `enabledWhenEmpty`, in that order.
 Omitted fields restore empty defaults. `shown` is `[builtinMask, ...otherIds]`, with
-the same seven builtin bits; at most 204 other ids. Other owner fields keep their
+the same eleven builtin bits; at most 204 other ids. Other owner fields keep their
 ordinary types and limits. Duplicate place ids, invalid aliases, duplicate shown ids,
 unknown mask bits and trailing fields are rejected. Decoded drafts must also fit
-128 KiB before publication. Byte accounting for normal and keepalive saves uses the
+132 KiB before publication. Byte accounting for normal and keepalive saves uses the
 actual encoded request; there is no separate quota for each representation.
 
 The upgrade concatenates the visible reading orders of cards and analytics, then
@@ -180,13 +181,14 @@ Reads and new membership do not materialize every implicit place. Add, replay an
 device-onboarding writes also require the current writer header.
 
 The standard widgets are `agents`, `activity`, `quota-history`, `budget-history`,
-`quota-table`, `budget-table` and `subscription-funds`. Each analytics replacement in `shown` is placed;
+`quota-table`, `budget-table`, `subscription-funds`, `quota-session-history`,
+`quota-session-table`, `budget-spending-history` and `budget-spending-table`. Each analytics replacement in `shown` is placed;
 `hidden` takes precedence. Unplaced analytics become placed once their resource
 capabilities appear, independently of filters, latest errors or zero balances. Placed
 widgets remain when resources leave. `enabledWhenEmpty` applies only to explicit
 `agents` and `activity` additions. New empty boards have no analytics placed and keep
 activity hidden; any standard widget can be added explicitly to an empty board.
-The released v3 numeric aliases 0 through 6 and shown mask 127 are unchanged.
+The v4 shown mask admits 2047; the released v3 aliases 0 through 6 and mask 127 remain frozen in the migration decoder. Hidden/column widget maps admit 211 entries and shown admits 215 (eleven builtins plus 204 other IDs). The v3-to-v4 migration retains the old IDs for weekly limits and wallet balance, inserts five-hour and spending siblings next to saved parents, and copies visibility, widths, requested heights and table columns. Each stored view and retained receipt is upgraded atomically; chained older upgrades increment a view revision only once.
 
 Agent sessions uses the existing period `sessions` section, independent of quota
 history and chart selection. Reader-local project/machine/subscription/each-agent
@@ -299,8 +301,8 @@ or the table, a chart as tall as it draws by itself, the first agent of the list
 many more), so `h` is what the owner asked for, not what shows, and the hub does not check
 it against the content. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
 else is refused. The hub migrates stored pre-grid views and split analytics IDs before
-serving the view with its revision. Saves require the compact version 3 codec and
-its writer header, with a 76 KiB UTF-8 body limit. The page uses keepalive only within its
+serving the view with its revision. Saves require the compact version 4 codec and
+its writer header, with an 80 KiB UTF-8 body limit. The page uses keepalive only within its
 aggregate 64 KiB budget; larger drafts use immediate serialized ordinary saves.
 There is no separate count limit on places; each place is validated.
 

@@ -1,3 +1,5 @@
+import * as widgets from '../../server/domain/widgets';
+import {chartSeriesMuted} from '../lib/prefs';
 import {test,type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -23,7 +25,7 @@ import * as moneyView from '../lib/moneyView';
 import * as money from '../lib/money';
 import * as moneyTable from '../lib/moneyTable';
 import {seriesFocusStyle} from '../components/seriesFocus';
-import {moneySelection,DEFAULT_MONEY} from '../lib/moneySelection';
+import {moneySelection,fundsLegacyMuted,DEFAULT_MONEY} from '../lib/moneySelection';
 import * as periods from '../lib/periods';
 import {plotPathPrepared,observationRunsPrepared} from '../lib/plotPath';
 import {clipPrepared} from '../lib/forecast';
@@ -113,8 +115,8 @@ function drawing(h:Awaited<ReturnType<typeof creditHistory>>,initial:Update,page
     '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared},
     '../lib/board':{useBoardId:()=> 'board',useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
     '../lib/history':{useBudgetHistory:()=>({history:shown,drawing:shown,loading:false,presentation}),useBudgetHistoryPlot:()=>null,useHistoryBegins:()=>current.historyStart,fundsHistory:{retry(){}}},
-    '../lib/prefs':{usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection},'../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
-    '../lib/view':{colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>current.now},'../lib/pan':{usePanning:()=>null},
+    '../lib/prefs':{useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection,fundsLegacyMuted},'../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
+    '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>current.now},'../lib/pan':{usePanning:()=>null},
     '../lib/axisNavigation':{axisNavigation:()=>({context:'board'})},'../i18n':{t:(key:string)=>key,useLocale:()=> 'en'},
     './prepared':{usePrepared:outer.usePrepared},'./sizing':{usePlot:()=>({plot:160,onBase(){}})},'./Chart':{Chart},
   };

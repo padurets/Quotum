@@ -4,7 +4,7 @@ import {createPortal} from 'react-dom';
 import type {Activity as ActivityData, ActivityDimension, ActivityGroup} from '../lib/types';
 import {clock, num, shortDay, stamp, workHours} from '../lib/format';
 import {activityEmpty, activityScale, activityGroupName as groupName, atOnce, groupColors, mutedKey} from '../lib/activity';
-import {ACTIVITY_BY, setMuted, setPrefs, usePref} from '../lib/prefs';
+import {ACTIVITY_BY, setMuted, setPrefs, usePref, useChartMuted, chartMuteKey, chartSeriesMuted} from '../lib/prefs';
 import {setTimeRange, timeRangeKey, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {cellLabel, frameChangesAt, frameOf, measuredTo, niceTicks} from '../lib/periods';
 import {ACTIVITY, cardId, isHidden, withHidden, type Arrange} from '../lib/view';
@@ -43,7 +43,6 @@ function ActivitySettings({arrange}: {arrange: Arrange}) {
   return (
     <>
     <Popover label={t('activity.settings')} icon={<SlidersIcon />} open={open} onOpenChange={setOpen}>
-      <div className="popover-note">{t('chart.panHint')}</div>
       <div className="popover-section">
         <div className="popover-title">{t('activity.by')}</div>
         <div className="popover-pad">
@@ -174,7 +173,7 @@ const LegendItem = memo(function LegendItem({history, group, groupKey, by, name,
         style={seriesFocusStyle(mutedKey(by, groupKey))}
         aria-describedby={id}
         aria-pressed={!muted}
-        onClick={() => setMuted(mutedKey(by, groupKey), !muted)}
+        onClick={() => setMuted(chartMuteKey(ACTIVITY,by,groupKey), !muted)}
         onFocus={event => {
           setFocused(event.currentTarget.matches(':focus-visible'));
           setDismissed(false);
@@ -199,7 +198,7 @@ const LegendItem = memo(function LegendItem({history, group, groupKey, by, name,
 /** Complete quantities do not render for partial plot arrivals. */
 const Totals = memo(function Totals({history,by,muted,since}: {history:History|null;by:ActivityDimension;muted:Record<string,boolean>;since:number|null}) {
   useLocale();
-  const shown=(activity:ActivityData)=>activity.by[by].reduce((sum,group)=>sum+(muted[mutedKey(by,group.key)]?0:group.agentMs),0);
+  const shown=(activity:ActivityData)=>activity.by[by].reduce((sum,group)=>sum+(chartSeriesMuted(muted,ACTIVITY,by,group.key,!!muted[mutedKey(by,group.key)])?0:group.agentMs),0);
   const activity=useActivityNumbers(history,by,value=>JSON.stringify([!!value.known,...metricsText(value),shown(value)<value.agentMs,workHours(shown(value))]));
   if (!activity?.known || activity.activeMs <= 0) return null;
   const shownMs=shown(activity);
@@ -241,8 +240,9 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
   const lineup = useLineup();
   const personal = usePersonalBoard();
   const titles = useTitles(arrange.view.names);
-  const range = usePref('range'), kind = usePref('kind'), horizon = usePref('horizon'), showPlan = usePref('showPlan'), showForecast = usePref('showForecast'), activityBy = usePref('activityBy'), muted = usePref('muted');
-  const prefs = useMemo(() => ({range, kind, horizon, showPlan, showForecast, activityBy, muted}), [range, kind, horizon, showPlan, showForecast, activityBy, muted]);
+  const range=usePref('range'),horizon=usePref('horizon'),activityBy=usePref('activityBy'),muted=useChartMuted(ACTIVITY);
+  const prefs=useMemo(()=>({range,horizon,activityBy,muted}),[range,horizon,activityBy,muted]);
+  const groupMuted=(key:string)=>chartSeriesMuted(muted,ACTIVITY,activityBy,key,!!muted[mutedKey(activityBy,key)]);
   const by = prefs.activityBy;
   const locale = useLocale();
   const selected = useTimeRange();
@@ -263,7 +263,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     const groups = drawnActivity?.by[by] ?? [];
     const colors = groupColors(groups, by, arrange.view, source => titles[source]?.provider ?? '');
     const names = groups.map(group => groupName(group, by, titles));
-    const muted = groups.map(group => !!prefs.muted[mutedKey(by, group.key)]);
+    const muted = groups.map(group => groupMuted(group.key));
     const shown = groups.flatMap((group, i) => (muted[i] ? [] : [{group, color: colors[i], name: names[i]}]));
     return {groups, colors, names, muted, shown};
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -280,7 +280,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
     const previous = registry.current?.authority === authority && registry.current.token === strip.token && registry.current.by === by ? registry.current : {authority, token: strip.token, by, seed, groups: seed};
     const identities = groupRegistry(previous.seed, previous.groups, [...found.values()], by === 'source' ? key => key==='unknown'||key==='notProvided'?'var(--other)' : colorOf(arrange.view, key, titles[key]?.provider ?? '') : undefined);
     const plotted: {group: PlotGroup; color: string; name: string}[] = [];
-    for (const identity of identities) {if (!prefs.muted[mutedKey(by, identity.key)]) plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
+    for (const identity of identities) {if (!groupMuted(identity.key)) plotted.push({group: data.get(identity.key) ?? {key: identity.key, name: identity.name, cells: EMPTY_CELLS}, color: identity.color, name: groupName(identity, by, titles)}); yield;}
     return {identities, shown: plotted, strip, registry: {authority, token: strip.token, by, seed: previous.seed, groups: identities}};
   }, [strip, groups, colors, shown, by, arrange.view, titles, prefs.muted, locale], `${authority}:${history?.board}:${by}`);
   const presentation = prepared.value ?? {identities: [], shown: [], strip: null};
@@ -330,7 +330,7 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
           />
           <div className="legend">
             {(emptyFrame ? [] : presentation.identities).map(identity => (
-              <LegendItem key={identity.key} history={drawing} groupKey={identity.key} by={by} group={currentGroups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!prefs.muted[mutedKey(by, identity.key)]} />
+              <LegendItem key={identity.key} history={drawing} groupKey={identity.key} by={by} group={currentGroups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!groupMuted(identity.key)} />
             ))}
           </div>
       </>

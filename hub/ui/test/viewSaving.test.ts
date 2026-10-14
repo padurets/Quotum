@@ -10,7 +10,7 @@ import type {Arrange} from '../lib/view';
 import type {View} from '../lib/types';
 import {preparationFixture} from './preparationFixture';
 
-const EMPTY:View={version:3,layout:{columns:6,places:{}},names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{},enabledWhenEmpty:[]};
+const EMPTY:View={version:4,layout:{columns:6,places:{}},names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{},enabledWhenEmpty:[]};
 const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 function fixture(platform?: 'electron'|'tauri') {
   const hooks=preparationFixture(),reads:{url:string;view:View;headers:Record<string,string>;resolve:(value:unknown)=>void;reject:(error:unknown)=>void}[]=[],events=new Map<string,()=>void>();

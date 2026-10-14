@@ -204,7 +204,7 @@ if (typeof window !== 'undefined') {
   let context = prefs();
   onPrefs(() => {
     const next = prefs();
-    if (['range', 'kind', 'horizon', 'showPlan', 'showForecast', 'activityBy'].some(key => next[key as keyof typeof next] !== context[key as keyof typeof context])) cancel();
+    if (['range', 'horizon', 'showPlan', 'showForecast', 'showSessionForecast', 'activityBy', 'money', 'funds'].some(key => next[key as keyof typeof next] !== context[key as keyof typeof context])) cancel();
     context = next;
   });
 }

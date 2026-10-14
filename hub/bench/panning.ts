@@ -2,7 +2,7 @@ import type {Cdp} from './cdp.js';
 import {panningProblems, type PanReading} from './panningBudget.js';
 import {panningReload,type ReloadDiagnostic} from './panningReload.js';
 
-/** Native input against the real charts; the temporary layout brings all four into view. */
+/** Native input against the real charts; the temporary layout brings all six into view. */
 export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp,'at'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)),diagnoseReload?:ReloadDiagnostic) {
   let stage='native/setup';
   const progress=(next:string)=>{stage='native/'+next;cdp.at?.(stage);console.log('bench: '+stage);};
@@ -20,16 +20,16 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
   const originalHorizon = await cdp.evaluate<string>(`JSON.parse(localStorage.getItem('quotum.prefs')||'{}').horizon||'auto'`);
   let interception = false;
   let failed = false;
-  await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 1600, deviceScaleFactor: 1, mobile: false});
+  await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 2400, deviceScaleFactor: 1, mobile: false});
   try {
-    for (const initiator of ['quota', 'budget', 'funds'] as const) {
+    for (const initiator of ['quota', 'session', 'activity', 'budget', 'spending', 'funds'] as const) {
       // A newly opened board gives each input owner an independently unread edge.
       progress(`${initiator}/reload`);
       await panningReload(cdp,initiator,diagnoseReload);
       progress(`${initiator}/charts-open`);
-      await cdp.evaluate(`(async()=>{window.__quotumBench?.pause();const until=Date.now()+15000;while(!['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))){if(Date.now()>until)throw new Error('panning charts did not open');await new Promise(r=>setTimeout(r,20));}})()`);
-      const selector = initiator === 'quota' ? '.history' : initiator === 'funds' ? '.subscription-funds' : '.budget-history';
-      const inset = initiator === 'quota' ? 52 : 88;
+      await cdp.evaluate(`(async()=>{window.__quotumBench?.pause();const until=Date.now()+15000;while(!['quota-history','quota-session-history','activity','budget-history','budget-spending-history','subscription-funds'].every(id=>document.querySelector('[data-widget="'+id+'"] .chart>svg'))){if(Date.now()>until)throw new Error('panning charts did not open');await new Promise(r=>setTimeout(r,20));}})()`);
+      const selector = '[data-widget="'+({quota:'quota-history',session:'quota-session-history',activity:'activity',budget:'budget-history',spending:'budget-spending-history',funds:'subscription-funds'} as const)[initiator]+'"]';
+      const inset = initiator === 'quota'||initiator==='session' ? 52 : initiator==='activity'?60:88;
       await cdp.evaluate(`(() => {
     const style=document.createElement('style'); style.id='quotum-pan-layout';
     // Clear inherited stretch on hidden cards too: all widgets now share this grid.
@@ -47,19 +47,19 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await settled();
       progress(`${initiator}/${period}/prepare`);
       await cdp.evaluate(`(async () => {for(let i=0;i<3;i++){await new Promise(requestAnimationFrame);const r=document.querySelector('.history .chart>svg').getBoundingClientRect();scrollBy(0,r.top-140);}})()`);
-      const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number; budgetSeries: number; fundsSeries: number; charts: number}>(`(() => {
+      const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number; budgetSeries: number; fundsSeries: number; sessionSeries:number; spendingSeries:number; charts: number}>(`(() => {
         const svg=document.querySelector('${selector} .chart>svg'), r=svg.getBoundingClientRect();
         const charts=[...document.querySelectorAll('.chart>svg')].filter(e=>{const b=e.getBoundingClientRect();return b.top>=0&&b.bottom<=innerHeight;}).length;
-        return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-${inset})/svg.viewBox.baseVal.width,fundsSeries:document.querySelectorAll('.subscription-funds .series[d]:not([d=""])').length,budgetSeries:document.querySelectorAll('.budget-history .series[d]:not([d=""])').length,series:document.querySelectorAll('.history .series[d]:not([d=""])').length,charts};
+        return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-${inset})/svg.viewBox.baseVal.width,fundsSeries:document.querySelectorAll('.subscription-funds .series[d]:not([d=""])').length,budgetSeries:document.querySelectorAll('[data-widget="budget-history"] .series[d]:not([d=""])').length,series:document.querySelectorAll('[data-widget="quota-history"] .series[d]:not([d=""])').length,sessionSeries:document.querySelectorAll('[data-widget="quota-session-history"] .series[d]:not([d=""])').length,spendingSeries:document.querySelectorAll('[data-widget="budget-spending-history"] .series[d]:not([d=""])').length,charts};
       })()`);
       await cdp.evaluate(`(() => {
         const initiator=${JSON.stringify(initiator)};
-        const charts=[document.querySelector('.history .chart>svg'),document.querySelector('.activity .chart>svg'),document.querySelector('.budget-history .chart>svg'),document.querySelector('.subscription-funds .chart>svg')],driver=initiator==='quota'?0:initiator==='funds'?3:2,root=charts[driver],views=charts.map(svg=>svg.viewBox.baseVal.width),scales=charts.map((svg,i)=>svg.getBoundingClientRect().width/views[i]),size=svg=>svg.getAttribute('viewBox')+':'+svg.style.height,sizes=charts.map(size);
-        const probe=window.__quotumPan={frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:[0,0,0,0],synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[]};
+        const charts=['quota-history','activity','budget-history','subscription-funds','quota-session-history','budget-spending-history'].map(id=>document.querySelector('[data-widget="'+id+'"] .chart>svg')),driver=({quota:0,activity:1,budget:2,funds:3,session:4,spending:5})[initiator],root=charts[driver],views=charts.map(svg=>svg.viewBox.baseVal.width),scales=charts.map((svg,i)=>svg.getBoundingClientRect().width/views[i]),size=svg=>svg.getAttribute('viewBox')+':'+svg.style.height,sizes=charts.map(size);
+        const probe=window.__quotumPan={frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:Array(6).fill(0),synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[]};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
         probe.returnSnapshot=()=>({now:Date.now(),url:location.search,charts:charts.map((svg,i)=>{
-          const left=i===1?48:i>=2?76:40,box=svg.viewBox.baseVal.width,inner=box-left-12,r=svg.getBoundingClientRect(),scale=r.width/box;
+          const left=i===1?48:i===0||i===4?40:76,box=svg.viewBox.baseVal.width,inner=box-left-12,r=svg.getBoundingClientRect(),scale=r.width/box;
           const layer=svg.parentElement.querySelector(i===1?'.plot-clip.is-band .plot-move':'.plot-move[data-plot-main]'),slides=layer.querySelector('.slides'),matrix=slides.getScreenCTM();
           const from=Number(svg.dataset.drawFrom),to=Number(svg.dataset.drawTo),span=Math.max(60000,to-from);
           const timeAt=x=>from+((x-matrix.e)/matrix.a-left)/inner*span;
@@ -75,7 +75,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         // Inline frozen matrices and the committed domain are enough during input;
         // no computed style or SVG layout read belongs in this moving-frame probe.
         const presentation=(svg,layer,i,at)=>{
-          const left=i===1?48:i>=2?76:40,inner=views[i]-left-12,span=Number(svg.dataset.drawTo)-Number(svg.dataset.drawFrom),matrix=matrixOf(layer.querySelector('.slides').style.transform),outer=matrixOf(layer.style.transform);
+          const left=i===1?48:i===0||i===4?40:76,inner=views[i]-left-12,span=Number(svg.dataset.drawTo)-Number(svg.dataset.drawFrom),matrix=matrixOf(layer.querySelector('.slides').style.transform),outer=matrixOf(layer.style.transform);
           const shown={x:scales[i]*(matrix.a*(left+(at-Number(svg.dataset.drawFrom))/span*inner)+matrix.e)+outer.e,perMs:scales[i]*matrix.a*inner/span};
           if(i===1){let node=svg.parentElement.querySelector('.plot-clip.is-band'),a=1,b=0;if(node.style.visibility==='hidden')return{x:NaN,perMs:NaN};for(let n=0;n<4;n++,node=node.firstElementChild){const m=matrixOf(node.style.transform);b+=a*m.e;a*=m.a;}const origin=left*scales[i];return{x:origin+b+a*(shown.x-origin),perMs:a*shown.perMs};}
           return shown;
@@ -130,7 +130,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
           if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?charts.map(svg=>(Number(svg.dataset.panBase||0))+':1'):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
           const moved=current.map((value,i)=>value!==previous[i]);
           if(active){probe.synchronized&&=charts.every((svg,i)=>{const shown=gesture?.shown[i],actual=presentation(svg,layers[i],i,gesture?.origin),delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrices[i].e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(actual.x)&&Math.abs(actual.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(actual.perMs/shown.perMs-1)<1e-6&&Math.abs(actual.x-(shown.x-delta*shown.perMs))<.1;})&&[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack')).every(layer=>Math.abs(matrixOf(layer.style.transform).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
-          // Each input reaches all four plots. Activity has no future, so only the
+          // Each input reaches all six plots. Activity has no future, so only the
           // remaining-share chart must move during the final future fold.
           if(active&&probe.synchronized&&(moved.every(Boolean)||afterCallback)){
             // Coalesced input reaches its final position together. A newer event
@@ -218,7 +218,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
         return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,segments,outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34)};
       })()`);
-      report.initiator = initiator; report.period = period; report.series = geometry.series; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
+      report.initiator = initiator; report.period = period; report.series = geometry.series; report.sessionSeries=geometry.sessionSeries; report.spendingSeries=geometry.spendingSeries; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
       reports.push(report);
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
       const live = await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`);

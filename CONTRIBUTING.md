@@ -18,7 +18,7 @@ measures this machine once.
 After building the hub, `npm run bench -- --ci` in `hub/` checks dashboard costs in
 Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp http://host:port`). It includes native
 wheel and Shift-drag starting from the quota, budget and subscription-funds charts at
-24h and 30d, moving all four charts with at least twelve real series per resource family and
+24h and 30d, moving all six charts with at least twelve real series per resource family and
 CPU throttled fourfold. The scenario covers delayed history, strip rebuilding, reversal
 and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 50 ms
 at p99; input to an actually updated chart frame must stay within 34 ms at p95. Empty
@@ -404,7 +404,7 @@ populated, committed drawing and stable layout before switching, then require th
 line to remain present and inside its scale on every frame until the new view commits.
 
 The same run checks pan traffic separately from the native frame budget, using the
-dense 75-day fixture and all four charts at 24h and 30d. Controlled production-loader
+dense 75-day fixture and all six charts at 24h and 30d. Controlled production-loader
 replays and native browser gestures use 0, 100 and 400 ms answer delays. Cached
 return and repeat must start no history GETs; half-width movements allow at most
 seven attempts from the history chart and five from activity, and a 4% movement

@@ -1,16 +1,15 @@
 import {AnalyticsPanel, AnalyticsNote, SeriesLegendItem} from './AnalyticsPanel';
 import {useSeriesFocus} from './seriesFocus';
-import {QuotaSettings} from './Analytics';
 import {memo, useMemo, useLayoutEffect, useRef} from 'react';
 import {earliest, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLinePrepared} from '../lib/plan';
 import {announcedOf, forecastLinePrepared, type Context} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
-import {setMuted, setPrefs, usePref} from '../lib/prefs';
+import {setMuted, setPrefs, usePref, useChartMuted, chartMuteKey, chartSeriesMuted} from '../lib/prefs';
 import {setTimeRange, timeRangeKey, useTimeRange} from '../lib/timeRange';
 import {frameChangesAt, frameOf, measuredTo} from '../lib/periods';
-import {QUOTA_HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
+import {QUOTA_HISTORY, QUOTA_SESSION_HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEventsPrepared, chartResetsPrepared, type PlotLine} from '../lib/lines';
 import {subscriptionLinesPrepared,subscriptionPlotLinesPrepared,subscriptionOverflow} from '../lib/subscription';
 import {lineRegistry} from '../lib/plotRegistry';
@@ -19,6 +18,7 @@ import {chartMoments, type ForecastLine, type PlanLine} from '../lib/readout';
 import {useBoardId, useForecastsOf, useLineup, useNamed, usePastResets, useResetNews, useResetsFor} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
+type QuotaKind='session'|'weekly';
 import {t, useLocale} from '../i18n';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {usePlot} from './sizing';
@@ -29,14 +29,13 @@ import {historyProjection, type ProjectionHints} from '../lib/historyProjection'
 
 /**
  * The chart's own settings: whether it draws the plan and the forecast (where either has
- * something to draw), the shared quota kind, and (for the board's owner) hiding it.
+ * something to draw), and (for the board's owner) hiding it.
  */
-function HistorySettings({arrange, planAvailable, forecastAvailable}: {arrange: Arrange; planAvailable: boolean; forecastAvailable: boolean}) {
-  const showPlan=usePref('showPlan'),showForecast=usePref('showForecast');
+function HistorySettings({arrange, kind, planAvailable, forecastAvailable}: {arrange: Arrange; kind:QuotaKind; planAvailable: boolean; forecastAvailable: boolean}) {
+  const forecastKey=kind==='session'?'showSessionForecast':'showForecast';
+  const showPlan=usePref('showPlan'),showForecast=usePref(forecastKey),widget=kind==='session'?QUOTA_SESSION_HISTORY:QUOTA_HISTORY;
   return (
     <Popover label={t('history.settings')} icon={<SlidersIcon />}>
-      <div className="popover-note">{t('chart.panHint')}</div>
-      <QuotaSettings />
       {(planAvailable || forecastAvailable) && (
         <div className="popover-section">
           <div className="popover-title">{t('history.show')}</div>
@@ -46,14 +45,14 @@ function HistorySettings({arrange, planAvailable, forecastAvailable}: {arrange: 
             </SwitchRow>
           )}
           {forecastAvailable && (
-            <SwitchRow on={showForecast} onChange={on => setPrefs({showForecast: on})}>
+            <SwitchRow on={showForecast} onChange={on => setPrefs({[forecastKey]: on})}>
               {t('history.forecast')}
             </SwitchRow>
           )}
           {planAvailable && <div className="popover-note">{t('history.planHint')}</div>}
         </div>
       )}
-      {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, QUOTA_HISTORY, true))}>{t('widget.hide')}</HideRow>}
+      {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, widget, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
   );
 }
@@ -65,7 +64,8 @@ function HistorySettings({arrange, planAvailable, forecastAvailable}: {arrange: 
  * the history's grid at a time, a label past its right edge counts down on its own, and a
  * forecast's line goes when the table no longer says where its window leads.
  */
-const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange}) {
+const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arrange: Arrange;kind?:QuotaKind}) {
+  const widget=kind==='session'?QUOTA_SESSION_HISTORY:QUOTA_HISTORY;
   const {history,drawing,loading,error,presentation:authority} = useHistory();
   const strip = useHistoryPlot();
   const registry = useRef<{authority: number; token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
@@ -78,8 +78,9 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const lineup = useLineup();
   const hubForecasts = useForecastsOf(lineup);
   const news = useResetNews();
-  const range = usePref('range'), kind = usePref('kind'), horizon = usePref('horizon'), showPlan = usePref('showPlan'), showForecast = usePref('showForecast'), activityBy = usePref('activityBy'), muted = usePref('muted');
-  const prefs = useMemo(() => ({range, kind, horizon, showPlan, showForecast, activityBy, muted}), [range, kind, horizon, showPlan, showForecast, activityBy, muted]);
+  const range=usePref('range'),horizon=usePref('horizon'),showPlan=usePref('showPlan',kind==='weekly'),showForecast=usePref(kind==='session'?'showSessionForecast':'showForecast'),muted=useChartMuted(widget);
+  const prefs=useMemo(()=>({range,kind,horizon,showPlan:kind==='weekly'&&showPlan,showForecast,muted}),[range,kind,horizon,showPlan,showForecast,muted]);
+  const mutedLine=(line:{sourceId:string;windowId:string;key:string})=>chartSeriesMuted(muted,widget,line.sourceId,line.windowId,!!muted[line.key]);
   const {view} = arrange;
   const omitted=subscriptionOverflow(sources,view);
   // Series names and markers are text: they are rebuilt when the language changes.
@@ -123,7 +124,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
       nextRegistry = {authority, token: strip.token, seed: previous.seed, lines};
     }
     const visible: PlotLine[] = [];
-    for (const line of lines) {if (!prefs.muted[line.key]) visible.push(line); yield;}
+    for (const line of lines) {if (!mutedLine(line)) visible.push(line); yield;}
     const scheduled = visible.some(line => line.provider === 'codex') ? (futureCodex?.scheduled?.scheduledFor ?? null) : null;
     const announced = frame.live ? scheduled : null;
     const planAvailable = prefs.kind === 'weekly' && visible.some(line => !line.capCells&&planOf(view, line.sourceId) !== null);
@@ -186,8 +187,8 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const wantedTo = historyProjection(frame, measured, prefs, currentHints, context?.lookAhead);
 
   return (
-    <AnalyticsPanel ref={panel} className="history" title={t('history.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
-      settings={<HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)}/>}
+    <AnalyticsPanel ref={panel} className="history" title={t(kind==='session'?'history.sessionTitle':'history.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
+      settings={<HistorySettings arrange={arrange} kind={kind} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)}/>}
     >
       {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}
       <Chart
@@ -213,7 +214,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
 
       <div className="legend">
         {lines.map(line => (
-          <SeriesLegendItem key={line.key} seriesKey={line.key} name={line.name} color={line.color} dash={line.dash} muted={!!prefs.muted[line.key]} onToggle={() => setMuted(line.key, !prefs.muted[line.key])}>
+          <SeriesLegendItem key={line.key} seriesKey={line.key} name={line.name} color={line.color} dash={line.dash} muted={mutedLine(line)} onToggle={() => setMuted(chartMuteKey(widget,line.sourceId,line.windowId), !mutedLine(line))}>
             <b>{line.current === null ? '—' : `${num(line.current)}%`}</b>
           </SeriesLegendItem>
         ))}

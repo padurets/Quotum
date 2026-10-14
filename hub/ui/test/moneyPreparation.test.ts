@@ -1,3 +1,6 @@
+import * as widgets from '../../server/domain/widgets';
+import {chartSeriesMuted} from '../lib/prefs';
+import {moneySeriesForPurpose} from '../lib/moneyTable';
 import {defaultCurrencyContext} from '../../server/domain/currency';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,7 +19,7 @@ import * as currency from '../../server/domain/currency';
 import * as moneyView from '../lib/moneyView';
 import * as money from '../lib/money';
 import * as moneyTable from '../lib/moneyTable';
-import {moneySelection} from '../lib/moneySelection';
+import {moneySelection,fundsLegacyMuted} from '../lib/moneySelection';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import type {Card, History} from '../lib/types';
 import type {Chart as ChartComponent} from '../components/Chart';
@@ -42,7 +45,7 @@ test('balance and funds drawing facts do not depend on the visible quantity fram
   for(const [family,meterSeries] of [['budget',[balance,cap]],['funds',[funds]]] as const) {
     const chunks=[{from:0,meterSeries:[...meterSeries]}],drawing={meterSeries:composeMeters(chunks,minute,0,4*minute)};
     const draw=(quantities:{from:number;to:number}|undefined,view='balance')=>{
-      const context={authority:0,family,settings:{view},context:defaultCurrencyContext,strip:{meterChunks:chunks,cell:minute,from:0,to:4*minute,meterFrame:quantities},drawing,history:drawing,unit:'USD',prefs:{muted:{}},sources:[{id:'wallet',provider:'openrouter'},{id:'subscription',provider:'codex'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof drawing.meterSeries;lines:Record<string,unknown>[];origin:bigint;span:bigint;pad:bigint}};
+      const context={authority:0,family,purpose:family==='funds'?'balance':view,moneySeriesForPurpose,isMuted:()=>false,accounting:()=>true,settings:{view},context:defaultCurrencyContext,strip:{meterChunks:chunks,cell:minute,from:0,to:4*minute,meterFrame:quantities},drawing,history:drawing,unit:'USD',prefs:{muted:{}},sources:[{id:'wallet',provider:'openrouter'},{id:'subscription',provider:'codex'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof drawing.meterSeries;lines:Record<string,unknown>[];origin:bigint;span:bigint;pad:bigint}};
       runInNewContext(ts.transpileModule(region+'\nglobalThis.model=prepared.value;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
       return context.model;
     };
@@ -69,7 +72,7 @@ test('the actual spending generator keeps visible quantities invariant under ove
     const raw=crossing?{...cells,cells:[[1,'10000000','0','1000000',60000,{steps:[{from:10000,to:60001,amount:'1000000',evidence:'continuous'}]}]] as MeterSeriesCells['cells']}:cells;
     const chunks=[{from:0,meterSeries:[raw]}],original=composeMeters(chunks,60000,60000,180000);
     const draw=(strip:unknown)=>{
-      const context={authority:0,family:'budget',settings:{view:'spending'},context:defaultCurrencyContext,strip,original,history:{meterSeries:original},drawing:{meterSeries:original},unit:'USD',prefs:{money:{view:'spending'},muted:{}},sources:[{id:'s',title:'Fixture',provider:'openrouter'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[['s','balance']]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof original}};
+      const context={authority:0,family:'budget',purpose:'spending',moneySeriesForPurpose,isMuted:()=>false,accounting:()=>true,settings:{view:'spending'},context:defaultCurrencyContext,strip,original,history:{meterSeries:original},drawing:{meterSeries:original},unit:'USD',prefs:{money:{view:'spending'},muted:{}},sources:[{id:'s',title:'Fixture',provider:'openrouter'}],arrange:{view:{}},locale:'en',board:'b',selection:{ids:[['s','balance']]},moneyIdentity,composeMetersPrepared,colorOf:()=> '#fff',nameOf:()=> 'Fixture',usePrepared:(work:()=>Generator<void,unknown,void>)=>({value:drain(work()),ready:true}),model:null as unknown as {entries:typeof original}};
       runInNewContext(ts.transpileModule(region+'\nglobalThis.model=prepared.value;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
       return JSON.stringify(context.model.entries[0].points.filter(p=>p.at>=60000&&p.at<180000).map(p=>[p.at,p.value]));
     };
@@ -110,6 +113,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
     let fullStrip = drawingStrip;
     let history = {board: 'board', range: '1h', cellMs: 60000, since: 0, to: 120000, meterSeries: series} as History | null;
     let sources = cards, view = EMPTY_VIEW, presentation = 0;
+    let purpose:'balance'|'spending'='balance';
     const prefs = {money: {unit: 'USD', view: 'balance', selected: {}}, muted: {}, range: '1h', horizon: 'auto'};
     const Chart = () => null;
     const memo = (read: () => unknown, deps: unknown[]) => {const box = outer.useRef(null) as {current: {deps: unknown[]; value: unknown} | null}; if (!box.current || deps.some((v, i) => !Object.is(v, box.current!.deps[i]))) box.current = {deps, value: read()}; return box.current.value;};
@@ -118,8 +122,8 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
       '../../server/domain/providers': providers, '../../server/domain/currency': currency, '../../server/domain/meterHistory': {composeMetersPrepared},
       '../lib/board': {useBoardId: () => 'board', useCurrencyContext: () => defaultCurrencyContext, useNamed: () => sources},
       '../lib/history': {useBudgetHistory: () => ({history, drawing: history, loading: !history, presentation}), useBudgetHistoryPlot: (_family: string, quantities=false) => change==='quantity frame'?(quantities?fullStrip:drawingStrip):null, useHistoryBegins: () => 0, budgetHistory: {retry: () => {}}},
-      '../lib/prefs': {usePref: (key:keyof typeof prefs) => prefs[key]}, '../lib/moneySelection': {moneySelection}, '../lib/moneyView': moneyView, '../lib/money': money,
-      '../lib/view': {colorOf: () => '#fff'}, '../lib/periods': {frameOf: () => ({from: 0, to: 120000, live: true}), measuredTo: () => 60000},
+      '../lib/prefs': {useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref: (key:keyof typeof prefs) => prefs[key]}, '../lib/moneySelection': {moneySelection,fundsLegacyMuted}, '../lib/moneyView': moneyView, '../lib/money': money,
+      '../lib/view': {...widgets,colorOf: () => '#fff'}, '../lib/periods': {frameOf: () => ({from: 0, to: 120000, live: true}), measuredTo: () => 60000},
       '../lib/timeRange': {useTimeRange: () => null}, '../lib/clock': {useClock: () => 60000}, '../lib/pan': {usePanning: () => null},
       '../lib/axisNavigation': {axisNavigation: () => ({context: 'board'})}, '../i18n': {t: (key: string) => key, useLocale: () => 'en'},
       './prepared': {usePrepared: outer.usePrepared}, './sizing': {usePlot: () => ({plot: {}, onBase: () => {}})}, './Chart': {Chart},
@@ -135,7 +139,7 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
     runInNewContext(ts.transpileModule(`function draw(){${source.slice(start, source.indexOf('  const model = ', start))}\nreturn prepared;}\nglobalThis.draw=draw;`, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, child);
     const draw = () => {
       outer.begin();
-      const tree = component.exports.MoneyHistory({arrange: {view, owner: false}});
+      const tree = component.exports.MoneyHistory({arrange: {view, owner: false},purpose});
       const chart = tree.props.children.find(node => node?.type === Chart)! as ReactElement<ComponentProps<typeof ChartComponent>>;
       outer.commit();
       Object.assign(child, {incomingLines: chart.props.lines, incomingReady: chart.props.prepared, valueAxis: chart.props.axis, modelContext: chart.props.modelContext});
@@ -148,14 +152,14 @@ for (const change of ['hidden', 'removed', 'boundary', 'batched boundary', 'reso
     if (change==='quantity frame') {
       fullStrip = {...drawingStrip, meterFrame: {from: 60000, to: 120000}};
       assert.equal(settle().value, original, 'moving quantities leave the balance preparation and geometry intact');
-      prefs.money.view = 'spending';
+      purpose='spending';
       const spending = settle().value!;
       assert.equal(spending.paths[0].latest, '60000:3000000', 'the consumer selects quantities for the current visible frame');
       fullStrip = {...drawingStrip};
       const moved = settle().value!;
       assert.equal(moved.paths[0].latest, '60000:1000000', 'a cached pan changes the exact cumulative spending amount');
       assert.notEqual(moved.paths[0].line, spending.paths[0].line, 'spending geometry follows the changed quantities');
-      prefs.money.view = 'balance';
+      purpose='balance';
       assert.equal(settle().value!.paths[0].latest, '60000:10000000');
       return;
     }

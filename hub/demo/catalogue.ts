@@ -45,7 +45,7 @@ export {CURRENCY_SCENES} from './currencies.js';
  * and ui/test/planHistory.test.ts; first-known and changed plans are durable below.
  */
 export const ANALYTICS_SCENES=[
-  {id:'mixed',expect:['five-widgets','quota-percentages','budget-amounts','independent-units']},
+  {id:'mixed',expect:['fixed-pairs','quota-percentages','budget-amounts','independent-units']},
   {id:'empty',expect:['pending-empty','explicit-empty','sticky-placement']},
 ] as const;
 

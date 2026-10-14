@@ -14,7 +14,7 @@ import * as format from '../lib/format';
 import * as agents from '../lib/agents';
 import * as view from '../lib/view';
 import * as i18n from '../i18n';
-import {EMPTY_VIEW,encodeView,decodeView} from '../../server/domain/view';
+import {EMPTY_VIEW,encodeView,decodeView,decodeUnifiedView} from '../../server/domain/view';
 import {AGENTS,widgetVisible,showWidgets,WIDGETS} from '../../server/domain/widgets';
 import type {ActivityDimension} from '../lib/types';
 import type {WorkTrace} from '../../server/domain/periodWork';
@@ -141,7 +141,7 @@ test('one established sessions widget keeps placements, v3 aliases and independe
   assert.equal(view.columnShown(enabled,AGENTS,'active'),true);
   assert.equal(view.columnShown(enabled,AGENTS,'concurrency'),true);
   assert.deepEqual(decodeView(encodeView(enabled)),enabled);
-  assert.equal(decodeView([3,[[0,3],[1,3],[2,3],[3,3],[4,3],[5,3],[6,3]],4,[127]])!.shown.length,7);
+  assert.equal(decodeUnifiedView([3,[[0,3],[1,3],[2,3],[3,3],[4,3],[5,3],[6,3]],4,[127]])!.shown.length,7);
   assert.deepEqual(agents.columnsOf('none').rest,['client','worked','activity','machine','subscription','running']);
 });
 
