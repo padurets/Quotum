@@ -1,6 +1,6 @@
 import type {Preparation} from './prepare.js';
 import {WORK_BLOCK_MS,type WorkTrace} from './periodWork.js';
-import {numberAt,numberColumn,rateAt,bindRate,sampleAt,sampleCount,type SampleRows,type PeriodTape,type MoneyTape} from './periodTape.js';
+import {numberColumn,numberTail,rateAt,bindRate,sampleAt,sampleCount,type SampleRows,type PeriodTape,type MoneyTape} from './periodTape.js';
 import type {MeterSpan,Reading} from './meters.js';
 
 const lower=<T>(rows:readonly T[],at:number,time:(row:T)=>number)=>{let a=0,b=rows.length;while(a<b){const m=(a+b)>>>1;if(time(rows[m])<at)a=m+1;else b=m;}return a;};
@@ -31,10 +31,10 @@ export function* retainWork(trace:WorkTrace,from:number,reserve:(bytes:number)=>
 function* samplesAfter(rows:SampleRows,from:number,reserve:(bytes:number)=>void):Preparation<SampleRows>{
   let a=0,b=sampleCount(rows);while(a<b){const m=(a+b)>>>1;if(sampleAt(rows,m)!.at<from)a=m+1;else b=m;}
   const start=Math.max(0,a-1),count=sampleCount(rows)-start;if(!start)return rows;
-  // Column construction overlaps its compressed output, never an expanded row ledger.
-  reserve(count*40+512);
+  // Copies release the expired buffers; a view would keep the entire old ledger alive.
+  reserve('columns' in rows?256:count*40+512);
   const columns=[];
-  for(let field=0;field<5;field++)columns.push(yield*numberColumn(count,i=>'columns' in rows?numberAt(rows.columns[field],i+start)!:rows[(i+start)*5+field]));
+  for(let field=0;field<5;field++)columns.push('columns' in rows?yield*numberTail(rows.columns[field],start,reserve):yield*numberColumn(count,i=>rows[(i+start)*5+field]));
   return {length:count*5,columns};
 }
 

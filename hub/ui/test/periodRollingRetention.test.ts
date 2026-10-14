@@ -5,11 +5,71 @@ import {expandPeriod} from '../../server/domain/periodWire';
 import {workedSessions} from '../../server/domain/periodWork';
 import {PeriodAccounting} from '../../server/domain/periodAccounting';
 import {PeriodIndex} from '../../server/domain/periodIndex';
-import {decodeSamples,sampleCount,mergeTape,bindRate,rateAt,type PeriodTape,type MoneyTape} from '../../server/domain/periodTape';
+import {decodeSamples,sampleCount,sampleAt,packSamples,retainSamplesPrepared,numberColumn,numberTail,numberAt,numberBytes,mergeTape,bindRate,rateAt,type NumberColumn,type PeriodTape,type MoneyTape} from '../../server/domain/periodTape';
 import {retainTape} from '../../server/domain/periodRetention';
 import {drain,Preparations} from '../lib/prepare';
 import {PERIOD_SCOPES} from '../../server/domain/periodRead';
 import type {Meter} from '../../server/domain/meters';
+
+test('numeric prefix retirement preserves every value and releases expired buffers',()=>{
+  const cases=[
+    Array.from({length:256},()=>17.125),
+    Array.from({length:256},(_,i)=>1_800_000_000_000+i*60_000),
+    Array.from({length:256},(_,i)=>i<97?i*3:1000-(i-97)*7),
+    Array.from({length:256},(_,i)=>(i*137)%251),
+    Array.from({length:256},(_,i)=>Math.sin(i)+i*.125),
+  ].map(values=>drain(numberColumn(values.length,i=>values[i])));
+  const large=Number.MAX_SAFE_INTEGER-10;
+  cases.push({length:3,base:0,values:null,runs:{ends:new Uint32Array([3]),bases:new Float64Array([large]),steps:new Float64Array([-large])}});
+  const buffers=(column:NumberColumn)=>column.runs?[column.runs.ends.buffer,column.runs.bases.buffer,column.runs.steps.buffer]:column.values?[column.values.buffer]:[];
+  for(const column of cases)for(const start of [0,1,96,97,98,Math.floor(column.length/2),column.length-1,column.length].filter(start=>start<=column.length)){
+    const before=Array.from({length:column.length},(_,i)=>numberAt(column,i)),bytes=numberBytes(column);
+    const tail=drain(numberTail(column,start));
+    assert.deepEqual(Array.from({length:tail.length},(_,i)=>numberAt(tail,i)),before.slice(start));
+    assert.deepEqual(Array.from({length:column.length},(_,i)=>numberAt(column,i)),before,'retirement cannot mutate a visible or cached ledger');
+    assert.ok(numberBytes(tail)<=bytes,'retirement cannot grow retained storage');
+    if(start)for(const buffer of buffers(tail))assert.ok(!buffers(column).includes(buffer),'the expired prefix must not remain reachable through a subarray');
+    else assert.equal(tail,column);
+  }
+});
+
+test('retirement reserves a dense compressed suffix before copying and can abandon it',()=>{
+  const length=8192+128,start=8192;
+  const column=drain(numberColumn(length,i=>i<start?i:start+(i*137)%251));
+  assert.ok(column.runs);
+  const before=Array.from({length},(_,i)=>numberAt(column,i));let copied=false;
+  const bases=column.runs.bases,slice=bases.slice.bind(bases);
+  bases.slice=(from,to)=>{copied=true;return slice(from,to);};
+  const limited=new Error('capacity');
+  assert.throws(()=>drain(numberTail(column,start,()=>{throw limited;})),error=>error===limited);
+  assert.equal(copied,false,'capacity refusal must precede new typed buffers');
+  let charged=0;
+  const tail=drain(numberTail(column,start,bytes=>{charged+=bytes;}));
+  assert.equal(charged,numberBytes(tail));
+  assert.ok(charged*5>(length-start)*40+512,'five dense suffixes exceed the former row-based reserve');
+  const cancelled=numberTail(column,start,()=>{});
+  assert.equal(cancelled.next().done,false);
+  cancelled.return(column);
+  assert.deepEqual(Array.from({length},(_,i)=>numberAt(column,i)),before);
+  assert.deepEqual(Array.from({length:tail.length},(_,i)=>numberAt(tail,i)),before.slice(start));
+});
+
+for(const count of [128,8192])test(`retiring compressed quota cadences does bounded work for ${count} observations`,()=>{
+  const origin=1_800_000_000_000,step=60_000;
+  const flat=packSamples(Array.from({length:count},(_,i)=>({at:origin+i*step,used:i%512,resetAt:origin+count*step,staleAfterMs:count*step,validUntil:origin+count*step+1})));
+  const samples=drain(retainSamplesPrepared(flat));
+  const tape:PeriodTape={from:origin,cut:origin+count*step,replaceFrom:origin,cursor:'cursor',quota:Array.from({length:12},(_,i)=>({source:String(i),window:'w',samples})),money:[]};
+  const work=retainTape(tape,origin+2*step+1);let steps=0,result=work.next();
+  while(!result.done){steps++;result=work.next();}
+  assert.ok(steps<256,`a single expired prefix performed ${steps} preparation steps`);
+  const retained=result.value.quota[0].samples;
+  assert.equal(sampleCount(retained),count-2,'the actual predecessor observation stays available');
+  for(let i=0;i<count-2;i++)assert.deepEqual(sampleAt(retained,i),sampleAt(flat,i+2));
+  assert.equal(sampleCount(samples),count,'the old ledger stays intact until commit');
+  const reference=drain(retainTape({...tape,quota:[{...tape.quota[0],samples:flat}]},origin+2*step+1));
+  const range={from:origin+2*step+1,to:origin+count*step};
+  assert.deepEqual(new PeriodAccounting(result.value,null).quotaSummary('0','w',range),new PeriodAccounting(reference,null).quotaSummary('0','w',range));
+});
 
 test('a superseded money span tail is retired while complete rate transitions remain observable',()=>{
   const path=[{id:'first-proof',source:'manual',base:'USD',date:0,fetchedAt:0,from:'1000000',to:'2000000'}];

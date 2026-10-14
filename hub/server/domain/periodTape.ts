@@ -62,6 +62,23 @@ export function* numberColumn(length:number,value:(i:number,pass:number)=>number
   for(let i=0;i<length;i++){values[i]=value(i,1)-base;if((i&63)===63)yield;}
   return {length,base,values};
 }
+/** Retire a prefix without decoding and recompressing the surviving cadence. */
+export function* numberTail(column:NumberColumn,start:number,reserve:(bytes:number)=>void=()=>{}):Preparation<NumberColumn>{
+  if(!start)return column;
+  const length=column.length-start;
+  if(!length){reserve(32);return {length:0,base:0,values:null};}
+  if(!column.runs){reserve(32+length*(column.values?.BYTES_PER_ELEMENT??0));return {length,base:column.base,values:column.values?.slice(start)??null};}
+  const {ends,bases,steps}=column.runs;let first=0,last=ends.length;
+  while(first<last){const middle=(first+last)>>>1;if(ends[middle]<=start)first=middle+1;else last=middle;}
+  // Re-associating a very large integer product can change its rounding.
+  const runStart=first?ends[first-1]:0;
+  if(!Number.isSafeInteger((ends[first]-runStart-1)*steps[first])){reserve(length*8+128);return yield*numberColumn(length,i=>numberAt(column,i+start)!);}
+  reserve(128+(ends.length-first)*20);
+  const nextEnds=new Uint32Array(ends.length-first),nextBases=bases.slice(first),nextSteps=steps.slice(first);
+  nextBases[0]=bases[first]+(start-runStart)*steps[first];
+  for(let i=first;i<ends.length;i++){nextEnds[i-first]=ends[i]-start;yield;}
+  return {length,base:0,values:null,runs:{ends:nextEnds,bases:nextBases,steps:nextSteps}};
+}
 type Sample=CellSamples['samples'][number];
 /** Flat numeric rows avoid repeating property names and per-observation objects. */
 export const packSamples=(rows:readonly Sample[]):number[]=>rows.flatMap(s=>[s.at,s.used,s.resetAt??-1,s.staleAfterMs,s.validUntil??-1]);
