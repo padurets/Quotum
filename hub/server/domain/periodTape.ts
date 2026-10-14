@@ -108,10 +108,16 @@ export function sampleBytes(rows:SampleRows,delta=false):number {
 }
 export const sampleCount=(rows:SampleRows)=>rows.length/SAMPLE_WIDTH;
 export function sampleAt(rows:SampleRows,index:number):Sample|undefined {
-  const at=index*SAMPLE_WIDTH;if(at<0||at>=rows.length)return undefined;
-  const get=(field:number)=>'columns' in rows?numberAt(rows.columns[field],index)!:rows[at+field];
-  const resetAt=get(2),validUntil=get(4);
-  return {at:get(0),used:get(1),resetAt:resetAt===-1?null:resetAt,staleAfterMs:get(3),...(validUntil===-1?{}:{validUntil})};
+  const offset=index*SAMPLE_WIDTH;if(offset<0||offset>=rows.length)return undefined;
+  let at:number,used:number,resetAt:number,staleAfterMs:number,validUntil:number;
+  if('columns' in rows){
+    const columns=rows.columns;
+    resetAt=numberAt(columns[2],index)!;validUntil=numberAt(columns[4],index)!;
+    at=numberAt(columns[0],index)!;used=numberAt(columns[1],index)!;staleAfterMs=numberAt(columns[3],index)!;
+  }else{
+    resetAt=rows[offset+2];validUntil=rows[offset+4];at=rows[offset];used=rows[offset+1];staleAfterMs=rows[offset+3];
+  }
+  return {at,used,resetAt:resetAt===-1?null:resetAt,staleAfterMs,...(validUntil===-1?{}:{validUntil})};
 }
 /** Read the observation's deadline without decoding its quota value. */
 export function sampleDeadlineAt(rows:SampleRows,index:number):number|undefined {
