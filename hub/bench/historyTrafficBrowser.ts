@@ -12,13 +12,46 @@ import {historyPoolReceiptScript,historyPoolCriticalReceiptScript} from './histo
 import {ScriptBinding} from './scriptBinding';
 import {clientIdentity} from './evidence';
 import {deadline} from './deadline';
+import {compactJSON} from '../server/history';
+import type {PeriodWireReply} from '../server/domain/periodWire';
 
 const DAY = 86_400_000;
 type ResourceRead={scope?:PeriodScope;selection:string;from:number;to:number;cell:number;answer?:Pick<HistoryAnswer,'run'|'now'|'known'>;chunks?:[number,number][]};
 type RequestDiagnostic={selection?:{mode:'live';periodMs:number}|{mode:'range';from:number;to:number};evaluatedAt?:number;sections:{scope:PeriodScope;from:number;to:number;cell:number;cells:'skip'|'read';evidence:'skip'|'cursor'|'baseline'}[];values:number;sessions:boolean};
-type Read = {httpStatus?:number;endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
+type Read = {httpStatus?:number;endpoint?:'history'|'period'|'period/sessions';stage?:string;diagnostic?:RequestDiagnostic;wireParts?:ReturnType<typeof periodWireParts>;sections?:ResourceRead[];request?:Promise<void>;selection: string; id: string; phase: string; from: number; to: number; cell: number; lower: number; before: Promise<unknown[]>; coding?: string; length?: number; attemptId?: string; transferId?: string; canceled?: boolean; count?: BodyCount; answer?: Pick<HistoryAnswer, 'run' | 'now' | 'known'>; chunks?: [number, number][]};
 const lowerHeaders = (headers: Record<string, string>) => Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 let pageSerial = 0;
+
+/** Count the original wire before expansion; a failed observation cannot change its verdict. */
+export function periodWireParts(raw:PeriodReply,text:string) {
+  const p=raw as PeriodReply&Pick<PeriodWireReply,'moneySemantics'|'rateLegs'>;
+  // Quota, budget, funds, values, sessions: 1 complete, 2 limit, 3 range, 4 other error, 5 delta.
+  const states=[p?.quota,p?.budget,p?.funds,p?.values,p?.sessions].map(part=>part?.state==='complete'?1:part?.state==='delta'?5:part?.state==='error'?part.error==='history_limit'?2:part.error==='history_range_invalid'?3:4:0);
+  const missing={qualified:false as const,states};
+  try {
+    if(states.some(state=>state!==1)||compactJSON(p)!==text)return missing;
+    const n=(value:unknown)=>value===undefined?0:Buffer.byteLength(compactJSON(value));
+    const scopes=PERIOD_SCOPES.map(scope=>{
+      const part=p[scope]!;if(part.state!=='complete')throw 0;
+      const value=part.value,tape=value.tape,fixed=tape?.fixed,shift=fixed?.shift;if(!fixed)throw 0;
+      const fields=[n({...value,tape:undefined}),n({...tape,fixed:undefined}),n({...fixed,shift:undefined}),n(shift)];
+      const bytes=n(part);return [bytes,...fields,bytes-fields.reduce((a,b)=>a+b,0),shift?.window?.paths.length??0,shift?.window?.pieces.length??0];
+    });
+    if(p.values!.state!=='complete'||p.sessions!.state!=='complete')return missing;
+    const cards=p.values!.value,programs=cards.filter(card=>card.states!==undefined);
+    const base=n(cards.map(card=>({...card,states:undefined}))),replay=programs.reduce((sum,card)=>sum+n(card.states),0),cardBytes=n(p.values);
+    const values=[cardBytes,base,replay,cardBytes-base-replay,cards.length,programs.length,programs.reduce((sum,card)=>sum+card.states!.pieces.length,0)];
+    const work=p.sessions!.value,fixed=work.fixed,shift=fixed?.shift;if(!fixed)return missing;
+    const fields=[n({...work,fixed:undefined}),n({...fixed,shift:undefined}),n(shift)];
+    const workBytes=n(p.sessions),sessions=[workBytes,...fields,workBytes-fields.reduce((a,b)=>a+b,0),work.refs.length,shift?.window?.pieces.length??0];
+    const keys=Object.keys(p),allowed=['basis','quota','budget','funds','values','sessions','moneySemantics','rateLegs'];
+    const dictionaries=n(p.moneySemantics)+n(p.rateLegs),whole=Buffer.byteLength(text),basis=n(p.basis);
+    const topResidual=whole-basis-dictionaries-scopes.reduce((sum,row)=>sum+row[0],0)-values[0]-sessions[0];
+    const syntax=2+keys.reduce((sum,key)=>sum+Buffer.byteLength(JSON.stringify(key))+1,0)+Math.max(0,keys.length-1);
+    if(!keys.every(key=>allowed.includes(key))||topResidual!==syntax||scopes.some(row=>row[5]<0)||values[3]<0||sessions[4]<0)return missing;
+    return {qualified:true as const,states,whole,basis,dictionaries,topResidual,scopes,values,sessions};
+  }catch{return missing;}
+}
 
 /** Time coordinates and borrowed metadata do not identify a resource selection. */
 export function historyReadSelection(url: URL) {
@@ -67,7 +100,7 @@ export class HistoryBodies {
   /** Only request shape and body counts: identities, cursors and response contents stay private. */
   diagnostic(phase:string){
     const reads=this.reads.filter(read=>read.phase===phase);
-    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,httpStatus:read.httpStatus??null,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
+    return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,...(read.wireParts?{wireParts:read.wireParts}:{}),httpStatus:read.httpStatus??null,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
   }
   constructor(cdp: Pick<Cdp, 'on' | 'send'>) {
     cdp.on<{requestId: string; request: {url: string;postData?:string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
@@ -118,7 +151,10 @@ export class HistoryBodies {
           this.errors.push(new Error(read.httpStatus===undefined?'accounting HTTP status unavailable':`accounting HTTP status ${read.httpStatus}`));
           return;
         }
-        const raw=JSON.parse(decoded.toString()) as HistoryReply|PeriodReply;
+        const text=decoded.toString(),raw=JSON.parse(text) as HistoryReply|PeriodReply,d=read.diagnostic;
+        if(/^browser\/1d\/activity\/(100|400)ms\/0\.5\/take1\/cold$/.test(read.phase)&&d?.selection?.mode==='range'&&d.values===69&&d.sessions&&
+          d.sections.length===3&&PERIOD_SCOPES.every(scope=>d.sections.some(part=>part.scope===scope&&part.cells==='skip'&&part.evidence==='baseline'))&&
+          this.reads.filter(part=>part.phase===read.phase).slice(0,64).includes(read))read.wireParts=periodWireParts(raw as PeriodReply,text);
         const parts=read.sections??[read];
         for(const part of parts){
           const scope='scope' in part?part.scope:undefined;

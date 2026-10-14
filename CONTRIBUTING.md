@@ -605,6 +605,13 @@ within-tile bridge. The report separates complete bodies, partial byte bounds an
 unknown transfers; headers are never counted as body bytes. Only HTTP 200 responses
 qualify as accounting data, including metadata-only reads. Error bodies still count
 their physical bytes, and reports retain numeric HTTP status without response contents.
+The two 1d activity cold cohorts at 100 and 400 ms also retain decoded wire component
+sizes for their final baseline. Numeric rows separate history headers, fixed summaries
+and shift programs, card values and neighboring states, and session summaries. Section
+states remain visible when a baseline is incomplete. Counts use the original compact
+JSON before expansion and must conserve its whole size; they do not allocate Brotli
+bytes to individual sections or change the budget verdict. These observations share
+the existing 64-read diagnostic limit and retain no response text.
 Independent whole-cell composition also checks series, activity and events. Each
 history attempt gets its
 fixture identity before HTTP starts, so aborts before response headers cannot borrow

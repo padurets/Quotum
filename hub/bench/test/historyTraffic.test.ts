@@ -87,6 +87,46 @@ test('the owned proxy measures a real fixed-codec HTTP body without changing JSO
 
 import {HistoryBodies, hasSeededHistory, historyReadSelection, historyScroll, prepareHistoryTarget, stableHistoryReads} from '../historyTrafficBrowser';
 import {readUnion} from '../historyTrafficBudget';
+import {compactJSON} from '../../server/history';
+import type {PeriodReply} from '../../server/domain/periodRead';
+
+test('failed cold cohorts retain original wire sizes and section errors without changing body verdicts', async () => {
+  const basis={run:'private-canary',revision:'0',evaluatedAt:3000,evidenceCut:2000,range:{from:1000,to:2000}};
+  const fixed={range:basis.range,money:[],quota:[],shift:{until:2000,steps:[],window:{paths:[],slopes:[[]],pieces:[[1000,3000,0,[]]]}}};
+  const history={run:'private-canary',now:3000,historyStart:0,known:{work:0,sources:{'private-canary':0}},chunks:[],tape:{from:0,cut:3000,money:[],quota:[],fixed}};
+  const reply={basis,...Object.fromEntries(['quota','budget','funds'].map(scope=>[scope,{state:'complete',basis,value:history}])),
+    values:{state:'complete',basis,value:Array.from({length:69},(_,i)=>({id:`private-canary-${i}`,provider:'codex',windows:[],meters:[],keys:[]}))},
+    sessions:{state:'complete',basis,value:{refs:[],spans:[],fixed,cursor:'private-canary'}}} as unknown as PeriodReply;
+  const request={version:1,selection:{mode:'range',from:1000,to:2000},evaluatedAt:3000,values:Array(69).fill('private-canary'),sessions:{},
+    ...Object.fromEntries(['quota','budget','funds'].map(scope=>[scope,{cell:'1000',from:'1000',to:'2000',cells:'skip'}]))};
+  const original=compactJSON(reply);assert.notEqual(original,JSON.stringify(reply),'the server wire uses compact numbers');
+  for(const [phase,answer,post,qualifies,states] of [
+    ['browser/1d/activity/100ms/0.5/take1/cold',original,request,true,[1,1,1,1,1]],
+    ['browser/1d/activity/400ms/0.5/take1/cold',compactJSON({...reply,funds:{state:'error',error:'history_limit'}}),request,false,[1,1,2,1,1]],
+    ['browser/1d/activity/100ms/0.5/take1/cold',JSON.stringify(reply),request,false,[1,1,1,1,1]],
+    ['browser/1d/activity/100ms/0.5/take1/warm',original,request,undefined,undefined],
+    ['browser/1d/activity/0ms/0.5/take1/cold',original,request,undefined,undefined],
+    ['browser/1d/activity/100ms/0.5/take1/cold',original,{...request,values:['private-canary']},undefined,undefined],
+  ] as const){
+    const listeners=new Map<string,(event:never)=>void>();
+    const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:async<T>()=>({body:answer,base64Encoded:false} as T)};
+    const observer=new HistoryBodies(cdp);observer.phase=phase;
+    const emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
+    emit('Network.requestWillBeSent',{requestId:'baseline',request:{url:'http://localhost/api/boards/private-canary/period',postData:JSON.stringify(post)}});
+    emit('Network.responseReceived',{requestId:'baseline',response:{status:200,headers:{'Content-Encoding':'br','Content-Length':'40'}}});
+    emit('Network.loadingFinished',{requestId:'baseline'});await Promise.all([...observer.pending]);
+    assert.deepEqual(observer.errors,[]);assert.equal(observer.reads[0].count?.complete,true);
+    assert.equal(observer.reads[0].count?.decoded,Buffer.byteLength(answer));assert.equal(observer.reads[0].count?.lower,40);
+    const parts=observer.diagnostic(phase).reads[0].wireParts;
+    assert.equal(parts?.qualified,qualifies);assert.deepEqual(parts?.states,states);
+    if(parts?.qualified){
+      assert.equal(parts.whole,Buffer.byteLength(answer));
+      assert.equal(parts.basis!+parts.dictionaries!+parts.scopes!.reduce((sum,row)=>sum+row[0],0)+parts.values![0]+parts.sessions![0]+parts.topResidual!,parts.whole);
+    }
+    assert.doesNotMatch(JSON.stringify(observer.diagnostic(phase)),/private-canary/);
+  }
+  assert.equal(compactJSON(reply),original,'observing the wire cannot mutate retained evidence');
+});
 
 test('native history setup rejects a covered point or a different chart without moving its point', async () => {
   const surface = {}, other = {}, chart = {contains: (node: unknown) => node === surface};
