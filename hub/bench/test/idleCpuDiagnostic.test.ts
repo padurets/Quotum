@@ -121,6 +121,8 @@ test('original period input capture keeps the latest resource replies outside th
   };
   request('initial-private-id',{quota:{},budget:{},funds:{},sessions:{}});
   for(let i=0;i<10;i++)request('quota-private-'+i,{quota:{}});
+  request('drawing-private-id',{quota:{evidence:'skip'}});
+  cdp.responseBodies.set('drawing-private-id',JSON.stringify({basis,quota:{state:'complete',basis,value:{chunks:[]}}}));
   request('foreign-private-id',{quota:{}},'https://foreign.test');
   await diagnostic.start();
   request('during-counter-private-id',{quota:{}});

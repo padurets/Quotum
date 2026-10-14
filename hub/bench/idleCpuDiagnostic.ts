@@ -157,7 +157,8 @@ export class IdleCpuDiagnostic {
       const selection=parsePeriod(request.selection);
       if(!selection){this.missingInputRequests++;return;}
       const input:Input={id:event.requestId,selection,evaluatedAt:finite(request.evaluatedAt)?request.evaluatedAt:null,complete:false};
-      for(const scope of [...PERIOD_SCOPES,'sessions'] as const)if(request[scope])this.inputs.set(scope,input);
+      for(const scope of PERIOD_SCOPES)if(request[scope]&&request[scope]!.evidence!=='skip')this.inputs.set(scope,input);
+      if(request.sessions)this.inputs.set('sessions',input);
     }catch{this.missingInputRequests++;}
   };
   private readonly inputFinished=(event:{requestId:string})=>{for(const input of this.inputs.values())if(input.id===event.requestId)input.complete=true;};
@@ -251,7 +252,7 @@ export class IdleCpuDiagnostic {
         }catch{complete=false;rows.push({resource,status:'unavailable'});if(signal.aborted||performance.now()>end)throw 0;}
       }
     });}catch{complete=false;}
-    this.save('idle-cpu-main-period-inputs',{mode:'diagnostic',kind:'Resources0 quota,1 budget,2 funds,3 sessions. Latest original server replies before profiling; read after counters and profiler stop. Committed tapes and retirementAt remain unknown.',status:complete?'complete':'insufficient-evidence',fixtureStart:this.inputOrigin.fixtureStart,missingInputRequests:this.missingInputRequests,rows});
+    this.save('idle-cpu-main-period-inputs',{mode:'diagnostic',kind:'Resources0 quota,1 budget,2 funds,3 sessions. Latest original evidence-bearing replies before profiling; read after counters and profiler stop. Committed tapes and retirementAt remain unknown.',status:complete?'complete':'insufficient-evidence',fixtureStart:this.inputOrigin.fixtureStart,missingInputRequests:this.missingInputRequests,rows});
   }
 
   private async clock(stage:string){
