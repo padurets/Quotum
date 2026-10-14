@@ -12,6 +12,7 @@ export type PanReading = {
   segments?: Record<string, {count: number; p95: number; max: number}>;
   outliers?: {ms: number; segment: string; pending: number; requests: number}[];
   responses?: {ms: number; queued: number; processed: number; segment: string; requests: number}[];
+  mutationSamples?: {segment:string;surface:string;tag:string;type:string;attribute:string|null;measurement:boolean;panning:boolean}[];
 };
 
 /** Empty callbacks, missing input samples and an idle chart can never pass a frame budget. */

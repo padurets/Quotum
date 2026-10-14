@@ -70,7 +70,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         for(let i=0;i<4;i++,clip=clip.firstElementChild)clips.push(clip);
         const bands=[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack'));
         const connected=()=>layers.every((layer,i)=>layer.isConnected!==false&&slides[i].isConnected!==false)&&clips.every(clip=>clip.isConnected!==false);
-        const probe=window.__quotumPan={frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:Array(6).fill(0),synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[],wheelGapMs:0,lastWheel:null};
+        const probe=window.__quotumPan={frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:Array(6).fill(0),synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,mutationSamples:[],undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[],wheelGapMs:0,lastWheel:null};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
         probe.returnSnapshot=()=>({now:Date.now(),url:location.search,charts:charts.map((svg,i)=>{
@@ -131,7 +131,11 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         };
         probe.observer=new MutationObserver(records=>{
           if(!probe.running||!probe.feeding)return;
-          for(const record of records){const element=record.target.nodeType===1?record.target:record.target.parentElement;if(!element?.closest('.card,.topbar,.agents-panel,.forecast,.budget-table,.activity-totals'))continue;const clock=element.closest('[data-time]'),timeOnly=clock&&clock.getAttribute('data-time')!=='chart';if(!timeOnly)probe.forbiddenMutations++;}
+          for(const record of records){const element=record.target.nodeType===1?record.target:record.target.parentElement,panel=element?.closest('.card,.topbar,.agents-panel,.forecast,.budget-table,.activity-totals');if(!panel)continue;const clock=element.closest('[data-time]'),timeOnly=clock&&clock.getAttribute('data-time')!=='chart';if(!timeOnly){
+            probe.forbiddenMutations++;
+            // Keep only structural provenance, never text, values or source IDs.
+            if(probe.mutationSamples.length<24)probe.mutationSamples.push({segment:probe.segment,surface:['card','topbar','agents-panel','forecast','budget-table','activity-totals'].find(name=>panel.classList.contains(name)),tag:element.tagName,type:record.type,attribute:record.attributeName??null,measurement:!!element.closest('.table-measure'),panning:!!root.dataset.panEnd});
+          }}
         });probe.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true});
         const originalRAF=window.requestAnimationFrame||requestAnimationFrame;
         const schedule=callback=>originalRAF.call(window,callback);
@@ -241,7 +245,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       const report = await cdp.evaluate<PanReading>(`(() => {
         const p=window.__quotumPan;p.cleanup();
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
-        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,wheelGapMs:p.wheelGapMs,segments,outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34)};
+        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,mutationSamples:p.mutationSamples,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,wheelGapMs:p.wheelGapMs,segments,outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34)};
       })()`);
       report.initiator = initiator; report.period = period; report.series = geometry.series; report.sessionSeries=geometry.sessionSeries; report.spendingSeries=geometry.spendingSeries; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;report.edgeSeries=edgeSeries;
       reports.push(report);

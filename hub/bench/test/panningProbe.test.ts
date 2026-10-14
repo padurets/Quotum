@@ -11,6 +11,7 @@ const probe = source.match(/await cdp\.evaluate\(`(\(\(\) => \{\n\s*const initia
 
 function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'spending'|'funds' = 'quota') {
   let time = 0;
+  let observe:(records:unknown[])=>void=()=>{};
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
   const schedule = (callback: (stamp: number) => void) => {callbacks.push(callback); return callbacks.length;};
   const layer = (data = false) => {const slides = {isConnected:true,style: {transform: 'none'}, getAnimations: () => []}; return {isConnected:true,style: {transform: 'none'}, slides, querySelector: (selector: string) => selector === '.activity-stack' ? data ? {} : null : slides};};
@@ -44,7 +45,7 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'spending'|'fu
     document: {body: {}, querySelector: (selector: string) => selector.includes('quota-session-history')?sessionSvg:selector.includes('budget-spending-history')?spendingSvg:selector.includes('quota-history')?historySvg:selector.includes('budget-history')?budgetSvg:selector.includes('subscription-funds')?fundsSvg:activitySvg},
     history: {pushState: () => {}}, getComputedStyle: () => ({opacity: '1', transform: 'none'}),
     requestAnimationFrame: schedule, cancelAnimationFrame: () => {},
-    MutationObserver: class {observe() {} disconnect() {}},
+    MutationObserver: class {constructor(read:(records:unknown[])=>void){observe=read;}observe() {} disconnect() {}},
     DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);if(value?.startsWith('scaleX'))this.e*=this.a;}},
     window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: () => {}},
   };
@@ -70,8 +71,21 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'spending'|'fu
   };
   const frame = (at: number) => {time = at; return callbacks.splice(0);};
   const runFrame = (at: number) => frame(at).forEach(callback => callback(at));
-  return {reading, wheel, listeners, bubble, update, frame, runFrame, requestFrame: context.window.requestAnimationFrame, context,sessionSvg,spendingSvg,sessionLayer,spendingLayer,historySvg, activitySvg, budgetSvg, fundsSvg, fundsLayer, budgetLayer, historyLayer, activityLayer, activityClip};
+  return {reading, wheel, listeners, bubble, update, frame, runFrame,observe:(records:unknown[])=>observe(records), requestFrame: context.window.requestAnimationFrame, context,sessionSvg,spendingSvg,sessionLayer,spendingLayer,historySvg, activitySvg, budgetSvg, fundsSvg, fundsLayer, budgetLayer, historyLayer, activityLayer, activityClip};
 }
+
+test('forbidden-mutation provenance is bounded and structural while the failure count remains complete',()=>{
+  const f=fixture();Object.assign(f.reading,{feeding:true});
+  const panel={classList:{contains:(name:string)=>name==='forecast'}};
+  const element={nodeType:1,tagName:'TD',textContent:'private row text',closest:(selector:string)=>selector.startsWith('.card')?panel:selector==='.table-measure'?{}:null};
+  f.observe(Array.from({length:40},()=>({target:element,type:'attributes',attributeName:'title',oldValue:'private exact value'})));
+  assert.equal(f.reading.forbiddenMutations,40);assert.equal(f.reading.mutationSamples!.length,24);
+  assert.deepEqual({...f.reading.mutationSamples![0]},{segment:'wheel',surface:'forecast',tag:'TD',type:'attributes',attribute:'title',measurement:true,panning:true});
+  assert.ok(!JSON.stringify(f.reading.mutationSamples).includes('private'),'journal never copies values, text or source IDs');
+  const clock={getAttribute:()=> 'work'};
+  f.observe([{target:{...element,closest:(selector:string)=>selector==='[data-time]'?clock:element.closest(selector)},type:'characterData'}]);
+  assert.equal(f.reading.forbiddenMutations,40,'genuine clock-only text remains outside the forbidden count');
+});
 
 test('the probe includes clipping transforms and rejects a missing inverse on the real data layer', () => {
   for (const correct of [true, false]) {
