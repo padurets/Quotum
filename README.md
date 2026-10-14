@@ -134,15 +134,15 @@ notifications also stay live, independently of the board's historical range.
   own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
 - **Separate subscription limit and budget charts and metrics**, each movable, resizable and
   hideable on the same grid as cards and agent sessions. They share the board's time
-  range. The weekly/session switch selects windows in the quota chart and table;
-  cards keep their own window visibility settings. Budget history opens with balances,
-  with spending in its chart settings. The budget chart and table share
-  a series selection available in either widget's settings, even when the other is hidden.
-- **A chart of the weekly or the 5-hour windows** over the last hour up to the last 30
-  days. Ahead of now it draws the plan, where each window is going (a weekly one nearly
-  flat over the hours its subscription usually spends nothing) and the next resets, as
-  far as you choose; behind, it marks when limits came back early and when free resets
-  were granted. Drag across it to zoom into a burst of work (on a phone, hold a finger
+  range. Five-hour limits, weekly limits, budget balances and cumulative spending each
+  have their own chart and table; cards keep their own window visibility settings.
+  All four budget widgets share **Accounts and keys** for data selection. Each chart's
+  legend controls its visibility independently of table columns.
+- **Charts of weekly and 5-hour windows** over the last hour up to the last 30
+  days. Ahead of now they show forecasts and the next resets, as far as you choose.
+  The weekly chart also draws the spending plan, nearly flat over the hours when the
+  subscription usually spends nothing. Behind now they mark when limits came back early
+  and when free resets were granted. Drag across a chart to zoom into a burst of work (on a phone, hold a finger
   on it first). ‹ and › move it by half its length; a horizontal touchpad swipe,
   Shift with the wheel, or Shift-drag moves the activity, limit, budget and subscription-funds
   charts together continuously through time.
