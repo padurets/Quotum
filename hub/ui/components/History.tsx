@@ -186,6 +186,17 @@ const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arra
   const currentHints = model ? {...model.hints, forecast: model.futureFacts.some(forecast => now < forecast.until), zeros: model.futureFacts.filter(forecast => now < forecast.until).map(forecast => forecast.zero)} : null;
   const wantedTo = historyProjection(frame, measured, prefs, currentHints, context?.lookAhead);
 
+  const legend = useMemo(() => (
+    <div className="legend">
+      {lines.map(line => (
+        <SeriesLegendItem key={line.key} seriesKey={line.key} name={line.name} color={line.color} dash={line.dash} muted={mutedLine(line)} onToggle={() => setMuted(chartMuteKey(widget,line.sourceId,line.windowId), !mutedLine(line))}>
+          <b>{line.current === null ? '—' : `${num(line.current)}%`}</b>
+        </SeriesLegendItem>
+      ))}
+      {!!history && !lines.length && !error && <span className="legend-empty">{t('history.noLines')}</span>}
+    </div>
+  ), [lines, muted, widget, locale, history, error, authority, board]);
+
   return (
     <AnalyticsPanel ref={panel} className="history" title={t(kind==='session'?'history.sessionTitle':'history.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
       settings={<HistorySettings arrange={arrange} kind={kind} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)}/>}
@@ -212,14 +223,7 @@ const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arra
           onBase={onBase}
         />
 
-      <div className="legend">
-        {lines.map(line => (
-          <SeriesLegendItem key={line.key} seriesKey={line.key} name={line.name} color={line.color} dash={line.dash} muted={mutedLine(line)} onToggle={() => setMuted(chartMuteKey(widget,line.sourceId,line.windowId), !mutedLine(line))}>
-            <b>{line.current === null ? '—' : `${num(line.current)}%`}</b>
-          </SeriesLegendItem>
-        ))}
-        {!!history && !lines.length && !error && <span className="legend-empty">{t('history.noLines')}</span>}
-      </div>
+      {legend}
     </AnalyticsPanel>
   );
 });

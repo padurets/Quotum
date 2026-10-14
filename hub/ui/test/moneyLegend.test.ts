@@ -101,6 +101,7 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     function settle(){for(let i=0;i<4;i++){render();hooks.finish();}return render();}
     function replaceFirst(fields:Partial<MeterHistory>) {history={...history!,meterSeries:history!.meterSeries!.map((s,i)=>i?s:{...s,...fields})};drawing=history;}
     function update(phase:string) {
+      if(phase==='frame')now+=250;
       if(phase==='clock'){now+=M;history=index.project(base,{from:now-H,to:now});}
       if(phase==='data'){index=new PeriodAccounting(tape(true),null);history=index.project(base,{from:now-H,to:now});drawing=history;}
       if(phase==='nonrolling'){history={...history!,live:false};drawing=history;}
@@ -131,7 +132,9 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     }};
   }
   const h=harness(),rows:{phase:string;moneyCalls:number;prepared:ChartProps['prepared'];lines:number}[]=[];
-  let retained=h.settle().chart.props.lines;
+  const first=h.settle();
+  let retained=first.chart.props.lines;
+  for(let n=0;n<50;n++)assert.equal(h.update('frame').legend,first.legend,'frame-only renders retain the actual legend JSX');
   for(const phase of['stable','clock','clock','clock','data','nonrolling','nonrollingAmount','rename','currency','locale','mute','spending','zero','unknown','unavailable','partial','cap','balance','zero','unknown','hide','restore','unit','resetunit','revoke']) {
     const r=phase==='stable'?h.render():h.update(phase);
     if(['stable','clock','rename','mute'].includes(phase))assert.equal(r.calls,0,phase+' reuses identical formatted amounts');

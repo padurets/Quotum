@@ -14,7 +14,7 @@ test('the actual History producer retains data on clock wakes and keeps forecast
   const line = {key: 's@w', provider: 'claude', sourceId: 's', windowId: 'w', color: 'red'};
   const source = readFileSync(new URL('../components/History.tsx', import.meta.url), 'utf8');
   const start = source.indexOf('  const prepared = usePrepared(');
-  const region = source.slice(start, source.indexOf('\n  return (', start));
+  const region = source.slice(start, source.indexOf('\n  const legend = useMemo(', start));
   type Result = {prepared: {ready: boolean}; model: {forecasts: unknown[]; markers: {at: number}[]}; currentHints: {forecast: boolean; zeros: number[]}; wantedTo: number};
   const context = {...hook, now: H, measured: H, from: 0, frame: {from: 0, to: H, future: H, live: true}, authority: 0, history: {board: 'b', events: []}, drawing: {board: 'b', events: []}, strip: null,
     sources: [{id: 's', successAt: H, windows: [{id: 'w', kind: 'weekly', resetAt: 3 * H}]}], view: {},
