@@ -110,6 +110,16 @@ CPU diagnostics also match the exact successfully injected native sampler to ano
 parsed script IDs in the same window after the input family. Missing or conflicting
 owners and collection limits remain insufficient evidence. Matching source bytes
 does not establish a callback instance or its execution cost.
+The original budget/24h scenario also samples allocation ancestry, requesting objects
+collected by both minor and major GC. Numeric parent links, node-local self sizes and
+bundle positions use the ordinary 1 MiB evidence limit, with omissions explicit.
+The existing family binding supplies source ownership separately. Allocation samples
+have no timestamps and cannot identify a particular delayed frame or the cost of GC.
+Requested flags and runtime version receipts do not by themselves qualify collection
+semantics; observer overhead and raw profile transfer memory remain unqualified.
+Setup and drain share the existing five-second CPU deadlines. An unavailable sampler
+that never starts preserves the original workload; unconfirmed active-state cleanup
+closes only the owned browser and retains the original readings and failure.
 CPU mode also observes cache pressure, eviction and read freshness on the original
 `browser/30d/activity/0ms/0.5/take1` page. Ordinary reservations are counted but remain
 unobserved; they add no flight records, owner scans, timestamps or serialization.
