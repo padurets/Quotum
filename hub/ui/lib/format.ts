@@ -193,16 +193,32 @@ function formatter(shape: keyof typeof SHAPES) {
   return kept;
 }
 
-export const clock = (time: number) => formatter('clock').format(time);
+const dateReadings = new WeakMap<Intl.DateTimeFormat, Map<number, string>>();
+
+/** Repeated marker dates reuse their words, within the formatter's language and zone. */
+function dateText(shape: keyof typeof SHAPES, time: number) {
+  const format = formatter(shape);
+  let readings = dateReadings.get(format);
+  const kept = readings?.get(time);
+  if (kept !== undefined) {
+    readings!.delete(time); readings!.set(time, kept);
+    return kept;
+  }
+  const parts = shape === 'day' ? format.formatToParts(time) : null;
+  const text = parts ? ['day', 'month'].map(type => parts.find(part => part.type === type)?.value ?? '').join(' ') : format.format(time);
+  if (!readings) dateReadings.set(format, readings = new Map());
+  readings.set(time, text);
+  if (readings.size > 512) readings.delete(readings.keys().next().value!);
+  return text;
+}
+
+export const clock = (time: number) => dateText('clock', time);
 
 /** "22 Sept": the scale along a chart's axis, which has little room; saying when is `stamp`. */
-export const shortDay = (time: number) => formatter('shortDay').format(time);
+export const shortDay = (time: number) => dateText('shortDay', time);
 
 /** "26 September": the day, its month in a word. */
-export const day = (time: number) => {
-  const parts = formatter('day').formatToParts(time);
-  return ['day', 'month'].map(type => parts.find(part => part.type === type)?.value ?? '').join(' ');
-};
+export const day = (time: number) => dateText('day', time);
 
 /**
  * "26 September 14:00": the one way the board says when, with no dots or commas between

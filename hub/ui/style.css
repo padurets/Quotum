@@ -257,7 +257,8 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
  */
 .popover.is-capped { overflow-y: auto; overscroll-behavior: contain; }
 .popover.is-capped:not(.is-cramped):has(.popover-scroll) { display: flex; flex-direction: column; }
-.popover.is-capped:not(.is-cramped):has(.popover-scroll) > * { flex-shrink: 0; }
+/* Child sizing needs no descendant match, which would invalidate unrelated widget subtrees. */
+.popover.is-capped:not(.is-cramped) > * { flex-shrink: 0; }
 .popover.is-capped:not(.is-cramped) .popover-scroll { position: relative; flex-shrink: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .popover.is-cramped .popover-scroll { overflow: visible; }
 /*
