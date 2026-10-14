@@ -619,7 +619,7 @@ export const Chart = memo(function Chart({
           <path
             key={plan.key}
             className="plan-line"
-            style={seriesFocusStyle(plan.key)}
+            style={seriesFocusStyle(plan.lines)}
             stroke={plan.color}
             d={planPaths[i]}
           />

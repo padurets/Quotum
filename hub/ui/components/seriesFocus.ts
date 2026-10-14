@@ -3,7 +3,10 @@ import {useEffect, useLayoutEffect, useRef, type CSSProperties, type RefObject} 
 const variable = (key: string) => '--series-' + Array.from(key, letter => letter.codePointAt(0)!.toString(16)).join('-');
 
 /** One inherited variable dims peers, another restores the chosen series in every layer. */
-export const seriesFocusStyle = (key: string): CSSProperties => ({'--series-focus': `var(${variable(key)}, var(--chart-focus, 1))`} as CSSProperties);
+export const seriesFocusStyle = (key: string | readonly string[]): CSSProperties => {
+  const keys=typeof key==='string'?[key]:key,values=keys.map(id=>`var(${variable(id)}, var(--chart-focus, 1))`);
+  return {'--series-focus':values.length>1?`max(${values.join(', ')})`:values[0]??'var(--chart-focus, 1)'} as CSSProperties;
+};
 
 /** Legend interaction changes paint only; prepared data and React consumers stay asleep. */
 export function useSeriesFocus(panel: RefObject<HTMLElement | null>) {
