@@ -44,8 +44,11 @@ export function migrateFixedViews(db: DatabaseSync, now: number, originalRevisio
     if (!Number.isSafeInteger(revision)) throw new Error('View revision exhausted');
     db.prepare('INSERT INTO views(board_id,payload,updated_by,updated_at,revision) VALUES(?,?,?,?,?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision')
       .run(board.id,JSON.stringify(encodeView(view)),board.updated_by ?? board.created_by,now,revision);
-    const receipts = db.prepare("SELECT id,widget_targets FROM board_additions WHERE board_id=? AND json_extract(item,'$.kind')='widget'").all(board.id) as {id:string;widget_targets:string|null}[];
-    for (const receipt of receipts) if (receipt.widget_targets) db.prepare('UPDATE board_additions SET widget_targets=? WHERE id=?').run(JSON.stringify(fixedWidgetTargets(JSON.parse(receipt.widget_targets))),receipt.id);
+    const receipts = db.prepare("SELECT id,item,widget_targets FROM board_additions WHERE board_id=? AND json_extract(item,'$.kind')='widget'").all(board.id) as {id:string;item:string;widget_targets:string|null}[];
+    for (const receipt of receipts) {
+      const targets=receipt.widget_targets?JSON.parse(receipt.widget_targets):[JSON.parse(receipt.item).widgetId];
+      db.prepare('UPDATE board_additions SET widget_targets=? WHERE id=?').run(JSON.stringify(fixedWidgetTargets(targets)),receipt.id);
+    }
   }
 }
 

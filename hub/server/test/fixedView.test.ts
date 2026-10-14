@@ -1,12 +1,19 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
+import {randomUUID} from 'node:crypto';
+import {mkdtempSync,rmSync} from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {EMPTY_VIEW, decodeView, decodeUnifiedView, encodeView, encodeUnifiedView, VIEW_BODY_LIMIT, VIEW_DECODED_LIMIT, type UnifiedView} from '../domain/view.js';
 import {migrateFixed, fixedWidgetTargets} from '../domain/fixedView.js';
 import {reconcileAnalytics} from '../domain/analyticsView.js';
 import {WIDGETS, widgetVisible} from '../domain/widgets.js';
 import {Directory} from '../store/directory.js';
 import {migrate, STEPS} from '../store/schema.js';
+import {Store} from '../store/store.js';
+import {BoardAdditions} from '../additions.js';
+import type {Credentials} from '../secrets/index.js';
 
 const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 const old = (): UnifiedView => ({...structuredClone(EMPTY_VIEW),version:3});
@@ -133,4 +140,42 @@ for(const version of [19,22,25])test(`layout ${version} upgrades atomically with
     const saved=db.prepare('SELECT payload,revision FROM views WHERE board_id=?').get('b');
     migrate(db,12);assert.deepEqual(db.prepare('SELECT payload,revision FROM views WHERE board_id=?').get('b'),saved);
   } finally {db.close();}
+});
+
+for(const version of [19,22,25])test(`layout ${version} preserves NULL receipt intent on resume and completed replay`,async()=>{
+  const folder=mkdtempSync(path.join(os.tmpdir(),'quotum-fixed-receipt-')),file=path.join(folder,'hub.sqlite'),db=new DatabaseSync(file);
+  const ready=parents.map(widgetId=>({id:randomUUID(),widgetId})),complete=parents.map(widgetId=>({id:randomUUID(),widgetId}));
+  for(const step of STEPS.slice(0,version))db.exec(step);
+  db.exec(`PRAGMA user_version=${version}`);
+  db.exec("INSERT INTO users VALUES('u','owner@fixture.example','Owner','unused',0); INSERT INTO boards VALUES('b','',1,'u',0); INSERT INTO members VALUES('b','u','owner',0)");
+  const input={...old(),hidden:parents},payload=version<22?{...input,version:2}:encodeUnifiedView(input);
+  db.prepare('INSERT INTO views VALUES(?,?,?,?,?)').run('b',JSON.stringify(payload),'u',0,7);
+  for(const [state,receipts] of [['ready',ready],['complete',complete]] as const)for(const receipt of receipts) {
+    db.prepare('INSERT INTO board_additions(id,owner_id,request_id,board_id,item,state,result,created_at,updated_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(receipt.id,'u',randomUUID(),'b',JSON.stringify({kind:'widget',widgetId:receipt.widgetId}),state,state==='complete'?JSON.stringify({sourceIds:[],appliedAt:0,placement:'added'}):null,0,0,100_000);
+  }
+  db.close();
+  const store=new Store(file,100),directory=new Directory(store.db),additions=new BoardAdditions(store,directory,{} as Credentials,()=>100);
+  try {
+    assert.equal(directory.viewRevision('b'),8);
+    const saved=store.db.prepare('SELECT id,item,widget_targets FROM board_additions ORDER BY id').all();
+    migrate(store.db,101);assert.deepEqual(store.db.prepare('SELECT id,item,widget_targets FROM board_additions ORDER BY id').all(),saved);
+    for(const receipt of ready) {
+      const resumed=await additions.run('u',receipt.id,undefined,()=>true);
+      assert.equal(resumed.state,'complete');assert.deepEqual(resumed.widgetIds,fixedWidgetTargets([receipt.widgetId]));
+      assert.ok(resumed.current.widgets!.every(widget=>widget.placement==='visible'));
+      assert.deepEqual(resumed.item,{kind:'widget',widgetId:receipt.widgetId});
+    }
+    const hidden={...directory.view('b'),hidden:fixedWidgetTargets(parents),shown:[]};directory.saveView('b',hidden,'u',102);
+    const revision=directory.viewRevision('b');
+    for(const receipt of [...ready,...complete]) {
+      const replay=await additions.run('u',receipt.id,undefined,()=>true);
+      assert.deepEqual(replay.widgetIds,fixedWidgetTargets([receipt.widgetId]));assert.ok(replay.current.widgets!.every(widget=>widget.placement==='hidden'));
+    }
+    assert.equal(directory.viewRevision('b'),revision,'completed replay never resurrects later hidden widgets');
+    const modern=additions.reserve('u',randomUUID(),'b',{kind:'widget',widgetId:'quota-history'});
+    const added=await additions.run('u',modern.id,undefined,()=>true);
+    assert.deepEqual(added.widgetIds,['quota-history']);assert.ok(widgetVisible(directory.view('b'),'quota-history',0));
+    assert.equal(widgetVisible(directory.view('b'),'quota-session-history',0),false,'a new v4 action adds only the requested widget');
+  } finally {store.close();rmSync(folder,{recursive:true,force:true});}
 });
