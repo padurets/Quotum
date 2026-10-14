@@ -17,8 +17,9 @@ measures this machine once.
 
 After building the hub, `npm run bench -- --ci` in `hub/` checks dashboard costs in
 Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp http://host:port`). It includes native
-wheel and Shift-drag starting from the quota, budget and subscription-funds charts at
-24h and 30d, moving all six charts with at least twelve real series per resource family and
+wheel and Shift-drag starting from each five-hour limit, weekly limit, agent activity,
+budget balance, cumulative spending and subscription-funds chart at 24h and 30d, moving
+all six charts with at least twelve real series per resource family and
 CPU throttled fourfold. The scenario covers delayed history, strip rebuilding, reversal
 and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 50 ms
 at p99; input to an actually updated chart frame must stay within 34 ms at p95. Empty
