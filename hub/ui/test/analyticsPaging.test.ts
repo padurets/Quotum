@@ -32,7 +32,7 @@ for(const family of ['quota','budget'] as const)test(`${family} sorts the comple
   const render=()=>context.exports[component](props).props.children[1].props.children;
   let [table,footer,measurement]=render();
   assert.equal(footer.props.count,rows.length);assert.equal(measurement.props.children.props.still,true);
-  assert.equal(measurement.props.children.props.sorting,undefined,'static height measurement has no interactive sorting');
+  assert.equal(measurement.props.children.props.sorting,table.props.sorting,'static measurement keeps the visible sortable header geometry');
   page=1;[table]=render();assert.equal(table.props.rows.length,TABLE_PAGE_ROWS);
   table.props.sorting.onSort(column);[table]=render();
   const ascending=Array.from({length:23},(_,score)=>String(scores.indexOf(score)));

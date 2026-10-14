@@ -95,7 +95,7 @@ const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,ran
     {ordered.length>0&&<>
       <AnalyticsTable columns={columns} rows={ordered.slice(widget.from,widget.to)} name={t('table.limit')} lead={fixed?'end':'now'} sorting={sorting} layout={widget.layout} body={widget.live}/>
       <WidgetPages table={widget} count={ordered.length}/>
-      <TableMeasure table={widget}><AnalyticsTable columns={columns} rows={ordered.slice(widget.measureFrom,widget.measureTo)} name={t('table.limit')} lead={fixed?'end':'now'} layout={widget.layout} body={widget.measured} still/></TableMeasure>
+      <TableMeasure table={widget}><AnalyticsTable columns={columns} rows={ordered.slice(widget.measureFrom,widget.measureTo)} name={t('table.limit')} lead={fixed?'end':'now'} sorting={sorting} layout={widget.layout} body={widget.measured} still/></TableMeasure>
     </>}
   </AnalyticsPanel>;
 });

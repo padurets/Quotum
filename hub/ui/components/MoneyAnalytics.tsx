@@ -71,7 +71,7 @@ const SortedMoney=memo(function SortedMoney({rows,entries,columns,history,panel,
     {ordered.length>0&&<>
       <AnalyticsTable columns={columns} rows={ordered.slice(widget.from,widget.to)} name={t('money.key')} lead="value" sorting={sorting} layout={widget.layout} body={widget.live}/>
       <WidgetPages table={widget} count={ordered.length}/>
-      <TableMeasure table={widget}><AnalyticsTable columns={columns} rows={ordered.slice(widget.measureFrom,widget.measureTo)} name={t('money.key')} lead="value" layout={widget.layout} body={widget.measured} still/></TableMeasure>
+      <TableMeasure table={widget}><AnalyticsTable columns={columns} rows={ordered.slice(widget.measureFrom,widget.measureTo)} name={t('money.key')} lead="value" sorting={sorting} layout={widget.layout} body={widget.measured} still/></TableMeasure>
     </>}
   </AnalyticsPanel>;
 });
