@@ -1052,9 +1052,11 @@ remaining active hours from fresh native funds. Balance-only sources, subscripti
 funds, individual keys and quota caps supply no monetary work rate. A single source
 correlation is shown once among its selected account rows, with its native evidence
 and partial coverage. Current currency presentation uses the shared recorded binding.
-A work burst can combine quota/activity and opt-in budget tails in one authenticated
-read-only history POST. Their grids remain independent and share a bounded work read;
-ordinary finance-only history keeps its existing path and cache dependencies.
+A work burst combines quota/activity and opt-in budget tails through the shared
+authenticated read-only period POST. Their grids remain independent and share a
+bounded work read. Composite drawing cells contain financial data; work estimates
+use the common period tape and curves. Ordinary finance-only history keeps its
+existing path and cache dependencies, and the legacy GET history route remains available.
 Money cells are packed separately, with small header and interval leaves; unchanged
 cells share their byte buffers during private staging. Packing, decoding and composition
 yield between leaves and cells through the shared preparation scheduler. Monetary

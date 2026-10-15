@@ -4,10 +4,22 @@ import type {Meter, MeterSpan} from './meters.js';
 export type UsageWork={windowId:string;from:number;to:number;growth:number;quality:'confirmed'|'partial';expiresAt:number};
 export type UsageStep=Omit<UsageWork,'quality'|'expiresAt'> & {resetAt:number|null};
 export type UsageSample=Pick<Sample,'at'|'used'|'resetAt'|'staleAfterMs'|'validUntil'>;
+function grewOnePoint(before:number,after:number):boolean {
+  const whole=Math.floor(after)-Math.floor(before);
+  if(whole!==1)return whole>1;
+  // Compare the native decimal endpoints, including exponent notation, without
+  // rounding either one or adding a point in binary floating-point arithmetic.
+  const parts=(input:number)=>{
+    const [value,exponent='0']=String(input).split('e'),[integer,fraction='']=value.split('.');
+    return {amount:BigInt(integer+fraction),scale:fraction.length-Number(exponent)};
+  };
+  const a=parts(before),b=parts(after),scale=Math.max(0,a.scale,b.scale);
+  return b.amount*10n**BigInt(scale-b.scale)-a.amount*10n**BigInt(scale-a.scale)>=10n**BigInt(scale);
+}
 export function quotaSteps(windowId:string,samples:UsageSample[]):UsageStep[] {
   const steps:UsageStep[]=[];
   for(let i=1;i<samples.length;i++) {const a=samples[i-1],b=samples[i],step=edge(a,b);
-    if(step.valid&&b.used>=a.used+1&&b.at-a.at<=30*60_000&&a.resetAt!==null&&b.at<a.resetAt)steps.push({windowId,from:a.at,to:b.at,growth:step.delta,resetAt:b.resetAt});
+    if(step.valid&&grewOnePoint(a.used,b.used)&&b.at-a.at<=30*60_000&&a.resetAt!==null&&b.at<a.resetAt)steps.push({windowId,from:a.at,to:b.at,growth:step.delta,resetAt:b.resetAt});
   }
   return steps;
 }

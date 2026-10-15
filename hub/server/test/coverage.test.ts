@@ -109,6 +109,23 @@ test('native quota thresholds use original samples and exact time boundaries',()
   assert.deepEqual(quotaSteps('weekly',[{...a,resetAt:null},{...b,resetAt:null}]),[]);
 });
 
+test('every hundredth retains an exact one-point native quota threshold',()=>{
+  const decimal=(value:number)=>Number(`${Math.floor(value/100)}.${String(value%100).padStart(2,'0')}`);
+  const a={at:start,used:0,resetAt:start+day,staleAfterMs:30*minute};
+  for(let value=0;value<=9900;value++){
+    assert.equal(quotaSteps('weekly',[{...a,used:decimal(value)},{...a,at:start+minute,used:decimal(value+100)}]).length,1,`${decimal(value)} → ${decimal(value+100)}`);
+  }
+});
+
+test('persisted quota growth compares decimal and exponent endpoints without rounding',()=>{
+  for(const [before,after,expected] of [[0.14,1.14,1],[0.15,1.15,1],[98.99,99.99,1],[0,1,1],[0.14,1.1399999999,0],[0,1-Number.EPSILON,0],[1e-30,1,0],[Number.MIN_VALUE,1,0],[1e-30,1.0000000000000002,1],[0.9999999999999999,2,1]]){
+    const f=fixture();try{
+      f.sample(start,before);f.sample(start+4*minute,after);
+      assert.equal(f.mark().length,expected,`${before} → ${after}`);
+    }finally{f.store.close();}
+  }
+});
+
 test('empty ingest heartbeats close coverage without changing raw work or connection revisions; legacy reports break it',()=>{
   const f=fixture();try{
     const ingest=new Ingest(f.store,f.directory,new Duty(),new Cadence()),credential={kind:'device' as const,device:f.directory.deviceById(f.device)!};
