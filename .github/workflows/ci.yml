@@ -21,6 +21,11 @@ on:
         required: false
         type: boolean
         default: false
+      original_timing:
+        description: Sample CPU using the original idle window without alignment
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -132,7 +137,7 @@ jobs:
           EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
         env:
-          QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.trace_only && 'trace' || '1' }}
+          QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.trace_only && 'trace' || inputs.original_timing && 'profile' || '1' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
       - uses: actions/upload-artifact@v7
         if: always()

@@ -41,7 +41,7 @@ function fixture() {
     {node: 'fixture-time', time: true, kind: 'label', region: 'page', count: 6},
   ], mutations: []};
   const phase = {from: 1791891785064, to: 1791891905005, monotonicFrom: 127683.5, monotonicTo: 247624.6, cellMs: 300000,
-    starts: [5972972, 5972972, 5972972, 5972972], ends: [5972973, 5972973, 5972973, 5972973], transitions: [2, 1, 1, 1]};
+    starts: [5972972, 5972972, 5972972, 5972972, 5972972], ends: [5972973, 5972973, 5972973, 5972973, 5972973], transitions: [2, 1, 1, 1, 1]};
   let metricReads = 0, threadReads = 0, closes = 0, end = () => {};
   const stopping = new Promise<void>(resolve => {end = resolve;});
   const cdp = {endpoint: 'fixture', failDrain: false,
