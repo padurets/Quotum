@@ -34,8 +34,11 @@ traffic and cancellation checks; `--scope dashboard` selects idle, measurements,
 frequency, all ten native panning scenarios, subscription credits and currency checks.
 The `bench` check passes only when both jobs succeed; a failed, skipped or cancelled job
 fails this check. The default `--scope all` keeps the full local run and its original
-order. Diagnostic modes require that full scope. Separate jobs still observe the normal
-card warmup and chart-grid alignment; their performance budgets do not change.
+order. CPU panning diagnostics require an owned browser and no other diagnostic mode.
+Diagnostic modes require the full scope, except CPU panning may use `--ci --scope dashboard`.
+The existing CPU diagnostic job uses this dashboard prefix; default/all CPU runs keep
+the full prefix. Separate jobs still observe the normal card warmup and chart-grid
+alignment; their performance budgets do not change.
 DevTools commands keep their thirty-second response deadline. An explicit renderer
 crash or target-detach event fails pending commands immediately, even if the socket
 stays open, and retains the original failure before cleanup. It does not retry work.
@@ -129,12 +132,12 @@ semantics; observer overhead and raw profile transfer memory remain unqualified.
 Setup and drain share the existing five-second CPU deadlines. An unavailable sampler
 that never starts preserves the original workload; unconfirmed active-state cleanup
 closes only the owned browser and retains the original readings and failure.
-CPU mode also observes cache pressure, eviction and read freshness on the original
+In `--scope all`, CPU mode also observes cache pressure, eviction and read freshness on the original
 `browser/30d/activity/0ms/0.5/take1` page. Ordinary reservations are counted but remain
 unobserved; they add no flight records, owner scans, timestamps or serialization.
 A complete critical scope does not imply complete ordinary-flight evidence or
 qualified observer overhead. Failed or pending renderer commands still close directly.
-The same CPU observer follows one fixed physical tile, binding its chart family only
+The same full-scope CPU observer follows one fixed physical tile, binding its chart family only
 through an actual chart read reaching the shared transport with the same owner and
 range. Numeric state changes distinguish retained coverage from synchronous clears,
 including a history-limit clear without eviction. Asynchronous publication or clearing

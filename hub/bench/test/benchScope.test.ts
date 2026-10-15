@@ -22,8 +22,8 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red';
-async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={}) {
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw';
+async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true) {
   const calls:string[]=[],saved=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const listeners=new Map<string,()=>void>();let now=Date.parse('2026-10-15T12:00:10Z'),metricStart=now,metricReads=0;
   let terminal!:()=>void;const exited=new Promise<void>(resolve=>{terminal=resolve;});
@@ -58,11 +58,11 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={}) {
   class Requests {count=0;bytes=0;byPath={};counting=false;}
   class Stop extends Error {}
   class ChromeLaunchError extends Error {}
-  const context={exports:{},process:{argv:['node','index.ts','--ci',...args],env:{CI:'1',...env},pid:1,platform:'linux',
+  const context={exports:{},process:{argv:['node','index.ts',...(ci?['--ci']:[]),...args],env:{CI:'1',...env},pid:1,platform:'linux',
       on:(name:string,fn:()=>void)=>{listeners.set(name,fn);},exit:(code:number)=>{exits.push(code);terminal();}},
     Date:class extends Date {static now(){return now;}},console:{log:()=>{},error:(value:unknown)=>{logs.push(String(value));}},path,Buffer,RunOwner,Demo,Evidence,Requests,Stop,ChromeLaunchError,
     USAGE:'fixture usage',IDLE:{ci:120,full:300},SHOWN_MS:30_000,MEASURED:'fixture',HISTORY_BYTES_PER_MEASUREMENT,
-    SETS:[set],panningSet:(value:unknown)=>value,people:()=>[{id:'ana'}],freePort:async()=>1234,
+    SETS:[set],panningSet:(value:unknown)=>value,people:()=>[{id:'ana'}],freePort:async()=>{mark('freePort');return 1234;},
     addressOf:()=>({base:'http://127.0.0.1:1234'}),prepare:async()=>{mark('prepare');},findChrome:()=>'/unused/chrome',
     seedPanningBudgets:()=>{mark('seed');},hear:async()=>({close:()=>{mark('stream-close');},reset:()=>{},counts:()=>({ping:5})}),
     launchChrome:async()=>{mark('launch');return browser;},openTab:async()=>{mark('openTab');return{cdp};},
@@ -78,10 +78,14 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={}) {
       reading:{...reading,renders:[{node:'card',region:'card:fixture',time:false,kind:null,count:1}]}};},
     work:async()=>{mark('work');return{reports:[],problems:problems('work')};},
     workPrivate:async()=>{mark('private-work');return{reports:[],problems:problems('private-work')};},
-    frequencyKeys:async()=>{mark('frequency');},panning:async()=>{mark('panning');return{problems:problems('panning'),
+    frequencyKeys:async()=>{mark('frequency');},panning:async()=>{mark('panning');if(fault==='panning-throw')throw Error('panning-original');return{problems:problems('panning'),
       reports:['quota','session','activity','budget','funds'].flatMap(initiator=>['24h','30d'].map(period=>({initiator,period,frames:[16],latency:[16]})))};},
-    creditPhase:async()=>{mark('credits');return{updates:[],problems:problems('credits')};},
+    creditPhase:async()=>{mark('credits');if(fault==='credits-throw')throw new Stop('credits-original');return{updates:[],problems:problems('credits')};},
     moneyPhase:async()=>{mark('money');return{problems:problems('money')};},
+    profilePanning:async(target:unknown,actualBrowser:unknown,_evidence:unknown,original:(target:unknown)=>Promise<unknown>)=>{
+      assert.equal(actualBrowser,browser);mark('profile-start');try{return await original(target);}finally{mark('profile-stop');}
+    },
+    profileControls:async()=>{mark('profile-controls');},
   };
   runInNewContext(code,context);
   const selected=(context as unknown as {selected:{main():Promise<void>;parseArgs(args:string[]):unknown}}).selected;
@@ -137,9 +141,47 @@ for(const fault of ['idle','measure','work','private-work','panning','credits','
 const diagnostics={QUOTUM_BENCH_DIAGNOSE_PANNING:'cpu',QUOTUM_BENCH_DIAGNOSE_IDLE:'double',QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'profile',
   QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'1',QUOTUM_BENCH_DIAGNOSE_STARTUP:'1',QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS:'1',
   QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1',QUOTUM_BENCH_DIAGNOSE_NATIVE:'1',QUOTUM_BENCH_REVERSAL_PROBE:'1'};
-for(const scope of ['history','dashboard'])for(const [key,value] of Object.entries(diagnostics))test('partial '+scope+' rejects '+key,async()=>{
+for(const scope of ['history','dashboard'])for(const [key,value] of Object.entries(diagnostics).filter(([key])=>scope!=='dashboard'||key!=='QUOTUM_BENCH_DIAGNOSE_PANNING'))test('partial '+scope+' rejects '+key,async()=>{
   const result=await run(['--scope',scope],undefined,{[key]:value});
   assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);assert.deepEqual(result.exits,[]);
+});
+const cpu={QUOTUM_BENCH_DIAGNOSE_PANNING:'cpu'};
+for(const scope of ['all','dashboard'])test('actual CPU '+scope+' preserves its original prefix and complete tail',async()=>{
+  const result=await run(['--scope',scope],undefined,cpu);assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);
+  const selected=result.calls.filter(call=>call==='history'||call==='openTab'||call==='phase:idle'||tail.includes(call)||call.startsWith('profile-'));
+  assert.deepEqual(selected,[...(scope==='all'?['history']:[]),'openTab','phase:idle','measure','work','private-work','frequency','profile-start','panning','profile-stop','credits','money','profile-controls']);
+  assert.deepEqual(result.statuses,['diagnostic']);assert.deepEqual(safeEvidence(result.saved.get('scope')),{mode:scope});
+  const value=result.saved.get('result') as {mode:string;panning:{initiator:string;period:string}[]};
+  assert.equal(value.mode,scope);assert.deepEqual(value.panning.map(row=>row.initiator+'/'+row.period),['quota','session','activity','budget','funds'].flatMap(owner=>['24h','30d'].map(period=>owner+'/'+period)));
+  assert.ok(result.saved.has('credits'));assert.ok(result.saved.has('money'));assert.ok(result.saved.has('diagnostic-panning-result'));
+});
+test('dashboard CPU retains simultaneous prefix and later failures without passing a diagnostic control',async()=>{
+  const result=await run(['--scope','dashboard'],'all-red',cpu);assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);
+  assert.deepEqual(order(result.calls),['openTab',...tail]);assert.deepEqual(result.statuses,['failed']);
+  const problems=(result.saved.get('result') as {problems:string[]}).problems;
+  for(const name of ['work','private-work','panning','credits','money'])assert.ok(problems.includes(name+'-red'));
+  for(const message of ['script took ','never showed on their card','never showed on their chart'])assert.ok(problems.some(value=>value.includes(message)));
+  assert.ok(result.calls.indexOf('profile-controls')>result.calls.indexOf('money'));assert.ok(result.saved.has('diagnostic-panning-result'));
+});
+for(const fault of ['panning-throw','credits-throw'] as const)test('dashboard CPU preserves '+fault+' and closes every owner',async()=>{
+  const result=await run(['--scope','dashboard'],fault,cpu);assert.equal(result.error,undefined);assert.deepEqual(result.exits,[fault==='credits-throw'?2:1]);
+  assert.deepEqual(result.statuses,['failed']);assert.ok(result.logs.some(line=>line.includes(fault==='credits-throw'?'credits-original':'panning-original')));
+  assert.ok(!result.saved.has('result'));assert.ok(!result.calls.includes('money'));assert.ok(!result.calls.includes('profile-controls'));
+  assert.equal(result.saved.has('panning'),fault==='credits-throw');assert.ok(result.calls.includes('profile-stop'));
+  for(const name of ['stream-close','browser-close','demo-stop'])assert.equal(result.calls.filter(call=>call===name).length,1);
+});
+for(const mode of ['pairs','trace','unknown'])test('dashboard still rejects panning '+mode,async()=>{
+  const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_PANNING:mode});
+  assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);
+});
+for(const scope of ['all','dashboard'])for(const [key,value] of Object.entries(diagnostics).filter(([key])=>key!=='QUOTUM_BENCH_DIAGNOSE_PANNING'))test('CPU '+scope+' rejects mixed '+key+' before preparation',async()=>{
+  const result=await run(['--scope',scope],undefined,{...cpu,[key]:value});assert.match(String(result.error),/CPU panning/);assert.deepEqual(result.calls,[]);
+});
+for(const scope of ['all','dashboard'])test('CPU '+scope+' rejects an attached browser before preparation',async()=>{
+  const result=await run(['--scope',scope,'--cdp','http://127.0.0.1:9222'],undefined,cpu);assert.match(String(result.error),/owned browser/);assert.deepEqual(result.calls,[]);
+});
+test('dashboard CPU requires the original CI idle duration',async()=>{
+  const result=await run(['--scope','dashboard'],undefined,cpu,false);assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);
 });
 test('actual parser rejects unknown, missing and repeated scope',async()=>{
   const {parse}=await run(['--scope','history']);
@@ -162,5 +204,14 @@ test('the existing bench check requires success from both independent scopes',{s
     assert.ok(job.includes('timeout-minutes: 20'));assert.ok(job.includes('--ci --scope '+scope));
     assert.ok(!job.includes('continue-on-error:'));
     assert.ok(!job.includes('\n    needs:'),'benchmark producers run independently');
+  }
+  const diagnostics=readFileSync(new URL('../../../.github/workflows/bench-diagnostics.yml',import.meta.url),'utf8').split('  panning-trace:\n')[1];
+  assert.ok(diagnostics.includes('timeout-minutes: 20'));assert.ok(!diagnostics.includes('continue-on-error:'));
+  const native=diagnostics.split('      - run: |\n')[1].split('\n        env:')[0].split('\n').map(line=>line.slice(10)).join('\n');
+  assert.ok(native.endsWith('npm run bench -- --ci "$@"'));
+  const choose=native.slice(0,native.indexOf('QUOTUM_CHROME='));
+  for(const mode of ['cpu','trace','pairs','']){
+    const result=spawnSync('bash',['-eu','-c',choose+'printf \'%s\\n\' \"$@\"'],{env:{...process.env,QUOTUM_BENCH_DIAGNOSE_PANNING:mode},encoding:'utf8'});
+    assert.ifError(result.error);assert.equal(result.status,0);assert.equal(result.stdout,mode==='cpu'?'--scope\ndashboard\n':'\n');
   }
 });

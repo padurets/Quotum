@@ -129,7 +129,10 @@ async function main() {
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
   try {
-    if (options.scope !== 'all' && [panDiagnostic, idleDiagnostic, idleCpuMode, idleTimingDiagnostic, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE].some(Boolean)) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
+    const otherDiagnostics = [idleDiagnostic, idleCpuMode, idleTimingDiagnostic, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE];
+    if (panDiagnostic === 'cpu' && (options.cdp || otherDiagnostics.some(Boolean))) throw new Stop('CPU panning diagnostics require an owned browser without another diagnostic mode');
+    const dashboardCpu = options.scope === 'dashboard' && options.ci && panDiagnostic === 'cpu';
+    if (options.scope !== 'all' && [panDiagnostic, ...otherDiagnostics].some(Boolean) && !dashboardCpu) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
     if (startupDiagnostic && (startupDiagnostic !== '1' || options.cdp || panDiagnostic || idleDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup diagnostic mode');
     if (startupWaitDiagnostic && (startupWaitDiagnostic !== '1' || !options.ci || process.platform !== 'linux' || options.cdp || startupDiagnostic || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup wait diagnostic mode');
@@ -394,8 +397,8 @@ async function main() {
         try{await observer.diagnose(label);}finally{await observer.close();}
       })()]);
     });
-    // Profile at the original phase, after its unchanged traffic, idle and update
-    // workload. Starting on a fresh board would capture a different fixture state.
+    // Profile after this scope's unchanged prefix: idle and updates, plus traffic
+    // for all. Starting on a fresh board would capture a different fixture state.
     const panned = panDiagnostic === 'cpu'
       ? await profilePanning(cdp, browser, evidence, runPanning)
       : await runPanning(cdp, undefined, evidence);

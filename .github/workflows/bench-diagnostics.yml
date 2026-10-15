@@ -216,7 +216,13 @@ jobs:
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
       - run: npm run build
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+      - run: |
+          if [ "$QUOTUM_BENCH_DIAGNOSE_PANNING" = cpu ]; then
+            set -- --scope dashboard
+          else
+            set --
+          fi
+          QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci "$@"
         env:
           QUOTUM_BENCH_DIAGNOSE_PANNING: ${{ !contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics') && (contains(github.event.pull_request.labels.*.name, 'benchmark-cpu-diagnostics') && 'cpu' || 'trace') || '' }}
           QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL: ${{ contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics') && '1' || '' }}
