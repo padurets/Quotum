@@ -32,6 +32,27 @@ test('financial index reuse releases retired native work evidence from its objec
   assert.deepEqual(next.moneySummary('wallet','balance','USD',range),new PeriodAccounting(kept,null).moneySummary('wallet','balance','USD',range));
 });
 
+test('a complete replacement reuses unchanged financial rows and discards every absent anchor and series',()=>{
+  const reading=(at:number)=>({id:'balance',at,previousAt:null,kind:'balance' as const,unit:'USD',amount:'1000000',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:1000});
+  const group:MoneyTape={source:'wallet',meter:'balance',readings:[reading(0)],spans:[{from:0,to:100,staleAfterMs:1000}]};
+  for(const at of [0,100])bindRate(group,'USD\n'+at,null);
+  const before:PeriodTape={from:0,cut:101,replaceFrom:0,cursor:'old',quota:[],money:[group]};
+  const baseline=structuredClone(before);baseline.cursor='new';
+  const merged=mergeTape(before,baseline);
+  assert.equal(merged.money[0].readings,group.readings);assert.equal(merged.money[0].spans,group.spans);
+  assert.equal(merged.money[0].rateBindings,group.rateBindings);
+  const prior=new PeriodAccounting(before,null),next=drain(PeriodAccounting.prepare(merged,null,undefined,prior));
+  assert.equal(next.financialAuthority,prior.financialAuthority);
+
+  const obsolete=structuredClone(before);obsolete.from=10;
+  obsolete.money.push({...group,source:'removed'});
+  obsolete.quota=[{source:'removed',window:'weekly',samples:[]}];
+  obsolete.money[0].readings.unshift(reading(-100));bindRate(obsolete.money[0],'USD\n-100',null);
+  const clean=mergeTape(obsolete,baseline);
+  assert.equal(clean.from,baseline.from);assert.deepEqual(clean.quota,baseline.quota);
+  assert.deepEqual(JSON.parse(JSON.stringify(clean.money)),baseline.money,'a full baseline cannot restore an old anchor, rate or source');
+});
+
 test('unchanged monetary rows retain their minimal rate dictionary without copying it',()=>{
   const group:MoneyTape={source:'wallet',meter:'balance',readings:[{id:'balance',at:0,previousAt:null,kind:'balance',unit:'USD',amount:'1000000',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:1000}],spans:[{from:0,to:100,staleAfterMs:1000}]};
   for(const at of [0,100])bindRate(group,'USD\n'+at,null);

@@ -142,32 +142,34 @@ function* replace<T>(before:readonly T[],after:readonly T[],keep:(row:T)=>boolea
 
 export const mergeTape=(previous:PeriodTape|undefined,next:PeriodTape)=>drain(mergeTapePrepared(previous,next));
 export function* mergeTapePrepared(previous:PeriodTape|undefined,next:PeriodTape,reserve:(bytes:number)=>void=()=>{},release:(bytes:number)=>void=()=>{}):Preparation<PeriodTape> {
-  if(!previous||next.fixed||previous.fixed||next.replaceFrom<=previous.from&&(next.replaceTo??Infinity)>=previous.cut)return next;
+  if(!previous||next.fixed||previous.fixed)return next;
+  const complete=next.replaceFrom<=previous.from&&(next.replaceTo??Infinity)>=previous.cut;
+  const from=complete?-Infinity:next.replaceFrom,to=complete?Infinity:next.replaceTo??Infinity;
   reserve(256+(previous.quota.length+next.quota.length+previous.money.length+next.money.length)*128);
-  const quota=new Map(previous.quota.map(s=>[s.source+'\n'+s.window,s]));
-  for(const series of next.quota){const key=series.source+'\n'+series.window,old=quota.get(key);const samples=yield* replaceSamples(old?.samples??[],series.samples,next.replaceFrom,next.replaceTo??Infinity);const descriptors=yield* replace(old?.descriptors??[],series.descriptors??[],s=>s.at<next.replaceFrom||s.at>=(next.replaceTo??Infinity),s=>s.at);quota.set(key,{...series,samples,...(descriptors.length?{descriptors}:{})});}
-  const money=new Map(previous.money.map(s=>[s.source+'\n'+s.meter,s]));
+  const previousQuota=new Map(previous.quota.map(s=>[s.source+'\n'+s.window,s])),quota=complete?new Map<string,PeriodTape['quota'][number]>():previousQuota;
+  for(const series of next.quota){const key=series.source+'\n'+series.window,old=previousQuota.get(key);const samples=yield* replaceSamples(old?.samples??[],series.samples,from,to);const descriptors=yield* replace(old?.descriptors??[],series.descriptors??[],s=>s.at<from||s.at>=to,s=>s.at);quota.set(key,{...series,samples,...(descriptors.length?{descriptors}:{})});}
+  const previousMoney=new Map(previous.money.map(s=>[s.source+'\n'+s.meter,s])),money=complete?new Map<string,MoneyTape>():previousMoney;
   for(const series of next.money) {
-    const key=series.source+'\n'+series.meter,old=money.get(key);
+    const key=series.source+'\n'+series.meter,old=previousMoney.get(key);
     reserve([old,series,old?.paired,series.paired].reduce((bytes,part)=>bytes+(part?(part.readings.length+part.spans.length)*128:0),0));
-    const readings=yield* replace(old?.readings??[],series.readings,r=>r.at<next.replaceFrom||r.at>=(next.replaceTo??Infinity),r=>r.at);
-    const spans=yield* replace(old?.spans??[],series.spans,s=>s.to<next.replaceFrom||s.from>=(next.replaceTo??Infinity),s=>s.from);
+    const readings=yield* replace(old?.readings??[],series.readings,r=>r.at<from||r.at>=to,r=>r.at);
+    const spans=yield* replace(old?.spans??[],series.spans,s=>s.to<from||s.from>=to,s=>s.from);
     let paired=series.paired;
     if(paired&&old?.paired) {
-      const readings=yield* replace(old.paired.readings,paired.readings,r=>r.at<next.replaceFrom||r.at>=(next.replaceTo??Infinity),r=>r.at);
-      const spans=yield* replace(old.paired.spans,paired.spans,s=>s.to<next.replaceFrom||s.from>=(next.replaceTo??Infinity),s=>s.from);
+      const readings=yield* replace(old.paired.readings,paired.readings,r=>r.at<from||r.at>=to,r=>r.at);
+      const spans=yield* replace(old.paired.spans,paired.spans,s=>s.to<from||s.from>=to,s=>s.from);
       paired={readings,spans};
     }
     let workCounter=series.workCounter;
     if(workCounter&&old?.workCounter) {
       reserve((old.workCounter.readings.length+workCounter.readings.length+old.workCounter.spans.length+workCounter.spans.length)*128);
-      const readings=yield*replace(old.workCounter.readings,workCounter.readings,r=>r.at<next.replaceFrom||r.at>=(next.replaceTo??Infinity),r=>r.at);
-      const spans=yield*replace(old.workCounter.spans,workCounter.spans,s=>s.to<next.replaceFrom||s.from>=(next.replaceTo??Infinity),s=>s.from);
+      const readings=yield*replace(old.workCounter.readings,workCounter.readings,r=>r.at<from||r.at>=to,r=>r.at);
+      const spans=yield*replace(old.workCounter.spans,workCounter.spans,s=>s.to<from||s.from>=to,s=>s.from);
       workCounter={...workCounter,readings,spans};
     }
     const merged:MoneyTape={...series,readings,spans,...(paired?{paired}:{}),...(workCounter?{workCounter}:{}),rates:undefined,rateBindings:undefined};
     const keys=new Set<string>(),anchors=new Set<number>(),superseded=new Set<number>();
-    for(const part of [old,series])if(part)for(const dictionary of [part.rates,part.rateBindings?.entries])for(const key in dictionary){
+    for(const part of complete?[series]:[old,series])if(part)for(const dictionary of [part.rates,part.rateBindings?.entries])for(const key in dictionary){
       if(!keys.has(key)){reserve(128+key.length*2);keys.add(key);}yield;
     }
     const anchor=(at:number)=>{if(!anchors.has(at)){reserve(64);anchors.add(at);}};
@@ -200,5 +202,5 @@ export function* mergeTapePrepared(previous:PeriodTape|undefined,next:PeriodTape
     if(old?.rates&&merged.rates&&JSON.stringify(old.rates)===JSON.stringify(merged.rates))merged.rates=old.rates;
     money.set(key,sameMoneyTape(old??merged,merged)&&old?.workCounter===merged.workCounter?old??merged:merged);
   }
-  return {...next,from:Math.min(previous.from,next.from),quota:[...quota.values()],money:[...money.values()]};
+  return {...next,from:complete?next.from:Math.min(previous.from,next.from),quota:[...quota.values()],money:[...money.values()]};
 }

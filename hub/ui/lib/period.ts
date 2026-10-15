@@ -468,7 +468,7 @@ class BoardPeriod {
         try{
           const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves??priorIndex?.curves,old?.accounting,changedWork,bytes=>charge(scope,base+bytes));
           if(incoming){changed.add(scope);tapes.set(scope,{tape,accounting,generation:intent.generation,proofEpoch,selection:intent.request.selection,rangeKey:intent.request.selection.mode==='range'?periodKey(intent.request.selection):prefs().range,queryKey,basisRange:reply[scope]?.state==='complete'?reply[scope]!.basis.range:reply.basis.range});}
-          else tapes.set(scope,{...old!,accounting});
+          else {tapes.set(scope,{...old!,accounting});changed.add(scope);}
         }catch(error){if(error!==limited)throw error;incomingTapes.delete(scope);failScope(scope);}
       }
       const edge=retainedFrom===null?Infinity:yield*retention.retirementEdge(work,[...tapes.values()].map(entry=>entry.tape),retainedFrom);
