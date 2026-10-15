@@ -129,13 +129,17 @@ jobs:
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
         env:
           QUOTUM_BENCH_DIAGNOSE_STARTUP: '1'
+          STARTUP_CONTROL_LANE: ${{ matrix.lane }}
+          STARTUP_CONTROL_ROOT: ${{ github.workspace }}/hub/bench/startupControl
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-startup
       - name: Startup interval evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: startup-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
-          path: ${{ runner.temp }}/quotum-startup
+          path: |
+            ${{ runner.temp }}/quotum-startup
+            ${{ runner.temp }}/quotum-startup-read-*
           if-no-files-found: warn
 
   paired-panning:
