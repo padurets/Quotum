@@ -165,6 +165,41 @@ test('a moment that is not after now is a mistake of its part: taken as a minute
   assert.deepEqual(c.woken, ['wrong']);
 });
 
+test('reaffirming an owed deadline keeps its pending wake without restarting the minimum delay', () => {
+  const c = pageClock(), due = T0 + 1;
+  const watch = c.part('pending', () => due), timer = {...c.timers[0]};
+  for (const elapsed of [10, 10]) {
+    c.jump(elapsed);
+    c.clock.due(watch, due, c.now());
+    assert.equal(watch.due, due);
+    assert.equal(c.timers[0].id, timer.id);
+    assert.equal(c.timers[0].at, timer.at);
+  }
+  c.advance(timer.at - c.now());
+  assert.deepEqual(c.woken, ['pending']);
+  c.advance(MIN - 1);
+  assert.deepEqual(c.woken, ['pending'], 'a newly repeated invalid deadline still cannot spin');
+  c.advance(1);
+  assert.deepEqual(c.woken, ['pending', 'pending']);
+  c.clock.due(watch, null, c.now());
+  assert.equal(c.timers.length, 0);
+});
+
+test('a small hub skew still retargets future and newly overdue pending deadlines', () => {
+  for (const elapsed of [S, MIN - 400]) {
+    const c = pageClock(), due = T0 + MIN;
+    const watch = c.part('skewed', () => null);
+    c.clock.due(watch, due, c.now());
+    c.jump(elapsed);
+    c.clock.heard(c.now() + 500, c.now());
+    c.clock.due(watch, due, c.clock.hubNow());
+    const expected = elapsed === S ? due - 500 : c.now() + 250;
+    assert.equal(c.timers[0].at, expected);
+    c.advance(expected - c.now());
+    assert.deepEqual(c.woken, ['skewed']);
+  }
+});
+
 test('a hidden tab has no timer; shown again, whatever came due meanwhile is woken at once', () => {
   const c = pageClock();
   c.part('minute', now => now - (now % MIN) + MIN);

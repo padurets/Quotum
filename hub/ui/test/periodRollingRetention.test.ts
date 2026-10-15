@@ -11,6 +11,27 @@ import {drain,Preparations} from '../lib/prepare';
 import {PERIOD_SCOPES} from '../../server/domain/periodRead';
 import type {Meter} from '../../server/domain/meters';
 
+test('work-order subscriptions cannot postpone an already due live retirement',async t=>{
+  let now=NOW;t.mock.method(Date,'now',()=>now);
+  const h=await fixture({clocked:true,periodName:'24h',creditFrom:NOW-24*H+2*M,creditTo:NOW-24*H+5*M});
+  let remove=()=>{};
+  try{
+    const due=NOW+5*M,before=h.period.get().value,revision=h.period.revision,bytes=h.pool.estimatedBytes;
+    assert.equal(h.period.retirementAt,due);
+    now=due-1;h.advance(now);h.period.refreshWorkClock();await flush();
+    now=due+1;h.advance(now);remove=h.period.subscribeWorkOrder(()=>null);
+    now=due+300;h.advance(now);await flush();
+    assert.equal(h.period.get().error,null);
+    assert.equal(h.period.get().rows.length,0,'expired work leaves the visible period without another minute of delay');
+    assert.notStrictEqual(h.period.get().value,before,'the actual producer ledger retires its expired storage');
+    assert.equal(h.period.get().value.refs.length,0);
+    assert.equal(h.period.revision,revision);
+    assert.equal(h.requests.length,0);
+    assert.ok(h.pool.estimatedBytes<bytes);
+    assert.equal(h.pool.activeFlights,0);
+  }finally{remove();await h.close();}
+});
+
 test('numeric prefix retirement preserves every value and releases expired buffers',()=>{
   const cases=[
     Array.from({length:256},()=>17.125),

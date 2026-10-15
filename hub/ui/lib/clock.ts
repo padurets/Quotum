@@ -71,7 +71,8 @@ export class PageClock {
   /** What a part shows now changes at `at` (hub time), or never by itself (null). */
   due(watch: Watch, at: number | null, now: number) {
     const previous = watch.due;
-    watch.due = at === null ? null : at > now ? at : now + MISSED;
+    // Repeating a pending deadline cannot cancel the wake already owed for it.
+    watch.due = at === null ? null : at > now || at === previous ? at : now + MISSED;
     if (this.watches.has(watch)) this.reconsider(watch, previous);
     this.arm();
   }
@@ -112,6 +113,8 @@ export class PageClock {
     const at = Number.isFinite(nearest) ? now + Math.min(Math.max(nearest - this.hubNow(now), NEAREST), FURTHEST) : null;
     // A commit updates many labels; their unchanged nearest deadline needs no new timer.
     if (this.timer?.at === at) return;
+    // An overdue wake keeps its earlier timer instead of restarting the minimum delay.
+    if (this.timer && at !== null && nearest <= this.hubNow(now) && this.timer.at <= at) return;
     if (this.timer) this.env.clearTimeout(this.timer.handle);
     this.timer = null;
     if (at === null) return;
