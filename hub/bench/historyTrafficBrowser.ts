@@ -308,11 +308,12 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     await prepareHistoryTarget(cdp, future ? '[data-widget="quota-history"] .chart' : '.activity .chart', geometry);
     const seedReads = bodies.resources.filter(read => read.phase === seedPhase && read.count?.complete);
     assert.ok(seedReads.length,`${name}: no complete seed resources: ${JSON.stringify(bodies.reads.map(read=>({phase:read.phase,resources:read.sections?.length,cell:read.cell,complete:read.count?.complete,canceled:read.canceled})))}`); const cell = seedReads[0].cell;
-    const seeds = new Map<string, {answer: NonNullable<Read['answer']>; initial: Set<number>}>();
+    const seeds = new Map<string, {answer: NonNullable<Read['answer']>; initial: Set<number>; closedBefore: number}>();
     for (const read of seedReads) {
       let group = seeds.get(read.selection);
-      if (!group) seeds.set(read.selection, group = {answer: read.answer!, initial: new Set()});
+      if (!group) seeds.set(read.selection, group = {answer: read.answer!, initial: new Set(), closedBefore: read.answer!.now});
       group.answer = read.answer!;
+      group.closedBefore = Math.min(group.closedBefore, read.answer!.now);
       for (const [from, to] of read.chunks!) for (let at = from; at < to; at += cell) group.initial.add(at);
     }
     await cdp.evaluate(`(() => {
@@ -372,6 +373,10 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
           assert.ok(reads.length <= maxAttempts, 'browser history exceeded its request cap');
           return {selection, group, scope, reads, requested, optional, totals};
         });
+        // Closed seed cells cannot become missing merely because the live cut moved.
+        for (const {group, requested} of groups) for (const at of requested) {
+          assert.ok(at + cell > group.closedBefore || !group.initial.has(at), 'browser reread closed fresh seed data in the same selection');
+        }
         stableHistoryReads(cold, seeds, cell);
         const families = [];
         for (const {selection, group, scope, reads, requested, optional, totals} of groups) {

@@ -98,7 +98,7 @@ const coldCode=ts.transpileModule(source.slice(coldStart,coldEnd).replace('expor
   {compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 
 /** Stand in browser IO while running the complete production traffic cohort. */
-async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'physical-only-body'|'later-run'|'later-known'|'optional'|'attempts') {
+async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'physical-only-body'|'later-run'|'later-known'|'optional'|'attempts'|'fresh-closed'|'fresh-open'|'fresh-open-stable'|'mixed-seed') {
   let pages=0,closed=0,observersClosed=0;
   const proxy={transfers:[] as any[],phase(){},async settled(){}};
   const context={DAY:86_400_000,assert,...budget,cellStart,historyScroll,stableHistoryReads,URLSearchParams,
@@ -106,13 +106,15 @@ async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'p
     observeReversal:async()=>({watch:async(_name:string,work:()=>Promise<unknown>)=>work(),async close(){observersClosed++;}}),
     historyBody:async(_url:string,_cookie:string,_signal:unknown,onBody?:(body:unknown)=>void)=>{
       onBody?.({complete:true,decoded:100,lower:40});
-      return {run:'r',now:mode!=='stable'&&pages===1?after:before,known,chunks:[]};
+      return {run:'r',now:mode!=='stable'&&mode!=='fresh-open-stable'&&pages===1?after:before,known,chunks:[]};
     },
     historyPage:async(_browser:unknown,_proxy:unknown,_cookie:string,_name:string,length:number,future:number)=>{
       assert.equal(pages,closed,'a replacement must await previous-page cleanup');
       const page=++pages,origin=before,geometry={x:0,y:0,width:1000,series:12},reads:any[]=[];
       const selections=['board=b&scope=quota','board=b&scope=budget'];
-      const seeds=new Map(selections.map(selection=>[selection,{answer:{run:'r',now:before,known},initial:new Set()}]));
+      const seeds=new Map(selections.map((selection,index)=>[selection,{closedBefore:before,
+        answer:{run:'r',now:mode==='mixed-seed'&&page===1?after+60_000:before,known},
+        initial:new Set<number>(page===1&&index===0&&['fresh-closed','fresh-open','fresh-open-stable','mixed-seed'].includes(mode)?[mode==='fresh-closed'?requestFrom-cell:requestFrom]:[])}]));
       const bodies={phase:'',reads,get resources(){return reads.filter(read=>read.selection);},diagnostic(){return {};}};
       let distance=0;
       const cdp={at(){},snapshot(){return {};},async send(method:string,args:any){
@@ -121,10 +123,10 @@ async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'p
           distance=args.xDistance;
           for(let i=0;i<(page===1&&mode==='attempts'?9:2);i++){
             const id=page+'/'+i,bad=page===1&&(mode==='bad-first'&&i===0||mode==='bad-second'&&i===1);
-            reads.push({phase:bodies.phase,selection:selections[Math.min(i,1)],from:requestFrom,
-              to:page===1&&mode==='optional'&&i===0?requestFrom+62*cell:requestTo,cell,
+            reads.push({phase:bodies.phase,selection:selections[Math.min(i,1)],from:mode==='fresh-closed'&&page===1&&i===0?requestFrom-cell:requestFrom,
+              to:page===1&&mode==='optional'&&i===0?requestFrom+62*cell:mode==='mixed-seed'?requestTo+cell:requestTo,cell,
               count:{id,complete:true,lower:40,length:40,decoded:100,coding:bad?'identity':'br'},
-              answer:{run:page===1&&mode==='later-run'&&i===1?'changed':'r',now:page===1&&mode!=='stable'&&i===0?after:before,
+              answer:{run:page===1&&mode==='later-run'&&i===1?'changed':'r',now:page===1&&mode!=='stable'&&mode!=='fresh-open-stable'&&i===0?mode==='mixed-seed'?after+cell:after:before,
                 known:page===1&&mode==='later-known'&&i===1?{work:1,sources:{s:0}}:known}});
             proxy.transfers.push({id,phase:bodies.phase,sent:true,finished:true,aborted:false,encoded:40,decoded:100});
           }
@@ -163,4 +165,26 @@ test('cold traffic retries only a changed reference after validating every resou
     assert.equal(failed.pages,1,mode+' must not create a replacement cohort');
     assert.equal(failed.closed,1);assert.equal(failed.observersClosed,1);
   }
+});
+
+test('a changed cutoff cannot hide rereading an already closed seed cell',async()=>{
+  const failed=await coldReplay('fresh-closed');
+  assert.ok(failed.error,'the closed-cell reread must fail before replacing its cohort');
+  assert.ok(!((failed.error as Error).cause instanceof budget.HistoryCutChanged));
+  assert.equal(failed.pages,1);assert.equal(failed.closed,1);assert.equal(failed.observersClosed,1);
+});
+
+test('an open seed cell keeps cutoff invalidation even when a later seed reply closes it',async()=>{
+  for(const mode of ['fresh-open','mixed-seed'] as const){
+    const recovered=await coldReplay(mode);
+    assert.equal(recovered.error,null);assert.equal(recovered.pages,25);
+    assert.equal(recovered.result.invalidated.length,1);assert.equal(recovered.result.reports.length,72);
+    assert.equal(recovered.closed,25);assert.equal(recovered.observersClosed,25);
+  }
+});
+
+test('a stable cutoff still rejects rereading the open seed cell',async()=>{
+  const failed=await coldReplay('fresh-open-stable');
+  assert.ok(failed.error);assert.ok(!((failed.error as Error).cause instanceof budget.HistoryCutChanged));
+  assert.equal(failed.pages,1);assert.equal(failed.closed,1);assert.equal(failed.observersClosed,1);
 });
