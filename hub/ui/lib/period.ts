@@ -263,9 +263,9 @@ class BoardPeriod {
   private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence};for(const listener of this.listeners)listener();}
   private retireWork() {
     this.retained.clear();preparations()?.cancel(this.preparationOwner);
-    // Fixed work totals belong to their captured attribution, while their money
-    // values retain the independent financial authority across the replacement.
-    if(this.tapes.get('budget')?.tape.fixed?.moneyWork)this.dirtyScopes.add('budget');
+    // Work evidence belongs to its captured attribution. Native financial values
+    // retain their independent authority across the replacement.
+    if(this.tapes.get('budget')?.tape.fixed?.moneyWork||this.tapes.get('budget')?.tape.money.some(group=>group.workCounter))this.dirtyScopes.add('budget');
     this.workEvidence++;this.retirementAt=Infinity;
     this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;this.workProofEpoch=-1;
     this.tapes.delete('quota');delete this.projectionErrors.quota;this.transport.forgetEvidence('quota');
@@ -462,7 +462,7 @@ class BoardPeriod {
       const tapes=new Map(priorTapes);
       for(const scope of PERIOD_SCOPES){
         const old=tapes.get(scope),incoming=incomingTapes.get(scope);
-        if(!incoming&&!((scope==='quota'||old?.tape.money.some(g=>g.workCounter))&&old&&index))continue;
+        if(!incoming&&!((scope==='quota'||old?.tape.money.some(g=>g.workCounter&&changedWork.has(g.source)))&&old&&index))continue;
         const queryKey=incoming?queryKeyFor(scope):old!.queryKey,tape=incoming??old!.tape;
         const base=staged.get(scope)??0;
         try{

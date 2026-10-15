@@ -170,6 +170,7 @@ const LegendItem = memo(function LegendItem({history, group, groupKey, by, name,
         type="button"
         className="legend-item"
         data-series-key={mutedKey(by, groupKey)}
+        data-agent-ms={group?.agentMs}
         style={seriesFocusStyle(mutedKey(by, groupKey))}
         aria-describedby={id}
         aria-pressed={!muted}

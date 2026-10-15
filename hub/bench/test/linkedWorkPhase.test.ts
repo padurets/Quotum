@@ -7,10 +7,12 @@ import {SETS} from '../../demo/catalogue.js';
 import {people} from '../../demo/model.js';
 import {activityCreditProblems,HISTORY_BYTES_PER_MEASUREMENT,renderProblems} from '../budget.js';
 import type {Counted} from '../probe.js';
+import {PeriodActivity} from '../../server/domain/periodActivity.js';
+import type {WorkTrace} from '../../server/domain/periodWork.js';
 
-type Options={setupMs?:number;creditMs?:number;activity?:boolean;reads?:number;bytes?:number;financial?:boolean;ackMs?:number;invalidationMs?:number};
+type Options={setupMs?:number;creditMs?:number;activity?:boolean;reads?:number;bytes?:number;financial?:boolean;ackMs?:number;invalidationMs?:number;retiring?:boolean};
 /** Run the production phase, including its browser scripts, against a virtual clock and DOM. */
-async function phase({setupMs=1500,creditMs=200,activity=true,reads=1,bytes=100,financial=false,ackMs=0,invalidationMs=0}:Options={}) {
+async function phase({setupMs=1500,creditMs=200,activity=true,reads=1,bytes=100,financial=false,ackMs=0,invalidationMs=0,retiring=false}:Options={}) {
   const start=Date.parse('2026-10-15T04:50:58Z'),source='openrouter:linked';
   const invalidatedAt=start+invalidationMs;
   let now=start,readyAt=Infinity,probeFrom=now,calls=0;
@@ -26,11 +28,13 @@ async function phase({setupMs=1500,creditMs=200,activity=true,reads=1,bytes=100,
   const financialChanged=()=>financial&&updates.some(update=>update.at>=probeFrom&&update.at+1200<=now);
   const loading=()=>now>=invalidatedAt&&now<readyAt;
   const work=()=>!loading()?{getAttribute:()=>String(value())}:null;
-  const totals=()=>!loading()?{getAttribute:()=>String(100+(activity?value():0))}:null;
+  const totals=()=>!loading()?{getAttribute:()=>String(100_000+(activity?value():0)-(retiring?value()*12:0))}:null;
+  const project=()=>!loading()&&activity&&value()>0?{getAttribute:()=>String(value())}:null;
   const group={getAttribute:(name:string)=>name==='data-series'?source+' balance':'1:56400000',querySelectorAll:()=>[{getAttribute:()=>financialChanged()?'changed':'stable'}]};
   const document={body:{},getAnimations:()=>[],querySelector:(selector:string)=>{
     if(selector.startsWith('[data-work-source='))return work();
     if(selector==='.activity-totals')return totals();
+    if(selector.startsWith('.activity [data-series-key='))return project();
     if(selector.includes('is-loading'))return loading()?{}:null;
     return null;
   },querySelectorAll:(selector:string)=>selector.includes('[data-series]')?[group]:selector==='[data-work-source]'?(work()?[work()]:[]):[]};
@@ -79,6 +83,22 @@ test('linked wallet cannot qualify a stale ready row before the new authority ar
   const {result}=await phase({invalidationMs:100});
   assert.deepEqual(Array.from(result.problems),[]);
   assert.ok(result.setup.waitMs>=1500);
+});
+
+test('linked wallet observes its Activity project even while old board work expires',async()=>{
+  const {result}=await phase({retiring:true});
+  assert.deepEqual(Array.from(result.problems),[]);
+  assert.equal(result.reports.length,3);
+});
+
+test('the production Activity curve credits a project while the rolling board total decreases',()=>{
+  const period=86_400_000,now=period+60_000,from=now-period;
+  const refs=Array.from({length:13},(_,i)=>({ref:String(i),source:i===12?'wallet':'old',device:{id:String(i),name:'Device'},origin:'terminal' as const,project:i===12?'Linked benchmark':'Old '+i,folder:null,startedAt:0}));
+  const trace:WorkTrace={anchor:0,knownFrom:0,cut:now+1000,refs,spans:[...Array.from({length:12},(_,i)=>[i,from-60_000,from+60_000] as [number,number,number]),[12,now,now+1000]]};
+  const activity=new PeriodActivity(trace),before=activity.summary({from,to:now},'project'),after=activity.summary({from:from+1000,to:now+1000},'project');
+  assert.equal(after.agentMs-before.agentMs,-11_000);
+  assert.equal(after.by.project.find(group=>group.key===JSON.stringify('Linked benchmark'))?.agentMs,1000);
+  assert.equal(activity.summary({from,to:now+1000},'project').agentMs-before.agentMs,1000);
 });
 
 test('linked wallet never-ready baseline fails within the existing setup bound',async()=>{

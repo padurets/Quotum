@@ -20,16 +20,17 @@ export class PeriodTransport implements HistoryMember {
   private baselineKey='';
   private readonly baselineParts=new Set<string>();
   private readonly cursors=new Map<string,string>();
+  private readonly metadata=new Map<PeriodScope,{board:string;meters?:string;unit?:string;currency?:string;work?:string;tag:string}>();
   constructor(private readonly pool:HistoryPool,private readonly intent:()=>PeriodIntent|null,private readonly receive:(reply:PeriodReply,intent:PeriodIntent,reserve?:(bytes:number)=>boolean)=>void|Promise<void>,
     private readonly send:(board:string,body:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean)=>Promise<PeriodReply>,private readonly accessLost:()=>void=()=>{}) {}
   get estimatedBytes(){return 0;}
   evictionCandidates(){return [];}
   private key(intent:PeriodIntent){return `${intent.generation}:${intent.revision}`;}
   change(){this.retire();this.schedule();}
-  forgetEvidence(scope?:PeriodScope){if(!scope)this.cursors.clear();else for(const key of this.cursors.keys())if(JSON.parse(key)[1]===scope)this.cursors.delete(key);}
+  forgetEvidence(scope?:PeriodScope){if(!scope){this.cursors.clear();this.metadata.clear();}else {for(const key of this.cursors.keys())if(JSON.parse(key)[1]===scope)this.cursors.delete(key);this.metadata.delete(scope);}}
   evidence(){return new Map(this.cursors);}
   restoreEvidence(cursors:ReadonlyMap<string,string>){this.cursors.clear();for(const [key,value] of cursors)this.cursors.set(key,value);}
-  reset(){this.resetEpoch++;this.completed=this.failed=this.baselineKey='';this.baselineParts.clear();this.cursors.clear();for(const flight of this.flights)this.abort(flight);for(const demand of this.queue)demand.reject(aborted());this.queue=[];}
+  reset(){this.resetEpoch++;this.completed=this.failed=this.baselineKey='';this.baselineParts.clear();this.cursors.clear();this.metadata.clear();for(const flight of this.flights)this.abort(flight);for(const demand of this.queue)demand.reject(aborted());this.queue=[];}
   retry(){this.failed='';this.change();}
   read(scope:PeriodScope,query:HistoryQuery,signal?:AbortSignal):Promise<HistoryReply> {
     return new Promise((resolve,reject)=>{
@@ -70,7 +71,14 @@ export class PeriodTransport implements HistoryMember {
       for(const scope of PERIOD_SCOPES)if(scope!==pendingBaseline[0])delete body[scope];
       for(const part of ['values','sessions'] as const)if(this.baselineParts.has(part))delete body[part];
     }
-    for(const scope of PERIOD_SCOPES){const query=body[scope];if(query)query.evidence??=!extras?'skip':this.cursors.get(cursorKey(scope,query));}
+    for(const scope of PERIOD_SCOPES){const original=body[scope];if(!original)continue;const query=body[scope]={...original};
+      query.evidence??=!extras?'skip':this.cursors.get(cursorKey(scope,query));
+      // Drawing readers own their captured basis. Only our evidence-only sections borrow our token.
+      if(extras&&!demands.some(demand=>demand.scope===scope)){
+        const prior=this.metadata.get(scope);
+        query.meta??=prior&&prior.board===intent.board&&prior.meters===query.meters&&prior.unit===query.unit&&prior.currency===query.currency&&prior.work===query.work?prior.tag:'';
+      }
+    }
     const appliedIntent={...intent,request:body};
     const resetEpoch=this.resetEpoch;
     const start=()=>{
@@ -86,7 +94,10 @@ export class PeriodTransport implements HistoryMember {
           if(flight.controller.signal.aborted)return;
           const latest=this.intent();
           if(latest?.generation===intent.generation&&latest.revision===intent.revision){if(extras){if(!deferredBaseline)this.completed=key;if(baseline)for(const part of [...PERIOD_SCOPES,'values','sessions'] as const)if(body[part])this.baselineParts.add(part);}
-          for(const scope of PERIOD_SCOPES){const part=reply[scope],query=body[scope];if(query&&part?.state==='complete'&&part.value.tape)this.cursors.set(cursorKey(scope,query),part.value.tape.cursor);}}
+          for(const scope of PERIOD_SCOPES){const part=reply[scope],query=body[scope];if(query&&part?.state==='complete'){
+            if(part.value.tape)this.cursors.set(cursorKey(scope,query),part.value.tape.cursor);
+            if(part.value.meta)this.metadata.set(scope,{board:intent.board,meters:query.meters,unit:query.unit,currency:query.currency,work:query.work,tag:part.value.meta});
+          }}}
         }
         for(const demand of demands) {
           const part=reply[demand.scope];

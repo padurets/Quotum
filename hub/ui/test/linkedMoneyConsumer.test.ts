@@ -30,8 +30,8 @@ test('a sessions-only reply updates the wallet table consumer after creating a l
     const useSyncExternalStore=(subscribe:any,read:any)=>{const at=cursor++;let state=slots[at];if(!state){state=slots[at]={value:read()};stops.push(subscribe(()=>{const next=read();if(!Object.is(state.value,next)){state.value=next;dirty=true;requestRender();}}));}state.value=read();return state.value;};
     const context={useRef,useMemo,useSyncExternalStore,pan:{active:()=>null,onPhase:()=>()=>{}},hubNow:()=>NOW,planEventsAt,planEventsDeadline,shallowEqual,useClock:()=>NOW,fundsHistory:{},page:h.page,timeRange:()=>null,prefs:()=>h.settings,boardPeriod:h.period,read:null as any};
     const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
-    let renderedWork:any;
-    render=()=>{cursor=0;dirty=false;context.read(loader);renderedWork=h.period.moneyWorkAt(wallet,NOW);};
+    let renderedWork:any,renders=0;
+    render=()=>{cursor=0;dirty=false;renders++;context.read(loader);renderedWork=h.period.moneyWorkAt(wallet,NOW);};
     const pump=async()=>{for(let i=0;i<10;i++){await settle();if(dirty)render();}};render();
     const financial=h.period.getFinancialProjectionRevision('budget');
     let fCursor=0,fQueued=false,fRenders=0,fDrawingChanges=0,fDrawing:any;const fSlots:any[]=[];
@@ -43,6 +43,14 @@ test('a sessions-only reply updates the wallet table consumer after creating a l
     runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fContext);
     fRender=()=>{fCursor=0;fRenders++;const value=fContext.read(loader,true,true);if(value.drawing!==fDrawing){fDrawingChanges++;fDrawing=value.drawing;}};fRender();
     const fRendersBefore=fRenders,fDrawingsBefore=fDrawingChanges,readsBefore=loaderReads,historyBefore=loader.get().history;
+    const beforePrivate={revision:h.period.getProjectionRevision('budget'),renders,work:renderedWork};
+    h.requests.length=0;
+    h.store.creditWork(h.device,NOW-30_000,NOW,[{client:'claude',source:null,origin:'terminal',startedAt:NOW-M,project:'Private benchmark',folder:'',identity:{kind:'stable',sessionId:'d'.repeat(32)}}]);h.events.flush();await pump();
+    assert.deepEqual(h.period.moneyWorkAt(wallet,NOW),beforePrivate.work);
+    assert.equal(h.period.getProjectionRevision('budget'),beforePrivate.revision,'unbound work does not publish an unrelated budget projection');
+    assert.equal(renders,beforePrivate.renders,'unbound work does not render the actual wallet table subscriber');
+    assert.equal(fRenders,fRendersBefore);assert.equal(fDrawingChanges,fDrawingsBefore);
+    assert.equal(h.requests.length,1);assert.equal(h.requests[0].budget,undefined);
     h.requests.length=0;
     h.store.links.mutate(h.owner,'create',null,{clientId:'opencode',deviceId:null,route:null,sourceId:wallet,from:NOW-H,to:null,expectedRevision:h.store.links.revision(h.owner),requestId:randomUUID()},NOW);h.events.flush();await pump();
     assert.ok(h.period.moneyWorkAt(wallet,NOW),'common accounting computed money work');

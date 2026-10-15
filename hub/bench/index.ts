@@ -601,7 +601,10 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
   const authority=(await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard)).workAuthority;
   const geometry=()=>cdp.evaluate<string>(`JSON.stringify(Array.from(document.querySelectorAll('.budget-history [data-series]')).map(node=>[node.getAttribute('data-series'),node.getAttribute('data-last'),Array.from(node.querySelectorAll('path')).map(path=>path.getAttribute('d'))]))`);
   const active=()=>cdp.evaluate<number>(`Number(document.querySelector('[data-work-source="${source}"]')?.getAttribute('data-active-ms')??-1)`);
-  const agentTime=()=>cdp.evaluate<number>(`Number(document.querySelector('.activity-totals')?.getAttribute('data-agent-ms')??-1)`);
+  // A rolling board can lose more old work than this credit adds. Observe its own rendered project.
+  const activitySelector='.activity [data-series-key='+JSON.stringify('activity:project:'+JSON.stringify(session.project))+']';
+  const activityRead=`Number(document.querySelector(${JSON.stringify(activitySelector)})?.getAttribute('data-agent-ms')??0)`;
+  const agentTime=()=>cdp.evaluate<number>(activityRead);
   const unavailable=async()=>{
     const state=await cdp.evaluate(`(()=>({period:window.__quotumWalletState?.(${JSON.stringify(source)})??null,table:document.querySelector('.budget-table')?.textContent?.slice(0,1600),markers:document.querySelectorAll('[data-work-source]').length,range:JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range,selected:new URLSearchParams(location.search).has('from')}))()`).catch(()=>({status:'unavailable'}));
     console.error('bench: linked wallet state '+JSON.stringify(state));throw new Stop('linked wallet work columns are not ready');
@@ -611,7 +614,7 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
   while(stable<3){
     const layout=await cdp.evaluate<string|null>(`(()=>{
       const baseline=window.__quotumWalletState?.(${JSON.stringify(source)},${JSON.stringify(authority)});
-      if(!baseline?.authorityReady||baseline.periodLoading||baseline.periodError||baseline.workNeeded||!baseline.work)return null;
+      if(!baseline?.authorityReady||baseline.periodLoading||baseline.periodError||baseline.workNeeded||!baseline.work||baseline.preparation?.flights.length)return null;
       if(!document.querySelector('[data-work-source="${source}"]')||!document.querySelector('.activity-totals')||document.querySelector('.agents-panel.is-loading,.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]'))return null;
       if(document.getAnimations().some(animation=>animation.playState==='running'&&animation.effect?.target?.matches('.widget,.widget-body')))return null;
       return JSON.stringify(Array.from(document.querySelectorAll('.widgets>.widget')).map(node=>{const box=node.getBoundingClientRect();return[box.x,box.y,box.width,box.height];}));
@@ -628,7 +631,7 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
     await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
     await cdp.evaluate(`(()=>{
       let activeAt=null,activityAt=null;
-      const values=()=>({activeMs:Number(document.querySelector('[data-work-source="${source}"]')?.getAttribute('data-active-ms')??-1),activityAgentMs:Number(document.querySelector('.activity-totals')?.getAttribute('data-agent-ms')??-1)});
+      const values=()=>({activeMs:Number(document.querySelector('[data-work-source="${source}"]')?.getAttribute('data-active-ms')??-1),activityAgentMs:${activityRead}});
       const observer=new MutationObserver(()=>{
         const value=values(),now=Date.now();
         if(activeAt===null&&value.activeMs>${before})activeAt=now;
@@ -656,7 +659,7 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
   agent.trackClients([],[]);await demo.reportNow('laptop');
   const response=await fetch(owner.base+'/api/links/'+created.links.at(-1)!.id,{method:'DELETE',headers:{cookie:owner.cookie,origin:new URL(owner.base).origin,'content-type':'application/json'},body:JSON.stringify({expectedRevision:created.revision,requestId:randomUUID()})});
   if(!response.ok)throw new Stop('linked wallet fixture could not remove its rule');
-  return {setup,reports,problems};
+  return {setup,activityProject:session.project,reports,problems};
 }
 
 /** The personal display path uses the same measurement and render budgets as native money. */
