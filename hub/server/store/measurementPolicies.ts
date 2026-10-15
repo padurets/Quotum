@@ -74,13 +74,14 @@ export class MeasurementPolicies {
     return next;
   }
 
-  confirm(device: string, capable: boolean, revision: number | null, authority: string | null): boolean {
+  confirm(device: string, capable: boolean, revision: number | null, authority: string | null): {changed:boolean;capabilityChanged:boolean} {
     const policy = this.device(device);
     const ack = capable && authority === policy.authority && revision === policy.revision ? revision : null;
     const prior = this.db.prepare('SELECT capable,confirmed_revision FROM device_measurement_control WHERE device_id=?').get(device);
-    if (prior && Number(prior.capable) === Number(capable) && prior.confirmed_revision === ack) return false;
+    if (prior && Number(prior.capable) === Number(capable) && prior.confirmed_revision === ack) return {changed:false,capabilityChanged:false};
+    const capabilityChanged=Number(prior?.capable??0)!==Number(capable);
     this.db.prepare('INSERT INTO device_measurement_control VALUES (?,?,?) ON CONFLICT(device_id) DO UPDATE SET capable=excluded.capable,confirmed_revision=excluded.confirmed_revision').run(device, Number(capable), ack);
-    return true;
+    return {changed:true,capabilityChanged};
   }
 
   control(device: string): {capable: boolean; confirmedRevision: number | null} {

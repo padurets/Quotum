@@ -32,6 +32,10 @@ export class MeasurementSelection {
     return {changed:!before||before.expiresAt<=now,current:true,expiresAt:candidate.expiresAt};
   }
 
+  candidateAccounts(device:string) {
+    return [...(this.devices.get(device)?.values()??[])].map(({key,provider})=>({key,provider}));
+  }
+
   /** Multiplexed account groups may span batches; a singleton is evidence of a changed login. */
   current(device:string,accounts:Map<ClientProvider,Set<string>>,now:number) {
     for(const before of [...(this.devices.get(device)?.values() ?? [])]) {

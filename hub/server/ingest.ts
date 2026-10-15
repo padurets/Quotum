@@ -208,7 +208,13 @@ export class Ingest {
     const request = parseCheckin(body);
     const device = this.device(credential, request, now);
     const policy = this.store.measurementPolicies.device(device.id);
-    if (this.store.measurementPolicies.confirm(device.id, request.measurementPolicy && request.attemptContext, request.policyAck?.revision ?? null, request.policyAck?.authority ?? null)) this.directory.measurementsChanged(device.userId);
+    const confirmation=this.store.measurementPolicies.confirm(device.id, request.measurementPolicy && request.attemptContext, request.policyAck?.revision ?? null, request.policyAck?.authority ?? null);
+    if (confirmation.changed) this.directory.measurementsChanged(device.userId);
+    // Capability changes affect existing account candidates even without a subscription directive.
+    if (confirmation.capabilityChanged) for(const {key,provider} of this.measurementSelection.candidateAccounts(device.id)) {
+      const source=this.store.findSource(provider,key);
+      if(source)this.notifyMeasurementOwners(source);
+    }
     const currentAccounts=new Map<ClientProvider,Set<string>>();
     for(const subscription of request.subscriptions) {
       if('measuredBy' in subscription)continue;

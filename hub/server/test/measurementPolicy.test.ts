@@ -508,6 +508,31 @@ for(const paced of [false,true])test(`same-device duty recovery reaches another 
   assert.deepEqual(frames.map(frame=>({type:frame.type,data:JSON.parse(frame.data)})),[{type:'devices',data:{}}]);
 });
 
+for(const capable of [false,true])for(const empty of [false,true])test(`capability ${capable?'recovery':'loss'} reaches other holders with empty subscriptions=${empty}`,t=>{
+  const {store,directory,ingest,user,batch,credential,sender,device}=setup();ingest.accept(credential,batch(now),now);
+  const second={...sender,machine:{...sender.machine,id:'measurement-capability-B12345'}};
+  const subscriptions=[{provider:'codex',account}];
+  const ask=(modern:boolean,at:number,listed=subscriptions)=>ingest.checkin(credential,{...second,paced:true,...(modern?{capabilities:{measurementPolicy:1,attemptContext:1}}:{}),subscriptions:listed},at);
+  ask(true,now+1);const target=directory.devices(user.id).find(candidate=>candidate.id!==device)!.id;
+  for(const [revision,enabled] of [false,true].entries()) {
+    const change=store.measurementPolicies.saveDevice(target,revision,desired(enabled),now+revision+2);
+    ingest.participationChanged(target,change.changed,now+revision+2);
+  }
+  ask(true,now+4);
+  ingest.checkin(credential,{...sender,paced:true,capabilities:{measurementPolicy:1,attemptContext:1},subscriptions},now+120000);
+  const source=store.held(user.id)[0].id;store.measurementPolicies.savePreference(source,0,target);
+  if(capable)ask(false,now+120001);
+  const bob=directory.createUser('capability-bob@example.com','Bob','x',now);store.hold(source,bob.id,now);
+  const board=directory.createBoard('Other board',bob.id,now),secret=newSecret('qt_s');directory.createSession(secret,bob.id,now,86400000);
+  let clock=now+120002;
+  const events=new Events({store,directory,ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>clock,after:()=>()=>{}});events.attach();t.after(()=>{events.close();store.close();});
+  const frames:Frame[]=[];events.open({user:bob.id,secret,board:board.id,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});events.flush();frames.length=0;
+  assert.equal(ingest.measurementSources(bob.id,clock)[0].pending,!capable);
+  clock++;ask(capable,clock,empty?[]:subscriptions);events.flush();
+  assert.equal(ingest.measurementSources(bob.id,clock)[0].pending,capable);
+  assert.deepEqual(frames.map(frame=>({type:frame.type,data:JSON.parse(frame.data)})),[{type:'devices',data:{}}]);
+});
+
 test('unchanged contacts reuse the private selection baseline at every held-source cohort size',()=>{
   for(const count of [1,20,200]) {
     const {store,directory,ingest,user,batch,credential,sender}=setup();ingest.accept(credential,batch(now),now);
