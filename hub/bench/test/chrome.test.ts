@@ -38,7 +38,8 @@ function fixture(t: TestContext, mode = 'ready', holdPort = false) {
         const worker=cp.spawn(process.execPath,['-e',"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"],{detached:mode==='escaped-worker',stdio:mode==='escaped-worker'?'ignore':['ignore','inherit','inherit']});
         fs.writeFileSync(profile+'/worker',String(worker.pid));
       }
-      fs.writeFileSync(profile+'/started',String(port));
+      fs.writeFileSync(profile+'/started.tmp',String(port));
+      fs.renameSync(profile+'/started.tmp',profile+'/started');
     });
   `;
   const child = spawn(process.execPath, ['-e', script, profile, mode, String(holdPort)], {detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe']});
@@ -153,11 +154,32 @@ for (const mode of ['no-port', 'invalid', 'mismatch', 'redirect', 'headers-hang'
   test(`cancelled ${mode} startup never grants readiness and closes its owned endpoint`, async t => {
     const hangs = mode === 'headers-hang' || mode === 'body-hang';
     const {profile, launch, publishPort} = fixture(t, mode, hangs), controller = new AbortController();
-    t.after(() => controller.abort());
     let ready = false;
     let observed: LaunchReport | undefined;
+    let failure: Partial<Pick<LaunchReport, 'stage'|'failure'|'probes'|'startupSpans'>> | undefined;
     const pending = launch(controller.signal, report => {observed = report;}).then(browser => {ready = true; return browser.close();});
-    const failed = assert.rejects(pending, (error:unknown) => {
+    const outcome = pending.then(() => ({rejected: false, error: undefined}), (error: unknown) => ({rejected: true, error}));
+    try {
+      await until(() => existsSync(profile + '/started'));
+      const port = readFileSync(profile + '/started', 'utf8');
+      assert.match(port, /^[1-9]\d{0,4}$/);
+      assert.ok(Number(port) <= 65535, 'the stand-in published its listening port');
+      if (hangs) {
+        // A listening child need not have published its endpoint or received a probe yet.
+        await until(() => observed?.failure === 'no-port');
+        assert.equal(observed?.probes, undefined);
+        assert.equal(existsSync(profile+'/requested'), false);
+        publishPort();
+        await until(() => observed?.probes?.stage === (mode === 'headers-hang' ? 'headers' : 'body')
+          && existsSync(profile+'/requested'));
+      } else if (mode === 'no-port' || mode === 'invalid') {
+        await until(() => observed?.failure === (mode === 'no-port' ? 'no-port' : 'invalid-port'));
+      } else {
+        await until(() => Object.keys(observed?.probes?.failures ?? {}).length > 0);
+      }
+      assert.equal(ready, false); controller.abort();
+      const result = await outcome; assert.equal(result.rejected, true);
+      const error = result.error;
       assert.ok(error instanceof ChromeLaunchError);
       assert.equal(error.report.failure,'cancelled');
       assert.equal(error.report.cleanup?.status,'closed');
@@ -172,26 +194,19 @@ for (const mode of ['no-port', 'invalid', 'mismatch', 'redirect', 'headers-hang'
         if (probe.to === null) assert.equal(spans.status, 'incomplete', 'cancellation cannot invent an operation end');
         assert.equal(spans.publicationProof, false); assert.equal(spans.clockMapping.status, 'unknown');
       }
-      return true;
-    });
-    await until(() => existsSync(profile + '/started'));
-    const port = readFileSync(profile + '/started', 'utf8');
-    if (hangs) {
-      // A listening child need not have published its endpoint or received a probe yet.
-      await until(() => observed?.failure === 'no-port');
-      assert.equal(observed?.probes, undefined);
-      assert.equal(existsSync(profile+'/requested'), false);
-      publishPort();
-      await until(() => observed?.probes?.stage === (mode === 'headers-hang' ? 'headers' : 'body')
-        && existsSync(profile+'/requested'));
-    } else if (mode === 'no-port' || mode === 'invalid') {
-      await until(() => observed?.failure === (mode === 'no-port' ? 'no-port' : 'invalid-port'));
-    } else {
-      await until(() => Object.keys(observed?.probes?.failures ?? {}).length > 0);
+      assert.equal(existsSync(profile), false);
+      await assert.rejects(fetch('http://127.0.0.1:' + port));
+    } catch (error) {
+      if (error instanceof Error) {
+        failure = {stage: observed?.stage, failure: observed?.failure, probes: observed?.probes && {...observed.probes, failures: {...observed.probes.failures}}};
+        error.cause ??= failure;
+      }
+      throw error;
+    } finally {
+      // A failed phase handshake must drain startup without replacing its own error.
+      controller.abort(); const result = await outcome;
+      if (failure && result.error instanceof ChromeLaunchError) failure.startupSpans = result.error.report.startupSpans;
     }
-    assert.equal(ready, false); controller.abort(); await failed;
-    assert.equal(existsSync(profile), false);
-    await assert.rejects(fetch('http://127.0.0.1:' + port));
   });
 }
 
