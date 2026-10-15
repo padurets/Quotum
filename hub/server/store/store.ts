@@ -937,15 +937,17 @@ export class Store {
     if (!keys.length) return [];
     const owner = String(this.db.prepare('SELECT user_id FROM devices WHERE id=?').get(device)?.user_id ?? '');
     const context = captured??this.links.batch([owner]);
-    const read = this.db.prepare("SELECT s.id,s.client,s.source_id,s.account_by,s.route_class,s.route_by,s.route_host,s.route_provider,w.from_at,w.to_at FROM agent_sessions s JOIN agent_work w ON w.session_id=s.id WHERE s.device_id=? AND s.client=? AND s.producer_id=? ORDER BY s.id,w.from_at");
+    const read = this.db.prepare("SELECT s.id,s.client,s.source_id,s.account_by,s.route_class,s.route_by,s.route_host,s.route_provider,min(w.from_at) AS from_at,max(w.to_at) AS to_at FROM agent_sessions s JOIN agent_work w ON w.session_id=s.id WHERE s.device_id=? AND s.client=? AND s.producer_id=? AND w.to_at>? GROUP BY s.id");
+    const sum = this.db.prepare('SELECT COALESCE(sum(min(to_at,?)-max(from_at,?)),0) AS ms FROM agent_work WHERE session_id=? AND to_at>? AND from_at<?');
     return keys.map(key => {
       if (key.identity.kind === 'legacy') return null;
       const clientId = key.client ?? key.source?.split(':')[0] ?? 'unknown', rules = context(owner, device, clientId);
       const source = resolveLink({...key, clientId, deviceId: device}, rules, now).source;
       let ms = 0;
-      for (const row of read.all(device, clientId, key.identity.sessionId) as {source_id: string | null; account_by: SessionEvidence['accountBy']; route_class: SessionRoute['class']; route_by: SessionRoute['by'] | null; route_host: string | null; route_provider: string | null; from_at: number; to_at: number}[]) {
+      for (const row of read.all(device, clientId, key.identity.sessionId,from) as {id:number;source_id: string | null; account_by: SessionEvidence['accountBy']; route_class: SessionRoute['class']; route_by: SessionRoute['by'] | null; route_host: string | null; route_provider: string | null; from_at: number; to_at: number}[]) {
         const input: AttributionInput = {clientId, deviceId: device, source: row.source_id, accountBy: row.account_by, route: row.route_by ? {class: row.route_class, by: row.route_by, host: row.route_host, provider: row.route_provider} : null};
-        for (const fragment of splitLinks(input, rules, row.from_at, row.to_at)) if (fragment.source === source) ms += Math.max(0,fragment.to - Math.max(fragment.from,from));
+        // Resolve a context's cuts once, then sum its raw stretches within them.
+        for (const fragment of splitLinks(input, rules, Math.max(from,row.from_at), row.to_at)) if (fragment.source === source) ms += Number(sum.get(fragment.to,fragment.from,row.id,fragment.from,fragment.to)!.ms);
       }
       return ms;
     });
@@ -980,28 +982,28 @@ export class Store {
       .all(JSON.stringify([...bounds.keys()])) as unknown as ({id: number; clientId: string; accountBy: SessionEvidence['accountBy']; class: SessionRoute['class']; by: SessionRoute['by'] | null; host: string | null; provider: string | null;client:string;producer_id:string|null;raw_project:string;raw_folder:string;device_name:string} & Omit<Stretch, 'session' | 'from' | 'to'>)[];
     for(const session of sessions)reserve?.(768+2*((session.project?.length??0)+(session.folder?.length??0)+session.client.length+(session.source?.length??0)+(session.producer_id?.length??0)+session.raw_project.length+session.raw_folder.length+session.device_name.length));
     const contexts = captured??this.links.batch([...new Set(sessions.map(s => s.user))],reserve), allowed = sources ? new Set(sources) : null;
+    const contextOf=(s:typeof sessions[number])=>({device:s.device,user:s.user,origin:s.origin,project:s.project,folder:s.folder,startedAt:s.startedAt,...(devices?{rawContext:{source:s.source,client:s.client,producer:s.producer_id,project:s.raw_project,folder:s.raw_folder,deviceName:s.device_name,accountBy:s.accountBy,route:s.by?{class:s.class,by:s.by,host:s.host,provider:s.provider}:null}}:{})});
     // Resolve each context's timeline once, then reuse it for all its raw stretches.
     const timelines = new Map(sessions.flatMap(s => {
       const input: AttributionInput = {clientId: s.clientId, deviceId: s.device, source: s.source, accountBy: s.accountBy, route: s.by ? {class: s.class, by: s.by, host: s.host, provider: s.provider} : null};
       const bound=bounds.get(s.id)!;
       const parts=splitLinks(input, contexts(s.user, s.device, s.clientId), bound.from, bound.to).filter(part=>!allowed||part.source!==null&&allowed.has(part.source)||part.source===null&&s.user===owner);
-      return parts.length?[[s.id,{session:s,parts,next:0}] as [number,{session:typeof s;parts:typeof parts;next:number}]]:[];
+      return parts.length?[[s.id,{context:contextOf(s),parts,next:0}] as [number,{context:ReturnType<typeof contextOf>;parts:typeof parts;next:number}]]:[];
     }));
     const result: Stretch[] = [];
     let lastId:number|undefined,lastTimeline:ReturnType<typeof timelines.get>;
-    const contextOf=(s:typeof sessions[number])=>({device:s.device,user:s.user,origin:s.origin,project:s.project,folder:s.folder,startedAt:s.startedAt,...(devices?{rawContext:{source:s.source,client:s.client,producer:s.producer_id,project:s.raw_project,folder:s.raw_folder,deviceName:s.device_name,accountBy:s.accountBy,route:s.by?{class:s.class,by:s.by,host:s.host,provider:s.provider}:null}}:{})});
     for (const [id, start, end] of rows) {
       // Rows are ordered by context, so one lookup serves all its stretches.
       const timeline=id===lastId?lastTimeline:timelines.get(id);lastId=id;lastTimeline=timeline;
-      if(!timeline)continue;const s = timeline.session;
+      if(!timeline)continue;
       if(timeline.parts.length===1&&timeline.parts[0].from<=start&&timeline.parts[0].to>=end){
-        result.push({session:id,source:timeline.parts[0].source,...contextOf(s),from:start,to:end});
+        result.push({session:id,source:timeline.parts[0].source,...timeline.context,from:start,to:end});
         continue;
       }
       while (timeline.next < timeline.parts.length && timeline.parts[timeline.next].to <= start) timeline.next++;
       for (let n = timeline.next; n < timeline.parts.length && timeline.parts[n].from < end; n++) {
         const part = timeline.parts[n];
-        result.push({session: id, source: part.source, ...contextOf(s), from: Math.max(start, part.from), to: Math.min(end, part.to)});
+        result.push({session: id, source: part.source, ...timeline.context, from: Math.max(start, part.from), to: Math.min(end, part.to)});
       }
     }
     return result;

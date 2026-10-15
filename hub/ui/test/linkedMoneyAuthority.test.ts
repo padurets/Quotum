@@ -6,8 +6,8 @@ import {PeriodAccounting} from '../../server/domain/periodAccounting.js';
 import {expandPeriod} from '../../server/domain/periodWire.js';
 import type {Meter} from '../../server/domain/meters.js';
 
-test('correcting funding retires old work curves while preserving exact financial accounting',async t=>{
-  t.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true,ownerDevice:true});
+for(const fixed of [false,true])test(`correcting funding retires old ${fixed?'fixed':'live'} work curves while preserving exact financial accounting`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true,ownerDevice:true,fixed});
   try{
     const wallet=h.store.source('openrouter','w'.repeat(24),NOW-H),other=h.store.source('openrouter','o'.repeat(24),NOW-H);
     for(const source of [wallet,other]){
@@ -26,11 +26,35 @@ test('correcting funding retires old work curves while preserving exact financia
     assert.equal(h.period.moneyWorkAt(wallet,NOW),undefined,'authority retirement immediately removes the old estimate');
     for(let i=0;i<5;i++){await new Promise<void>(resolve=>setImmediate(resolve));await flush();}
     assert.equal(h.pool.activeFlights,0);
-    const reply=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'live',periodMs:H},evaluatedAt:NOW,budget:{cell:String(M),from:String(NOW-H),to:String(NOW),unit:'USD',meters:JSON.stringify([[wallet,'balance'],[other,'balance']]),work:'1',cells:'skip'},sessions:{}})));
+    const reply=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:fixed?{mode:'range',from:NOW-H,to:NOW}:{mode:'live',periodMs:H},evaluatedAt:NOW,budget:{cell:String(M),from:String(NOW-H),to:String(NOW),unit:'USD',meters:JSON.stringify([[wallet,'balance'],[other,'balance']]),work:'1',cells:'skip'},sessions:{}})));
     assert.ok(reply.budget&&reply.budget.state==='complete');assert.ok(reply.sessions&&reply.sessions.state==='complete');
     const exact=new PeriodAccounting(reply.budget.value.tape!,reply.sessions.value),range=reply.budget.basis.range;
     for(const source of [wallet,other])assert.deepEqual(h.period.moneyWorkAt(source,NOW),exact.moneyWorkSummary(source,range));
     assert.equal(h.period.moneyWorkAt(wallet,NOW)?.activeMs,0);assert.equal(h.period.moneyWorkAt(other,NOW)?.activeMs,M);
     assert.equal(h.period.getFinancialProjectionRevision('budget'),financial,'changing funding does not rebuild native financial indices');
+  }finally{await h.close();}
+});
+
+for(const fixed of [false,true])test(`a financial observation preserves ${fixed?'fixed':'live'} work authority without reading sessions again`,async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true,ownerDevice:true,fixed});
+  try{
+    const wallet=h.store.source('openrouter','w'.repeat(24),NOW-H);h.store.hold(wallet,h.owner,NOW-H);
+    const record=(at:number,usage:string)=>{
+      const meter=(id:string,amount:string):Meter=>({id,at,amount,kind:'counter',unit:'USD',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:H,stale:false});
+      h.store.record(wallet,{type:'meters',observedAt:at,staleAfterMs:H,meters:[meter('usage',usage),meter('credits','60000000')],keys:[],inventoryComplete:true,inventoryError:null});
+    };
+    record(NOW-50*M,'0');record(NOW-M,'6000000');
+    h.store.links.mutate(h.owner,'create',null,{clientId:'codex',deviceId:null,route:null,sourceId:wallet,from:NOW-H,to:null,expectedRevision:h.store.links.revision(h.owner),requestId:randomUUID()},NOW);
+    h.directory.saveView(h.board,{...h.directory.view(h.board),shown:['agents','activity','budget-table','budget-history']},h.owner,NOW);
+    h.events.touchBoards([h.board]);h.events.flush();await flush();
+    assert.equal(h.period.moneyWorkAt(wallet,NOW)?.activeMs,M);h.requests.length=0;
+    record(NOW-5000,'7000000');h.events.flush();await flush();
+    assert.equal(h.pool.activeFlights,0);assert.ok(h.requests.some(request=>request.budget));
+    assert.ok(h.requests.every(request=>!request.sessions),'a financial measurement reuses the admitted work ledger');
+    const reply=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:fixed?{mode:'range',from:NOW-H,to:NOW}:{mode:'live',periodMs:H},evaluatedAt:NOW,budget:{cell:String(M),from:String(NOW-H),to:String(NOW),unit:'USD',meters:JSON.stringify([[wallet,'balance']]),work:'1',cells:'skip'},sessions:{}})));
+    assert.ok(reply.budget?.state==='complete'&&reply.sessions?.state==='complete');
+    const exact=new PeriodAccounting(reply.budget.value.tape!,reply.sessions.value);
+    assert.deepEqual(h.period.moneyWorkAt(wallet,NOW),exact.moneyWorkSummary(wallet,reply.budget.basis.range));
+    assert.equal(h.period.moneyWorkAt(wallet,NOW)?.activeMs,M);
   }finally{await h.close();}
 });

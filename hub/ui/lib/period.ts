@@ -197,7 +197,7 @@ class BoardPeriod {
     const summary=tape.accounting.moneySummary(series.sourceId,series.meterId,series.unit,this.tapeRange(tape,now));
     return summary?{...series,...summary}:series;
   }
-  moneyWorkAt(source:string,now:number,rangeKey?:string){const tape=this.tapes.get('budget');return this.workProofEpoch===this.proofEpoch&&tape&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;}
+  moneyWorkAt(source:string,now:number,rangeKey?:string){const tape=this.tapes.get('budget');return this.work.value&&tape&&this.workRangeKey===tape.rangeKey&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;}
   rangeAt(scope:PeriodScope,now:number,rangeKey?:string){const tape=this.tapes.get(scope);return tape&&(rangeKey===undefined||tape.rangeKey===rangeKey)?this.tapeRange(tape,now):null;}
   moneyOrderAt(now:number,rangeKey:string,readOrder?:(at:number)=>string) {
     const tape=this.tapes.get('budget');
@@ -263,6 +263,9 @@ class BoardPeriod {
   private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence};for(const listener of this.listeners)listener();}
   private retireWork() {
     this.retained.clear();preparations()?.cancel(this.preparationOwner);
+    // Fixed work totals belong to their captured attribution, while their money
+    // values retain the independent financial authority across the replacement.
+    if(this.tapes.get('budget')?.tape.fixed?.moneyWork)this.dirtyScopes.add('budget');
     this.workEvidence++;this.retirementAt=Infinity;
     this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;this.workProofEpoch=-1;
     this.tapes.delete('quota');delete this.projectionErrors.quota;this.transport.forgetEvidence('quota');

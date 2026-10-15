@@ -88,6 +88,17 @@ test('temporal fragments preserve one agent within the same cell and live counte
   } finally {f.store.close();}
 });
 
+test('current-source totals retain idle gaps and exclusive temporal cuts',()=>{
+  const f=setup();try{
+    for(const start of [0,2,4])f.store.creditWork(f.device,now+start*minute,now+(start+1)*minute,[f.key()]);
+    f.link({to:now+2.5*minute});f.link({sourceId:f.second,from:now+2.5*minute});
+    assert.deepEqual(f.store.worked(f.device,[f.key()],0,now+minute),[1.5*minute]);
+    assert.deepEqual(f.store.worked(f.device,[f.key()],now+2*minute,now+6*minute),[1.5*minute]);
+    assert.deepEqual(f.store.worked(f.device,[f.key()],now+3*minute,now+6*minute),[minute]);
+    assert.deepEqual(f.store.worked(f.device,[f.key()],now+5*minute,now+6*minute),[0]);
+  }finally{f.store.close();}
+});
+
 test('mixed Codex routes and idle evidence corrections use one resolver', () => {
   const f = setup(); try {
     const api = f.session('codex', f.account, {sessionId: 'a'.repeat(32), route: {class: 'api', by: 'session', host: 'openrouter.ai', provider: 'openrouter'}});

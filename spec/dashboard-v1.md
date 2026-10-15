@@ -594,7 +594,7 @@ Session evidence is a complete temporal index:
 {
   anchor: number; cut: number; knownFrom: number; available?: false; cursor: string;
   refs: {
-    ref: string; source: string | null; sourceStatus?: 'notProvided'; clientId: string; device: {id: string; name: string};
+    ref: string; identityRef?: string; source: string | null; sourceStatus?: 'notProvided'; clientId: string; device: {id: string; name: string};
     origin: 'terminal' | 'editor' | 'app'; project: string | null; folder: string | null;
     startedAt: number; presenceKey?: string;
     currentPresence?: {working: boolean; through: number; workingThrough: number; startedAt: number};
