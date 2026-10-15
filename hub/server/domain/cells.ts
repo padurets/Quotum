@@ -1,7 +1,8 @@
+import {sourceKey} from './workAccess.js';
 import {earlyReset} from './attention.js';
 import {cellStart, encodeCells, tileEnd, tileOf, type Chunk, type DecodedCell, type HistoryMeta} from './history.js';
 import {edge} from './quota.js';
-import {overlap, union, type Stretch} from './work.js';
+import {overlap,union,workTime,type Stretch} from './work.js';
 
 /** A window read once through a run of missing tiles, including its preceding sample. */
 export type CellSamples = {source: string; window: string; samples: {at: number; used: number; resetAt: number | null; staleAfterMs: number; validUntil?: number}[]};
@@ -16,7 +17,7 @@ export function workFrom(groups: CellSamples[], from: number): number {
 }
 
 /** One pass through samples and stretches; chunks stop at tile edges, never sample edges. */
-export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Record<string, string>, cell: number, from: number, to: number, known: HistoryMeta['known']): Chunk<number>[] {
+export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Record<string, string>, cell: number, from: number, to: number, known:HistoryMeta['known'],reserve?:(bytes:number)=>void):Chunk<number>[] {
   const chunks: Chunk<number>[] = [];
   for (let at = from; at < to;) {
     const end = Math.min(to, tileEnd(tileOf(at, cell), cell));
@@ -30,9 +31,10 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
     if (!bySource.has(stretch.source)) bySource.set(stretch.source, []);
     bySource.get(stretch.source)!.push(stretch);
   }
-  const worked = new Map([...bySource].map(([source, spans]) => [source, union(spans)]));
+  const attributed=new Map([...bySource].map(([source,spans])=>[source,spans.flatMap(s=>{const from=Math.max(s.from,s.quotaFrom??known.sourceWork?.[source??'']??known.work);return s.to>from?[{...s,from}]:[];})]));
+  const worked=new Map([...attributed].map(([source,spans])=>[source,union(spans)]));
   for (const group of groups) {
-    const since = Math.max(known.work, known.sources[group.source] ?? Infinity);
+    const since = Math.max(known.work,known.sourceWork?.[group.source]??(known.sourceWork?Infinity:known.sources[group.source]??Infinity));
     const values = chunks.map(() => [] as DecodedCell[]);
     let current: DecodedCell | undefined;
     for (let n = 0; n < group.samples.length; n++) {
@@ -85,7 +87,7 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
   const dimensions = ['s', 'p', 'd'] as const;
   const projects=new Map<string|null,string>();
   const keyOf=(dim:typeof dimensions[number],s:Stretch)=>{
-    if(dim==='s')return s.source??'unknown';
+    if(dim==='s')return sourceKey(s);
     if(dim==='d')return s.device;
     let key=projects.get(s.project);
     if(key===undefined){key=JSON.stringify(s.project);projects.set(s.project,key);}
@@ -96,10 +98,10 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
     const indexes = sessionIndexes[tileOf(at, cell) - firstTile];
     const sessions = new Map<string, {ms: number; s: Stretch}>();
     for (const s of spans) {
-      const key = `${s.session}:${s.source??''}`;
+      const key = JSON.stringify([s.session,s.source,s.sourceStatus]);
       if (!indexes.has(key)) {
         indexes.set(key, chunk.activity.sessions.length);
-        chunk.activity.sessions.push([s.session, s.source, s.project, s.device]);
+        chunk.activity.sessions.push(s.sourceStatus?[s.session,s.source,s.project,s.device,s.sourceStatus]:[s.session,s.source,s.project,s.device]);
         chunk.activity.devices[s.device] = devices[s.device];
       }
       const session = sessions.get(key) ?? {ms: 0, s};
@@ -127,6 +129,12 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
         const ms = unions[dim].get(key)!.ms;
         if (ms !== defaultMs) row[3].push([dim, key, ms]);
       }
+    }
+    for(const [source] of bySource)if(source!==null){
+      const full=spans.filter(s=>s.source===source);if(!full.length)continue;
+      const clipped=full.flatMap(s=>{const from=Math.max(s.from,s.quotaFrom??known.sourceWork?.[source]??known.work);return s.to>from?[{...s,from}]:[];});
+      const agent=(rows:Stretch[])=>rows.reduce((n,s)=>n+s.to-s.from,0),activeMs=workTime(clipped),agentMs=agent(clipped);
+      if(activeMs!==workTime(full)||agentMs!==agent(full)){reserve?.(144+source.length*2);(chunk.activity.sourceWork??=[]).push([source,row[0],activeMs,agentMs]);}
     }
     chunk.activity.cells.push(row);
   }

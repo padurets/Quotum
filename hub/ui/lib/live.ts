@@ -1,4 +1,4 @@
-import type {ConnectionStatus, HubEvent, PageEvent} from './board';
+import type {ConnectionStatus, HubEvent, PageEvent, Snapshot} from './board';
 
 /**
  * The page's connection to the hub's events (spec/dashboard-v1.md): one board at a time, a
@@ -425,14 +425,19 @@ export class Live {
         this.greeted(data as Hello);
         return;
       case 'snapshot':
-        if (!this.hello || this.status !== 'connecting') return;
-        // Row 4.
-        this.clear('attempt');
-        this.backoff = 0;
-        this.enter('live');
-        this.env.dispatch({type: 'hub', event: {type: 'snapshot', data} as HubEvent});
-        this.watch();
-        this.after('firstPing', this.heartbeatMs + FIRST_PING_SLACK, () => this.noPing());
+        if (!this.hello || (this.status !== 'connecting' && this.status !== 'live') || (data as Snapshot).board?.id !== this.board) return;
+        // An authority replacement in the current stream keeps its connection lifecycle.
+        if (this.status === 'live') {
+          this.env.dispatch({type: 'hub', event: {type: 'snapshot', data} as HubEvent});
+        } else {
+          // Row 4.
+          this.clear('attempt');
+          this.backoff = 0;
+          this.enter('live');
+          this.env.dispatch({type: 'hub', event: {type: 'snapshot', data} as HubEvent});
+          this.watch();
+          this.after('firstPing', this.heartbeatMs + FIRST_PING_SLACK, () => this.noPing());
+        }
         return;
       case 'ping':
         this.env.heard((data as {now: number}).now);

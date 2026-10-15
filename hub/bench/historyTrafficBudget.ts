@@ -2,10 +2,24 @@ import type {BodyCount, Transfer} from './historyProxy';
 import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, cellStart, tileOf, type HistoryAnswer} from '../server/domain/history';
 import assert from 'node:assert/strict';
 
-export class HistoryCutChanged extends Error {}
-export function stableHistory(answer: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, cell: number) {
+export const HISTORY_COHORT_TAKES = 3;
+export class HistoryCutChanged extends Error {
+  constructor(readonly cut: {seedNow:number;answerNow:number;cell:number;seedCut:number;answerCut:number}) {
+    super('history crossed its grid cutoff during this cohort');
+  }
+}
+/** Only a changed reference cutoff invalidates a cohort; every assertion still fails. */
+export function historyCutInvalidation(error:unknown,name:string,take:number) {
+  if (!(error instanceof HistoryCutChanged) || take >= HISTORY_COHORT_TAKES) throw new Error(`${name}: ${String(error)}`, {cause:error});
+  return {name,reason:error.message,...error.cut};
+}
+export function historyIdentity(answer: Pick<HistoryAnswer, 'run' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'known'>) {
   assert.equal(answer.run, seed.run); assert.deepEqual(answer.known, seed.known);
-  if (cellStart(answer.now + CLOCK_TOLERANCE_MS, cell) !== cellStart(seed.now + CLOCK_TOLERANCE_MS, cell)) throw new HistoryCutChanged('history crossed its grid cutoff during this cohort');
+}
+export function stableHistory(answer: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, cell: number) {
+  historyIdentity(answer, seed);
+  const answerCut=cellStart(answer.now+CLOCK_TOLERANCE_MS,cell),seedCut=cellStart(seed.now+CLOCK_TOLERANCE_MS,cell);
+  if (answerCut !== seedCut) throw new HistoryCutChanged({seedNow:seed.now,answerNow:answer.now,cell,seedCut,answerCut});
 }
 
 /** A reference union is partitioned only by holes and the existing API tile cap. */

@@ -5,6 +5,8 @@ import {validClientId} from '../domain/clients.js';
 import {providerOf} from '../domain/providers.js';
 import type {ClientLink, LinkContext, LinkInput, LinkRoute} from '../domain/links.js';
 
+export type LinkBatch=((owner:string,device:string,client:string)=>LinkContext)&{revision:string};
+
 type Row = {id: string; client: string; device_id: string | null; route_class: LinkRoute['class'] | null; route_provider: string | null; source_id: string; from_at: number; to_at: number | null; created_at: number};
 const linkOf = (r: Row): ClientLink => ({id: r.id, clientId: r.client, deviceId: r.device_id, route: r.route_class ? {class: r.route_class, provider: r.route_provider} : null, sourceId: r.source_id, from: r.from_at, to: r.to_at, createdAt: r.created_at});
 const canonical = (value: unknown): string => JSON.stringify(value, (_key, item: unknown) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
@@ -13,7 +15,6 @@ const time = (value: unknown): value is number => typeof value === 'number' && N
 /** Owner rules and receipts commit with the revision and all validation. */
 export class LinkStore {
   onChange: ((owner: string) => void) | null = null;
-  private readonly batches = new Map<string, {version: number; clients: Map<string, ClientLink[]>}>();
   constructor(private readonly db: DatabaseSync) {}
   revision(owner: string): string {return String(this.db.prepare('SELECT version FROM link_versions WHERE user_id=?').get(owner)?.version ?? 0);}
   list(owner: string): ClientLink[] {return (this.db.prepare('SELECT * FROM client_links WHERE user_id=? ORDER BY client,device_id,from_at,id').all(owner) as Row[]).map(linkOf);}
@@ -26,39 +27,34 @@ export class LinkStore {
     return {...context, routeEnabled: context.routeEnabled && row?.route_enabled !== 0};
   }
   held(owner: string): Map<string, string> {return new Map((this.db.prepare("SELECT h.source_id,COALESCE(s.provider,'') AS provider FROM holders h LEFT JOIN sources s ON s.id=h.source_id WHERE h.user_id=?").all(owner) as {source_id: string; provider: string}[]).map(r => [r.source_id, r.provider]));}
-  /** Three bounded reads serve all owners, clients and devices of one projection. */
-  batch(owners: readonly string[]): (owner: string, device: string, client: string) => LinkContext {
+  /** One captured rule set serves all owners, clients and devices of a projection. */
+  batch(owners: readonly string[],reserve?:(bytes:number)=>void,at=Date.now()):LinkBatch {
     const users=[...new Set(owners)],people = JSON.stringify(users), links = new Map<string, Map<string, ClientLink[]>>(), held = new Map<string, Map<string, string>>();
-    // Read revisions with the rules: unchanged owners reuse their parsed rules,
-    // while holdings and route policy are always read from the current transaction.
-    const requested=JSON.stringify(users.map(owner=>[owner,this.batches.get(owner)?.version??-1]));
-    // A null index key skips unchanged owners before SQLite walks their rules.
-    const rows=this.db.prepare("WITH requested AS (SELECT json_extract(value,'$[0]') AS owner,json_extract(value,'$[1]') AS version FROM json_each(?)) SELECT r.owner,COALESCE(v.version,0) AS version,l.* FROM requested r LEFT JOIN link_versions v ON v.user_id=r.owner LEFT JOIN client_links l ON l.user_id=CASE WHEN COALESCE(v.version,0)<>r.version THEN r.owner END").all(requested) as (Row & {owner:string;version:number})[];
     const next=new Map<string,{version:number;clients:Map<string,ClientLink[]>}>();
-    for(const row of rows) {
+    const rows=this.db.prepare("SELECT r.value AS owner,COALESCE(v.version,0) AS version,l.* FROM json_each(?) r LEFT JOIN link_versions v ON v.user_id=r.value LEFT JOIN client_links l ON l.user_id=r.value").iterate(people);
+    for(const raw of rows) {
+      const row=raw as unknown as Row&{owner:string;version:number};
       let group=next.get(row.owner);
-      if(!group) {
-        const prior=this.batches.get(row.owner);
-        group=prior?.version===row.version?prior:{version:row.version,clients:new Map()};
-        next.set(row.owner,group);
-      }
-      if(row.id) {
+      if(!group){reserve?.(256);next.set(row.owner,group={version:row.version,clients:new Map()});links.set(row.owner,group.clients);}
+      if(row.id){
+        reserve?.(768+2*(row.owner.length+row.client.length+(row.device_id?.length??0)+row.source_id.length+(row.route_provider?.length??0)));
         let list=group.clients.get(row.client);if(!list)group.clients.set(row.client,list=[]);list.push(linkOf(row));
       }
-    }
-    for(const [owner,group] of next) {
-      links.set(owner,group.clients);
-      afterCommit(()=>{
-        this.batches.delete(owner);this.batches.set(owner,group);
-        while(this.batches.size>128)this.batches.delete(this.batches.keys().next().value!);
-      });
     }
     for (const row of this.db.prepare("SELECT h.user_id,h.source_id,COALESCE(s.provider,'') AS provider FROM holders h LEFT JOIN sources s ON s.id=h.source_id WHERE h.user_id IN (SELECT value FROM json_each(?))").all(people) as {user_id: string; source_id: string; provider: string}[]) {
       let map = held.get(row.user_id); if (!map) held.set(row.user_id, map = new Map()); map.set(row.source_id, row.provider);
     }
     const disabled = new Set((this.db.prepare('SELECT p.device_id,p.client FROM device_tracking_policy p JOIN devices d ON d.id=p.device_id WHERE d.user_id IN (SELECT value FROM json_each(?)) AND p.route_enabled=0').all(people) as {device_id: string; client: string}[]).map(r => JSON.stringify([r.device_id, r.client])));
     const empty: ClientLink[] = [], noHoldings = new Map<string, string>();
-    return (owner, device, client) => ({links: links.get(owner)?.get(client) ?? empty, held: held.get(owner) ?? noHoldings, routeEnabled: !disabled.has(JSON.stringify([device, '*'])) && !disabled.has(JSON.stringify([device, client]))});
+    const targets:[string,string,boolean][]=[],versions:[string,number][]=[];let phase=0;
+    for(const [owner,group] of next) {
+      versions.push([owner,group.version]);const sources=new Set<string>();
+      for(const list of group.clients.values())for(const link of list){sources.add(link.sourceId);phase+=Number(link.from<=at)+Number(link.to!==null&&link.to<=at);}
+      for(const source of [...sources].sort())targets.push([owner,source,held.get(owner)?.has(source)??false]);
+    }
+    const evidence=this.db.prepare("SELECT key,value FROM meta WHERE key IN (SELECT 'workEvidence:'||value FROM json_each(?)) ORDER BY key").all(people);
+    const revision=createHash('sha256').update(JSON.stringify([versions,targets,[...disabled].sort(),evidence,phase])).digest('base64url');
+    return Object.assign((owner:string,device:string,client:string)=>({links:links.get(owner)?.get(client)??empty,held:held.get(owner)??noHoldings,routeEnabled:!disabled.has(JSON.stringify([device,'*']))&&!disabled.has(JSON.stringify([device,client]))}),{revision});
   }
   private own(owner: string, id: string): ClientLink {
     const row = this.db.prepare('SELECT * FROM client_links WHERE user_id=? AND id=?').get(owner, id) as Row | undefined;
@@ -115,7 +111,6 @@ export class LinkStore {
         if (changed) this.save(owner, {...input, id: old?.id ?? randomUUID(), createdAt: old?.createdAt ?? now});
       }
       if (changed) {
-        this.batches.delete(owner);
         this.db.prepare('INSERT INTO link_versions VALUES (?,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1').run(owner);
         this.db.prepare('INSERT INTO account_revisions VALUES (?,1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1').run(owner);
         afterCommit(() => this.onChange?.(owner));

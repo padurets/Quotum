@@ -28,13 +28,14 @@ test('the actual empty activity result keeps its time axis and legend container 
   const range = {from: NOW - 72 * H, to: NOW - 48 * H};
   const history: History = {since: range.from, to: range.to, range: `${range.from}-${range.to}`, live: false, cellMs: 5 * M, historyStart: 0, series: [], events: [], activity: {known: {from: range.from, to: range.to}, since: 0, barMs: H, activeMs: 0, agentMs: 0, agents: 0, cells: [], by: {source: [], project: [], device: []}}};
   const x = (at: number) => 48 + (at - range.from) / DAY * 340;
-  const context = {AnalyticsPanel,quotaHistory:{retry:()=>{}},error:undefined as 'history_failed'|undefined,
-    navigationKey, navigation: {context: 'test', range: 'range'}, React, ...React, CSS: {escape: (id: string) => id}, StackPaths, stacksHeight, activityScale, niceTicks, cellStart, activityEmpty, MINUTE: M, clipPlot, PlotLayer, PlotOverlay, usePreparationBasis: (basis: unknown) => basis, usePrepared: (work: () => Generator<void, unknown, void>) => ({value: drain(work()), ready: true}), EMPTY_ACTIVITY: history.activity,
+  const authorities:number[]=[];
+  const context = {AnalyticsPanel,quotaHistory:{retry:()=>{}},error:undefined as 'history_failed'|undefined,authority:3,
+    navigationKey, navigation: {context: 'test', range: 'range'}, React, ...React, CSS: {escape: (id: string) => id}, StackPaths, stacksHeight, activityScale, niceTicks, cellStart, activityEmpty, MINUTE: M, clipPlot, PlotLayer, PlotOverlay, usePreparationBasis: (basis: unknown,_inputs:unknown,_active:unknown,_ready:unknown,authority:number) => {authorities.push(authority);return basis;}, usePrepared: (work: () => Generator<void, unknown, void>) => ({value: drain(work()), ready: true}), EMPTY_ACTIVITY: history.activity,
     pan: new Pan({now: () => NOW, commit: () => {}, requestFrame: () => null, cancelFrame: () => {}, setTimeout: () => null, clearTimeout: () => {}}),
     useLocale: () => 'en', useTimeAxis: () => ({box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {...range, end: range.to}, x, drawX: x, screenX: x, commitDrawing: () => {}}),
     clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key: string) => key,
     Tooltip: () => null, useTip: () => ({tip: {current: null}, style: {}}), panel: {current: null}, loading: false,
-    history: history as History | null, activity: history.activity, plot: undefined as number | undefined, onBase: () => {}, arrange: {},
+    history: history as History | null, drawing: history, activity: history.activity, drawnActivity: history.activity, currentGroups: [], plot: undefined as number | undefined, onBase: () => {}, arrange: {},
     Totals: () => null, ActivitySettings: () => null, LegendItem: () => null,
     shownMs: 0, since: null, from: range.from, to: range.to, setTimeRange: () => {}, by: 'project', selected: range,
     timeRangeKey: (value: typeof range) => `${value.from}-${value.to}`, prefs: {muted: {}, range: '24h'}, groups: [], titles: {}, shownSources: ['s'],
@@ -49,6 +50,7 @@ test('the actual empty activity result keeps its time axis and legend container 
   assert.ok(complete.includes('class="legend"'));
   assert.ok(complete.includes('class="chart-empty">activity.none'));
   assert.ok(!complete.includes('class="chart chart-loading"'));
+  assert.equal(authorities.at(-1),3,'the actual Stacks receives the history presentation lifetime');
   context.panning = 1;
   const moving = markup();
   assert.ok(moving.includes('viewBox="0 0 400 160" style="height:160px"'));
@@ -57,7 +59,9 @@ test('the actual empty activity result keeps its time axis and legend container 
   context.history = {...history, range: '24h'};
   assert.ok(!markup().includes('class="chart-empty">activity.none'), 'an old answer cannot describe a pending selected frame');
   context.history = null;
+  context.authority++;
   assert.ok(markup().includes('viewBox="0 0 400 160"'), 'initial loading keeps an input-capable empty axis');
+  assert.equal(authorities.at(-1),4,'the empty axis also receives the retired presentation lifetime');
   context.error='history_failed';
   const failed=markup();
   assert.ok(failed.includes('history-error'));assert.ok(!failed.includes('history.loading'));

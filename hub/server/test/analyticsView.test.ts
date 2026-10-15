@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {migrateAnalytics, reconcileAnalytics} from '../domain/analyticsView.js';
-import {EMPTY_VIEW, parseView, VIEW_BODY_LIMIT} from '../domain/view.js';
+import {EMPTY_VIEW, parseSplitView, VIEW_BODY_LIMIT} from '../domain/view.js';
 import {widgetVisible} from '../domain/widgets.js';
 import {supportsQuota, supportsBudget} from '../domain/providers.js';
 import {STEPS, migrate} from '../store/schema.js';
@@ -23,7 +23,7 @@ test('migration splits visible families, preserves exact anchors and is idempote
     assert.equal(result.shown.length, resources.length * 2);
     assert.equal(result.layout.places.history, undefined);
     assert.equal(migrateAnalytics(result, resources), result);
-    assert.ok(parseView(result));
+    assert.ok(parseSplitView(result));
     if (resources.length === 2) assert.ok(result.layout.places['budget-history'].y > 100);
   }
 });
@@ -46,7 +46,7 @@ test('resource descriptors admit both families without consulting a balance or f
   assert.equal(supportsQuota({meterKinds:['cap']}),false);
   assert.equal(supportsBudget({meterKinds:['balance']}),false);
   const placed = reconcileAnalytics(EMPTY_VIEW,[quota,budget]);
-  assert.equal(placed.shown.length,4);
+  assert.equal(placed.shown.length,6);
   assert.equal(reconcileAnalytics(placed,[]),placed);
 });
 
@@ -82,7 +82,7 @@ test('near-limit legacy documents retain every entry and fit the bounded migrati
     const migrated = migrateAnalytics(input,resources);
     assert.ok(Buffer.byteLength(JSON.stringify(input)) > 65400);
     assert.ok(Buffer.byteLength(JSON.stringify(migrated)) <= VIEW_BODY_LIMIT);
-    assert.ok(parseView(migrated));
+    assert.ok(parseSplitView(migrated));
     for (const [id,place] of Object.entries(input.layout.places)) if (!['history','forecast'].includes(id)) assert.deepEqual(migrated.layout.places[id],place);
     assert.deepEqual(migrated.names,input.names);
     if(pregrid) {assert.equal(Object.keys(input.layout.places).length,0);for(const id of [...input.order!,...Object.keys(input.sizes!)])if(!['history','forecast'].includes(id))assert.ok(migrated.layout.places[id]);}
@@ -99,14 +99,14 @@ for (const version of [16,18]) test(`schema ${version} conversion is atomic, fre
     db.prepare('INSERT INTO views VALUES(?,?,?,?,?)').run('board',JSON.stringify(legacy()),'owner',0,7);
     db.prepare('INSERT INTO board_additions(id,owner_id,request_id,board_id,item,state,created_at,updated_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?)').run('receipt','owner','request','board',JSON.stringify({kind:'widget',widgetId:'history'}),'complete',0,0,100);
     migrate(db,1);
-    assert.equal(db.prepare('SELECT widget_targets FROM board_additions').get()!.widget_targets,'["quota-history"]');
+    assert.equal(db.prepare('SELECT widget_targets FROM board_additions').get()!.widget_targets,'["quota-history","quota-session-history"]');
     const directory = new Directory(db), first = directory.viewState('board');
     assert.equal(first.revision,8);
     assert.deepEqual(directory.viewState('board'),first); migrate(db,2);
     assert.deepEqual(directory.viewState('board'),first);
     db.exec("INSERT INTO sources(id,provider,account,created_at) VALUES('b','deepseek','b',0); INSERT INTO holders VALUES('b','owner',0)");
     const expanded = directory.viewState('board');
-    assert.equal(expanded.revision,9); assert.equal(expanded.view.shown.length,4);
+    assert.equal(expanded.revision,9); assert.equal(expanded.view.shown.length,6);
     assert.deepEqual(directory.viewState('board'),expanded);
     assert.equal(db.prepare('SELECT updated_by FROM views').get()!.updated_by,'owner');
   } finally {db.close();}

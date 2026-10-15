@@ -2,8 +2,19 @@ import {DAY, type DemoSet} from '../demo/model.js';
 
 /** Twelve real sources continue beyond the 30d strip's rebuild and read-ahead edges. */
 export function panningSet(set: DemoSet): DemoSet {
-  let count = 0;
-  return {...set, workHistoryMs: 75 * DAY, entries: set.entries.map(entry => entry.kind === 'card' && count++ < 12 ? {...entry, history: Math.max(entry.history, 75 * DAY), agents: entry.agents?.map(agent => ({...agent, since: Math.min(agent.since, -75 * DAY)}))} : entry)};
+  const owner=set.entries.find(entry=>entry.kind==='person')?.id;
+  const machines=new Map(set.entries.filter(entry=>entry.kind==='machine').map(entry=>[entry.id,entry.person??owner]));
+  const counts={session:0,weekly:0};
+  const entries=set.entries.map(entry=>{
+    if(entry.kind!=='card'||entry.on?.[owner!]?.hidden||!entry.machines.some(id=>(machines.get(id)??owner)===owner))return entry;
+    const kinds=new Set(entry.windows.map(window=>window(0)).filter(window=>!entry.on?.[owner!]?.windows?.includes(window.id)).map(window=>window.kind));
+    const extend=(['session','weekly'] as const).filter(kind=>kinds.has(kind)&&counts[kind]<12);
+    if(!extend.length)return entry;
+    for(const kind of extend)counts[kind]++;
+    return {...entry,history:Math.max(entry.history,75*DAY),agents:entry.agents?.map(agent=>({...agent,since:Math.min(agent.since,-75*DAY)}))};
+  });
+  if(counts.session<12||counts.weekly<12)throw new Error('Panning needs twelve visible subscriptions for each limit period');
+  return {...set,workHistoryMs:75*DAY,entries};
 }
 
 import {Store} from '../server/store/store.js';

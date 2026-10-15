@@ -12,18 +12,22 @@ test('actual chart consumers reserve final drawing readiness for the complete ta
     const start = source.indexOf(`<${consumer}\n`), element = source.slice(start, source.indexOf('/>', start) + 2);
     const answered = source.split('\n').find(line => line.startsWith('  const answered = ')) ?? '';
     const selected = {from: 3_600_000, to: 7_200_000};
-    const context = {React,error:undefined, Chart: () => null, Stacks: () => null, timeRangeKey,
+    const context = {React,error:undefined,authority:3, Chart: () => null, Stacks: () => null, timeRangeKey,
       selected: selected as typeof selected | null, prefs: {range: '24h', kind: 'weekly'}, history: {board: 'b', range: 'old'},
       panning: null as number | null, prepared: {ready: true}, loading: false,
       model: {visible: [], plans: [], forecasts: [], markers: [], cellMs: 60_000, strip: null}, lines: [],
-      presentation: {shown: [], identities: [], strip: null}, frame: {live: false}, activity: {}, EMPTY_ACTIVITY: {},
+      presentation: {shown: [], identities: [], strip: null}, frame: {live: false}, activity: {}, drawnActivity: {}, drawing: {since: 0}, EMPTY_ACTIVITY: {},
       from: selected.from, to: selected.to, measured: selected.to, now: selected.to, wantedTo: selected.to, strip: null,
       navigation: {}, since: null, plot: 200, onBase: () => {}, setTimeRange: () => {}, by: 'source', emptyFrame: null, empty: null, t: () => '',
-      render: null as unknown as () => React.ReactElement<{prepared: boolean; from: number}>,
+      render: null as unknown as () => React.ReactElement<{prepared: boolean; from: number;modelContext?:string;authority?:number}>,
     };
     runInNewContext(ts.transpileModule(`function render(){${answered}\nreturn (${element});}\nglobalThis.render=render;`, {compilerOptions: {target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React}}).outputText, context);
     assert.equal(context.render().props.prepared, false, `${file}: a ready partial strip cannot start the final fold before the complete target`);
     assert.equal(context.render().props.from, selected.from, 'ordinary navigation keeps its immediate desired projection');
+    const lifetime=()=>file==='History'?context.render().props.modelContext:context.render().props.authority;
+    assert.equal(lifetime(),file==='History'?'3:b:weekly':3,'the consumer receives the current presentation lifetime');
+    context.authority++;
+    assert.equal(lifetime(),file==='History'?'4:b:weekly':4,'an unchanged target cannot hide a retired presentation');
     context.panning = 1; assert.equal(context.render().props.prepared, true, 'active partial data still publishes without waiting for exact totals');
     context.panning = null; context.history.range = timeRangeKey(selected); assert.equal(context.render().props.prepared, true);
     context.prepared.ready = false; assert.equal(context.render().props.prepared, false);

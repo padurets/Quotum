@@ -97,16 +97,26 @@ Codex         api                  idle     started 25m ago · editor
 
 ## What the dashboard shows
 
+The board shares one time range across card measurements, agent sessions, charts and
+tables. In a historical range, cards show the last retained measurement before its end,
+with freshness checked at that boundary; unavailable history stays unknown. Values
+keep their measurement times, and reset times are shown as dates and times. Loading or
+failed reads label any retained results with the range they actually cover.
+Measurement status, connection errors, refresh actions, forecasts, free-reset
+availability and reset announcements remain live. The compact panel and native
+notifications also stay live, independently of the board's historical range.
+
 - **A card per subscription**, one meter per window: green above 30%, amber at 30% and
   below, red under 10%. A tick on the meter shows where your spending plan expects you
-  to be right now. The dot on the provider's logo says whether the numbers are fresh.
-- **Which agents run on it, and which of them work.** Under the limits, a mark per
-  Claude Code, Codex or Antigravity session spending the subscription, grouped by
-  machine: filled while it works, outlined while idle; its project, its folder (a
-  worktree, a folder inside the repository) and its credited work time in agent-hours
-  in the panel. Credit belongs to the current subscription and is unknown without a
-  reliable session ID; a dash keeps that distinct from known zero. Terminals, editors
-  and the Codex app alike.
+  to be at the displayed time. The dot on the provider's logo tells how measurements
+  are going now; historical values have their own measurement time and stale state.
+- **Which agents worked on it during the period.** Under the limits, a mark per
+  Claude Code, Codex or Antigravity session with recorded work on the subscription,
+  grouped by machine, including sessions no longer running. The panel shows each
+  session's project, folder (a worktree or a folder inside the repository) and work
+  within the selected period in agent-hours. Marks also show current working state
+  when known; current presence does not add work to the period. Terminals, editors and
+  the Codex app alike.
 - **Purchased Codex credits.** Additional funds appear in the subscription's footer,
   beside free resets, with the same compact amount and disclosure in the compact view.
   The initial estimate is 0.04 USD per credit; Currencies lets you set a personal
@@ -123,13 +133,16 @@ Codex         api                  idle     started 25m ago · editor
   six days after the reset and nothing on the seventh. Each subscription can have its
   own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
 - **Separate subscription limit and budget charts and metrics**, each movable, resizable and
-  hideable. They share one time interval with agent activity; weekly/session switches
-  affect only subscription limits. Budget history opens with balances, with spending in its settings.
-- **A chart of the weekly or the 5-hour windows** over the last hour up to the last 30
-  days. Ahead of now it draws the plan, where each window is going (a weekly one nearly
-  flat over the hours its subscription usually spends nothing) and the next resets, as
-  far as you choose; behind, it marks when limits came back early and when free resets
-  were granted. Drag across it to zoom into a burst of work (on a phone, hold a finger
+  hideable on the same grid as cards and agent sessions. They share the board's time
+  range. Five-hour limits, weekly limits, budget balances each
+  have their own chart and table; cards keep their own window visibility settings.
+  Both budget widgets share **Accounts and keys** in their settings for data selection. Each chart's
+  legend controls its visibility independently of table columns.
+- **Charts of weekly and 5-hour windows** over the last hour up to the last 30
+  days. Ahead of now they show forecasts and the next resets, as far as you choose.
+  The weekly chart also draws the spending plan, nearly flat over the hours when the
+  subscription usually spends nothing. Behind now they mark when limits came back early
+  and when free resets were granted. Drag across a chart to zoom into a burst of work (on a phone, hold a finger
   on it first). ‹ and › move it by half its length; a horizontal touchpad swipe,
   Shift with the wheel, or Shift-drag moves the activity, limit, budget and subscription-funds
   charts together continuously through time.
@@ -149,23 +162,37 @@ Codex         api                  idle     started 25m ago · editor
 - **Agent activity:** agent-hours over the same period, stacked by subscription, project
   or machine in bars of up to an hour (two hours over a month). Four agents over an hour
   make 4 agent-hours: the legend adds up to the total. Active time (at least one agent
-  working), how many agents worked and the average at once are in the totals and
+  working), recorded sessions and the average at once are in the totals and
   tooltips. It zooms and moves through time as the chart does.
+- **Agent sessions:** one table for projects, machines or subscriptions, or a row per
+  agent. Grouped rows can also show active time and average concurrency; enable those
+  columns in its settings. Open a group to see its retained sessions over the same
+  period. Active totals count overlapping work once. Recorded sessions count work
+  contexts, so a logical session can count more than once after a context change.
+  Table widgets fit whole rows to their chosen height and share a compact pager at the
+  bottom right, beside the matching row count. Whole-period totals have their own line
+  above them, aligned with columns on wide tables and labelled in a two-by-two grid on
+  narrow lists. None is the first grouping choice; Client is visible by default in
+  individual rows and group disclosures and can be hidden in column settings. Grouping
+  uses the shared segmented control. Wide sortable headers cycle ascending, descending, then reset; narrow lists use the
+  sort menu. There is no inner vertical scrolling.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
-- **Boards made of widgets** (a card per subscription, agent activity, the chart, the
-  table, and a list of the running agents to turn on, gathered by project, machine or
-  subscription, each group with how many of its agents work, their agent-hours and the
-  date and time of their last activity, or now while any works; individual agents with
-  their machines and subscriptions a click away), like a dashboard in Grafana:
-  the cards show what is left now, the analytics under them share one set of filters.
+- **Boards made of widgets**, like a dashboard in Grafana: source cards, agent activity,
+  charts, tables and an optional Agent sessions table share one grid. The table gathers
+  sessions by project, machine or subscription, with work within the selected period,
+  the date and time of their last recorded work in it and current working counts when
+  known. Individual agents with their machines and subscriptions are a click away.
+  The header's filter button reveals the common period, quota window and forecast
+  horizon; hiding the controls keeps those choices. A dot marks a historical range.
   The owner places them on a six-column grid by dragging their heads, and resizes them
   to a third, a half, two thirds or the whole width. Each fills only the rows its content
   needs, so cards stack beside a tall list, unless the owner drags its bottom edge (or
   a bottom corner) to make it taller, or the list of agents shorter: the charts grow
-  with it, a card never gets shorter than its content, and a shorter list ends with how
-  many more rows it has, which opens them all. Either side edge changes the width. A
+  with it, a card never gets shorter than its content, and tables fit whole rows to
+  their height, with a pager at the bottom right for the remaining rows. Either side
+  edge changes the width. A
   double click on the bottom edge or a bottom corner, or Enter or Space on the bottom
   edge, gives a widget back the height of its content. The owner names the cards,
   hides the ones they don't need (the data keeps coming) and sets the plans; everyone on
@@ -185,8 +212,10 @@ Codex         api                  idle     started 25m ago · editor
   Every reader of a shared card can use it.
 - **Your data, shared when you choose.** Everything your machines measure is on your
   personal board. On a shared board a team sees the limits its members share with it:
-  each person decides which of their subscriptions it shows. A team subscription
-  measured by several people is one card.
+  each person decides which of their subscriptions it shows. Device sessions are
+  provided by default, independently of subscriptions. Each member can turn their
+  devices off or on per board in Board settings → Provided data; turning one on again
+  starts a new history boundary. A team subscription measured by several people is one card.
 
 The interface is available in English and Russian.
 
@@ -216,11 +245,13 @@ day, not a script thrown together over a weekend. In practice that meant:
   and folder (`sessions = false` and `projects = false` turn that off). With each
   question to the hub, whether its client is in use on the machine: a card tells the
   members of its boards that the subscription is in use right now, whatever those
-  settings say. Where a board shows that subscription, whoever brought it, and the
-  person whose agents they are is on the board, its members see them with the name of
-  the machine they run on, each project under the name that person gave it, and when and
-  how long they worked, by project and machine, from the later of when that person joined
-  the board and when the subscription came to it (on their own board, all of it). The hub
+  settings say. Shared boards admit each member's device sessions independently of
+  subscriptions, enabled by default and managed per device in Board settings → Provided data.
+  Members see the client, machine, project and folder names and their credited work.
+  Shared work begins no earlier than membership and retained capture; re-enabling a
+  device starts a fresh boundary. Personal boards keep all of their owner's captured work.
+  Funding is identified only while held and provided; otherwise its identity is redacted.
+  Quota attribution additionally respects the subscription's separate grant boundary. The hub
   keeps when each agent worked, with its machine, project and folder names, for 90 days,
   and the names you give your projects until you undo them; you see and correct your
   projects through *Agent activity → Settings → Manage projects*. The full list is in the [spec](spec/ingest-v1.md#privacy).
@@ -361,9 +392,10 @@ rate cache contains no credentials or account information. Historical estimates 
 their original rate. Without a usable rate, CNY is retained and USD stays unknown or stale.
 All original balances, estimates, rate provenance, funds status and safe provider
 context are retained within the history retention period. Budget history and its table
-appear beside subscription analytics. Totals are selected by
-default; components can be added in the chart's settings. The total is not added to its
-components. Reported USD and converted CNY are never summed. Spending and top-up events
+share the board's grid and time range. **Accounts and keys** in either wallet widget’s settings
+selects the account's total for both wallet widgets. Balance components remain
+in the card's disclosure. Reported USD and converted CNY
+are never summed. Spending and top-up events
 are **unavailable** because the endpoint has no spending counter; a balance change
 cannot establish spending. An omitted currency keeps its last value as stale and
 breaks its history until a valid observation returns. A failed request preserves the
@@ -394,18 +426,22 @@ action. **Recent additions and recovery** finds saved results after a lost respo
 reload, without duplicating access or restoring a later hidden or removed card.
 
 The original plan label stays beside the title; a small second line identifies the
-resource as **Subscription** or **Budget**. The budget card shows only current state:
-its balance and enabled key-limit scales with their reset times. Its settings switch
-individual scales, including keys beyond the initial five-key preview. Scales use the
+resource as **Subscription** or **Budget**. The budget card shows its balance and enabled
+key-limit scales with their reset times, using the board's time range. A historical
+range uses retained measurements before its end; the compact panel keeps current
+values. The card's settings switch individual scales, including keys beyond the
+initial five-key preview. Scales use the
 same segmented meters as subscriptions; keys without a spending limit have no scale.
-Spending belongs to analytics.
 Settings show at most ten keys per page. Access turns amber seven days before expiry;
 expired, revoked or forbidden access is red. Working keys without expiry have no expiry
 mark. Temporary read failures are amber.
-The chart's own settings select
-key usage and remaining limits for the independent budget chart and table.
-Account balances are selected
-by default; at most 32 logical series are drawn, with visible overflow. The chart uses
+Five-hour and weekly subscription limits each have their own chart and table.
+Budget balances have their own chart and table.
+Both budget widgets share **Accounts and keys** in their settings: an account selects its total,
+and a key selects its reported remaining limit. Table columns and each
+chart's legend visibility remain independent display settings.
+Account balances are selected by default; at most 32 metrics are selected, with
+visible overflow. The chart uses
 one unit per axis and keeps the same time range and gestures as subscription history.
 Wallet balances have no percentage; only positive key limits do.
 
@@ -625,9 +661,11 @@ agent running in the background keeps its version until it is started again.
 
 Coding clients are tracked independently of subscription measurement. OpenCode native
 CLI sessions and installed client versions appear in My connections → Devices. Work
-without a known held subscription remains on your personal Agents and Agent activity
-widgets, including on an empty board; add them through Add widget. Shared boards never
-show that private work. `[clients.<id>] enabled = false` disables one client's tracking;
+is admitted on personal and shared boards independently of subscription cards. Shared
+boards default to including every member's device sessions; each member controls their
+own devices in Board settings → Provided data. An unknown subscription is Not identified;
+a known held subscription absent from the board is Not provided, with its identity hidden.
+Add Agent sessions and Agent activity through Add widget on an empty board. `[clients.<id>] enabled = false` disables one client's tracking;
 `[providers.<id>] enabled = false` disables only its measurements. A client's `path`
 overrides its legacy provider path. Native OpenCode local project attribution is
 available on Linux; shared or unproven invocations, and macOS/Windows, report presence

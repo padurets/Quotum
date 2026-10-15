@@ -302,7 +302,8 @@ export class Ingest {
   /**
    * Which coding agents run on a device now. A session is filed under the subscription
    * it names, else under the one this device last delivered for its provider; one the
-   * hub does not know, or its person does not hold, remains private to that person.
+   * hub does not know, or its person does not hold, keeps that raw binding. Board
+   * projections admit device sessions independently and redact undisclosed funding.
    */
   sessions(credential: Credential, body: unknown, now = Date.now()): {accepted: number} {
     const report = parseSessions(body);

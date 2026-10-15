@@ -1,4 +1,5 @@
-import {historyRoutes} from './routes/history.js';
+import {readHistory, ReadError, type HistoryQuery} from './historyRead.js';
+import {PeriodReader,periodRoutes} from './periodRead.js';
 import {Attention} from './attention.js';
 import {STATUS_CODES} from 'node:http';
 import type {Socket} from 'node:net';
@@ -109,8 +110,9 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   const anyHost = hosts.has('*');
   const history = new HistoryTiles(store);
   const events = hub.events ?? new Events(hub);
-  events.onClientHistory = (user, since) => history.touchClient(user, since);
-  events.onHistory = (source, since, scopes, options) => history.touch(source, since, scopes, options);
+  const periods = new PeriodReader(hub,history,events);
+  events.onHistory = (source, since, scopes, work) => {history.touch(source, since, scopes);periods.touch(source,since,scopes,work);};
+  events.onClientHistory=(user,since,device)=>{history.touchClient(user,since,device);periods.touchClient(user,since,device);};
   events.attach();
   hub.credentials!.setObserver(events);
   hub.hubSources?.setObserver(events);
@@ -177,7 +179,12 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
     return snapshot;
   });
 
-  historyRoutes(app, hub, guards, events, history);
+  app.get<{Querystring: HistoryQuery & {board?:string}}>('/api/history', (request, reply) => {
+    const access = guards.board(request, reply, request.query.board);
+    if (!access) return reply;
+    try {return reply.type('application/json').send(readHistory(hub, history, events, access.board.id, access.user.id, request.query));}
+    catch(error) {if(error instanceof ReadError)return reply.code(error.statusCode).send({error:error.code});throw error;}
+  });
 
   if (hub.local) {
     const attention = new Attention(store, Date.now());
@@ -188,6 +195,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   // Open streams and held polls would keep the server from closing: they end first.
   app.addHook('preClose', async () => events.close());
   eventRoutes(app, directory, events, guards, !!hub.local);
+  periodRoutes(app,guards,periods);
   accountRoutes(app, hub, guards);
   sourceKeyRoutes(app,hub,guards);
   currencyRoutes(app,hub,guards);

@@ -5,17 +5,18 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import * as React from 'react';
 import {preciseReadout} from '../lib/lines';
+import {stamp} from '../lib/format';
 
 test('current clock presentation keeps paired future paths, raw marker coordinates and composed overlays', () => {
   const H = 3_600_000, minute = 60_000, source = readFileSync(new URL('../components/Chart.tsx', import.meta.url), 'utf8');
   const start = source.indexOf('  const model = '), head = source.slice(start, source.indexOf('  const none = ', start));
-  const markerStart = source.indexOf('markers.map(marker => {'), markerEnd = source.indexOf('\n        {lines.map', markerStart);
+  const markerStart = source.indexOf('markers.map(marker => {'), markerEnd = source.indexOf('\n        {seriesArtwork}', markerStart);
   const markerRender = source.slice(markerStart, markerEnd).trim().slice(0, -1);
   const observationHover=source.split('\n').find(line=>line.startsWith('  const observationHover='));
   const hoverX = source.split('\n').find(line => line.startsWith('  const hoverX = '));
   const bandWidth = source.split('\n').find(line => line.startsWith('  const bandWidth = '));
   const basis = {from: 0, to: 2 * H, end: H};
-  const context = {React, preciseReadout, prepared: {ready: true, value: {basis, now: H, lines: [] as {pointMode?:'cell'|'observation'}[], plans: [{key: 'expired', until: H}, {key: 'valid', until: 3 * H}], planPaths: ['expired-plan', 'valid-plan'],
+  const context = {React, stamp,preciseReadout, prepared: {ready: true, value: {basis, now: H, lines: [] as {pointMode?:'cell'|'observation'}[], plans: [{key: 'expired', until: H}, {key: 'valid', until: 3 * H}], planPaths: ['expired-plan', 'valid-plan'],
     forecasts: [{key: 'expired', until: H}, {key: 'valid', until: 3 * H}], forecastPaths: ['expired-forecast', 'valid-forecast'],
     markers: [{key: 'entering', at: 2 * H + minute, until: 3 * H, label: 'reset', color: 'red'}, {key: 'expired', at: H, until: H}], paths: [], strip: null}},
     valueAxis: undefined, currentClock: H + minute, desiredFrom: minute, desiredNow: H + minute, desiredTo: 2 * H, desiredLive: true,
@@ -41,4 +42,14 @@ test('current clock presentation keeps paired future paths, raw marker coordinat
   context.prepared.value.lines=[{pointMode:'observation'}];
   assert.equal(context.draw().hoverX,context.axis.screenX(context.axis.rawHover),'observations follow raw pointer time on the same composed axis');
   context.currentClock = 3 * H; assert.equal(context.draw().elements.length, 0, 'expired reset markers leave the retained model presentation');
+});
+
+test('a historical diamond at a cell boundary keeps its full readout under a nearby pointer',()=>{
+  const source=readFileSync(new URL('../components/Chart.tsx',import.meta.url),'utf8');
+  const line=ts.transpileModule(source.split('\n').find(line=>line.startsWith('  const markerReadout = '))!,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  const marker={at:600_000,past:true,label:'Plan changed',detail:'pro → max'};
+  const context={markers:[marker],hover:540_000,cellMs:60_000,pointedAt:599_999,axis:{screenX:(at:number)=>at/1000},read:null as unknown as ()=>typeof marker[]};
+  runInNewContext(`${line}\nglobalThis.read=()=>markerReadout;`,context);assert.equal(context.read()[0],marker);
+  context.pointedAt=595_000;
+  runInNewContext(`(()=>{${line}\nglobalThis.read=()=>markerReadout;})();`,context);assert.equal(context.read().length,0,'a distant diamond is not an event of this cell');
 });

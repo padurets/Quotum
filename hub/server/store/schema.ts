@@ -1,4 +1,4 @@
-import {migrateAnalyticsViews} from './analyticsView.js';
+import {migrateAnalyticsViews, migrateUnifiedViews, migrateFixedViews} from './analyticsView.js';
 import type {DatabaseSync} from 'node:sqlite';
 import {adoptDeclaredLayout} from './legacyDeclared.js';
 
@@ -349,7 +349,27 @@ export const STEPS = [
   END;
   `,
 
-  // Temporal declarations never replace the account evidence in the work ledger.
+  // 22 — a single grid, stored through the lossless compact view codec below.
+  `SELECT 1;`,
+  // 23 — historical cards find the last native batch without scanning every window.
+  `CREATE INDEX samples_by_source_time ON samples(source_id,at);`,
+  // 24 — retained geometry never becomes a provider observation.
+  `
+  ALTER TABLE meter_spans ADD COLUMN observed_from INTEGER;
+  ALTER TABLE meter_contexts ADD COLUMN observed_from INTEGER;
+  UPDATE meter_spans SET observed_from=from_at WHERE from_at=to_at OR EXISTS(
+    SELECT 1 FROM readings r WHERE r.source_id=meter_spans.source_id
+      AND r.meter_id=meter_spans.meter_id AND r.at=meter_spans.from_at);
+  UPDATE meter_contexts SET observed_from=to_at WHERE from_at=to_at;
+  `,
+  // 25 — session sharing belongs to the board and device, independently of subscriptions.
+  `CREATE TABLE board_device_sessions (
+    board_id TEXT NOT NULL, device_id TEXT NOT NULL, enabled_since INTEGER,
+    revision TEXT NOT NULL, PRIMARY KEY(board_id,device_id)) WITHOUT ROWID;
+  CREATE INDEX board_device_sessions_by_device ON board_device_sessions(device_id);`,
+  // 26 — fixed subscription periods, with lossless view expansion.
+  `SELECT 1;`,
+  // 27 — temporal declarations never replace the account evidence in the work ledger.
   `
   CREATE TABLE client_links (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, client TEXT NOT NULL, device_id TEXT,
@@ -364,28 +384,8 @@ export const STEPS = [
   CREATE TABLE device_tracking_policy (device_id TEXT NOT NULL,client TEXT NOT NULL,route_enabled INTEGER NOT NULL CHECK(route_enabled IN (0,1)),
     PRIMARY KEY(device_id,client)) WITHOUT ROWID;
   CREATE INDEX devices_by_owner ON devices(user_id,id);
-  CREATE TRIGGER attribution_member_added AFTER INSERT ON members BEGIN
-    INSERT INTO meta VALUES ('attributionBoard:'||NEW.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
-  END;
-  CREATE TRIGGER attribution_member_removed AFTER DELETE ON members BEGIN
-    INSERT INTO meta VALUES ('attributionBoard:'||OLD.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
-  END;
-  CREATE TRIGGER attribution_member_changed AFTER UPDATE ON members BEGIN
-    INSERT INTO meta VALUES ('attributionBoard:'||NEW.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
-  END;
-  CREATE TRIGGER attribution_share_added AFTER INSERT ON shares BEGIN
-    INSERT INTO meta VALUES ('attributionBoard:'||NEW.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
-  END;
-  CREATE TRIGGER attribution_share_removed AFTER DELETE ON shares BEGIN
-    INSERT INTO meta VALUES ('attributionBoard:'||OLD.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
-  END;
-  CREATE TRIGGER attribution_visibility_changed AFTER UPDATE OF payload ON views
-    WHEN CASE WHEN json_valid(OLD.payload) AND json_valid(NEW.payload) THEN
-      COALESCE(json_extract(OLD.payload,'$.hidden'),'[]')<>COALESCE(json_extract(NEW.payload,'$.hidden'),'[]') ELSE 1 END BEGIN
-    INSERT INTO meta VALUES ('attributionBoard:'||NEW.board_id,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
-  END;
   `,
-  // Accepted source-counter endpoints preserve native zero intervals for work estimates.
+  // 28 — accepted source-counter endpoints preserve native zero intervals for work estimates.
   `
   ALTER TABLE readings ADD COLUMN pair_anchor INTEGER NOT NULL DEFAULT 0 CHECK(pair_anchor IN (0,1));
   CREATE INDEX readings_sparse ON readings(source_id,meter_id,at) WHERE pair_anchor=0;
@@ -395,7 +395,7 @@ export const STEPS = [
     DELETE FROM meter_pair_starts WHERE source_id=OLD.id;
   END;
   `,
-  // Coverage witnesses prove completed observations only within the current topology.
+  // 29 — coverage witnesses prove completed observations only within the current topology.
   `
   CREATE TABLE device_tracking (device_id TEXT PRIMARY KEY,payload TEXT NOT NULL,last_at INTEGER NOT NULL,
     epoch TEXT NOT NULL,topology_version INTEGER NOT NULL);
@@ -453,7 +453,11 @@ export function migrate(db: DatabaseSync, now: number) {
   db.exec('BEGIN IMMEDIATE');
   try {
     for (const step of STEPS.slice(adoptDeclaredLayout(db,current))) db.exec(step);
+    // All view formats in this upgrade are one change visible at transaction commit.
+    const viewRevisions = current < 22 ? new Map((db.prepare('SELECT board_id,revision FROM views').all() as {board_id:string;revision:number}[]).map(row => [row.board_id,row.revision])) : undefined;
     if (current < 19) migrateAnalyticsViews(db, now);
+    if (current < 22) migrateUnifiedViews(db, now);
+    if (current < 26) migrateFixedViews(db, now, viewRevisions);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('historyStart', String(now));
     // Before this, how agents worked is not known (the sums of layout 2 are gone), rather than none worked.

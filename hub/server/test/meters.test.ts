@@ -55,7 +55,7 @@ test('exact SQLite readings are sparse on heartbeat and retain the real precedin
   const record = (at: number, usage: string, credits = '50000000') => store.record(source, measure(at, [meter('usage', at, usage), meter('credits', at, credits)]));
   record(1, '30000000'); record(60_001, '30000000'); record(120_001, '33000000', '70000000');
   assert.deepEqual(store.meters.readings(source, 'usage', 0, 200_000).map(r => [r.at,r.amount,r.previousAt]), [[1,'30000000',null],[120_001,'33000000',60_001]]);
-  assert.deepEqual(store.meters.spans(source, 'usage', 0, 200_000), [{from: 1,to: 120_001,staleAfterMs: 300_000}]);
+  assert.deepEqual(store.meters.spans(source, 'usage', 0, 200_000), [{from: 1,to: 120_001,observedFrom: 1,staleAfterMs: 300_000}]);
   assert.equal(store.state(source).successAt, 120_001);
   assert.equal(store.meters.calendar(source, 120_001).day.amount, '3000000', 'credits increased by twenty, while usage increased by three');
   const huge = '9007199254740993';
@@ -127,7 +127,7 @@ test('a sparse heartbeat reserves the WAL writer before reading its span',()=>{
   const prepare=store.db.prepare.bind(store.db);let attempted=false,peerWrote=false;
   store.db.prepare=(sql:string)=>{
     const statement=prepare(sql);
-    if(sql.startsWith('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans')) {
+    if(sql.startsWith('SELECT ')&&sql.endsWith(' FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1')) {
       const get=statement.get.bind(statement);
       statement.get=(...args)=>{
         const result=Reflect.apply(get,statement,args);

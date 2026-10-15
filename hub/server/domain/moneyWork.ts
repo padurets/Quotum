@@ -24,6 +24,13 @@ function workIntegral(work: Span[]) {
   return (from:number,to:number):[number,number] => {const a=value(from),b=value(to);return [b[0]-a[0],b[1]-a[1]];};
 }
 
+/** Financial cells and exact period accounting apply the same native evidence rule. */
+export function continuousMoneyPair(input:Pick<MoneyWorkInput,'unit'|'knownFrom'>,a:Reading,b:Reading,span:MeterSpan|undefined):boolean {
+  const delta=BigInt(b.amount)-BigInt(a.amount);
+  return input.knownFrom!==null&&a.at>=input.knownFrom&&b.previousAt===a.at&&a.kind==='counter'&&b.kind===a.kind&&a.unit===b.unit&&b.unit===input.unit&&delta>=0n&&b.at-a.at<=a.staleAfterMs
+    &&JSON.stringify(semanticsOf(a))===JSON.stringify(semanticsOf(b))&&!!span&&span.from<=a.at&&span.to>=b.at&&(span.observedFrom===undefined||span.observedFrom<=a.at)&&(span.interruptedAt===undefined||span.interruptedAt>=b.at)&&(span.holdUntil==null||span.holdUntil>b.at);
+}
+
 /** Original accepted pairs stay whole; crossing pairs are carried once by their closing cell. */
 export function packMoneyWork(input: MoneyWorkInput, from: number, to: number, cell: number): MoneyWorkCells {
   const integral=workIntegral(input.work), values=new Map<number,MoneyWorkCell>(), edges:MoneyWorkEdge[]=[];
@@ -34,8 +41,7 @@ export function packMoneyWork(input: MoneyWorkInput, from: number, to: number, c
     const a=input.readings[i-1],b=input.readings[i];if(b.at<from||b.at>=to)continue;
     while(spanIndex<input.spans.length&&input.spans[spanIndex].to<b.at)spanIndex++;
     const span=input.spans[spanIndex],delta=BigInt(b.amount)-BigInt(a.amount);
-    const continuous=input.knownFrom!==null&&a.at>=input.knownFrom&&b.previousAt===a.at&&a.kind==='counter'&&b.kind===a.kind&&a.unit===b.unit&&b.unit===input.unit&&delta>=0n&&b.at-a.at<=a.staleAfterMs
-      &&JSON.stringify(semanticsOf(a))===JSON.stringify(semanticsOf(b))&&!!span&&span.from<=a.at&&span.to>=b.at&&(span.interruptedAt===undefined||span.interruptedAt>=b.at)&&(span.holdUntil==null||span.holdUntil>b.at);
+    const continuous=continuousMoneyPair(input,a,b,span);
     const [active,agent]=continuous?integral(a.at,b.at):[0,0],spent=delta>0n?delta.toString():'0',during=active?spent:'0';
     if(!continuous)partial=true;
     const value=row(b.at),start=from+value[0]*cell;

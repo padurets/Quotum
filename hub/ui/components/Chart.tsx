@@ -1,7 +1,7 @@
-import {Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode} from 'react';
+import {Fragment, memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
-import {preciseReadout, type PlotBlock, type PlotLine as Line} from '../lib/lines';
+import {pointIndex, preciseReadout, type PlotBlock, type PlotLine as Line} from '../lib/lines';
 import {useClock} from '../lib/clock';
 import {gapText, gapTone, readout as readCell, runOutPast, valueAt, type ForecastLine, type PlanLine} from '../lib/readout';
 import type {TimeRange} from '../lib/timeRange';
@@ -15,12 +15,13 @@ import {covered, type PlotBuffer} from '../lib/historyPlot';
 import {observationRunsPrepared,plotPathPrepared} from '../lib/plotPath';
 import {clipPrepared} from '../lib/forecast';
 import {usePrepared, usePreparationBasis} from './prepared';
+import {seriesFocusStyle} from './seriesFocus';
 
 /**
  * A moment on the time axis: ahead, a known window reset or an announced extra one;
  * behind (`past`), something that happened to a source, such as an early reset.
  */
-export type Marker = {key: string; at: number; label: string; color: string; strong?: boolean; past?: boolean; detail?: string; until?: number};
+export type Marker = {key: string; at: number; label: string; name?:string;color: string; strong?: boolean; past?: boolean; detail?: string; until?: number};
 
 /** The mark of a past event: a small diamond centred at (x, y). */
 const diamond = (x: number, y: number, r = 4) => `M${x},${y - r}l${r},${r}l${-r},${r}l${-r},${-r}z`;
@@ -104,90 +105,75 @@ export function edgeFit<T>(inside: number, past: T[], rows: number): {shown: T[]
  * One pointing past the right edge tells its exact time under the pointer or on a tap
  * (`onTip`).
  */
-function MarkerLabel({
-  x,
-  y,
-  end,
-  color,
-  children,
-  shorten,
-  fonts,
-  onTip,
-}: {
-  x: number;
-  y: number;
-  end: boolean;
-  color?: string;
-  children: string;
-  /** Wider than `room`, the text is said again with `name` in it shortened to what fits. */
-  shorten?: {name: string; say: (name: string) => string; room: number};
-  /** Counts the web fonts loaded: what was measured before one came is measured again. */
-  fonts: number;
-  onTip?: (shown: boolean, tapped: boolean) => void;
+function MarkerLabel({x,y,end,color,children,shorten,fonts,onTip}: {
+  x:number;y:number;end:boolean;color?:string;children:string;
+  shorten?:{name:string;say:(name:string)=>string;room:number;bounded?:boolean};
+  fonts:number;onTip?:(shown:boolean,tapped:boolean)=>void;
 }) {
-  const text = useRef<SVGTextElement>(null);
-  const whole = useRef<SVGTextElement>(null);
-  const [box, setBox] = useState<{offset: number; width: number} | null>(null);
-  // How many characters of the name it keeps, for the text, room and fonts it was measured
-  // with (`input`): a fit found for anything else is not used, and the text shows whole.
-  const input = shorten ? `${children}|${shorten.room}|${fonts}` : '';
-  const [fit, setFit] = useState<{input: string; keep: number | null} | null>(null);
-  const keep = fit?.input === input ? fit.keep : null;
-  const shown = shorten && keep !== null ? shorten.say(shortName(shorten.name, keep)) : children;
-  // Measured once for each input, on a hidden copy of the whole text with an ellipsis after
-  // it: its width, each character of the name as drawn in it, and the ellipsis. Where the
-  // copy does not hold the text character for character (the name not in it, spaces drawn
-  // as one), or the browser will not measure, the text shows whole: a label a little wide
-  // is better than a board that is not drawn.
-  useLayoutEffect(() => {
-    const element = whole.current;
-    if (!shorten || !element) return;
-    let found: number | null = null;
+  const text=useRef<SVGTextElement>(null),whole=useRef<SVGTextElement>(null),rest=useRef<SVGTextElement>(null);
+  const cache=useRef<{identity:string;widths:number[];ellipsis:number;full:number}|null>(null);
+  const suffixCache=useRef<{identity:string;width:number}|null>(null);
+  const [box,setBox]=useState<{offset:number;width:number}|null>(null);
+  const input=shorten?JSON.stringify([children,shorten.name,shorten.room,fonts,!!color,!!shorten.bounded]):'';
+  const [fit,setFit]=useState<{input:string;keep:number|null;degraded:boolean}|null>(null);
+  const valid=fit?.input===input;
+  const degraded=!!shorten?.bounded&&(!valid||!!fit?.degraded);
+  const shown=degraded?shorten!.say('…'):shorten&&valid&&fit.keep!==null?shorten.say(shortName(shorten.name,fit.keep)):children;
+  const room=Math.max(1,shorten?.room??1);
+  useLayoutEffect(()=>{
+    if(!shorten||!whole.current||!rest.current)return;
+    let keep:number|null=null,failed=false;
     try {
-      const start = children.indexOf(shorten.name);
-      const length = element.getSubStringLength(0, children.length);
-      if (length > shorten.room && start >= 0 && element.getNumberOfChars() === children.length + 1) {
-        let at = start;
-        const widths = graphemes(shorten.name).map(letter => {
-          const width = element.getSubStringLength(at, letter.length);
-          at += letter.length;
-          return width;
+      const element=whole.current,style=getComputedStyle(element);
+      const font=JSON.stringify([fonts,style.fontFamily,style.fontSize,style.fontWeight,style.fontStyle,style.letterSpacing,style.fontStretch]);
+      const identity=JSON.stringify([shorten.name,font]);
+      if(cache.current?.identity!==identity){
+        if(element.getNumberOfChars()!==shorten.name.length+1)throw new Error('unavailable SVG character mapping');
+        let at=0,previous=0;
+        const widths=graphemes(shorten.name).map(letter=>{
+          at+=letter.length;const prefix=element.getSubStringLength(0,at),width=prefix-previous;previous=prefix;
+          if(!Number.isFinite(width)||width<0)throw new Error('unavailable SVG prefix');return width;
         });
-        const name = widths.reduce((sum, width) => sum + width, 0);
-        found = fitting(widths, length - name, element.getSubStringLength(children.length, 1), shorten.room);
+        const ellipsis=element.getSubStringLength(shorten.name.length,1);
+        if(!(previous>0)||!(ellipsis>0))throw new Error('unavailable SVG font');
+        cache.current={identity,widths,ellipsis,full:previous};
       }
-    } catch {
-      found = null;
+      const suffix=shorten.say(''),suffixIdentity=JSON.stringify([suffix,font]);
+      if(suffixCache.current?.identity!==suffixIdentity){
+        const width=rest.current.getComputedTextLength();
+        if(!Number.isFinite(width)||width<0||suffix.length>0&&width===0)throw new Error('unavailable SVG suffix');
+        suffixCache.current={identity:suffixIdentity,width};
+      }
+      const measured=cache.current;
+      keep=fitting(measured.widths,suffixCache.current.width,measured.ellipsis,shorten.room);
+    }catch{failed=true;}
+    setFit(previous=>previous?.input===input&&previous.keep===keep&&previous.degraded===failed?previous:{input,keep,degraded:failed});
+  },[input]);
+  useLayoutEffect(()=>{
+    if(degraded)return;
+    try {
+      const measured=text.current?.getBBox();
+      if(!measured||!Number.isFinite(measured.width)||measured.width<=0)throw new Error('unavailable SVG bounds');
+      if(shorten?.bounded&&measured.width>shorten.room+.01)throw new Error('SVG shaping exceeds room');
+      const offset=measured.x-x,width=measured.width;
+      setBox(previous=>previous?.offset===offset&&previous.width===width?previous:{offset,width});
+    }catch{
+      if(shorten?.bounded)setFit(previous=>previous?.input===input&&previous.degraded?previous:{input,keep:null,degraded:true});
     }
-    setFit(fit => (fit?.input === input && fit.keep === found ? fit : {input, keep: found}));
-  }, [input]);
-  useLayoutEffect(() => {
-    const measured = text.current?.getBBox();
-    if (measured) {
-      const offset = measured.x - x, width = measured.width;
-      setBox(box => box?.offset === offset && box.width === width ? box : {offset, width});
-    }
-    // The glyph bounds move with their anchor; only their text or font needs measuring.
-  }, [end, shown, fonts, !!color]);
-  return (
-    <g
-      className={`marker-label ${onTip ? 'is-pointed' : ''} ${color ? 'is-forecast' : ''}`}
-      style={color ? ({'--label-color': color} as CSSProperties) : undefined}
-      onPointerEnter={onTip && (event => event.pointerType !== 'touch' && onTip(true, false))}
-      onPointerLeave={onTip && (event => event.pointerType !== 'touch' && onTip(false, false))}
-      onPointerUp={onTip && (event => event.pointerType === 'touch' && onTip(true, true))}
-    >
-      {box && <rect x={x + box.offset - 6} y={y - 13} width={box.width + 12} height={19} rx={5} />}
-      <text ref={text} x={x} y={y} textAnchor={end ? 'end' : 'start'}>
-        {shown}
-      </text>
-      {shorten && (
-        <text ref={whole} x={x} y={y} textAnchor={end ? 'end' : 'start'} visibility="hidden" aria-hidden="true">
-          {`${children}…`}
-        </text>
-      )}
-    </g>
-  );
+    // Position only applies the cached local bounds; it never measures text.
+  },[end,shown,fonts,!!color,degraded,shorten?.bounded,shorten?.room]);
+  const local=degraded?{offset:end?-room:0,width:room}:box;
+  return <g className={`marker-label ${onTip?'is-pointed':''} ${color?'is-forecast':''}`} style={color?({'--label-color':color} as CSSProperties):undefined}
+    onPointerEnter={onTip&&(event=>event.pointerType!=='touch'&&onTip(true,false))}
+    onPointerLeave={onTip&&(event=>event.pointerType!=='touch'&&onTip(false,false))}
+    onPointerUp={onTip&&(event=>event.pointerType==='touch'&&onTip(true,true))}>
+    {local&&<rect x={x+local.offset-6} y={y-13} width={local.width+12} height={19} rx={5}/>}
+    <text ref={text} x={x} y={y} textAnchor={end?'end':'start'} textLength={degraded?room:undefined} lengthAdjust={degraded?'spacingAndGlyphs':undefined}>{shown}</text>
+    {shorten&&<>
+      <text ref={whole} visibility="hidden" aria-hidden="true" xmlSpace="preserve">{`${shorten.name}…`}</text>
+      <text ref={rest} visibility="hidden" aria-hidden="true" xmlSpace="preserve">{shorten.say('')}</text>
+    </>}
+  </g>;
 }
 
 /**
@@ -203,6 +189,7 @@ const EdgeLabel = memo(function EdgeLabel({
   x,
   y,
   room,
+  compact,
   fonts,
   onEdge,
 }: {
@@ -215,13 +202,14 @@ const EdgeLabel = memo(function EdgeLabel({
   x: number;
   y: number;
   room: number;
+  compact?:boolean;
   fonts: number;
   onEdge: (edge: {key: string; tapped: boolean} | null) => void;
 }) {
   const now = useClock(now => countdownChangesAt(at, now));
   // Its words are rebuilt when the language changes.
   useLocale();
-  const say = (label: string) => t(runsOut ? 'chart.runsOut' : 'chart.ahead', {label, time: countdown(at - now)});
+  const say = (label: string) => t(compact?'chart.compactAhead':runsOut ? 'chart.runsOut' : 'chart.ahead', {label, time: countdown(at - now)});
   return (
     <g data-time="countdown">
       <MarkerLabel
@@ -231,7 +219,7 @@ const EdgeLabel = memo(function EdgeLabel({
         color={color}
         fonts={fonts}
         // It ends at the plot's right edge, and its backing, 6 wider than the text, starts within the plot.
-        shorten={runsOut ? {name, say, room} : undefined}
+        shorten={runsOut||compact ? {name, say, room,bounded:compact} : undefined}
         onTip={(shown, tapped) => onEdge(shown ? {key: id, tapped} : null)}
       >
         {say(name)}
@@ -239,6 +227,28 @@ const EdgeLabel = memo(function EdgeLabel({
     </g>
   );
 });
+
+function InsideLabel({marker,x,y,end,room,fonts,compact,onEdge}:{marker:Marker;x:number;y:number;end:boolean;room:number;fonts:number;compact:boolean;onEdge:(edge:{key:string;tapped:boolean}|null)=>void}) {
+  const now=useClock(now=>compact?countdownChangesAt(marker.at,now):null);
+  useLocale();
+  const name=marker.name??marker.label,say=(label:string)=>t('chart.compact',{label,time:countdown(marker.at-now)});
+  return <g data-time={compact?'countdown':undefined}><MarkerLabel x={x} y={y} end={end} fonts={fonts} shorten={compact?{name,say,room,bounded:true}:undefined} onTip={(shown,tapped)=>onEdge(shown?{key:marker.key,tapped}:null)}>{compact?say(name):marker.label}</MarkerLabel></g>;
+}
+
+function MarkerTime({at,time}:{at:number;time:string}) {
+  const now=useClock(now=>at>now?countdownChangesAt(at,now):null);
+  useLocale();
+  return <div className="tooltip-time"><div data-time="countdown">{at>now?t('chart.markerIn',{time:countdown(at-now)}):null}</div><div>{time}</div></div>;
+}
+
+/** Narrow labels include their backing in this budget; their text leaves room for its padding. */
+export const labelRoom=(usable:number)=>Math.max(1,Math.min(180,usable*.6)-12);
+export function announcementLayout(at:number,left:number,right:number,compact:boolean) {
+  const end=compact?right-at<at-left:at>right-150;
+  const x=at+(end?-6:6);
+  const room=Math.min(labelRoom(right-left),Math.max(1,(end?x-left:right-x)-6));
+  return {end,x,room};
+}
 
 /** How tall the chart draws its plot by itself, in its units: lower on a narrow chart. */
 export const plotHeight = (width: number) => (width < 560 ? 220 : 300);
@@ -291,7 +301,7 @@ export const Chart = memo(function Chart({
   onSelect?: (range: TimeRange) => void;
   plot?: number;
   onBase?: (height: number) => void;
-  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;detail?:(key:string,at:number)=>ReactNode};
+  axis?:{min:number;max:number;ticks:number[];label:string;formatTick:(value:number)=>string;formatValue:(key:string,value:number,at:number)=>string;rawValue?:(key:string,at:number)=>string|undefined;observation?:(key:string,at:number)=>{at:number;value:string}|undefined;detail?:(key:string,at:number)=>ReactNode};
   stepped?:boolean;
   strip?: PlotBuffer | null;
   prepared?: boolean;
@@ -309,7 +319,7 @@ export const Chart = memo(function Chart({
   useLayoutEffect(() => onBase?.(base * scale), [base, scale, onBase]);
   const top = 12, bottom = 28;
   const inputs = [incomingLines, incomingPlans, incomingForecasts, incomingMarkers, incomingStrip, width, height, cellMs, modelContext, navigation && navigationKey(navigation), desiredLive, valueAxis, stepped];
-  const requested = usePreparationBasis({...axis.basis, end: axis.active && !incomingStrip ? axis.basis.end : desiredNow}, inputs, axis.active, incomingReady);
+  const requested = usePreparationBasis({...axis.basis, end: axis.active && !incomingStrip ? axis.basis.end : desiredNow}, inputs, axis.active, incomingReady, modelContext);
   const blockPaths = useRef(new WeakMap<PlotBlock, {geometry: string; line: string; last: [number, number] | null}>());
   const prepared = usePrepared(function* () {
     const basis = {from: requested.from, to: requested.to, end: requested.end};
@@ -320,17 +330,23 @@ export const Chart = memo(function Chart({
     const bx = (at: number) => x(Math.min(drawNow, at + cellMs / 2));
     const y = (value: number) => top + (1 - (value-(valueAxis?.min??0)) / ((valueAxis?.max??100)-(valueAxis?.min??0))) * (height - top - bottom);
     const geometry = `${basis.from}:${basis.to}:${drawNow}:${width}:${height}:${cellMs}:${valueAxis?.min??0}:${valueAxis?.max??100}:${stepped}`;
-    const paths: {line: string; last: [number, number] | null; parts: {key: string; line: string}[] | null; latest: string | undefined}[] = [];
+    const paths: {line: string; last: [number, number] | null; parts: {key: string; line: string}[] | null; latest: string | undefined; observation?:string}[] = [];
     for (const line of incomingLines) {
       let latest: string | undefined;
+      let observation: string | undefined;
       let lastAt:number|undefined;
       for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; lastAt=at; yield;}
-      if(lastAt!==undefined&&valueAxis?.rawValue)latest=`${lastAt}:${valueAxis.rawValue(line.key,lastAt)}`;
+      if(lastAt!==undefined&&valueAxis?.rawValue){
+        const value=valueAxis.rawValue(line.key,lastAt);latest=`${lastAt}:${value}`;
+        // An unchanged balance can advance its observation without moving its drawing cell.
+        const proof=line.pointMode==='observation'?valueAxis.observation?.(line.key,lastAt):undefined;
+        if(proof&&Number.isSafeInteger(proof.at)&&proof.at>=0&&proof.at<=drawNow&&proof.value===value)observation=`${proof.at}:${value}`;
+      }
       if(line.pointMode==='observation') {
         const observed=yield* observationRunsPrepared(line.points,incomingStrip?.from??drawFrom,incomingStrip?.to??basis.to,drawNow);
         const runs:[number,number][][]=[];
         for(const run of observed.runs){const mapped:[number,number][]=[];for(const [at,value] of run){mapped.push([x(at),y(value)]);yield;}runs.push(mapped);}
-        paths.push({line:yield* plotPathPrepared(runs,true),last:observed.last?[x(observed.last[0]),y(observed.last[1])]:null,parts:null,latest});
+        paths.push({line:yield* plotPathPrepared(runs,true),last:observed.last?[x(observed.last[0]),y(observed.last[1])]:null,parts:null,latest,observation:observed.runs.length?observation:undefined});
       } else if(line.capCells) {
         let path='',last:[number,number]|null=null;
         for(const cell of line.capCells) {
@@ -431,7 +447,8 @@ export const Chart = memo(function Chart({
   const columnCount = Object.values(columns).filter(Boolean).length;
   // A cell ahead of now where no line reads anything says only what happens in it.
   const grid = rows.length > 0 && columnCount > 0;
-  const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + cellMs);
+  // A diamond on a cell boundary remains reachable across rounding and a touch's width.
+  const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + cellMs || m.past && Math.abs(axis.screenX(m.at)-axis.screenX(pointedAt!))<=4);
   // Labels are measured: a web font that arrives later makes them as wide as they are drawn.
   const [fonts, setFonts] = useState(0);
   useEffect(() => {
@@ -442,11 +459,11 @@ export const Chart = memo(function Chart({
   // Past the right edge: an announcement, then where windows run out, the soonest first, each
   // said there (`EdgeLabel`), how soon by the page's clock as the table says it.
   const beyond = [
-    ...markers.filter(m => desiredLive && m.strong && !m.past && m.at > desiredTo).map(m => ({key: m.key, label: m.label, at: m.at, time: stamp(m.at), color: undefined, runsOut: false})),
+    ...markers.filter(m => desiredLive && m.strong && !m.past && m.at > desiredTo).map(m => ({key: m.key, label: m.label, name:m.name??m.label,at: m.at, time: stamp(m.at), color: undefined, runsOut: false})),
     // Spaces drawn as one: a name typed with two in a row reads, and measures, as SVG draws it.
     ...runOutPast(forecasts, desiredTo)
       .sort((a, b) => a.at - b.at)
-      .map(f => ({key: `forecast-${f.key}`, label: f.name.replace(/\s+/g, ' '), at: f.at, time: t('forecast.runsOutAt', {time: stamp(f.at)}), color: f.color, runsOut: true})),
+      .map(f => ({key: `forecast-${f.key}`, label: f.name.replace(/\s+/g, ' '),name:f.name.replace(/\s+/g,' '), at: f.at, time: t('forecast.runsOutAt', {time: stamp(f.at)}), color: f.color, runsOut: true})),
   ];
   // With the announcements inside the chart, as many as the plot has rows for, from the first
   // row by one edge of the plot to the last by the other; the rest are said together.
@@ -454,7 +471,7 @@ export const Chart = memo(function Chart({
   const {shown: past, more} = edgeFit(announced.length, beyond, Math.floor((height - top - bottom - 26) / LABEL_STEP) + 1);
   /** A label past the right edge pointed at or tapped: the tooltip tells its time instead of the cell's values, or theirs. */
   const [edge, setEdge] = useState<{key: string; tapped: boolean} | null>(null);
-  const edgeMarkers = panning || !edge ? [] : edge.key === MORE ? more : past.filter(m => m.key === edge.key);
+  const edgeMarkers = panning || !edge ? [] : edge.key === MORE ? more : [...past,...announced.map(m=>({key:m.key,label:m.label,name:m.name??m.label,at:m.at,time:stamp(m.at),color:undefined,runsOut:false}))].filter(m => m.key === edge.key);
   const edgeKey = edgeMarkers.length ? edge!.key : null;
   // A label taken away under the pointer (a step to a range, which has no future) says nothing
   // of it: what it told is forgotten, so the tooltip reads the cells again.
@@ -479,8 +496,8 @@ export const Chart = memo(function Chart({
     let low = 0;
     let high = 0;
     for (const line of lines) {
-      for (const [at, value] of line.points) {
-        if (at < a || at > b) continue;
+      for (let i = pointIndex(line.points, a); i < line.points.length && line.points[i][0] <= b; i++) {
+        const value = line.points[i][1];
         if (value < LABEL_BAND) low++;
         else if (value > 100 - LABEL_BAND) high++;
       }
@@ -503,7 +520,9 @@ export const Chart = memo(function Chart({
       if (value < band) low++;
       else if (value > 100 - band) high++;
     };
-    for (const line of lines) for (const [at, value] of line.points) if (at >= a && at <= b) count(value);
+    for (const line of lines) {
+      for (let i = pointIndex(line.points, a); i < line.points.length && line.points[i][0] <= b; i++) count(line.points[i][1]);
+    }
     const across = [0, 0.25, 0.5, 0.75, 1].map(share => a + (b - a) * share);
     for (const forecast of forecasts) for (const at of across) count(valueAt([forecast.points], at));
     for (const plan of plans) for (const at of across) count(valueAt(plan.runs, at));
@@ -522,13 +541,16 @@ export const Chart = memo(function Chart({
   const hoverX = hover === null ? 0 : hover > now ? axis.screenX(Math.min(to, hover + cellMs / 2)) : observationHover?axis.screenX(pointedAt!):bx(hover);
   // On a narrow chart it spans the chart's width under the plot; a marker's time stands over its label and does not rise.
   const narrow = width < 560;
+  const descriptionId=useId();
   const {tip, style: tipStyle} = useTip(svg, {width, at: hoverX, narrow, rises: !edgeKey, bottom: height * scale});
   // A marker's time stands over its label, or under it where the bars that stick at the top
   // would cover it, and a long list of them over the label where neither leaves it whole in the
   // window (`edgeOf`): found from where the label is and how tall the tooltip is uncut, never
   // from where and as it was drawn, after every render and as the page scrolls under a pointer
   // that stays.
-  const edgeRow = edgeKey ? stackRows.get(edgeKey)! : 0;
+  const pointedAnnouncement=announced.find(m=>m.key===edgeKey);
+  const pointLayout=pointedAnnouncement?announcementLayout(x(pointedAnnouncement.at),left,width-right,narrow):null;
+  const edgeRow = edgeKey ? stackRows.get(edgeKey)??labelY(pointLayout?.x??width-right,pointLayout?.end??true) : 0;
   const [edgePlace, setEdgePlace] = useState<ReturnType<typeof edgeOf>>({below: false, by: 0, cut: null});
   const placeEdge = useRef(() => {});
   placeEdge.current = () => {
@@ -552,6 +574,19 @@ export const Chart = memo(function Chart({
   }, [edgeShown]);
   const bandWidth = Math.max(1, axis.screenX(Math.min(to, (hover ?? 0) + cellMs)) - axis.screenX(hover ?? 0));
 
+  // Clock and gesture renders move the retained artwork through its owner.
+  // Only new prepared data needs to visit every series and path again.
+  const seriesArtwork=useMemo(()=>lines.map((line,i)=>(
+    <g key={line.key} className="series-focus" style={seriesFocusStyle(line.key)} data-series={`${line.sourceId} ${line.windowId}`} data-last={paths[i]?.latest} data-observation={paths[i]?.observation} stroke={line.color} strokeDasharray={line.dash||undefined}>
+      {paths[i].parts?.map(part=><path key={part.key} d={part.line} className="series"/>)??<path d={paths[i].line} className="series"/>}
+    </g>
+  )),[lines,paths]);
+  const seriesEnds=useMemo(()=>lines.map((line,i)=>paths[i].last?(
+    <g key={`${line.key}-end`} className="line-end series-focus" style={seriesFocusStyle(line.key)}>
+      <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18}/>
+      <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color}/>
+    </g>
+  ):null),[lines,paths]);
   return (
     <div className="chart" ref={box} {...handlers}>
       {to > now && (
@@ -571,9 +606,10 @@ export const Chart = memo(function Chart({
         preserveAspectRatio="none"
         role="img"
         aria-label={shownAxis?.label??t('chart.label')}
+        aria-describedby={descriptionId}
         className={onSelect ? 'is-selectable' : undefined}
       >
-        <desc>{t('chart.panHint')}</desc>
+        <desc id={descriptionId}>{[t('chart.panHint'),...markers.filter(m=>m.at>=desiredFrom&&(m.past||desiredLive)).map(m=>[m.label,stamp(m.at),m.detail].filter(Boolean).join('\n')),...beyond.filter(m=>m.runsOut).map(m=>`${m.label}\n${m.time}`)].join('\n')}</desc>
 
         {!shownAxis&&<><line x1={left} x2={width - right} y1={y(30)} y2={y(30)} className="threshold warn" />
         <line x1={left} x2={width - right} y1={y(10)} y2={y(10)} className="threshold crit" /></>}
@@ -596,6 +632,7 @@ export const Chart = memo(function Chart({
           <path
             key={plan.key}
             className="plan-line"
+            style={seriesFocusStyle(plan.lines)}
             stroke={plan.color}
             d={planPaths[i]}
           />
@@ -604,6 +641,7 @@ export const Chart = memo(function Chart({
           <path
             key={forecast.key}
             className="forecast-line"
+            style={seriesFocusStyle(forecast.key)}
             stroke={forecast.color}
             strokeDasharray={forecast.dash || undefined}
             d={forecastPaths[i]}
@@ -617,7 +655,7 @@ export const Chart = memo(function Chart({
               <g key={marker.key} className="marker is-event">
                 <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.color} />
                 <path d={diamond(mx, top)} fill={marker.color} />
-                <title>{[`${marker.label} · ${cellLabel(marker.at, 0)}`, marker.detail].filter(Boolean).join('\n')}</title>
+                <title>{[marker.label, stamp(marker.at), marker.detail].filter(Boolean).join('\n')}</title>
               </g>
             );
           }
@@ -625,32 +663,20 @@ export const Chart = memo(function Chart({
             <g key={marker.key} className={`marker ${marker.strong ? 'is-strong' : ''}`}>
               <line x1={mx} x2={mx} y1={top} y2={height - bottom} stroke={marker.strong ? undefined : marker.color} />
               {!marker.strong && <circle cx={mx} cy={y(100)} r={3} fill={marker.color} />}
-              <title>{`${marker.label} · ${cellLabel(marker.at, 0)}`}</title>
+              <title>{`${marker.label}\n${stamp(marker.at)}`}</title>
             </g>
           );
         })}
-        {lines.map((line, i) => (
-          <g key={line.key} data-series={`${line.sourceId} ${line.windowId}`} data-last={paths[i]?.latest} stroke={line.color} strokeDasharray={line.dash || undefined}>
-            {paths[i].parts?.map(part => <path key={part.key} d={part.line} className="series" />) ?? <path d={paths[i].line} className="series" />}
-          </g>
-        ))}
+        {seriesArtwork}
         {/* Announcements are read over the lines, each on its own backing. */}
         {announced.map(marker => {
           const mx = x(marker.at);
-          const nearRight = mx > width - right - 150;
-          const lx = nearRight ? mx - 6 : mx + 6;
+          const {end,x:lx,room}=announcementLayout(mx,left,width-right,narrow);
           return (
-            <MarkerLabel key={marker.key} x={lx} y={stackRows.get(marker.key) ?? labelY(lx, nearRight)} end={nearRight} fonts={fonts}>
-              {marker.label}
-            </MarkerLabel>
+            <InsideLabel key={marker.key} marker={marker} x={lx} y={stackRows.get(marker.key) ?? labelY(lx,end)} end={end} room={room} fonts={fonts} compact={narrow} onEdge={panning?()=>{}:setEdge}/>
           );
         })}
-        {hover === null && lines.map((line, i) => paths[i].last ? (
-          <g key={`${line.key}-end`} className="line-end">
-            <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={7} fill={line.color} opacity={0.18} />
-            <circle cx={paths[i].last![0]} cy={paths[i].last![1]} r={3} fill={line.color} />
-          </g>
-        ) : null)}
+        {hover === null && seriesEnds}
       </PlotLayer>
       <PlotOverlay width={width} height={height}>
         <g>
@@ -659,13 +685,14 @@ export const Chart = memo(function Chart({
               <EdgeLabel
                 key={label.key}
                 id={label.key}
-                name={label.label}
+                name={narrow?label.name:label.label}
                 at={label.at}
                 runsOut={label.runsOut}
                 color={label.color}
-                x={width - right}
+                x={width - right-(narrow?6:0)}
                 y={stackRows.get(label.key)!}
-                room={width - left - right - 6}
+                room={narrow?labelRoom(width-left-right):width - left - right - 6}
+                compact={narrow}
                 fonts={fonts}
                 onEdge={panning ? () => {} : setEdge}
               />
@@ -701,7 +728,7 @@ export const Chart = memo(function Chart({
               <div className={`tooltip-marker ${marker.color ? '' : 'is-strong'}`} style={marker.color ? {color: marker.color} : undefined}>
                 {marker.label}
               </div>
-              <div className="tooltip-time">{marker.time}</div>
+              <MarkerTime at={marker.at} time={marker.time}/>
             </Fragment>
           ))}
         </Tooltip>
@@ -744,7 +771,7 @@ export const Chart = memo(function Chart({
                     <line x1="7" x2="7" y1="0" y2="10" stroke={marker.strong ? 'var(--accent)' : marker.color} strokeWidth="2" />
                   )}
                 </svg>
-                <strong>{clock(marker.at)}</strong>
+                <strong>{marker.past?stamp(marker.at):clock(marker.at)}</strong>
                 <span>{marker.label}</span>
                 {marker.detail && <small className="tooltip-detail">{marker.detail}</small>}
               </div>

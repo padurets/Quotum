@@ -1,4 +1,7 @@
-import {migrateAnalytics} from '../domain/analyticsView.js';
+import {migrateFixed} from '../domain/fixedView.js';
+import {migrateUnified as migrateSplit} from '../domain/unifiedView.js';
+const migrateUnified=(...args:Parameters<typeof migrateSplit>)=>migrateFixed(migrateSplit(...args),args[1]);
+import {decodeView, encodeView, parseView, VIEW_VERSION, VIEW_VERSION_HEADER} from '../domain/view.js';
 import {cellOf, compose, targetOf, tileOf, tileStart, type HistoryAnswer} from '../domain/history.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -26,7 +29,7 @@ const periodOf = (id: string) => PERIODS.find(p => p.id === id)!;
 const iso = (ms: number) => new Date(ms).toISOString();
 const ORIGIN = 'http://localhost';
 const SETUP = 'BCDF-GHJK';
-const EMPTY = {version: 2 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}, enabledWhenEmpty: []};
+const EMPTY = {version: 4 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}, enabledWhenEmpty: []};
 
 async function hub() {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), 'quotum-api-')), 'db.sqlite'));
@@ -45,9 +48,9 @@ async function hub() {
     const response = await app.inject({
       method,
       url,
-      payload: options.body,
+      payload: method==='POST'&&url.endsWith('/view')&&!options.legacyClient&&parseView(options.body) ? encodeView(parseView(options.body)!) : options.body,
       headers: {
-        ...(!options.legacyClient?{'X-Quotum-View-Version':'2'}:{}),
+        ...(!options.legacyClient?{[VIEW_VERSION_HEADER]:String(VIEW_VERSION)}:{}),
         ...(method==='POST'&&url.endsWith('/view')?{'If-Match':'"'+directory.viewRevision(url.split('/')[3])+'"'}:{}),
         ...(typeof options.body === 'string' ? {'content-type': 'application/json'} : {}),
         ...(options.as && cookies.get(options.as) ? {cookie: cookies.get(options.as)!} : {}),
@@ -296,11 +299,11 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   assert.deepEqual(shares.map(({budget,...share}:any)=>share), [{source, provider: 'codex', sharedBy: 'Bob', mine: false}]);
   assert.equal(shares[0].budget.enabled,false);
 
-  store.db.prepare('INSERT OR REPLACE INTO views (board_id,payload,updated_by,updated_at) VALUES (?, ?, ?, ?)').run(team, JSON.stringify(migrateAnalytics({order: ['history'], sizes: {history: 3}},store.sources(team))), 'alice', Date.now());
+  store.db.prepare('INSERT OR REPLACE INTO views (board_id,payload,updated_by,updated_at) VALUES (?, ?, ?, ?)').run(team, JSON.stringify(encodeView(migrateUnified({order: ['history'], sizes: {history: 3}},store.sources(team)))), 'alice', Date.now());
   const old = (await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view;
-  assert.deepEqual(old, migrateAnalytics({order: ['history'], sizes: {history: 3}},store.sources(team)), 'migration is shared by every reader');
-  assert.deepEqual(shared.view.shown, ['quota-history','quota-table'], 'applicable analytics are placed when the first source appears');
-  const view = {...EMPTY, layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}, [`source:${source}`]: {x: 0, y: 0, w: 3}}}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], shown: ['agents','quota-history','quota-table'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}, unplanned: [source], colors: {[source]: '#1fa89c'}, columns: {agents: ['machine', 'origin']}, shownColumns: {agents: ['state']}};
+  assert.deepEqual(old, decodeView(encodeView(migrateUnified({order: ['history'], sizes: {history: 3}},store.sources(team)))), 'migration is shared by every reader');
+  assert.deepEqual(shared.view.shown, ['quota-history','quota-table','quota-session-history','quota-session-table'], 'applicable analytics are placed when the first source appears');
+  const view = decodeView(encodeView({...EMPTY, layout: {columns: 6, places: {history: {x: 0, y: 0, w: 6}, [`source:${source}`]: {x: 0, y: 0, w: 3}}}, names: {[source]: 'Bob’s Codex'}, hidden: ['forecast'], shown: ['agents','quota-history','quota-table','quota-session-history','quota-session-table'], windows: [`${source}/weekly`], plans: {[source]: [50, 50, 0, 0, 0, 0, 0]}, unplanned: [source], colors: {[source]: '#1fa89c'}, columns: {agents: ['machine', 'origin']}, shownColumns: {agents: ['state']}}))!;
   assert.deepEqual((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: view})).body.view, view);
   assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view, view);
   assert.equal((await call('POST', `/api/boards/${team}/view`, {as: 'bob', body: EMPTY})).status, 403, 'a member only looks');
@@ -319,7 +322,7 @@ test('people share their subscriptions with a shared board; its owner arranges, 
   // A height the owner chose goes with its place; none while the widget follows its content.
   assert.equal(HUB_MAX_ROWS, MAX_ROWS, 'the page and the hub hold a height to the same most');
   for (const h of [1, 8, MAX_ROWS]) {
-    const tall = {...view, layout: {columns: 6, places: {...view.layout.places, history: {x: 0, y: 0, w: 6, h}}}};
+    const tall = decodeView(encodeView({...view, layout: {columns: 6, places: {...view.layout.places, history: {x: 0, y: 0, w: 6, h}}}}))!;
     assert.deepEqual((await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: tall})).body.view, tall, `h ${h}`);
     assert.deepEqual((await call('GET', `/api/overview?board=${team}`, {as: 'bob'})).body.view, tall, 'a member sees the chosen height');
   }
@@ -356,19 +359,19 @@ test('a migrated view can save new neighbours after 400 retained places, within 
     sizes: Object.fromEntries(Array.from({length: 200}, (_, i) => [`source:s${i}`, 4])),
   };
   assert.ok(Buffer.byteLength(JSON.stringify(legacy)) < 16 * 1024, 'the old route could store this view');
-  store.db.prepare('INSERT OR REPLACE INTO views (board_id,payload,updated_by,updated_at) VALUES (?, ?, ?, ?)').run(board, JSON.stringify(migrateAnalytics(legacy,[])), 'alice', Date.now());
+  store.db.prepare('INSERT OR REPLACE INTO views (board_id,payload,updated_by,updated_at) VALUES (?, ?, ?, ?)').run(board, JSON.stringify(encodeView(migrateUnified(legacy,[]))), 'alice', Date.now());
   const old = (await call('GET', `/api/overview?board=${board}`, {as: 'alice'})).body.view;
   const ids = ['source:s0', 'source:new'];
-  const migrated = legacyLayout(old, {cards: ids, analytics: []}, []);
-  assert.equal(Object.keys(migrated.layout.places).length, 403);
+  const migrated = legacyLayout(parseView(old)!, {cards: ids, analytics: []}, []);
+  assert.equal(Object.keys(migrated.layout.places).length, 405);
   const origin = settle(ordered(migrated.layout, ids).map(item => ({...item, h: 7})), 6);
   const changed = withPlaces(migrated, placesOf(widened(origin, 'source:s0', 4, 6)));
-  assert.equal(Object.keys(changed.layout.places).length, 404);
+  assert.equal(Object.keys(changed.layout.places).length, 406);
   assert.deepEqual(changed.layout.places['source:s0'], {x: 0, y: 0, w: 4});
   assert.deepEqual(changed.layout.places['source:new'], {x: 2, y: 7, w: 3}, 'the neighbour moves down, not sideways');
   assert.ok(Object.keys(migrated.layout.places).every(id => Object.hasOwn(changed.layout.places, id)), 'all retained settings survive');
   assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: changed})).status, 200);
-  assert.deepEqual((await call('GET', `/api/overview?board=${board}`, {as: 'alice'})).body.view.layout, changed.layout);
+  assert.deepEqual((await call('GET', `/api/overview?board=${board}`, {as: 'alice'})).body.view.layout, decodeView(encodeView(changed))!.layout);
 
   const tooLarge = {...changed, layout: {columns: 6, places: Object.fromEntries(
     Array.from({length: 800}, (_, i) => [String(i).padEnd(120, 'x'), {x: 0, y: i, w: 6}]),
@@ -386,18 +389,19 @@ test('a full view request has a small UTF-8 migration reserve above the keepaliv
   // Places with chosen heights count as any other part of the view.
   const places = Object.fromEntries(Array.from({length: 50}, (_, i) => [`source:${i}`, {x: 0, y: i * 10, w: 6, h: i % 2 ? MAX_ROWS : 1}]));
   for (const unit of ['x', 'я']) {
-    const empty = {...EMPTY, layout: {columns: 6, places}, padding: ''};
-    const room = VIEW_BODY_LIMIT - Buffer.byteLength(JSON.stringify(empty));
-    const unitBytes = Buffer.byteLength(unit);
-    // An ignored field fills the request without changing any validated view settings.
-    const exact = {...empty, padding: unit.repeat(Math.floor(room / unitBytes)) + 'x'.repeat(room % unitBytes)};
-    assert.equal(Buffer.byteLength(JSON.stringify(exact)), VIEW_BODY_LIMIT);
+    const view={...EMPTY,layout:{columns:6,places},windows:[] as string[]};
+    for (let i=0;i<500;i++) {
+      const next={...view,windows:[...view.windows,unit.repeat(116)+String(i)]};
+      if(Buffer.byteLength(JSON.stringify(encodeView(next)))>VIEW_BODY_LIMIT)break;
+      view.windows=next.windows;
+    }
+    const wire=JSON.stringify(encodeView(view));
+    const exact=wire+' '.repeat(VIEW_BODY_LIMIT-Buffer.byteLength(wire));
+    assert.equal(Buffer.byteLength(exact), VIEW_BODY_LIMIT);
     const saved = await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: exact});
     assert.equal(saved.status, 200);
-    assert.deepEqual(saved.body.view.layout.places, places);
-    const over = {...exact, padding: exact.padding + 'x'};
-    assert.equal(Buffer.byteLength(JSON.stringify(over)), VIEW_BODY_LIMIT + 1);
-    assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: over})).status, 413);
+    assert.deepEqual(saved.body.view.layout.places, decodeView(encodeView(view))!.layout.places);
+    assert.equal((await call('POST', `/api/boards/${board}/view`, {as: 'alice', body: exact+' '})).status, 413);
   }
 });
 
@@ -823,16 +827,18 @@ const hoursBy = (history: any, dimension: string) =>
   Object.fromEntries(history.activity.by[dimension].map((g: any) => [g.name ?? g.key, Math.round(g.agentMs / 360_000) / 10]));
 
 /**
- * What always holds of work in a history: the windows of a subscription share its hours,
- * which are its group's in the activity (no group where they are none), and the parts of
+ * Windows share source quota work, independently clipped by the source grant.
+ * Activity keeps the entire device-admitted cohort. Explicit quota expectations apply
+ * where a later source grant excludes some activity; the parts of
  * a cell add up exactly to its agent time. A subscription with no measurement in a range has no window
  * there, though its agents' work is in the activity.
  */
-function assertWork(history: any) {
+function assertWork(history: any, clipped:Record<string,[number,number]>={}) {
   for (const line of history.series) {
     if (!line.work || line.work.ms === null) continue;
-    assert.equal(history.activity.by.source.find((g: any) => g.key === line.sourceId)?.activeMs ?? 0, line.work.ms, `${line.sourceId} ${line.windowId}`);
-    assert.equal(history.activity.by.source.find((g: any) => g.key === line.sourceId)?.agentMs ?? 0, line.work.agentMs);
+    const group=history.activity.by.source.find((g:any)=>g.key===line.sourceId),expected=clipped[line.sourceId];
+    assert.ok(expected||line.work.from<=Math.max(history.since,history.activity.since),'a later source cut requires an explicit eligible-work oracle');
+    assert.deepEqual([line.work.ms,line.work.agentMs],expected??[group?.activeMs??0,group?.agentMs??0],`${line.sourceId} ${line.windowId}`);
   }
   for (const dimension of ['source', 'project', 'device']) {
     for (const [cell, , agentMs] of history.activity.cells) {
@@ -842,20 +848,20 @@ function assertWork(history: any) {
   }
 }
 
-test('a shared board shows the work of its members on its subscriptions, from their joining and its sharing on; a personal board all of one\'s own', async () => {
+test('shared session work follows device joining while quota work also follows source sharing; personal work keeps its own capture', async () => {
   const {call, team, bobs, source, later, ago, hour} = await worked();
   const history = (await readFrame(call, `board=${team}&range=24h`, 'bob')).body;
-  assert.deepEqual(hoursBy(history, 'project'), {quotum: 2, billing: 1}, "neither Alice's work before the sharing nor Bob's before he joined, nor hers on a subscription before it came");
-  assert.deepEqual([history.activity.activeMs / hour, history.activity.agentMs / hour], [2.5, 3], "Bob's and Carol's half hour together counts once in the work");
-  assert.deepEqual([history.activity.agents, history.activity.barMs], [3, hour], 'three agents, drawn in hours over a day');
-  assert.deepEqual(history.activity.known, {from: ago(5), to: history.to}, 'known from the sharing on, up to now');
-  assert.equal(history.activity.since, ago(5));
+  assert.deepEqual(hoursBy(history, 'project'), {quotum:2,billing:1,early:0.5,secret:0.5}, 'device admission retains pre-source-grant work while Bob’s pre-join credit stays excluded');
+  assert.deepEqual([history.activity.activeMs / hour, history.activity.agentMs / hour], [3,4], 'Alice’s extra half hour adds union time; Bob and Carol’s overlap still counts once');
+  assert.deepEqual([history.activity.agents, history.activity.barMs], [5,hour], 'five positive-work contexts, drawn in hours over a day');
+  assert.deepEqual(history.activity.known, {from:ago(6),to:history.to}, 'session coverage follows the earliest admitted member, independently of source grants');
+  assert.equal(history.activity.since,ago(6));
   const line = (id: string) => history.series.find((l: any) => l.sourceId === id).work;
   assert.deepEqual([line(source).from, line(source).ms / hour, line(source).agentMs / hour], [ago(5), 2.5, 3]);
   const group = history.activity.by.source.find((g: any) => g.key === source);
-  assert.deepEqual([group.agentMs / hour, group.activeMs / hour, group.agents], [3, 2.5, 3]);
+  assert.deepEqual([group.agentMs / hour, group.activeMs / hour, group.agents], [3.5,3,4]);
   assert.deepEqual([line(later).from, line(later).ms, line(later).agentMs], [ago(3), 0, 0], 'known from its own sharing on: none of the spending before is set against the hours');
-  assertWork(history);
+  assertWork(history,{[source]:[2.5*hour,3*hour],[later]:[0,0]});
 
   const own = (await readFrame(call, `board=${bobs}&range=24h`, 'bob')).body;
   assert.deepEqual(hoursBy(own, 'project'), {billing: 2}, 'all of his own, and nobody else’s');
@@ -863,27 +869,28 @@ test('a shared board shows the work of its members on its subscriptions, from th
   assertWork(own);
 });
 
-test('the work a board shows follows its cards, members and names at once', async () => {
-      const {call, team, source, device, invite, workKey: key} = await worked();
+test('admitted board work follows members and names independently of card hiding', async () => {
+      const {call,team,source,later,hour,device,invite,workKey:key} = await worked();
       const read = async () => (await readFrame(call, `board=${team}&range=24h`, 'alice')).body;
       const first = await read();
       const before = key();
       assert.equal(key(), before, 'the same while nothing changes');
 
-      // A hidden card: its work is not on the board, and comes back once it is shown again.
+      // Card hiding changes presentation while the admitted cohort and quota work stay authoritative.
       await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: {...EMPTY, hidden: [`source:${source}`]}});
       const hidden = await read();
-      assert.deepEqual([hidden.activity.activeMs, hidden.activity.by.source, hidden.series.find((s: {sourceId: string}) => s.sourceId === source).work], [0, [], null], 'hidden');
-      assert.notEqual(key(), before);
+      assert.deepEqual([hidden.activity.activeMs,hidden.activity.agentMs,hidden.activity.agents,hidden.activity.by],[first.activity.activeMs,first.activity.agentMs,first.activity.agents,first.activity.by]);
+      assert.deepEqual(hidden.series.find((s:{sourceId:string})=>s.sourceId===source).work,first.series.find((s:{sourceId:string})=>s.sourceId===source).work);
+      assert.equal(key(),before,'hiding never changes work authority');
       await call('POST', `/api/boards/${team}/view`, {as: 'alice', body: EMPTY});
       assert.deepEqual(hoursBy(await read(), 'project'), hoursBy(first, 'project'), 'shown again');
       assert.equal(key(), before);
 
       // Names given to projects and machines show in the next answer.
       await call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum hub'}});
-      assert.deepEqual(hoursBy(await read(), 'project'), {'Quotum hub': 1, quotum: 1, billing: 1}, "Alice's name for her project; Carol's stays hers");
+      assert.deepEqual(hoursBy(await read(), 'project'), {'Quotum hub':1,quotum:1,billing:1,early:0.5,secret:0.5}, "Alice's name for her project; Carol's stays hers");
       await call('POST', '/api/projects/restore', {as: 'alice', body: {reported: ['quotum']}});
-      assert.deepEqual(hoursBy(await read(), 'project'), {quotum: 2, billing: 1});
+      assert.deepEqual(hoursBy(await read(), 'project'), {quotum:2,billing:1,early:0.5,secret:0.5});
       await call('POST', `/api/devices/${device}`, {as: 'alice', body: {name: 'Desk'}});
       assert.ok('Desk' in hoursBy(await read(), 'device'), 'the name a machine is given');
 
@@ -891,8 +898,8 @@ test('the work a board shows follows its cards, members and names at once', asyn
       await call('POST', `/api/boards/${team}/leave`, {as: 'carol'});
       await call('POST', `/api/invites/${await invite()}/accept`, {as: 'carol'});
       const back = await read();
-      assert.deepEqual(hoursBy(back, 'project'), {quotum: 1, billing: 1});
-      assertWork(back);
+      assert.deepEqual(hoursBy(back, 'project'), {quotum:1,billing:1,early:0.5,secret:0.5});
+      assertWork(back,{[source]:[2*hour,2*hour],[later]:[0,0]});
 });
 
 test('project names containing separators cannot alias other names in the history cache', async () => {
@@ -907,36 +914,32 @@ test('project names containing separators cannot alias other names in the histor
   const joined = `A\u001f${user}\u001esecret\u001eB`;
   await rename('quotum', joined);
   const before = key();
-  assert.deepEqual(hoursBy(await read(), 'project'), {[joined]: 1, quotum: 1, billing: 1});
+  assert.deepEqual(hoursBy(await read(), 'project'), {[joined]:1,quotum:1,billing:1,early:0.5,secret:0.5});
   await rename(joined, 'A');
   await rename('secret', 'B');
   assert.notEqual(key(), before, 'different names have different keys');
-  assert.deepEqual(hoursBy(await read(), 'project'), {A: 1, quotum: 1, billing: 1}, 'the cached answer is not reused after renaming');
+  assert.deepEqual(hoursBy(await read(), 'project'), {A:1,quotum:1,billing:1,early:0.5,B:0.5}, 'the cached answer is not reused after renaming');
 });
 
-test('a board’s history is read under a key of what the board shows, which names off the board leave as it is', async () => {
-  const {call, team, later, workKey: key} = await worked();
-  // Alice's second subscription leaves the board: the project she worked on only there is off it.
-  await call('DELETE', `/api/boards/${team}/shares/${later}`, {as: 'alice'});
-  const before = key();
-  await call('POST', '/api/projects', {as: 'alice', body: {groups: ['secret'], name: 'Hidden'}});
-  assert.equal(key(), before, 'a project renamed off the board');
-  // A machine that measures but has no agents on the board's subscriptions.
-  const secret = (await call('POST', '/api/tokens', {as: 'bob', body: {}})).body.secret;
-  await call('POST', '/v1/ingest', {body: batch('bob-desk-0123456789'), headers: {authorization: `Bearer ${secret}`}});
-  assert.equal(key(), before, 'a machine added with no agents on the board');
-  // A name the board shows changes the key.
-  await call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name: 'Quotum hub'}});
-  assert.notEqual(key(), before);
+test('work authority follows admitted-device names even without shared funding and ignores names outside the cohort',async()=>{
+  const {call,team,later,workKey:key}=await worked();
+  await call('DELETE',`/api/boards/${team}/shares/${later}`,{as:'alice'});const before=key();
+  await call('POST','/api/projects',{as:'alice',body:{groups:['secret'],name:'Unprovided'}});assert.notEqual(key(),before,'source unsharing redacts funding but keeps the admitted project');
+  const named=key(),secret=(await call('POST','/api/tokens',{as:'bob',body:{}})).body.secret;
+  await call('POST','/v1/ingest',{body:batch('bob-desk-0123456789'),headers:{authorization:`Bearer ${secret}`}});assert.notEqual(key(),named,'a new saved member device receives default admission');
+  const added=key();await call('POST','/api/projects',{as:'alice',body:{groups:['quotum'],name:'Quotum hub'}});assert.notEqual(key(),added);
+  await call('POST',`/api/boards/${team}/leave`,{as:'carol'});const departed=key();
+  const privateName=await call('POST','/api/projects',{as:'carol',body:{groups:['quotum'],name:'Private project'}});assert.equal(privateName.status,200);assert.equal(key(),departed,'a departed owner’s names cannot change the remaining cohort');
+  await call('POST','/api/projects',{as:'alice',body:{groups:['never-captured'],name:'Unused'}});assert.equal(key(),departed,'a name without captured admitted work changes no work authority');
 });
 
 test('the work of a period is of its known part: a range reads its own, and one before the hub kept work reads none', async () => {
-  const {call, store, team, ago, hour} = await worked();
+  const {call,store,team,later,ago,hour}=await worked();
   const range = (from: number, to: number) => readFrame(call, `board=${team}&from=${from}&to=${to}`, 'alice').then(r => r.body);
   const middle = await range(ago(3.5), ago(2.5));
   assert.equal(middle.activity.activeMs, ago(3) - middle.since, "Alice's work within it, out to whole cells; Bob's is before he joined");
   assert.equal(Math.round(middle.activity.activeMs / hour * 10) / 10, 0.5);
-  assertWork(middle);
+  assertWork(middle,{[later]:[0,0]});
   const before = await range(ago(12), ago(8));
   assert.equal(before.activity.known, null, 'before the subscription came to the board, nothing of it is known');
   store.db.prepare("UPDATE meta SET value = ? WHERE key = 'agentWorkSince'").run(String(ago(1)));
@@ -982,7 +985,9 @@ test('agents report the coding agents running on their machines; the cards of th
   assert.equal((await report([{...codex, sessionId: 'a'.repeat(32)}])).status, 200);
   const [identified] = await shown();
   assert.equal(identified.workedMs, 0, 'valid ID starts with known zero, without guessed legacy credit');
-  assert.deepEqual(Object.keys(identified).sort(), Object.keys(first).sort(), 'producer identity never reaches the board');
+  assert.deepEqual(Object.keys(identified).sort(), [...Object.keys(first), 'presenceKey', 'currentPresence'].sort(), 'stable sessions add only the opaque presence binding and deadlines');
+  assert.match(identified.presenceKey, /^[\w-]{16}$/);
+  assert.ok(!JSON.stringify(identified).includes('a'.repeat(32)), 'raw producer identity never reaches the board');
   assert.equal((await report([])).status, 200);
   assert.deepEqual(await shown(), [], 'an empty list: none runs');
   const long = await report([{...codex, project: 'x'.repeat(300), folder: 'y'.repeat(300)}]);
@@ -1015,8 +1020,8 @@ test('agents report the coding agents running on their machines; the cards of th
   assert.equal(borrowed.body.accepted, 1, "unheld work is accepted for its owner's private view");
   const bobsOverview = (await call('GET', '/api/overview', {as: 'bob'})).body;
   assert.deepEqual(bobsOverview.sources, []);
-  assert.equal(bobsOverview.ownSessions.length, 1);
-  assert.equal(Object.hasOwn(bobsOverview.ownSessions[0], 'source'), false, 'raw unheld attribution stays private to storage');
+  assert.equal(bobsOverview.unattributedSessions.length, 1);
+  assert.equal(Object.hasOwn(bobsOverview.unattributedSessions[0], 'source'), false, 'raw unheld attribution stays private to storage');
 
   const invalidTime = await report([{...guessed, lastWorkedAt: 'never'}]);
   assert.deepEqual([invalidTime.status, invalidTime.body], [400, {error: 'invalid_request', detail: 'lastWorkedAt'}]);
@@ -1072,7 +1077,7 @@ test('changes from another origin, unknown hosts and other methods are refused',
 });
 
 
-test('view writes require an independent current writer header even when an old page echoes v2',async t=>{
+test('view writes require an independent current writer header even when an old page echoes v4',async t=>{
   const {app,call,person,store}=await hub();t.after(()=>app.close());const board=await person('alice');
   const current=(await call('GET','/api/overview?board='+board,{as:'alice'})).body.view;
   const before=store.db.prepare('SELECT * FROM views WHERE board_id=?').get(board);
@@ -1081,8 +1086,8 @@ test('view writes require an independent current writer header even when an old 
     assert.equal(reply.status,428);assert.equal(reply.body.error,'view_reload_required');
     assert.deepEqual(store.db.prepare('SELECT * FROM views WHERE board_id=?').get(board),before);
   }
-  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:3}})).status,400);
-  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:1}})).status,428);
+  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:5}})).status,400);
+  assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:{...current,version:1}})).status,400);
   assert.equal((await call('POST',`/api/boards/${board}/view`,{as:'alice',body:current,headers:{'If-Match':'"0"'}})).status,409);
 });
 

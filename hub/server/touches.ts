@@ -14,9 +14,9 @@ export type Touches = {
   /** What is the same for everyone changed: the reset trackers' news. */
   touchHub(): void;
   /** A source's history changed from `since`: a measurement or credited agent work. */
-  history(source: string, since: number, scopes?: readonly HistoryScope[], options?: {work: true}): void;
-  touchClientSessions?(user: string): void;
-  clientHistory?(user: string, since: number): void;
+  history(source: string, since: number, scopes?: readonly HistoryScope[], work?: boolean): void;
+  touchClientSessions?(user:string,device?:string):void;
+  clientHistory?(user:string,since:number,device?:string,sources?:readonly string[]):void;
   /** Some sessions of this person may have ended. */
   dropSessions(user: string): void;
   /** This person may be off this board. */

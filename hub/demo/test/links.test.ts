@@ -48,7 +48,7 @@ test('linked-client catalogue codes hold through production reports, projections
     const publicText=JSON.stringify(shared);assert.ok(!publicText.includes('gateway.example')&&!publicText.includes('accountSourceId')&&!publicText.includes('linkId'));
     assert.ok(shared.sources.some(source=>source.usageWork?.length));seen.add('shared-safe-status');
     const wallet=source('OpenRouter linked work').id,cell=60_000,from=Math.floor((now-2*hour)/cell)*cell,to=Math.ceil((now+1)/cell)*cell;
-    const chunks=store.cells(owner.personalBoard,cell,from,to,{now,scope:'budget',work:true,meters:{unit:'USD',ids:[[wallet,'balance']]}});
+    const chunks=store.cells(owner.personalBoard,cell,from,to,{now,scope:'budget',sourceWork:true,meters:{unit:'USD',ids:[[wallet,'balance']]}});
     const work=drain(composeMoneyWorkPrepared(chunks,cell,from,to))[0],estimate=moneyWorkRate(work,'14000000');
     assert.equal(work.eligibleActiveMs,hour);assert.equal(estimate.rate,'1400000');seen.add('active-hour-rate');
     assert.equal(estimate.remainingMs,String(10*hour));seen.add('remaining-active-hours');

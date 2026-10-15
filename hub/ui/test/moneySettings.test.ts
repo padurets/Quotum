@@ -6,7 +6,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {preparationFixture} from './preparationFixture';
-import {archivedKeyGroups,keyMeter,moneySelection,readMoney} from '../lib/moneySelection';
+import {archivedKeyGroups,keyMeter,moneySelection,readMoney,moneyChoices,toggleMoneyChoice} from '../lib/moneySelection';
 import {Store} from '../../server/store/store';
 import {deepSeekMeasurement} from '../../server/connectors/deepseek';
 import {ApiError} from '../lib/http';
@@ -15,6 +15,8 @@ import {referenceBalance,budgetVisible,balanceGroups,balanceRoleLabel,keyName} f
 import type {Named} from '../lib/board';
 import type {KeyPage} from '../lib/moneyKeys';
 import type {Meter} from '../../server/domain/meters';
+import {EMPTY_VIEW} from '../../server/domain/view';
+import type {Arrange} from '../lib/view';
 
 type Node={type:unknown;props:Record<string,unknown>;key?:string};
 const component=(name:string)=>({name});
@@ -40,12 +42,13 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),jsxs:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),Fragment:'fragment'};
     if(name.endsWith('/board'))return {useBoardId:()=> 'b',useCurrencyContext:()=>budget?.context??defaultCurrencyContext};
     if(name.endsWith('/http'))return {ApiError,call};
-    if(name.endsWith('/moneySelection'))return {moneySelection,archivedKeyGroups,keyMeter};
-    if(name.endsWith('/prefs'))return {usePrefs:()=>prefs,setPrefs:(patch:typeof prefs)=>{prefs=patch;}};
+    if(name.endsWith('/moneySelection'))return {moneySelection,archivedKeyGroups,keyMeter,moneyChoices,toggleMoneyChoice};
+    if(name.endsWith('/prefs'))return {usePref:(key:keyof typeof prefs)=>prefs[key],setPrefs:(patch:typeof prefs)=>{prefs=patch;}};
     if(name.endsWith('/money'))return {keyName,balanceRoleLabel,balanceGroups,referenceBalance,budgetVisible};
     if(name.endsWith('/providers'))return providers;
     if(name==='../../server/domain/currency')return currency;
     if(name.endsWith('/meterHistory'))return {MAX_METERS:32};
+    if(name.endsWith('/view'))return {};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key};
     if(name==='./Popover')return {SwitchRow:switchRow};
     if(name==='./KeyPages')return {KEYS_PER_PAGE:10,KeyPages:pages,KeyPageContent:content};
@@ -58,19 +61,9 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
   const settle=async()=>{render();await flush();return render();};
   const pager=()=>nodes(tree).find(n=>n.type===pages)!.props as {page:number;pages:number;next:boolean;previous:boolean;loading:boolean;onNext:()=>void;onPrevious:()=>void};
   const slots=()=>nodes(tree).filter(n=>typeof n.props.className==='string'&&n.props.className.includes('key-slot'));
-  return {settle,render,pager,slots,reads,selection:()=>moneySelection([source],[],prefs.money,budget?.context).selection,switches:()=>nodes(tree).filter(n=>n.type===switchRow),refresh:()=>{revision++;source={...source,successAt:revision};}};
+  const openKeys=async()=>{const button=nodes(tree).find(n=>n.type==='button'&&nodes(n).some(child=>child.props.children==='money.keySeries'));assert.ok(button);(button.props.onClick as ()=>void)();await settle();};
+  return {settle,render,pager,slots,reads,openKeys,selection:()=>moneySelection([source],[],prefs.money,budget?.context).selection,switches:()=>nodes(tree).filter(n=>n.type===switchRow),refresh:()=>{revision++;source={...source,successAt:revision};}};
 }
-
-test('adding a native component preserves the implicit total in the reader currency',async()=>{
-  const definition={id:'CNY',name:'CNY',symbol:'CNY',fractionDigits:2};
-  const source:Named={id:'s',title:'Account',provider:'deepseek',plan:'',successAt:1,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,keys:[],keysCount:0,meters:['balance:CNY','granted:CNY','topped_up:CNY'].map(id=>({...meter(id),unit:'CNY'}))};
-  const f=fixture([],{source,context:{target:definition,definitions:[definition],sources:{}}});await f.settle();
-  assert.deepEqual(f.selection()?.ids,[['s','balance:CNY']]);
-  assert.equal(f.switches().find(n=>n.key==='balance:CNY')?.props.on,true);
-  const granted=f.switches().find(n=>n.key==='granted:CNY')!;
-  (granted.props.onChange as (on:boolean)=>void)(true);await f.settle();
-  assert.deepEqual(Array.from(f.selection()!.ids,([source,meter])=>[source,meter]),[['s','balance:CNY'],['s','granted:CNY']]);
-});
 
 test('native and converted balance-only sources have balance switches without archived key controls',async t=>{
   const store=new Store(':memory:',1);t.after(()=>store.close());
@@ -84,37 +77,96 @@ test('native and converted balance-only sources have balance switches without ar
   const native=source('USD','1'.repeat(24)),converted=source('CNY','2'.repeat(24));
   for(const current of [native,converted]) {
     const f=fixture([],{source:current,context:defaultCurrencyContext});await f.settle();
-    assert.equal(f.switches().length,3);assert.equal(f.slots().length,0);
+    assert.equal(f.switches().length,1);assert.equal(f.slots().length,0);
     assert.equal(f.switches().filter(row=>row.props.on).length,1);assert.equal(f.reads.length,0);
-    const component=f.switches()[1];(component.props.onChange as (on:boolean)=>void)(true);await f.settle();
-    assert.equal(f.selection()!.ids.length,2);assert.equal(f.slots().length,0);
+    const component=f.switches()[0];(component.props.onChange as (on:boolean)=>void)(false);await f.settle();
+    assert.equal(f.selection()!.ids.length,0);assert.equal(f.slots().length,0);
   }
   const multiple=fixture([],{source:converted,others:[native],context:defaultCurrencyContext});await multiple.settle();
-  assert.equal(multiple.switches().length,6);assert.equal(multiple.render().some(n=>n.props.children==='money.selectedDetails'),false);
+  assert.equal(multiple.switches().length,2);assert.equal(multiple.render().some(n=>n.props.children==='money.selectedDetails'),false);
 });
 
 test('the real settings keep ten slots when a selected live key moves off page',async()=>{
-  const f=fixture();await f.settle();
-  const usage=f.switches().find(n=>n.key==='key:0:usage')!;
+  const f=fixture();await f.settle();await f.openKeys();
+  const usage=f.switches().find(n=>n.key==='0')!;
   (usage.props.onChange as (on:boolean)=>void)(true);await f.settle();
+  assert.ok(f.selection()!.ids.some(([,meter])=>meter==='key:0:cap'));
+  assert.ok(!f.selection()!.ids.some(([,meter])=>meter==='key:0:usage'));
   f.pager().onNext();await f.settle();
   assert.equal(f.slots().length,10);assert.equal(f.pager().page,2);assert.equal(f.pager().pages,2);
-  assert.equal(f.switches().some(n=>n.key==='key:0:usage'),false);
+  assert.equal(f.switches().some(n=>n.key==='0'),false);
 });
 
 test('selected archived scales use the same pages and remain removable',async()=>{
-  const f=fixture([['s','key:gone:usage'],['s','key:gone:cap']]);await f.settle();
+  const f=fixture([['s','key:gone:usage'],['s','key:gone:cap']]);await f.settle();await f.openKeys();
   assert.equal(f.pager().pages,3);f.pager().onNext();await f.settle();
   assert.equal(f.slots().length,10);f.pager().onNext();await f.settle();
   assert.equal(f.slots().length,1);assert.equal(f.pager().page,3);assert.equal(f.pager().loading,false);
-  for(const kind of ['usage','cap']){const row=f.switches().find(n=>n.key===`key:gone:${kind}`)!;assert.equal(row.props.disabled,false);(row.props.onChange as (on:boolean)=>void)(false);await f.settle();}
+  const row=f.switches().find(n=>n.key==='gone')!;assert.equal(row.props.disabled,false);(row.props.onChange as (on:boolean)=>void)(false);await f.settle();assert.ok(!f.selection()!.ids.some(([,meter])=>meter.startsWith('key:gone:')));
   assert.equal(f.pager().pages,2);assert.equal(f.slots().length,10);
 });
 
 test('an open settings page reloads its names and caps on a successful source update',async()=>{
-  const f=fixture();await f.settle();f.pager().onNext();await f.settle();
+  const f=fixture();await f.settle();await f.openKeys();f.pager().onNext();await f.settle();
   const before=f.reads.length;f.refresh();await f.settle();
   assert.equal(f.reads.length,before+1);assert.equal(f.pager().page,2);
-  assert.ok(f.slots().every(n=>nodes(n).some(child=>child.props.children===`Key ${Number(n.key)} revision 2`)));
-  assert.equal(f.switches().find(n=>n.key==='key:10:cap')?.props.disabled,true);
+  assert.ok(f.slots().every(n=>n.props.children===`Key ${Number(n.key)} revision 2`));
+  const key=f.switches().find(n=>n.key==='10')!;assert.equal(key.props.disabled,true,'usage without a reported cap is not a balance choice');
+  assert.equal(key.props.value,'money.noCap');
+  assert.ok(!f.selection()!.ids.some(([,meter])=>meter==='key:10:usage'));
+});
+
+test('shared settings expose reader data selection while keeping board actions owner-only',()=>{
+  const popover=component('popover'),hide=component('hide');
+  let available=1,settings=readMoney({unit:'USD'});
+  const modules:Record<string,unknown>={
+    'react/jsx-runtime':{jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'},
+    '../lib/board':{useCurrencyContext:()=>defaultCurrencyContext},
+    '../lib/prefs':{usePref:()=>settings},
+    '../lib/moneySelection':{moneySelection:()=>({selection:{ids:Array.from({length:available},(_,i)=>['s',String(i)])}})},
+    '../../server/domain/currency':currency,'../../server/domain/meterHistory':{MAX_METERS:32},
+    '../i18n':{t:(key:string)=>key},'./Popover':{Popover:popover,HideRow:hide,SwitchRow:switchRow},
+  };
+  const load=(file:string)=>{
+    const context={exports:{} as Record<string,(props:Record<string,unknown>)=>Node|null>,require:(name:string)=>modules[name]??{}};
+    runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+    return context.exports;
+  };
+  const money=load('../components/MoneySettings.tsx'),table=load('../components/AnalyticsTable.tsx');
+  for(const owner of [false,true]) {
+    const arrange:Arrange={view:EMPTY_VIEW,owner,update:()=>{throw new Error('opening reader settings must not write the board');}};
+    const props={arrange,widget:'budget-history',sources:[{id:'s'}],series:[]};
+    const chart=money.MoneyChartSettings(props)!;
+    assert.equal(chart.type,popover);assert.equal(chart.props.label,'history.settings');
+    assert.equal(nodes(chart).filter(node=>node.type===hide).length,Number(owner));
+    const picker=nodes(chart).find(node=>node.type===money.MoneySettings)!;
+    assert.ok(picker);assert.equal(nodes(money.MoneySettings(picker.props)).filter(node=>node.type===money.KeyMoneySettings).length,1);
+    const grid=table.TableSettings({...props,columns:[{id:'value',title:'Balance'}],visible:['value'],children:picker})!;
+    assert.equal(grid.type,popover);assert.ok(nodes(grid).includes(picker));
+    assert.equal(nodes(grid).filter(node=>node.type===switchRow).length,Number(owner),'column controls stay owner-only');
+    assert.equal(nodes(grid).filter(node=>node.type===hide).length,Number(owner));
+    const funds={...props,family:'funds'};
+    const ordinary=money.MoneyChartSettings(funds);
+    assert.equal(ordinary===null,!owner);
+    assert.equal(nodes(ordinary).some(node=>node.type===money.FundsSettings),false,'ordinary funds have no duplicate visibility list');
+    available=33;
+    assert.equal(nodes(money.MoneyChartSettings(funds)).filter(node=>node.type===money.FundsSettings).length,1);
+    available=1;settings=readMoney({unit:'USD',selected:{USD:[]}});
+    assert.equal(nodes(money.MoneyChartSettings(funds)).filter(node=>node.type===money.FundsSettings).length,1,'explicit empty data selection remains recoverable');
+    settings=readMoney({unit:'USD'});
+  }
+  modules.react={memo:(component:unknown)=>component,useMemo:(read:()=>unknown)=>read(),useRef:(current:unknown)=>({current})};
+  modules['../lib/board']={useCurrencyContext:()=>defaultCurrencyContext,useNamed:()=>[]};
+  modules['../lib/history']={useBudgetHistory:()=>({history:null}),budgetHistory:{retry:()=>{}}};
+  modules['../lib/view']={columnShown:()=>true,BUDGET_TABLE:'budget-table'};
+  modules['../i18n']={t:(key:string)=>key,useLocale:()=> 'en'};
+  modules['./AnalyticsTable']=table;modules['./MoneySettings']=money;
+  const analytics=load('../components/MoneyAnalytics.tsx');
+  for(const owner of [false,true]) {
+    const panel=analytics.MoneyTable({arrange:{owner,view:EMPTY_VIEW}})!;
+    assert.equal(panel.props.controls,undefined);
+    const settings=panel.props.settings as Node;
+    assert.equal(settings.type,table.TableSettings);
+    assert.equal((settings.props.children as Node).type,money.MoneySettings,'the table uses the same reader selection inside its existing settings');
+  }
 });

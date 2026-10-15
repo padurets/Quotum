@@ -194,7 +194,7 @@ answers. A program started from the desktop does not see the PATH a shell sets u
 the desktop app finds a client only in these places; one elsewhere is given by `path` in
 the settings.
 
-### Coding clients and private work
+### Coding clients and board session access
 
 The Rust client catalogue owns executable discovery and process tracking independently
 of quota collectors. Claude Code, Codex and Antigravity map explicitly to their existing
@@ -216,12 +216,40 @@ Live sessions, working state, retained counters and history share this resolver.
 History cuts raw work at rule boundaries without rewriting the ledger. Display fragments
 share a board-scoped row identity so source splitting adds no agents. Stronger context
 evidence applies to retained history, including when received in an idle report.
-Source-less and unheld work is private to the machine owner's personal board;
-shared projections and source activity signals require a current holding.
+A single immutable WorkAccess snapshot admits saved-device
+work independently of subscriptions. Personal boards always admit their owner's work.
+Settings, admission and funding dependencies use the same device inventory: connected
+devices and disconnected devices with retained work. A disconnected device without
+retained work cannot establish coverage or invalidate the session cursor.
+Schema 25 appends sparse board_device_sessions overrides: absent means on from joining,
+NULL means off, and an explicit timestamp means on from a new cutoff. Every effective
+change receives a fresh opaque revision for CAS, including same-millisecond OFF/ON.
+The saved device owner controls its setting; disconnect keeps retained history and its
+policy, while leaving a board removes overrides and rejoining starts a new cutoff.
 
-Private ownSessions and ownSince events update the corresponding page slices and
-quota/activity history without card or financial updates. Closed tiles invalidate even
-without readers. Empty boards use the same explicit Add widget flow and saved visibility.
+Funding disclosure is separate: current held sources provided to the board retain their
+public source ID; held sources not provided become null with sourceStatus:notProvided;
+unknown or unheld sources become plain null. Hidden cards never filter admitted work.
+The immutable raw ledger and presence binding retain their original source/context.
+No source, holding, duty or retrospective attribution is created.
+
+Every board uses the released source sessions map plus one disjoint unattributedSessions
+slice, without a second full roster. Source-free workSince events update the shared
+work index without financial updates, clipped to device admission before publication.
+An opaque workAuthority changes only with relevant access, names or actual retained
+evidence boundaries; ordinary time, measurements and new contexts do not change it.
+One board funding revision in existing metadata changes atomically with relevant
+holding or sharing mutations. Retained admitted evidence, current session source facts
+and quota work coverage determine relevance; unrelated wallet holdings stay independent.
+The revision belongs to the captured WorkAccess, alongside its maps. History cells,
+metadata, cache keys and quota tapes reuse that single reserved snapshot; an allocation
+failure is shared by dependent sections. Actual database changes revalidate authority
+with a fresh bounded snapshot before delivery. Revocation
+replaces queued stream/poll data with a fresh snapshot and retires the browser's work
+index, staged replies, drawings, gestures and retained summaries immediately. Closed
+tiles, including empty source-less tiles, invalidate even without watchers; their
+dependency metadata is counted within the existing 32 MiB cache budget. Empty boards
+use the same explicit Add widget flow and saved visibility.
 An account-private devices hint invalidates an open owner-device disclosure on any
 board without sending session data; opening or reconnecting also reads the owner API.
 The same presence deadline clears the disclosure even when its only sessions use held,
@@ -484,9 +512,11 @@ the latest list of each machine in memory for five minutes (after a restart the 
 send theirs again), files each session under its subscription (the account the client is signed in to now, else the one
 the machine last delivered for that client; only one its person holds; the agent leaves
 out a session of a client signed in anew since it last measured, until it knows which
-account that is) and shows it on
-that card, by project (as that person named it) and folder, to the members of a board
-the person is on where the subscription is shown, whoever brought it. Each list also counts until the next one, for at most 200 seconds: the hub
+account that is). This list supplies current presence by project (as that person named
+it) and folder, visible to members of boards admitting that saved device's sessions.
+Source disclosure follows the board's provided subscriptions separately. The compact panel uses current sessions; dashboard lists
+use retained work in the board's period, with this presence attached when known.
+Each list also counts until the next one, for at most 200 seconds: the hub
 keeps when each session worked, with its machine, subscription, where it runs, since
 when and its project and folder names as reported, as long as samples. A session is
 never credited twice for the same time: after the hub's clock goes back, it is credited
@@ -496,9 +526,10 @@ out when read (`domain/work.ts`): agent-hours add each stretch up, two agents co
 twice; active time is their union, overlaps counted once for whichever machines,
 people or projects are asked about. The corrections people make to project
 names apply when read, so they reach all the time kept. The database says since when
-this is kept (`agentWorkSince`): before it, how agents worked is not known. A board's
-live lists tell each identified running agent's retained credited work on its current
-subscription, summed across project, folder and origin contexts. The optional opaque
+this is kept (`agentWorkSince`): before it, how agents worked is not known. The live
+session projection carries each identified running agent's retained credited work on
+its current subscription, summed across project, folder and origin contexts. This
+operational counter is separate from the dashboard's period totals. The optional opaque
 producer identity hashes a persisted private installation salt, OS, provider and native
 process birth; wall clocks and context names do not tell identity. Linux and macOS use
 boot IDs with raw process birth clocks, while Windows attempts only a validated fixed
@@ -510,13 +541,17 @@ migration preserves every historical row ID and work interval. Identified work h
 persisted high-water end across its contextual rows; crossing legacy and identified
 namespaces clips against the opposite namespace's retained device-wide end, snapshotted
 before writes. On rollback this can conservatively undercount parallel work until that
-end. History keeps its sharing/joining cutoff; live counters for allowed sessions include
-retained current-subscription credit before that cutoff too.
-The agents panel opened from a card's tray shows this credited work time for each
-session in agent-hours, with its project and folder, grouped by machine.
+end. Shared session history and live counters are clipped to the device's current
+joining or re-enable cutoff. Source quota attribution is additionally clipped to its
+sharing cutoff; personal live counters retain their own captured credit. Dashboard session lists
+and the agents panel opened from a card's tray use authorized work intersecting the
+board's selected period, clipped to that period and those cutoffs. They include retained
+contexts absent from the current machine list. The tray panel shows that period's work
+in agent-hours, with project and folder, grouped by machine. Optional current presence
+never supplies additional credited work or changes the historical roster.
 
-The analytics show it over their period. The table tells, for each window, its
-subscription's active time, what the window spent per active hour, what share of its
+The accounting table and agent activity use that same period. The table tells, for
+each window, its subscription's active time, what the window spent per active hour, what share of its
 spending came while agents were active, and, beside the forecast by time, a forecast by
 work: how many active hours what is left lasts at that spending (or that it lasts to
 the reset). An optional Agent-hours column adds each agent's time separately.
@@ -527,17 +562,39 @@ A widget stacks agent-hours by subscription, project or machine in bars of an ho
 than twenty hours). Four agents over an hour make a bar 4h tall. The legend's groups
 add up to the total in every split; projects and machines take seven colours by their
 agent-hours, and those past them share a neutral one. Each group is its own however
-small. Above the stacks are agent-hours, active time, distinct agents and the average
+small. Above the stacks are agent-hours, active time, recorded sessions and the average
 at once (agent-hours divided by active time). Active time is not drawn: it is in the
 totals and tooltips. A bar's tooltip gives these totals first, then its group parts;
 a legend entry's glass bubble gives the group's agent-hours, active time, average at
-once and distinct agents. Hover or keyboard focus opens it, Escape dismisses it; a
+once and recorded sessions. Hover or keyboard focus opens it, Escape dismisses it; a
 tap also switches the group and keeps the bubble for four seconds. Switching groups
 off recomputes stacks, scale and the shown agent-hours; active time, agents and at
-once still cover all the board's agents. A subscription's agent-hours equal its
-windows' Agent-hours column, and its active time equals their Active time column.
-What is known of a period begins with `agentWorkSince`, and on a shared board no earlier than the
-subscription came to it: the part before is said to be unknown, not drawn as idle. The
+once still cover all the board's agents. A subscription's activity grouping includes all admitted work. Its quota work columns
+use the separate source-grant cutoff, so work before a subscription was provided can
+appear in Activity without entering quota attribution.
+The Agent sessions table compares the same work by project, machine or subscription,
+with reader grouping and sorting independent of the activity chart. Its existing
+count, credited work and last-activity columns can be accompanied by union active time
+and average concurrency. These two grouped columns are off by default and enabled in
+owner settings; individual-agent rows and disclosures retain their contextual fields.
+It reads the shared period work index without quota history or plot preparation.
+Whole-period totals never add group active times or average row concurrency. Recorded
+sessions are positive-work retained contexts, so one logical producer can count more
+than once after a context change. The chart explains the same count. Opening a group
+shows those retained contexts, including ones without current presence, with their work
+clipped to the same period. The table uses common whole-row pages and a bottom-right
+pager without an inner vertical scroller. Its disclosure uses existing 50-row pages.
+Small cells and visible raw-value sort crossings use the common clock; fixed ranges
+do not tick. Ratio ordering uses shared exact BigInt cross-products, and its scheduler
+searches bounded discrete polynomial segments around their integer vertex. It never
+uses floating roots or polling. The existing nearest 250 ms batching applies. Replacement reads keep the last complete summary with its original basis
+until new evidence is accepted, and access or work-authority loss clears retained work.
+Session coverage begins with retained capture and the earliest admitted device cutoff;
+no admitted devices means unavailable, distinct from known zero. Source quota coverage
+also observes its source grant. A backward clock correction behind discarded evidence
+keeps one complete prior range for rows, scalar work, coverage, summaries, order and
+geometry through wait/error/retry; operational presence stays independent. Revocation
+clears that basis instead of retaining it. The
 pace and the share while active are taken over the activity within the steps between
 samples whose spending counts, so a gap counts neither, and need half an hour of it. Work that
 would outlast the reset, or a whole window where no reset time comes first (a range),
@@ -591,12 +648,18 @@ them), kept for 90 days.
   The chart, table and activity are composed on the page from the same cells. A whole
   tile ending before now is cached on the hub, within 32 MiB. Every measurement and
   credited work invalidates tiles it can affect, including an empty tile of that source;
-  a changed `Store.workKey` (lineup, work selection, project or machine names) recounts it.
+  a changed `Store.workKey` (device admission, funding disclosure or relevant project/machine names) recounts it. Resource selection and financial proof remain separate.
   Tiles near retention's edge are never cached. Deleting retained samples, work or events
   advances a private store revision; the next server read clears the tile cache before
   looking for hits. Even a distant tile can depend on a preceding sample of any age.
   This housekeeping emits no history event: observations already read by the page stay
-  until its usual data or connection changes. The page keeps packed buffers within an
+  until its usual data or connection changes. Stored plan events are an exception:
+  quota tiles carry actual nonempty plan observations and the latest authorized
+  differing predecessor. Their independent retention deadlines limit closed-tile
+  reuse; the page redacts expired facts from tiles and readouts with its shared clock,
+  without HTTP or a physical database prune. A first accessible observation means
+  first known to this reader. Plan names count towards the existing byte budgets.
+  The page keeps packed buffers within an
   estimated 15 MiB, protecting the frame on screen and removing dictionaries no retained
   cell uses after replacement. Session references are opaque and
   change with the hub's run, so answers cannot mix runs. A machine's list credits work
@@ -641,6 +704,12 @@ them), kept for 90 days.
   never under its mean hour), so that it would run out before the reset at that pace, put
   a muted arrow up by the words, and how many times and when it would run out in the
   tooltip; the verdict stays.
+
+  The producer records the actual observed plan boundary used at its confirmation
+  hour. Each board filters this provenance by visibility, sharing and retention;
+  expiry updates only the provenance, leaving the shared numeric model intact. A
+  compatible weekly forecast's tooltip gives the plan observation and explains its
+  confirmation after an hour, including a forecast waiting for more data.
 
   A series says nothing until it has an hour of history. Under a day it goes by the hours
   it has, leaning on the window's own mean (once the window ran half an hour when the
@@ -705,6 +774,13 @@ Money readings use signed integer millionths; native Codex credits carry their o
 exact coefficient and scale. Both have sparse value/semantic changes and
 continuous observation spans. Unchanged heartbeats extend freshness without another
 reading. Retention keeps one predecessor to distinguish a late increase from a reset.
+Spans and provider contexts store their confirmed first observation separately from
+their retained start. Pruning clips geometry without changing that observation or its
+currency quote. A same-value recovery records its actual new start. Legacy heads are
+unknown unless retained evidence proves them. Extending a span with an unknown head
+preserves its previous confirmed tail before advancing it; that anchor cannot date an
+earlier historical value. Readers never treat the retention cutoff as a measurement.
+Reference and private currency retention preserve the quotes needed by these anchors.
 Safe provider context has its own sparse history alongside that ledger: DeepSeek funds
 availability, inventory completeness and observed key identities, and each key's
 properties, reported period usage, BYOK usage and supplier dates. Exact amounts stay
@@ -721,6 +797,13 @@ spending or retroactively reconstructing overwritten period totals.
 A missing key is stale after one successful traversal and archived after two successive
 successful misses; partial traversals never confirm absence, and history is retained.
 A valid null limit explicitly ends the current cap, including in a partial round.
+Each key's explicit cap presence or absence is saved at that key page's observation
+time. Partial inventories and malformed limits do not replace this evidence. Historical
+cards apply the last confirmed state before their right edge, and retention keeps its
+predecessor; a later incomplete response cannot restore a removed scale.
+Older retained inventories can establish absence only by their recorded completion
+time. They cannot recover an earlier page time or a removal that retention already
+discarded; without that evidence the old amount remains last-known and stale.
 Invalid money leaves stay distinct from null. The ledger retains the last confirmed
 span endpoint as evidence through archival and retention; reappearance uses that
 heartbeat time as its spending anchor.
@@ -789,14 +872,16 @@ observation/freshness. Accepted empty or partial replies retain missing numerica
 values as stale and persist an exclusive interruption on their observation spans.
 A same-value return starts a new span without inventing a changed reading. Accepted
 status time is the watermark even when numerical success is older.
-Budget cards and the compact panel use one typed presentation of current funds and
-selected allowances. A single Available balance section uses the reader's display currency. Native reference currency takes
-precedence over separate converted observations; the two are never summed. Composition
+Budget cards and the compact panel use one typed presentation of funds and selected
+allowances. Dashboard cards use the latest retained measurements before the end of a
+historical selection; compact keeps current values. A single Available balance section
+uses the reader's display currency. Native reference currency takes precedence over
+separate converted observations; the two are never summed. Composition
 opens from the balance amount in a shared Popover. Key allowances appear separately, with their own scope, limit and reset;
 they do not add to account funds. Only catalogue-supported caps have scales. Lifetime
 credits never supply a wallet's percentage denominator. DeepSeek has no key-cap scales
 or spending summary. Each value keeps its own observation time and stale state.
-Additional observations have explicit purposes: balance components explain current
+Additional observations have explicit purposes: balance components explain the displayed
 funds, counters and reported period totals support analytics, BYOK retains a separate
 accounting basis, and key properties and inventory quality describe access and
 measurement reliability. New API fields do not automatically add card rows. The safe
@@ -1131,13 +1216,15 @@ and its limits.
   more (its last holder left or was removed). Deleting a board deletes its sharing and
   its view, never the measurements.
 - **The view** of a board is how it is arranged: the order of its widgets (a card per
-  source, the list of running agents, the chart, the table and agent activity), their places on a
-  six-column grid (`x`, `y`, `w`, and `h` where the owner chose a height; what the content
+  source, agent sessions, activity, quota and budget charts and tables, and subscription
+  funds history), their places on a six-column grid (`x`, `y`, `w`, and `h` where the
+  owner chose a height; what the content
   needs is measured, never stored), names and colours
   given to cards, the hidden widgets (and those
   off by default, the list of agents, turned on), the columns hidden in a widget's table,
   the agents' and the limits' (and those off by default turned on), the windows hidden inside cards and the spending
-  plans, or that a card has none. The list of agents shows only the subscriptions whose cards are shown.
+  plans, or that a card has none. Agent sessions and activity include admitted device
+  work independently of card visibility or subscription sharing.
   It is stored once per board, like a dashboard in Grafana: the owner arranges it and
   names the cards the way the team calls them, and everyone sees the same board. Nothing
   in the view changes what is measured or stored.
@@ -1240,8 +1327,10 @@ the same object. What shows time (how long ago, how soon, the freshness dot, the
 mark, that the hub cannot be reached) is a small part of its own that tells the page's
 one clock (`hub/ui/lib/clock.ts`) when it reads otherwise, and renders only then: the
 clock keeps one timer for the whole page, none on a hidden tab, and counts in the hub's
-time as the hub's messages tell it. The chart and agent activity move on a cell of the
-history's grid at a time; a label past the chart's right edge counts down on its own, and
+time as the hub's messages tell it. Chart geometry moves on a cell of the history's grid
+at a time. Activity totals, legend amounts and open readouts follow their exact selected
+interval and wake separately when their displayed numbers change; a label past the
+chart's right edge counts down on its own, and
 a forecast's line goes at the moment the table says it runs out, or at the reset; in the
 table, the plan, where the pace leads and the active hours left each read otherwise at
 their own moment. History is read when the hub tells of measurements or credited agent
@@ -1273,37 +1362,52 @@ the GPU.
 A card's dot by the logo tells how its measurements go: its colour, and in its tooltip
 when it was measured and, while the hub sets the pace, when the next measurement comes
 and why, each a line of its own.
-A board has two areas: the cards (and the list of running agents, when turned on),
-which are about now and show every window, and under
-them the analytics: agent activity, quota history and table, additional subscription
-funds history, and wallet budget history and table. All use the period in the analytics head; the weekly/session switch applies
-only to the quota pair. Each analytics widget has independent placement,
-visibility and table columns. Budget series are chosen in the budget chart settings
-and shared with its table, even while the chart is hidden. Subscription funds have
-their own balance-only chart and subscription selection. They never appear in wallet
-budget charts or tables; both monetary charts reuse the same renderer. Each
+A board has one grid for source cards, agent sessions, activity, quota history and
+table, and budget history and table. A filter button in the header toggles a separate
+row directly beneath it, with its controls aligned right. Navigation and filters share
+one sticky glass backing and a continuous outer edge, with an inset divider between the rows.
+Its translucent surface remains distinct from the page background. On wide screens
+the backing shares the content's 1240 px maximum width and 28 px inner side spacing,
+with rounded lower corners. Hiding filters reduces that same surface to the header.
+Narrow screens keep edge-to-edge bars.
+The filter button forms its own group after the board controls. A small dot marks a
+selected historical range, including when the row is hidden; returning to live removes it.
+The row starts closed and remembers its visibility in the reader's browser.
+Hiding it preserves the selected period and shared chart horizon; while open,
+it keeps them available during scrolling. Board navigation and widget management
+stay in the header. Five-hour limits, weekly limits and wallet balance
+each have independent chart/table pairs. Both wallet widgets share
+an accounts-and-keys picker in their settings. Each chart's legend controls
+only its own visibility. Subscription funds use their own family and expose data
+selection only for a bounded cohort or a retained explicit selection. Table columns
+remain owner settings, while shared data controls are available to every reader. Each
 analytics panel uses the same heading and reader-error component. The selected
-period appears once in the shared analytics controls. While a different range is loading
+period and its back/forward buttons appear together at the right end of the shared
+analytics controls. While a different range is loading
 or has failed, retained results name the interval they actually cover; this status
 disappears when the selected answer arrives. The
 limit and budget tables share their column controls, cells and responsive renderer;
 when their selected columns no longer fit, both become labelled rows. Their own
 data models provide the values and column widths, including clock-driven cells.
-Each area is arranged on its own grid. A row is 48 px (a 32 px track and a 16 px gap).
+Every widget is arranged on one grid. A row is 48 px (a 32 px track and a 16 px gap).
+Content measurements update grid positions and reading order directly, without a
+React render of the grid or neighbouring widgets. Only a widget whose own allocated
+height changes hears a sizing update; layout edits still reconcile through React.
 Each widget fills the fewest whole rows that contain its content, with any spare room
 above a card's tray or at the bottom of a panel, unless the owner chose a height for it
-(`h`, in rows). A chosen height is a request, not what shows: a card or the table never
+(`h`, in rows). A chosen height is a request, not what shows: a card never
 gets shorter than its content, and grows past the chosen rows while its content needs
-more, back to them when it needs less, without the view changing. All four charts give a
+more, back to them when it needs less, without the view changing. All five charts give a
 chosen height to their plot, never drawing it lower than they do by themselves, their
-heads, totals and legends whole. The Agent sessions widget gathers them by project (one name
-across people, as agent activity counts it), machine or subscription, each viewer for
-themselves, or lists each agent: a group tells how many of its agents work, how long they
-have worked (each running agent's credited work, which the hub sends with it) and their
-last activity as now while any works or within the first minute, minutes or hours ago
-on the current day, yesterday for the previous local day, then a date and time. The exact
-time stays in the tooltip; an unknown time is a dash. Only the time label wakes when its
-wording changes.
+heads, totals and legends whole. The Agent sessions widget gathers the period's sessions
+by project (one name across people, as agent activity counts it), machine or subscription,
+each viewer for themselves, or lists each agent with None first. Client is shown by
+default in individual and disclosure rows; its owner column setting is independent
+of chart series, and narrow ordinary rows keep it quietly on their existing first line. A group tells how many of its agents
+are currently known to work, their credited work within the period and the date and
+time of their last intersecting work endpoint, using `stamp` in `ui/lib/format.ts`.
+An unknown time is a dash. Presence and rolling work labels have separate clocks;
+current presence does not turn a period's last-work timestamp into a relative label.
 In a narrow grouped list, the default first line pairs the name with the agent count;
 the second pairs credited work on the left with last activity on the right, aligned
 with the line above.
@@ -1312,10 +1416,31 @@ the group. A folder stays under the project in the same table cell, wrapping lon
 worktree names. Their default columns fit a wide dialog as a table with rows highlighted
 edge to edge; a narrow dialog uses an inset compact list. The dialog has no repeated
 count or work total above its rows; its toolbar holds only Back and list sorting when
-needed. The list can be shorter than its rows: it
-shows the most whole rows that fit, in its own order, and a last row saying how many
-more, which opens them all in a dialog; to know how many fit, it lays all its rows out
-unseen beside it, their times standing still. Such a widget tells the grid
+needed. Board tables share `ui/components/TableWidget.tsx`: one width decision,
+height measurement, page model, pager and sort presentation. Natural pages contain
+ten rows; a chosen height fits as many complete rows as its space allows. Variable row
+heights follow row identities through ordering and paging. Static measurement starts
+with fifty candidates and expands to the fitting page and its next row, without clock
+subscriptions. A separate footer puts the whole-selection summary on the left and
+the matching row count beside the compact pager on a separate line below it.
+Wide totals align with their table columns, using the same widths and showing only
+values under the dividing rule; column headings are not repeated. A narrow list uses
+a fixed two-column metric grid above the count and pager. Tables without aggregate
+metrics show only the count and pager.
+Each value names its metric and scope. The sessions table shows whole-period work and
+context counts; quota and budget tables show matching row counts without summing
+unrelated percentages or overlapping wallet components. One-page tables hide the
+pager. Grouping uses the shared labelled segmented control, with None first and
+Project still the default. Optional activity and concurrency columns do not add
+details to the compact session rows. The current working count is a subtitle under
+the session widget's heading, in the shared analytics-note style.
+Wide headers cycle
+ascending, descending, reset; a reset leaves no header selected and restores the
+table's default order. Only the compact list shows a sort menu. Activity totals
+cover the complete period on every page. Height and paging select rows from the
+already complete shared index; neither changes the API request nor starts another
+history read. No table uses an inner vertical scroller.
+Its disclosure pages through the complete retained roster in batches of fifty. Such a widget tells the grid
 through a context of its own (`ui/components/sizing.ts`) the least it can show, what it
 needs whole and, as it lays itself out anew, how tall it shows, so the grid fills the
 rest of its rows before that paints; it reads how tall it is to be and when the grid gives
@@ -1353,9 +1478,12 @@ reading order, with the heights chosen where the least their content can show fi
 arranging is available only on the wide grid.
 The hub migrates pre-grid views and legacy analytics anchors atomically, retaining
 hidden intent, heights, unrelated geometry and each table's columns. A board view and
-revision are read as one reconciled pair. Saves require version 2 and its writer header;
+revision are read as one reconciled pair. Saves use the compact version 4 codec and its writer header;
 a stale runtime cannot save a version it merely echoed from a snapshot. The ordinary
-body limit is 76 KiB UTF-8. Up to the aggregate browser keepalive limit of 64 KiB, saves
+body limit is 80 KiB UTF-8 of the encoded request; decoded drafts fit 132 KiB.
+Storage and POST use the same tuple codec; readers receive a semantic View object.
+The legacy split migration concatenates the old visible orders, retains saved hidden places and
+keeps unarranged source cards implicit. Version 4 retains the old weekly and wallet balance widget IDs and inserts five-hour siblings beside their saved weekly parents, copying width, height and visibility. The upgrade preserves unrelated owner fields and expands retained Add receipts once. New membership never saves all their defaults. Up to the aggregate browser keepalive limit of 64 KiB, saves
 retain their debounce. Larger drafts start ordinary serialized saves immediately; a
 browser close warning stays until acknowledgment or explicit discard, and navigation
 that destroys the saver waits, including native browser Back/Forward. A failed save
@@ -1377,21 +1505,158 @@ with an explicit retry carrying the captured revision. Ending the authenticated 
 drops unsent successors; a submitted Add continues when only its form closes, while an
 owner-scope change prevents further phases. No timer polls for those results.
 New empty boards keep analytics widgets pending. Resource capabilities place
-the quota or wallet pair and the subscription-funds chart independently on first use. An explicit Add also places an empty widget; placement
+the five-hour and weekly pairs, wallet balance pair and subscription-funds chart independently on first use.
+If those automatic placements would exceed a view size bound, they remain pending
+while the board keeps its valid saved view and revision. A smaller save makes room
+for reconciliation to retry; new source cards remain implicit. Explicit Add and save
+still reject oversized changes without discarding saved settings.
+An explicit Add also places an empty widget; placement
 is sticky after its last source or series disappears. Explicit hidden intent wins.
 `enabledWhenEmpty` applies to agents and activity; analytics placement lives in `shown`.
 What
-is only about how one person looks (the analytics' period and window type, the chart's
+is only about how one person looks (the board's period, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
-the agents table's sort order, the chosen board and language) stays in their browser.
-Quota history, budget history, subscription-funds history and agent activity read and move along time alike
-(`ui/components/timeAxis.ts`), each with its legend under it. A time range selected on
-any of them becomes the analytics' period; it lives in the page's
+the agents and quota tables' sort orders, the chosen board and language) stays in their browser.
+The controls above the mixed widget grid own the common period and forecast
+horizon. Shared wallet data selection is accessible from both wallet widgets,
+including a table whose chart is hidden. Each widget keeps its display settings, such as
+columns, forecast visibility, stacking and legend choices.
+A fixed accounting interval is exactly `[from,to)`: card values use the latest retained
+observation strictly before `to`, with validity evaluated at `to`. Missing predecessors
+stay unknown. Native membership follows the last retained nonempty measurement batch;
+monetary values retain their original amounts, allowances and conversion evidence.
+Their optional exclusive `validUntil` separates availability from the recoverable
+observation timestamp: compressed heartbeats can confirm a value between stored anchors
+without inventing a newer measurement time. Live values without it use their normal TTL.
+Current operational status, connector failures, actions, forecasts and reset news remain
+live. Compact mode and native notifications also remain live.
+
+The board's period coordinator collects quota, wallet budget, subscription funds, value and session demands into
+one read-only `POST /api/boards/:board/period`. The GET history route and the period
+route call the same cell reader. Source-work budget estimates join this coordinator
+through an explicit work demand; their native observation pairs and admitted source
+curves use the same period accounting and fixed shift machinery. Unchanged financial
+indexes retain their identity when work alone changes. Sections succeed or fail independently. Within the
+same authorized scope, a retained complete presentation keeps its own interval while
+a replacement loads or fails, including across reconnects. A source or resource removal,
+changed currency context or changed permission to read work retires both the displayed
+result and its reusable presentation until a new authorized baseline is ready; panning
+or restoring the same IDs cannot bring back a retired result. Board, access,
+currency, resource selections, visible consumers and request generations prevent a late
+response from acquiring a newer label. Superseded period reads leave the transport queue;
+retrying an analytical widget repeats its failed exact evidence as well as its drawing cells.
+A bounded signed frontier lets the next read replace changed work and measurement
+intervals or extend missing older evidence. Each bounded work and measurement journal
+has its own monotonic proof boundary. Session cursors require the work proof, quota
+tapes require both proofs, and financial tapes require measurement proof independently
+of work. Once a required proof is discarded, its older cursor needs a complete bounded
+baseline. Quota cells and the session projection share
+one authorized work extraction within a composite read. The request captures one clock,
+expires quiet sessions at that time, then captures the evidence revision. Nested readers
+use that same clock, and every section and cursor names that revision.
+Server period reads yield between preparation slices and share a serial queue, so an
+abandoned request can release its reservation while the hub serves other routes.
+The same protected work capture supplies its authority key to nested readers. Retained
+project names and device labels enter that key one row at a time; temporary hashing
+buffers share the request reservation, including detail and access revalidation reads.
+An authority buffer that cannot fit returns the existing history-limit error while
+independent financial sections can still complete.
+Before resuming or publishing a response, the reader checks access, currency context
+and relevant evidence changes. A changed input discards the whole preparation and
+permits one fresh attempt; continued churn returns `unavailable`. Unrelated boards
+and facts beyond the captured evidence interval do not invalidate the read.
+
+Retained work traces and measurement tapes provide exact boundaries beside the shared
+interior cells. Work prefixes and interval unions compute clipped session duration,
+active time and agent-hours. Hour blocks share identical work patterns without losing
+gaps or millisecond boundaries; the roster, activity and quota accounting share their
+curves. Numeric columns use constant values, piecewise integer progressions or exact integer offsets where possible,
+with 64-bit values for fractions and wider ranges. Changed series rebuild only their own
+prefixes. Rolling numeric labels read those prefixes through the shared clock and wake
+when their formatted value changes. A duration update alone does not wake its roster or
+table; membership and ordering still do. Charts advance at their own grid boundaries.
+As a live window advances, expired work blocks and redundant measurement prefixes
+leave the retained indexes. Work indexes retain unchanged timelines and hour patterns;
+only timelines with an expired prefix copy their remaining buffers. The last real
+observation before the boundary, its availability bounds and required currency evidence
+remain intact. Cleanup uses the cancellable preparation scheduler without reading
+history. Widening past discarded coverage, including a backward correction of the hub
+clock, requires a new bounded baseline and keeps the previous basis visible until it
+arrives. Capture and authority cutoffs remain independent of the locally retained coverage.
+When a continuous monetary span grows, merging retires a superseded heartbeat tail
+only when it is no longer an observation anchor, the new answer omits its binding
+and its complete rate path is unchanged. Explicit bindings and real rate changes
+remain, so accumulated history and a fresh read retain the same conversion provenance.
+Fixed selections carry exact totals and boundary geometry instead of a rolling
+ledger; the server and browser share the accounting implementation in `server/domain`.
+The interior drawing still uses cached history cells. Neighboring card states keep exact sparse changes instead of repeated measurement objects.
+Their interval lookup allocates no replay; restored values share immutable proofs.
+The server reads each source's neighboring state boundaries once and finds native batches
+through a source/time index. Fixed summaries retain compact numeric columns while being
+built; temporary wire rows are released before the next source is read.
+Complete live indexes and fixed
+summaries can move into the shared LRU when a different interval is selected. Returning
+to a retained target reuses it; new evidence or authority changes invalidate those entries.
+Fixed summaries also describe exact duration and timestamp changes between
+observation, work, availability and grid boundaries. Nearby endpoint cells use sparse
+changes between those intervals and an immutable starting summary. The initial reply
+borrows that base from its requested projection; shifted copies retain it. A card
+whose validity already spans the neighboring positions needs no extra sequence. Nearby integer
+timestamps use exact deltas; fractional readings and money retain their original values. A repeated gesture
+can reuse the proof even when native input moves an endpoint to the other side of a
+boundary. Card states retain their own observation and availability intervals. Amounts
+and spending steps are replaced exactly at changes, never interpolated. Positions
+outside the retained proof require new evidence.
+On the wire, replay programs group changes by field and share path prefixes. The
+browser charges restored path and patch containers before allocation, then restores
+the same exact edits for replay. This encoding never changes supplier evidence or
+interpolates fractional values.
+Widgets keep their last complete presentation during replacement, including native panning.
+Cold drawing cells and resource evidence are read separately; live ledgers are split
+by resource family, while compact fixed summaries share one response. Preparation
+replaces scratch reservations as each retained index is completed. Monetary indexes
+retain numeric boundaries in typed buffers and exact amounts in unbounded integer
+prefixes; only uncertain steps need separate amount records. Their retained charge
+includes buffers, collections and integer payloads, while preparation also reserves
+overlapping builders and sorting scratch before allocation. Shared pan readers
+decode one input tile at a time, as do coarse cold reads, so an unread month cannot displace the complete period
+with one large transport body.
+Monetary steps remain exact integers; a partially
+intersected spending step is uncertain, never divided by elapsed time. A balance's TTL
+does not establish spending coverage beyond its last confirmed observation. Cards and
+analytical boundary values use the same recorded heartbeat valuation; an exchange-rate
+change does not become spending. Both readers exclude observations and availability
+barriers at or beyond the hub clock captured for the request. A future compressed endpoint
+cannot extend freshness or accounting coverage: only a retained observation anchor may
+replace it, with its own freshness duration when that duration is recoverable. Admission
+precedes currency binding and accounting, without rewriting stored supplier facts.
+The page clock
+advances live boundaries locally through already received evidence, without a request
+or invented work after the evidence cut. Fixed past accounting does not tick. These
+indexes, dictionaries, response staging and cached values share the history readers'
+15 MiB budget and two transport slots. Server projections share the 32 MiB tile budget.
+Work packing reserves its hourly expansion, dictionaries and overlapping buffers
+before allocation; cancellation releases scratch, and completed packing retains only
+its output charge.
+An oversized section reports `history_limit` without publishing partial totals. Numeric
+preparation uses the shared cancellable scheduler; aggregate benchmark traffic includes
+composite and detail reads, cancellations and responses that finish after measurement.
+
+Quota history, wallet budgets, subscription funds and agent activity read and move along time alike
+(`ui/components/timeAxis.ts`), each with its legend under it. Pointing to a legend
+entry or focusing it with the keyboard highlights that series and dims its peers.
+Wallet charts and tables use a common accounts-and-keys picker inside their settings. Its shared reader selection is independent of the table’s owner-only display settings. An account selects its total balance; a key selects its reported remaining cap within the shared 32-meter bound. Retired spending preferences are discarded without replacing an explicit empty selection with default accounts. Balance components remain in card details. Each fixed chart has independent legend visibility. Ordinary subscription funds use only the legend; the accounts picker appears for more than 32 eligible balances or an explicit retained data selection. Legacy funds subsets remain global visibility intent across boards, without changing bounded admission on legend clicks.
+
+All five charts share `ui/components/seriesFocus.ts`: inherited CSS variables change
+paint without rebuilding prepared paths, updating reader preferences or rendering data
+consumers. Muted entries retain their visibility toggle and do not dim visible series.
+A time range selected on any chart becomes the board's period, including card measurements, session lists and
+accounting tables; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
-‹ and › beside the period move the analytics by half their length: back, to a range in
+‹ and › beside the period move the board by half its period: back, to a range in
 the past held in the address like a dragged one; forward, up to now, where the chosen
 period comes back. A horizontal touchpad swipe, Shift with the wheel, or Shift with a
-mouse or pen drag moves all four charts continuously. A page-local transaction captures
+mouse or pen drag moves all five charts continuously. A page-local transaction captures
 each chart's scale in CSS pixels and applies the same time delta on animation frames;
 plain dragging still selects a range and touch retains its hold-to-select gesture.
 Prepared SVG artwork moves in composited HTML surfaces behind a stationary clip;
@@ -1475,7 +1740,7 @@ also requires the complete history answer for the requested range, so a partial
 strip cannot start the fold before that answer replaces it.
 User navigation owns the requested projection separately from drawing readiness.
 Back, a preset or a horizon change retires an older held pose and its pending RAF or
-fold; all four charts immediately place their retained data in the requested projection.
+fold; all five charts immediately place their retained data in the requested projection.
 Ready data keeps that projection when it replaces the borrowed model. Borrowed data
 keeps its own coverage and time domain, so future points are clipped rather than
 clamped into an edge and a requested past frame shows no old future labels.
@@ -1495,15 +1760,64 @@ ahead until movement or history news changes what is needed.
 For ordinary discrete navigation the chart moves to the new period at once, drawing
 the answer it has until the next frame is assembled. A run of quick steps reads its
 first and last missing parts. Tiles are kept across frames on the same grid, so a return
-or switching 12h and 24h asks nothing once both have been seen. A new lineup makes them stale; changed work attribution invalidates only quota/activity; a late measurement or credited work makes only cells from
+or switching 12h and 24h asks nothing once both have been seen. A new lineup makes them stale; changed work attribution invalidates quota/activity and explicitly requested source-work budget accounting; a late measurement or credited work makes only cells from
 its actual time stale, and the page reads them when a frame needs them.
 
-Both agent lists put working sessions first, then the ones that worked most recently,
-then the newest. The card's panel keeps machine groups, ordered by each one's most
-active session. The table's headers sort ascending, descending, then back to activity;
+Dashboard agent lists contain contexts with credited work intersecting the selected
+period, including contexts absent from the current machine list. Duration is clipped
+to that period, and recency uses the last intersecting work endpoint. Current presence
+is optional and expires separately; it never proves more work or an end time. The hub
+keeps renewal deadlines internally and publishes only semantic changes, so an unchanged
+idle confirmation does not wake panels or card trays. The page confirms presence from
+the latest stream snapshot, clears it on lost continuity, and waits for a new snapshot
+before confirming it again. Historical replies cannot renew current presence. The
+card's panel keeps machine groups, ordered by each one's most recent credited work.
+It groups and orders the complete roster before paging. Loading and failure remain
+visible in its tray disclosure even before any sessions arrive; retained rows name their
+own interval and offer a retry there. The full session dialog carries the same interval,
+loading state and retry, so its modal surface does not hide the evidence behind its rows.
+A failed read never establishes an empty period.
+The compact view keeps live measurements and current session counts independently of
+the board's selected period. The Agent sessions table's headers sort ascending,
+descending, then back to activity;
 a hidden column does not sort. When its owner's chosen columns do not fit the widget's
 own width, it becomes a compact list with a sort menu. State is off by default: the
 mark already tells it. Explicit column choices belong to the board, sorting to the viewer.
+
+The quota table shares one viewer sort with its compact list: ascending, descending,
+then default, with unavailable columns falling back without losing the saved choice.
+Live default order puts exhausted limits first, then absolute exhaustion time,
+then known remaining shares; fixed selections use descending spending. Missing
+values follow known values in either direction, with numeric locale names breaking
+ties. Rolling work, agent hours and plans use existing accounting indexes and the
+shared page clock for exact boundaries and adjacent key crossings. Only a changed
+permutation publishes retained row descriptors; sorting does not wake other widgets.
+
+Agent sessions, quota metrics and budget metrics use the same sortable header and
+menu pieces in `ui/components/TableWidget.tsx`, including typography, active colour,
+reserved arrow space and accessible selection. Headers cycle through both directions
+and default; menus expose default as a separate row. Budget sorting is a separate
+viewer preference. Wide tables sort through their headers; only compact lists show
+a separate sort button beside settings, and settings contain no sorting choices.
+Rows and controls share the same width decision, preserving the viewer's choice
+when the widget changes between table and list. Names use the reader's locale;
+values and top-ups compare exact integer millionths from the same accounting
+model as their cells. Unknown values stay last in either direction. Hidden columns
+temporarily use default without losing the saved choice. Default preserves the budget
+series order; live accounting boundaries use the shared page clock and retain cells.
+The budget chart, legend and table name a total balance by its account rather than
+repeating "Available balance". Scoped key limits keep their names; balance components,
+roles and currency provenance remain reachable in card details.
+
+On charts narrower than 560 SVG units, reset and exhaustion labels show the name
+and countdown, with an arrow only beyond the visible edge. Their backing is bounded
+by 180 units and 60% of usable plot width. Hover and touch retain the full event
+meaning and date in the shared tooltip; the primary image description carries them
+too. Each mounted label caches shaped grapheme-prefix measurements by name and
+font, measures its current countdown separately, and moves with cached local bounds.
+Unavailable mappings, fonts or overflowing shaping use a bounded ellipsis with the
+complete suffix until the next real input changes. Wide label layout and the overflow
+stack keep their existing behavior.
 The table of limits does the same: its owner chooses its columns, and where they do not
 fit it lists each window with what is left, then its other values, each with its heading.
 Agent-hours and the share of spending while active are off by default: adding either can

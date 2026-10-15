@@ -5,7 +5,7 @@ import {activityEmpty, activityScale, atOnce, shownActivity, groupColors, mutedK
 import {CATEGORY_COLORS, PROVIDERS} from '../lib/providers';
 import type {ActivityGroup, View} from '../lib/types';
 
-const view: View = {version: 2 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+const view: View = {version:4 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 const HOUR = 3_600_000;
 const group = (key: string, change: Partial<ActivityGroup> = {}): ActivityGroup => ({key, name: key, agentMs: HOUR, activeMs: HOUR, agents: 1, cells: [], ...change});
 
@@ -136,7 +136,7 @@ test('the widget says why it has no stacks, and never calls a period idle before
     ...change,
   });
   assert.deepEqual(activityEmpty(null, 1), {key: 'loading'});
-  assert.deepEqual(activityEmpty({since, activity: activity({})}, 0), {key: 'noSources'});
+  assert.deepEqual(activityEmpty({since, activity: activity({})},0),{key:'none'});
   assert.deepEqual(activityEmpty({since, activity: activity({known: null, since: since + HOUR})}, 1), {key: 'knownFrom', at: since + HOUR});
   assert.deepEqual(activityEmpty({since, activity: activity({})}, 1), {key: 'none'});
   assert.deepEqual(activityEmpty({since, activity: activity({known: {from: since + 20 * 24 * HOUR, to: since + 30 * 24 * HOUR}})}, 1), {

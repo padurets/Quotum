@@ -62,8 +62,8 @@ test('temporal fragments preserve one agent within the same cell and live counte
     assert.deepEqual(result.activity.by.source.map(s => [s.key, s.agentMs, s.agents]).sort(), [[f.wallet, minute, 1], [f.second, minute, 1]].sort());
     assert.equal(chunks[0].activity.sessions.length, 2);
     assert.notEqual(chunks[0].activity.sessions[0][0], chunks[0].activity.sessions[1][0]);
-    assert.equal(chunks[0].activity.sessions[0][4], chunks[0].activity.sessions[1][4]);
-    assert.deepEqual(f.store.worked(f.device, [f.key()], now + minute), [minute]);
+    assert.equal(chunks[0].activity.sessions[0][5], chunks[0].activity.sessions[1][5]);
+    assert.deepEqual(f.store.worked(f.device,[f.key()],0,now+minute), [minute]);
     assert.equal(f.store.db.prepare('SELECT count(*) n FROM agent_sessions').get()!.n, 1);
   } finally {f.store.close();}
 });
@@ -150,7 +150,9 @@ for (const flush of [false, true]) for (const change of ['holding', 'rule', 'bou
     const answer = await events.poll(reading, opened.lease); assert.ok(answer && answer !== 'limit');
     assert.equal(answer.frames.length, 1); assert.equal(answer.frames[0].type, 'snapshot');
     const encoded = polled(answer.frames);
-    for (const value of ['PRIVATE_QUEUED_CANARY', 'private-canary.example', 'custom-gateway-canary', link.id, f.owner.id, 'a'.repeat(32)]) assert.ok(!encoded.includes(value), value);
-    if (change === 'reacquire') assert.ok(encoded.includes('Current name'));
+    for (const value of ['private-canary.example', 'custom-gateway-canary', link.id, f.owner.id, 'a'.repeat(32)]) assert.ok(!encoded.includes(value), value);
+    const snapshot=JSON.parse(answer.frames[0].data);
+    if(change==='reacquire') {assert.ok(encoded.includes('Current name'));assert.ok(!encoded.includes('PRIVATE_QUEUED_CANARY'));}
+    else {assert.equal(snapshot.sessions[f.wallet]?.length??0,0);assert.equal(snapshot.unattributedSessions[0].project,'PRIVATE_QUEUED_CANARY');assert.equal(snapshot.unattributedSessions[0].sourceStatus,change==='rule'?'notProvided':undefined);}
   } finally {events.close(); f.store.close();}
 });

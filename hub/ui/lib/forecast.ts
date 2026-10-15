@@ -271,7 +271,8 @@ const times = (value: number) => ({count: Math.round(value * 10) / 10, times: nu
  * the tooltip), and the tooltip, a part a line; its colour is the outlook's tone.
  */
 export function outlookText(said: Outlook, live: Win | undefined, ahead: SeriesForecast | null, context: Context, planEnd: PlanEnd | null): {text: string; burst: boolean; title: string[]} {
-  const quiet = (title: string[] = []) => ({text: '—', burst: false, title});
+  const provenance=live?.kind==='weekly'&&ahead?.planSince!=null&&!ahead.failed&&ahead.resetAt!=null&&live.resetAt!=null&&Math.abs(ahead.resetAt-live.resetAt)<=TOLERANCE&&!['none','idle','awaiting','renewing','unavailable'].includes(said.key)?[t('forecast.planBasis',{time:stamp(ahead.planSince)})]:[];
+  const quiet = (title: string[] = []) => ({text: '—', burst: false, title:[...title,...provenance]});
   switch (said.key) {
     case 'none':
       return quiet();
@@ -285,10 +286,10 @@ export function outlookText(said: Outlook, live: Win | undefined, ahead: SeriesF
     case 'pastZero':
       return quiet([t('forecast.pastZero', {time: stamp(said.at)}), t('forecast.awaiting')]);
     case 'usedUp':
-      return {text: t('forecast.usedUp'), burst: false, title: []};
+      return {text: t('forecast.usedUp'), burst: false, title: provenance};
   }
   const text = said.key === 'runsOut' ? t('forecast.runsOut', {time: countdown(said.inMs)}) : said.key === 'pace' ? t('forecast.pace') : t('forecast.left', {value: num(said.left)});
-  const title: string[] = [];
+  const title: string[] = [...provenance];
   if (said.key === 'runsOut') title.push(t('forecast.runsOutAt', {time: stamp(said.at)}));
   if (live?.kind !== 'weekly' || !ahead) {
     if (said.rate !== undefined) title.push(t('forecast.rate', {rate: rateText(said.rate)}));

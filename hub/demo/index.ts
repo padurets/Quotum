@@ -1,3 +1,4 @@
+import {seedSessionClients} from './sessionClients.js';
 import {spawn, type ChildProcess} from 'node:child_process';
 import {existsSync, mkdtempSync, realpathSync, rmSync} from 'node:fs';
 import {createServer} from 'node:net';
@@ -208,6 +209,7 @@ export class Demo {
       seedWork(store, stand);
       if(set.id==='clients')await seedClients(store,new Directory(store.db),stand);
       if(set.id==='links')await seedLinks(store,new Directory(store.db),stand);
+      if(set.id==='sessions')await seedSessionClients(store,new Directory(store.db),stand);
       if(this.options.money!==false&&(set.id==='all'||set.id==='money'||set.id==='analytics')){await seedMoney(store,new Directory(store.db),stand);await seedDeepSeek(store,new Directory(store.db),stand);seedCurrencies(store,stand);seedCodexCredits(store,new Directory(store.db),stand);}
       if(this.options.money!==false&&(set.id==='all'||set.id==='quotas'||set.id==='analytics'))await seedQuotas(store,new Directory(store.db),stand);
     } finally {

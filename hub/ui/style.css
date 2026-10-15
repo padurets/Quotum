@@ -25,6 +25,7 @@
   --glass-edge: #ffffff1a;
   --glass-shadow: inset 0 1px 0 #ffffff1c, 0 24px 48px -16px #000000d9;
   --popup-radius: 12px;
+  --page-width: 1240px;
   --sans: 'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
   font-family: var(--sans);
@@ -68,11 +69,11 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .limit-value, .legend-item b, td, .tooltip-row strong { font-variant-numeric: tabular-nums; }
 
 /* ---------- header ---------- */
+.board-bar { position: sticky; top: 0; z-index: 10; }
+/* One backing keeps navigation and filters on the same glass, while their popovers can blur the page. */
+.board-bar::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: color-mix(in srgb, var(--surface) 80%, transparent); -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); box-shadow: inset 0 0 0 1px var(--hair), 0 8px 24px -12px #00000080; }
 .topbar { position: sticky; top: 0; z-index: 10; }
-/* The bar's frosting is its ::before, not the bar: see .glass for why. */
-.topbar::before { content: ''; position: absolute; inset: 0; z-index: -1; background: #0b0b0ecc; -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); }
-.topbar::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--hair-2) 20%, var(--hair-2) 80%, transparent); }
-.topbar-inner { max-width: 1240px; margin: 0 auto; padding: 0 28px; height: 60px; display: flex; align-items: center; gap: 24px; }
+.topbar-inner { max-width: var(--page-width); margin: 0 auto; padding: 0 28px; height: 60px; display: flex; align-items: center; gap: 24px; }
 .brand { display: flex; align-items: center; gap: 11px; color: var(--text); text-decoration: none; font-weight: 560; font-size: 15px; letter-spacing: -.01em; white-space: nowrap; }
 .logo { width: 26px; height: 26px; }
 .logo-mark { fill: none; stroke: #0c0d18; stroke-width: 3.4; stroke-linecap: round; }
@@ -91,17 +92,19 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .avatar-button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid transparent; border-radius: 50%; background: none; transition: background .15s, border-color .15s; }
 .avatar-button:hover { background: #ffffff0a; border-color: var(--hair); }
 
-main { max-width: 1240px; margin: 0 auto; padding: 28px 28px 56px; display: flex; flex-direction: column; gap: 20px; }
+main { max-width: var(--page-width); margin: 0 auto; padding: 28px 28px 56px; display: flex; flex-direction: column; gap: 20px; }
 
 /* ---------- widgets ---------- */
 .widgets { position: relative; display: grid; grid-template-columns: repeat(var(--columns, 6), minmax(0, 1fr)); grid-auto-rows: 32px; gap: 16px; }
 
-/* The analytics under the cards: one head with the filters of agent activity, the chart
-   and the table, which stays under the top bar while they scroll by. */
-.analytics { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
-.analytics-head { position: sticky; top: 60px; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 10px 0; }
-.analytics-head::before { content: ''; position: absolute; inset: 0 -28px; z-index: -1; background: #0b0b0ecc; -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%); }
-.analytics-head h2 { margin: 0; font-size: 17px; font-weight: 560; letter-spacing: -.015em; }
+/* Shared viewing controls extend the header's glass below its navigation. */
+.analytics-head { position: sticky; top: 60px; z-index: 5; }
+.analytics-head::before { content: ''; position: absolute; top: 0; inset-inline: 28px; height: 1px; background: var(--hair-2); }
+.analytics-head-inner { max-width: var(--page-width); min-height: 56px; margin: 0 auto; padding: 10px 28px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+/* Once there is room beside the content, the glass shares its width and rounds only its lower edge. */
+@media (min-width: 1280px) {
+  .board-bar { max-width: var(--page-width); margin-inline: auto; border-radius: 0 0 16px 16px; }
+}
 .widget { position: relative; display: flex; flex-direction: column; min-width: 0; }
 .widgets > .card.is-loading { grid-column: span 2; grid-row: span 5; }
 .widget-body { position: relative; display: flex; flex-direction: column; min-width: 0; }
@@ -254,7 +257,8 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
  */
 .popover.is-capped { overflow-y: auto; overscroll-behavior: contain; }
 .popover.is-capped:not(.is-cramped):has(.popover-scroll) { display: flex; flex-direction: column; }
-.popover.is-capped:not(.is-cramped):has(.popover-scroll) > * { flex-shrink: 0; }
+/* Child sizing needs no descendant match, which would invalidate unrelated widget subtrees. */
+.popover.is-capped:not(.is-cramped) > * { flex-shrink: 0; }
 .popover.is-capped:not(.is-cramped) .popover-scroll { position: relative; flex-shrink: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .popover.is-cramped .popover-scroll { overflow: visible; }
 /*
@@ -441,25 +445,37 @@ td.muted, small.muted { color: var(--text-3); }
 .agents-rows table { table-layout: fixed; }
 /* A cell holds what it says for screen readers: a long project cut short does not push it past the table, which would scroll. */
 .agents-rows td { position: relative; overflow: hidden; text-overflow: ellipsis; }
-.agents-rows th button { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; padding: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: left; }
-.agents-rows th button:hover, .agents-rows th[aria-sort] { color: var(--text-2); }
-.agents-sort-arrow { width: 10px; flex-shrink: 0; }
-.agents-controls { display: flex; gap: 6px; margin-left: auto; }
 .agents-panel .panel-head { gap: 8px; }
 .agents-compact, .analytics-compact { list-style: none; margin: 18px calc(-1 * var(--panel-pad)) 0; padding: 0; }
 .agents-compact > li, .analytics-compact > li { padding: 11px var(--panel-pad); border-bottom: 1px solid var(--hair); color: var(--text-2); }
 .agents-compact > li:last-child, .analytics-compact > li:last-child { border-bottom: 0; }
 .agents-compact > li:hover, .analytics-compact > li:hover { background: #ffffff04; }
 .agents-compact > li.is-working { color: var(--text); }
-/* The last row of a list made shorter than its agents: how many more, opening them all. */
-.agents-more-button { display: block; width: 100%; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--text-3); text-align: left; outline-offset: -2px; }
-.agents-more-button:hover { color: var(--text); }
-.agents-compact > li.agents-more { padding: 0; }
-.agents-compact > li.agents-more > .agents-more-button { padding: 11px var(--panel-pad); }
-tr.agents-more > td { padding: 0; }
-tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 /* The rows a shorter list measures, laid out unseen: as wide as it is, taking no room. Positioned, so what its rows name for screen readers is cut with them rather than lengthening the page. */
-.agents-measure { position: relative; height: 0; overflow: hidden; visibility: hidden; }
+.table-measure { position: relative; height: 0; overflow: hidden; visibility: hidden; }
+.table-pages { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 8px; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.table-pages[hidden] { display: none; }
+.table-pages .icon-button:disabled { opacity: .35; pointer-events: none; }
+.table-footer { padding-top: 10px; border-top: 1px solid var(--hair); }
+.table-summary { display: flex; align-items: center; gap: 18px; flex: 1; min-width: 0; }
+.table-summary-heading { flex-shrink: 0; color: var(--text-4); font-size: 11px; }
+.table-summary dl { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; }
+.table-summary dl > div { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.table-summary dt { font-size: 11px; color: var(--text-3); }
+.table-summary dd { margin: 0; font-size: 13px; font-weight: 550; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.table-summary.is-aligned { display: grid; gap: 0; align-items: baseline; }
+.table-summary.is-aligned .table-summary-heading { grid-column: 1; grid-row: 1; }
+.table-summary.is-aligned dl { display: contents; }
+.table-summary.is-aligned dl > div { display: block; padding: 0 10px; }
+.table-footer-pages { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 8px; }
+.table-footer-pages small { font-size: 11px; color: var(--text-4); font-variant-numeric: tabular-nums; }
+.table-footer-pages:first-child { margin-top: 0; }
+.table-footer-pages .table-pages { padding-top: 0; }
+.table-footer.is-list .table-summary { display: block; }
+.table-footer.is-list .table-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin-top: 8px; }
+.table-footer.is-list .table-summary dl > div { justify-content: space-between; }
+.widget-body > .panel:has(> .table-footer)::after { display: none; }
+.widget-body > .panel > .table-footer { margin-top: calc(var(--fill, 0px) + 14px); }
 /* All the agents in a dialog: its list's rows light up inset, as a menu's do. */
 .agents-dialog-head { display: flex; align-items: center; gap: 8px; min-height: 26px; }
 .agents-dialog .agents-compact { margin: 8px -8px 0; }
@@ -497,6 +513,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 /* Positioned, so the state named for screen readers after a long project is cut with it rather than widening the page. */
 .agents-project { position: relative; min-width: 0; overflow: hidden; }
 .agents-project > span, .agents-project small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agents-project .agents-client { display: inline; margin-inline-start: 8px; }
 .agents-project small, .agents-rows td .agents-folder { color: var(--text-4); font-size: 11.5px; }
 /* A folder identifies the worktree: keep its full name below the project in the same cell. */
 .agents-rows td .agents-folder { display: block; padding-left: 38px; color: var(--text-3); white-space: normal; overflow-wrap: anywhere; }
@@ -518,6 +535,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .history-error { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .panel { --panel-pad: 22px; padding: 20px var(--panel-pad) 22px; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.panel-controls { display: flex; gap: 6px; margin-left: auto; }
 .panel-head h2 { margin: 0; font-size: 15px; font-weight: 560; letter-spacing: -.01em; }
 .panel-heading { flex: 1; min-width: 0; }
 .analytics-note { margin: 6px 0 0; font-size: 11.5px; color: var(--text-4); }
@@ -525,8 +543,9 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .panel-note { margin-right: auto; color: var(--text-3); font-size: 12.5px; }
 .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .controls .picker { margin-left: 0; }
-/* At the right even when it takes a row of its own: the arrows at its end stay where they were. */
-.analytics-head .controls { margin-left: auto; justify-content: flex-end; }
+.analytics-head .controls { display: contents; }
+.analytics-head .controls .segmented { flex: 0 1 auto; }
+.analytics-head .controls .picker { width: auto; }
 .segmented { display: flex; padding: 2px; gap: 2px; border: 1px solid var(--hair); border-radius: 9px; background: #ffffff04; }
 .segmented button, .segmented-radio span { white-space: nowrap; border: 0; background: none; color: var(--text-3); padding: 5px 12px; border-radius: 7px; font-size: 12.5px; transition: color .15s, background .15s; }
 .segmented button:hover, .segmented-radio:hover span { color: var(--text-2); }
@@ -537,7 +556,11 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .segmented-radio:has(input:disabled) { cursor: default; }
 .segmented:has(:disabled):not([aria-busy=true]) { opacity: .5; }
 /* The period: [the list] and a time range's × beside it, then ‹ ›. */
-.period { display: flex; align-items: center; gap: 2px; }
+.period { display: flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
+.period > .picker { min-width: 0; margin-left: 0; }
+.period .text-button { max-width: 100%; }
+.period .period-name { min-width: 0; }
+.period-name > span { min-width: 0; overflow-wrap: anywhere; }
 .period .icon-button { width: 28px; height: 28px; }
 .period .icon-button svg { stroke-width: 1.6; stroke-linejoin: round; }
 .period .icon-button:disabled { opacity: .35; pointer-events: none; }
@@ -547,12 +570,13 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 
 /* Under its chart, as on either chart. */
 .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 12px 0 0; }
-.legend-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border: 0; background: none; font-size: 12.5px; color: var(--text-2); text-align: left; transition: opacity .15s; }
+.legend-item { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; border: 0; background: none; font-size: 12.5px; color: var(--text-2); text-align: left; opacity: calc(var(--series-focus, 1) * var(--legend-opacity, 1)); transition: opacity .15s; }
 /* A long name (a project's path) breaks anywhere rather than widening the row; its value stays whole. */
 .legend-item span { min-width: 0; overflow-wrap: anywhere; }
 .legend-item b { color: var(--text); font-weight: 500; white-space: nowrap; }
-.legend-item[aria-pressed=false] { opacity: .35; }
-.legend-item:hover { opacity: 1; color: var(--text); }
+.series-focus { opacity: var(--series-focus, 1); }
+.legend-item[aria-pressed=false] { --legend-opacity: .35; }
+.legend-item:hover { --legend-opacity: 1; color: var(--text); }
 .legend-empty { font-size: 12.5px; color: var(--text-4); padding: 4px 0; }
 
 .chart { position: relative; margin-top: 18px; }
@@ -590,7 +614,7 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .activity-legend-item.is-open[data-bubble-side=down]::before { bottom: auto; top: 100%; }
 .activity-shown { display: inline-block; margin-left: 8px; }
 
-.activity-stack { stroke: var(--surface); stroke-width: .75; }
+.activity-stack { stroke: var(--surface); stroke-width: .75; opacity: var(--series-focus, 1); }
 .activity-hatch { stroke: var(--hair-2); stroke-width: 1.5; }
 .activity-unknown-label { fill: var(--text-3); font-size: 11.5px; }
 .activity-swatch { display: inline-block; flex-shrink: 0; width: 10px; height: 10px; border-radius: 2px; }
@@ -610,11 +634,11 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .marker-label text { fill: var(--bg); font-size: 11px; font-weight: 600; }
 .marker-label rect { fill: var(--accent); }
 .marker.is-event line { stroke-dasharray: none; opacity: .4; }
-.plan-line { fill: none; stroke-width: 1.5; stroke-dasharray: 1 4; stroke-linecap: round; opacity: .55; }
+.plan-line { fill: none; stroke-width: 1.5; stroke-dasharray: 1 4; stroke-linecap: round; opacity: calc(var(--series-focus, 1) * .55); }
 .series { fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
 .series, .forecast-line, .plan-line, .activity-stack, .marker line, .now-line { vector-effect: non-scaling-stroke; }
 /* Where a window's pace leads: its series' colour and dash, thinner and fainter, with square ends unlike the plan's dots. */
-.forecast-line { fill: none; stroke-width: 1.25; stroke-linejoin: round; opacity: .6; }
+.forecast-line { fill: none; stroke-width: 1.25; stroke-linejoin: round; opacity: calc(var(--series-focus, 1) * .6); }
 .marker-label.is-forecast text { fill: var(--label-color); font-weight: 500; }
 .marker-label.is-forecast rect { fill: var(--surface); stroke: var(--hair); }
 /* What is drawn over the lines never takes the pointer from what is under it (a label telling a time). */
@@ -673,6 +697,10 @@ tr.agents-more .agents-more-button { padding: 11px var(--table-edge, 12px); }
 .table-wrap { position: relative; overflow-x: auto; margin-top: 18px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; font-weight: 500; color: var(--text-4); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; padding: 12px 10px 8px; white-space: nowrap; border-bottom: 1px solid var(--hair); }
+.table-sort { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; padding: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; text-align: inherit; }
+.table-sort:hover, th[aria-sort] { color: var(--text-2); }
+.table-sort-arrow { width: 10px; flex-shrink: 0; }
+.is-right .table-sort { justify-content: flex-end; }
 td { padding: 11px 10px; border-bottom: 1px solid #ffffff08; color: var(--text-2); white-space: nowrap; }
 tr:last-child td { border-bottom: 0; }
 tbody tr { transition: background .15s; }
@@ -773,7 +801,7 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 .dialog.glass { box-shadow: inset 0 1px 0 #ffffff1c, 0 30px 70px -34px #0000009e; }
 .dialog { width: 100%; max-width: 520px; max-height: calc(100dvh - 96px); overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 16px; padding: 22px 24px 24px; border-radius: 16px; outline: none; }
 .dialog > * { flex-shrink: 0; }
-.dialog.is-wide { max-width: 760px; }
+.dialog.is-wide { max-width: 960px; }
 /* A panel on the right edge, for the person's own settings. */
 .overlay.is-side { display: flex; justify-content: flex-end; padding: 0; overflow: hidden; scrollbar-gutter: auto; }
 .dialog.is-side { max-width: 400px; max-height:100dvh; height: 100dvh; gap: 20px; padding: 20px 24px 28px; border-width: 0 0 0 1px; border-radius: 0; overflow-y: auto; overscroll-behavior: contain; animation: slide-in .22s cubic-bezier(.2, .7, .2, 1); }
@@ -882,9 +910,8 @@ tr:hover .device-name .icon-button, .device-name .icon-button:focus-visible { op
   .resize-handle { display: none; }
 }
 @media (max-width: 680px) {
-  /* On a phone the filters take two rows: they scroll with the page. */
-  .analytics-head { position: static; }
-  .analytics-head::before { display: none; }
+  .analytics-head::before { inset-inline: 16px; }
+  .analytics-head-inner { padding: 12px 16px; gap: 8px; }
   .topbar-inner { padding: 0 16px; gap: 12px; }
   .board-name { max-width: 120px; }
   .inline-form { flex-direction: column; align-items: stretch; }
@@ -1003,6 +1030,8 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 
 /* Board actions and the account menu share the original header. */
 .status { flex-shrink: 1; }
+.filter-toggle { flex-shrink: 0; padding-right: 12px; border-right: 1px solid var(--hair-2); }
+.filter-range-dot { position: absolute; top: 2px; right: 2px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 .board-controls { display: flex; align-items: center; gap: 8px; min-width: 0; padding-right: 12px; border-right: 1px solid var(--hair-2); }
 .board-controls > .picker { min-width: 0; }
 .board-controls > .picker > .text-button { min-width: 0; max-width: 100%; }
@@ -1048,7 +1077,9 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .settings-item-main small { display: block; margin-top: 3px; color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
 .settings-list-row .settings-item-main { white-space: normal; overflow: visible; }
 .settings-item-detail { max-width: 24ch; color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
-.settings-item-actions { display: flex; align-items: center; justify-content: flex-end; }
+.settings-item-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.settings-item-actions label { display: flex; align-items: flex-start; gap: 8px; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.settings-item-actions input { flex-shrink: 0; }
 .view-save-notice { margin: 16px 28px; padding: 16px; border: 1px solid var(--hair-2); border-radius: 12px; overflow-wrap: anywhere; }
 .view-save-notice > b { font-size: 13px; }
 .settings-content > .drawer-section:first-child { border-top: 0; padding-top: 0; }
@@ -1104,13 +1135,14 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
   .status { gap: 8px; }
   .board-actions { gap: 4px; }
   .board-controls { gap: 4px; padding-right: 8px; }
+  .filter-toggle { padding-right: 8px; }
   .manage-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
   .manage-actions { grid-row: 1; padding: 4px 0 12px; border-left: 0; border-bottom: 1px solid var(--hair); }
   .settings-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .settings-nav { flex-direction: row; flex-wrap: wrap; gap: 4px; }
   .settings-nav a { padding: 8px 10px; font-size: 12px; }
   .settings-content { padding: 18px; }
-  .settings-list { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
+  .settings-list { grid-template-columns: minmax(0, 1fr) fit-content(50%); column-gap: 12px; }
   .settings-list-row { column-gap: 12px; }
   .settings-item-detail { grid-column: 1; }
   .settings-item-actions { grid-column: 2; grid-row: 1 / 3; }
@@ -1212,3 +1244,4 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 }
 
 .multiline { white-space: pre-line; }
+.period-status { display: flex; flex-wrap: wrap; gap: .4rem .8rem; color: var(--muted); font-size: .8rem; }

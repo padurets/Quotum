@@ -1,7 +1,8 @@
 export type HistoryScope = 'quota' | 'budget';
-export type HistoryChange = {source: string; scope: HistoryScope; since: number; work?: true};
+export type HistoryChange = {source: string; scope: HistoryScope; since: number; workSince?:number};
 export const HISTORY_SCOPES: readonly HistoryScope[] = ['quota', 'budget'];
 
+import {sourceKey} from './workAccess.js';
 import {drain, ordered, type Preparation} from './prepare.js';
 import {barOf, type Activity, type ActivityGroup, type Dimension, type SeriesWork} from './work.js';
 import {composeMetersPrepared, type MeterHistory, type MeterSeriesCells} from './meterHistory.js';
@@ -42,7 +43,8 @@ export type SeriesCells = {source: string; window: string; hold: number; open: n
 export type SessionCell = number | [number, number];
 export type GroupCell = [dimension: 's' | 'p' | 'd', key: string, activeMs: number];
 export type ActivityCells<Ref = string> = {
-  sessions: [ref: Ref, source: string | null, project: string | null, device: string, identityRef?: Ref][];
+  sessions: [ref: Ref, source: string | null, project: string | null, device: string, sourceStatus?:'notProvided', identityRef?:Ref][];
+  sourceWork?:[source:string,index:number,activeMs:number,agentMs:number][];
   devices: Record<string, string>;
   cells: [index: number, active: number, sessions: SessionCell[], groups: GroupCell[]][];
 };
@@ -55,11 +57,21 @@ export type Chunk<Ref = string> = {
   activity: ActivityCells<Ref>;
   resets: [string, string, number][];
   grants: [string, number, number][];
+  plans?: PlanRow[];
 };
-export type HistoryMeta = {now: number; historyStart: number; known: {own?: number; work: number; sources: Record<string, number>}; meta?: string};
+export type PlanRow=[source:string,at:number,plan:string,previous:{at:number;plan:string}|null,expiresAt:number];
+export const planRowBytes=(row:PlanRow)=>320+2*(row[0].length+row[2].length+(row[3]?.plan.length??0));
+/** Read validity ends independently of physical pruning or supplier plan changes. */
+export function planRowAt(row:PlanRow,now:number):PlanRow|null {
+  if(now>=row[4])return null;
+  return row[3]&&now>=row[4]-row[1]+row[3].at?[row[0],row[1],row[2],null,row[4]]:row;
+}
+export const planRowDeadline=(row:PlanRow)=>Math.min(row[4],row[3]?row[4]-row[1]+row[3].at:Infinity);
+export type HistoryMeta = {now: number; historyStart: number; known: {own?: number; work: number; sources: Record<string, number>;sessions?:number|null;sourceWork?:Record<string,number>}; meta?: string};
+export const workKnownFrom = (known:HistoryMeta['known']):number|null => known.sessions!==undefined?known.sessions:Math.max(known.own??known.work,...(known.own===undefined&&Object.keys(known.sources).length?[Math.min(...Object.values(known.sources))]:[]));
 export type HistoryAnswer = HistoryMeta & {run: string; chunks: Chunk[]};
 export type HistoryBasis = HistoryMeta & {run: string};
-export type HistoryReply = HistoryAnswer | {now: number; run: string; meta: string; chunks: Chunk[]};
+export type HistoryReply = (HistoryAnswer | {now: number; run: string; meta: string; chunks: Chunk[]}) & {tape?:import('./periodTape.js').PeriodTape};
 
 /** A compact reply can borrow only the metadata captured by its own request. */
 export function expandHistory(reply: HistoryReply, prior?: HistoryBasis): HistoryAnswer {
@@ -69,8 +81,34 @@ export function expandHistory(reply: HistoryReply, prior?: HistoryBasis): Histor
 }
 export type SourceEvent =
   | {sourceId: string; at: number; kind: 'early_reset'; windows: string[]}
-  | {sourceId: string; at: number; kind: 'resets_granted'; count: number};
+  | {sourceId: string; at: number; kind: 'resets_granted'; count: number}
+  | {sourceId:string;at:number;kind:'plan';plan:string;previous:{at:number;plan:string}|null;expiresAt:number};
+export function* planEventsPrepared(chunks:readonly Chunk[],from:number,to:number,now:number):Preparation<(SourceEvent&{kind:'plan'})[]> {
+  const result:(SourceEvent&{kind:'plan'})[]=[],seen=new Set<string>();
+  for(const chunk of chunks)for(const raw of chunk.plans??[]){
+    yield;const row=planRowAt(raw,now);if(!row||row[1]<from||row[1]>=to)continue;
+    const [sourceId,at,plan,previous,expiresAt]=row,key=sourceId+'\n'+at;
+    if(seen.has(key))continue;seen.add(key);result.push({sourceId,at,kind:'plan',plan,previous,expiresAt});
+  }
+  return result;
+}
+export function planEventAt(event:SourceEvent,now:number):SourceEvent|null {
+  if(event.kind!=='plan')return event;
+  const row:PlanRow=[event.sourceId,event.at,event.plan,event.previous,event.expiresAt],value=planRowAt(row,now);
+  return value===row?event:value?{...event,previous:value[3]}:null;
+}
+export function planEventsAt(events:SourceEvent[],now:number):SourceEvent[] {
+  const result=events.flatMap(event=>{const value=planEventAt(event,now);return value?[value]:[];});
+  return result.length===events.length&&result.every((event,i)=>event===events[i])?events:result;
+}
+export function planEventsDeadline(events:readonly SourceEvent[]):number {
+  let deadline=Infinity;
+  for(const event of events)if(event.kind==='plan')deadline=Math.min(deadline,event.expiresAt,event.previous?event.expiresAt-event.at+event.previous.at:Infinity);
+  return deadline;
+}
 export type HistorySeries = {
+  windowValue?:Pick<import('./quota.js').Win,'id'|'kind'|'label'|'minutes'>;
+  pointMode?:'cell'|'observation';
   sourceId: string;
   windowId: string;
   consumed: number;
@@ -82,6 +120,7 @@ export type HistorySeries = {
   work: SeriesWork | null;
 };
 export type History = {
+  exact?:true;
   board?: string;
   range: string;
   live: boolean;
@@ -93,7 +132,7 @@ export type History = {
   meterSeries?: MeterHistory[];
   moneyWork?: MoneyWork[];
   events: SourceEvent[];
-  activity: Activity & {since: number; known: {from: number; to: number} | null};
+  activity: Activity & {available?:false;since: number; known: {from: number; to: number} | null};
 };
 
 export type DecodedCell = {
@@ -175,7 +214,7 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
   const since = k0 * cell;
   const to = Math.min((k1 + 1) * cell, Math.max(target.now, meta.now));
   const inFrame = (at: number) => at >= since && at < (k1 + 1) * cell;
-  const S = (source: string) => Math.max(meta.known.work, meta.known.sources[source] ?? Infinity);
+  const S = (source: string) => Math.max(meta.known.work,meta.known.sourceWork?.[source]??(meta.known.sourceWork?Infinity:meta.known.sources[source]??Infinity));
   const chunksInOrder = yield* ordered(chunks, (a, b) => a.from - b.from);
   const barMs = barOf(cell, target.length);
   const bars = new Map<number, {active: number; agent: number; refs: Set<string>}>();
@@ -196,13 +235,13 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
       for (const member of members) {
         yield;
         const [n, ms] = typeof member === 'number' ? [member, active] : member;
-        const [fragmentRef, source, project, device, identityRef] = chunk.activity.sessions[n];
+        const [fragmentRef, source, project, device,sourceStatus,identityRef] = chunk.activity.sessions[n];
         const ref = identityRef ?? fragmentRef;
         refs.add(ref);
         total.refs.add(ref);
         total.agent += ms;
         agentMs += ms;
-        const keys = {source: source ?? 'unknown', project: JSON.stringify(project), device};
+        const keys = {source: sourceKey({source,sourceStatus}), project: JSON.stringify(project), device};
         const names = {source: null, project, device: chunk.activity.devices[device] ?? null};
         for (const dim of DIMENSIONS) {
           yield;
@@ -228,6 +267,17 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
       }
     }
   }
+  const sourceTotals=new Map<string,{active:number;agent:number}>();
+  for(const chunk of chunksInOrder){
+    const overrides=new Map((chunk.activity.sourceWork??[]).map(([source,index,active,agent])=>[source+' '+index,{active,agent}]));
+    for(const [index,_active,members,groups] of chunk.activity.cells){
+      if(!inFrame(chunk.from+index*cell))continue;
+      const parts=new Map<string,{active:number;agent:number}>();
+      for(const member of members){const [id,ms]=typeof member==='number'?[member,_active]:member;const source=chunk.activity.sessions[id][1];if(source!==null){const part=parts.get(source)??{active:0,agent:0};part.active=Math.max(part.active,ms);part.agent+=ms;parts.set(source,part);}yield;}
+      for(const [dim,key,ms] of groups)if(dim==='s'&&parts.has(key))parts.get(key)!.active=ms;
+      for(const [source,full] of parts){const value=overrides.get(source+' '+index)??full,previous=sourceTotals.get(source)??{active:0,agent:0};previous.active+=value.active;previous.agent+=value.agent;sourceTotals.set(source,previous);yield;}
+    }
+  }
   const holes: [number, number][] = [];
   let readTo = chunksInOrder[0]?.to ?? 0;
   for (const chunk of chunksInOrder.slice(1)) {
@@ -244,8 +294,9 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
       if (!inFrame(v.at)) continue;
       if (!row) {
         const from = Math.max(since, S(values.source));
-        const work: SeriesWork | null = values.source in meta.known.sources ? {from, ms: from >= to ? null : by.source.get(values.source)?.activeMs ?? 0, agentMs: 0, consumed: 0, coveredMs: 0, duringWork: 0} : null;
-        if (work && from < to) work.agentMs = by.source.get(values.source)?.agentMs ?? 0;
+        const available=meta.known.sourceWork?values.source in meta.known.sourceWork:values.source in meta.known.sources;
+        const total=sourceTotals.get(values.source);
+        const work: SeriesWork | null = available?{from,ms:from>=to?null:total?.active??0,agentMs:from>=to?0:total?.agent??0,consumed:0,coveredMs:0,duringWork:0}:null;
         row = {line: {sourceId: values.source, windowId: values.window, consumed: 0, coveredMs: 0, remainingAtStart: v.open ?? v.first, remainingAtEnd: null, staleAfterMs: v.hold, points: [], work}, last: v.at, segment: 1};
         series.set(key, row);
       } else if (v.gap || holes.some(([a, b]) => a > row!.last && b <= v.at)) row.segment++;
@@ -266,7 +317,7 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
   const resets = yield* resetEventsPrepared(chunksInOrder, windows, since, (k1 + 1) * cell);
   const grants: SourceEvent[] = [];
   for (const chunk of chunksInOrder) for (const [sourceId, at, count] of chunk.grants) {if (inFrame(at)) grants.push({sourceId, at, kind: 'resets_granted', count}); yield;}
-  const activitySince = Math.max(meta.known.own ?? meta.known.work, ...(meta.known.own === undefined && Object.keys(meta.known.sources).length ? [Math.min(...Object.values(meta.known.sources))] : []));
+  const activitySince = workKnownFrom(meta.known)??to;
   const knownFrom = Math.max(since, activitySince);
   const groups = {} as Record<Dimension, ActivityGroup[]>;
   for (const dim of DIMENSIONS) {
@@ -284,8 +335,8 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
     ...(chunksInOrder.some(c => c.meterSeries !== undefined) ? {meterSeries: yield* composeMetersPrepared(chunksInOrder,cell,since,to)} : {}),
     ...(chunksInOrder.some(c => c.moneyWork !== undefined) ? {moneyWork: yield* composeMoneyWorkPrepared(chunksInOrder,cell,since,to)} : {}),
     series: yield* ordered(lines, (a, b) => compare(a.sourceId, b.sourceId) || compare(a.windowId, b.windowId)),
-    events: yield* ordered([...resets, ...grants], (a, b) => a.at - b.at),
-    activity: {since: activitySince, known: knownFrom < to ? {from: knownFrom, to} : null, barMs, activeMs, agentMs, agents: refs.size, cells: activityCells, by: groups},
+    events: yield* ordered([...resets, ...grants,...yield*planEventsPrepared(chunksInOrder,since,(k1+1)*cell,Math.max(target.now,meta.now))], (a, b) => a.at - b.at),
+    activity: {...(meta.known.sessions===null?{available:false as const}:{}),since: activitySince, known: knownFrom < to ? {from: knownFrom, to} : null, barMs, activeMs, agentMs, agents: refs.size, cells: activityCells, by: groups},
   };
 }
 

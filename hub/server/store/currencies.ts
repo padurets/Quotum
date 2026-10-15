@@ -53,7 +53,7 @@ export class CurrencyStore extends CurrencyRegistry {
     if(cached.paths.size>=1024)cached.paths.delete(cached.paths.keys().next().value!);
     cached.paths.set(key,path);return path;
   }
-  history(owner:string,target:string,from=0,to=Number.MAX_SAFE_INTEGER):CurrencyBindings {
+  history(owner:string,target:string,from=0,to=Number.MAX_SAFE_INTEGER,reserve?:(bytes:number)=>void):CurrencyBindings {
     this.definition(owner,target,true);
     const load=this.db.prepare(`SELECT observation_at,through_at,anchor,steps FROM currency_bindings
       WHERE owner_id=? AND source_id=? AND from_currency=? AND target_currency=? AND observation_at<?
@@ -66,10 +66,14 @@ export class CurrencyStore extends CurrencyRegistry {
     const missing=this.db.prepare('INSERT OR IGNORE INTO currency_unavailable_observations VALUES (?,?,?,?,?,?)');
     const recovered=this.db.prepare('DELETE FROM currency_unavailable_observations WHERE owner_id=? AND source_id=? AND from_currency=? AND target_currency=? AND observation_at=? AND anchor=?');
     const active=!target.startsWith('personal:')||this.db.prepare('SELECT 1 FROM currency_definitions WHERE owner_id=? AND id=? AND archived_at IS NULL').get(owner,target);
-    return new CurrencyBindings(target,(source,unit)=>load.all(owner,source,unit,target,to,from,owner,source,unit,target,from) as BindingRange[],
+    return new CurrencyBindings(target,(source,unit)=>{
+      const rows:BindingRange[]=[];for(const raw of load.iterate(owner,source,unit,target,to,from,owner,source,unit,target,from)){const row=raw as BindingRange;reserve?.(512+row.steps.length*2);rows.push(row);}return rows;
+    },
       (unit,at,anchor)=>active?this.path(owner,unit,target,at,anchor):null,
       (source,unit,row)=>{save.run(owner,source,unit,target,row.observation_at,row.through_at,row.anchor,row.steps);},
-      (source,unit)=>loadMissing.all(owner,source,unit,target,to,from,owner,source,unit,target,from) as UnavailableObservation[],
+      (source,unit)=>{
+        const rows:UnavailableObservation[]=[];for(const raw of loadMissing.iterate(owner,source,unit,target,to,from,owner,source,unit,target,from)){reserve?.(128);rows.push(raw as UnavailableObservation);}return rows;
+      },
       (source,unit,point,unavailable)=>{(unavailable?missing:recovered).run(owner,source,unit,target,point.observation_at,point.anchor);},
       (from,to)=>this.interval(owner,from)===this.interval(owner,to));
   }
@@ -127,12 +131,12 @@ export class CurrencyStore extends CurrencyRegistry {
       this.db.prepare('INSERT INTO money_valuations VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(source,id,native.at,last?.to_at??null,native.id,native.unit,native.amount,target,converted.amount,quote.id,semantics,native.staleAfterMs);
     }
     if(last&&last.interrupted_at===null&&native.at-last.to_at<=last.stale_after_ms) {
-      this.db.prepare('UPDATE meter_spans SET to_at=?,stale_after_ms=? WHERE source_id=? AND meter_id=? AND from_at=?').run(native.at,native.staleAfterMs,source,id,last.from_at);
-    }else this.db.prepare('INSERT INTO meter_spans(source_id,meter_id,from_at,to_at,stale_after_ms) VALUES (?,?,?,?,?)').run(source,id,native.at,native.at,native.staleAfterMs);
+      this.db.prepare('UPDATE meter_spans SET to_at=?,stale_after_ms=?,observed_from=coalesce(observed_from,to_at) WHERE source_id=? AND meter_id=? AND from_at=?').run(native.at,native.staleAfterMs,source,id,last.from_at);
+    }else this.db.prepare('INSERT INTO meter_spans(source_id,meter_id,from_at,to_at,stale_after_ms,observed_from) VALUES (?,?,?,?,?,?)').run(source,id,native.at,native.at,native.staleAfterMs,native.at);
     return last?.to_at??native.at;
   }
   private lastSpan(source:string,id:string) {
-    return this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source,id) as {from_at:number;to_at:number;stale_after_ms:number;interrupted_at:number|null}|undefined;
+    return this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,observed_from FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source,id) as {from_at:number;to_at:number;stale_after_ms:number;interrupted_at:number|null}|undefined;
   }
   interrupt(source:string,nativeId:string,target:string,at:number):boolean {
     const id=conversionId(nativeId,target),last=this.lastSpan(source,id);
@@ -149,12 +153,20 @@ export class CurrencyStore extends CurrencyRegistry {
     const at=span.to_at,stale=native.stale||native.amount!==row.native_amount||native.unit!==row.native_unit||native.at!==at||span.interrupted_at!==null||now>at+span.stale_after_ms;
     return {...JSON.parse(row.semantics) as ReturnType<typeof semanticsOf>,id,kind:'balance',unit:target,amount:row.amount,at,staleAfterMs:span.stale_after_ms,stale,conversion:this.conversion(row,at)};
   }
-  readings(source:string,id:string,from:number,to:number):Reading[] {
-    const rows=this.db.prepare('SELECT * FROM money_valuations WHERE source_id=? AND meter_id=? AND at<? AND at>=coalesce((SELECT max(at) FROM money_valuations WHERE source_id=? AND meter_id=? AND at<?),?) ORDER BY at').all(source,id,to,source,id,from,from) as ValueRow[];
-    return rows.map(row=>({...JSON.parse(row.semantics) as ReturnType<typeof semanticsOf>,id,kind:'balance',unit:row.unit,amount:row.amount,at:row.at,previousAt:row.previous_at,staleAfterMs:row.stale_after_ms,conversion:this.conversion(row)}));
+  readings(source:string,id:string,from:number,to:number,reserve?:(bytes:number)=>void):Reading[] {
+    const rows:Reading[]=[];
+    for(const raw of this.db.prepare('SELECT * FROM money_valuations WHERE source_id=? AND meter_id=? AND at<? AND at>=coalesce((SELECT max(at) FROM money_valuations WHERE source_id=? AND meter_id=? AND at<?),?) ORDER BY at').iterate(source,id,to,source,id,from,from)) {
+      const row=raw as ValueRow;reserve?.(1024+row.semantics.length*2);
+      rows.push({...JSON.parse(row.semantics) as ReturnType<typeof semanticsOf>,id,kind:'balance',unit:row.unit,amount:row.amount,at:row.at,previousAt:row.previous_at,staleAfterMs:row.stale_after_ms,conversion:this.conversion(row)});
+    }
+    return rows;
   }
-  spans(source:string,id:string,to:number):MeterSpan[] {
-    return (this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at FROM meter_spans WHERE source_id=? AND meter_id=? AND from_at<=?').all(source,id,to) as {from_at:number;to_at:number;stale_after_ms:number;interrupted_at:number|null}[]).map(r=>({from:r.from_at,to:r.to_at,staleAfterMs:r.stale_after_ms,...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})}));
+  spans(source:string,id:string,to:number,reserve?:(bytes:number)=>void,from=0):MeterSpan[] {
+    const rows:MeterSpan[]=[];
+    for(const raw of this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,observed_from FROM meter_spans WHERE source_id=? AND meter_id=? AND from_at<=? AND min(coalesce(interrupted_at,9223372036854775807),to_at+stale_after_ms+1)>?').iterate(source,id,to,from)) {
+      const r=raw as {from_at:number;to_at:number;observed_from:number|null;stale_after_ms:number;interrupted_at:number|null};reserve?.(192);rows.push({from:r.from_at,to:r.to_at,...(r.observed_from===null?{}:{observedFrom:r.observed_from}),staleAfterMs:r.stale_after_ms,...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})});
+    }
+    return rows;
   }
   prune(cutoff:number) {
     this.quoteEpoch++;this.quoteLists.clear();this.snapshotCache.clear();
@@ -174,7 +186,7 @@ export class CurrencyStore extends CurrencyRegistry {
         AND (r.at BETWEEN currency_bindings.observation_at AND currency_bindings.through_at
           OR r.previous_at BETWEEN currency_bindings.observation_at AND currency_bindings.through_at))
       AND NOT EXISTS(SELECT 1 FROM meter_spans s WHERE s.source_id=currency_bindings.source_id
-        AND (s.from_at BETWEEN currency_bindings.observation_at AND currency_bindings.through_at
+        AND (s.observed_from BETWEEN currency_bindings.observation_at AND currency_bindings.through_at
           OR s.to_at BETWEEN currency_bindings.observation_at AND currency_bindings.through_at))
       AND NOT EXISTS(SELECT 1 FROM money_valuations v JOIN meter_spans s ON s.source_id=v.source_id AND s.meter_id=v.meter_id
         WHERE v.source_id=currency_bindings.source_id AND v.native_unit=currency_bindings.from_currency AND v.quote_id=currency_bindings.anchor

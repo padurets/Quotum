@@ -94,3 +94,12 @@ test('many converted observations share rate provenance while preserving every o
   assert.deepEqual(composeMeters([{from:0,meterSeries:tile.chunk(0,60*cell)}],cell,0,60*cell),composeMeters([{from:0,meterSeries:[input]}],cell,0,60*cell));
   assert.ok(tile.bytes<80_000,'one tile retains shared metadata instead of several full copies per cell');
 });
+
+test('compact cell headers retain nulls, zero offsets, exclusive bounds and unfamiliar field names',()=>{
+  const extra={open:null,first:'900719925474099312345',segment:0,pointOffsetMs:0,openOffsetMs:0,validUntil:cell,knownFrom:0,knownUntil:cell,topupInternal:'0',
+    observations:[{at:0,value:'900719925474099312345',validUntil:cell,semantics:null}],
+    ...{'0':'numeric key','x:open':'prefixed key','futureField':'future value'}};
+  const input=series([[0,'900719925474099312345',null,'0',cell,extra]]),tile=new MeterTile(0,cell);
+  tile.merge(0,cell,[input]);
+  assert.deepEqual(tile.chunk(0,cell)[0].cells[0][5],extra);
+});

@@ -1,14 +1,15 @@
 import {AnalyticsPanel, AnalyticsNote, SeriesLegendItem} from './AnalyticsPanel';
-import {memo, useLayoutEffect, useRef} from 'react';
+import {useSeriesFocus} from './seriesFocus';
+import {memo, useMemo, useLayoutEffect, useRef} from 'react';
 import {earliest, num} from '../lib/format';
 import {sourceLabel} from '../lib/quota';
 import {planAt, started, weeklyPlanLinePrepared} from '../lib/plan';
 import {announcedOf, forecastLinePrepared, type Context} from '../lib/forecast';
 import {PROVIDERS} from '../lib/providers';
-import {HORIZONS, setMuted, setPrefs, usePrefs} from '../lib/prefs';
+import {setMuted, setPrefs, usePref, useChartMuted, chartMuteKey, chartSeriesMuted} from '../lib/prefs';
 import {setTimeRange, timeRangeKey, useTimeRange} from '../lib/timeRange';
 import {frameChangesAt, frameOf, measuredTo} from '../lib/periods';
-import {QUOTA_HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
+import {QUOTA_HISTORY, QUOTA_SESSION_HISTORY, planOf, withHidden, type Arrange} from '../lib/view';
 import {chartEventsPrepared, chartResetsPrepared, type PlotLine} from '../lib/lines';
 import {subscriptionLinesPrepared,subscriptionPlotLinesPrepared,subscriptionOverflow} from '../lib/subscription';
 import {lineRegistry} from '../lib/plotRegistry';
@@ -17,8 +18,8 @@ import {chartMoments, type ForecastLine, type PlanLine} from '../lib/readout';
 import {useBoardId, useForecastsOf, useLineup, useNamed, usePastResets, useResetNews, useResetsFor} from '../lib/board';
 import {useClock} from '../lib/clock';
 import {quotaHistory, useHistory, useHistoryBegins, useHistoryPlot} from '../lib/history';
+type QuotaKind='session'|'weekly';
 import {t, useLocale} from '../i18n';
-import {Segmented} from './Kit';
 import {HideRow, Popover, SlidersIcon, SwitchRow} from './Popover';
 import {usePlot} from './sizing';
 import {pan, usePanning} from '../lib/pan';
@@ -28,15 +29,13 @@ import {historyProjection, type ProjectionHints} from '../lib/historyProjection'
 
 /**
  * The chart's own settings: whether it draws the plan and the forecast (where either has
- * something to draw), how far it looks ahead, and (for the board's owner) hiding it.
- * Its note says the look ahead needs the plan or the forecast, where a period ending now
- * has neither; a range in the past has no future at all.
+ * something to draw), and (for the board's owner) hiding it.
  */
-function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote}: {arrange: Arrange; planAvailable: boolean; forecastAvailable: boolean; horizonNote: boolean}) {
-  const {horizon, showPlan, showForecast} = usePrefs();
+function HistorySettings({arrange, kind, planAvailable, forecastAvailable}: {arrange: Arrange; kind:QuotaKind; planAvailable: boolean; forecastAvailable: boolean}) {
+  const forecastKey=kind==='session'?'showSessionForecast':'showForecast';
+  const showPlan=usePref('showPlan'),showForecast=usePref(forecastKey),widget=kind==='session'?QUOTA_SESSION_HISTORY:QUOTA_HISTORY;
   return (
     <Popover label={t('history.settings')} icon={<SlidersIcon />}>
-      <div className="popover-note">{t('chart.panHint')}</div>
       {(planAvailable || forecastAvailable) && (
         <div className="popover-section">
           <div className="popover-title">{t('history.show')}</div>
@@ -46,26 +45,14 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
             </SwitchRow>
           )}
           {forecastAvailable && (
-            <SwitchRow on={showForecast} onChange={on => setPrefs({showForecast: on})}>
+            <SwitchRow on={showForecast} onChange={on => setPrefs({[forecastKey]: on})}>
               {t('history.forecast')}
             </SwitchRow>
           )}
           {planAvailable && <div className="popover-note">{t('history.planHint')}</div>}
         </div>
       )}
-      <div className="popover-section">
-        <div className="popover-title">{t('history.horizon')}</div>
-        <div className="popover-pad">
-          <Segmented
-            value={horizon}
-            onChange={value => setPrefs({horizon: value})}
-            options={HORIZONS.map(h => [h, h === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(h)})])}
-            label={t('history.horizon')}
-          />
-        </div>
-        {horizonNote && <div className="popover-note">{t('history.horizonNote')}</div>}
-      </div>
-      {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, QUOTA_HISTORY, true))}>{t('widget.hide')}</HideRow>}
+      {arrange.owner && <HideRow onHide={() => arrange.update(view => withHidden(view, widget, true))}>{t('widget.hide')}</HideRow>}
     </Popover>
   );
 }
@@ -77,18 +64,23 @@ function HistorySettings({arrange, planAvailable, forecastAvailable, horizonNote
  * the history's grid at a time, a label past its right edge counts down on its own, and a
  * forecast's line goes when the table no longer says where its window leads.
  */
-const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange}) {
-  const {history, loading,error} = useHistory();
+const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arrange: Arrange;kind?:QuotaKind}) {
+  const widget=kind==='session'?QUOTA_SESSION_HISTORY:QUOTA_HISTORY;
+  const {history,drawing,loading,error,presentation:authority} = useHistory();
   const strip = useHistoryPlot();
-  const registry = useRef<{token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
+  const registry = useRef<{authority: number; token: number; seed: PlotLine[]; lines: PlotLine[]} | null>(null);
+  if (registry.current?.authority !== authority) registry.current = null;
   const panel = useRef<HTMLElement>(null);
+  useSeriesFocus(panel);
   // Made taller by its owner, the widget gives the room to the plot, not to empty space under the legend.
   const {plot, onBase} = usePlot(panel);
   const sources = useNamed(arrange.view.names,'quota');
   const lineup = useLineup();
   const hubForecasts = useForecastsOf(lineup);
   const news = useResetNews();
-  const prefs = usePrefs();
+  const range=usePref('range'),horizon=usePref('horizon'),showPlan=usePref('showPlan',kind==='weekly'),showForecast=usePref(kind==='session'?'showSessionForecast':'showForecast'),muted=useChartMuted(widget);
+  const prefs=useMemo(()=>({range,kind,horizon,showPlan:kind==='weekly'&&showPlan,showForecast,muted}),[range,kind,horizon,showPlan,showForecast,muted]);
+  const mutedLine=(line:{sourceId:string;windowId:string;key:string})=>chartSeriesMuted(muted,widget,line.sourceId,line.windowId,!!muted[line.key]);
   const {view} = arrange;
   const omitted=subscriptionOverflow(sources,view);
   // Series names and markers are text: they are rebuilt when the language changes.
@@ -105,9 +97,9 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const past = usePastResets();
   const clockNow = useClock(now => earliest(frameChangesAt(selected, history?.cellMs ?? 60_000, now), ...moments.filter(at => at > now)), [history, strip, sources, hubForecasts, lineup, news, prefs, selected, view, locale, codex, past]);
   const panning = usePanning();
-  const captured = useRef<{token: number; now: number; lookAhead: number; sources: typeof sources; forecasts: typeof hubForecasts; lineup: typeof lineup; news: typeof news; codex: typeof codex; view: typeof view} | null>(null);
+  const captured = useRef<{authority: number; token: number; now: number; lookAhead: number; sources: typeof sources; forecasts: typeof hubForecasts; lineup: typeof lineup; news: typeof news; codex: typeof codex; view: typeof view} | null>(null);
   if (panning === null) captured.current = null;
-  else if (captured.current?.token !== panning) captured.current = {token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow), lookAhead: pan.get()?.lookAhead ?? 0, sources, forecasts: hubForecasts, lineup, news, codex, view};
+  else if (captured.current?.token !== panning || captured.current.authority !== authority) captured.current = {authority, token: panning, now: Math.max(clockNow, pan.get()?.originEnd ?? clockNow), lookAhead: pan.get()?.lookAhead ?? 0, sources, forecasts: hubForecasts, lineup, news, codex, view};
   const context = panning !== null ? captured.current : null;
   const now = context?.now ?? clockNow;
   const futureSources = context?.sources ?? sources;
@@ -122,17 +114,17 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const from = frame.from;
   const measured = measuredTo(frame, history, selected, prefs.range);
   const prepared = usePrepared(function* () {
-    const answered = yield* subscriptionLinesPrepared(history, sources, view, prefs.kind);
+    const answered = yield* subscriptionLinesPrepared(drawing, sources, view, prefs.kind);
     let lines: PlotLine[] = answered;
     let nextRegistry: typeof registry.current = null;
     if (strip) {
-      const previous = registry.current?.token === strip.token ? registry.current : {token: strip.token, seed: answered, lines: answered};
+      const previous = registry.current?.authority === authority && registry.current.token === strip.token ? registry.current : {authority, token: strip.token, seed: answered, lines: answered};
       const eligibleSeed = previous.seed.filter(line => answered.some(current => current.key === line.key));
       lines = lineRegistry(eligibleSeed, previous.lines, yield* subscriptionPlotLinesPrepared(strip, sources, view, prefs.kind));
-      nextRegistry = {token: strip.token, seed: previous.seed, lines};
+      nextRegistry = {authority, token: strip.token, seed: previous.seed, lines};
     }
     const visible: PlotLine[] = [];
-    for (const line of lines) {if (!prefs.muted[line.key]) visible.push(line); yield;}
+    for (const line of lines) {if (!mutedLine(line)) visible.push(line); yield;}
     const scheduled = visible.some(line => line.provider === 'codex') ? (futureCodex?.scheduled?.scheduledFor ?? null) : null;
     const announced = frame.live ? scheduled : null;
     const planAvailable = prefs.kind === 'weekly' && visible.some(line => !line.capCells&&planOf(view, line.sourceId) !== null);
@@ -152,7 +144,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
     const hints: ProjectionHints = {plan: planAvailable, forecast: ahead.length > 0, announced: scheduled, zeros: ahead.map(a => a.drawn.zero)};
     const to = historyProjection(frame, measured, prefs, hints, context?.lookAhead);
     const markers: Marker[] = [];
-    if (announced && announced > from) markers.push({key: 'announced-codex', at: announced, label: t('chart.announcedCodex'), color: 'var(--accent)', strong: true});
+    if (announced && announced > from) markers.push({key: 'announced-codex', at: announced, label: t('chart.announcedCodex'), name:PROVIDERS.codex.name,color: 'var(--accent)', strong: true});
     const seen = new Set<string>();
     for (const line of visible) {
       yield;
@@ -163,9 +155,10 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
       if (seen.has(key)) continue;
       seen.add(key); markers.push({key, at: resetAt, until: resetAt, label: t('chart.reset', {source: source ? sourceLabel(source) : line.provider}), color: line.color});
     }
-    for (const {event, lines: shown} of yield* chartEventsPrepared(strip?.events ?? history?.events ?? [], visible, strip?.from ?? from)) {
+    for (const {event, lines: shown} of yield* chartEventsPrepared(strip?.events ?? drawing?.events ?? [], visible, strip?.from ?? from)) {
       const source = sources.find(s => s.id === event.sourceId), name = source ? sourceLabel(source) : shown[0].provider;
-      markers.push({key: `${event.kind}-${event.sourceId}-${event.at}`, at: event.at, label: event.kind === 'early_reset' ? t('chart.earlyReset', {source: name}) : t('chart.resetsGranted', {count: event.count, source: name}), color: shown[0].color, past: true}); yield;
+      const until=event.kind==='plan'?Math.min(event.expiresAt,event.previous?event.expiresAt-event.at+event.previous.at:Infinity):undefined;
+      markers.push({key: `${event.kind}-${event.sourceId}-${event.at}`, at: event.at, label: event.kind === 'early_reset' ? t('chart.earlyReset', {source: name}) : event.kind==='plan'?t(event.previous?'chart.planChanged':'chart.planFirst',{source:name,plan:event.plan,previous:event.previous?.plan??''}):t('chart.resetsGranted', {count: event.count, source: name}), color: shown[0].color, past: true,until}); yield;
     }
     for (const {provider, reset, line} of yield* chartResetsPrepared(past, visible, strip?.from ?? from, strip?.to ?? measured)) {
       markers.push({key: `announced-${provider}-${reset.at}`, at: reset.at, label: t('chart.resetForAll', {source: PROVIDERS[provider]?.name ?? provider}), detail: reset.text, color: line.color, past: true}); yield;
@@ -185,7 +178,7 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
       if (points.length) forecasts.push({key: line.key, name: line.name, color: line.color, dash: line.dash, points, zero: drawn.zero, at: drawn.at, until: drawn.until}); yield;
     }
     return {futureFacts: ahead.map(a => ({zero: a.drawn.zero, until: a.drawn.until})), hints, lines, visible, markers, plans: [...plans.values()], forecasts, to, from, measured, now: strip ? now : measured, cellMs: strip?.cell ?? history?.cellMs ?? 60_000, strip, frame, planAvailable, forecastAvailable, planShown, forecastShown, moments: [...chartMoments(markers, ahead.map(a => a.drawn), to), ...[...plans.values()].map(plan => plan.until!)], registry: nextRegistry};
-  }, [history, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, navigationKey(navigation)], `${history?.board}:${prefs.kind}`);
+  }, [drawing, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, navigationKey(navigation)], `${authority}:${history?.board}:${prefs.kind}`);
   const model = prepared.value;
   useLayoutEffect(() => {if (model) registry.current = model.registry;}, [model]);
   const lines = model?.lines ?? [];
@@ -193,9 +186,20 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
   const currentHints = model ? {...model.hints, forecast: model.futureFacts.some(forecast => now < forecast.until), zeros: model.futureFacts.filter(forecast => now < forecast.until).map(forecast => forecast.zero)} : null;
   const wantedTo = historyProjection(frame, measured, prefs, currentHints, context?.lookAhead);
 
+  const legend = useMemo(() => (
+    <div className="legend">
+      {lines.map(line => (
+        <SeriesLegendItem key={line.key} seriesKey={line.key} name={line.name} color={line.color} dash={line.dash} muted={mutedLine(line)} onToggle={() => setMuted(chartMuteKey(widget,line.sourceId,line.windowId), !mutedLine(line))}>
+          <b>{line.current === null ? '—' : `${num(line.current)}%`}</b>
+        </SeriesLegendItem>
+      ))}
+      {!!history && !lines.length && !error && <span className="legend-empty">{t('history.noLines')}</span>}
+    </div>
+  ), [lines, muted, widget, locale, history, error, authority, board]);
+
   return (
-    <AnalyticsPanel ref={panel} className="history" title={t('history.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
-      settings={<HistorySettings arrange={arrange} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)} horizonNote={frame.live && !model?.planShown && !model?.forecastShown}/>}
+    <AnalyticsPanel ref={panel} className="history" title={t(kind==='session'?'history.sessionTitle':'history.title')} chart history={history} loading={loading} error={error} retry={quotaHistory.retry}
+      settings={<HistorySettings arrange={arrange} kind={kind} planAvailable={model?.planAvailable ?? false} forecastAvailable={frame.live && (currentHints?.forecast ?? false)}/>}
     >
       {omitted > 0 && <AnalyticsNote>{t('history.quotaOverflow', {count: omitted})}</AnalyticsNote>}
       <Chart
@@ -212,21 +216,14 @@ const WindowHistory = memo(function WindowHistory({arrange}: {arrange: Arrange})
           cellMs={model?.cellMs ?? history?.cellMs ?? 60_000}
           strip={model?.strip ?? null}
           prepared={prepared.ready && (panning !== null || answered || !!error)}
-          modelContext={`${history?.board}:${prefs.kind}`}
+          modelContext={`${authority}:${history?.board}:${prefs.kind}`}
           empty={error ? null : !history ? t('history.loading') : lines.length ? t('analytics.allMuted') : t('history.noLines')}
           onSelect={setTimeRange}
           plot={plot}
           onBase={onBase}
         />
 
-      <div className="legend">
-        {lines.map(line => (
-          <SeriesLegendItem key={line.key} name={line.name} color={line.color} dash={line.dash} muted={!!prefs.muted[line.key]} onToggle={() => setMuted(line.key, !prefs.muted[line.key])}>
-            <b>{line.current === null ? '—' : `${num(line.current)}%`}</b>
-          </SeriesLegendItem>
-        ))}
-        {!!history && !lines.length && !error && <span className="legend-empty">{t('history.noLines')}</span>}
-      </div>
+      {legend}
     </AnalyticsPanel>
   );
 });
