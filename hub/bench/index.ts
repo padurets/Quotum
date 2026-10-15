@@ -130,9 +130,9 @@ async function main() {
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
   try {
     const otherDiagnostics = [idleDiagnostic, idleCpuMode, idleTimingDiagnostic, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE];
-    if (panDiagnostic === 'cpu' && (options.cdp || otherDiagnostics.some(Boolean))) throw new Stop('CPU panning diagnostics require an owned browser without another diagnostic mode');
-    const dashboardCpu = options.scope === 'dashboard' && options.ci && panDiagnostic === 'cpu';
-    if (options.scope !== 'all' && [panDiagnostic, ...otherDiagnostics].some(Boolean) && !dashboardCpu) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
+    const dashboardPanning = options.scope === 'dashboard' && options.ci && (panDiagnostic === 'cpu' || panDiagnostic === 'trace');
+    if ((panDiagnostic === 'cpu' || dashboardPanning) && (options.cdp || otherDiagnostics.some(Boolean))) throw new Stop('Panning diagnostics require an owned browser without another diagnostic mode');
+    if (options.scope !== 'all' && [panDiagnostic, ...otherDiagnostics].some(Boolean) && !dashboardPanning) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
     if (startupDiagnostic && (startupDiagnostic !== '1' || options.cdp || panDiagnostic || idleDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup diagnostic mode');
     if (startupWaitDiagnostic && (startupWaitDiagnostic !== '1' || !options.ci || process.platform !== 'linux' || options.cdp || startupDiagnostic || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup wait diagnostic mode');
@@ -247,7 +247,7 @@ async function main() {
       if (Date.now() > shownBy) throw new Stop(`The board showed no cards in ${SHOWN_MS / 1000} s.`);
       await sleep(250);
     }
-    if (panDiagnostic && panDiagnostic !== 'cpu') {
+    if (panDiagnostic && panDiagnostic !== 'cpu' && options.scope !== 'dashboard') {
       evidence.begin('diagnostic-panning-'+panDiagnostic);
       say('diagnostic panning '+panDiagnostic+'; canonical benchmark is not run');
       await cdp.evaluate('__quotumBench.pause()');
@@ -397,15 +397,16 @@ async function main() {
         try{await observer.diagnose(label);}finally{await observer.close();}
       })()]);
     });
-    // Profile after this scope's unchanged prefix: idle and updates, plus traffic
+    // Observe after this scope's unchanged prefix: idle and updates, plus traffic
     // for all. Starting on a fresh board would capture a different fixture state.
     const panned = panDiagnostic === 'cpu'
       ? await profilePanning(cdp, browser, evidence, runPanning)
+      : panDiagnostic === 'trace' ? await tracePanning(cdp, browser, evidence, runPanning)
       : await runPanning(cdp, undefined, evidence);
-    // Full CPU timelines already have one file per scenario. Duplicating them
+    // Full diagnostic timelines already have one file per scenario. Duplicating them
     // across aggregate files would exceed the summary cap and lose all readings.
     const panningReadings = panned.reports.map(report => {
-      if (panDiagnostic !== 'cpu' || !report.timeline) return report;
+      if ((panDiagnostic !== 'cpu' && panDiagnostic !== 'trace') || !report.timeline) return report;
       const {entries, ...timeline} = report.timeline;
       return {...report, timeline: {...timeline, storedEntries: entries.length}};
     });
@@ -462,12 +463,13 @@ async function main() {
     };
     console.log(JSON.stringify(result, null, 2));
     evidence.save('result', result);
-    if (panDiagnostic === 'cpu') {
+    if (panDiagnostic === 'cpu' || panDiagnostic === 'trace') {
       evidence.save('diagnostic-panning-result', {mode: 'diagnostic', problems: problems.map(reason => ({reason})), reports: result.panning});
       // Empty-tab sampler controls follow every original phase; they cannot warm
       // the captured page or replace a failed original budget with a control pass.
-      await profileControls(browser, evidence);
-      say('original benchmark phases captured with CPU sampling; observer overhead is unqualified');
+      if (panDiagnostic === 'cpu') await profileControls(browser, evidence);
+      else await traceControls(browser, evidence);
+      say('original benchmark phases captured with '+(panDiagnostic === 'cpu' ? 'CPU sampling' : 'tracing')+'; observer overhead is unqualified');
     }
     if (problems.length) say(`over budget:\n- ${problems.join('\n- ')}`);
     await finish(problems.length ? 1 : 0);

@@ -217,7 +217,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: |
-          if [ "$QUOTUM_BENCH_DIAGNOSE_PANNING" = cpu ]; then
+          if [ "$QUOTUM_BENCH_DIAGNOSE_PANNING" = cpu ] || [ "$QUOTUM_BENCH_DIAGNOSE_PANNING" = trace ]; then
             set -- --scope dashboard
           else
             set --
