@@ -46,13 +46,14 @@ test('work-only budget updates preserve the financial subscription and native se
   assert.notDeepEqual(h.store.get().history!.moneyWork,prior);assert.equal(h.store.getFinancial(),financial);assert.equal(h.store.get().history!.meterSeries,series);assert.equal(financialRenders,0);
   stop();h.store.close();assert.equal(h.store.getFinancial().history,null);
 });
-function harness(budget?: number, preparations?: Preparations, scope?: 'quota'|'budget', pool?: HistoryPool) {
+function harness(budget?: number, preparations?: Preparations, scope?: 'quota'|'budget', pool?: HistoryPool, workInPresentation?:boolean) {
   let now = NOW;
   let elapsed = 0;
   let dropped = 0;
   const timers = new Map<unknown, {at: number; run: () => void}>();
   const reads: {board: string; cell: number; from: number; to: number; signal?: AbortSignal; meters?:MeterSelection; metadata?: HistoryBasis; settled: boolean; answer(patch?: Partial<HistoryAnswer>): Promise<void>; fail(error: unknown): Promise<void>}[] = [];
   const store = new HistoryStore({
+    workInPresentation,
     now: () => now,
     preparations,
     elapsedNow: () => elapsed,
@@ -513,6 +514,15 @@ test('lineup and since zero retire the shown frame immediately and coalesce one 
   assert.equal(h.store.get().loading,false);
   await flush();assert.equal(h.reads.length,2,'lineup and zero-cutoff news require no duplicate read');
   h.store.close();
+});
+
+test('quota activity retires on authority withdrawal even when raw drawing cells omit work',async()=>{
+  const h=harness(undefined,undefined,'quota',undefined,false);
+  h.store.choose('1h',null);h.store.open('b');h.store.hello('run');h.store.snapshot(['s'],['s weekly'],0,'old','same-finances');await flush();
+  for(const read of pending(h))await read.answer();
+  assert.ok(h.store.get().history);const presentation=h.store.get().presentation;
+  h.store.snapshot(['s'],['s weekly'],0,'revoked','same-finances');
+  assert.equal(h.store.get().history,null);assert.ok(h.store.get().presentation>presentation);h.store.close();
 });
 
 test('an ordinary reconnect retains its successful baseline undimmed while work authority is unchanged',async()=>{

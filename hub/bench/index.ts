@@ -198,6 +198,13 @@ async function main() {
     // their own subscribed-selector tests, including equal displayed labels.
     const bootstrapSource=`localStorage.setItem('quotum.locale','en');
       localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),agentsSort:{column:'project',descending:false}}));
+      window.__quotumInspectHistoryPool=pool=>{window.__quotumWalletState=source=>{
+        const p=[...pool.members].find(m=>m.tapes),reader=[...pool.members].find(m=>m.scope==='budget'),tape=p?.tapes.get('budget');
+        const work=p?.moneyWorkAt(source,Date.now()),group=tape?.tape.money.find(m=>m.source===source),shown=reader?.get();
+        return {periodLoading:p?.get().loading,periodError:!!p?.get().error,workNeeded:p?.workNeeded,work:work?{activeMs:work.activeMs,knownFrom:work.knownFrom}:null,
+          budget:group?{meter:group.meter,counter:!!group.workCounter,readings:group.workCounter?.readings.length,workFrom:group.workCounter?.workFrom}:null,
+          drawing:shown?{loading:shown.loading,error:shown.error,range:shown.history?.range,series:shown.history?.meterSeries?.slice(0,24).map(m=>({source:m.sourceId,meter:m.meterId,unit:m.unit,kind:m.kind,role:m.role}))}:null};
+      };};
       ${probeScript()}`;
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source:bootstrapSource});
     idleCpu?.binding.rememberInjected(1,bootstrapSource);
@@ -592,7 +599,10 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
   const reports:{at:number;reads:number;bytes:number;activeMs:number;activityAgentMs:number}[]=[],problems:string[]=[];
   for(let i=0;i<3;i++) {
     const before=await active(),beforeAgent=await agentTime(),drawing=await geometry();
-    if(before<0)throw new Stop('linked wallet work columns are not visible');
+    if(before<0){
+      const state=await cdp.evaluate(`(()=>({period:window.__quotumWalletState?.(${JSON.stringify(source)})??null,table:document.querySelector('.budget-table')?.textContent?.slice(0,1600),markers:document.querySelectorAll('[data-work-source]').length,range:JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range,selected:new URLSearchParams(location.search).has('from')}))()`).catch(()=>({status:'unavailable'}));
+      console.error('bench: linked wallet state '+JSON.stringify(state));throw new Stop('linked wallet work columns are not visible');
+    }
     await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
     if(i===2)agent.trackClients([{...session,working:false}],[]);
     const at=await demo.reportNow('laptop');await sleep(1000);await drain(requests);requests.counting=false;

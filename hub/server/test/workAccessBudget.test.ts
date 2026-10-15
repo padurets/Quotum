@@ -25,6 +25,34 @@ test('captured holdings and route policies reserve their retained maps before al
  }finally{store.close();}
 });
 
+test('the default history ceiling admits context rows before materializing a dense month',t=>{
+ const start=Math.floor(Date.now()/(2*H))*2*H-28*24*H,store=new Store(':memory:',start),directory=new Directory(store.db);
+ try{
+  const owner=directory.createUser('contexts@example.com','Contexts','fixture',start),source=store.source('codex','contexts',start);
+  store.hold(source,owner.id,start);
+  const device=directory.saveDevice({userId:owner.id,machine:{id:'contexts',name:'Laptop',os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},start).id;
+  const count=40000,project='P'.repeat(120),folder='F'.repeat(120);
+  const session=store.db.prepare('INSERT INTO agent_sessions(id,device_id,client,source_id,origin,started_at,project,folder,ordinal,producer_id,account_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)'),work=store.db.prepare('INSERT INTO agent_work VALUES(?,?,?)');
+  store.db.exec('BEGIN');
+  for(let id=1;id<=count;id++){session.run(id,device,'codex',source,'terminal',start+(id-1)*M,project,folder,0,id.toString(16).padStart(32,'0'),'login');work.run(id,start+(id-1)*M,start+id*M);}
+  store.db.exec('COMMIT');
+  const tiles=new HistoryTiles(store),reservation=tiles.reservation.bind(tiles);let reserved=0,materialized=0,unadmitted=0;
+  t.mock.method(tiles,'reservation',()=>{const value=reservation();let own=0;return {add:(bytes:number)=>{value.add(bytes);reserved+=bytes;own+=bytes;},remove:(bytes:number)=>{value.remove(bytes);reserved-=bytes;own-=bytes;},close:()=>{value.close();reserved-=own;own=0;}};});
+  const prepare=store.db.prepare.bind(store.db),observe=(rows:number)=>{materialized+=rows;unadmitted=Math.max(unadmitted,materialized*512-reserved);};
+  t.mock.method(store.db,'prepare',(sql:string)=>{
+   const statement=prepare(sql);if(!sql.startsWith('SELECT s.id,s.client AS clientId'))return statement;
+   const all=statement.all.bind(statement),iterate=statement.iterate.bind(statement);
+   t.mock.method(statement,'all',(...args:Parameters<typeof all>)=>{const rows=all(...args);observe(rows.length);return rows;});
+   t.mock.method(statement,'iterate',function*(...args:Parameters<typeof iterate>){for(const row of iterate(...args)){observe(1);yield row;}});
+   return statement;
+  });
+  const board=directory.boards(owner.id).find(board=>board.personal)!.id;
+  assert.throws(()=>tiles.read(board,2*H,start,start+40080*M,Date.now(),store.shown(board,[]),undefined,'quota'),HistoryLimit);
+  assert.ok(materialized<count,'over-budget contexts are refused before full native materialization');
+  assert.ok(unadmitted<=4096,'a native context batch cannot allocate ahead of its reservation');assert.equal(reserved,0);
+ }finally{store.close();}
+});
+
 async function fixture(t:TestContext,ceiling?:number,devices=1){
  t.mock.method(Date,'now',()=>at+2*H);const h=await centralFixture(),events=new Events(h.hub,undefined,{now:()=>at+2*H,after:()=>()=>{}},null),tiles=new HistoryTiles(h.store,ceiling),period=new PeriodReader(h.hub,tiles,events);
  t.after(async()=>{events.close();await h.app.close();h.store.close();});
