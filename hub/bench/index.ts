@@ -592,29 +592,60 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
 async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,source:string) {
   say('checking linked wallet credit with Activity, money work columns and a stable financial chart');
   const owner=stand.people.get(people(stand.set)[0].id)!,agent=stand.agents.get('laptop')!,start=Date.now();
+  const initial=new Requests(cdp);initial.counting=true;
   const revision=(await owner.get<{revision:string}>('/api/links')).revision;
   const created=await owner.post<{revision:string;links:{id:string}[]}>('/api/links',{clientId:'opencode',deviceId:null,route:null,sourceId:source,from:start,to:null,expectedRevision:revision,requestId:randomUUID()});
   const session={clientId:'opencode',sessionId:'e'.repeat(32),source:null,origin:'terminal',project:'Linked benchmark',startedAt:new Date(start).toISOString(),working:true};
-  agent.trackClients([session],[]);await demo.reportNow('laptop');await sleep(1000);
+  agent.trackClients([session],[]);await demo.reportNow('laptop');
   const geometry=()=>cdp.evaluate<string>(`JSON.stringify(Array.from(document.querySelectorAll('.budget-history [data-series]')).map(node=>[node.getAttribute('data-series'),node.getAttribute('data-last'),Array.from(node.querySelectorAll('path')).map(path=>path.getAttribute('d'))]))`);
   const active=()=>cdp.evaluate<number>(`Number(document.querySelector('[data-work-source="${source}"]')?.getAttribute('data-active-ms')??-1)`);
   const agentTime=()=>cdp.evaluate<number>(`Number(document.querySelector('.activity-totals')?.getAttribute('data-agent-ms')??-1)`);
-  const reports:{at:number;reads:number;bytes:number;activeMs:number;activityAgentMs:number}[]=[],problems:string[]=[];
+  const unavailable=async()=>{
+    const state=await cdp.evaluate(`(()=>({period:window.__quotumWalletState?.(${JSON.stringify(source)})??null,table:document.querySelector('.budget-table')?.textContent?.slice(0,1600),markers:document.querySelectorAll('[data-work-source]').length,range:JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range,selected:new URLSearchParams(location.search).has('from')}))()`).catch(()=>({status:'unavailable'}));
+    console.error('bench: linked wallet state '+JSON.stringify(state));throw new Stop('linked wallet work columns are not ready');
+  };
+  // The first list starts a lease. Configuration changes need a cold baseline before credit measurements.
+  const setupFrom=Date.now(),readyBy=setupFrom+SHOWN_WITHIN;
+  let previous='',stable=0;
+  while(stable<3){
+    const layout=await cdp.evaluate<string|null>(`(()=>{
+      if(!document.querySelector('[data-work-source="${source}"]')||!document.querySelector('.activity-totals')||document.querySelector('.agents-panel.is-loading,.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]'))return null;
+      if(document.getAnimations().some(animation=>animation.playState==='running'&&animation.effect?.target?.matches('.widget,.widget-body')))return null;
+      return JSON.stringify(Array.from(document.querySelectorAll('.widgets>.widget')).map(node=>{const box=node.getBoundingClientRect();return[box.x,box.y,box.width,box.height];}));
+    })()`);
+    stable=!initial.historyPending&&layout!==null&&layout===previous?stable+1:0;previous=layout??'';
+    if(stable<3){if(Date.now()>=readyBy)await unavailable();await sleep(20);}
+  }
+  initial.counting=false;
+  const setup={waitMs:Date.now()-setupFrom,historyRequests:initial.historyRequests,historyBytes:initial.historyBytes};
+  const reports:{at:number;capturedAt:number;reads:number;bytes:number;activeMs:number;activityAgentMs:number;activeMsLatency:number|null;activityMsLatency:number|null}[]=[],problems:string[]=[];
   for(let i=0;i<3;i++) {
     const before=await active(),beforeAgent=await agentTime(),drawing=await geometry();
-    if(before<0){
-      const state=await cdp.evaluate(`(()=>({period:window.__quotumWalletState?.(${JSON.stringify(source)})??null,table:document.querySelector('.budget-table')?.textContent?.slice(0,1600),markers:document.querySelectorAll('[data-work-source]').length,range:JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range,selected:new URLSearchParams(location.search).has('from')}))()`).catch(()=>({status:'unavailable'}));
-      console.error('bench: linked wallet state '+JSON.stringify(state));throw new Stop('linked wallet work columns are not visible');
-    }
+    if(before<0||beforeAgent<0)await unavailable();
     await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
+    await cdp.evaluate(`(()=>{
+      let activeAt=null,activityAt=null;
+      const values=()=>({activeMs:Number(document.querySelector('[data-work-source="${source}"]')?.getAttribute('data-active-ms')??-1),activityAgentMs:Number(document.querySelector('.activity-totals')?.getAttribute('data-agent-ms')??-1)});
+      const observer=new MutationObserver(()=>{
+        const value=values(),now=Date.now();
+        if(activeAt===null&&value.activeMs>${before})activeAt=now;
+        if(activityAt===null&&value.activityAgentMs>${beforeAgent})activityAt=now;
+      });
+      observer.observe(document.body,{attributes:true,attributeFilter:['data-active-ms','data-agent-ms'],childList:true,subtree:true});
+      window.__quotumLinkedWork=()=>{observer.disconnect();delete window.__quotumLinkedWork;return{...values(),activeAt,activityAt,capturedAt:Date.now(),reading:__quotumBench.read()};};
+    })()`);
     if(i===2)agent.trackClients([{...session,working:false}],[]);
-    const at=await demo.reportNow('laptop');await sleep(1000);await drain(requests);requests.counting=false;
-    const value=await active(),reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.historyRequests,bytes=requests.historyBytes;
-    const activityAgentMs=await agentTime();
-    reports.push({at,reads,bytes,activeMs:value,activityAgentMs});
+    const at=await demo.reportNow('laptop');await sleep(at+1000-Date.now());
+    const shown=await cdp.evaluate<{activeMs:number;activityAgentMs:number;activeAt:number|null;activityAt:number|null;capturedAt:number;reading:Reading}>('window.__quotumLinkedWork()');
+    // Drain only accounts for terminal traffic and late renders; it cannot extend the credit deadline.
+    await drain(requests);requests.counting=false;
+    const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.historyRequests,bytes=requests.historyBytes;
+    const activeMsLatency=shown.activeAt===null?null:shown.activeAt-at,activityMsLatency=shown.activityAt===null?null:shown.activityAt-at;
+    reports.push({at,capturedAt:shown.capturedAt,reads,bytes,activeMs:shown.activeMs,activityAgentMs:shown.activityAgentMs,activeMsLatency,activityMsLatency});
     if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`linked wallet work read history ${reads} times, ${bytes} bytes`);
-    if(value<=before)problems.push('linked wallet active time did not advance');
-    problems.push(...activityCreditProblems(reading.renders,beforeAgent,activityAgentMs));
+    if(shown.activeMs<=before||activeMsLatency===null||activeMsLatency<0||activeMsLatency>1000)problems.push('linked wallet active time did not advance within 1000 ms');
+    problems.push(...activityCreditProblems(shown.reading.renders,beforeAgent,shown.activityAgentMs));
+    if(activityMsLatency===null||activityMsLatency<0||activityMsLatency>1000)problems.push('linked wallet Activity did not advance within 1000 ms');
     if(await geometry()!==drawing)problems.push('linked wallet work changed financial geometry');
     if(reading.renders.some(part=>!part.time&&part.widget==='budget'&&part.node.includes('.budget-history')))problems.push('linked wallet work rendered the financial chart');
     problems.push(...renderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from,to:Date.now()}));
@@ -622,7 +653,7 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
   agent.trackClients([],[]);await demo.reportNow('laptop');
   const response=await fetch(owner.base+'/api/links/'+created.links.at(-1)!.id,{method:'DELETE',headers:{cookie:owner.cookie,origin:new URL(owner.base).origin,'content-type':'application/json'},body:JSON.stringify({expectedRevision:created.revision,requestId:randomUUID()})});
   if(!response.ok)throw new Stop('linked wallet fixture could not remove its rule');
-  return {reports,problems};
+  return {setup,reports,problems};
 }
 
 /** The personal display path uses the same measurement and render budgets as native money. */
