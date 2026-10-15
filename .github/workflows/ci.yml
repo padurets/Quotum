@@ -16,6 +16,11 @@ on:
         description: SHA256 of the previously received compiled client
         required: true
         type: string
+      history_raw:
+        description: Save original synthetic history400 wire bodies without an idle CPU profile
+        required: false
+        type: boolean
+        default: false
       trace_only:
         description: Observe the original idle window without CPU sampling or alignment
         required: false
@@ -177,8 +182,18 @@ jobs:
         env:
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
           EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+      - run: |
+          if [ "$HISTORY_RAW" = true ]; then
+            unset QUOTUM_BENCH_DIAGNOSE_IDLE_CPU QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING QUOTUM_BENCH_DIAGNOSE_PANNING
+            QUOTUM_BENCH_CAPTURE_HISTORY_RAW=400 QUOTUM_BENCH_DIAGNOSTICS_DIR="$RUNNER_TEMP/quotum-history-raw" QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope history
+          elif [ "$HISTORY_RAW" = false ]; then
+            QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+          else
+            echo 'Unknown manual history capture mode.' >&2
+            exit 1
+          fi
         env:
+          HISTORY_RAW: ${{ inputs.history_raw }}
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.trace_only && 'trace' || inputs.original_timing && 'profile' || '1' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
       - uses: actions/upload-artifact@v7
@@ -187,6 +202,7 @@ jobs:
           name: idle-cpu-control
           path: |
             /tmp/quotum-idle-cpu-diagnostic/
+            ${{ runner.temp }}/quotum-history-raw/
             hub/dist/client/assets/index-*.js
           if-no-files-found: warn
 

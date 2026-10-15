@@ -18,8 +18,8 @@ const gridsOf = (store: HistoryStore) => (store as unknown as {grids: Map<number
 
 /** Controlled traffic uses the production gesture, loader and actual HTTP parser;
  * native presentation is measured separately on the unchanged browser route. */
-export async function historyTraffic(upstream: string, cookie: string, board: string, windows: string[], browser?: Browser, evidence?: Pick<Evidence, 'save'>) {
-  const proxy = await historyProxy(upstream, browser?.owner), reports = [], invalidated = [], problems: string[] = [];
+export async function historyTraffic(upstream: string, cookie: string, board: string, windows: string[], browser?: Browser, evidence?: Pick<Evidence, 'save'>,rawDirectory?:string) {
+  const proxy = await historyProxy(upstream, browser?.owner,rawDirectory?{directory:rawDirectory,save:value=>evidence?.save('raw-history-400',value)}:undefined), reports = [], invalidated = [], problems: string[] = [];
   try {
     for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
       for (let take = 1; take <= HISTORY_COHORT_TAKES; take++) {
@@ -144,5 +144,5 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
     const nativeCancellations = browser ? await browserCancellationTraffic(browser, proxy, cookie, false, false, evidence) : null;
     if (native) problems.push(...native.problems);
     return {codec: HISTORY_CODEC, reports, invalidated, cancellations, native, nativeCancellations, problems};
-  } finally {await proxy.close();}
+  } finally {try{proxy.raw400?.finish();}catch{if(proxy.raw400)proxy.raw400.errors++;}finally{await proxy.close();}}
 }

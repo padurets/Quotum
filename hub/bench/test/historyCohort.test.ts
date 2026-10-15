@@ -5,6 +5,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import * as budget from '../historyTrafficBudget';
 import {historyScroll,stableHistoryReads} from '../historyTrafficBrowser';
+import {RAW_HISTORY_400} from '../historyProxy';
 import {cellStart} from '../../server/domain/history';
 
 const source=readFileSync(new URL('../historyTrafficBrowser.ts',import.meta.url),'utf8');
@@ -101,7 +102,7 @@ const coldCode=ts.transpileModule(source.slice(coldStart,coldEnd).replace('expor
 async function coldReplay(mode:'stable'|'cross-only'|'bad-first'|'bad-second'|'physical-only-body'|'later-run'|'later-known'|'optional'|'attempts'|'fresh-closed'|'fresh-open'|'fresh-open-stable'|'mixed-seed') {
   let pages=0,closed=0,observersClosed=0;
   const proxy={transfers:[] as any[],phase(){},async settled(){}};
-  const context={DAY:86_400_000,assert,...budget,cellStart,historyScroll,stableHistoryReads,URLSearchParams,
+  const context={DAY:86_400_000,assert,...budget,cellStart,historyScroll,stableHistoryReads,RAW_HISTORY_400,URLSearchParams,
     process:{env:{}},console:{error(){}},writeFileSync(){},
     observeReversal:async()=>({watch:async(_name:string,work:()=>Promise<unknown>)=>work(),async close(){observersClosed++;}}),
     historyBody:async(_url:string,_cookie:string,_signal:unknown,onBody?:(body:unknown)=>void)=>{
