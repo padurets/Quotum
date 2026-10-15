@@ -81,7 +81,7 @@ test('a conflict reload retains the draft and creates a command against the new 
 
 test('the same editor applies all changed fields from a date while deletion sends no replacement', () => {
   const date=new Date(link.from+30*60_000),at=new Date(date.getTime()-date.getTimezoneOffset()*60_000).toISOString().slice(0,16);
-  const change = fixture('edit'); change.choose('links.source', 'codex:one'); change.choose('links.client', 'codex'); change.choose('links.from', 'date'); change.choose('links.date', at); change.submit();
+  const change = fixture('edit'); change.choose('links.source', 'codex:one'); change.choose('links.client', 'codex'); change.choose('links.apply', 'date'); change.choose('links.date', at); change.submit();
   assert.equal(change.reads[0].url, '/api/links/rule/change');
   assert.deepEqual(Object.keys(change.reads[0].body).sort(), ['at', 'clientId', 'deviceId', 'expectedRevision', 'newSourceId', 'requestId', 'route', 'to']);
   assert.equal(change.reads[0].body.at, new Date(at).getTime());
@@ -101,7 +101,7 @@ test('an active link changes from saving by default and a lost reply keeps that 
 
 test('one editor can explicitly correct the whole period without rounding its original milliseconds', t => {
   t.mock.method(Date,'now',()=>link.from+1000);
-  const f=fixture('edit');f.choose('links.source','codex:one');f.choose('links.from','original');f.submit();
+  const f=fixture('edit');f.choose('links.source','codex:one');f.choose('links.apply','original');f.submit();
   assert.equal(f.reads[0].url,'/api/links/rule');assert.equal(f.reads[0].body.from,link.from);assert.equal(f.reads[0].body.to,link.to);
 });
 
@@ -111,6 +111,14 @@ test('editing a past or future link uses its own original period by default', ()
     const f=fixture('edit',{...link,from,to});f.choose('links.source','codex:one');f.submit();
     assert.equal(f.reads[0].url,'/api/links/rule');assert.equal(f.reads[0].body.from,from);assert.equal(f.reads[0].body.to,to);
   }
+});
+
+test('the same editor can reschedule an entire future period beyond its former end', t=>{
+  t.mock.method(Date,'now',()=>link.from-60_000);
+  const local=(at:number)=>{const date=new Date(at);return new Date(at-date.getTimezoneOffset()*60_000).toISOString().slice(0,16);};
+  const f=fixture('edit'),from=local(link.to!+60_000),to=local(link.to!+3_600_000);
+  f.choose('links.date',from);f.choose('links.to',to);f.submit();
+  assert.equal(f.reads[0].url,'/api/links/rule');assert.equal(f.reads[0].body.from,new Date(from).getTime());assert.equal(f.reads[0].body.to,new Date(to).getTime());
 });
 
 test('an unchanged edit does not write or offer an enabled Save action',()=>{

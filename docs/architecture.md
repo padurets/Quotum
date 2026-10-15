@@ -1188,9 +1188,9 @@ and its limits.
   source entry points open the same editor with context, without creating a link.
   An existing matching link opens for editing instead of creating an overlapping
   rule. The editor has one effective-date choice: saving time, a chosen date, or
-  the original start. A later start atomically preserves the old prefix and replaces
-  the remaining rule, including its device and route scope; the original start
-  corrects the whole period. Active links default to preserving earlier work.
+  the entire period. A dated edit atomically preserves the old prefix and replaces
+  the remaining rule, including its device and route scope; a whole-period edit
+  can also move the original bounds. Active links default to preserving earlier work.
   Disconnected targets retain their owner-visible identity and the shared
   disconnected label, but cannot be selected for new work. Their owner-only
   management metadata includes no measurements or other people's private labels.

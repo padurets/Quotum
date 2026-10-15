@@ -127,20 +127,20 @@ function LinkForm({edit, inventory, onClose, onSaved, reload}: {edit: Edit; inve
   const [link, setLink] = useState(edit.link), [from, setFrom] = useState(localDate(edit.link.from)), [to, setTo] = useState(edit.link.to === null ? '' : localDate(edit.link.to));
   const [revision, setRevision] = useState(edit.revision), [busy, setBusy] = useState(false), [error, setError] = useState<unknown>(null);
   const command = useRef<{fingerprint: string; url: string; body: object} | null>(null), dates = useRef<HTMLDetailsElement>(null);
-  const source = targetOf(inventory, edit.link.sourceId), start = starts === 'original' ? edit.link.from : starts === 'now' ? openedAt : from === localDate(edit.link.from) ? edit.link.from : new Date(from).getTime();
+  const source = targetOf(inventory, edit.link.sourceId), start = starts === 'now' ? openedAt : from === localDate(edit.link.from) ? edit.link.from : new Date(from).getTime();
   const end = to ? edit.link.to !== null && to === localDate(edit.link.to) ? edit.link.to : new Date(to).getTime() : null;
-  const changed = !existing || link.clientId !== edit.link.clientId || link.sourceId !== edit.link.sourceId || link.deviceId !== edit.link.deviceId || JSON.stringify(link.route) !== JSON.stringify(edit.link.route) || end !== edit.link.to || start < edit.link.from;
-  const effect = existing && (starts === 'now' || start > edit.link.from) ? 'links.datedEffect' : 'links.periodEffect';
+  const changed = !existing || link.clientId !== edit.link.clientId || link.sourceId !== edit.link.sourceId || link.deviceId !== edit.link.deviceId || JSON.stringify(link.route) !== JSON.stringify(edit.link.route) || end !== edit.link.to || starts === 'original' && start !== edit.link.from || start < edit.link.from;
+  const effect = existing && starts !== 'original' && (starts === 'now' || start > edit.link.from) ? 'links.datedEffect' : 'links.periodEffect';
   const submit = async (event: FormEvent) => {
     event.preventDefault(); if (busy || !remove && !changed) return; setError(null);
     // The choice "from saving" is captured once, including after a lost reply.
     const fingerprint = JSON.stringify([link, starts, from, to, revision]);
     if (command.current?.fingerprint !== fingerprint) {
       const at = starts === 'now' ? Date.now() : start;
-      if (!remove && (!inventory.clients.includes(link.clientId) || !inventory.sources.some(source => source.id === link.sourceId) || !Number.isSafeInteger(at) || at < 0 || end !== null && (!Number.isSafeInteger(end) || end <= at) || existing && at > edit.link.from && edit.link.to !== null && at >= edit.link.to)) {
+      if (!remove && (!inventory.clients.includes(link.clientId) || !inventory.sources.some(source => source.id === link.sourceId) || !Number.isSafeInteger(at) || at < 0 || end !== null && (!Number.isSafeInteger(end) || end <= at) || existing && starts !== 'original' && at > edit.link.from && edit.link.to !== null && at >= edit.link.to)) {
         if (dates.current) dates.current.open = true; setError(new ApiError(400, 'invalid_link')); return;
       }
-      const dated = existing && at > edit.link.from;
+      const dated = existing && starts !== 'original' && at > edit.link.from;
       const data = remove ? {} : dated ? {at, newSourceId: link.sourceId, clientId: link.clientId, deviceId: link.deviceId, route: link.route, to: end} : {...link, from: at, to: end};
       command.current = {fingerprint, url: '/api/links' + (edit.link.id ? '/' + edit.link.id : '') + (dated ? '/change' : ''), body: {...data, expectedRevision: revision, requestId: crypto.randomUUID()}};
     }
@@ -160,8 +160,8 @@ function LinkForm({edit, inventory, onClose, onSaved, reload}: {edit: Edit; inve
         </div>
         <details ref={dates} className="disclosure"><summary>{t('links.period')}<span className="disclosure-value">{starts === 'now' ? t('currencies.fromNow') : Number.isFinite(start) ? stamp(start) : t('links.from')}{' — '}{end !== null && Number.isFinite(end) ? stamp(end) : t('links.openEnd')}</span></summary>
           <div className="dialog-form">
-            <SelectField label={t('links.from')} value={starts} onChange={event => setStarts(event.target.value as typeof starts)}><option value="now">{t('currencies.fromNow')}</option>{existing && <option value="original">{t('links.fromOriginal', {time: stamp(edit.link.from)})}</option>}<option value="date">{t('links.fromDate')}</option></SelectField>
-            {starts === 'date' && <Field type="datetime-local" required label={t('links.date')} value={from} onChange={event => setFrom(event.target.value)} />}
+            <SelectField label={t(existing ? 'links.apply' : 'links.from')} value={starts} onChange={event => setStarts(event.target.value as typeof starts)}><option value="now">{t('currencies.fromNow')}</option><option value="date">{t('links.fromDate')}</option>{existing && <option value="original">{t('links.entirePeriod')}</option>}</SelectField>
+            {starts !== 'now' && <Field type="datetime-local" required label={t('links.date')} value={from} onChange={event => setFrom(event.target.value)} />}
             <Field type="datetime-local" label={t('links.to')} value={to} onChange={event => setTo(event.target.value)} />
             <small>{t('links.timezone', {zone: Intl.DateTimeFormat().resolvedOptions().timeZone})}</small>
           </div>
@@ -173,7 +173,7 @@ function LinkForm({edit, inventory, onClose, onSaved, reload}: {edit: Edit; inve
           <small>{t('links.conditionAdvice')}</small>
         </div></details>
       </fieldset>
-      {existing && <p className="dialog-text">{t(effect, {time: starts === 'now' ? t('currencies.fromNow') : Number.isFinite(start) ? stamp(start) : t('links.from')})}</p>}
+      {existing && <p className="dialog-text">{t(effect)}</p>}
     </>}
     <ErrorLine error={error} />
     {error instanceof ApiError && ['links_changed', 'source_not_held'].includes(error.code) && <button className="button" type="button" onClick={() => void reload().then(data => {if (data) {setRevision(data.revision); command.current = null; setError(null);}})}>{t('links.reload')}</button>}

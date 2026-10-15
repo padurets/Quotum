@@ -1098,7 +1098,6 @@ export const en = {
 
   "links.edit": "Edit link",
   "links.scope": "Device and work type",
-  "links.fromOriginal": "From the link’s start ({time})",
   "links.fromDate": "From a specific date…",
   "links.date": "Start date",
   "links.datedEffect": "Work before the new period keeps its previous link.",
@@ -1106,6 +1105,8 @@ export const en = {
   "links.planned": "Scheduled links",
   "links.history": "Past links",
   "links.noCurrent": "No links apply at the moment.",
+  "links.apply": "Apply changes",
+  "links.entirePeriod": "To the entire link period",
   "links.loading": "Loading client links…",
   "links.noSources": "Connect a provider account or a device reporting a subscription before assigning a source.",
   "links.saved": "Current links",
