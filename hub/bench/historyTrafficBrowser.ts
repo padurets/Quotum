@@ -8,7 +8,7 @@ import type {Evidence} from './evidence';
 import {cellStart, expandHistory, type HistoryAnswer, type HistoryBasis, type HistoryReply} from '../server/domain/history';
 import {openTab, type Browser, type Cdp} from './cdp';
 import {HISTORY_COHORT_TAKES, historyCutInvalidation, historyIdentity, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
-import {HISTORY_ATTEMPT_HEADER, HISTORY_CODEC_PARAMS, historyBody, historyProxy, RAW_HISTORY_400, type HistoryRaw400, type BodyCount, type Transfer} from './historyProxy';
+import {HISTORY_ATTEMPT_HEADER, HISTORY_CODEC_PARAMS, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
 import {observeReversal} from './reversalDiagnostic';
 import {historyPoolReceiptScript,historyPoolCriticalReceiptScript} from './historyPoolReceipt';
 import {ScriptBinding} from './scriptBinding';
@@ -140,8 +140,7 @@ export class HistoryBodies {
     const reads=this.reads.filter(read=>read.phase===phase);
     return {attempts:reads.length,omitted:Math.max(0,reads.length-64),reads:reads.slice(0,64).map(read=>({...read.attemptId&&/^b\d+:\d+$/.test(read.attemptId)?{attemptId:read.attemptId}:{},stage:read.stage,endpoint:read.endpoint,request:read.diagnostic,...(read.wireParts?{wireParts:read.wireParts}:{}),...(read.wireAlternative?{wireAlternative:read.wireAlternative}:{}),httpStatus:read.httpStatus??null,canceled:read.canceled??false,complete:read.count?.complete??false,decoded:read.count?.decoded,encodedLower:read.count?.lower,encodedUpper:read.count?.upper}))};
   }
-  rawBases(){return [...this.metadata.entries()];}
-  constructor(cdp: Pick<Cdp, 'on' | 'send'>,wireAlternative=false,raw400?:HistoryRaw400) {
+  constructor(cdp: Pick<Cdp, 'on' | 'send'>,wireAlternative=false) {
     cdp.on<{requestId: string; request: {url: string;postData?:string; headers?: Record<string, string>}}>('Network.requestWillBeSent', event => {
       const url = new URL(event.request.url); if (!accountingPath(url.pathname)) return;
       const read: Read = {endpoint:url.pathname==='/api/history'?'history':url.pathname.endsWith('/sessions')?'period/sessions':'period',stage:this.stage,selection: historyReadSelection(url), id: event.requestId, phase: this.phase, from: Number(url.searchParams.get('from')), to: Number(url.searchParams.get('to')), cell: Number(url.searchParams.get('cell')), lower: 0, before: Promise.all([...this.pending]), attemptId: lowerHeaders(event.request.headers ?? {})[HISTORY_ATTEMPT_HEADER]};
@@ -149,7 +148,6 @@ export class HistoryBodies {
       if(url.pathname!=='/api/history'){
         read.sections=[];
         const classify=(postData:string)=>{
-          if(raw400)try{raw400.post(read.id,read.phase,postData);}catch{raw400.errors++;}
           const body=JSON.parse(postData) as PeriodRequest;
           const selection=body.selection;
           read.diagnostic={...(selection?{selection:selection.mode==='live'?{mode:'live',periodMs:Number(selection.periodMs)}:{mode:'range',from:Number(selection.from),to:Number(selection.to)}}:{}),evaluatedAt:Number(body.evaluatedAt),sections:PERIOD_SCOPES.flatMap(scope=>{const query=body[scope];return query?[{scope,from:Number(query.from),to:Number(query.to),cell:Number(query.cell),cells:query.cells==='skip'?'skip' as const:'read' as const,evidence:query.evidence==='skip'?'skip' as const:query.evidence?'cursor' as const:'baseline' as const}]:[];}),values:body.values?.length??0,sessions:!!body.sessions};
@@ -251,10 +249,10 @@ export async function prepareHistoryTarget(cdp: Pick<Cdp, 'send' | 'evaluate'>, 
   assert.ok(reachable, 'native history gesture target is covered');
 }
 
-type TrafficProxy = {url: string; transfers: Transfer[];raw400?:HistoryRaw400; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
+type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
 
 async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>,poolMode:'full'|'critical'='full') {
-  const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp,process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING==='1',name===RAW_HISTORY_400?proxy.raw400:undefined);
+  const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp,process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING==='1');
   const poolName=name.replace(/[^a-zA-Z0-9_-]/g,'-');
   const poolBinding=poolEvidence?new ScriptBinding(cdp,clientIdentity(),(file,value)=>poolEvidence.save('pool-'+poolName+'-'+file,value)):null;
   let poolCaptured=false;
@@ -417,9 +415,7 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name,status,geometry,cell,
           reads:trafficReadEvidence(bodies.reads),cold:bodies.diagnostic(`${name}/cold`),reports:reports.filter(report=>report.name.startsWith(name+'/')),
           transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),command:cdp.snapshot()});
-        try{
-          if(name===RAW_HISTORY_400&&proxy.raw400)try{proxy.raw400.finish({status,reads:trafficReadEvidence(bodies.reads),bases:bodies.rawBases(),aggregate:reports.find(report=>report.name===name+'/all-accounting')});}catch{proxy.raw400.errors++;}
-        }finally{try{await capturePool();}finally{await observer?.close();await close();}}
+        try{await capturePool();}finally{await observer?.close();await close();}
       }
     }
   }

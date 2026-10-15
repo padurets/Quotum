@@ -117,7 +117,6 @@ async function main() {
   const startupDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP;
   const startupWaitDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS;
   const poolDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
-  const rawHistory = process.env.QUOTUM_BENCH_CAPTURE_HISTORY_RAW;
   evidence.save('scope', {mode: options.scope});
   let idleCpu:IdleCpuDiagnostic|undefined;
   const diagnosticDirectory=path.join('/tmp/quotum-idle-cpu-diagnostic',`${process.env.GITHUB_RUN_ID??'local'}-${process.env.GITHUB_RUN_ATTEMPT??'1'}-${process.pid}`);
@@ -131,7 +130,6 @@ async function main() {
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
   try {
     const otherDiagnostics = [idleDiagnostic, idleCpuMode, idleTimingDiagnostic, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE];
-    if(rawHistory&&(rawHistory!=='400'||!options.ci||options.scope!=='history'||options.cdp||panDiagnostic||otherDiagnostics.some(Boolean)||!process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR))throw new Stop('Raw history capture requires its owned CI history scope without other diagnostics');
     const dashboardPanning = options.scope === 'dashboard' && options.ci && (panDiagnostic === 'cpu' || panDiagnostic === 'trace');
     if ((panDiagnostic === 'cpu' || dashboardPanning) && (options.cdp || otherDiagnostics.some(Boolean))) throw new Stop('Panning diagnostics require an owned browser without another diagnostic mode');
     if (options.scope !== 'all' && [panDiagnostic, ...otherDiagnostics].some(Boolean) && !dashboardPanning) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
@@ -167,7 +165,7 @@ async function main() {
     }
     try {await owner.close();} catch (error) {code = 1; say(String(error));}
     try {await demo.stop();} catch {code = 1; say('demo cleanup failed');}
-    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || startupDiagnostic || startupWaitDiagnostic || poolDiagnostic || rawHistory) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
+    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || startupDiagnostic || startupWaitDiagnostic || poolDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
     process.exit(code);
   })();
   const set = panningSet(SETS[0]);
@@ -202,7 +200,7 @@ async function main() {
       say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
       evidence.begin('history-traffic');
       const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
-      try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser, evidence,rawHistory?path.join(process.env.QUOTUM_BENCH_DIAGNOSTICS_DIR!,evidence.id,'raw-history-400'):undefined);}
+      try{traffic=await historyTraffic(address.base, ana.cookie, board, current.sources.flatMap(source => source.windows.map(window => `${source.id} ${window.id}`)), browser, evidence);}
       catch(error){
         if(/browser\/(?:1|30)d\/reversal/.test(String(error))){
           say('replaying the failed reversal with page and browser diagnostics; the original failure remains');
