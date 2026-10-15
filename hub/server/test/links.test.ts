@@ -95,6 +95,25 @@ test('owner links preserve exact nullable overlap semantics and atomic dated edi
   } finally {store.close();}
 });
 
+test('one dated edit preserves the prefix while replacing its scope and end atomically', () => {
+  const f=fixture();
+  try{
+    const old=f.mutate('create',null,f.input).body.links[0];
+    const replacement={at:150,newSourceId:f.second,clientId:'codex',deviceId:f.device.id,route:{class:'api',provider:'openrouter'},to:250};
+    f.mutate('change',old.id,replacement);
+    const rows=f.store.links.list(f.owner.id),prefix=rows.find(row=>row.id===old.id)!,suffix=rows.find(row=>row.id!==old.id)!;
+    assert.deepEqual(prefix,{...old,to:150});
+    assert.deepEqual([suffix.clientId,suffix.deviceId,suffix.route,suffix.sourceId,suffix.from,suffix.to],['codex',f.device.id,replacement.route,f.second,150,250]);
+    const before=rows,revision=f.store.links.revision(f.owner.id);
+    assert.throws(()=>f.mutate('change',suffix.id,{...replacement,at:175,deviceId:f.foreign.id}),/not_found/);
+    assert.deepEqual(f.store.links.list(f.owner.id),before);assert.equal(f.store.links.revision(f.owner.id),revision);
+    f.mutate('create',null,{...f.input,clientId:'codex',deviceId:null,from:200,to:300});
+    const conflict=f.store.links.list(f.owner.id),version=f.store.links.revision(f.owner.id);
+    assert.throws(()=>f.mutate('change',suffix.id,{at:175,newSourceId:f.second,deviceId:null,route:null}),/link_overlap/);
+    assert.deepEqual(f.store.links.list(f.owner.id),conflict);assert.equal(f.store.links.revision(f.owner.id),version);
+  }finally{f.store.close();}
+});
+
 test('two connections reject stale revisions, replay lost replies and expire receipts', () => {
   const path = mkdtempSync(join(tmpdir(), 'quotum-links-')), f = fixture(join(path, 'test.sqlite')), second = new Store(join(path, 'test.sqlite'), 0);
   try {

@@ -20,10 +20,14 @@ export function linkRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
   app.get('/api/links', (request, reply) => {
     const user = guards.user(request, reply); if (!user) return reply;
     const personal=hub.directory.boards(user.id).find(board=>board.personal);
-    const sources=titled(hub.store.held(user.id),personal?hub.directory.view(personal.id).names:{});
-    return {revision: store.revision(user.id), links: store.list(user.id).map(link => ({...link, active: hub.store.holds(user.id, link.sourceId)})),
-      sources: sources.map(source => ({id: source.id, provider: source.provider,
-        name: String(hub.store.db.prepare('SELECT name FROM declared_accounts WHERE user_id=? AND source_id=?').get(user.id, source.id)?.name ?? source.title)})),
+    const links=store.list(user.id),held=hub.store.held(user.id),ids=new Set(held.map(source=>source.id));
+    // An owner's saved link retains its target's identity, never its measurements
+    // or another person's private account label after disconnecting.
+    const disconnected=hub.store.db.prepare('SELECT DISTINCT s.id,s.provider FROM client_links l JOIN sources s ON s.id=l.source_id WHERE l.user_id=? ORDER BY s.rowid').all(user.id) as {id:string;provider:string}[];
+    const known=titled([...held,...disconnected.filter(source=>!ids.has(source.id))],personal?hub.directory.view(personal.id).names:{}).map(source=>({id:source.id,provider:source.provider,
+      name:String(hub.store.db.prepare('SELECT name FROM declared_accounts WHERE user_id=? AND source_id=?').get(user.id,source.id)?.name??source.title)}));
+    return {revision: store.revision(user.id), links: links.map(link => ({...link, active: ids.has(link.sourceId)})),
+      sources: known.filter(source=>ids.has(source.id)),targets:known.filter(source=>links.some(link=>link.sourceId===source.id)),
       clients: [...new Set([...clients.map(c => c.id), ...(hub.store.db.prepare('SELECT client FROM device_clients c JOIN devices d ON d.id=c.device_id WHERE d.user_id=? UNION SELECT client FROM agent_sessions s JOIN devices d ON d.id=s.device_id WHERE d.user_id=?').all(user.id, user.id) as {client: string}[]).map(c => c.client)])],
       devices: hub.directory.devices(user.id).map(device => ({id: device.id, name: device.label ?? device.name}))};
   });

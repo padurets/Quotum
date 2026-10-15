@@ -104,11 +104,12 @@ export class LinkStore {
       else if (operation === 'change') {
         if (!old) throw new Error('not_found');
         if (!time(command.at) || command.at < old.from || old.to !== null && command.at >= old.to) throw new Error('invalid_link');
-        const input = this.input(owner, {...old, sourceId: command.newSourceId, from: command.at});
+        const replacement=Object.fromEntries(['clientId','deviceId','route','to'].filter(key=>Object.hasOwn(command,key)).map(key=>[key,command[key]]));
+        const input = this.input(owner, {...old, ...replacement, sourceId: command.newSourceId, from: command.at});
         this.overlap(owner, input, old.id);
-        changed = input.sourceId !== old.sourceId;
+        changed = canonical(input) !== canonical({clientId:old.clientId,deviceId:old.deviceId,route:old.route,sourceId:old.sourceId,from:input.from,to:old.to});
         if (changed) {
-          if (input.from === old.from) this.save(owner, {...old, sourceId: input.sourceId});
+          if (input.from === old.from) this.save(owner, {...old, ...input});
           else {this.save(owner, {...old, to: input.from}); this.save(owner, {...input, id: randomUUID(), createdAt: now});}
         }
       } else {

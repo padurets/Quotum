@@ -1186,6 +1186,16 @@ and its limits.
   creation and revocation actions. Provider accounts have their own *My connections* page.
   *Settings → Clients and sources* manages temporal client/source links. Device and
   source entry points open the same editor with context, without creating a link.
+  An existing matching link opens for editing instead of creating an overlapping
+  rule. The editor has one effective-date choice: saving time, a chosen date, or
+  the original start. A later start atomically preserves the old prefix and replaces
+  the remaining rule, including its device and route scope; the original start
+  corrects the whole period. Active links default to preserving earlier work.
+  Disconnected targets retain their owner-visible identity and the shared
+  disconnected label, but cannot be selected for new work. Their owner-only
+  management metadata includes no measurements or other people's private labels.
+  Current and scheduled links are listed separately; past periods stay in the
+  standard disclosure rather than growing the current list after every change.
   *Agent activity → Settings → Manage projects* lists the projects their agents worked
   on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are

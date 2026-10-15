@@ -100,5 +100,13 @@ for (const local of [false, true]) test(`link API enforces owner scope, origin, 
     assert.equal((await request('GET',closed)).statusCode,200);assert.equal(cells.mock.callCount(),1,'physical credit uses only admitted work invalidation');
     events.history(source,start,['budget']);
     assert.equal((await request('GET',closed)).statusCode,200);assert.equal(cells.mock.callCount(),2,'financial evidence still invalidates the tile');
+    store.release(source,owner.id);
+    directory.saveView(board,{...directory.view(board),names:{...directory.view(board).names,[source]:'My disconnected wallet'}},owner.id,now);
+    const inventory=(await request('GET','/api/links')).json();
+    assert.equal(inventory.sources.some((item:{id:string})=>item.id===source),false,'disconnected targets cannot be selected');
+    assert.deepEqual(inventory.targets.find((item:{id:string})=>item.id===source),{id:source,provider:'openrouter',name:'My disconnected wallet'});
+    assert.ok(inventory.links.some((link:{sourceId:string;active:boolean})=>link.sourceId===source&&!link.active));
+    assert.ok(inventory.targets.every((item:object)=>Object.keys(item).sort().join(',')==='id,name,provider'),'identity includes no balances, account evidence or credentials');
+    if(!local){const foreign=(await request('GET','/api/links',undefined,other.id)).json();assert.deepEqual(foreign.targets,[]);assert.ok(!JSON.stringify(foreign).includes('My disconnected wallet'));}
   } finally {await app.close(); store.close();}
 });
