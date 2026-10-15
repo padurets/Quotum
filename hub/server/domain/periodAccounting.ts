@@ -52,11 +52,12 @@ class QuotaIndex {
   constructor(readonly series:PeriodTape['quota'][number],private readonly activity:WorkTimeline|undefined,private readonly known:number,deferred=false,prior?:QuotaIndex) {
     const count=sampleCount(series.samples);
     this.times=prior?.series===series?prior.times:'columns' in series.samples?series.samples.columns[0]:new Float64Array(count);
-    if(!deferred)drain(this.build(prior));
+    if(!deferred)drain(QuotaIndex.build(()=>this,prior));
   }
-  static *prepare(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number,prior?:QuotaIndex):Preparation<QuotaIndex>{const value=new QuotaIndex(series,activity,known,true,prior);yield*value.build(prior);return value;}
-  private *build(prior?:QuotaIndex):Preparation<void>{
-    const series=this.series,{known}=this,activity=known===Infinity?undefined:this.activity,count=sampleCount(series.samples);
+  static prepare(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number,prior?:QuotaIndex):Preparation<QuotaIndex>{return QuotaIndex.build(()=>new QuotaIndex(series,activity,known,true,prior),prior);}
+  private static *build(create:()=>QuotaIndex,prior?:QuotaIndex):Preparation<QuotaIndex>{
+    const value=create();
+    const series=value.series,{known}=value,activity=known===Infinity?undefined:value.activity,count=sampleCount(series.samples);
     // Work retirement can leave quota observations untouched. Keep their exact prefixes.
     const reuse=prior?.series===series;
     const deadlines=reuse?null:new Float64Array(count),spent=reuse?null:new Float64Array(count),covered=reuse?null:new Float64Array(count),worked=activity?new Float64Array(count):null,during=activity?new Float64Array(count):null;
@@ -65,7 +66,7 @@ class QuotaIndex {
     for(let i=0;i<count&&(!reuse||activity);i++) {
       yield;
       const sample=sampleAt(series.samples,i)!;
-      if(!reuse&&this.times instanceof Float64Array)this.times[i]=sample.at;
+      if(!reuse&&value.times instanceof Float64Array)value.times[i]=sample.at;
       if(deadlines)deadlines[i]=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity);
       if(i) {
         if(spent&&covered){spent[i]=spent[i-1];covered[i]=covered[i-1];}
@@ -79,13 +80,14 @@ class QuotaIndex {
       }
       previous=sample;
     }
-    if(reuse){this.deadlines=prior.deadlines;this.spent=prior.spent;this.covered=prior.covered;}
+    if(reuse){value.deadlines=prior.deadlines;value.spent=prior.spent;value.covered=prior.covered;}
     else if(deadlines&&spent&&covered){
-      const sorted=yield*sortedNumbers(deadlines);this.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
-      this.spent=yield*numberColumn(spent.length,i=>spent[i]);this.covered=yield*numberColumn(covered.length,i=>covered[i]);
+      const sorted=yield*sortedNumbers(deadlines);value.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
+      value.spent=yield*numberColumn(spent.length,i=>spent[i]);value.covered=yield*numberColumn(covered.length,i=>covered[i]);
     }
-    this.worked=worked?yield*numberColumn(count,i=>worked[i]):{length:count,base:0,values:null};
-    this.during=during?yield*numberColumn(count,i=>during[i]):{length:count,base:0,values:null};
+    value.worked=worked?yield*numberColumn(count,i=>worked[i]):{length:count,base:0,values:null};
+    value.during=during?yield*numberColumn(count,i=>during[i]):{length:count,base:0,values:null};
+    return value;
   }
 
   get bytes(){return [this.deadlines,this.spent,this.covered,this.worked,this.during].reduce((n,c)=>n+numberBytes(c),0)+(this.times instanceof Float64Array?numberBytes(this.times):0);}
@@ -335,11 +337,12 @@ export class PeriodAccounting {
   private readonly quota=new Map<string,QuotaIndex>();
   private readonly money=new Map<string,MoneyIndex>();
   private readonly sampleTimes=new Map<string,Numbers>();
-  constructor(readonly tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,deferred=false) {if(!deferred)drain(this.build(work,curves));}
-  static *prepare(tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void):Preparation<PeriodAccounting>{const value=new PeriodAccounting(tape,work,curves,true);yield*value.build(work,curves,prior,changedWork,progress);return value;}
-  private *build(work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void):Preparation<void>{
-    const tape=this.tape;
-    if(tape.fixed)return;
+  constructor(readonly tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,deferred=false) {if(!deferred)drain(PeriodAccounting.build(()=>this,work,curves));}
+  static prepare(tape:PeriodTape,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void):Preparation<PeriodAccounting>{return PeriodAccounting.build(()=>new PeriodAccounting(tape,work,curves,true),work,curves,prior,changedWork,progress);}
+  private static *build(create:()=>PeriodAccounting,work:WorkTrace|null,curves?:PeriodCurves,prior?:PeriodAccounting,changedWork:ReadonlySet<string>=new Set(),progress?:(bytes:number)=>void):Preparation<PeriodAccounting>{
+    const value=create();
+    const tape=value.tape;
+    if(tape.fixed)return value;
     const workCurves=curves??(work?yield*PeriodCurves.prepare(work):undefined);
     let preparedBytes=0;
     for(const series of tape.quota) {
@@ -348,15 +351,16 @@ export class PeriodAccounting {
       if(!reuse)progress?.(preparedBytes+sampleCount(series.samples)*88+1024);
       const index=reuse?old!:yield*QuotaIndex.prepare(series,activity,series.workFrom===null||work?.available===false?Infinity:Math.max(work?.knownFrom??Infinity,series.workFrom??0),old?.series===series?old:undefined);
       if(!reuse){preparedBytes+=index.bytes;progress?.(preparedBytes);}
-      this.quota.set(key,index);this.sampleTimes.set(key,index.times);
+      value.quota.set(key,index);value.sampleTimes.set(key,index.times);
     }
     for(const group of tape.money){
       const key=group.source+'\n'+group.meter+'\n'+(group.displayUnit??group.readings[0]?.unit),old=prior?.money.get(key),reuse=old?.group===group;
       if(!reuse)progress?.(preparedBytes+MoneyIndex.bytes(group));
       const index=reuse?old!:yield*MoneyIndex.prepare(group);
       if(!reuse){preparedBytes+=index.bytes;progress?.(preparedBytes);}
-      this.money.set(key,index);
+      value.money.set(key,index);
     }
+    return value;
   }
   get quotaBytes(){let bytes=0;for(const index of this.quota.values())bytes+=index.bytes;return bytes;}
   get bytes(){let bytes=this.quotaBytes;for(const index of this.money.values())bytes+=index.bytes;return bytes;}
