@@ -50,7 +50,7 @@ test('money preparation keeps cold history reusable across cached return and rep
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   const coordinatorCode=ts.transpileModule(source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
   const dir=mkdtempSync(join(tmpdir(),'quotum-full-memory-')),file=join(dir,'fixture.sqlite');
-  let store=new Store(file),directory=new Directory(store.db);
+  let store=new Store(file,NOW-75*DAY),directory=new Directory(store.db);
   const user=directory.createUser('fixture@example.com','Fixture','fixture',NOW-75*DAY),owner={...user,personalBoard:directory.boards(user.id)[0].id};store.close();
   seedPanningBudgets(file,{start:NOW,people:new Map([['fixture',owner]])} as any);
   store=new Store(file);directory=new Directory(store.db);
@@ -90,7 +90,7 @@ test('money preparation keeps cold history reusable across cached return and rep
   for(const [i,scope] of (['quota','budget','budget'] as const).entries()){
    const meter=i===0?undefined:moneyReadSelection(snapshot.sources,board.view,i===2?settings.funds:settings.money,board.currencies,i===2?'funds':'budget');
    const family=i===2?'funds':scope;
-   const reader=new HistoryStore({now:()=>clockNow,preparations:preparer,setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:t=>clearTimeout(t as any),dropTimeRange:()=>{throw Error('dropRange')},
+   const reader=new HistoryStore({workInCells:false,now:()=>clockNow,preparations:preparer,setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:t=>clearTimeout(t as any),dropTimeRange:()=>{throw Error('dropRange')},
     read:(_board,cell,from,to,signal,meters,meta)=>period.transport.read(family,{cell:String(cell),from:String(from),to:String(to),...(panning?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal).then((reply:any)=>expandHistory(reply,meta)),
    },pool.budget,scope,pool);
    readers.push(reader);reader.choose('30d',null);reader.setMeters(meter);reader.open(board.id);reader.hello(events.epoch);reader.snapshot(board.lineup,quotas.flatMap(id=>store.state(id).windows.map(w=>`${id} ${w.id}`)),NOW-75*DAY);
@@ -122,6 +122,7 @@ test('money preparation keeps cold history reusable across cached return and rep
   }
   try{
    period.activate(true);await settle();
+   assert.ok(period.get().rows.some((row:any)=>row.workedMs>0),'the retained work fixture must have positive credit inside its known period');
    const end=NOW-(length+DAY)*.5;await gesture('cold',end,{from:end-length,to:end});
    await gesture('warm-return',NOW,null);await gesture('warm-repeat',end,{from:end-length,to:end});
    assert.equal(attempts.filter(stage=>stage.startsWith('warm')).length,0,'warm return/repeat must not read any history section');

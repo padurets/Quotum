@@ -21,7 +21,7 @@ test('a sessions-only reply updates the wallet table consumer after creating a l
     h.directory.saveView(h.board,{...h.directory.view(h.board),shown:['agents','activity','budget-table','budget-history']},h.owner,NOW);h.events.touchBoards([h.board]);h.events.flush();await settle();
     const selection=()=>{const b=h.page.get().board!;return moneyReadSelection(b.lineup.map((id:string)=>b.cards[id]),b.view,h.settings.money,b.currencies);};
     let loaderReads=0;
-    loader=new HistoryStore({now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,meters,meta)=>{loaderReads++;return h.period.transport.read('budget',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??'',unit:meters!.unit,meters:JSON.stringify(meters!.ids),...(meters!.displayCurrency?{currency:meters!.displayCurrency}:{}),...(meters!.work?{work:'1'}:{})},signal).then((reply:HistoryReply)=>expandHistory(reply,meta));},setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,'budget',h.pool);
+    loader=new HistoryStore({workInCells:false,now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,meters,meta)=>{loaderReads++;return h.period.transport.read('budget',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??'',unit:meters!.unit,meters:JSON.stringify(meters!.ids),...(meters!.displayCurrency?{currency:meters!.displayCurrency}:{}),...(meters!.work?{work:'1'}:{})},signal).then((reply:HistoryReply)=>expandHistory(reply,meta));},setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,'budget',h.pool);
     stop=follow(loader,h.page);loader.choose('1h',null);loader.setMeters(selection());loader.open(h.board);loader.hello(h.events.epoch);const b=h.page.get().board!;loader.snapshot(b.lineup,[],b.historyStart,b.workAuthority,JSON.stringify([b.lineup.map((id:string)=>{const c=b.cards[id];return [id,c.budget,c.meters,c.creditBalance,c.balanceStatus];}),b.currencies]));await settle();
     assert.ok(loader.get().history);assert.equal(loader.get().loading,false);assert.equal(selection()?.work,true);
     let dirty=false,cursor=0;const slots:any[]=[];let render:any=()=>{};let queued=false;const requestRender=()=>{if(!queued){queued=true;queueMicrotask(()=>{queued=false;if(dirty)render();});}};
@@ -34,17 +34,29 @@ test('a sessions-only reply updates the wallet table consumer after creating a l
     render=()=>{cursor=0;dirty=false;context.read(loader);renderedWork=h.period.moneyWorkAt(wallet,NOW);};
     const pump=async()=>{for(let i=0;i<10;i++){await settle();if(dirty)render();}};render();
     const financial=h.period.getFinancialProjectionRevision('budget');
+    let fCursor=0,fQueued=false,fRenders=0,fDrawingChanges=0,fDrawing:any;const fSlots:any[]=[];
+    const fRef=(current:any)=>{const at=fCursor++;return fSlots[at]??(fSlots[at]={current});};
+    const fMemo=(read:any,deps:any[])=>{const box=fRef(null);if(!box.current||deps.some((v:any,i:number)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;};
+    let fRender:any=()=>{};
+    const fSubscribe=(subscribe:any,read:any)=>{const at=fCursor++;let state=fSlots[at];if(!state){state=fSlots[at]={value:read()};stops.push(subscribe(()=>{const next=read();if(!Object.is(state.value,next)){state.value=next;if(!fQueued){fQueued=true;queueMicrotask(()=>{fQueued=false;fRender();});}}}));}state.value=read();return state.value;};
+    const fContext={...context,useRef:fRef,useMemo:fMemo,useSyncExternalStore:fSubscribe,read:null as any};
+    runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,fContext);
+    fRender=()=>{fCursor=0;fRenders++;const value=fContext.read(loader,true,true);if(value.drawing!==fDrawing){fDrawingChanges++;fDrawing=value.drawing;}};fRender();
+    const fRendersBefore=fRenders,fDrawingsBefore=fDrawingChanges,readsBefore=loaderReads,historyBefore=loader.get().history;
     h.requests.length=0;
     h.store.links.mutate(h.owner,'create',null,{clientId:'opencode',deviceId:null,route:null,sourceId:wallet,from:NOW-H,to:null,expectedRevision:h.store.links.revision(h.owner),requestId:randomUUID()},NOW);h.events.flush();await pump();
     assert.ok(h.period.moneyWorkAt(wallet,NOW),'common accounting computed money work');
     assert.deepEqual(renderedWork,h.period.moneyWorkAt(wallet,NOW),'the actual history subscriber renders newly available work');
     assert.equal(h.pool.activeFlights,0);assert.equal(loader.get().loading,false);
     assert.equal(h.period.getFinancialProjectionRevision('budget'),financial,'work leaves financial indices unchanged');
+    assert.equal(loaderReads,readsBefore,'creating a link reuses financial drawing tiles');assert.equal(loader.get().history,historyBefore);
+    assert.equal(fRenders,fRendersBefore,'creating a link never renders the financial subscriber');assert.equal(fDrawingChanges,fDrawingsBefore);
     const readsAfter=loaderReads,historyAfter=loader.get().history;h.requests.length=0;
     h.store.creditWork(h.device,NOW-30_000,NOW,[{client:'opencode',source:null,origin:'terminal',startedAt:NOW-M,project:'Linked benchmark',folder:'',identity:{kind:'stable',sessionId:'e'.repeat(32)}}]);h.events.flush();await pump();
     assert.equal(renderedWork.activeMs,30_000);
     assert.equal(loaderReads,readsAfter,'work reuses the financial drawing tiles');assert.equal(loader.get().history,historyAfter);
     assert.equal(h.period.getFinancialProjectionRevision('budget'),financial);
     assert.equal(h.requests.length,1,'work updates share one period request');
+    assert.equal(fRenders,fRendersBefore);assert.equal(fDrawingChanges,fDrawingsBefore);
   }finally{stops.forEach(stop=>stop());stop?.();loader?.close();await h.close();}
 });

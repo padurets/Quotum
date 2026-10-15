@@ -7,6 +7,7 @@ import {join} from 'node:path';
 import {Store,type WorkKey} from '../store/store.js';
 import {Directory} from '../store/directory.js';
 import {parseSessions,type Tracking} from '../domain/ingest.js';
+import {resolveLink,safeRoute} from '../domain/links.js';
 import {capSteps} from '../domain/usageWork.js';
 import {quotaSteps} from '../domain/usageWork.js';
 import {Ingest} from '../ingest.js';
@@ -31,10 +32,27 @@ test('tracking is additive, lenient, bounded and cannot certify dropped client s
   const input={version:1,agent:'fixture',machine:{id:'0123456789abcdef',name:'Laptop',os:'linux',arch:'x86_64'},sentAt:new Date(start).toISOString(),sessions:[],tracking:scope()};
   assert.equal(parseSessions(input).tracking?.complete,true);
   assert.equal(parseSessions({...input,tracking:{...scope(),version:2}}).tracking,null);
-  assert.equal(parseSessions({...input,tracking:{...scope(),clients:['opencode','opencode']}}).tracking?.complete,false);
-  assert.equal(parseSessions({...input,tracking:{...scope(),clients:Array.from({length:70},(_,i)=>'client'+i)}}).tracking?.clients.length,64);
+  assert.equal(parseSessions({...input,tracking:{...scope(),clients:['opencode','opencode']}}).tracking,null);
+  assert.equal(parseSessions({...input,tracking:{...scope(),clients:Array.from({length:70},(_,i)=>'client'+i)}}).tracking,null);
   assert.equal(parseSessions({...input,clientSessions:[{clientId:'opencode'}]}).tracking?.complete,false);
   assert.equal(parseSessions({...input,tracking:null}).tracking,null);
+});
+
+test('malformed tracking cannot withdraw route opt-out or reinterpret saved attribution',()=>{
+  for(const patch of [{routeDisabled:['INVALID ID']},{clients:['INVALID ID'],routeDisabled:[]},{clients:['codex','codex'],routeDisabled:[]},{clients:Array.from({length:65},(_,i)=>'client'+i),routeDisabled:[]},{routeDisabled:['custom-client']},{version:2,routeDisabled:[]}]){
+    const f=fixture();try{
+      const tracking={version:1 as const,clients:['codex'],routeDisabled:['codex'],complete:true};
+      const context=()=>f.store.links.batch([f.owner.id])(f.owner.id,f.device,'codex');
+      const input={clientId:'codex',deviceId:f.device,source:f.source,route:{class:'api' as const,by:'session' as const,host:'openrouter.ai',provider:'openrouter'}};
+      f.store.coverage.record(f.device,f.owner.id,tracking,start);
+      const parsed=parseSessions({version:1,agent:'fixture',machine:{id:'0123456789abcdef',name:'Laptop',os:'linux',arch:'x86_64'},sentAt:new Date(start+1000).toISOString(),sessions:[],tracking:{...tracking,...patch}});
+      assert.equal(parsed.tracking,null);f.store.coverage.record(f.device,f.owner.id,parsed.tracking,start+1000);
+      assert.equal(context().routeEnabled,false);assert.equal(safeRoute(input.route,context().routeEnabled).route,null);
+      assert.equal(resolveLink(input,context(),start).source,f.source);
+      f.store.coverage.record(f.device,f.owner.id,{...tracking,routeDisabled:[],complete:false},start+2000);
+      assert.equal(context().routeEnabled,true,'a valid incomplete snapshot can explicitly change the policy');
+    }finally{f.store.close();}
+  }
 });
 
 test('coverage needs two complete endpoints, preserves unknown gaps and never extrapolates',()=>{

@@ -337,11 +337,10 @@ export type SessionReport = AgentSender & {sentAt: number; sessions: AgentSessio
 
 function trackingOf(value:unknown):Tracking|null {
   if(!isObject(value)||value.version!==1||typeof value.complete!=='boolean'||!Array.isArray(value.clients)||!Array.isArray(value.routeDisabled))return null;
-  let complete=value.complete;
-  const ids=(input:unknown[])=>{const output:string[]=[];for(const id of input){if(!validClientId(id)||output.includes(id)||output.length>=64){complete=false;continue;}output.push(id);}return output.sort();};
+  const ids=(input:unknown[])=>{if(input.length>64||input.some(id=>!validClientId(id))||new Set(input).size!==input.length)return null;return (input as string[]).slice().sort();};
   const clients=ids(value.clients),routeDisabled=ids(value.routeDisabled);
-  if(routeDisabled.some(id=>!knownClients.some(c=>c.id===id)))return null;
-  return {version:1,clients,routeDisabled,complete};
+  if(!clients||!routeDisabled||routeDisabled.some(id=>!knownClients.some(c=>c.id===id)))return null;
+  return {version:1,clients,routeDisabled,complete:value.complete};
 }
 
 function soft<T>(read: () => T): T | null {

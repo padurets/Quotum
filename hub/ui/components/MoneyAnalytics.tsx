@@ -184,7 +184,8 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
   };
   const cellOf=(s:MeterHistory,id:MoneyColumn):Cell|TimedCell=>{
     const at=(now:number):Cell=>{const {partial,content,activeMs,...cell}=cellAt(s,id,now);return {...cell,content:<><span {...(activeMs===undefined?{}:{'data-work-source':s.sourceId,'data-active-ms':activeMs})}>{content}</span>{partial&&<small className="money-partial">*</small>}</>};};
-    return history?.live?{time:'money-'+id,changesAt:now=>boardPeriod.cellChangesAt('budget',now,at=>JSON.stringify(cellAt(s,id,at)),undefined,s.sourceId,history.range),at}:at(hubNow());
+    const textAt=(now:number)=>{const {activeMs:_,...visible}=cellAt(s,id,now);return JSON.stringify(visible);};
+    return history?.live?{time:'money-'+id,changesAt:now=>boardPeriod.cellChangesAt('budget',now,textAt,undefined,s.sourceId,history.range),at}:at(hubNow());
   };
   // Retained rows stay mounted through pan-only panel updates; their cells own
   // the clock and replan only when the table's data or display settings change.

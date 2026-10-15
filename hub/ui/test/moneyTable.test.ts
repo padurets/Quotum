@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
+import {money,activeHours} from '../lib/money';
 import {defaultCurrencyContext} from '../../server/domain/currency';
 import {PeriodAccounting} from '../lib/periodAccounting';
 import {PageClock} from '../lib/clock';
@@ -10,7 +11,7 @@ import {periodTextChangesAt} from '../lib/periodClock';
 import {evaluatedRange} from '../../server/domain/period';
 import type {PeriodTape} from '../../server/domain/periodTape';
 import type {WorkTrace} from '../../server/domain/periodWork';
-import {moneyComparator,moneyTableValues,moneySeriesName,moneySeriesDetail,nextMoneySort,readMoneySort,visibleMoneySort,type MoneySort} from '../lib/moneyTable';
+import {moneyComparator,moneyTableValues,moneyWorkValues,moneySeriesName,moneySeriesDetail,nextMoneySort,readMoneySort,visibleMoneySort,type MoneySort} from '../lib/moneyTable';
 import type {MeterHistory} from '../lib/moneyView';
 import {setLocale,t} from '../i18n';
 
@@ -104,4 +105,28 @@ test('active-time sorting wakes at a linear crossing before the next work bounda
     assert.equal(ordered[0],rows[1]);assert.equal(ordered[0].cells,rows[1].cells);
     now++;clock.wakeDue();assert.equal(dirty,false);
   }finally{for(const state of slots)state.stop?.();assert.equal(timers.size,0);}
+});
+
+test('the actual active-time cell clock ignores raw measurement attributes until visible text changes',()=>{
+  const M=60000,readings=[0,20,40,60].map((at,i)=>({id:'usage',at:at*M,previousAt:i?[0,20,40,60][i-1]*M:null,kind:'counter' as const,unit:'USD',amount:String(i*1000000),limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:H}));
+  const spans=[{from:0,to:H,observedFrom:0,staleAfterMs:H}],group={source:'wallet',meter:'balance',role:'total' as const,readings:readings.map(r=>({...r,id:'balance',kind:'balance' as const,amount:'100000000'})),spans,workCounter:{source:'wallet',unit:'USD',knownFrom:0,workFrom:0,readings,spans}};
+  const tape:PeriodTape={from:0,cut:2*H,replaceFrom:0,cursor:'x',quota:[],money:[group]};
+  const work:WorkTrace={anchor:0,cut:2*H,knownFrom:0,refs:[{ref:'r',source:'wallet',device:{id:'d',name:'D'},origin:'terminal',project:null,folder:null,startedAt:0}],spans:[[0,0,H]]};
+  const accounting=new PeriodAccounting(tape,work),range=(at:number)=>({from:at-H,to:at}),entry=series('wallet','100000000');
+  const periodSource=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8'),method=periodSource.slice(periodSource.indexOf('  cellChangesAt('),periodSource.indexOf('  projectionState('));
+  const model={exports:{} as {method:(...args:any[])=>number|null},evaluatedRange,periodTextChangesAt};
+  runInNewContext(ts.transpileModule('class Model {'+method+'}\nexports.method=Model.prototype.cellChangesAt;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,model);
+  const boardPeriod={moneyAt:(s:MeterHistory,at:number)=>({...s,...accounting.moneySummary(s.sourceId,s.meterId,s.unit,range(at))}),rangeAt:(_scope:string,at:number)=>range(at),moneyWorkAt:(_source:string,at:number)=>accounting.moneyWorkSummary('wallet',range(at)),cellChangesAt:model.exports.method.bind({tapes:new Map([['budget',{tape,accounting,selection:{mode:'live',periodMs:H},rangeKey:'1h'}]])})};
+  const ui=readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8'),code=ui.slice(ui.indexOf('  const cellAt='),ui.indexOf('  // Retained rows stay mounted'));
+  const context={exports:{} as {create:(entry:MeterHistory,id:string)=>{changesAt:(at:number)=>number|null};raw:(entry:MeterHistory,id:string,at:number)=>{content:string;title?:string;activeMs?:number}},require:()=>({jsx:(_type:unknown,props:unknown)=>({props}),jsxs:(_type:unknown,props:unknown)=>({props})}),history:{live:true,range:'1h',since:0,to:H},boardPeriod,moneyTableValues,moneyWorkValues,activeHours,money,t,context:defaultCurrencyContext};
+  runInNewContext(ts.transpileModule(code+'\nexports.create=cellOf;exports.raw=cellAt;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+  let now=H+1000;const cell=context.exports.create(entry,'active'),visible=(at:number)=>{const {activeMs:_,...value}=context.exports.raw(entry,'active',at);return JSON.stringify(value);};
+  assert.notEqual(context.exports.raw(entry,'active',now).activeMs,context.exports.raw(entry,'active',now+5000).activeMs);
+  assert.equal(visible(now),visible(now+5000));const due=cell.changesAt(now)!;assert.equal(due,now+359001);
+  assert.equal(visible(due-1),visible(now));assert.notEqual(visible(due),visible(now));
+  let callbacks=0,timer:{run:()=>void;at:number}|null=null;
+  const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:(run,ms)=>{timer={run,at:now+ms};return timer;},clearTimeout:()=>{timer=null;}}),watch=clock.watch();
+  const stop=clock.subscribe(watch,()=>{callbacks++;clock.due(watch,cell.changesAt(now),now);});clock.due(watch,due,now);
+  const start=now;while(timer&&(timer as {at:number}).at<=start+5000){const current=timer as {run:()=>void;at:number};now=current.at;timer=null;current.run();}
+  assert.equal(callbacks,0,'raw active milliseconds cannot wake unchanged visible cells');stop();
 });

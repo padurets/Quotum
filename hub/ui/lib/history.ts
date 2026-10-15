@@ -28,6 +28,8 @@ const STORED_BYTES = 15 * 1024 * 1024;
 
 export type HistoryEnv = {
   clock?:PageClock;
+  /** Common period projections own work separately from the drawing cells. */
+  workInCells?:boolean;
   read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis): Promise<HistoryAnswer>;
   now(): number;
   /** Elapsed time stays independent of corrections to the estimated hub clock. */
@@ -187,7 +189,7 @@ export class HistoryStore {
   }
 
   snapshot(lineup: string[], windows: Iterable<string> = this.windows, historyStart=0,workAuthority?:string,evidence?:string) {
-    const changedWork = (this.scope !== 'budget'||this.meters?.work) && this.workAuthority!==undefined&&(!workAuthority||workAuthority!==this.workAuthority);
+    const changedWork = this.env.workInCells!==false&&(this.scope !== 'budget'||this.meters?.work) && this.workAuthority!==undefined&&(!workAuthority||workAuthority!==this.workAuthority);
     this.workAuthority = workAuthority;
     const unchanged=evidence!==undefined&&evidence===this.snapshotEvidence;this.snapshotEvidence=evidence;
     if(this.ready&&unchanged&&!changedWork&&this.lineupKey===keyOf(lineup)&&historyStart<=this.historyStart)return;
@@ -931,6 +933,7 @@ const keyOf = (lineup: string[]) => JSON.stringify([...lineup].sort());
 export {historyPool} from './historyPool';
 function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
   const value=new HistoryStore({
+    workInCells:false,
     read: (_board, cell, from, to, signal, meters, meta) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal).then(reply=>expandHistory(reply,meta)),
     now: hubNow,
     setTimeout: (run, ms) => setTimeout(run, ms),
