@@ -330,7 +330,8 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
       const name = `browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
       evidence?.save('traffic-stage', {name, stage: 'seed'});
       const poolMode=process.env.QUOTUM_BENCH_DIAGNOSE_PANNING==='cpu'?'critical':'full';
-      const poolEvidence=(process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'||poolMode==='critical')&&name==='browser/30d/activity/0ms/0.5/take1'?evidence:undefined;
+      const poolTarget=poolMode==='critical'?name==='browser/30d/activity/0ms/0.5/take1':length===DAY&&!future&&[100,400].includes(latency)&&fraction===.5&&take===1;
+      const poolEvidence=(process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'||poolMode==='critical')&&poolTarget?evidence:undefined;
       const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,poolMode);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null, status='failed';
       try {
