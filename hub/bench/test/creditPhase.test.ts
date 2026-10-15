@@ -10,10 +10,11 @@ import {cards,people} from '../../demo/model.js';
 import {cellOf,cellStart} from '../../server/domain/history.js';
 import {creditSnapshot} from '../credits.js';
 import {MARGIN_MS,overviewCards,stillProblems,stillSnapshot} from '../still.js';
+import {FADE_FOR,PULSE_FOR} from '../../ui/lib/quota.js';
 import {chartProblems,creditRenderProblems,HISTORY_BYTES_PER_MEASUREMENT,measuredProblems} from '../budget.js';
 
 /** Execute the whole production phase; the stand and CDP only supply its observations. */
-async function phase({resetIn=Infinity,extraQuota=false,setupDrift=0}: {resetIn?:number;extraQuota?:boolean;setupDrift?:number}={}) {
+async function phase({resetIn=Infinity,fadesIn=-Infinity,extraQuota=false,setupDrift=0}: {resetIn?:number;fadesIn?:number;extraQuota?:boolean;setupDrift?:number}={}) {
   const start=Date.parse('2026-10-15T04:50:58Z'),boundary=start+resetIn;
   let now=start,probeFrom=now,amount='0',rows=0,coverage=0,lastChange=0,changedBalance=false;
   const selected=cards(SETS[0]).find(card=>card.provider==='codex'&&card.windows.length)!;
@@ -21,6 +22,7 @@ async function phase({resetIn=Infinity,extraQuota=false,setupDrift=0}: {resetIn?
   const overview={board:{id:'board'},sources:[
     {id:source,successAt:start,staleAfterMs:3_600_000,windows:[{resetAt:null}]},
     {id:'claude:reset',successAt:start-600_000,staleAfterMs:3_600_000,windows:[{resetAt:Number.isFinite(boundary)?boundary:null}]},
+    ...(Number.isFinite(fadesIn)?[{id:'antigravity:measured',successAt:start+fadesIn-PULSE_FOR-FADE_FOR,staleAfterMs:3_600_000,windows:[]}]:[]),
   ],forecast:{}};
   const owner={get:async()=>overview};
   const agent={ingest:async(snapshots: {balances?:{amount:string}[]}[])=>{
@@ -59,7 +61,7 @@ async function phase({resetIn=Infinity,extraQuota=false,setupDrift=0}: {resetIn?
   const sourceFile=ts.createSourceFile('index.ts',readFileSync(new URL('../index.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
   const declaration=sourceFile.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='creditPhase');
   assert.ok(declaration);
-  const context={Date:class extends Date {static now(){return now;}},path,createHash,DatabaseSync:Ledger,Requests,SHOWN_WITHIN:5000,MARGIN_MS,HISTORY_BYTES_PER_MEASUREMENT,Stop:Error,
+  const context={Date:class extends Date {static now(){return now;}},path,createHash,DatabaseSync:Ledger,Requests,SHOWN_WITHIN:5000,MARGIN_MS,FADE_FOR,PULSE_FOR,HISTORY_BYTES_PER_MEASUREMENT,Stop:Error,
     cards,people,creditSnapshot,stillSnapshot,overviewCards,stillProblems,cellOf,cellStart,chartProblems,creditRenderProblems,measuredProblems,say:()=>{},
     sleep:async(ms:number)=>{waits.push(ms);now+=ms;},drain:async()=>{now+=100;},
     selectMoney:async()=>{now+=50+setupDrift;},
@@ -90,4 +92,29 @@ test('a qualified credit phase still fails unrelated quota renders and mutations
 
 test('credit setup rejects a reset entering the interval during page preparation',async()=>{
   await assert.rejects(phase({resetIn:50_000,setupDrift:10_000}),/baseline changes independently: claude:reset has a limit that resets/);
+});
+
+for(const fadesIn of [8000,40_000,55_400])test(`credit setup waits for the earlier measured card to finish fading in ${fadesIn}ms`,async()=>{
+  const {result}=await phase({fadesIn,resetIn:1900});
+  assert.deepEqual(Array.from(result.problems),[]);
+  assert.equal(result.updates.length,4);
+  assert.equal(result.qualification.waits.length,1,'reset and fade share the existing setup wait');
+  const started=Date.parse('2026-10-15T04:50:58Z');
+  for(const update of result.updates)assert.ok(update.from>started+fadesIn+MARGIN_MS);
+});
+
+test('credit setup keeps its original shared deadline when another card cannot finish fading',async()=>{
+  await assert.rejects(phase({fadesIn:55_401}),/credit measurement has no quiet quota interval/);
+});
+
+test('an already faded measurement adds no setup wait',async()=>{
+  const {result}=await phase({fadesIn:-1});
+  assert.equal(result.qualification.waits.length,0);
+  assert.deepEqual(Array.from(result.problems),[]);
+});
+
+test('credit setup settles a fade ending exactly at its opening boundary',async()=>{
+  const {result}=await phase({fadesIn:400});
+  assert.equal(result.qualification.waits.length,1);
+  assert.deepEqual(Array.from(result.problems),[]);
 });

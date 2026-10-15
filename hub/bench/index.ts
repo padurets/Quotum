@@ -34,6 +34,7 @@ import {panningPairs, tracePanning, traceControls} from './panningDiagnostic.js'
 import {profilePanning, profileControls} from './cpuProfile.js';
 import {ChromeLaunchError} from './chrome.js';
 import {creditSnapshot} from './credits.js';
+import {FADE_FOR,PULSE_FOR} from '../ui/lib/quota.js';
 import {startupTrials} from './startupDiagnostic.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
@@ -524,17 +525,18 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
   const quotaAt=Date.now();
   await agent.ingest([stillSnapshot(card,stand.start,quotaAt)],[],quotaAt);
   await deliver('2500',quotaAt-25_000);
-  // A natural reset can reorder the quota table and end a forecast without a credit
-  // update. Reload after a nearby reset, then qualify the whole measured interval.
+  // Earlier measurements can still fade when panning finishes quickly. Settle
+  // those dots and nearby quota resets within the same bounded setup interval.
   const readCards=()=>overviewCards(path=>owner.get<Snapshot>(path),overview.board.id);
-  const windowMs=4*(2*SHOWN_WITHIN+100),setupUntil=Date.now()+60_000,waits:{from:number;until:number;resets:number[]}[]=[];
+  const windowMs=4*(2*SHOWN_WITHIN+100),setupUntil=Date.now()+60_000,waits:{from:number;until:number;resets:number[];fades:number[]}[]=[];
   for(;;) {
     const cards=await readCards(),from=Date.now();
     const resets=cards.flatMap(card=>card.windows.map(window=>window.resetAt)).filter((at):at is number=>at!==null&&at>=from&&at<=from+windowMs+SHOWN_WITHIN);
-    if(!resets.length)break;
-    const until=Math.max(...resets)+MARGIN_MS;
+    const fades=cards.filter(card=>card.id!==source&&card.successAt!==null).map(card=>card.successAt!+PULSE_FOR+FADE_FOR).filter(at=>at>=from);
+    if(!resets.length&&!fades.length)break;
+    const until=Math.max(...resets,...fades)+MARGIN_MS;
     if(until>setupUntil)throw new Stop('credit measurement has no quiet quota interval');
-    waits.push({from,until,resets});
+    waits.push({from,until,resets,fades});
     await sleep(until-from);
   }
   await selectMoney(cdp,[[source,'balance:credits']],'funds');
