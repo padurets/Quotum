@@ -94,6 +94,38 @@ test('timestamps use day, month and a 24-hour local clock, including midnight', 
   });
 });
 
+test('repeated marker timestamps reuse bounded readings without freezing locale or zone', t => {
+  travelling(t, moveTo => {
+    moveTo('UTC');
+    const formatToParts = Intl.DateTimeFormat.prototype.formatToParts;
+    let readings = 0;
+    t.mock.method(Intl.DateTimeFormat.prototype, 'formatToParts', function(this: Intl.DateTimeFormat, time: number) {
+      readings++;
+      return formatToParts.call(this, time);
+    });
+    const at = Date.UTC(2031, 2, 20, 23, 45);
+    assert.equal(stamp(at), '20 March 23:45');
+    const first = readings;
+    for (let i = 0; i < 100; i++) assert.equal(stamp(at), '20 March 23:45');
+    assert.equal(readings, first, 'unchanged markers do not repeat ICU date work');
+    setLocale('ru'); assert.equal(stamp(at), '20 марта 23:45');
+    moveTo('Asia/Tokyo'); assert.equal(stamp(at), '21 марта 08:45');
+    setLocale('en'); assert.equal(stamp(at), '21 March 08:45');
+    moveTo('UTC'); assert.equal(stamp(at), '20 March 23:45');
+    const warm = readings;
+    for (let i = 1; i <= 600; i++) {
+      stamp(at + i * 60_000);
+      assert.equal(stamp(at), '20 March 23:45');
+    }
+    assert.equal(readings, warm + 600, 'a frequently read marker stays cached as history advances');
+    for (let i = 601; i <= 1200; i++) stamp(at + i * 60_000);
+    const before = readings;
+    assert.equal(stamp(at), '20 March 23:45');
+    assert.equal(readings, before + 1, 'old readings are released after a bounded history sweep');
+    assert.throws(() => stamp(NaN), RangeError);
+  });
+});
+
 test('a time is said in the time zone the system is in: at once where the clocks read otherwise, a second later at the soonest where they read the same', t => {
   const at = Date.UTC(2026, 8, 25, 20, 30);
   travelling(t, moveTo => {

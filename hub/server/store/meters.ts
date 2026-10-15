@@ -34,7 +34,7 @@ export class MeterStore {
       ids.add(meter.id);
       const old = current.get(meter.id);
       if (old && old.at >= meter.at) continue;
-      const last = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source, meter.id) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null;hold_until:number|null} | undefined;
+      const last = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until,observed_from FROM meter_spans WHERE source_id=? AND meter_id=? ORDER BY from_at DESC LIMIT 1').get(source, meter.id) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null;hold_until:number|null} | undefined;
       const admission = previous.provider === 'codex' && meter.id === 'balance:credits' && !!this.db.prepare('SELECT 1 FROM shares WHERE source_id=? AND budget_anchor_at IS NULL AND budget_since<=? LIMIT 1').get(source, meter.at);
       if (!old || !sameMeter(old, meter) || admission) {
         this.db.prepare('INSERT INTO readings (source_id,meter_id,at,previous_at,kind,unit,amount,limit_amount,reset_at,minutes,scope,label,stale_after_ms,amount_scale) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
@@ -42,8 +42,8 @@ export class MeterStore {
       }
       if (admission) this.db.prepare('UPDATE shares SET budget_anchor_at=? WHERE source_id=? AND budget_anchor_at IS NULL AND budget_since<=?').run(meter.at, source, meter.at);
       if (last && last.interrupted_at===null && last.hold_until===null && old && meter.at - last.to_at <= last.stale_after_ms && old.kind === meter.kind && old.unit === meter.unit) {
-        this.db.prepare('UPDATE meter_spans SET to_at=?,stale_after_ms=? WHERE source_id=? AND meter_id=? AND from_at=?').run(meter.at, meter.staleAfterMs, source, meter.id, last.from_at);
-      } else this.db.prepare('INSERT INTO meter_spans (source_id,meter_id,from_at,to_at,stale_after_ms) VALUES (?,?,?,?,?)').run(source, meter.id, meter.at, meter.at, meter.staleAfterMs);
+        this.db.prepare('UPDATE meter_spans SET to_at=?,stale_after_ms=?,observed_from=coalesce(observed_from,to_at) WHERE source_id=? AND meter_id=? AND from_at=?').run(meter.at, meter.staleAfterMs, source, meter.id, last.from_at);
+      } else this.db.prepare('INSERT INTO meter_spans (source_id,meter_id,from_at,to_at,stale_after_ms,observed_from) VALUES (?,?,?,?,?,?)').run(source, meter.id, meter.at, meter.at, meter.staleAfterMs, meter.at);
       since = Math.min(since, last?.interrupted_at==null?old?.at??meter.at:meter.at);
       current.set(meter.id, {...meter, stale: false});
     }
@@ -60,6 +60,7 @@ export class MeterStore {
       const id=`key:${key}:cap`;
       if(!observed.has(key)||ids.has(id))throw new Error('invalid_key_part');
       current.delete(id);
+      since=Math.min(since,keyTimes.get(key)!);
       this.db.prepare('UPDATE meter_spans SET stale_after_ms=min(stale_after_ms,max(0,?-to_at-1)) WHERE source_id=? AND meter_id=? AND from_at=(SELECT max(from_at) FROM meter_spans WHERE source_id=? AND meter_id=?)')
         .run(keyTimes.get(key)!,source,id,source,id);
     }
@@ -102,15 +103,18 @@ export class MeterStore {
   }
 
   /** Include one predecessor even when it predates retention: it is evidence, not a plotted point. */
-  readings(source: string, meter: string, from: number, to: number): Reading[] {
+  readings(source: string, meter: string, from: number, to: number, reserve?:(bytes:number)=>void): Reading[] {
     const query = this.db.prepare('SELECT * FROM readings WHERE source_id=? AND meter_id=? AND at<? AND at>=coalesce((SELECT max(at) FROM readings WHERE source_id=? AND meter_id=? AND at<?),?) ORDER BY at');
     query.setReadBigInts(true);
-    return (query.all(source, meter, to, source, meter, from, from) as ReadingRow[]).map(r => ({id: r.meter_id, at: Number(r.at), previousAt: numberOf(r.previous_at), kind: r.kind, unit: r.unit, amount: r.amount.toString(), ...(r.unit === 'credits:codex' ? {scale:Number(r.amount_scale)} : {}), limit: r.limit_amount?.toString() ?? null, resetAt: numberOf(r.reset_at), minutes: numberOf(r.minutes), scope: r.scope, label: r.label, staleAfterMs: Number(r.stale_after_ms)}));
+    const rows:Reading[]=[];
+    for(const raw of query.iterate(source,meter,to,source,meter,from,from)){const r=raw as ReadingRow;reserve?.(640+2*((r.label?.length??0)+(r.scope?.length??0)+r.meter_id.length+r.unit.length));rows.push({id: r.meter_id, at: Number(r.at), previousAt: numberOf(r.previous_at), kind: r.kind, unit: r.unit, amount: r.amount.toString(), ...(r.unit==='credits:codex'?{scale:Number(r.amount_scale)}:{}), limit: r.limit_amount?.toString() ?? null, resetAt: numberOf(r.reset_at), minutes: numberOf(r.minutes), scope: r.scope, label: r.label, staleAfterMs: Number(r.stale_after_ms)});}
+    return rows;
   }
 
-  spans(source: string, meter: string, from: number, to: number): MeterSpan[] {
-    const rows = this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until FROM meter_spans WHERE source_id=? AND meter_id=? AND min(coalesce(interrupted_at,9223372036854775807),coalesce(hold_until,9223372036854775807),to_at+stale_after_ms+1)>? AND from_at<=? ORDER BY from_at').all(source, meter, from, to) as {from_at: number; to_at: number; stale_after_ms: number; interrupted_at:number|null;hold_until:number|null}[];
-    return rows.map(r => ({from: r.from_at, to: r.to_at, staleAfterMs: r.stale_after_ms,...(r.hold_until===null?{}:{holdUntil:r.hold_until}),...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})}));
+  spans(source: string, meter: string, from: number, to: number,reserve?:(bytes:number)=>void): MeterSpan[] {
+    const rows:MeterSpan[]=[];
+    for(const raw of this.db.prepare('SELECT from_at,to_at,stale_after_ms,interrupted_at,hold_until,observed_from FROM meter_spans WHERE source_id=? AND meter_id=? AND min(coalesce(interrupted_at,9223372036854775807),coalesce(hold_until,9223372036854775807),to_at+stale_after_ms+1)>? AND from_at<=? ORDER BY from_at').iterate(source,meter,from,to)){const r=raw as {from_at:number;to_at:number;observed_from:number|null;stale_after_ms:number;interrupted_at:number|null;hold_until:number|null};reserve?.(192);rows.push({from:r.from_at,to:r.to_at,...(r.observed_from===null?{}:{observedFrom:r.observed_from}),staleAfterMs:r.stale_after_ms,...(r.hold_until===null?{}:{holdUntil:r.hold_until}),...(r.interrupted_at===null?{}:{interruptedAt:r.interrupted_at})});}
+    return rows;
   }
 
   calendar(source: string, now: number, asOf=now) {
@@ -121,18 +125,18 @@ export class MeterStore {
     return {day:spending(readings,spans,periods.day,Math.max(periods.day,asOf)),week:spending(readings,spans,periods.week,Math.max(periods.week,asOf)),month:spending(readings,spans,periods.month,Math.max(periods.month,asOf))};
   }
 
-  groups(selection: MeterSelection, from: number, to: number): MeterGroup[] {
+  groups(selection: MeterSelection, from: number, to: number,reserve?:(bytes:number)=>void): MeterGroup[] {
     return selection.ids.map(([source,meter]): MeterGroup => {
       const usage = meter === 'balance' ? 'usage' : meter;
       const provider=this.db.prepare('SELECT provider FROM sources WHERE id=?').get(source)?.provider;
       const policy=monetaryOf(String(provider));
       const descriptor=balanceDescriptor(String(provider),meter);
       const conversion=conversionOrigin(meter);
-      if(conversion){const native=balanceDescriptor(String(provider),conversion.meter);return {source,meter,accounting:{spending:'unavailable',topups:'unavailable'},...(native?{role:native.role}:{}),pointMode:'observation',readings:this.currencies.readings(source,meter,from,to),spans:this.currencies.spans(source,meter,to)};}
-      const group = {source,meter,...(policy?{accounting:{spending:policy.spending,topups:policy.topups},...(descriptor?{role:descriptor.role}:{}),...(policy.spending==='unavailable'?{pointMode:'observation' as const}:{})}:{accounting:{spending:'unavailable' as const,topups:'unavailable' as const}}),readings:this.readings(source,usage,from,to),spans:this.spans(source,usage,0,to)};
+      if(conversion){const native=balanceDescriptor(String(provider),conversion.meter);return {source,meter,accounting:{spending:'unavailable',topups:'unavailable'},...(native?{role:native.role}:{}),pointMode:'observation',readings:this.currencies.readings(source,meter,from,to,reserve),spans:this.currencies.spans(source,meter,to,reserve)};}
+      const group = {source,meter,...(policy?{accounting:{spending:policy.spending,topups:policy.topups},...(descriptor?{role:descriptor.role}:{}),...(policy.spending==='unavailable'?{pointMode:'observation' as const}:{})}:{accounting:{spending:'unavailable' as const,topups:'unavailable' as const}}),readings:this.readings(source,usage,from,to,reserve),spans:this.spans(source,usage,0,to,reserve)};
       if (meter !== 'balance') return group;
-      if (provider !== 'openrouter') return {...group,readings:this.readings(source,meter,from,to),spans:this.spans(source,meter,0,to)};
-      return {...group,paired:{readings:this.readings(source,'credits',from,to),spans:this.spans(source,'credits',0,to)}};
+      if (provider !== 'openrouter') return {...group,readings:this.readings(source,meter,from,to,reserve),spans:this.spans(source,meter,0,to,reserve)};
+      return {...group,paired:{readings:this.readings(source,'credits',from,to,reserve),spans:this.spans(source,'credits',0,to,reserve)}};
     });
   }
 

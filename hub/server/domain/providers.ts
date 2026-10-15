@@ -28,6 +28,7 @@ export const balanceDescriptor=(provider:string,meter:string)=>monetaryOf(provid
 export type ResourceDescriptor = {id?:string;meterKinds: readonly string[]; quotaMeters?: readonly string[]; monetary?: unknown};
 export const supportsQuota = (provider: ResourceDescriptor | undefined) => !!provider && (provider.meterKinds.includes('window') || !!provider.quotaMeters?.length);
 export const supportsBudget = (provider: ResourceDescriptor | undefined) => !!provider?.monetary;
+export const supportsSpending = (provider: ReturnType<typeof providerOf>) => !!provider && 'monetary' in provider && provider.monetary.spending === 'counter';
 export const quotaMeter = (provider: ResourceDescriptor | undefined, id: string) => provider?.quotaMeters?.includes(id) ?? false;
 export const budgetMeter = (provider: ResourceDescriptor | undefined, id: string) => supportsBudget(provider) && !quotaMeter(provider, id) && (provider?.id!=='codex'||id==='balance:credits');
 

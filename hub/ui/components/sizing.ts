@@ -53,6 +53,8 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
   const [plot, setPlot] = useState<number | undefined>(undefined);
   const base = useRef<number | null>(null);
   const held = useRef<{legend: HTMLElement; height: string; overflow: string; alignContent: string; keep: boolean; range: TimeRange | null} | null>(null);
+  const legendSize=useRef<{legend:HTMLElement;height:number}|null>(null);
+  const watchLegend=useRef(()=>{});
   const locked = () => !!pan.active() || pan.shifting() || !!panel.current?.querySelector('.chart > svg.is-panning');
   const measure = useRef(() => {});
   measure.current = () => {
@@ -83,10 +85,11 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
       held.current = null;
     };
     const changed = () => {
+      watchLegend.current();
       if (locked()) {
         const legend = panel.current?.querySelector<HTMLElement>(':scope > .legend');
         if (held.current || !legend) return;
-        const height = legend.getBoundingClientRect().height;
+        const height = legendSize.current?.legend===legend?legendSize.current.height:legend.getBoundingClientRect().height;
         held.current = {legend, height: legend.style.height, overflow: legend.style.overflow, alignContent: legend.style.alignContent, keep: false, range: timeRange()};
         Object.assign(legend.style, {height: `${height}px`, overflow: 'auto', alignContent: 'flex-start'});
       } else if (held.current && !held.current.keep) {
@@ -107,7 +110,7 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
     let context = prefs();
     const preferences = onPrefs(() => {
       const next = prefs();
-      if (next.range !== context.range || next.kind !== context.kind || next.activityBy !== context.activityBy) {restore(); measure.current();}
+      if (next.range !== context.range || next.activityBy !== context.activityBy) {restore(); measure.current();}
       context = next;
     });
     const board = page.listen(event => {
@@ -119,9 +122,21 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
     return () => {alive = false; unsubscribe(); stopped(); navigated(); preferences(); board(); observer.disconnect(); restore();};
   }, [panel, sizing?.manual, sizing?.allocated, sizing?.width, locale]);
   useLayoutEffect(() => {
-    const observer = new ResizeObserver(() => measure.current());
+    let legend:HTMLElement|null=null;
+    const observer = new ResizeObserver(entries => {
+      for(const entry of entries)if(entry.target===legend)legendSize.current={legend:legend!,height:entry.borderBoxSize?.[0]?.blockSize??entry.contentRect.height};
+      measure.current();
+    });
+    const follow=()=>{
+      const next=panel.current?.querySelector<HTMLElement>(':scope > .legend')??null;
+      if(next===legend)return;
+      if(legend)observer.unobserve(legend);
+      legend=next;legendSize.current=null;
+      if(legend)observer.observe(legend);
+    };
+    watchLegend.current=follow;follow();
     if (panel.current) observer.observe(panel.current);
-    return () => observer.disconnect();
+    return () => {watchLegend.current=()=>{};observer.disconnect();legendSize.current=null;};
   }, [panel]);
   const report = sizing?.report;
   useLayoutEffect(() => () => report?.(null), [report]);

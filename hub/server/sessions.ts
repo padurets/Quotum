@@ -1,6 +1,8 @@
+import {createHmac, randomBytes} from 'node:crypto';
 import type {SessionEvidence} from './domain/sessionEvidence.js';
 import type {Origin} from './domain/ingest.js';
 import type {Store, WorkKey} from './store/store.js';
+import {admitted,fundingOf,type WorkAccess} from './domain/workAccess.js';
 
 /** A running coding agent as its machine reported it, on the subscription it spends. */
 export type LiveSession = SessionEvidence & {
@@ -26,6 +28,9 @@ export type LiveSession = SessionEvidence & {
  * stay apart; and how long it has worked, as credited by its machine's lists so far.
  */
 export type BoardSession = {
+  sourceStatus?:'notProvided';
+  presenceKey?: string;
+  currentPresence?: {working: boolean; startedAt: number};
   clientId?: string;
   device: {id: string; name: string};
   origin: Origin;
@@ -79,8 +84,11 @@ function keysOf(machine: Machine): WorkKey[] {
  */
 export class Sessions {
   private readonly machines = new Map<string, Machine>();
+  private readonly presenceSecret = randomBytes(32);
 
-  constructor(private readonly store: Store) {}
+  constructor(private readonly store: Store) {
+    store.setCurrentFunding((device,owner,source,now)=>{const machine=this.machines.get(device);return !!machine&&machine.user===owner&&now<=machine.at+KEEP_MS&&machine.sessions.some(session=>session.source===source);});
+  }
 
   /** A machine's new list, from its person `user`, each session filed under its subscription. */
   report(device: string, user: string, sessions: (LiveSession & {source: string | null})[], now: number) {
@@ -90,7 +98,7 @@ export class Sessions {
     const normalized = sessions.map(s => ({...s, clientId: s.clientId ?? s.source?.split(':')[0] ?? 'unknown'}));
     if (normalized.length) this.machines.set(device, {at: now, user, sessions: normalized});
     else this.machines.delete(device);
-    this.store.clientSessionsChanged(user);
+    this.store.clientSessionsChanged(user,device);
 
   }
 
@@ -100,7 +108,7 @@ export class Sessions {
       if (now - machine.at <= KEEP_MS) continue;
       this.credit(device, machine, machine.at + CREDIT_MS);
       this.machines.delete(device);
-      this.store.clientSessionsChanged(machine.user);
+      this.store.clientSessionsChanged(machine.user,device);
     }
   }
 
@@ -109,13 +117,45 @@ export class Sessions {
     for (const device of devices) {
       const before = this.machines.get(device);
       this.machines.delete(device);
-      if (before) this.store.clientSessionsChanged(before.user);
+      if (before) this.store.clientSessionsChanged(before.user,device);
     }
   }
 
   /** The subscriptions a machine's list shows agents on. */
   sourcesOf(device: string): string[] {
     return [...new Set((this.machines.get(device)?.sessions ?? []).flatMap(s => s.source ? [s.source] : []))];
+  }
+
+  /** An opaque join key for the same stable context in authorized stream and period projections. */
+  binding(device:string, client:string, source:string|null, producer:string|null, origin:Origin, project:string|null, folder:string|null) {
+    if(!producer)return undefined;
+    return createHmac('sha256',this.presenceSecret).update(JSON.stringify([device,client,source,producer,origin,project??'',folder??''])).digest('base64url').slice(0,16);
+  }
+
+  /** Only a producer's stable identity can enrich a retained context with current presence. */
+  presence(device:string, client:string, source:string|null, producer:string|null, origin:Origin, project:string|null, folder:string|null, now:number) {
+    return this.presenceIn(this.machines,device,client,source,producer,origin,project,folder,now);
+  }
+
+  /** Reports replace these lists, so a retained map keeps one request's presence cut. */
+  presenceSnapshot(reserve:(bytes:number)=>void,include:(device:string,user:string,source:string|null)=>boolean):Sessions['presence'] {
+    const machines=new Map<string,Machine>();
+    for(const [id,machine] of this.machines){
+      let sessions:StoredSession[]|undefined;
+      for(const session of machine.sessions)if(include(id,machine.user,session.source)){
+        const bytes=768+2*(session.project?.length??0)+2*(session.folder?.length??0)+2*session.device.name.length;
+        reserve(bytes+(sessions?0:128));(sessions??=[]).push(session);
+      }
+      if(sessions)machines.set(id,{...machine,sessions});
+    }
+    return (...args)=>this.presenceIn(machines,...args);
+  }
+  private presenceIn(machines:ReadonlyMap<string,Machine>,device:string,client:string,source:string|null,producer:string|null,origin:Origin,project:string|null,folder:string|null,now:number) {
+    if(!producer)return undefined;
+    const machine=machines.get(device);
+    if(!machine||now>machine.at+KEEP_MS)return undefined;
+    const session=machine.sessions.find(s=>s.clientId===client&&s.source===source&&s.sessionId===producer&&s.origin===origin&&(s.project??'')===(project??'')&&(s.folder??'')===(folder??''));
+    return session?{working:session.working&&now<machine.at+CREDIT_MS,through:machine.at+KEEP_MS+1,workingThrough:machine.at+CREDIT_MS,startedAt:session.startedAt}:undefined;
   }
 
   /**
@@ -131,16 +171,32 @@ export class Sessions {
       const keys = keysOf(machine);
       const selected = machine.sessions.flatMap((s, i) => s.source === source ? [{s, key: keys[i]}] : []);
       const worked = this.store.worked(id, selected.map(s => s.key));
-      const present = this.presenter(machine.user, id);
+      const present = this.presenter(machine.user, id, now);
       selected.forEach(({s}, i) => found.push(present(s, worked[i])));
 
     }
     return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);
   }
 
-  /** When `of` answers otherwise with no new list: a machine's list shown now stops showing. Null when only a new list changes it. */
+  /** One admitted collection is split once into disjoint subscription and fallback slices. */
+  board(access:WorkAccess,now:number) {
+    const sessions=new Map<string,BoardSession[]>(),unattributedSessions:BoardSession[]=[],ends:number[]=[];
+    for(const [id,machine] of this.machines){
+      const scope=admitted(access,id,machine.user);if(!scope||now-machine.at>KEEP_MS)continue;
+      const keys=keysOf(machine),worked=this.store.worked(id,keys,access.owner===null?scope.from:undefined),present=this.presenter(machine.user,id,now);
+      machine.sessions.forEach((s,i)=>{const funding=fundingOf(access,machine.user,s.source),row={...present(s,worked[i]),...(funding.sourceStatus?{sourceStatus:funding.sourceStatus}:{})};
+        if(funding.source===null)unattributedSessions.push(row);else {let list=sessions.get(funding.source);if(!list)sessions.set(funding.source,list=[]);list.push(row);}
+      });
+      ends.push(...this.deadlines(machine,now,()=>true));
+    }
+    const sort=(a:BoardSession,b:BoardSession)=>a.device.name.localeCompare(b.device.name)||a.device.id.localeCompare(b.device.id)||a.startedAt-b.startedAt;
+    for(const list of sessions.values())list.sort(sort);unattributedSessions.sort(sort);
+    return {sessions,unattributedSessions,changesAt:ends.length?Math.min(...ends):null};
+  }
+
+  /** When a current list stops confirming work or presence without another report. */
   ofChangesAt(source: string, people: string[], now: number): number | null {
-    const ends = [...this.machines.values()].filter(m => now - m.at <= KEEP_MS && people.includes(m.user) && this.store.holds(m.user, source) && m.sessions.some(s => s.source === source)).map(m => m.at + KEEP_MS + 1);
+    const ends = [...this.machines.values()].filter(m => now - m.at <= KEEP_MS && people.includes(m.user) && this.store.holds(m.user, source) && m.sessions.some(s => s.source === source)).flatMap(m => this.deadlines(m, now, s => s.source === source));
     return ends.length ? Math.min(...ends) : null;
   }
 
@@ -158,30 +214,11 @@ export class Sessions {
     return ends.length ? Math.min(...ends) : null;
   }
 
-  /** Unknown and unheld work is private to the owner's personal board. */
-  own(user: string, board: string, now: number): BoardSession[] {
-    if (this.store.privateOwner(board) !== user) return [];
-    return this.privateSessions(user, now);
-  }
-
-  privateSessions(user: string, now: number, device?: string): BoardSession[] {
-    const found: BoardSession[] = [];
-    for (const [id, machine] of this.machines) {
-      if (machine.user !== user || now - machine.at > KEEP_MS || device !== undefined && id !== device) continue;
-      const keys = keysOf(machine);
-      const selected = machine.sessions.flatMap((s, i) => this.store.displaySource(user, s.source) === null ? [{s, key: keys[i]}] : []);
-      const worked = this.store.worked(id, selected.map(s => s.key));
-      const present = this.presenter(user, id);
-      selected.forEach(({s}, i) => found.push(present(s, worked[i])));
-    }
-    return found.sort((a, b) => a.device.name.localeCompare(b.device.name) || a.device.id.localeCompare(b.device.id) || a.startedAt - b.startedAt);
-  }
-
   deviceSessions(user: string, device: string, now: number): (BoardSession & {source: string | null})[] {
     const machine = this.machines.get(device);
     if (!machine || machine.user !== user || now - machine.at > KEEP_MS) return [];
     const worked = this.store.worked(device, keysOf(machine));
-    const present = this.presenter(user, device);
+    const present = this.presenter(user, device, now, false);
     return machine.sessions.map((session, i) => ({...present(session, worked[i]), source: this.store.displaySource(user, session.source)}));
   }
 
@@ -197,18 +234,21 @@ export class Sessions {
     return deadlines.length ? Math.min(...deadlines) : null;
   }
 
-  ownChangesAt(user: string, board: string, now: number): number | null {
-    if (this.store.privateOwner(board) !== user) return null;
-    const deadlines = [...this.machines.values()].filter(m => m.user === user && now - m.at <= KEEP_MS && m.sessions.some(s => this.store.displaySource(user, s.source) === null)).map(m => m.at + KEEP_MS + 1);
-    return deadlines.length ? Math.min(...deadlines) : null;
+  /** Renewals move the hub's timer, not the board's unchanged presence. */
+  private deadlines(machine: Machine, now: number, selected: (session: StoredSession) => boolean): number[] {
+    return [machine.at + KEEP_MS + 1, ...(now < machine.at + CREDIT_MS && machine.sessions.some(s => selected(s) && s.working) ? [machine.at + CREDIT_MS] : [])];
   }
 
-  private presenter(user: string, id: string): (session: StoredSession, workedMs: number | null) => BoardSession {
+  private presenter(user: string, id: string, now: number, includePresence = true): (session: StoredSession, workedMs: number | null) => BoardSession {
     const names = this.store.projectNames(user);
     const alias = this.store.db.prepare('SELECT COALESCE(label,name) AS name FROM devices WHERE id=?').get(id) as {name:string} | undefined;
-    return ({clientId, device, origin, project, folder, startedAt, lastWorkedAt, working}, workedMs) => {
+    const workingUntil=this.machines.get(id)!.at+CREDIT_MS;
+    return ({clientId, source, sessionId, device, origin, project, folder, startedAt, lastWorkedAt, working}, workedMs) => {
+      const presenceKey=includePresence?this.binding(id,clientId,source,sessionId,origin,project,folder):undefined;
+      const evidence=presenceKey?this.presence(id,clientId,source,sessionId,origin,project,folder,now):undefined;
+      const currentPresence=evidence?{working:evidence.working,startedAt:evidence.startedAt}:undefined;
       const shown = project === null ? null : (names.get(project) ?? project);
-      return {clientId, device: alias ? {...device,name:alias.name} : device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, lastWorkedAt, working, workedMs};
+      return {...(presenceKey?{presenceKey,currentPresence}:{}),clientId, device: alias ? {...device,name:alias.name} : device, origin, project: shown, folder: folder ?? (shown !== project ? project : null), startedAt, lastWorkedAt, working:includePresence?working&&now<workingUntil:working, workedMs};
     };
   }
 

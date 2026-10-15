@@ -34,7 +34,7 @@ test('the owned proxy measures a real fixed-codec HTTP body without changing JSO
   } finally {await proxy.close(); await new Promise<void>(resolve => upstream.close(() => resolve()));}
 });
 
-import {HistoryBodies, historyReadSelection, historyScroll, stableHistoryReads} from '../historyTrafficBrowser';
+import {HistoryBodies, hasSeededHistory, historyReadSelection, historyScroll, stableHistoryReads} from '../historyTrafficBrowser';
 import {readUnion} from '../historyTrafficBudget';
 
 test('traffic references preserve each resource selection instead of merging equal time cells', () => {
@@ -234,7 +234,7 @@ import {historyPageScript} from '../historyTrafficBrowser';
 test('the browser fixture tags each fetch before IO and keeps cancellation identity without response headers', async () => {
   const calls: {resource: unknown; init: RequestInit}[] = [];
   const window = {fetch: async (resource: unknown, init: RequestInit) => {calls.push({resource, init}); return {};}, __quotumHistoryAttempts: {} as Record<string, {aborted: boolean}>};
-  runInNewContext(historyPageScript('24h'), {window, location: {href: 'http://localhost:8080/'}, localStorage: {setItem: () => {}}, URL, Headers, Request});
+  runInNewContext(historyPageScript('24h'), {window, location: {href: 'http://localhost:8080/'}, localStorage: {setItem: () => {}}, URL, Headers, Request, performance});
   const headers = new Headers({Accept: 'application/json'}), controller = new AbortController();
   await window.fetch('/api/history?cell=1&from=0&to=60', {headers, signal: controller.signal, credentials: 'same-origin'});
   await window.fetch('/api/history?cell=1&from=0&to=60', {headers});
@@ -244,4 +244,91 @@ test('the browser fixture tags each fetch before IO and keeps cancellation ident
   assert.equal(headers.has(HISTORY_ATTEMPT_HEADER), false, 'the production options are not mutated');
   controller.abort(); assert.equal(window.__quotumHistoryAttempts[ids[0]].aborted, true);
   assert.equal(window.__quotumHistoryAttempts[ids[1]].aborted, false);
+});
+
+test('composite bodies count once while both resource selections and standalone detail attempts remain visible',async()=>{
+  const listeners=new Map<string,(event:never)=>void>();
+  const history={run:'r',now:1,historyStart:0,known:{work:0,sources:{}},chunks:[{from:0,to:60}]};
+  const raw={basis:{},quota:{state:'complete',value:history},budget:{state:'complete',value:history},funds:{state:'complete',value:history},sessions:{state:'complete',value:{refs:[]}}};
+  const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:async<T>()=>({body:JSON.stringify(raw),base64Encoded:false} as T)};
+  const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
+  const query={cell:'1',from:'0',to:'60',evidence:'cursor'};
+  emit('Network.requestWillBeSent',{requestId:'combined',request:{url:'http://localhost/api/boards/b/period',postData:JSON.stringify({quota:query,budget:{...query,meters:'[]',unit:'USD'}})}});
+  emit('Network.loadingFinished',{requestId:'combined'});await Promise.all([...observer.pending]);
+  assert.deepEqual(observer.errors,[]);assert.equal(observer.reads.length,1);assert.equal(observer.resources.length,2);
+  assert.equal(observer.reads[0].count?.decoded,Buffer.byteLength(JSON.stringify(raw)));
+  assert.deepEqual(observer.resources.map(r=>new URLSearchParams(r.selection).get('scope')),['quota','budget']);
+  assert.ok(observer.resources.every(r=>!new URLSearchParams(r.selection).has('evidence')));
+  emit('Network.requestWillBeSent',{requestId:'details',request:{url:'http://localhost/api/boards/b/period/sessions',postData:'{}'}});
+  emit('Network.loadingFailed',{requestId:'details',canceled:true});
+  assert.equal(observer.reads.length,2);assert.equal(observer.resources.length,2);assert.equal(observer.reads[1].canceled,true);
+  emit('Network.requestWillBeSent',{requestId:'evidence',request:{url:'http://localhost/api/boards/b/period',postData:JSON.stringify({quota:{...query,cells:'skip'}})}});
+  emit('Network.loadingFinished',{requestId:'evidence'});await Promise.all([...observer.pending]);
+  assert.equal(observer.reads.length,3);assert.equal(observer.resources.length,2,'evidence bytes count without pretending cached cells were reread');
+  assert.equal(observer.reads[2].count?.decoded,Buffer.byteLength(JSON.stringify(raw)));assert.deepEqual(observer.errors,[]);
+  assert.equal(hasSeededHistory(observer.reads,'seed'),false,'evidence and two complete families cannot stand in for the third cell seed');
+  emit('Network.requestWillBeSent',{requestId:'funds',request:{url:'http://localhost/api/boards/b/period',postData:JSON.stringify({funds:query})}});
+  assert.equal(hasSeededHistory(observer.reads,'seed'),false,'the queued family must finish its physical read');
+  emit('Network.loadingFinished',{requestId:'funds'});await Promise.all([...observer.pending]);
+  assert.equal(hasSeededHistory(observer.reads,'seed'),true);assert.equal(hasSeededHistory(observer.reads,'different phase'),false);
+});
+
+test('composite resource classification waits for an omitted POST body even after the response arrives',async()=>{
+  const listeners=new Map<string,(event:never)=>void>();
+  const history={run:'r',now:1,historyStart:0,known:{work:0,sources:{}},chunks:[{from:0,to:60}]};
+  const raw=JSON.stringify({basis:{},quota:{state:'complete',value:history}});
+  let finish!:(value:{postData:string})=>void;
+  const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:<T>(method:string)=>
+    (method==='Network.getRequestPostData'?new Promise<{postData:string}>(resolve=>{finish=resolve;}):Promise.resolve({body:raw,base64Encoded:false})) as Promise<T>};
+  const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
+  emit('Network.requestWillBeSent',{requestId:'omitted',request:{url:'http://localhost/api/boards/b/period'}});
+  assert.equal(observer.reads.length,1);assert.equal(observer.activeCount,1);assert.equal(observer.pending.size,1);
+  emit('Network.loadingFinished',{requestId:'omitted'});await Promise.resolve();
+  assert.equal(observer.reads[0].count,undefined,'a response cannot settle before its resource selection is known');
+  finish({postData:JSON.stringify({quota:{cell:'1',from:'0',to:'60'}})});
+  await Promise.all([...observer.pending]);
+  assert.deepEqual(observer.errors,[]);assert.equal(observer.reads.length,1);assert.equal(observer.resources.length,1);
+  assert.equal(new URLSearchParams(observer.resources[0].selection).get('scope'),'quota');
+  assert.deepEqual(observer.resources[0].chunks,[[0,60]]);assert.equal(observer.resources[0].count?.decoded,Buffer.byteLength(raw));
+});
+
+test('a missing POST body that Chrome cannot recover fails observation and retains the canceled attempt',async()=>{
+  const listeners=new Map<string,(event:never)=>void>(),missing=new Error('POST data unavailable');
+  const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:<T>()=>Promise.reject<T>(missing)};
+  const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
+  emit('Network.requestWillBeSent',{requestId:'missing',request:{url:'http://localhost/api/boards/b/period'}});
+  emit('Network.loadingFailed',{requestId:'missing',canceled:true});
+  await Promise.all([...observer.pending]);
+  assert.deepEqual(observer.errors,[missing]);assert.equal(observer.reads.length,1);assert.equal(observer.reads[0].canceled,true);
+  assert.equal(observer.reads[0].count?.complete,false);assert.equal(observer.activeCount,0);
+});
+
+test('warm failure diagnostics distinguish exact reads and gesture stages without exposing identities or bodies',async()=>{
+  const listeners=new Map<string,(event:never)=>void>();
+  let finish!:(value:{postData:string})=>void;
+  const cdp={on:<T>(name:string,fn:(event:T)=>void)=>listeners.set(name,fn as (event:never)=>void),send:<T>()=>new Promise<{postData:string}>(resolve=>{finish=resolve;}) as Promise<T>};
+  const observer=new HistoryBodies(cdp),emit=(name:string,event:object)=>listeners.get(name)?.(event as never);
+  observer.phase='warm';observer.stage='cached return';
+  emit('Network.requestWillBeSent',{requestId:'private-request',request:{url:'http://localhost/api/boards/private-board/period'}});
+  observer.stage='cached repeat';
+  finish({postData:JSON.stringify({selection:{mode:'live',periodMs:30*86_400_000},evaluatedAt:900,
+    quota:{cell:'1',from:'0',to:'60',cells:'skip',evidence:'private-cursor',meters:'[["private-source","private-meter"]]'},
+    funds:{cell:'1',from:'0',to:'60',evidence:'skip'},values:['private-source'],sessions:{cursor:'private-work-cursor'}})});
+  await Promise.all([...observer.pending]);
+  emit('Network.dataReceived',{requestId:'private-request',encodedDataLength:123});
+  emit('Network.loadingFailed',{requestId:'private-request',canceled:true});
+  emit('Network.requestWillBeSent',{requestId:'private-repeat',request:{url:'http://localhost/api/boards/private-board/period/sessions',postData:JSON.stringify({selection:{mode:'range',from:10,to:20},evaluatedAt:901,refs:['private-ref']})}});
+  emit('Network.loadingFailed',{requestId:'private-repeat',canceled:false});
+  const diagnostic=observer.diagnostic('warm');
+  assert.equal(diagnostic.attempts,2);assert.equal(diagnostic.omitted,0);
+  assert.deepEqual(diagnostic.reads[0],{stage:'cached return',endpoint:'period',request:{selection:{mode:'live',periodMs:30*86_400_000},evaluatedAt:900,
+    sections:[{scope:'quota',cell:1,from:0,to:60,cells:'skip',evidence:'cursor'},{scope:'funds',cell:1,from:0,to:60,cells:'read',evidence:'skip'}],values:1,sessions:true},canceled:true,complete:false,decoded:undefined,encodedLower:123,encodedUpper:undefined});
+  assert.equal(diagnostic.reads[1].stage,'cached repeat');assert.equal(diagnostic.reads[1].endpoint,'period/sessions');
+  assert.deepEqual(diagnostic.reads[1].request?.selection,{mode:'range',from:10,to:20});
+  assert.equal(JSON.stringify(diagnostic).includes('private'),false);
+  observer.reads[0].attemptId='b2:34';observer.reads[1].attemptId='private-attempt';
+  assert.equal(observer.diagnostic('warm').reads[0].attemptId,'b2:34');
+  assert.equal(JSON.stringify(observer.diagnostic('warm')).includes('private'),false);
+  for(let n=0;n<70;n++)emit('Network.requestWillBeSent',{requestId:String(n),request:{url:'http://localhost/api/history?board=private-board&scope=budget&cell=1&from=0&to=60'}});
+  assert.equal(observer.diagnostic('warm').reads.length,64);assert.equal(observer.diagnostic('warm').omitted,8);
 });

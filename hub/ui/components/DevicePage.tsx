@@ -97,6 +97,7 @@ export function DevicePage({session, onSession}: {session: Session; onSession: (
               <dd className="mono">{pending.userCode}</dd>
             </dl>
             <p className="auth-note">{t('device.asYou')}</p>
+            <p className="auth-note">{t('connect.sessionSharing')}</p>
             <p className="auth-note">{t('device.warning')}</p>
             <ErrorLine error={error} />
             <div className="button-row">

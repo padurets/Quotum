@@ -19,8 +19,7 @@ const card = (id: string, used = 50, extra: Partial<Card> = {}): Card => ({
   ...extra,
 });
 
-const VIEW = {version: 2 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
-
+const VIEW = {version:4 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 test('contact storage stays bounded across abandoned devices and reconnect replaces its baseline',()=>{
   const devices=Array.from({length:1100},(_,index)=>({deviceId:`device-${index}`,lastSeenAt:index+1}));
   const first=reduce(INITIAL,{type:'hub',event:{type:'deviceContacts',data:{devices}}});
@@ -331,15 +330,15 @@ test('snapshot and session events normalize old or invalid credit before retaini
   }
 });
 
-test('private sessions replace only their slice, clear on shared snapshots and survive older personal hubs',()=>{
+test('unattributed sessions replace their slice on every board and tolerate older hubs',()=>{
   const privateSession={...session,clientId:'opencode'};
-  const first=run(hub({type:'snapshot',data:snapshot({ownSessions:[privateSession]})}));
-  const next=reduce(first,hub({type:'ownSessions',data:{sessions:[{...privateSession,workedMs:60_000}]}}));
+  const first=run(hub({type:'snapshot',data:snapshot({unattributedSessions:[privateSession]})}));
+  const next=reduce(first,hub({type:'unattributedSessions',data:{sessions:[{...privateSession,workedMs:60_000}]}}));
   assert.equal(next.board!.cards,first.board!.cards);assert.equal(next.board!.sessions,first.board!.sessions);
-  assert.notEqual(next.board!.ownSessions,first.board!.ownSessions);
-  assert.equal(reduce(next,hub({type:'ownSessions',data:{sessions:next.board!.ownSessions!}})),next);
-  const shared=reduce(next,hub({type:'snapshot',data:snapshot({board:{id:'team',name:'Team',personal:false},ownSessions:[privateSession]})}));
-  assert.deepEqual(shared.board!.ownSessions,[]);
-  assert.equal(reduce(shared,hub({type:'ownSessions',data:{sessions:[privateSession]}})),shared);
-  assert.deepEqual(run(hub({type:'snapshot',data:snapshot()})).board!.ownSessions,[]);
+  assert.notEqual(next.board!.unattributedSessions,first.board!.unattributedSessions);
+  assert.equal(reduce(next,hub({type:'unattributedSessions',data:{sessions:next.board!.unattributedSessions!}})),next);
+  const shared=reduce(next,hub({type:'snapshot',data:snapshot({board:{id:'team',name:'Team',personal:false},unattributedSessions:[privateSession]})}));
+  assert.deepEqual(shared.board!.unattributedSessions,[privateSession]);
+  assert.equal(reduce(shared,hub({type:'unattributedSessions',data:{sessions:[privateSession]}})),shared);
+  assert.deepEqual(run(hub({type:'snapshot',data:snapshot()})).board!.unattributedSessions,[]);
 });

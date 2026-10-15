@@ -30,6 +30,10 @@ test('a stand that would change by itself during the window is told, card by car
   assert.deepEqual(stillProblems([{...still, id: 'fading', successAt: from - 4 * MIN}], from, to), ["fading's dot still fades"]);
   assert.deepEqual(stillProblems([{...still, id: 'pulsing', successAt: from - MIN}], from, to), ["pulsing's dot still fades"], 'fading all through the window');
   assert.deepEqual(stillProblems([{...still, id: 'reset', windows: [{resetAt: to}]}], from, to), ['reset has a limit that resets']);
+  const measured={...still,id:'measured',successAt:from};
+  assert.deepEqual(stillProblems([measured],from,to,'measured'),[],'its own measurement may restart its dot');
+  assert.deepEqual(stillProblems([{...measured,windows:[{resetAt:to}]}],from,to,'measured'),['measured has a limit that resets'],'the measured card keeps its quota deadline');
+  assert.deepEqual(stillProblems([{...measured,id:'other'}],from,to,'measured'),["other's dot still fades"],'other cards stay under the original clock guard');
 });
 
 /**

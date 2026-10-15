@@ -1,4 +1,4 @@
-import {migrateAnalyticsViews} from './analyticsView.js';
+import {migrateAnalyticsViews, migrateUnifiedViews, migrateFixedViews} from './analyticsView.js';
 import type {DatabaseSync} from 'node:sqlite';
 import {adoptDeclaredLayout} from './legacyDeclared.js';
 
@@ -349,7 +349,27 @@ export const STEPS = [
   END;
   `,
 
-  // Measurement participation is independent of device connection and transient duty.
+  // 22 — a single grid, stored through the lossless compact view codec below.
+  `SELECT 1;`,
+  // 23 — historical cards find the last native batch without scanning every window.
+  `CREATE INDEX samples_by_source_time ON samples(source_id,at);`,
+  // 24 — retained geometry never becomes a provider observation.
+  `
+  ALTER TABLE meter_spans ADD COLUMN observed_from INTEGER;
+  ALTER TABLE meter_contexts ADD COLUMN observed_from INTEGER;
+  UPDATE meter_spans SET observed_from=from_at WHERE from_at=to_at OR EXISTS(
+    SELECT 1 FROM readings r WHERE r.source_id=meter_spans.source_id
+      AND r.meter_id=meter_spans.meter_id AND r.at=meter_spans.from_at);
+  UPDATE meter_contexts SET observed_from=to_at WHERE from_at=to_at;
+  `,
+  // 25 — session sharing belongs to the board and device, independently of subscriptions.
+  `CREATE TABLE board_device_sessions (
+    board_id TEXT NOT NULL, device_id TEXT NOT NULL, enabled_since INTEGER,
+    revision TEXT NOT NULL, PRIMARY KEY(board_id,device_id)) WITHOUT ROWID;
+  CREATE INDEX board_device_sessions_by_device ON board_device_sessions(device_id);`,
+  // 26 — fixed subscription periods, with lossless view expansion.
+  `SELECT 1;`,
+  // 27 — measurement participation is independent of device connection and transient duty.
   `
   CREATE TABLE device_measurement_policies (device_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
   CREATE TABLE source_measurement_preferences (source_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, device_id TEXT);
@@ -380,7 +400,11 @@ export function migrate(db: DatabaseSync, now: number) {
   db.exec('BEGIN IMMEDIATE');
   try {
     for (const step of STEPS.slice(adoptDeclaredLayout(db,current))) db.exec(step);
+    // All view formats in this upgrade are one change visible at transaction commit.
+    const viewRevisions = current < 22 ? new Map((db.prepare('SELECT board_id,revision FROM views').all() as {board_id:string;revision:number}[]).map(row => [row.board_id,row.revision])) : undefined;
     if (current < 19) migrateAnalyticsViews(db, now);
+    if (current < 22) migrateUnifiedViews(db, now);
+    if (current < 26) migrateFixedViews(db, now, viewRevisions);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('historyStart', String(now));
     // Before this, how agents worked is not known (the sums of layout 2 are gone), rather than none worked.

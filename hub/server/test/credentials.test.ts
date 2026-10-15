@@ -16,6 +16,7 @@ import {Store} from '../store/store.js';
 import {ConnectorTransport, type Connector} from '../connectors/index.js';
 import {Credentials, SecretError, SecretKey, startSecrets, type SecretKeyReport} from '../secrets/index.js';
 import {newSecret} from '../domain/auth.js';
+import {VIEW_VERSION, VIEW_VERSION_HEADER} from '../domain/view.js';
 
 const CANARY = 'CANARY_PRIVATE_CREDENTIAL_0123456789';
 const KEK = Buffer.alloc(32, 7).toString('base64url');
@@ -39,7 +40,7 @@ async function harness(options: {available?: boolean; report?: SecretKeyReport} 
   const hub:Hub={store, directory, credentials, resets: new ResetFeed(undefined, () => {}), ingest: new Ingest(store, directory, new Duty(), new Cadence()), pairing: new Pairing(directory), setup: new Setup(false, null), local: null};
   let additions!:BoardAdditions;
   const app = await buildApp(hub,(_app,current)=>{additions=current.additions!;});
-  const call = (method: 'POST' | 'GET' | 'DELETE', url: string, payload?: object | string, as = 'alice', origin: string | null = ORIGIN) => app.inject({method, url, payload, headers: {...(cookies.has(as) ? {cookie: cookies.get(as)} : {}), ...(origin ? {origin} : {}), ...(typeof payload === 'string' ? {'content-type': 'application/json'} : {})}});
+  const call = (method: 'POST' | 'GET' | 'DELETE', url: string, payload?: object | string, as = 'alice', origin: string | null = ORIGIN) => app.inject({method, url, payload, headers: {[VIEW_VERSION_HEADER]: String(VIEW_VERSION), ...(cookies.has(as) ? {cookie: cookies.get(as)} : {}), ...(origin ? {origin} : {}), ...(typeof payload === 'string' ? {'content-type': 'application/json'} : {})}});
   const clean = (...outputs: string[]) => {
     for (const output of outputs) for (const secret of [CANARY, KEK]) assert.equal(output.includes(secret), false, 'no complete secret in output');
     for (const suffix of ['', '-wal', '-shm']) for (const secret of [CANARY, KEK]) assert.equal(readFileSync(file + suffix).includes(Buffer.from(secret)), false, 'no plaintext in SQLite files');
@@ -277,7 +278,7 @@ test('a revoked in-flight create cannot replay a concurrent request from a new s
   const input={provider:'test',secret:CANARY,requestId:'33333333-3333-4333-8333-333333333333'};
   const pending=h.call('POST','/api/credentials',input);await ready;
   const owner=h.users.get('alice')!,token=newSecret('qt_s');h.directory.deleteSessions(owner);h.directory.createSession(token,owner,Date.now(),60_000);
-  const concurrent=await h.app.inject({method:'POST',url:'/api/credentials',payload:input,headers:{origin:ORIGIN,cookie:`quotum_session=${token}`}});
+  const concurrent=await h.app.inject({method:'POST',url:'/api/credentials',payload:input,headers:{[VIEW_VERSION_HEADER]: String(VIEW_VERSION),origin:ORIGIN,cookie:`quotum_session=${token}`}});
   assert.equal(concurrent.statusCode,201);release();
   const late=await pending;assert.equal(late.statusCode,401);assert.deepEqual(late.json(),{error:'unauthorized'});
   assert.equal((await h.call('GET','/api/credentials')).statusCode,401);
@@ -298,7 +299,7 @@ test('each session waiting for a shared addition or replacement must retain acce
     const input={secret:CANARY+'_next',...(mode==='replacement'?{requestId:'55555555-5555-4555-8555-555555555555'}:{})};
     const token=newSecret('qt_s');h.directory.createSession(token,h.users.get('alice')!,Date.now(),60_000);
     const winner=h.call('POST',url,input);await ready;
-    const pending=h.app.inject({method:'POST',url,payload:input,headers:{origin:ORIGIN,cookie:`quotum_session=${token}`}});await joining;
+    const pending=h.app.inject({method:'POST',url,payload:input,headers:{[VIEW_VERSION_HEADER]: String(VIEW_VERSION),origin:ORIGIN,cookie:`quotum_session=${token}`}});await joining;
     h.directory.deleteSession(token);release();
     const saved=await winner,late=await pending;assert.equal(saved.statusCode,200);
     assert.equal(late.statusCode,mode==='addition'?403:401);assert.deepEqual(late.json(),{error:mode==='addition'?'addition_permission':'unauthorized'});

@@ -3,7 +3,7 @@ import {cellStart, compose, expandHistory, targetOf, tileOf, type Chunk, type Hi
 import {followPan, HistoryStore} from '../ui/lib/history';
 import {Pan} from '../ui/lib/pan';
 import type {HistoryTile} from '../ui/lib/historyTiles';
-import {HistoryCutChanged, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
+import {HISTORY_COHORT_TAKES, historyCutInvalidation, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_CODEC, historyBody, historyProxy, type BodyCount} from './historyProxy';
 import {browserCancellationTraffic, browserHistoryTraffic} from './historyTrafficBrowser';
 import type {Browser} from './cdp';
@@ -21,7 +21,7 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
   const proxy = await historyProxy(upstream), reports = [], invalidated = [], problems: string[] = [];
   try {
     for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
-      for (let take = 1; take <= 3; take++) {
+      for (let take = 1; take <= HISTORY_COHORT_TAKES; take++) {
         const name = `${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`, anchor = cellStart(Date.now() - 60_000, 60_000);
         let selected: {from: number; to: number} | null = {from: anchor - length, to: anchor};
         let phase = `${name}/seed`, inFlight = 0, peakFlights = 0, latest: HistoryAnswer | undefined;
@@ -85,12 +85,15 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
           gesture.finish(token); await settle();
           assert.ok(store.get().history); assert.equal(store.get().history!.range, `${selected!.from}-${selected!.to}`);
           const final = store.get().history!, meta = latest!;
-          stableHistory(meta, seed, cell);
-          assert.equal(freshOverlap, 0, 'fresh cells were read again'); assert.equal(ownershipOverlap, 0, 'conflicting tile writers'); assert.ok(peakFlights <= 2);
+          assert.equal(ownershipOverlap, 0, 'conflicting tile writers'); assert.ok(peakFlights <= 2);
           assert.ok([...requested].filter(at => !visited.has(at) && !bridges.has(at)).length <= Math.min(60, Math.ceil(length / cell / 4)), 'unvisited optional cells exceeded the buffer');
           const coldBodies = bodies.filter(b => b.phase === phase);
           await proxy.settled(phase);
           const totals = bodyTotals(coldBodies.map(({count}) => ({count, transfer: transferFor(count, proxy.transfers)})));
+          const maxAttempts = fraction === .04 ? 2 : future ? 7 : 5;
+          assert.ok(coldBodies.length <= maxAttempts, 'controlled history exceeded its request cap');
+          stableHistory(meta, seed, cell);
+          assert.equal(freshOverlap, 0, 'fresh cells were read again');
           proxy.phase(`${name}/reference`);
           let referenceDecoded = 0, referenceEncoded = 0;
           const readReference = async (from: number, to: number) => {
@@ -112,13 +115,12 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
             store.pan({token: 10, length, from: anchor - length - delta, to: Math.min(anchor, anchor - delta + DAY), direction}); await flush();
           }
           assert.equal(attempts.length, warmStart, 'warm return and repeat must start zero GETs');
-          const report = {name, attempts: attempts.filter(r => r.phase.endsWith('/cold')).length, maxAttempts: fraction === .04 ? 2 : future ? 7 : 5, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, warmAttempts: attempts.length - warmStart, bridgeCells: bridges.size, optionalUnvisitedCells: [...requested].filter(at => !visited.has(at) && !bridges.has(at)).length, peakFlights, freshOverlap, ownershipOverlap, series: final.series.length, range: final.range, requests: attempts.filter(r => r.phase.endsWith('/cold'))};
+          const report = {name, attempts: attempts.filter(r => r.phase.endsWith('/cold')).length, maxAttempts, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, warmAttempts: attempts.length - warmStart, bridgeCells: bridges.size, optionalUnvisitedCells: [...requested].filter(at => !visited.has(at) && !bridges.has(at)).length, peakFlights, freshOverlap, ownershipOverlap, series: final.series.length, range: final.range, requests: attempts.filter(r => r.phase.endsWith('/cold'))};
           reports.push(report); problems.push(...trafficProblems(report)); unsubscribe();
           console.error(`bench: ${name}: ${report.attempts} GETs, ${report.warmAttempts} warm GETs, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / referenceEncoded}`);
           break;
         } catch (error) {
-          if (!(error instanceof HistoryCutChanged) || take === 3) throw new Error(`${name}: ${String(error)}`, {cause: error});
-          invalidated.push({name, reason: error.message, attempts, bodies});
+          invalidated.push({...historyCutInvalidation(error,name,take),attempts,bodies});
         } finally {store.close(); await Promise.allSettled([...pending]);}
       }
     }

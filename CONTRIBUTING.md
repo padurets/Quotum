@@ -17,8 +17,9 @@ measures this machine once.
 
 After building the hub, `npm run bench -- --ci` in `hub/` checks dashboard costs in
 Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp http://host:port`). It includes native
-wheel and Shift-drag starting from the quota, budget and subscription-funds charts at
-24h and 30d, moving all four charts with at least twelve real series per resource family and
+wheel and Shift-drag starting from each five-hour limit, weekly limit, agent activity,
+budget balance and subscription-funds chart at 24h and 30d, moving
+all five charts with at least twelve real series per resource family and
 CPU throttled fourfold. The scenario covers delayed history, strip rebuilding, reversal
 and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 50 ms
 at p99; input to an actually updated chart frame must stay within 34 ms at p95. Empty
@@ -226,6 +227,29 @@ Services, encrypted storage, receipts and board events use production code; only
 external answers and device reports are synthetic. No real provider or client is
 contacted. Use `make info` for the actual address and synthetic sign-in.
 
+`DEV_SET=sessions make dev` opens the session analytics review fixture. Sign in as Ana:
+the default 24h period has 57 projects, six machines, four subscriptions and 129
+recorded contexts, including OpenCode and another client alongside mapped sessions.
+Agent sessions includes active time and average concurrency,
+fits whole rows to its height and has a compact pager at the bottom right. Its separate
+footer shows totals across the entire selected period, including rows on other pages,
+on a separate line above the pager and row count. Wide totals reuse the table's columns
+and headings; narrow totals use a fixed grid. The current working count is a subtitle.
+Grouping uses shared segments; None comes first while Project stays the default.
+Increasing the height fits more rows without a fifty-row page cap or another API read;
+when every row fits, the pager disappears. Wide tables sort through their headers, with the
+third click clearing the selected sort; only narrow lists show a sort menu.
+Atlas's 67-context disclosure has two pages.
+Recent overlapping work, 64 retained Atlas contexts absent from the live
+roster, long names and a projectless context are ready to inspect in either language.
+Client and subscription columns are available in individual rows and disclosures.
+Shared variants show sessions without subscriptions, subscriptions without sessions,
+both permissions, disabled devices, hidden cards and a later subscription grant.
+Provided data includes a disconnected device with retained history.
+Live synthetic reports keep measurements fresh. The 7d and 30d periods also have work;
+the latter explains the fixture's seven-day coverage. For a known-empty fixed range,
+select four to two hours before startup; nine to eight days before startup is unknown.
+
 `DEV_MODE=hub make dev` starts an ordinary hub on
 isolated persistent data with reset trackers disabled. No mode starts coding clients.
 Hub mode provisions its persistent key automatically in the private `hub-keys`
@@ -373,16 +397,19 @@ one already running. CI runs it on every push; run it when you change the dashbo
 and have Chrome.
 
 The completed measurement phase's React/DOM observer is disconnected before native
-panning. Native wheel and Shift-drag start separately from the subscription limit, budget and subscription-funds
-charts at both periods. Each input owner starts with fresh readers, captures its own
-events and must move all four plots within the same budgets.
+panning. Native wheel and Shift-drag start separately from the weekly limit, five-hour
+limit, activity, budget balance and subscription-funds charts at both periods.
+Each input owner starts with fresh readers, captures its own events and must move all
+five plots within the same budgets.
 Panning keeps its own movement and mutation checks; resetting the measurement
-probe resumes full observation for money updates. Money-view controls wait for a
-populated, committed drawing and stable layout before switching, then require the
-line to remain present and inside its scale on every frame until the new view commits.
+probe resumes full observation for money updates. The balance checks wait
+for populated, committed drawings and stable layout, then require each account or scoped-limit
+line to remain present and inside its scale on every observed frame.
+Set `QUOTUM_BENCH_PROFILE_PANNING=1` to replay failed native samples with CPU and
+timeline profiling; this diagnostic never supplies budget readings.
 
 The same run checks pan traffic separately from the native frame budget, using the
-dense 75-day fixture and all four charts at 24h and 30d. Controlled production-loader
+dense 75-day fixture and all five charts at 24h and 30d. Controlled production-loader
 replays and native browser gestures use 0, 100 and 400 ms answer delays. Cached
 return and repeat must start no history GETs; half-width movements allow at most
 seven attempts from the history chart and five from activity, and a 4% movement

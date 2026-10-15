@@ -14,6 +14,7 @@ import {setLocale,t} from '../i18n';
 import type {Card} from '../lib/types';
 import type {KeyPart,Meter} from '../../server/domain/meters';
 import * as meterDomain from '../../server/domain/meters';
+import * as resources from '../../server/domain/resources';
 import {deepSeekMeasurement} from '../../server/connectors/deepseek';
 import * as currency from '../../server/domain/currency';
 import {defaultCurrencyContext} from '../../server/domain/currency';
@@ -37,6 +38,7 @@ const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact
   if(name==='react/jsx-runtime')return jsx;
   if(name==='../../server/domain/currency')return currency;
   if(name==='../../server/domain/meters')return meterDomain;
+  if(name==='../../server/domain/resources')return resources;
   if(name==='../lib/money')return money;
   if(name==='../lib/currencySettings')return currencySettings;
   if(name==='../lib/format')return format;
@@ -47,6 +49,7 @@ const fixture={exports:{} as {MoneyCard:(props:{source:Card;board:string;compact
   if(name==='./Kit')return {ErrorLine:()=>null};
   if(name==='../lib/board')return {useCurrencyContext:()=>shownCurrency};
   if(name==='../lib/clock')return {useClock:()=>1};
+  if(name==='../lib/measurementClock')return {useMeasurementClock:()=>1,useMeasurementTime:()=>null};
   if(['../lib/board','../lib/clock','../lib/http','../lib/quota','./Meter'].includes(name))return {};
   throw new Error(name);
 }};

@@ -1,3 +1,6 @@
+import {migrateUnified} from '../server/domain/unifiedView.js';
+import {migrateFixed} from '../server/domain/fixedView.js';
+import type {View} from '../server/domain/view.js';
 import {COLUMNS, defaultWidth, starts, type Layout} from '../ui/lib/grid.js';
 import type {Store, WorkKey} from '../server/store/store.js';
 import {parseSessions} from '../server/domain/ingest.js';
@@ -195,8 +198,8 @@ export function viewOf(stand: Stand, key: string) {
   const personal = stand.people.has(key);
   const shown = cards(set).filter(card => (personal ? holdersOf(set, card).includes(key) : !!card.on?.[key]));
   const board = boards(set).find(b => b.id === key) ?? people(set).find(p => p.id === key);
-  const view = {
-    version: 2 as const,
+  const view: View = {
+    version: 4 as const,
     layout: {columns: COLUMNS, places: {}} as Layout,
     names: {} as Record<string, string>,
     hidden: [] as string[],
@@ -206,7 +209,7 @@ export function viewOf(stand: Stand, key: string) {
     unplanned: [] as string[],
     colors: {} as Record<string, string>,
     columns: {},
-    shownColumns: board?.kind === 'board' && board.tableColumns ? {'quota-table': board.tableColumns} : {},
+    shownColumns: {...(board?.kind === 'board' && board.tableColumns ? {'quota-table': board.tableColumns} : {}), ...(board?.agentsColumns ? {agents: board.agentsColumns} : {})},
   };
   let cursor = 0;
   let rank = 0;
@@ -233,7 +236,8 @@ export function viewOf(stand: Stand, key: string) {
     const auto = place(id === 'quota-table' ? board?.forecastWidth ?? COLUMNS : COLUMNS);
     view.layout.places[id] = board?.places?.[id] ?? auto;
   }
-  return view;
+  const resources=shown.map(card=>({id:stand.sources.get(card.id)!,provider:card.provider}));
+  return migrateFixed(migrateUnified({...view,version:2},resources),resources);
 }
 
 /**

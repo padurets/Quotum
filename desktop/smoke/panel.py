@@ -191,9 +191,16 @@ def check_panel(bus, item, child, root, env):
         open_main()
         pid = wait(engine)
         board = wait(lambda: next((w for w in visible(pid) if not w.override), None))
+        # Mapping can precede the initial show/focus completing. Resume must test
+        # the queued newer requests after the original main already owned focus.
+        initial_focus = wait(lambda: focused_inside(board.id))
         x.XSelectInput(display, board.id, 1 << 21)  # FocusChangeMask
         os.kill(pid, signal.SIGSTOP)
         try:
+            stopped = wait(lambda: any(line.startswith('State:') and line.split()[1] == 'T'
+                                      for line in Path(f'/proc/{pid}/status').read_text().splitlines()))
+            print({'mainPanelHandoff': {'engine': pid, 'main': board.id,
+                                       'initialMainFocus': int(initial_focus), 'stopAcknowledged': int(stopped)}}, flush=True)
             open_main()
             activate()
             loader = wait(lambda: visible(child.pid))

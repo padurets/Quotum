@@ -9,7 +9,7 @@ export function moneyPointAt(series:MeterHistory,at:number) {
 /** Cap values belong to one fetched cell and its producer's exclusive bounds. */
 export function meterPointIn(series:MeterHistory,at:number,cell:number) {
   if(series.kind!=='cap')return series.points.filter(p=>p.at<=at).at(-1);
-  const grid=cellStart(at,cell),point=series.points.find(p=>p.at===grid);
+  const grid=cellStart(at,cell),point=series.points.find(p=>p.at===grid&&p.knownFrom!==undefined&&p.knownUntil!==undefined&&at>=p.knownFrom&&at<p.knownUntil);
   return point&&point.knownFrom!==undefined&&point.knownUntil!==undefined&&at>=point.knownFrom&&at<point.knownUntil?point:undefined;
 }
 export const moneyIdentity=(series:MeterHistory)=>JSON.stringify([series.sourceId,series.meterId,series.kind,series.unit]);

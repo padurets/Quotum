@@ -63,7 +63,12 @@ export type CadenceWhy = 'low' | 'inUse' | 'changed' | 'idle' | 'reset' | 'fixed
 
 /** A coding agent running on a machine, spending the subscription of its card. */
 export type LiveSession = {
+  /** Present only on retained period rows. */
+  ref?: string;
+  presenceKey?: string;
+  currentPresence?: {working:boolean;startedAt:number};
   clientId?: string;
+  sourceStatus?:'notProvided';
   device: {id: string; name: string};
   /** A terminal; an editor or the provider's app, which run one client per window. */
   origin: 'terminal' | 'editor' | 'app';
@@ -140,6 +145,7 @@ export type ForecastBasis = {hours: number; cold: boolean; usualPerDay: number; 
  * [minutes from the anchor, left]; `lib/forecast.ts` reads it.
  */
 export type SeriesForecast = {
+  planSince?:number|null;
   state: 'none' | 'needData' | 'usedUp' | 'awaiting' | 'runsOut' | 'lasts';
   failed?: true;
   asOf: number;

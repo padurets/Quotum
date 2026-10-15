@@ -182,3 +182,11 @@ test('every whole-cell cut of a packed tile composes as the original complete ce
     assert.deepEqual(compose([tile.chunk(known)], meta, target, windows), compose([whole], meta, target, windows), `${a}..${b}`);
   }
 });
+
+test('sparse quota attribution and neutral funding survive partial replacement and bounded tile storage',()=>{
+ const metadata={work:0,sources:{s:30_000},sessions:0,sourceWork:{s:30_000}};
+ const chunk:Chunk={from:0,to:M,series:[],activity:{sessions:[['known','s','P','d'],['unprovided',null,'P','d','notProvided']],devices:{d:'Laptop'},cells:[[0,M,[0,1],[]]],sourceWork:[['s',0,30_000,30_000]]},resets:[],grants:[]};
+ const tile=new HistoryTile(0,M);tile.merge(chunk,metadata);tile.readTo=tile.validTo=M;const size=tile.bytes;assert.deepEqual(tile.chunk(metadata).activity,chunk.activity);
+ tile.merge({...chunk,activity:{...chunk.activity,sourceWork:[['s',0,0,0]]}},metadata);assert.deepEqual(tile.chunk(metadata).activity.sourceWork,[['s',0,0,0]]);assert.equal(tile.bytes,size,'replacement does not accumulate old sparse buffers');
+ const activity=compose([tile.chunk(metadata)],{now:M,historyStart:0,known:metadata},targetOf(M,M,''),new Set()).activity;assert.deepEqual(activity.by.source.map(g=>g.key).sort(),['notProvided','s']);assert.equal(activity.agentMs,2*M);
+});

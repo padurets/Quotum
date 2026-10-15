@@ -148,6 +148,6 @@ export function useClock(changesAt: (now: number) => number | null, context?: re
   const now = context ? snapshot.current!.now : hubNow();
   const latest = useRef(changesAt);
   latest.current = changesAt;
-  useLayoutEffect(() => clock.due(watch, latest.current(now), now));
+  useLayoutEffect(() => clock.due(watch, latest.current(now), now),[watch,changesAt,now,wakes]);
   return now;
 }

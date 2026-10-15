@@ -55,8 +55,8 @@ analytics. Run it when you change the dashboard and have Chrome (`QUOTUM_CHROME`
 on `PATH`, or `--cdp` to one already running); CI fails over budget. After the readings,
 it also checks consecutive measuring-frequency saves with native arrow keys and fails
 if saving loses focus.
-Native horizontal wheel and Shift-drag scenarios start separately from the limit, budget
-and subscription-funds charts, moving all four charts at 24h and 30d
+Native horizontal wheel and Shift-drag scenarios start separately from each of the five
+charts (five-hour limits, weekly limits, activity, balance and subscription funds), moving all five at 24h and 30d
 with at least twelve real series per resource family and CPU throttled fourfold, including an unread edge,
 strip rebuilding, reversal and return to live. Moving-frame p95/p99 must stay within
 34/50 ms and input-to-updated-frame p95 within 34 ms; callbacks without actual chart
@@ -110,8 +110,11 @@ and platform smoke checks still apply.
   and owner IDs never enter shared projections.
 - **Clients and collectors are independent.** The client catalogue owns discovery and
   activity; only explicitly mapped collectors measure subscriptions. Preserve legacy
-  session order and cap priority. Unknown or unheld work belongs only to the owner's
-  personal board and devices, never shared projections or source activity signals.
+  session order and cap priority. Device sessions are admitted independently of subscriptions, defaulting on for every
+  member's saved devices on each shared board. Unknown or unheld funding is redacted;
+  known held funding is disclosed only while the source is provided to that board.
+  Hiding a card never filters the admitted cohort. Unknown or unheld work never affects source activity signals. Board funding
+  redaction does not change collector identity or source duty.
   Evidence metadata never changes producer identity or retrospectively attributes work.
 - **The provider catalogue defines authority.** Known hub-measured providers are
   dropped from agent snapshots, failures and sessions before their other fields are
@@ -166,7 +169,22 @@ and platform smoke checks still apply.
   keeps its own options in its settings, and has its legend under it, each entry switched
   off and on by a click.
 - Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
+- Sortable tables reuse `hub/ui/components/TableWidget.tsx` for their headers and menu
+  choices, including active colour, arrow spacing and keyboard behavior. Reader sorting
+  stays separate from the owner's column controls.
+- Chart legends share `hub/ui/components/seriesFocus.ts` to highlight a series under
+  the pointer or keyboard focus. Apply it to every plot layer for that series;
+  highlighting changes paint, never the data, selection or prepared geometry.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).
+- Board widgets never add a vertical scroller inside the page. Table widgets share
+  `TableWidget` for responsive layout, whole-row height fitting and the compact pager
+  at the bottom right. A separate footer puts complete-period totals above the pager
+  and row count. Wide totals align with their columns without repeating headings;
+  narrow lists label them in a fixed grid. Row capacity follows height without a fixed
+  page cap, using the complete shared index without new reads. Session grouping uses
+  the shared segmented control. No more/all popup substitutes for paging. Wide tables sort in
+  their headers; only narrow lists show a sort icon. Headers cycle ascending,
+  descending, reset; reset clears the selected header and restores the default order.
 - **Keep the board cheap to render.** Nothing on the page is `position: fixed` or has a
   fixed background, and widgets have no `backdrop-filter` (floating surfaces and the
   sticky bars may): whole-window repainting during scroll is expensive, especially
@@ -186,13 +204,14 @@ and platform smoke checks still apply.
 - Subscription cards and compact rows share the percentage-limit layout and period
   names. Provider-specific amounts and allowances belong in value details; the
   provider's storage unit does not define a separate card layout.
-- Subscription analytics share the same period switches, percentage chart and table,
+- Subscription analytics use independent five-hour and weekly chart/table pairs,
   including hub-measured caps. Convert a historical cap with its own reported allowance
   and observation bounds; never reinterpret it using the current allowance or invent
   spending, forecasts or agent-work attribution.
 - Devices and provider accounts connect through My connections. Account settings hold
   profile and app settings. A widget's display switches live in its own settings;
-  measurement tables do not change chart selections.
+  table column switches do not change chart selections. Shared quota and budget filters
+  remain accessible from either member of their chart/table pair.
 - **Budget widgets share one semantic presentation.** Dashboard and compact use the
   same budget view and renderer: one Available balance, supported scoped allowances
   separately, and balance composition in the existing disclosure. Accounting totals

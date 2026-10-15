@@ -25,7 +25,7 @@ function fixture(budget: number, direction = 0, seed = 0) {
     grids.set(cell, tiles);
   }
   const target: Domain = {cell: M, k0: 5 * 60, k1: 8 * 60 - 1};
-  const state = {grids, budget, reservations: new Set([`${M}:2`, `${5 * M}:${seed % 12}`]), version: 3, aheadStopped: !!(seed % 2), interest: direction ? {direction} : null,
+  const state = {grids, budget, reservations: new Set([`${M}:2`, `${5 * M}:${seed % 12}`]), version:4, aheadStopped: !!(seed % 2), interest: direction ? {direction} : null,
     target: () => {counts.targets++; return target;}, plotTarget: () => {counts.targets++; return target;},
     aheadTarget: (value: Domain) => ({...value, k0: value.k0 + direction * 180, k1: value.k1 + direction * 180}),
     get estimatedBytes() {let bytes = 0; for (const tiles of grids.values()) for (const tile of tiles.values()) bytes += tile.bytes; return bytes;},

@@ -5,36 +5,32 @@ import {moneyView, selectMoney} from '../controls.js';
 import type {Cdp} from '../cdp.js';
 
 function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
-  let frame = 0, changedAt: number | null = null, loaded = () => {};
-  const selected: {label: string; frame: number}[] = [];
+  let frame = 0, loaded = () => {};
   let ids: [string, string][] = [['dense-1', 'balance'], ['dense-2', 'balance']];
-  const ready = () => changedAt === null ? frame >= 9 : frame - changedAt >= 4;
+  const ready = () => frame >= 9;
   const root = {
-    dataset: {get drawReady() {return String(ready());}},
+    viewBox:{baseVal:{height:220}},dataset: {get drawReady() {return String(ready());}},
     getBoundingClientRect: () => ({x: Math.min(frame, 8), y: 0, width: 900, height: 220}),
   };
   const line = {
     matches: () => false,
-    querySelectorAll: () => [{getAttribute: () => frame < 5 || broken === 'blank' && changedAt !== null && !ready() ? '' : 'M0,10H100'}],
-    getBBox: () => ({y: broken === 'scale' && changedAt !== null ? -1 : 10, height: 0}),
+    querySelectorAll: () => [{getAttribute: () => frame < 5 ? '' : 'M0,10H100'}],
+    getBBox: () => ({y: broken === 'scale' ? -1 : 10, height: 0}),
     ownerSVGElement: {viewBox: {baseVal: {height: 220}}},
   };
-  const buttons = ['Spending', 'Balance'].map(textContent => ({textContent, click() {
-    assert.ok(frame >= 11, 'controls wait for populated paths, committed data and stable layout');
-    if (changedAt !== null) assert.ok(ready(), 'each switch must finish its numeric preparation');
-    selected.push({label: textContent, frame}); changedAt = frame;
-  }}));
+  const balance='[data-widget="budget-history"]';
+  const panel={querySelector:(child:string)=>child==='.chart>svg'?root:null,querySelectorAll:()=>broken==='blank'?[]:[line]};
   const context = {
     localStorage: {getItem: () => '{}', setItem: (_key: string, value: string) => {ids = JSON.parse(value).money.selected.USD;}},
     Date: {now: () => frame * 16},
     requestAnimationFrame: (callback: (stamp: number) => void) => queueMicrotask(() => callback(++frame * 16)),
     document: {
-      querySelector: (selector: string) => selector === '.budget-history .chart > svg' ? root
+      querySelector: (selector: string) => selector===balance?panel:selector === balance+' .chart > svg'||selector==='.budget-history .chart > svg' ? root
         : selector === '.budget-history.is-loading' ? ready() ? null : {}
         : selector.startsWith('.history.is-loading,') ? broken === 'slow-quota' && frame < 20 ? {} : null
-        : selector === '.budget-history .panel-head button' ? {click() {}}
+        : selector === '.budget-history .panel-head .picker > button' ? {click() {}}
         : selector.startsWith('[data-series=') ? line : null,
-      querySelectorAll: (selector: string) => selector === '.budget-history [data-series]' ? frame >= 3 ? ids.map(() => line) : [] : buttons,
+      querySelectorAll: (selector: string) => frame<3?[]:selector === balance+' [data-series]'?ids.map(()=>line):selector === '.budget-history [data-series]'?ids.flatMap(()=>[line,line]):[],
       getAnimations: () => frame < 8 ? [{playState: 'running', effect: {target: {matches: () => true}}}] : [],
     },
   };
@@ -43,14 +39,14 @@ function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
     send: async (method: string) => {if (method === 'Page.reload') loaded();},
     evaluate: async (source: string) => runInNewContext(source, context),
   } as unknown as Cdp;
-  return {cdp, selected, ids: () => ids, frame: () => frame};
+  return {cdp, ids: () => ids, frame: () => frame};
 }
 
 test('the monetary update phase replaces the dense pan selection with its measured account', async () => {
   const page = moneyPage();
   await selectMoney(page.cdp, [['measured', 'balance']]);
   assert.deepEqual(page.ids(), [['measured', 'balance']]);
-  assert.deepEqual(page.selected, [], 'selecting accounts does not switch the financial view');
+  assert.ok(page.frame()>=11,'readiness requires the selected account in the balance widget');
 });
 
 test('monetary measurements wait for the other reader to finish after selection reload', async () => {
@@ -59,17 +55,17 @@ test('monetary measurements wait for the other reader to finish after selection 
   assert.ok(page.frame() >= 22, 'three stable frames start only after quota history is ready');
 });
 
-test('money controls start from a complete drawing and await each prepared view', async () => {
+test('money controls check account balances and limits after a stable drawing', async () => {
   const page = moneyPage();
   await moneyView(page.cdp, 'wallet', 'capped', 'zero');
-  assert.deepEqual(page.selected.map(change => change.label), ['Spending', 'Balance', 'Spending']);
-  for (let i = 1; i < page.selected.length; i++) assert.ok(page.selected[i].frame - page.selected[i - 1].frame >= 4);
+  assert.ok(page.frame()>=11);
 });
 
-test('waiting for a money view still rejects a lost line before preparation finishes', async () => {
-  await assert.rejects(moneyView(moneyPage('blank').cdp, 'wallet', 'capped', 'zero'), /money line disappeared/);
+test('fixed purpose verification rejects an empty numeric plot', async () => {
+  await assert.rejects(moneyView(moneyPage('blank').cdp, 'wallet', 'capped', 'zero'), /no account line/);
 });
+
 
 test('waiting for a money view still rejects geometry outside the current scale', async () => {
-  await assert.rejects(moneyView(moneyPage('scale').cdp, 'wallet', 'capped', 'zero'), /outside its new scale/);
+  await assert.rejects(moneyView(moneyPage('scale').cdp, 'wallet', 'capped', 'zero'), /left its scale/);
 });

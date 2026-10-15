@@ -12,7 +12,7 @@ import {boardState, cardId, isWindowHidden} from '../lib/view';
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const now = Date.parse('2026-09-24T12:00:00Z');
-const EMPTY: View = {version: 2 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+const EMPTY: View = {version:4 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 
 test('a reset announced or possible outranks one that happened, which outranks a change of limits', () => {
   const event = (at: number) => ({url: 'https://codex-resets.com/', text: '', at});
@@ -56,15 +56,15 @@ test('the plan column marks a gap of three points to the plan', () => {
   assert.deepEqual(planCell(week(0), now, now, DEFAULT_PLAN), {remaining: 57.5, delta: 0, notable: false}, 'used up is past any plan');
 });
 
-test('agents are drawn up to ten; the table leaves out hidden cards and says why it is empty', () => {
+test('agents are drawn up to ten; table admission stays independent of hidden cards', () => {
   const session = (): LiveSession => ({device: {id: 'd', name: 'laptop'}, origin: 'terminal', project: null, folder: null, startedAt: now, lastWorkedAt: null, working: true, workedMs: 0});
   assert.equal(drawn(Array.from({length: DRAWN}, session)), true);
   assert.equal(drawn(Array.from({length: DRAWN + 1}, session)), false);
   const source = (id: string, sessions: LiveSession[]): AgentSource => ({id, provider: 'codex', sessions});
   const hidden = {...EMPTY, hidden: [cardId('b')]};
-  assert.equal(agentRows([source('a', []), source('b', [session()])], hidden).empty, 'noneShown');
+  assert.equal(agentRows([source('a', []), source('b', [session()])], hidden).empty,null);
   assert.equal(agentRows([source('a', []), source('b', [])], hidden).empty, 'none');
-  assert.equal(agentRows([source('a', [session()]), source('b', [session()])], hidden).rows.length, 1);
+  assert.equal(agentRows([source('a', [session()]), source('b', [session()])], hidden).rows.length,2);
 });
 
 test('an agent shows its folder under its project only where the folder tells it apart', () => {

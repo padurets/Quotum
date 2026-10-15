@@ -1,3 +1,4 @@
+import {VIEW_VERSION, VIEW_VERSION_HEADER} from '../../server/domain/view';
 import {widgetVisible} from '../../server/domain/widgets';
 import {useEffect, useRef, useState, type FormEvent} from 'react';
 import {t} from '../i18n';
@@ -33,17 +34,19 @@ export function Completion({
     view = useServerView(),
     currentBoard = useBoardId();
   const path = usePath();
+  const deviceOnly=!!operation.deviceId&&operation.item.kind==='sources'&&!operation.item.sourceIds.length;
   const widgets = operation.item.kind === 'widget' ? operation.widgetIds ?? [operation.item.widgetId] : [];
   const widget = widgets[0] ?? null;
   const visible =
     !personal &&
     currentBoard === board?.id &&
     view &&
-    (widget
-      ? widgets.every(id => widgetVisible(view, id, lineup.length))
+    (operation.item.kind==='widget'
+      ? widgets.length>0&&widgets.every(id => widgetVisible(view, id, lineup.length))
       : operation.result?.sourceIds.every(id => lineup.includes(id) && !isHidden(view, cardId(id))));
   const source = operation.result?.sourceIds[0];
   const changed =
+    (operation.item.kind==='widget'&&!widgets.length) ||
     operation.current?.sources?.some(item => item.placement !== 'visible') ||
     operation.current?.widgets?.some(widget => widget.placement !== 'visible') ||
     (operation.current?.credential && !operation.current.credential.exists);
@@ -66,9 +69,9 @@ export function Completion({
       <span className="completion-symbol" aria-hidden="true">
         <Check size={24} />
       </span>
-      <h3>{t(changed ? 'add.changed' : personal ? 'add.connected' : visible ? 'add.complete' : 'add.waiting')}</h3>
+      <h3>{t(deviceOnly?'add.deviceComplete':changed ? 'add.changed' : personal ? 'add.connected' : visible ? 'add.complete' : 'add.waiting')}</h3>
       <p>
-        {t(changed ? 'add.changedText' : personal ? 'add.personalResult' : 'add.boardResult', {
+        {t(deviceOnly?'add.deviceCompleteText':changed ? 'add.changedText' : personal ? 'add.personalResult' : 'add.boardResult', {
           board: board ? boardTitle(board) : t('boards.personalName'),
         })}
       </p>
@@ -98,7 +101,7 @@ export function Completion({
         </p>
       )}
       <button className="button primary" disabled={!board || operation.current?.boardAccessible === false} onClick={focus}>
-        {t(personal || !visible ? 'add.openBoard' : 'add.viewWidget')}
+        {t(deviceOnly||personal||!visible?'add.openBoard':'add.viewWidget')}
       </button>
     </div>
   );
@@ -580,7 +583,7 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
   useEffect(() => {
     mounted.current = true;
     const abort = new AbortController();
-    void call<Intent>('POST', '/api/device-onboarding', {requestId: requestId.current, boardId: board.id}, 12_000, abort.signal).then(
+    void call<Intent>('POST', '/api/device-onboarding', {requestId: requestId.current, boardId: board.id}, 12_000, abort.signal, {[VIEW_VERSION_HEADER]:String(VIEW_VERSION)}).then(
       value => {
         if (!abort.signal.aborted) setIntent(value);
       },
@@ -618,7 +621,7 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
             deviceId: device,
             sourceIds: selected,
             includeBudget:financial.filter(id=>selected.includes(id)),
-          });
+          }, 12_000, undefined, {[VIEW_VERSION_HEADER]:String(VIEW_VERSION)});
       if (!mounted.current) return;
       addition.restore(operation);
       await addition.submit(operation.boardId, operation.item);
@@ -676,7 +679,7 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
                 type="button"
                 className="button"
                 onClick={() => {
-                  void call('POST', '/api/device/approve', {code: pending.userCode, onboardingId: intent.id}).then(() => {
+                  void call('POST', '/api/device/approve', {code: pending.userCode, onboardingId: intent.id}, 12_000, undefined, {[VIEW_VERSION_HEADER]:String(VIEW_VERSION)}).then(() => {
                     setPending(null);
                     setCode('');
                     void recover(intent.id);
@@ -729,7 +732,7 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
       </select>
       {chosen && (
         <fieldset className="source-selection" disabled={selecting || addition.busy || !!intent?.additionId}>
-          <legend>{t('add.selectSources')}</legend>
+          <legend>{t('add.optionalSources')}</legend>
           {chosen.sources
             .filter(source => available.includes(source.source) || intent?.sourceIds.includes(source.source))
             .map(source => (
@@ -760,10 +763,10 @@ export function DeviceAdd({board, demo, onClose}: {board: Board; demo: boolean; 
         </button>
         <button
           className="button primary"
-          disabled={!intent || !selected.length || addition.busy || selecting || ['expired', 'complete'].includes(intent.status)}
+          disabled={!intent || !chosen || addition.busy || selecting || ['expired', 'complete'].includes(intent.status)}
           onClick={() => void finish()}
         >
-          {t('add.selection')}
+          {t(selected.length?'add.selection':'add.finishDevice')}
         </button>
       </div>
     </div>

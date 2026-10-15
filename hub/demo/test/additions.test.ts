@@ -1,3 +1,4 @@
+import {VIEW_VERSION, VIEW_VERSION_HEADER} from '../../server/domain/view.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -17,7 +18,7 @@ import {Cadence} from '../../server/cadence.js';
 import {Pairing} from '../../server/pairing.js';
 import {ResetFeed} from '../../server/resets.js';
 import {Setup} from '../../server/setup.js';
-import {BUDGET_WIDGETS, QUOTA_WIDGETS, widgetVisible} from '../../server/domain/widgets.js';
+import {LEGACY_BUDGET_WIDGETS, QUOTA_WIDGETS, widgetVisible} from '../../server/domain/widgets.js';
 
 const secret = 'SYNTHETIC_PROVIDER_KEY_0123456789';
 async function harness(extended = true) {
@@ -40,7 +41,7 @@ async function harness(extended = true) {
   const cookies = new Map<string, string>();
   for (const user of [owner, member]) {const token = newSecret('qt_s'); directory.createSession(token, user.id, Date.now(), 60_000); cookies.set(user.id, 'quotum_session=' + token);}
   const app = await buildApp({store, directory, credentials, ingest: new Ingest(store, directory, new Duty(), new Cadence()), pairing: new Pairing(directory), resets: new ResetFeed(undefined, () => {}), setup: new Setup(false, null), local: null}, extended ? demoAdditionControls : undefined);
-  const call = (method: 'GET' | 'POST', url: string, payload?: object, user = owner.id, origin: string | null = 'http://localhost') => app.inject({method, url, payload, headers: {'X-Quotum-View-Version':'2',cookie: cookies.get(user)!, ...(origin ? {origin} : {})}});
+  const call = (method: 'GET' | 'POST', url: string, payload?: object, user = owner.id, origin: string | null = 'http://localhost') => app.inject({method, url, payload, headers: {[VIEW_VERSION_HEADER]:String(VIEW_VERSION),cookie: cookies.get(user)!, ...(origin ? {origin} : {})}});
   const reserve = async (item: object, user = owner.id, boardId: string | null = board.id) => (await call('POST', '/api/additions', {requestId: randomUUID(), boardId, item}, user)).json();
   const close = async () => {await app.close(); store.close(); transport.close(); rmSync(dir, {recursive: true, force: true});};
   return {store, directory, credentials, owner, member, board, call, reserve, close};
@@ -108,10 +109,26 @@ test('members add only their sources; an empty analytic does not expose the othe
   assert.deepEqual(h.directory.view(h.board.id).shown, ['quota-history']);
 });
 
+test('the sessions table is an owner-only explicit placement and receipt replay preserves a subsequent hide',async t=>{
+  const h=await harness();t.after(h.close);
+  assert.equal(h.directory.view(h.board.id).shown.includes('agents'),false);
+  assert.equal((await h.reserve({kind:'widget',widgetId:'agents'},h.member.id)).error,'addition_permission');
+  const receipt=await h.reserve({kind:'widget',widgetId:'agents'});
+  assert.equal((await h.call('POST','/api/additions/'+receipt.id+'/run',{})).json().state,'complete');
+  const placed=h.directory.view(h.board.id);assert.deepEqual(placed.shown,['agents']);
+  assert.equal(placed.layout.places['agents'],undefined,'the normal client arrangement materializes geometry');
+  h.directory.saveView(h.board.id,{...placed,hidden:['agents']},h.owner.id,Date.now());
+  await h.call('POST','/api/additions/'+receipt.id+'/run',{});
+  assert.ok(h.directory.view(h.board.id).hidden.includes('agents'));
+  const readd=await h.reserve({kind:'widget',widgetId:'agents'});
+  await h.call('POST','/api/additions/'+readd.id+'/run',{});
+  assert.ok(!h.directory.view(h.board.id).hidden.includes('agents'));
+});
+
 for (const first of ['codex', 'deepseek'] as const) test(`a new board waits for its first ${first} source before placing only that analytics pair`, async t => {
   const h = await harness(); t.after(h.close);
-  const pair = first === 'codex' ? QUOTA_WIDGETS : BUDGET_WIDGETS;
-  const other = first === 'codex' ? BUDGET_WIDGETS : QUOTA_WIDGETS;
+  const pair = first === 'codex' ? QUOTA_WIDGETS : LEGACY_BUDGET_WIDGETS;
+  const other = first === 'codex' ? LEGACY_BUDGET_WIDGETS : QUOTA_WIDGETS;
   const source = h.store.source(first, 'first-source', Date.now());
   h.store.hold(source, h.owner.id, Date.now());
   // Owning the source on the personal board does not place it on a new shared board.

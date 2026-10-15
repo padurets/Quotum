@@ -2,8 +2,9 @@ import {analyticsResources} from './analyticsView.js';
 import {reconcileAnalytics} from '../domain/analyticsView.js';
 import type {DatabaseSync} from 'node:sqlite';
 import {newId, secretHash} from '../domain/auth.js';
-import {EMPTY_VIEW, type View} from '../domain/view.js';
+import {EMPTY_VIEW, encodeView, decodeView, sameView, viewBytes, VIEW_BODY_LIMIT, type View} from '../domain/view.js';
 import {tell, transaction, type Touches} from '../touches.js';
+import {workFundingKey} from '../domain/workAccess.js';
 
 export type User = {id: string; email: string; name: string; createdAt: number};
 export type Board = {id: string; name: string; personal: boolean; role: 'owner' | 'member'};
@@ -172,13 +173,18 @@ export class Directory {
   viewState(boardId: string): {view: View; revision: number} {
     return this.transaction(() => {
       const row = this.db.prepare('SELECT payload,revision,updated_by FROM views WHERE board_id=?').get(boardId) as {payload: string; revision: number; updated_by: string} | undefined;
-      const saved: View = row ? {...EMPTY_VIEW, ...JSON.parse(row.payload)} : EMPTY_VIEW;
-      const view = reconcileAnalytics(saved, analyticsResources(this.db, boardId));
+      const saved = row ? decodeView(JSON.parse(row.payload)) : EMPTY_VIEW;
+      if (!saved) throw new Error('Invalid stored board view');
+      const reconciled = reconcileAnalytics(saved, analyticsResources(this.db, boardId));
+      const candidate = reconciled === saved ? saved : decodeView(encodeView(reconciled));
+      // Derived defaults must not block reading or reducing an accepted owner view.
+      // Keeping it unchanged leaves reconciliation pending for the next read with room.
+      const view = candidate && (candidate === saved || viewBytes(candidate) <= VIEW_BODY_LIMIT) ? candidate : saved;
       let revision = row?.revision ?? 0;
       if (view !== saved) {
         if (!Number.isSafeInteger(++revision)) throw new Error('View revision exhausted');
         const owner = row?.updated_by ?? (this.db.prepare('SELECT created_by FROM boards WHERE id=?').get(boardId) as {created_by: string}).created_by;
-        this.db.prepare('INSERT INTO views(board_id,payload,updated_by,updated_at,revision) VALUES(?,?,?,?,?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision').run(boardId, JSON.stringify(view), owner, Date.now(), revision);
+        this.db.prepare('INSERT INTO views(board_id,payload,updated_by,updated_at,revision) VALUES(?,?,?,?,?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision').run(boardId, JSON.stringify(encodeView(view)), owner, Date.now(), revision);
         tell(this.observer, o => o.touchBoards([boardId]));
       }
       return {view, revision};
@@ -190,10 +196,11 @@ export class Directory {
   saveView(boardId: string, view: View, by: string, now: number) {
     return this.transaction(() => {
       const current = this.viewState(boardId);
-      if (JSON.stringify(current.view) === JSON.stringify(view)) return current.revision;
+      if (viewBytes(view) > VIEW_BODY_LIMIT || !decodeView(encodeView(view))) throw Object.assign(new Error('view_limit'), {statusCode:413});
+      if (sameView(current.view, view)) return current.revision;
       const revision = current.revision + 1;
       if (!Number.isSafeInteger(revision)) throw new Error('View revision exhausted');
-      this.db.prepare('INSERT INTO views (board_id, payload, updated_by, updated_at, revision) VALUES (?, ?, ?, ?, ?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload, updated_by=excluded.updated_by, updated_at=excluded.updated_at, revision=excluded.revision').run(boardId, JSON.stringify(view), by, now, revision);
+      this.db.prepare('INSERT INTO views (board_id, payload, updated_by, updated_at, revision) VALUES (?, ?, ?, ?, ?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload, updated_by=excluded.updated_by, updated_at=excluded.updated_at, revision=excluded.revision').run(boardId, JSON.stringify(encodeView(view)), by, now, revision);
       tell(this.observer, o => o.touchBoards([boardId]));
       return revision;
     });
@@ -259,9 +266,10 @@ export class Directory {
    */
   deleteBoard(id: string) {
     const members = this.observer ? this.members(id).map(m => m.id) : [];
-    for (const table of ['members', 'invites', 'views', 'boards']) {
+    for (const table of ['board_device_sessions','members', 'invites', 'views', 'boards']) {
       this.db.prepare(`DELETE FROM ${table} WHERE ${table === 'boards' ? 'id' : 'board_id'} = ?`).run(id);
     }
+    this.db.prepare('DELETE FROM meta WHERE key=?').run(workFundingKey(id));
     tell(this.observer, o => {
       o.dropBoard(id);
       for (const member of members) o.touchUser(member);
@@ -270,7 +278,12 @@ export class Directory {
 
   /** Someone leaves a board, or its owner removes them. What they shared goes with them (Store.unshareOrphans). */
   removeMember(boardId: string, userId: string) {
-    if (!this.db.prepare("DELETE FROM members WHERE board_id = ? AND user_id = ? AND role <> 'owner'").run(boardId, userId).changes) return;
+    const removed=transaction(this.db,()=>{
+      if(!this.db.prepare("DELETE FROM members WHERE board_id = ? AND user_id = ? AND role <> 'owner'").run(boardId,userId).changes)return false;
+      this.db.prepare('DELETE FROM board_device_sessions WHERE board_id=? AND device_id IN (SELECT id FROM devices WHERE user_id=?)').run(boardId,userId);
+      return true;
+    });
+    if(!removed)return;
     tell(this.observer, o => {
       o.dropMember(boardId, userId);
       o.touchBoards([boardId]);

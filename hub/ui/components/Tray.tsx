@@ -1,5 +1,6 @@
 import {useLayoutEffect, useRef, useState, type ReactNode} from 'react';
 import type {LiveSession} from '../lib/types';
+import type {SessionPeriod} from '../lib/period';
 import {DRAWN} from '../lib/agents';
 import {useClock} from '../lib/clock';
 import {resetLabel, resetLabelChangesAt, type ResetStatus} from '../lib/resets';
@@ -30,13 +31,13 @@ function hasRoom(tray: HTMLElement) {
  * or the agents change, not as time passes: the tray itself renders with time only when
  * news comes or goes, what the news says is a part of its own (`ResetNews`).
  */
-export function Tray({resets, news: extraNews, current, sessions}: {resets: ResetStatus | undefined; news?: ReactNode; current: ReactNode; sessions: LiveSession[]}) {
+export function Tray({resets, news: extraNews, current, sessions, sessionPeriod}: {resets: ResetStatus | undefined; news?: ReactNode; current: ReactNode; sessions: LiveSession[]; sessionPeriod?: SessionPeriod}) {
   const tray = useRef<HTMLElement>(null);
   const [roomy, setRoomy] = useState(true);
   const now = useClock(now => resetLabelChangesAt(resets, now));
   const news = !!resetLabel(resets, now);
   // What adds or removes something to watch; a change of size within is caught by the observer.
-  const layout = `${news}/${!!extraNews}/${!!current}/${Math.min(sessions.length, DRAWN + 1)}`;
+  const layout = `${news}/${!!extraNews}/${!!current}/${Math.min(sessions.length, DRAWN + 1)}/${!!sessionPeriod?.loading || !!sessionPeriod?.error}`;
 
   useLayoutEffect(() => {
     const element = tray.current;
@@ -58,7 +59,7 @@ export function Tray({resets, news: extraNews, current, sessions}: {resets: Rese
         </div>
       )}
       {current}
-      <Agents sessions={sessions} roomy={roomy} />
+      <Agents sessions={sessions} roomy={roomy} period={sessionPeriod} />
     </footer>
   );
 }

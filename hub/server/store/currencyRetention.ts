@@ -10,12 +10,12 @@ export function pruneCurrencyTimeline(db:DatabaseSync,cutoff:number) {
     AND NOT EXISTS(SELECT 1 FROM state,json_each(state.payload,'$.meters') v WHERE state.source_id=m.source_id
       AND json_extract(v.value,'$.at')=m.observation_at AND json_extract(v.value,'$.unit')=m.from_currency)
     AND NOT EXISTS(SELECT 1 FROM readings r WHERE r.source_id=m.source_id AND r.unit=m.from_currency AND (r.at=m.observation_at OR r.previous_at=m.observation_at))
-    AND NOT EXISTS(SELECT 1 FROM meter_spans s WHERE s.source_id=m.source_id AND (s.from_at=m.observation_at OR s.to_at=m.observation_at))
+    AND NOT EXISTS(SELECT 1 FROM meter_spans s WHERE s.source_id=m.source_id AND (s.observed_from=m.observation_at OR s.to_at=m.observation_at))
     AND NOT EXISTS(SELECT 1 FROM money_valuations v WHERE v.source_id=m.source_id AND v.native_unit=m.from_currency AND (v.at=m.observation_at OR v.previous_at=m.observation_at))`).run(cutoff,cutoff);
   const anchors=(db.prepare(`SELECT DISTINCT at FROM (
     SELECT json_extract(m.value,'$.at') at FROM state,json_each(state.payload,'$.meters') m
     UNION SELECT at FROM readings UNION SELECT previous_at FROM readings
-    UNION SELECT from_at FROM meter_spans UNION SELECT to_at FROM meter_spans
+    UNION SELECT observed_from FROM meter_spans UNION SELECT to_at FROM meter_spans
     UNION SELECT at FROM money_valuations UNION SELECT previous_at FROM money_valuations
     UNION SELECT observation_at FROM currency_bindings UNION SELECT through_at FROM currency_bindings
     UNION SELECT observation_at FROM currency_unavailable_observations

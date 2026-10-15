@@ -1,3 +1,4 @@
+import {VIEW_VERSION, VIEW_VERSION_HEADER} from '../../server/domain/view';
 import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
 import {stamp} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
@@ -140,6 +141,7 @@ export function DeviceCode() {
 export function ConnectDevice({onboardingId}: {onboardingId?: string} = {}) {
   return (
     <div className="dialog-form">
+      <p className="sharing-disclosure">{t('connect.sessionSharing')}</p>
       <DeviceCode />
       <details className="connection-tokens">
         <summary>{t('connect.tokenTitle')}</summary>
@@ -167,7 +169,7 @@ export function DeviceTokens({onboardingId}: {onboardingId?: string} = {}) {
     setBusy(true);
     setError(null);
     try {
-      const token = await call<Token & {secret: string}>('POST', '/api/tokens', {name: name.trim(), ...(onboardingId ? {onboardingId} : {})});
+      const token = await call<Token & {secret: string}>('POST', '/api/tokens', {name: name.trim(), ...(onboardingId ? {onboardingId} : {})}, 12_000, undefined, {[VIEW_VERSION_HEADER]:String(VIEW_VERSION)});
       setCreated({secret: token.secret, name: tokenName(token)});
       setName('');
       load();

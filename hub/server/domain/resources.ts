@@ -9,7 +9,10 @@ export type CreditBalance = {
   amount?: string;
   hasCredits?: boolean;
 };
-export type CreditBalanceState = Omit<CreditBalance, 'amount'> & {at: number; staleAfterMs: number};
+/** A historical projection can retain a compressed availability span independently of its sample anchor. */
+export type ObservationTiming = {at:number;staleAfterMs:number;validUntil?:number};
+export const observationDeadline = (value:ObservationTiming) => value.validUntil??value.at+value.staleAfterMs+1;
+export type CreditBalanceState = Omit<CreditBalance, 'amount'> & ObservationTiming;
 export type Delivery = {at: number; staleAfterMs: number};
 export type BudgetAccess = {enabled: boolean; since: number | null; anchor: number | null; revision: string};
 

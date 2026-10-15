@@ -284,7 +284,37 @@ function Test-MainPanelHandoff([IntPtr]$Main) {
       $browsersLeft=@(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'"|Where-Object {$_.ParentProcessId -eq $process.Id})
       if(-not $browsersLeft.Count){break};Start-Sleep -Milliseconds 100
     }while((Get-Date) -lt $deadline)
-    if($browsersLeft.Count -or [QuotumWindowProbe]::Find($process.Id) -ne [IntPtr]::Zero){throw 'Cancelled main creation retained a window or WebView'}
+    # CIM may have sampled a browser before it exited. Trust only an already
+    # held process with the same birth; live and unknown roots remain failures.
+    $recheckStartedUtc = [datetime]::UtcNow.ToString('o')
+    $browserChecks = @()
+    $confirmedExited = 0
+    foreach ($info in @($browsersLeft | Select-Object -First 16)) {
+      $known = @($browsers.Values | Where-Object { $_.Id -eq $info.ProcessId })
+      $entry = [ordered]@{pid=[int]$info.ProcessId; birthBound=0; hasExited=-1}
+      if ($known.Count -eq 1) {
+        try {
+          # CIM birth times have microsecond precision; compare UTC at that precision.
+          $heldBirth = $known[0].StartTime.ToUniversalTime()
+          $snapshotBirth = $info.CreationDate.ToUniversalTime()
+          $entry.heldBirthUtc = $heldBirth.ToString('o')
+          $entry.snapshotBirthUtc = $snapshotBirth.ToString('o')
+          if ($heldBirth.ToString('yyyyMMddHHmmssffffff') -eq $snapshotBirth.ToString('yyyyMMddHHmmssffffff')) {
+            $entry.birthBound = 1
+            $entry.hasExited = [int]$known[0].HasExited
+            if ($entry.hasExited) {
+              $entry.exitUtc = $known[0].ExitTime.ToUniversalTime().ToString('o')
+              $confirmedExited++
+            }
+          }
+        } catch { $entry.hasExited = -1 }
+      }
+      $browserChecks += $entry
+    }
+    $remainingBrowserCount = $browsersLeft.Count - $confirmedExited
+    $remainingWindow = [QuotumWindowProbe]::Find($process.Id)
+    $result.mainPanelHandoffRelease = [ordered]@{startedUtc=$recheckStartedUtc; endedUtc=[datetime]::UtcNow.ToString('o'); snapshotBrowserCount=$browsersLeft.Count; remainingBrowserCount=$remainingBrowserCount; visibleWindow=$remainingWindow.ToInt64(); browserChecks=$browserChecks; omittedBrowserChecks=[Math]::Max(0, $browsersLeft.Count - 16)}
+    if($remainingBrowserCount -or $remainingWindow -ne [IntPtr]::Zero){throw 'Cancelled main creation retained a window or WebView'}
   }
 }
 

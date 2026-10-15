@@ -1,29 +1,14 @@
 import {useRef, useState, useSyncExternalStore} from 'react';
-import type {Kind} from '../lib/types';
-import {setPrefs, usePrefs} from '../lib/prefs';
+import {HORIZONS, setPrefs, usePref} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
 import {goTo, setTimeRange, timeRangeLabel, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistoryBegins} from '../lib/history';
+import {QUOTA_WIDGETS, BUDGET_WIDGETS, ACTIVITY, SUBSCRIPTION_FUNDS} from '../../server/domain/widgets';
 import {t, useLocale} from '../i18n';
 import {pan} from '../lib/pan';
-import {Segmented} from './Kit';
 import {Popover} from './Popover';
-
-/** Weekly or 5-hour windows. */
-function KindSwitch({value, onChange}: {value: string; onChange: (kind: string) => void}) {
-  return (
-    <Segmented
-      value={value}
-      onChange={onChange}
-      options={[
-        ['weekly', t('history.weekly')],
-        ['session', t('history.session')],
-      ]}
-      label={t('history.kind')}
-    />
-  );
-}
+import {Segmented} from './Kit';
 
 const Arrow = ({back}: {back: boolean}) => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -50,7 +35,7 @@ function PeriodName({selected, range}: {selected: TimeRange | null; range: strin
 }
 
 /**
- * The period of the analytics (agent activity, the chart and the table): one of a list,
+ * The viewing period of the whole board: one of a list,
  * ending now, or a time range in the past, dragged across a chart or stepped back to with
  * ‹. ‹ and › move either by half its length; › up to now brings the chosen period back,
  * as clearing a range does.
@@ -59,7 +44,7 @@ function PeriodName({selected, range}: {selected: TimeRange | null; range: strin
  * reckoned at the click; the clock renders them only when ‹ turns on or off.
  */
 function PeriodSwitch({historyStart}: {historyStart: number}) {
-  const {range} = usePrefs();
+  const range = usePref('range');
   const selected = useTimeRange();
   const now = useClock(now => stepChangesAt(selected, range, now, historyStart));
   const [open, setOpen] = useState(false);
@@ -147,20 +132,31 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
   );
 }
 
-/**
- * The head of the board's analytics: the window type and the period that the chart and
- * the table both show. The cards above it are about now and show every window.
- */
-export function AnalyticsHead() {
-  const prefs=usePrefs(),{kind}=prefs;
-  const historyStart = useHistoryBegins();
+/** Only controls shared across widgets belong above the board. */
+export function AnalyticsHead({widgets, visible}: {widgets: string[]; visible: boolean}) {
   return (
-    <div className="analytics-head">
-      <h2>{t('analytics.title')}</h2>
+    <section id="board-filters" className="analytics-head" aria-label={t('header.filters')} hidden={!visible}>
+      {visible && <ViewingControls widgets={widgets} />}
+    </section>
+  );
+}
+
+function ViewingControls({widgets}: {widgets: string[]}) {
+  const horizon = usePref('horizon');
+  const historyStart = useHistoryBegins();
+  const charts = [ACTIVITY,...QUOTA_WIDGETS.filter(id=>id.endsWith('history')),...BUDGET_WIDGETS.filter(id=>id.endsWith('history')),SUBSCRIPTION_FUNDS].some(id=>widgets.includes(id));
+  const horizonName = (value: typeof horizon) => value === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(value)});
+  return (
+    <div className="analytics-head-inner">
       <div className="controls">
-        <KindSwitch value={kind} onChange={next => setPrefs({kind:next as Kind})} />
-        <PeriodSwitch historyStart={historyStart} />
+        {charts && <Popover label={t('history.horizon')} trigger={<span className="period-name">{t('history.horizon')}: {horizonName(horizon)}<ChevronIcon /></span>}>
+          <div className="popover-section">
+            <div className="popover-title">{t('history.horizon')}</div>
+            <div className="popover-pad"><Segmented value={horizon} onChange={horizon => setPrefs({horizon})} options={HORIZONS.map(h => [h, horizonName(h)])} label={t('history.horizon')} /></div>
+          </div>
+        </Popover>}
       </div>
+      <PeriodSwitch historyStart={historyStart} />
     </div>
   );
 }

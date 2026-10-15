@@ -121,7 +121,7 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
   if (boardPath && (local || board?.id !== boardPath[1])) return <main><section className="panel settings-content"><ErrorLine error={null} /><p>{t('settings.unavailable')}</p></section></main>;
   const visible = boardPath ? (board?.personal ? BOARD.slice(0, 1) : BOARD) : sections;
   return <SettingsFrame title={boardPath ? t('boardSettings.forBoard', {board: boardTitle(board!)}) : t('header.settings')} sections={visible} section={section} base={base} board={board}>
-    {boardPath ? section === 'general' ? <General board={board!} /> : section === 'members' ? <MembersTab board={board!} userId={user.id} /> : <SharesTab board={board!} /> :
+    {boardPath ? section === 'general' ? <General board={board!} /> : section === 'members' ? <MembersTab board={board!} userId={user.id} /> : <SharesTab board={board!} userId={user.id} /> :
       section === 'profile' ? <><Profile user={user} onChanged={refresh} /><Password /></> :
       section === 'connections' ? <ConnectionsPage userId={user.id} boards={boards} trustedKeys={trustedKeys} local={local} /> :
       section === 'currencies' ? <CurrencySettings key={user.id} /> :

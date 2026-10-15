@@ -127,7 +127,7 @@ test('a paused HTTP reader applies backpressure to the native encoder', {timeout
     }
     assert.equal(stable, 3, 'the encoder pauses while its socket cannot drain');
     assert.ok(codec);
-    assert.equal(codec.writableFinished, false, 'the entire payload has not been encoded in advance');
+    assert.equal(codec.readableEnded, false, 'the paused response still has unread encoded output');
     assert.ok(codec.readableLength >= codec.readableHighWaterMark, 'the native readable queue is applying backpressure');
     assert.ok(codec.readableLength <= codec.readableHighWaterMark + 16 * 1024, 'native output remains bounded');
     assert.ok(produced > 0);

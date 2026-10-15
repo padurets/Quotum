@@ -1,60 +1,80 @@
 import type {Cdp} from './cdp.js';
 import {panningProblems, type PanReading} from './panningBudget.js';
+import {panningReload,type ReloadDiagnostic} from './panningReload.js';
 
-/** Native input against the real charts; the temporary layout brings all four into view. */
-export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms))) {
+/** Native input against the real charts; the temporary layout brings all five into view. */
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp,'at'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)),diagnoseReload?:ReloadDiagnostic) {
+  let stage='native/setup';
+  const progress=(next:string)=>{stage='native/'+next;cdp.at?.(stage);console.log('bench: '+stage);};
   const wait = (ms: number) => cdp.evaluate(`new Promise(resolve => setTimeout(resolve, ${ms}))`);
   const key = (down: boolean, name: string, code: number) => cdp.send('Input.dispatchKeyEvent', {type: down ? 'keyDown' : 'keyUp', key: name, code: name === 'Shift' ? 'ShiftLeft' : name, windowsVirtualKeyCode: code, modifiers: down && name === 'Shift' ? 8 : 0});
   const mouse = (type: string, x: number, y: number, modifiers = 0) => cdp.send('Input.dispatchMouseEvent', {type, x, y, modifiers, button: type === 'mouseMoved' && !modifiers ? 'none' : 'left', buttons: type === 'mousePressed' || type === 'mouseMoved' && modifiers ? 1 : 0, clickCount: type === 'mouseMoved' ? undefined : 1});
   const click = async (selector: string, index = 0) => {
-    const point = await cdp.evaluate<{x: number; y: number}>(`(async () => {const until=Date.now()+5000;let element;while(!(element=document.querySelectorAll(${JSON.stringify(selector)})[${index}])){if(Date.now()>until)throw new Error('missing native input target: '+${JSON.stringify(selector)});await new Promise(r=>setTimeout(r,20));}if(!element.closest('.popover')){element.scrollIntoView({block:'center'});await new Promise(requestAnimationFrame);}const r=element.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    const point = await cdp.evaluate<{x: number; y: number}>(`(async () => {const until=Date.now()+5000;let element;while(!(element=document.querySelectorAll(${JSON.stringify(selector)})[${index}])){if(Date.now()>until)throw new Error('missing native input target: '+${JSON.stringify(selector)});await new Promise(r=>setTimeout(r,20));}element.scrollIntoView({block:element.closest('.popover')?'nearest':'center'});await new Promise(requestAnimationFrame);const r=element.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
     await mouse('mouseMoved', point.x, point.y);
     await mouse('mousePressed', point.x, point.y);
     await mouse('mouseReleased', point.x, point.y);
   };
-  const settled = () => cdp.evaluate(`(async()=>{const until=Date.now()+15000,p=new URLSearchParams(location.search),wanted=p.has('from')?p.get('from')+'-'+p.get('to'):JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range||'24h';while(document.querySelector('.history.is-loading, .activity.is-loading, .budget-history.is-loading, .subscription-funds.is-loading') || document.querySelector('.chart > svg[data-pan-end], .chart > svg[data-draw-ready="false"], .chart > svg.is-panning')||[...document.querySelectorAll('.forecast,.budget-table')].some(table=>table.dataset.historyRange!==wanted)){if(Date.now()>until)throw new Error('charts and complete totals did not settle: '+JSON.stringify({wanted,panels:[...document.querySelectorAll('.history,.activity,.budget-history,.subscription-funds,.forecast,.budget-table')].map(panel=>({class:panel.className,range:panel.dataset.historyRange,error:panel.querySelector('.history-error')?.textContent,plot:panel.querySelector('.chart>svg')?.dataset})),flights:window.__quotumPan?[...window.__quotumPan.flights.values()]:[]}));await new Promise(r=>setTimeout(r,20));}await new Promise(r=>setTimeout(r,250));})()`);
+  const settled = () => cdp.evaluate(`(async()=>{const until=Date.now()+15000,p=new URLSearchParams(location.search),wanted=p.has('from')?p.get('from')+'-'+p.get('to'):JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range||'24h';while(document.querySelector('.history.is-loading, .activity.is-loading, .budget-history.is-loading, .subscription-funds.is-loading, .agents-panel.is-loading') || document.querySelector('.chart > svg[data-pan-end], .chart > svg[data-draw-ready="false"], .chart > svg.is-panning')||[...document.querySelectorAll('.forecast,.budget-table,.agents-panel')].some(table=>table.dataset.historyRange!==wanted)){if(Date.now()>until)throw new Error('charts and complete totals did not settle: '+JSON.stringify({wanted,panels:[...document.querySelectorAll('.history,.activity,.budget-history,.subscription-funds,.forecast,.budget-table,.agents-panel')].map(panel=>({class:panel.className,range:panel.dataset.historyRange,error:panel.querySelector('.history-error')?.textContent,plot:panel.querySelector('.chart>svg')?.dataset})),flights:window.__quotumPan?[...window.__quotumPan.flights.values()]:[]}));await new Promise(r=>setTimeout(r,20));}await new Promise(r=>setTimeout(r,250));})()`);
   const reports: PanReading[] = [];
+  // Count independent measured series intersecting the visible plot, never path parts.
+  // These layout reads happen after settling, outside the moving-frame probe.
+  const density = () => cdp.evaluate<Omit<PanReading['edgeSeries'][number],'stage'>>(`(() => {
+    const count=id=>{const panel=document.querySelector('[data-widget="'+id+'"]'),svg=panel.querySelector('.chart>svg'),r=svg.getBoundingClientRect(),box=svg.viewBox.baseVal.width,left=r.left+(id.startsWith('quota')?40:76)*r.width/box,right=r.right-12*r.width/box;
+      return new Set([...panel.querySelectorAll('[data-series]')].filter(group=>[...group.querySelectorAll('.series[d]:not([d=""])')].some(path=>{const p=path.getBoundingClientRect();return p.right>left&&p.left<right;})).map(group=>group.dataset.series)).size;};
+    return {series:count('quota-history'),sessionSeries:count('quota-session-history'),budgetSeries:count('budget-history'),fundsSeries:count('subscription-funds')};
+  })()`);
   const originalHorizon = await cdp.evaluate<string>(`JSON.parse(localStorage.getItem('quotum.prefs')||'{}').horizon||'auto'`);
   let interception = false;
-  await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 1600, deviceScaleFactor: 1, mobile: false});
+  let failed = false;
+  await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 2400, deviceScaleFactor: 1, mobile: false});
   try {
-    for (const initiator of ['quota', 'budget', 'funds'] as const) {
+    for (const initiator of ['quota', 'session', 'activity', 'budget', 'funds'] as const) {
       // A newly opened board gives each input owner an independently unread edge.
-      const loaded = new Promise<void>((resolve, reject) => {
-        const late = setTimeout(() => reject(new Error('panning board reload did not finish')), 5000);
-        cdp.on('Page.loadEventFired', () => {clearTimeout(late); resolve();});
-      });
-      await cdp.send('Page.reload'); await loaded;
-      await cdp.evaluate(`(async()=>{window.__quotumBench?.pause();const until=Date.now()+15000;while(!['.history','.activity','.budget-history','.subscription-funds'].every(panel=>document.querySelector(panel+' .chart>svg'))){if(Date.now()>until)throw new Error('panning charts did not open');await new Promise(r=>setTimeout(r,20));}})()`);
-      const selector = initiator === 'quota' ? '.history' : initiator === 'funds' ? '.subscription-funds' : '.budget-history';
-      const inset = initiator === 'quota' ? 52 : 88;
+      progress(`${initiator}/reload`);
+      await panningReload(cdp,initiator,diagnoseReload);
+      progress(`${initiator}/charts-open`);
+      await cdp.evaluate(`(async()=>{window.__quotumBench?.pause();const until=Date.now()+15000;while(!['quota-history','quota-session-history','activity','budget-history','subscription-funds'].every(id=>document.querySelector('[data-widget="'+id+'"] .chart>svg'))){if(Date.now()>until)throw new Error('panning charts did not open');await new Promise(r=>setTimeout(r,20));}})()`);
+      const selector = '[data-widget="'+({quota:'quota-history',session:'quota-session-history',activity:'activity',budget:'budget-history',funds:'subscription-funds'} as const)[initiator]+'"]';
+      const inset = initiator === 'quota'||initiator==='session' ? 52 : initiator==='activity'?60:88;
       await cdp.evaluate(`(() => {
     const style=document.createElement('style'); style.id='quotum-pan-layout';
-    style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important}.widget:not(:has(.history,.activity,.budget-history,.subscription-funds)){display:none!important}.widget:has(.history){order:1}.widget:has(.activity){order:2}.widget:has(.budget-history){order:3}.widget:has(.subscription-funds){order:4}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:200px!important}.activity .chart>svg{height:140px!important}.budget-history .chart>svg,.subscription-funds .chart>svg{height:200px!important}.legend{max-height:48px;overflow:auto}.activity .legend{max-height:40px}';
+    // Clear inherited stretch on hidden cards too: all widgets now share this grid.
+    style.textContent='.widgets{display:flex!important;flex-direction:column!important}.widget{height:auto!important;--fill:0px!important}.widget:not(:has(.history,.activity,.budget-history,.subscription-funds)){display:none!important}.widget:has(.history){order:1}.widget:has(.activity){order:2}.widget:has(.budget-history){order:3}.widget:has(.subscription-funds){order:4}.widget-body{height:auto!important}.widget-body>.panel{--fill:0px!important}.history .chart>svg{height:200px!important}.activity .chart>svg{height:140px!important}.budget-history .chart>svg,.subscription-funds .chart>svg{height:200px!important}.legend{max-height:48px;overflow:auto}.activity .legend{max-height:40px}';
     document.head.append(style); document.querySelector('.analytics-head')?.scrollIntoView();
   })()`);
     // A manual horizon keeps the 30d source's full 1.25-width path inside retention.
-    await click('.history .panel-head .picker > button');
-    await click('.history .popover .segmented button', 1);
+    await click('.analytics-head .controls .picker > button');
+    await click('.analytics-head .popover .popover-section:last-child .segmented button', 1);
     await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     for (const [period, index] of [['24h', 4], ['30d', 8]] as const) {
+      progress(`${initiator}/${period}/select`);
       await click('.period .picker > button');
       await click('.period .popover .popover-row', index);
       await settled();
+      progress(`${initiator}/${period}/prepare`);
       await cdp.evaluate(`(async () => {for(let i=0;i<3;i++){await new Promise(requestAnimationFrame);const r=document.querySelector('.history .chart>svg').getBoundingClientRect();scrollBy(0,r.top-140);}})()`);
-      const geometry = await cdp.evaluate<{x: number; y: number; width: number; series: number; budgetSeries: number; fundsSeries: number; charts: number}>(`(() => {
+      const geometry = {...await cdp.evaluate<{x: number; y: number; width: number; charts: number}>(`(() => {
         const svg=document.querySelector('${selector} .chart>svg'), r=svg.getBoundingClientRect();
         const charts=[...document.querySelectorAll('.chart>svg')].filter(e=>{const b=e.getBoundingClientRect();return b.top>=0&&b.bottom<=innerHeight;}).length;
-        return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-${inset})/svg.viewBox.baseVal.width,fundsSeries:document.querySelectorAll('.subscription-funds .series[d]:not([d=""])').length,budgetSeries:document.querySelectorAll('.budget-history .series[d]:not([d=""])').length,series:document.querySelectorAll('.history .series[d]:not([d=""])').length,charts};
-      })()`);
+        return {x:r.left+r.width*.5,y:r.top+80,width:r.width*(svg.viewBox.baseVal.width-${inset})/svg.viewBox.baseVal.width,charts};
+      })()`),...await density()};
+      const edgeSeries:PanReading['edgeSeries']=[];
       await cdp.evaluate(`(() => {
         const initiator=${JSON.stringify(initiator)};
-        const charts=[document.querySelector('.history .chart>svg'),document.querySelector('.activity .chart>svg'),document.querySelector('.budget-history .chart>svg'),document.querySelector('.subscription-funds .chart>svg')],driver=initiator==='quota'?0:initiator==='funds'?3:2,root=charts[driver],views=charts.map(svg=>svg.viewBox.baseVal.width),scales=charts.map((svg,i)=>svg.getBoundingClientRect().width/views[i]),size=svg=>svg.getAttribute('viewBox')+':'+svg.style.height,sizes=charts.map(size);
-        const probe=window.__quotumPan={frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:[0,0,0,0],synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[]};
+        const charts=['quota-history','activity','budget-history','subscription-funds','quota-session-history'].map(id=>document.querySelector('[data-widget="'+id+'"] .chart>svg')),driver=({quota:0,activity:1,budget:2,funds:3,session:4})[initiator],root=charts[driver],views=charts.map(svg=>svg.viewBox.baseVal.width),scales=charts.map((svg,i)=>svg.getBoundingClientRect().width/views[i]),size=svg=>svg.getAttribute('viewBox')+':'+svg.style.height,sizes=charts.map(size);
+        // PlotLayer retains these owners while React replaces their path children.
+        // Repeated selectors inside every production RAF would load the measurement itself.
+        const layers=charts.map((svg,i)=>svg.parentElement.querySelector(i===1?'.plot-clip.is-band .plot-move':'.plot-move[data-plot-main]')),slides=layers.map(layer=>layer.querySelector('.slides'));
+        const activityClip=charts[1].parentElement.querySelector('.plot-clip.is-band'),clips=[];let clip=activityClip;
+        for(let i=0;i<4;i++,clip=clip.firstElementChild)clips.push(clip);
+        const bands=[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack'));
+        const connected=()=>layers.every((layer,i)=>layer.isConnected!==false&&slides[i].isConnected!==false)&&clips.every(clip=>clip.isConnected!==false);
+        const probe=window.__quotumPan={frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:Array(5).fill(0),synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,mutationSamples:[],undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[],wheelGapMs:0,lastWheel:null};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding)probe.pushesDuring++;else probe.pushesAfter++;originalPush(...args);};
         probe.returnSnapshot=()=>({now:Date.now(),url:location.search,charts:charts.map((svg,i)=>{
-          const left=i===1?48:i>=2?76:40,box=svg.viewBox.baseVal.width,inner=box-left-12,r=svg.getBoundingClientRect(),scale=r.width/box;
+          const left=i===1?48:i===0||i===4?40:76,box=svg.viewBox.baseVal.width,inner=box-left-12,r=svg.getBoundingClientRect(),scale=r.width/box;
           const layer=svg.parentElement.querySelector(i===1?'.plot-clip.is-band .plot-move':'.plot-move[data-plot-main]'),slides=layer.querySelector('.slides'),matrix=slides.getScreenCTM();
           const from=Number(svg.dataset.drawFrom),to=Number(svg.dataset.drawTo),span=Math.max(60000,to-from);
           const timeAt=x=>from+((x-matrix.e)/matrix.a-left)/inner*span;
@@ -66,13 +86,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
         let gesture=null;
         const capturedInputs=new WeakMap();
         const capture=e=>{const delivered=performance.now(),at=e.timeStamp>1e12?e.timeStamp-performance.timeOrigin:e.timeStamp;capturedInputs.set(e,{at:Math.min(delivered,at),delivered});};
-        const owners=()=>charts.map((svg,i)=>svg.parentElement.querySelector(i===1?'.plot-clip.is-band .plot-move':'.plot-move[data-plot-main]'));
+        const owners=()=>layers;
         // Inline frozen matrices and the committed domain are enough during input;
         // no computed style or SVG layout read belongs in this moving-frame probe.
         const presentation=(svg,layer,i,at)=>{
-          const left=i===1?48:i>=2?76:40,inner=views[i]-left-12,span=Number(svg.dataset.drawTo)-Number(svg.dataset.drawFrom),matrix=matrixOf(layer.querySelector('.slides').style.transform),outer=matrixOf(layer.style.transform);
+          const left=i===1?48:i===0||i===4?40:76,inner=views[i]-left-12,span=Number(svg.dataset.drawTo)-Number(svg.dataset.drawFrom),matrix=matrixOf(slides[i].style.transform),outer=matrixOf(layer.style.transform);
           const shown={x:scales[i]*(matrix.a*(left+(at-Number(svg.dataset.drawFrom))/span*inner)+matrix.e)+outer.e,perMs:scales[i]*matrix.a*inner/span};
-          if(i===1){let node=svg.parentElement.querySelector('.plot-clip.is-band'),a=1,b=0;if(node.style.visibility==='hidden')return{x:NaN,perMs:NaN};for(let n=0;n<4;n++,node=node.firstElementChild){const m=matrixOf(node.style.transform);b+=a*m.e;a*=m.a;}const origin=left*scales[i];return{x:origin+b+a*(shown.x-origin),perMs:a*shown.perMs};}
+          if(i===1){let a=1,b=0;if(activityClip.style.visibility==='hidden')return{x:NaN,perMs:NaN};for(const node of clips){const m=matrixOf(node.style.transform);b+=a*m.e;a*=m.a;}const origin=left*scales[i];return{x:origin+b+a*(shown.x-origin),perMs:a*shown.perMs};}
           return shown;
         };
         const begin=(token,x)=>{const origin=Number(root.dataset.panOrigin),layers=owners();gesture={token,pixels:0,x,origin,shown:charts.map((svg,i)=>presentation(svg,layers[i],i,origin)),started:!!root.dataset.panEnd,scale:Number(root.dataset.panScale),baseline:Number(root.dataset.panBase||0)};};
@@ -85,6 +105,8 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
           if(e.type==='pointerup')return;
           if(e.type==='wheel'){
             if(!e.cancelable||(!e.deltaX&&!e.shiftKey))return;
+            if(probe.lastWheel?.segment===probe.segment)probe.wheelGapMs=Math.max(probe.wheelGapMs,captured.at-probe.lastWheel.at);
+            probe.lastWheel={segment:probe.segment,at:captured.at};
             if(!gesture||gesture.token!==token)begin(token);
             const unit=[1,16,400][e.deltaMode]||1;
             gesture.pixels-=(e.deltaX||(e.shiftKey?e.deltaY:0))*unit;
@@ -99,15 +121,21 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
         for(const type of types){owner.addEventListener(type,capture,true);window.addEventListener(type,input);}
         const originalFetch=window.fetch.bind(window);probe.originalFetch=originalFetch;
         window.fetch=async(...args)=>{
-          const url=new URL(String(args[0]),location.href);if(url.pathname!='/api/history')return originalFetch(...args);
-          const scope=JSON.stringify([url.searchParams.get('scope'),url.searchParams.get('meters'),url.searchParams.get('unit'),url.searchParams.get('currency')]),cell=Number(url.searchParams.get('cell')),from=Number(url.searchParams.get('from')),to=Number(url.searchParams.get('to')),tiles=Math.floor((to-1)/(cell*60))-Math.floor(from/(cell*60))+1;
-          for(const f of probe.flights.values())if(f.scope===scope&&f.cell===cell&&f.from<to&&f.to>from)probe.duplicateReads++;
-          const id={},signal=args[1]?.signal,aborted=()=>probe.flights.delete(id);probe.flights.set(id,{scope,cell,from,to});signal?.addEventListener('abort',aborted,{once:true});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.maxTiles=Math.max(probe.maxTiles,tiles);probe.coldReads++;
+          const url=new URL(String(args[0]),location.href),legacy=url.pathname==='/api/history';if(!legacy&&!new RegExp('^/api/boards/[^/]+/period(?:/sessions)?$').test(url.pathname))return originalFetch(...args);
+          const body=legacy?null:JSON.parse(args[1]?.body||'{}');
+          const sections=legacy?[Object.fromEntries(url.searchParams)]:['quota','budget','funds'].filter(scope=>body[scope]&&body[scope].cells!=='skip').map(scope=>({...body[scope],scope:scope==='funds'?'budget':scope}));
+          const ranges=sections.map(q=>({scope:JSON.stringify([q.scope,q.meters,q.unit,q.currency]),cell:Number(q.cell),from:Number(q.from),to:Number(q.to)}));
+          for(const q of ranges){for(const f of probe.flights.values())for(const other of f)if(other.scope===q.scope&&other.cell===q.cell&&other.from<q.to&&other.to>q.from)probe.duplicateReads++;probe.maxTiles=Math.max(probe.maxTiles,Math.floor((q.to-1)/(q.cell*60))-Math.floor(q.from/(q.cell*60))+1);}
+          const id={},signal=args[1]?.signal,aborted=()=>probe.flights.delete(id);probe.flights.set(id,ranges);signal?.addEventListener('abort',aborted,{once:true});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.coldReads++;
           try {return await originalFetch(...args);}finally{probe.flights.delete(id);signal?.removeEventListener('abort',aborted);}
         };
         probe.observer=new MutationObserver(records=>{
           if(!probe.running||!probe.feeding)return;
-          for(const record of records){const element=record.target.nodeType===1?record.target:record.target.parentElement;if(!element?.closest('.card,.topbar,.agents-panel,.forecast,.budget-table,.activity-totals'))continue;const clock=element.closest('[data-time]'),timeOnly=clock&&clock.getAttribute('data-time')!=='chart';if(!timeOnly)probe.forbiddenMutations++;}
+          for(const record of records){const element=record.target.nodeType===1?record.target:record.target.parentElement,panel=element?.closest('.card,.topbar,.agents-panel,.forecast,.budget-table,.activity-totals');if(!panel)continue;const clock=element.closest('[data-time]'),timeOnly=clock&&clock.getAttribute('data-time')!=='chart';if(!timeOnly){
+            probe.forbiddenMutations++;
+            // Keep only structural provenance, never text, values or source IDs.
+            if(probe.mutationSamples.length<24)probe.mutationSamples.push({segment:probe.segment,surface:['card','topbar','agents-panel','forecast','budget-table','activity-totals'].find(name=>panel.classList.contains(name)),tag:element.tagName,type:record.type,attribute:record.attributeName??null,measurement:!!element.closest('.table-measure'),panning:!!root.dataset.panEnd});
+          }}
         });probe.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true});
         const originalRAF=window.requestAnimationFrame||requestAnimationFrame;
         const schedule=callback=>originalRAF.call(window,callback);
@@ -115,15 +143,15 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
         const consume=(count,now)=>{for(const input of probe.pending.splice(0,count)){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size});}};
         const sample=(stamp,afterCallback=false)=>{
           if(!probe.running)return;
-          const now=performance.now(),demand=probe.pending.length,layers=owners(),active=!!root.dataset.panEnd,folding=!active&&layers[0].querySelector('.slides').getAnimations().some(a=>a.playState==='running');
-          probe.sizeStable&&=charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
-          const matrices=layers.map((layer,i)=>{const transform=active?layer.style.transform:folding&&i===0?getComputedStyle(layer.querySelector('.slides')).transform:'none',matrix=matrixOf(transform);return folding?{a:matrix.a,e:matrix.e*scales[i]}:matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
+          const now=performance.now(),demand=probe.pending.length,layers=owners(),active=!!root.dataset.panEnd,folding=!active&&slides[0].getAnimations().some(a=>a.playState==='running');
+          probe.sizeStable&&=connected()&&charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
+          const matrices=layers.map((layer,i)=>{const transform=active?layer.style.transform:folding&&i===0?getComputedStyle(slides[i]).transform:'none',matrix=matrixOf(transform);return folding?{a:matrix.a,e:matrix.e*scales[i]}:matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
           const nextPhase=active?'pan':folding?'fold':'idle';
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
           if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?charts.map(svg=>(Number(svg.dataset.panBase||0))+':1'):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
           const moved=current.map((value,i)=>value!==previous[i]);
-          if(active){probe.synchronized&&=charts.every((svg,i)=>{const shown=gesture?.shown[i],actual=presentation(svg,layers[i],i,gesture?.origin),delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrices[i].e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(actual.x)&&Math.abs(actual.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(actual.perMs/shown.perMs-1)<1e-6&&Math.abs(actual.x-(shown.x-delta*shown.perMs))<.1;})&&[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack')).every(layer=>Math.abs(matrixOf(layer.style.transform).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
-          // Each input reaches all four plots. Activity has no future, so only the
+          if(active){probe.synchronized&&=connected()&&charts.every((svg,i)=>{const shown=gesture?.shown[i],actual=presentation(svg,layers[i],i,gesture?.origin),delta=(Number(svg.dataset.panEnd)-Number(svg.dataset.panOrigin));return svg.dataset.panEnd===root.dataset.panEnd&&Math.abs(delta/Number(svg.dataset.panScale)+matrices[i].e-Number(svg.dataset.panBase||0))<.01&&shown&&Number.isFinite(actual.x)&&Math.abs(actual.perMs*Number(svg.dataset.panScale)-1)<1e-6&&Math.abs(actual.perMs/shown.perMs-1)<1e-6&&Math.abs(actual.x-(shown.x-delta*shown.perMs))<.1;})&&bands.every(layer=>layer.isConnected!==false&&Math.abs(matrixOf(layer.style.transform).e-matrices[1].e)<.01);moved.forEach((changed,i)=>{if(changed)probe.chartUpdates[i]++;});}
+          // Each input reaches all five plots. Activity has no future, so only the
           // remaining-share chart must move during the final future fold.
           if(active&&probe.synchronized&&(moved.every(Boolean)||afterCallback)){
             // Coalesced input reaches its final position together. A newer event
@@ -146,7 +174,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
           if(!active&&!folding)probe.last=0;
           previous=current;probe.undimmed&&=charts.every(svg=>!svg.closest('.is-loading')&&(!svg.style.opacity||svg.style.opacity==='1'));
         };
-        window.requestAnimationFrame=callback=>schedule(stamp=>{try{callback.call(window,stamp);}finally{if(probe.running&&probe.pending.length)sample(stamp,true);}});
+        // An unrelated preparation RAF cannot present new input. Inspect all
+        // five drawings only when the initiator's real drawing has changed.
+        const painted=()=>[root.dataset.panToken,root.dataset.panEnd,layers[driver].style.transform,slides[driver].style.transform,root.dataset.drawFrom,root.dataset.drawTo].join(':');
+        let lastPaint=painted();
+        window.requestAnimationFrame=callback=>schedule(stamp=>{try{callback.call(window,stamp);}finally{
+          if(probe.running&&probe.pending.length){const next=painted();if(next!==lastPaint){lastPaint=next;sample(stamp,true);}}
+        }});
         const tick=stamp=>{
           if(!probe.running)return;
           if(!root.dataset.panEnd)sample(stamp);
@@ -164,16 +198,20 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       interception = true;
       const wheel = (dx: number, shift = false) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: dx, deltaY: 0, modifiers: shift ? 8 : 0});
       const sent: Promise<unknown>[] = [];
+      progress(`${initiator}/${period}/wheel`);
       await cdp.evaluate('window.__quotumPan.feeding=true');
-      // The browser generates native wheel input without a CDP IPC per delta.
+      // Chrome owns one continuous native wheel gesture, including its reversal.
       const scroll = (distance: number, reverse = 0) => cdp.send('Input.synthesizeScrollGesture', {x: geometry.x, y: geometry.y, xDistance: distance, xOverscroll: reverse, yDistance: 0, speed: 720, gestureSourceType: 'mouse', preventFling: true});
       await scroll(geometry.width * 1.25, geometry.width * 1.25 / 3);
       await cdp.evaluate('window.__quotumPan.feeding=false');
       await wait(240);
       await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
       interception = false;
+      progress(`${initiator}/${period}/wheel-settle`);
       await settled();
+      edgeSeries.push({stage:'wheel',...await density()});
       // Shift-drag keeps capture when the pointer leaves the SVG, without extra inertia.
+      progress(`${initiator}/${period}/drag`);
       await cdp.evaluate(`window.__quotumPan.segment='drag'`);
       await key(true, 'Shift', 16);
       await mouse('mousePressed', geometry.x, geometry.y, 8);
@@ -185,8 +223,11 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       await cdp.evaluate('window.__quotumPan.feeding=false');
       await mouse('mouseReleased', geometry.x + 720, geometry.y, 8);
       await key(false, 'Shift', 16);
+      progress(`${initiator}/${period}/drag-settle`);
       await settled();
+      edgeSeries.push({stage:'drag',...await density()});
       // Native Shift deltaX returns to live, then Back/Forward restore complete gestures.
+      progress(`${initiator}/${period}/return-live`);
       sent.length = 0;
       await cdp.evaluate(`window.__quotumPan.segment='return'`);
       const returnBefore = await cdp.evaluate<unknown>('window.__quotumPan.returnSnapshot()');
@@ -204,9 +245,9 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       const report = await cdp.evaluate<PanReading>(`(() => {
         const p=window.__quotumPan;p.cleanup();
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
-        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,segments,outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34)};
+        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,mutationSamples:p.mutationSamples,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,wheelGapMs:p.wheelGapMs,segments,outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34)};
       })()`);
-      report.initiator = initiator; report.period = period; report.series = geometry.series; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
+      report.initiator = initiator; report.period = period; report.series = geometry.series; report.sessionSeries=geometry.sessionSeries; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;report.edgeSeries=edgeSeries;
       reports.push(report);
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
       const live = await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`);
@@ -216,6 +257,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       }
       await cdp.evaluate('window.__quotumPan.returnInput=null');
       // Held Shift-wheel has the same uninterrupted scale as dragging, across rests.
+      progress(`${initiator}/${period}/held-shift-and-navigation`);
       await mouse('mouseMoved', geometry.x, geometry.y);
       await key(true, 'Shift', 16);
       await wait(30);
@@ -229,12 +271,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       await wheel(24, true); await wait(40);
       await key(false, 'Shift', 16); await wait(240);
       if (!(await cdp.evaluate<boolean>(`!document.querySelector('[data-pan-end]')&&!new URLSearchParams(location.search).has('from')`))) throw new Error('Shift-wheel return did not preserve live');
-      await cdp.evaluate(`history.back()`); await wait(300);
+      await cdp.evaluate(`history.back()`); await wait(300); await settled();
       if (!(await cdp.evaluate<boolean>(`new URLSearchParams(location.search).has('from')`))) throw new Error('Back did not restore the whole previous gesture');
-      await cdp.evaluate(`history.forward()`); await wait(300);
+      await cdp.evaluate(`history.forward()`); await wait(300); await settled();
       if (!(await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`))) throw new Error('Forward did not restore live');
       // A wheel does not blur a keyboard-focused legend. Its bubble must stay
       // hidden through ordinary panning, a latched drag and their final fold.
+      progress(`${initiator}/${period}/legend`);
       const legendVisible = () => cdp.evaluate<boolean>(`[...document.querySelectorAll('.activity-legend-tip.is-open')].some(tip=>getComputedStyle(tip).display!=='none')`);
       await key(true, 'Tab', 9); await key(false, 'Tab', 9);
       await cdp.evaluate(`document.querySelector('.activity .legend-item').focus()`); await wait(40);
@@ -253,22 +296,30 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'>, pace: 
       if (await legendVisible()) throw new Error('a drag fold reopened a focused legend readout');
       await wait(260);
       await cdp.evaluate(`history.back()`); await settled();
+      progress(`${initiator}/${period}/complete`);
     }
       await cdp.evaluate(`document.getElementById('quotum-pan-layout')?.remove()`);
     }
     return {reports, problems: reports.flatMap(panningProblems)};
+  } catch(error) {
+    failed=true;console.error('bench: '+stage+' failed');throw error;
   } finally {
+    try {
     await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
     if (interception) await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1});
     await cdp.evaluate(`(() => {window.__quotumPan?.cleanup();document.getElementById('quotum-pan-layout')?.remove();})()`);
     try {
-      if (await cdp.evaluate<boolean>(`!document.querySelector('.history .popover')`)) await click('.history .panel-head .picker > button');
-      await click('.history .popover .segmented button', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
+      if (await cdp.evaluate<boolean>(`!document.querySelector('.analytics-head .popover')`)) await click('.analytics-head .controls .picker > button');
+      await click('.analytics-head .popover .popover-section:last-child .segmented button', Math.max(0, ['auto', '1d', '3d', '7d'].indexOf(originalHorizon)));
       await key(true, 'Escape', 27); await key(false, 'Escape', 27);
     } catch {
       // A failed setup retains its original error; the benchmark owns and closes its tab.
       await cdp.evaluate(`(() => {const p=JSON.parse(localStorage.getItem('quotum.prefs')||'{}');p.horizon=${JSON.stringify(originalHorizon)};localStorage.setItem('quotum.prefs',JSON.stringify(p));})()`);
     }
     await cdp.send('Emulation.clearDeviceMetricsOverride');
+    } catch(error) {
+      if(!failed)throw error;
+      console.error('bench: '+stage+' cleanup failed; retaining original failure');
+    }
   }
 }
