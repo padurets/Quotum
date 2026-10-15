@@ -53,7 +53,7 @@ function resolve(input: AttributionInput, context: LinkContext, at: number, {rou
 }
 
 /** Display cuts leave the raw ledger and its distinct agent identity untouched. */
-export function splitLinks(input: AttributionInput, context: LinkContext, from: number, to: number): {source: string | null; from: number; to: number}[] {
+export function splitLinks(input: AttributionInput, context: LinkContext, from: number, to: number, reserve?:(bytes:number)=>void): {source: string | null; from: number; to: number}[] {
   const evidence = safeRoute(input.route, context.routeEnabled), {route} = evidence;
   // Scope and route cannot change within a retained context. Select their rules
   // once rather than testing unrelated conditions again at every time boundary.
@@ -69,7 +69,7 @@ export function splitLinks(input: AttributionInput, context: LinkContext, from: 
   for (let i = 0; i < times.length - 1; i++) {
     const source = resolve(input, selected, times[i], evidence).source, last = result.at(-1);
     if (last && last.source === source) last.to = times[i + 1];
-    else result.push({source, from: times[i], to: times[i + 1]});
+    else {reserve?.(192);result.push({source, from: times[i], to: times[i + 1]});}
   }
   return result;
 }

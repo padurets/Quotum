@@ -657,11 +657,17 @@ export class Store {
 
   admittedWork(access:WorkAccess,from:number,to:number,reserve?:(bytes:number)=>void):Stretch[] {
     if(!access.devices.size)return [];
-    return this.agentWork(from,to,undefined,null,reserve,[...access.devices.keys()],access.attribution).flatMap(row=>{
-      const scope=admitted(access,row.device,row.user);if(!scope||row.to<=scope.from)return [];
+    const rows=this.agentWork(from,to,undefined,null,reserve,[...access.devices.keys()],access.attribution);let kept=0;
+    // These rows belong to this read. Apply admission without retaining a second copy.
+    for(const row of rows){
+      const scope=admitted(access,row.device,row.user);if(!scope||row.to<=scope.from)continue;
       const funding=fundingOf(access,row.user,row.source);
-      return [{...row,...funding,from:Math.max(row.from,scope.from),...(funding.source!==null?{quotaFrom:Math.max(scope.from,access.sources.get(funding.source)!.since)}:{})}];
-    });
+      row.source=funding.source;row.from=Math.max(row.from,scope.from);
+      if(funding.sourceStatus)row.sourceStatus=funding.sourceStatus;
+      if(funding.source!==null)row.quotaFrom=Math.max(scope.from,access.sources.get(funding.source)!.since);
+      rows[kept++]=row;
+    }
+    rows.length=kept;return rows;
   }
 
   /** Complete cells of every measured window, read once through a run of missing tiles. */
@@ -987,16 +993,19 @@ export class Store {
     const contexts = captured??this.links.batch([...new Set(sessions.map(s => s.user))],reserve), allowed = sources ? new Set(sources) : null;
     const contextOf=(s:typeof sessions[number])=>({device:s.device,user:s.user,origin:s.origin,project:s.project,folder:s.folder,startedAt:s.startedAt,...(devices?{rawContext:{source:s.source,client:s.client,producer:s.producer_id,project:s.raw_project,folder:s.raw_folder,deviceName:s.device_name,accountBy:s.accountBy,route:s.by?{class:s.class,by:s.by,host:s.host,provider:s.provider}:null}}:{})});
     // Resolve each context's timeline once, then reuse it for all its raw stretches.
-    const timelines = new Map(sessions.flatMap(s => {
+    const timelines = new Map<number,{context:ReturnType<typeof contextOf>;parts:ReturnType<typeof splitLinks>;next:number}>();
+    for(const s of sessions){
       const input: AttributionInput = {clientId: s.clientId, deviceId: s.device, source: s.source, accountBy: s.accountBy, route: s.by ? {class: s.class, by: s.by, host: s.host, provider: s.provider} : null};
       const bound=bounds.get(s.id)!;
-      const parts=splitLinks(input, contexts(s.user, s.device, s.clientId), bound.from, bound.to).filter(part=>!allowed||part.source!==null&&allowed.has(part.source)||part.source===null&&s.user===owner);
-      return parts.length?[[s.id,{context:contextOf(s),parts,next:0}] as [number,{context:ReturnType<typeof contextOf>;parts:typeof parts;next:number}]]:[];
-    }));
+      const parts=splitLinks(input, contexts(s.user, s.device, s.clientId), bound.from, bound.to,reserve).filter(part=>!allowed||part.source!==null&&allowed.has(part.source)||part.source===null&&s.user===owner);
+      if(parts.length){reserve?.(256);timelines.set(s.id,{context:contextOf(s),parts,next:0});}
+    }
     const result: Stretch[] = [];
     let lastId:number|undefined,lastTimeline:ReturnType<typeof timelines.get>;
     // Copying context objects into every stretch dominates dense reads.
-    const append=(id:number,source:string|null,context:ReturnType<typeof contextOf>,from:number,to:number)=>{
+    const append=(id:number,source:string|null,context:ReturnType<typeof contextOf>,from:number,to:number,extra=false)=>{
+      // The raw row's reservation includes its first output; cuts can add more.
+      if(extra)reserve?.(256);
       const span:Stretch={session:id,source,device:context.device,user:context.user,origin:context.origin,project:context.project,folder:context.folder,startedAt:context.startedAt,from,to};
       if(context.rawContext)span.rawContext=context.rawContext;
       result.push(span);
@@ -1010,9 +1019,10 @@ export class Store {
         continue;
       }
       while (timeline.next < timeline.parts.length && timeline.parts[timeline.next].to <= start) timeline.next++;
+      let emitted=false;
       for (let n = timeline.next; n < timeline.parts.length && timeline.parts[n].from < end; n++) {
         const part = timeline.parts[n];
-        append(id,part.source,timeline.context,Math.max(start,part.from),Math.min(end,part.to));
+        append(id,part.source,timeline.context,Math.max(start,part.from),Math.min(end,part.to),emitted);emitted=true;
       }
     }
     return result;

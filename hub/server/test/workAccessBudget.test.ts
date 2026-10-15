@@ -53,6 +53,27 @@ test('the default history ceiling admits context rows before materializing a den
  }finally{store.close();}
 });
 
+for(const links of [64,128])test(`the default history ceiling bounds ${links} temporal cuts and releases a refused read`,t=>{
+ const start=Math.floor(Date.now()/(12*H))*12*H-28*24*H,end=start+28*24*H,store=new Store(':memory:',start),directory=new Directory(store.db);
+ try{
+  const owner=directory.createUser('fragments@example.com','Fragments','fixture',start),board=directory.boards(owner.id).find(board=>board.personal)!.id;
+  const devices=Array.from({length:20},(_,i)=>directory.saveDevice({userId:owner.id,machine:{id:'fragments-'+i,name:'Laptop '+i,os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},start).id);
+  const sources=['a','b'].map(account=>store.source('openrouter',account,start));for(const source of sources)store.hold(source,owner.id,start);
+  const session=store.db.prepare('INSERT INTO agent_sessions(id,device_id,client,source_id,origin,started_at,project,folder,ordinal,producer_id,account_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)'),work=store.db.prepare('INSERT INTO agent_work VALUES(?,?,?)'),link=store.db.prepare('INSERT INTO client_links VALUES(?,?,?,?,?,?,?,?,?,?)');
+  store.db.exec('BEGIN');
+  for(let n=0;n<links;n++)link.run('link-'+n,owner.id,'opencode',null,null,null,sources[n%2],start+(end-start)*n/links,start+(end-start)*(n+1)/links,start);
+  for(let id=1;id<=2400;id++){session.run(id,devices[(id-1)%20],'opencode',null,'terminal',start,'Project','Folder',0,id.toString(16).padStart(32,'0'),null);work.run(id,start,end);}
+  store.db.exec('COMMIT');
+  const tiles=new HistoryTiles(store),reservation=tiles.reservation.bind(tiles);let reserved=0;
+  t.mock.method(tiles,'reservation',()=>{const value=reservation();let own=0;return {add:(bytes:number)=>{value.add(bytes);reserved+=bytes;own+=bytes;},remove:(bytes:number)=>{value.remove(bytes);reserved-=bytes;own-=bytes;},close:()=>{value.close();reserved-=own;own=0;}};});
+  assert.throws(()=>tiles.read(board,12*H,start,end,Date.now(),store.shown(board,[]),undefined,'quota'),HistoryLimit,'small raw input must not admit an unbounded temporal projection');
+  assert.equal(reserved,0,'a refused projection releases all request reservations');
+  store.db.prepare('DELETE FROM client_links WHERE id NOT IN (?,?)').run('link-0','link-1');
+  assert.equal(tiles.read(board,12*H,start,end,Date.now(),store.shown(board,[]),undefined,'quota').length,2,'a smaller projection still succeeds on the same tiles');
+  assert.equal(reserved,0);
+ }finally{store.close();}
+});
+
 async function fixture(t:TestContext,ceiling?:number,devices=1){
  t.mock.method(Date,'now',()=>at+2*H);const h=await centralFixture(),events=new Events(h.hub,undefined,{now:()=>at+2*H,after:()=>()=>{}},null),tiles=new HistoryTiles(h.store,ceiling),period=new PeriodReader(h.hub,tiles,events);
  t.after(async()=>{events.close();await h.app.close();h.store.close();});
