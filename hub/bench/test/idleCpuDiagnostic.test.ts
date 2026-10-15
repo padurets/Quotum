@@ -9,7 +9,7 @@ import type {Reading} from '../probe.js';
 import {IdleCpuDiagnostic,sourceIdentity,idleEdgeProblems,originalTraceProblems,ownedClockFires,planIdleEdge,idleCommittedScript,type IdleGeometry} from '../idleCpuDiagnostic.js';
 import {numericProfile,profileWindow} from '../cpuProfile.js';
 import {idleWindow,idlePhaseScript,idlePhaseProblems} from '../still.js';
-import {encodeSamples} from '../../server/domain/periodTape.js';
+import {drain} from '../../server/domain/prepare.js';
 import {safeEvidence} from '../evidence.js';
 import {fixture,flush,NOW,H,M} from '../../ui/test/periodRuntimeFixture.js';
 
@@ -18,11 +18,81 @@ type Saved={name:string;value:unknown;large?:boolean};
 function committedReader(pool?:unknown) {
   let clock=0;
   const forbidden=()=>{throw Error('snapshot scheduled work');};
-  const context:Record<string,any>={exports:{},Map,Set,WeakMap,Date,performance:{now:()=>++clock},setTimeout:forbidden,setInterval:forbidden,requestAnimationFrame:forbidden,queueMicrotask:forbidden};
+  const context:Record<string,any>={exports:{},Map,Set,WeakMap,Date,btoa,performance:{now:()=>++clock},setTimeout:forbidden,setInterval:forbidden,requestAnimationFrame:forbidden,queueMicrotask:forbidden};
   runInNewContext('window=globalThis;'+idleCommittedScript(),context);
   if(pool)context.__quotumInspectHistoryPool(pool);
-  return {context,attach:context.__quotumInspectHistoryPool,read:()=>JSON.parse(JSON.stringify(safeEvidence(context.__quotumIdleCommitted.read())))};
+  return {context,attach:context.__quotumInspectHistoryPool,read:(exact=false)=>JSON.parse(JSON.stringify(exact?context.__quotumIdleCommitted.read():safeEvidence(context.__quotumIdleCommitted.read())))};
 }
+
+/** Restore the fixed numeric shape using the actual production prototypes. */
+function rebuildInput(payload:any,input:any,index:any) {
+  const scalar=([kind,value]:[number,number|null])=>kind===0?value:kind===1?Infinity:kind===2?-Infinity:kind===4?-0:NaN;
+  const vectors=new Map<number,Float64Array|Uint32Array>(payload.vectors.map((row:any)=>{
+    const value=row.type==='f64'?new Float64Array(row.length):new Uint32Array(row.length);
+    const bytes=Buffer.from(row.base64,'base64');assert.equal(bytes.length,value.byteLength);new Uint8Array(value.buffer).set(bytes);return [row.id,value];
+  }));
+  const column=(v:any):any=>v.vector?vectors.get(v.vector):{length:v.length,base:scalar(v.base),values:v.values===null?null:vectors.get(v.values),...(v.runs?{runs:{ends:vectors.get(v.runs.ends),bases:vectors.get(v.runs.bases),steps:vectors.get(v.runs.steps)}}:{})};
+  const patterns=new Map(payload.patterns.map((p:any)=>[p.id,Object.assign(Object.create(Object.getPrototypeOf(index.activity.curves[0])),Object.fromEntries(['times','agents','active','slopes'].map(k=>[k,vectors.get(p[k])]))) ]));
+  const timelines=new Map(payload.timelines.map((v:any)=>[v.id,Object.assign(Object.create(Object.getPrototypeOf(index.activity)),{...Object.fromEntries(['hours','agents','active'].map(k=>[k,vectors.get(v[k])])),curves:v.curves.map((id:number)=>patterns.get(id))})]));
+  return {column,known:scalar(input.known),activity:input.activity===null?undefined:timelines.get(input.activity),samples:input.samples.vector?vectors.get(input.samples.vector):{length:input.samples.length,columns:input.samples.columns.map(column)}};
+}
+
+test('committed numeric inputs rebuild actual quota columns across retained history without requests',async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({personal:true,clocked:true,creditFrom:NOW-20*M,creditTo:NOW-5*M});
+  try{
+    const reader=committedReader(h.pool),requests=h.requests.length;
+    for(const now of [NOW,NOW+5*M]){
+      h.jump(now);await flush();
+      const current=h.period.index.curves.groups.source,first=[...current.entries()][0];
+      current.set(first[0],Object.assign(Object.create(Object.getPrototypeOf(first[1])),first[1]));
+      const snapshot=reader.read(true),payload=snapshot.rebuild;current.set(first[0],first[1]);assert.equal(payload.status,'complete');
+      assert.equal(payload.endian,'LE');assert.ok(payload.inputs.length>0);assert.ok(payload.timelines.length>0);
+      assert.ok(payload.inputs.some((row:any)=>row.activity!==null&&row.activity!==row.sourceCurve),'actual accounting activity stays distinct from the current source curve');
+      const entry=h.period.tapes.get('quota'),indices=[...entry.accounting.quota.values()];
+      const prototype=indices.find((v:any)=>v.activity?.curves.length);assert.ok(prototype);
+      for(let i=0;i<indices.length;i++){
+        const index=indices[i],input=payload.inputs[i],restored=rebuildInput(payload,input,prototype);
+        assert.deepEqual(restored.samples,index.series.samples);assert.ok(Object.is(restored.known,index.known));
+        const built:any=drain(index.constructor.prepare({...index.series,samples:restored.samples},restored.activity,restored.known));
+        for(const field of ['times','deadlines','spent','covered','worked','during']){assert.deepEqual(restored.column(input.outputs[field]),index[field]);assert.deepEqual(built[field],index[field]);}
+        assert.equal(built.bytes,index.bytes);
+        for(const from of [NOW-24*H,NOW-H,NOW-10*M])assert.deepEqual(built.at({from,to:now}),index.at({from,to:now}));
+      }
+      assert.ok(!JSON.stringify(payload).includes('PRIVATE_CANARY'));
+    }
+    assert.equal(h.requests.length,requests);
+  }finally{await h.close();}
+});
+
+test('committed numeric export copies only typed views and preserves floating bits',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true});
+  try{
+    const entry=h.period.tapes.get('quota'),index=entry.accounting.quota.values().next().value;
+    const backing=new Float64Array([123,-0,NaN,Infinity,-Infinity,1.25,456]);index.spent={length:5,base:-0,values:backing.subarray(1,6)};
+    const snapshot=committedReader(h.pool).read(true),payload=snapshot.rebuild;assert.equal(payload.status,'complete');
+    const output=payload.inputs[0].outputs.spent;assert.deepEqual(output.base,[4,null]);
+    const vector=payload.vectors.find((v:any)=>v.id===output.values);assert.equal(vector.length,5);
+    assert.deepEqual(Buffer.from(vector.base64,'base64'),Buffer.from(backing.buffer,8,40));
+    for(const [known,tag] of [[Infinity,1],[-Infinity,2],[NaN,3],[-0,4]]){index.known=known;assert.deepEqual(committedReader(h.pool).read(true).rebuild.inputs[0].known,[tag,null]);}
+  }finally{await h.close();}
+});
+
+test('numeric export limits and unknown shapes retain the compact committed evidence',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true});
+  try{
+    const entry=h.period.tapes.get('quota'),index=entry.accounting.quota.values().next().value,reader=committedReader(h.pool),spent=index.spent;
+    for(const value of [new Float64Array(400000),{length:1,base:0,values:{length:1}},{length:1,base:0,values:{[Symbol.toStringTag]:'Float64Array',length:1,byteLength:8}}]){
+      index.spent=value;const snapshot=reader.read(true);assert.equal(snapshot.status,'complete');assert.equal(snapshot.rebuild.status,'insufficient-evidence');assert.ok(snapshot.rows.length>0);
+    }
+    index.spent=spent;
+    const activity=index.activity;index.activity={hours:new Float64Array(0),agents:new Float64Array(0),active:new Float64Array(0),curves:Array(16385).fill({})};
+    const excessive=reader.read(true);assert.equal(excessive.status,'complete');assert.equal(excessive.rebuild.status,'insufficient-evidence');index.activity=activity;
+    const samples=index.series.samples,columns=Array(100000).fill({length:1,base:0,values:null});let mapped=0;
+    columns.map=(()=>{mapped++;throw Error('invalid columns traversed');}) as typeof columns.map;index.series.samples={length:5,columns};
+    const malformed=reader.read(true);assert.equal(malformed.status,'complete');assert.equal(malformed.rebuild.status,'insufficient-evidence');assert.equal(mapped,0);index.series.samples=samples;
+  }finally{await h.close();}
+});
 
 test('committed snapshots distinguish real work-only sharing from measurement-prefix replacement',async t=>{
   const start=NOW-24*H;let now=NOW;t.mock.method(Date,'now',()=>now);
@@ -160,65 +230,6 @@ test('idle CPU diagnostics serialize after original counters and readout',async(
   assert.ok(cdp.commands.indexOf('Profiler.stop')>cdp.commands.indexOf('ORIGINAL.readout'));
   assert.ok(cdp.commands.indexOf('Debugger.enable')>cdp.commands.indexOf('Profiler.stop'));
   assert.ok(!cdp.commands.includes('Performance.enable'),'the original metric domain stays unchanged');
-});
-test('original period input capture keeps the latest resource replies outside the counters and excludes private fields',async()=>{
-  const cdp=new CurrentCdpFake(),saved:Saved[]=[];
-  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value:safeEvidence(value)}),client,true,'profile',{base:'https://example.test',fixtureStart:300_000});
-  const basis={run:'PRIVATE_CANARY',revision:'PRIVATE_CANARY',evaluatedAt:400_000,evidenceCut:300_000,range:{from:100_000,to:400_000}};
-  const samples=encodeSamples([10,20,30].map(at=>({at,used:99,resetAt:null,staleAfterMs:60_000})));
-  const section={state:'complete',basis,value:{tape:{from:10,cut:30,replaceFrom:10,cursor:'PRIVATE_CANARY',quota:[{source:'PRIVATE_CANARY',window:'PRIVATE_CANARY',samples,samplesEncoding:'delta'}],money:[]}}};
-  const initial={basis,quota:section,budget:section,funds:section,sessions:{state:'complete',basis,value:{anchor:10,cut:30,knownFrom:10,refs:[{project:'PRIVATE_CANARY'}],spans:[]}}};
-  const request=(id:string,scopes:object,origin='https://example.test',finish=true)=>{
-    cdp.responseBodies.set(id,JSON.stringify(initial));
-    cdp.emit('Network.requestWillBeSent',{requestId:id,request:{url:origin+'/api/boards/PRIVATE_CANARY/period',postData:JSON.stringify({version:1,selection:{mode:'live',periodMs:900_000},evaluatedAt:400_000,...scopes})}});
-    if(finish)cdp.emit('Network.loadingFinished',{requestId:id});
-  };
-  request('initial-private-id',{quota:{},budget:{},funds:{},sessions:{}});
-  for(let i=0;i<10;i++)request('quota-private-'+i,{quota:{}});
-  request('drawing-private-id',{quota:{evidence:'skip'}});
-  cdp.responseBodies.set('drawing-private-id',JSON.stringify({basis,quota:{state:'complete',basis,value:{chunks:[]}}}));
-  request('foreign-private-id',{quota:{}},'https://foreign.test');
-  await diagnostic.start();
-  request('during-counter-private-id',{quota:{}});
-  await diagnostic.stop({before:{Timestamp:1},after:{Timestamp:121},instrumentMs:0,seconds:120});
-  assert.deepEqual(cdp.responseReads,[]);
-  await diagnostic.captureInputs();
-  assert.deepEqual(cdp.responseReads,['quota-private-9','initial-private-id']);
-  const snapshot=result(saved,'idle-cpu-main-period-inputs');
-  assert.equal(snapshot.status,'complete');assert.equal(snapshot.fixtureStart,300_000);
-  assert.deepEqual((snapshot.rows as unknown[]).map(row=>record(row).resource),[0,1,2,3]);
-  assert.equal(record((snapshot.rows as unknown[])[3]).status,'complete');
-  assert.deepEqual(record(record((snapshot.rows as unknown[])[0]).value).quota,[{samples:3,first:10,next:20,last:30}]);
-  assert.ok(!JSON.stringify(snapshot).includes('PRIVATE_CANARY'));
-  assert.ok(!JSON.stringify(snapshot).includes('private-id'));assert.ok(!JSON.stringify(snapshot).includes('foreign.test'));
-  await diagnostic.close();
-});
-test('missing, unfinished or unreadable original inputs stay explicit and never fall back to older replies',async()=>{
-  const cdp=new CurrentCdpFake(),saved:Saved[]=[];
-  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,'trace',{base:'https://example.test',fixtureStart:0});
-  const event=(id:string,postData?:string)=>cdp.emit('Network.requestWillBeSent',{requestId:id,request:{url:'https://example.test/api/boards/private/period',postData}});
-  event('missing');event('old',JSON.stringify({selection:{mode:'live',periodMs:900_000},quota:{},budget:{}}));cdp.emit('Network.loadingFinished',{requestId:'old'});
-  event('unfinished',JSON.stringify({selection:{mode:'live',periodMs:900_000},quota:{}}));
-  await diagnostic.start();await diagnostic.stop({before:{Timestamp:1},after:{Timestamp:121},instrumentMs:0,seconds:120});
-  await diagnostic.captureInputs();
-  const snapshot=result(saved,'idle-cpu-main-period-inputs');assert.equal(snapshot.status,'insufficient-evidence');assert.equal(snapshot.missingInputRequests,1);
-  assert.deepEqual(cdp.responseReads,['old']);
-  assert.deepEqual(snapshot.rows,[0,1,2,3].map(resource=>({resource,status:'unavailable'})));
-  assert.ok(!JSON.stringify(snapshot).includes('console.log'));await diagnostic.close();
-});
-test('synchronous original input work cannot claim complete evidence after the existing5s deadline',async t=>{
-  const cdp=new CurrentCdpFake(),saved:Saved[]=[];
-  const diagnostic=new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,'trace',{base:'https://example.test',fixtureStart:0});
-  const basis={evaluatedAt:1,evidenceCut:1,range:{from:0,to:1}},section={state:'complete',basis,value:{tape:{from:0,cut:1,replaceFrom:0,quota:[],money:[]}}};
-  cdp.responseBodies.set('input',JSON.stringify({basis,quota:section,budget:section,funds:section,sessions:{state:'complete',basis,value:{anchor:0,knownFrom:0,refs:[],spans:[]}}}));
-  cdp.emit('Network.requestWillBeSent',{requestId:'input',request:{url:'https://example.test/api/boards/private/period',postData:JSON.stringify({selection:{mode:'live',periodMs:900_000},quota:{},budget:{},funds:{},sessions:{}})}});
-  cdp.emit('Network.loadingFinished',{requestId:'input'});
-  await diagnostic.start();await diagnostic.stop({before:{Timestamp:1},after:{Timestamp:121},instrumentMs:0,seconds:120});
-  let now=0;t.mock.method(performance,'now',()=>now);
-  const send=cdp.send.bind(cdp);
-  t.mock.method(cdp,'send',async<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>=>{const value=await send<T>(method,params,signal);if(method==='Network.getResponseBody')now=5001;return value;});
-  await diagnostic.captureInputs();assert.equal(result(saved,'idle-cpu-main-period-inputs').status,'insufficient-evidence');
-  assert.deepEqual(cdp.responseReads,['input']);await diagnostic.close();
 });
 test('idle CPU diagnostics exclude foreign and unscoped callbacks',async()=>{
   const {saved}=await capture(),timers=result(saved,'idle-cpu-timers');

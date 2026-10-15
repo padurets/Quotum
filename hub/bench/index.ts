@@ -226,7 +226,7 @@ async function main() {
     await cdp.send('Network.enable');
     await cdp.send('Performance.enable');
     if(idleCpuMode){
-      idleCpu=new IdleCpuDiagnostic(cdp,saveDiagnostic,clientIdentity(),!options.cdp,idleCpuMode==='trace'?'trace':'profile',{base:address.base,fixtureStart:stand.start});
+      idleCpu=new IdleCpuDiagnostic(cdp,saveDiagnostic,clientIdentity(),!options.cdp,idleCpuMode==='trace'?'trace':'profile');
       saveDiagnostic('idle-cpu-source',sourceIdentity());
     }
     await cdp.send('Emulation.setFocusEmulationEnabled', {enabled: true});
@@ -335,7 +335,6 @@ async function main() {
       const window={before,after,instrumentMs:reading.instrumentMs,seconds};
       await idleCpu.stop(window);
       await idleCpu.captureCommitted('after');
-      await idleCpu.captureInputs();
       await idleCpu.bindAndClose();
       const edge=idleCpuMode==='1'?idleCpu.edgeReceipt(edgePlan!,from,to,counterFrom!,counterTo!,geometryBefore!,geometryAfter!,window):idleCpu.traceReceipt(from,to,cellMs,window,reading);
       say(`diagnostic only: ${idleCpuMode==='1'?'aligned natural edge':'original idle '+idleCpuMode} ${edge.status}; observer overhead is unqualified`);

@@ -2,23 +2,17 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {readFileSync,readdirSync} from 'node:fs';
 import path from 'node:path';
-import {setImmediate} from 'node:timers/promises';
 import type {Cdp} from './cdp.js';
 import {bounded} from './reversalDiagnostic.js';
 import {numericProfile} from './cpuProfile.js';
 import {ScriptBinding} from './scriptBinding.js';
 import type {Reading} from './probe.js';
-import {parsePeriod} from '../server/domain/period.js';
-import {PERIOD_SCOPES,type PeriodRequest,type PeriodReply} from '../server/domain/periodRead.js';
-import {SAMPLE_WIDTH,sampleAt,sampleCount} from '../server/domain/periodTape.js';
 
 type Client={status:'available';name:string;bytes:number;sha256:string}|{status:'unavailable'};
 type RawEvent={name:string;ph:string;ts?:number;dur?:number;tts?:number;tdur?:number;pid?:number;tid?:number;args?:{data?:{frame?:string;timerId?:number;timeout?:number;singleShot?:boolean;scriptId?:string|number;lineNumber?:number;columnNumber?:number;stackTrace?:unknown;message?:string}}};
 type CounterWindow={before:Record<string,number>;after:Record<string,number>;instrumentMs:number;seconds:number};
 type Save=(name:string,value:unknown,large?:boolean)=>void;
 type Profile=Parameters<typeof numericProfile>[0];
-type Input={id:string;selection:ReturnType<typeof parsePeriod>;evaluatedAt:number|null;complete:boolean};
-type InputScope=typeof PERIOD_SCOPES[number]|'sessions';
 export type IdleEdgePlan={boundary:number;from:number;to:number;cellMs:number;seconds:number;marginMs:30_000};
 export type IdleChartGeometry={widget:'quota'|'session'|'activity'|'budget'|'funds';count:number;axisEnd:number|null;from:number|null;to:number|null;ready:boolean;panning:boolean;visibleFrom:number|null;visibleTo:number|null};
 export type IdleGeometry={now:number;selected:boolean;charts:IdleChartGeometry[]};
@@ -93,6 +87,41 @@ export function idleCommittedScript() {
         const value={status:'complete',at,monotonic,ownerId:id(owner),generation:own(owner,'generation'),revision:own(owner,'revision'),retirement:numeric(own(owner,'retirementAt')),workId:id(own(own(owner,'work'),'value')),workIndexId:id(workIndex),curvesId:id(curves),tapeId:id(tape),accountingId:id(accounting),from:numeric(own(tape,'from')),cut:numeric(own(tape,'cut')),
           columns:{key:0,seriesId:1,samplesId:2,samples:3,descriptorsId:4,indexId:5,timesId:6,deadlinesId:7,spentId:8,coveredId:9,workedId:10,duringId:11,activityId:12,sourceCurveId:13,knownKind:14,known:15},rows};
         if(!Number.isSafeInteger(value.generation)||!Number.isSafeInteger(value.revision)||JSON.stringify(value).length>32768)throw 0;
+        // Exact committed quota inputs and outputs, outside the measured window.
+        // Typed views retain their bits; only this fixed private shape is copied.
+        try{
+          let bytes=0,sampleCount=0,curveLinks=0;const vectors=[],timelines=[],patterns=[],inputs=[],seenVectors=new Set(),seenTimelines=new Set(),seenPatterns=new Set();
+          const scalar=n=>Object.is(n,-0)?[4,null]:numeric(n);
+          const vector=v=>{
+            const kind=Object.prototype.toString.call(v),type=kind==='[object Float64Array]'?'f64':kind==='[object Uint32Array]'?'u32':null;if(!ArrayBuffer.isView(v)||!type||!Number.isSafeInteger(v.length)||v.byteLength!==v.length*(type==='f64'?8:4))throw 0;
+            const key=id(v);if(seenVectors.has(key))return key;if(seenVectors.size>=8192)throw 0;seenVectors.add(key);
+            bytes+=v.byteLength;if(bytes>2.75*1024*1024)throw 0;
+            const view=new Uint8Array(v.buffer,v.byteOffset,v.byteLength);let text='';
+            for(let i=0;i<view.length;i+=8192)text+=String.fromCharCode(...view.subarray(i,i+8192));
+            vectors.push({id:key,type,length:v.length,base64:btoa(text)});return key;
+          };
+          const column=v=>{
+            const base=own(v,'base');if(base===undefined)return {vector:vector(v)};
+            const length=own(v,'length'),values=own(v,'values'),runs=own(v,'runs');if(!Number.isSafeInteger(length)||length<0)throw 0;
+            return {id:id(v),length,base:scalar(base),values:values===null?null:vector(values),...(runs?{runs:{ends:vector(own(runs,'ends')),bases:vector(own(runs,'bases')),steps:vector(own(runs,'steps'))}}:{})};
+          };
+          const timeline=v=>{
+            if(v===undefined||v===null)return null;
+            const key=id(v);if(seenTimelines.has(key))return key;seenTimelines.add(key);if(seenTimelines.size>128)throw 0;
+            const parts=own(v,'curves');if(!Array.isArray(parts)||(curveLinks+=parts.length)>16384)throw 0;
+            const links=parts.map(p=>{const key=id(p);if(!seenPatterns.has(key)){if(seenPatterns.size>=1024)throw 0;seenPatterns.add(key);patterns.push({id:key,...Object.fromEntries(['times','agents','active','slopes'].map(k=>[k,vector(own(p,k))]))});}return key;});
+            timelines.push({id:key,...Object.fromEntries(['hours','agents','active'].map(k=>[k,vector(own(v,k))])),curves:links});return key;
+          };
+          for(const series of quota){
+            const index=indices.get(own(series,'source')+'\\n'+own(series,'window')),samples=own(series,'samples'),columns=own(samples,'columns');
+            if(columns!==undefined&&(!Array.isArray(columns)||columns.length!==5))throw 0;
+            sampleCount+=own(samples,'length')/5;if(sampleCount>100000)throw 0;
+            const workFrom=own(series,'workFrom');
+            inputs.push({key:key(own(series,'source'),own(series,'window')),samples:columns?{length:own(samples,'length'),columns:columns.map(column)}:{vector:vector(samples)},known:scalar(own(index,'known')),workFrom:workFrom===undefined?null:workFrom===null?['null']:scalar(workFrom),activity:timeline(own(index,'activity')),sourceCurve:timeline(sourceCurves?.get(own(series,'source'))),outputs:Object.fromEntries(['times','deadlines','spent','covered','worked','during'].map(k=>[k,column(own(index,k))]))});
+          }
+          const payload={status:'complete',kind:'Committed quota rebuild inputs and outputs; not a full pool or work-retirement replay.',endian:new Uint8Array(new Uint16Array([1]).buffer)[0]===1?'LE':'BE',bytes,sampleCount,vectors,timelines,patterns,inputs};
+          if(JSON.stringify(payload).length>4*1024*1024)throw 0;value.rebuild=payload;
+        }catch{value.rebuild={status:'insufficient-evidence'};}
         return value;
       }catch{return {status:'insufficient-evidence',at,monotonic};}
     }};
@@ -187,23 +216,6 @@ export class IdleCpuDiagnostic {
   private traceCleanup='unavailable';
   private readonly clockSource:ClockSource;
   private readonly clocks:{stage:string;before:number|null;page:number;after:number|null;valid:boolean}[]=[];
-  private readonly inputs=new Map<InputScope,Input>();
-  private missingInputRequests=0;
-  private readonly inputRequest=(event:{requestId:string;request:{url:string;postData?:string}})=>{
-    if(!this.inputOrigin)return;
-    try{
-      const url=new URL(event.request.url);
-      if(url.origin!==new URL(this.inputOrigin.base).origin||!/^\/api\/boards\/[^/]+\/period$/.test(url.pathname))return;
-      if(!event.request.postData||event.request.postData.length>64*1024){this.missingInputRequests++;return;}
-      const request=JSON.parse(event.request.postData) as PeriodRequest;
-      const selection=parsePeriod(request.selection);
-      if(!selection){this.missingInputRequests++;return;}
-      const input:Input={id:event.requestId,selection,evaluatedAt:finite(request.evaluatedAt)?request.evaluatedAt:null,complete:false};
-      for(const scope of PERIOD_SCOPES)if(request[scope]&&request[scope]!.evidence!=='skip')this.inputs.set(scope,input);
-      if(request.sessions)this.inputs.set('sessions',input);
-    }catch{this.missingInputRequests++;}
-  };
-  private readonly inputFinished=(event:{requestId:string})=>{for(const input of this.inputs.values())if(input.id===event.requestId)input.complete=true;};
   private readonly collected=(message:{value:RawEvent[]})=>{
     if(!this.active)return;
     for(const event of message.value){
@@ -231,15 +243,12 @@ export class IdleCpuDiagnostic {
   };
   private readonly completed=()=>{this.ended=true;this.complete();};
 
-  constructor(private readonly cdp:Cdp,private readonly save:Save,client:Client,ownedSynthetic:boolean,private readonly collection:'profile'|'trace'='profile',private readonly inputOrigin?:{base:string;fixtureStart:number}){
+  constructor(private readonly cdp:Cdp,private readonly save:Save,client:Client,ownedSynthetic:boolean,private readonly collection:'profile'|'trace'='profile'){
     if(!ownedSynthetic)throw Error('Idle CPU diagnostics require an owned synthetic browser');
     this.clockSource=clockTimerSource(client);
     this.binding=new ScriptBinding(cdp,client,(name,value)=>{if(name.startsWith('source-family-'))this.sourceBinding=value;save('idle-cpu-'+name,value);});
     save('idle-cpu-client',{mode:'diagnostic',client,clockSource:this.clockSource});
-    if(inputOrigin){cdp.on('Network.requestWillBeSent',this.inputRequest);cdp.on('Network.loadingFinished',this.inputFinished);}
   }
-
-  private stopInputObservation(){this.cdp.off('Network.requestWillBeSent',this.inputRequest);this.cdp.off('Network.loadingFinished',this.inputFinished);}
 
   /** Both calls surround, rather than extend, the original profiler/counter window. */
   async captureCommitted(stage:'before'|'after'){
@@ -247,63 +256,7 @@ export class IdleCpuDiagnostic {
     if(!this.active&&!this.profiler&&!this.tracing&&(stage==='before'||this.ended))try{
       value=await this.cdp.evaluate(`window.__quotumIdleCommitted?.read() ?? {status:'insufficient-evidence'}`);
     }catch{/* Missing private shape is a diagnostic gap, never a new verdict. */}
-    this.save('idle-cpu-committed-'+stage,{mode:'diagnostic',kind:'Net committed identities across snapshots, including setup/drain outside counters; cancelled attempts, intermediate commits and callback costs remain unknown.',value});
-  }
-
-  /** Original server inputs do not prove which tapes the client committed. */
-  async captureInputs(){
-    if(!this.inputOrigin)return;
-    const inputs=new Map(this.inputs);this.inputs.clear();
-    const rows:unknown[]=[];let complete=this.missingInputRequests===0;
-    const end=performance.now()+5000;
-    try{await bounded('idle original period inputs',async signal=>{
-      const replies=new Map<string,{reply:PeriodReply;bytes:number;bodyHash:string}>();
-      for(const scope of [...PERIOD_SCOPES,'sessions'] as const){
-        const resource=[...PERIOD_SCOPES,'sessions'].indexOf(scope);
-        const input=inputs.get(scope);
-        if(!input?.complete){complete=false;rows.push({resource,status:'unavailable'});continue;}
-        try{
-          let captured=replies.get(input.id);
-          if(!captured){
-            const response=await this.cdp.send<{body:string;base64Encoded:boolean}>('Network.getResponseBody',{requestId:input.id},signal);
-            if(typeof response.body!=='string'||typeof response.base64Encoded!=='boolean'||response.body.length>4*1024*1024)throw 0;
-            const bytes=Buffer.from(response.body,response.base64Encoded?'base64':'utf8');if(bytes.length>4*1024*1024)throw 0;
-            // Replay paths and money dictionaries do not encode these scalar fields.
-            captured={reply:JSON.parse(bytes.toString()) as PeriodReply,bytes:bytes.length,bodyHash:createHash('sha256').update(bytes).digest('hex')};replies.set(input.id,captured);
-          }
-          if(signal.aborted||performance.now()>end)throw 0;
-          const {reply}=captured;
-          const part=reply[scope];if(part?.state!=='complete')throw 0;
-          const basis={evaluatedAt:part.basis.evaluatedAt,evidenceCut:part.basis.evidenceCut,range:{from:part.basis.range.from,to:part.basis.range.to}};
-          let value:unknown;
-          if(scope==='sessions'){
-            const work=reply.sessions!;if(work.state!=='complete')throw 0;
-            const v=work.value;value={anchor:v.anchor,cut:v.cut??null,knownFrom:v.knownFrom,fixed:!!v.fixed,refs:v.refs.length,spans:v.spans.length,blocks:(v.packed?.blocks.length??0)/3};
-          }else{
-            const v=reply[scope]!;if(v.state!=='complete')throw 0;
-            const tape=v.value.tape;if(!tape||tape.quota.length>128)throw 0;
-            const quota=[];
-            for(const series of tape.quota){
-              const samples=series.samples;if(!Array.isArray(samples)||samples.length%SAMPLE_WIDTH)throw 0;
-              const n=sampleCount(samples);let first=sampleAt(samples,0)?.at??null,next=sampleAt(samples,1)?.at??null,last=sampleAt(samples,n-1)?.at??null;
-              if(series.samplesEncoding==='delta'){
-                let at=0;
-                for(let i=0;i<n;i++){
-                  const delta=samples[i*SAMPLE_WIDTH];if(!finite(delta))throw 0;
-                  at+=delta;if(!i)first=at;if(i===1)next=at;last=at;
-                  if((i&4095)===4095){await setImmediate(undefined,{signal});if(performance.now()>end)throw 0;}
-                }
-              }
-              quota.push({samples:n,first,next,last});
-            }
-            value={from:tape.from,cut:tape.cut,replaceFrom:tape.replaceFrom,replaceTo:tape.replaceTo??null,fixed:!!tape.fixed,moneySeries:tape.money.length,quota};
-          }
-          if(signal.aborted||performance.now()>end)throw 0;
-          rows.push({resource,status:'complete',bytes:captured.bytes,bodyHash:captured.bodyHash,selection:input.selection,evaluatedAt:input.evaluatedAt,basis,value});
-        }catch{complete=false;rows.push({resource,status:'unavailable'});if(signal.aborted||performance.now()>end)throw 0;}
-      }
-    });}catch{complete=false;}
-    this.save('idle-cpu-main-period-inputs',{mode:'diagnostic',kind:'Resources0 quota,1 budget,2 funds,3 sessions. Latest original evidence-bearing replies before profiling; read after counters and profiler stop. Committed tapes and retirementAt remain unknown.',status:complete?'complete':'insufficient-evidence',fixtureStart:this.inputOrigin.fixtureStart,missingInputRequests:this.missingInputRequests,rows});
+    this.save('idle-cpu-committed-'+stage,{mode:'diagnostic',kind:'Committed quota rebuild inputs, outputs and identities outside counters; intermediate commits, pool retirement and observer cost remain unknown.',value},true);
   }
 
   private async clock(stage:string){
@@ -315,7 +268,6 @@ export class IdleCpuDiagnostic {
 
   /** Called before the unchanged from/to/reset/metrics sequence. */
   async start(){
-    this.stopInputObservation();
     this.frame=(await this.cdp.send<{frameTree:{frame:{id:string}}}>('Page.getFrameTree')).frameTree.frame.id;
     if(typeof this.frame!=='string'||!this.frame)throw Error('Owned target frame unavailable');
     this.cdp.on('Tracing.dataCollected',this.collected);this.cdp.on('Tracing.tracingComplete',this.completed);
@@ -383,7 +335,6 @@ export class IdleCpuDiagnostic {
     this.save('idle-cpu-edge',receipt);return receipt;
   }
   async close(){
-    this.stopInputObservation();this.inputs.clear();
     this.active=false;this.binding.close();
     this.cdp.off('Tracing.dataCollected',this.collected);this.cdp.off('Tracing.tracingComplete',this.completed);
     if(this.profiler){try{await this.cdp.send('Profiler.stop');}finally{await this.cdp.send('Profiler.disable');this.profiler=false;}}
