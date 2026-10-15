@@ -533,19 +533,98 @@ for(const capable of [false,true])for(const empty of [false,true])test(`capabili
   assert.deepEqual(frames.map(frame=>({type:frame.type,data:JSON.parse(frame.data)})),[{type:'devices',data:{}}]);
 });
 
+test('an explicit local collector scope makes a preferred device unavailable without discarding its account',t=>{
+  const {store,directory,ingest,user,batch,credential,sender,device}=setup();ingest.accept(credential,batch(now),now);
+  const second={...sender,machine:{...sender.machine,id:'measurement-local-scope-B123'}};
+  const ask=(at:number,extra:object={})=>ingest.checkin(credential,{...second,paced:true,capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[],...extra},at);
+  ask(now+1,{subscriptions:[{provider:'codex',account}]});
+  const target=directory.devices(user.id).find(candidate=>candidate.id!==device)!.id,source=store.held(user.id)[0].id;
+  store.measurementPolicies.savePreference(source,0,target);
+  const bob=directory.createUser('scope-bob@example.com','Bob','x',now);store.hold(source,bob.id,now);
+  const board=directory.createBoard('Other board',bob.id,now),secret=newSecret('qt_s');directory.createSession(secret,bob.id,now,86400000);
+  let clock=now+2;
+  const events=new Events({store,directory,ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>clock,after:()=>()=>{}});events.attach();t.after(()=>{events.close();store.close();});
+  const frames:Frame[]=[];events.open({user:bob.id,secret,board:board.id,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});events.flush();frames.length=0;
+  const seen=ingest.measurementSources(user.id,clock)[0].candidates.find(candidate=>candidate.device===target)!.seenAt;
+  ask(clock,{collectors:['claude']});events.flush();
+  const unavailable=ingest.measurementSources(user.id,clock)[0].candidates.find(candidate=>candidate.device===target)!;
+  assert.equal(unavailable.reason,'not_configured');assert.equal(unavailable.seenAt,seen);
+  assert.equal(ingest.measurementSources(bob.id,clock)[0].pending,false);
+  assert.deepEqual(frames.map(frame=>({type:frame.type,data:JSON.parse(frame.data)})),[{type:'devices',data:{}}]);
+  const fallback=ingest.checkin(credential,{...sender,paced:true,subscriptions:[{provider:'codex',account}]},now+120000).subscriptions[0];
+  assert.equal(fallback.onDuty,true);assert.equal(ingest.refresh(source,now+120000).value.unavailable,null);
+  for(const collectors of [[null],['future-collector']])ask(now+120001,{collectors});
+  assert.equal(ingest.measurementSources(user.id,now+120001)[0].candidates.find(candidate=>candidate.device===target)!.reason,'not_configured','invalid or unsupported lists do not fabricate an empty scope');
+  ask(now+120002,{collectors:['codex']});
+  const restored=ingest.measurementSources(user.id,now+120002)[0].candidates.find(candidate=>candidate.device===target)!;
+  assert.equal(restored.reason,'eligible');assert.equal(restored.seenAt,seen,'configuration alone never renews account evidence');
+  assert.deepEqual(store.measurementPolicies.preference(source),{revision:1,device:target});
+});
+
+test('a locally absent collector releases idle duty and cannot receive a contradictory claim',()=>{
+  const {store,ingest,user,batch,credential,sender,duty}=setup();ingest.accept(credential,batch(now),now);
+  const denied=ingest.checkin(credential,{...sender,paced:true,collectors:[],subscriptions:[{provider:'codex',account}]},now+1);
+  assert.equal(denied.subscriptions[0].measure,false);assert.equal(duty.holder(account),null);
+  const other={...sender,machine:{...sender.machine,id:'measurement-local-fallback-12'}};
+  assert.equal(ingest.checkin(credential,{...other,paced:true,subscriptions:[{provider:'codex',account}]},now+2).subscriptions[0].onDuty,true);
+  assert.equal(store.state(store.held(user.id)[0].id).successAt,now);store.close();
+});
+
+test('local collector removal preserves issued work and its resource without renewing unavailable duty',()=>{
+  const {store,ingest,user,batch,credential,sender,duty,device}=setup();ingest.accept(credential,batch(now),now);
+  const source=store.held(user.id)[0].id;
+  const answer=ingest.checkin(credential,{...sender,paced:true,capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[{provider:'codex',account}]},now+120000).subscriptions[0];
+  assert.equal(answer.measure,true);const until=duty.until(account);
+  ingest.requestRefresh(source,now+120001);const original=ingest.refresh(source,now+120001).value.request!;
+  ingest.checkin(credential,{...sender,collectors:[],capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[]},now+120002);
+  assert.equal(duty.holder(account),device);assert.equal(duty.until(account),until);
+  const retained=ingest.refresh(source,now+120002).value.request!;assert.equal(retained.deadline,original.deadline);assert.equal(retained.dispatchAt,original.dispatchAt);
+  const policy=store.measurementPolicies.device(device),attemptContext={version:1,authority:policy.authority,collectorEpoch:0,target:{kind:'verified',accountKey:account},commandId:answer.commandId};
+  assert.equal(ingest.accept(credential,batch(now+120003,{attemptContext,staleAfterMs:3*3600000}),now+120003).accepted,1);
+  assert.equal(duty.holder(account),null);assert.equal(ingest.refresh(source,now+120003).value.request?.status,'updated');
+  assert.equal(store.state(source).successAt,now+120003);store.close();
+});
+
+test('local scope changes reach an owner even before a device confirms any account',t=>{
+  const {store,directory,ingest,user,batch,credential,sender,device}=setup();ingest.accept(credential,batch(now),now);
+  const second={...sender,machine:{...sender.machine,id:'measurement-local-unknown-123'}};
+  const contact={...second,capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[]};ingest.checkin(credential,contact,now+1);
+  const target=directory.devices(user.id).find(candidate=>candidate.id!==device)!.id;
+  const board=directory.createBoard('Other board',user.id,now),secret=newSecret('qt_s');directory.createSession(secret,user.id,now,86400000);
+  const events=new Events({store,directory,ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>now+2,after:()=>()=>{}});events.attach();t.after(()=>{events.close();store.close();});
+  const frames:Frame[]=[];events.open({user:user.id,secret,board:board.id,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});events.flush();frames.length=0;
+  ingest.checkin(credential,{...contact,collectors:[]},now+2);events.flush();
+  assert.equal(ingest.measurementSources(user.id,now+2)[0].candidates.find(candidate=>candidate.device===target)!.reason,'not_configured');
+  assert.equal(frames.filter(frame=>frame.type==='devices').length,1);
+});
+
+test('configuration expires independently of resource acceptance and current account evidence',()=>{
+  const {store,ingest,user,batch,credential,sender}=setup();
+  ingest.accept(credential,batch(now),now);ingest.checkin(credential,{...sender,collectors:[],subscriptions:[]},now+1);
+  ingest.accept(credential,batch(now+700000),now+700000);
+  assert.equal(ingest.measurementSources(user.id,now+700000)[0].candidates[0].reason,'not_configured','an in-flight resource does not overwrite a later configuration declaration');
+  assert.equal(store.state(store.held(user.id)[0].id).successAt,now+700000);
+  ingest.measurementSelection.prune(now+720002);
+  assert.equal(ingest.measurementSources(user.id,now+720002)[0].candidates[0].reason,'eligible','expired configuration supplies no negative evidence');
+  store.close();
+});
+
 test('unchanged contacts reuse the private selection baseline at every held-source cohort size',()=>{
   for(const count of [1,20,200]) {
     const {store,directory,ingest,user,batch,credential,sender}=setup();ingest.accept(credential,batch(now),now);
-    const request={...sender,paced:true,subscriptions:[{provider:'codex',account}]};ingest.checkin(credential,request,now+1);
+    const request={...sender,paced:true,collectors:['codex'],subscriptions:[{provider:'codex',account}]};ingest.checkin(credential,request,now+1);
     for(let index=1;index<count;index++){const source=store.source('codex',index.toString(16).padStart(24,'0'),now);store.hold(source,user.id,now);}
     const events=new Events({store,directory,ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>now+15000,after:()=>()=>{}});events.attach();
     try {
       const secret=newSecret('qt_s');directory.createSession(secret,user.id,now,86400000);const frames:Frame[]=[];
       const original=ingest.measurementSelection.privateState.bind(ingest.measurementSelection);let reads=0;
       ingest.measurementSelection.privateState=(...args)=>{reads++;return original(...args);};
+      const accounts=ingest.measurementSelection.candidateAccounts.bind(ingest.measurementSelection);let enumerations=0;
+      ingest.measurementSelection.candidateAccounts=(...args)=>{enumerations++;return accounts(...args);};
       events.open({user:user.id,secret,board:directory.boards(user.id).find(board=>board.personal)!.id,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});events.flush();reads=0;frames.length=0;
       ingest.checkin(credential,request,now+15000);events.flush();
       assert.equal(reads,0,`${count} held sources: a contact does not recalculate selection`);
+      assert.equal(enumerations,0,`${count} held sources: an unchanged collector scope does not enumerate accounts`);
       assert.deepEqual(frames.map(frame=>frame.type),['deviceContacts']);
       const device=directory.devices(user.id)[0].id,change=store.measurementPolicies.saveDevice(device,0,desired(false),now+15001);
       ingest.participationChanged(device,change.changed,now+15001);events.flush();assert.equal(reads,1,'a semantic change still revalidates the baseline');

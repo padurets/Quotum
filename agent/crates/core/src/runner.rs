@@ -181,7 +181,7 @@ impl Runner {
         let mut commands: Vec<Option<String>> = vec![None; self.adapters.len()];
         let mut command_accounts: Vec<Option<String>> = vec![None; self.adapters.len()];
         let mut policy_contact = Instant::now();
-        if sink.managed() && !providers.is_empty() {
+        if sink.managed() {
             policy = sink.checkin_managed(&[], &providers).policy;
             sink.flush();
             for (index, provider) in providers.iter().enumerate() {
@@ -1063,6 +1063,54 @@ mod tests {
         assert!(events.is_empty(), "waiting at the hub's pace is not news");
         assert_eq!(sink.flushed, 1, "the hub answered: what it did not take goes now");
     }
+    #[test]
+    fn an_empty_local_scope_is_declared_once_without_starting_a_recovery_loop() {
+        struct Empty {
+            checkins: usize,
+        }
+        impl Sink for Empty {
+            fn managed(&self) -> bool {
+                true
+            }
+            fn needs_policy_contact(&self) -> bool {
+                true
+            }
+            fn checkin_managed(&mut self, asks: &[Ask], collectors: &[Provider]) -> crate::sink::CheckinAnswer {
+                assert!(asks.is_empty());
+                assert!(collectors.is_empty());
+                self.checkins += 1;
+                crate::sink::CheckinAnswer {
+                    directives: Vec::new(),
+                    commands: Vec::new(),
+                    accounts: Vec::new(),
+                    policy: None,
+                }
+            }
+            fn deliver(&mut self, _: &Outcome) {
+                panic!("empty scope delivered");
+            }
+        }
+        let stop = Stop::new();
+        let watchdog = stop.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            watchdog.request(crate::stop::How::Exit);
+        });
+        let state = std::env::temp_dir().join(format!("quotum-empty-scope-{}", std::process::id()));
+        let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
+        let mut runner = Runner::with_adapters(
+            Config::parse("sessions = false").unwrap(),
+            paths,
+            Vec::new(),
+            std::env::temp_dir(),
+            stop,
+        );
+        let mut sink = Empty { checkins: 0 };
+        runner.policy_contact_every = Duration::ZERO;
+        runner.run(&mut sink, |_| panic!("empty scope measured"));
+        assert_eq!(sink.checkins, 1);
+    }
+
     #[test]
     fn hub_denial_is_learned_before_unknown_account_discovery_with_sessions_off() {
         struct Denied {

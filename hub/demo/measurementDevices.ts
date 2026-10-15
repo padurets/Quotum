@@ -21,6 +21,7 @@ export async function seedMeasurementDevices(_store:Store,_directory:Directory,s
   await stand.agents.get('laptop')!.ingest([observed(-2000,{resets:{available:2},balances:credits('finite')})],[],Date.now());
   await stand.agents.get('desktop')!.ingest([observed(-1000,{windows:[],resourceStatus:{windows:'missing',resets:'missing'},balances:credits('finite')})],[],Date.now());
   await stand.agents.get('backup')!.ingest([observed(0,{resets:{available:2},balances:credits('missing'),client:'1.2.4'})],[],Date.now());
+  const local=stand.agents.get('local-only')!;local.configuredCollectors=['claude'];await local.checkin([]);
   const view=await owner.get<{devices:{id:string;reported:string;policy:{revision:number}}[];sources:{source:string;preference:{revision:number};candidates:{device:string;reason:string}[]}[]}>('/api/devices?measurement=1');
   const desktop=view.devices.find(device=>device.reported==='desktop')!,backup=view.devices.find(device=>device.reported==='backup')!;
   await owner.post(`/api/devices/${desktop.id}/measurement-policy`,{operationId:randomUUID(),expectedRevision:desktop.policy.revision,desired:{enabled:false,collectors:{claude:true,codex:true,antigravity:true}}});

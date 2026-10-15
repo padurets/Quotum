@@ -113,6 +113,10 @@ An accepted navigation entry retires the previous connection dialogs before focu
 the source. Opening the main window without a destination preserves the current draft.
 The hub reuses its private selection baseline between semantic changes and deadlines;
 eligibility changes notify holders even while they watch another board.
+Local collector configuration can make an own candidate unavailable without changing
+its account evidence, hub participation setting or retained resource producers. The
+reason stays private to that device's owner; other holders receive only a semantic
+hint when their subscription's effective selection changes.
 
 `POST /api/devices/:device/measurement-policy` takes
 `{operationId, expectedRevision, desired: {enabled, collectors: {claude, codex, antigravity}}}`.

@@ -457,6 +457,8 @@ connections, holdings and history. Effective gate changes permanently require la
 epoch evidence; a delayed packet cannot bypass disable/re-enable using corrected time.
 The agent bootstraps policy before discovery and enforces its connection-bound durable
 cache separately from local configuration and scheduler waits.
+A managed runner with no local collectors declares that empty scope once at bootstrap;
+it does not add a recurring policy loop for an empty local scope.
 
 MeasurementSelection indexes current account evidence in both directions. Explicit
 check-ins can declare several accounts across batches; a singleton replaces the previous
@@ -467,6 +469,12 @@ bindings are display facts. Auto uses Duty and Cadence; a global preferred own e
 device waits for the issued measurement's safe boundary, falls back on ordinary eligible
 collectors when unavailable, and returns on recovery. Reads and intent saves do not
 extend leases. No per-resource parallel collector or completeness ranking is added.
+An explicit complete collector list supplies bounded local availability independently
+of account evidence. An omitted collector cannot be preferred while the declaration
+is current; listing one never establishes or renews an account. The twelve-minute
+cache and its private event deadlines use the existing maintenance and event clocks.
+Unchanged declarations update their deadline without enumerating candidate accounts.
+Configuration does not revoke an issued command or change resource admission.
 
 Ingest decides resource admission, issued-command acknowledgement, source failure and
 manual fresh-data completion separately. Modern commands have immutable IDs and launch

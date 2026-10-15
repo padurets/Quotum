@@ -28,6 +28,7 @@ export const ru = {
   'measurements.unavailablePreference': 'Предпочтительное устройство недоступно',
   'measurements.eligible': 'Доступно',
   'measurements.disabled': 'Измерения отключены',
+  'measurements.not_configured': 'Сборщик выключен в локальной конфигурации',
   'measurements.epoch_required': 'Требуется обновление Quotum',
   'measurements.offline': 'Нет недавнего контакта по аккаунту',
   'measurements.paused': 'Ожидание после ошибки клиента',

@@ -140,6 +140,7 @@ export class Agent {
   static readonly VERSION = 'quotum/0.7.0';
   reportedVersion=Agent.VERSION;
   measurementControl=true;
+  configuredCollectors:ClientProvider[]|null=null;
 
   /** Connects a machine with a one-time code that `person` approves, as `quotum connect` does. */
   static async byCode(base: string, machine: MachineInfo, person: Person): Promise<Agent> {
@@ -169,7 +170,7 @@ export class Agent {
 
   /** Asks whether to measure its subscriptions now, following the hub's pace (spec: Asking whether to measure). */
   async checkin(subscriptions: object[], paced = true) {
-    const body = {version: 1, agent: this.reportedVersion, paced, machine: this.machine, subscriptions,...(this.measurementControl?{capabilities:{measurementPolicy:1,attemptContext:1},...(this.policy?{policyAck:{authority:this.policy.authority,revision:this.policy.revision}}:{})}:{})};
+    const body = {version: 1, agent: this.reportedVersion, paced, machine: this.machine, subscriptions,...(this.configuredCollectors?{collectors:this.configuredCollectors}:{}),...(this.measurementControl?{capabilities:{measurementPolicy:1,attemptContext:1},...(this.policy?{policyAck:{authority:this.policy.authority,revision:this.policy.revision}}:{})}:{})};
     type Told = {provider: string; measure: boolean; onDuty?: boolean; askInMs?: number; nextInMs?: number;accountKey?:string;commandId?:string};
     const reply=(await call<{subscriptions:Told[];policy?:MeasurementPolicy}>(this.base,'POST','/v1/checkin',{body,token:this.token})).body;
     this.policy=reply.policy;

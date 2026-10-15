@@ -289,8 +289,8 @@ export function parseCheckin(body: unknown): Checkin {
   const capabilities = isObject(input.capabilities) ? input.capabilities : {};
   const ack = isObject(input.policyAck) && typeof input.policyAck.authority === 'string' && Number.isSafeInteger(input.policyAck.revision) && (input.policyAck.revision as number) >= 0
     ? {authority: input.policyAck.authority, revision: input.policyAck.revision as number} : null;
-  const collectors = Array.isArray(input.collectors) && input.collectors.length <= 16
-    ? [...new Set(input.collectors.filter((id): id is ClientProvider => typeof id === 'string' && providerOf(id)?.measuredBy === 'client'))] : null;
+  const collectors = Array.isArray(input.collectors) && input.collectors.length <= 16 && input.collectors.every(id=>typeof id==='string'&&providerOf(id)?.measuredBy==='client')
+    ? [...new Set(input.collectors as ClientProvider[])] : null;
   return {...sender, paced, subscriptions, measurementPolicy: capabilities.measurementPolicy === 1, attemptContext: capabilities.attemptContext === 1, policyAck: ack, collectors};
 }
 

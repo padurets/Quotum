@@ -39,7 +39,7 @@ test('the fleet catalogue exposes version evidence, epoch barriers, global prefe
   const funds=source.origins.find(origin=>origin.resource==='funds')!;
   assert.notEqual(funds.valueOrigin!.device,funds.observationOrigin!.device);assert.equal(funds.status,'missing');seen.add('independent-funds');
   assert.equal(funds.valueOrigin!.client,'1.2.3');assert.equal(funds.observationOrigin!.client,'1.2.4');seen.add('measurement-version');
-  assert.deepEqual(new Set(source.candidates.map(candidate=>candidate.reason)),new Set(['eligible','disabled','epoch_required']));
+  assert.deepEqual(new Set(source.candidates.map(candidate=>candidate.reason)),new Set(['eligible','disabled','epoch_required','not_configured']));seen.add('not-configured');
   const owner=stand.people.get('ana')!,preferred=source.preference.device!;
   assert.equal((await fetch(base+'/api/devices/'+preferred,{method:'DELETE',headers:{cookie:owner.cookie,origin:base}})).ok,true);
   const disconnected=(await owner.get<typeof view>('/api/devices?measurement=1')).sources.find(candidate=>candidate.source===source.source)!;

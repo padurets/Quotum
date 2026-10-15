@@ -398,9 +398,18 @@ revision and epochs are nonnegative safe integers, and `changedAt` is a nullable
 hub timestamp in milliseconds. These fields do not change supplier identity.
 `policyAck: {authority, revision}` confirms only a policy durably saved by the agent.
 The optional `collectors` request lists locally configured collectors, without
-activating ones disabled in local configuration.
+activating ones disabled in local configuration. A valid complete list, including
+`[]`, describes the active managed runner's scope (including `--only`). An absent
+collector makes that device temporarily ineligible for it; another eligible device
+uses Auto fallback. Listing a collector does not establish or renew account evidence.
+The hub retains this private declaration for at most twelve minutes after its last
+valid report, alongside bounded account evidence. Missing, malformed or unsupported
+lists supply no new declaration and do not renew an earlier one. This availability
+metadata never changes policy epochs, holdings or resource admission, nor cancels
+an issued command or a dispatched refresh's original binding and deadline.
 
-The agent asks for policy before first account discovery. It keeps one bounded,
+The agent asks for policy before first account discovery, including a single empty
+collector declaration when a managed runner has no local collectors. It keeps one bounded,
 connection-, credential- and machine-bound policy cache separately from config.
 Missing fields, HTTP failures and ordinary unanswered scheduling never clear a
 known denial. A blocked collector launches no measurement and cannot use offline
@@ -634,8 +643,9 @@ The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
 
 ## Privacy
 
-Measurement policy, current candidate identities, command IDs, device versions and
-producer identities are owner/control metadata. Board readers do not receive foreign
+Measurement policy, local collector availability, current candidate identities,
+command IDs, device versions and producer identities are owner/control metadata.
+Board readers do not receive foreign
 device IDs, names or versions. A preference is global per subscription and can be
 changed only by current holders to their own eligible device, or cleared by a holder.
 Resource producer evidence is saved at acceptance, with separate latest value and

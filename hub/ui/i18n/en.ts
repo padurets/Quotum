@@ -33,6 +33,7 @@ export const en = {
   'measurements.unavailablePreference': 'Preferred device is unavailable',
   'measurements.eligible': 'Eligible',
   'measurements.disabled': 'Measurements disabled',
+  'measurements.not_configured': 'Collector disabled in local configuration',
   'measurements.epoch_required': 'Quotum update required',
   'measurements.offline': 'No recent account contact',
   'measurements.paused': 'Waiting after a client error',

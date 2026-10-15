@@ -131,15 +131,16 @@ export class Ingest {
           let onDuty = false;
           if (recorded.delivery) {
             this.cadence.refreshResult(account, device.id, observedAt, true, now);
-            if (evidence?.current && evidence.expiresAt>now && this.cadence.canRenewDuty(account, device.id, observedAt)) {
+            if (evidence?.current && evidence.expiresAt>now && this.cadence.canRenewDuty(account, device.id, observedAt) && this.measurementSelection.configured(device.id,snapshot.provider,now)) {
               this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now, acknowledge);
               onDuty = this.duty.holder(account) === device.id;
-            }
+            }else if(acknowledge&&!this.measurementSelection.configured(device.id,snapshot.provider,now))this.duty.acknowledge(account,device.id,observedAt);
           } else if (acknowledge) this.duty.acknowledge(account, device.id, observedAt);
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
           if (recorded.delivery) this.cadence.delivered(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,snapshot.staleAfterMs,this.signals(source,account,now).inUse,now,onDuty,acknowledge);
           else if (recorded.accepted) this.cadence.observed(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,this.signals(source,account,now).inUse,now,acknowledge);
           else if (acknowledge) this.cadence.acknowledge(account,device.id,observedAt);
+          this.measurementSelection.releaseUnconfigured(account,snapshot.provider,now);
         });
       }
 
@@ -208,6 +209,12 @@ export class Ingest {
     const request = parseCheckin(body);
     const device = this.device(credential, request, now);
     const policy = this.store.measurementPolicies.device(device.id);
+    const configured=this.measurementSelection.configure(device.id,request.collectors,now);
+    if(configured.changed)this.directory.measurementsChanged(device.userId);
+    for(const {key,provider} of configured.accounts) {
+      const source=this.store.findSource(provider,key);
+      if(source)this.notifyMeasurementOwners(source);
+    }
     const confirmation=this.store.measurementPolicies.confirm(device.id, request.measurementPolicy && request.attemptContext, request.policyAck?.revision ?? null, request.policyAck?.authority ?? null);
     if (confirmation.changed) this.directory.measurementsChanged(device.userId);
     // Capability changes affect existing account candidates even without a subscription directive.

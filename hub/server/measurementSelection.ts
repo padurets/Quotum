@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {admitMeasurement, type AttemptContext} from './domain/measurementPolicy.js';
-import type {ClientProvider} from './domain/providers.js';
+import {clientProviders,type ClientProvider} from './domain/providers.js';
 import type {Store} from './store/store.js';
 import type {Directory} from './store/directory.js';
 import type {Duty} from './duty.js';
@@ -8,7 +8,8 @@ import type {Cadence} from './cadence.js';
 
 type Candidate = {device: string; provider: ClientProvider; key: string; seenAt: number; expiresAt: number};
 type Command = {id: string; device: string; provider: ClientProvider; key: string; authority: string; epoch: number; mode: 'legacy' | 'contextV1'; at: number; deadline: number};
-export type CandidateReason = 'eligible' | 'disabled' | 'epoch_required' | 'offline' | 'paused' | 'account_unknown' | 'revoked';
+export type CandidateReason = 'eligible' | 'disabled' | 'not_configured' | 'epoch_required' | 'offline' | 'paused' | 'account_unknown' | 'revoked';
+const CONFIGURATION_TTL_MS=12*60_000;
 
 /** Current account evidence is indexed both ways; historical device_sources is never an authority. */
 export class MeasurementSelection {
@@ -16,6 +17,7 @@ export class MeasurementSelection {
   private readonly devices = new Map<string, Map<string, Candidate>>();
   private readonly commands = new Map<string, Command>();
   private readonly refreshCommands = new Map<string, Command>();
+  private readonly configurations = new Map<string,{collectors:Set<ClientProvider>;expiresAt:number}>();
   constructor(private readonly store: Store, private readonly directory: Directory, private readonly duty: Duty, private readonly cadence: Cadence,private readonly changed:(key:string)=>void=()=>{}) {}
 
   observe(key: string, provider: ClientProvider, device: string, now: number, nextAskMs = 120_000, replace = true) {
@@ -34,6 +36,35 @@ export class MeasurementSelection {
 
   candidateAccounts(device:string) {
     return [...(this.devices.get(device)?.values()??[])].map(({key,provider})=>({key,provider}));
+  }
+
+  configured(device:string,provider:ClientProvider,now:number) {
+    const configuration=this.configurations.get(device);
+    return !configuration||configuration.expiresAt<=now||configuration.collectors.has(provider);
+  }
+
+  /** Configuration can remove availability, but never proves or refreshes an account. */
+  configure(device:string,collectors:readonly ClientProvider[]|null,now:number) {
+    if(collectors===null)return {changed:false,accounts:[]};
+    const prior=this.configurations.get(device),next=new Set(collectors);
+    if(prior&&prior.expiresAt>now&&prior.collectors.size===next.size&&[...next].every(provider=>prior.collectors.has(provider))) {
+      prior.expiresAt=now+CONFIGURATION_TTL_MS;
+      return {changed:false,accounts:[]};
+    }
+    const available=clientProviders.map(provider=>this.configured(device,provider,now));
+    const before=this.candidateAccounts(device).map(account=>({...account,configured:this.configured(device,account.provider,now)}));
+    this.configurations.set(device,{collectors:next,expiresAt:now+CONFIGURATION_TTL_MS});
+    const accounts=before.filter(account=>account.configured!==this.configured(device,account.provider,now));
+    for(const {key,provider} of accounts)this.releaseUnconfigured(key,provider,now);
+    return {changed:clientProviders.some((provider,index)=>available[index]!==this.configured(device,provider,now)),accounts};
+  }
+
+  /** A local scope change waits for issued work, but idle authority cannot block fallback. */
+  releaseUnconfigured(key:string,provider:ClientProvider,now:number) {
+    const holder=this.duty.holder(key);
+    if(holder===null||this.configured(holder,provider,now)||this.duty.measuring(key,now))return;
+    this.cadence.retainDispatched(key,holder);
+    this.duty.release(key,holder);this.cadence.released(key,holder);this.changed(key);
   }
 
   /** Multiplexed account groups may span batches; a singleton is evidence of a changed login. */
@@ -60,6 +91,7 @@ export class MeasurementSelection {
     if (!this.directory.deviceLive(device)) return 'revoked';
     const policy = this.store.measurementPolicies.device(device), gate = policy.collectors[provider];
     if (!policy.enabled || !gate.enabled) return 'disabled';
+    if (!this.configured(device,provider,now)) return 'not_configured';
     if (gate.requiresEpoch && !this.store.measurementPolicies.control(device).capable) return 'epoch_required';
     const candidate = this.candidates.get(key)?.get(device);
     if (!candidate || candidate.provider !== provider) return 'account_unknown';
@@ -88,6 +120,8 @@ export class MeasurementSelection {
   }
 
   claim(source: string | null, provider: ClientProvider, key: string, device: string, active: boolean, now: number) {
+    this.releaseUnconfigured(key,provider,now);
+    if(!this.configured(device,provider,now))return {measure:false,until:now+60_000};
     const preferred = this.preferred(source, provider, key, now), holder = this.duty.holder(key);
     if (preferred !== null) {
       if (holder !== preferred && holder !== null && this.duty.measuring(key, now)) return {measure: false, until: Math.min(this.duty.until(key)!, now+15_000)};
@@ -150,6 +184,7 @@ export class MeasurementSelection {
   }
 
   invalidate(device: string, providers?: readonly ClientProvider[]) {
+    if(!providers)this.configurations.delete(device);
     const affected = [...(this.devices.get(device)?.values() ?? [])].filter(c => !providers || providers.includes(c.provider));
     for (const c of affected) {
       this.duty.release(c.key, device);
@@ -163,6 +198,7 @@ export class MeasurementSelection {
   /** Existing hub maintenance also releases evidence from devices that never reconnect. */
   prune(now:number) {
     let removed=0;
+    for(const [device,configuration] of this.configurations)if(configuration.expiresAt<=now||!this.directory.deviceLive(device))this.configurations.delete(device);
     for(const account of this.candidates.values())for(const candidate of account.values()) {
       if(candidate.expiresAt>now&&this.directory.deviceLive(candidate.device))continue;
       this.duty.release(candidate.key,candidate.device);
@@ -179,12 +215,16 @@ export class MeasurementSelection {
     const owned=new Set(this.directory.devices(user).map(device=>device.id));
     const value:unknown[]=[],deadlines:number[]=[];
     const deadline=(at:number|null)=>{if(at!==null&&at>now)deadlines.push(at);};
+    value.push(['configured',[...owned].sort().map(device=>{
+      deadline(this.configurations.get(device)?.expiresAt??null);
+      return [device,clientProviders.map(provider=>this.configured(device,provider,now))];
+    })]);
     for(const source of this.store.held(user)) {
       if(!['claude','codex','antigravity'].includes(source.provider))continue;
       const key=source.account,until=this.duty.until(key),{holder,pending}=this.state(source.id,source.provider as ClientProvider,key,now);
       deadline(until);
       const candidates=[...(this.candidates.get(key)?.values()??[])];
-      for(const candidate of candidates){deadline(candidate.expiresAt);deadline(this.cadence.pausedUntil(key,candidate.device,now));}
+      for(const candidate of candidates){deadline(candidate.expiresAt);deadline(this.cadence.pausedUntil(key,candidate.device,now));deadline(this.configurations.get(candidate.device)?.expiresAt??null);}
       value.push([source.id,holder===null?'none':owned.has(holder)?'own':'external',pending,
         candidates.filter(candidate=>owned.has(candidate.device)).map(candidate=>[candidate.device,candidate.expiresAt>now,candidate.expiresAt>now&&this.cadence.pausedUntil(key,candidate.device,now)!==null]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])))]);
     }
