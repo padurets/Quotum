@@ -27,7 +27,7 @@ function ResourceOrigins({origin}:{origin:ResourceOrigin}) {
   const stale=origin.staleAt===null || now>origin.staleAt;
   return <li className="settings-list-row popover-row"><span className="settings-item-main">
     <b>{t(origin.resource==='funds'?'money.additionalFunds':origin.resource==='resets'?'measurements.resets':'measurements.quotas')}</b>
-    <small data-time>{t(`measurements.status.${stale&&['observed','finite'].includes(origin.status)?'stale':origin.status}`)}</small>
+    <small data-time>{t(`measurements.status.${stale&&['observed','finite','unlimited'].includes(origin.status)?'stale':origin.status}`)}</small>
     <small>{t('measurements.valueOrigin')}</small><OriginDetails origin={origin.valueOrigin}/>
   </span><span className="settings-item-detail"><small>{t('measurements.observationOrigin')}</small><OriginDetails origin={origin.observationOrigin}/></span></li>;
 }
