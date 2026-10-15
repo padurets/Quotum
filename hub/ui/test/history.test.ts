@@ -184,16 +184,20 @@ test('a monetary pan exposes new data without notifying balance drawings for qua
   const context={budgetHistory:h.store,fundsHistory:h.store,useSyncExternalStore:(subscribe:HistoryStore['subscribePlot'],read:HistoryStore['getPlot'])=>{
     let value=read();const watch:Watch={read,stop:()=>{},changes:0};
     watch.stop=subscribe(()=>{const next=read();if(next!==value){value=next;watch.changes++;}});watches.push(watch);return value;
-  },hook:null as unknown as (family:string,quantities?:boolean)=>unknown};
+  },hook:null as unknown as (family:string)=>unknown};
   const hook=source.slice(source.indexOf('export function useBudgetHistoryPlot('),source.indexOf('/** A fresh answer from either resource'));
   runInNewContext(ts.transpileModule(hook.replace('export function','function')+'\nglobalThis.hook=useBudgetHistoryPlot;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
-  context.hook('budget');context.hook('funds');context.hook('budget',true);
+  context.hook('budget');context.hook('funds');
+  let quantities=h.store.getPlot();
+  const quantityWatch:Watch={read:h.store.getPlot,changes:0,stop:()=>{}};
+  quantityWatch.stop=h.store.subscribePlot(()=>{const next=h.store.getPlot();if(next!==quantities){quantities=next;quantityWatch.changes++;}});
+  watches.push(quantityWatch);
   const drawing=watches[0].read()!;
   assert.equal(watches[1].read(),drawing);
   for(const field of ['meterChunks','series','coverage','activityCells'] as const)assert.equal(drawing[field],plot[field],'snapshots share prepared arrays');
   const chunks=plot.meterChunks,reads=h.reads.length;
   for(let i=1;i<=3;i++){h.store.pan({token:1,length:24*H,from:range.from+i*plot.cell,to:range.to+i*plot.cell,direction:0});await flush();}
-  assert.deepEqual(watches.map(w=>w.changes),[0,0,3],'cached movement updates spending quantities without rendering balance or funds');
+  assert.deepEqual(watches.map(w=>w.changes),[0,0,3],'cached movement updates accounting quantities without rendering balance or funds');
   assert.equal(h.store.getPlot()!.meterChunks,chunks,'cached movement does not rebuild the drawing strip');
   assert.equal(h.store.getPlot()!.meterFrame!.from,Math.floor((range.from+3*plot.cell)/plot.cell)*plot.cell);
   assert.equal(h.reads.length,reads);

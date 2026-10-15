@@ -12,6 +12,7 @@ import {WIDGETS, widgetVisible} from '../domain/widgets.js';
 import {Directory} from '../store/directory.js';
 import {migrate, STEPS} from '../store/schema.js';
 import {Store} from '../store/store.js';
+import {ordered} from '../domain/layout.js';
 import {BoardAdditions} from '../additions.js';
 import type {Credentials} from '../secrets/index.js';
 
@@ -206,6 +207,8 @@ test('retired preview spending aliases read losslessly but are never active or a
   assert.deepEqual(wire[1].map(place=>place[0]),[9,10]);
   assert.deepEqual(decoded,view);
   assert.equal(migrateFixed(decoded,resources),decoded,'unrelated preview layout fields are not reset');
+  assert.equal(widgetVisible(decoded,'source:wallet',10),true,'retiring a builtin never hides implicit source cards');
+  assert.equal(widgetVisible({...decoded,hidden:['source:wallet']},'source:wallet',10),false,'source visibility still respects the saved hide');
   for(const id of retired){assert.ok(!WIDGETS.includes(id as typeof WIDGETS[number]));assert.equal(widgetVisible(decoded,id,10),false);}
   const fresh=migrateFixed(undefined,resources);
   assert.ok(retired.every(id=>!fresh.shown.includes(id)&&!fresh.layout.places[id]));
@@ -241,4 +244,22 @@ test('retired Add receipts stay immutable and never save or resurrect removed wi
     assert.equal(widgetVisible(directory.view('b'),'budget-history',1),true);
     assert.equal(widgetVisible(directory.view('b'),'budget-spending-history',1),false);
   }finally{store.close();}
+});
+
+
+test('the actual split-view upgrade preserves source order independently of the visibility predicate',()=>{
+  const db=new DatabaseSync(':memory:');
+  try {
+    for(const step of STEPS.slice(0,19))db.exec(step);
+    db.exec("PRAGMA user_version=19; INSERT INTO boards VALUES('b','',1,'u',0); INSERT INTO sources(id,provider,account,created_at) VALUES('A','claude','A',0),('B','claude','B',1); INSERT INTO holders VALUES('A','u',0),('B','u',1)");
+    const input={...structuredClone(EMPTY_VIEW),version:2,shown:['agents'],hidden:['activity','quota-history','quota-table','budget-history','budget-table','subscription-funds'],layout:{columns:6,places:{'source:A':{x:0,w:3,y:10}}}};
+    const ids=['source:A','source:B','agents'];
+    assert.deepEqual(ordered(input.layout,ids).map(item=>item.id),ids);
+    db.prepare('INSERT INTO views VALUES(?,?,?,?,?)').run('b',JSON.stringify(input),'u',0,7);
+    migrate(db,10);
+    const row=db.prepare('SELECT payload,revision FROM views WHERE board_id=?').get('b') as {payload:string;revision:number};
+    const view=decodeView(JSON.parse(row.payload))!;
+    assert.deepEqual(ordered(view.layout,ids).map(item=>item.id),ids,'saved and implicit cards keep their original reading order');
+    assert.equal(row.revision,8);
+  }finally{db.close();}
 });

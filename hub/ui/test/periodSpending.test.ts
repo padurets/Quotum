@@ -68,8 +68,8 @@ async function fixture(t:TestContext) {
 function consumer(sourceId:string,board:string,range:PeriodRange) {
   const hooks=preparationFixture(),Chart=()=>null;
   const sources=[{id:sourceId,title:'Wallet',provider:'openrouter'}];
-  let history:History|null=null,strip:PlotBuffer|null=null,purpose:'balance'|'spending'='spending';
-  const prefs={money:{view:'balance',unit:'USD'},muted:{},range:'1h',horizon:'auto'};
+  let history:History|null=null,strip:PlotBuffer|null=null;
+  const prefs={money:{unit:'USD'},muted:{},range:'1h',horizon:'auto'};
   const memo=(read:()=>unknown,deps:unknown[])=>{const ref=hooks.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!ref.current||deps.some((v,i)=>!Object.is(v,ref.current!.deps[i])))ref.current={deps,value:read()};return ref.current.value;};
   const modules:Record<string,unknown>={
     'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:hooks.useRef,useMemo:memo},
@@ -85,11 +85,11 @@ function consumer(sourceId:string,board:string,range:PeriodRange) {
   type Drawing={lines:Line[];prepared:boolean;axis:{rawValue:(key:string,at:number)=>string|undefined}};
   const context={exports:{} as {MoneyHistory:(props:unknown)=>ReactElement<{children:ReactElement[]}>},require:(name:string)=>modules[name]??{}};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
-  const render=()=>{hooks.begin();const tree=context.exports.MoneyHistory({arrange:{view:EMPTY_VIEW,owner:false},purpose});hooks.commit();return (tree.props.children.find(node=>node?.type===Chart) as ReactElement<Drawing>).props;};
-  return (next:History,plot:PlotBuffer|null,view:'balance'|'spending'='spending')=>{history=next;strip=plot;purpose=view;for(let i=0;i<3;i++){render();hooks.finish();}return render();};
+  const render=()=>{hooks.begin();const tree=context.exports.MoneyHistory({arrange:{view:EMPTY_VIEW,owner:false}});hooks.commit();return (tree.props.children.find(node=>node?.type===Chart) as ReactElement<Drawing>).props;};
+  return (next:History,plot:PlotBuffer|null)=>{history=next;strip=plot;for(let i=0;i<3;i++){render();hooks.finish();}return render();};
 }
 
-for(const amount of ['3000000','9007199254740993'])test(`the actual historical Spending consumer keeps ${amount} through the production pan fold`,async t=>{
+for(const amount of ['3000000','9007199254740993'])test(`the balance consumer preserves the exact remaining amount after spending ${amount} through the pan fold`,async t=>{
   const h=await fixture(t);h.record(NOW-21*M,'0');h.record(NOW-70_000,'0');h.record(NOW-50_000,amount);
   let range={from:selected.from-M,to:selected.to-M};
   const initial=await h.read(range),loader=new HistoryStore({now:()=>NOW,elapsedNow:()=>0,preparations:null,setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{throw Error('unexpected range loss');},
@@ -99,8 +99,8 @@ for(const amount of ['3000000','9007199254740993'])test(`the actual historical S
   await settle(()=>!!loader.get().history&&!loader.get().loading);
   loader.pan({token:1,length:selected.to-selected.from,...selected,direction:1});await settle(()=>!!loader.getPlot());
   const draw=consumer(h.source,h.board,selected),pan=draw(loader.get().history!,loader.getPlot());
-  assert.equal(pan.axis.rawValue(pan.lines[0].key!,selected.to-1),amount,'the raw strip counts the step once');
-  draw(loader.get().history!,loader.getPlot(),'balance');
+  const remaining=(20000000000000000n-BigInt(amount)).toString();
+  assert.equal(pan.axis.rawValue(pan.lines[0].key!,selected.to-1),remaining,'the raw strip retains exact balance after the reported usage');
   range=selected;const answer=await h.read(range);loader.choose('1h',range);loader.endPan(true);
   await settle(()=>!loader.getPlot()&&!loader.get().loading&&loader.get().history?.range===timeRangeKey(range));
   const exact=answer.accounting.project(loader.get().history!,range),series=exact.meterSeries![0];
@@ -108,8 +108,8 @@ for(const amount of ['3000000','9007199254740993'])test(`the actual historical S
   // This also fails on a null-to-zero or skipped-point patch, before invoking the consumer.
   assert.equal(pointSum(series),amount,'the exact boundary points retain the real spending contribution');
   const folded=draw(exact,loader.getPlot());assert.equal(folded.prepared,true);
-  assert.equal(folded.axis.rawValue(folded.lines[0].key!,range.to-1),amount,'folding preserves the exact cumulative readout');
-  assert.equal(folded.lines[0].points.at(-1)![1],pan.lines[0].points.at(-1)![1],'the spending path has no amount jump or duplicate step');
+  assert.equal(folded.axis.rawValue(folded.lines[0].key!,range.to-1),remaining,'folding preserves the exact balance readout');
+  assert.equal(folded.lines[0].points.at(-1)![1],pan.lines[0].points.at(-1)![1],'the balance path has no amount jump or duplicate step');
 });
 
 test('exact spending reclassifies crossing interior steps and keeps exclusive endpoints and currency amounts',async t=>{
@@ -133,5 +133,5 @@ test('gaps stay unlocated while available boundary points retain confirmed zero 
   assert.equal(series.spent,'0');assert.equal(pointSum(series),'0');assert.equal(series.coveredMs,20_000);
   assert.deepEqual(series.unlocated.map(step=>[step.amount,step.evidence]),[['3000000','gap']]);
   assert.deepEqual(series.points.flatMap(point=>point.steps).map(step=>[step.amount,step.evidence]),[['3000000','gap']]);
-  const result=consumer(h.source,h.board,selected)(exact,null);assert.equal(result.prepared,true);assert.equal(result.axis.rawValue(result.lines[0].key!,selected.to-1),'0');
+  const result=consumer(h.source,h.board,selected)(exact,null);assert.equal(result.prepared,true);assert.equal(result.axis.rawValue(result.lines[0].key!,selected.to-1),'19999999997000000');
 });
