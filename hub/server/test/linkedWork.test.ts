@@ -8,7 +8,7 @@ import {HistoryTiles} from '../history.js';
 import {compose, targetOf, type Chunk} from '../domain/history.js';
 import {readHistory} from './historyRead.js';
 import type {LinkInput} from '../domain/links.js';
-import {Events, polled} from '../events.js';
+import {Events, polled,type Frame} from '../events.js';
 import {Ingest} from '../ingest.js';
 import {Duty} from '../duty.js';
 import {Cadence} from '../cadence.js';
@@ -27,6 +27,26 @@ function setup() {
   const link = (input: Partial<LinkInput> = {}) => store.links.mutate(owner.id, 'create', null, {clientId: 'opencode', deviceId: null, route: null, sourceId: wallet, from: now, to: null, ...input, expectedRevision: store.links.revision(owner.id), requestId: randomUUID()}, now).body.links.at(-1)!;
   return {store, directory, owner, board, device, account, wallet, second, live, session, key, link};
 }
+
+test('shared source holders receive work history only from their admitted device cohort',()=>{
+  const f=setup(),reader=f.directory.createUser('outside@example.com','Outside','fixture',now),other=f.directory.boards(reader.id).find(board=>board.personal)!.id;
+  f.store.hold(f.wallet,reader.id,now);f.link();
+  const ingest=new Ingest(f.store,f.directory,new Duty(),new Cadence()),events=new Events({store:f.store,directory:f.directory,ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>now+minute,after:()=>()=>{}},null);
+  events.attach();const own:Frame[]=[],foreign:Frame[]=[];
+  try{
+    for(const [user,board,frames] of [[f.owner.id,f.board,own],[reader.id,other,foreign]] as const){
+      const secret='fixture-reader-'+user;f.directory.createSession(secret,user,now,86_400_000);
+      const opened=events.open({user,board,secret,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});assert.ok(opened&&opened!=='limit');
+    }
+    assert.equal(f.store.workAccess(other).devices.size,0);
+    f.store.creditWork(f.device,now,now+minute,[f.key()]);events.flush();
+    assert.equal(foreign.filter(frame=>frame.type==='history').length,0,'holding the same source grants no work notification');
+    const history=own.filter(frame=>frame.type==='history').map(frame=>JSON.parse(frame.data));
+    assert.equal(history.length,1);assert.ok(history[0].changes.some((change:{source:string;scope:string})=>change.source===f.wallet&&change.scope==='budget'));
+    f.store.links.mutate(f.owner.id,'correct',f.store.links.list(f.owner.id)[0].id,{...f.store.links.list(f.owner.id)[0],sourceId:f.second,expectedRevision:f.store.links.revision(f.owner.id),requestId:randomUUID()},now);events.flush();
+    assert.equal(foreign.filter(frame=>frame.type==='history').length,0,'rule corrections keep the same admission boundary');
+  }finally{events.close();f.store.close();}
+});
 
 test('a later link reattributes live, credit and history without changing the ledger', () => {
   const f = setup(); try {

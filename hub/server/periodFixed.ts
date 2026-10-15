@@ -56,7 +56,8 @@ export function* prepareFixedWork(trace:WorkTrace,range:PeriodRange,cell:number,
     const activity=projection.project(blank,range);
     for(const at of new Set([Math.floor(range.from/barMs)*barMs,Math.floor((range.to-1)/barMs)*barMs])){
       const part={from:Math.max(range.from,at),to:Math.min(range.to,at+barMs)};
-      activity.cells.push([at,index.curves.all.read(part,true),index.curves.all.read(part),index.curves.contexts.filter(curve=>curve.read(part)>0).length]);
+      const agents=new Set(trace.refs.filter((_,i)=>index.curves.contexts[i].read(part)>0).map(ref=>ref.identityRef??ref.ref)).size;
+      activity.cells.push([at,index.curves.all.read(part,true),index.curves.all.read(part),agents]);
       for(const by of ['source','project','device'] as const)for(const group of activity.by[by])group.cells.push([at,index.curves.groups[by].get(group.key)!.read(part)]);
     }
     return {range,totals:rows.map(row=>[ids.get(row.ref)!,row.workedMs,row.lastWorkedAt]),activity};

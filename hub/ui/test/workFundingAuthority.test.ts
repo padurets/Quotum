@@ -18,10 +18,10 @@ for(const personal of [false,true])test(`related unheld funding changes category
  try{
   const raw=h.store.source('codex','b'.repeat(24),NOW-M),row=h.period.get().rows[0],captured=h.store.workAccess(h.board),key=h.store.workKey(h.board,undefined,captured),gate=h.hold();assert.equal(row.source,null);assert.equal(row.sourceStatus,undefined);
   h.store.hold(raw,h.owner,NOW);h.events.flush();await flush();assert.notEqual(h.store.workKey(h.board),key);assert.equal(h.store.workKey(h.board,undefined,captured),key,'a retained access snapshot never reads the new live revision');assert.equal(h.period.get().rows.length,0);
-  gate.release();await flush();let after=h.period.get().rows[0];assert.equal(after.workedMs,row.workedMs);assert.equal(after.ref,row.ref);assert.equal(after.presenceKey,row.presenceKey);assert.ok(after.currentPresence);
+  gate.release();await flush();let after=h.period.get().rows[0];assert.equal(after.workedMs,row.workedMs);assert.equal(after.identityRef,row.identityRef);assert.equal(after.presenceKey,row.presenceKey);assert.ok(after.currentPresence);
   if(personal)assert.equal(after.source,raw);else{
    assert.equal(after.source,null);assert.equal(after.sourceStatus,'notProvided');const heldKey=h.store.workKey(h.board);
-   h.store.share(h.board,raw,h.owner,NOW);h.events.flush();await flush();assert.notEqual(h.store.workKey(h.board),heldKey);after=h.period.get().rows[0];assert.equal(after.source,raw);assert.equal(after.ref,row.ref);assert.equal(after.presenceKey,row.presenceKey);
+   h.store.share(h.board,raw,h.owner,NOW);h.events.flush();await flush();assert.notEqual(h.store.workKey(h.board),heldKey);after=h.period.get().rows[0];assert.equal(after.source,raw);assert.equal(after.identityRef,row.identityRef);assert.equal(after.presenceKey,row.presenceKey);
   }
   const providedKey=h.store.workKey(h.board);h.store.release(raw,h.owner);h.events.flush();await flush();assert.notEqual(h.store.workKey(h.board),providedKey);after=h.period.get().rows[0];assert.equal(after.source,null);assert.equal(after.sourceStatus,undefined);assert.equal(after.workedMs,row.workedMs);assert.equal(after.presenceKey,row.presenceKey);assert.ok(after.currentPresence);
  }finally{await h.close();}

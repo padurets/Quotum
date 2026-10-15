@@ -6,9 +6,24 @@ import {Events} from '../events.js';
 import {PeriodReader} from '../periodRead.js';
 import {readHistory,ReadError} from '../historyRead.js';
 import {Store} from '../store/store.js';
+import {Directory} from '../store/directory.js';
 import {PeriodAccounting} from '../domain/periodAccounting.js';
 import {createHash} from 'node:crypto';
 const M=60_000,H=60*M;
+
+test('captured holdings and route policies reserve their retained maps before allocation',()=>{
+ const store=new Store(':memory:',at),directory=new Directory(store.db),owner=directory.createUser('memory@example.com','Memory','fixture',at);
+ try{
+  for(let i=0;i<300;i++)store.hold(store.source('codex',String(i).padStart(24,'0'),at),owner.id,at);
+  const device=directory.saveDevice({userId:owner.id,machine:{id:'fixture',name:'Laptop',os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},at).id;
+  store.db.prepare('INSERT INTO device_tracking_policy VALUES (?,?,0)').run(device,'*');
+  const reservation=new HistoryTiles(store,8192).reservation();
+  try{assert.throws(()=>store.links.batch([owner.id],reservation.add),HistoryLimit);}finally{reservation.close();}
+  let bytes=0;const context=store.links.batch([owner.id],size=>bytes+=size);
+  assert.equal(context(owner.id,device,'codex').held.size,300);assert.equal(context(owner.id,device,'codex').routeEnabled,false);
+  assert.ok(bytes>300*256,'holdings and disabled policies belong to the same captured budget');
+ }finally{store.close();}
+});
 
 async function fixture(t:TestContext,ceiling?:number,devices=1){
  t.mock.method(Date,'now',()=>at+2*H);const h=await centralFixture(),events=new Events(h.hub,undefined,{now:()=>at+2*H,after:()=>()=>{}},null),tiles=new HistoryTiles(h.store,ceiling),period=new PeriodReader(h.hub,tiles,events);
@@ -30,7 +45,7 @@ for(const ceiling of [5000,50_000])test(`retained authority names share the ${ce
   h.store.db.prepare('INSERT INTO project_names VALUES (?,?,?)').run(h.owner.id,reported,name);names.push({user_id:h.owner.id,reported,name});
  }
  assert.ok(Buffer.byteLength(JSON.stringify(names))>ceiling,'authority metadata exceeds the requested ceiling although the selected ledger is empty');
- const access=h.store.workAccess(h.board),expected=createHash('sha256').update(JSON.stringify([access.knownFrom,[...access.devices],access.fundingRevision??'',[[h.source,at-M,[h.owner.id]]],names,[{id:h.device.id,name:'Laptop'}]])).digest('base64url').slice(0,16);
+ const access=h.store.workAccess(h.board),expected=createHash('sha256').update(JSON.stringify([access.knownFrom,[...access.devices],access.fundingRevision??'',access.attributionRevision??'',[[h.source,at-M,[h.owner.id]]],names,[{id:h.device.id,name:'Laptop'}]])).digest('base64url').slice(0,16);
  assert.equal(h.store.workKey(h.board,undefined,access),expected,'incremental hashing preserves the existing JSON authority namespace');
  const prepare=h.store.db.prepare.bind(h.store.db);
  t.mock.method(h.store.db,'prepare',(sql:string)=>{

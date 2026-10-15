@@ -9,7 +9,7 @@ import {PeriodIndex} from '../domain/periodIndex.js';
 import type {PeriodTape} from '../domain/periodTape.js';
 import type {WorkTrace} from '../domain/periodWork.js';
 import {moneyWorkRate} from '../domain/moneyWork.js';
-import {fixedTape} from '../periodFixed.js';
+import {fixedTape,fixedWork} from '../periodFixed.js';
 import {shifted} from '../domain/periodShift.js';
 
 const M=60_000,H=60*M;
@@ -73,4 +73,14 @@ test('temporal funding fragments keep one agent in period and activity counts',(
   activity.update(period.advance(range,H).rows);
   for(const by of ['source','project','device'] as const){const summary=activity.summary(range,by);assert.equal(summary.agents,1);assert.equal(summary.agentMs,H);assert.equal(summary.activeMs,H);}
   assert.deepEqual(activity.summary(range,'source').by.source.map(group=>group.agents),[1,1]);
+});
+
+test('fixed boundary bins and their shifted tooltip keep one logical agent',()=>{
+  const work=trace();work.refs=[{...work.refs[0],ref:'before'},{...work.refs[0],ref:'after',source:'other'}];work.spans=[[0,0,30_000],[1,30_000,H+M]];
+  const range={from:0,to:H},fixed=fixedWork(work,range,M,H+M,()=>{});
+  for(const at of [range,{from:1000,to:H+1000}]){
+    const value=shifted(fixed.fixed!,at);assert.ok(value);assert.equal(value.activity.agents,1);
+    assert.equal(value.activity.cells[0][3],1);assert.equal(value.activity.cells.at(-1)![3],1);
+    assert.equal(value.activity.agentMs,H);assert.equal(value.activity.activeMs,H);
+  }
 });

@@ -42,7 +42,7 @@ function sourceHook(board:ReturnType<typeof workStore>,id:string) {
   const source=code('../lib/period.ts'),body=source.slice(source.indexOf('const roster='));
   let cursor=0,changes=0;
   const slots:unknown[]=[],subscriptions:{read:()=>unknown;value:unknown;stop:()=>void}[]=[];
-  const context={exports:{} as {useSourcePeriodSessions:(id:string)=>SessionPeriod&{rows:WorkedSession[]}},boardPeriod:board,selector,sameJson,
+  const context={exports:{} as {useTimeRange:()=>null,useSourcePeriodSessions:(id:string)=>SessionPeriod&{rows:WorkedSession[]}},boardPeriod:board,selector,sameJson,
     useRef:(value:unknown)=>{const index=cursor++;return slots[index]??(slots[index]={current:value});},
     useState:(initial:()=>unknown)=>{const index=cursor++;return [slots[index]??(slots[index]=initial())];},
     useSyncExternalStore:(subscribe:(listener:()=>void)=>()=>void,read:()=>unknown)=>{
@@ -110,7 +110,7 @@ test('the actual card tray keeps an accessible loading/error disclosure and retr
   });
   let reading:SessionPeriod&{rows:WorkedSession[]}={rows:[],basis:null,loading:true,error:null};
   const drawCard=component('../components/SourceCard.tsx','CardTray','function CardTray(','\n/**',{
-    useSourcePeriodSessions:()=>reading,useResetsFor:()=>undefined,useSourceAccess:()=>null,providerOf,Tray:drawTray,
+    useTimeRange:()=>null,useSourcePeriodSessions:()=>reading,useResetsFor:()=>undefined,useSourceAccess:()=>null,providerOf,Tray:drawTray,
     AccessMark:'access',QuotaMark:'quota',BalanceMark:'balance',FreeResets:'free-resets',
   });
   const draw=()=>nodes(drawCard({source:{id:'s',provider:'claude'}}));

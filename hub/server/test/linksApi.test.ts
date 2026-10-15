@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {buildApp} from '../api.js';
+import {buildApp,type Hub} from '../api.js';
+import {Events} from '../events.js';
 import {Store} from '../store/store.js';
 import {Directory} from '../store/directory.js';
 import {Duty} from '../duty.js';
@@ -19,7 +20,9 @@ for (const local of [false, true]) test(`link API enforces owner scope, origin, 
   const other = local ? owner : directory.createUser('other@example.com', 'Other', 'fixture', now), source = store.source('openrouter', 'fixture', now);
   store.hold(source, owner.id, now);
   const ingest = new Ingest(store, directory, new Duty(), new Cadence());
-  const app = await buildApp({store, directory, resets: new ResetFeed(undefined, () => {}), ingest, pairing: new Pairing(directory), setup: new Setup(false, null), local: local ? {key} : null});
+  const hub:Hub={store, directory, resets: new ResetFeed(undefined, () => {}), ingest, pairing: new Pairing(directory), setup: new Setup(false, null), local: local ? {key} : null};
+  const events=new Events(hub);hub.events=events;
+  const app = await buildApp(hub);
   try {
     const cookies = new Map<string, string>();
     for (const user of [owner, other]) {const token = newSecret('qt_s'); directory.createSession(token, user.id, now, 3_600_000); cookies.set(user.id, 'quotum_session=' + token);}
@@ -84,5 +87,16 @@ for (const local of [false, true]) test(`link API enforces owner scope, origin, 
     assert.equal((await request('POST',periodUrl,{...period,quota:{...period.quota,work:'1'}})).statusCode,400);
     assert.equal((await request('GET','/api/history'+query.replace('scope=budget','scope=quota')+'&work=1')).statusCode,400);
     prepare.mock.restore();
+    const end=Math.floor(now/3_600_000)*3_600_000,start=end-3_600_000;
+    const closed='/api/history?'+new URLSearchParams({board,cell:String(cell),from:String(start),to:String(end),scope:'budget',unit:'USD',meters:JSON.stringify(budget.meters)});
+    const cells=t.mock.method(store,'cells');
+    for(let i=0;i<2;i++)assert.equal((await request('GET',closed)).statusCode,200);
+    assert.equal(cells.mock.callCount(),1);
+    events.history(source,start,['budget'],true);
+    assert.equal((await request('GET',closed)).statusCode,200);assert.equal(cells.mock.callCount(),1,'work-only HTTP wiring preserves pure financial tiles');
+    store.creditWork(device,start+cell,start+2*cell,[{source,client:'opencode',origin:'terminal',startedAt:start,project:'Cache',folder:'',identity:{kind:'stable',sessionId:'b'.repeat(32)}}]);
+    assert.equal((await request('GET',closed)).statusCode,200);assert.equal(cells.mock.callCount(),1,'physical credit uses only admitted work invalidation');
+    events.history(source,start,['budget']);
+    assert.equal((await request('GET',closed)).statusCode,200);assert.equal(cells.mock.callCount(),2,'financial evidence still invalidates the tile');
   } finally {await app.close(); store.close();}
 });

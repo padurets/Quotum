@@ -20,7 +20,7 @@ import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/
 import {hasPeriodValue,periodValueAt} from '../../server/domain/periodValues';
 import {canShift,shifted} from '../../server/domain/periodShift';
 import {periodOf} from '../lib/periods';
-import {moneySelection,DEFAULT_MONEY} from '../lib/moneySelection';
+import {moneyReadSelection,DEFAULT_MONEY} from '../lib/moneySelection';
 import {subscriptionSelection} from '../lib/subscription';
 import {sameJson} from '../lib/store';
 import {EMPTY_VIEW} from '../../server/domain/view';
@@ -50,7 +50,7 @@ function harness(visible:string[]=['quota-history']) {
   };
   const context={exports:{} as {BoardPeriod:new()=>Coordinator},hubNow:()=>NOW,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>({board})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
-    empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneySelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
+    empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(coordinatorCode,context);
   const period=new context.exports.BoardPeriod();
   return {board,settings,pool,period,attempts,fail,select:(range:PeriodRange|null)=>{selected=range;period.changed();},hold:(fn:typeof held)=>{held=fn;},failWork:(value:boolean)=>{failWork=value;},failValues:(value:boolean)=>{failValues=value;}};

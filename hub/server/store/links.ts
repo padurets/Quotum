@@ -29,6 +29,7 @@ export class LinkStore {
   held(owner: string): Map<string, string> {return new Map((this.db.prepare("SELECT h.source_id,COALESCE(s.provider,'') AS provider FROM holders h LEFT JOIN sources s ON s.id=h.source_id WHERE h.user_id=?").all(owner) as {source_id: string; provider: string}[]).map(r => [r.source_id, r.provider]));}
   /** One captured rule set serves all owners, clients and devices of a projection. */
   batch(owners: readonly string[],reserve?:(bytes:number)=>void,at=Date.now()):LinkBatch {
+    reserve?.(256+owners.reduce((bytes,owner)=>bytes+160+owner.length*4,0));
     const users=[...new Set(owners)],people = JSON.stringify(users), links = new Map<string, Map<string, ClientLink[]>>(), held = new Map<string, Map<string, string>>();
     const next=new Map<string,{version:number;clients:Map<string,ClientLink[]>}>();
     const rows=this.db.prepare("SELECT r.value AS owner,COALESCE(v.version,0) AS version,l.* FROM json_each(?) r LEFT JOIN link_versions v ON v.user_id=r.value LEFT JOIN client_links l ON l.user_id=r.value").iterate(people);
@@ -41,10 +42,15 @@ export class LinkStore {
         let list=group.clients.get(row.client);if(!list)group.clients.set(row.client,list=[]);list.push(linkOf(row));
       }
     }
-    for (const row of this.db.prepare("SELECT h.user_id,h.source_id,COALESCE(s.provider,'') AS provider FROM holders h LEFT JOIN sources s ON s.id=h.source_id WHERE h.user_id IN (SELECT value FROM json_each(?))").all(people) as {user_id: string; source_id: string; provider: string}[]) {
+    for (const raw of this.db.prepare("SELECT h.user_id,h.source_id,COALESCE(s.provider,'') AS provider FROM holders h LEFT JOIN sources s ON s.id=h.source_id WHERE h.user_id IN (SELECT value FROM json_each(?))").iterate(people)) {
+      const row=raw as {user_id:string;source_id:string;provider:string};
+      reserve?.(256+2*(row.user_id.length+row.source_id.length+row.provider.length));
       let map = held.get(row.user_id); if (!map) held.set(row.user_id, map = new Map()); map.set(row.source_id, row.provider);
     }
-    const disabled = new Set((this.db.prepare('SELECT p.device_id,p.client FROM device_tracking_policy p JOIN devices d ON d.id=p.device_id WHERE d.user_id IN (SELECT value FROM json_each(?)) AND p.route_enabled=0').all(people) as {device_id: string; client: string}[]).map(r => JSON.stringify([r.device_id, r.client])));
+    const disabled=new Set<string>();
+    for(const raw of this.db.prepare('SELECT p.device_id,p.client FROM device_tracking_policy p JOIN devices d ON d.id=p.device_id WHERE d.user_id IN (SELECT value FROM json_each(?)) AND p.route_enabled=0').iterate(people)){
+      const row=raw as {device_id:string;client:string};reserve?.(160+2*(row.device_id.length+row.client.length));disabled.add(JSON.stringify([row.device_id,row.client]));
+    }
     const empty: ClientLink[] = [], noHoldings = new Map<string, string>();
     const targets:[string,string,boolean][]=[],versions:[string,number][]=[];let phase=0;
     for(const [owner,group] of next) {

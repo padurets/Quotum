@@ -111,7 +111,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   const history = new HistoryTiles(store);
   const events = hub.events ?? new Events(hub);
   const periods = new PeriodReader(hub,history,events);
-  events.onHistory = (source, since, scopes, work) => {history.touch(source, since, scopes);periods.touch(source,since,scopes,work);};
+  events.onHistory = (source, since, scopes, work) => {history.touch(source, since, scopes,work);periods.touch(source,since,scopes,work);};
   events.onClientHistory=(user,since,device)=>{history.touchClient(user,since,device);periods.touchClient(user,since,device);};
   events.attach();
   hub.credentials!.setObserver(events);

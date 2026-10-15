@@ -82,8 +82,6 @@ export class Store {
   private pruned = 0;
   private readonly attentionCyclesReady: boolean;
 
-  private counterSource(source:string):boolean {return sourceCounterOf(String(this.db.prepare('SELECT provider FROM sources WHERE id=?').get(source)?.provider??''))!==null;}
-
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
@@ -93,13 +91,11 @@ export class Store {
     this.coverage = new CoverageStore(this.db);
     this.usageWork = new UsageWithoutWork(this);
     this.links.onChange = owner => {
-
       const sources = this.held(owner).map(s => s.id);
       tell(this.observer, o => {
         o.touchSources(sources);
         o.touchBoards([...new Set(sources.flatMap(source => this.boardsOf(source)))]);
         o.touchUser(owner); o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0);
-        for (const source of sources) {o.history(source, 0, ['quota']); if(this.counterSource(source))o.history(source, 0, ['budget'], true);}
       });
     };
     this.currencies=new CurrencyStore(this.db);
@@ -330,7 +326,7 @@ export class Store {
       const owner = String(this.db.prepare('SELECT user_id FROM devices WHERE id=?').get(device)?.user_id ?? '');
       this.db.prepare("INSERT INTO meta VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1").run('workEvidence:' + owner);
 
-      tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); const sources = [...this.links.held(owner).keys()]; o.touchSources(sources); for (const source of sources) {o.history(source, 0, ['quota']); if(this.counterSource(source))o.history(source, 0, ['budget'], true);}});
+      tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); o.touchSources([...this.links.held(owner).keys()]);});
     }
     return result;
   }
@@ -689,7 +685,7 @@ export class Store {
       if(meters) {
         const groups=this.financialGroups(board,meters,from,to,now);
         for(const chunk of chunks)chunk.meterSeries=this.meters.cells(meters,chunk.from,chunk.to,cellMs,groups);
-        if(sourceWork)this.moneyWork(board,shown,meters,from,to,cellMs,now,chunks,work);
+        if(sourceWork)this.moneyWork(board,shown,meters,from,to,cellMs,now,chunks,work,reserve);
       }
       return chunks;
     }
@@ -748,16 +744,20 @@ export class Store {
     return [...new Set(selection.ids.filter(([source,meter])=>!meter.startsWith('key:')&&sourceCounterOf(sources.get(source)??'')!==null).map(([source])=>source))];
   }
 
-  private moneyWork(board:string,shown:Shown,selection:MeterSelection,from:number,to:number,cell:number,now:number,chunks:Chunk<number>[],shared?:WorkRead) {
+  private moneyWork(board:string,shown:Shown,selection:MeterSelection,from:number,to:number,cell:number,now:number,chunks:Chunk<number>[],shared?:WorkRead,reserve?:(bytes:number)=>void) {
     const access=shared?.ensureAccess?.()??this.workAccess(board,now),sources=this.moneyWorkSources(board,selection),known=this.historyKnown(shown,access.owner,access);
-    const groups=sources.map(source=>{const counter=sourceCounterOf(this.state(source).provider)!;return {source,...this.meters.pairReadings(source,counter,from,to)};});
+    const groups=sources.map(source=>{const counter=sourceCounterOf(this.state(source).provider)!;return {source,...this.meters.pairReadings(source,counter,from,to,reserve)};});
     let readFrom=from;
     for(const group of groups)for(let i=1;i<group.readings.length;i++){const a=group.readings[i-1],b=group.readings[i];if(b.previousAt===a.at&&b.at-a.at<=a.staleAfterMs)readFrom=Math.min(readFrom,a.at);}
-    const work=(shared?shared(readFrom,Math.min(now,to)):this.admittedWork(access,readFrom,Math.min(now,to))).flatMap(span=>span.source!==null&&sources.includes(span.source)&&span.to>(span.quotaFrom??known.work)?[{...span,from:Math.max(span.from,span.quotaFrom??known.work)}]:[]);
+    const admitted=shared?shared(readFrom,Math.min(now,to)):this.admittedWork(access,readFrom,Math.min(now,to));
+    reserve?.(256+admitted.length*192);
+    const work=admitted.flatMap(span=>span.source!==null&&sources.includes(span.source)&&span.to>(span.quotaFrom??known.work)?[{...span,from:Math.max(span.from,span.quotaFrom??known.work)}]:[]);
     for(const chunk of chunks)chunk.moneyWork=[];
     for(const group of groups) {
       const cutoff=Math.max(known.work,shown.get(group.source)?.since??Infinity,now-config.retention.sampleDays*86_400_000);
-      const packed=packMoneyWork({source:group.source,unit:group.readings.at(-1)?.unit??'USD',knownFrom:group.knownFrom===null?null:Math.max(group.knownFrom,cutoff),readings:group.readings,spans:group.spans,work:work.filter(span=>span.source===group.source)},from,to,cell);
+      reserve?.(128+work.length*8);
+      const packed=packMoneyWork({source:group.source,unit:group.readings.at(-1)?.unit??'USD',knownFrom:group.knownFrom===null?null:Math.max(group.knownFrom,cutoff),readings:group.readings,spans:group.spans,work:work.filter(span=>span.source===group.source)},from,to,cell,reserve);
+      reserve?.(256+packed.cells.length*256+packed.edges.length*16);
       for(const chunk of chunks)chunk.moneyWork!.push({...packed,cells:packed.cells.filter(row=>from+row[0]*cell>=chunk.from&&from+row[0]*cell<chunk.to).map(row=>[row[0]-(chunk.from-from)/cell,...row.slice(1)] as typeof row),edges:packed.edges.filter(edge=>edge[1]>=chunk.from&&edge[1]<chunk.to)});
     }
   }
@@ -904,8 +904,6 @@ export class Store {
         const producer = identity.kind === 'stable' ? identity.sessionId : null;
         const ordinal = identity.kind === 'legacy' ? identity.ordinal : 0;
         const created = add.run(device, client, source, origin, startedAt, project, folder, ordinal, producer).changes > 0;
-        if (created && owner) {
-        }
         const {id} = (producer === null
           ? legacy.get(device, client, source, source, startedAt, origin, project, folder, ordinal)
           : stable.get(device, client, producer, source, source, origin, project, folder)) as {id: number};
@@ -929,10 +927,9 @@ export class Store {
       this.db.exec('RELEASE credit');
       throw error;
     }
-    for (const [source, start] of credited) tell(this.observer, o => {o.history(source,start,['quota'],true);if(this.counterSource(source))o.history(source,start,['budget'],true);});
     if(credited.size||Number.isFinite(changedFrom)||changedEvidence)afterCommit(()=>{this.workGeneration++;});
     if(owner&&Number.isFinite(changedFrom))tell(this.observer,o=>o.clientHistory?.(owner,changedFrom,device,[...credited.keys()]));
-    if(changedEvidence&&owner){tell(this.observer,o=>{o.touchClientSessions?.(owner,device);o.clientHistory?.(owner,0,device);const sources=[...contexts(owner,device,'').held.keys()];o.touchSources(sources);for(const source of sources){o.history(source,0,['quota'],true);if(this.counterSource(source))o.history(source,0,['budget'],true);}});}
+    if(changedEvidence&&owner){tell(this.observer,o=>{o.touchClientSessions?.(owner,device);o.clientHistory?.(owner,0,device);o.touchSources([...contexts(owner,device,'').held.keys()]);});}
   }
 
   /** Retained credit resolved to the session's current source; legacy identity is unknown. */

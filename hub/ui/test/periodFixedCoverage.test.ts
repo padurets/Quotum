@@ -32,7 +32,7 @@ import {PeriodAccounting} from '../lib/periodAccounting';
 import {PeriodIndex} from '../lib/periodIndex';
 import {PeriodActivity} from '../lib/periodActivity';
 import {periodOf} from '../lib/periods';
-import {moneySelection,DEFAULT_MONEY} from '../lib/moneySelection';
+import {moneyReadSelection,DEFAULT_MONEY} from '../lib/moneySelection';
 import {subscriptionSelection} from '../lib/subscription';
 import {sameJson} from '../lib/store';
 import {draggedRange} from '../lib/timeRange';
@@ -66,7 +66,7 @@ async function harness(t:TestContext,initial:PeriodRange|null,emptyWidgets?:stri
   const context={exports:{} as {BoardPeriod:new()=>Coordinator},hubNow:()=>now,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{attempts.push(body);await held;const response=await read(body);assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());replies.push(reply);if(emptyWidgets)now++;return reply;},
     page:{get:()=>({board})},pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
-    empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneySelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
+    empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(coordinatorCode,context);const period=new context.exports.BoardPeriod();
   t.after(async()=>{period.activate(false);await app.close();store.close();});
   const settle=async()=>{for(let i=0;i<300;i++){await new Promise(setImmediate);if(i>20&&!pool.activeFlights)return;}assert.fail('period request did not settle');};

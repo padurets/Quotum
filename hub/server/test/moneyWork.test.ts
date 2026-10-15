@@ -9,7 +9,7 @@ import {Directory} from '../store/directory.js';
 import {composeMoneyWorkPrepared, moneyWorkRate, type MoneyWork} from '../domain/moneyWork.js';
 import {drain} from '../domain/prepare.js';
 import type {Meter} from '../domain/meters.js';
-import {HistoryTiles} from '../history.js';
+import {HistoryTiles,HistoryLimit} from '../history.js';
 import {DatabaseSync} from 'node:sqlite';
 import {STEPS} from '../store/schema.js';
 
@@ -29,6 +29,17 @@ function fixture(file:string,times:number[]) {
   };
   return {store,source,board,owner:owner.id,device,read};
 }
+
+test('dense native pair reads share the request ceiling even when their financial JSON is sparse',()=>{
+  const root=mkdtempSync(path.join(tmpdir(),'quotum-pair-budget-')),h=fixture(path.join(root,'db.sqlite'),Array.from({length:3000},(_,i)=>i/60));
+  const tiles=new HistoryTiles(h.store,128*1024),from=start,to=start+50*minute,shown=h.store.shown(h.board,[]),selection={ids:[[h.source,'balance']] as [string,string][],unit:'USD'};
+  try{
+    assert.ok(tiles.read(h.board,minute,from,to,to,shown,selection,'budget').length);
+    assert.throws(()=>tiles.read(h.board,minute,from,to,to,shown,selection,'budget',undefined,true),HistoryLimit);
+    assert.ok(tiles.read(h.board,minute,from,to,to,shown,selection,'budget').length,'a refused work reservation releases all staging');
+    assert.ok(new HistoryTiles(h.store).read(h.board,minute,from,to,to,shown,selection,'budget',undefined,true).length,'the same native evidence fits the ordinary shared budget');
+  }finally{h.store.close();rmSync(root,{recursive:true,force:true});}
+});
 
 test('accepted unchanged native endpoints survive reopen and distinguish equal sparse histories',()=>{
   const root=mkdtempSync(path.join(tmpdir(),'quotum-pairs-'));

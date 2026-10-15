@@ -594,7 +594,7 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
     await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
     if(i===2)agent.trackClients([{...session,working:false}],[]);
     const at=await demo.reportNow('laptop');await sleep(1000);await drain(requests);requests.counting=false;
-    const value=await active(),reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.byPath['/api/history']??0,bytes=requests.bytesByPath['/api/history']??0;
+    const value=await active(),reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.historyRequests,bytes=requests.historyBytes;
     const activityAgentMs=await agentTime();
     reports.push({at,reads,bytes,activeMs:value,activityAgentMs});
     if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`linked wallet work read history ${reads} times, ${bytes} bytes`);

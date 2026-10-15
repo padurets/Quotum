@@ -67,7 +67,7 @@ test('late work and renames invalidate closed tiles, while hiding retains admitt
   const ref = chunk.activity.sessions[0][0];
   assert.match(ref, /^[\w-]{8}$/);
   assert.equal(h.tiles.fragmentRef(h.board, 1, h.source), ref);
-  assert.equal(chunk.activity.sessions[0][4], h.tiles.ref(h.board, 1));
+  assert.equal(chunk.activity.sessions[0][5], h.tiles.ref(h.board, 1));
   assert.notEqual(h.tiles.ref('other', 1), ref);
   assert.notEqual(new HistoryTiles(h.store).ref(h.board, 1), ref);
   assert.equal(JSON.parse(h.read(start, start + H, start + 3 * H, [`source:${h.source}`])[0]).activity.sessions.length,1);
@@ -80,7 +80,7 @@ test('late work and renames invalidate closed tiles, while hiding retains admitt
 
 test('missing adjacent tiles use one pass, and the cache evicts its least used entries', () => {
   // Admitted access, authority scratch and dependency sets leave room for a cached tile.
-  const h=fixture(5500); h.sample(start, 20);
+  const h=fixture(6500); h.sample(start, 20);
   h.read(start, start + 3 * H, start + 4 * H); assert.equal(h.calls(), 1);
   h.read(start + 2 * H, start + 3 * H, start + 4 * H); assert.equal(h.calls(), 1, 'last tile still fits');
   h.read(start, start + H, start + 4 * H); assert.equal(h.calls(), 2, 'first tile was evicted');
@@ -131,7 +131,7 @@ test('compact JSON keeps exact numbers and every digit and escape inside names',
   h.store.creditWork(h.device, start, start + M, [{source: h.source, origin: 'terminal', startedAt: start, project: name, folder: '', identity: {kind: 'legacy' as const, ordinal: 0}}]);
   const raw = h.store.cells(h.board, M, start, start + H, {now: start + 3 * H})[0];
   const [json] = h.read();
-  const expected = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, source, project, device]) => [h.tiles.fragmentRef(h.board, id, source), source, project, device, h.tiles.ref(h.board, id)])}};
+  const expected = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, source, project, device]) => [h.tiles.fragmentRef(h.board, id, source), source, project, device, null, h.tiles.ref(h.board, id)])}};
   assert.deepEqual(JSON.parse(json), expected);
   assert.ok(json.includes('3e5'), 'a hold uses its shorter exact spelling');
   assert.equal(JSON.parse(json).series[0].window, '300000');

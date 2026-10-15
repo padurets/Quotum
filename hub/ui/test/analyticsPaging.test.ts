@@ -17,7 +17,7 @@ for(const family of ['quota','budget'] as const)test(`${family} sorts the comple
   const node=(_type:unknown,props:unknown)=>({props});
   const context={exports:{} as Record<string,(props:unknown)=>any>,require:()=>({jsx:node,jsxs:node}),memo:(read:unknown)=>read,
     usePref:()=>sort,useLocale:()=> 'en',useRef:(current:unknown)=>({current}),useState:(read:()=>unknown)=>[read()],useMemo:(read:()=>unknown)=>read(),useCallback:(read:unknown)=>read,useLayoutEffect:()=>{},useSyncExternalStore:(_subscribe:unknown,read:()=>unknown)=>read(),
-    clock:{watch:()=>({}),due:()=>{}},hubNow:()=>3_600_000,FORECAST_WIDTHS:{limit:180},sortValue,forecastComparator,nextForecastSort,visibleForecastSort,moneyTableValues,moneyComparator,nextMoneySort,visibleMoneySort,
+    boardPeriod:{moneyWorkAt:()=>undefined},clock:{watch:()=>({}),due:()=>{}},hubNow:()=>3_600_000,FORECAST_WIDTHS:{limit:180},sortValue,forecastComparator,nextForecastSort,visibleForecastSort,moneyTableValues,moneyComparator,nextMoneySort,visibleMoneySort,
     AnalyticsPanel:'panel',AnalyticsTable:'table',WidgetPages:'footer',TableMeasure:'measurement',TableSortMenu:'sort',t:()=> 'Value',
     setPrefs:(value:any)=>{sort=value[family==='quota'?'forecastSort':'moneySort'];},
     useTableWidget:(_panel:unknown,_widths:unknown,_name:unknown,all:string[],key:string)=>{

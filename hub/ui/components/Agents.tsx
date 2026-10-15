@@ -5,7 +5,7 @@ import {timeRangeLabel,timeRangeKey,useTimeRange} from '../lib/timeRange';
 import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject} from 'react';
 import type {LiveSession} from '../lib/types';
 import {clientName} from '../../server/domain/clients';
-import {agentCount,agentSourceLabel} from '../lib/agents';
+import {agentCount,agentSourceLabel,distinctAgents} from '../lib/agents';
 import {AGENTS, colorOf, columnShown, withColumn, withHidden, type Arrange} from '../lib/view';
 import {
   AGENT_WIDTHS,
@@ -247,14 +247,15 @@ function RunningTime({group,still}:{group:AgentGroup;still:boolean}){
 
 /** How many of a group's agents work, of how many, as a card's tray counts them, and a mark for each while they are few. */
 function Tally({group, color}: {group: AgentGroup; color: Context['color']}) {
+  const agents=distinctAgents(group.rows);
   return (
     <span className="agents-tally">
       <span className="agents-count" aria-hidden="true">
         <b>{group.working}</b>/{agentCount(group.rows)}
       </span>
-      {drawn(group.rows) && (
+      {drawn(agents) && (
         <span className="agents-marks" aria-hidden="true">
-          {group.rows.map((row, i) => (
+          {agents.map((row, i) => (
             <Mark key={i} session={row.session} style={color(row.source)} />
           ))}
         </span>

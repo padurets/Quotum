@@ -64,7 +64,7 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
       'react/jsx-runtime':jsx,react:{useRef:hooks.useRef,useMemo,memo:reactMemo},
       '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared:meterHistory.composeMetersPrepared},
       '../lib/board':{useBoardId:()=> 'b',useCurrencyContext:()=>context,useNamed:()=>sources},
-      '../lib/history':{useBudgetHistory:()=>({history,drawing,loading:!history,presentation:authority}),useBudgetHistoryPlot:()=>null,useHistoryBegins:()=>0,budgetHistory:{retry(){}},fundsHistory:{retry(){}}},
+      '../lib/history':{useBudgetFinancialHistory:()=>({history,drawing,loading:!history,presentation:authority}),useBudgetHistoryPlot:()=>null,useHistoryBegins:()=>0,budgetHistory:{retry(){}},fundsHistory:{retry(){}}},
       '../lib/prefs':{useChartMuted:()=>prefs.muted,chartMuteKey,chartSeriesMuted,usePref:(key:keyof typeof prefs)=>prefs[key],setMuted:(key:string,value:boolean)=>toggles.push({key,value})},
       '../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
       './MoneySettings':{MoneyChartSettings},

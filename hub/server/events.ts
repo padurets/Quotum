@@ -4,7 +4,7 @@ import {randomBytes} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {config} from './config.js';
-import {catalogue} from './domain/providers.js';
+import {catalogue,sourceCounterOf} from './domain/providers.js';
 import type {Credentials} from './secrets/credentials.js';
 import type {HubSources} from './hubSources.js';
 import type {Ingest} from './ingest.js';
@@ -246,6 +246,7 @@ export class Events implements Touches {
   // ---------- touches ----------
 
   touchSources(ids: string[]) {
+    for (const id of ids) this.parts.hubSources?.activityChanged(id, this.clock.now());
     for (const watched of this.watched.values()) {
       for (const id of ids) {
         if (!watched.lineup.includes(id)) continue;
@@ -279,6 +280,7 @@ export class Events implements Touches {
 
   clientHistory(user:string,since:number,device?:string,sources:readonly string[]=[]) {
     try{this.onClientHistory?.(user,since,device);}catch(error){trouble(error);}
+    const budget=new Set(sources.filter(source=>sourceCounterOf(String(this.parts.store.db.prepare('SELECT provider FROM sources WHERE id=?').get(source)?.provider??''))!==null));
     for(const watched of this.watched.values()){
       const access=this.parts.store.workAccess(watched.id,this.clock.now());
       if(!(device?access.devices.get(device)?.owner===user:[...access.devices.values()].some(d=>d.owner===user)))continue;
@@ -287,7 +289,9 @@ export class Events implements Touches {
       this.workHistories.set(watched.id,Math.min(this.workHistories.get(watched.id)??admittedSince,admittedSince));
       for(const source of sources)if(access.sources.get(source)?.holders.has(user)){
         let pending=this.histories.get(watched.id);if(!pending)this.histories.set(watched.id,pending=new Map());
-        const key=JSON.stringify([source,'quota']),quotaSince=admittedSince===0?0:Math.max(admittedSince,access.sources.get(source)!.since);pending.set(key,{source,scope:'quota',since:Math.min(pending.get(key)?.since??quotaSince,quotaSince),workSince:Math.min(pending.get(key)?.workSince??quotaSince,quotaSince)});
+        const sourceSince=admittedSince===0?0:Math.max(admittedSince,access.sources.get(source)!.since);
+        const scopes:readonly HistoryScope[]=budget.has(source)?['quota','budget']:['quota'];
+        for(const scope of scopes){const key=JSON.stringify([source,scope]);pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??sourceSince,sourceSince),workSince:Math.min(pending.get(key)?.workSince??sourceSince,sourceSince)});}
       }
     }
     this.schedule();

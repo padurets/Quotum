@@ -18,7 +18,7 @@ import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/
 import {hasPeriodValue,periodValueAt} from '../../server/domain/periodValues';
 import {canShift,shifted} from '../../server/domain/periodShift';
 import {periodOf} from '../lib/periods';
-import {moneySelection,DEFAULT_MONEY} from '../lib/moneySelection';
+import {moneyReadSelection,DEFAULT_MONEY} from '../lib/moneySelection';
 import {subscriptionSelection} from '../lib/subscription';
 import {sameJson} from '../lib/store';
 import {EMPTY_VIEW} from '../../server/domain/view';
@@ -71,7 +71,7 @@ async function fixture(personal=false) {
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body)))));const pending=wait;wait=null;await pending;return reply;},
     page,pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
     packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
-    timeRange:()=>null,prefs:()=>settings,periodOf,cellOf,moneySelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
+    timeRange:()=>null,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const period=new context.exports.BoardPeriod();page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
   assert.equal(period.get().error,null);assert.equal(period.get().rows.length,1);requests.length=0;frames.length=0;

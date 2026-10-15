@@ -20,7 +20,7 @@ import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/
 import {hasPeriodValue,periodValueAt} from '../../server/domain/periodValues';
 import {canShift,shifted} from '../../server/domain/periodShift';
 import {periodOf} from '../lib/periods';
-import {moneySelection,DEFAULT_MONEY} from '../lib/moneySelection';
+import {moneySelection,moneyReadSelection,DEFAULT_MONEY} from '../lib/moneySelection';
 import {subscriptionSelection} from '../lib/subscription';
 import {sameJson} from '../lib/store';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
@@ -84,7 +84,7 @@ test('money preparation keeps cold history reusable across cached return and rep
   });
   const context={exports:{} as any,hubNow:()=>clockNow,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod,page:{get:()=>({board}),dispatch:console.error},pan:{get:()=>panning?{}:null},preparations:()=>preparer,
    prepareAsync:(owner:object,work:any,valid:()=>boolean)=>productionPrepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
-   empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneySelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
+   empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(coordinatorCode,context);const period=new context.exports.BoardPeriod();
   const readers:HistoryStore[]=[];
   for(const [i,scope] of (['quota','budget','budget'] as const).entries()){

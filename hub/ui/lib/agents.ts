@@ -85,6 +85,14 @@ export type AgentGroup = {
 
 export const agentCount=(rows:readonly AgentRow[])=>new Set(rows.map(({session})=>session.identityRef??session.ref??session)).size;
 
+/** A temporal funding fragment keeps its time, but its agent has one mark. */
+export function distinctAgents(rows:readonly AgentRow[]):AgentRow[] {
+  const agents=new Map<string|LiveSession,AgentRow>();
+  const presence=(session:LiveSession)=>session.currentPresence?2:session.working?1:0;
+  for(const row of rows){const key=row.session.identityRef??row.session.ref??row.session,previous=agents.get(key);if(!previous||presence(row.session)>presence(previous.session)||presence(row.session)===presence(previous.session)&&byActivity(row.session,previous.session)<0)agents.set(key,row);}
+  return [...agents.values()];
+}
+
 function groupOf(key: string, name: string | null, rows: AgentRow[]): AgentGroup {
   const seen = rows.flatMap(row => (row.session.lastWorkedAt === null ? [] : [row.session.lastWorkedAt]));
   return {
@@ -202,7 +210,7 @@ export function sortedGroups(groups: AgentGroup[], sort: AgentsSort, columns: re
     if (nameless(a) || nameless(b)) return Number(nameless(a)) - Number(nameless(b)) || activity;
     if (column === 'worked' && (a.workedMs === null || b.workedMs === null)) return Number(a.workedMs === null) - Number(b.workedMs === null) || activity;
     if ((column === 'active' || column === 'concurrency') && (a.activeMs == null || b.activeMs == null)) return Number(a.activeMs == null) - Number(b.activeMs == null) || activity;
-    const order = column === 'agents' ? a.rows.length - b.rows.length || a.working - b.working
+    const order = column === 'agents' ? agentCount(a.rows) - agentCount(b.rows) || a.working - b.working
       : column === 'worked' ? a.workedMs! - b.workedMs!
       : column === 'active' ? a.activeMs! - b.activeMs!
       : column === 'concurrency' ? compareWorkRatio(a.workedMs??0,a.activeMs??0,b.workedMs??0,b.activeMs??0)

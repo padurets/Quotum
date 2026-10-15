@@ -18,7 +18,7 @@ import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/
 import {hasPeriodValue,periodValueAt} from '../../server/domain/periodValues';
 import {canShift,shifted} from '../../server/domain/periodShift';
 import {periodOf} from '../lib/periods';
-import {moneySelection,DEFAULT_MONEY} from '../lib/moneySelection';
+import {moneyReadSelection,DEFAULT_MONEY} from '../lib/moneySelection';
 import {subscriptionSelection} from '../lib/subscription';
 import {sameJson,shallowEqual} from '../lib/store';
 import {EMPTY_VIEW} from '../../server/domain/view';
@@ -61,10 +61,10 @@ export async function fixture({personal=false,ownerDevice=false,transportLive=fa
   const owner=personal||ownerDevice?alice.id:bob.id;
   const device=directory.saveDevice({userId:owner,machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},start).id;
   const funding=privateWork?(unknown?null:store.source('codex','b'.repeat(24),start)):source;
-  const credit=(from=creditFrom,to=creditTo)=>store.creditWork(device,from,to,[{source:funding,origin:'terminal',startedAt:start,project:'Work project',folder:'Private folder',client:'codex',identity:stable?{kind:'stable',sessionId:'c'.repeat(32)}:{kind:'legacy',ordinal:0}}]);credit();
+  const credit=(from=creditFrom,to=creditTo)=>store.creditWork(device,from,to,[{accountBy:funding?'login':null,source:funding,origin:'terminal',startedAt:start,project:'Work project',folder:'Private folder',client:'codex',identity:stable?{kind:'stable',sessionId:'c'.repeat(32)}:{kind:'legacy',ordinal:0}}]);credit();
   const hub:Hub={store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{}),pairing:new Pairing(directory),setup:new Setup(false,null),local:null};
   let now=NOW;
-  const live=(working=false)=>({source:funding,clientId:'codex',sessionId:stable?'c'.repeat(32):null,device:{id:device,name:'Work laptop'},origin:'terminal' as const,project:'Work project',folder:'Private folder',startedAt:start,sentStartedAt:start,lastWorkedAt:NOW-2*M,working});
+  const live=(working=false)=>({accountBy:funding?'login' as const:null,source:funding,clientId:'codex',sessionId:stable?'c'.repeat(32):null,device:{id:device,name:'Work laptop'},origin:'terminal' as const,project:'Work project',folder:'Private folder',startedAt:start,sentStartedAt:start,lastWorkedAt:NOW-2*M,working});
   if(current)hub.ingest.live.report(device,owner,[live()],NOW);
   const timers=new Map<object,{at:number;run:()=>void}>();
   const events=new Events(hub,undefined,{now:()=>now,after:(ms,run)=>{const token={};timers.set(token,{at:now+ms,run});return ()=>{timers.delete(token);};}},null),tiles=new HistoryTiles(store),reader=new PeriodReader(hub,tiles,events);
@@ -92,7 +92,7 @@ export async function fixture({personal=false,ownerDevice=false,transportLive=fa
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body)))));const pending=wait;wait=null;await pending;return reply;},
     periodTextChangesAt,page,pan,preparations:()=>preparer,prepareAsync:(owner:object,work:Parameters<typeof drain>[0],valid:()=>boolean)=>prepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
     packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
-    timeRange:()=>fixed?{from:NOW-H,to:NOW}:null,prefs:()=>settings,periodOf,cellOf,moneySelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
+    timeRange:()=>fixed?{from:NOW-H,to:NOW}:null,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const period=new context.exports.BoardPeriod();pan.onPhase(()=>period.refreshWorkClock());page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
   assert.equal(period.get().error,null);assert.equal(period.get().rows.length,1);const initialRequests=requests.slice();requests.length=0;frames.length=0;

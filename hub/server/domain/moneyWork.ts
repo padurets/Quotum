@@ -32,7 +32,10 @@ export function continuousMoneyPair(input:Pick<MoneyWorkInput,'unit'|'knownFrom'
 }
 
 /** Original accepted pairs stay whole; crossing pairs are carried once by their closing cell. */
-export function packMoneyWork(input: MoneyWorkInput, from: number, to: number, cell: number): MoneyWorkCells {
+export function packMoneyWork(input: MoneyWorkInput, from: number, to: number, cell: number,reserve?:(bytes:number)=>void): MoneyWorkCells {
+  // Dense native pairs can produce small JSON. Admit the integral, worst-case
+  // edges and cell builders before allocating them.
+  reserve?.(1024+input.work.length*512+Math.ceil((to-from)/cell)*384+input.readings.reduce((bytes,reading)=>bytes+256+reading.amount.length*8,0));
   const integral=workIntegral(input.work), values=new Map<number,MoneyWorkCell>(), edges:MoneyWorkEdge[]=[];
   const row=(at:number) => {const index=Math.floor((at-from)/cell);let value=values.get(index);if(!value){const start=from+index*cell,[active,agent]=integral(start,Math.min(start+cell,to));value=[index,active,agent,'0',0,0,0,'0'];values.set(index,value);}return value;};
   for(let at=from;at<to;at+=cell) {const [active,agent]=integral(at,Math.min(at+cell,to));if(active||agent)row(at);}
