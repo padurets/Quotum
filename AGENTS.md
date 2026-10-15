@@ -55,7 +55,7 @@ analytics. Run it when you change the dashboard and have Chrome (`QUOTUM_CHROME`
 on `PATH`, or `--cdp` to one already running); CI fails over budget. After the readings,
 it also checks consecutive measuring-frequency saves with native arrow keys and fails
 if saving loses focus.
-Native horizontal wheel and Shift-drag scenarios start separately from each of the six
+Native horizontal wheel and Shift-drag scenarios start separately from each of the five
 charts (five-hour limits, weekly limits, activity, balance and subscription funds), moving all five at 24h and 30d
 with at least twelve real series per resource family and CPU throttled fourfold, including an unread edge,
 strip rebuilding, reversal and return to live. Moving-frame p95/p99 must stay within
