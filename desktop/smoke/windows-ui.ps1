@@ -427,16 +427,19 @@ try {
   $window=Wait-Window
   # A blocked WebView/UI thread must not stop the tray's native loading surface.
   # Only this test process's already-verified UI thread is paused, always resumed.
+  # A minimized window can still own foreground. This scenario needs both
+  # background conditions before pausing the UI.
   [void][QuotumWindowProbe]::ShowWindowAsync($window,6)
   $deadline=(Get-Date).AddSeconds(5)
-  while(-not [QuotumWindowProbe]::IsIconic($window) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
-  if(-not [QuotumWindowProbe]::IsIconic($window)){throw 'Could not put the test UI thread in the background'}
+  while((-not [QuotumWindowProbe]::IsIconic($window) -or [QuotumWindowProbe]::Foreground($window)) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
+  if(-not [QuotumWindowProbe]::IsIconic($window) -or [QuotumWindowProbe]::Foreground($window)){throw 'Could not put the test UI thread in the background'}
   foreach($cancel in @($false,$true)) {
     $observer=$loadingObservers[[int]$cancel]
     $paused=$null;$pauseFrom=$null
     try {
       $paused=[QuotumWindowProbe]::PauseUi($window,$process.Id)
       $pauseFrom=[DateTime]::UtcNow.Ticks
+      if(-not [QuotumWindowProbe]::IsIconic($window) -or [QuotumWindowProbe]::Foreground($window)){throw 'The test window left the background while pausing its UI thread'}
       $ui=[QuotumWindowProbe]::Snapshot($window,$process.Id)
       $tray=[QuotumWindowProbe]::Snapshot([QuotumWindowProbe]::Tray($process.Id),$process.Id)
       Watch-OwnedThreads $observer @($ui.Thread,$tray.Thread)

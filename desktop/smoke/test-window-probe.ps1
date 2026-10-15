@@ -74,6 +74,9 @@ try {
   try {[QuotumWindowProbe]::MainRequestThenPause(0,'fixture.exe') | Out-Null} catch {$failed=$true}
   if(-not $failed -or [QuotumWindowProbe]::LastDispatch.Acceptance -ne 'not-sent'){throw 'Missing target was accepted'}
 } finally {Remove-Item -LiteralPath $root -Recurse -Force}
+# The controlled probe has the native probe's type name, so keep it in a child.
+& (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot 'test-windows-background.ps1')
+if($LASTEXITCODE){throw 'Background setup controls failed'}
 # Check fabricated receipts before collecting native model diagnostics.
 & (Join-Path $PSScriptRoot 'test-loader-activation-evidence.ps1')
 & (Join-Path $PSScriptRoot 'test-windows-progress.ps1')
