@@ -6,8 +6,8 @@ import {type View} from './types';
 import {FALLBACK_COLOR, PROVIDERS} from './providers';
 
 import {EMPTY_VIEW as EMPTY, VIEW_VERSION_HEADER, VIEW_KEEPALIVE_LIMIT, VIEW_VERSION, encodeView, sameView, viewBytes} from '../../server/domain/view';
-import {widgetHidden, splitWidget, ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE, BUDGET_SPENDING_HISTORY, BUDGET_SPENDING_TABLE} from '../../server/domain/widgets';
-export {ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE, BUDGET_SPENDING_HISTORY, BUDGET_SPENDING_TABLE};
+import {widgetHidden, splitWidget, ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE} from '../../server/domain/widgets';
+export {ANALYTICS, AGENTS, ACTIVITY, QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE};
 import {cardId, windowKey} from '../../server/domain/presentation';
 export {cardId, isWindowHidden, keyShown} from '../../server/domain/presentation';
 export const isOffByDefault = (id: string) => id === AGENTS || splitWidget(id);

@@ -14,7 +14,7 @@ type CounterWindow={before:Record<string,number>;after:Record<string,number>;ins
 type Save=(name:string,value:unknown,large?:boolean)=>void;
 type Profile=Parameters<typeof numericProfile>[0];
 export type IdleEdgePlan={boundary:number;from:number;to:number;cellMs:number;seconds:number;marginMs:30_000};
-export type IdleChartGeometry={widget:'quota'|'session'|'activity'|'budget'|'spending'|'funds';count:number;axisEnd:number|null;from:number|null;to:number|null;ready:boolean;panning:boolean;visibleFrom:number|null;visibleTo:number|null};
+export type IdleChartGeometry={widget:'quota'|'session'|'activity'|'budget'|'funds';count:number;axisEnd:number|null;from:number|null;to:number|null;ready:boolean;panning:boolean;visibleFrom:number|null;visibleTo:number|null};
 export type IdleGeometry={now:number;selected:boolean;charts:IdleChartGeometry[]};
 type ClockSource={sha256:string;lineNumber:number;columnNumber:number}|null;
 type ClockTiming=ReturnType<typeof ownedClockFires>[number]&{threadTs:number|null;threadDuration:number|null};
@@ -67,7 +67,7 @@ export function clockTimerSource(client:Client,directory=path.join(import.meta.d
 export function idleGeometry(cdp:Pick<Cdp,'evaluate'>):Promise<IdleGeometry> {
   return cdp.evaluate(`(() => {
     const numeric=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
-    return {now:Date.now(),selected:new URLSearchParams(location.search).has('from'),charts:[['quota','[data-widget="quota-history"]',40],['session','[data-widget="quota-session-history"]',40],['activity','.activity',48],['budget','[data-widget="budget-history"]',76],['spending','[data-widget="budget-spending-history"]',76],['funds','.subscription-funds',76]].map(([widget,selector,left])=>{
+    return {now:Date.now(),selected:new URLSearchParams(location.search).has('from'),charts:[['quota','[data-widget="quota-history"]',40],['session','[data-widget="quota-session-history"]',40],['activity','.activity',48],['budget','[data-widget="budget-history"]',76],['funds','.subscription-funds',76]].map(([widget,selector,left])=>{
       const all=document.querySelectorAll(selector+' .chart'),chart=all[0],svg=chart?.querySelector(':scope > svg');
       const empty={widget,count:all.length,axisEnd:numeric(chart?.dataset.axisEnd),from:numeric(svg?.dataset.drawFrom),to:numeric(svg?.dataset.drawTo),ready:svg?.dataset.drawReady==='true',panning:!!svg?.classList.contains('is-panning'),visibleFrom:null,visibleTo:null};
       const slides=chart?.querySelector(widget==='activity'?'.plot-clip.is-band .plot-move .slides':'.plot-move[data-plot-main] .slides');
@@ -85,7 +85,7 @@ export function idleEdgeProblems(plan:IdleEdgePlan,from:number,to:number,counter
   const problems:string[]=[];
   if(to-from!==plan.seconds*1000||![from,to,counterFrom,counterTo].every(Number.isFinite)||counterFrom<from||counterTo<counterFrom||plan.boundary-counterFrom<plan.marginMs||counterTo-plan.boundary<plan.marginMs)problems.push('actual counter window missed the30s edge margins');
   if(before.selected||after.selected||before.now>=plan.boundary||after.now<plan.boundary)problems.push('snapshots do not bracket a natural live edge');
-  for(const widget of ['quota','session','activity','budget','spending','funds'] as const){
+  for(const widget of ['quota','session','activity','budget','funds'] as const){
     const previous=before.charts.filter(chart=>chart.widget===widget),next=after.charts.filter(chart=>chart.widget===widget),a=previous[0],b=next[0];
     if(previous.length!==1||next.length!==1||!a||!b||a.count!==1||b.count!==1||!a.ready||!b.ready||a.panning||b.panning||![a.axisEnd,a.from,a.to,a.visibleFrom,a.visibleTo,b.axisEnd,b.from,b.to,b.visibleFrom,b.visibleTo].every(value=>typeof value==='number'&&Number.isFinite(value))||a.axisEnd!>=plan.boundary||b.axisEnd!<plan.boundary||!(a.to!>a.from!)||!(b.to!>b.from!)||!(b.visibleFrom!>a.visibleFrom!)||!(b.visibleTo!>a.visibleTo!))problems.push(widget+' actual chart geometry did not cross the selected edge');
   }
@@ -107,7 +107,7 @@ export function originalTraceProblems(from:number,to:number,cellMs:number,window
   if(window.seconds!==120||to-from!==120_000||cellMs!==300_000||![from,to,window.before.Timestamp,window.after.Timestamp].every(Number.isFinite)||!(window.after.Timestamp>window.before.Timestamp))problems.push('original120s counter interval is unavailable');
   const boundary=(Math.floor(from/cellMs)+1)*cellMs;
   if(!(boundary>from&&boundary<to))problems.push('original window missed the natural chart cell edge');
-  for(const widget of ['quota','session','activity','budget','spending','funds'] as const)for(const [kind,rows] of [['render',reading.renders],['mutation',reading.mutations]] as const){
+  for(const widget of ['quota','session','activity','budget','funds'] as const)for(const [kind,rows] of [['render',reading.renders],['mutation',reading.mutations]] as const){
     if(!rows.some(row=>row.time&&row.kind==='chart'&&row.widget===widget&&Number.isSafeInteger(row.count)&&row.count>0))problems.push(widget+' chart '+kind+' was not observed');
   }
   if(!fires.length)problems.push('no received-source-bound own Clock TimerFire in the original counter interval');

@@ -367,7 +367,7 @@ export const STEPS = [
     board_id TEXT NOT NULL, device_id TEXT NOT NULL, enabled_since INTEGER,
     revision TEXT NOT NULL, PRIMARY KEY(board_id,device_id)) WITHOUT ROWID;
   CREATE INDEX board_device_sessions_by_device ON board_device_sessions(device_id);`,
-  // 26 — fixed subscription periods and budget purposes, with lossless view expansion.
+  // 26 — fixed subscription periods, with lossless view expansion.
   `SELECT 1;`,
 ];
 

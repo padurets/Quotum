@@ -975,7 +975,6 @@ export const en = {
   "money.fixedEstimate": "Estimate from {amount}. Source: {source}.",
   "money.currencyEstimate": "Estimate from {amount} using the {source} reference rate dated {date}.",
   "money.noDisplayBalance": "The original balance is saved. Its {currency} estimate is currently unavailable.",
-  "money.spending": "Spending",
   "money.day": "Today (UTC)",
   "money.week": "This week (UTC)",
   "money.month": "This month (UTC)",
@@ -1063,7 +1062,6 @@ export const en = {
   "money.balancePartial": "Some balance data are missing. Last valid values are retained as stale.",
   "money.unavailable": "Unavailable",
   "money.noSpending": "This provider does not report spending or top-up events. Balance changes cannot establish spending.",
-  "money.unsupportedSpending": "Spending is unavailable for {count} selected sources.",
   "api.credential_rejected": "DeepSeek rejected the key. It may be invalid or revoked. Replace it.",
   "api.credential_account_confirmation": "Confirm that this key belongs to the same declared account.",
   "api.declared_account_not_found": "The selected account is unavailable. Reopen the account list.",
@@ -1095,12 +1093,7 @@ export const en = {
 
   'history.sessionTitle': 'Five-hour limit trends',
   'forecast.sessionTitle': 'Five-hour limit metrics',
-  'widgets.spendingHistory': 'Budget spending trends',
-  'widgets.spendingTable': 'Budget spending metrics',
-  'money.cumulativeSpending': 'Cumulative spending',
   'money.data': 'Accounts and keys',
   'funds.data': 'Subscriptions',
-  'money.onlyUsage': 'Spending only',
   'money.archived': 'Archived',
-  'money.onlyCap': 'Cap remaining only',
 } satisfies Record<string, Message>;

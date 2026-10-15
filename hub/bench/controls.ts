@@ -66,17 +66,14 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'bud
   })()`);
 }
 
-/** Both fixed monetary purposes retain their own valid scale and resource scope. */
+/** The balance view keeps account and scoped-limit values inside their scale. */
 export async function moneyView(cdp: Cdp, source: string, cappedSource: string, cap: string) {
   await selectMoney(cdp, [[source, 'balance'], [cappedSource, cap]]);
   await cdp.evaluate(`(() => {
-    for(const widget of ['budget-history','budget-spending-history']){
-      const panel=document.querySelector('[data-widget="'+widget+'"]'),svg=panel?.querySelector('.chart>svg');
-      if(svg?.dataset.drawReady!=='true')throw new Error('fixed budget plot is not ready: '+widget);
-      const paths=Array.from(panel.querySelectorAll('.series[d]:not([d=""])'));
-      if(!paths.length)throw new Error('fixed budget plot has no account line: '+widget);
-      for(const path of paths){const box=path.getBBox();if(box.y<0||box.y+box.height>svg.viewBox.baseVal.height)throw new Error('fixed budget line left its scale: '+widget);}
-      if(widget==='budget-spending-history'&&panel.querySelector('[data-series="${cappedSource} ${cap}"]'))throw new Error('spending includes a scoped allowance');
-    }
+    const panel=document.querySelector('[data-widget="budget-history"]'),svg=panel?.querySelector('.chart>svg');
+    if(svg?.dataset.drawReady!=='true')throw new Error('budget plot is not ready');
+    const paths=Array.from(panel.querySelectorAll('.series[d]:not([d=""])'));
+    if(!paths.length)throw new Error('budget plot has no account line');
+    for(const path of paths){const box=path.getBBox();if(box.y<0||box.y+box.height>svg.viewBox.baseVal.height)throw new Error('budget line left its scale');}
   })()`);
 }

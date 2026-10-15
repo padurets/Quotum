@@ -97,7 +97,7 @@ only the board owner may show another member's hidden card or add a standard wid
 `{kind:"connection", provider, account?: {kind:"new"} | {kind:"existing", id}}`, or `{kind:"replace", credentialId}`.
 Source selections contain one to 100 unique IDs. Standard widgets are `agents`,
 `activity`, `quota-history`, `quota-session-history`, `quota-table`, `quota-session-table`,
-`budget-history`, `budget-spending-history`, `budget-table`, `budget-spending-table`,
+`budget-history`, `budget-table`,
 `subscription-funds`. Replacement is personal; the server captures its
 provider, source and access revision. Reusing a request ID with another destination or
 selection returns `409 addition_conflict`. No secret goes into reservation or storage.
@@ -162,7 +162,7 @@ Storage and POST use `[4, places, mask, ...fields]`; events, snapshots and confl
 responses use the semantic object with `version: 4`. Each place is `[id, geometry]`
 or `[id, geometry, h]`, in reading order. Integer ids 0 through 6 stand for `agents`,
 `activity`, `quota-history`, `budget-history`, `quota-table`, `budget-table`, `subscription-funds`; aliases 7 through 10 are `quota-session-history`,
-`quota-session-table`, `budget-spending-history`, `budget-spending-table`; other ids
+`quota-session-table`, `budget-spending-history`, `budget-spending-table`; the last two are retired preview slots, never reused or offered by the widget catalogue. Other ids
 are unchanged strings (including the distinct string `"0"`). Geometry 0 through 9
 indexes `(x,w)` pairs `(0,2),(0,3),(0,4),(0,6),(2,2),(2,3),(2,4),(3,2),(3,3),(4,2)`.
 The array position restores `y`; vertical gaps are not persisted height requests.
@@ -184,13 +184,13 @@ device-onboarding writes also require the current writer header.
 
 The standard widgets are `agents`, `activity`, `quota-history`, `budget-history`,
 `quota-table`, `budget-table`, `subscription-funds`, `quota-session-history`,
-`quota-session-table`, `budget-spending-history` and `budget-spending-table`. Each analytics replacement in `shown` is placed;
+`quota-session-table`. Each analytics replacement in `shown` is placed;
 `hidden` takes precedence. Unplaced analytics become placed once their resource
 capabilities appear, independently of filters, latest errors or zero balances. Placed
 widgets remain when resources leave. `enabledWhenEmpty` applies only to explicit
 `agents` and `activity` additions. New empty boards have no analytics placed and keep
 activity hidden; any standard widget can be added explicitly to an empty board.
-The v4 shown mask admits 2047; the released v3 aliases 0 through 6 and mask 127 remain frozen in the migration decoder. Hidden/column widget maps admit 211 entries and shown admits 215 (eleven builtins plus 204 other IDs). The v3-to-v4 migration retains the old IDs for weekly limits and wallet balance, inserts five-hour and spending siblings next to saved parents, and copies visibility, widths, requested heights and table columns. Each stored view and retained receipt is upgraded atomically; chained older upgrades increment a view revision only once.
+The v4 shown mask admits 2047; the released v3 aliases 0 through 6 and mask 127 remain frozen in the migration decoder. Hidden/column widget maps admit 211 entries and shown admits 215 (nine active builtin slots, two retired preview slots and 204 other IDs). The v3-to-v4 migration retains the old IDs for weekly limits and wallet balance, inserts five-hour siblings next to saved weekly parents, and copies visibility, widths, requested heights and table columns. Each stored view and retained receipt is upgraded atomically; chained older upgrades increment a view revision only once. Retired preview fields remain inert and losslessly readable. Existing Add receipts expose only active targets; a retired-only pending operation returns `addition_unavailable` without saving the view, and a completed replay never places it again.
 
 Agent sessions uses the existing period `sessions` section, independent of quota
 history and chart selection. Reader-local project/machine/subscription/each-agent

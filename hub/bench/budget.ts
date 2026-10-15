@@ -142,7 +142,7 @@ export function privateWorkRenderProblems({renders,mutations,from,to,cellMs}:Omi
   const found=renderProblems({card:'private-client-no-card',renders,mutations,from,to});
   const ticks=Math.floor(to/cellMs)-Math.floor(from/cellMs);
   for(const [what,parts] of [['rendered',renders],['changed',mutations]] as const)for(const part of parts) {
-    if(!['budget','spending','funds'].includes(part.widget??'')||part.time&&part.kind!=='chart')continue;
+    if(!['budget','funds'].includes(part.widget??'')||part.time&&part.kind!=='chart')continue;
     if(part.count>(part.kind==='chart'?ticks:0))found.push(`private work ${what} ${part.widget} ${part.node} ×${part.count}`);
   }
   return found;

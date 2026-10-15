@@ -72,9 +72,7 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
   useEffect(()=>{if(archivePage>extraPages)setArchivePage(extraPages);},[archivePage,extraPages]);
   const balance=(s:Named)=>unit===DEFAULT_CURRENCY?referenceBalance(s,context.target.id!==DEFAULT_CURRENCY||s.provider==='codex')?.total:s.meters?.find(m=>m.kind==='balance'&&m.unit===unit&&balanceDescriptor(s.provider,m.id)?.role==='total');
   const keyRow=(id:string,label:string,meters:string[],archived=false)=>{
-    const selectedKinds=meters.filter(m=>has(source!.id,m));
-    const partial=selectedKinds.length>0&&selectedKinds.length<meters.length;
-    return row(source!.id,meters,label,archived||!meters.length,archived?t('money.archived'):partial?t(selectedKinds.some(m=>m.endsWith(':usage'))?'money.onlyUsage':'money.onlyCap'):undefined,true,id);
+    return row(source!.id,meters,label,archived||!meters.length,archived?t('money.archived'):!meters.length?t('money.noCap'):undefined,true,id);
   };
   return <>
     <p className="popover-note">{selected.length} / {MAX_METERS}</p>
@@ -86,8 +84,8 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
       {(page?.inventory??source.inventory)?.complete===false&&<p className="popover-note">{t('money.inventoryPartial')}</p>}
       <KeyPageContent key={source.id} loading={busy} rows={Math.min(KEYS_PER_PAGE,total)}>
         {page&&<>
-          {!archivalIndex&&page.keys.map(part=>keyRow(part.id,keyName(part),(['usage','cap'] as const).map(kind=>`key:${part.id}:${kind}`).filter(id=>page.meters.some(m=>m.unit===unit&&m.id===id)||has(source.id,id))))}
-          {archivedShown.map(group=>keyRow(group.id,group.label,[group.usage,group.cap].filter((id):id is string=>!!id),true))}
+          {!archivalIndex&&page.keys.map(part=>keyRow(part.id,keyName(part),[`key:${part.id}:cap`].filter(id=>page.meters.some(m=>m.unit===unit&&m.id===id)||has(source.id,id))))}
+          {archivedShown.map(group=>keyRow(group.id,group.label,[group.cap],true))}
         </>}
       </KeyPageContent>
       {(total>KEYS_PER_PAGE||!!page?.next||back.length>0||!!archivalIndex)&&<KeyPages page={back.length+archivalIndex+1} pages={Math.ceil(total/KEYS_PER_PAGE)} previous={!!back.length||!!archivalIndex} next={!!page?.next||archivalIndex<extraPages}

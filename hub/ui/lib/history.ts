@@ -1062,7 +1062,7 @@ function usePeriodHistory(loader:HistoryStore,rolling=false):Shown&{drawing:Hist
 export function useHistory(rolling=false) {return usePeriodHistory(quotaHistory,rolling);}
 export function useBudgetHistory(family:MoneyFamily='budget',rolling=false) {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling);}
 export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
-export function useBudgetHistoryPlot(family: MoneyFamily = 'budget', quantities=false): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory,read=quantities?reader.getPlot:reader.getDrawingPlot;return useSyncExternalStore(reader.subscribePlot, read, read);}
+export function useBudgetHistoryPlot(family: MoneyFamily = 'budget'): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribePlot, reader.getDrawingPlot, reader.getDrawingPlot);}
 /** A fresh answer from either resource family supersedes the board's initial snapshot. */
 export function historyBegins(board: string | null, snapshot: number | null, answers: readonly (HistoryBoundary | null)[]): number {
   const current = answers.filter((answer): answer is HistoryBoundary => !!answer && answer.board === board);

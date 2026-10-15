@@ -9,6 +9,7 @@ import {providerOf, budgetMeter, moneyFamily, type MoneyFamily} from '../../serv
 
 export type MoneyPrefs={version:1;unit:string|null;selected:Record<string,[string,string][]>;legacySelected?:Record<string,[string,string][]>;removed?:number};
 export const DEFAULT_MONEY:MoneyPrefs={version:1,unit:DEFAULT_CURRENCY,selected:{}};
+const spendingMeter=(meter:string)=>{const native=conversionOrigin(meter)?.meter??meter;return native==='usage'||native==='credits'||/^key:[^:]+:usage$/.test(native);};
 const readSelections=(value:unknown):MoneyPrefs['selected']=>{
   const selected:MoneyPrefs['selected']={};
   if(value&&typeof value==='object'&&!Array.isArray(value))for(const [unit,ids] of Object.entries(value)){
@@ -20,29 +21,22 @@ export function readMoney(value:unknown,family:MoneyFamily='budget'):MoneyPrefs 
   if(!value||typeof value!=='object')return DEFAULT_MONEY;
   const raw=value as Partial<MoneyPrefs>,legacy=family==='funds'&&raw.version!==1;
   const selected=readSelections(raw.selected),legacySelected=legacy?selected:readSelections(raw.legacySelected);
+  if(family==='budget')for(const unit of Object.keys(selected))selected[unit]=selected[unit].filter(([,meter])=>!spendingMeter(meter));
   return {version:1,unit:isUnit(raw.unit)&&!raw.unit.startsWith('credits:')?raw.unit==='CNY'?DEFAULT_CURRENCY:raw.unit:DEFAULT_CURRENCY,
     selected:legacy?{}:selected,...(family==='funds'&&(legacy&&raw.selected!==undefined||raw.legacySelected!==undefined)?{legacySelected}:{}),
     ...(Number.isSafeInteger(raw.removed)&&raw.removed!>0&&raw.removed!<=32?{removed:raw.removed}:{})};
 }
 
-/** Preserve choices from other boards; expand a legacy key only when both meters fit. */
+/** Keep account and limit choices across boards; retired usage is never a balance. */
 export function moneyChoices(cards:readonly Card[],ids:readonly [string,string][],unit:string):[string,string][] {
-  const normalized=ids.map(([source,meter]):[string,string]=>{
+  const normalized=ids.filter(([,meter])=>!spendingMeter(meter)).map(([source,meter]):[string,string]=>{
     const card=cards.find(c=>c.id===source),origin=conversionOrigin(meter),descriptor=card&&balanceDescriptor(card.provider,origin?.meter??meter);
     const total=descriptor&&descriptor.role!=='total'?monetaryOf(card!.provider)?.balances.find(balance=>balance.role==='total'&&balance.unit===descriptor.unit):null;
     const preferred=descriptor&&card&&(unit===DEFAULT_CURRENCY?referenceBalance(card,true)?.total:card.meters?.find(m=>m.kind==='balance'&&m.unit===unit&&balanceDescriptor(card.provider,conversionOrigin(m.id)?.meter??m.id)?.role==='total'));
     if(preferred)return [source,preferred.id];
     return [source,total?(origin?conversionId(total.meterId,origin.unit):total.meterId):meter];
   });
-  const result=[...new Map(normalized.map(pair=>[JSON.stringify(pair),pair])).values()];
-  for(const [source,meter] of [...result]){
-    const key=keyMeter(meter);if(!key)continue;
-    const card=cards.find(c=>c.id===source);
-    const available=(card?.meters??[]).filter(m=>m.unit===unit&&keyMeter(m.id)?.[1]===key[1]).map(m=>[source,m.id] as [string,string]);
-    const missing=available.filter(([id,m])=>!result.some(([s,k])=>s===id&&(conversionOrigin(k)?.meter??k)===(conversionOrigin(m)?.meter??m)));
-    if(result.length+missing.length<=MAX_METERS)result.push(...missing);
-  }
-  return result;
+  return [...new Map(normalized.map(pair=>[JSON.stringify(pair),pair])).values()];
 }
 
 /** One logical choice commits all available metrics, or leaves the selection intact. */
@@ -80,16 +74,15 @@ export const fundsLegacyMuted=(settings:MoneyPrefs,source:string,meter:string)=>
 export const keyMeter=(meter:string)=>/^key:([^:]+):(usage|cap)$/.exec(conversionOrigin(meter)?.meter??meter);
 
 export function archivedKeyGroups(source:string,selected:readonly [string,string][],current:ReadonlySet<string>,history:readonly MeterHistory[]) {
-  const groups=new Map<string,{id:string;label:string;usage:string|null;cap:string|null}>();
+  const groups=new Map<string,{id:string;label:string;cap:string}>();
   for(const [owner,meter] of selected) {
-    const key=keyMeter(meter);if(owner!==source||!key)continue;
+    const key=keyMeter(meter);if(owner!==source||!key||key[2]!=='cap')continue;
     const id=key[1];
     if(current.has(id))continue;
     const saved=history.find(s=>s.sourceId===source&&s.meterId===meter);
-    const kind=key[2]==='cap'?'cap':'usage';
     let group=groups.get(id);
-    if(!group)groups.set(id,(group={id,label:saved?.semantics?.label??id,usage:null,cap:null}));
-    group[kind]=meter;
+    if(!group)groups.set(id,(group={id,label:saved?.semantics?.label??id,cap:meter}));
+    group.cap=meter;
   }
   return [...groups.values()];
 }

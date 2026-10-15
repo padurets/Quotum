@@ -26,7 +26,7 @@ test('fixed siblings preserve geometry, reading order, hidden intent and every o
     layout:{columns:6,places:{'quota-history':{x:0,w:3,y:2,h:17},'source:q':{x:3,w:3,y:5},'quota-table':{x:0,w:6,y:6,h:10},'budget-history':{x:0,w:6,y:8},'budget-table':{x:0,w:6,y:9,h:5}}}};
   const next = migrateFixed(view,resources),roundtrip = decodeView(encodeView(next));
   assert.deepEqual({...roundtrip,shown:next.shown},next);
-  assert.deepEqual(Object.keys(next.layout.places),['quota-history','quota-session-history','source:q','quota-table','quota-session-table','budget-history','budget-spending-history','budget-table','budget-spending-table']);
+  assert.deepEqual(Object.keys(next.layout.places),['quota-history','quota-session-history','source:q','quota-table','quota-session-table','budget-history','budget-table']);
   for (const id of Object.keys(view.layout.places)) {
     const {y:before,...geometry} = view.layout.places[id as keyof typeof view.layout.places];
     const {y:after,...retained} = next.layout.places[id];
@@ -37,7 +37,8 @@ test('fixed siblings preserve geometry, reading order, hidden intent and every o
   assert.equal(widgetVisible(next,'quota-session-table',2),false);
   assert.deepEqual(next.columns['quota-session-table'],['spent']);
   assert.deepEqual(next.shownColumns['quota-session-table'],['during']);
-  assert.deepEqual(next.columns['budget-spending-table'],['topup']);
+  assert.deepEqual(next.columns['budget-table'],['topup']);
+  assert.equal(next.columns['budget-spending-table'],undefined);
   for (const key of ['names','colors','windows','plans','unplanned'] as const) assert.deepEqual(next[key],view[key]);
   assert.equal(migrateFixed(next,resources),next);
   assert.equal(next.layout.places['source:b'],undefined,'implicit cards are not materialized');
@@ -47,8 +48,9 @@ test('explicit empty widgets split independently and existing sibling fields are
   const input = {...old(),shown:['quota-history','budget-table'],hidden:['budget-history'],
     columns:{'quota-table':['spent'],'quota-session-table':['work']},layout:{columns:6,places:{'quota-session-history':{x:3,w:3,y:0,h:9},'quota-history':{x:0,w:3,y:1,h:12}}}};
   const next = migrateFixed(input,[]);
-  for (const id of ['quota-history','quota-session-history','budget-table','budget-spending-table']) assert.ok(widgetVisible(next,id,0));
-  assert.ok(next.hidden.includes('budget-spending-history'));
+  for (const id of ['quota-history','quota-session-history','budget-table']) assert.ok(widgetVisible(next,id,0));
+  assert.ok(next.hidden.includes('budget-history'));
+  assert.ok(!next.hidden.includes('budget-spending-history'));
   assert.equal(next.layout.places['quota-session-history'].h,9);
   assert.deepEqual(next.columns['quota-session-table'],['work']);
 });
@@ -58,7 +60,7 @@ test('fresh fixed defaults follow catalogue capabilities, grants and sticky owne
     const view = migrateFixed(undefined,[{id:'s',provider}]);
     const expected = provider==='claude'?['quota-session-history','quota-session-table','quota-history','quota-table']:
       provider==='deepseek'?['budget-history','budget-table']:
-      provider==='openrouter'?['budget-history','budget-table','budget-spending-history','budget-spending-table']:
+      provider==='openrouter'?['budget-history','budget-table']:
       ['quota-session-history','quota-session-table','quota-history','quota-table','subscription-funds'];
     assert.deepEqual(view.shown,expected);
     assert.equal(reconcileAnalytics(view,[{id:'s',provider}]),view);
@@ -68,7 +70,7 @@ test('fresh fixed defaults follow catalogue capabilities, grants and sticky owne
   const hidden={...old(),hidden:parents};
   const migrated=reconcileAnalytics(migrateFixed(hidden,resources),resources);
   for(const id of WIDGETS.filter(id=>id.includes('quota')||id.includes('budget')))assert.ok(migrated.hidden.includes(id));
-  assert.deepEqual(fixedWidgetTargets(['quota-history','quota-history','budget-table']),['quota-history','quota-session-history','budget-table','budget-spending-table']);
+  assert.deepEqual(fixedWidgetTargets(['quota-history','quota-history','budget-table']),['quota-history','quota-session-history','budget-table']);
 });
 
 test('the released v3 aliases remain frozen and only v4 is accepted by the active writer', () => {
@@ -122,7 +124,7 @@ test('combined legacy encoded, decoded and collection maxima migrate, reload and
     for(const field of ['columns','shownColumns'] as const) {
       for(const [id,columns] of Object.entries(input[field]))assert.deepEqual(next[field][id],columns);
       assert.deepEqual(next[field]['quota-session-table'],input[field]['quota-table']);
-      assert.deepEqual(next[field]['budget-spending-table'],input[field]['budget-table']);
+      assert.equal(next[field]['budget-spending-table'],undefined);
     }
     const db=new DatabaseSync(':memory:');
     try {
@@ -194,4 +196,49 @@ for(const version of [19,22,25])test(`layout ${version} preserves NULL receipt i
     assert.deepEqual(added.widgetIds,['quota-history']);assert.ok(widgetVisible(directory.view('b'),'quota-history',0));
     assert.equal(widgetVisible(directory.view('b'),'quota-session-history',0),false,'a new v4 action adds only the requested widget');
   } finally {store.close();rmSync(folder,{recursive:true,force:true});}
+});
+
+
+test('retired preview spending aliases read losslessly but are never active or added by defaults',()=>{
+  const retired=['budget-spending-history','budget-spending-table'];
+  const view={...structuredClone(EMPTY_VIEW),shown:retired,columns:{'budget-spending-table':['spending']},layout:{columns:6,places:Object.fromEntries(retired.map((id,y)=>[id,{x:0,w:6,y}]))}};
+  const wire=encodeView(view),decoded=decodeView(wire)!;
+  assert.deepEqual(wire[1].map(place=>place[0]),[9,10]);
+  assert.deepEqual(decoded,view);
+  assert.equal(migrateFixed(decoded,resources),decoded,'unrelated preview layout fields are not reset');
+  for(const id of retired){assert.ok(!WIDGETS.includes(id as typeof WIDGETS[number]));assert.equal(widgetVisible(decoded,id,10),false);}
+  const fresh=migrateFixed(undefined,resources);
+  assert.ok(retired.every(id=>!fresh.shown.includes(id)&&!fresh.layout.places[id]));
+});
+
+test('retired Add receipts stay immutable and never save or resurrect removed widgets',async()=>{
+  const store=new Store(':memory:',100),directory=new Directory(store.db);
+  const additions=new BoardAdditions(store,directory,{} as Credentials,()=>100);
+  try {
+    store.db.exec("INSERT INTO users VALUES('u','owner@fixture.example','Owner','unused',0); INSERT INTO boards VALUES('b','',1,'u',0); INSERT INTO members VALUES('b','u','owner',0)");
+    directory.saveView('b',{...structuredClone(EMPTY_VIEW),hidden:['budget-history','budget-table']},'u',0);
+    const revision=directory.viewRevision('b');
+    const reserve=(state:string,item:string,targets:string[])=>{
+      const id=randomUUID();
+      store.db.prepare('INSERT INTO board_additions(id,owner_id,request_id,board_id,item,state,result,widget_targets,created_at,updated_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id,'u',randomUUID(),'b',item,state,state==='complete'?JSON.stringify({sourceIds:[],appliedAt:0,placement:'added'}):null,JSON.stringify(targets),0,0,100_000);
+      return id;
+    };
+    const item=JSON.stringify({kind:'widget',widgetId:'budget-spending-history'});
+    for(const state of ['ready','complete']) {
+      const id=reserve(state,item,['budget-spending-history']);
+      const answer=await additions.run('u',id,undefined,()=>true);
+      assert.equal(answer.state,state==='ready'?'needs_input':'complete');
+      if(state==='ready')assert.equal(answer.error,'addition_unavailable');
+      assert.deepEqual(answer.widgetIds,[]);assert.deepEqual(answer.current.widgets,[]);
+      assert.equal(directory.viewRevision('b'),revision);
+      assert.equal(widgetVisible(directory.view('b'),'budget-history',1),false);
+      assert.equal(store.db.prepare('SELECT item FROM board_additions WHERE id=?').get(id)!.item,item);
+    }
+    assert.throws(()=>additions.reserve('u',randomUUID(),'b',{kind:'widget',widgetId:'budget-spending-history' as never}),/addition_invalid/);
+    const mixed=reserve('ready',JSON.stringify({kind:'widget',widgetId:'budget-history'}),['budget-history','budget-spending-history']);
+    const answer=await additions.run('u',mixed,undefined,()=>true);
+    assert.equal(answer.state,'complete');assert.deepEqual(answer.widgetIds,['budget-history']);
+    assert.equal(widgetVisible(directory.view('b'),'budget-history',1),true);
+    assert.equal(widgetVisible(directory.view('b'),'budget-spending-history',1),false);
+  }finally{store.close();}
 });

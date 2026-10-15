@@ -1,10 +1,9 @@
 import {EMPTY_VIEW, type UnifiedView, type View, type Place} from './view.js';
 import {reconcileAnalytics, type AnalyticsResources} from './analyticsView.js';
-import {QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, BUDGET_HISTORY, BUDGET_TABLE, BUDGET_SPENDING_HISTORY, BUDGET_SPENDING_TABLE} from './widgets.js';
+import {QUOTA_HISTORY, QUOTA_TABLE, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE} from './widgets.js';
 
 const siblings = new Map([
   [QUOTA_HISTORY, QUOTA_SESSION_HISTORY], [QUOTA_TABLE, QUOTA_SESSION_TABLE],
-  [BUDGET_HISTORY, BUDGET_SPENDING_HISTORY], [BUDGET_TABLE, BUDGET_SPENDING_TABLE],
 ]);
 
 /** A reader's old modes never determine the owner's fixed widget layout. */
@@ -22,7 +21,7 @@ export function migrateFixed(input: UnifiedView | View | undefined, resources: A
   for (const [id, sibling] of siblings) {
     if (input.hidden.includes(id)) hidden.add(sibling);
     if (input.shown.includes(id)) shown.add(sibling);
-    if (id === QUOTA_TABLE || id === BUDGET_TABLE) {
+    if (id === QUOTA_TABLE) {
       for (const map of [columns, shownColumns]) if (map[id] && !map[sibling]) map[sibling] = [...map[id]];
     }
   }

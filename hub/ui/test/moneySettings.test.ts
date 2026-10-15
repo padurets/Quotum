@@ -87,6 +87,8 @@ test('the real settings keep ten slots when a selected live key moves off page',
   const f=fixture();await f.settle();await f.openKeys();
   const usage=f.switches().find(n=>n.key==='0')!;
   (usage.props.onChange as (on:boolean)=>void)(true);await f.settle();
+  assert.ok(f.selection()!.ids.some(([,meter])=>meter==='key:0:cap'));
+  assert.ok(!f.selection()!.ids.some(([,meter])=>meter==='key:0:usage'));
   f.pager().onNext();await f.settle();
   assert.equal(f.slots().length,10);assert.equal(f.pager().page,2);assert.equal(f.pager().pages,2);
   assert.equal(f.switches().some(n=>n.key==='0'),false);
@@ -106,5 +108,7 @@ test('an open settings page reloads its names and caps on a successful source up
   const before=f.reads.length;f.refresh();await f.settle();
   assert.equal(f.reads.length,before+1);assert.equal(f.pager().page,2);
   assert.ok(f.slots().every(n=>n.props.children===`Key ${Number(n.key)} revision 2`));
-  const key=f.switches().find(n=>n.key==='10')!;assert.equal(key.props.disabled,false);(key.props.onChange as (on:boolean)=>void)(true);await f.settle();assert.ok(f.selection()!.ids.some(([,meter])=>meter==='key:10:usage'));assert.ok(!f.selection()!.ids.some(([,meter])=>meter==='key:10:cap'));
+  const key=f.switches().find(n=>n.key==='10')!;assert.equal(key.props.disabled,true,'usage without a reported cap is not a balance choice');
+  assert.equal(key.props.value,'money.noCap');
+  assert.ok(!f.selection()!.ids.some(([,meter])=>meter==='key:10:usage'));
 });

@@ -5,11 +5,10 @@ import {capName, unitLabel} from './money';
 import {moneyTotal, type MeterHistory} from './moneyView';
 import {nextTableSort, visibleTableSort, type TableSort} from './table';
 
-export const MONEY_COLUMNS = ['value', 'spending', 'topup'] as const;
+export const MONEY_COLUMNS = ['value', 'topup'] as const;
 export type MoneyColumn = typeof MONEY_COLUMNS[number];
-export type MoneyPurpose = 'balance' | 'spending';
-export const moneySeriesForPurpose=(series:MeterHistory,purpose:MoneyPurpose)=>
-  series.kind==='balance'&&(!series.role||series.role==='total') || (purpose==='balance'?series.kind==='cap':series.kind==='counter'&&(series.meterId==='usage'||series.meterId.endsWith(':usage')));
+export const moneyBalanceSeries=(series:MeterHistory)=>
+  series.kind==='balance'&&(!series.role||series.role==='total') || series.kind==='cap';
 export type MoneySort = TableSort<MoneyColumn | 'name'>;
 export const nextMoneySort = nextTableSort<MoneyColumn | 'name'>;
 
@@ -43,7 +42,6 @@ export function moneySeriesDetail(series: MeterHistory, context: CurrencyContext
 /** Sort and cells read the same exact millionths and accounting capabilities. */
 export function moneyTableValues(series: MeterHistory, from: number, to: number): Record<MoneyColumn, string | null> {
   return {value: series.end,
-    spending: series.kind === 'cap' || series.spent === null ? null : moneyTotal(series, from, to).amount,
     topup: series.kind !== 'balance' || series.topup === null ? null : moneyTotal(series, from, to, true).amount};
 }
 

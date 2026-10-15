@@ -41,17 +41,25 @@ test('bounded funds admission uses immutable priority and retains explicit data 
   assert.deepEqual(settings.legacySelected!.USD,[['32','balance:credits']]);
 });
 
-test('logical key choices commit atomically, preserve legacy halves at capacity and remove both',()=>{
-  const selected=Array.from({length:31},(_,i)=>[String(i),'balance'] as [string,string]),meters=['key:k:usage','key:k:cap'];
-  assert.deepEqual(selection.toggleMoneyChoice(selected,'wallet',meters,true),selected);
-  const enough=selection.toggleMoneyChoice(selected.slice(0,30),'wallet',meters,true);
-  assert.equal(enough.length,32);assert.deepEqual(enough.slice(-2),meters.map(m=>['wallet',m]));
-  assert.deepEqual(selection.toggleMoneyChoice(enough,'wallet',meters,false),selected.slice(0,30));
+test('budget selection retires usage without replacing an explicit empty choice with defaults',()=>{
+  const pairs=Array.from({length:16},(_,i)=>[['wallet',`key:${i}:usage`],['wallet',`key:${i}:cap`]]).flat() as [string,string][];
+  const settings=selection.readMoney({unit:'USD',selected:{USD:pairs}});
+  assert.deepEqual(new Set(settings.selected.USD.map(pair=>JSON.stringify(pair))),new Set(Array.from({length:16},(_,i)=>JSON.stringify(['wallet',`key:${i}:cap`]))));
   const account=card('wallet','openrouter');
-  account.meters!.push(...meters.map(id=>({...account.meters![0],id,kind:id.endsWith(':cap')?'cap' as const:'counter' as const})));
-  const half=[...selected,['wallet',meters[0]] as [string,string]];
-  assert.deepEqual(selection.moneyChoices([account],half,'USD'),half);
-  assert.deepEqual(selection.moneyChoices([account],[['wallet',meters[0]]],'USD'),meters.map(m=>['wallet',m]));
+  for(const ids of [[['wallet','key:k:usage']],[['wallet','fx:EUR:key:k:usage']],[['wallet','usage'],['wallet','credits']]]) {
+    const retired=selection.readMoney({unit:'USD',selected:{USD:ids}});
+    assert.deepEqual(retired.selected.USD,[]);
+    const reloaded=selection.readMoney(JSON.parse(JSON.stringify(retired)));
+    assert.deepEqual(selection.moneySelection([account],[],reloaded).selection!.ids,[]);
+    assert.equal(selection.moneySelection([account],[],selection.DEFAULT_MONEY).selection!.ids.length,1,'only Reset restores defaults');
+  }
+  const saved:[string,string][]=[['wallet','key:k:usage'],['wallet','key:k:cap'],['other-board','key:a:cap'],['other-board','balance']];
+  assert.deepEqual(selection.moneyChoices([account],saved,'USD'),saved.slice(1));
+  const chosen=Array.from({length:31},(_,i)=>[String(i),'balance'] as [string,string]);
+  const full=selection.toggleMoneyChoice(chosen,'wallet',['key:k:cap'],true);
+  assert.equal(full.length,32);
+  assert.deepEqual(selection.toggleMoneyChoice(full,'wallet',['key:other:cap'],true),full);
+  assert.deepEqual(selection.toggleMoneyChoice(full,'wallet',['key:k:cap'],false),chosen);
 });
 
 test('legacy components and duplicate currency representations select one evidenced account total',()=>{
@@ -71,20 +79,21 @@ function preferences(saved:object){
 }
 
 test('scoped legend overrides isolate sibling charts, preserve explicit unmute and never alter data choices',()=>{
-  const p=preferences({kind:'session',money:{view:'spending',unit:'USD',selected:{USD:[['wallet','balance']]}},funds:{selected:{USD:[['a','balance:credits']]}},muted:{'["wallet","balance","balance","USD"]':true},moneySort:{column:'value',descending:true}});
+  const p=preferences({spendingSort:{column:'value',descending:true},kind:'session',money:{view:'spending',unit:'USD',selected:{USD:[['wallet','balance']]}},funds:{selected:{USD:[['a','balance:credits']]}},muted:{'["budget-spending-history","wallet","balance"]':true,'["wallet","balance","balance","USD"]':true},moneySort:{column:'value',descending:true}});
   assert.equal(Object.hasOwn(p.prefs(),'kind'),false);assert.equal(Object.hasOwn(p.prefs().money,'view'),false);
-  assert.deepEqual(JSON.parse(JSON.stringify(p.prefs().spendingSort)),{column:'value',descending:true});
-  const sibling=p.useChartMuted(widgets.BUDGET_SPENDING_HISTORY),before=p.prefs().money;
+  assert.equal(Object.hasOwn(p.prefs(),'spendingSort'),false);
+  assert.ok(!Object.keys(p.prefs().muted).some(key=>key.includes('budget-spending')));
+  const sibling=p.useChartMuted(widgets.SUBSCRIPTION_FUNDS),before=p.prefs().money;
   const key=p.chartMuteKey(widgets.BUDGET_HISTORY,'wallet','balance');
   p.setMuted(key,false);
   assert.equal(p.chartMuteKey(widgets.BUDGET_HISTORY,'wallet','fx:EUR:balance'),key,'display conversion keeps the native visibility identity');
   assert.equal(p.chartSeriesMuted(p.useChartMuted(widgets.BUDGET_HISTORY),widgets.BUDGET_HISTORY,'wallet','balance',true),false);
-  assert.equal(p.useChartMuted(widgets.BUDGET_SPENDING_HISTORY),sibling);
+  assert.equal(p.useChartMuted(widgets.SUBSCRIPTION_FUNDS),sibling);
   assert.equal(p.prefs().money,before);assert.equal(p.prefs().funds.selected.USD,undefined);
   const reloaded=preferences(p.saved());
   assert.equal(reloaded.chartSeriesMuted(reloaded.prefs().muted,widgets.BUDGET_HISTORY,'wallet','balance',true),false);
   assert.equal(selection.fundsLegacyMuted(reloaded.prefs().funds,'b','balance:credits'),true);
   assert.equal(selection.fundsLegacyMuted(reloaded.prefs().funds,'a','fx:EUR:balance:credits'),false);
-  p.setPrefs({sessionSort:null,spendingSort:null});
-  assert.equal(preferences(p.saved()).prefs().spendingSort,null,'an explicit reset cannot resurrect the inherited sort');
+  p.setPrefs({sessionSort:null});
+  assert.equal(Object.hasOwn(preferences(p.saved()).prefs(),'spendingSort'),false);
 });

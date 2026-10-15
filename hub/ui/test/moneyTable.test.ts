@@ -22,16 +22,14 @@ test('money sorting keeps integer precision, unavailable accounting last, and hi
     const values=[...rows].sort(moneyComparator({column:'value',descending},'en'));
     assert.equal(values.at(-1)!.key,'unknown');
     assert.deepEqual(values.slice(0,3).map(row=>row.key),descending?['2','10','zero']:['zero','10','2']);
-    assert.equal([...rows].sort(moneyComparator({column:'spending',descending},'en')).at(-1)!.key,'unknown');
   }
-  assert.equal(moneyTableValues({...entries[0],kind:'cap'},0,H).spending,null);
   assert.equal(moneyTableValues({...entries[0],kind:'counter'},0,H).topup,null);
   const up=nextMoneySort(null,'value'),down=nextMoneySort(up,'value');
   assert.deepEqual(readMoneySort(JSON.parse(JSON.stringify(down))),down);
   assert.equal(nextMoneySort(down,'value'),null);
   assert.equal(nextMoneySort(down,'value',false)?.descending,false,'menus reset through their default row');
   assert.equal(visibleMoneySort(down,['topup']),null);assert.equal(visibleMoneySort(down,['value']),down);
-  for(const value of [{},[],{column:'forecast',descending:false},{column:'value',descending:1}])assert.equal(readMoneySort(value),null);
+  for(const value of [{},[],{column:'spending',descending:false},{column:'forecast',descending:false},{column:'value',descending:1}])assert.equal(readMoneySort(value),null);
 });
 
 test('budget names omit repeated total words in EN/RU while distinct components and details remain',()=>{

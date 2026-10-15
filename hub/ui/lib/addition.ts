@@ -26,8 +26,6 @@ export const LABELS: Record<WidgetId, Key> = {
   'budget-table': 'widgets.budgetTable',
   'quota-session-history': 'history.sessionTitle',
   'quota-session-table': 'forecast.sessionTitle',
-  'budget-spending-history': 'widgets.spendingHistory',
-  'budget-spending-table': 'widgets.spendingTable',
 };
 export type Demo = {
   keys: {

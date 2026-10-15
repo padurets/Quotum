@@ -970,7 +970,6 @@ export const ru = {
   "money.fixedEstimate": "Оценка из {amount}. Источник: {source}.",
   "money.currencyEstimate": "Оценка из {amount} по справочному курсу {source} за {date}.",
   "money.noDisplayBalance": "Исходный баланс сохранён. Его оценка в {currency} пока недоступна.",
-  "money.spending": "Расход",
   "money.day": "За день (UTC)",
   "money.week": "За неделю (UTC)",
   "money.month": "За месяц (UTC)",
@@ -1058,7 +1057,6 @@ export const ru = {
   "money.balancePartial": "Часть данных баланса отсутствует. Последние корректные значения сохранены как устаревшие.",
   "money.unavailable": "Недоступно",
   "money.noSpending": "Поставщик не сообщает расходы или события пополнения. Изменение баланса не доказывает расход.",
-  "money.unsupportedSpending": "Расходы недоступны для выбранных источников: {count}.",
   "api.credential_rejected": "DeepSeek не принял ключ. Он может быть неверным или отозванным. Замените его.",
   "api.credential_account_confirmation": "Подтвердите, что ключ относится к тому же указанному аккаунту.",
   "api.declared_account_not_found": "Выбранный аккаунт недоступен. Откройте список заново.",
@@ -1090,12 +1088,7 @@ export const ru = {
 
   'history.sessionTitle': 'Динамика 5-часовых лимитов',
   'forecast.sessionTitle': 'Показатели 5-часовых лимитов',
-  'widgets.spendingHistory': 'Динамика расхода бюджета',
-  'widgets.spendingTable': 'Показатели расхода бюджета',
-  'money.cumulativeSpending': 'Накопленный расход',
   'money.data': 'Счета и ключи',
   'funds.data': 'Подписки',
-  'money.onlyUsage': 'Только расход',
   'money.archived': 'В архиве',
-  'money.onlyCap': 'Только остаток лимита',
 } satisfies Catalog;

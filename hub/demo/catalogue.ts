@@ -40,7 +40,7 @@ export {CURRENCY_SCENES} from './currencies.js';
 
 /** Mixed analytics stays visible; loading and read failures are held by history tests.
  * Legend mutes, table-only views and explicit empty Add are exercised on this set in
- * both languages. The shared range and all six charts use the native-input bench.
+ * both languages. The shared range and all five charts use the native-input bench.
  * Plan-event access and retention expiry are held in server/test/planHistory.test.ts
  * and ui/test/planHistory.test.ts; first-known and changed plans are durable below.
  */

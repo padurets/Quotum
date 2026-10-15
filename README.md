@@ -134,9 +134,9 @@ notifications also stay live, independently of the board's historical range.
   own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
 - **Separate subscription limit and budget charts and metrics**, each movable, resizable and
   hideable on the same grid as cards and agent sessions. They share the board's time
-  range. Five-hour limits, weekly limits, budget balances and cumulative spending each
+  range. Five-hour limits, weekly limits, budget balances each
   have their own chart and table; cards keep their own window visibility settings.
-  All four budget widgets share **Accounts and keys** for data selection. Each chart's
+  Both budget widgets share **Accounts and keys** for data selection. Each chart's
   legend controls its visibility independently of table columns.
 - **Charts of weekly and 5-hour windows** over the last hour up to the last 30
   days. Ahead of now they show forecasts and the next resets, as far as you choose.
@@ -393,7 +393,7 @@ their original rate. Without a usable rate, CNY is retained and USD stays unknow
 All original balances, estimates, rate provenance, funds status and safe provider
 context are retained within the history retention period. Budget history and its table
 share the board's grid and time range. **Accounts and keys** in any wallet widget
-selects the account's total for all four wallet widgets. Balance components remain
+selects the account's total for both wallet widgets. Balance components remain
 in the card's disclosure. Reported USD and converted CNY
 are never summed. Spending and top-up events
 are **unavailable** because the endpoint has no spending counter; a balance change
@@ -432,14 +432,13 @@ range uses retained measurements before its end; the compact panel keeps current
 values. The card's settings switch individual scales, including keys beyond the
 initial five-key preview. Scales use the
 same segmented meters as subscriptions; keys without a spending limit have no scale.
-Spending belongs to analytics.
 Settings show at most ten keys per page. Access turns amber seven days before expiry;
 expired, revoked or forbidden access is red. Working keys without expiry have no expiry
 mark. Temporary read failures are amber.
 Five-hour and weekly subscription limits each have their own chart and table.
-Budget balance and cumulative spending also have separate chart/table pairs.
-All four budget widgets share **Accounts and keys**: an account selects its total,
-and a key selects its available usage and cap together. Table columns and each
+Budget balances have their own chart and table.
+Both budget widgets share **Accounts and keys**: an account selects its total,
+and a key selects its reported remaining limit. Table columns and each
 chart's legend visibility remain independent display settings.
 Account balances are selected by default; at most 32 metrics are selected, with
 visible overflow. The chart uses

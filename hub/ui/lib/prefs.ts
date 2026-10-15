@@ -1,7 +1,7 @@
 import {useSyncExternalStore} from 'react';
 import {readAgentsBy, readAgentsSort, type AgentsBy, type AgentsSort} from './agents';
 import {type ActivityDimension} from './types';
-import {ACTIVITY, QUOTA_HISTORY, QUOTA_SESSION_HISTORY, BUDGET_HISTORY, BUDGET_SPENDING_HISTORY, SUBSCRIPTION_FUNDS} from '../../server/domain/widgets';
+import {ACTIVITY, QUOTA_HISTORY, QUOTA_SESSION_HISTORY, BUDGET_HISTORY, SUBSCRIPTION_FUNDS} from '../../server/domain/widgets';
 import {DEFAULT_PERIOD, periodOf} from './periods';
 import {readForecastSort,type ForecastSort} from './forecastSort';
 import {DEFAULT_MONEY,readMoney,type MoneyPrefs} from './moneySelection';
@@ -24,7 +24,6 @@ export type Prefs = {
   forecastSort:ForecastSort;
   sessionSort:ForecastSort;
   moneySort: MoneySort;
-  spendingSort:MoneySort;
   money:MoneyPrefs;
   funds:MoneyPrefs;
   /** Series switched off in the chart legend. */
@@ -53,11 +52,11 @@ export type Prefs = {
 const KEY = 'quotum.prefs';
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
 export const ACTIVITY_BY: ActivityDimension[] = ['project', 'device', 'source'];
-const DEFAULTS: Prefs = {forecastSort:null,sessionSort:null,moneySort:null,spendingSort:null,funds:DEFAULT_MONEY,money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, horizon: 'auto', filtersVisible: false, showPlan: true, showForecast: true, showSessionForecast:true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
+const DEFAULTS: Prefs = {forecastSort:null,sessionSort:null,moneySort:null,funds:DEFAULT_MONEY,money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, horizon: 'auto', filtersVisible: false, showPlan: true, showForecast: true, showSessionForecast:true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
 
-const CHARTS:readonly string[]=[ACTIVITY,QUOTA_HISTORY,QUOTA_SESSION_HISTORY,BUDGET_HISTORY,BUDGET_SPENDING_HISTORY,SUBSCRIPTION_FUNDS];
+const CHARTS:readonly string[]=[ACTIVITY,QUOTA_HISTORY,QUOTA_SESSION_HISTORY,BUDGET_HISTORY,SUBSCRIPTION_FUNDS];
 export const chartMuteKey=(widget:string,source:string,resource:string)=>JSON.stringify([widget,source,
-  [BUDGET_HISTORY,BUDGET_SPENDING_HISTORY,SUBSCRIPTION_FUNDS].includes(widget)?conversionOrigin(resource)?.meter??resource:resource]);
+  [BUDGET_HISTORY,SUBSCRIPTION_FUNDS].includes(widget)?conversionOrigin(resource)?.meter??resource:resource]);
 export const chartSeriesMuted=(muted:Prefs['muted'],widget:string,source:string,resource:string,inherited=false)=>muted[chartMuteKey(widget,source,resource)]??inherited;
 
 function readMuted(value:unknown):Prefs['muted'] {
@@ -65,9 +64,10 @@ function readMuted(value:unknown):Prefs['muted'] {
   const muted=Object.fromEntries(Object.entries(value).filter((entry):entry is [string,boolean]=>typeof entry[1]==='boolean'));
   for(const [key,on] of Object.entries(muted))try{
     const parts=JSON.parse(key);
+    if(Array.isArray(parts)&&parts[0]==='budget-spending-history'){delete muted[key];continue;}
     if(!Array.isArray(parts)||parts.length!==4||!parts.every(part=>typeof part==='string')||!['balance','counter','cap'].includes(parts[2]))continue;
     delete muted[key];
-    for(const widget of [BUDGET_HISTORY,BUDGET_SPENDING_HISTORY,SUBSCRIPTION_FUNDS]){
+    for(const widget of [BUDGET_HISTORY,SUBSCRIPTION_FUNDS]){
       const scoped=chartMuteKey(widget,parts[0],parts[1]);
       if(!Object.hasOwn(muted,scoped))muted[scoped]=on;
     }
@@ -86,7 +86,7 @@ function read(): Prefs {
     if (!ACTIVITY_BY.includes(stored.activityBy)) stored.activityBy = DEFAULTS.activityBy;
     const {range, horizon, filtersVisible, showPlan, showForecast, showResets, locked, activityBy} = stored;
     return {forecastSort:readForecastSort(stored.forecastSort),sessionSort:readForecastSort(Object.hasOwn(parsed,'sessionSort')?parsed.sessionSort:stored.forecastSort),
-      moneySort:readMoneySort(stored.moneySort),spendingSort:readMoneySort(Object.hasOwn(parsed,'spendingSort')?parsed.spendingSort:stored.moneySort),
+      moneySort:readMoneySort(stored.moneySort),
       funds:readMoney(stored.funds,'funds'),money:readMoney(stored.money),muted:readMuted(stored.muted),range,horizon,filtersVisible:filtersVisible===true,
       showPlan:showPlan!==false,showForecast:showForecast!==false,showSessionForecast:Object.hasOwn(parsed,'showSessionForecast')?parsed.showSessionForecast!==false:showForecast!==false,
       showResets:showResets!==false,locked:locked===true,agentsSort:readAgentsSort(stored.agentsSort),agentsBy:readAgentsBy(stored.agentsBy),activityBy};

@@ -55,7 +55,6 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     let history:History|null=index.project(base,{from:NOW-H,to:NOW}),drawing:History|null=history;
     let sources=cards,context=currency.defaultCurrencyContext,locale:i18n.Locale='en',authority=0;
     let prefs:Pick<Prefs,'money'|'funds'|'muted'|'range'|'horizon'>={money:{...DEFAULT_MONEY,unit:'USD'},funds:{...DEFAULT_MONEY},muted:{},range:'1h',horizon:'auto'};
-    let purpose:'balance'|'spending'='balance';
     let view=views.EMPTY_VIEW,calls=0,activeLeaf:Leaf|null=null;
     const toggles:{key:string;value:boolean}[]=[];
     const Chart=()=>null,SeriesLegendItem=()=>null;
@@ -90,7 +89,7 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     }
     function render() {
       i18n.setLocale(locale,false);calls=0;hooks.begin();
-      const tree=vm.exports.MoneyHistory({arrange:{view,owner:false},purpose});
+      const tree=vm.exports.MoneyHistory({arrange:{view,owner:false}});
       const chart=tree.props.children.find((child):child is ReactElement<ChartProps>=>nodeOf(child)?.type===Chart);
       const legend=tree.props.children.find((child):child is ReactElement<{className:string;children:unknown[]}>=>{const node=nodeOf(child);return node?.type==='div'&&node.props.className==='legend';});
       assert.ok(chart);assert.ok(legend);
@@ -110,8 +109,6 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
       if(phase==='currency')context={...context,definitions:context.definitions.map(d=>d.id==='USD'?{...d,symbol:'USDx'}:d)};
       if(phase==='locale')locale='ru';
       if(phase==='mute')prefs={...prefs,muted:{[chartMuteKey(widgets.BUDGET_HISTORY,'wallet0','balance')]:true}};
-      if(phase==='balance')purpose='balance';
-      if(phase==='spending')purpose='spending';
       if(phase==='zero')replaceFirst({end:'0',spent:'0',coveredMs:history!.to-history!.since,unlocated:[]});
       if(phase==='unknown')replaceFirst({end:null,spent:null,coveredMs:0});
       if(phase==='unavailable')replaceFirst({end:'0',spent:null,coveredMs:history!.to-history!.since});
@@ -135,7 +132,7 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
   const first=h.settle();
   let retained=first.chart.props.lines;
   for(let n=0;n<50;n++)assert.equal(h.update('frame').legend,first.legend,'frame-only renders retain the actual legend JSX');
-  for(const phase of['stable','clock','clock','clock','data','nonrolling','nonrollingAmount','rename','currency','locale','mute','spending','zero','unknown','unavailable','partial','cap','balance','zero','unknown','hide','restore','unit','resetunit','revoke']) {
+  for(const phase of['stable','clock','clock','clock','data','nonrolling','nonrollingAmount','rename','currency','locale','mute','zero','unknown','unavailable','partial','cap','zero','unknown','hide','restore','unit','resetunit','revoke']) {
     const r=phase==='stable'?h.render():h.update(phase);
     if(['stable','clock','rename','mute'].includes(phase))assert.equal(r.calls,0,phase+' reuses identical formatted amounts');
     if(phase==='clock'){assert.equal(r.chart.props.prepared,true);assert.strictEqual(r.chart.props.lines,retained,'clock keeps the exact prepared drawing');}
@@ -148,10 +145,10 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     if(phase==='mute')assert.equal(h.toggle(r)!.value,false,'callback uses current muted state');
     if(['hide','unit','revoke'].includes(phase)){assert.equal(r.chart.props.lines.length,0);assert.equal(r.legend.props.children.length,0,'no stale amount survives cleared history/unit/authority');}
     if(phase==='zero')assert.match(r.display,/0,00 USDx/);
-    if(phase==='unknown'&&rows.some(row=>row.phase==='balance'))assert.match(r.display,/—/);
-    if(phase==='unavailable')assert.ok(r.display.includes(i18n.t('money.unavailable')));
-    if(phase==='partial'){assert.match(r.display,/money-partial/);assert.ok(r.display.includes(i18n.t('money.partial')));}
-    if(phase==='cap')assert.doesNotMatch(r.display,/Cap/,'spending excludes scoped allowances');
+    if(phase==='unknown')assert.match(r.display,/—/);
+    if(phase==='unavailable'){assert.match(r.display,/0,00 USDx/);assert.ok(!r.display.includes(i18n.t('money.unavailable')),'unsupported spending never masks a known balance');}
+    if(phase==='partial'){assert.match(r.display,/0,00 USDx/);assert.doesNotMatch(r.display,/money-partial/,'partial spending is not partial balance');}
+    if(phase==='cap')assert.match(r.display,/Cap/,'balance retains the scoped allowance');
     rows.push({phase,moneyCalls:r.calls,prepared:r.chart.props.prepared,lines:r.chart.props.lines.length});
     retained=h.settle().chart.props.lines;
   }

@@ -139,6 +139,7 @@ export const parseSplitView = (body: unknown) => parseFields(body, 2) as SplitVi
 
 // These positions are the persisted v3 codec, independent of the catalogue's order.
 const V3_WIDGETS: readonly string[] = ['agents', 'activity', 'quota-history', 'budget-history', 'quota-table', 'budget-table', 'subscription-funds'];
+// Preview v4 spending slots stay reserved; the active catalogue never offers them.
 const BUILTIN_WIDGETS = [...V3_WIDGETS, 'quota-session-history', 'quota-session-table', 'budget-spending-history', 'budget-spending-table'];
 const GEOMETRY = [[0,2],[0,3],[0,4],[0,6],[2,2],[2,3],[2,4],[3,2],[3,3],[4,2]] as const;
 const FIELDS = ['names','hidden','shown','windows','plans','unplanned','colors','columns','shownColumns','enabledWhenEmpty'] as const;

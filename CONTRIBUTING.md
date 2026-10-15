@@ -18,8 +18,8 @@ measures this machine once.
 After building the hub, `npm run bench -- --ci` in `hub/` checks dashboard costs in
 Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp http://host:port`). It includes native
 wheel and Shift-drag starting from each five-hour limit, weekly limit, agent activity,
-budget balance, cumulative spending and subscription-funds chart at 24h and 30d, moving
-all six charts with at least twelve real series per resource family and
+budget balance and subscription-funds chart at 24h and 30d, moving
+all five charts with at least twelve real series per resource family and
 CPU throttled fourfold. The scenario covers delayed history, strip rebuilding, reversal
 and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 50 ms
 at p99; input to an actually updated chart frame must stay within 34 ms at p95. Empty
@@ -397,18 +397,18 @@ and have Chrome.
 
 The completed measurement phase's React/DOM observer is disconnected before native
 panning. Native wheel and Shift-drag start separately from the weekly limit, five-hour
-limit, activity, budget balance, spending and subscription-funds charts at both periods.
+limit, activity, budget balance and subscription-funds charts at both periods.
 Each input owner starts with fresh readers, captures its own events and must move all
-six plots within the same budgets.
+five plots within the same budgets.
 Panning keeps its own movement and mutation checks; resetting the measurement
-probe resumes full observation for money updates. The balance and spending checks wait
-for populated, committed drawings and stable layout, then require each fixed-purpose
-chart's line to remain present and inside its scale on every observed frame.
+probe resumes full observation for money updates. The balance checks wait
+for populated, committed drawings and stable layout, then require each account or scoped-limit
+line to remain present and inside its scale on every observed frame.
 Set `QUOTUM_BENCH_PROFILE_PANNING=1` to replay failed native samples with CPU and
 timeline profiling; this diagnostic never supplies budget readings.
 
 The same run checks pan traffic separately from the native frame budget, using the
-dense 75-day fixture and all six charts at 24h and 30d. Controlled production-loader
+dense 75-day fixture and all five charts at 24h and 30d. Controlled production-loader
 replays and native browser gestures use 0, 100 and 400 ms answer delays. Cached
 return and repeat must start no history GETs; half-width movements allow at most
 seven attempts from the history chart and five from activity, and a 4% movement

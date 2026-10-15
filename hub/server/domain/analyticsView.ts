@@ -1,6 +1,6 @@
 import {legacyLayout, ordered} from './layout.js';
 import {EMPTY_VIEW, type View, type UnifiedView, type SplitView} from './view.js';
-import {providerOf, moneyFamily, supportsQuota, supportsSpending} from './providers.js';
+import {providerOf, moneyFamily, supportsQuota} from './providers.js';
 import {ACTIVITY, SUBSCRIPTION_FUNDS, QUOTA_HISTORY, QUOTA_TABLE, BUDGET_HISTORY, BUDGET_TABLE, QUOTA_WIDGETS, LEGACY_QUOTA_WIDGETS, LEGACY_BUDGET_WIDGETS, BUDGET_WIDGETS, showWidgets} from './widgets.js';
 
 export type AnalyticsResources = {id: string; provider: string;budget?:{enabled:boolean}}[];
@@ -13,9 +13,8 @@ export function reconcileAnalytics<T extends View | UnifiedView | SplitView>(vie
   const {quota, budget} = families(resources);
   const funds = resources.some(s => s.budget?.enabled!==false && moneyFamily(providerOf(s.provider))==='funds');
   const modern = view.version === 4;
-  const spending = resources.some(s => s.budget?.enabled !== false && moneyFamily(providerOf(s.provider)) === 'budget' && supportsSpending(providerOf(s.provider)));
   const quotaWidgets = modern ? QUOTA_WIDGETS : LEGACY_QUOTA_WIDGETS;
-  const budgetWidgets = modern && spending ? BUDGET_WIDGETS : LEGACY_BUDGET_WIDGETS;
+  const budgetWidgets = modern ? BUDGET_WIDGETS : LEGACY_BUDGET_WIDGETS;
   const add = [...(quota ? quotaWidgets : []), ...(funds ? [SUBSCRIPTION_FUNDS] : []), ...(budget ? budgetWidgets : [])].filter(id => !view.shown.includes(id) && !view.hidden.includes(id));
   if (!add.length) return view;
   const next = showWidgets(view, add), places = {...view.layout.places};

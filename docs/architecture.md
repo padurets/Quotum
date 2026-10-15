@@ -1324,8 +1324,8 @@ selected historical range, including when the row is hidden; returning to live r
 The row starts closed and remembers its visibility in the reader's browser.
 Hiding it preserves the selected period and shared chart horizon; while open,
 it keeps them available during scrolling. Board navigation and widget management
-stay in the header. Five-hour limits, weekly limits, wallet balance and wallet
-spending each have independent chart/table pairs. The four wallet widgets share
+stay in the header. Five-hour limits, weekly limits and wallet balance
+each have independent chart/table pairs. Both wallet widgets share
 an accounts-and-keys picker in their reader controls. Each chart's legend controls
 only its own visibility. Subscription funds use their own family and expose data
 selection only for a bounded cohort or a retained explicit selection. Table columns
@@ -1346,7 +1346,7 @@ Each widget fills the fewest whole rows that contain its content, with any spare
 above a card's tray or at the bottom of a panel, unless the owner chose a height for it
 (`h`, in rows). A chosen height is a request, not what shows: a card never
 gets shorter than its content, and grows past the chosen rows while its content needs
-more, back to them when it needs less, without the view changing. All six charts give a
+more, back to them when it needs less, without the view changing. All five charts give a
 chosen height to their plot, never drawing it lower than they do by themselves, their
 heads, totals and legends whole. The Agent sessions widget gathers the period's sessions
 by project (one name across people, as agent activity counts it), machine or subscription,
@@ -1432,7 +1432,7 @@ a stale runtime cannot save a version it merely echoed from a snapshot. The ordi
 body limit is 80 KiB UTF-8 of the encoded request; decoded drafts fit 132 KiB.
 Storage and POST use the same tuple codec; readers receive a semantic View object.
 The legacy split migration concatenates the old visible orders, retains saved hidden places and
-keeps unarranged source cards implicit. Version 4 retains the old weekly and wallet balance widget IDs and inserts five-hour and spending siblings beside their saved parents, copying width, height and visibility. The upgrade preserves unrelated owner fields and expands retained Add receipts once. New membership never saves all their defaults. Up to the aggregate browser keepalive limit of 64 KiB, saves
+keeps unarranged source cards implicit. Version 4 retains the old weekly and wallet balance widget IDs and inserts five-hour siblings beside their saved weekly parents, copying width, height and visibility. The upgrade preserves unrelated owner fields and expands retained Add receipts once. New membership never saves all their defaults. Up to the aggregate browser keepalive limit of 64 KiB, saves
 retain their debounce. Larger drafts start ordinary serialized saves immediately; a
 browser close warning stays until acknowledgment or explicit discard, and navigation
 that destroys the saver waits, including native browser Back/Forward. A failed save
@@ -1454,7 +1454,7 @@ with an explicit retry carrying the captured revision. Ending the authenticated 
 drops unsent successors; a submitted Add continues when only its form closes, while an
 owner-scope change prevents further phases. No timer polls for those results.
 New empty boards keep analytics widgets pending. Resource capabilities place
-the five-hour and weekly pairs, wallet balance pair, wallet spending pair and subscription-funds chart independently on first use. Spending defaults require reported accounting capability.
+the five-hour and weekly pairs, wallet balance pair and subscription-funds chart independently on first use.
 If those automatic placements would exceed a view size bound, they remain pending
 while the board keeps its valid saved view and revision. A smaller save makes room
 for reconciliation to retry; new source cards remain implicit. Explicit Add and save
@@ -1467,7 +1467,7 @@ is only about how one person looks (the board's period, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents and quota tables' sort orders, the chosen board and language) stays in their browser.
 The controls above the mixed widget grid own the common period and forecast
-horizon. Shared wallet data selection is accessible from all four wallet widgets,
+horizon. Shared wallet data selection is accessible from both wallet widgets,
 including a table whose chart is hidden. Each widget keeps its display settings, such as
 columns, forecast visibility, stacking and legend choices.
 A fixed accounting interval is exactly `[from,to)`: card values use the latest retained
@@ -1591,9 +1591,9 @@ composite and detail reads, cancellations and responses that finish after measur
 Quota history, wallet budgets, subscription funds and agent activity read and move along time alike
 (`ui/components/timeAxis.ts`), each with its legend under it. Pointing to a legend
 entry or focusing it with the keyboard highlights that series and dims its peers.
-Wallet charts and tables use a common accounts-and-keys picker, separate from display settings. An account selects its total balance; a key selects its available usage and cap meters atomically within the shared 32-meter bound. Balance components remain in card details. Each fixed chart has independent legend visibility. Ordinary subscription funds use only the legend; the accounts picker appears for more than 32 eligible balances or an explicit retained data selection. Legacy funds subsets remain global visibility intent across boards, without changing bounded admission on legend clicks.
+Wallet charts and tables use a common accounts-and-keys picker, separate from display settings. An account selects its total balance; a key selects its reported remaining cap within the shared 32-meter bound. Retired spending preferences are discarded without replacing an explicit empty selection with default accounts. Balance components remain in card details. Each fixed chart has independent legend visibility. Ordinary subscription funds use only the legend; the accounts picker appears for more than 32 eligible balances or an explicit retained data selection. Legacy funds subsets remain global visibility intent across boards, without changing bounded admission on legend clicks.
 
-All six charts share `ui/components/seriesFocus.ts`: inherited CSS variables change
+All five charts share `ui/components/seriesFocus.ts`: inherited CSS variables change
 paint without rebuilding prepared paths, updating reader preferences or rendering data
 consumers. Muted entries retain their visibility toggle and do not dim visible series.
 A time range selected on any chart becomes the board's period, including card measurements, session lists and
@@ -1602,7 +1602,7 @@ address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it ca
 ‹ and › beside the period move the board by half its period: back, to a range in
 the past held in the address like a dragged one; forward, up to now, where the chosen
 period comes back. A horizontal touchpad swipe, Shift with the wheel, or Shift with a
-mouse or pen drag moves all six charts continuously. A page-local transaction captures
+mouse or pen drag moves all five charts continuously. A page-local transaction captures
 each chart's scale in CSS pixels and applies the same time delta on animation frames;
 plain dragging still selects a range and touch retains its hold-to-select gesture.
 Prepared SVG artwork moves in composited HTML surfaces behind a stationary clip;
@@ -1686,7 +1686,7 @@ also requires the complete history answer for the requested range, so a partial
 strip cannot start the fold before that answer replaces it.
 User navigation owns the requested projection separately from drawing readiness.
 Back, a preset or a horizon change retires an older held pose and its pending RAF or
-fold; all six charts immediately place their retained data in the requested projection.
+fold; all five charts immediately place their retained data in the requested projection.
 Ready data keeps that projection when it replaces the borrowed model. Borrowed data
 keeps its own coverage and time domain, so future points are clipped rather than
 clamped into an edge and a requested past frame shows no old future labels.

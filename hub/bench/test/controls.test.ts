@@ -4,7 +4,7 @@ import {runInNewContext} from 'node:vm';
 import {moneyView, selectMoney} from '../controls.js';
 import type {Cdp} from '../cdp.js';
 
-function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota' | 'cap-in-spending') {
+function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
   let frame = 0, loaded = () => {};
   let ids: [string, string][] = [['dense-1', 'balance'], ['dense-2', 'balance']];
   const ready = () => frame >= 9;
@@ -18,15 +18,14 @@ function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota' | 'cap-in-spending'
     getBBox: () => ({y: broken === 'scale' ? -1 : 10, height: 0}),
     ownerSVGElement: {viewBox: {baseVal: {height: 220}}},
   };
-  const balance='[data-widget="budget-history"]',spending='[data-widget="budget-spending-history"]';
+  const balance='[data-widget="budget-history"]';
   const panel={querySelector:(child:string)=>child==='.chart>svg'?root:null,querySelectorAll:()=>broken==='blank'?[]:[line]};
-  const spendingPanel={...panel,querySelector:(child:string)=>child==='.chart>svg'?root:broken==='cap-in-spending'?line:null};
   const context = {
     localStorage: {getItem: () => '{}', setItem: (_key: string, value: string) => {ids = JSON.parse(value).money.selected.USD;}},
     Date: {now: () => frame * 16},
     requestAnimationFrame: (callback: (stamp: number) => void) => queueMicrotask(() => callback(++frame * 16)),
     document: {
-      querySelector: (selector: string) => selector===balance?panel:selector===spending?spendingPanel:selector === balance+' .chart > svg'||selector==='.budget-history .chart > svg' ? root
+      querySelector: (selector: string) => selector===balance?panel:selector === balance+' .chart > svg'||selector==='.budget-history .chart > svg' ? root
         : selector === '.budget-history.is-loading' ? ready() ? null : {}
         : selector.startsWith('.history.is-loading,') ? broken === 'slow-quota' && frame < 20 ? {} : null
         : selector === '.budget-history .panel-head .picker > button' ? {click() {}}
@@ -47,7 +46,7 @@ test('the monetary update phase replaces the dense pan selection with its measur
   const page = moneyPage();
   await selectMoney(page.cdp, [['measured', 'balance']]);
   assert.deepEqual(page.ids(), [['measured', 'balance']]);
-  assert.ok(page.frame()>=11,'stable readiness ignores the same selected account in the separate spending widget');
+  assert.ok(page.frame()>=11,'readiness requires the selected account in the balance widget');
 });
 
 test('monetary measurements wait for the other reader to finish after selection reload', async () => {
@@ -56,7 +55,7 @@ test('monetary measurements wait for the other reader to finish after selection 
   assert.ok(page.frame() >= 22, 'three stable frames start only after quota history is ready');
 });
 
-test('money controls check both fixed purposes after a complete stable balance drawing', async () => {
+test('money controls check account balances and limits after a stable drawing', async () => {
   const page = moneyPage();
   await moneyView(page.cdp, 'wallet', 'capped', 'zero');
   assert.ok(page.frame()>=11);
@@ -66,9 +65,6 @@ test('fixed purpose verification rejects an empty numeric plot', async () => {
   await assert.rejects(moneyView(moneyPage('blank').cdp, 'wallet', 'capped', 'zero'), /no account line/);
 });
 
-test('fixed spending verification rejects a scoped allowance',async()=>{
-  await assert.rejects(moneyView(moneyPage('cap-in-spending').cdp,'wallet','capped','zero'),/spending includes a scoped allowance/);
-});
 
 test('waiting for a money view still rejects geometry outside the current scale', async () => {
   await assert.rejects(moneyView(moneyPage('scale').cdp, 'wallet', 'capped', 'zero'), /left its scale/);

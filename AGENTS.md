@@ -56,7 +56,7 @@ on `PATH`, or `--cdp` to one already running); CI fails over budget. After the r
 it also checks consecutive measuring-frequency saves with native arrow keys and fails
 if saving loses focus.
 Native horizontal wheel and Shift-drag scenarios start separately from each of the six
-charts (five-hour limits, weekly limits, activity, balance, spending and subscription funds), moving all six at 24h and 30d
+charts (five-hour limits, weekly limits, activity, balance and subscription funds), moving all five at 24h and 30d
 with at least twelve real series per resource family and CPU throttled fourfold, including an unread edge,
 strip rebuilding, reversal and return to live. Moving-frame p95/p99 must stay within
 34/50 ms and input-to-updated-frame p95 within 34 ms; callbacks without actual chart
