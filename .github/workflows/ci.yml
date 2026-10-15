@@ -27,12 +27,6 @@ on:
         type: boolean
         default: false
 
-      key_entry:
-        description: Run one Windows key-helper entry discriminator instead of the idle control
-        required: false
-        type: boolean
-        default: false
-
 permissions:
   contents: read
 
@@ -153,7 +147,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.key_entry }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -194,38 +188,6 @@ jobs:
           path: |
             /tmp/quotum-idle-cpu-diagnostic/
             hub/dist/client/assets/index-*.js
-          if-no-files-found: warn
-
-  windows-key-entry:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.key_entry }}
-    runs-on: windows-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: hub
-        shell: cmd
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.diagnostic_ref }}
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - run: npm ci
-      - name: Observe one original-deadline key helper with an entry marker
-        run: node --import tsx server/test/windowsKeyEntryDiagnostic.ts
-        env:
-          QUOTUM_KEY_ENTRY_DIAGNOSTIC: '1'
-          QUOTUM_KEY_ENTRY_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
-          QUOTUM_KEY_ENTRY_TRACE_ONLY: ${{ inputs.trace_only && '1' || '0' }}
-          QUOTUM_KEY_ENTRY_ORIGINAL_TIMING: ${{ inputs.original_timing && '1' || '0' }}
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: windows-key-entry-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/quotum-windows-key-entry/*.json
           if-no-files-found: warn
 
   managed-keys:
