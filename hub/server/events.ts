@@ -150,7 +150,7 @@ export class Events implements Touches {
   private dirtyHub = false;
   private readonly dirtyClientUsers = new Set<string>();
   private readonly workHistories = new Map<string, number>();
-  private readonly deviceSessions = new Map<string, {json: string; changesAt: number | null}>();
+  private readonly deviceSessions = new Map<string, {json: string; measurements:string; changesAt: number | null; sessionsAt:number|null}>();
   private ownDeadline: {at: number; cancel: () => void} | null = null;
   private readonly histories = new Map<string, Map<string, HistoryChange>>();
   private stopFlush: (() => void) | null = null;
@@ -451,7 +451,7 @@ export class Events implements Touches {
     const deviceFramesByUser = new Map<string, Frame[]>();
     // Work out presence before sending any board, so one reader cannot hide another's recovery.
     for (const watched of this.watched.values()) for (const sub of watched.subscribers) {
-      if (!(clientUsers.has(sub.user) || whole.has(watched.id) || users.has(sub.user) || sources.has(watched.id))) continue;
+      if (!(clientUsers.has(sub.user) || devices.has(sub.user) || whole.has(watched.id) || users.has(sub.user) || sources.has(watched.id))) continue;
       if (!deviceFramesByUser.has(sub.user)) {
         let frames: Frame[] = [];
         try { frames = this.refreshDeviceSessions(sub.user, now); }
@@ -675,7 +675,10 @@ export class Events implements Touches {
     if (at === null) return;
     this.ownDeadline = {at, cancel: this.later(Math.max(1000, at-now), () => {
       this.ownDeadline = null;
-      for (const [user, value] of this.deviceSessions) if (value.changesAt !== null && value.changesAt <= this.clock.now()) this.touchClientSessions(user);
+      for (const [user, value] of this.deviceSessions) if (value.changesAt !== null && value.changesAt <= this.clock.now()) {
+        if(value.sessionsAt!==null&&value.sessionsAt<=this.clock.now())this.touchClientSessions(user);
+        else this.dirtyClientUsers.add(user);
+      }
       this.schedule();
     })};
   }
@@ -684,10 +687,12 @@ export class Events implements Touches {
     const live = this.parts.ingest.live;
     const json = JSON.stringify(live.devices(user, now));
     const before = this.deviceSessions.get(user);
-    this.deviceSessions.set(user, {json, changesAt: live.devicesChangesAt(user, now)});
+    const measurement=this.parts.ingest.measurementSelection.privateState(user,now),measurements=JSON.stringify(measurement.value);
+    const sessionsAt=live.devicesChangesAt(user,now);
+    this.deviceSessions.set(user, {json,measurements,sessionsAt,changesAt:earliest(sessionsAt,measurement.changesAt)});
     this.armOwn(now);
     // This account hint carries no board data, IDs, session counts or project names.
-    return before?.json !== json ? [frame('devices', {})] : [];
+    return before?.json !== json || before?.measurements!==measurements ? [frame('devices', {})] : [];
   }
 
   // ---------- time ----------

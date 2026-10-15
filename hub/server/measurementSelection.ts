@@ -21,7 +21,7 @@ export class MeasurementSelection {
   observe(key: string, provider: ClientProvider, device: string, now: number, nextAskMs = 120_000, replace = true) {
     const before = this.devices.get(device)?.get(key);
     const latest=Math.max(-Infinity,...[...(this.devices.get(device)?.values()??[])].filter(candidate=>candidate.provider===provider).map(candidate=>candidate.seenAt));
-    if(replace && now<latest)return {changed:false,current:!!before,expiresAt:before?.expiresAt??0};
+    if(now<latest)return {changed:false,current:!!before,expiresAt:before?.expiresAt??0};
     if(replace && !before)this.current(device,new Map([[provider,new Set([key])]]),now);
     const command=this.commands.get(key);
     const candidate = {key, provider, device, seenAt: now, expiresAt: Math.max(now + Math.min(10*60_000, Math.max(120_000, nextAskMs))+120_000,command?.device===device?command.deadline:0)};
@@ -145,6 +145,7 @@ export class MeasurementSelection {
       this.duty.release(c.key, device);
       this.forgetCommands(c.key,device);
       this.remove(c);
+      this.changed(c.key);
     }
     return affected.map(c => c.key);
   }
@@ -161,6 +162,24 @@ export class MeasurementSelection {
     }
     for(const [key,command] of this.refreshCommands)if(command.deadline<=now||!this.cadence.dispatched(key))this.refreshCommands.delete(key);
     return removed;
+  }
+
+  /** Only semantic time transitions enter the private event baseline; contact extensions do not. */
+  privateState(user:string,now:number) {
+    const owned=new Set(this.directory.devices(user).map(device=>device.id));
+    const value:unknown[]=[],deadlines:number[]=[];
+    const deadline=(at:number|null)=>{if(at!==null&&at>now)deadlines.push(at);};
+    for(const source of this.store.held(user)) {
+      if(!['claude','codex','antigravity'].includes(source.provider))continue;
+      const key=source.account,holder=this.duty.holder(key),until=this.duty.until(key);
+      const active=holder!==null&&until!==null&&until>now;
+      deadline(until);
+      const candidates=[...(this.candidates.get(key)?.values()??[])];
+      for(const candidate of candidates){deadline(candidate.expiresAt);deadline(this.cadence.pausedUntil(key,candidate.device,now));}
+      value.push([source.id,active?(owned.has(holder!)?'own':'external'):'none',this.pending(source.id,source.provider as ClientProvider,key,now),
+        candidates.filter(candidate=>owned.has(candidate.device)).map(candidate=>[candidate.device,candidate.expiresAt>now,candidate.expiresAt>now&&this.cadence.pausedUntil(key,candidate.device,now)!==null]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])))]);
+    }
+    return {value,changesAt:deadlines.length?Math.min(...deadlines):null};
   }
 
   ownCandidates(user: string, source: string, provider: ClientProvider, key: string, now: number) {

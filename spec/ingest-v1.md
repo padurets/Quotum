@@ -574,9 +574,11 @@ not classify routes. Unknown configuration IDs are warned about and ignored.
   this array never uses the machine's previous source binding. Hub-measured providers
   cannot supply an agent's source attribution.
 - `clients` replaces the device's installed inventory, with at most 64 accepted entries
-  `{clientId, version?: string|null}`. An omitted or malformed whole field preserves
+  `{clientId, version?: string|null, observedAt?: ISO-date|null}`. An omitted or malformed whole field preserves
   inventory, and `[]` clears it. Duplicate IDs keep the first accepted entry. Version
   is a bounded token, never raw stdout, stderr or an executable path.
+  Installed observation times use the same report clock correction as session times;
+  an absent legacy timestamp remains unknown.
 
 Client IDs are lower-case ASCII identifiers of one to 64 characters, beginning with a
 letter, followed by letters, digits, `_` or `-`. Unknown valid IDs are safely preserved.

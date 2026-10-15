@@ -423,3 +423,52 @@ test('a long poll rechecks a queued contact after the device is revoked',async t
   for(const frame of next.frames.filter(frame=>frame.type==='snapshot'))assert.equal(device in JSON.parse(frame.data).deviceContacts,false);
   assert.equal(next.frames.some(frame=>frame.type==='deviceContacts'),false,'revocation after enqueue prevents disclosure');
 });
+
+test('a multiplexed delivery preserves each account without reviving an obsolete login',()=>{
+  const {store,ingest,user,duty,credential,device,batch,sender}=setup(),input=batch(now),other='b'.repeat(24);
+  ingest.accept(credential,{...input,snapshots:[input.snapshots[0],{...input.snapshots[0],account:other,observedAt:new Date(now+1).toISOString()}]},now+1);
+  for(const key of [account,other]){assert.equal(ingest.measurementSelection.reason(key,'codex',device,now+1),'eligible');assert.equal(duty.holder(key),device);}
+  assert.equal(ingest.measurementSources(user.id,now+1).length,2);
+  ingest.checkin(credential,{...sender,subscriptions:[{provider:'codex',account:'c'.repeat(24)}]},now+2000);
+  ingest.accept(credential,{...input,sentAt:new Date(now+3000).toISOString(),snapshots:input.snapshots.concat({...input.snapshots[0],account:other,observedAt:new Date(now+1000).toISOString()})},now+3000);
+  for(const key of [account,other]){assert.equal(ingest.measurementSelection.reason(key,'codex',device,now+3000),'account_unknown');assert.equal(duty.holder(key),null);}
+  store.close();
+});
+
+test('inventory observation uses the report clock correction while legacy time stays unknown',()=>{
+  for(const offset of [-3600000,3600000]) {
+    const {store,directory,ingest,credential,sender,device}=setup();
+    ingest.sessions(credential,{...sender,sentAt:new Date(now+offset).toISOString(),sessions:[],clients:[{clientId:'codex',version:'1.2.3',observedAt:new Date(now+offset-300000).toISOString()},{clientId:'claude',version:'2.0.0'}]},now);
+    const clients=directory.deviceClients(device);assert.equal(clients.find(client=>client.clientId==='codex')!.observedAt,now-300000);
+    assert.equal(clients.find(client=>client.clientId==='claude')!.observedAt,null);store.close();
+  }
+});
+
+for(const action of ['revoke','failure'] as const)test(`${action} sends every holder the changed duty without foreign metadata`,t=>{
+  const {store,directory,ingest,user,device,batch,credential,sender}=setup();ingest.accept(credential,batch(now),now);
+  const at=now+120000,answer=ingest.checkin(credential,{...sender,paced:true,capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[{provider:'codex',account}]},at);
+  const source=store.held(user.id)[0].id,bob=directory.createUser('expiry-bob@example.com','Bob','x',at);store.hold(source,bob.id,at);
+  const events=new Events({store,directory,ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>at+1,after:()=>()=>{}});events.attach();t.after(()=>{events.close();store.close();});
+  const secret=newSecret('qt_s');directory.createSession(secret,bob.id,at,86400000);const frames:Frame[]=[];
+  events.open({user:bob.id,secret,board:directory.boards(bob.id)[0].id,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});events.flush();frames.length=0;
+  assert.equal(ingest.measurementSources(bob.id,at)[0].duty,'external');
+  if(action==='revoke'){directory.revokeDevice(user.id,device,at+1);store.releaseRevoked(user.id);ingest.forget([device],at+1);}
+  else {const policy=store.measurementPolicies.device(device);ingest.accept(credential,{...sender,sentAt:new Date(at+1).toISOString(),snapshots:[],failures:[{provider:'codex',error:'timeout',observedAt:new Date(at+1).toISOString(),attemptContext:{version:1,authority:policy.authority,collectorEpoch:0,target:{kind:'verified',accountKey:account},commandId:answer.subscriptions[0].commandId}}]},at+1);}
+  events.flush();assert.equal(ingest.measurementSources(bob.id,at+1)[0].duty,'none');
+  assert.deepEqual(frames.filter(frame=>frame.type==='devices').map(frame=>JSON.parse(frame.data)),[{}]);assert.equal(JSON.stringify(frames).includes(device),false);
+});
+
+test('private measurement deadlines emit expiry without refetch hints for contact extensions',t=>{
+  const {store,directory,ingest,user,batch,credential,sender}=setup();ingest.accept(credential,batch(now,{staleAfterMs:3600000}),now);
+  let clock=now;const timers:{at:number;run:()=>void}[]=[];
+  const events=new Events({store,directory,ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>clock,after:(ms,run)=>{const timer={at:clock+ms,run};timers.push(timer);return()=>{const index=timers.indexOf(timer);if(index>=0)timers.splice(index,1);};}});events.attach();t.after(()=>{events.close();store.close();});
+  const advance=(to:number)=>{for(let i=0;i<10000;i++){timers.sort((a,b)=>a.at-b.at);if(!timers.length||timers[0].at>to){clock=to;return;}const timer=timers.shift()!;clock=timer.at;timer.run();}throw Error('timer loop');};
+  const secret=newSecret('qt_s');directory.createSession(secret,user.id,now,86400000);const frames:Frame[]=[];
+  events.open({user:user.id,secret,board:directory.boards(user.id)[0].id,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});events.flush();frames.length=0;
+  advance(now+60000);ingest.checkin(credential,{...sender,subscriptions:[{provider:'codex',account}]},clock);events.flush();frames.length=0;
+  const stable=ingest.measurementSelection.privateState(user.id,clock).value;
+  advance(now+240001);events.flush();assert.deepEqual(ingest.measurementSelection.privateState(user.id,clock).value,stable);
+  assert.equal(frames.filter(frame=>frame.type==='devices').length,0,'an extended heartbeat is not a semantic expiry');
+  frames.length=0;advance(now+300001);events.flush();assert.equal(ingest.measurementSources(user.id,clock)[0].candidates[0].reason,'offline');
+  assert.equal(frames.filter(frame=>frame.type==='devices').length,1,'actual candidate expiry reaches the open view');
+});

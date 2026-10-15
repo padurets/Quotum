@@ -72,9 +72,9 @@ export function Devices({local}: {local: boolean}) {
   const [hubVersion,setHubVersion]=useState(''),[sources,setSources]=useState<MeasurementSource[]>([]);
   const location=useLocation(),focused=new URLSearchParams(location.split('?')[1]??'').get('source');
   const [sourceId,setSource]=useState<string|null>(focused);
-  useEffect(()=>{setSource(focused);},[focused]);
   const selector=useRef<HTMLSelectElement>(null),unavailable=useRef<HTMLLIElement>(null),lastFocus=useRef<string|null>(null),intent=useMainNavigation();
   const focusRequest=focused&&intent?.destination?.kind==='devices'&&intent.destination.sourceId===focused ? focused+':'+intent.revision : focused;
+  useEffect(()=>{setSource(focused);},[focused,focusRequest]);
   useEffect(()=>{
     if(!focused||sourceId!==focused||lastFocus.current===focusRequest||!devices)return;
     const target=sources.some(source=>source.source===focused)?selector.current:unavailable.current;

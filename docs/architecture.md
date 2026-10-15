@@ -460,7 +460,8 @@ cache separately from local configuration and scheduler waits.
 
 MeasurementSelection indexes current account evidence in both directions. Explicit
 check-ins can declare several accounts across batches; a singleton replaces the previous
-login, while multiplexed account evidence expires independently. Old resource backlog
+login, while a delivery group containing several accounts preserves each account and
+multiplexed evidence expires independently. Old resource backlog
 cannot refresh newer account evidence. Historical device
 bindings are display facts. Auto uses Duty and Cadence; a global preferred own eligible
 device waits for the issued measurement's safe boundary, falls back on ordinary eligible

@@ -76,8 +76,22 @@ impl MainDestination {
 pub struct MainNavigation {
     pub revision: u64,
     pub destination: Option<MainDestination>,
+    #[serde(skip)]
+    pending: Option<(u64, u64, Option<MainDestination>)>,
 }
 impl MainNavigation {
+    /// Keep the last validated destination while the native event loop takes the main window.
+    pub fn queue(&mut self, instance: u64, request: u64, destination: Option<MainDestination>) {
+        self.pending = Some((instance, request, destination));
+    }
+    pub fn commit(&mut self, instance: u64, request: u64) -> bool {
+        if !self.pending.as_ref().is_some_and(|&(owner, revision, _)| owner == instance && revision == request) {
+            return false;
+        }
+        let (_, _, destination) = self.pending.take().unwrap();
+        self.set(destination);
+        true
+    }
     pub fn set(&mut self, destination: Option<MainDestination>) {
         self.revision += 1;
         self.destination = destination;
@@ -230,6 +244,23 @@ pub fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn queued_main_handoff_keeps_the_latest_validated_destination_and_rejects_retired_tickets() {
+        let mut navigation = MainNavigation::default();
+        navigation.queue(2, 1, Some(MainDestination::Devices { source_id: "codex:123456abcdef".into() }));
+        navigation.queue(2, 1, Some(MainDestination::Devices { source_id: "claude:abcdef123456".into() }));
+        assert!(navigation.destination.is_none());
+        assert!(!navigation.commit(1, 1));
+        assert!(!navigation.commit(2, 0));
+        assert!(navigation.commit(2, 1));
+        assert_eq!(serde_json::to_value(&navigation).unwrap()["destination"]["sourceId"], "claude:abcdef123456");
+        assert!(!navigation.commit(2, 1));
+        navigation.queue(3, 4, None);
+        assert!(!navigation.commit(2, 1));
+        assert!(navigation.commit(3, 4));
+        assert_eq!(navigation.revision, 2);
+        assert!(navigation.destination.is_none());
+    }
     #[test]
     fn requests_are_typed_and_unknown_commands_are_rejected() {
         assert!(serde_json::from_str::<Request>(r#"{"command":"app_state"}"#).is_ok());

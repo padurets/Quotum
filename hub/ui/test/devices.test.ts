@@ -15,8 +15,11 @@ const snapshot:Snapshot={board:{id:'b',name:'Board',personal:false},view:{versio
 const device:Device={id:'d',name:'Laptop',reported:'Laptop',os:'linux',arch:'x86_64',agent:'quotum/0.7.0',via:'token',lastSeenAt:1,sources:[],failures:[],clients:[{clientId:'opencode',version:'1.2.3',seenAt:1}],sessions:[]};
 const session={clientId:'opencode',device:{id:'d',name:'Laptop'},source:null,origin:'terminal' as const,project:'Current project',folder:null,startedAt:1,lastWorkedAt:null,working:false,workedMs:0};
 
-function fixture(){
+function fixture(focused:string|null=null){
   const hooks=preparationFixture(),row={},modal={},errorLine={},participation={},reads:{resolve:(value:Device[])=>void;reject:(error:Error)=>void}[]=[];
+  const sources=focused?[{source:focused,provider:'codex'},{source:'codex:bbbbbbbbbbbb',provider:'codex'}]:[];
+  let navigation=focused?{revision:1,destination:{kind:'devices',sourceId:focused}}:null,focuses=0;
+  const jsx=(type:unknown,props:Node['props'])=>{if(props.ref)(props.ref as {current:unknown}).current={scrollIntoView:()=>{},focus:()=>{focuses++;}};return {type,props};};
   let state:PageState=reduce(INITIAL,{type:'hub',event:{type:'snapshot',data:snapshot}});
   const memo=(fn:unknown,deps:unknown[])=>{
     const slot=hooks.useRef(undefined) as {current?:{fn:unknown;deps:unknown[]}};
@@ -25,11 +28,11 @@ function fixture(){
   };
   const context={URLSearchParams,exports:{} as {Devices:(props:{local:boolean})=>unknown},require:(name:string)=>{
     if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect:hooks.useLayoutEffect,useCallback:memo};
-    if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'};
-    if(name.endsWith('/router'))return {useLocation:()=>'/settings/connections'};
+    if(name==='react/jsx-runtime')return {jsx,jsxs:jsx,Fragment:'fragment'};
+    if(name.endsWith('/router'))return {useLocation:()=>'/settings/connections'+(focused?'?source='+focused:'')};
     if(name==='./MeasurementDevices')return {ParticipationSettings:participation};
-    if(name.endsWith('/board'))return {useConnectionsRevision:()=>state.board?.connectionsRevision??0,useDevicesRevision:()=>state.devicesRevision??0,useMainNavigation:()=>null};
-    if(name.endsWith('/http'))return {call:(method:string,url:string)=>{assert.equal(method,'GET');assert.equal(url,'/api/devices?measurement=1');return new Promise((resolve,reject)=>reads.push({resolve:devices=>resolve({devices,hubVersion:'0.7.0',sources:[]}),reject}));}};
+    if(name.endsWith('/board'))return {useConnectionsRevision:()=>state.board?.connectionsRevision??0,useDevicesRevision:()=>state.devicesRevision??0,useMainNavigation:()=>navigation};
+    if(name.endsWith('/http'))return {call:(method:string,url:string)=>{assert.equal(method,'GET');assert.equal(url,'/api/devices?measurement=1');return new Promise((resolve,reject)=>reads.push({resolve:devices=>resolve({devices,hubVersion:'0.7.0',sources}),reject}));}};
     if(name.endsWith('/providers'))return {PROVIDERS:{}};
     if(name.endsWith('/format'))return {stamp:()=>''};
     if(name.endsWith('/quota'))return {errorText:()=>''};
@@ -51,7 +54,9 @@ function fixture(){
   const reconnect=()=>{state=reduce(state,{type:'hub',event:{type:'snapshot',data:snapshot}});render();};
   const projects=()=>{const section=render().find(node=>node.type==='div'&&nodes(node.props.children).some(child=>child.type==='h3'&&child.props.children==='agents.title'));return Array.from(nodes(section?.props.children).filter(node=>node.type==='small').map(node=>node.props.children));};
   const reload=()=>render().find(node=>node.type===participation)!.props.reload as ()=>Promise<void>;
-  return {render,reads,open,close,hint,contact,reconnect,projects,errorLine,reload};
+  const select=(value:string)=>(render().find(node=>node.type==='select')!.props.onChange as (event:unknown)=>void)({target:{value}});
+  const repeat=()=>{navigation={revision:(navigation?.revision??0)+1,destination:{kind:'devices',sourceId:focused!}};render();render();};
+  return {render,reads,open,close,hint,contact,reconnect,projects,errorLine,reload,select,repeat,focuses:()=>focuses};
 }
 
 test('an open Devices view coalesces owner hints, contacts make no reads, and a disclosure shares its data',async()=>{
@@ -82,4 +87,13 @@ test('a mutation refresh waits for the newer owner read that supersedes it',asyn
   f.hint();assert.equal(f.reads.length,3);
   f.reads[1].resolve([device]);await flush();assert.equal(completed,false,'an ignored old reply is not an authoritative refresh');
   f.reads[2].resolve([device]);await refresh;assert.equal(completed,true);
+});
+
+
+test('a repeated native destination restores its subscription after a manual selection',async()=>{
+  const source='codex:aaaaaaaaaaaa',f=fixture(source);f.render();f.reads[0].resolve([device]);await flush();f.render();
+  assert.equal(f.focuses(),1);f.select('codex:bbbbbbbbbbbb');
+  assert.equal(f.render().find(node=>node.type==='select')!.props.value,'codex:bbbbbbbbbbbb');
+  f.repeat();assert.equal(f.render().find(node=>node.type==='select')!.props.value,source);assert.equal(f.focuses(),2);
+  f.contact(200);assert.equal(f.focuses(),2,'contacts do not steal focus');
 });

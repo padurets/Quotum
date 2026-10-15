@@ -103,6 +103,12 @@ observations preserve retained values, and unknown historical origins remain unk
 Quota, resets and subscription funds have independent status/freshness. A snapshot
 includes optional `deviceContacts: {[ownDeviceId]: lastSeenAt}` for reconnect.
 The page retains at most 1024 recent contacts; a reconnect replaces that baseline.
+Revocation, a verified failure releasing duty, and eligibility or duty expiry notify
+affected holders through the same private semantic hint. The existing owner-event
+deadline compares semantic selection state; a contact that extends an unchanged
+state neither sends a hint nor makes the page refetch. Accepted native destinations
+coalesce before asynchronous window handoff. Repeating a destination restores that
+source even after a manual selection in the already-open Devices view.
 
 `POST /api/devices/:device/measurement-policy` takes
 `{operationId, expectedRevision, desired: {enabled, collectors: {claude, codex, antigravity}}}`.

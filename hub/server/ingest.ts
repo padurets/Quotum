@@ -102,6 +102,7 @@ export class Ingest {
       const policy = this.store.measurementPolicies.device(device.id);
       // Every source the batch is about: its pace and its holder's duty move even when nothing new is recorded.
       const touched = new Set<string>();
+      const evidenceGroups=new Map<ClientProvider,Set<string>>();
 
       for (const snapshot of [...batch.snapshots].sort((a, b) => a.observedAt - b.observedAt)) {
         if (admitMeasurement(policy, snapshot.provider, snapshot.attemptContext ?? null) !== 'accepted') {
@@ -123,8 +124,9 @@ export class Ingest {
         if (recorded.accepted) result.accepted++; else result.duplicates++;
         if (recorded.windows) attention?.record(previous, measurement, now);
         if (recorded.unavailable) attention?.unavailable(previous, observedAt);
+        if(recorded.delivery){let group=evidenceGroups.get(snapshot.provider);if(!group)evidenceGroups.set(snapshot.provider,group=new Set());group.add(account);}
         afterCommit(() => {
-          const evidence=recorded.delivery ? this.measurementSelection.observe(account, snapshot.provider, device.id, observedAt) : null;
+          const evidence=recorded.delivery ? this.measurementSelection.observe(account, snapshot.provider, device.id, observedAt,120_000,evidenceGroups.get(snapshot.provider)!.size===1) : null;
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
           let onDuty = false;
           if (recorded.delivery) {
@@ -159,7 +161,10 @@ export class Ingest {
         if (key&&at>failureFloor) afterCommit(() => {
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
           if (this.cadence.failed(key, device.id, failure.error, at, acknowledge)) {
-            if (acknowledge && this.duty.failed(key, device.id, at)) this.cadence.released(key, device.id);
+            if (acknowledge && this.duty.failed(key, device.id, at)) {
+              this.cadence.released(key, device.id);
+              if(source)this.notifyMeasurementOwners(source);
+            }
             if (refreshAcknowledged) this.cadence.refreshResult(key, device.id, at, false, now);
           }
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
@@ -332,7 +337,6 @@ export class Ingest {
     const keys = this.measurementSelection.invalidate(device, collectors);
     for (const key of keys) this.cadence.withdraw(key, device, now);
     const sources = keys.flatMap(key => providers.flatMap(provider => this.store.findSource(provider,key) ?? []));
-    for(const source of sources)this.notifyMeasurementOwners(source);
     tell(this.observer, o => o.touchSources(sources));
     });
   }
@@ -433,7 +437,7 @@ export class Ingest {
         const lastWorkedAt = session.lastWorkedAt === null ? null : Math.max(startedAt, Math.min(now, session.lastWorkedAt + skew));
         return {...session, startedAt, sentStartedAt: session.startedAt, lastWorkedAt, device: {id: device.id, name}};
       });
-      if (report.clients !== null) this.directory.saveDeviceClients(device.id, device.userId, report.clients, now);
+      if (report.clients !== null) this.directory.saveDeviceClients(device.id, device.userId, report.clients.map(client=>({...client,observedAt:client.observedAt==null?null:Math.min(now,client.observedAt+skew)})), now);
 
       const before = this.live.sourcesOf(device.id).filter(source => this.store.holds(device.userId, source));
       this.live.report(device.id, device.userId, sessions, now);

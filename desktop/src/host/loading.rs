@@ -328,20 +328,17 @@ pub fn main(shell: &Arc<Shell>) {
         open_at(shell, ticket);
     });
 }
-pub fn main_from_panel(
-    shell: &Arc<Shell>,
-    instance: u64,
-    ticket: Head,
-    destination: Option<crate::ipc::MainDestination>,
-) {
+pub fn main_from_panel(shell: &Arc<Shell>, instance: u64, ticket: Head) {
     let opening = crate::window::opening(shell);
     dispatch(shell.clone(), move |panel, shell| {
         let _opening = opening;
-        if let Some(ticket) = super::accept_main_from_panel(shell, instance, ticket) {
-            shell.main_navigation.lock().unwrap_or_else(|e| e.into_inner()).set(destination);
+        if let Some(next) = super::accept_main_from_panel(shell, instance, ticket) {
+            if !shell.main_navigation.lock().unwrap_or_else(|e| e.into_inner()).commit(instance, ticket.revision) {
+                return;
+            }
             crate::ipc::publish(shell);
             panel.hide();
-            open_at(shell, ticket);
+            open_at(shell, next);
         }
     });
 }
