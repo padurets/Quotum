@@ -21,7 +21,7 @@ function cleanup(id:string) {
 }
 test('Windows registry bootstrap is private, durable and never replaces a missing established store',windows,t=>{
   // Observe the original helper call, including a cold failure; never print its frame or stderr.
-  const nativeSpawn=childProcess.spawnSync,attempts:{ms:number;status:number|null;failure:string|null;outputBytes:number;header:boolean;helperStatus:number|null;stages:ReturnType<typeof registryStages>}[]=[];
+  const nativeSpawn=childProcess.spawnSync,attempts:{ms:number;pid:number|null;signal:string|null;status:number|null;failure:string|null;stderrKind:string;stderrBytes:number|null;outputBytes:number;header:boolean;helperStatus:number|null;stages:ReturnType<typeof registryStages>}[]=[];
   t.mock.method(childProcess,'spawnSync',(...args:Parameters<typeof nativeSpawn>)=>{
     const helper=Array.isArray(args[1])&&args[1].some(value=>typeof value==='string'&&value.endsWith('windows.ps1'));
     if(helper)args[2]={...args[2],env:{...process.env,...args[2]?.env,QUOTUM_TEST_KEY_STAGES:'1'}};
@@ -29,8 +29,10 @@ test('Windows registry bootstrap is private, durable and never replaces a missin
     if(helper){
       const output=result.stdout,header=Buffer.isBuffer(output)&&output.length>=5&&output.subarray(0,4).equals(Buffer.from('QKR1'));
       const code=(result.error as NodeJS.ErrnoException|undefined)?.code;
-      attempts.push({ms:performance.now()-started,status:result.status,
+      attempts.push({ms:performance.now()-started,pid:Number.isSafeInteger(result.pid)&&result.pid>0?result.pid:null,
+        signal:result.signal===null?null:['SIGTERM','SIGKILL','SIGABRT','SIGINT','SIGBREAK'].includes(result.signal)?result.signal:'other',status:result.status,
         failure:code===undefined?null:['ETIMEDOUT','ENOENT','EACCES','ENOBUFS'].includes(code)?code:'other',
+        stderrKind:Buffer.isBuffer(result.stderr)?'buffer':result.stderr===null?'null':'other',stderrBytes:Buffer.isBuffer(result.stderr)?result.stderr.length:null,
         outputBytes:Buffer.isBuffer(output)?output.length:0,header,
         helperStatus:header&&output[4]<=3?output[4]:null,stages:registryStages(result.stderr)});
     }
