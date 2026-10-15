@@ -992,18 +992,24 @@ export class Store {
     }));
     const result: Stretch[] = [];
     let lastId:number|undefined,lastTimeline:ReturnType<typeof timelines.get>;
+    // Copying context objects into every stretch dominates dense reads.
+    const append=(id:number,source:string|null,context:ReturnType<typeof contextOf>,from:number,to:number)=>{
+      const span:Stretch={session:id,source,device:context.device,user:context.user,origin:context.origin,project:context.project,folder:context.folder,startedAt:context.startedAt,from,to};
+      if(context.rawContext)span.rawContext=context.rawContext;
+      result.push(span);
+    };
     for (const [id, start, end] of rows) {
       // Rows are ordered by context, so one lookup serves all its stretches.
       const timeline=id===lastId?lastTimeline:timelines.get(id);lastId=id;lastTimeline=timeline;
       if(!timeline)continue;
       if(timeline.parts.length===1&&timeline.parts[0].from<=start&&timeline.parts[0].to>=end){
-        result.push({session:id,source:timeline.parts[0].source,...timeline.context,from:start,to:end});
+        append(id,timeline.parts[0].source,timeline.context,start,end);
         continue;
       }
       while (timeline.next < timeline.parts.length && timeline.parts[timeline.next].to <= start) timeline.next++;
       for (let n = timeline.next; n < timeline.parts.length && timeline.parts[n].from < end; n++) {
         const part = timeline.parts[n];
-        result.push({session: id, source: part.source, ...timeline.context, from: Math.max(start, part.from), to: Math.min(end, part.to)});
+        append(id,part.source,timeline.context,Math.max(start,part.from),Math.min(end,part.to));
       }
     }
     return result;
