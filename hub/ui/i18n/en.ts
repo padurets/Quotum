@@ -514,7 +514,7 @@ export const en = {
   'add.deviceCompleteText':'Access to device sessions is managed separately from subscriptions. Manage it in Board settings → Provided data.',
   'add.finishDevice':'Finish connecting',
   'add.optionalSources':'Subscriptions to provide (optional)',
-  'agents.unknownSource':'Subscription not identified',
+  'agents.unknownSource':'Source not identified',
   'agents.concurrency': 'Average concurrency',
   'agents.title': 'Agent sessions',
   'agents.machineSummary': '{working} of {count} working',

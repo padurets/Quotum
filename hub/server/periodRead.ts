@@ -225,7 +225,8 @@ export class PeriodReader {
       yield;
       for(const scope of PERIOD_SCOPES)if(request[scope])response[scope]=yield*section((function*(){
         const historyScope=scope==='funds'?'budget':scope;
-        const query=request[scope]!,json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},work,query.cells!=='skip',now);
+        // Work estimates use the common tape and curves, without a second copy in drawing cells.
+        const query=request[scope]!,json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},work,query.cells!=='skip',now,false);
         reserve(Buffer.byteLength(json)*2);const value=JSON.parse(json) as HistoryReply;
         if(query.evidence==='skip')return value;
         const tapeIdentity=createHash('sha256').update(JSON.stringify([board,user,scope,scope==='quota'||query.work==='1'?identity:null,[...shown].map(([id,s])=>[id,s.since]),scope==='quota'?null:store.financialKey(board),query.meters,query.unit,query.currency,query.work,store.currencies.registryRevision(user)])).digest('base64url');

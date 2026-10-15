@@ -19,7 +19,7 @@ export class ReadError extends Error {
 export function fail(status:number, code:string):never {throw new ReadError(status,code);}
 
 /** Both transports enforce the same tile, authority and currency contract. */
-export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, work?:WorkRead, cells=true, capturedAt?:number):string {
+export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, work?:WorkRead, cells=true, capturedAt?:number, workCells=true):string {
   const {store,directory}=hub;
     const scope = query.scope;
     if(scope!==undefined&&scope!=='quota'&&scope!=='budget')fail(400, 'invalid_request');
@@ -59,7 +59,7 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
     if(reservation)work=sharedWork(hub,shown,{from,to},reservation.add,reservation.remove,null,now,board);
     const access=scope==='budget'&&!sourceWork?undefined:work!.ensureAccess!();
     let chunks: string[];
-    try {chunks=cells?history.read(board, cell, from, to, now, shown, meters, scope, work,sourceWork):[];}
+    try {chunks=cells?history.read(board, cell, from, to, now, shown, meters, scope, work,sourceWork&&workCells):[];}
     catch(error){if(error instanceof HistoryLimit)fail(413, 'history_limit');throw error;}
     if(query.currency!==undefined){
       if(!meters)fail(400, 'invalid_request');

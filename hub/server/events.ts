@@ -521,9 +521,9 @@ export class Events implements Touches {
   /**
    * The events of one board: its name and view when touched as a whole, then the touched
    * sources, sources new to it first, then its sources when they changed. Null once the
-   * board is gone: its readers are let go. Touched as a whole, it also checks the work
-   * authority, invalidating credited history when it changes. Delivery replaces an
-   * authority-changing delta with a snapshot, including changed presentation names;
+   * board is gone: its readers are let go. Each refresh also checks the work authority,
+   * including reached session deadlines, invalidating credited history when it changes.
+   * Delivery replaces an authority-changing delta with a snapshot, including changed presentation names;
    * view-only changes preserve admitted work.
    */
   private refresh(
@@ -568,14 +568,14 @@ export class Events implements Touches {
       ids = part.lineup;
       watched.lineup = ids;
       computed = lineup;
-      const work = projection.workKey(watched.id,roster.access);
-      if (watched.work !== null && watched.work !== work) {
-        let pending=histories.get(watched.id);if(!pending)histories.set(watched.id,(pending=new Map()));
-        for(const source of ids)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0,workSince:0});
-        workHistories.set(watched.id,0);
-      }
-      watched.work = work;
     }
+    const work = projection.workKey(watched.id,roster.access);
+    if (watched.work !== null && watched.work !== work) {
+      let pending=histories.get(watched.id);if(!pending)histories.set(watched.id,(pending=new Map()));
+      for(const {id:source} of lineup)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0,workSince:0});
+      workHistories.set(watched.id,0);
+    }
+    watched.work = work;
     if (computed.length) {
       const members = projection.members(watched.id);
       for (const source of computed) {

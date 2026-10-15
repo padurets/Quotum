@@ -53,6 +53,16 @@ function* moneyAfter(group:MoneyTape,from:number,reserve:(bytes:number)=>void):P
   const raw=yield*partAfter(group,from,reserve),paired=group.paired?yield*partAfter(group.paired,from,reserve):undefined,workCounter=group.workCounter?yield*partAfter(group.workCounter,from,reserve):undefined;
   const own=workCounter!==group.workCounter?{...raw,workCounter}:raw;
   if(!group.rates&&!group.rateBindings)return own===group&&paired===group.paired?group:{...own,...(paired?{paired}:{})};
+  if(raw===group&&paired===group.paired){
+    // With no expired financial rows, future bindings and one predecessor per
+    // unit already form the complete retained dictionary. Avoid copying it.
+    const previous=new Set<string>();let reusable=true;
+    for(const key of rateKeys(group)){
+      const split=key.lastIndexOf('\n'),unit=key.slice(0,split),at=Number(key.slice(split+1));
+      if(at<from){if(previous.has(unit)){reusable=false;break;}reserve(64+unit.length*2);previous.add(unit);}yield;
+    }
+    if(reusable)return own;
+  }
   const keys=new Set<string>(),previous=new Map<string,{at:number;key:string}>();let count=0;
   const add=(unit:string,at:number)=>{reserve(64+unit.length*2+32);keys.add(unit+'\n'+at);};
   for(const [part,original] of [[own,group],...(paired&&group.paired?[[paired,group.paired]]:[])]){

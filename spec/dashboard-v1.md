@@ -1808,8 +1808,9 @@ does not change original spending or work history.
 The shared period coordinator combines these demands with sessions, activity and the
 financial sections in `POST /api/boards/:board/period`; no separate composite history
 endpoint is used. `budget.work: '1'` adds native `workCounter` evidence only to eligible
-source-total monetary tapes. It includes the original readings, availability spans,
-`knownFrom` and the admitted source-work cutoff. Plain financial requests do not read
+source-total monetary tapes. Composite drawing chunks remain financial-only and do
+not duplicate the GET route's `moneyWork` cells. The tape includes the original
+readings, availability spans, `knownFrom` and the admitted source-work cutoff. Plain financial requests do not read
 or carry these dense observation pairs.
 
 The common period accounting index evaluates whole native pairs and source work curves

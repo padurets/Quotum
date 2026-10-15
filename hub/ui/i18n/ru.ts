@@ -509,7 +509,7 @@ export const ru = {
   'add.deviceCompleteText':'Доступ к сессиям устройства настраивается отдельно от подписок. Управляйте им в Настройки доски → Предоставленные данные.',
   'add.finishDevice':'Завершить подключение',
   'add.optionalSources':'Подписки для предоставления (необязательно)',
-  'agents.unknownSource':'Подписка не определена',
+  'agents.unknownSource':'Источник не определён',
   'agents.concurrency': 'Средняя параллельность',
   'agents.title': 'Сессии агентов',
   'agents.machineSummary': 'в работе {working} из {count}',

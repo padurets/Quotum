@@ -80,6 +80,8 @@ for (const local of [false, true]) test(`link API enforces owner scope, origin, 
     const periodUrl='/api/boards/'+board+'/period',period={version:1,selection:{mode:'range',from:from-30*cell,to},evaluatedAt:now,sessions:{},quota:{cell:String(cell),from:String(from-30*cell),to:String(to)},budget:{cell:String(cell),from:String(from-30*cell),to:String(to),unit:'USD',meters:JSON.stringify(budget.meters),work:'1'}};
     const combined=await request('POST',periodUrl,period);assert.equal(combined.statusCode,200);
     assert.equal(combined.json().quota.state,'complete');assert.equal(combined.json().budget.state,'complete');assert.equal(combined.json().sessions.state,'complete');
+    assert.ok(combined.json().budget.value.chunks.every((chunk:{moneyWork?:unknown})=>chunk.moneyWork===undefined),'composite drawing cells do not duplicate the shared work evidence');
+    assert.ok(combined.json().budget.value.tape.fixed.moneyWork.some((value:{source:string})=>value.source===source),'fixed period estimates retain their common accounting summary');
     assert.equal(prepare.mock.calls.filter(call=>/^SELECT w.session_id,/.test(String(call.arguments[0]))).length,1,'period sections share one raw work candidate read');
     const reads=prepare.mock.calls.length;
     assert.equal((await request('POST',periodUrl,{...period,budget:{...period.budget,work:'0'}})).statusCode,400);

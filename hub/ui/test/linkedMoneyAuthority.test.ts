@@ -6,6 +6,26 @@ import {PeriodAccounting} from '../../server/domain/periodAccounting.js';
 import {expandPeriod} from '../../server/domain/periodWire.js';
 import type {Meter} from '../../server/domain/meters.js';
 
+test('a scheduled link keeps its work authority through the next financial-only event',async t=>{
+  let now=NOW;t.mock.method(Date,'now',()=>now);const h=await fixture({current:true});
+  const settle=async()=>{await flush();for(let i=0;i<3;i++)await new Promise<void>(resolve=>setImmediate(resolve));await flush();};
+  try{
+    const wallet=h.store.source('openrouter','w'.repeat(24),NOW-H);
+    h.store.hold(wallet,h.owner,NOW-H);h.store.share(h.board,wallet,h.owner,NOW-H);
+    h.store.links.mutate(h.owner,'create',null,{clientId:'codex',deviceId:null,route:null,sourceId:wallet,from:NOW+11000,to:null,expectedRevision:h.store.links.revision(h.owner),requestId:randomUUID()},NOW);
+    for(let i=0;i<3;i++){h.events.flush();await settle();}
+    const before=h.page.get().board!.workAuthority;
+    now=NOW+11000;h.advance(now);await settle();
+    const authority=h.page.get().board!.workAuthority;
+    assert.notEqual(authority,before);assert.equal(authority,h.store.workKey(h.board));
+    assert.equal(h.period.get().rows.length,1);h.requests.length=0;
+    now=NOW+12000;h.events.history(wallet,now,['budget']);h.events.flush();await settle();
+    assert.equal(h.page.get().board!.workAuthority,authority,'financial history cannot roll back a timed work boundary');
+    assert.equal(h.period.get().rows.length,1);assert.equal(h.period.get().loading,false);assert.equal(h.pool.activeFlights,0);
+    assert.ok(h.requests.every(request=>!request.sessions),'a subsequent financial event reuses the settled work ledger');
+  }finally{await h.close();}
+});
+
 for(const fixed of [false,true])test(`correcting funding retires old ${fixed?'fixed':'live'} work curves while preserving exact financial accounting`,async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true,ownerDevice:true,fixed});
   try{

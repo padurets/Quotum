@@ -20,7 +20,7 @@ import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/
 import {hasPeriodValue,periodValueAt} from '../../server/domain/periodValues';
 import {canShift,shifted} from '../../server/domain/periodShift';
 import {periodOf} from '../lib/periods';
-import {moneySelection,moneyReadSelection,DEFAULT_MONEY} from '../lib/moneySelection';
+import {moneyReadSelection,DEFAULT_MONEY} from '../lib/moneySelection';
 import {subscriptionSelection} from '../lib/subscription';
 import {sameJson} from '../lib/store';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
@@ -57,7 +57,7 @@ test('money preparation keeps cold history reusable across cached return and rep
   store.db.exec('BEGIN');const quotas:string[]=[];
   for(let i=0;i<12;i++){
    const id=store.source('claude',`quota-fixture-${i}`,NOW-75*DAY);quotas.push(id);store.hold(id,user.id,NOW-75*DAY);
-   for(let at=NOW-75*DAY;at<=NOW;at+=3*3_600_000)store.record(id,{observedAt:at,staleAfterMs:6*3_600_000,plan:'pro',resets:null,windows:[{id:'weekly',kind:'weekly',used:20+i,remaining:80-i,minutes:10080,resetAt:NOW+7*DAY,label:null}]});
+   for(let at=NOW-75*DAY;at<=NOW;at+=3*3_600_000)store.record(id,{observedAt:at,staleAfterMs:6*3_600_000,plan:'pro',resets:null,windows:[{id:'weekly',kind:'weekly',used:20+i,remaining:80-i,minutes:10080,resetAt:NOW+7*DAY,label:null},{id:'session',kind:'session',used:20+i,remaining:80-i,minutes:300,resetAt:NOW+7*DAY,label:null}]});
   }
   store.db.exec('COMMIT');
   const device=directory.saveDevice({userId:user.id,machine:{id:'test-machine',name:'Laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.7.0',tokenId:null},NOW-75*DAY).id;
@@ -65,7 +65,7 @@ test('money preparation keeps cold history reusable across cached return and rep
   const hub:any={store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{}),pairing:new Pairing(directory),setup:new Setup(false,null),local:null};
   const events=new Events(hub,undefined,{now:()=>NOW,after:()=>()=>{}},null),server=new PeriodReader(hub,new HistoryTiles(store),events),projection=new Projection(hub);
   const snapshot=projection.snapshot(user.id,owner.personalBoard,NOW)!;
-  const board={id:owner.personalBoard,meta:snapshot.board,cards:Object.fromEntries(snapshot.sources.map(c=>[c.id,c])),lineup:snapshot.sources.map(c=>c.id),view:{...snapshot.view,shown:['quota-history','budget-history',SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS]},currencies:snapshot.currencies};
+  const board={id:owner.personalBoard,meta:snapshot.board,cards:Object.fromEntries(snapshot.sources.map(c=>[c.id,c])),lineup:snapshot.sources.map(c=>c.id),view:{...snapshot.view,shown:['quota-history','budget-history','budget-table',SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS]},currencies:snapshot.currencies};
   let selected:PeriodRange|null=null,panning=false,phase='seed';
   const settings={range:'30d',kind:'weekly',money:{...DEFAULT_MONEY},funds:{...DEFAULT_MONEY}};
   const preparer=new Preparations({now:()=>performance.now(),post:run=>setImmediate(run)});
@@ -88,10 +88,10 @@ test('money preparation keeps cold history reusable across cached return and rep
   runInNewContext(coordinatorCode,context);const period=new context.exports.BoardPeriod();
   const readers:HistoryStore[]=[];
   for(const [i,scope] of (['quota','budget','budget'] as const).entries()){
-   const meter=i===0?undefined:moneySelection(snapshot.sources,board.view.hidden,i===2?settings.funds:settings.money,board.currencies,i===2?'funds':'budget').selection;
+   const meter=i===0?undefined:moneyReadSelection(snapshot.sources,board.view,i===2?settings.funds:settings.money,board.currencies,i===2?'funds':'budget');
    const family=i===2?'funds':scope;
    const reader=new HistoryStore({now:()=>clockNow,preparations:preparer,setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:t=>clearTimeout(t as any),dropTimeRange:()=>{throw Error('dropRange')},
-    read:(_board,cell,from,to,signal,meters,meta)=>period.transport.read(family,{cell:String(cell),from:String(from),to:String(to),...(panning?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})},signal).then((reply:any)=>expandHistory(reply,meta)),
+    read:(_board,cell,from,to,signal,meters,meta)=>period.transport.read(family,{cell:String(cell),from:String(from),to:String(to),...(panning?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal).then((reply:any)=>expandHistory(reply,meta)),
    },pool.budget,scope,pool);
    readers.push(reader);reader.choose('30d',null);reader.setMeters(meter);reader.open(board.id);reader.hello(events.epoch);reader.snapshot(board.lineup,quotas.flatMap(id=>store.state(id).windows.map(w=>`${id} ${w.id}`)),NOW-75*DAY);
   }

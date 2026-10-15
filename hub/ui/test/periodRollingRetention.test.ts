@@ -11,6 +11,18 @@ import {drain,Preparations} from '../lib/prepare';
 import {PERIOD_SCOPES} from '../../server/domain/periodRead';
 import type {Meter} from '../../server/domain/meters';
 
+test('unchanged monetary rows retain their minimal rate dictionary without copying it',()=>{
+  const group:MoneyTape={source:'wallet',meter:'balance',readings:[{id:'balance',at:0,previousAt:null,kind:'balance',unit:'USD',amount:'1000000',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:1000}],spans:[{from:0,to:100,staleAfterMs:1000}]};
+  for(const at of [0,100])bindRate(group,'USD\n'+at,null);
+  const tape:PeriodTape={from:0,cut:101,replaceFrom:0,cursor:'cursor',quota:[],money:[group]};
+  let scratch=0;const kept=drain(retainTape(tape,50,bytes=>{scratch+=bytes;}));
+  assert.equal(kept,tape);assert.ok(scratch<1024);
+  for(const at of [5,10])bindRate(group,'USD\n'+at,null);
+  const trimmed=drain(retainTape(tape,50));
+  assert.equal(rateAt(trimmed.money[0],'USD\n5'),undefined,'older unreferenced bindings still retire');
+  for(const at of [0,10,100])assert.equal(rateAt(trimmed.money[0],'USD\n'+at),null,'native anchors and the predecessor remain');
+});
+
 test('a superseded money span tail is retired while complete rate transitions remain observable',()=>{
   const path=[{id:'first-proof',source:'manual',base:'USD',date:0,fetchedAt:0,from:'1000000',to:'2000000'}];
   const group=(to:number):MoneyTape=>({source:'wallet',meter:'balance',displayUnit:'EUR',readings:[{id:'balance',at:0,previousAt:null,kind:'balance',unit:'USD',amount:'9007199254741000',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:1000}],spans:[{from:0,to,observedFrom:0,staleAfterMs:1000}]});
