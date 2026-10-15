@@ -16,7 +16,7 @@ const device:Device={id:'d',name:'Laptop',reported:'Laptop',os:'linux',arch:'x86
 const session={clientId:'opencode',device:{id:'d',name:'Laptop'},source:null,origin:'terminal' as const,project:'Current project',folder:null,startedAt:1,lastWorkedAt:null,working:false,workedMs:0};
 
 function fixture(){
-  const hooks=preparationFixture(),row={},modal={},errorLine={},reads:{resolve:(value:Device[])=>void;reject:(error:Error)=>void}[]=[];
+  const hooks=preparationFixture(),row={},modal={},errorLine={},participation={},reads:{resolve:(value:Device[])=>void;reject:(error:Error)=>void}[]=[];
   let state:PageState=reduce(INITIAL,{type:'hub',event:{type:'snapshot',data:snapshot}});
   const memo=(fn:unknown,deps:unknown[])=>{
     const slot=hooks.useRef(undefined) as {current?:{fn:unknown;deps:unknown[]}};
@@ -27,7 +27,7 @@ function fixture(){
     if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect:hooks.useLayoutEffect,useCallback:memo};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'};
     if(name.endsWith('/router'))return {useLocation:()=>'/settings/connections'};
-    if(name==='./MeasurementDevices')return {};
+    if(name==='./MeasurementDevices')return {ParticipationSettings:participation};
     if(name.endsWith('/board'))return {useConnectionsRevision:()=>state.board?.connectionsRevision??0,useDevicesRevision:()=>state.devicesRevision??0,useMainNavigation:()=>null};
     if(name.endsWith('/http'))return {call:(method:string,url:string)=>{assert.equal(method,'GET');assert.equal(url,'/api/devices?measurement=1');return new Promise((resolve,reject)=>reads.push({resolve:devices=>resolve({devices,hubVersion:'0.7.0',sources:[]}),reject}));}};
     if(name.endsWith('/providers'))return {PROVIDERS:{}};
@@ -50,7 +50,8 @@ function fixture(){
   const contact=(lastSeenAt:number)=>{state=reduce(state,{type:'hub',event:{type:'deviceContacts',data:{devices:[{deviceId:device.id,lastSeenAt}]}}});render();};
   const reconnect=()=>{state=reduce(state,{type:'hub',event:{type:'snapshot',data:snapshot}});render();};
   const projects=()=>{const section=render().find(node=>node.type==='div'&&nodes(node.props.children).some(child=>child.type==='h3'&&child.props.children==='agents.title'));return Array.from(nodes(section?.props.children).filter(node=>node.type==='small').map(node=>node.props.children));};
-  return {render,reads,open,close,hint,contact,reconnect,projects,errorLine};
+  const reload=()=>render().find(node=>node.type===participation)!.props.reload as ()=>Promise<void>;
+  return {render,reads,open,close,hint,contact,reconnect,projects,errorLine,reload};
 }
 
 test('an open Devices view coalesces owner hints, contacts make no reads, and a disclosure shares its data',async()=>{
@@ -73,4 +74,12 @@ test('an obsolete device reply or error cannot restore a session after newer own
   f.reads[1].resolve([{...device,sessions:[session]}]);await flush();assert.deepEqual(f.projects(),[]);
   f.hint();f.hint();f.reads[4].resolve([device]);await flush();f.reads[3].reject(new Error('obsolete failure'));await flush();
   assert.ok(!f.render().some(node=>node.type===f.errorLine));
+});
+
+test('a mutation refresh waits for the newer owner read that supersedes it',async()=>{
+  const f=fixture();f.render();f.reads[0].resolve([{...device,policy:{revision:0} as Device['policy']}]);await flush();f.open();
+  let completed=false;const refresh=f.reload()().then(()=>{completed=true;});
+  f.hint();assert.equal(f.reads.length,3);
+  f.reads[1].resolve([device]);await flush();assert.equal(completed,false,'an ignored old reply is not an authoritative refresh');
+  f.reads[2].resolve([device]);await refresh;assert.equal(completed,true);
 });

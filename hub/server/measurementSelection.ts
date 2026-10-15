@@ -21,7 +21,7 @@ export class MeasurementSelection {
   observe(key: string, provider: ClientProvider, device: string, now: number, nextAskMs = 120_000, replace = true) {
     const before = this.devices.get(device)?.get(key);
     const latest=Math.max(-Infinity,...[...(this.devices.get(device)?.values()??[])].filter(candidate=>candidate.provider===provider).map(candidate=>candidate.seenAt));
-    if(replace && now<latest)return {changed:false,current:false,expiresAt:0};
+    if(replace && now<latest)return {changed:false,current:!!before,expiresAt:before?.expiresAt??0};
     if(replace && !before)this.current(device,new Map([[provider,new Set([key])]]),now);
     const command=this.commands.get(key);
     const candidate = {key, provider, device, seenAt: now, expiresAt: Math.max(now + Math.min(10*60_000, Math.max(120_000, nextAskMs))+120_000,command?.device===device?command.deadline:0)};

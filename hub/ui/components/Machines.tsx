@@ -84,12 +84,20 @@ export function Devices({local}: {local: boolean}) {
   const details = devices?.find(device=>device.id===detailsId) ?? null;
   const [renaming,setRenaming]=useState<Device|null>(null),[name,setName]=useState('');
   const [error, setError] = useState<unknown>(null);
+  const newest=useRef<{promise:Promise<void>}|null>(null);
   const load = useCallback(() => {
     const current = ++request.current;
-    return call<{devices:Device[];hubVersion:string;sources:MeasurementSource[]}>('GET', '/api/devices?measurement=1').then(value => {
+    const result=call<{devices:Device[];hubVersion:string;sources:MeasurementSource[]}>('GET', '/api/devices?measurement=1').then(value => {
       if (current !== request.current) return;
       setDevices(value.devices);setHubVersion(value.hubVersion);setSources(value.sources);setError(null);
     }, failure => {if (current === request.current) setError(failure);throw failure;});
+    // Save waits for the authoritative read even when a newer owner hint supersedes it.
+    const entry={promise:Promise.resolve()};
+    entry.promise=result.then(()=>newest.current!==entry?newest.current?.promise:undefined,failure=>{
+      if(newest.current&&newest.current!==entry)return newest.current.promise;
+      throw failure;
+    });
+    newest.current=entry;return entry.promise;
   }, []);
   useEffect(()=>{void load().catch(()=>{});}, [load, revision,presence]);
   useEffect(() => () => {++request.current;}, []);
