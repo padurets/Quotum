@@ -4,11 +4,13 @@ import {sseParser} from '../ui/lib/live.js';
  * The benchmark's own reader of a board's events (spec/dashboard-v1.md), asked for as the
  * page asks. Board events and owner-private contact metadata are counted separately;
  * the latter must match the owner's baseline and the narrow contact wire contract.
+ * Empty owner semantic hints are reported separately too; board changes still fail.
  */
 export type Heard = {
   counts(): Record<string, number>;
   boardCounts(): Record<string, number>;
   contacts(): {packets:number;entries:number;bytes:number;maxEntries:number;invalid:number};
+  hints(): {packets:number;bytes:number;invalid:number};
   reset(): void;
   close(): void;
 };
@@ -18,6 +20,7 @@ export class EventCounts {
   private all:Record<string,number>={};
   private board:Record<string,number>={};
   private contact={packets:0,entries:0,bytes:0,maxEntries:0,invalid:0};
+  private hint={packets:0,bytes:0,invalid:0};
   readonly push=sseParser((type,data)=>{
     this.all[type]=(this.all[type]??0)+1;
     this.board[type]=(this.board[type]??0)+1;
@@ -28,6 +31,15 @@ export class EventCounts {
         if(contacts&&typeof contacts==='object'&&!Array.isArray(contacts))for(const [id,at] of Object.entries(contacts))
           if(/^[A-Za-z0-9_-]{12}$/.test(id)&&Number.isSafeInteger(at)&&Number(at)>=0)this.own.add(id);
       }catch { /* A malformed snapshot remains a board event. */ }
+    }
+    if(type==='devices') {
+      try {
+        const packet=JSON.parse(data);
+        if(!packet||typeof packet!=='object'||Array.isArray(packet)||Object.keys(packet).length)throw new Error();
+        this.hint.packets++;this.hint.bytes+=Buffer.byteLength(data);
+        if(--this.board[type]===0)delete this.board[type];
+      }catch {this.hint.invalid++;}
+      return;
     }
     if(type!=='deviceContacts')return;
     try {
@@ -45,7 +57,8 @@ export class EventCounts {
   counts(){return {...this.all};}
   boardCounts(){return {...this.board};}
   contacts(){return {...this.contact};}
-  reset(){this.all={};this.board={};this.contact={packets:0,entries:0,bytes:0,maxEntries:0,invalid:0};}
+  hints(){return {...this.hint};}
+  reset(){this.all={};this.board={};this.contact={packets:0,entries:0,bytes:0,maxEntries:0,invalid:0};this.hint={packets:0,bytes:0,invalid:0};}
 }
 
 export async function hear(base: string, cookie: string, board: string): Promise<Heard> {
@@ -70,6 +83,7 @@ export async function hear(base: string, cookie: string, board: string): Promise
     counts: () => ledger.counts(),
     boardCounts:()=>ledger.boardCounts(),
     contacts:()=>ledger.contacts(),
+    hints:()=>ledger.hints(),
     reset: () => ledger.reset(),
     close: () => stop.abort(),
   };

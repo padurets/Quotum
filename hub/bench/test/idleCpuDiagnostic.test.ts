@@ -172,7 +172,7 @@ test('original trace preserves a missed edge, missing chart and unavailable thre
 async function originalIndex(collection:''|'1'|'trace') {
   let wall=540_000,plans=0,geometry=0,metricCalls=0;
   const ledger=new EventCounts();
-  const heard:Heard={reset:()=>{cdp.commands.push('ORIGINAL.heard-reset');ledger.reset();},counts:()=>ledger.counts(),boardCounts:()=>ledger.boardCounts(),contacts:()=>ledger.contacts(),close:()=>{}};
+  const heard:Heard={reset:()=>{cdp.commands.push('ORIGINAL.heard-reset');ledger.reset();},counts:()=>ledger.counts(),boardCounts:()=>ledger.boardCounts(),contacts:()=>ledger.contacts(),hints:()=>ledger.hints(),close:()=>{}};
   const saved:Saved[]=[],cdp=new class extends CurrentCdpFake {
     override async evaluate<T>(expression:string):Promise<T>{
       if(expression==='__quotumBench.reset()'){this.commands.push('ORIGINAL.reset');return undefined as T;}

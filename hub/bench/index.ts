@@ -245,7 +245,7 @@ async function main() {
     const after = await metrics(cdp);
     requests.counting = false;
     const events = heard.counts();
-    const boardEvents=heard.boardCounts(),deviceContacts=heard.contacts();
+    const boardEvents=heard.boardCounts(),deviceContacts=heard.contacts(),deviceHints=heard.hints();
     const reading = await cdp.evaluate<Reading>('__quotumBench.read()');
     const cellMs = cellOf(86_400_000);
     const scriptMsPerSecond = round(scriptPerSecond(before, after, reading.instrumentMs, seconds));
@@ -328,6 +328,7 @@ async function main() {
         events,
         boardEvents,
         deviceContacts,
+        deviceHints,
         renders: {commits: reading.commits, ...tally(reading.renders)},
         mutations: tally(reading.mutations),
         scriptMsPerSecond,

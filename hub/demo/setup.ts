@@ -115,10 +115,17 @@ export async function setUp(base: string, set: DemoSet, start: number, setupCode
     const failures = failuresAt(set, machine, start, -MIN);
     if (failures.length) {
       const agent=stand.agents.get(machine.id)!;
-      // The synthetic machine multiplexes accounts; declare its complete provider group.
-      for(const provider of new Set(cards(set).filter(card=>card.machines.includes(machine.id)).map(card=>card.provider))) {
-        const subscriptions=cards(set).filter(card=>card.provider===provider&&card.machines.includes(machine.id)).map(card=>({provider,...accountOf(card)}));
-        await agent.checkin(subscriptions.slice(0,16));
+      // Private client diagnostics need no account discovery. A verified failure does,
+      // and every command issued during that discovery needs its current outcome.
+      // The catalogue forbids another account on the same machine's failing collector.
+      for(const provider of new Set(failures.filter(failure=>failure.measurementTarget).map(failure=>failure.provider))) {
+        const group=cards(set).filter(card=>card.provider===provider&&card.machines.includes(machine.id));
+        const {subscriptions}=await agent.checkin(group.slice(0,16).map(card=>({provider,...accountOf(card)})));
+        for(const [index,answer] of subscriptions.entries())if(answer.measure) {
+          const card=group[index],failure=failures.find(failure=>failure.provider===provider&&JSON.stringify(failure.measurementTarget)===JSON.stringify(accountOf(card)));
+          const captured=now();
+          if(failure)failure.observedAt=new Date(captured).toISOString();
+        }
       }
       await agent.ingest([], failures, now());
     }

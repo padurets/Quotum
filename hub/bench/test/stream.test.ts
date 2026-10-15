@@ -17,13 +17,31 @@ test('private contacts remain fully reported while the unchanged board budget se
   assert.ok(counts.contacts().bytes>0);
   assert.match(idleProblems(idle(counts.counts())).join('\n'),/deviceContacts/,'the original oracle rejects an undifferentiated contact frame');
   assert.deepEqual(idleProblems(idle(counts.boardCounts())),[]);
-  for(const type of ['devices','card','history','unknown']) {
+  for(const type of ['refresh','card','history','snapshot','unknown']) {
     const changed=reader();send(changed,'ping',{});send(changed,type,{});
     assert.ok(idleProblems(idle(changed.boardCounts())).some(problem=>problem.includes(type)));
   }
   assert.ok(idleProblems({...idle(counts.boardCounts()),requests:{count:1,byPath:{'/api/devices':1}}}).length,'contact refetch remains forbidden');
   assert.ok(idleProblems({...idle(counts.boardCounts()),renders:[{region:'header',node:'div',kind:null,time:false,count:1}]}).length,'contact-driven board work remains forbidden');
   assert.ok(idleProblems({...idle(counts.boardCounts()),scriptMsPerSecond:0.301}).length,'the idle CPU threshold is unchanged');
+});
+
+test('only empty owner semantic hints qualify separately; board refreshes still fail',()=>{
+  const counts=reader();send(counts,'devices',{});
+  assert.deepEqual(counts.counts(),{devices:1});assert.deepEqual(counts.boardCounts(),{});
+  assert.deepEqual(counts.hints(),{packets:1,bytes:2,invalid:0});
+  assert.match(idleProblems(idle(counts.counts())).join('\n'),/devices/,'raw traffic still fails the original undifferentiated oracle');
+  send(counts,'refresh',{id:'source',refresh:{unavailable:'no_device'}});
+  assert.match(idleProblems(idle(counts.boardCounts())).join('\n'),/refresh/);
+  for(const data of [null,[],[{}],true,0,'',{'deviceId':a},{devices:[]},{source:'private'},{lastSeenAt:101}]) {
+    const invalid=reader();send(invalid,'devices',data);
+    assert.deepEqual(invalid.hints(),{packets:0,bytes:0,invalid:1});
+    assert.equal(invalid.boardCounts().devices,1);
+    assert.match(idleProblems(idle(invalid.boardCounts())).join('\n'),/devices/);
+  }
+  const malformed=reader();malformed.push('event: devices\ndata: {\n\n');
+  assert.equal(malformed.hints().invalid,1);assert.equal(malformed.boardCounts().devices,1);
+  counts.reset();assert.deepEqual(counts.hints(),{packets:0,bytes:0,invalid:0});
 });
 
 test('only bounded coalesced owner contact fields qualify as metadata',()=>{
