@@ -156,17 +156,23 @@ export const wakeDue = () => clock.wakeDue();
  * Rendered by its data at any other moment, it shows it with the time then. A
  * preparation context keeps that timestamp through its own completion renders.
  */
-export function useClock(changesAt: (now: number) => number | null, context?: readonly unknown[]): number {
+export function useClock(changesAt: (now: number) => number | null, context?: readonly unknown[], enabled = true): number {
   const [watch] = useState(() => clock.watch());
   const [subscribe] = useState(() => (listener: () => void) => clock.subscribe(watch, listener));
-  const wakes = useSyncExternalStore(subscribe, () => watch.wakes);
+  const read = () => enabled ? watch.wakes : 0;
+  const wakes = useSyncExternalStore(enabled ? subscribe : noClock, read, read);
   // A preparation completion is a render, not new time or data. Keep its intent
   // clock until this watch wakes or its captured data/UI context changes.
   const snapshot = useRef<{wakes: number; context: readonly unknown[]; now: number} | null>(null);
-  if (context && (!snapshot.current || snapshot.current.wakes !== wakes || snapshot.current.context.length !== context.length || context.some((value, i) => !Object.is(value, snapshot.current!.context[i])))) snapshot.current = {wakes, context: [...context], now: hubNow()};
-  const now = context ? snapshot.current!.now : hubNow();
+  if (!enabled) snapshot.current = null;
+  if (enabled && context && (!snapshot.current || snapshot.current.wakes !== wakes || snapshot.current.context.length !== context.length || context.some((value, i) => !Object.is(value, snapshot.current!.context[i])))) snapshot.current = {wakes, context: [...context], now: hubNow()};
+  const now = enabled && context ? snapshot.current!.now : hubNow();
   const latest = useRef(changesAt);
   latest.current = changesAt;
-  useLayoutEffect(() => clock.due(watch, latest.current(now), now),[watch,changesAt,now,wakes]);
+  useLayoutEffect(() => {
+    if (enabled) clock.due(watch, latest.current(now), now);
+    else if (watch.due !== null) clock.due(watch, null, now);
+  },[watch,changesAt,now,wakes,enabled]);
   return now;
 }
+const noClock = () => () => {};
