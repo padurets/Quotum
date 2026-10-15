@@ -1747,13 +1747,13 @@ viewer preference. Wide tables sort through their headers; only compact lists sh
 a separate sort button beside settings, and settings contain no sorting choices.
 Rows and controls share the same width decision, preserving the viewer's choice
 when the widget changes between table and list. Names use the reader's locale;
-values, spending and top-ups compare exact integer millionths from the same accounting
+values and top-ups compare exact integer millionths from the same accounting
 model as their cells. Unknown values stay last in either direction. Hidden columns
 temporarily use default without losing the saved choice. Default preserves the budget
 series order; live accounting boundaries use the shared page clock and retain cells.
 The budget chart, legend and table name a total balance by its account rather than
-repeating "Available balance". Distinct components and key scopes keep their names;
-balance roles and currency provenance remain reachable in details.
+repeating "Available balance". Scoped key limits keep their names; balance components,
+roles and currency provenance remain reachable in card details.
 
 On charts narrower than 560 SVG units, reset and exhaustion labels show the name
 and countdown, with an arrow only beyond the visible edge. Their backing is bounded
