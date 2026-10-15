@@ -198,10 +198,10 @@ async function main() {
     // their own subscribed-selector tests, including equal displayed labels.
     const bootstrapSource=`localStorage.setItem('quotum.locale','en');
       localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),agentsSort:{column:'project',descending:false}}));
-      window.__quotumInspectHistoryPool=pool=>{window.__quotumWalletState=source=>{
+      window.__quotumInspectHistoryPool=pool=>{window.__quotumWalletState=(source,authority)=>{
         const p=[...pool.members].find(m=>m.tapes),reader=[...pool.members].find(m=>m.scope==='budget'),tape=p?.tapes.get('budget');
         const work=p?.moneyWorkAt(source,Date.now()),group=tape?.tape.money.find(m=>m.source===source),shown=reader?.get();
-        return {periodLoading:p?.get().loading,periodError:!!p?.get().error,workNeeded:p?.workNeeded,work:work?{activeMs:work.activeMs,knownFrom:work.knownFrom}:null,
+        return {authorityReady:authority===undefined?undefined:!!p&&p.workAuthority===authority,periodLoading:p?.get().loading,periodError:!!p?.get().error,workNeeded:p?.workNeeded,work:work?{activeMs:work.activeMs,knownFrom:work.knownFrom}:null,
           preparation:p?{generation:p.generation,revision:p.revision,retiring:p.retiring,retirementPreparing:p.retirementPreparing,quotaSeries:p.tapes.get('quota')?.tape.quota.length,
             flights:[...p.transport.flights].slice(0,6).map(f=>({generation:f.intent.generation,revision:f.intent.revision,preparing:!!f.preparing,aborted:f.controller.signal.aborted,extras:f.extras,sections:Object.keys(f.intent.request)}))}:null,
           recentPeriods:performance.getEntriesByType('resource').filter(r=>/\\/period$/.test(new URL(r.name).pathname)).slice(-4).map(r=>({start:r.startTime,duration:r.duration,responseEnd:r.responseEnd,bytes:r.decodedBodySize})),
@@ -597,6 +597,8 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
   const created=await owner.post<{revision:string;links:{id:string}[]}>('/api/links',{clientId:'opencode',deviceId:null,route:null,sourceId:source,from:start,to:null,expectedRevision:revision,requestId:randomUUID()});
   const session={clientId:'opencode',sessionId:'e'.repeat(32),source:null,origin:'terminal',project:'Linked benchmark',startedAt:new Date(start).toISOString(),working:true};
   agent.trackClients([session],[]);await demo.reportNow('laptop');
+  const setupFrom=Date.now(),readyBy=setupFrom+SHOWN_WITHIN;
+  const authority=(await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard)).workAuthority;
   const geometry=()=>cdp.evaluate<string>(`JSON.stringify(Array.from(document.querySelectorAll('.budget-history [data-series]')).map(node=>[node.getAttribute('data-series'),node.getAttribute('data-last'),Array.from(node.querySelectorAll('path')).map(path=>path.getAttribute('d'))]))`);
   const active=()=>cdp.evaluate<number>(`Number(document.querySelector('[data-work-source="${source}"]')?.getAttribute('data-active-ms')??-1)`);
   const agentTime=()=>cdp.evaluate<number>(`Number(document.querySelector('.activity-totals')?.getAttribute('data-agent-ms')??-1)`);
@@ -605,10 +607,11 @@ async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>
     console.error('bench: linked wallet state '+JSON.stringify(state));throw new Stop('linked wallet work columns are not ready');
   };
   // The first list starts a lease. Configuration changes need a cold baseline before credit measurements.
-  const setupFrom=Date.now(),readyBy=setupFrom+SHOWN_WITHIN;
   let previous='',stable=0;
   while(stable<3){
     const layout=await cdp.evaluate<string|null>(`(()=>{
+      const baseline=window.__quotumWalletState?.(${JSON.stringify(source)},${JSON.stringify(authority)});
+      if(!baseline?.authorityReady||baseline.periodLoading||baseline.periodError||baseline.workNeeded||!baseline.work)return null;
       if(!document.querySelector('[data-work-source="${source}"]')||!document.querySelector('.activity-totals')||document.querySelector('.agents-panel.is-loading,.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]'))return null;
       if(document.getAnimations().some(animation=>animation.playState==='running'&&animation.effect?.target?.matches('.widget,.widget-body')))return null;
       return JSON.stringify(Array.from(document.querySelectorAll('.widgets>.widget')).map(node=>{const box=node.getBoundingClientRect();return[box.x,box.y,box.width,box.height];}));
