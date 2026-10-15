@@ -1,4 +1,5 @@
 import {sourceCounterOf} from './domain/providers.js';
+import {sourceWorkEligible} from './domain/moneyWork.js';
 import {sourceWorkFrom} from './domain/workAccess.js';
 import type {CellSamples} from './domain/cells.js';
 import type {Store,Shown,WorkRead} from './store/store.js';
@@ -74,7 +75,7 @@ export function periodTape(store:Store,board:string,shown:Shown,user:string,scop
           }
         }
       }
-      if(scope==='budget'&&query.work==='1'&&group.role==='total'&&!id[1].startsWith('key:')) {
+      if(scope==='budget'&&query.work==='1'&&group.role==='total'&&sourceWorkEligible(store.state(group.source).provider,id[1])) {
         const meter=sourceCounterOf(store.state(group.source).provider);
         if(meter) {
           const access=work?.ensureAccess?.()??store.workAccess(board,evidenceCut,reserve),from=sourceWorkFrom(access)[group.source]??Infinity;

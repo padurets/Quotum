@@ -38,6 +38,20 @@ struct Watch {
 }
 
 impl Watch {
+    /// The captured list cannot close coverage across a clock discontinuity.
+    fn clocked_witness(
+        &mut self,
+        report: &mut SessionReport,
+        captured: bool,
+        clock: &mut Clock,
+        wall: Millis,
+    ) -> Millis {
+        let back = clock.went_back(wall);
+        self.continuity_fault |= clock.discontinuous;
+        self.witness(report, captured);
+        back
+    }
+
     /// Whether `now` is a new list to send: the first one, a change, or one repeated in time.
     fn worth_sending(&self, report: &SessionReport) -> bool {
         if self.continuity_fault {
@@ -253,7 +267,10 @@ impl Runner {
                         &self.stop,
                         &watch.activity.client_paths(),
                     );
-                    watch.witness(&mut report, watch.activity.complete());
+                    let back = watch.clocked_witness(&mut report, watch.activity.complete(), &mut clock, now_ms());
+                    if back > 0 {
+                        schedule.shift(-back);
+                    }
                     // A list the hub did not take goes out again at the next look.
                     if watch.worth_sending(&report) {
                         let accepted = sink.report(&report);
@@ -865,6 +882,40 @@ mod tests {
         changed.tracking.as_mut().unwrap().clients.push(ClientId::Claude);
         watch.witness(&mut changed, true);
         assert!(!changed.tracking.as_ref().unwrap().complete, "scope changes break continuity");
+    }
+
+    #[test]
+    fn a_due_complete_list_checks_clock_continuity_before_its_witness() {
+        for jump in [-3_600_000, 3_600_000] {
+            let start = 10 * 3_600_000;
+            let mut report = SessionReport {
+                tracking: Some(Tracking {
+                    version: 1,
+                    clients: vec![ClientId::OpenCode],
+                    route_disabled: vec![],
+                    complete: true,
+                }),
+                ..SessionReport::default()
+            };
+            let mut watch = Watch {
+                activity: Activity::new(PathBuf::from("/nowhere"), false),
+                looked: Some(Instant::now()),
+                reported: Some((Instant::now() - REPORT_EVERY, report.clone())),
+                inventory: Inventory::default(),
+                continuity_fault: false,
+            };
+            assert!(watch.worth_sending(&report));
+            let mut clock = Clock::new(start);
+            clock.at = Instant::now() - REPORT_EVERY;
+            let back =
+                watch.clocked_witness(&mut report, true, &mut clock, start + REPORT_EVERY.as_millis() as Millis + jump);
+            assert_eq!(back > 0, jump < 0);
+            assert!(!report.tracking.as_ref().unwrap().complete);
+            watch.acknowledged(report.clone(), false);
+            report.tracking.as_mut().unwrap().complete = true;
+            watch.clocked_witness(&mut report, true, &mut clock, start + REPORT_EVERY.as_millis() as Millis + jump);
+            assert!(!report.tracking.as_ref().unwrap().complete, "a lost false witness stays latched");
+        }
     }
 
     #[test]

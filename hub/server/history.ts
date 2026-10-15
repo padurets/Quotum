@@ -45,10 +45,19 @@ export class HistoryTiles {
   /** Partial tiles reuse these immutable pseudonyms without hashing every read. */
   private cachedRef(input: string) {
     const hit=this.refs.get(input);if(hit!==undefined)return hit;
+    const bytes=this.refBytes(input);this.makeRoom(bytes);
     const value=createHmac('sha256',this.key).update(input).digest('base64url').slice(0,8);
-    this.refs.set(input,value);
-    while(this.refs.size>Math.max(1,Math.floor(this.budget/1024)))this.refs.delete(this.refs.keys().next().value!);
+    if(this.bytes+this.reserved+bytes<=this.budget){this.refs.set(input,value);this.bytes+=bytes;}
     return value;
+  }
+
+  private refBytes(input:string){return 256+input.length*2;}
+  private makeRoom(bytes:number){
+    while(this.bytes+this.reserved+bytes>this.budget){
+      if(this.refs.size){const key=this.refs.keys().next().value!;this.refs.delete(key);this.bytes-=this.refBytes(key);}
+      else if(this.kept.size)this.drop(this.kept.keys().next().value!);
+      else break;
+    }
   }
 
   /** Request projections share the tile budget and release their reservation on every exit. */
@@ -57,7 +66,7 @@ export class HistoryTiles {
     return {
       add: (bytes: number) => {
         if (bytes + this.reserved > this.budget) throw new HistoryLimit();
-        while (this.bytes + this.reserved + bytes > this.budget && this.kept.size) this.drop(this.kept.keys().next().value!);
+        this.makeRoom(bytes);
         this.reserved += bytes; used += bytes;
       },
       remove: (bytes: number) => {if(bytes<0||bytes>used)throw new Error('invalid_reservation');this.reserved-=bytes;used-=bytes;},
@@ -128,7 +137,7 @@ export class HistoryTiles {
           const validUntil=(chunk.plans??[]).reduce((next,row)=>Math.min(next,planRowDeadline(row)),Infinity);
           this.kept.set(part.key, {owner:this.store.privateOwner(board),devices,users,scope,sourceWork,workKey,sources,cell,tile:part.tile,json,bytes,validUntil});
           this.bytes += bytes;
-          while (this.bytes + this.reserved > this.budget && this.kept.size) this.drop(this.kept.keys().next().value!);
+          this.makeRoom(0);
         }
       });
     }

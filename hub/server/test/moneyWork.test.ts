@@ -12,9 +12,25 @@ import type {Meter} from '../domain/meters.js';
 import {HistoryTiles,HistoryLimit} from '../history.js';
 import {DatabaseSync} from 'node:sqlite';
 import {STEPS} from '../store/schema.js';
+import {centralFixture,at} from './centralFixture.js';
 
 const start=Date.UTC(2026,8,1),minute=60_000;
 const meter=(id:string,at:number,value:string):Meter=>({id,at,amount:value,kind:'counter',unit:'USD',stale:false,staleAfterMs:45*minute,limit:null,resetAt:null,minutes:null,scope:null,label:null});
+
+test('a standalone budget-work GET credits a quiet linked device before its first history read',async t=>{
+  let now=at;t.mock.method(Date,'now',()=>now);const h=await centralFixture();
+  try{
+    const source=h.store.source('openrouter','quiet-linked-wallet',at);h.store.hold(source,h.owner.id,at);h.store.share(h.board,source,h.owner.id,at);
+    h.store.links.mutate(h.owner.id,'create',null,{clientId:'opencode',deviceId:h.device.id,route:null,sourceId:source,from:at,to:null,expectedRevision:'0',requestId:randomUUID()},at);
+    h.hub.ingest.live.report(h.device.id,h.owner.id,[{clientId:'opencode',source:null,sessionId:'a'.repeat(32),origin:'terminal',project:'Quiet',folder:null,startedAt:at,sentStartedAt:at,lastWorkedAt:null,working:true,device:{id:h.device.id,name:'Laptop'}}],at);
+    assert.equal(h.store.db.prepare('SELECT count(*) n FROM agent_work').get()!.n,0);
+    now=at+6*minute;
+    const query=new URLSearchParams({board:h.board,cell:String(minute),from:String(at),to:String(now),scope:'budget',unit:'USD',meters:JSON.stringify([[source,'balance']]),work:'1'});
+    const response=await h.call('GET','/api/history?'+query);assert.equal(response.statusCode,200,response.body);
+    const work=drain(composeMoneyWorkPrepared(response.json().chunks,minute,at,now))[0];assert.equal(work.activeMs,200_000);
+    assert.equal(h.store.db.prepare('SELECT count(*) n FROM agent_work').get()!.n,1);
+  }finally{await h.app.close();h.store.close();}
+});
 function fixture(file:string,times:number[]) {
   let store=new Store(file,start);const directory=new Directory(store.db),owner=directory.createUser('owner@example.com','Owner','fixture',start),board=directory.boards(owner.id).find(b=>b.personal)!.id;
   const source=store.source('openrouter','fixture',start),device=directory.saveDevice({userId:owner.id,machine:{id:'fixture',name:'Laptop',os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},start).id;

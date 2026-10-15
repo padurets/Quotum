@@ -20,7 +20,7 @@ import {MeterStore} from './meters.js';
 import type {MeterSelection} from '../domain/meterHistory.js';
 import {DEFAULT_CURRENCY} from '../domain/currency.js';
 import {providerOf,quotaMeter,supportsBudget,supportsQuota,sourceCounterOf} from '../domain/providers.js';
-import {packMoneyWork} from '../domain/moneyWork.js';
+import {packMoneyWork,sourceWorkEligible} from '../domain/moneyWork.js';
 import {budgetAccess, type BudgetAccess} from '../domain/resources.js';
 import {exactDecimal} from '../domain/amount.js';
 import {CurrencyStore} from './currencies.js';
@@ -741,7 +741,7 @@ export class Store {
 
   moneyWorkSources(board:string,selection:MeterSelection):string[] {
     const sources=new Map(this.sources(board).map(source=>[source.id,source.provider]));
-    return [...new Set(selection.ids.filter(([source,meter])=>!meter.startsWith('key:')&&sourceCounterOf(sources.get(source)??'')!==null).map(([source])=>source))];
+    return [...new Set(selection.ids.filter(([source,meter])=>sourceWorkEligible(sources.get(source)??'',meter)).map(([source])=>source))];
   }
 
   private moneyWork(board:string,shown:Shown,selection:MeterSelection,from:number,to:number,cell:number,now:number,chunks:Chunk<number>[],shared?:WorkRead,reserve?:(bytes:number)=>void) {

@@ -6,6 +6,10 @@ import ts from 'typescript';
 import {defaultCurrencyContext} from '../../server/domain/currency';
 import {PeriodAccounting} from '../lib/periodAccounting';
 import {PageClock} from '../lib/clock';
+import {periodTextChangesAt} from '../lib/periodClock';
+import {evaluatedRange} from '../../server/domain/period';
+import type {PeriodTape} from '../../server/domain/periodTape';
+import type {WorkTrace} from '../../server/domain/periodWork';
 import {moneyComparator,moneyTableValues,moneySeriesName,moneySeriesDetail,nextMoneySort,readMoneySort,visibleMoneySort,type MoneySort} from '../lib/moneyTable';
 import type {MeterHistory} from '../lib/moneyView';
 import {setLocale,t} from '../i18n';
@@ -67,4 +71,37 @@ test('actual money order follows an exclusive availability boundary without repl
   now++;clock.wakeDue();assert.equal(dirty,false);
   sort=null;assert.deepEqual(Array.from(render(),row=>row.key),['A','B']);
   for(const state of slots)state.stop?.();assert.equal(timers.size,0);
+});
+
+test('active-time sorting wakes at a linear crossing before the next work boundary',()=>{
+  const M=60_000;let now=H+1000,index=0,dirty=false;
+  const timers=new Map<object,{run:()=>void;at:number}>(),slots:any[]=[],effects:(()=>void)[]=[];
+  const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:(run,ms)=>{const id={};timers.set(id,{run,at:now+ms});return id;},clearTimeout:id=>{timers.delete(id as object);}});
+  const work:WorkTrace={anchor:0,cut:2*H,knownFrom:0,refs:['A','B'].map(source=>({ref:source,source,device:{id:source,name:source},origin:'terminal',project:null,folder:null,startedAt:0})),spans:[[0,0,50*M],[1,20*M,H]]};
+  const readings=[0,20,40,60].map((at,i)=>({id:'usage',at:at*M,previousAt:i?[0,20,40,60][i-1]*M:null,kind:'counter' as const,unit:'USD',amount:String(i*1000000),limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:H}));
+  const spans=[{from:0,to:H,observedFrom:0,staleAfterMs:H}];
+  const tape:PeriodTape={from:0,cut:2*H,replaceFrom:0,cursor:'x',quota:[],money:['A','B'].map(source=>({source,meter:'balance',role:'total',readings:readings.map(r=>({...r,id:'balance',kind:'balance',amount:'100000000'})),spans,workCounter:{source,unit:'USD',knownFrom:0,workFrom:0,readings,spans}}))};
+  const accounting=new PeriodAccounting(tape,work),entries=['A','B'].map(source=>series(source,'100000000'));
+  const rows=entries.map(entry=>({key:entry.sourceId,name:entry.sourceId,cells:{active:{content:'kept'}}})),props={rows,entries,columns:[{id:'active'}],history:{live:true,range:'1h',since:0,to:H}};
+  const modelCode=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8'),method=modelCode.slice(modelCode.indexOf('  moneyOrderAt('),modelCode.indexOf('  private workBoundary('));
+  const model={exports:{} as {order:(...args:any[])=>unknown},evaluatedRange,periodTextChangesAt};
+  runInNewContext(ts.transpileModule('class Model { '+method+'}\nexports.order=Model.prototype.moneyOrderAt;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,model);
+  const order=model.exports.order.bind({tapes:new Map([['budget',{tape,accounting,rangeKey:'1h',selection:{mode:'live',periodMs:H}}]])});
+  const slot=(make:()=>any)=>{const at=index++;return slots[at]??(slots[at]=make());};
+  const context={exports:{} as {SortedMoney:(props:unknown)=>{props:any}},require:()=>({jsx:(_type:unknown,props:unknown)=>({props}),jsxs:(_type:unknown,props:unknown)=>({props})}),memo:(fn:unknown)=>fn,
+    usePref:()=>({column:'active',descending:true}),useLocale:()=> 'en',useRef:(current:unknown)=>slot(()=>({current})),useState:(make:()=>unknown)=>[slot(make)],useMemo:(make:()=>unknown)=>make(),useCallback:(fn:unknown)=>fn,
+    useLayoutEffect:(run:()=>void)=>effects.push(run),useSyncExternalStore:(subscribe:(notify:()=>void)=>()=>void,read:()=>unknown)=>{const state=slot(()=>{const state={value:read(),stop:()=>{}};state.stop=subscribe(()=>{const next=read();if(next!==state.value){state.value=next;dirty=true;}});return state;});state.value=read();return state.value;},
+    clock,hubNow:()=>now,moneyTableValues,moneyComparator,nextMoneySort,visibleMoneySort,
+    boardPeriod:{moneyWorkAt:(source:string,at:number)=>accounting.moneyWorkSummary(source,{from:at-H,to:at}),moneyAt:(entry:MeterHistory)=>entry,rangeAt:(_scope:string,at:number)=>({from:at-H,to:at}),moneyOrderAt:order},
+    AnalyticsPanel:()=>{},TableSortMenu:()=>{},TableMeasure:()=>{},WidgetPages:()=>{},useTableWidget:(_panel:unknown,_columns:unknown,_name:unknown,keys:string[])=>({layout:'table',from:0,to:keys.length,measureFrom:0,measureTo:0}),AnalyticsTable:()=>{},setPrefs:()=>{},t:()=> 'Account'};
+  const source=readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8'),start=source.indexOf('const SortedMoney=');
+  runInNewContext(ts.transpileModule('export '+source.slice(start,source.indexOf('const pointAt=',start)),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+  const render=()=>{index=0;dirty=false;const value=context.exports.SortedMoney(props).props.children[1].props.children[0].props.rows as typeof rows;effects.splice(0).forEach(run=>run());return value;};
+  try{
+    assert.deepEqual(Array.from(render(),row=>row.key),['A','B']);assert.equal(Math.min(...[...timers.values()].map(timer=>timer.at)),H+10*M+1);
+    now=H+10*M;clock.wakeDue();assert.equal(dirty,false);
+    now++;clock.wakeDue();assert.equal(dirty,true);const ordered=render();assert.deepEqual(Array.from(ordered,row=>row.key),['B','A']);
+    assert.equal(ordered[0],rows[1]);assert.equal(ordered[0].cells,rows[1].cells);
+    now++;clock.wakeDue();assert.equal(dirty,false);
+  }finally{for(const state of slots)state.stop?.();assert.equal(timers.size,0);}
 });

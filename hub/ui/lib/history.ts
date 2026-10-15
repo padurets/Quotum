@@ -975,9 +975,8 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
       else if (hub.type === 'card'&&scope==='quota') loader.setWindows(windowsOf(state));
       else if (hub.type === 'history') {
         const selected=scope==='budget'?new Set(selectedMeters(state,scope,family)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
-        const withWork=selectedMeters(state,scope,family)?.work;
-        const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source)&&(scope!=='budget'||withWork||change.workSince===undefined||change.since<change.workSince));
-        const workSince = scope==='quota'||withWork?hub.data.workSince : undefined;
+        const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source)&&(scope!=='budget'||change.workSince===undefined||change.since<change.workSince));
+        const workSince = scope==='quota'?hub.data.workSince : undefined;
         if(changes?.length || workSince !== undefined)loader.news(Math.min(...(changes ?? []).map(change=>change.since), workSince ?? Infinity), hub.data.workAuthority);
         else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since, hub.data.workAuthority);
       }

@@ -197,11 +197,13 @@ class BoardPeriod {
     const summary=tape.accounting.moneySummary(series.sourceId,series.meterId,series.unit,this.tapeRange(tape,now));
     return summary?{...series,...summary}:series;
   }
-  moneyWorkAt(source:string,now:number,rangeKey?:string){const tape=this.tapes.get('budget');return tape&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;}
+  moneyWorkAt(source:string,now:number,rangeKey?:string){const tape=this.tapes.get('budget');return this.workProofEpoch===this.proofEpoch&&tape&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;}
   rangeAt(scope:PeriodScope,now:number,rangeKey?:string){const tape=this.tapes.get(scope);return tape&&(rangeKey===undefined||tape.rangeKey===rangeKey)?this.tapeRange(tape,now):null;}
-  moneyOrderAt(now:number,rangeKey:string) {
+  moneyOrderAt(now:number,rangeKey:string,readOrder?:(at:number)=>string) {
     const tape=this.tapes.get('budget');
-    return tape?.selection.mode==='live'&&tape.rangeKey===rangeKey&&evaluatedRange(tape.selection,now).from>=tape.tape.from?tape.accounting.changesAt(now,tape.selection.periodMs):null;
+    if(tape?.selection.mode!=='live'||tape.rangeKey!==rangeKey||evaluatedRange(tape.selection,now).from<tape.tape.from)return null;
+    const boundary=(at:number)=>tape.accounting.changesAt(at,tape.selection.mode==='live'?tape.selection.periodMs:0);
+    return readOrder?periodTextChangesAt(now,boundary,readOrder):boundary(now);
   }
   private workBoundary(now:number,refs?:readonly string[],source?:string) {
     if(!this.index||!this.workAdvances(now))return null;
@@ -266,7 +268,7 @@ class BoardPeriod {
     this.tapes.delete('quota');delete this.projectionErrors.quota;this.transport.forgetEvidence('quota');
     this.workRows=[];
     const previous=this.rowsBySource;this.rowsBySource=new Map();for(const id of previous.keys())for(const listener of this.sourceListeners.get(id)??[])listener();
-    this.work={...this.work,loading:this.wantsWork};this.publishWork();this.publishProjection(['quota']);
+    this.work={...this.work,loading:this.wantsWork};this.publishWork();this.publishProjection(['quota','budget']);
     this.measureBytes();clock.due(this.watch,null,hubNow());
   }
   private clear() {
@@ -451,7 +453,8 @@ class BoardPeriod {
         charge('work',workBytes(work,0)+workPreparationBytes(work));index=yield*PeriodIndex.prepare(work);activity=yield*PeriodActivity.prepare(work,index.curves);charge('work',workBytes(work,index.curves.bytes));
       }catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};work=priorWork;index=null;activity=null;discard('work');}
       const workPart=reply.sessions,changedWork=new Set<string>();let changedBytes=0;
-      try{if(workPart&&workPart.state!=='error')for(const refs of [workPart.value.refs,...(workPart.state==='complete'||retired?[priorWork?.refs??[]]:[])])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}}
+      try{if(workPart?.state==='complete'&&!priorWork)for(const group of priorTapes.get('budget')?.tape.money??[])if(group.workCounter&&!changedWork.has(group.source)){changedBytes+=64+group.source.length*2;charge('changedWork',changedBytes);changedWork.add(group.source);yield;}
+      if(workPart&&workPart.state!=='error')for(const refs of [workPart.value.refs,...(workPart.state==='complete'||retired?[priorWork?.refs??[]]:[])])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}}
       catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};work=priorWork;index=null;activity=null;changedWork.clear();discard('changedWork');discard('work');}
       const tapes=new Map(priorTapes);
       for(const scope of PERIOD_SCOPES){

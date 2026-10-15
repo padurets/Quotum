@@ -1152,9 +1152,10 @@ Quota reads cannot request private monetary conversion. Validated ranges outside
 bounds return `400 history_range_invalid` for scoped readers, independently of malformed
 selection errors. Existing cell, tile, meter, response and retention limits remain.
 
-Cache and metadata identities include the read scope. Work-name changes invalidate only
-quota caches; metadata offered by another scope cannot be reused. A `history` event keeps
-its legacy `sources` union and minimum `since`, and adds `changes: [{source, scope, since, work?}]`.
+Cache and metadata identities include the read scope. Work-name changes invalidate quota
+and opted-in source-work caches; pure financial caches retain their resource identity.
+Metadata offered by another scope cannot be reused. A `history` event keeps
+its legacy `sources` union and minimum `since`, and adds `changes: [{source, scope, since, workSince?: number}]`.
 Each source/scope keeps its own earliest changed time. Native samples, subscription caps
 and credited work affect quota; monetary observations and valuation changes affect budget.
 Work refreshes preserve coalesced budget changes. Clients without `changes` conservatively

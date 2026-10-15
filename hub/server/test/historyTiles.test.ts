@@ -10,6 +10,20 @@ import type {Touches} from '../touches.js';
 const M = 60_000;
 const H = 60 * M;
 const start = tileStart(tileOf(Date.now() - 3 * H, M), M);
+
+test('pseudonyms, cached tiles and request staging share one ceiling',()=>{
+  const h=fixture(8192),memory=h.tiles as unknown as {bytes:number;reserved:number;refs:Map<string,string>};
+  try{
+    const refs=Array.from({length:8},(_,i)=>h.tiles.fragmentRef(h.board,i,h.source));h.sample(start,20);h.read();
+    assert.ok(memory.bytes>0);assert.ok(memory.refs.size>0);
+    const reservation=h.tiles.reservation();
+    try{reservation.add(8192);assert.equal(memory.bytes,0);assert.equal(memory.refs.size,0);assert.equal(memory.reserved,8192);
+      assert.equal(h.tiles.fragmentRef(h.board,0,h.source),refs[0],'eviction keeps the deterministic public identity');
+      assert.equal(memory.bytes+memory.reserved,8192,'a full reservation computes refs without retaining a second cache');
+    }finally{reservation.close();}
+    h.read();assert.equal(h.calls(),2,'a full staging reservation also retired the cached tile');
+  }finally{h.store.close();}
+});
 function fixture(budget?: number) {
   const store = new Store(':memory:', start - H);
   const directory = new Directory(store.db);

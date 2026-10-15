@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {money,capPercent,capStale,capChangesAt,accessTone,accessChangesAt} from '../lib/money';
 import {setLocale} from '../i18n';
-import {archivedKeyGroups,moneySelection,readMoney} from '../lib/moneySelection';
+import {archivedKeyGroups,moneySelection,readMoney,moneyReadSelection,DEFAULT_MONEY} from '../lib/moneySelection';
 import {moneyTotal,type MeterHistory} from '../lib/moneyView';
 import type {Card} from '../lib/types';
 import type {Meter} from '../../server/domain/meters';
@@ -12,6 +12,16 @@ import {INITIAL,reduce,type Snapshot} from '../lib/board';
 
 const meter=(id:string,value='1'):Meter=>({id,amount:value,kind:'balance',unit:'USD',limit:null,at:1,stale:false,staleAfterMs:1000,resetAt:null,minutes:null,scope:null,label:null});
 const card=(id:string):Card=>({id,provider:'openrouter',plan:'',successAt:1,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,meters:[meter('balance'),...Array.from({length:10},(_,i)=>meter('key:'+i))]});
+
+test('key-only work demand stays unsupported through conversion while mixed account selections opt in',()=>{
+  const source=card('wallet'),view={...EMPTY_VIEW,shown:['budget-table']};
+  for(const key of ['key:k:cap','fx:EUR:key:k:cap']){
+    const unit=key.startsWith('fx:')?'EUR':'USD',account=unit==='EUR'?'fx:EUR:balance':'balance';
+    const settings={...DEFAULT_MONEY,unit,selected:{[unit]:[[source.id,key] as [string,string]]}};
+    assert.equal(moneyReadSelection([source],view,settings)?.work,undefined,key);
+    settings.selected[unit].push([source.id,account]);assert.equal(moneyReadSelection([source],view,settings)?.work,true,'the account selection has its own source-wide work demand');
+  }
+});
 test('unknown spending stays unknown, and a known subtotal identifies missing coverage',()=>{
   const series:MeterHistory={sourceId:'s',meterId:'balance',kind:'balance',unit:'USD',semantics:null,start:null,end:'10',spent:'0',topup:'0',unlocated:[],topupUnlocated:[],coveredMs:0,points:[]};
   assert.deepEqual(moneyTotal(series,0,86400000),{amount:null,unknown:true,partial:true});

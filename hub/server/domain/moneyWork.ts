@@ -1,6 +1,11 @@
 import {semanticsOf, type MeterSpan, type Reading} from './meters.js';
 import type {Preparation} from './prepare.js';
 import type {Span} from './work.js';
+import {conversionOrigin} from './currency.js';
+import {sourceCounterOf} from './providers.js';
+
+/** Source-wide estimates never treat a converted key allowance as an account. */
+export const sourceWorkEligible=(provider:string,meter:string)=>sourceCounterOf(provider)!==null&&!(conversionOrigin(meter)?.meter??meter).startsWith('key:');
 
 export type MoneyWorkCell = [index: number, activeMs: number, agentMs: number, spent: string, eligibleActiveMs: number, eligibleAgentMs: number, coveredMs: number, duringWork: string];
 export type MoneyWorkEdge = [from: number, to: number, spent: string, eligibleActiveMs: number, eligibleAgentMs: number, coveredMs: number, duringWork: string, evidence: 'continuous' | 'gap'];

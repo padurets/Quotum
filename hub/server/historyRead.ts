@@ -26,7 +26,7 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
     const now = capturedAt??Date.now();
     // Credit quiet machines before deciding whether their tiles can be reused.
     // A composite read already swept before capturing its journal frontier.
-    if(scope!=='budget'&&capturedAt===undefined)hub.ingest.live.sweep(now);
+    if((scope!=='budget'||query.work==='1')&&capturedAt===undefined)hub.ingest.live.sweep(now);
     const number = (value: string | undefined) => value && /^\d{1,15}$/.test(value) ? Number(value) : NaN;
     const cell = number(query.cell);
     const from = number(query.from);

@@ -9,6 +9,7 @@ import {PeriodIndex} from '../domain/periodIndex.js';
 import type {PeriodTape} from '../domain/periodTape.js';
 import type {WorkTrace} from '../domain/periodWork.js';
 import {moneyWorkRate} from '../domain/moneyWork.js';
+import {sourceWorkEligible} from '../domain/moneyWork.js';
 import {fixedTape,fixedWork} from '../periodFixed.js';
 import {shifted} from '../domain/periodShift.js';
 
@@ -16,6 +17,12 @@ const M=60_000,H=60*M;
 const trace=(end=H):WorkTrace=>({anchor:0,cut:2*H,knownFrom:0,refs:[{ref:'fragment',identityRef:'original',source:'wallet',device:{id:'device',name:'Laptop'},origin:'terminal',project:'Project',folder:null,startedAt:0}],spans:[[0,0,end]]});
 const counter=():WorkCounter=>({source:'wallet',unit:'USD',knownFrom:0,workFrom:0,readings:[0,20,40,60,80,100].map((at,i)=>({id:'usage',at:at*M,previousAt:i?([0,20,40,60,80,100][i-1]*M):null,kind:'counter',unit:'USD',amount:i<2?'0':'1000000',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:H})),spans:[{from:0,to:100*M,observedFrom:0,staleAfterMs:H}]});
 const index=(value=counter(),work=trace())=>drain(MoneyWorkIndex.prepare(value,new PeriodCurves(work).groups.source.get('wallet')));
+
+test('native and converted key selections cannot acquire source-wide work authority',()=>{
+  for(const meter of ['key:k:cap','key:k:usage','fx:EUR:key:k:cap','fx:EUR:key:k:usage'])assert.equal(sourceWorkEligible('openrouter',meter),false,meter);
+  for(const meter of ['balance','fx:EUR:balance'])assert.equal(sourceWorkEligible('openrouter',meter),true,meter);
+  assert.equal(sourceWorkEligible('deepseek','balance:USD'),false);
+});
 
 test('whole unchanged native pairs establish the active-hour rate without inventing spending',()=>{
   const value=index().at({from:0,to:H+1});

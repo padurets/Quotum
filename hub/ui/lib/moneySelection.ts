@@ -1,7 +1,7 @@
 import {BUDGET_TABLE,widgetVisible} from '../../server/domain/widgets';
 import type {View} from '../../server/domain/view';
 import {columnShown} from './view';
-import {sourceCounterOf} from '../../server/domain/providers';
+import {sourceWorkEligible} from '../../server/domain/moneyWork';
 import {DEFAULT_CURRENCY,defaultCurrencyContext,conversionOrigin,conversionId,type CurrencyContext} from '../../server/domain/currency';
 import {balanceDescriptor, monetaryOf} from '../../server/domain/providers';
 import {isUnit} from '../../server/domain/amount';
@@ -94,6 +94,6 @@ export function archivedKeyGroups(source:string,selected:readonly [string,string
 /** Chart and table requests share one selection; source work is an explicit table need. */
 export function moneyReadSelection(cards:readonly Card[],view:View,settings:MoneyPrefs,context:CurrencyContext=defaultCurrencyContext,family:MoneyFamily='budget'):MeterSelection|undefined {
   const selected=moneySelection(cards,view.hidden,settings,context,family).selection;
-  const work=family==='budget'&&widgetVisible(view,BUDGET_TABLE,cards.length)&&['active','rate','remaining'].some(id=>columnShown(view,BUDGET_TABLE,id))&&selected?.ids.some(([id,meter])=>!meter.startsWith('key:')&&sourceCounterOf(cards.find(card=>card.id===id)?.provider??'')!==null);
+  const work=family==='budget'&&widgetVisible(view,BUDGET_TABLE,cards.length)&&['active','rate','remaining'].some(id=>columnShown(view,BUDGET_TABLE,id))&&selected?.ids.some(([id,meter])=>sourceWorkEligible(cards.find(card=>card.id===id)?.provider??'',meter));
   return work&&selected?{...selected,work:true}:selected;
 }

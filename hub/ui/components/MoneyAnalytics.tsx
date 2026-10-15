@@ -51,13 +51,14 @@ const SortedMoney=memo(function SortedMoney({rows,entries,columns,history,panel,
   const [watch]=useState(()=>clock.watch()),cached=useRef<AnalyticsRow<MoneyColumn>[]>([]);
   const evaluate=useCallback(()=>{
     const {rows,entries,active,history,locale}=current.current,now=hubNow();
-    let ordered=rows;
-    if(active&&history){
-      const range=history.live?boardPeriod.rangeAt('budget',now,history.range):null;
-      const values=entries.map((series,i)=>({key:rows[i].key,name:rows[i].name,values:moneyTableValues(history.live?boardPeriod.moneyAt(series,now,history.range):series,range?.from??history.since,range?.to??history.to,boardPeriod.moneyWorkAt(series.sourceId,now,history.range)??history.moneyWork?.find(value=>value.source===series.sourceId))})).sort(moneyComparator(active,locale));
-      const byKey=new Map(rows.map(row=>[row.key,row]));ordered=values.map(value=>byKey.get(value.key)!);
-    }
-    clock.due(watch,history?.live&&active&&active.column!=='name'?boardPeriod.moneyOrderAt(now,history.range):null,now);
+    const orderAt=(at:number)=>{
+      if(!active||!history)return rows;
+      const range=history.live?boardPeriod.rangeAt('budget',at,history.range):null;
+      const values=entries.map((series,i)=>({key:rows[i].key,name:rows[i].name,values:moneyTableValues(history.live?boardPeriod.moneyAt(series,at,history.range):series,range?.from??history.since,range?.to??history.to,boardPeriod.moneyWorkAt(series.sourceId,at,history.range))})).sort(moneyComparator(active,locale));
+      const byKey=new Map(rows.map(row=>[row.key,row]));return values.map(value=>byKey.get(value.key)!);
+    };
+    const ordered=orderAt(now);
+    clock.due(watch,history?.live&&active&&active.column!=='name'?boardPeriod.moneyOrderAt(now,history.range,active.column==='active'?at=>JSON.stringify(orderAt(at).map(row=>row.key)):undefined):null,now);
     if(ordered.length!==cached.current.length||ordered.some((row,i)=>row!==cached.current[i]))cached.current=ordered;
     return cached.current;
   },[watch]);
@@ -164,7 +165,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
   const cellAt=(original:MeterHistory,id:MoneyColumn,now:number):{content:string;title?:string;partial?:boolean;activeMs?:number}=>{
     const s=history?.live?boardPeriod.moneyAt(original,now,history.range):original;
     const range=history?.live?boardPeriod.rangeAt('budget',now,history.range):null;
-    const work=boardPeriod.moneyWorkAt(s.sourceId,now,history?.range)??history?.moneyWork?.find(value=>value.source===s.sourceId);
+    const work=boardPeriod.moneyWorkAt(s.sourceId,now,history?.range);
     const values=moneyTableValues(s,range?.from??history!.since,range?.to??history!.to,work);
     if(id==='active'||id==='rate'||id==='remaining') {
       const eligible=moneyWorkValues(s,work);
