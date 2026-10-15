@@ -1,7 +1,7 @@
 import {useEffect, useState, type FormEvent, type ReactNode} from 'react';
 import {t, type Key} from '../i18n';
 import {call} from '../lib/http';
-import {navigate, settingsHref, useLocation} from '../lib/router';
+import {navigate, settingsHref, useLocation, useNavigationEntry} from '../lib/router';
 import {boardTitle, rereadSession, type Board, type Session, type User} from '../lib/session';
 import {inApp, settingsSections, type AppState} from '../lib/app';
 import {useApp} from '../lib/board';
@@ -107,7 +107,7 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
   user: User; board: Board | null; boards: Board[]; local: boolean; trustedKeys: Session['trustedKeys'];
   refresh: () => Promise<void>; onAppState: (state: AppState) => void;
 }) {
-  const address = useLocation(), path = address.split('?')[0], appState = useApp();
+  const address = useLocation(), entry=useNavigationEntry(), path = address.split('?')[0], appState = useApp();
   const boardPath = path.match(/^\/boards\/([^/]+)\/settings(?:\/([^/]+))?$/);
   const capabilities = settingsSections(local, inApp());
   const sections = PERSONAL.filter(item => item.id === 'profile' ? !local : item.id === 'application' ? capabilities.includes('app') || capabilities.includes('measuring') : true);
@@ -123,7 +123,7 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
   return <SettingsFrame title={boardPath ? t('boardSettings.forBoard', {board: boardTitle(board!)}) : t('header.settings')} sections={visible} section={section} base={base} board={board}>
     {boardPath ? section === 'general' ? <General board={board!} /> : section === 'members' ? <MembersTab board={board!} userId={user.id} /> : <SharesTab board={board!} userId={user.id} /> :
       section === 'profile' ? <><Profile user={user} onChanged={refresh} /><Password /></> :
-      section === 'connections' ? <ConnectionsPage userId={user.id} boards={boards} trustedKeys={trustedKeys} local={local} /> :
+      section === 'connections' ? <ConnectionsPage key={entry+':'+(new URLSearchParams(address.split('?')[1]??'').get('source')??'')} userId={user.id} boards={boards} trustedKeys={trustedKeys} local={local} /> :
       section === 'currencies' ? <CurrencySettings key={user.id} /> :
       section === 'projects' ? <Projects /> : section === 'interface' ? <><p className="dialog-text">{t('settings.browserScope')}</p><Browser title={t('settings.interface')} /></> :
       section === 'application' && appState ? <>{capabilities.includes('measuring') && <Measuring state={appState} onState={onAppState} />}{capabilities.includes('app') && <AppSection state={appState} onState={onAppState} />}</> : null}

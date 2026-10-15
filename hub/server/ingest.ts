@@ -161,10 +161,8 @@ export class Ingest {
         if (key&&at>failureFloor) afterCommit(() => {
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
           if (this.cadence.failed(key, device.id, failure.error, at, acknowledge)) {
-            if (acknowledge && this.duty.failed(key, device.id, at)) {
-              this.cadence.released(key, device.id);
-              if(source)this.notifyMeasurementOwners(source);
-            }
+            if(source)this.notifyMeasurementOwners(source);
+            if (acknowledge && this.duty.failed(key, device.id, at)) this.cadence.released(key, device.id);
             if (refreshAcknowledged) this.cadence.refreshResult(key, device.id, at, false, now);
           }
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
@@ -231,7 +229,9 @@ export class Ingest {
         }
         const key = subscriptionKey(s, device.userId);
         const source = this.store.findSource(s.provider, key);
+        const pending=source!==null&&this.measurementSelection.pending(source,s.provider,key,now);
         if (this.measurementSelection.observe(key, s.provider, device.id, now,120_000,false).changed) this.directory.measurementsChanged(device.userId);
+        if(source&&pending!==this.measurementSelection.pending(source,s.provider,key,now))this.notifyMeasurementOwners(source);
         const previousHolder = this.duty.holder(key);
         this.restoreFixed(source, key, now);
         this.cadence.settleRefresh(key, this.refreshDuty(key), now);

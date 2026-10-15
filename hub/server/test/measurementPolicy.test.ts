@@ -472,3 +472,45 @@ test('private measurement deadlines emit expiry without refetch hints for contac
   frames.length=0;advance(now+300001);events.flush();assert.equal(ingest.measurementSources(user.id,clock)[0].candidates[0].reason,'offline');
   assert.equal(frames.filter(frame=>frame.type==='devices').length,1,'actual candidate expiry reaches the open view');
 });
+
+for(const mode of ['pause','recovery'] as const)test(`preferred candidate ${mode} reaches holders watching another empty board`,t=>{
+  const {store,directory,ingest,user,duty,credential,sender,device,batch}=setup();ingest.accept(credential,batch(now),now);
+  const second={...sender,machine:{...sender.machine,id:'measurement-global-B012345'}};
+  const ask=(machine:typeof sender,at:number)=>ingest.checkin(credential,{...machine,paced:true,capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[{provider:'codex',account}]},at);
+  ask(second,now+1);ask(sender,now+120000);
+  const target=directory.devices(user.id).find(candidate=>candidate.id!==device)!.id,source=store.held(user.id)[0].id;
+  store.measurementPolicies.savePreference(source,0,target);
+  const at=now+(mode==='pause'?120001:250000),bob=directory.createUser('global-bob@example.com','Bob','x',now);store.hold(source,bob.id,now);
+  const empty=directory.createBoard('Other board',bob.id,now),secret=newSecret('qt_s');directory.createSession(secret,bob.id,now,86400000);
+  const events=new Events({store,directory,ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>at+1,after:()=>()=>{}});events.attach();t.after(()=>{events.close();store.close();});
+  const frames:Frame[]=[];events.open({user:bob.id,secret,board:empty.id,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});events.flush();frames.length=0;
+  assert.equal(ingest.measurementSources(bob.id,at)[0].pending,mode==='pause');
+  if(mode==='pause') {
+    const policy=store.measurementPolicies.device(target);
+    ingest.accept(credential,{...second,sentAt:new Date(at+1).toISOString(),snapshots:[],failures:[{provider:'codex',error:'timeout',observedAt:new Date(at+1).toISOString(),attemptContext:{version:1,authority:policy.authority,collectorEpoch:0,target:{kind:'verified',accountKey:account}}}]},at+1);
+  }else {const answer=ask(second,at+1).subscriptions[0];assert.equal(answer.measure,false);assert.equal(answer.askInMs,15000);}
+  events.flush();assert.equal(duty.holder(account),device,'the current issued measurement keeps its duty');
+  assert.equal(ingest.measurementSources(bob.id,at+1)[0].pending,mode==='recovery');
+  assert.deepEqual(frames.map(frame=>({type:frame.type,data:JSON.parse(frame.data)})),[{type:'devices',data:{}}]);
+});
+
+test('unchanged contacts reuse the private selection baseline at every held-source cohort size',()=>{
+  for(const count of [1,20,200]) {
+    const {store,directory,ingest,user,batch,credential,sender}=setup();ingest.accept(credential,batch(now),now);
+    const request={...sender,paced:true,subscriptions:[{provider:'codex',account}]};ingest.checkin(credential,request,now+1);
+    for(let index=1;index<count;index++){const source=store.source('codex',index.toString(16).padStart(24,'0'),now);store.hold(source,user.id,now);}
+    const events=new Events({store,directory,ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>now+15000,after:()=>()=>{}});events.attach();
+    try {
+      const secret=newSecret('qt_s');directory.createSession(secret,user.id,now,86400000);const frames:Frame[]=[];
+      const original=ingest.measurementSelection.privateState.bind(ingest.measurementSelection);let reads=0;
+      ingest.measurementSelection.privateState=(...args)=>{reads++;return original(...args);};
+      events.open({user:user.id,secret,board:directory.boards(user.id).find(board=>board.personal)!.id,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});events.flush();reads=0;frames.length=0;
+      ingest.checkin(credential,request,now+15000);events.flush();
+      assert.equal(reads,0,`${count} held sources: a contact does not recalculate selection`);
+      assert.deepEqual(frames.map(frame=>frame.type),['deviceContacts']);
+      const device=directory.devices(user.id)[0].id,change=store.measurementPolicies.saveDevice(device,0,desired(false),now+15001);
+      ingest.participationChanged(device,change.changed,now+15001);events.flush();assert.equal(reads,1,'a semantic change still revalidates the baseline');
+      assert.equal(frames.filter(frame=>frame.type==='devices').length,1);
+    }finally{events.close();store.close();}
+  }
+});

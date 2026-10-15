@@ -150,7 +150,7 @@ export class Events implements Touches {
   private dirtyHub = false;
   private readonly dirtyClientUsers = new Set<string>();
   private readonly workHistories = new Map<string, number>();
-  private readonly deviceSessions = new Map<string, {json: string; measurements:string; changesAt: number | null; sessionsAt:number|null}>();
+  private readonly deviceSessions = new Map<string, {json: string; measurements:string; measurementsAt:number|null; changesAt: number | null; sessionsAt:number|null}>();
   private ownDeadline: {at: number; cancel: () => void} | null = null;
   private readonly histories = new Map<string, Map<string, HistoryChange>>();
   private stopFlush: (() => void) | null = null;
@@ -454,7 +454,7 @@ export class Events implements Touches {
       if (!(clientUsers.has(sub.user) || devices.has(sub.user) || whole.has(watched.id) || users.has(sub.user) || sources.has(watched.id))) continue;
       if (!deviceFramesByUser.has(sub.user)) {
         let frames: Frame[] = [];
-        try { frames = this.refreshDeviceSessions(sub.user, now); }
+        try { frames = this.refreshDeviceSessions(sub.user, now,devices.has(sub.user)||users.has(sub.user)); }
         catch (error) { trouble(error); failed.users.add(sub.user); this.deviceSessions.delete(sub.user); }
         deviceFramesByUser.set(sub.user, frames);
       }
@@ -683,13 +683,15 @@ export class Events implements Touches {
     })};
   }
 
-  private refreshDeviceSessions(user: string, now: number): Frame[] {
+  private refreshDeviceSessions(user: string, now: number, measurementTouched=false): Frame[] {
     const live = this.parts.ingest.live;
     const json = JSON.stringify(live.devices(user, now));
     const before = this.deviceSessions.get(user);
-    const measurement=this.parts.ingest.measurementSelection.privateState(user,now),measurements=JSON.stringify(measurement.value);
+    const due=before?.measurementsAt!==null&&before?.measurementsAt!==undefined&&before.measurementsAt<=now;
+    const measurement=!before||measurementTouched||due?this.parts.ingest.measurementSelection.privateState(user,now):null;
+    const measurements=measurement?JSON.stringify(measurement.value):before!.measurements,measurementsAt=measurement?measurement.changesAt:before!.measurementsAt;
     const sessionsAt=live.devicesChangesAt(user,now);
-    this.deviceSessions.set(user, {json,measurements,sessionsAt,changesAt:earliest(sessionsAt,measurement.changesAt)});
+    this.deviceSessions.set(user, {json,measurements,measurementsAt,sessionsAt,changesAt:earliest(sessionsAt,measurementsAt)});
     this.armOwn(now);
     // This account hint carries no board data, IDs, session counts or project names.
     return before?.json !== json || before?.measurements!==measurements ? [frame('devices', {})] : [];

@@ -29,7 +29,7 @@ export class MeasurementSelection {
     account.set(device, candidate);
     let owned = this.devices.get(device); if (!owned) this.devices.set(device, owned = new Map());
     owned.set(key, candidate);
-    return {changed:!before,current:true,expiresAt:candidate.expiresAt};
+    return {changed:!before||before.expiresAt<=now,current:true,expiresAt:candidate.expiresAt};
   }
 
   /** Multiplexed account groups may span batches; a singleton is evidence of a changed login. */

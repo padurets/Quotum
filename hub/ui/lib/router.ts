@@ -111,6 +111,9 @@ export function onLocation(listener: () => void) {
   };
 }
 
+/** An accepted entry changes even when an explicit destination has the same URL. */
+export function useNavigationEntry() {return useSyncExternalStore(onLocation,()=>position,()=>position);}
+
 export function useLocation() {
   return useSyncExternalStore(onLocation, address, address);
 }

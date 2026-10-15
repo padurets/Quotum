@@ -109,6 +109,10 @@ deadline compares semantic selection state; a contact that extends an unchanged
 state neither sends a hint nor makes the page refetch. Accepted native destinations
 coalesce before asynchronous window handoff. Repeating a destination restores that
 source even after a manual selection in the already-open Devices view.
+An accepted navigation entry retires the previous connection dialogs before focusing
+the source. Opening the main window without a destination preserves the current draft.
+The hub reuses its private selection baseline between semantic changes and deadlines;
+eligibility changes notify holders even while they watch another board.
 
 `POST /api/devices/:device/measurement-policy` takes
 `{operationId, expectedRevision, desired: {enabled, collectors: {claude, codex, antigravity}}}`.
