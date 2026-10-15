@@ -17,7 +17,7 @@ import {chartProblems, creditRenderProblems, HISTORY_BYTES_PER_MEASUREMENT, idle
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
-import {MARGIN_MS, idlePhaseProblems, idlePhaseScript, idleWindow, overviewCards, stillProblems, stillSnapshot, warmUntil, type IdlePhase} from './still.js';
+import {MARGIN_MS, foreseenAt, idlePhaseProblems, idlePhaseScript, idleWindow, overviewCards, stillProblems, stillSnapshot, warmUntil, type IdlePhase} from './still.js';
 import {hear, type Heard} from './stream.js';
 import {frequencyKeys, moneyView, selectMoney} from './controls.js';
 import {panning} from './panning.js';
@@ -540,18 +540,19 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
   const quotaAt=Date.now();
   await agent.ingest([stillSnapshot(card,stand.start,quotaAt)],[],quotaAt);
   await deliver('2500',quotaAt-25_000);
-  // Earlier measurements can still fade when panning finishes quickly. Settle
-  // those dots and nearby quota resets within the same bounded setup interval.
+  // Earlier measurements can still fade or leave an hourly forecast pending.
+  // Settle those and nearby quota resets within the same bounded setup interval.
   const readCards=()=>overviewCards(path=>owner.get<Snapshot>(path),overview.board.id);
-  const windowMs=4*(2*SHOWN_WITHIN+100),setupUntil=Date.now()+60_000,waits:{from:number;until:number;resets:number[];fades:number[]}[]=[];
+  const windowMs=4*(2*SHOWN_WITHIN+100),setupUntil=Date.now()+60_000,waits:{from:number;until:number;resets:number[];fades:number[];forecasts:number[]}[]=[];
   for(;;) {
     const cards=await readCards(),from=Date.now();
     const resets=cards.flatMap(card=>card.windows.map(window=>window.resetAt)).filter((at):at is number=>at!==null&&at>=from&&at<=from+windowMs+SHOWN_WITHIN);
     const fades=cards.filter(card=>card.id!==source&&card.successAt!==null).map(card=>card.successAt!+PULSE_FOR+FADE_FOR).filter(at=>at>=from);
-    if(!resets.length&&!fades.length)break;
-    const until=Math.max(...resets,...fades)+MARGIN_MS;
+    const forecasts=cards.map(foreseenAt).filter((at):at is number=>at!==null&&at>=from-MARGIN_MS&&at<=from+windowMs+MARGIN_MS);
+    if(!resets.length&&!fades.length&&!forecasts.length)break;
+    const until=Math.max(...resets,...fades,...forecasts)+MARGIN_MS;
     if(until>setupUntil)throw new Stop('credit measurement has no quiet quota interval');
-    waits.push({from,until,resets,fades});
+    waits.push({from,until,resets,fades,forecasts});
     await sleep(until-from);
   }
   await selectMoney(cdp,[[source,'balance:credits']],'funds');
