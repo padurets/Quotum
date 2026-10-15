@@ -57,7 +57,7 @@ export class Ingest {
     this.forecasts = new Forecasts(store);
     this.measurementSelection = new MeasurementSelection(store, directory, duty, cadence,key=>{
       const sources=providers.flatMap(provider=>this.store.findSource(provider,key)??[]);
-      for(const source of sources)this.notifyMeasurementOwners(source);
+      for(const source of sources)this.notifyMeasurementOwners(source,false);
       tell(this.observer,o=>o.touchSources(sources));
     });
   }
@@ -162,7 +162,7 @@ export class Ingest {
         if (key&&at>failureFloor) afterCommit(() => {
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
           if (this.cadence.failed(key, device.id, failure.error, at, acknowledge)) {
-            if(source)this.notifyMeasurementOwners(source);
+            if(source)this.notifyMeasurementOwners(source,false);
             if (acknowledge && this.duty.failed(key, device.id, at)) this.cadence.released(key, device.id);
             if (refreshAcknowledged) this.cadence.refreshResult(key, device.id, at, false, now);
           }
@@ -276,7 +276,7 @@ export class Ingest {
           return {provider: s.provider, ...answer, ...(request.attemptContext ? {accountKey:key} : {}), ...(commandId ? {commandId} : {}), until: iso(now + answer.askInMs)};
         })();
         const after=this.measurementSelection.state(source,s.provider,key,now);
-        if(source&&(before.holder!==after.holder||before.pending!==after.pending))this.notifyMeasurementOwners(source);
+        if(source&&(before.holder!==after.holder||before.pending!==after.pending))this.notifyMeasurementOwners(source,false);
         return reply;
       }),
     };

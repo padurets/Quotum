@@ -609,7 +609,7 @@ test('configuration expires independently of resource acceptance and current acc
   store.close();
 });
 
-for(const change of ['configuration','capability'] as const)test(`an unpreferred candidate ${change} change stays private when selection is unchanged`,t=>{
+for(const change of ['configuration','capability','participation','revoke','login','failure'] as const)test(`an unpreferred candidate ${change} change stays private when selection is unchanged`,t=>{
   const {store,directory,ingest,user,batch,credential,sender,device}=setup();ingest.accept(credential,batch(now),now);
   const second={...sender,machine:{...sender.machine,id:'measurement-private-B12345'}};
   const contact={...second,paced:true,collectors:['codex'],capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[{provider:'codex',account}]};
@@ -631,10 +631,45 @@ for(const change of ['configuration','capability'] as const)test(`an unpreferred
   }
   events.flush();for(const received of frames.values())received.length=0;
   const before=ingest.measurementSources(bob.id,clock);
-  ingest.checkin(credential,{...contact,subscriptions:[],...(change==='configuration'?{collectors:[]}:{capabilities:undefined})},clock);events.flush();
+  if(change==='participation') {
+    const next=desired();next.collectors.codex=false;
+    const saved=store.measurementPolicies.saveDevice(target,0,next,clock);ingest.participationChanged(target,saved.changed,clock);
+  } else if(change==='revoke') {
+    directory.revokeDevice(user.id,target,clock);store.releaseRevoked(user.id);ingest.forget([target],clock);
+  } else if(change==='login')ingest.checkin(credential,{...contact,subscriptions:[{provider:'codex',account:'b'.repeat(24)}]},clock);
+  else if(change==='failure') {
+    const policy=store.measurementPolicies.device(target);
+    ingest.accept(credential,{...second,sentAt:new Date(clock).toISOString(),snapshots:[],failures:[{provider:'codex',observedAt:new Date(clock).toISOString(),error:'timeout',attemptContext:{version:1,authority:policy.authority,collectorEpoch:0,target:{kind:'verified',accountKey:account}}}]},clock);
+  } else ingest.checkin(credential,{...contact,subscriptions:[],...(change==='configuration'?{collectors:[]}:{capabilities:undefined})},clock);
+  events.flush();
   assert.deepEqual(ingest.measurementSources(bob.id,clock),before);
   assert.deepEqual(frames.get(bob.id),[],'foreign private availability does not invalidate an unchanged effective selection');
-  assert.equal(frames.get(user.id)!.filter(frame=>frame.type==='devices').length,1,'own metadata still refreshes');
+  assert.equal(frames.get(user.id)!.filter(frame=>frame.type===(change==='revoke'?'snapshot':'devices')).length,1,'own metadata still refreshes, including an authoritative rebaseline on revocation');
+});
+
+test('an Auto handover distinguishes own devices while foreign holders retain the same neutral selection',t=>{
+  const {store,directory,ingest,user,batch,credential,sender,device}=setup();ingest.accept(credential,batch(now,{staleAfterMs:3*3600000}),now);
+  const second={...sender,machine:{...sender.machine,id:'measurement-own-handover-B123'}};
+  const contact={...second,paced:true,capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[{provider:'codex',account}]};
+  ingest.checkin(credential,contact,now+600000);
+  const target=directory.devices(user.id).find(candidate=>candidate.id!==device)!.id,source=store.held(user.id)[0].id;
+  const bob=directory.createUser('handover-bob@example.com','Bob','x',now);store.hold(source,bob.id,now);
+  const clock=now+600001,events=new Events({store,directory,ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>clock,after:()=>()=>{}});
+  events.attach();t.after(()=>{events.close();store.close();});
+  const frames=new Map<string,Frame[]>();
+  for(const owner of [user,bob]) {
+    const secret=newSecret('qt_s');directory.createSession(secret,owner.id,now,86400000);frames.set(owner.id,[]);
+    const board=directory.createBoard('Other board',owner.id,now);
+    events.open({user:owner.id,secret,board:board.id,kind:'stream',send:batch=>frames.get(owner.id)!.push(...batch),end:()=>{}});
+  }
+  events.flush();for(const received of frames.values())received.length=0;
+  const before=ingest.measurementSources(bob.id,clock);
+  const reply=ingest.checkin(credential,{...contact,subscriptions:[{provider:'codex',account,active:true}]},clock);
+  assert.equal(reply.subscriptions[0].onDuty,true);events.flush();
+  assert.equal(ingest.measurementSources(user.id,clock)[0].candidates.find(candidate=>candidate.device===target)!.onDuty,true);
+  assert.deepEqual(ingest.measurementSources(bob.id,clock),before);
+  assert.equal(frames.get(user.id)!.filter(frame=>frame.type==='devices').length,1);
+  assert.deepEqual(frames.get(bob.id),[]);
 });
 
 test('unchanged contacts reuse the private selection baseline at every held-source cohort size',()=>{

@@ -225,7 +225,8 @@ export class MeasurementSelection {
       deadline(until);
       const candidates=[...(this.candidates.get(key)?.values()??[])];
       for(const candidate of candidates){deadline(candidate.expiresAt);deadline(this.cadence.pausedUntil(key,candidate.device,now));deadline(this.configurations.get(candidate.device)?.expiresAt??null);}
-      value.push([source.id,holder===null?'none':owned.has(holder)?'own':'external',pending,
+      // An own handover changes the controls; foreign producer identity stays private.
+      value.push([source.id,holder===null?'none':owned.has(holder)?holder:'external',pending,
         candidates.filter(candidate=>owned.has(candidate.device)).map(candidate=>[candidate.device,candidate.expiresAt>now,candidate.expiresAt>now&&this.cadence.pausedUntil(key,candidate.device,now)!==null]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])))]);
     }
     return {value,changesAt:deadlines.length?Math.min(...deadlines):null};
