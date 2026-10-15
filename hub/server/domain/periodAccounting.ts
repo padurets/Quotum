@@ -307,8 +307,11 @@ class MoneyIndex {
   }
 }
 
-/** Two fixed buffers keep cooperative sorting within the retained evidence budget. */
+/** Native bounds often arrive ordered; other inputs sort within two fixed buffers. */
 function* sortedNumbers(input:Float64Array):Preparation<Float64Array> {
+  let ordered=true;
+  for(let i=1;i<input.length;i++){if(input[i]<input[i-1]){ordered=false;break;}yield;}
+  if(ordered)return input;
   let rows:Float64Array=input,next:Float64Array=new Float64Array(input.length);
   for(let size=1;size<rows.length;size*=2) {
     for(let start=0;start<rows.length;start+=size*2) {

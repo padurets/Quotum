@@ -24,6 +24,20 @@ test('shared work curves match exact session sums and concurrent unions across h
 
 const blank:History={range:'1h',live:true,since:0,to:60_000,cellMs:60_000,historyStart:0,events:[],series:[],activity:{since:0,known:{from:0,to:60_000},barMs:60_000,activeMs:0,agentMs:0,agents:0,cells:[],by:{source:[],project:[],device:[]}}};
 const tape=():PeriodTape=>({from:0,cut:60_000,replaceFrom:0,cursor:'cursor',quota:[],money:[]});
+test('ordered native quota bounds prepare in linear work and nonmonotonic bounds retain their deadlines',()=>{
+  const count=4096,evidence=tape();
+  const samples=Array.from({length:count},(_,i)=>({at:i*100,used:i%100,resetAt:1_000_000,staleAfterMs:1000}));
+  evidence.cut=count*100;evidence.quota=[{source:'s',window:'w',samples:packSamples(samples)}];
+  const task=PeriodAccounting.prepare(evidence,null);let turns=0,result;
+  for(;;){const step=task.next();if(step.done){result=step.value;break;}turns++;}
+  assert.ok(turns<count*8,'already ordered native bounds must not add a logarithmic sort to a replacement baseline');
+  assert.equal(result.changesAt(count*100,100_000),count*100+1);
+  const unordered=tape();unordered.quota=[{source:'s',window:'w',samples:packSamples([{at:0,used:10,resetAt:null,staleAfterMs:900},{at:100,used:20,resetAt:null,staleAfterMs:100},{at:200,used:30,resetAt:null,staleAfterMs:500}])}];
+  const mixed=new PeriodAccounting(unordered,null);
+  assert.equal(mixed.changesAt(1001,1000),1101);
+  assert.equal(mixed.changesAt(1101,1000),1201,'a later observation can expire before an earlier one');
+  assert.equal(mixed.changesAt(1201,1000),1701);
+});
 test('exact endpoints exclude later samples of the same cell and stop validity at reset',()=>{
   const evidence=tape();evidence.quota=[{source:'s',window:'w',samples:packSamples([{at:0,used:10,resetAt:50_000,staleAfterMs:60_000},{at:20_000,used:25,resetAt:50_000,staleAfterMs:60_000},{at:40_000,used:90,resetAt:50_000,staleAfterMs:60_000}])}];
   const frame={...blank,series:[{sourceId:'s',windowId:'w',consumed:80,coveredMs:40_000,remainingAtStart:90,remainingAtEnd:10,staleAfterMs:60_000,points:[[0,10,1] as [number,number,number]],work:null}]};
