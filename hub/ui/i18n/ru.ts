@@ -25,6 +25,7 @@ export const ru = {
   'measurements.collector': 'Измерять эту подписку на',
   'measurements.auto': 'Auto',
   'measurements.externalPreference': 'Предпочтение другого держателя',
+  'measurements.unavailablePreference': 'Предпочтительное устройство недоступно',
   'measurements.eligible': 'Доступно',
   'measurements.disabled': 'Измерения отключены',
   'measurements.epoch_required': 'Требуется обновление Quotum',

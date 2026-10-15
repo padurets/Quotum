@@ -30,6 +30,7 @@ export const en = {
   'measurements.collector': 'Measure this subscription on',
   'measurements.auto': 'Auto',
   'measurements.externalPreference': 'Preference set by another holder',
+  'measurements.unavailablePreference': 'Preferred device is unavailable',
   'measurements.eligible': 'Eligible',
   'measurements.disabled': 'Measurements disabled',
   'measurements.epoch_required': 'Quotum update required',

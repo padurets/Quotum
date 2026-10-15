@@ -12,10 +12,11 @@ const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 function fixture(kind:'preference'|'participation') {
   const hooks=preparationFixture(),posts:{body:any;resolve:(value:unknown)=>void}[]=[];
   let refreshed=()=>{},failed=(_error:Error)=>{},reads=0;
-  const source={source:'codex:0123456789ab',preference:{kind:'auto',revision:0},candidates:[{device:'a',reason:'eligible'},{device:'b',reason:'eligible'}],origins:[],duty:'none'};
+  const source={source:'codex:0123456789ab',preference:{kind:'auto',revision:0,device:null as string|null},candidates:[{device:'a',reason:'eligible'},{device:'b',reason:'eligible'}],origins:[],duty:'none'};
   const device={id:'a',policy:{revision:0,enabled:true,collectors:Object.fromEntries(['claude','codex','antigravity'].map(id=>[id,{enabled:true}]))}};
   const reload=()=>{reads++;return new Promise<void>((resolve,reject)=>{refreshed=()=>{
-    source.preference={kind:'preferred',revision:1,device:'a'} as typeof source.preference;
+    const selected=posts.at(-1)!.body.desired;
+    source.preference={kind:selected===null?'auto':'preferred',revision:source.preference.revision+1,device:selected};
     device.policy={...device.policy,revision:1,enabled:false};resolve();
   };failed=reject;});};
   const context={crypto:{randomUUID:()=>`operation-${posts.length}`},exports:{} as Record<string,(props:any)=>unknown>,require:(name:string)=>{
@@ -33,8 +34,22 @@ function fixture(kind:'preference'|'participation') {
   const submit=()=>render().find(node=>node.type==='form')!.props.onSubmit({preventDefault(){}}) as Promise<void>;
   const locked=()=>render().find(node=>node.type==='fieldset')!.props.disabled;
   const value=()=>{const tree=render();return kind==='preference'?tree.find(node=>node.type==='select')!.props.value:tree.find(node=>node.type==='input')!.props.checked;};
-  render();return {render,edit,submit,locked,value,posts,reads:()=>reads,refresh:()=>refreshed(),fail:(error:Error)=>failed(error)};
+  render();return {source,render,edit,submit,locked,value,posts,reads:()=>reads,refresh:()=>refreshed(),fail:(error:Error)=>failed(error)};
 }
+
+test('a disconnected preference remains visible and can be explicitly cleared',async()=>{
+  const f=fixture('preference');
+  f.source.preference={kind:'preferred',revision:1,device:'a'};
+  f.source.candidates=f.source.candidates.filter(candidate=>candidate.device!=='a');
+  f.render();
+  const tree=f.render(),select=tree.find(node=>node.type==='select')!;
+  assert.equal(select.props.value,'a');
+  assert.ok(tree.some(node=>node.type==='option'&&node.props.value==='a'&&node.props.disabled),'the current unavailable choice must not silently display Auto');
+  select.props.onChange({target:{value:'auto'}});
+  assert.equal(f.render().find(node=>node.type==='button')!.props.disabled,false);
+  const saving=f.submit();assert.equal(f.posts[0].body.desired,null);assert.equal(f.posts[0].body.expectedRevision,1);
+  f.posts[0].resolve({});await flush();f.refresh();await saving;f.render();assert.equal(f.value(),'auto');
+});
 
 for(const kind of ['preference','participation'] as const) {
   test(`${kind} keeps edits locked through the write and authoritative refresh`,async()=>{

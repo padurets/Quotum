@@ -229,41 +229,42 @@ export class Ingest {
         }
         const key = subscriptionKey(s, device.userId);
         const source = this.store.findSource(s.provider, key);
-        const pending=source!==null&&this.measurementSelection.pending(source,s.provider,key,now);
-        if (this.measurementSelection.observe(key, s.provider, device.id, now,120_000,false).changed) this.directory.measurementsChanged(device.userId);
-        if(source&&pending!==this.measurementSelection.pending(source,s.provider,key,now))this.notifyMeasurementOwners(source);
-        const previousHolder = this.duty.holder(key);
-        this.restoreFixed(source, key, now);
-        this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-        this.cadence.capability(key, device.id, request.paced, s.minIntervalMs, now);
-        this.protect(source, key, now);
-        this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-        if (!request.paced) {
-          const directive = this.measurementSelection.claim(source, s.provider, key, device.id, s.active, now);
-          if (source && previousHolder !== this.duty.holder(key)) this.notifyMeasurementOwners(source);
+        const before=this.measurementSelection.state(source,s.provider,key,now);
+        const reply=(()=>{
+          if (this.measurementSelection.observe(key, s.provider, device.id, now,120_000,false).changed) this.directory.measurementsChanged(device.userId);
+          this.restoreFixed(source, key, now);
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-          return {provider: s.provider, measure: directive.measure, until: iso(directive.until)};
-        }
-        const paused = this.cadence.pausedUntil(key, device.id, now);
-        const holder = this.duty.holder(key);
-        const leased = (this.duty.until(key) ?? 0) > now;
-        if (paused !== null && !(holder === device.id && leased)) {
-          // Another device measures it, or none does until this one's pause is over.
-          const askInMs = Math.ceil(Math.min(paused - now, 10 * 60_000));
-          return {provider: s.provider, measure: false, onDuty: !(holder !== null && holder !== device.id && leased), askInMs, until: iso(now + askInMs)};
-        }
-        const directive = this.measurementSelection.claim(source, s.provider, key, device.id, s.active, now);
-        if (source && previousHolder !== this.duty.holder(key)) this.notifyMeasurementOwners(source);
-        this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-        if (!directive.measure) {
-          return {provider: s.provider, measure: false, onDuty: false, askInMs: directive.until - now, until: iso(directive.until)};
-        }
-        const answer = this.cadence.answer(key, device.id, s.provider, now, s.minIntervalMs, this.signals(source, key, now));
-        if (answer.measure) this.duty.asked(key, device.id, now);
-        const commandId = answer.measure ? this.measurementSelection.issue(key, s.provider, device.id, request.attemptContext, now) : undefined;
-        this.measurementSelection.observe(key, s.provider, device.id, now, answer.askInMs,false);
-        this.protect(source, key, now);
-        return {provider: s.provider, ...answer, ...(request.attemptContext ? {accountKey:key} : {}), ...(commandId ? {commandId} : {}), until: iso(now + answer.askInMs)};
+          this.cadence.capability(key, device.id, request.paced, s.minIntervalMs, now);
+          this.protect(source, key, now);
+          this.cadence.settleRefresh(key, this.refreshDuty(key), now);
+          if (!request.paced) {
+            const directive = this.measurementSelection.claim(source, s.provider, key, device.id, s.active, now);
+            this.cadence.settleRefresh(key, this.refreshDuty(key), now);
+            return {provider: s.provider, measure: directive.measure, until: iso(directive.until)};
+          }
+          const paused = this.cadence.pausedUntil(key, device.id, now);
+          const holder = this.duty.holder(key);
+          const leased = (this.duty.until(key) ?? 0) > now;
+          if (paused !== null && !(holder === device.id && leased)) {
+            // Another device measures it, or none does until this one's pause is over.
+            const askInMs = Math.ceil(Math.min(paused - now, 10 * 60_000));
+            return {provider: s.provider, measure: false, onDuty: !(holder !== null && holder !== device.id && leased), askInMs, until: iso(now + askInMs)};
+          }
+          const directive = this.measurementSelection.claim(source, s.provider, key, device.id, s.active, now);
+          this.cadence.settleRefresh(key, this.refreshDuty(key), now);
+          if (!directive.measure) {
+            return {provider: s.provider, measure: false, onDuty: false, askInMs: directive.until - now, until: iso(directive.until)};
+          }
+          const answer = this.cadence.answer(key, device.id, s.provider, now, s.minIntervalMs, this.signals(source, key, now));
+          if (answer.measure) this.duty.asked(key, device.id, now);
+          const commandId = answer.measure ? this.measurementSelection.issue(key, s.provider, device.id, request.attemptContext, now) : undefined;
+          this.measurementSelection.observe(key, s.provider, device.id, now, answer.askInMs,false);
+          this.protect(source, key, now);
+          return {provider: s.provider, ...answer, ...(request.attemptContext ? {accountKey:key} : {}), ...(commandId ? {commandId} : {}), until: iso(now + answer.askInMs)};
+        })();
+        const after=this.measurementSelection.state(source,s.provider,key,now);
+        if(source&&(before.holder!==after.holder||before.pending!==after.pending))this.notifyMeasurementOwners(source);
+        return reply;
       }),
     };
   }
@@ -352,7 +353,7 @@ export class Ingest {
       const key = this.store.account(source.id)!, provider = source.provider as ClientProvider;
       const preference = this.store.measurementPolicies.preference(source.id);
       const state=this.store.state(source.id);
-      const holder=(this.duty.until(key) ?? 0)>now ? this.duty.holder(key) : null;
+      const {holder,pending}=this.measurementSelection.state(source.id,provider,key,now);
       const own = preference.device !== null && this.directory.deviceById(preference.device)?.userId === user;
       const producer = (origin: {device:string;at:number;client:string|null;evidence:string|null} | null): {device?:string;name?:string;at:number;client?:string|null;evidence?:string|null;external?:boolean} | null => {
         if (!origin) return null;
@@ -362,7 +363,7 @@ export class Ingest {
       return {source:source.id,provider,label:names[source.id] ?? (key.startsWith(`user:${user}/${provider}/`) ? key.slice(`user:${user}/${provider}/`.length) : null),
         duty:holder===null ? 'none' as const : this.directory.deviceById(holder)?.userId===user ? 'own' as const : 'external' as const,
         preference:{revision:preference.revision,kind:preference.device === null ? 'auto' as const : 'preferred' as const,device:own ? preference.device : null},
-        pending:this.measurementSelection.pending(source.id,provider,key,now),
+        pending,
         candidates:this.measurementSelection.ownCandidates(user,source.id,provider,key,now),
         origins:this.store.resourceOrigins(source.id).map(origin=>{
           const observation=origin.resource==='funds'?state.creditBalance:quotaObservation(state,origin.resource==='resets'?'resets':'windows');

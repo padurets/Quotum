@@ -77,6 +77,12 @@ export class MeasurementSelection {
     return preferred !== null && holder !== null && preferred !== holder && (this.duty.until(key) ?? 0)>now;
   }
 
+  /** A retained holder ID has no visible duty after its lease expires. */
+  state(source:string|null,provider:ClientProvider,key:string,now:number) {
+    return {holder:(this.duty.until(key)??0)>now?this.duty.holder(key):null,
+      pending:source!==null&&this.pending(source,provider,key,now)};
+  }
+
   claim(source: string | null, provider: ClientProvider, key: string, device: string, active: boolean, now: number) {
     const preferred = this.preferred(source, provider, key, now), holder = this.duty.holder(key);
     if (preferred !== null) {
@@ -171,12 +177,11 @@ export class MeasurementSelection {
     const deadline=(at:number|null)=>{if(at!==null&&at>now)deadlines.push(at);};
     for(const source of this.store.held(user)) {
       if(!['claude','codex','antigravity'].includes(source.provider))continue;
-      const key=source.account,holder=this.duty.holder(key),until=this.duty.until(key);
-      const active=holder!==null&&until!==null&&until>now;
+      const key=source.account,until=this.duty.until(key),{holder,pending}=this.state(source.id,source.provider as ClientProvider,key,now);
       deadline(until);
       const candidates=[...(this.candidates.get(key)?.values()??[])];
       for(const candidate of candidates){deadline(candidate.expiresAt);deadline(this.cadence.pausedUntil(key,candidate.device,now));}
-      value.push([source.id,active?(owned.has(holder!)?'own':'external'):'none',this.pending(source.id,source.provider as ClientProvider,key,now),
+      value.push([source.id,holder===null?'none':owned.has(holder)?'own':'external',pending,
         candidates.filter(candidate=>owned.has(candidate.device)).map(candidate=>[candidate.device,candidate.expiresAt>now,candidate.expiresAt>now&&this.cadence.pausedUntil(key,candidate.device,now)!==null]).sort((a,b)=>String(a[0]).localeCompare(String(b[0])))]);
     }
     return {value,changesAt:deadlines.length?Math.min(...deadlines):null};

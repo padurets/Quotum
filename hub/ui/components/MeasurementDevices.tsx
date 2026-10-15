@@ -97,6 +97,7 @@ export function PreferenceSettings({source,devices,reload,readOnly=false}:{sourc
       <fieldset className="form-fields" disabled={mutation.busy}><label className="field"><span>{t('measurements.collector')}</span><select value={draft} onChange={event=>{setDraft(event.target.value);setDirty(true);mutation.clear();}}>
         <option value="auto">{t('measurements.auto')}</option>
         {value==='external'&&<option value="external" disabled>{t('measurements.externalPreference')}</option>}
+        {draft!=='auto'&&draft!=='external'&&!source.candidates.some(candidate=>candidate.device===draft)&&<option value={draft} disabled>{t('measurements.unavailablePreference')}</option>}
         {source.candidates.map(candidate=><option key={candidate.device} value={candidate.device} disabled={candidate.reason!=='eligible'}>{devices.find(device=>device.id===candidate.device)?.name ?? t('devices.device')}{candidate.reason==='eligible'?'':` (${t(`measurements.${candidate.reason}`)})`}</option>)}
       </select></label></fieldset>
       {source.pending&&<p className="dialog-text">{t('measurements.handover')}</p>}
