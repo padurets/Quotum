@@ -11,7 +11,7 @@ import {Ago} from './Time';
 import {ConnectionRow} from './Connections';
 import {clientName} from '../../server/domain/clients';
 import type {LiveSession} from '../lib/types';
-import {useConnectionsRevision, useDevicesRevision, useDeviceContact} from '../lib/board';
+import {useConnectionsRevision, useDevicesRevision, useDeviceContact, useMainNavigation} from '../lib/board';
 import type {MeasurementPolicy} from '../../server/domain/measurementPolicy';
 import {ParticipationSettings, PreferenceSettings, VersionInfo, type MeasurementSource} from './MeasurementDevices';
 import {useLocation} from '../lib/router';
@@ -73,17 +73,25 @@ export function Devices({local}: {local: boolean}) {
   const location=useLocation(),focused=new URLSearchParams(location.split('?')[1]??'').get('source');
   const [sourceId,setSource]=useState<string|null>(focused);
   useEffect(()=>{setSource(focused);},[focused]);
+  const selector=useRef<HTMLSelectElement>(null),unavailable=useRef<HTMLLIElement>(null),lastFocus=useRef<string|null>(null),intent=useMainNavigation();
+  const focusRequest=focused&&intent?.destination?.kind==='devices'&&intent.destination.sourceId===focused ? focused+':'+intent.revision : focused;
+  useEffect(()=>{
+    if(!focused||sourceId!==focused||lastFocus.current===focusRequest||!devices)return;
+    const target=sources.some(source=>source.source===focused)?selector.current:unavailable.current;
+    if(!target)return;
+    target.scrollIntoView({block:'center'});target.focus({preventScroll:true});lastFocus.current=focusRequest;
+  },[focused,sourceId,sources,devices,focusRequest]);
   const details = devices?.find(device=>device.id===detailsId) ?? null;
   const [renaming,setRenaming]=useState<Device|null>(null),[name,setName]=useState('');
   const [error, setError] = useState<unknown>(null);
   const load = useCallback(() => {
     const current = ++request.current;
-    call<{devices:Device[];hubVersion:string;sources:MeasurementSource[]}>('GET', '/api/devices?measurement=1').then(value => {
+    return call<{devices:Device[];hubVersion:string;sources:MeasurementSource[]}>('GET', '/api/devices?measurement=1').then(value => {
       if (current !== request.current) return;
       setDevices(value.devices);setHubVersion(value.hubVersion);setSources(value.sources);setError(null);
-    }, failure => {if (current === request.current) setError(failure);});
+    }, failure => {if (current === request.current) setError(failure);throw failure;});
   }, []);
-  useEffect(load, [load, revision,presence]);
+  useEffect(()=>{void load().catch(()=>{});}, [load, revision,presence]);
   useEffect(() => () => {++request.current;}, []);
 
   const revoke = async (device: Device) => {
@@ -91,7 +99,7 @@ export function Devices({local}: {local: boolean}) {
     setError(null);
     try {
       await call('DELETE', `/api/devices/${encodeURIComponent(device.id)}`);
-      load();
+      await load();
     } catch (failure) {
       setError(failure);
     }
@@ -99,11 +107,11 @@ export function Devices({local}: {local: boolean}) {
 
   const rename = async(event:FormEvent) => {
     event.preventDefault();if(!renaming)return;
-    try {await call('POST',`/api/devices/${encodeURIComponent(renaming.id)}`,{name:name.trim()});setRenaming(null);load();}catch(failure){setError(failure);}
+    try {await call('POST',`/api/devices/${encodeURIComponent(renaming.id)}`,{name:name.trim()});setRenaming(null);await load();}catch(failure){setError(failure);}
   };
   return <>
-    {focused&&devices&&!sources.some(source=>source.source===focused)&&<li className="dialog-text">{t('measurements.unavailableSource')}</li>}
-    {sources.length>0&&<li className="settings-section"><label className="field"><span>{t('measurements.subscription')}</span><select value={sourceId??''} onChange={event=>setSource(event.target.value||null)}><option value="">{t('measurements.chooseSubscription')}</option>{sources.map((source,index)=><option key={source.source} value={source.source}>{source.label ?? `${PROVIDERS[source.provider]?.name ?? source.provider} ${index+1}`}</option>)}</select></label>
+    {focused&&devices&&!sources.some(source=>source.source===focused)&&<li className="dialog-text" role="alert" tabIndex={-1} ref={unavailable}>{t('measurements.unavailableSource')}</li>}
+    {sources.length>0&&<li className="settings-section"><label className="field"><span>{t('measurements.subscription')}</span><select ref={selector} value={sourceId??''} onChange={event=>setSource(event.target.value||null)}><option value="">{t('measurements.chooseSubscription')}</option>{sources.map((source,index)=><option key={source.source} value={source.source}>{source.label ?? `${PROVIDERS[source.provider]?.name ?? source.provider} ${index+1}`}</option>)}</select></label>
       {sources.find(source=>source.source===sourceId)&&<PreferenceSettings key={sourceId} source={sources.find(source=>source.source===sourceId)!} devices={devices??[]} reload={load} readOnly={local}/>}</li>}
     {error&&<li><ErrorLine error={error}/></li>}
     {devices?.length===0&&<li className="admin-empty">{t(local?'local.devicesEmpty':'devices.empty')}</li>}

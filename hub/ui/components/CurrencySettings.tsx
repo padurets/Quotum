@@ -32,7 +32,7 @@ function DisplayCurrency({data,refresh,dirty}:{data:CurrencyManagement;refresh:R
   return <section className="settings-section currency-overview">
     <h2>{t('currencies.display')}</h2><p className="dialog-text">{t('currencies.scope')}</p>
     <form className="currency-display-form" onSubmit={event=>{event.preventDefault();save.send('/api/currencies/display',{currency:choice},()=>setEdited(false));}}>
-      <fieldset className="currency-fields" disabled={save.disabled}><CurrencyChoice title={t('currencies.display')} items={items} value={choice} disabled={save.disabled} compact onChange={id=>{setChoice(id);setEdited(id!==data.selected);}} /></fieldset>
+      <fieldset className="form-fields" disabled={save.disabled}><CurrencyChoice title={t('currencies.display')} items={items} value={choice} disabled={save.disabled} compact onChange={id=>{setChoice(id);setEdited(id!==data.selected);}} /></fieldset>
       {edited&&<div className="button-row currency-actions"><button className="button primary" disabled={save.disabled}>{t('account.save')}</button><button type="button" className="button" disabled={save.disabled} onClick={reset}>{t('common.cancel')}</button></div>}
       {save.conflict&&<p className="dialog-text">{t('currencies.current',{currency:currencyLabel(items.find(item=>item.id===data.selected)!,locale,items)})}</p>}
       <div className="currency-notice">{save.notice}</div>
@@ -49,7 +49,7 @@ function ArchiveCurrency({data,item,refresh,dirty,onClose}:{data:CurrencyManagem
   const [replacement,setReplacement]=useState(''),save=useSave(data.registryRevision,false,refresh,dirty),selected=data.selected===item.definition.id;
   return <Modal title={t('currencies.archive')} restore={()=>restoreCurrency(item.definition.id)} onClose={save.disabled?undefined:onClose}>
     <p className="dialog-text">{t('currencies.archiveHelp',{name:item.definition.name})}</p>
-    {selected&&<fieldset className="currency-fields" disabled={save.disabled}><CurrencySelect title={t('currencies.replacement')} value={replacement} onChange={setReplacement} items={[...data.standards,...data.personal.filter(row=>row.archivedAt===null&&row.definition.id!==item.definition.id).map(row=>row.definition)]} /></fieldset>}
+    {selected&&<fieldset className="form-fields" disabled={save.disabled}><CurrencySelect title={t('currencies.replacement')} value={replacement} onChange={setReplacement} items={[...data.standards,...data.personal.filter(row=>row.archivedAt===null&&row.definition.id!==item.definition.id).map(row=>row.definition)]} /></fieldset>}
     <div className="button-row currency-actions"><button className="button" disabled={save.disabled} onClick={onClose}>{t('common.cancel')}</button><button className="button danger" disabled={save.disabled||selected&&!replacement} onClick={()=>save.send('/api/currencies/'+item.definition.id+'/archive',{...(replacement?{replacement}:{})},onClose)}>{t('currencies.archive')}</button></div>
     {save.notice}
   </Modal>;

@@ -27,7 +27,7 @@ const ACCOUNT = 'a1b2c3d4e5f6a1b2c3d4e5f6';
 /** The page asks for events with this header (spec: `GET /api/events`). */
 const STREAM = {'quotum-stream': '1'};
 /** Device controls have a separate private-event suite; these assertions track board data. */
-const boardTypes=(frames:Frame[])=>frames.filter(frame=>!['devices','deviceContacts'].includes(frame.type)).map(frame=>frame.type);
+const boardTypes=(frames:Frame[])=>frames.filter(frame=>frame.type!=='deviceContacts').map(frame=>frame.type);
 
 test('every subscription of one reader receives the same currency change',t=>{
   const at=Date.now(),store=new Store(':memory:',at),directory=new Directory(store.db);
@@ -367,7 +367,7 @@ test('a change goes out once, only as the part it changed, in one event however 
   const changed = await s.within();
   assert.deepEqual(
     boardTypes(changed),
-    ['card', 'history'],
+    ['card', 'devices', 'history'],
   );
   assert.equal(changed[0].data.windows[0].used, 53);
   assert.equal(changed.find(event=>event.type==='history')!.data.sources.length, 1);
@@ -376,7 +376,7 @@ test('a change goes out once, only as the part it changed, in one event however 
   // The same numbers again change nothing a reader sees.
   await h.measure(secret, clock.now() - 500, {used: 53});
   clock.advance(config.events.smoothMs);
-  assert.deepEqual(await s.types(), ['card', 'history'], 'a newer measurement: when it was taken changed');
+  assert.deepEqual(await s.types(), ['card', 'devices', 'history'], 'a newer measurement: when it was taken changed');
   assert.deepEqual(sessions, s.snapshot.sessions);
 });
 
@@ -444,7 +444,7 @@ test('a reader coming while changes wait to go out has them in the snapshot and 
   t.after(s.close);
   assert.equal(s.snapshot.sources[0].windows[0].used, 70);
   assert.deepEqual(await s.types(600), [], 'in the snapshot, and the page reads its history after a snapshot anyway');
-  assert.deepEqual(await first.types(100), ['card', 'history'], 'sent to the one reading already, when the new one came');
+  assert.deepEqual(await first.types(100), ['card', 'devices', 'history'], 'sent to the one reading already, when the new one came');
 });
 
 /** A hub on a clock tests move, with Alice, her token and a stream of her personal board. */
@@ -984,7 +984,7 @@ test('long polls carry the same events: a lease starts with hello and snapshot, 
   const news = await waiting;
   assert.deepEqual(
     boardTypes(news.events),
-    ['card', 'history'],
+    ['card', 'devices', 'history'],
   );
   assert.equal(news.lease, first.lease);
 
@@ -1109,21 +1109,21 @@ test('every change a reader sees is told: what each request touches reaches the 
 
   type Row = [string, () => Promise<unknown>, string[], string[], string[]];
   const rows: Row[] = [
-    ['a measurement', () => h.measure(secret, Date.now() - 10 * MIN, {used: 60}), ['card', 'history'], ['card', 'history'], []],
+    ['a measurement', () => h.measure(secret, Date.now() - 10 * MIN, {used: 60}), ['card', 'devices', 'history'], ['card', 'devices', 'history'], []],
     // Measured long enough ago: told to measure now, the card says a measurement is under way.
 
     [
       'a check-in at the pace',
       () => h.call('POST', '/v1/checkin', {token: secret, body: {...agent, paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active: false}]}}),
-      ['cadence', 'refresh'],
-      ['cadence', 'refresh'],
+      ['cadence', 'refresh', 'devices'],
+      ['cadence', 'refresh', 'devices'],
       [],
     ],
     [
       'a list of agents',
       () => h.call('POST', '/v1/sessions', {token: secret, body: {...agent, sentAt: iso(Date.now()), sessions: [session]}}),
-      ['sessions'],
-      ['sessions'],
+      ['sessions', 'devices'],
+      ['sessions', 'devices'],
       [],
     ],
     ['a project renamed', () => h.call('POST', '/api/projects', {as: 'alice', body: {groups: ['quotum'], name:'Quotum'}}),['sessions','devices','history'],['sessions','devices','history'],[]],
@@ -1255,7 +1255,7 @@ test('what each change of data touches reaches the boards it shows on: people jo
     const done = await act();
     if (done && typeof done === 'object' && 'status' in done) assert.ok((done as {status: number}).status < 300, `${what}: ${JSON.stringify(done)}`);
     const [a, b, c] = await Promise.all([own.within(), shared.within(), carols.within()]);
-    assert.deepEqual({own: a.map(e => e.type), shared: b.map(e => e.type), carols: c.map(e => e.type)}, {own: onOwn, shared: onShared, carols: onCarols}, what);
+    assert.deepEqual({own: boardTypes(a), shared: boardTypes(b), carols: boardTypes(c)}, {own: onOwn, shared: onShared, carols: onCarols}, what);
     if (what === 'the machine that told of agents is disconnected') {
       for (const event of [a[0], b[0]]) {
         const snapshot = event.data;

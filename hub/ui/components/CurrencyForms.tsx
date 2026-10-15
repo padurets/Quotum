@@ -109,7 +109,7 @@ export function DefinitionForm({data,item,refresh,dirty,onDone,onCancel}:{data:C
     }catch{setError(new ApiError(400,'invalid_currency'));}
   };
   return <form className="dialog-form currency-form" ref={form} onSubmit={submit}>
-    <fieldset disabled={save.disabled||item?.archivedAt!=null} className="currency-fields">
+    <fieldset disabled={save.disabled||item?.archivedAt!=null} className="form-fields">
       <Field label={t('currencies.name')} value={name} maxLength={64} required onChange={event=>setName(event.target.value)} />
       <div className="currency-metadata-fields"><Field label={t('currencies.symbol')} value={symbol} maxLength={12} required onChange={event=>setSymbol(event.target.value)} />
       <Field label={t('currencies.precision')} type="number" min={0} max={6} step={1} required value={digits} onChange={event=>setDigits(event.target.value)} /></div>
@@ -132,7 +132,7 @@ export function RateForm({data,item,refresh,dirty,seed,onDone,onCancel}:{data:Cu
   return <form className="dialog-form currency-form" ref={form} onSubmit={event=>{
     event.preventDefault();setError(null);try{const at=past?new Date(date).getTime():undefined;if(at!==undefined&&(!Number.isSafeInteger(at)||at>Date.now()))throw new Error();save.send('/api/currencies/'+item.definition.id+'/rates',{base,rate:currencyRate(rate,locale),...(builtin?{direction:'basePerUnit'}:{}),...(at===undefined?{}:{date:at})},onDone);}catch{setError(new ApiError(400,'invalid_currency'));}
   }}>
-    <fieldset className="currency-fields" disabled={save.disabled||item.archivedAt!==null}>
+    <fieldset className="form-fields" disabled={save.disabled||item.archivedAt!==null}>
       <RateFields inverse={builtin} standards={data.standards} base={base} rate={rate} symbol={builtin?t('money.codexCredit'):item.definition.symbol} onBase={setBase} onRate={setRate} />
       <div className="field"><label htmlFor={when}>{t('currencies.effective')}</label><select id={when} value={past?'past':'now'} onChange={event=>setPast(event.target.value==='past')}><option value="now">{t('currencies.fromNow')}</option><option value="past">{t('currencies.fromPast')}</option></select></div>
       {past&&<Field label={t('currencies.localDate')} type="datetime-local" required value={date} onChange={event=>setDate(event.target.value)} />}

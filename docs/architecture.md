@@ -487,8 +487,10 @@ one latest intent. Local desktop retains its local measurement configuration.
 The agent posts each measurement right away. When the hub is unreachable, measurements
 wait in a spool file (at most 5,000, about two days, rewritten atomically) and go out
 oldest first when it answers again; meanwhile the agent tries again after a minute,
-then less and less often, up to once an hour. A check-in the hub answers ends that wait
-at once, and what was kept goes right after it. Resending
+then less and less often, up to once an hour. Check-ins and policy recovery keep their
+own contact schedule; their success never shortens an ingest retry deadline. Once
+that deadline allows it, contact or delivery retries send the retained spool even
+without an installed or enabled collector. Resending
 is safe: a measurement the hub already has counts as a duplicate. When the hub says
 the device was removed or its token revoked, the agent stops; any other refusal only
 makes it wait. A sign-in page in front of the hub (a redirect, or a web page where the

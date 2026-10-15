@@ -28,7 +28,7 @@ function fixture(){
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'};
     if(name.endsWith('/router'))return {useLocation:()=>'/settings/connections'};
     if(name==='./MeasurementDevices')return {};
-    if(name.endsWith('/board'))return {useConnectionsRevision:()=>state.board?.connectionsRevision??0,useDevicesRevision:()=>state.devicesRevision??0};
+    if(name.endsWith('/board'))return {useConnectionsRevision:()=>state.board?.connectionsRevision??0,useDevicesRevision:()=>state.devicesRevision??0,useMainNavigation:()=>null};
     if(name.endsWith('/http'))return {call:(method:string,url:string)=>{assert.equal(method,'GET');assert.equal(url,'/api/devices?measurement=1');return new Promise((resolve,reject)=>reads.push({resolve:devices=>resolve({devices,hubVersion:'0.7.0',sources:[]}),reject}));}};
     if(name.endsWith('/providers'))return {PROVIDERS:{}};
     if(name.endsWith('/format'))return {stamp:()=>''};

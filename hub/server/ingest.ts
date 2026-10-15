@@ -1,7 +1,7 @@
 import type {Attention} from './attention.js';
 import {secretKind} from './domain/auth.js';
 import {CLOCK_TOLERANCE_MS, Invalid, parseBatch, parseCheckin, parseSessions, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
-import {deliveryOf} from './domain/quota.js';
+import {deliveryOf,quotaObservation} from './domain/quota.js';
 import {Forecasts} from './forecasts.js';
 import {Sessions} from './sessions.js';
 import {ACTIVE_WITHIN_MS, type Cadence, type Signals, type Why} from './cadence.js';
@@ -124,12 +124,12 @@ export class Ingest {
         if (recorded.windows) attention?.record(previous, measurement, now);
         if (recorded.unavailable) attention?.unavailable(previous, observedAt);
         afterCommit(() => {
-          if (recorded.delivery) this.measurementSelection.observe(account, snapshot.provider, device.id, observedAt);
+          const evidence=recorded.delivery ? this.measurementSelection.observe(account, snapshot.provider, device.id, observedAt) : null;
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
           let onDuty = false;
           if (recorded.delivery) {
             this.cadence.refreshResult(account, device.id, observedAt, true, now);
-            if (this.cadence.canRenewDuty(account, device.id, observedAt)) {
+            if (evidence?.current && evidence.expiresAt>now && this.cadence.canRenewDuty(account, device.id, observedAt)) {
               this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now, acknowledge);
               onDuty = this.duty.holder(account) === device.id;
             }
@@ -153,13 +153,14 @@ export class Ingest {
         if (!key) continue;
         const source = this.store.findSource(failure.provider, key);
         const acknowledge = this.measurementSelection.acknowledges(key, failure.provider, device.id, at, failure.attemptContext ?? null, false);
+        const refreshAcknowledged=this.measurementSelection.acknowledgesRefreshFailure(key,failure.provider,device.id,at,failure.attemptContext??null);
         const known=key&&this.store.findSource(failure.provider,key);
         const failureFloor=known?deliveryOf(this.store.state(known))?.at??-Infinity:-Infinity;
         if (key&&at>failureFloor) afterCommit(() => {
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
           if (this.cadence.failed(key, device.id, failure.error, at, acknowledge)) {
             if (acknowledge && this.duty.failed(key, device.id, at)) this.cadence.released(key, device.id);
-            if (acknowledge) this.cadence.refreshResult(key, device.id, at, false, now);
+            if (refreshAcknowledged) this.cadence.refreshResult(key, device.id, at, false, now);
           }
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
         });
@@ -225,7 +226,7 @@ export class Ingest {
         }
         const key = subscriptionKey(s, device.userId);
         const source = this.store.findSource(s.provider, key);
-        if (this.measurementSelection.observe(key, s.provider, device.id, now,120_000,false)) this.directory.measurementsChanged(device.userId);
+        if (this.measurementSelection.observe(key, s.provider, device.id, now,120_000,false).changed) this.directory.measurementsChanged(device.userId);
         const previousHolder = this.duty.holder(key);
         this.restoreFixed(source, key, now);
         this.cadence.settleRefresh(key, this.refreshDuty(key), now);
@@ -305,6 +306,7 @@ export class Ingest {
     if (this.refresh(source, now).value.unavailable === 'handover_pending') return {status: 'unavailable' as const, reason: 'handover_pending'};
     const key = this.store.account(source)!;
     const result = this.cadence.requestRefresh(key, this.refreshDuty(key), deliveryOf(this.store.state(source))?.at ?? null, now);
+    this.measurementSelection.bindRefresh(key);
     tell(this.observer, o => o.touchSources([source]));
     return result;
   }
@@ -330,6 +332,7 @@ export class Ingest {
     const keys = this.measurementSelection.invalidate(device, collectors);
     for (const key of keys) this.cadence.withdraw(key, device, now);
     const sources = keys.flatMap(key => providers.flatMap(provider => this.store.findSource(provider,key) ?? []));
+    for(const source of sources)this.notifyMeasurementOwners(source);
     tell(this.observer, o => o.touchSources(sources));
     });
   }
@@ -358,7 +361,7 @@ export class Ingest {
         pending:this.measurementSelection.pending(source.id,provider,key,now),
         candidates:this.measurementSelection.ownCandidates(user,source.id,provider,key,now),
         origins:this.store.resourceOrigins(source.id).map(origin=>{
-          const observation=origin.resource==='funds'?state.creditBalance:origin.resource==='resets'?state.resources?.resets:state.resources?.windows;
+          const observation=origin.resource==='funds'?state.creditBalance:quotaObservation(state,origin.resource==='resets'?'resets':'windows');
           const status: 'observed'|'finite'|'unlimited'|'missing'|'unsupported'|'invalid'|'unknown'=observation?.status ?? 'unknown';
           return {...origin,status,stale:observation ? now-observation.at>observation.staleAfterMs : true,staleAt:observation ? observation.at+observation.staleAfterMs : null,valueOrigin:producer(origin.valueOrigin),observationOrigin:producer(origin.observationOrigin)};
         })};

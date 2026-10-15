@@ -172,6 +172,12 @@ export class Cadence {
     const request=this.requests.get(key);return request?.retainedDuty&&pending(request.view)?request.device:null;
   }
 
+  dispatched(key:string):{device:string;at:number;deadline:number}|null {
+    const request=this.requests.get(key);
+    return request&&pending(request.view)&&request.view.dispatchAt!==null
+      ? {device:request.device,at:request.view.dispatchAt,deadline:request.view.deadline} : null;
+  }
+
   requestRefresh(key: string, duty: RefreshDuty, baseline: number | null, now: number): {status: 'accepted' | 'unavailable' | 'too_soon'; retryAt?: number} {
     this.settleRefresh(key, duty, now);
     const state = this.refresh(key, duty, now).value;

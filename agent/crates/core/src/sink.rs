@@ -469,7 +469,10 @@ impl Sink for HubSink {
     fn deliver_attempt(&mut self, outcome: &Outcome, context: Option<&AttemptContext>) {
         let item = match outcome {
             Ok(snapshot) => Item::ManagedSnapshot { snapshot: snapshot.clone(), context: context.cloned() },
-            Err(failure) if failure.error == ErrorKind::NotInstalled => return,
+            Err(failure) if failure.error == ErrorKind::NotInstalled => {
+                self.flush();
+                return;
+            }
             Err(failure) => Item::ManagedFailure { failure: failure.clone(), context: context.cloned() },
         };
         self.spool.push_back(item);
@@ -931,6 +934,38 @@ pub(crate) mod tests {
             Directive::Wait { ask_at: now + 15_000, on_duty: false },
             "on duty only when it says so"
         );
+    }
+
+    #[test]
+    fn a_removed_client_still_drains_managed_backlog_when_delivery_retry_is_due() {
+        let ready = Arc::new(AtomicBool::new(false));
+        let current = ready.clone();
+        let (url, seen) = hub(move |_, _| {
+            if current.load(Ordering::SeqCst) {
+                json(200, json!({"accepted":1}))
+            } else {
+                json(503, json!({"error":"unavailable"}))
+            }
+        });
+        let (mut sender, _) = sink(&url, "managed-removed-client");
+        sender.deliver_attempt(&failed("saved outcome"), None);
+        assert_eq!(sender.spool.len(), 1);
+        let gone = Err(crate::model::Failure::new(Provider::Codex, ErrorKind::NotInstalled, "fixture"));
+        ready.store(true, Ordering::SeqCst);
+        sender.deliver_attempt(&gone, None);
+        assert_eq!(seen.lock().unwrap().len(), 1, "a missing client cannot cancel ingest backoff");
+        sender.retry_at = Some(Instant::now());
+        sender.deliver_attempt(&gone, None);
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        assert!(sender.spool.is_empty());
+        let restored = HubSink::new(
+            &Hub { url, token: "qt_d_test".into() },
+            sender.machine.clone(),
+            sender.spool_file.clone(),
+            Box::new(|_| {}),
+        );
+        assert!(restored.spool.is_empty(), "the acknowledged backlog is removed from disk too");
+        let _ = fs::remove_file(sender.spool_file.clone());
     }
 
     #[test]

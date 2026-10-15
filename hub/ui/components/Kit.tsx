@@ -65,7 +65,7 @@ export function Modal({
       // A menu open in the dialog closes first (on the same key, by itself); the dialog, on the next.
       if (event.key === 'Escape') return own.querySelector('.popover') ? undefined : close.current?.();
       if (event.key !== 'Tab') return;
-      const fields = [...own.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], [tabindex], [contenteditable="true"]')]
+      const fields = [...own.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], details > summary:first-of-type, [tabindex], [contenteditable="true"]')]
         .filter(field => field.tabIndex >= 0 && !field.matches(':disabled') && !field.closest('[inert]') && field.getClientRects().length);
       const first = fields[0];
       const last = fields.at(-1);

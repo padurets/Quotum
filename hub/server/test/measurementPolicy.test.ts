@@ -7,7 +7,7 @@ import {Ingest, type Credential} from '../ingest.js';
 import {Duty} from '../duty.js';
 import {Cadence} from '../cadence.js';
 import {newSecret} from '../domain/auth.js';
-import {admitMeasurement, type Participation} from '../domain/measurementPolicy.js';
+import {admitMeasurement, type AttemptContext, type Participation} from '../domain/measurementPolicy.js';
 import {PolicyError, RECEIPT_LIFETIME_MS} from '../store/measurementPolicies.js';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -330,8 +330,81 @@ test('contacts are coalesced for their owner, semantic changes stay separate, an
   directory.measurementsChanged(user.id);directory.measurementsChanged(user.id);events.flush();
   assert.equal(received[0].filter(f=>f.type==='devices').length,1);
   for(const frames of received)frames.length=0;
+  ingest.sessions(credential,{...sender,agent:'quotum/0.7.1',sentAt:new Date(now+11).toISOString(),sessions:[{provider:'codex',account:null,origin:'terminal',project:'Fixture',startedAt:new Date(now).toISOString(),working:false}]},now+11);
+  events.flush();
+  assert.equal(received[0].filter(f=>f.type==='devices').length,1,'inventory and session changes share one owner hint');
+  assert.equal(received[1].some(f=>f.type==='devices'||f.type==='deviceContacts'),false);
+  for(const frames of received)frames.length=0;
   ingest.checkin(credential,{...sender,subscriptions:[]},now+20);directory.revokeDevice(user.id,device,now+21);events.flush();
   assert.equal(received[0].some(f=>f.type==='deviceContacts'),false);
+});
+
+test('delayed data from a previous login cannot restore its measurement duty',()=>{
+  const {store,directory,user,duty,ingest,credential,sender,device,batch}=setup();
+  ingest.accept(credential,batch(now),now);
+  ingest.checkin(credential,{...sender,subscriptions:[{provider:'codex',account:'b'.repeat(24)}]},now+2000);
+  assert.equal(duty.holder(account),null);
+  assert.equal(ingest.accept(credential,batch(now+1000),now+3000).accepted,1,'the older numeric observation is still useful');
+  assert.equal(ingest.measurementSelection.reason(account,'codex',device,now+3000),'account_unknown');
+  assert.equal(duty.holder(account),null,'historical resources do not prove the current login');
+  const b={...sender,machine:{...sender.machine,id:'measurement-machine-B012345'}};
+  ingest.checkin(credential,{...b,paced:true,subscriptions:[{provider:'codex',account}]},now+4000);
+  assert.equal(duty.holder(account),directory.devices(user.id).find(candidate=>candidate.id!==device)!.id);
+  store.close();
+});
+
+test('resource diagnostics use the reported quota observation for every client provider',()=>{
+  for(const provider of ['claude','codex','antigravity'] as const) {
+    const {store,ingest,credential,user,batch}=setup(),input=batch(now);
+    ingest.accept(credential,{...input,snapshots:input.snapshots.map(snapshot=>({...snapshot,provider}))},now);
+    const origin=ingest.measurementSources(user.id,now)[0].origins.find(origin=>origin.resource==='windows')!;
+    assert.equal(origin.status,'observed',provider);assert.equal(origin.stale,false,provider);assert.equal(origin.staleAt,now+204000,provider);
+    assert.equal(ingest.measurementSources(user.id,now+204001)[0].origins[0].stale,true,provider);
+    store.close();
+  }
+});
+
+test('a long-lived retained quota does not extend expired account evidence on backlog delivery',()=>{
+  const {store,ingest,duty,credential,batch}=setup();
+  ingest.accept(credential,batch(now),now);
+  assert.equal(ingest.accept(credential,{...batch(now+1000,{staleAfterMs:86400000}),sentAt:new Date(now+600000).toISOString()},now+600000).accepted,1);
+  assert.ok((duty.until(account)??0)<=now+600000,'the resource promise is not a current-account lease');
+  store.close();
+});
+
+test('a dispatched refresh retains its failure binding without acknowledging the new holder command',()=>{
+  const {store,ingest,user,duty,credential,sender,device,batch}=setup();
+  ingest.accept(credential,batch(now),now);
+  const source=store.held(user.id)[0].id;
+  const b={...sender,machine:{...sender.machine,id:'measurement-command-B012345'}};
+  const ask=(machine:typeof sender,at:number)=>ingest.checkin(credential,{...machine,paced:true,capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[{provider:'codex',account}]},at);
+  const a1=ask(sender,now+120000).subscriptions[0].commandId!;
+  ask(b,now+120001);assert.equal(ingest.requestRefresh(source,now+120002).status,'accepted');
+  ask(sender,now+120003);
+  const target=ingest.measurementSources(user.id,now+120003)[0].candidates.find(candidate=>candidate.device!==device)!;
+  store.measurementPolicies.savePreference(source,0,target.device);
+  const b1=ask(b,now+120004).subscriptions[0].commandId!;assert.ok(b1);
+  const policy=store.measurementPolicies.device(device),context:AttemptContext={version:1,authority:policy.authority,collectorEpoch:0,target:{kind:'verified',accountKey:account},commandId:a1};
+  assert.equal(ingest.measurementSelection.acknowledges(account,'codex',device,now+120005,context,false),false);
+  ingest.accept(credential,{...sender,sentAt:new Date(now+120005).toISOString(),snapshots:[],failures:[{provider:'codex',observedAt:new Date(now+120005).toISOString(),error:'timeout',attemptContext:context}]},now+120005);
+  assert.equal(ingest.refresh(source,now+120005).value.request?.status,'failed');
+  assert.equal(duty.holder(account),target.device,'A failure leaves B duty intact');
+  const newPolicy=store.measurementPolicies.device(target.device);
+  assert.equal(ingest.measurementSelection.acknowledges(account,'codex',target.device,now+120005,{version:1,authority:newPolicy.authority,collectorEpoch:0,target:{kind:'verified',accountKey:account},commandId:b1},true),true);
+  store.close();
+});
+
+test('participation changes invalidate every holder private Devices view without sharing device identities',t=>{
+  const {store,directory,ingest,user,device,batch,credential}=setup();ingest.accept(credential,batch(now),now);
+  const source=store.held(user.id)[0].id,bob=directory.createUser('holder-bob@example.com','Bob','x',now);store.hold(source,bob.id,now);
+  const events=new Events({store,directory,ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>now+1,after:()=>()=>{}});events.attach();
+  t.after(()=>{events.close();store.close();});const secret=newSecret('qt_s');directory.createSession(secret,bob.id,now,86400000);const frames:Frame[]=[];
+  events.open({user:bob.id,secret,board:directory.boards(bob.id)[0].id,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});events.flush();frames.length=0;
+  assert.equal(ingest.measurementSources(bob.id,now)[0].duty,'external');
+  const changed=store.measurementPolicies.saveDevice(device,0,desired(false),now+1);ingest.participationChanged(device,changed.changed,now+1);events.flush();
+  assert.equal(ingest.measurementSources(bob.id,now+1)[0].duty,'none');
+  assert.deepEqual(frames.filter(frame=>frame.type==='devices').map(frame=>JSON.parse(frame.data)),[{}]);
+  assert.equal(JSON.stringify(frames).includes(device),false,'the hint carries no foreign device ID');
 });
 
 test('a long poll rechecks a queued contact after the device is revoked',async t=>{

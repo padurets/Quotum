@@ -385,6 +385,11 @@ that does not have `askInMs` is read as one without `"paced"`.
 
 ## Managed measurement participation
 
+A dispatched refresh keeps its original command binding and deadline across a
+preferred-device handover. A matching failure may finish that request without
+acknowledging a newer command. Retained resource data never renew current-account
+evidence beyond its bounded observation time.
+
 A check-in may advertise `capabilities: {measurementPolicy: 1, attemptContext: 1}`.
 The hub returns `policy: {version: 1, authority, revision, enabled, collectors}`;
 `collectors` has exactly `claude`, `codex` and `antigravity`, each with

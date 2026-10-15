@@ -80,6 +80,7 @@ pub struct Runner {
     clients: Vec<ClientId>,
     /// Ends this run, a measurement under way included.
     stop: Stop,
+    policy_contact_every: Duration,
 }
 
 impl Runner {
@@ -105,7 +106,7 @@ impl Runner {
         stop: Stop,
     ) -> Runner {
         let clients = ClientId::ALL.into_iter().filter(|c| config.tracks(*c)).collect();
-        Runner { config, paths, home, adapters, clients, stop }
+        Runner { config, paths, home, adapters, clients, stop, policy_contact_every: Duration::from_secs(60) }
     }
 
     pub fn clients(&self) -> &[ClientId] {
@@ -182,6 +183,7 @@ impl Runner {
         let mut policy_contact = Instant::now();
         if sink.managed() && !providers.is_empty() {
             policy = sink.checkin_managed(&[], &providers).policy;
+            sink.flush();
             for (index, provider) in providers.iter().enumerate() {
                 schedule.block(index, !sink.allows_measurement(*provider), now_ms());
             }
@@ -243,7 +245,7 @@ impl Runner {
             // One recovery contact in the existing loop, including with sessions and every collector off.
             if !providers.is_empty()
                 && sink.needs_policy_contact()
-                && policy_contact.elapsed() >= Duration::from_secs(60)
+                && policy_contact.elapsed() >= self.policy_contact_every
                 && !schedule.has_cleared()
                 && schedule.asks(now_ms()).is_empty()
             {
@@ -251,7 +253,12 @@ impl Runner {
                 let indices: Vec<usize> = providers
                     .iter()
                     .enumerate()
-                    .filter(|(i, p)| sink.allows_measurement(**p) && current[*i].is_some() && self.installed(*i))
+                    .filter(|(i, p)| {
+                        schedule.paced(*i)
+                            && sink.allows_measurement(**p)
+                            && current[*i].is_some()
+                            && self.installed(*i)
+                    })
                     .map(|(i, _)| i)
                     .collect();
                 let asks: Vec<Ask> = indices
@@ -265,6 +272,7 @@ impl Runner {
                     })
                     .collect();
                 let answer = sink.checkin_managed(&asks, &providers);
+                sink.flush();
                 policy_contact = Instant::now();
                 policy = answer.policy.or(policy);
                 for (index, provider) in providers.iter().enumerate() {
@@ -342,7 +350,7 @@ impl Runner {
                 let due = schedule.next().map(|(_, due)| due).unwrap_or(now + TICK.as_millis() as Millis);
                 let wait = due - now_ms();
                 if wait > 0 {
-                    thread::sleep(Duration::from_millis(wait as u64).min(TICK));
+                    thread::sleep(Duration::from_millis(wait as u64).min(TICK).min(self.policy_contact_every));
                 }
                 continue;
             }
@@ -1098,6 +1106,73 @@ mod tests {
         runner.run(&mut sink, |_| panic!("blocked collector measured"));
         assert_eq!(sink.checkins, 1);
         assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn policy_contact_keeps_local_backoff_and_flushes_without_an_enabled_collector() {
+        struct Contact {
+            stop: Stop,
+            checkins: usize,
+            flushed: usize,
+            enabled: bool,
+        }
+        impl Sink for Contact {
+            fn managed(&self) -> bool {
+                true
+            }
+            fn needs_policy_contact(&self) -> bool {
+                true
+            }
+            fn allows_measurement(&self, _: Provider) -> bool {
+                self.enabled
+            }
+            fn checkin(&mut self, asks: &[Ask]) -> Vec<Directive> {
+                self.checkins += 1;
+                if self.checkins > 2 {
+                    assert!(asks.is_empty(), "local backoff is not a measuring request");
+                }
+                if self.checkins == 4 {
+                    self.stop.request(crate::stop::How::Exit);
+                }
+                vec![Directive::Unanswered; asks.len()]
+            }
+            fn flush(&mut self) {
+                self.flushed += 1;
+            }
+            fn deliver(&mut self, _: &Outcome) {}
+        }
+        fn unsupported() -> Outcome {
+            Err(crate::model::Failure::new(Provider::Antigravity, ErrorKind::Unsupported, "fixture"))
+        }
+        for enabled in [true, false] {
+            let config: Config = toml::from_str(&format!(
+                "sessions = false\n[providers.antigravity]\npath = {:?}",
+                std::env::current_exe().unwrap()
+            ))
+            .unwrap();
+            let state = std::env::temp_dir().join(format!("quotum-control-{}-{enabled}", std::process::id()));
+            let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state };
+            let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let stop = Stop::new();
+            let timeout = stop.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_secs(5));
+                timeout.request(crate::stop::How::Exit);
+            });
+            let adapter: Box<dyn Collector> =
+                Box::new(Scripted { outcome: unsupported, runs: runs.clone(), activity: Vec::new() });
+            let mut runner = Runner::with_adapters(config, paths, vec![adapter], std::env::temp_dir(), stop.clone());
+            // Zero advances control turns deterministically without waiting a real minute.
+            runner.policy_contact_every = Duration::ZERO;
+            let mut sink = Contact { stop, checkins: 0, flushed: 0, enabled };
+            runner.run(&mut sink, |event| {
+                if let Event::Measured(_, next) = event {
+                    assert!(next - now_ms() > 10 * 60_000);
+                }
+            });
+            assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), usize::from(enabled));
+            assert!(sink.flushed >= 3, "bootstrap and control turns drain delivery independently");
+        }
     }
 
     #[test]

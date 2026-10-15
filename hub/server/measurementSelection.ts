@@ -15,12 +15,13 @@ export class MeasurementSelection {
   private readonly candidates = new Map<string, Map<string, Candidate>>();
   private readonly devices = new Map<string, Map<string, Candidate>>();
   private readonly commands = new Map<string, Command>();
+  private readonly refreshCommands = new Map<string, Command>();
   constructor(private readonly store: Store, private readonly directory: Directory, private readonly duty: Duty, private readonly cadence: Cadence,private readonly changed:(key:string)=>void=()=>{}) {}
 
   observe(key: string, provider: ClientProvider, device: string, now: number, nextAskMs = 120_000, replace = true) {
     const before = this.devices.get(device)?.get(key);
     const latest=Math.max(-Infinity,...[...(this.devices.get(device)?.values()??[])].filter(candidate=>candidate.provider===provider).map(candidate=>candidate.seenAt));
-    if(replace && now<latest)return false;
+    if(replace && now<latest)return {changed:false,current:false,expiresAt:0};
     if(replace && !before)this.current(device,new Map([[provider,new Set([key])]]),now);
     const command=this.commands.get(key);
     const candidate = {key, provider, device, seenAt: now, expiresAt: Math.max(now + Math.min(10*60_000, Math.max(120_000, nextAskMs))+120_000,command?.device===device?command.deadline:0)};
@@ -28,7 +29,7 @@ export class MeasurementSelection {
     account.set(device, candidate);
     let owned = this.devices.get(device); if (!owned) this.devices.set(device, owned = new Map());
     owned.set(key, candidate);
-    return !before;
+    return {changed:!before,current:true,expiresAt:candidate.expiresAt};
   }
 
   /** Multiplexed account groups may span batches; a singleton is evidence of a changed login. */
@@ -38,7 +39,7 @@ export class MeasurementSelection {
       if(current?.has(before.key) || before.expiresAt>now && (!current || current.size!==1))continue;
       this.duty.release(before.key,device);
       this.cadence.withdraw(before.key,device,now);
-      if(this.commands.get(before.key)?.device===device)this.commands.delete(before.key);
+      this.forgetCommands(before.key,device);
       this.remove(before);
       this.changed(before.key);
     }
@@ -95,17 +96,39 @@ export class MeasurementSelection {
     const command: Command = {id: randomUUID(), key, provider, device, authority: policy.authority,
       epoch: policy.collectors[provider].epoch, mode: modern ? 'contextV1' : 'legacy', at: now, deadline: now+300_000};
     this.commands.set(key, command);
+    this.bindRefresh(key);
     return modern ? command.id : undefined;
+  }
+
+  /** A dispatched refresh keeps its original command when another device starts measuring. */
+  bindRefresh(key:string) {
+    const request=this.cadence.dispatched(key),command=this.commands.get(key);
+    if(!request){this.refreshCommands.delete(key);return;}
+    if(command?.device===request.device&&command.at===request.at)this.refreshCommands.set(key,command);
+  }
+
+  acknowledgesRefreshFailure(key:string,provider:ClientProvider,device:string,at:number,context:AttemptContext|null):boolean {
+    const request=this.cadence.dispatched(key),command=this.refreshCommands.get(key);
+    return !!request&&!!command&&request.device===command.device&&request.at===command.at&&this.matches(command,provider,device,at,context,false);
+  }
+
+  private forgetCommands(key:string,device:string) {
+    if(this.commands.get(key)?.device===device)this.commands.delete(key);
+    if(this.refreshCommands.get(key)?.device===device)this.refreshCommands.delete(key);
   }
 
   acknowledges(key: string, provider: ClientProvider, device: string, at: number, context: AttemptContext | null, success: boolean): boolean {
     const command = this.commands.get(key);
     // Released successful acknowledgement also covers non-paced legacy traffic.
     if (!command) return success && context === null;
+    return this.matches(command,provider,device,at,context,success);
+  }
+
+  private matches(command:Command,provider:ClientProvider,device:string,at:number,context:AttemptContext|null,success:boolean) {
     if (command.device !== device || command.provider !== provider || at < command.at-30_000 || at>command.deadline) return false;
     if (command.mode === 'legacy') return success;
     return context?.commandId === command.id && context.authority === command.authority && context.collectorEpoch === command.epoch &&
-      (success || context.target.kind === 'verified' && context.target.accountKey === key);
+      (success || context.target.kind === 'verified' && context.target.accountKey === command.key);
   }
 
   failureAccount(provider: ClientProvider, device: string, context: AttemptContext | null, now: number): string | null {
@@ -120,7 +143,7 @@ export class MeasurementSelection {
     const affected = [...(this.devices.get(device)?.values() ?? [])].filter(c => !providers || providers.includes(c.provider));
     for (const c of affected) {
       this.duty.release(c.key, device);
-      if (this.commands.get(c.key)?.device === device) this.commands.delete(c.key);
+      this.forgetCommands(c.key,device);
       this.remove(c);
     }
     return affected.map(c => c.key);
@@ -133,9 +156,10 @@ export class MeasurementSelection {
       if(candidate.expiresAt>now&&this.directory.deviceLive(candidate.device))continue;
       this.duty.release(candidate.key,candidate.device);
       this.cadence.withdraw(candidate.key,candidate.device,now);
-      if(this.commands.get(candidate.key)?.device===candidate.device)this.commands.delete(candidate.key);
+      this.forgetCommands(candidate.key,candidate.device);
       this.remove(candidate);this.changed(candidate.key);removed++;
     }
+    for(const [key,command] of this.refreshCommands)if(command.deadline<=now||!this.cadence.dispatched(key))this.refreshCommands.delete(key);
     return removed;
   }
 

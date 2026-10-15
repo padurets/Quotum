@@ -8,6 +8,9 @@ import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {STEPS,SCHEMA_VERSION,migrate} from '../store/schema.js';
 
+import {Store} from '../store/store.js';
+import {CurrencyStore} from '../store/currencies.js';
+
 test('measurement controls upgrade the unified layout without changing session sharing or inventory',()=>{
   const db=new DatabaseSync(':memory:');
   try {
@@ -23,8 +26,6 @@ test('measurement controls upgrade the unified layout without changing session s
       assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get()!.n,0);
   }finally{db.close();}
 });
-import {Store} from '../store/store.js';
-import {CurrencyStore} from '../store/currencies.js';
 
 /**
  * Every step a release shipped, by its hash. A database records which steps it has

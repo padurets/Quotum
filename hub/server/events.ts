@@ -504,7 +504,7 @@ export class Events implements Touches {
           return device?.userId === sub.user && this.parts.directory.deviceLive(deviceId) ? [{deviceId,lastSeenAt}] : [];
         });
         let frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...(deviceFramesByUser.get(sub.user) ?? []),
-          ...(devices.has(sub.user) ? [frame('devices',{})] : []), ...(privateContacts.length ? [frame('deviceContacts',{devices:privateContacts})] : []), ...historyFrames, ...news];
+          ...(devices.has(sub.user) && !deviceFramesByUser.get(sub.user)?.length ? [frame('devices',{})] : []), ...(privateContacts.length ? [frame('deviceContacts',{devices:privateContacts})] : []), ...historyFrames, ...news];
         if (sub.fresh) continue;
         if(!frames.length&&!sub.desktop)continue;
         try {

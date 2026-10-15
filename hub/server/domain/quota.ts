@@ -72,6 +72,12 @@ export type SourceState = {
 export const deliveryOf = (state: SourceState): Delivery | null => state.delivery ??
   (state.successAt !== null && state.staleAfterMs !== null ? {at: state.successAt, staleAfterMs: state.staleAfterMs} : null);
 
+/** Released quota providers report a successful batch instead of independent observations. */
+export function quotaObservation(state: SourceState, resource: 'windows' | 'resets'): ResourceObservation | null {
+  return state.resources?.[resource] ?? (state.successAt !== null && state.staleAfterMs !== null && (resource === 'windows' || state.resets !== null)
+    ? {status: 'observed', at: state.successAt, staleAfterMs: state.staleAfterMs} : null);
+}
+
 export type Edge = {
   valid: boolean;
   delta: number;
