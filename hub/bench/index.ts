@@ -54,7 +54,7 @@ import {IdleCpuDiagnostic,sourceIdentity,idleGeometry,planIdleEdge,idleCommitted
  * idle page for a shorter time.
  */
 
-const USAGE = 'Usage: npm run bench -- [--ci] [--cdp <http://host:port>]';
+const USAGE = 'Usage: npm run bench -- [--ci] [--scope all|history|dashboard] [--cdp <http://host:port>]';
 /** How long the idle page is watched, in seconds. */
 const IDLE = {full: 300, ci: 120};
 /** How long the board may take to show its cards. */
@@ -67,18 +67,24 @@ const MEASURE_EVERY = 3_000;
 /** A measurement that has not shown on its card by then does not show. */
 const SHOWN_WITHIN = 5_000;
 
-export function parseArgs(argv: string[]): {ci: boolean; cdp: string | null} {
+type Scope = 'all' | 'history' | 'dashboard';
+export function parseArgs(argv: string[]): {ci: boolean; cdp: string | null; scope: Scope} {
   let ci = false;
   let cdp: string | null = null;
+  let scope: Scope = 'all', scoped = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--ci') ci = true;
-    else if (arg === '--cdp') {
+    else if (arg === '--scope') {
+      const value = argv[++i];
+      if (scoped || !value || !['all', 'history', 'dashboard'].includes(value)) throw new Stop(`--scope takes exactly one of all, history or dashboard.\n${USAGE}`);
+      scope = value as Scope; scoped = true;
+    } else if (arg === '--cdp') {
       cdp = argv[++i] ?? '';
       if (!/^https?:\/\/[^/]+\/?$/.test(cdp)) throw new Stop(`--cdp takes the browser's DevTools address, as http://host:port, not "${cdp}".\n${USAGE}`);
     } else throw new Stop(`Unknown argument "${arg}".\n${USAGE}`);
   }
-  return {ci, cdp};
+  return {ci, cdp, scope};
 }
 
 /** A port nothing listens on now, for the hub. */
@@ -111,6 +117,7 @@ async function main() {
   const startupDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP;
   const startupWaitDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS;
   const poolDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
+  evidence.save('scope', {mode: options.scope});
   let idleCpu:IdleCpuDiagnostic|undefined;
   const diagnosticDirectory=path.join('/tmp/quotum-idle-cpu-diagnostic',`${process.env.GITHUB_RUN_ID??'local'}-${process.env.GITHUB_RUN_ATTEMPT??'1'}-${process.pid}`);
   const saveDiagnostic=(name:string,value:unknown,large=false)=>{
@@ -122,6 +129,7 @@ async function main() {
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
   try {
+    if (options.scope !== 'all' && [panDiagnostic, idleDiagnostic, idleCpuMode, idleTimingDiagnostic, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE].some(Boolean)) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
     if (startupDiagnostic && (startupDiagnostic !== '1' || options.cdp || panDiagnostic || idleDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup diagnostic mode');
     if (startupWaitDiagnostic && (startupWaitDiagnostic !== '1' || !options.ci || process.platform !== 'linux' || options.cdp || startupDiagnostic || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup wait diagnostic mode');
@@ -185,7 +193,7 @@ async function main() {
     // The unchanged traffic matrix runs while the seeded measurements age. Its
     // temporary pages close before the idle board opens or any script budget starts.
     let traffic:Awaited<ReturnType<typeof historyTraffic>>|undefined;
-    if((!panDiagnostic||panDiagnostic==='cpu')&&!idleDiagnostic){
+    if(options.scope!=='dashboard'&&(!panDiagnostic||panDiagnostic==='cpu')&&!idleDiagnostic){
       say('checking controlled pan traffic over fixed Brotli HTTP, separately from native performance');
       evidence.begin('history-traffic');
       const current = await ana.get<Snapshot>(`/api/overview?board=${encodeURIComponent(board)}`);
@@ -199,6 +207,12 @@ async function main() {
       }
       evidence.save('history-traffic', traffic);
       if(process.env.QUOTUM_BENCH_REVERSAL_PROBE==='1')await diagnoseReversal(browser,address.base,ana.cookie,12);
+    }
+    if(options.scope==='history'){
+      if(!traffic)throw new Stop('canonical history traffic readings unavailable');
+      const result={mode:options.scope,historyTraffic:traffic,problems:traffic.problems};
+      console.log(JSON.stringify(result,null,2));evidence.save('result',result);
+      await finish(traffic.problems.length?1:0);return;
     }
     tab = await openTab(browser);
     const {cdp} = tab;
@@ -395,8 +409,8 @@ async function main() {
     evidence.save('panning', {...panned, reports: panningReadings});
     problems.push(...panned.problems);
     say(`native panning: ${JSON.stringify({reports: panned.reports.map(report => ({initiator: report.initiator, period: report.period, frameP95Ms: round(percentile(report.frames, .95)), frameP99Ms: round(percentile(report.frames, .99)), inputP95Ms: round(percentile(report.latency, .95)), pushesDuring:report.pushesDuring,pushesAfter:report.pushesAfter,forbiddenMutations:report.forbiddenMutations})), problems: panned.problems})}`);
-    if(!traffic)throw new Stop('canonical history traffic readings unavailable');
-    problems.push(...traffic.problems);
+    if(options.scope!=='dashboard'&&!traffic)throw new Stop('canonical history traffic readings unavailable');
+    if(traffic)problems.push(...traffic.problems);
     evidence.begin('credits');
     const credits=await creditPhase(demo,stand,cdp,evidence);
     evidence.save('credits', credits);
@@ -406,6 +420,7 @@ async function main() {
     evidence.save('money', monetary);
     problems.push(...monetary.problems);
     const result = {
+      mode: options.scope,
       set: set.id,
       idle: {
         seconds: actualSeconds, plannedSeconds: seconds, planned, phase, phaseProblems,

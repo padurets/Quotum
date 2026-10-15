@@ -76,10 +76,24 @@ jobs:
   # What an open dashboard costs, measured in Chrome on the built hub and page (hub/bench).
   # A release does not wait for it: the commit it tags already passed it.
   bench:
+    if: ${{ always() && !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
+    needs: [bench-history, bench-dashboard]
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Require both benchmark scopes
+        env:
+          HISTORY_RESULT: ${{ needs['bench-history'].result }}
+          DASHBOARD_RESULT: ${{ needs['bench-dashboard'].result }}
+        run: |
+          if [ "$HISTORY_RESULT" != success ] || [ "$DASHBOARD_RESULT" != success ]; then
+            echo 'Both benchmark jobs must succeed.'
+            exit 1
+          fi
+
+  bench-history:
     if: ${{ !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
-    # Allow the full traffic matrix and subsequent credit/currency checks to finish.
-    # Individual operation deadlines and performance budgets remain enforced.
     timeout-minutes: 20
     defaults:
       run:
@@ -93,15 +107,43 @@ jobs:
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
       - run: npm run build
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope history
         env:
-          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-diagnostics
+          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-history
+      - name: History benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-history-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quotum-bench-history
+          if-no-files-found: warn
+
+  bench-dashboard:
+    if: ${{ !inputs.diagnostic_ref && !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    # Independent traffic checks run on another runner; every dashboard phase stays here.
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hub
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope dashboard
+        env:
+          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-bench-dashboard
       - name: Benchmark evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: bench-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/quotum-bench-diagnostics
+          name: bench-dashboard-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/quotum-bench-dashboard
           if-no-files-found: warn
 
   idle-cpu-control:

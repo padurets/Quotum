@@ -28,6 +28,14 @@ frequency-focus checks retain their budgets. Mixed Codex subscriptions also exer
 changed credit balances and unchanged-value heartbeats: each updates its own card and
 funds history without waking quota or wallet analytics. No browser means the check
 was not run.
+CI runs the unchanged history traffic matrix and dashboard phases on separate runners,
+each with a 20-minute job limit. `--scope history` selects the matrix, including native
+traffic and cancellation checks; `--scope dashboard` selects idle, measurements, work,
+frequency, all ten native panning scenarios, subscription credits and currency checks.
+The `bench` check passes only when both jobs succeed; a failed, skipped or cancelled job
+fails this check. The default `--scope all` keeps the full local run and its original
+order. Diagnostic modes require that full scope. Separate jobs still observe the normal
+card warmup and chart-grid alignment; their performance budgets do not change.
 DevTools commands keep their thirty-second response deadline. An explicit renderer
 crash or target-detach event fails pending commands immediately, even if the socket
 stays open, and retains the original failure before cleanup. It does not retry work.
