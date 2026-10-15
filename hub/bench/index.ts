@@ -202,6 +202,9 @@ async function main() {
         const p=[...pool.members].find(m=>m.tapes),reader=[...pool.members].find(m=>m.scope==='budget'),tape=p?.tapes.get('budget');
         const work=p?.moneyWorkAt(source,Date.now()),group=tape?.tape.money.find(m=>m.source===source),shown=reader?.get();
         return {periodLoading:p?.get().loading,periodError:!!p?.get().error,workNeeded:p?.workNeeded,work:work?{activeMs:work.activeMs,knownFrom:work.knownFrom}:null,
+          preparation:p?{generation:p.generation,revision:p.revision,retiring:p.retiring,retirementPreparing:p.retirementPreparing,quotaSeries:p.tapes.get('quota')?.tape.quota.length,
+            flights:[...p.transport.flights].slice(0,6).map(f=>({generation:f.intent.generation,revision:f.intent.revision,preparing:!!f.preparing,aborted:f.controller.signal.aborted,extras:f.extras,sections:Object.keys(f.intent.request)}))}:null,
+          recentPeriods:performance.getEntriesByType('resource').filter(r=>/\\/period$/.test(new URL(r.name).pathname)).slice(-4).map(r=>({start:r.startTime,duration:r.duration,responseEnd:r.responseEnd,bytes:r.decodedBodySize})),
           budget:group?{meter:group.meter,counter:!!group.workCounter,readings:group.workCounter?.readings.length,workFrom:group.workCounter?.workFrom}:null,
           drawing:shown?{loading:shown.loading,error:shown.error,range:shown.history?.range,series:shown.history?.meterSeries?.slice(0,24).map(m=>({source:m.sourceId,meter:m.meterId,unit:m.unit,kind:m.kind,role:m.role}))}:null};
       };};
