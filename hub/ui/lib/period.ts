@@ -219,7 +219,7 @@ class BoardPeriod {
     const period=tape.selection.periodMs;
     return periodTextChangesAt(now,at=>{const next=Math.min(tape.accounting.changesAt(at,period,source)??Infinity,scope==='quota'?this.workBoundary(at,undefined,source)??Infinity:Infinity,extra?.(at)??Infinity);return Number.isFinite(next)?next:null;},read);
   }
-  projectionState(history:History,scope:PeriodScope){const tape=this.tapes.get(scope),range=evaluatedRange(this.selection,this.evaluatedAt);return {ready:!!tape&&tape.queryKey===this.scopeKeys[scope]&&tape.rangeKey===history.range&&this.tapeCovers(tape.tape,range),error:this.projectionErrors[scope]};}
+  projectionState(history:History,scope:PeriodScope){const tape=this.tapes.get(scope),range=evaluatedRange(this.selection,this.evaluatedAt);return {ready:!!tape&&tape.queryKey===this.scopeKeys[scope]&&tape.rangeKey===history.range&&this.tapeCovers(tape,range),error:this.projectionErrors[scope]};}
   getSource=(id:string)=>this.rowsBySource.get(id)??noSessions;
   getWorkEvidence=()=>this.workEvidence;
   getValue=(id:string)=>this.values.get(id)??noValue;
@@ -229,13 +229,15 @@ class BoardPeriod {
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   subscribeValue=(id:string,listener:()=>void)=>{let set=this.valueListeners.get(id);if(!set)this.valueListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   private queryKey(query:HistoryQuery,scope?:PeriodScope){const board=page.get().board;return JSON.stringify([query.meters,query.unit,query.currency,scope==='quota'?board?.lineup.filter(id=>!board.view.hidden.includes('source:'+id)):scope&&board?.lineup.map(id=>[id,board.cards[id]?.budget])]);}
-  private tapeCovers(tape:PeriodTape,range:{from:number;to:number}) {
+  private tapeCovers(entry:{tape:PeriodTape;selection:PeriodSelection},range:{from:number;to:number}) {
+    const {tape,selection}=entry;
     // A complete fixed summary covers its requested endpoints, even when minute
     // rounding puts the right edge beyond the separate observation cut.
     if(tape.fixed)return this.selection.mode==='range'&&range.from===tape.fixed.range.from&&range.to===tape.fixed.range.to;
-    return range.from>=tape.from&&(range.to<=tape.cut||this.selection.mode==='live'&&this.liveEvidence);
+    // Each resource's accepted live evidence advances without a sessions reply.
+    return range.from>=tape.from&&(range.to<=tape.cut||this.selection.mode==='live'&&selection.mode==='live');
   }
-  private needsTape(scope:PeriodScope,key:string,range:{from:number;to:number}){const tape=this.tapes.get(scope);return this.dirtyScopes.has(scope)||!tape||tape.queryKey!==key||!this.tapeCovers(tape.tape,range);}
+  private needsTape(scope:PeriodScope,key:string,range:{from:number;to:number}){const tape=this.tapes.get(scope);return this.dirtyScopes.has(scope)||!tape||tape.queryKey!==key||!this.tapeCovers(tape,range);}
   private queries(board:NonNullable<PageState['board']>,range:{from:number;to:number}) {
     const cell=cellOf(range.to-range.from),cards=board.lineup.flatMap(id=>board.cards[id]??[]);
     const queries:Partial<Record<PeriodScope,HistoryQuery>>={};
@@ -334,7 +336,7 @@ class BoardPeriod {
         historyPool.release(staging);
       }
       if(!this.workNeeded&&this.work.basis){this.workSelection=selection;this.workRangeKey=selection.mode==='range'?periodKey(selection):prefs().range;this.tick(false);}
-      for(const tape of this.tapes.values())if(range.from>=tape.tape.from&&(range.to<=tape.tape.cut||this.liveEvidence)){tape.selection=selection;tape.rangeKey=selection.mode==='range'?periodKey(selection):prefs().range;}
+      for(const tape of this.tapes.values())if(this.tapeCovers(tape,range)){tape.selection=selection;tape.rangeKey=selection.mode==='range'?periodKey(selection):prefs().range;}
       this.work={...this.work,loading:this.workNeeded,error:null};this.publishWork();this.publishProjection();
       this.transport.change();return;
     }
