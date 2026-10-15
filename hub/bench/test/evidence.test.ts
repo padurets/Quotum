@@ -24,9 +24,12 @@ test('a phase manifest and completed readings survive a later failure with verif
 test('unsafe data is omitted and evidence overflow remains explicit', () => {
   const value = safeEvidence({cookie: 'canary-cookie', environment: {token: 'canary-token'}, commandLine: 'canary-command',
     method: 'Runtime.evaluate', expression: 'canary-expression', name: 'https://private.invalid/canary-url', message: 'canary-conversation',
+    mutation: {surface:'forecast',tag:'TD',attribute:'class'}, unknownMutation: {surface:'canary-surface',tag:'canary-tag',attribute:'canary-attribute'},
     values: Array.from({length: 10_003}, (_, i) => i)});
   assert.doesNotMatch(JSON.stringify(value), /canary|private/);
   assert.equal((value as {method: string}).method, 'Runtime.evaluate');
+  assert.deepEqual((value as {mutation:unknown}).mutation, {surface:'forecast',tag:'TD',attribute:'class'});
+  assert.deepEqual((value as {unknownMutation:unknown}).unknownMutation, {surface:'[text omitted]',tag:'[text omitted]',attribute:'[text omitted]'});
   assert.equal((value as {values: {omittedEntries: number}}).values.omittedEntries, 3);
 });
 

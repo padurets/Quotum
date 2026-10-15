@@ -1,39 +1,14 @@
 import {useRef, useState, useSyncExternalStore} from 'react';
-import type {Kind} from '../lib/types';
-import {HORIZONS, setPrefs, usePrefs} from '../lib/prefs';
+import {HORIZONS, setPrefs, usePref} from '../lib/prefs';
 import {PERIODS, periodLabel, periodOf, step, stepChangesAt} from '../lib/periods';
 import {goTo, setTimeRange, timeRangeLabel, useTimeRange, type TimeRange} from '../lib/timeRange';
 import {hubNow, useClock} from '../lib/clock';
 import {useHistoryBegins} from '../lib/history';
-import {QUOTA_WIDGETS, ACTIVITY, QUOTA_HISTORY, BUDGET_HISTORY, SUBSCRIPTION_FUNDS} from '../../server/domain/widgets';
+import {QUOTA_WIDGETS, BUDGET_WIDGETS, ACTIVITY, SUBSCRIPTION_FUNDS} from '../../server/domain/widgets';
 import {t, useLocale} from '../i18n';
 import {pan} from '../lib/pan';
-import {Segmented} from './Kit';
 import {Popover} from './Popover';
-
-/** Weekly or 5-hour windows. */
-function KindSwitch() {
-  const {kind} = usePrefs();
-  return (
-    <Segmented
-      value={kind}
-      onChange={next => setPrefs({kind: next as Kind})}
-      options={[
-        ['weekly', t('history.weekly')],
-        ['session', t('history.session')],
-      ]}
-      label={t('history.kind')}
-    />
-  );
-}
-
-/** The same filter is available beside either member of the quota pair. */
-export function QuotaSettings() {
-  return <div className="popover-section">
-    <div className="popover-title">{t('history.kind')}</div>
-    <div className="popover-pad"><KindSwitch /></div>
-  </div>;
-}
+import {Segmented} from './Kit';
 
 const Arrow = ({back}: {back: boolean}) => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -69,7 +44,7 @@ function PeriodName({selected, range}: {selected: TimeRange | null; range: strin
  * reckoned at the click; the clock renders them only when ‹ turns on or off.
  */
 function PeriodSwitch({historyStart}: {historyStart: number}) {
-  const {range} = usePrefs();
+  const range = usePref('range');
   const selected = useTimeRange();
   const now = useClock(now => stepChangesAt(selected, range, now, historyStart));
   const [open, setOpen] = useState(false);
@@ -167,15 +142,13 @@ export function AnalyticsHead({widgets, visible}: {widgets: string[]; visible: b
 }
 
 function ViewingControls({widgets}: {widgets: string[]}) {
-  const {horizon} = usePrefs();
+  const horizon = usePref('horizon');
   const historyStart = useHistoryBegins();
-  const quota = QUOTA_WIDGETS.some(id=>widgets.includes(id));
-  const charts = [ACTIVITY,QUOTA_HISTORY,BUDGET_HISTORY,SUBSCRIPTION_FUNDS].some(id=>widgets.includes(id));
+  const charts = [ACTIVITY,...QUOTA_WIDGETS.filter(id=>id.endsWith('history')),...BUDGET_WIDGETS.filter(id=>id.endsWith('history')),SUBSCRIPTION_FUNDS].some(id=>widgets.includes(id));
   const horizonName = (value: typeof horizon) => value === 'auto' ? t('history.horizonAuto') : t('history.daysShort', {count: parseInt(value)});
   return (
     <div className="analytics-head-inner">
       <div className="controls">
-        {quota && <KindSwitch />}
         {charts && <Popover label={t('history.horizon')} trigger={<span className="period-name">{t('history.horizon')}: {horizonName(horizon)}<ChevronIcon /></span>}>
           <div className="popover-section">
             <div className="popover-title">{t('history.horizon')}</div>

@@ -1,4 +1,4 @@
-import {migrateAnalyticsViews, migrateUnifiedViews} from './analyticsView.js';
+import {migrateAnalyticsViews, migrateUnifiedViews, migrateFixedViews} from './analyticsView.js';
 import type {DatabaseSync} from 'node:sqlite';
 import {adoptDeclaredLayout} from './legacyDeclared.js';
 
@@ -367,6 +367,8 @@ export const STEPS = [
     board_id TEXT NOT NULL, device_id TEXT NOT NULL, enabled_since INTEGER,
     revision TEXT NOT NULL, PRIMARY KEY(board_id,device_id)) WITHOUT ROWID;
   CREATE INDEX board_device_sessions_by_device ON board_device_sessions(device_id);`,
+  // 26 — fixed subscription periods, with lossless view expansion.
+  `SELECT 1;`,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;
@@ -384,8 +386,11 @@ export function migrate(db: DatabaseSync, now: number) {
   db.exec('BEGIN IMMEDIATE');
   try {
     for (const step of STEPS.slice(adoptDeclaredLayout(db,current))) db.exec(step);
+    // All view formats in this upgrade are one change visible at transaction commit.
+    const viewRevisions = current < 22 ? new Map((db.prepare('SELECT board_id,revision FROM views').all() as {board_id:string;revision:number}[]).map(row => [row.board_id,row.revision])) : undefined;
     if (current < 19) migrateAnalyticsViews(db, now);
     if (current < 22) migrateUnifiedViews(db, now);
+    if (current < 26) migrateFixedViews(db, now, viewRevisions);
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.prepare('INSERT OR IGNORE INTO meta VALUES (?, ?)').run('historyStart', String(now));
     // Before this, how agents worked is not known (the sums of layout 2 are gone), rather than none worked.

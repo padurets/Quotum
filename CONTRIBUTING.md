@@ -17,8 +17,9 @@ measures this machine once.
 
 After building the hub, `npm run bench -- --ci` in `hub/` checks dashboard costs in
 Chrome (`QUOTUM_CHROME`, one on `PATH`, or `--cdp http://host:port`). It includes native
-wheel and Shift-drag starting from the quota, budget and subscription-funds charts at
-24h and 30d, moving all four charts with at least twelve real series per resource family and
+wheel and Shift-drag starting from each five-hour limit, weekly limit, agent activity,
+budget balance and subscription-funds chart at 24h and 30d, moving
+all five charts with at least twelve real series per resource family and
 CPU throttled fourfold. The scenario covers delayed history, strip rebuilding, reversal
 and returning to live. Moving-frame intervals must stay within 34 ms at p95 and 50 ms
 at p99; input to an actually updated chart frame must stay within 34 ms at p95. Empty
@@ -89,7 +90,7 @@ not exact on/off-CPU intervals. Off-CPU time alone cannot distinguish scheduler 
 from deliberate sleep or a lock wait. An input's final
 geometry must still commit before it can be credited.
 `QUOTUM_BENCH_DIAGNOSE_PANNING=cpu` (the `benchmark-cpu-diagnostics` PR label)
-samples JavaScript stacks during each of the six original native scenarios in an owned
+samples JavaScript stacks during each of the ten native scenarios in an owned
 synthetic browser. It retains only numeric sample graphs, public bundle positions and
 fixed browser operation names, bounded to 100,000 entries and 32 MiB per scenario.
 Profiler setup and stop keep five-second deadlines; an unconfirmed stop closes its
@@ -617,16 +618,19 @@ performance duration; missing coverage is a failure and the 0.3 ms/s budget incl
 the transition's work.
 
 The completed measurement phase's React/DOM observer is disconnected before native
-panning. Native wheel and Shift-drag start separately from the subscription limit, budget and subscription-funds
-charts at both periods. Each input owner starts with fresh readers, captures its own
-events and must move all four plots within the same budgets.
+panning. Native wheel and Shift-drag start separately from the weekly limit, five-hour
+limit, activity, budget balance and subscription-funds charts at both periods.
+Each input owner starts with fresh readers, captures its own events and must move all
+five plots within the same budgets.
 Panning keeps its own movement and mutation checks; resetting the measurement
-probe resumes full observation for money updates. Money-view controls wait for a
-populated, committed drawing and stable layout before switching, then require the
-line to remain present and inside its scale on every frame until the new view commits.
+probe resumes full observation for money updates. The balance checks wait
+for populated, committed drawings and stable layout, then require each account or scoped-limit
+line to remain present and inside its scale on every observed frame.
+Set `QUOTUM_BENCH_PROFILE_PANNING=1` to replay failed native samples with CPU and
+timeline profiling; this diagnostic never supplies budget readings.
 
 The same run checks pan traffic separately from the native frame budget, using the
-dense 75-day fixture and all four charts at 24h and 30d. Controlled production-loader
+dense 75-day fixture and all five charts at 24h and 30d. Controlled production-loader
 replays and native browser gestures use 0, 100 and 400 ms answer delays. Cached
 return and repeat must start no history GETs; half-width movements allow at most
 seven attempts from the history chart and five from activity, and a 4% movement

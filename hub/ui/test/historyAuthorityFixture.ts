@@ -3,11 +3,11 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {HistoryStore, follow, type Shown} from '../lib/history';
-import {createStore} from '../lib/store';
+import {createStore,shallowEqual} from '../lib/store';
 import {INITIAL, reduce, type HubEvent, type Snapshot} from '../lib/board';
 import type {Card, History} from '../lib/types';
 import {EMPTY_VIEW} from '../../server/domain/view';
-import {CLOCK_TOLERANCE_MS, cellStart, tileEnd, tileOf, type Chunk, type HistoryAnswer} from '../../server/domain/history';
+import {planEventsAt,planEventsDeadline,CLOCK_TOLERANCE_MS, cellStart, tileEnd, tileOf, type Chunk, type HistoryAnswer} from '../../server/domain/history';
 import type {MeterSelection} from '../../server/domain/meterHistory';
 
 export const H = 3_600_000;
@@ -42,7 +42,7 @@ export function harness(activity = false) {
     return box.current.value;
   };
   const context = {useRef, useMemo, useSyncExternalStore: (_subscribe: unknown, read: () => unknown) => read(),
-    usePanning: () => panning, useClock: () => NOW, fundsHistory: {}, page, timeRange: () => null, prefs: () => ({range}),
+    pan:{active:()=>panning,onPhase:()=>()=>{}},hubNow:()=>NOW,planEventsAt,planEventsDeadline,shallowEqual,useClock: () => NOW, fundsHistory: {}, page, timeRange: () => null, prefs: () => ({range}),
     boardPeriod: {getProjectionRevision: () => revision, projectionState: () => ({ready, error}), project: (history: History) => history},
     read: null as unknown as (loader: HistoryStore, rolling: boolean) => Frame};
   const source = readFileSync(new URL('../lib/history.ts', import.meta.url), 'utf8');

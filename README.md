@@ -134,15 +134,15 @@ notifications also stay live, independently of the board's historical range.
   own plan: a day at 0 is a day you don't spend, and it can be any day of the week.
 - **Separate subscription limit and budget charts and metrics**, each movable, resizable and
   hideable on the same grid as cards and agent sessions. They share the board's time
-  range. The weekly/session switch selects windows in the quota chart and table;
-  cards keep their own window visibility settings. Budget history opens with balances,
-  with spending in its chart settings. The budget chart and table share
-  a series selection available in either widget's settings, even when the other is hidden.
-- **A chart of the weekly or the 5-hour windows** over the last hour up to the last 30
-  days. Ahead of now it draws the plan, where each window is going (a weekly one nearly
-  flat over the hours its subscription usually spends nothing) and the next resets, as
-  far as you choose; behind, it marks when limits came back early and when free resets
-  were granted. Drag across it to zoom into a burst of work (on a phone, hold a finger
+  range. Five-hour limits, weekly limits, budget balances each
+  have their own chart and table; cards keep their own window visibility settings.
+  Both budget widgets share **Accounts and keys** in their settings for data selection. Each chart's
+  legend controls its visibility independently of table columns.
+- **Charts of weekly and 5-hour windows** over the last hour up to the last 30
+  days. Ahead of now they show forecasts and the next resets, as far as you choose.
+  The weekly chart also draws the spending plan, nearly flat over the hours when the
+  subscription usually spends nothing. Behind now they mark when limits came back early
+  and when free resets were granted. Drag across a chart to zoom into a burst of work (on a phone, hold a finger
   on it first). ‹ and › move it by half its length; a horizontal touchpad swipe,
   Shift with the wheel, or Shift-drag moves the activity, limit, budget and subscription-funds
   charts together continuously through time.
@@ -392,9 +392,9 @@ rate cache contains no credentials or account information. Historical estimates 
 their original rate. Without a usable rate, CNY is retained and USD stays unknown or stale.
 All original balances, estimates, rate provenance, funds status and safe provider
 context are retained within the history retention period. Budget history and its table
-share the board's grid and time range. Totals are selected by default; components can
-be added from either the chart's or the table's settings, using their shared series
-selection. The total is not added to its components. Reported USD and converted CNY
+share the board's grid and time range. **Accounts and keys** in either wallet widget’s settings
+selects the account's total for both wallet widgets. Balance components remain
+in the card's disclosure. Reported USD and converted CNY
 are never summed. Spending and top-up events
 are **unavailable** because the endpoint has no spending counter; a balance change
 cannot establish spending. An omitted currency keeps its last value as stale and
@@ -432,14 +432,15 @@ range uses retained measurements before its end; the compact panel keeps current
 values. The card's settings switch individual scales, including keys beyond the
 initial five-key preview. Scales use the
 same segmented meters as subscriptions; keys without a spending limit have no scale.
-Spending belongs to analytics.
 Settings show at most ten keys per page. Access turns amber seven days before expiry;
 expired, revoked or forbidden access is red. Working keys without expiry have no expiry
 mark. Temporary read failures are amber.
-The budget chart and table share a selection of key usage and remaining limits,
-editable from either widget's settings. The chart's balance/spending mode and the
-table's columns remain separate display settings.
-Account balances are selected by default; at most 32 logical series are drawn, with
+Five-hour and weekly subscription limits each have their own chart and table.
+Budget balances have their own chart and table.
+Both budget widgets share **Accounts and keys** in their settings: an account selects its total,
+and a key selects its reported remaining limit. Table columns and each
+chart's legend visibility remain independent display settings.
+Account balances are selected by default; at most 32 metrics are selected, with
 visible overflow. The chart uses
 one unit per axis and keeps the same time range and gestures as subscription history.
 Wallet balances have no percentage; only positive key limits do.

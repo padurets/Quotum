@@ -8,7 +8,7 @@ import {tableCell as shown,type Cell,type TimedCell} from './TableCell';
 export type {Cell,TimedCell} from './TableCell';
 
 export type AnalyticsColumn<Id extends string> = {id: Id; title: string; hint?: string; width: number; align?: 'right'};
-export type AnalyticsRow<Id extends string> = {key: string; name: string; color?: string; cells: Record<Id, Cell | TimedCell>};
+export type AnalyticsRow<Id extends string> = {key: string; name: string; hint?: string; color?: string; cells: Record<Id, Cell | TimedCell>};
 
 export function TableSettings<Id extends string>({arrange, widget, columns, visible, children}: {
   arrange: Arrange; widget: string; columns: readonly AnalyticsColumn<Id>[]; visible: readonly Id[];
@@ -38,7 +38,7 @@ export function AnalyticsTable<Id extends string>({columns, rows, name, lead, so
   if (layout === 'list') return <ul ref={body as RefObject<HTMLUListElement|null>} className="analytics-compact">{rows.map(row => <li key={row.key} onClick={event=>openRow(row,event.target)}>
     <div className="analytics-compact-main">
       {row.color && <span className="swatch" style={{background: row.color}}/>}
-      <span className="analytics-compact-name">{rowName(row)}</span>
+      <span className="analytics-compact-name" title={row.hint}>{rowName(row)}</span>
       {columns.filter(column => column.id === lead).map(column => shown(column.id, row.cells[column.id], (cell, time) =>
         <span data-time={time} className={cell.className} title={cell.title}><span className="sr-only">{column.title}: </span>{cell.content}</span>,still))}
     </div>
@@ -49,7 +49,7 @@ export function AnalyticsTable<Id extends string>({columns, rows, name, lead, so
     <colgroup><col/>{columns.map(column => <col key={column.id} style={{width: column.width}}/>)}</colgroup>
     <thead><tr><TableHeading id={'name' as Id|'name'} title={name} sorting={sorting}/>{columns.map(column => <TableHeading key={column.id} {...column} sorting={sorting}/>)}</tr></thead>
     <tbody ref={body as RefObject<HTMLTableSectionElement|null>}>{rows.map(row => <tr key={row.key} onClick={event=>openRow(row,event.target)}>
-      <td><span className="analytics-name">{row.color && <span className="swatch" style={{background: row.color}}/>}{rowName(row)}</span></td>
+      <td><span className="analytics-name" title={row.hint}>{row.color && <span className="swatch" style={{background: row.color}}/>}{rowName(row)}</span></td>
       {columns.map(column => shown(column.id, row.cells[column.id], (cell, time) => <td data-time={time} className={[cell.className, column.align && 'is-' + column.align].filter(Boolean).join(' ') || undefined} title={cell.title}>{cell.content}</td>,still))}
     </tr>)}</tbody>
   </table></div>;

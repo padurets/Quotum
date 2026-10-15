@@ -324,33 +324,34 @@ test('a lost profiler start is still stopped without running the scenario', asyn
 test('every original panning scenario owns a distinct CPU profile and passes its input unchanged', async () => {
   const f = fixture();
   const result = await profilePanning(f.cdp, f.browser, f.evidence, async cdp => {
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 10; i++) {
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
       await cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', deltaX: 12});
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
     }
     return {reports: [], problems: []};
   });
-  assert.equal(result.problems.length, 0); assert.equal(f.sent.filter(value => value.method === 'Profiler.start').length, 6);
+  assert.equal(result.problems.length, 0); assert.equal(f.sent.filter(value => value.method === 'Profiler.start').length, 10);
   assert.equal(f.sent.filter(value => value.method.startsWith('HeapProfiler.')).length, 0);
-  assert.equal(f.sent.filter(value => value.method === 'Profiler.stop').length, 6);
-  assert.deepEqual(f.sent.filter(value => value.method === 'Input.dispatchMouseEvent').map(value => value.params), Array(6).fill({type: 'mouseWheel', deltaX: 12}));
-  for (let i = 1; i <= 6; i++) assert.equal((f.files.get(`cpu-${i}-profile`) as {status: string}).status, 'complete');
+  assert.equal(f.sent.filter(value => value.method === 'Profiler.stop').length, 10);
+  assert.deepEqual(f.sent.filter(value => value.method === 'Input.dispatchMouseEvent').map(value => value.params), Array(10).fill({type: 'mouseWheel', deltaX: 12}));
+  for (let i = 1; i <= 10; i++) assert.equal((f.files.get(`cpu-${i}-profile`) as {status: string}).status, 'complete');
 });
 
 test('only the successfully installed original budget/24h sampler selects allocations and freezes its failure before drain', async () => {
   const f = fixture(), evaluate = f.cdp.evaluate.bind(f.cdp), send = f.cdp.send.bind(f.cdp);
-  const report = {initiator: 'budget' as const, period: '24h', series: 12, budgetSeries: 12, fundsSeries: 12, charts: 4, rate: 4,
-    frames: Array(10_000).fill(51), latency: Array(10_000).fill(20), inputs: 10_000, updated: 10_000, chartUpdates: [40, 40, 40, 40], synchronized: true,
+  const report = {initiator: 'budget' as const, period: '24h', series: 12, budgetSeries: 12, fundsSeries: 12, sessionSeries: 12, charts: 5, rate: 4,
+    frames: Array(10_000).fill(51), latency: Array(10_000).fill(20), inputs: 10_000, updated: 10_000, chartUpdates: [40, 40, 40, 40, 40], synchronized: true,
     peakFlights: 1, maxTiles: 8, duplicateReads: 0, pushesDuring: 0, pushesAfter: 3, expectedPushes: 3, forbiddenMutations: 0, coldReads: 1, undimmed: true, sizeStable: true,
+    edgeSeries: ['wheel', 'drag'].map(stage=>({stage,series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12})),wheelGapMs:1,
     timeline: {status: 'complete', count: 100_000, omitted: 0, entries: Array(100_000).fill({private: 'private-canary'})}};
   f.cdp.evaluate = (async (expression: string, signal?: AbortSignal) => expression.startsWith('(() => {\n        const p=window.__quotumPan;p.cleanup();') ? report : evaluate(expression, signal)) as Cdp['evaluate'];
   f.cdp.send = (async (method: string, params: object, signal?: AbortSignal) => {
-    if (method === 'HeapProfiler.stopSampling') assert.match(JSON.stringify(f.files.get('cpu-3-original-result')), /moving-frame p99/);
+    if (method === 'HeapProfiler.stopSampling') assert.match(JSON.stringify(f.files.get('cpu-7-original-result')), /moving-frame p99/);
     return send(method, params, signal);
   }) as Cdp['send'];
   await profilePanning(f.cdp, f.browser, f.evidence, async cdp => {
-    for (const initiator of ['quota', 'budget', 'funds']) for (const period of ['24h', '30d']) {
+    for (const initiator of ['quota', 'session', 'activity', 'budget', 'funds']) for (const period of ['24h', '30d']) {
       await cdp.evaluate(`(() => {\n        const initiator="${initiator}",period="${period}";const probe=window.__quotumPan={};probe.raf=schedule(tick);})()`);
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
       await cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', deltaX: 12});
@@ -359,13 +360,14 @@ test('only the successfully installed original budget/24h sampler selects alloca
     }
     return {reports: [], problems: []};
   });
-  assert.equal(f.sent.filter(row => row.method === 'Profiler.start').length, 6);
+  assert.equal(f.sent.filter(row => row.method === 'Profiler.start').length, 10);
   assert.equal(f.sent.filter(row => row.method === 'HeapProfiler.startSampling').length, 1);
   assert.equal(f.sent.filter(row => row.method === 'HeapProfiler.stopSampling').length, 1);
-  assert.equal((f.files.get('cpu-3-allocations') as {status: string}).status, 'complete');
-  assert.deepEqual([...f.files.keys()].filter(name => /^cpu-\d+-allocations$/.test(name)), ['cpu-3-allocations']);
-  assert.equal(f.sent.filter(row => row.method === 'Input.dispatchMouseEvent').length, 6);
-  const original = JSON.stringify(safeEvidence(f.files.get('cpu-3-original-result')));
+  assert.equal((f.files.get('cpu-7-allocations') as {status: string}).status, 'complete');
+  assert.deepEqual([...f.files.keys()].filter(name => /^cpu-\d+-allocations$/.test(name)), ['cpu-7-allocations']);
+  assert.equal(f.sent.filter(row => row.method === 'Input.dispatchMouseEvent').length, 10);
+  assert.deepEqual(f.files.get('cpu-allocation-selection'), {mode:'diagnostic',status:'selected',interval:7});
+  const original = JSON.stringify(safeEvidence(f.files.get('cpu-7-original-result')));
   assert.ok(Buffer.byteLength(original) < 4096); assert.doesNotMatch(original, /private-canary|timeline|entries/);
 });
 

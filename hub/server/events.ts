@@ -585,7 +585,7 @@ export class Events implements Touches {
         if (cadence !== null) frames.push({type: 'cadence', data: `{"id":${id},"cadence":${cadence}}`});
         const refresh = this.changed(base, `refresh:${source.id}`, value.refresh);
         if (refresh !== null) frames.push({type: 'refresh', data: `{"id":${id},"refresh":${refresh}}`});
-        const ahead = projection.forecastPart(source.id, now);
+        const ahead = projection.forecastPart(watched.id,source.id, now);
         const forecast = this.changed(base, `forecast:${source.id}`, ahead.value);
         if (forecast !== null) frames.push({type: 'forecast', data: `{"id":${id},"forecast":${forecast}}`});
         const at = earliest(changesAt, ahead.changesAt);

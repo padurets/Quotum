@@ -2,7 +2,8 @@ import type {DatabaseSync} from 'node:sqlite';
 import {legacyWidgetTargets, migrateAnalytics, type AnalyticsResources} from '../domain/analyticsView.js';
 import {providers} from '../domain/providers.js';
 import {migrateUnified} from '../domain/unifiedView.js';
-import {encodeView} from '../domain/view.js';
+import {encodeView, encodeUnifiedView, decodeView, decodeUnifiedView, parseUnifiedView} from '../domain/view.js';
+import {migrateFixed, fixedWidgetTargets} from '../domain/fixedView.js';
 import {budgetAccess} from '../domain/resources.js';
 
 /** Membership alone determines relevance, even while a supplier has no accepted samples. */
@@ -25,7 +26,29 @@ export function migrateUnifiedViews(db: DatabaseSync, now: number) {
     const revision = (board.revision ?? 0) + 1;
     if (!Number.isSafeInteger(revision)) throw new Error('View revision exhausted');
     db.prepare('INSERT INTO views(board_id,payload,updated_by,updated_at,revision) VALUES(?,?,?,?,?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision')
+      .run(board.id,JSON.stringify(encodeUnifiedView(view)),board.updated_by ?? board.created_by,now,revision);
+  }
+}
+
+/** The schema transaction expands modes before any page can read or save a v4 view. */
+export function migrateFixedViews(db: DatabaseSync, now: number, originalRevisions?: ReadonlyMap<string, number>) {
+  const boards = db.prepare('SELECT b.id,b.created_by,v.payload,v.revision,v.updated_by FROM boards b LEFT JOIN views v ON v.board_id=b.id').all() as {id:string;created_by:string;payload:string|null;revision:number|null;updated_by:string|null}[];
+  for (const board of boards) {
+    const raw = board.payload ? JSON.parse(board.payload) : undefined;
+    if (raw && decodeView(raw)) continue;
+    const input = raw ? Array.isArray(raw) ? decodeUnifiedView(raw) : parseUnifiedView(raw) : undefined;
+    if (input === null) throw new Error('Invalid stored board view');
+    const view = migrateFixed(input, analyticsResources(db, board.id));
+    if (!decodeView(encodeView(view))) throw new Error('Invalid migrated board view');
+    const revision = (originalRevisions ? originalRevisions.get(board.id) ?? 0 : board.revision ?? 0) + 1;
+    if (!Number.isSafeInteger(revision)) throw new Error('View revision exhausted');
+    db.prepare('INSERT INTO views(board_id,payload,updated_by,updated_at,revision) VALUES(?,?,?,?,?) ON CONFLICT(board_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision')
       .run(board.id,JSON.stringify(encodeView(view)),board.updated_by ?? board.created_by,now,revision);
+    const receipts = db.prepare("SELECT id,item,widget_targets FROM board_additions WHERE board_id=? AND json_extract(item,'$.kind')='widget'").all(board.id) as {id:string;item:string;widget_targets:string|null}[];
+    for (const receipt of receipts) {
+      const targets=receipt.widget_targets?JSON.parse(receipt.widget_targets):[JSON.parse(receipt.item).widgetId];
+      db.prepare('UPDATE board_additions SET widget_targets=? WHERE id=?').run(JSON.stringify(fixedWidgetTargets(targets)),receipt.id);
+    }
   }
 }
 

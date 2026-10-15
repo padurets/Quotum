@@ -1,5 +1,5 @@
 import {sourceKey} from '../../server/domain/workAccess';
-import {cellStart, resetEventsPrepared, type Chunk, type HistoryMeta, type SourceEvent, type SeriesCells, type Target} from '../../server/domain/history';
+import {cellStart, resetEventsPrepared,planEventsPrepared, type Chunk, type HistoryMeta, type SourceEvent, type SeriesCells, type Target} from '../../server/domain/history';
 import {barOf} from '../../server/domain/work';
 import type {ActivityDimension} from './types';
 import type {PlotBlock, PlotSeries} from './lines';
@@ -112,6 +112,7 @@ export function* plotPrepared(chunks: readonly Chunk[], meta: HistoryMeta, targe
   const series = new Map<string, {line: PlotSeries; parts: PlotSeries['points'][]; last: number; lastUntil?: number; segment: number}>();
   const activityCells = new Map<number, PlotBar>();
   const events: SourceEvent[] = yield* resetEventsPrepared(chunks, windows, from, to);
+  events.push(...yield*planEventsPrepared(chunks,from,to,Math.max(target.now,meta.now)));
   for (const chunk of chunks) {
     for (const values of chunk.series) {
       const key = `${values.source} ${values.window}`;

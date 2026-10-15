@@ -96,7 +96,9 @@ only the board owner may show another member's hidden card or add a standard wid
 `{kind:"sources", sourceIds:[...]}`, `{kind:"widget", widgetId}`,
 `{kind:"connection", provider, account?: {kind:"new"} | {kind:"existing", id}}`, or `{kind:"replace", credentialId}`.
 Source selections contain one to 100 unique IDs. Standard widgets are `agents`,
-`activity`, `quota-history`, `subscription-funds`, `budget-history`, `quota-table`, `budget-table`. Replacement is personal; the server captures its
+`activity`, `quota-history`, `quota-session-history`, `quota-table`, `quota-session-table`,
+`budget-history`, `budget-table`,
+`subscription-funds`. Replacement is personal; the server captures its
 provider, source and access revision. Reusing a request ID with another destination or
 selection returns `409 addition_conflict`. No secret goes into reservation or storage.
 
@@ -145,10 +147,10 @@ with 32-KiB bodies and ten key-verification attempts per minute per user and add
 Status and reservation have a separate bounded request limit. Credentials cannot be
 submitted in a query. Closed panels do not poll or read catalogue/history data.
 
-`POST /api/boards/:board/view` is owner-only and accepts the compact v3 view described
-below, up to 76 KiB (77,824 UTF-8 bytes including JSON syntax). The independent
-writer header `X-Quotum-View-Version: 3` is required, even when a previous page echoes
-a received v3 view. Missing or incompatible writer headers return
+`POST /api/boards/:board/view` is owner-only and accepts the compact v4 view described
+below, up to 80 KiB (81,920 UTF-8 bytes including JSON syntax). The independent
+writer header `X-Quotum-View-Version: 4` is required, even when a previous page echoes
+a received v4 view. Missing or incompatible writer headers return
 `428 view_reload_required` without mutation; malformed or unsupported body
 versions return `400 invalid_request`. `If-Match: "<revision>"` remains required:
 missing is `428 view_reload_required`, malformed is `400 invalid_request`, and stale
@@ -156,20 +158,21 @@ is `409 view_conflict` with the authorized current `{view, revision}`.
 Success returns `{view, revision}`. Semantic changes increment revision; no-op saves
 do not. Snapshots and view events carry that revision.
 
-Storage and POST use `[3, places, mask, ...fields]`; events, snapshots and conflict
-responses use the semantic object with `version: 3`. Each place is `[id, geometry]`
+Storage and POST use `[4, places, mask, ...fields]`; events, snapshots and conflict
+responses use the semantic object with `version: 4`. Each place is `[id, geometry]`
 or `[id, geometry, h]`, in reading order. Integer ids 0 through 6 stand for `agents`,
-`activity`, `quota-history`, `budget-history`, `quota-table`, `budget-table`, `subscription-funds`; other ids
+`activity`, `quota-history`, `budget-history`, `quota-table`, `budget-table`, `subscription-funds`; aliases 7 through 10 are `quota-session-history`,
+`quota-session-table`, `budget-spending-history`, `budget-spending-table`; the last two are retired preview slots, never reused or offered by the widget catalogue. Other ids
 are unchanged strings (including the distinct string `"0"`). Geometry 0 through 9
 indexes `(x,w)` pairs `(0,2),(0,3),(0,4),(0,6),(2,2),(2,3),(2,4),(3,2),(3,3),(4,2)`.
 The array position restores `y`; vertical gaps are not persisted height requests.
 The ten mask bits select nonempty `names`, `hidden`, `shown`, `windows`, `plans`,
 `unplanned`, `colors`, `columns`, `shownColumns`, `enabledWhenEmpty`, in that order.
 Omitted fields restore empty defaults. `shown` is `[builtinMask, ...otherIds]`, with
-the same seven builtin bits; at most 204 other ids. Other owner fields keep their
+the same eleven builtin bits; at most 204 other ids. Other owner fields keep their
 ordinary types and limits. Duplicate place ids, invalid aliases, duplicate shown ids,
 unknown mask bits and trailing fields are rejected. Decoded drafts must also fit
-128 KiB before publication. Byte accounting for normal and keepalive saves uses the
+132 KiB before publication. Byte accounting for normal and keepalive saves uses the
 actual encoded request; there is no separate quota for each representation.
 
 The upgrade concatenates the visible reading orders of cards and analytics, then
@@ -180,13 +183,14 @@ Reads and new membership do not materialize every implicit place. Add, replay an
 device-onboarding writes also require the current writer header.
 
 The standard widgets are `agents`, `activity`, `quota-history`, `budget-history`,
-`quota-table`, `budget-table` and `subscription-funds`. Each analytics replacement in `shown` is placed;
+`quota-table`, `budget-table`, `subscription-funds`, `quota-session-history`,
+`quota-session-table`. Each analytics replacement in `shown` is placed;
 `hidden` takes precedence. Unplaced analytics become placed once their resource
 capabilities appear, independently of filters, latest errors or zero balances. Placed
 widgets remain when resources leave. `enabledWhenEmpty` applies only to explicit
 `agents` and `activity` additions. New empty boards have no analytics placed and keep
 activity hidden; any standard widget can be added explicitly to an empty board.
-The released v3 numeric aliases 0 through 6 and shown mask 127 are unchanged.
+The v4 shown mask admits 2047; the released v3 aliases 0 through 6 and mask 127 remain frozen in the migration decoder. Hidden/column widget maps admit 211 entries and shown admits 215 (nine active builtin slots, two retired preview slots and 204 other IDs). The v3-to-v4 migration retains the old IDs for weekly limits and wallet balance, inserts five-hour siblings next to saved weekly parents, and copies visibility, widths, requested heights and table columns. Each stored view and retained receipt is upgraded atomically; chained older upgrades increment a view revision only once. Retired preview fields remain inert and losslessly readable. Existing Add receipts expose only active targets; a retired-only pending operation returns `addition_unavailable` without saving the view, and a completed replay never places it again.
 
 Agent sessions uses the existing period `sessions` section, independent of quota
 history and chart selection. Reader-local project/machine/subscription/each-agent
@@ -299,8 +303,8 @@ or the table, a chart as tall as it draws by itself, the first agent of the list
 many more), so `h` is what the owner asked for, not what shows, and the hub does not check
 it against the content. A place has exactly `x`, `y`, `w` and, optionally, `h`; anything
 else is refused. The hub migrates stored pre-grid views and split analytics IDs before
-serving the view with its revision. Saves require the compact version 3 codec and
-its writer header, with a 76 KiB UTF-8 body limit. The page uses keepalive only within its
+serving the view with its revision. Saves require the compact version 4 codec and
+its writer header, with an 80 KiB UTF-8 body limit. The page uses keepalive only within its
 aggregate 64 KiB budget; larger drafts use immediate serialized ordinary saves.
 There is no separate count limit on places; each place is validated.
 
@@ -378,6 +382,14 @@ shownZero, shownLeft, comfy, points, basis}`, worked out as of `asOf`:
   last day against that (null while it goes by a straight line); `burst`, `{times, zero}`
   when the last six hours ran at least twice as fast as usual and would run out before
   the reset at that pace, else null. For `needData`, only `{hours}`; else null.
+
+- `planSince` (optional): the actual observed plan boundary used by the producer at
+  `asOf`, or null when unknown. It is filtered by this board's source visibility,
+  sharing start and retention. It is not the beginning of a subscription. Expiry can
+  send a forecast replacement changing only this provenance, without recalculating
+  the shared forecast or its confirmation time. The compatible weekly forecast's
+  tooltip gives this boundary and explains its confirmation after an hour of
+  observations, including while it needs more data.
 
 The first time after the hub starts, it is worked out on the latest sample, as of the
 last whole hour if the sample came before it (or goes on as the hub kept it, if that took
@@ -797,8 +809,27 @@ type Chunk = {
   };
   resets: [source: string, window: string, at: number][];
   grants: [source: string, at: number, count: number][];
+  plans?: [source: string, at: number, plan: string,
+    previous: {at: number; plan: string} | null, expiresAt: number][];
 };
 ```
+
+Quota chunks in both history and board-period replies optionally include the stored
+nonempty plan observations. `at` is the actual observation inside `[from,to)`, never
+a grid boundary. Repeated identical or empty names create no event. `previous` is
+the latest authorized differing nonempty observation within the same source's
+sharing and retention bounds; null means first known to this reader. It does not
+prove the subscription's original plan. Names and predecessor structures count
+towards the existing tile and response byte budgets. Budget and subscription-funds
+history expose no plan events.
+
+`expiresAt` is `at + retentionMs + 1`, an exclusive Unix-millisecond deadline.
+The predecessor expires independently at `expiresAt - at + previous.at`.
+Closed server tiles are reusable only until the earliest deadline. The page removes
+expired events and predecessor names from retained tiles, composed history and plot
+readouts before reuse, including after sleep, through its shared clock and without
+a history request. Replacing an interval replaces its plan facts too. This expiry
+does not depend on physical database pruning or change any forecast values.
 
 Cell indexes are relative to `chunk.from / cell`. Each series contains only cells with
 measurements, in order. Every window with measurements is included, even one the card
@@ -1038,7 +1069,8 @@ Card key scales use the existing view's `windows` visibility list with
 hidden; `shown` holds explicitly enabled scales beyond it, using the same entry format.
 An explicit enabled choice survives changes in preview ordering. The card's switches
 also apply to compact. Card settings page through key-scale switches; there is no
-key-table dialog. Chart series are chosen independently in the chart's own settings.
+key-table dialog. Wallet widgets share an Accounts and keys data picker in their settings,
+independently of card scales. Chart legends control each chart's visibility separately.
 Both resource types use the same segmented meter; balances have no percentage meter.
 
 A hub-measured card may also carry `meters`, `keys` (a preview of at most five),
@@ -1137,12 +1169,12 @@ scope, label}` as it actually held before the chunk, or null.
 
 A meter cell is `[index, value, spentInternal, spentExceptional, coveredMs, extra?]`.
 Value is the historical amount, or remaining for a cap. The composed money frame also
-keeps exact known spending per point, so the spending view draws only located spending.
+retains exact known spending per point as accounting evidence.
 Summaries distinguish missing coverage from zero spending: no covered interval gives
 an unknown amount, and a known subtotal with incomplete coverage is marked partial.
 Different kind or unit identities that occur inside one cell retain separate series.
-Progressive drawing may hold neighboring cells for movement, while spending uses the
-visible whole-cell period. Loading those neighbors cannot change its amounts or make
+Progressive drawing may hold neighboring cells for movement, while spending accounting
+uses the visible whole-cell period. Loading those neighbors cannot change its amounts or make
 a boundary-crossing step located within that period.
 Extra may give `first`, `open`
 (including explicit null), `segment`, historical `semantics`, original exceptional
@@ -1160,7 +1192,7 @@ DeepSeek series have `accounting: {spending: "unavailable", topups: "unavailable
 Their two spending cell slots are null, exceptional/top-up steps are absent, and
 composed `spent`, `topup` and per-point `spent` are null. They keep numeric balance
 values, coverage and their catalogue role. Missing capability never becomes zero.
-The UI omits unsupported spending lines and explains unavailable table quantities.
+Unsupported top-up totals remain unavailable in the budget table.
 
 DeepSeek `pointMode: "observation"` cells additionally use `pointOffsetMs` (omitted
 means zero) and an exclusive absolute `validUntil` (omitted means fixed grid cell end).
@@ -1396,6 +1428,11 @@ are absent from every shared projection. Credential details remain owner-only. T
 
 ## Privacy
 
+Plan-event names, preceding observations and forecast plan boundaries disclose only
+visible source evidence inside this board's history grant and retention period.
+Predecessors retained for internal housekeeping never extend that grant. These
+fields include no private account labels, owner identities or collector credentials.
+
 Period and session projections expose only authorized board measurements and clipped
 credited work. Opaque refs do not expose producer session ids or database row ids.
 Current context is joined server-side only after an authorized stable identity match.
@@ -1545,9 +1582,9 @@ Alternatively, `ids` is a JSON array of 1–50 opaque key ids, mutually exclusiv
 `after` and `limit`. It returns only those current keys and their meters in inventory
 order, with `next: null`. Enabled scales beyond the preview use this bounded read when
 their source changes; they never poll. Membership and source visibility still apply.
-Chart settings show current and selected archived keys through the same pages of at
-most ten keys. Selected current keys on other pages are not duplicated. An open page
-reloads after a successful source measurement.
+The shared Accounts and keys picker shows current keys and selected archived key caps
+through pages of at most ten keys. Selected current keys on other pages are not
+duplicated. An open page reloads after a successful source measurement.
 
 ## Mixed Codex subscription and credit balance
 

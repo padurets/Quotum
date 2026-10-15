@@ -138,8 +138,17 @@ export class Projection {
    * Where the recent pace of a source's weekly windows leads, the same on every board. Apart
    * from `sourcePart`: what reads a card for every frame does not work out forecasts.
    */
-  forecastPart(source: string, now: number): Timed<ForecastPart> {
-    return this.hub.ingest.forecasts.of(source, now);
+  forecastPart(board:string,source: string, now: number): Timed<ForecastPart> {
+    const rights=this.hub.store.shown(board,this.hub.directory.view(board).hidden).get(source);
+    if(!rights)return {value:{},changesAt:null};
+    const global=this.hub.ingest.forecasts.of(source,now),retention=config.retention.sampleDays*DAY,cutoff=Math.max(rights.since,now-retention);
+    let next=global.changesAt??Infinity;
+    const value=Object.fromEntries(Object.entries(global.value).map(([id,forecast])=>{
+      const since=forecast.planSince!=null&&forecast.planSince>=cutoff?forecast.planSince:null;
+      if(since!==null)next=Math.min(next,since+retention+1);
+      return [id,{...forecast,planSince:since}];
+    }));
+    return {value,changesAt:Number.isFinite(next)?next:null};
   }
 
   /** The same visible figures as the cards, with data quality independent of their level. */
@@ -240,7 +249,7 @@ export class Projection {
       sessions: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].sessions])),
       cadence: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].cadence])),
       refresh: Object.fromEntries(lineup.map((s, i) => [s.id, sources[i].refresh])),
-      forecast: Object.fromEntries(lineup.map(s => [s.id, this.forecastPart(s.id, now).value])),
+      forecast: Object.fromEntries(lineup.map(s => [s.id, this.forecastPart(board,s.id, now).value])),
       mine: this.mine(user, lineup),
       boards: this.boards(user),
       connectionsRevision: this.hub.directory.connectionsRevision(user),

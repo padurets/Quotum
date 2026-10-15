@@ -37,7 +37,7 @@ const coordinatorCode=ts.transpileModule(source.slice(source.indexOf('class Boar
 function harness(visible:string[]=['quota-history']) {
   const cards=Object.fromEntries(['A','B'].map(id=>[id,{id,provider:'openrouter',windows:[],meters:[]}])) as Record<string,{id:string;provider:string;windows:never[];meters:never[]}>;
   const board={id:'b',meta:{personal:true},lineup:['A','B'],cards,view:{...EMPTY_VIEW,hidden:[ACTIVITY],shown:[...visible]}};
-  const settings={range:'1h',kind:'session',money:{...DEFAULT_MONEY,selected:{USD:[['A','balance']] as [string,string][]}},funds:{...DEFAULT_MONEY}};
+  const settings={range:'1h',showSessionForecast:true,money:{...DEFAULT_MONEY,selected:{USD:[['A','balance']] as [string,string][]}},funds:{...DEFAULT_MONEY}};
   const pool=new HistoryPool(),attempts:Attempt[]=[],fail=new Set<PeriodScope>();
   let selected:PeriodRange|null=null,held:((attempt:Attempt)=>Promise<void>)|null=null,failWork=false,failValues=false;
   const send=async(_board:string,body:PeriodRequest,signal:AbortSignal):Promise<PeriodReply>=>{
@@ -79,8 +79,8 @@ test('a runtime money selection retires its old evidence without changing other 
   assert.deepEqual(JSON.parse(h.attempts[0].body.budget!.meters!),[['B','balance']]);
   assert.equal(h.attempts[0].body.sessions,undefined);finish();await flush();
   assert.equal(h.period.projectionState({range:'1h'},'budget').ready,true);
-  h.settings.money.view='spending';h.settings.kind='weekly';h.period.changed();await flush();
-  assert.equal(h.attempts.length,1,'view and quota kind change presentation, not evidence');
+  h.settings.showSessionForecast=false;h.period.changed();await flush();
+  assert.equal(h.attempts.length,1,'forecast visibility changes presentation, not evidence');
   h.period.activate(false);
 });
 

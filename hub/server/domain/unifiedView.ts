@@ -1,11 +1,11 @@
 import {migrateAnalytics, reconcileAnalytics, type AnalyticsResources} from './analyticsView.js';
 import {ordered, type Place} from './layout.js';
-import {VIEW_VERSION, type View} from './view.js';
-import {ANALYTICS, WIDGETS, widgetVisible} from './widgets.js';
+import {type UnifiedView} from './view.js';
+import {LEGACY_ANALYTICS as ANALYTICS, LEGACY_WIDGETS as WIDGETS, widgetVisible} from './widgets.js';
 
 /** Freeze the old visible sequences before weaving in hidden saved intent. */
-export function migrateUnified(input: Parameters<typeof migrateAnalytics>[0] | View, resources: AnalyticsResources): View {
-  if (input?.version === VIEW_VERSION) return input;
+export function migrateUnified(input: Parameters<typeof migrateAnalytics>[0] | UnifiedView, resources: AnalyticsResources): UnifiedView {
+  if (input?.version === 3) return input;
   const split = reconcileAnalytics(migrateAnalytics(input, resources), resources);
   const cards = [...resources.map(source => 'source:' + source.id), 'agents'];
   const areas = [cards, ANALYTICS];
@@ -31,5 +31,5 @@ export function migrateUnified(input: Parameters<typeof migrateAnalytics>[0] | V
     for (const [id,p] of tail) add(id,p);
   }
   for (const [id,p] of Object.entries(saved).filter(([id]) => !used.has(id)).sort(compare)) add(id,p);
-  return {...split,version:VIEW_VERSION,layout:{columns:6,places:Object.fromEntries(entries)}};
+  return {...split,version:3,layout:{columns:6,places:Object.fromEntries(entries)}};
 }

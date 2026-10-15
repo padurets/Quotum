@@ -397,6 +397,11 @@ async function shown(stand: Stand, entry: Entry, check: object, reading: Reading
     const events = marks.filter(m => m.event.sourceId === source.id).map(m => m.event.kind);
     values.event = events.includes(card.event) ? card.event : events;
   }
+  if('planHistory' in card){
+    const history=await reading.history(board);
+    const plans=history.events.filter(event=>event.sourceId===source.id&&event.kind==='plan');
+    values.planHistory=plans.some(event=>event.kind==='plan'&&(card.planHistory==='changed'?event.previous!==null:event.previous===null))?card.planHistory:plans;
+  }
   return values;
 }
 

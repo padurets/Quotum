@@ -18,7 +18,7 @@ import {Cadence} from '../../server/cadence.js';
 import {Pairing} from '../../server/pairing.js';
 import {ResetFeed} from '../../server/resets.js';
 import {Setup} from '../../server/setup.js';
-import {BUDGET_WIDGETS, QUOTA_WIDGETS, widgetVisible} from '../../server/domain/widgets.js';
+import {LEGACY_BUDGET_WIDGETS, QUOTA_WIDGETS, widgetVisible} from '../../server/domain/widgets.js';
 
 const secret = 'SYNTHETIC_PROVIDER_KEY_0123456789';
 async function harness(extended = true) {
@@ -127,8 +127,8 @@ test('the sessions table is an owner-only explicit placement and receipt replay 
 
 for (const first of ['codex', 'deepseek'] as const) test(`a new board waits for its first ${first} source before placing only that analytics pair`, async t => {
   const h = await harness(); t.after(h.close);
-  const pair = first === 'codex' ? QUOTA_WIDGETS : BUDGET_WIDGETS;
-  const other = first === 'codex' ? BUDGET_WIDGETS : QUOTA_WIDGETS;
+  const pair = first === 'codex' ? QUOTA_WIDGETS : LEGACY_BUDGET_WIDGETS;
+  const other = first === 'codex' ? LEGACY_BUDGET_WIDGETS : QUOTA_WIDGETS;
   const source = h.store.source(first, 'first-source', Date.now());
   h.store.hold(source, h.owner.id, Date.now());
   // Owning the source on the personal board does not place it on a new shared board.

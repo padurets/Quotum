@@ -1,28 +1,34 @@
 import {useSyncExternalStore} from 'react';
 import {readAgentsBy, readAgentsSort, type AgentsBy, type AgentsSort} from './agents';
-import {ANALYTICS_KINDS, type ActivityDimension, type Kind} from './types';
+import {type ActivityDimension} from './types';
+import {ACTIVITY, QUOTA_HISTORY, QUOTA_SESSION_HISTORY, BUDGET_HISTORY, SUBSCRIPTION_FUNDS} from '../../server/domain/widgets';
 import {DEFAULT_PERIOD, periodOf} from './periods';
+import {readForecastSort,type ForecastSort} from './forecastSort';
 import {DEFAULT_MONEY,readMoney,type MoneyPrefs} from './moneySelection';
+import {readMoneySort, type MoneySort} from './moneyTable';
+import {conversionOrigin} from '../../server/domain/currency';
 
 /** How far the chart looks ahead: `auto` follows the period. */
 export type Horizon = 'auto' | '1d' | '3d' | '7d';
 
 /**
- * How this reader looks at the dashboard, whatever the board: the period and window type
- * of its analytics (agent activity, the chart and the table), the chart's horizon, lines
- * and groups switched off in either chart's legend, whether it draws the plan and the
+ * How this reader looks at the dashboard, whatever the board: the period
+ * of its analytics, the chart's horizon, lines
+ * and groups switched off in each chart's legend, whether it draws the plan and the
  * forecast, what the list of agents gathers by and how it sorts, what the activity widget
  * stacks by, reset announcements, and whether the
  * widgets are locked in place. How a
  * board is arranged is the board's own (lib/view.ts).
  */
 export type Prefs = {
+  forecastSort:ForecastSort;
+  sessionSort:ForecastSort;
+  moneySort: MoneySort;
   money:MoneyPrefs;
   funds:MoneyPrefs;
   /** Series switched off in the chart legend. */
-  muted: Record<string, true>;
+  muted: Record<string, boolean>;
   range: string;
-  kind: Kind;
   horizon: Horizon;
   /** Keep the shared filter row open beneath the header. */
   filtersVisible: boolean;
@@ -30,6 +36,7 @@ export type Prefs = {
   showPlan: boolean;
   /** Draw where each window's pace leads on the chart. */
   showForecast: boolean;
+  showSessionForecast:boolean;
   /** Show reset announcements from the community trackers. */
   showResets: boolean;
   /** The widgets stay where they are: no handles to move or resize them. */
@@ -45,19 +52,44 @@ export type Prefs = {
 const KEY = 'quotum.prefs';
 export const HORIZONS: Horizon[] = ['auto', '1d', '3d', '7d'];
 export const ACTIVITY_BY: ActivityDimension[] = ['project', 'device', 'source'];
-const DEFAULTS: Prefs = {funds:DEFAULT_MONEY,money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, kind: 'weekly', horizon: 'auto', filtersVisible: false, showPlan: true, showForecast: true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
+const DEFAULTS: Prefs = {forecastSort:null,sessionSort:null,moneySort:null,funds:DEFAULT_MONEY,money:DEFAULT_MONEY,muted: {}, range: DEFAULT_PERIOD, horizon: 'auto', filtersVisible: false, showPlan: true, showForecast: true, showSessionForecast:true, showResets: true, locked: false, agentsSort: null, agentsBy: 'project', activityBy: 'project'};
+
+const CHARTS:readonly string[]=[ACTIVITY,QUOTA_HISTORY,QUOTA_SESSION_HISTORY,BUDGET_HISTORY,SUBSCRIPTION_FUNDS];
+export const chartMuteKey=(widget:string,source:string,resource:string)=>JSON.stringify([widget,source,
+  [BUDGET_HISTORY,SUBSCRIPTION_FUNDS].includes(widget)?conversionOrigin(resource)?.meter??resource:resource]);
+export const chartSeriesMuted=(muted:Prefs['muted'],widget:string,source:string,resource:string,inherited=false)=>muted[chartMuteKey(widget,source,resource)]??inherited;
+
+function readMuted(value:unknown):Prefs['muted'] {
+  if(!value||typeof value!=='object'||Array.isArray(value))return {};
+  const muted=Object.fromEntries(Object.entries(value).filter((entry):entry is [string,boolean]=>typeof entry[1]==='boolean'));
+  for(const [key,on] of Object.entries(muted))try{
+    const parts=JSON.parse(key);
+    if(Array.isArray(parts)&&parts[0]==='budget-spending-history'){delete muted[key];continue;}
+    if(!Array.isArray(parts)||parts.length!==4||!parts.every(part=>typeof part==='string')||!['balance','counter','cap'].includes(parts[2]))continue;
+    delete muted[key];
+    for(const widget of [BUDGET_HISTORY,SUBSCRIPTION_FUNDS]){
+      const scoped=chartMuteKey(widget,parts[0],parts[1]);
+      if(!Object.hasOwn(muted,scoped))muted[scoped]=on;
+    }
+  }catch{/* Native quota and activity keys retain their earlier identity. */}
+  return muted;
+}
 
 function read(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
-    const stored = {...DEFAULTS, ...(raw ? (JSON.parse(raw) as Partial<Prefs>) : {})};
+    const parsed:Partial<Prefs> = raw ? JSON.parse(raw) : {};
+    const stored = {...DEFAULTS, ...parsed};
     // Whatever the browser kept from another version must still be a valid choice.
     stored.range = periodOf(String(stored.range)).id;
-    if (!ANALYTICS_KINDS.includes(stored.kind)) stored.kind = DEFAULTS.kind;
     if (!HORIZONS.includes(stored.horizon)) stored.horizon = DEFAULTS.horizon;
     if (!ACTIVITY_BY.includes(stored.activityBy)) stored.activityBy = DEFAULTS.activityBy;
-    const {muted, range, kind, horizon, filtersVisible, showPlan, showForecast, showResets, locked, activityBy} = stored;
-    return {funds:{...readMoney(stored.funds),view:'balance'},money:readMoney(stored.money),muted, range, kind, horizon, filtersVisible: filtersVisible === true, showPlan, showForecast, showResets, locked: locked === true, agentsSort: readAgentsSort(stored.agentsSort), agentsBy: readAgentsBy(stored.agentsBy), activityBy};
+    const {range, horizon, filtersVisible, showPlan, showForecast, showResets, locked, activityBy} = stored;
+    return {forecastSort:readForecastSort(stored.forecastSort),sessionSort:readForecastSort(Object.hasOwn(parsed,'sessionSort')?parsed.sessionSort:stored.forecastSort),
+      moneySort:readMoneySort(stored.moneySort),
+      funds:readMoney(stored.funds,'funds'),money:readMoney(stored.money),muted:readMuted(stored.muted),range,horizon,filtersVisible:filtersVisible===true,
+      showPlan:showPlan!==false,showForecast:showForecast!==false,showSessionForecast:Object.hasOwn(parsed,'showSessionForecast')?parsed.showSessionForecast!==false:showForecast!==false,
+      showResets:showResets!==false,locked:locked===true,agentsSort:readAgentsSort(stored.agentsSort),agentsBy:readAgentsBy(stored.agentsBy),activityBy};
   } catch {
     return DEFAULTS;
   }
@@ -92,14 +124,26 @@ export function usePrefs(): Prefs {
 }
 
 /** One preference: whoever reads it renders when it changes, not when another one does. */
-export function usePref<K extends keyof Prefs>(key: K): Prefs[K] {
-  return useSyncExternalStore(subscribe, () => current[key], () => current[key]);
+export function usePref<K extends keyof Prefs>(key: K, active=true): Prefs[K] {
+  return useSyncExternalStore(subscribe, () => active?current[key]:DEFAULTS[key], () => active?current[key]:DEFAULTS[key]);
 }
+
+// Each fixed chart hears only its own visibility changes and immutable legacy flags.
+const chartSnapshots=new Map<string,{all:Prefs['muted'];value:Prefs['muted']}>();
+function mutedForChart(widget:string):Prefs['muted'] {
+  const previous=chartSnapshots.get(widget);
+  if(previous?.all===current.muted)return previous.value;
+  const value=Object.fromEntries(Object.entries(current.muted).filter(([key])=>{
+    try{const parts=JSON.parse(key);return !Array.isArray(parts)||parts.length!==3||!CHARTS.includes(parts[0])||parts[0]===widget;}catch{return true;}
+  }));
+  const same=previous&&Object.keys(value).length===Object.keys(previous.value).length&&Object.entries(value).every(([key,on])=>previous.value[key]===on);
+  const result=same?previous.value:value;chartSnapshots.set(widget,{all:current.muted,value:result});return result;
+}
+export const useChartMuted=(widget:string)=>useSyncExternalStore(subscribe,()=>mutedForChart(widget),()=>mutedForChart(widget));
 
 export const setMuted = (key: string, muted: boolean) =>
   setPrefs(prefs => {
     const next = {...prefs.muted};
-    if (muted) next[key] = true;
-    else delete next[key];
+    next[key] = muted;
     return {muted: next};
   });

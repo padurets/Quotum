@@ -1,7 +1,5 @@
 import type {Cdp} from './cdp.js';
 import {reload} from './reload.js';
-import {deadline} from './deadline.js';
-import type {Evidence} from './evidence.js';
 
 /** A saved radio remains focused, so the next native arrow can save another choice. */
 export async function frequencyKeys(cdp: Cdp) {
@@ -38,10 +36,10 @@ export async function frequencyKeys(cdp: Cdp) {
 
 /** Each phase keeps its intended monetary selection across the page reload. */
 export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'budget'|'funds'='budget') {
-  const panel=family==='funds'?'.subscription-funds':'.budget-history';
+  const panel=family==='funds'?'[data-widget="subscription-funds"]':'[data-widget="budget-history"]';
   await cdp.evaluate(`(() => {
     const prefs = JSON.parse(localStorage.getItem('quotum.prefs') || '{}');
-    prefs.${family==='funds'?'funds':'money'} = {unit: 'USD', view: 'balance', selected: {USD: ${JSON.stringify(ids)}}};
+    prefs.${family==='funds'?'funds':'money'} = {version:1,unit: 'USD', selected: {USD: ${JSON.stringify(ids)}}};
     prefs.muted = {};
     localStorage.setItem('quotum.prefs', JSON.stringify(prefs));
   })()`);
@@ -64,47 +62,14 @@ export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'bud
   })()`);
 }
 
-/** A zero cap keeps the scale's origin unchanged when balances become spending. */
-export async function moneyView(cdp: Cdp, source: string, cappedSource: string, cap: string, evidence?: Pick<Evidence, 'save'>) {
+/** The balance view keeps account and scoped-limit values inside their scale. */
+export async function moneyView(cdp: Cdp, source: string, cappedSource: string, cap: string) {
   await selectMoney(cdp, [[source, 'balance'], [cappedSource, cap]]);
-  await cdp.evaluate(`document.querySelector('.budget-history .panel-head .picker > button').click()`);
-  for (const [index, label] of ['Spending', 'Balance', 'Spending'].entries()) {
-    try {
-      await cdp.evaluate(`(async () => {
-      const button = Array.from(document.querySelectorAll('.popover .segmented button')).find(b => b.textContent === ${JSON.stringify(label)});
-      if (!button) throw new Error('no money view control');
-      const evidence=window.__quotumMoneyViewEvidence={name:${JSON.stringify(label)},sourceId:${JSON.stringify(source)},frames:[],omitted:0};
-      const read=window.__quotumMoneyViewRead=frame=>{
-        const series=document.querySelector('[data-series="${source} balance"]');
-        const paths=series?.matches('path')?[series]:Array.from(series?.querySelectorAll('path.series')||[]);
-        const root=document.querySelector('.budget-history .chart > svg'),box=series?.getBBox(),height=series?.ownerSVGElement.viewBox.baseVal.height;
-        return {frame,at:performance.now(),ready:root?.dataset.drawReady==='true',paths:paths.filter(path=>path.getAttribute('d')).length,
-          from:Number(root?.dataset.drawFrom),to:Number(root?.dataset.drawTo),box:box?[box.x,box.y,box.width,box.height]:null,height};
-      };
-      evidence.before=read(-1);
-      button.click();
-      const end=Date.now()+5000;
-      let frames=0;
-      do {
-        await new Promise(requestAnimationFrame);
-        const record=read(frames);
-        evidence.frames.push(record);if(evidence.frames.length>20){evidence.frames.shift();evidence.omitted++;}
-        if (!record.paths) {evidence.firstMissing=record;throw new Error('money line disappeared while selecting ${label}');}
-        if (record.box[1] < 0 || record.box[1] + record.box[3] > record.height) throw new Error('switching money view left the line outside its new scale');
-        if (Date.now() > end) throw new Error('money view did not commit ${label}');
-      } while (++frames < 2 || document.querySelector('.budget-history .chart > svg')?.dataset.drawReady !== 'true');
-    })()`);
-    } finally {
-      if(evidence)try {
-        const state=await deadline(5000,signal=>cdp.evaluate(`(async()=>{
-          const state=window.__quotumMoneyViewEvidence;
-          if(state?.firstMissing){state.after=[];for(let i=0;i<2;i++){await new Promise(requestAnimationFrame);state.after.push(window.__quotumMoneyViewRead(state.firstMissing.frame+i+1));}}
-          return state;
-        })()`,signal));
-        evidence.save('money-view-'+index,state);
-      } catch {evidence.save('money-view-'+index,{status:'unavailable'});}
-    }
-  }
-  await cdp.send('Input.dispatchKeyEvent', {type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
-  await cdp.send('Input.dispatchKeyEvent', {type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27});
+  await cdp.evaluate(`(() => {
+    const panel=document.querySelector('[data-widget="budget-history"]'),svg=panel?.querySelector('.chart>svg');
+    if(svg?.dataset.drawReady!=='true')throw new Error('budget plot is not ready');
+    const paths=Array.from(panel.querySelectorAll('.series[d]:not([d=""])'));
+    if(!paths.length)throw new Error('budget plot has no account line');
+    for(const path of paths){const box=path.getBBox();if(box.y<0||box.y+box.height>svg.viewBox.baseVal.height)throw new Error('budget line left its scale');}
+  })()`);
 }

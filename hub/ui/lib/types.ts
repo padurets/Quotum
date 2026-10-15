@@ -145,6 +145,7 @@ export type ForecastBasis = {hours: number; cold: boolean; usualPerDay: number; 
  * [minutes from the anchor, left]; `lib/forecast.ts` reads it.
  */
 export type SeriesForecast = {
+  planSince?:number|null;
   state: 'none' | 'needData' | 'usedUp' | 'awaiting' | 'runsOut' | 'lasts';
   failed?: true;
   asOf: number;

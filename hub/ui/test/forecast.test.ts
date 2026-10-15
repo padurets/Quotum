@@ -340,7 +340,7 @@ test('the table stays a table while its chosen columns fit the widget, and becom
   assert.equal(forecastLayout(['now'], 360), 'table', 'fewer columns, a table on a narrower widget');
   assert.equal(forecastLayout(LIVE_COLUMNS, 360), 'list');
   // A widget as wide as the board: the page's content is 1184 pixels, less the panel's border.
-  const view = {version: 3 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+  const view = {version:4 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
   const shown = (columns: readonly ForecastColumn[]) => columns.filter(column => columnShown(view, QUOTA_TABLE, column));
   assert.equal(forecastLayout(shown(LIVE_COLUMNS), 1182), 'table', 'every column on by default, on a widget as wide as the board');
   // As measured on the board, with the padding of the cells at the table's edges.
@@ -361,4 +361,17 @@ test('the table stays a table while its chosen columns fit the widget, and becom
     ['agenthours', 'during'],
     'agent-hours and the share while active does not fit beside them',
   );
+});
+
+test('compatible weekly provenance explains the actual observed plan boundary without changing the verdict',()=>{
+  for(const locale of ['en','ru'] as const){
+    setLocale(locale);const since=measured-HOUR,ahead=lasts({planSince:since}),live=week(60),said=outlook(live,measured,measured,ahead,context());
+    const original=outlookText(said,live,lasts(),context(),null),shown=outlookText(said,live,ahead,context(),null);
+    assert.equal(shown.text,original.text);assert.equal(shown.burst,original.burst);assert.equal(shown.title.length,original.title.length+1);
+    assert.match(shown.title[0],locale==='en'?/confirmed by an hour/:/подтверждена часом/);
+    const pending=outlookText({key:'needData',why:'hour',tone:''},live,{...ahead,state:'needData'},context(),null);assert.equal(pending.title.length,2);
+    for(const key of ['none','idle','awaiting','renewing','unavailable'] as const)assert.ok(!outlookText({key,tone:''},live,ahead,context(),null).title.some(line=>line===shown.title[0]));
+    assert.deepEqual(outlookText(said,live,{...ahead,failed:true},context(),null),original);
+    assert.deepEqual(outlookText(said,live,{...ahead,resetAt:reset+HOUR},context(),null),original);
+  }
 });

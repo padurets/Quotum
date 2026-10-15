@@ -200,12 +200,22 @@ class BoardPeriod {
     const summary=tape.accounting.quotaSummary(line.sourceId,line.windowId,this.tapeRange(tape,now));
     return summary?{...line,...summary}:line;
   }
+  quotaOrderAt(line:Line,now:number,rangeKey:string,active:boolean){
+    const tape=this.tapes.get('quota');
+    if(!tape||tape.selection.mode!=='live'||tape.rangeKey!==rangeKey||evaluatedRange(tape.selection,now).from<tape.tape.from)return {slope:0,next:Infinity};
+    const work=tape.accounting.quotaWorkSlope(line.sourceId,line.windowId,now,tape.selection.periodMs,active);
+    return {slope:work?.slope??0,next:Math.min(work?.next??Infinity,tape.accounting.changesAt(now,tape.selection.periodMs,line.sourceId)??Infinity)};
+  }
   moneyAt(series:MeterHistory,now:number,rangeKey?:string):MeterHistory {
     const tape=this.tapes.get('budget');if(!tape||tape.selection.mode!=='live'||rangeKey!==undefined&&tape.rangeKey!==rangeKey)return series;
     const summary=tape.accounting.moneySummary(series.sourceId,series.meterId,series.unit,this.tapeRange(tape,now));
     return summary?{...series,...summary}:series;
   }
   rangeAt(scope:PeriodScope,now:number,rangeKey?:string){const tape=this.tapes.get(scope);return tape&&(rangeKey===undefined||tape.rangeKey===rangeKey)?this.tapeRange(tape,now):null;}
+  moneyOrderAt(now:number,rangeKey:string) {
+    const tape=this.tapes.get('budget');
+    return tape?.selection.mode==='live'&&tape.rangeKey===rangeKey&&evaluatedRange(tape.selection,now).from>=tape.tape.from?tape.accounting.changesAt(now,tape.selection.periodMs):null;
+  }
   private workBoundary(now:number,refs?:readonly string[],source?:string) {
     if(!this.index||!this.workAdvances(now))return null;
     let next=Infinity;const period=this.workSelection.mode==='live'?this.workSelection.periodMs:0,selected=refs?new Set(refs):null;
@@ -229,7 +239,7 @@ class BoardPeriod {
       return Number.isFinite(next)?next:null;
     },read,initial);
   }
-  projectionState(history:History,scope:PeriodScope){const tape=this.tapes.get(scope),range=evaluatedRange(this.selection,this.evaluatedAt);return {ready:!!tape&&tape.queryKey===this.scopeKeys[scope]&&tape.rangeKey===history.range&&this.tapeCovers(tape.tape,range),error:this.projectionErrors[scope]};}
+  projectionState(history:History,scope:PeriodScope){const tape=this.tapes.get(scope),range=evaluatedRange(this.selection,this.evaluatedAt);return {ready:!!tape&&tape.queryKey===this.scopeKeys[scope]&&tape.rangeKey===history.range&&this.tapeCovers(tape,range),error:this.projectionErrors[scope]};}
   getSource=(id:string)=>this.rowsBySource.get(id)??noSessions;
   getWorkEvidence=()=>this.workEvidence;
   getValue=(id:string)=>this.values.get(id)??noValue;
@@ -239,13 +249,15 @@ class BoardPeriod {
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   subscribeValue=(id:string,listener:()=>void)=>{let set=this.valueListeners.get(id);if(!set)this.valueListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   private queryKey(query:HistoryQuery,scope?:PeriodScope){const board=page.get().board;return JSON.stringify([query.meters,query.unit,query.currency,scope==='quota'?board?.lineup.filter(id=>!board.view.hidden.includes('source:'+id)):scope&&board?.lineup.map(id=>[id,board.cards[id]?.budget])]);}
-  private tapeCovers(tape:PeriodTape,range:{from:number;to:number}) {
+  private tapeCovers(entry:{tape:PeriodTape;selection:PeriodSelection},range:{from:number;to:number}) {
+    const {tape,selection}=entry;
     // A complete fixed summary covers its requested endpoints, even when minute
     // rounding puts the right edge beyond the separate observation cut.
     if(tape.fixed)return this.selection.mode==='range'&&range.from===tape.fixed.range.from&&range.to===tape.fixed.range.to;
-    return range.from>=tape.from&&(range.to<=tape.cut||this.selection.mode==='live'&&this.liveEvidence);
+    // Each resource's accepted live evidence advances without a sessions reply.
+    return range.from>=tape.from&&(range.to<=tape.cut||this.selection.mode==='live'&&selection.mode==='live');
   }
-  private needsTape(scope:PeriodScope,key:string,range:{from:number;to:number}){const tape=this.tapes.get(scope);return this.dirtyScopes.has(scope)||!tape||tape.queryKey!==key||!this.tapeCovers(tape.tape,range);}
+  private needsTape(scope:PeriodScope,key:string,range:{from:number;to:number}){const tape=this.tapes.get(scope);return this.dirtyScopes.has(scope)||!tape||tape.queryKey!==key||!this.tapeCovers(tape,range);}
   private queries(board:NonNullable<PageState['board']>,range:{from:number;to:number}) {
     const cell=cellOf(range.to-range.from),cards=board.lineup.flatMap(id=>board.cards[id]??[]);
     const queries:Partial<Record<PeriodScope,HistoryQuery>>={};
@@ -344,7 +356,7 @@ class BoardPeriod {
         historyPool.release(staging);
       }
       if(!this.workNeeded&&this.work.basis){this.workSelection=selection;this.workRangeKey=selection.mode==='range'?periodKey(selection):prefs().range;this.tick(false);}
-      for(const tape of this.tapes.values())if(range.from>=tape.tape.from&&(range.to<=tape.tape.cut||this.liveEvidence)){tape.selection=selection;tape.rangeKey=selection.mode==='range'?periodKey(selection):prefs().range;}
+      for(const tape of this.tapes.values())if(this.tapeCovers(tape,range)){tape.selection=selection;tape.rangeKey=selection.mode==='range'?periodKey(selection):prefs().range;}
       this.work={...this.work,loading:this.workNeeded,error:null};this.publishWork();this.publishProjection();
       this.transport.change();return;
     }

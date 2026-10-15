@@ -33,8 +33,9 @@ export const runOutPast = (forecasts: ForecastLine[], to: number): {key: string;
  * (`until`), wherever it is: past the edge, that is the moment the table says it runs out,
  * which its label there tells.
  */
-export const chartMoments = (markers: {at: number; strong?: boolean; past?: boolean}[], drawn: {until: number}[], to: number): number[] => [
+export const chartMoments = (markers: {at: number; strong?: boolean; past?: boolean;until?:number}[], drawn: {until: number}[], to: number): number[] => [
   ...markers.filter(m => m.strong && !m.past && m.at > to).map(m => m.at),
+  ...markers.flatMap(m=>m.until===undefined?[]:[m.until]),
   ...drawn.map(d => d.until),
 ];
 

@@ -634,7 +634,7 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
         <div className="panel-heading"><h2 ref={heading} tabIndex={-1}>{t('agents.title')}</h2>
           {period.basis&&tableCell('working',workingSummary,(cell,time)=><p className="analytics-note" data-time={time}>{cell.content}</p>)}
         </div>
-        <div className="agents-controls">
+        <div className="panel-controls">
           {layout === 'list' && <SortMenu {...sorting} />}
           <Popover label={t('agents.settings')} icon={<SlidersIcon />}>
             <TableGrouping value={agentsBy} options={AGENTS_BY.map(by=>[by,t(by==='none'?'agents.byNone':COLUMNS[by].title)])} onChange={agentsBy=>setPrefs({agentsBy})}/>

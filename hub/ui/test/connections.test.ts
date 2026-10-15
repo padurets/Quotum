@@ -182,3 +182,11 @@ test('DeviceAdd submits an empty optional selection through onboarding and the o
  const selecting=f.reads.at(-1)!;assert.equal(selecting.url,'/api/device-onboarding/intent/selection');assert.deepEqual(Array.from((selecting.body as {sourceIds:string[]}).sourceIds),[]);
  const operation={id:'receipt',deviceId:'own-device',boardId:'board',state:'ready',item:{kind:'sources',sourceIds:[]}};selecting.resolve(operation);await flush();assert.equal(f.reads.at(-1)!.url,'/api/additions/receipt/run');f.unmount();f.reads.at(-1)!.resolve({...operation,state:'complete',result:{sourceIds:[]}});await flush();assert.equal(f.reads.length,6,'close keeps the reserved run and creates no second addition');
 });
+
+
+test('a completed retired widget receipt reports changed instead of a successful empty addition',()=>{
+  const f=fixture(),props={operation:{id:'receipt',boardId:'board',state:'complete',item:{kind:'widget',widgetId:'budget-spending-history'},widgetIds:[],result:{sourceIds:[]},current:{boardAccessible:true,widgets:[],sources:[]}},board:{id:'board',name:'Team',personal:false,role:'owner'},personal:false,onClose:()=>{}};
+  const tree=f.completion(props);
+  assert.equal(tree.find(node=>node.type==='h3')!.props.children,'add.changed');
+  f.unmount();
+});

@@ -271,7 +271,7 @@ test('trace cleanup failure cannot turn an uncollected profile into complete evi
 });
 
 const traceWindow={before:{Timestamp:1,ScriptDuration:0},after:{Timestamp:121,ScriptDuration:.05},instrumentMs:.5,seconds:120};
-const traceRows:Reading['renders']=(['quota','activity','budget','funds'] as const).map(widget=>({node:widget,time:true,kind:'chart',region:'analytics',widget,count:1}));
+const traceRows:Reading['renders']=(['quota','session','activity','budget','funds'] as const).map(widget=>({node:widget,time:true,kind:'chart',region:'analytics',widget,count:1}));
 const traceReading:Reading={instrumentMs:.5,commits:1,cardChanged:{},renders:traceRows,mutations:traceRows};
 const traceFires=[{timerId:10,ts:2_000_000,duration:8000,pid:1,tid:2,source:{sha256:hash,lineNumber:9,columnNumber:250_437},threadTs:1000,threadDuration:5000}];
 test('original trace accepts chart commits and separate thread timing without a geometry claim',()=>{
@@ -401,7 +401,7 @@ test('profile windows reject incompatible clock brackets',()=>{
 });
 
 const edgePlan=planIdleEdge(500_000,120,300_000);
-const edgeGeometry=(after=false):IdleGeometry=>({now:after?660_000:540_000,selected:false,charts:(['quota','activity','budget','funds'] as const).map(widget=>({widget,count:1,axisEnd:after?600_000:540_000,from:0,to:86_400_000,ready:true,panning:false,visibleFrom:after?60_000:0,visibleTo:after?86_460_000:86_400_000}))});
+const edgeGeometry=(after=false):IdleGeometry=>({now:after?660_000:540_000,selected:false,charts:(['quota','session','activity','budget','funds'] as const).map(widget=>({widget,count:1,axisEnd:after?600_000:540_000,from:0,to:86_400_000,ready:true,panning:false,visibleFrom:after?60_000:0,visibleTo:after?86_460_000:86_400_000}))});
 const edgeProblems=(before=edgeGeometry(),after=edgeGeometry(true),counterFrom=540_010,counterTo=660_000)=>idleEdgeProblems(edgePlan,540_000,660_000,counterFrom,counterTo,before,after);
 test('aligned idle planning selects a future start and centres the existing120s window',()=>{
   assert.deepEqual(edgePlan,{boundary:600_000,from:540_000,to:660_000,cellMs:300_000,seconds:120,marginMs:30_000});
@@ -421,16 +421,16 @@ test('an absent or duplicate chart cannot credit four-chart movement',()=>{
   const duplicate=edgeGeometry(true);duplicate.charts.push({...duplicate.charts[0]});assert.ok(edgeProblems(undefined,duplicate).some(problem=>problem.startsWith('quota')));
 });
 test('wrong chart movement cannot replace the missing expected chart',()=>{
-  const wrong=edgeGeometry(true);wrong.charts[3]={...wrong.charts[3],widget:'budget'};
+  const wrong=edgeGeometry(true);const i=wrong.charts.findIndex(chart=>chart.widget==='funds');wrong.charts[i]={...wrong.charts[i],widget:'budget'};
   assert.ok(edgeProblems(undefined,wrong).some(problem=>problem.startsWith('funds')));
 });
 test('render counts or shifted axis labels alone cannot prove plotted movement',()=>{
-  const unchanged=edgeGeometry(true);unchanged.charts[1].visibleFrom=0;unchanged.charts[1].visibleTo=86_400_000;
+  const unchanged=edgeGeometry(true);const chart=unchanged.charts.find(chart=>chart.widget==='activity')!;chart.visibleFrom=0;chart.visibleTo=86_400_000;
   assert.ok(edgeProblems(undefined,unchanged).some(problem=>problem.startsWith('activity')));
 });
 test('panning, unready geometry and a non-crossed axis remain insufficient',()=>{
   for(const patch of [{panning:true},{ready:false},{axisEnd:599_999},{visibleTo:null}]){
-    const after=edgeGeometry(true);Object.assign(after.charts[2],patch);assert.ok(edgeProblems(undefined,after).some(problem=>problem.startsWith('budget')));
+    const after=edgeGeometry(true);Object.assign(after.charts.find(chart=>chart.widget==='budget')!,patch);assert.ok(edgeProblems(undefined,after).some(problem=>problem.startsWith('budget')));
   }
   const selected=edgeGeometry(true);selected.selected=true;assert.match(edgeProblems(undefined,selected)[0],/natural live/);
 });

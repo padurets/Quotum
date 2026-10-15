@@ -244,7 +244,7 @@ export async function profileInterval<T>(cdp: Cdp, browser: Browser, run: () => 
 export async function profilePanning(cdp: Cdp, browser: Browser, evidence?: Files, run = panning, client = clientIdentity()) {
   if (!browser.owned) throw new Error('CPU profiling requires an owned synthetic browser');
   let active: Promise<unknown> | undefined, release = () => {}, interval = 0, familyStart = 0;
-  let selected = false, allocationSelected = false, selectedReport: PanReading | undefined;
+  let selected = false, allocationSelected = false, selectedInterval: number | null = null, selectedReport: PanReading | undefined;
   const binding = new ScriptBinding(cdp, client, (name, value) => evidence?.save('cpu-' + name, value));
   const stop = async () => {if (active) {release(); const pending = active; active = undefined; await pending;}};
   const measured = {on: cdp.on.bind(cdp), off: cdp.off.bind(cdp), at: cdp.at?.bind(cdp),
@@ -252,7 +252,7 @@ export async function profilePanning(cdp: Cdp, browser: Browser, evidence?: File
       const value = await cdp.evaluate<T>(expression, signal);
       if (expression.startsWith('(() => {\n        const initiator=') && expression.includes('const probe=window.__quotumPan={') && expression.includes('probe.raf=schedule(tick);')) {
         binding.rememberInjected(interval + 1, expression);
-        selected = expression.includes('const initiator="budget",period="24h";') && interval === 2;
+        selected = expression.includes('const initiator="budget",period="24h";') && !allocationSelected;
         selectedReport = undefined;
       }
       if (selected && expression.startsWith('(() => {\n        const p=window.__quotumPan;p.cleanup();')) selectedReport = value as PanReading;
@@ -268,7 +268,7 @@ export async function profilePanning(cdp: Cdp, browser: Browser, evidence?: File
       const rate = (params as {rate?: number}).rate;
       if (method === 'Emulation.setCPUThrottlingRate' && rate === 4) {
         await stop(); const id = ++interval;
-        allocationSelected ||= selected;
+        if (selected) {allocationSelected = true; selectedInterval = id;}
         let ready = () => {};
         const started = new Promise<void>(resolve => {ready = resolve;});
         active = profileInterval(cdp, browser, () => {ready(); return new Promise(resolve => {release = () => resolve(undefined);});}, {
@@ -278,7 +278,7 @@ export async function profilePanning(cdp: Cdp, browser: Browser, evidence?: File
         await Promise.race([started, active]);
       } else if (method === 'Emulation.setCPUThrottlingRate' && rate === 1) {
         if (selectedReport) {
-          evidence?.save('cpu-3-original-result', {mode: 'diagnostic', initiator: selectedReport.initiator, period: selectedReport.period,
+          evidence?.save('cpu-' + interval + '-original-result', {mode: 'diagnostic', initiator: selectedReport.initiator, period: selectedReport.period,
             frames: {count: selectedReport.frames.length, p95: percentile(selectedReport.frames, .95), p99: percentile(selectedReport.frames, .99)},
             inputs: {count: selectedReport.inputs, measured: selectedReport.latency.length, p95: percentile(selectedReport.latency, .95)},
             problems: panningProblems(selectedReport).map(reason => ({reason}))});
@@ -292,7 +292,7 @@ export async function profilePanning(cdp: Cdp, browser: Browser, evidence?: File
   catch (error) {failed = true; throw error;}
   finally {
     binding.close();
-    evidence?.save('cpu-allocation-selection', {mode: 'diagnostic', status: allocationSelected ? 'selected' : 'unavailable', interval: allocationSelected ? 3 : null});
+    evidence?.save('cpu-allocation-selection', {mode: 'diagnostic', status: allocationSelected ? 'selected' : 'unavailable', interval: selectedInterval});
     try {await stop();} catch (error) {if (!failed) throw error;}
   }
 }

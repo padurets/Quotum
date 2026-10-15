@@ -1,7 +1,7 @@
 import {legacyLayout, ordered} from './layout.js';
-import {EMPTY_VIEW, type View, type SplitView} from './view.js';
+import {EMPTY_VIEW, type View, type UnifiedView, type SplitView} from './view.js';
 import {providerOf, moneyFamily, supportsQuota} from './providers.js';
-import {ACTIVITY, SUBSCRIPTION_FUNDS, QUOTA_HISTORY, QUOTA_TABLE, BUDGET_HISTORY, BUDGET_TABLE, QUOTA_WIDGETS, BUDGET_WIDGETS, showWidgets} from './widgets.js';
+import {ACTIVITY, SUBSCRIPTION_FUNDS, QUOTA_HISTORY, QUOTA_TABLE, BUDGET_HISTORY, BUDGET_TABLE, QUOTA_WIDGETS, LEGACY_QUOTA_WIDGETS, LEGACY_BUDGET_WIDGETS, BUDGET_WIDGETS, showWidgets} from './widgets.js';
 
 export type AnalyticsResources = {id: string; provider: string;budget?:{enabled:boolean}}[];
 type LegacyView = Omit<View, 'version' | 'layout'> & {version?: 1; layout?: View['layout']};
@@ -9,14 +9,17 @@ const families = (resources: AnalyticsResources) => ({quota: resources.some(s =>
 const legacyIds = ['history', 'forecast'];
 
 /** The server applies defaults once; hidden and placed widgets never depend on a reader. */
-export function reconcileAnalytics<T extends View | SplitView>(view: T, resources: AnalyticsResources): T {
+export function reconcileAnalytics<T extends View | UnifiedView | SplitView>(view: T, resources: AnalyticsResources): T {
   const {quota, budget} = families(resources);
   const funds = resources.some(s => s.budget?.enabled!==false && moneyFamily(providerOf(s.provider))==='funds');
-  const add = [...(quota ? QUOTA_WIDGETS : []), ...(funds ? [SUBSCRIPTION_FUNDS] : []), ...(budget ? BUDGET_WIDGETS : [])].filter(id => !view.shown.includes(id) && !view.hidden.includes(id));
+  const modern = view.version === 4;
+  const quotaWidgets = modern ? QUOTA_WIDGETS : LEGACY_QUOTA_WIDGETS;
+  const budgetWidgets = modern ? BUDGET_WIDGETS : LEGACY_BUDGET_WIDGETS;
+  const add = [...(quota ? quotaWidgets : []), ...(funds ? [SUBSCRIPTION_FUNDS] : []), ...(budget ? budgetWidgets : [])].filter(id => !view.shown.includes(id) && !view.hidden.includes(id));
   if (!add.length) return view;
   const next = showWidgets(view, add), places = {...view.layout.places};
   // Existing anchors keep their coordinates. Newly applicable panels use free trailing rows.
-  let y = Math.max(-1, ...Object.entries(places).filter(([id]) => view.version === 3 || !id.startsWith('source:') && id !== 'agents').map(([,p]) => p.y)) + 1;
+  let y = Math.max(-1, ...Object.entries(places).filter(([id]) => view.version >= 3 || !id.startsWith('source:') && id !== 'agents').map(([,p]) => p.y)) + 1;
   for (const id of add) if (!places[id]) places[id] = {x: 0, y: y++, w: 6};
   return {...next, layout: {...view.layout, places}};
 }

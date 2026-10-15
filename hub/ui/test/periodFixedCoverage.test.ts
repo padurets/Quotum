@@ -24,7 +24,7 @@ import {packWorkPrepared,workPreparationBytes,mergeWorkPrepared,type WorkTrace} 
 import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/domain/periodTape';
 import {hasPeriodValue,periodValueAt} from '../../server/domain/periodValues';
 import {canShift,shifted} from '../../server/domain/periodShift';
-import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
+import {AGENTS,ACTIVITY,WIDGETS,QUOTA_WIDGETS,BUDGET_WIDGETS,BUDGET_TABLE,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
 import {PeriodTransport} from '../lib/periodTransport';
 import {HistoryPool} from '../lib/historyPool';
 import {drain} from '../lib/prepare';
@@ -43,11 +43,11 @@ const coordinatorCode=ts.transpileModule(source.slice(source.indexOf('class Boar
 type Coordinator={activate(active:boolean):void;changed():void;refreshWorkClock():void;projectionState(history:Pick<History,'range'>,scope:PeriodScope):{ready:boolean};get():{value:WorkTrace|null;loading:boolean;error:string|null}};
 
 /** The production coordinator consumes authenticated HTTP replies from real stored observations. */
-async function harness(t:TestContext,initial:PeriodRange|null) {
+async function harness(t:TestContext,initial:PeriodRange|null,emptyWidgets?:string[]) {
   let now=NOW,selected=initial,held:Promise<void>|null=null;
   t.mock.method(Date,'now',()=>now);
   const store=new Store(':memory:',NOW-3*H),directory=new Directory(store.db);
-  const user=directory.createUser('coverage@example.com','Coverage','unused',NOW-3*H),boardId=directory.boards(user.id)[0].id;
+  const user=directory.createUser('coverage@example.com','Coverage','unused',NOW-3*H),boardId=emptyWidgets?directory.createBoard('Empty',user.id,NOW-3*H).id:directory.boards(user.id)[0].id;
   const token=newSecret('qt_s');directory.createSession(token,user.id,NOW-3*H,24*H);
   const subscription=store.source('codex','a'.repeat(24),NOW-3*H),wallet=store.source('deepseek','b'.repeat(24),NOW-3*H);
   for(const id of [subscription,wallet])store.hold(id,user.id,NOW-3*H);
@@ -58,11 +58,13 @@ async function harness(t:TestContext,initial:PeriodRange|null) {
   const hub:Hub={store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{}),pairing:new Pairing(directory),setup:new Setup(false,null),local:null};
   const app=await buildApp(hub),snapshot=new Projection(hub).snapshot(user.id,boardId,NOW)!;
   const board={id:boardId,meta:snapshot.board,lineup:snapshot.sources.map(s=>s.id),cards:Object.fromEntries(snapshot.sources.map(s=>[s.id,s])),currencies:snapshot.currencies,view:{...snapshot.view,shown:['quota-history','budget-history',SUBSCRIPTION_FUNDS],hidden:[ACTIVITY]}};
+  if(emptyWidgets){board.view.shown=emptyWidgets;board.view.hidden=WIDGETS.filter(id=>!emptyWidgets.includes(id));}
+  const workReads=t.mock.method(store,'agentWork');
   const pool=new HistoryPool(),attempts:PeriodRequest[]=[],replies:PeriodReply[]=[];
   const settings={range:'1h',kind:'weekly',money:{...DEFAULT_MONEY},funds:{...DEFAULT_MONEY}};
   const read=(body:PeriodRequest)=>app.inject({method:'POST',url:`/api/boards/${boardId}/period`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body});
   const context={exports:{} as {BoardPeriod:new()=>Coordinator},hubNow:()=>now,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,
-    fetchPeriod:async(_board:string,body:PeriodRequest)=>{attempts.push(body);await held;const response=await read(body);assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());replies.push(reply);return reply;},
+    fetchPeriod:async(_board:string,body:PeriodRequest)=>{attempts.push(body);await held;const response=await read(body);assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());replies.push(reply);if(emptyWidgets)now++;return reply;},
     page:{get:()=>({board})},pan:{get:()=>null},preparations:()=>null,prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
     empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneySelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(coordinatorCode,context);const period=new context.exports.BoardPeriod();
@@ -71,8 +73,35 @@ async function harness(t:TestContext,initial:PeriodRange|null) {
   const ready=(expected:boolean)=>{const range=selected?periodKey({mode:'range',...selected}):settings.range;for(const scope of PERIOD_SCOPES)assert.equal(period.projectionState({range},scope).ready,expected,scope);};
   const part=(scope:PeriodScope)=>{const part=[...replies].reverse().find(r=>r[scope])?.[scope];assert.equal(part?.state,'complete');if(part?.state!=='complete')throw Error('incomplete');return part;};
   period.activate(true);await settle();
-  return {period,pool,attempts,replies,read,settle,ready,part,select:(range:PeriodRange|null)=>{selected=range;period.changed();},advance:(at:number)=>{now=at;period.refreshWorkClock();},hold:()=>{let release!:()=>void;held=new Promise(resolve=>{release=resolve;});return()=>{held=null;release();};}};
+  return {period,pool,attempts,replies,read,settle,ready,part,now:()=>now,workReads:()=>workReads.mock.callCount(),show:(widgets:string[])=>{board.view.shown=widgets;board.view.hidden=WIDGETS.filter(id=>!widgets.includes(id));period.changed();},select:(range:PeriodRange|null)=>{selected=range;period.changed();},advance:(at:number)=>{now=at;period.refreshWorkClock();},hold:()=>{let release!:()=>void;held=new Promise(resolve=>{release=resolve;});return()=>{held=null;release();};}};
 }
+
+for(const widget of [...QUOTA_WIDGETS,...BUDGET_WIDGETS,SUBSCRIPTION_FUNDS])test(`a standalone empty ${widget} retains its own live evidence without sessions`,async t=>{
+  const scope:PeriodScope=widget===SUBSCRIPTION_FUNDS?'funds':widget.startsWith('budget-')?'budget':'quota';
+  const h=await harness(t,null,[widget]),tape=h.part(scope).value.tape!;
+  assert.ok(h.now()>tape.cut,'the response arrives after its actual observation cut');
+  assert.deepEqual(tape.quota,[]);assert.deepEqual(tape.money,[]);assert.equal(tape.cut,NOW);
+  const ready=()=>assert.equal(h.period.projectionState({range:'1h'},scope).ready,true);
+  ready();assert.equal(h.period.get().value,null);assert.equal(h.period.get().loading,false);
+  const attempts=h.attempts.length;
+  for(const elapsed of [1,M]){h.advance(h.now()+elapsed);h.period.changed();await h.settle();ready();assert.equal(h.attempts.length,attempts,'clock movement does not reread the completed empty resource');}
+  const range={from:NOW-2*H,to:NOW-H};h.select(range);await h.settle();
+  assert.equal(h.period.projectionState({range:periodKey({mode:'range',...range})},scope).ready,true);
+  h.select(null);await h.settle();ready();
+  assert.ok(h.attempts.every(request=>!request.sessions&&!request.values));
+  if(scope!=='quota')assert.equal(h.workReads(),0,'money evidence does not read agent work');
+});
+
+test('empty resource families keep independent live readiness while a sibling response waits',async t=>{
+  const h=await harness(t,null,[BUDGET_TABLE]),release=h.hold();
+  h.show([BUDGET_TABLE,SUBSCRIPTION_FUNDS]);
+  assert.equal(h.period.projectionState({range:'1h'},'budget').ready,true);
+  assert.equal(h.period.projectionState({range:'1h'},'funds').ready,false);
+  release();await h.settle();
+  assert.equal(h.period.projectionState({range:'1h'},'funds').ready,true);
+  assert.equal(h.attempts.length,2);assert.ok(!h.attempts[1].budget&&h.attempts[1].funds);
+  assert.ok(h.attempts.every(request=>!request.sessions&&!request.values));assert.equal(h.workReads(),0);
+});
 
 test('a rounded drag endpoint beyond now completes quota, budget and funds without extending their evidence cut',async t=>{
   const range=draggedRange(NOW-H,NOW,NOW)!;assert.equal(range.to-NOW,35_000);

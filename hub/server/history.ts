@@ -1,13 +1,13 @@
 import {createHmac, randomBytes} from 'node:crypto';
 import {config} from './config.js';
-import {tileEnd, tileOf, tileStart, type Chunk, type HistoryBasis, type HistoryScope} from './domain/history.js';
+import {tileEnd, tileOf, tileStart,planRowDeadline, type Chunk, type HistoryBasis, type HistoryScope} from './domain/history.js';
 import type {Shown, Store, WorkRead} from './store/store.js';
 import type {MeterSelection} from './domain/meterHistory.js';
 import {sharedWork} from './periodWork.js';
 
 export class HistoryLimit extends Error { constructor() {super('history_limit');} }
 
-type Kept = {owner:string|null;devices:Set<string>;users:Set<string>;scope?: HistoryScope; workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number};
+type Kept = {owner:string|null;devices:Set<string>;users:Set<string>;scope?: HistoryScope; workKey: string; sources: Set<string>; cell: number; tile: number; json: string; bytes: number;validUntil:number};
 
 /** JSON permits shorter exact integer spellings (300000 is 3e5); names stay untouched. */
 export function compactJSON(value: unknown, replacer?: (this: unknown, key: string, value: unknown) => unknown): string {
@@ -90,7 +90,7 @@ export class HistoryTiles {
     const workKey = (scope !== 'budget' && parts.some(p => p.eligible) ? (work!.authority??this.store.workKey(board, shown,access!,work!.reserve,work!.release))+JSON.stringify([...shown]) : '') + (meters ? this.store.financialKey(board) : '');
     for (const part of parts) {
       const hit = part.eligible ? this.kept.get(part.key) : undefined;
-      if (hit?.workKey !== workKey) continue;
+      if (hit?.workKey !== workKey||now>=hit.validUntil) continue;
       part.json = hit.json;
       this.kept.delete(part.key);
       this.kept.set(part.key, hit);
@@ -99,7 +99,9 @@ export class HistoryTiles {
       if (parts[i].json !== undefined) {i++; continue;}
       const start = i;
       while (i < parts.length && parts[i].json === undefined) i++;
-      const chunks = this.store.cells(board, cell, parts[start].from, parts[i - 1].to, {now, shown, meters, scope, work});
+      const reservation=this.reservation();
+      let chunks:Chunk<number>[];
+      try{chunks=this.store.cells(board,cell,parts[start].from,parts[i-1].to,{now,shown,meters,scope,work,reserve:reservation.add});}finally{reservation.close();}
       chunks.forEach((raw, offset) => {
         const part = parts[start + offset];
         const chunk: Chunk = {...raw, activity: {...raw.activity, sessions: raw.activity.sessions.map(([id, ...rest]) => [this.ref(board, id), ...rest])}};
@@ -108,7 +110,8 @@ export class HistoryTiles {
         if (part.eligible) {
           this.drop(part.key);
           const bytes=Buffer.byteLength(json)+256+devices.size*128+users.size*128+sources.size*128+workKey.length*2+part.key.length*2;
-          this.kept.set(part.key, {owner:this.store.privateOwner(board),devices,users,scope,workKey,sources,cell,tile:part.tile,json,bytes});
+          const validUntil=(chunk.plans??[]).reduce((next,row)=>Math.min(next,planRowDeadline(row)),Infinity);
+          this.kept.set(part.key, {owner:this.store.privateOwner(board),devices,users,scope,workKey,sources,cell,tile:part.tile,json,bytes,validUntil});
           this.bytes += bytes;
           while (this.bytes + this.reserved > this.budget && this.kept.size) this.drop(this.kept.keys().next().value!);
         }

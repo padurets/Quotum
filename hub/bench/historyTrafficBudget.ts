@@ -2,14 +2,27 @@ import type {BodyCount, Transfer} from './historyProxy';
 import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, cellStart, tileOf, type HistoryAnswer} from '../server/domain/history';
 import assert from 'node:assert/strict';
 
-export class HistoryCutChanged extends Error {}
-export function stableHistory(answer: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, cell: number, to: number) {
+export const HISTORY_COHORT_TAKES = 3;
+export class HistoryCutChanged extends Error {
+  constructor(readonly cut: {seedNow:number;answerNow:number;cell:number;seedCut:number;answerCut:number;to?:number;seedGridCut?:number;answerGridCut?:number}) {
+    super('history crossed its grid cutoff during this cohort');
+  }
+}
+/** Only a changed reference cutoff invalidates a cohort; every assertion still fails. */
+export function historyCutInvalidation(error:unknown,name:string,take:number) {
+  if (!(error instanceof HistoryCutChanged) || take >= HISTORY_COHORT_TAKES) throw new Error(`${name}: ${String(error)}`, {cause:error});
+  return {name,reason:error.message,...error.cut};
+}
+export function historyIdentity(answer: Pick<HistoryAnswer, 'run' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'known'>) {
   assert.equal(answer.run, seed.run); assert.deepEqual(answer.known, seed.known);
-  // The live cutoff cannot change coverage of a request ending wholly in the past.
-  // Keep the exclusive request end, including requests ending inside a grid cell.
-  const last = (Math.ceil(to / cell) - 1) * cell;
-  const cut = (now: number) => Math.min(last, cellStart(now + CLOCK_TOLERANCE_MS, cell));
-  if (cut(answer.now) !== cut(seed.now)) throw new HistoryCutChanged('history crossed its grid cutoff during this cohort');
+}
+export function stableHistory(answer: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, seed: Pick<HistoryAnswer, 'run' | 'now' | 'known'>, cell: number, to: number) {
+  historyIdentity(answer, seed);
+  // The exclusive request end bounds the cutoff even inside a grid cell.
+  const last=(Math.ceil(to/cell)-1)*cell;
+  const answerGridCut=cellStart(answer.now+CLOCK_TOLERANCE_MS,cell),seedGridCut=cellStart(seed.now+CLOCK_TOLERANCE_MS,cell);
+  const answerCut=Math.min(last,answerGridCut),seedCut=Math.min(last,seedGridCut);
+  if (answerCut !== seedCut) throw new HistoryCutChanged({seedNow:seed.now,answerNow:answer.now,cell,seedCut,answerCut,to,seedGridCut,answerGridCut});
 }
 
 /** A reference union is partitioned only by holes and the existing API tile cap. */

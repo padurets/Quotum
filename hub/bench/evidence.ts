@@ -12,6 +12,9 @@ const requestLabels = new Map([
   ['cells', new Set(['skip', 'read'])],
   ['evidence', new Set(['skip', 'cursor', 'baseline'])],
   ['endpoint', new Set(['history', 'period', 'period/sessions'])],
+  ['surface', new Set(['card', 'topbar', 'agents-panel', 'forecast', 'budget-table', 'activity-totals'])],
+  ['tag', new Set(['DIV', 'SPAN', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'BUTTON', 'INPUT', 'LABEL', 'UL', 'LI', 'P', 'SMALL', 'NAV', 'FOOTER', 'DL', 'DT', 'DD', 'TIME', 'svg', 'path', 'g', 'line', 'text', 'tspan', 'rect', 'clipPath'])],
+  ['attribute', new Set(['class', 'style', 'title', 'aria-label', 'aria-busy', 'aria-hidden', 'data-time', 'data-table-metric', 'data-pan-end', 'd', 'transform', 'hidden', 'inert', 'disabled'])],
 ]);
 
 /** Diagnostic payloads are numeric evidence and synthetic identifiers, never arbitrary text. */

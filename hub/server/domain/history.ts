@@ -55,7 +55,16 @@ export type Chunk<Ref = string> = {
   activity: ActivityCells<Ref>;
   resets: [string, string, number][];
   grants: [string, number, number][];
+  plans?: PlanRow[];
 };
+export type PlanRow=[source:string,at:number,plan:string,previous:{at:number;plan:string}|null,expiresAt:number];
+export const planRowBytes=(row:PlanRow)=>320+2*(row[0].length+row[2].length+(row[3]?.plan.length??0));
+/** Read validity ends independently of physical pruning or supplier plan changes. */
+export function planRowAt(row:PlanRow,now:number):PlanRow|null {
+  if(now>=row[4])return null;
+  return row[3]&&now>=row[4]-row[1]+row[3].at?[row[0],row[1],row[2],null,row[4]]:row;
+}
+export const planRowDeadline=(row:PlanRow)=>Math.min(row[4],row[3]?row[4]-row[1]+row[3].at:Infinity);
 export type HistoryMeta = {now: number; historyStart: number; known: {own?: number; work: number; sources: Record<string, number>;sessions?:number|null;sourceWork?:Record<string,number>}; meta?: string};
 export const workKnownFrom = (known:HistoryMeta['known']):number|null => known.sessions!==undefined?known.sessions:Math.max(known.own??known.work,...(known.own===undefined&&Object.keys(known.sources).length?[Math.min(...Object.values(known.sources))]:[]));
 export type HistoryAnswer = HistoryMeta & {run: string; chunks: Chunk[]};
@@ -70,7 +79,31 @@ export function expandHistory(reply: HistoryReply, prior?: HistoryBasis): Histor
 }
 export type SourceEvent =
   | {sourceId: string; at: number; kind: 'early_reset'; windows: string[]}
-  | {sourceId: string; at: number; kind: 'resets_granted'; count: number};
+  | {sourceId: string; at: number; kind: 'resets_granted'; count: number}
+  | {sourceId:string;at:number;kind:'plan';plan:string;previous:{at:number;plan:string}|null;expiresAt:number};
+export function* planEventsPrepared(chunks:readonly Chunk[],from:number,to:number,now:number):Preparation<(SourceEvent&{kind:'plan'})[]> {
+  const result:(SourceEvent&{kind:'plan'})[]=[],seen=new Set<string>();
+  for(const chunk of chunks)for(const raw of chunk.plans??[]){
+    yield;const row=planRowAt(raw,now);if(!row||row[1]<from||row[1]>=to)continue;
+    const [sourceId,at,plan,previous,expiresAt]=row,key=sourceId+'\n'+at;
+    if(seen.has(key))continue;seen.add(key);result.push({sourceId,at,kind:'plan',plan,previous,expiresAt});
+  }
+  return result;
+}
+export function planEventAt(event:SourceEvent,now:number):SourceEvent|null {
+  if(event.kind!=='plan')return event;
+  const row:PlanRow=[event.sourceId,event.at,event.plan,event.previous,event.expiresAt],value=planRowAt(row,now);
+  return value===row?event:value?{...event,previous:value[3]}:null;
+}
+export function planEventsAt(events:SourceEvent[],now:number):SourceEvent[] {
+  const result=events.flatMap(event=>{const value=planEventAt(event,now);return value?[value]:[];});
+  return result.length===events.length&&result.every((event,i)=>event===events[i])?events:result;
+}
+export function planEventsDeadline(events:readonly SourceEvent[]):number {
+  let deadline=Infinity;
+  for(const event of events)if(event.kind==='plan')deadline=Math.min(deadline,event.expiresAt,event.previous?event.expiresAt-event.at+event.previous.at:Infinity);
+  return deadline;
+}
 export type HistorySeries = {
   windowValue?:Pick<import('./quota.js').Win,'id'|'kind'|'label'|'minutes'>;
   pointMode?:'cell'|'observation';
@@ -297,7 +330,7 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
     range: target.key, live: target.live, since, to, cellMs: cell, historyStart: meta.historyStart,
     ...(chunksInOrder.some(c => c.meterSeries !== undefined) ? {meterSeries: yield* composeMetersPrepared(chunksInOrder,cell,since,to)} : {}),
     series: yield* ordered(lines, (a, b) => compare(a.sourceId, b.sourceId) || compare(a.windowId, b.windowId)),
-    events: yield* ordered([...resets, ...grants], (a, b) => a.at - b.at),
+    events: yield* ordered([...resets, ...grants,...yield*planEventsPrepared(chunksInOrder,since,(k1+1)*cell,Math.max(target.now,meta.now))], (a, b) => a.at - b.at),
     activity: {...(meta.known.sessions===null?{available:false as const}:{}),since: activitySince, known: knownFrom < to ? {from: knownFrom, to} : null, barMs, activeMs, agentMs, agents: refs.size, cells: activityCells, by: groups},
   };
 }

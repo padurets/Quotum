@@ -55,8 +55,8 @@ analytics. Run it when you change the dashboard and have Chrome (`QUOTUM_CHROME`
 on `PATH`, or `--cdp` to one already running); CI fails over budget. After the readings,
 it also checks consecutive measuring-frequency saves with native arrow keys and fails
 if saving loses focus.
-Native horizontal wheel and Shift-drag scenarios start separately from the limit, budget
-and subscription-funds charts, moving all four charts at 24h and 30d
+Native horizontal wheel and Shift-drag scenarios start separately from each of the five
+charts (five-hour limits, weekly limits, activity, balance and subscription funds), moving all five at 24h and 30d
 with at least twelve real series per resource family and CPU throttled fourfold, including an unread edge,
 strip rebuilding, reversal and return to live. Moving-frame p95/p99 must stay within
 34/50 ms and input-to-updated-frame p95 within 34 ms; callbacks without actual chart
@@ -172,6 +172,12 @@ and platform smoke checks still apply.
   keeps its own options in its settings, and has its legend under it, each entry switched
   off and on by a click.
 - Scrollbars have one style, set once at the top of `hub/ui/style.css`; nothing styles its own.
+- Sortable tables reuse `hub/ui/components/TableWidget.tsx` for their headers and menu
+  choices, including active colour, arrow spacing and keyboard behavior. Reader sorting
+  stays separate from the owner's column controls.
+- Chart legends share `hub/ui/components/seriesFocus.ts` to highlight a series under
+  the pointer or keyboard focus. Apply it to every plot layer for that series;
+  highlighting changes paint, never the data, selection or prepared geometry.
 - Widgets on the board are a `.card` (a source) or a `.panel` (the list of agents, agent activity, the chart, the table).
 - Board widgets never add a vertical scroller inside the page. Table widgets share
   `TableWidget` for responsive layout, whole-row height fitting and the compact pager
@@ -201,7 +207,7 @@ and platform smoke checks still apply.
 - Subscription cards and compact rows share the percentage-limit layout and period
   names. Provider-specific amounts and allowances belong in value details; the
   provider's storage unit does not define a separate card layout.
-- Subscription analytics share the same period switches, percentage chart and table,
+- Subscription analytics use independent five-hour and weekly chart/table pairs,
   including hub-measured caps. Convert a historical cap with its own reported allowance
   and observation bounds; never reinterpret it using the current allowance or invent
   spending, forecasts or agent-work attribution.

@@ -21,11 +21,11 @@ test('unknown spending stays unknown, and a known subtotal identifies missing co
 });
 test('a selected live key on another page is not archived, and archived scales share one key group',()=>{
   const selected:[string,string][]=[['s','key:live:usage'],['s','key:gone:usage'],['s','key:gone:cap'],['other','key:else:cap']];
-  assert.deepEqual(archivedKeyGroups('s',selected,new Set(['live']),[]),[{id:'gone',label:'gone',usage:'key:gone:usage',cap:'key:gone:cap'}]);
+  assert.deepEqual(archivedKeyGroups('s',selected,new Set(['live']),[]),[{id:'gone',label:'gone',cap:'key:gone:cap'}]);
 });
 test('account balances, converted balances and counters cannot become archived key groups',()=>{
   const ids=['balance','balance:CNY','granted:CNY','fx:USD:balance:CNY','fx:USD:granted:CNY','usage','credits','key:gone:usage','key:gone:cap'];
-  assert.deepEqual(archivedKeyGroups('s',ids.map(id=>['s',id]),new Set(),[]),[{id:'gone',label:'gone',usage:'key:gone:usage',cap:'key:gone:cap'}]);
+  assert.deepEqual(archivedKeyGroups('s',ids.map(id=>['s',id]),new Set(),[]),[{id:'gone',label:'gone',cap:'key:gone:cap'}]);
 });
 test('access warnings begin exactly seven days before expiry, and expired access is critical',()=>{
   const now=Date.UTC(2026,9,4),expiry=now+8*86_400_000,warning=now+86_400_000;
@@ -81,7 +81,7 @@ test('money defaults select only balances, bound overflow and preserve explicit 
   assert.equal(moneySelection(cards,['source:one'],explicit).removed,1);
 });
 test('source access is an independent private slice and disappears with its lineup',()=>{
-  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:{version: 3 as const, layout: {columns: 6, places: {}}, names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{}},historyStart:0,sources:[card('one')],sessions:{},cadence:{},refresh:{},forecast:{},mine:['one'],boards:[],resets:{resets:{},trackers:[],past:{}}};
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:{version:4 as const, layout: {columns: 6, places: {}}, names:{},hidden:[],shown:[],windows:[],plans:{},unplanned:[],colors:{},columns:{},shownColumns:{}},historyStart:0,sources:[card('one')],sessions:{},cadence:{},refresh:{},forecast:{},mine:['one'],boards:[],resets:{resets:{},trackers:[],past:{}}};
   const before=reduce(INITIAL,{type:'hub',event:{type:'snapshot',data:snapshot}});
   const own={error:null,expiresAt:null,canRefresh:true,credentialIds:['own']};
   const next=reduce(before,{type:'hub',event:{type:'sourceAccess',data:{one:own}}});

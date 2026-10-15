@@ -87,6 +87,16 @@ export function planAt(w: Win, measuredAt: number | null, now: number, plan: Wee
   return {remaining: weeklyPlanRemaining(elapsed, plan), deadline, done: now >= deadline, weekly: true};
 }
 
+/** The current linear piece ends before the plan changes slope or disappears. */
+export function planOrderAt(w:Win|undefined,measuredAt:number|null,now:number,plan:WeeklyPlan|null) {
+  const point=w&&planAt(w,measuredAt,now,plan);
+  if(!point||!w?.resetAt||!w.minutes)return {slope:0,next:Infinity};
+  const start=w.resetAt-w.minutes*60_000;
+  if(w.kind!=='weekly')return {slope:-100/(w.minutes*60_000),next:w.resetAt};
+  const day=Math.floor(Math.max(0,now-start)/DAY);
+  return {slope:now<start?0:-(plan?.[day]??0)/DAY,next:Math.min(w.resetAt,now<start?start:start+(day+1)*DAY)};
+}
+
 /** What a card says under a limit about the plan: how many points ahead of it or behind it. */
 export type PlanNote = {key: 'ahead' | 'behind'; value: number; weekly: boolean};
 

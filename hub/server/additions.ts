@@ -121,7 +121,7 @@ export class BoardAdditions {
     return row;
   }
   isWidget(owner: string, id: string) {return JSON.parse(this.row(owner, id).item).kind === 'widget';}
-  private targets(row: Row): string[] {const item = JSON.parse(row.item) as AdditionItem; return item.kind === 'widget' ? row.widget_targets ? JSON.parse(row.widget_targets) : [item.widgetId] : [];}
+  private targets(row: Row): string[] {const item = JSON.parse(row.item) as AdditionItem; return item.kind === 'widget' ? (row.widget_targets ? JSON.parse(row.widget_targets) as string[] : [item.widgetId]).filter(id => WIDGETS.includes(id as WidgetId)) : [];}
   get(owner: string, id: string) {this.recover(); return this.answer(this.row(owner,id));}
   list(owner: string, limit = 20, before?: string, requestId?: string) {
     this.prune();
@@ -214,6 +214,7 @@ export class BoardAdditions {
           this.eligible(owner,board,result.sourceIds);
           const view=this.directory.view(board.id),existing=this.store.sources(board.id);
           const ids=item.kind==='widget'?this.targets(row):result.sourceIds.map(cardId);
+          if(item.kind==='widget'&&!ids.length)throw new AdditionError('addition_unavailable');
           const already=item.kind==='widget'?ids.every(id=>widgetVisible(view,id,existing.length)):result.sourceIds.every(id=>existing.some(source=>source.id===id)&&!hidden(view,cardId(id)));
           if(!board.personal)for(const source of result.sourceIds)if(this.store.holds(owner,source))this.store.share(board.id,source,owner,now,item.kind==='sources'&&item.includeBudget?.includes(source)===true);
           result.viewRevision=this.directory.saveView(board.id,shown(this.directory.view(board.id),ids),owner,now);

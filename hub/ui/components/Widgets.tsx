@@ -600,7 +600,6 @@ export function Widgets({
                   className="drag-handle"
                   aria-label={t('widgets.move', {name: widget.name})}
                   aria-describedby={hint}
-                  title={t('widgets.moveHint')}
                   onKeyDown={key(spot.id, 'move')}
                   ref={handleRef(spot.id, 'move')}
                 >
@@ -614,12 +613,12 @@ export function Widgets({
               </Sized>
               {movable && (
                 <>
-                  <span className="resize-handle is-left" aria-hidden="true" title={t('widgets.leftHint')} onPointerDown={e => begin(spot.id, 'left', e)} />
+                  <span className="resize-handle is-left" aria-hidden="true" onPointerDown={e => begin(spot.id, 'left', e)} />
                   <button
                     type="button"
                     className="resize-handle is-right"
                     aria-label={t('widgets.resize', {name: widget.name})}
-                    title={t('widgets.resizeHint')}
+                    aria-describedby={hint+'-width'}
                     onPointerDown={e => begin(spot.id, 'right', e)}
                     onKeyDown={key(spot.id, 'right')}
                     ref={handleRef(spot.id, 'right')}
@@ -628,7 +627,7 @@ export function Widgets({
                     type="button"
                     className="resize-handle is-bottom"
                     aria-label={t('widgets.height', {name: widget.name})}
-                    title={t('widgets.heightHint')}
+                    aria-describedby={hint+'-height'}
                     onPointerDown={e => begin(spot.id, 'bottom', e)}
                     onKeyDown={key(spot.id, 'bottom')}
                     // Enter and Space, and a screen reader's own activation: a click with no count and no pointer (some browsers count no tap that began a gesture).
@@ -641,7 +640,6 @@ export function Widgets({
                       key={corner}
                       className={`resize-handle is-${corner}`}
                       aria-hidden="true"
-                      title={t('widgets.cornerHint')}
                       onPointerDown={e => begin(spot.id, corner, e)}
                       onDoubleClick={() => twice(spot.id)}
                     />
@@ -657,6 +655,8 @@ export function Widgets({
           <p id={hint} className="sr-only">
             {t('widgets.moveHint')}
           </p>
+          <p id={hint+'-width'} className="sr-only">{t('widgets.resizeHint')}</p>
+          <p id={hint+'-height'} className="sr-only">{t('widgets.heightHint')}</p>
           <div className="sr-only" aria-live="polite">
             {said.map((line, i) => (
               <div key={i}>{line}</div>

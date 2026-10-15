@@ -10,7 +10,7 @@ function labels() {
   const text = readFileSync(new URL('../components/Chart.tsx', import.meta.url), 'utf8');
   const source = ts.createSourceFile('Chart.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const marker = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'MarkerLabel');
-  assert.ok(marker);
+  assert.ok(marker && ts.isFunctionDeclaration(marker) && marker.body);
   const effects: ts.Expression[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node) && node.expression.getText(source) === 'useLayoutEffect') effects.push(node.arguments[0]);
@@ -19,16 +19,22 @@ function labels() {
   visit(marker);
   assert.equal(effects.length, 2);
   const cache = source.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'LabelBoxes');
+  const font = marker.body.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration => declaration.name.getText(source) === 'fontOf'));
+  assert.ok(cache && font);
   type Backing = {x: number; width: number};
-  const context = {reads: 0, backing: null, make: null, draw: null} as unknown as {
+  const context = {reads: 0, backing: null, make: null, draw: null,
+    getComputedStyle: () => ({fontFamily: 'Test', fontSize: '12px', fontWeight: '400', fontStyle: 'normal', letterSpacing: '0px', fontStretch: 'normal'}),
+  } as unknown as {
     reads: number;
     make(): object;
     draw(cache: object, shown: string, end: boolean, color: string | undefined, fonts: number, x: number, offset: number, width: number, scale?: number): Backing;
   };
-  const script = `${cache?.getText(source) ?? ''}
-    globalThis.make = () => ${cache ? 'new LabelBoxes()' : '({})'};
+  const script = `${cache.getText(source)}
+    globalThis.make = () => new LabelBoxes();
     globalThis.draw = (boxes, shown, end, color, fonts, x, offset, width, scale = 1) => {
       const text = {current: {getBBox() {reads++; return {x: x + offset, width};}}};
+      const shorten = undefined, degraded = false;
+      ${font.getText(source)}
       const setBox = update => {backing = update(backing);};
       (${effects[1].getText(source)})();
       return {x: x + backing.offset - 6, width: backing.width + 12};
@@ -83,7 +89,9 @@ function shortened() {
   const source = ts.createSourceFile('Chart.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const marker = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'MarkerLabel');
   const cache = source.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'LabelBoxes');
-  assert.ok(marker && cache);
+  assert.ok(marker && ts.isFunctionDeclaration(marker) && marker.body && cache);
+  const font = marker.body.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration => declaration.name.getText(source) === 'fontOf'));
+  assert.ok(font);
   const effects: ts.Expression[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node) && node.expression.getText(source) === 'useLayoutEffect') effects.push(node.arguments[0]);
@@ -92,7 +100,9 @@ function shortened() {
   visit(marker);
   assert.equal(effects.length, 2);
   type Reading = {fail?: boolean; characters?: number; width?: number};
-  const context = {reads: 0, fitting, graphemes} as unknown as {
+  const context = {reads: 0, fitting, graphemes,
+    getComputedStyle: () => ({fontFamily: 'Test', fontSize: '12px', fontWeight: '400', fontStyle: 'normal', letterSpacing: '0px', fontStretch: 'normal'}),
+  } as unknown as {
     reads: number;
     make(): object;
     draw(boxes: object, children: string, name: string, room: number, fonts?: number, color?: string, reading?: Reading, scale?: number): number | null;
@@ -100,11 +110,14 @@ function shortened() {
   const script = `${cache.getText(source)}
     globalThis.make = () => new LabelBoxes();
     globalThis.draw = (boxes, children, name, room, fonts = 0, color, reading = {}, scale = 1) => {
-      const shorten = {name, room}, input = children + '|' + room + '|' + fonts;
+      const shorten = {name, room, say: label => children.replace(name, label)}, input = children + '|' + room + '|' + fonts;
+      const cache = {current: null}, suffixCache = {current: null};
+      ${font.getText(source)}
       const whole = {current: {
         getSubStringLength(start, length) {reads++; if (reading.fail) throw Error('unavailable'); return length * (reading.width ?? 7);},
-        getNumberOfChars() {reads++; return reading.characters ?? children.length + 1;},
+        getNumberOfChars() {reads++; return reading.characters ?? name.length + 1;},
       }};
+      const rest = {current: {getComputedTextLength() {reads++; if (reading.fail) throw Error('unavailable'); return shorten.say('').length * (reading.width ?? 7);}}};
       let saved = null;
       const setFit = update => {saved = update(saved);};
       (${effects[0].getText(source)})();
@@ -116,9 +129,11 @@ function shortened() {
 
 test('remounted captions reuse both whole and shortened native text fits', () => {
   const label = shortened(), cache = label.make();
-  assert.equal(label.draw(cache, 'Reset: Codex', 'Codex', 200), null);
+  assert.equal(label.draw(cache, 'Reset: Codex', 'Codex', 200), 5);
+  const wholeReads = label.reads;
+  assert.ok(wholeReads > 0, 'the first fit reads the actual name and suffix');
   label.draw(cache, 'Reset: Codex', 'Codex', 200);
-  assert.equal(label.reads, 1, 'a whole fit is remembered too');
+  assert.equal(label.reads, wholeReads, 'a whole fit is remembered too');
   assert.equal(label.draw(cache, 'Reset: Codex', 'Codex', 70), 2);
   const reads = label.reads;
   assert.equal(label.draw(cache, 'Reset: Codex', 'Codex', 70), 2);
@@ -151,20 +166,22 @@ test('unavailable native fits can be measured again while character mismatches k
   const other = label.make();
   assert.equal(label.draw(other, 'Reset: Codex', 'Codex', 70, 0, undefined, {characters: 10}), null);
   const reads = label.reads;
-  label.draw(other, 'Reset: Codex', 'Codex', 70, 0, undefined, {characters: 10});
-  assert.equal(label.reads, reads, 'the safe whole-text fallback needs no repeated native read');
+  assert.equal(label.draw(other, 'Reset: Codex', 'Codex', 70, 0, undefined, {characters: 10}), null);
+  assert.ok(label.reads > reads, 'an unavailable character mapping is not cached across mounts');
 });
 
 test('Unicode caption fits remain bounded over changing names', () => {
   const label = shortened(), cache = label.make();
   const text = 'Русская подпись 👩‍💻';
   label.draw(cache, text, text, 500);
+  const firstReads = label.reads;
+  assert.ok(firstReads > 0);
   label.draw(cache, text, text, 500);
-  assert.equal(label.reads, 1);
+  assert.equal(label.reads, firstReads);
   for (let i = 0; i < 300; i++) label.draw(cache, String(i), String(i), 500);
   const reads = label.reads;
   label.draw(cache, text, text, 500);
-  assert.equal(label.reads, reads + 1, 'old fits leave the bounded caption cache');
+  assert.equal(label.reads, reads + firstReads, 'old fits leave the bounded caption cache');
 });
 
 test('a smaller SVG viewport remeasures native caption bounds at its new scale', () => {

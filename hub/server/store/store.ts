@@ -6,7 +6,7 @@ import {config} from '../config.js';
 import {providers, sourceId, type Provider, type Source} from '../domain/sources.js';
 import {deliveryOf, type Measurement, type SourceState} from '../domain/quota.js';
 import {cellsOf, workFrom, type CellSamples} from '../domain/cells.js';
-import {tileOf, type Chunk, type HistoryMeta} from '../domain/history.js';
+import {tileOf,planRowBytes, type PlanRow, type Chunk, type HistoryMeta} from '../domain/history.js';
 import type {MeasureIntervalMs} from '../domain/frequency.js';
 import type {PlanChange, SeriesSample} from '../domain/forecast.js';
 import type {Origin, SessionRoute} from '../domain/ingest.js';
@@ -621,7 +621,7 @@ export class Store {
     });
   }
 
-  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, []), meters, scope, work}: {now?: number; shown?: Shown; meters?: MeterSelection; scope?: HistoryScope; work?: WorkRead} = {}): Chunk<number>[] {
+  cells(board: string, cellMs: number, from: number, to: number, {now = Date.now(), shown = this.shown(board, []), meters, scope, work,reserve}: {now?: number; shown?: Shown; meters?: MeterSelection; scope?: HistoryScope; work?: WorkRead;reserve?:(bytes:number)=>void} = {}): Chunk<number>[] {
     const sources = this.sources(board);
     // Subscription caps accompany native windows; wallet selections retain their cheaper read.
     const withWindows=scope ? scope==='quota' : !meters||meters.ids.some(([id])=>sources.some(source=>source.id===id&&providerOf(source.provider)?.funding==='subscription'));
@@ -660,6 +660,22 @@ export class Store {
     const grants = this.db.prepare("SELECT source_id, at, detail FROM events WHERE source_id IN (SELECT value FROM json_each(?)) AND kind = 'resets_granted' AND at >= ? AND at < ?")
       .all(JSON.stringify(sources.map(s => s.id)), from, to) as {source_id: string; at: number; detail: string}[];
     for (const event of grants) chunks[tileOf(event.at, cellMs) - tileOf(from, cellMs)].grants.push([event.source_id, event.at, Number(event.detail)]);
+    if(withWindows){
+      const retention=config.retention.sampleDays*86_400_000;
+      const readPlans=this.db.prepare("SELECT at,detail FROM events WHERE source_id=? AND kind='plan' AND at>=? AND at<? ORDER BY at");
+      const predecessor=this.db.prepare("SELECT at,detail FROM events WHERE source_id=? AND kind='plan' AND at>=? AND at<? AND detail<>? ORDER BY at DESC");
+      const valid=(name:unknown):name is string=>typeof name==='string'&&name.length>0&&name.length<=256&&!/[\u0000-\u001f]/.test(name);
+      for(const [id,rights] of shown){
+        const cutoff=Math.max(now-retention,rights.since);
+        for(const raw of readPlans.iterate(id,Math.max(from,cutoff),to)){
+          const event=raw as {at:number;detail:string};if(!valid(event.detail))continue;
+          let previous:{at:number;plan:string}|null=null;
+          for(const raw of predecessor.iterate(id,cutoff,event.at,event.detail)){const row=raw as {at:number;detail:string};if(valid(row.detail)){previous={at:row.at,plan:row.detail};break;}}
+          const row:PlanRow=[id,event.at,event.detail,previous,event.at+retention+1];reserve?.(planRowBytes(row));
+          (chunks[tileOf(event.at,cellMs)-tileOf(from,cellMs)].plans??=[]).push(row);
+        }
+      }
+    }
     if (meters) {
       const groups=this.financialGroups(board,meters,from,to,now);
       for (const chunk of chunks) chunk.meterSeries = this.meters.cells(meters,chunk.from,chunk.to,cellMs,groups);

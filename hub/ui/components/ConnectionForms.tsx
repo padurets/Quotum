@@ -41,11 +41,12 @@ export function Completion({
     !personal &&
     currentBoard === board?.id &&
     view &&
-    (widget
-      ? widgets.every(id => widgetVisible(view, id, lineup.length))
+    (operation.item.kind==='widget'
+      ? widgets.length>0&&widgets.every(id => widgetVisible(view, id, lineup.length))
       : operation.result?.sourceIds.every(id => lineup.includes(id) && !isHidden(view, cardId(id))));
   const source = operation.result?.sourceIds[0];
   const changed =
+    (operation.item.kind==='widget'&&!widgets.length) ||
     operation.current?.sources?.some(item => item.placement !== 'visible') ||
     operation.current?.widgets?.some(widget => widget.placement !== 'visible') ||
     (operation.current?.credential && !operation.current.credential.exists);

@@ -7,6 +7,7 @@ import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {Store} from '../store/store.js';
 import {SCHEMA_VERSION} from '../store/schema.js';
+import {config} from '../config.js';
 import type {WindowMeasurement as Measurement, Win} from '../domain/quota.js';
 
 const start = 1_800_000_000_000;
@@ -123,6 +124,7 @@ test('limits back before their reset time and free resets granted are events for
   store.record(id, measurement({observedAt: at(6), windows: [weekly(1, start + 7 * 86_400_000), session(1)], resets: {available: 0, expiring: []}}));
   const {events} = readHistory(store, BOARD, start - 1, 60_000);
   assert.deepEqual(events, [
+    {sourceId:id,at:at(0),kind:'plan',plan:'Pro',previous:null,expiresAt:at(0)+config.retention.sampleDays*86_400_000+1},
     {sourceId: id, at: at(2), kind: 'resets_granted', count: 1},
     {sourceId: id, at: at(4), kind: 'early_reset', windows: ['session', 'weekly']},
   ]);
@@ -139,7 +141,7 @@ test('old samples are pruned after the retention period', () => {
   store.close();
 });
 
-test("a subscription's plan is kept from each moment it was reported otherwise, and never in the chart's events", () => {
+test("a subscription's recorded plan changes appear once in chart history, including its first known plan", () => {
   const store = fresh();
   const id = seen(store, 'claude', 'account-a');
   const at = (hours: number) => start + hours * 3_600_000;
@@ -154,7 +156,9 @@ test("a subscription's plan is kept from each moment it was reported otherwise, 
     {at: at(0), plan: 'pro'},
     {at: at(3), plan: 'max'},
   ]);
-  assert.deepEqual(readHistory(store, BOARD, 0, 60_000).events, []);
+  assert.deepEqual(readHistory(store, BOARD, 0, 60_000).events.map(event=>event.kind==='plan'?[event.at,event.plan,event.previous]:event), [
+    [at(0),'pro',null],[at(3),'max',{at:at(0),plan:'pro'}],[at(5),'pro',{at:at(3),plan:'max'}],
+  ]);
   store.close();
 });
 

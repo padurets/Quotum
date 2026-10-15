@@ -13,7 +13,14 @@ test('a committed credit heartbeat retains its observation when the carried outl
   const series=(observedAt:number,observation=true)=>({sourceId:'credit',meterId:'balance:credits',kind:'balance',unit:'USD',pointMode:observation?'observation':undefined,
     points:[{at:cell,value:'99920000',validUntil:2*cell,semantics:{conversion:{original:{at:observedAt}}}}]});
   const moneySource=readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8');
-  const start=moneySource.indexOf('  const axis=useMemo('),region=moneySource.slice(start,moneySource.indexOf('  const answered=',start));
+  const parsed=ts.createSourceFile('MoneyAnalytics.tsx',moneySource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  let axisDeclaration:ts.VariableStatement|undefined;
+  const visit=(node:ts.Node)=>{
+    if(ts.isVariableStatement(node)&&node.declarationList.declarations.some(declaration=>declaration.name.getText(parsed)==='axis'))axisDeclaration=node;
+    ts.forEachChild(node,visit);
+  };
+  visit(parsed);assert.ok(axisDeclaration);
+  const region=axisDeclaration.getText(parsed);
   type Axis={min:number;max:number;rawValue:(key:string,at:number)=>string|undefined;observation?:(key:string,at:number)=>{at:number;value:string}|undefined};
   const money={moneyIdentity,moneyPointAt,meterPointIn,useMemo:(work:()=>unknown)=>work(),t:()=>'',symbol:'$',unit:'USD',locale:'en',context:{},strip:null,history:{cellMs:cell},settings:{view:'balance'},
     makeAxis:null as unknown as (entries:ReturnType<typeof series>[])=>Axis};

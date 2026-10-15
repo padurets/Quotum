@@ -4,21 +4,21 @@ import {boardPeriod,followPeriod} from './period';
 import type {HistoryScope} from '../../server/domain/history';
 import {widgetVisible, QUOTA_WIDGETS, BUDGET_WIDGETS, SUBSCRIPTION_FUNDS, ACTIVITY} from '../../server/domain/widgets';
 import {useMemo,useRef,useSyncExternalStore} from 'react';
-import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart, type Chunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
+import {CLOCK_TOLERANCE_MS, MAX_READ_TILES, TILE_CELLS, cellStart, composePrepared, expandHistory, targetOf, tileEnd, tileOf, tileStart,planEventsAt,planEventsDeadline, type Chunk, type HistoryAnswer, type HistoryBasis, type Target} from '../../server/domain/history';
 import {page, type PageEvent, type PageState} from './board';
-import {hubNow,useClock} from './clock';
+import {clock,hubNow,useClock,type PageClock} from './clock';
 import {HistoryTile} from './historyTiles';
 import {ApiError, UNAUTHORIZED} from './http';
 import {periodOf,frameChangesAt} from './periods';
 import {onPrefs, prefs} from './prefs';
-import type {Store} from './store';
+import {shallowEqual,type Store} from './store';
 import {dropTimeRange, onTimeRange, timeRange, timeRangeKey, type TimeRange} from './timeRange';
 import type {History} from './types';
 import type {MeterSelection} from '../../server/domain/meterHistory';
 import type {MoneyFamily} from '../../server/domain/providers';
 import {moneySelection} from './moneySelection';
 import {subscriptionSelection} from './subscription';
-import {pan,usePanning, type Pan} from './pan';
+import {pan, type Pan} from './pan';
 import {plotPrepared, type Coverage, type PlotBuffer} from './historyPlot';
 
 import {prepare, preparations, type Preparation, type Preparations} from './prepare';
@@ -28,6 +28,7 @@ const RETRY_MS = 15_000;
 const STORED_BYTES = 15 * 1024 * 1024;
 
 export type HistoryEnv = {
+  clock?:PageClock;
   read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis, owner?: HistoryReadOwner): Promise<HistoryAnswer>;
   /** The shared transport owns HTTP admission until this reader settles its answer. */
   sharedTransport?: boolean;
@@ -114,13 +115,17 @@ export class HistoryStore {
   private readonly responses = new Map<Flight, ResponseOwner>();
   private readonly reservations = new Map<string, Flight>();
   private readonly plotChunks = new Map<string, {tile: HistoryTile; seq: number; from: number; to: number; chunk: Chunk}>();
+  private readonly planWatch:ReturnType<PageClock['watch']>;
+  private stopPlanClock:(()=>void)|null=null;
+  private planDeadline=Infinity;
 
-  constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES, readonly scope?: HistoryScope, private readonly pool?: HistoryPool) {pool?.register(this);}
+  constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES, readonly scope?: HistoryScope, private readonly pool?: HistoryPool) {this.planWatch=(env.clock??clock).watch();pool?.register(this);}
 
   /** Settings keep the board's live context without reading or preparing its charts. */
   setActive(active: boolean) {
     if (this.active === active) return;
     this.active = active;
+    this.schedulePlanClock();
     if (active) this.schedule();
     else {
       this.cancelProjection();
@@ -277,9 +282,9 @@ export class HistoryStore {
     this.publish();
   }
 
-  get = () => this.state;
-  getPlot = () => this.plot;
-  getDrawingPlot = () => this.drawingPlot;
+  get = () => {if(this.expirePlans())this.publish();return this.state;};
+  getPlot = () => {if(this.expirePlans())this.publish();return this.plot;};
+  getDrawingPlot = () => {if(this.expirePlans())this.publish();return this.drawingPlot;};
   subscribePlot = (listener: () => void) => {this.plotListeners.add(listener); return () => void this.plotListeners.delete(listener);};
 
   /** Geometry changes do not choose a committed target or compose its totals. */
@@ -386,12 +391,40 @@ export class HistoryStore {
   }
 
   private publish() {
+    this.schedulePlanClock();this.expirePlans();
     const history = this.shown;
     const loading = !this.historyLimit && !this.readError && (!history && this.ready || !this.plotPending && !!history && history.range !== this.target().key);
     const error=this.historyLimit?'history_limit' as const:this.readError?'history_failed' as const:undefined;
     if (history === this.state.history && loading === this.state.loading&&error===this.state.error&&this.presentation===this.state.presentation) return;
     this.state = {history, loading,presentation:this.presentation,...(error?{error}:{})};
     for (const listener of this.listeners) listener();
+  }
+  private schedulePlanClock(){
+    if(this.scope==='budget')return;
+    const events=[this.shown?.events,this.plot?.events,this.drawingPlot?.events].flatMap(events=>events??[]);
+    this.planDeadline=Math.min(...[...this.grids.values()].flatMap(tiles=>[...tiles.values()].map(tile=>tile.planDeadline)),planEventsDeadline(events));
+    const owner=this.env.clock??clock;
+    if(this.active&&this.board&&Number.isFinite(this.planDeadline)){
+      this.stopPlanClock??=owner.subscribe(this.planWatch,()=>{if(this.expirePlans())this.publish();else this.schedulePlanClock();});
+      owner.due(this.planWatch,this.planDeadline,this.env.now());
+    }else{this.stopPlanClock?.();this.stopPlanClock=null;}
+  }
+  private expirePlans(){
+    const now=this.env.now();if(now<this.planDeadline)return false;
+    let changed=false;
+    for(const tiles of this.grids.values())for(const [key,tile] of tiles){const next=tile.retirePlans(now);if(next){tiles.set(key,next);changed=true;}}
+    const shownEvents=this.shown&&planEventsAt(this.shown.events,now),plotEvents=this.plot&&planEventsAt(this.plot.events,now),drawingEvents=this.drawingPlot&&planEventsAt(this.drawingPlot.events,now);
+    const plotChanged=!!this.plot&&plotEvents!==this.plot.events;
+    changed||=!!this.shown&&shownEvents!==this.shown.events||plotChanged||!!this.drawingPlot&&drawingEvents!==this.drawingPlot.events;
+    if(!changed)return false;
+    this.cancelProjection();this.version++;this.plotVersion=-1;this.plotChunks.clear();
+    if(this.shown&&shownEvents!==this.shown.events)this.shown={...this.shown,events:shownEvents!};
+    if(this.plot&&plotChanged)this.plot={...this.plot,events:plotEvents!};
+    if(this.drawingPlot&&drawingEvents!==this.drawingPlot.events)this.drawingPlot={...this.drawingPlot,events:drawingEvents!};
+    this.schedulePlanClock();
+    if(plotChanged)for(const listener of this.plotListeners)listener();
+    this.schedule();
+    return true;
   }
 
   private tiles(cell: number) {
@@ -524,7 +557,7 @@ export class HistoryStore {
         const key = `${tile.cell}:${tile.from}`;
         let saved = store.plotChunks.get(key);
         if (!saved || saved.tile !== tile || saved.seq !== seq || saved.from !== from || saved.to !== to) {
-          const chunk = yield* tile.chunkPrepared(meta.known, true);
+          const chunk = yield* tile.chunkPrepared(meta.known, true,store.env.now());
           saved = {tile, seq, from, to, chunk};
           if (valid()) store.plotChunks.set(key, saved);
         }
@@ -553,7 +586,7 @@ export class HistoryStore {
     this.composeCurrent = next => next.key === target.key && next.cell === target.cell && next.k0 === target.k0 && next.k1 === target.k1 && valid();
     const work = function* (): Preparation<History> {
       const chunks: Chunk[] = [];
-      for (const {tile} of pins) {chunks.push(yield* tile.chunkPrepared(meta.known)); yield;}
+      for (const {tile} of pins) {chunks.push(yield* tile.chunkPrepared(meta.known,false,target.now)); yield;}
       return {...yield* composePrepared(chunks, meta, target, windows), board};
     };
     prepare(this.composeOwner, work(), valid, history => {
@@ -692,6 +725,7 @@ export class HistoryStore {
   private abort(flight: Flight) {this.preparations?.cancel(flight); this.releaseResponse(flight); flight.controller.abort();}
   private abortFlights() {for (const flight of [...this.flights]) this.abort(flight);}
   private setPlot(plot: PlotBuffer | null) {
+    if(plot){const events=planEventsAt(plot.events,this.env.now());if(events!==plot.events)plot={...plot,events};}
     // Both snapshots share the prepared arrays. Moving quantities must not
     // replace the balance drawing; new data and authority replace both.
     this.drawingPlot=plot;
@@ -759,7 +793,7 @@ export class HistoryStore {
           const admit = (bytes: number) => !store.pool || store.pool.reserve(flight, otherGrowth + Math.max(0, bytes - base.bytes));
           // Include new empty tile headers before preparation can yield, too.
           if (!admit(pin.staged.bytes)) {response.limited = true; completed = true; return;}
-          const staged = yield* pin.staged.staged(chunk, response.answer.known, admit);
+          const staged = yield* pin.staged.staged(chunk, response.answer.known, admit,store.env.now());
           if (!staged) {response.limited = true; completed = true; return;}
           pin.staged = staged;
           pin.chunks.push(chunk);
@@ -1011,39 +1045,61 @@ if (typeof window !== 'undefined') {
 }
 function usePeriodHistory(loader:HistoryStore,rolling=false):Shown&{drawing:History|null} {
   const shown=useSyncExternalStore(loader.subscribe,loader.get,loader.get);
-  const panning=usePanning();
+  const panning=pan.active();
   const revision=useSyncExternalStore(listener=>boardPeriod.subscribeProjection(loader===fundsHistory?'funds':loader.scope??'quota',listener),()=>boardPeriod.getProjectionRevision(loader===fundsHistory?'funds':loader.scope??'quota'));
-  const now=useClock(at=>rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at):null,[shown,revision,panning]);
-  const retained=useRef<{board:string;history:History}|null>(null);
+  const retained=useRef<{board:string;history:History;deadline:number}|null>(null);
+  const now=useClock(at=>{
+    const next=Math.min(rolling?frameChangesAt(timeRange(),shown.history?.cellMs??60_000,at)??Infinity:Infinity,retained.current?.deadline??Infinity);
+    return Number.isFinite(next)?next:null;
+  },[shown,revision,panning]);
   const gesture=useRef<{active:boolean;target:string|null}>({active:false,target:null});
   const authority=useRef<{board:string;loader:HistoryStore;presentation:number}|null>(null);
-  const result=useMemo(()=>{
+  const snapshot=useRef<{inputs:readonly unknown[];phase:number|null;phaseRevision:number;value:Shown}|null>(null);
+  // Phase bookkeeping runs even when the retained accounting frame stays the
+  // same. Only a changed snapshot should render a table or its static measure.
+  const read=useMemo(()=>()=>{
+    const shownNow=loader.get(),revisionNow=boardPeriod.getProjectionRevision(loader===fundsHistory?'funds':loader.scope??'quota'),panning=pan.active();
     const board=page.get().board?.id??'';
-    if(authority.current?.board!==board||authority.current.loader!==loader||authority.current.presentation!==shown.presentation){
-      retained.current=null;gesture.current={active:false,target:null};authority.current={board,loader,presentation:shown.presentation};
-    }
     const selected=timeRange(),target=board+':'+(selected?timeRangeKey(selected):prefs().range);
-    if(panning!==null){gesture.current.active=true;gesture.current.target=null;}
-    else if(gesture.current.active){gesture.current.active=false;gesture.current.target=target;}
-    if(gesture.current.target!==target)gesture.current.target=null;
-    const folding=gesture.current.target===target;
-    // The data layers move through their strips during a gesture. Keep the last
-    // complete accounting frame until release, including its full opacity.
-    if(panning!==null&&retained.current)return {...shown,history:retained.current.history,loading:false};
-    if(!shown.history)return shown;
-    const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=boardPeriod.projectionState(shown.history,scope);
-    if(!state.ready)return {...shown,history:retained.current?.history??null,loading:!folding&&!state.error&&!shown.error,error:state.error??shown.error};
-    const history=boardPeriod.project(shown.history,scope,now);retained.current={board,history};if(!shown.loading)gesture.current.target=null;return {...shown,history,loading:folding?false:shown.loading,error:state.error??shown.error};
-  },[shown,revision,loader,panning,now]);
+    const inputs=[shownNow,revisionNow,loader,panning,now,board,target],previous=snapshot.current,validAt=hubNow();
+    // A retained frame can outlive the raw tiles that scheduled its expiry.
+    // Retire its plan facts before even the stable-snapshot fast path.
+    const held=retained.current,expired=!!held&&validAt>=held.deadline;
+    if(expired){const events=planEventsAt(held.history.events,validAt);retained.current={...held,history:{...held.history,events},deadline:planEventsDeadline(events)};}
+    if(!expired&&previous&&inputs.every((value,i)=>Object.is(value,previous.inputs[i])))return previous.value;
+    const at=gesture.current.active&&panning===null||shownNow!==shown||revisionNow!==revision?validAt:now;
+    const value=(()=>{
+      if(authority.current?.board!==board||authority.current.loader!==loader||authority.current.presentation!==shownNow.presentation){
+        retained.current=null;gesture.current={active:false,target:null};authority.current={board,loader,presentation:shownNow.presentation};
+      }
+      if(panning!==null){gesture.current.active=true;gesture.current.target=null;}
+      else if(gesture.current.active){gesture.current.active=false;gesture.current.target=target;}
+      if(gesture.current.target!==target)gesture.current.target=null;
+      const folding=gesture.current.target===target;
+      // The data layers move through their strips during a gesture. Keep the last
+      // complete accounting frame until release, including its full opacity.
+      if(panning!==null&&retained.current)return {...shownNow,history:retained.current.history,loading:false,error:shownNow.error};
+      if(!shownNow.history)return shownNow;
+      const scope=loader===fundsHistory?'funds':loader.scope??'quota',state=boardPeriod.projectionState(shownNow.history,scope);
+      if(!state.ready)return {...shownNow,history:retained.current?.history??null,loading:!folding&&!state.error&&!shownNow.error,error:state.error??shownNow.error};
+      const projected=boardPeriod.project(shownNow.history,scope,at),deadline=held?.history.events===projected.events?held.deadline:planEventsDeadline(projected.events);
+      const events=validAt>=deadline?planEventsAt(projected.events,validAt):projected.events,history=events===projected.events?projected:{...projected,events};
+      retained.current={board,history,deadline:events===projected.events?deadline:planEventsDeadline(events)};
+      if(!shownNow.loading)gesture.current.target=null;return {...shownNow,history,loading:folding?false:shownNow.loading,error:state.error??shownNow.error};
+    })();
+    snapshot.current={inputs,phase:panning,phaseRevision:(previous?.phaseRevision??0)+(previous&&previous.phase!==panning?1:0),value:previous&&shallowEqual(previous.value,value)?previous.value:value};
+    return snapshot.current.value;
+  },[shown,revision,loader,now]);
+  const result=useSyncExternalStore(pan.onPhase,read,read);
   // Rolling totals change with the endpoints; their unchanged drawing evidence
   // must not restart line and stack preparation on the same clock wake.
-  const drawing=useMemo(()=>result.history,[shown,revision,loader,panning]);
+  const drawing=useMemo(()=>result.history,[shown,revision,loader,snapshot.current?.phaseRevision,result.history?.events]);
   return {...result,drawing};
 }
 export function useHistory(rolling=false) {return usePeriodHistory(quotaHistory,rolling);}
 export function useBudgetHistory(family:MoneyFamily='budget',rolling=false) {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling);}
 export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
-export function useBudgetHistoryPlot(family: MoneyFamily = 'budget', quantities=false): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory,read=quantities?reader.getPlot:reader.getDrawingPlot;return useSyncExternalStore(reader.subscribePlot, read, read);}
+export function useBudgetHistoryPlot(family: MoneyFamily = 'budget'): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribePlot, reader.getDrawingPlot, reader.getDrawingPlot);}
 /** A fresh answer from either resource family supersedes the board's initial snapshot. */
 export function historyBegins(board: string | null, snapshot: number | null, answers: readonly (HistoryBoundary | null)[]): number {
   const current = answers.filter((answer): answer is HistoryBoundary => !!answer && answer.board === board);

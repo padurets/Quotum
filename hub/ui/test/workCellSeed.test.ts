@@ -43,6 +43,11 @@ function consumer(now:()=>number) {
     clock:{...clock,watch:clock.watch.bind(clock),subscribe:clock.subscribe.bind(clock),due:(_watch:unknown,at:number|null,stamp:number)=>dues.push({now:stamp,at})},hubNow:clock.hubNow,
     useState:(initial:()=>unknown)=>[slot(initial)],useRef:(current:unknown)=>slot(()=>({current})),useSyncExternalStore:(_subscribe:unknown,read:()=>number)=>{slot(()=>null);return read();},
     useLayoutEffect:(effect:()=>void)=>effects.push(effect),
+    useMemo:(read:()=>unknown,deps:unknown[])=>{
+      const memo=slot(()=>({deps:undefined as unknown[]|undefined,value:undefined as unknown}));
+      if(!memo.deps||deps.length!==memo.deps.length||deps.some((value,i)=>!Object.is(value,memo.deps![i]))){memo.deps=[...deps];memo.value=read();}
+      return memo.value;
+    },
   };
   runInNewContext(compile(hookSource+timedSource.replace('function Timed(','export function Timed(')),context);
   return {render(cell:TimedCell){cursor=0;effects=[];const output=context.exports.Timed({cell,render:(shown,time)=>({shown:plain(shown),time})});return {output,effects:[...effects]};},
@@ -75,14 +80,15 @@ for(const locale of ['en','ru'] as const)test(`${locale}: rendered work cells se
       assert.deepEqual(seeded,unseeded.slice(1),'only the duplicate current-time summary is removed');
       read.clear();assert.equal(clock.layout(frame).at,expected.due);assert.deepEqual(read.times,unseeded,'effect replay follows the original planner');
 
-      // A discarded update shares useClock.latest.current with its committed fiber.
-      const kept=clock.render(cell);now+=17;clock.render(cell);read.clear();
+      // New evidence in a discarded update shares latest.current with its committed fiber.
+      const kept=clock.render(cell);now+=17;clock.render(make(h.period,base,history,column,resetAt));read.clear();
       const afterDiscard=clock.layout(kept),discardReads=[...read.times];
       read.clear();const expectedDiscard=reference(h.period,base,history,column,now-17,resetAt),discardBaseline=read.times.slice(0,-1);
       assert.equal(afterDiscard.now,now-17);assert.equal(afterDiscard.at,expectedDiscard.due);assert.deepEqual(discardReads,discardBaseline,'another timestamp cannot seed a previous effect');
 
-      // The hook reads latest.current: equal-time double render has the same pure Cell.
-      const older=clock.render(cell),latest=clock.render(cell);assert.deepEqual(latest.output,older.output);read.clear();
+      // New evidence advances the intent; its equal-time layout render reuses the pure Cell.
+      const refreshed=make(h.period,base,history,column,resetAt),older=clock.render(refreshed);read.clear();
+      const latest=clock.render(refreshed);assert.deepEqual(latest.output,older.output);assert.deepEqual(read.times,[],'a layout render does not reread the displayed summary');read.clear();
       const superseded=clock.layout(older),supersededReads=[...read.times];
       read.clear();const expectedSuperseded=reference(h.period,base,history,column,now,resetAt);
       assert.equal(superseded.at,expectedSuperseded.due);

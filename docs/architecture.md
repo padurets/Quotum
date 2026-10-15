@@ -623,7 +623,13 @@ them), kept for 90 days.
   advances a private store revision; the next server read clears the tile cache before
   looking for hits. Even a distant tile can depend on a preceding sample of any age.
   This housekeeping emits no history event: observations already read by the page stay
-  until its usual data or connection changes. The page keeps packed buffers within an
+  until its usual data or connection changes. Stored plan events are an exception:
+  quota tiles carry actual nonempty plan observations and the latest authorized
+  differing predecessor. Their independent retention deadlines limit closed-tile
+  reuse; the page redacts expired facts from tiles and readouts with its shared clock,
+  without HTTP or a physical database prune. A first accessible observation means
+  first known to this reader. Plan names count towards the existing byte budgets.
+  The page keeps packed buffers within an
   estimated 15 MiB, protecting the frame on screen and removing dictionaries no retained
   cell uses after replacement. Session references are opaque and
   change with the hub's run, so answers cannot mix runs. A machine's list credits work
@@ -668,6 +674,12 @@ them), kept for 90 days.
   never under its mean hour), so that it would run out before the reset at that pace, put
   a muted arrow up by the words, and how many times and when it would run out in the
   tooltip; the verdict stays.
+
+  The producer records the actual observed plan boundary used at its confirmation
+  hour. Each board filters this provenance by visibility, sharing and retention;
+  expiry updates only the provenance, leaving the shared numeric model intact. A
+  compatible weekly forecast's tooltip gives the plan observation and explains its
+  confirmation after an hour, including a forecast waiting for more data.
 
   A series says nothing until it has an hour of history. Under a day it goes by the hours
   it has, leaning on the window's own mean (once the window ran half an hour when the
@@ -1310,14 +1322,14 @@ Narrow screens keep edge-to-edge bars.
 The filter button forms its own group after the board controls. A small dot marks a
 selected historical range, including when the row is hidden; returning to live removes it.
 The row starts closed and remembers its visibility in the reader's browser.
-Hiding it preserves the selected period, quota window kind and shared chart horizon;
-while open, it keeps them available during scrolling. Board navigation and widget
-management stay in the header. The quota kind
-is also available in each quota widget's settings. The budget chart and table share
-one series selection, editable from either widget even when the other is hidden.
-Balance/spending belongs to the budget chart's settings; subscription funds have their
-own selection in their chart. Table columns remain owner settings, while shared filters
-are available to every reader. Each
+Hiding it preserves the selected period and shared chart horizon; while open,
+it keeps them available during scrolling. Board navigation and widget management
+stay in the header. Five-hour limits, weekly limits and wallet balance
+each have independent chart/table pairs. Both wallet widgets share
+an accounts-and-keys picker in their settings. Each chart's legend controls
+only its own visibility. Subscription funds use their own family and expose data
+selection only for a bounded cohort or a retained explicit selection. Table columns
+remain owner settings, while shared data controls are available to every reader. Each
 analytics panel uses the same heading and reader-error component. The selected
 period and its back/forward buttons appear together at the right end of the shared
 analytics controls. While a different range is loading
@@ -1334,7 +1346,7 @@ Each widget fills the fewest whole rows that contain its content, with any spare
 above a card's tray or at the bottom of a panel, unless the owner chose a height for it
 (`h`, in rows). A chosen height is a request, not what shows: a card never
 gets shorter than its content, and grows past the chosen rows while its content needs
-more, back to them when it needs less, without the view changing. All four charts give a
+more, back to them when it needs less, without the view changing. All five charts give a
 chosen height to their plot, never drawing it lower than they do by themselves, their
 heads, totals and legends whole. The Agent sessions widget gathers the period's sessions
 by project (one name across people, as agent activity counts it), machine or subscription,
@@ -1415,12 +1427,12 @@ reading order, with the heights chosen where the least their content can show fi
 arranging is available only on the wide grid.
 The hub migrates pre-grid views and legacy analytics anchors atomically, retaining
 hidden intent, heights, unrelated geometry and each table's columns. A board view and
-revision are read as one reconciled pair. Saves use the compact version 3 codec and its writer header;
+revision are read as one reconciled pair. Saves use the compact version 4 codec and its writer header;
 a stale runtime cannot save a version it merely echoed from a snapshot. The ordinary
-body limit is 76 KiB UTF-8 of the encoded request; decoded drafts fit 128 KiB.
+body limit is 80 KiB UTF-8 of the encoded request; decoded drafts fit 132 KiB.
 Storage and POST use the same tuple codec; readers receive a semantic View object.
-The migration concatenates the old visible orders, retains saved hidden places and
-keeps unarranged source cards implicit. New membership never saves all their defaults. Up to the aggregate browser keepalive limit of 64 KiB, saves
+The legacy split migration concatenates the old visible orders, retains saved hidden places and
+keeps unarranged source cards implicit. Version 4 retains the old weekly and wallet balance widget IDs and inserts five-hour siblings beside their saved weekly parents, copying width, height and visibility. The upgrade preserves unrelated owner fields and expands retained Add receipts once. New membership never saves all their defaults. Up to the aggregate browser keepalive limit of 64 KiB, saves
 retain their debounce. Larger drafts start ordinary serialized saves immediately; a
 browser close warning stays until acknowledgment or explicit discard, and navigation
 that destroys the saver waits, including native browser Back/Forward. A failed save
@@ -1442,7 +1454,7 @@ with an explicit retry carrying the captured revision. Ending the authenticated 
 drops unsent successors; a submitted Add continues when only its form closes, while an
 owner-scope change prevents further phases. No timer polls for those results.
 New empty boards keep analytics widgets pending. Resource capabilities place
-the quota or wallet pair and the subscription-funds chart independently on first use.
+the five-hour and weekly pairs, wallet balance pair and subscription-funds chart independently on first use.
 If those automatic placements would exceed a view size bound, they remain pending
 while the board keeps its valid saved view and revision. A smaller save makes room
 for reconciliation to retry; new source cards remain implicit. Explicit Add and save
@@ -1451,13 +1463,13 @@ An explicit Add also places an empty widget; placement
 is sticky after its last source or series disappears. Explicit hidden intent wins.
 `enabledWhenEmpty` applies to agents and activity; analytics placement lives in `shown`.
 What
-is only about how one person looks (the board's period and window type, the chart's
+is only about how one person looks (the board's period, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
-the agents table's sort order, the chosen board and language) stays in their browser.
-The controls above the mixed widget grid own the common period, quota kind and forecast
-horizon. Shared quota and budget filters are also accessible from the relevant widgets,
+the agents and quota tables' sort orders, the chosen board and language) stays in their browser.
+The controls above the mixed widget grid own the common period and forecast
+horizon. Shared wallet data selection is accessible from both wallet widgets,
 including a table whose chart is hidden. Each widget keeps its display settings, such as
-columns, balance/spending mode, stacking and legend choices.
+columns, forecast visibility, stacking and legend choices.
 A fixed accounting interval is exactly `[from,to)`: card values use the latest retained
 observation strictly before `to`, with validity evaluated at `to`. Missing predecessors
 stay unknown. Native membership follows the last retained nonempty measurement batch;
@@ -1585,14 +1597,20 @@ preparation uses the shared cancellable scheduler; aggregate benchmark traffic i
 composite and detail reads, cancellations and responses that finish after measurement.
 
 Quota history, wallet budgets, subscription funds and agent activity read and move along time alike
-(`ui/components/timeAxis.ts`), each with its legend under it. A time range selected on
-any of them becomes the board's period, including card measurements, session lists and
+(`ui/components/timeAxis.ts`), each with its legend under it. Pointing to a legend
+entry or focusing it with the keyboard highlights that series and dims its peers.
+Wallet charts and tables use a common accounts-and-keys picker inside their settings. Its shared reader selection is independent of the table’s owner-only display settings. An account selects its total balance; a key selects its reported remaining cap within the shared 32-meter bound. Retired spending preferences are discarded without replacing an explicit empty selection with default accounts. Balance components remain in card details. Each fixed chart has independent legend visibility. Ordinary subscription funds use only the legend; the accounts picker appears for more than 32 eligible balances or an explicit retained data selection. Legacy funds subsets remain global visibility intent across boards, without changing bounded admission on legend clicks.
+
+All five charts share `ui/components/seriesFocus.ts`: inherited CSS variables change
+paint without rebuilding prepared paths, updating reader preferences or rendering data
+consumers. Muted entries retain their visibility toggle and do not dim visible series.
+A time range selected on any chart becomes the board's period, including card measurements, session lists and
 accounting tables; it lives in the page's
 address (`?from=&to=`), so a reload keeps it, Back undoes it and a link to it can be shared on the board.
 ‹ and › beside the period move the board by half its period: back, to a range in
 the past held in the address like a dragged one; forward, up to now, where the chosen
 period comes back. A horizontal touchpad swipe, Shift with the wheel, or Shift with a
-mouse or pen drag moves all four charts continuously. A page-local transaction captures
+mouse or pen drag moves all five charts continuously. A page-local transaction captures
 each chart's scale in CSS pixels and applies the same time delta on animation frames;
 plain dragging still selects a range and touch retains its hold-to-select gesture.
 Prepared SVG artwork moves in composited HTML surfaces behind a stationary clip;
@@ -1704,7 +1722,7 @@ also requires the complete history answer for the requested range, so a partial
 strip cannot start the fold before that answer replaces it.
 User navigation owns the requested projection separately from drawing readiness.
 Back, a preset or a horizon change retires an older held pose and its pending RAF or
-fold; all four charts immediately place their retained data in the requested projection.
+fold; all five charts immediately place their retained data in the requested projection.
 Ready data keeps that projection when it replaces the borrowed model. Borrowed data
 keeps its own coverage and time domain, so future points are clipped rather than
 clamped into an edge and a requested past frame shows no old future labels.
@@ -1747,6 +1765,41 @@ descending, then back to activity;
 a hidden column does not sort. When its owner's chosen columns do not fit the widget's
 own width, it becomes a compact list with a sort menu. State is off by default: the
 mark already tells it. Explicit column choices belong to the board, sorting to the viewer.
+
+The quota table shares one viewer sort with its compact list: ascending, descending,
+then default, with unavailable columns falling back without losing the saved choice.
+Live default order puts exhausted limits first, then absolute exhaustion time,
+then known remaining shares; fixed selections use descending spending. Missing
+values follow known values in either direction, with numeric locale names breaking
+ties. Rolling work, agent hours and plans use existing accounting indexes and the
+shared page clock for exact boundaries and adjacent key crossings. Only a changed
+permutation publishes retained row descriptors; sorting does not wake other widgets.
+
+Agent sessions, quota metrics and budget metrics use the same sortable header and
+menu pieces in `ui/components/TableWidget.tsx`, including typography, active colour,
+reserved arrow space and accessible selection. Headers cycle through both directions
+and default; menus expose default as a separate row. Budget sorting is a separate
+viewer preference. Wide tables sort through their headers; only compact lists show
+a separate sort button beside settings, and settings contain no sorting choices.
+Rows and controls share the same width decision, preserving the viewer's choice
+when the widget changes between table and list. Names use the reader's locale;
+values and top-ups compare exact integer millionths from the same accounting
+model as their cells. Unknown values stay last in either direction. Hidden columns
+temporarily use default without losing the saved choice. Default preserves the budget
+series order; live accounting boundaries use the shared page clock and retain cells.
+The budget chart, legend and table name a total balance by its account rather than
+repeating "Available balance". Scoped key limits keep their names; balance components,
+roles and currency provenance remain reachable in card details.
+
+On charts narrower than 560 SVG units, reset and exhaustion labels show the name
+and countdown, with an arrow only beyond the visible edge. Their backing is bounded
+by 180 units and 60% of usable plot width. Hover and touch retain the full event
+meaning and date in the shared tooltip; the primary image description carries them
+too. Each mounted label caches shaped grapheme-prefix measurements by name and
+font, measures its current countdown separately, and moves with cached local bounds.
+Unavailable mappings, fonts or overflowing shaping use a bounded ellipsis with the
+complete suffix until the next real input changes. Wide label layout and the overflow
+stack keep their existing behavior.
 The table of limits does the same: its owner chooses its columns, and where they do not
 fit it lists each window with what is left, then its other values, each with its heading.
 Agent-hours and the share of spending while active are off by default: adding either can

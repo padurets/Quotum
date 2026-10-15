@@ -40,10 +40,12 @@ export {CURRENCY_SCENES} from './currencies.js';
 
 /** Mixed analytics stays visible; loading and read failures are held by history tests.
  * Legend mutes, table-only views and explicit empty Add are exercised on this set in
- * both languages. The shared range and all four real plots use the native-input bench.
+ * both languages. The shared range and all five charts use the native-input bench.
+ * Plan-event access and retention expiry are held in server/test/planHistory.test.ts
+ * and ui/test/planHistory.test.ts; first-known and changed plans are durable below.
  */
 export const ANALYTICS_SCENES=[
-  {id:'mixed',expect:['five-widgets','quota-percentages','budget-amounts','independent-units']},
+  {id:'mixed',expect:['fixed-pairs','quota-percentages','budget-amounts','independent-units']},
   {id:'empty',expect:['pending-empty','explicit-empty','sticky-placement']},
 ] as const;
 
@@ -870,6 +872,7 @@ const all: DemoSet = {
       id: 'codex-behind',
       provider: 'codex',
       plan: 'Pro',
+      planAt: time=>time<-12*HOUR?'Plus':'Pro',
       machines: ['win-desktop'],
       history: 14 * DAY,
       windows: [fiveHours(90 * MIN, 6, agentsWork(ON_CALL_AGENTS, shifts(12))), weekly({since: -2 * DAY, use: alongPlan(-15, WEEK_PLAN_FLAT)})],
@@ -878,6 +881,8 @@ const all: DemoSet = {
       on: {ana: {name: 'Codex Pro for the platform team and the on-call rotation', color: '#43aca1', plan: WEEK_PLAN_FLAT, width: 2}},
       expect: [
         {title: 'Codex Pro for the platform team and the on-call rotation'},
+        {event:'plan'},
+        {planHistory:'changed'},
         {agents: 10, drawn: true},
         {window: 'weekly', level: 'ok', note: 'behind'},
         // Behind its plan, but spending as it did the last day, it lasts about to the reset.
@@ -1312,6 +1317,8 @@ const all: DemoSet = {
       on: {ana: {name: 'Six hours of history'}},
       expect: [
         {title: 'Six hours of history'},
+        {event:'plan'},
+        {planHistory:'first'},
         // It runs out in half the time to the reset, but under a day of history a forecast is never red, nor says what is left.
         {forecast: 'weekly', outlook: 'runsOut', tone: 'v-warn', cold: true},
       ],

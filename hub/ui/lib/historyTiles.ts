@@ -1,4 +1,4 @@
-import {decodeCellsPrepared, encodeCellsPrepared, TILE_CELLS, type Chunk, type DecodedCell, type HistoryMeta} from '../../server/domain/history';
+import {decodeCellsPrepared, encodeCellsPrepared, TILE_CELLS,planRowAt,planRowBytes,planRowDeadline, type PlanRow,type Chunk, type DecodedCell, type HistoryMeta} from '../../server/domain/history';
 
 import {drain, type Preparation} from './prepare';
 import {MeterTile} from './meterTiles';
@@ -24,6 +24,9 @@ export class HistoryTile {
   private activity = new ArrayBuffer(HEAD);
   private resets: Chunk['resets'] = [];
   private grants: Chunk['grants'] = [];
+  private plans:PlanRow[]=[];
+  private planBytes=0;
+  private plansUntil=Infinity;
   private sourceWork:NonNullable<Chunk['activity']['sourceWork']>=[];
   private meters: MeterTile;
   private hasMeters=false;
@@ -36,13 +39,20 @@ export class HistoryTile {
   get to() {return this.from + TILE_CELLS * this.cell;}
 
   get bytes() {
-    return this.activity.byteLength + this.meters.bytes + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192+this.sourceWork.length*192 + 1024;
+    return this.activity.byteLength + this.meters.bytes + this.seriesBytes + this.sessions.length * 320 + this.groups.length * 192 + (this.resets.length + this.grants.length) * 192 + this.planBytes + this.sourceWork.length*192 + 1024;
+  }
+  get planDeadline(){return this.plansUntil;}
+  /** Expiry changes only this tile's new facts, preserving published generations. */
+  retirePlans(now:number):HistoryTile|null {
+    if(now<this.planDeadline)return null;
+    const plans=this.plans.flatMap(row=>{const value=planRowAt(row,now);return value?[value]:[];});
+    return Object.assign(Object.create(HistoryTile.prototype),this,{plans,planBytes:plans.reduce((n,row)=>n+planRowBytes(row),0),plansUntil:plans.reduce((n,row)=>Math.min(n,planRowDeadline(row)),Infinity),writeSeq:this.writeSeq+1}) as HistoryTile;
   }
 
   /** A private COW tile keeps every published buffer untouched until response commit. */
   staged(chunk: Chunk, known: HistoryMeta['known']): Preparation<HistoryTile>;
-  staged(chunk: Chunk, known: HistoryMeta['known'], admit: (bytes: number) => boolean): Preparation<HistoryTile | null>;
-  *staged(chunk: Chunk, known: HistoryMeta['known'], admit?: (bytes: number) => boolean): Preparation<HistoryTile | null> {
+  staged(chunk: Chunk, known: HistoryMeta['known'], admit: (bytes: number) => boolean,now?:number): Preparation<HistoryTile | null>;
+  *staged(chunk: Chunk, known: HistoryMeta['known'], admit?: (bytes: number) => boolean,now=0): Preparation<HistoryTile | null> {
     const copy = new HistoryTile(this.from, this.cell);
     copy.readFrom = this.readFrom; copy.readTo = this.readTo; copy.validTo = this.validTo;
     copy.writeSeq = this.writeSeq; copy.shownAt = this.shownAt;
@@ -51,7 +61,7 @@ export class HistoryTile {
     for (const group of this.groups) {copy.groups.push(group); yield;}
     for (const key in this.devices) {copy.devices[key] = this.devices[key]; yield;}
     copy.hasMeters = this.hasMeters; copy.meters = yield* this.meters.clonePrepared();
-    copy.activity = this.activity; copy.resets = this.resets; copy.grants = this.grants;copy.sourceWork=this.sourceWork;
+    copy.activity = this.activity; copy.resets = this.resets; copy.grants = this.grants;copy.plans=this.plans;copy.planBytes=this.planBytes;copy.plansUntil=this.plansUntil;copy.sourceWork=this.sourceWork;
     // Earlier chunks of this response remain owned while their replacement is copied.
     let reserved = this.bytes;
     const fits = () => {
@@ -61,7 +71,7 @@ export class HistoryTile {
       if (!admit(bytes)) return false;
       reserved = bytes; return true;
     };
-    for (const step of copy.mergePrepared(chunk, known)) {
+    for (const step of copy.mergePrepared(chunk, known,now)) {
       if (!fits()) return null;
       yield step;
     }
@@ -71,7 +81,7 @@ export class HistoryTile {
 
   merge(chunk: Chunk, known: HistoryMeta['known']) {drain(this.mergePrepared(chunk, known));}
 
-  private *mergePrepared(chunk: Chunk, known: HistoryMeta['known']): Preparation<void> {
+  private *mergePrepared(chunk: Chunk, known: HistoryMeta['known'],now=0): Preparation<void> {
     this.hasMeters ||= chunk.meterSeries!==undefined;
     yield* this.meters.mergePrepared(chunk.from,chunk.to,chunk.meterSeries??[]);
     const first = (chunk.from - this.from) / this.cell;
@@ -157,6 +167,10 @@ export class HistoryTile {
     for (const row of this.grants) {if (row[1] < chunk.from || row[1] >= chunk.to) grants.push(row); yield;}
     for (const row of chunk.grants) {grants.push([...row]); yield;}
     this.resets = resets; this.grants = grants;
+    const plans:PlanRow[]=[];
+    for(const raw of this.plans){const row=planRowAt(raw,now);if(row&&(row[1]<chunk.from||row[1]>=chunk.to))plans.push(row);yield;}
+    for(const raw of chunk.plans??[]){const row=planRowAt(raw,now);if(row)plans.push([row[0],row[1],row[2],row[3]?{...row[3]}:null,row[4]]);yield;}
+    this.plans=plans;this.planBytes=plans.reduce((n,row)=>n+planRowBytes(row),0);this.plansUntil=plans.reduce((n,row)=>Math.min(n,planRowDeadline(row)),Infinity);
   }
 
   /** References in all retained rows survive, including a suffix not yet read in this epoch. */
@@ -203,9 +217,9 @@ export class HistoryTile {
   }
 
   /** Only the read interval is materialized; old epoch data stays held until replaced. */
-  chunk(known: HistoryMeta['known'], plot = false): Chunk {return drain(this.chunkPrepared(known, plot));}
+  chunk(known: HistoryMeta['known'], plot = false,now=Date.now()): Chunk {return drain(this.chunkPrepared(known, plot,now));}
 
-  *chunkPrepared(known: HistoryMeta['known'], plot = false): Preparation<Chunk> {
+  *chunkPrepared(known: HistoryMeta['known'], plot = false,now=Date.now()): Preparation<Chunk> {
     const first = (this.readFrom - this.from) / this.cell;
     const chunk: Chunk = {from: this.readFrom, to: this.readTo, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
     for(const [source,index,active,agent] of this.sourceWork){if(index>=first&&this.from+index*this.cell<this.readTo)(chunk.activity.sourceWork??=[]).push([source,index-first,active,agent]);yield;}
@@ -213,6 +227,7 @@ export class HistoryTile {
     for (const key in this.devices) {chunk.activity.devices[key] = this.devices[key]; yield;}
     for (const row of this.resets) {if (row[2] >= this.readFrom && row[2] < this.readTo) chunk.resets.push([...row]); yield;}
     for (const row of this.grants) {if (row[1] >= this.readFrom && row[1] < this.readTo) chunk.grants.push([...row]); yield;}
+    for(const raw of this.plans){const row=planRowAt(raw,now);if(row&&row[1]>=this.readFrom&&row[1]<this.readTo)(chunk.plans??=[]).push([row[0],row[1],row[2],row[3]?{...row[3]}:null,row[4]]);yield;}
     if(this.hasMeters)chunk.meterSeries=yield* this.meters.chunkPrepared(this.readFrom,this.readTo);
     for (const s of this.series.values()) {
       if (plot) {

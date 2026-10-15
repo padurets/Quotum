@@ -558,6 +558,12 @@ The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
 
 ## Privacy
 
+Reported nonempty plan names may become timestamped subscription-history events.
+Repeated names and empty reports add no event. Dashboard readers receive only plan
+observations allowed by their board's source visibility, sharing start and retention;
+an internal predecessor does not extend that access. No extra client collection or
+provider request is required.
+
 Codex credit observations add only a native amount, its status and the optional
 `hasCredits` flag under the existing account pseudonym. No purchase history, provider
 account ID, credentials or model request is involved. Personal boards show funds;
