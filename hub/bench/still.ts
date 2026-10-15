@@ -5,6 +5,7 @@ import {snapshot, type Card} from '../demo/model.js';
 import {STILL_FOR} from '../demo/setup.js';
 
 const HOUR = 3_600_000;
+const IDLE_CHARTS = ['quota-history', 'quota-session-history', 'activity', 'budget-history', 'subscription-funds'] as const;
 
 /** Keep one real grid transition inside the existing duration, away from endpoint clock wakes. */
 export function idleWindow(readyAt: number, seconds: number, cellMs: number) {
@@ -32,16 +33,16 @@ export function idlePhaseProblems(phase: IdlePhase, boundary: number): string[] 
   const errors: string[] = [];
   if (!(phase.from < boundary && boundary < phase.to) || Math.floor(phase.to / phase.cellMs) - Math.floor(phase.from / phase.cellMs) !== 1) errors.push('idle phase did not span exactly one grid boundary');
   if (Math.abs((phase.to - phase.from) - (phase.monotonicTo - phase.monotonicFrom)) > 1000) errors.push('idle phase clock changed during measurement');
-  if (phase.transitions.length !== 4 || phase.transitions.some(count => count !== 1)) errors.push('idle phase did not observe one transition in each chart');
-  if (phase.starts.length !== 4 || phase.ends.length !== 4 || phase.starts.some(value => value !== Math.floor(phase.from / phase.cellMs)) || phase.ends.some(value => value !== Math.floor(phase.to / phase.cellMs))) errors.push('idle chart grid disagrees with the measurement clock');
+  if (phase.transitions.length !== IDLE_CHARTS.length || phase.transitions.some(count => count !== 1)) errors.push('idle phase did not observe one transition in each chart');
+  if (phase.starts.length !== IDLE_CHARTS.length || phase.ends.length !== IDLE_CHARTS.length || phase.starts.some(value => value !== Math.floor(phase.from / phase.cellMs)) || phase.ends.some(value => value !== Math.floor(phase.to / phase.cellMs))) errors.push('idle chart grid disagrees with the measurement clock');
   return errors;
 }
 
 /** Observe production axis changes; no timer or artificial clock drives the page. */
 export function idlePhaseScript(cellMs: number): string {
   return `(() => {
-    const axes = ['.history','.activity','.budget-history','.subscription-funds'].map(panel => document.querySelector(panel+' [data-axis-end]'));
-    if(axes.some(axis=>!axis))throw new Error('idle phase requires all four chart axes');
+    const axes = ${JSON.stringify(IDLE_CHARTS)}.map(widget => document.querySelector('[data-widget="'+widget+'"] [data-axis-end]'));
+    if(axes.some(axis=>!axis))throw new Error('idle phase requires all five chart axes');
     const cell = axis => Math.floor(Number(axis.dataset.axisEnd)/${cellMs});
     const starts=axes.map(cell),last=[...starts],transitions=axes.map(()=>0);
     const from=Date.now(),monotonicFrom=performance.now();

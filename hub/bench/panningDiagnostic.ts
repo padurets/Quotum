@@ -49,7 +49,7 @@ export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceE
   let active:Promise<unknown>|undefined,release=()=>{},interval=0,familyStart=0,failed=false;
   const binding=new ScriptBinding(cdp,client,(name,value)=>evidence?.save(name,value));
   const stop=async()=>{if(active){release();const pending=active;active=undefined;await pending;}};
-  const measured={on:cdp.on.bind(cdp),off:cdp.off.bind(cdp),at:cdp.at?.bind(cdp),
+  const measured={on:cdp.on.bind(cdp),off:cdp.off.bind(cdp),at:cdp.at?.bind(cdp),snapshot:cdp.snapshot?.bind(cdp),
     evaluate:async<T>(expression:string,signal?:AbortSignal):Promise<T>=>{
       const value=await cdp.evaluate<T>(expression,signal);
       // This original cleanup follows both periods and all extra family checks.

@@ -299,7 +299,7 @@ async function originalIndex(collection:''|'1'|'trace'|'profile',boundaryFailure
       }
       if(expression==='(()=>{const p=__quotumIdlePhase.read();__quotumIdlePhase.stop();return p;})()'){
         this.commands.push('ORIGINAL.phase-stop');
-        return {from:phaseFrom,to:wall,monotonicFrom:phaseFrom,monotonicTo:wall,cellMs:300_000,starts:Array(4).fill(Math.floor(phaseFrom/300_000)),ends:Array(4).fill(Math.floor(wall/300_000)),transitions:[1,1,1,1]} as T;
+        return {from:phaseFrom,to:wall,monotonicFrom:phaseFrom,monotonicTo:wall,cellMs:300_000,starts:Array(5).fill(Math.floor(phaseFrom/300_000)),ends:Array(5).fill(Math.floor(wall/300_000)),transitions:[1,1,1,1,1]} as T;
       }
       return super.evaluate<T>(expression);
     }

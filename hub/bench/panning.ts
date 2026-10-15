@@ -7,7 +7,7 @@ import {panMetrics, panCost} from './panningMetrics.js';
 import {panningSettlement} from './panningFailure.js';
 
 /** Native input against the real charts; the temporary layout brings all five into view. */
-export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {timeline?: boolean; save(name: string, value: unknown): void}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic) {
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {timeline?: boolean; save(name: string, value: unknown): void}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic) {
   const evidence=typeof options==='function'?undefined:options;
   diagnoseReload??=typeof options==='function'?options:undefined;
   cdp.at?.('panning/setup');
@@ -27,9 +27,21 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
   // Count independent measured series intersecting the visible plot, never path parts.
   // These layout reads happen after settling, outside the moving-frame probe.
   const density = () => cdp.evaluate<Omit<PanReading['edgeSeries'][number],'stage'>>(`(() => {
+    let sessionDensity;
+    const number=value=>typeof value==='string'&&value.trim()!==''&&Number.isFinite(+value)?+value:null;
     const count=id=>{const panel=document.querySelector('[data-widget="'+id+'"]'),svg=panel.querySelector('.chart>svg'),r=svg.getBoundingClientRect(),box=svg.viewBox.baseVal.width,left=r.left+(id.startsWith('quota')?40:76)*r.width/box,right=r.right-12*r.width/box;
-      return new Set([...panel.querySelectorAll('[data-series]')].filter(group=>[...group.querySelectorAll('.series[d]:not([d=""])')].some(path=>{const p=path.getBoundingClientRect();return p.right>left&&p.left<right;})).map(group=>group.dataset.series)).size;};
-    return {series:count('quota-history'),sessionSeries:count('quota-session-history'),budgetSeries:count('budget-history'),fundsSeries:count('subscription-funds')};
+      const groups=[...panel.querySelectorAll('[data-series]')];
+      const detail=id==='quota-session-history'?{groups:groups.length,nonempty:0,intersecting:0,leftOnly:0,rightOnly:0,drawFrom:number(svg.dataset.drawFrom),drawTo:number(svg.dataset.drawTo),axisEnd:number(svg.parentElement?.dataset.axisEnd)}:null;
+      const found=new Set(groups.filter(group=>{
+        const paths=[...group.querySelectorAll('.series[d]:not([d=""])')];let leftOnly=true,rightOnly=true;
+        if(detail&&paths.length)detail.nonempty++;
+        const intersects=paths.some(path=>{const p=path.getBoundingClientRect();if(detail){leftOnly&&=p.right<=left;rightOnly&&=p.left>=right;}return p.right>left&&p.left<right;});
+        if(detail&&!intersects&&paths.length){if(leftOnly)detail.leftOnly++;if(rightOnly)detail.rightOnly++;}
+        return intersects;
+      }).map(group=>group.dataset.series)).size;
+      if(detail){detail.intersecting=found;sessionDensity=detail;}
+      return found;};
+    return {series:count('quota-history'),sessionSeries:count('quota-session-history'),budgetSeries:count('budget-history'),fundsSeries:count('subscription-funds'),sessionDensity};
   })()`);
   const originalHorizon = await cdp.evaluate<string>(`JSON.parse(localStorage.getItem('quotum.prefs')||'{}').horizon||'auto'`);
   let interception = false, failed = false;
@@ -302,7 +314,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
         return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,mutationSamples:p.mutationSamples,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,wheelGapMs:p.wheelGapMs,segments,transactions:p.readTransactions(),outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34),timeline:p.timeline?.read()};
       })()`);
-      report.initiator = initiator; report.period = period; report.series = geometry.series; report.sessionSeries=geometry.sessionSeries; report.edgeSeries=edgeSeries; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
+      report.initiator = initiator; report.period = period; report.series = geometry.series; report.sessionSeries=geometry.sessionSeries; report.sessionDensity=geometry.sessionDensity; report.edgeSeries=edgeSeries; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
       if(costStart&&costEnd)report.cost=panCost(costStart,costEnd);
       reports.push(report);
       evidence?.save('panning-'+initiator+'-'+period,report);
@@ -316,16 +328,20 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await cdp.evaluate('window.__quotumPan.returnInput=null');
       // Held Shift-wheel has the same uninterrupted scale as dragging, across rests.
       progress(`${initiator}/${period}/held-shift-and-navigation`);
+      at('held-shift-hover');
       await mouse('mouseMoved', geometry.x, geometry.y);
       await key(true, 'Shift', 16);
       await wait(30);
       if (await cdp.evaluate<boolean>(`!!document.querySelector('.subscription-funds .tooltip,.history .tooltip,.budget-history .tooltip,.activity .tooltip,.activity-legend-tip.is-open')`)) throw new Error('holding Shift left a chart readout visible');
+      at('held-shift-first-minus-12');
       await wheel(-12, true); await wait(300);
       const first = await cdp.evaluate<number>(`new DOMMatrix(document.querySelector('${selector} ${initiator==='activity'?'.plot-clip.is-band .plot-move':'.plot-move[data-plot-main]'}').style.transform).e`);
       if (!(await cdp.evaluate<boolean>(`!!document.querySelector('[data-pan-end]')&&!new URLSearchParams(location.search).has('from')`))) throw new Error('Shift-wheel committed before Shift was released');
+      at('held-shift-second-minus-12');
       await wheel(-12, true); await wait(240);
       const second = await cdp.evaluate<number>(`new DOMMatrix(document.querySelector('${selector} ${initiator==='activity'?'.plot-clip.is-band .plot-move':'.plot-move[data-plot-main]'}').style.transform).e`);
       if (!Number.isFinite(first) || first <= 0 || Math.abs(second - 2 * first) > .01) throw new Error('Shift-wheel changed its scale during a pause');
+      at('held-shift-return-plus-24');
       await wheel(24, true); await wait(40);
       await key(false, 'Shift', 16); await wait(240);
       if (!(await cdp.evaluate<boolean>(`!document.querySelector('[data-pan-end]')&&!new URLSearchParams(location.search).has('from')`))) throw new Error('Shift-wheel return did not preserve live');
@@ -360,8 +376,9 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
     }
     return {reports, problems: reports.flatMap(panningProblems)};
   } catch (error) {
+    const command = cdp.snapshot?.();
     failed = true;
-    evidence?.save('panning-failure', {status: 'failed', ...scenario, completed: reports.length, settlement: panningSettlement(error)});
+    evidence?.save('panning-failure', {status: 'failed', ...scenario, completed: reports.length, command, settlement: panningSettlement(error)});
     if (evidence) try {
       const partial = await deadline(5000, signal => cdp.evaluate(panPartialScript(scenario?.initiator,scenario?.period), signal));
       evidence.save('panning-partial', {...scenario, partial});

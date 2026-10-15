@@ -1,9 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {runInNewContext} from 'node:vm';
 import {FADE_FOR, PULSE_FOR} from '../../ui/lib/quota.js';
 import {hourShift} from '../../server/forecasts.js';
 import type {Snapshot} from '../../server/projection.js';
-import {DOT_STILL_AFTER, foreseenAt, idlePhaseProblems, idleWindow, MARGIN_MS, overviewCards, SETTLE_MS, stillProblems, warmUntil, type IdlePhase} from '../still.js';
+import {DOT_STILL_AFTER, foreseenAt, idlePhaseProblems, idlePhaseScript, idleWindow, MARGIN_MS, overviewCards, SETTLE_MS, stillProblems, warmUntil, type IdlePhase} from '../still.js';
 import {scriptPerSecond, tally} from '../report.js';
 
 const MIN = 60_000;
@@ -33,10 +34,54 @@ test('an already eligible idle window starts without waiting for a fixed midpoin
 });
 
 test('idle phase rejects missing coverage, extra grid movement and clock discontinuity', () => {
-  const phase: IdlePhase = {from: 240000, to: 360000, monotonicFrom: 1000, monotonicTo: 121000, cellMs: 300000, starts: [0,0,0,0], ends: [1,1,1,1], transitions: [1,1,1,1]};
+  const phase: IdlePhase = {from: 240000, to: 360000, monotonicFrom: 1000, monotonicTo: 121000, cellMs: 300000, starts: [0,0,0,0,0], ends: [1,1,1,1,1], transitions: [1,1,1,1,1]};
   assert.deepEqual(idlePhaseProblems(phase, 300000), []);
-  for (const changed of [{transitions: [0,0,0]}, {transitions: [1,2,1]}, {starts: []}, {ends: [1,1,0]}, {from: 310000}, {monotonicTo: 124000}]) {
+  for (const changed of [{transitions: [0,0,0]}, {transitions: [1,2,1]}, {starts: []}, {ends: [1,1,0]}, {transitions: [1,1,1,1]}, {starts: [0,0,0,0]}, {ends: [1,1,1,1]}, {transitions: [1,1,1,1,0]}, {ends: [1,1,1,1,0]}, {from: 310000}, {monotonicTo: 124000}]) {
     assert.ok(idlePhaseProblems({...phase, ...changed}, 300000).length);
+  }
+});
+
+test('the actual idle phase probe requires and observes every explicit chart widget', () => {
+  const widgets = ['quota-history', 'quota-session-history', 'activity', 'budget-history', 'subscription-funds'];
+  function probe(missing?: string) {
+    const axes = widgets.filter(widget => widget !== missing).map(widget => ({widget, dataset: {axisEnd: '240000'}}));
+    const selected: string[] = [], observed: string[] = [];
+    let now = 240000, monotonic = 1000, notify = () => {}, disconnected = 0;
+    const window = {__quotumIdlePhase: undefined as {read(): IdlePhase; stop(): void} | undefined};
+    runInNewContext(idlePhaseScript(300000), {
+      window, Date: {now: () => now}, performance: {now: () => monotonic},
+      document: {querySelector: (selector: string) => {
+        selected.push(selector);
+        return axes.find(axis => selector === '[data-widget="' + axis.widget + '"] [data-axis-end]') ?? null;
+      }},
+      MutationObserver: class {
+        constructor(callback: () => void) {notify = callback;}
+        observe(axis: typeof axes[number], options: {attributes: boolean; attributeFilter: string[]}) {
+          observed.push(axis.widget);
+          assert.equal(options.attributes, true); assert.deepEqual(Array.from(options.attributeFilter), ['data-axis-end']);
+        }
+        disconnect() {disconnected++;}
+      },
+    });
+    return {selected, observed, cross(frozen?: string): IdlePhase {
+      for (const axis of axes) if (axis.widget !== frozen) axis.dataset.axisEnd = '360000';
+      now = 360000; monotonic = 121000; notify();
+      const phase = JSON.parse(JSON.stringify(window.__quotumIdlePhase!.read())) as IdlePhase;
+      window.__quotumIdlePhase!.stop(); assert.equal(disconnected, 1);
+      return phase;
+    }};
+  }
+  const complete = probe(), phase = complete.cross();
+  assert.deepEqual(complete.selected, widgets.map(widget => '[data-widget="' + widget + '"] [data-axis-end]'));
+  assert.deepEqual(complete.observed, widgets);
+  assert.deepEqual(phase.starts, [0,0,0,0,0]); assert.deepEqual(phase.ends, [1,1,1,1,1]); assert.deepEqual(phase.transitions, [1,1,1,1,1]);
+  assert.deepEqual(idlePhaseProblems(phase, 300000), []);
+  for (const widget of widgets) {
+    assert.throws(() => probe(widget), /idle phase requires all five chart axes/);
+    const frozen = probe().cross(widget);
+    assert.equal(frozen.transitions[widgets.indexOf(widget)], 0);
+    assert.ok(idlePhaseProblems(frozen, 300000).includes('idle phase did not observe one transition in each chart'), widget);
+    assert.ok(idlePhaseProblems(frozen, 300000).includes('idle chart grid disagrees with the measurement clock'), widget);
   }
 });
 

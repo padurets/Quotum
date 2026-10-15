@@ -1,8 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import type {Cdp} from '../cdp.js';
+import type {Browser, Cdp} from '../cdp.js';
 import {reload} from '../reload.js';
 import {panning} from '../panning.js';
+import {profilePanning} from '../cpuProfile.js';
+import {tracePanning} from '../panningDiagnostic.js';
 
 test('reload releases its load subscription on success, failure and a silent command', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
@@ -25,19 +27,47 @@ test('reload releases its load subscription on success, failure and a silent com
   }
 });
 
-test('a failed panning scenario saves its partial evidence and survives failed cleanup', async () => {
-  const error = new Error('original scenario failure'), files = new Map<string, unknown>();
-  let first = true, loaded = () => {};
+test('a failed panning scenario saves its original command before partial evidence and failed cleanup', async () => {
+  const error = new Error('original scenario failure'), files = new Map<string, unknown>(), events: string[] = [];
+  let first = true, loaded = () => {}, context = '', id = 0;
+  type Ack = {id: number; method: string};
+  let lastAck: Ack | null = null, failedAck: Ack | null = null, failedContext = '';
   const cdp = {
+    at: (value: string) => {context = value; if (value.endsWith('/cleanup')) events.push('cleanup');},
+    snapshot: () => {events.push('snapshot'); return {context, lastAck};},
     on: (method: string, callback: () => void) => {if(method==='Page.loadEventFired')loaded = callback;}, off: () => {},
-    send: async (method: string) => {if (method === 'Page.reload') loaded(); if (method === 'Emulation.setCPUThrottlingRate') throw new Error('cleanup failed');},
+    send: async (method: string) => {lastAck = {id: ++id, method}; if (method === 'Page.reload') loaded(); if (method === 'Emulation.setCPUThrottlingRate') throw new Error('cleanup failed');},
     evaluate: async (source: string) => {
+      lastAck = {id: ++id, method: 'Runtime.evaluate'};
       if (first) {first = false; return 'auto';}
-      if (source.includes("status:'partial'")) return {inputs: 17, timeline: {status: 'complete'}};
+      if (source.includes("status:'partial'")) {events.push('partial'); return {inputs: 17, timeline: {status: 'complete'}};}
+      events.push('original-failure'); failedAck = lastAck; failedContext = context;
       throw error;
     },
   } as unknown as Cdp;
-  await assert.rejects(panning(cdp, undefined, {save: (name, value) => {files.set(name, value);}}), value => value === error);
+  await assert.rejects(panning(cdp, undefined, {save: (name, value) => {events.push('save:' + name); files.set(name, value);}}), value => value === error);
   assert.ok(files.has('panning-failure') && files.has('panning-partial') && files.has('panning-cleanup'));
   assert.match(JSON.stringify(files.get('panning-partial')), /17/);
+  const failure = files.get('panning-failure') as {command: {context: string; lastAck: typeof lastAck}};
+  assert.deepEqual(failure.command, {context: failedContext, lastAck: failedAck});
+  assert.equal(failure.command.context, 'native/quota/charts-open');
+  assert.notDeepEqual(failure.command.lastAck, lastAck, 'partial and cleanup must actually replace the current command');
+  assert.deepEqual(events.slice(events.indexOf('original-failure') + 1, events.indexOf('partial') + 1), ['snapshot', 'save:panning-failure', 'partial']);
+  assert.ok(events.indexOf('partial') < events.indexOf('cleanup'));
+});
+
+test('both panning diagnostic wrappers forward snapshots with the original receiver and no command', async () => {
+  for (const wrap of [profilePanning, tracePanning]) {
+    const error = new Error('original wrapper failure'), receipt = {context: 'panning/quota/24h/held-shift-first-minus-12'};
+    let snapshots = 0;
+    const cdp = {
+      on: () => {}, off: () => {}, at: () => {},
+      send: async () => {assert.fail('snapshot forwarding must not send a command');},
+      evaluate: async () => {assert.fail('snapshot forwarding must not evaluate the page');},
+      snapshot() {assert.equal(this, cdp); snapshots++; return receipt;},
+    } as unknown as Cdp;
+    const run: typeof panning = async measured => {assert.equal(measured.snapshot?.(), receipt); throw error;};
+    await assert.rejects(wrap(cdp, {owned: true} as Browser, undefined, run, {status: 'unavailable'}), value => value === error);
+    assert.equal(snapshots, 1);
+  }
 });

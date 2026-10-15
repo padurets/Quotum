@@ -247,7 +247,7 @@ export async function profilePanning(cdp: Cdp, browser: Browser, evidence?: File
   let selected = false, allocationSelected = false, selectedInterval: number | null = null, selectedReport: PanReading | undefined;
   const binding = new ScriptBinding(cdp, client, (name, value) => evidence?.save('cpu-' + name, value));
   const stop = async () => {if (active) {release(); const pending = active; active = undefined; await pending;}};
-  const measured = {on: cdp.on.bind(cdp), off: cdp.off.bind(cdp), at: cdp.at?.bind(cdp),
+  const measured = {on: cdp.on.bind(cdp), off: cdp.off.bind(cdp), at: cdp.at?.bind(cdp), snapshot: cdp.snapshot?.bind(cdp),
     evaluate: async<T>(expression: string, signal?: AbortSignal): Promise<T> => {
       const value = await cdp.evaluate<T>(expression, signal);
       if (expression.startsWith('(() => {\n        const initiator=') && expression.includes('const probe=window.__quotumPan={') && expression.includes('probe.raf=schedule(tick);')) {
