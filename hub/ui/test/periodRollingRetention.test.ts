@@ -11,6 +11,27 @@ import {drain,Preparations} from '../lib/prepare';
 import {PERIOD_SCOPES} from '../../server/domain/periodRead';
 import type {Meter} from '../../server/domain/meters';
 
+test('financial index reuse releases retired native work evidence from its object graph',()=>{
+  const readings=Array.from({length:10000},(_,i)=>({id:'usage',at:i*2*M,previousAt:i?(i-1)*2*M:null,kind:'counter' as const,unit:'USD',amount:'0',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:4*M}));
+  const spans=[{from:0,to:readings.at(-1)!.at,observedFrom:0,staleAfterMs:4*M}];
+  const counter={source:'wallet',unit:'USD',knownFrom:0,workFrom:0,readings,spans};
+  const tape:PeriodTape={from:0,cut:20000*M,replaceFrom:0,cursor:'cursor',quota:[],money:[{source:'wallet',meter:'balance',role:'total',readings:[{...readings[0],id:'balance',kind:'balance',amount:'1000000'}],spans,workCounter:counter}]};
+  const prior=drain(PeriodAccounting.prepare(tape,null)),kept=drain(retainTape(tape,readings.at(-10)!.at));
+  const next=drain(PeriodAccounting.prepare(kept,null,undefined,prior));
+  assert.equal(kept.money[0].workCounter!.readings.length,11);
+  assert.equal(next.financialAuthority,prior.financialAuthority,'native work retirement preserves the financial index');
+  const seen=new Set<object>(),pending:unknown[]=[next];let oldEvidence=false;
+  while(pending.length){
+    const value=pending.pop();if(!value||typeof value!=='object'||seen.has(value))continue;
+    if(value===counter||value===readings){oldEvidence=true;break;}seen.add(value);
+    if(value instanceof Map)for(const [key,item] of value){pending.push(key,item);}
+    else if(!ArrayBuffer.isView(value))pending.push(...Object.values(value));
+  }
+  assert.equal(oldEvidence,false,'the current accounting graph cannot retain the discarded native ledger');
+  const range={from:kept.from,to:kept.cut};
+  assert.deepEqual(next.moneySummary('wallet','balance','USD',range),new PeriodAccounting(kept,null).moneySummary('wallet','balance','USD',range));
+});
+
 test('unchanged monetary rows retain their minimal rate dictionary without copying it',()=>{
   const group:MoneyTape={source:'wallet',meter:'balance',readings:[{id:'balance',at:0,previousAt:null,kind:'balance',unit:'USD',amount:'1000000',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:1000}],spans:[{from:0,to:100,staleAfterMs:1000}]};
   for(const at of [0,100])bindRate(group,'USD\n'+at,null);

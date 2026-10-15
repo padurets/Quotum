@@ -206,7 +206,12 @@ class MoneyIndex {
     return 4096+numeric+valuations+anchorScratch+coverage+conversion+spent+topup;
   }
   get bytes(){return this.retainedBytes;}
-  constructor(readonly group:MoneyTape,deferred=false) {if(!deferred)drain(this.build());}
+  readonly group:Omit<MoneyTape,'workCounter'>;
+  constructor(group:MoneyTape,deferred=false) {
+    // Reusing financial prefixes must not retain an older native work ledger.
+    const {workCounter:_work,...financial}=group;this.group=financial;
+    if(!deferred)drain(this.build());
+  }
   static *prepare(group:MoneyTape):Preparation<MoneyIndex>{const value=new MoneyIndex(group,true);yield*value.build();return value;}
   private *build():Preparation<void>{
     const group=this.group;
