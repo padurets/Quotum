@@ -57,7 +57,7 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     let prefs:Pick<Prefs,'money'|'funds'|'muted'|'range'|'horizon'>={money:{...DEFAULT_MONEY,unit:'USD'},funds:{...DEFAULT_MONEY},muted:{},range:'1h',horizon:'auto'};
     let view=views.EMPTY_VIEW,calls=0,activeLeaf:Leaf|null=null;
     const toggles:{key:string;value:boolean}[]=[];
-    const Chart=()=>null,SeriesLegendItem=()=>null;
+    const Chart=()=>null,SeriesLegendItem=()=>null,MoneyChartSettings=()=>null;
     const useMemo=(f:()=>unknown,deps:unknown[])=>{const r=hooks.useRef(null) as {current:{deps:unknown[];value:unknown}|null};if(!r.current||deps.length!==r.current.deps.length||deps.some((v,i)=>!Object.is(v,r.current!.deps[i])))r.current={deps,value:f()};return r.current.value;};
     const useLocale=()=>{if(activeLeaf)activeLeaf.subscribesLocale=true;return locale;};
     const modules:Record<string,unknown>={
@@ -67,6 +67,7 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
       '../lib/history':{useBudgetHistory:()=>({history,drawing,loading:!history,presentation:authority}),useBudgetHistoryPlot:()=>null,useHistoryBegins:()=>0,budgetHistory:{retry(){}},fundsHistory:{retry(){}}},
       '../lib/prefs':{useChartMuted:()=>prefs.muted,chartMuteKey,chartSeriesMuted,usePref:(key:keyof typeof prefs)=>prefs[key],setMuted:(key:string,value:boolean)=>toggles.push({key,value})},
       '../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},
+      './MoneySettings':{MoneyChartSettings},
       '../lib/moneySelection':{moneySelection,fundsLegacyMuted},'../lib/moneyView':moneyView,'../lib/money':{...money,money:(...args:Parameters<typeof money.money>)=>{calls++;return money.money(...args);}},
       '../lib/view':{...widgets,colorOf:()=> '#fff'},'../lib/periods':periods,'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>now},'../lib/pan':{usePanning:()=>null},
       '../lib/axisNavigation':{axisNavigation:()=>({context:'b'})},'../i18n':{t:i18n.t,useLocale},'./prepared':{usePrepared:hooks.usePrepared},'./sizing':{usePlot:()=>({plot:160,onBase(){}})},'./Chart':{Chart},'./AnalyticsPanel':{SeriesLegendItem},
@@ -90,6 +91,10 @@ test('money legend reuses unchanged amounts through rolling clocks and preserves
     function render() {
       i18n.setLocale(locale,false);calls=0;hooks.begin();
       const tree=vm.exports.MoneyHistory({arrange:{view,owner:false}});
+      const panel=nodeOf(tree)!;
+      assert.equal(panel.props.controls,undefined,'data selection is inside settings, without a duplicate header control');
+      const settings=nodeOf(panel.props.settings)!;
+      assert.equal(settings.type,MoneyChartSettings);assert.equal(settings.props.sources,sources);
       const chart=tree.props.children.find((child):child is ReactElement<ChartProps>=>nodeOf(child)?.type===Chart);
       const legend=tree.props.children.find((child):child is ReactElement<{className:string;children:unknown[]}>=>{const node=nodeOf(child);return node?.type==='div'&&node.props.className==='legend';});
       assert.ok(chart);assert.ok(legend);

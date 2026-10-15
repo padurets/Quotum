@@ -1059,8 +1059,8 @@ Card key scales use the existing view's `windows` visibility list with
 hidden; `shown` holds explicitly enabled scales beyond it, using the same entry format.
 An explicit enabled choice survives changes in preview ordering. The card's switches
 also apply to compact. Card settings page through key-scale switches; there is no
-key-table dialog. Wallet widgets share an Accounts and keys data picker, independently
-of card scales. Chart legends control each chart's visibility separately.
+key-table dialog. Wallet widgets share an Accounts and keys data picker in their settings,
+independently of card scales. Chart legends control each chart's visibility separately.
 Both resource types use the same segmented meter; balances have no percentage meter.
 
 A hub-measured card may also carry `meters`, `keys` (a preview of at most five),

@@ -136,7 +136,7 @@ notifications also stay live, independently of the board's historical range.
   hideable on the same grid as cards and agent sessions. They share the board's time
   range. Five-hour limits, weekly limits, budget balances each
   have their own chart and table; cards keep their own window visibility settings.
-  Both budget widgets share **Accounts and keys** for data selection. Each chart's
+  Both budget widgets share **Accounts and keys** in their settings for data selection. Each chart's
   legend controls its visibility independently of table columns.
 - **Charts of weekly and 5-hour windows** over the last hour up to the last 30
   days. Ahead of now they show forecasts and the next resets, as far as you choose.
@@ -392,7 +392,7 @@ rate cache contains no credentials or account information. Historical estimates 
 their original rate. Without a usable rate, CNY is retained and USD stays unknown or stale.
 All original balances, estimates, rate provenance, funds status and safe provider
 context are retained within the history retention period. Budget history and its table
-share the board's grid and time range. **Accounts and keys** in any wallet widget
+share the board's grid and time range. **Accounts and keys** in either wallet widget’s settings
 selects the account's total for both wallet widgets. Balance components remain
 in the card's disclosure. Reported USD and converted CNY
 are never summed. Spending and top-up events
@@ -437,7 +437,7 @@ expired, revoked or forbidden access is red. Working keys without expiry have no
 mark. Temporary read failures are amber.
 Five-hour and weekly subscription limits each have their own chart and table.
 Budget balances have their own chart and table.
-Both budget widgets share **Accounts and keys**: an account selects its total,
+Both budget widgets share **Accounts and keys** in their settings: an account selects its total,
 and a key selects its reported remaining limit. Table columns and each
 chart's legend visibility remain independent display settings.
 Account balances are selected by default; at most 32 metrics are selected, with

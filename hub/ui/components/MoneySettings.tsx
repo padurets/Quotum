@@ -8,9 +8,10 @@ import {referenceBalance,budgetVisible,keyName} from '../lib/money';
 import {balanceDescriptor,type MoneyFamily} from '../../server/domain/providers';
 import type {MeterHistory} from '../lib/moneyView';
 import {MAX_METERS} from '../../server/domain/meterHistory';
+import {withHidden,type Arrange} from '../lib/view';
 import {t} from '../i18n';
 import {ErrorLine} from './Kit';
-import {Popover,SwitchRow} from './Popover';
+import {Popover,SwitchRow,SlidersIcon,HideRow} from './Popover';
 import {KEYS_PER_PAGE,KeyPages,KeyPageContent} from './KeyPages';
 import type {KeyPage} from '../lib/moneyKeys';
 
@@ -103,7 +104,9 @@ export function KeyMoneySettings({sources,hidden,series}:{sources:readonly Named
   </>;
 }
 
-export const MoneySettings=KeyMoneySettings;
+export function MoneySettings(props:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[]}) {
+  return <div className="popover-section"><div className="popover-title">{t('money.data')}</div><KeyMoneySettings {...props}/></div>;
+}
 
 /** Additional subscription funds have their own balance-only series selection. */
 export function FundsSettings({sources,hidden}:{sources:readonly Named[];hidden:readonly string[]}) {
@@ -124,13 +127,15 @@ export function FundsSettings({sources,hidden}:{sources:readonly Named[];hidden:
   </>;
 }
 
-/** Data selection is shared by wallet widgets; ordinary funds visibility lives in the legend. */
-export function MoneyDataControl({sources,hidden,series,family='budget'}:{sources:readonly Named[];hidden:readonly string[];series:readonly MeterHistory[];family?:MoneyFamily}) {
+/** Reader selection shares the settings surface; ordinary funds visibility lives in the legend. */
+export function MoneyChartSettings({arrange,widget,sources,series,family='budget'}:{arrange:Arrange;widget:string;sources:readonly Named[];series:readonly MeterHistory[];family?:MoneyFamily}) {
+  const hidden=arrange.view.hidden;
   const context=useCurrencyContext(),settings=usePref(family==='funds'?'funds':'money'),unit=settings.unit??DEFAULT_CURRENCY;
   const available=sources.flatMap(source=>moneySelection([source],hidden,{...settings,selected:{}},context,family).selection?.ids??[]);
-  if(family==='funds'&&available.length<=MAX_METERS&&!Object.hasOwn(settings.selected,unit))return null;
-  const label=t(family==='funds'?'funds.data':'money.data');
-  return <Popover label={label} trigger={label} triggerClass="button">
-    {family==='funds'?<FundsSettings sources={sources} hidden={hidden}/>:<KeyMoneySettings sources={sources} hidden={hidden} series={series}/>}
+  const data=family==='budget'||available.length>MAX_METERS||Object.hasOwn(settings.selected,unit);
+  if(!arrange.owner&&!data)return null;
+  return <Popover label={t('history.settings')} icon={<SlidersIcon/>}>
+    {data&&(family==='funds'?<div className="popover-section"><div className="popover-title">{t('funds.data')}</div><FundsSettings sources={sources} hidden={hidden}/></div>:<MoneySettings sources={sources} hidden={hidden} series={series}/>)}
+    {arrange.owner&&<HideRow onHide={()=>arrange.update(view=>withHidden(view,widget,true))}>{t('widget.hide')}</HideRow>}
   </Popover>;
 }

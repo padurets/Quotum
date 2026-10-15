@@ -1326,7 +1326,7 @@ Hiding it preserves the selected period and shared chart horizon; while open,
 it keeps them available during scrolling. Board navigation and widget management
 stay in the header. Five-hour limits, weekly limits and wallet balance
 each have independent chart/table pairs. Both wallet widgets share
-an accounts-and-keys picker in their reader controls. Each chart's legend controls
+an accounts-and-keys picker in their settings. Each chart's legend controls
 only its own visibility. Subscription funds use their own family and expose data
 selection only for a bounded cohort or a retained explicit selection. Table columns
 remain owner settings, while shared data controls are available to every reader. Each
@@ -1591,7 +1591,7 @@ composite and detail reads, cancellations and responses that finish after measur
 Quota history, wallet budgets, subscription funds and agent activity read and move along time alike
 (`ui/components/timeAxis.ts`), each with its legend under it. Pointing to a legend
 entry or focusing it with the keyboard highlights that series and dims its peers.
-Wallet charts and tables use a common accounts-and-keys picker, separate from display settings. An account selects its total balance; a key selects its reported remaining cap within the shared 32-meter bound. Retired spending preferences are discarded without replacing an explicit empty selection with default accounts. Balance components remain in card details. Each fixed chart has independent legend visibility. Ordinary subscription funds use only the legend; the accounts picker appears for more than 32 eligible balances or an explicit retained data selection. Legacy funds subsets remain global visibility intent across boards, without changing bounded admission on legend clicks.
+Wallet charts and tables use a common accounts-and-keys picker inside their settings. Its shared reader selection is independent of the table’s owner-only display settings. An account selects its total balance; a key selects its reported remaining cap within the shared 32-meter bound. Retired spending preferences are discarded without replacing an explicit empty selection with default accounts. Balance components remain in card details. Each fixed chart has independent legend visibility. Ordinary subscription funds use only the legend; the accounts picker appears for more than 32 eligible balances or an explicit retained data selection. Legacy funds subsets remain global visibility intent across boards, without changing bounded admission on legend clicks.
 
 All five charts share `ui/components/seriesFocus.ts`: inherited CSS variables change
 paint without rebuilding prepared paths, updating reader preferences or rendering data

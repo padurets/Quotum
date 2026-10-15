@@ -10,7 +10,7 @@ import {moneySelection,fundsLegacyMuted} from '../lib/moneySelection';
 import {money} from '../lib/money';
 import {moneySeriesName as nameOf,moneySeriesDetail,moneyTableValues,moneyBalanceSeries,moneyComparator,nextMoneySort,visibleMoneySort,type MoneyColumn} from '../lib/moneyTable';
 import {moneyIdentity,moneyPointAt,meterPointIn,moneyTotal,type MeterHistory} from '../lib/moneyView';
-import {colorOf,columnShown,withHidden,SUBSCRIPTION_FUNDS,BUDGET_HISTORY,BUDGET_TABLE,type Arrange} from '../lib/view';
+import {colorOf,columnShown,SUBSCRIPTION_FUNDS,BUDGET_HISTORY,BUDGET_TABLE,type Arrange} from '../lib/view';
 import {frameOf,frameChangesAt,measuredTo} from '../lib/periods';
 import {useTimeRange,setTimeRange,timeRangeKey} from '../lib/timeRange';
 import {clock,hubNow,useClock} from '../lib/clock';
@@ -19,8 +19,7 @@ import type {Line} from '../lib/lines';
 import {t,useLocale} from '../i18n';
 import {Chart} from './Chart';
 import {usePlot} from './sizing';
-import {Popover,SlidersIcon,HideRow} from './Popover';
-import {MoneyDataControl} from './MoneySettings';
+import {MoneyChartSettings,MoneySettings} from './MoneySettings';
 import {axisNavigation} from '../lib/axisNavigation';
 import {usePrepared} from './prepared';
 import {usePanning} from '../lib/pan';
@@ -143,10 +142,7 @@ export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:
   const legend=useMemo(()=><div className="legend">{original.map(s=>{const key=moneyIdentity(s),card=sources.find(c=>c.id===s.sourceId);return <SeriesLegendItem key={key} seriesKey={key} name={nameOf(s,card?.title??s.sourceId,context,family)} title={moneySeriesDetail(s,context)} color={colorOf(arrange.view,s.sourceId,card?.provider??'')} dash={s.kind==='cap'?'7 5':undefined} muted={isMuted(s)} onToggle={()=>setMuted(chartMuteKey(widget,s.sourceId,s.meterId),!isMuted(s))}><b><MoneyLegendAmount value={s.end} unit={s.unit} context={context}/></b></SeriesLegendItem>;})}</div>,[original,sources,context,family,history,arrange.view,muted,settings,widget,locale,authority,board]);
   const answered=history?.range===(selected?timeRangeKey(selected):prefs.range);
   return <AnalyticsPanel ref={panel} className={funds?'subscription-funds':'budget-history'} title={t(funds?'widgets.subscriptionFunds':'widgets.budgetHistory')} chart history={history} loading={loading} error={error} retry={reader.retry}
-    controls={<MoneyDataControl family={family} sources={sources} hidden={arrange.view.hidden} series={history?.meterSeries??[]}/>}
-    settings={arrange.owner&&<Popover label={t('history.settings')} icon={<SlidersIcon/>}>
-      <HideRow onHide={()=>arrange.update(v=>withHidden(v,widget,true))}>{t('widget.hide')}</HideRow>
-    </Popover>}>
+    settings={<MoneyChartSettings arrange={arrange} widget={widget} family={family} sources={sources} series={history?.meterSeries??[]}/>}>
     <SelectionNotice family={family}/>
     <Chart lines={lines} axis={axis} stepped from={frame.from} now={strip?now:measured} to={frame.to} cellMs={strip?.cell??history?.cellMs??60_000} strip={model?.strip??null} prepared={prepared.ready&&(panning!==null||answered||!!error)} empty={error?null:!history?t('history.loading'):noResources?t(funds?'analytics.noFunds':'analytics.noBudget'):noSelection?t('analytics.noSelection'):entries.length&&!lines.length?t('analytics.allMuted'):t('money.unknown')} plot={plot} onBase={onBase} onSelect={setTimeRange} navigation={navigation} live={frame.live} clock={now} modelContext={modelContext}/>
     {legend}
@@ -186,8 +182,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
         cells:{value:cellOf(series,'value'),topup:cellOf(series,'topup')}};
     }),[history,unit,sources,context,arrange.view,locale]);
   return <SortedMoney rows={rows} entries={entries} columns={columns} panel={panel} unit={unit} className="budget-table" title={t('widgets.budgetTable')} history={history} loading={loading} error={error} retry={budgetHistory.retry}
-    controls={<MoneyDataControl sources={sources} hidden={arrange.view.hidden} series={history?.meterSeries??[]}/>}
-    settings={<TableSettings arrange={arrange} widget={widget} columns={definitions} visible={columns.map(column=>column.id)}/>}
+    settings={<TableSettings arrange={arrange} widget={widget} columns={definitions} visible={columns.map(column=>column.id)}><MoneySettings sources={sources} hidden={arrange.view.hidden} series={history?.meterSeries??[]}/></TableSettings>}
   >
     <SelectionNotice/>
     {!history&&!error?<p className="panel-loading">{t('history.loading')}</p>:!entries.length&&!error?<p className="panel-empty">{t(empty)}</p>:null}
