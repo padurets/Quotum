@@ -38,7 +38,7 @@ import {startupTrials} from './startupDiagnostic.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
 import {traceIdle} from './idleTiming.js';
-import {IdleCpuDiagnostic,sourceIdentity,idleGeometry,planIdleEdge,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
+import {IdleCpuDiagnostic,sourceIdentity,idleGeometry,planIdleEdge,idleCommittedScript,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -219,7 +219,7 @@ async function main() {
     // their own subscribed-selector tests, including equal displayed labels.
     const bootstrapSource=`localStorage.setItem('quotum.locale','en');
       localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),agentsSort:{column:'project',descending:false}}));
-      ${probeScript()}`;
+      ${probeScript()}${idleCpu?idleCommittedScript():''}`;
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source:bootstrapSource});
     idleCpu?.binding.rememberInjected(1,bootstrapSource,'idle-probe');
     await cdp.send('Page.navigate', {url: `${address.base}/`});
@@ -270,7 +270,7 @@ async function main() {
       saveDiagnostic('idle-cpu-plan',{mode:'diagnostic',kind:'Temporally aligned diagnostic only; no canonical benchmark timing change.',...edgePlan});
       geometryBefore=await idleGeometry(cdp);
     }
-    if(idleCpu)await idleCpu.start();
+    if(idleCpu){await idleCpu.captureCommitted('before');await idleCpu.start();}
     const from = Date.now();
     const to = from + seconds * 1000;
     const moving = stillProblems(await overview(), from, to);
@@ -316,6 +316,7 @@ async function main() {
       const geometryAfter=idleCpuMode==='1'?await idleGeometry(cdp):undefined;
       const window={before,after,instrumentMs:reading.instrumentMs,seconds};
       await idleCpu.stop(window);
+      await idleCpu.captureCommitted('after');
       await idleCpu.captureInputs();
       await idleCpu.bindAndClose();
       const edge=idleCpuMode==='1'?idleCpu.edgeReceipt(edgePlan!,from,to,counterFrom!,counterTo!,geometryBefore!,geometryAfter!,window):idleCpu.traceReceipt(from,to,cellMs,window,reading);

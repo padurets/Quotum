@@ -57,6 +57,48 @@ export function planIdleEdge(now:number,seconds:number,cellMs:number):IdleEdgePl
   return{boundary,from:boundary-half,to:boundary+half,cellMs,seconds,marginMs:30_000};
 }
 
+/** Committed identities only: no wrapped methods, in-window work or retained old buffers. */
+export function idleCommittedScript() {
+  return `(() => {
+    const ids=new WeakMap(),keys=new Map();let serial=0,pool=null,invalid=false;
+    const own=(value,key)=>{const d=Object.getOwnPropertyDescriptor(value,key);if(d&&!('value'in d))throw 0;return d?.value;};
+    const map=value=>{try{Map.prototype.has.call(value,null);return true;}catch{return false;}};
+    const id=value=>{if(value===null||value===undefined)return null;if(typeof value!=='object')throw 0;if(!ids.has(value))ids.set(value,++serial);return ids.get(value);};
+    const numeric=value=>{if(typeof value!=='number')throw 0;return [Number.isFinite(value)?0:value===Infinity?1:value===-Infinity?2:3,Number.isFinite(value)?value:null];};
+    const key=(source,window)=>{if(typeof source!=='string'||typeof window!=='string'||source.length>512||window.length>512)throw 0;const k=source+'\\n'+window;if(!keys.has(k)){if(keys.size>=256)throw 0;keys.set(k,keys.size+1);}return keys.get(k);};
+    if(window.__quotumInspectHistoryPool!==undefined)invalid=true;
+    else window.__quotumInspectHistoryPool=value=>{if(pool)invalid=true;else pool=value;};
+    window.__quotumIdleCommitted={read:()=>{
+      const at=Date.now(),monotonic=performance.now();
+      try{
+        if(invalid||!pool)throw 0;
+        const members=own(pool,'members');Set.prototype.has.call(members,null);if(members.size>8)throw 0;
+        const owners=[...members].filter(member=>map(own(member,'tapes'))&&own(member,'transport'));
+        if(owners.length!==1)throw 0;
+        const owner=owners[0],entry=own(owner,'tapes').get('quota');if(!entry||own(owner,'retiring')!==false)throw 0;
+        const tape=own(entry,'tape'),accounting=own(entry,'accounting'),quota=own(tape,'quota'),indices=own(accounting,'quota');
+        if(!Array.isArray(quota)||!quota.length||quota.length>128||!map(indices)||indices.size!==quota.length||own(accounting,'tape')!==tape)throw 0;
+        const workIndex=own(owner,'index'),curves=workIndex?own(workIndex,'curves'):null,sourceCurves=curves?own(own(curves,'groups'),'source'):null;
+        if(sourceCurves!==null&&!map(sourceCurves))throw 0;
+        const seen=new Set(),rows=[];
+        for(const series of quota){
+          const source=own(series,'source'),window=own(series,'window'),ordinal=key(source,window);
+          if(seen.has(ordinal))throw 0;seen.add(ordinal);
+          const index=indices.get(source+'\\n'+window),samples=own(series,'samples');
+          if(!index||own(index,'series')!==series)throw 0;
+          const count=own(samples,'length')/5;if(!Number.isSafeInteger(count)||count<0)throw 0;
+          const prefixes=['times','deadlines','spent','covered','worked','during'].map(field=>{const value=own(index,field);if(!value||typeof value!=='object')throw 0;return id(value);});
+          rows.push([ordinal,id(series),id(samples),count,id(own(series,'descriptors')),id(index),...prefixes,id(own(index,'activity')),id(sourceCurves?.get(source)),...numeric(own(index,'known'))]);
+        }
+        const value={status:'complete',at,monotonic,ownerId:id(owner),generation:own(owner,'generation'),revision:own(owner,'revision'),retirement:numeric(own(owner,'retirementAt')),workId:id(own(own(owner,'work'),'value')),workIndexId:id(workIndex),curvesId:id(curves),tapeId:id(tape),accountingId:id(accounting),from:numeric(own(tape,'from')),cut:numeric(own(tape,'cut')),
+          columns:{key:0,seriesId:1,samplesId:2,samples:3,descriptorsId:4,indexId:5,timesId:6,deadlinesId:7,spentId:8,coveredId:9,workedId:10,duringId:11,activityId:12,sourceCurveId:13,knownKind:14,known:15},rows};
+        if(!Number.isSafeInteger(value.generation)||!Number.isSafeInteger(value.revision)||JSON.stringify(value).length>32768)throw 0;
+        return value;
+      }catch{return {status:'insufficient-evidence',at,monotonic};}
+    }};
+  })()`;
+}
+
 /** Trace callback coordinates are one-based; CPU sample coordinates are separate. */
 export function clockTimerSource(client:Client,directory=path.join(import.meta.dirname,'../dist/client/assets')):ClockSource {
   if(client.status!=='available')return null;
@@ -198,6 +240,15 @@ export class IdleCpuDiagnostic {
   }
 
   private stopInputObservation(){this.cdp.off('Network.requestWillBeSent',this.inputRequest);this.cdp.off('Network.loadingFinished',this.inputFinished);}
+
+  /** Both calls surround, rather than extend, the original profiler/counter window. */
+  async captureCommitted(stage:'before'|'after'){
+    let value:unknown={status:'insufficient-evidence'};
+    if(!this.active&&!this.profiler&&!this.tracing&&(stage==='before'||this.ended))try{
+      value=await this.cdp.evaluate(`window.__quotumIdleCommitted?.read() ?? {status:'insufficient-evidence'}`);
+    }catch{/* Missing private shape is a diagnostic gap, never a new verdict. */}
+    this.save('idle-cpu-committed-'+stage,{mode:'diagnostic',kind:'Net committed identities across snapshots, including setup/drain outside counters; cancelled attempts, intermediate commits and callback costs remain unknown.',value});
+  }
 
   /** Original server inputs do not prove which tapes the client committed. */
   async captureInputs(){

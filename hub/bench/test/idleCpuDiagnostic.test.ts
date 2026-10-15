@@ -6,13 +6,67 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import type {Cdp} from '../cdp.js';
 import type {Reading} from '../probe.js';
-import {IdleCpuDiagnostic,sourceIdentity,idleEdgeProblems,originalTraceProblems,ownedClockFires,planIdleEdge,type IdleGeometry} from '../idleCpuDiagnostic.js';
+import {IdleCpuDiagnostic,sourceIdentity,idleEdgeProblems,originalTraceProblems,ownedClockFires,planIdleEdge,idleCommittedScript,type IdleGeometry} from '../idleCpuDiagnostic.js';
 import {numericProfile,profileWindow} from '../cpuProfile.js';
 import {idleWindow,idlePhaseScript,idlePhaseProblems} from '../still.js';
 import {encodeSamples} from '../../server/domain/periodTape.js';
 import {safeEvidence} from '../evidence.js';
+import {fixture,flush,NOW,H,M} from '../../ui/test/periodRuntimeFixture.js';
 
 type Saved={name:string;value:unknown;large?:boolean};
+
+function committedReader(pool?:unknown) {
+  let clock=0;
+  const forbidden=()=>{throw Error('snapshot scheduled work');};
+  const context:Record<string,any>={exports:{},Map,Set,WeakMap,Date,performance:{now:()=>++clock},setTimeout:forbidden,setInterval:forbidden,requestAnimationFrame:forbidden,queueMicrotask:forbidden};
+  runInNewContext('window=globalThis;'+idleCommittedScript(),context);
+  if(pool)context.__quotumInspectHistoryPool(pool);
+  return {context,attach:context.__quotumInspectHistoryPool,read:()=>JSON.parse(JSON.stringify(safeEvidence(context.__quotumIdleCommitted.read())))};
+}
+
+test('committed snapshots distinguish real work-only sharing from measurement-prefix replacement',async t=>{
+  const start=NOW-24*H;let now=NOW;t.mock.method(Date,'now',()=>now);
+  const h=await fixture({personal:true,periodName:'24h',clocked:true,creditFrom:start+2*M,creditTo:start+5*M});
+  try{
+    const source=h.store.source('codex','d'.repeat(24),start-H);h.store.hold(source,h.alice.id,start-H);
+    for(let i=0;i<12;i++)h.store.record(source,{observedAt:start+M+i*10*M,plan:'',resets:null,staleAfterMs:48*H,windows:['w','PRIVATE_CANARY'].map(id=>({id,kind:'weekly',label:null,minutes:10080,used:10+i*.1,remaining:90-i*.1,resetAt:NOW+24*H}))});
+    for(const [id,from,to] of [['d',start+2*M,start+5*M],['d',start+H+10*M,start+H+30*M]] as const)h.store.creditWork(h.device,from,to,[{source,client:'codex',origin:'terminal',startedAt:start-H,project:'PRIVATE_CANARY',folder:'PRIVATE_CANARY',identity:{kind:'stable',sessionId:id.repeat(32)}}]);
+    h.events.flush();await flush();
+    const reader=committedReader(h.pool),before=reader.read(),again=reader.read();
+    assert.equal(before.status,'complete');assert.equal(before.rows.length,3);assert.equal(new Set(before.rows.map((row:number[])=>row[0])).size,3);
+    assert.deepEqual(again.rows,before.rows);assert.equal(again.ownerId,before.ownerId);
+    const requests=h.requests.length;
+    now=NOW+5*M;h.jump(now);await flush();const workOnly=reader.read();assert.equal(workOnly.status,'complete');
+    assert.equal(workOnly.ownerId,before.ownerId);assert.notEqual(workOnly.workIndexId,before.workIndexId);
+    for(const old of before.rows){const row=workOnly.rows.find((r:number[])=>r[0]===old[0]);assert.equal(row[1],old[1]);assert.notEqual(row[5],old[5]);for(const column of [6,7,8,9])assert.equal(row[column],old[column]);}
+    now=NOW+12*M;h.jump(now);await flush();const trimmed=reader.read();assert.equal(trimmed.status,'complete');
+    const replaced=trimmed.rows.filter((row:number[])=>row[2]!==workOnly.rows.find((r:number[])=>r[0]===row[0])[2]);assert.equal(replaced.length,2);
+    for(const row of replaced){const old=workOnly.rows.find((r:number[])=>r[0]===row[0]);assert.notEqual(row[1],old[1]);assert.ok(row[3]<old[3]);for(const column of [5,7,8,9])assert.notEqual(row[column],old[column]);}
+    assert.equal(h.requests.length,requests);assert.ok(!JSON.stringify([before,workOnly,trimmed]).includes('PRIVATE_CANARY'));assert.ok(!JSON.stringify(trimmed).includes(source));
+    const integrated=committedReader(),module=readFileSync(new URL('../../ui/lib/historyPool.ts',import.meta.url),'utf8');
+    runInNewContext(ts.transpileModule(module,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,integrated.context);
+    assert.equal(integrated.read().status,'insufficient-evidence');integrated.context.exports.historyPool.register(h.period);
+    const singleton=integrated.read();assert.equal(singleton.status,'complete');assert.equal(singleton.rows.length,trimmed.rows.length);
+  }finally{await h.close();}
+});
+
+test('committed snapshots reject incomplete ownership and private shapes without invoking getters',async t=>{
+  t.mock.method(Date,'now',()=>NOW);
+  const h=await fixture({personal:true});
+  try{
+    const reader=committedReader();assert.equal(reader.read().status,'insufficient-evidence');reader.attach(h.pool);assert.equal(reader.read().status,'complete');
+    const entry=h.period.tapes.get('quota'),series=entry.tape.quota[0],indices=entry.accounting.quota,key=series.source+'\n'+series.window,index=indices.get(key);
+    indices.delete(key);assert.equal(reader.read().status,'insufficient-evidence');indices.set(key,index);
+    const descriptor=Object.getOwnPropertyDescriptor(series,'samples')!;let invoked=0;
+    Object.defineProperty(series,'samples',{configurable:true,get:()=>{invoked++;throw Error('PRIVATE_CANARY');}});
+    assert.equal(reader.read().status,'insufficient-evidence');assert.equal(invoked,0);Object.defineProperty(series,'samples',descriptor);
+    const rows=entry.tape.quota;entry.tape.quota=Array(129).fill(series);assert.equal(reader.read().status,'insufficient-evidence');entry.tape.quota=rows;
+    h.period.retiring=true;assert.equal(reader.read().status,'insufficient-evidence');h.period.retiring=false;
+    const known=index.known;for(const [value,kind] of [[Infinity,1],[-Infinity,2],[NaN,3]]){index.known=value;const snapshot=reader.read();assert.equal(snapshot.status,'complete');assert.deepEqual(snapshot.rows[0].slice(14),[kind,null]);}index.known=known;
+    const extra={tapes:new Map(),transport:{}};h.pool.register(extra as any);assert.equal(reader.read().status,'insufficient-evidence');(h.pool as any).members.delete(extra);
+    reader.attach(h.pool);assert.equal(reader.read().status,'insufficient-evidence');
+  }finally{await h.close();}
+});
 test('manual control reports its checked out source separately from the workflow event',()=>{
   const source='1'.repeat(40),event='2'.repeat(40),receipt=sourceIdentity({QUOTUM_BENCH_SOURCE_SHA:source,GITHUB_SHA:event},()=>source);
   assert.equal(receipt.status,'complete');assert.equal(receipt.sourceHead,source);assert.equal(receipt.checkoutSha,source);assert.equal(receipt.eventSha,event);
@@ -47,7 +101,7 @@ class CurrentCdpFake {
   on<T>(name:string,listener:(value:T)=>void){const rows=this.listeners.get(name)??[];rows.push(listener as (value:unknown)=>void);this.listeners.set(name,rows);}
   off<T>(name:string,listener:(value:T)=>void){this.listeners.set(name,(this.listeners.get(name)??[]).filter(value=>value!==listener));}
   emit(name:string,value:unknown){for(const listener of this.listeners.get(name)??[])listener(value);}
-  async evaluate<T>(expression:string):Promise<T>{assert.equal(arguments.length,1);this.commands.push('evaluate');assert.equal(expression,'performance.now()');return this.timestamp*1000 as T;}
+  async evaluate<T>(expression:string):Promise<T>{assert.equal(arguments.length,1);if(expression.startsWith('window.__quotumIdleCommitted?')){this.commands.push('committed-snapshot');return {status:'insufficient-evidence'} as T;}this.commands.push('evaluate');assert.equal(expression,'performance.now()');return this.timestamp*1000 as T;}
   async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
     assert.ok(arguments.length<=3);if(signal)assert.equal(signal.aborted,false);this.commands.push(method);
     if(this.options.forbidProfiler)assert.ok(!method.startsWith('Profiler.'),'trace-only must never send a profiler command');
@@ -281,6 +335,11 @@ test('actual original-profile index preserves the counter sequence and samples w
   assert.ok(cdp.commands.indexOf('Profiler.start')<cdp.commands.indexOf('ORIGINAL.reset'));
   assert.ok(cdp.commands.indexOf('Profiler.stop')>cdp.commands.indexOf('ORIGINAL.phase-stop'));
   assert.ok(cdp.commands.indexOf('Debugger.enable')>cdp.commands.indexOf('Profiler.stop'));
+  assert.equal(cdp.commands.filter(command=>command==='committed-snapshot').length,2);
+  assert.ok(cdp.commands.indexOf('committed-snapshot')<cdp.commands.indexOf('Profiler.enable'));
+  assert.ok(cdp.commands.lastIndexOf('committed-snapshot')>cdp.commands.indexOf('Tracing.end'));
+  assert.equal(record(result(saved,'idle-cpu-committed-before').value).status,'insufficient-evidence');
+  assert.equal(record(result(saved,'idle-cpu-committed-after').value).status,'insufficient-evidence');
   assert.equal(result(saved,'idle-cpu-profile').samplingInterval,2000);
   assert.equal(result(saved,'idle-cpu-original-trace').profileStatus,'complete');
 });
