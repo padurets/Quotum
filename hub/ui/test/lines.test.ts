@@ -25,6 +25,23 @@ test('metadata and ordering follow the cards and their windows, independently of
   assert.deepEqual(lines.map(l => [l.windowId, l.provider, l.kind, l.label, l.minutes]), [['other', 'claude', 'weekly', 'Pool', 720], ['weekly', 'claude', 'weekly', null, 10080]]);
 });
 
+test('series ranking visits each source once per preparation and follows later card order', () => {
+  const cards = Array.from({length: 24}, (_, i) => ({id: 'source-' + i, provider: 'codex', windows: [{...weekly, id: 'other'}, weekly]}));
+  const entries = cards.flatMap(card => card.windows.map(window => ({...series(window.id), sourceId: card.id}))).reverse();
+  const data = {...history, series: entries}, original = [...entries];
+  const lookup = cards.findIndex.bind(cards);
+  let searches = 0;
+  Object.defineProperty(cards, 'findIndex', {value: (...args: Parameters<typeof lookup>) => {searches++; return lookup(...args);}});
+  for (let pass = 0; pass < 2; pass++) {
+    searches = 0;
+    const result = linesOf(data, cards, view, 'weekly');
+    assert.deepEqual(result.map(row => row.key), cards.flatMap(card => card.windows.map(window => card.id + '/' + window.id)));
+    assert.equal(searches, entries.length, 'comparison steps reuse the rank within this preparation');
+    assert.deepEqual(entries, original, 'ranking leaves the captured input order untouched');
+    cards.reverse();
+  }
+});
+
 test('a line reads its last value in cells without a measurement of their own, until it breaks', () => {
   const points: [number, number, number][] = [
     [0, 90, 0],
