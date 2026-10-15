@@ -85,7 +85,7 @@ const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,ran
     if(ordered.length!==cached.current.length||ordered.some((row,i)=>row!==cached.current[i]))cached.current=ordered;
     return cached.current;
   },[watch]);
-  const subscribe=useCallback((listener:()=>void)=>clock.subscribe(watch,()=>{evaluate();listener();}),[watch,evaluate]);
+  const subscribe=useCallback((listener:()=>void)=>clock.subscribe(watch,listener),[watch]);
   const ordered=useSyncExternalStore(subscribe,evaluate,evaluate);
   useLayoutEffect(()=>{evaluate();});
   const onSort=useCallback((column:SortColumn|null,cycle?:boolean)=>setPrefs({[sortKey]:nextForecastSort(active,column,cycle)}),[active,sortKey]);
