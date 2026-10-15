@@ -124,9 +124,15 @@ const sameRow=(a:unknown,b:unknown)=>a===b||!!a&&!!b&&typeof a==='object'&&typeo
 
 /** Work counters do not change the financial series that shares their source. */
 export function sameMoneyTape(a:MoneyTape,b:MoneyTape):boolean {
-  const {workCounter:_aw,readings:ar,spans:as,paired:ap,rates:ratesA,rateBindings:bindingsA,...am}=a;
-  const {workCounter:_bw,readings:br,spans:bs,paired:bp,rates:ratesB,rateBindings:bindingsB,...bm}=b;
-  return ar===br&&as===bs&&ap?.readings===bp?.readings&&ap?.spans===bp?.spans&&ratesA===ratesB&&bindingsA===bindingsB&&JSON.stringify(am)===JSON.stringify(bm);
+  const {workCounter:_aw,retainedFrom:af=0,readings:ar,spans:as,paired:ap,rates:ratesA,rateBindings:bindingsA,...am}=a;
+  const {workCounter:_bw,retainedFrom:bf=0,readings:br,spans:bs,paired:bp,rates:ratesB,rateBindings:bindingsB,...bm}=b;
+  if(ar!==br||as!==bs||ap?.readings!==bp?.readings||ap?.spans!==bp?.spans||ratesA!==ratesB||bindingsA!==bindingsB||JSON.stringify(am)!==JSON.stringify(bm))return false;
+  // A moving cutoff matters only when it changes confirmed financial coverage.
+  // Keep interruption and hold bounds identical to the accounting index.
+  return af===bf||as.every(span=>{
+    const to=Math.min(span.to,span.holdUntil??Infinity,span.interruptedAt??Infinity);
+    return Math.min(to,Math.max(span.from,af))===Math.min(to,Math.max(span.from,bf));
+  });
 }
 
 function* replace<T>(before:readonly T[],after:readonly T[],keep:(row:T)=>boolean,key:(row:T)=>number):Preparation<T[]> {
@@ -200,7 +206,7 @@ export function* mergeTapePrepared(previous:PeriodTape|undefined,next:PeriodTape
     release(previousProofBytes);
     if(old?.rateBindings&&merged.rateBindings&&sameRow(old.rateBindings.entries,merged.rateBindings.entries)&&JSON.stringify(old.rateBindings.paths)===JSON.stringify(merged.rateBindings.paths))merged.rateBindings=old.rateBindings;
     if(old?.rates&&merged.rates&&JSON.stringify(old.rates)===JSON.stringify(merged.rates))merged.rates=old.rates;
-    money.set(key,sameMoneyTape(old??merged,merged)&&old?.workCounter===merged.workCounter?old??merged:merged);
+    money.set(key,old?.retainedFrom===merged.retainedFrom&&sameMoneyTape(old??merged,merged)&&old?.workCounter===merged.workCounter?old??merged:merged);
   }
   return {...next,from:complete?next.from:Math.min(previous.from,next.from),quota:[...quota.values()],money:[...money.values()]};
 }

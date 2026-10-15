@@ -11,7 +11,7 @@ import {moneyReadSelection} from '../lib/moneySelection';
 import {shallowEqual} from '../lib/store';
 
 test('a sessions-only reply updates the wallet table consumer after creating a link',async t=>{
-  t.mock.method(Date,'now',()=>NOW);
+  let now=NOW;t.mock.method(Date,'now',()=>now);
   const h=await fixture({personal:true,ownerDevice:true});
   let loader:any,stop:any; const stops:(()=>void)[]=[];
   const settle=async()=>{await flush();for(let i=0;i<6;i++){await new Promise<void>(resolve=>setImmediate(resolve));await flush();}};
@@ -51,8 +51,10 @@ test('a sessions-only reply updates the wallet table consumer after creating a l
     assert.equal(renders,beforePrivate.renders,'unbound work does not render the actual wallet table subscriber');
     assert.equal(fRenders,fRendersBefore);assert.equal(fDrawingChanges,fDrawingsBefore);
     assert.equal(h.requests.length,1);assert.equal(h.requests[0].budget,undefined);
+    now+=1000;h.jump(now);await pump();
+    assert.equal(fRenders,fRendersBefore,'ordinary time preserves the financial subscriber');
     h.requests.length=0;
-    h.store.links.mutate(h.owner,'create',null,{clientId:'opencode',deviceId:null,route:null,sourceId:wallet,from:NOW-H,to:null,expectedRevision:h.store.links.revision(h.owner),requestId:randomUUID()},NOW);h.events.flush();await pump();
+    h.store.links.mutate(h.owner,'create',null,{clientId:'opencode',deviceId:null,route:null,sourceId:wallet,from:NOW-H,to:null,expectedRevision:h.store.links.revision(h.owner),requestId:randomUUID()},now);h.events.flush();await pump();
     assert.ok(h.period.moneyWorkAt(wallet,NOW),'common accounting computed money work');
     assert.deepEqual(renderedWork,h.period.moneyWorkAt(wallet,NOW),'the actual history subscriber renders newly available work');
     assert.equal(h.pool.activeFlights,0);assert.equal(loader.get().loading,false);

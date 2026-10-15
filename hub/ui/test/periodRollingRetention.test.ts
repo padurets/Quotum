@@ -11,6 +11,28 @@ import {drain,Preparations} from '../lib/prepare';
 import {PERIOD_SCOPES} from '../../server/domain/periodRead';
 import type {Meter} from '../../server/domain/meters';
 
+test('financial reuse follows effective retention coverage and native evidence',()=>{
+  const group:MoneyTape={source:'wallet',meter:'balance',displayUnit:'USD',retainedFrom:100,readings:[{id:'balance',at:5000,previousAt:null,kind:'balance',unit:'USD',amount:'1000000',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:1000}],spans:[{from:5000,to:6000,staleAfterMs:1000}]};
+  const tape=(money:MoneyTape):PeriodTape=>({from:0,cut:7000,replaceFrom:0,cursor:'cursor',quota:[],money:[money]});
+  const prior=new PeriodAccounting(tape(group),null),range={from:0,to:7000};
+  const variants=[
+    {name:'retention before evidence',value:{...group,retainedFrom:200},reuse:true,covered:1000},
+    {name:'retention intersects evidence',value:{...group,retainedFrom:5500},reuse:false,covered:500},
+    {name:'retention removes coverage',value:{...group,retainedFrom:6000},reuse:false,covered:0},
+    {name:'availability interruption',value:{...group,spans:[{...group.spans[0],interruptedAt:5800}]},reuse:false,covered:800},
+    {name:'native readings removed',value:{...group,readings:[]},reuse:false,covered:1000},
+    {name:'native spans removed',value:{...group,spans:[]},reuse:false,covered:0},
+  ];
+  for(const {name,value,reuse,covered} of variants){
+    const nextTape=tape(value),next=drain(PeriodAccounting.prepare(nextTape,null,undefined,prior));
+    assert.equal(next.financialAuthority===prior.financialAuthority,reuse,name);
+    assert.deepEqual(next.fixed(range,1000),new PeriodAccounting(nextTape,null).fixed(range,1000),name);
+    assert.equal(next.moneySummary('wallet','balance','USD',range)?.coveredMs,covered,name);
+  }
+  const refreshed=mergeTape(tape(group),tape({...group,retainedFrom:200}));
+  assert.equal(refreshed.money[0].retainedFrom,200,'the tape retains its current cutoff even when the financial index is reusable');
+});
+
 test('financial index reuse releases retired native work evidence from its object graph',()=>{
   const readings=Array.from({length:10000},(_,i)=>({id:'usage',at:i*2*M,previousAt:i?(i-1)*2*M:null,kind:'counter' as const,unit:'USD',amount:'0',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:4*M}));
   const spans=[{from:0,to:readings.at(-1)!.at,observedFrom:0,staleAfterMs:4*M}];
