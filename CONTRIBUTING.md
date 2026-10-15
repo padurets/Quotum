@@ -194,21 +194,12 @@ cannot revise it. The 20-second deadline, launch flags, cleanup and benchmark ph
 are unchanged. Without the flag, no extra process reads or samples run. This outcome
 is diagnostic and cannot satisfy the required benchmark. The `make bench` wrapper
 forwards the flag without loading preview configuration.
-The optional `benchmark-startup-diagnostics` PR label runs two fixed launch slots on
-each of three hosted runners after the same fixture preparation. A temporary control
-compares ordinary execution with a sequential read of the Chrome executable before
-execution, in A/B, B/A and A/B order. Both wrappers wait until the original 20-second
-deadline is armed. The read consumes that deadline; each launch keeps a fresh profile.
-Runtime paths and metadata are captured before a single per-file cache eviction and
-residency snapshot for each slot. The executable's whole-file hash is checked after
-both slots and their cleanup, with its original identity unchanged throughout. Only a
-confirmed zero-residency snapshot permits a launch. Unknown
-helper termination stops the remaining slots; no slot gets a replacement. The helper
-never operates on a local or shared machine. Numeric process, scheduler, I/O and
-pressure counters remain diagnostic, with missing evidence and sampling cost explicit.
-The normal startup diagnostic command keeps its first/repeat pair when the control
-root is unset. All outcomes survive, and these diagnostics cannot satisfy the required
-benchmark.
+The optional `benchmark-startup-diagnostics` PR label runs a fixed first/repeat launch
+pair on three runners after the same benchmark fixture preparation. Each launch keeps
+the 20-second deadline and a fresh profile. Numeric process, scheduler, I/O and pressure
+counters are sampled separately from performance gates; missing counters and sampling
+cost remain explicit. All six outcomes are retained, and a repeat success never replaces
+a first failure. These diagnostics cannot satisfy the canonical benchmark.
 An owned browser is ready only when its private `DevToolsActivePort` and a bounded
 loopback `/json/version` reply identify the same browser. Its stderr announcement
 is optional. Startup stays bounded at 20 seconds; cancellation drains pending tab

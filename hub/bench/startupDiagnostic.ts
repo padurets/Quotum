@@ -1,6 +1,4 @@
 import {readFile, readdir, statfs} from 'node:fs/promises';
-import path from 'node:path';
-import {pathToFileURL} from 'node:url';
 import {ChromeLaunchError, launchChrome, type LaunchReport} from './chrome.js';
 import type {Evidence} from './evidence.js';
 import type {RunOwner} from './runOwner.js';
@@ -115,77 +113,24 @@ export class StartupSampler {
 
 /** A fixed first/repeat pair keeps every outcome; a warm success never replaces a failure. */
 export async function startupTrials(file: string, sandbox: boolean, owner: RunOwner, evidence: Evidence) {
-  const root = process.env.STARTUP_CONTROL_ROOT, lane = Number(process.env.STARTUP_CONTROL_LANE);
-  if (root && (![1, 2, 3].includes(lane) || !path.isAbsolute(root))) throw new Error('Startup control inputs unavailable');
-  const controlModule = root ? await import(pathToFileURL(path.join(root, 'controller.ts')).href) : undefined;
-  const runtimeModule = root ? await import(pathToFileURL(path.join(root, 'runtime.mjs')).href) : undefined;
-  const runtime = runtimeModule ? await runtimeModule.bindRuntime(file) : undefined;
-  if (runtime) evidence.save('startup-runtime', {status:runtime.status,node:runtime.node,version:runtime.kernel,
-    coldSnapshotProof:false,files:runtime.files.map((value: {file:string;sha256?:string;status:string},id:number)=>({id,executable:path.basename(value.file),sha:value.sha256,status:value.status}))});
-  let failed = false, cleanupConfirmed = true;
-  try {
+  let failed = false;
   for (let attempt = 1; attempt <= 2; attempt++) {
     owner.signal.throwIfAborted();
     evidence.begin(`startup-${attempt}`);
-    if (runtime && !await runtimeModule.unchangedRuntime(runtime)) throw new Error('Startup runtime changed before qualification');
-    const control = controlModule ? await controlModule.prepareArm(file,lane,attempt,owner.signal) : undefined;
-    if (control) {
-      evidence.save(`startup-${attempt}-condition`, {lane,attempt,armId:control.arm==='A'?0:1,...control.qualification});
-      if (control.qualification.status !== 'cold-snapshot') {
-        failed = true;
-        evidence.save(`startup-${attempt}-result`, {status:'unavailable',stage:'qualification'});
-        if (control.qualification.abortExperiment) {cleanupConfirmed=false;throw new Error('Cache helper unconfirmed; remaining startup slots unperformed');}
-        continue;
-      }
-    }
     const sampler = new StartupSampler(value => evidence.saveTrace(`startup-${attempt}-samples`,value));
     await sampler.start();
-    let gate: ReturnType<typeof import('./startupControl/controller.js')['goGate']> | undefined;
     try {
-      cleanupConfirmed = false;
-      const browser = await owner.start(signal => {
-        if (!control) return launchChrome(file,sandbox,signal,sampler.observe);
-        gate = controlModule.goGate(control.directory,signal,sampler.observe);
-        const pending = launchChrome(control.file,sandbox,signal,gate!.observe);
-        gate!.returned();
-        return pending;
-      });
+      const browser = await owner.start(signal => launchChrome(file,sandbox,signal,sampler.observe));
       await sampler.stop();
       evidence.save(`startup-${attempt}-result`,{status:'ready',browser:browser.launchReport?.()});
-      if (runtime) {
-        const execution = await runtimeModule.executedRuntime(browser.launchReport?.(),runtime);
-        evidence.save(`startup-${attempt}-execution`,execution);
-        if (execution.status !== 'matched') failed = true;
-      }
       await browser.close();
-      cleanupConfirmed = true;
       evidence.save(`startup-${attempt}-cleanup`,browser.launchReport?.());
     } catch (error) {
       failed = true;
       if (!(error instanceof ChromeLaunchError)) throw error;
       evidence.save(`startup-${attempt}-result`,{status:'failed',browser:error.report});
       if (error.report.cleanup?.status !== 'closed') throw error;
-      cleanupConfirmed = true;
-    } finally {
-      if (control) {
-        const release = gate?.close();
-        evidence.save(`startup-${attempt}-go`,release??{status:'unavailable'});
-        if (release?.status !== 'released') failed = true;
-      }
-      await sampler.stop();
-      if (runtime) {
-        const unchanged = await runtimeModule.unchangedRuntime(runtime);
-        evidence.save(`startup-${attempt}-runtime`,{unchanged});
-        if (!unchanged) throw new Error('Startup runtime changed; remaining slots unperformed');
-      }
-    }
-  }
-  } finally {
-    if (runtime) {
-      const final = cleanupConfirmed ? await runtimeModule.finalizeRuntime(runtime) : {status:'unavailable'};
-      evidence.save('startup-runtime-final',final);
-      if (final.status !== 'retrospectively-bound') failed = true;
-    }
+    } finally {await sampler.stop();}
   }
   return failed ? 1 : 0;
 }
