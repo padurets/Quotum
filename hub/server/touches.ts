@@ -17,7 +17,8 @@ export type Touches = {
   history(source: string, since: number, scopes?: readonly HistoryScope[], work?: boolean): void;
   touchClientSessions?(user:string,device?:string):void;
   clientHistory?(user:string,since:number,device?:string,sources?:readonly string[]):void;
-  touchDevices?(user: string): void;
+  /** Metadata needs a private hint; selection-only touches compare the effective state first. */
+  touchDevices?(user: string, metadata?: boolean): void;
   deviceContact?(user: string, device: string, at: number): void;
   /** Some sessions of this person may have ended. */
   dropSessions(user: string): void;

@@ -213,14 +213,14 @@ export class Ingest {
     if(configured.changed)this.directory.measurementsChanged(device.userId);
     for(const {key,provider} of configured.accounts) {
       const source=this.store.findSource(provider,key);
-      if(source)this.notifyMeasurementOwners(source);
+      if(source)this.notifyMeasurementOwners(source,false);
     }
     const confirmation=this.store.measurementPolicies.confirm(device.id, request.measurementPolicy && request.attemptContext, request.policyAck?.revision ?? null, request.policyAck?.authority ?? null);
     if (confirmation.changed) this.directory.measurementsChanged(device.userId);
     // Capability changes affect existing account candidates even without a subscription directive.
     if (confirmation.capabilityChanged) for(const {key,provider} of this.measurementSelection.candidateAccounts(device.id)) {
       const source=this.store.findSource(provider,key);
-      if(source)this.notifyMeasurementOwners(source);
+      if(source)this.notifyMeasurementOwners(source,false);
     }
     const currentAccounts=new Map<ClientProvider,Set<string>>();
     for(const subscription of request.subscriptions) {
@@ -355,8 +355,8 @@ export class Ingest {
     });
   }
 
-  private notifyMeasurementOwners(source: string) {
-    for (const row of this.store.db.prepare('SELECT user_id FROM holders WHERE source_id=?').all(source)) this.directory.measurementsChanged(String(row.user_id));
+  private notifyMeasurementOwners(source: string, metadata = true) {
+    for (const row of this.store.db.prepare('SELECT user_id FROM holders WHERE source_id=?').all(source)) this.directory.measurementsChanged(String(row.user_id),metadata);
   }
 
   measurementSources(user: string, now: number) {

@@ -232,8 +232,8 @@ export class Directory {
     return (this.db.prepare('SELECT revision FROM account_revisions WHERE user_id=?').get(userId) as {revision: number} | undefined)?.revision ?? 0;
   }
 
-  measurementsChanged(user: string) {
-    tell(this.observer, o => o.touchDevices?.(user));
+  measurementsChanged(user: string, metadata = true) {
+    tell(this.observer, o => o.touchDevices?.(user,metadata));
   }
 
   // ---------- boards, members, invites ----------

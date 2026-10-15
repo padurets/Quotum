@@ -145,7 +145,7 @@ export class Events implements Touches {
   private readonly dirtyBoards = new Set<string>();
   private readonly dirtySources = new Map<string, Set<string>>();
   private readonly dirtyUsers = new Set<string>();
-  private readonly dirtyDevices = new Set<string>();
+  private readonly dirtyDevices = new Map<string, boolean>();
   private readonly contacts = new Map<string, Map<string, number>>();
   private dirtyHub = false;
   private readonly dirtyClientUsers = new Set<string>();
@@ -279,8 +279,8 @@ export class Events implements Touches {
     this.schedule();
   }
 
-  touchDevices(user: string) {
-    if ([...this.subscribers.values()].some(s => s.user === user)) this.dirtyDevices.add(user);
+  touchDevices(user: string, metadata = true) {
+    if ([...this.subscribers.values()].some(s => s.user === user)) this.dirtyDevices.set(user,this.dirtyDevices.get(user)||metadata);
     this.schedule();
   }
 
@@ -378,7 +378,7 @@ export class Events implements Touches {
     const whole = new Set(this.dirtyBoards);
     const sources = new Map(this.dirtySources);
     const users = new Set(this.dirtyUsers);
-    const devices = new Set(this.dirtyDevices), contacts = new Map(this.contacts);
+    const devices = new Map(this.dirtyDevices), contacts = new Map(this.contacts);
     this.dirtyDevices.clear(); this.contacts.clear();
     const histories = new Map(this.histories);
     const clientUsers = new Set(this.dirtyClientUsers);
@@ -504,7 +504,7 @@ export class Events implements Touches {
           return device?.userId === sub.user && this.parts.directory.deviceLive(deviceId) ? [{deviceId,lastSeenAt}] : [];
         });
         let frames = [...(heads.get(watched.id) ?? []), ...own, ...access, ...(deviceFramesByUser.get(sub.user) ?? []),
-          ...(devices.has(sub.user) && !deviceFramesByUser.get(sub.user)?.length ? [frame('devices',{})] : []), ...(privateContacts.length ? [frame('deviceContacts',{devices:privateContacts})] : []), ...historyFrames, ...news];
+          ...(devices.get(sub.user) && !deviceFramesByUser.get(sub.user)?.length ? [frame('devices',{})] : []), ...(privateContacts.length ? [frame('deviceContacts',{devices:privateContacts})] : []), ...historyFrames, ...news];
         if (sub.fresh) continue;
         if(!frames.length&&!sub.desktop)continue;
         try {
