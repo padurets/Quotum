@@ -93,7 +93,7 @@ function LinkManager({context}: {context: URLSearchParams}) {
     {!inventory.sources.length && <><p className="dialog-text">{t('links.noSources')}</p><div><button className="button" onClick={() => navigate(settingsHref('/settings/connections'))}>{t('settings.connections')}</button></div></>}
     <div className="settings-section-head"><Segmented options={[['links', t('links.saved')], ['history', t('links.history')]]} value={history ? 'history' : 'links'} onChange={value => setHistory(value === 'history')} label={t('links.list')} /></div>
     <ErrorLine error={error} />
-    {error && <button className="button" onClick={() => void load()}>{t('links.reload')}</button>}
+    {!!error && <button className="button" onClick={() => void load()}>{t('links.reload')}</button>}
     {!shown.length && <p className="admin-empty">{t(history ? 'links.emptyHistory' : inventory.links.length ? 'links.noCurrent' : 'links.empty')}</p>}
     {rows(shown)}
     {edit && <LinkForm key={edit.operation + edit.link.id} edit={edit} inventory={inventory} onClose={() => setEdit(null)} onSaved={async () => {await load(); setEdit(null);}} reload={load} />}
