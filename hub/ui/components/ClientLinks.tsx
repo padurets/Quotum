@@ -184,11 +184,11 @@ export function SessionFunding({session, evidence, inventory, error}: {session: 
     <ErrorLine error={error} />
     {!inventory && !error ? <p className="dialog-text">{t('links.loading')}</p> : !evidence ? !error && <p className="dialog-text">{t(inventory ? 'links.sessionEnded' : 'links.loading')}</p> : <>
       <p className="dialog-text">{inactive ? t('links.inactiveExplanation', {source: name(link?.sourceId ?? null)}) : t(evidence.by === 'link' ? 'links.manual' : evidence.by === 'account' ? evidence.accountBy === 'inferred' ? 'links.inferred' : 'links.reported' : evidence.route?.class === 'api' ? 'links.apiUnassigned' : 'links.noAccount')}</p>
-      <dl className="tray-panel-table">
-        {link && <div><dt>{t('links.source')}</dt><dd>{name(link.sourceId)}{inactive && <><br /><small className="v-warn">{t('sources.disconnected')}</small></>}</dd></div>}
-        {evidence.accountSourceId && <div><dt>{t('links.reportedAccount')}</dt><dd>{name(evidence.accountSourceId)}</dd></div>}
-        {evidence.route && <div><dt>{t('links.routeType')}</dt><dd>{condition(evidence).split('\n').join(' / ')}</dd></div>}
-        {evidence.host && <div><dt>{t('links.gateway')}</dt><dd>{evidence.host}</dd></div>}
+      <dl className="connection-facts">
+        {link && <><dt>{t('links.source')}</dt><dd>{name(link.sourceId)}{inactive && <><br /><small className="v-warn">{t('sources.disconnected')}</small></>}</dd></>}
+        {evidence.accountSourceId && <><dt>{t('links.reportedAccount')}</dt><dd>{name(evidence.accountSourceId)}</dd></>}
+        {evidence.route && <><dt>{t('links.routeType')}</dt><dd>{condition(evidence).split('\n').join(' / ')}</dd></>}
+        {evidence.host && <><dt>{t('links.gateway')}</dt><dd>{evidence.host}</dd></>}
       </dl>
       {evidence.disagreement && !inactive && <p className="dialog-text">{t('links.disagreement')}</p>}
       {evidence.otherGateway && <p className="dialog-text">{t('links.otherGateway')}</p>}
