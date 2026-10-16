@@ -8,6 +8,7 @@ type FocusTarget={name:string;isConnected:boolean;focus:()=>void};
 
 function fixture() {
   const effects:(()=>void|(()=>void))[]=[];
+  const layers:{overlay:{inert:boolean};frame:{inert:boolean}}[]=[];
   let panel:any;
   const target=(name:string):FocusTarget=>({name,isConnected:true,focus(){document.activeElement=this;}});
   const body=target('body'),trigger=target('trigger'),row=target('row'),root={inert:false};
@@ -22,13 +23,16 @@ function fixture() {
   }};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/Kit.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const mount=()=>{
-    const own:any={...target('dialog'),parentElement:{inert:false},contains:(value:unknown)=>value===own,querySelector:()=>null,querySelectorAll:()=>[]};
+    const overlay={inert:false};
+    const frame={inert:false};
+    layers.push({overlay,frame});
+    const own:any={...target('dialog'),parentElement:frame,closest:(selector:string)=>{assert.equal(selector,'.overlay');return overlay;},contains:(value:unknown)=>value===own,querySelector:()=>null,querySelectorAll:()=>[]};
     panel=own;
     context.exports.Modal({title:'Details',children:null,restore:()=>row});
     const cleanup=effects.shift()!() as ()=>void;
     return()=>{own.isConnected=false;cleanup();};
   };
-  return {body,trigger,row,root,document,mount};
+  return {body,trigger,row,root,document,mount,layers};
 }
 
 test('a contextual dialog returns to its object row when navigation left focus on the body',()=>{
@@ -47,5 +51,18 @@ test('discarding nested contextual dialogs restores their object after both clos
   const f=fixture(),closeDetails=f.mount(),closeConfirmation=f.mount();
   closeDetails();closeConfirmation();
   assert.equal(f.document.activeElement,f.row);
+  assert.equal(f.root.inert,false);
+});
+
+test('nested dialogs block the whole lower overlay and restore it when the top closes',()=>{
+  const f=fixture(),closeDetails=f.mount(),details=f.document.activeElement,closeConfirmation=f.mount();
+  assert.equal(f.layers[0].overlay.inert,true);
+  assert.equal(f.layers[0].frame.inert,false);
+  assert.equal(f.layers[1].overlay.inert,false);
+  closeConfirmation();
+  assert.equal(f.layers[0].overlay.inert,false);
+  assert.equal(f.document.activeElement,details);
+  assert.equal(f.root.inert,true);
+  closeDetails();
   assert.equal(f.root.inert,false);
 });

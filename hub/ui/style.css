@@ -276,11 +276,8 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
   border: 1px solid var(--glass-edge);
   box-shadow: var(--glass-shadow);
 }
-/*
- * Over the chart's lines the text has to stay readable: a denser pane. So over a dialog's
- * rows, where the glass within the dialog's own does not blur them.
- */
-.tooltip.glass, .dialog .popover.glass { background: linear-gradient(180deg, #ffffff0c, #ffffff02 45%), #131318d9; }
+/* Over the chart's lines the text has to stay readable: a denser pane. */
+.tooltip.glass { background: linear-gradient(180deg, #ffffff0c, #ffffff02 45%), #131318d9; }
 .popover-title.is-group { padding-top: 6px; padding-bottom: 4px; }
 .popover-title { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-4); padding: 4px 8px 8px; }
 .popover-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 4px 12px; padding: 4px 8px 12px; }
@@ -794,13 +791,17 @@ code { font-family: var(--mono); font-size: .92em; color: var(--text-2); }
 /* ---------- dialogs ---------- */
 /* As wide as the screen allows whatever it shows, its scrollbar or none: what goes in a dialog can choose its form by the dialog's width. */
 .overlay { position: fixed; inset: 0; z-index: 50; display: grid; grid-template-columns: minmax(0, 1fr); place-items: start center; padding: 72px 16px 24px; background: #05050899; backdrop-filter: blur(4px); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-.dialog.glass { box-shadow: inset 0 1px 0 #ffffff1c, 0 30px 70px -34px #0000009e; }
-.dialog { width: 100%; max-width: 520px; max-height: calc(100dvh - 96px); overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 16px; padding: 22px 24px 24px; border-radius: 16px; outline: none; }
+/* A sibling backing keeps the glass still as content scrolls, and lets popovers blur the dialog's text. */
+.dialog-frame { position: relative; z-index: 0; display: flex; width: 100%; max-width: 520px; max-height: calc(100dvh - 96px); border-radius: 16px; }
+.dialog-backdrop { position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit; box-shadow: inset 0 1px 0 #ffffff1c, 0 30px 70px -34px #0000009e; }
+.dialog { width: 100%; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 16px; padding: 22px 24px 24px; border: 1px solid transparent; border-radius: inherit; outline: none; }
 .dialog > * { flex-shrink: 0; }
-.dialog.is-wide { max-width: 960px; }
+.dialog-frame.is-wide { max-width: 960px; }
 /* A panel on the right edge, for the person's own settings. */
 .overlay.is-side { display: flex; justify-content: flex-end; padding: 0; overflow: hidden; scrollbar-gutter: auto; }
-.dialog.is-side { max-width: 400px; max-height:100dvh; height: 100dvh; gap: 20px; padding: 20px 24px 28px; border-width: 0 0 0 1px; border-radius: 0; overflow-y: auto; overscroll-behavior: contain; animation: slide-in .22s cubic-bezier(.2, .7, .2, 1); }
+.dialog-frame.is-side { max-width: 400px; max-height: 100dvh; height: 100dvh; border-radius: 0; animation: slide-in .22s cubic-bezier(.2, .7, .2, 1); }
+.dialog-frame.is-side > .dialog-backdrop, .dialog.is-side { border-width: 0 0 0 1px; }
+.dialog.is-side { gap: 20px; padding: 20px 24px 28px; }
 @keyframes slide-in { from { transform: translateX(28px); opacity: 0; } }
 .drawer-section { display: flex; flex-direction: column; gap: 12px; padding-top: 18px; border-top: 1px solid var(--hair); }
 .drawer-section h3 { margin: 0; font-size: 10.5px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--text-4); }

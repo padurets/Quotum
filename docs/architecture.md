@@ -1179,7 +1179,9 @@ and its limits.
   in the shared dialog: a machine's measurement participation or diagnostics (Quotum and client
   versions, observations, failures and sessions), or a subscription's preferred machine
   and retained resource origins. Resource details use the shared popover, fitted to
-  the dialog's scrollport without enlarging it. Expanding diagnostics never lengthens
+  the dialog's scrollport without enlarging it. The shared dialog keeps its glass
+  backing beside its scrolling content so nested popovers can blur the text behind
+  them with the same glass as other menus. Expanding diagnostics never lengthens
   a machine row or the page. A widget's contextual link
   opens its subscription dialog directly. Unsaved measurement drafts ask before leaving,
   and a save stays locked through its authoritative read. Connect a device opens the

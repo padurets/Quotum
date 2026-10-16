@@ -45,7 +45,7 @@ export function Modal({
   const [previous] = useState(() => document.activeElement as HTMLElement | null);
   useLayoutEffect(() => {
     const own = panel.current!;
-    const overlay = own.parentElement!;
+    const overlay = own.closest<HTMLElement>('.overlay')!;
     const page = document.documentElement;
     const root = document.getElementById('root');
     if (!dialogs.length) {
@@ -107,18 +107,21 @@ export function Modal({
   }, []);
   return createPortal(
     <div className={`overlay ${side ? 'is-side' : ''}`} onMouseDown={event => event.target === event.currentTarget && onClose?.()}>
-      <div className={`dialog glass ${wide ? 'is-wide' : ''} ${side ? 'is-side' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panel} tabIndex={-1}>
-        <div className="dialog-head">
-          <h2>{title}</h2>
-          {onClose && (
-            <button type="button" className="icon-button" aria-label={t('common.close')} onClick={onClose}>
-              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                <path d="M4 4l8 8M12 4l-8 8" />
-              </svg>
-            </button>
-          )}
+      <div className={`dialog-frame ${wide ? 'is-wide' : ''} ${side ? 'is-side' : ''}`}>
+        <div className="dialog-backdrop glass" aria-hidden="true" />
+        <div className={`dialog ${side ? 'is-side' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panel} tabIndex={-1}>
+          <div className="dialog-head">
+            <h2>{title}</h2>
+            {onClose && (
+              <button type="button" className="icon-button" aria-label={t('common.close')} onClick={onClose}>
+                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </button>
+            )}
+          </div>
+          {children}
         </div>
-        {children}
       </div>
     </div>,
     document.body,
