@@ -222,6 +222,8 @@ available through Add widget.
 their exact free intervals, inactive targets, account disagreements, spending per
 active hour, and complete or partial work observation. Its durable codes are in
 `LINK_SCENES` and checked by `hub/demo/test/links.test.ts`.
+
+`DEV_SET=devices DEV_STILL=true make dev` shows agent versions, disabled collectors, an epoch barrier, a preferred device and retained measurement origins in My connections.
 `DEV_SET=onboarding DEV_STILL=true make dev` exercises board and account onboarding.
 Ana owns *Studio* and *New board*; Boris is a member of both. OpenRouter starts
 unconnected. Add widget offers synthetic keys for successful, partial and failed

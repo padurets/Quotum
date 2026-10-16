@@ -33,6 +33,8 @@ import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
 import {ErrorLine, Segmented} from './Kit';
 import {useBubble} from './Tooltip';
 import {quotaPeriods,quotaRemaining} from '../lib/subscription';
+import {navigate, measurementDevicesHref} from '../lib/router';
+import {app, inApp} from '../lib/app';
 
 /** Where the plan expects the limit to be now: a mark on its meter, in whole percent, moved when that changes. */
 function PlanMark({w, measuredAt, weekly}: {w: Win; measuredAt: number | null; weekly: WeeklyPlan | null}) {
@@ -343,6 +345,9 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
       )}
       <Frequency key={`${boardId}:${source.id}`} source={source} board={boardId} />
       {mine && <button className="popover-row" onClick={() => {setOpen(false); openClientLinks(undefined, source.id);}}>{t('links.manage')}</button>}
+      {mine&&providerOf(source.provider)?.measuredBy==='client'&&<button type="button" className="popover-row" onClick={()=>{
+        navigate(measurementDevicesHref(source.id,boardId));
+      }}>{t('measurements.manage')}</button>}
       <div className={owner ? 'popover-section' : undefined}>
         <RefreshAction id={source.id} board={boardId} onAccepted={() => setOpen(false)} />
         {owner && <HideRow section={false} onHide={() => arrange.update(view => withHidden(view, cardId(source.id), true))}>{t('widget.hide')}</HideRow>}
@@ -385,7 +390,8 @@ function AllHidden({source, arrange}: {source: Card; arrange: Arrange}) {
  * when they were measured and when the next measurement comes and why. It is what of a
  * card changes with time: it renders at those moments, the card does not.
  */
-export function CardMark({source}: {source: Card}) {
+export function CardMark({source,compact=false}: {source: Card;compact?:boolean}) {
+  const mine = useMine(source.id);
   const pace = useCadence(source.id);
   const refresh = useRefresh(source.id);
   const pending = refreshPending(refresh);
@@ -435,16 +441,17 @@ export function CardMark({source}: {source: Card}) {
       document.removeEventListener('pointerdown', hide);
     };
   }, [tip]);
-  return (
+  const managesDevices=compact && mine && providerOf(source.provider)?.measuredBy==='client';
+  const mark = (
     <span
       className={`provider-mark ${warn ? 'is-warn' : ''} ${tip ? 'is-tipped' : ''}`}
       data-time="mark"
       data-refresh={outcome ?? 'idle'}
       aria-label={lines.join('\n')}
       role="img"
-      onPointerEnter={event => event.pointerType !== 'touch' && setHovered(true)}
+      onPointerEnter={event => !managesDevices && event.pointerType !== 'touch' && setHovered(true)}
       onPointerLeave={() => setHovered(false)}
-      onPointerUp={event => event.pointerType === 'touch' && setTip(true)}
+      onPointerUp={event => !managesDevices && event.pointerType === 'touch' && setTip(true)}
     >
       <img className="provider-logo" src={logoOf(source.provider)} alt="" />
       {pending ? (
@@ -454,13 +461,17 @@ export function CardMark({source}: {source: Card}) {
       ) : (
         <i className={`dot dot-fresh ${dot.pulsing ? 'is-pulsing' : ''}`} style={{'--fresh': dot.fresh} as CSSProperties} />
       )}
-      <span className="dot-tip glass" ref={bubble} aria-hidden="true">
+      {!managesDevices&&<span className="dot-tip glass" ref={bubble} aria-hidden="true">
         {lines.map((line, index) => (
           <span key={index}>{line}</span>
         ))}
-      </span>
+      </span>}
     </span>
   );
+  return managesDevices ? <Popover label={t('measurements.manage')} trigger={mark} triggerClass="measurement-mark-button" align="left" width={288}>
+    <div className="popover-note">{lines.map((line,index)=><div key={index}>{line}</div>)}</div>
+    <button type="button" className="popover-row" onClick={()=>inApp()?void app.openMain({kind:'devices',sourceId:source.id}):navigate(measurementDevicesHref(source.id))}>{t('measurements.manage')}</button>
+  </Popover> : mark;
 }
 
 /** The card's tray: reset news, additional funds, free resets and running agents. */

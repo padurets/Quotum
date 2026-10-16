@@ -61,6 +61,11 @@ for (const local of [false, true]) test(`link API enforces owner scope, origin, 
     assert.equal(deviceDetails.sessions[0].attribution.accountSourceId, null);
     assert.equal(deviceDetails.sessions[1].attribution.accountSourceId, source, 'identical client/start/project routes retain their own explanation');
     assert.equal(deviceDetails.sessions[1].attribution.host, 'openrouter.ai');
+    const measurementDetails = (await request('GET', '/api/devices?measurement=1&details=' + device)).json();
+    assert.ok(Array.isArray(measurementDetails.sources));assert.equal(typeof measurementDetails.hubVersion,'string');
+    assert.deepEqual(measurementDetails.devices.find((item:{id:string})=>item.id===device).sessions,deviceDetails.sessions);
+    assert.ok((await request('GET','/api/devices?measurement=1')).json().devices.every((item:{sessions:{attribution?:unknown}[]})=>item.sessions.every(row=>row.attribution===undefined)));
+
     assert.ok((await request('GET', '/api/devices?details=foreign')).json().every((item: {sessions: {attribution?: unknown}[]}) => item.sessions.every(row => row.attribution === undefined)));
     ingest.live.report(device, owner.id, [session], now);
     const future = {...body, deviceId: device, clientId: 'codex', route: {class: 'api', provider: 'openrouter'}, from: now + 10 * 60_000, expectedRevision: '2', requestId: randomUUID()};

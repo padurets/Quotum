@@ -32,7 +32,7 @@ function DisplayCurrency({data,refresh,dirty}:{data:CurrencyManagement;refresh:R
   return <section className="settings-section currency-overview">
     <h2>{t('currencies.display')}</h2><p className="dialog-text">{t('currencies.scope')}</p>
     <form className="currency-display-form" onSubmit={event=>{event.preventDefault();save.send('/api/currencies/display',{currency:choice},()=>setEdited(false));}}>
-      <fieldset className="currency-fields" disabled={save.disabled}><CurrencyChoice title={t('currencies.display')} items={items} value={choice} disabled={save.disabled} compact onChange={id=>{setChoice(id);setEdited(id!==data.selected);}} /></fieldset>
+      <fieldset className="form-fields" disabled={save.disabled}><CurrencyChoice title={t('currencies.display')} items={items} value={choice} disabled={save.disabled} compact onChange={id=>{setChoice(id);setEdited(id!==data.selected);}} /></fieldset>
       {edited&&<div className="button-row currency-actions"><button className="button primary" disabled={save.disabled}>{t('account.save')}</button><button type="button" className="button" disabled={save.disabled} onClick={reset}>{t('common.cancel')}</button></div>}
       {save.conflict&&<p className="dialog-text">{t('currencies.current',{currency:currencyLabel(items.find(item=>item.id===data.selected)!,locale,items)})}</p>}
       <div className="currency-notice">{save.notice}</div>
@@ -49,7 +49,7 @@ function ArchiveCurrency({data,item,refresh,dirty,onClose}:{data:CurrencyManagem
   const [replacement,setReplacement]=useState(''),save=useSave(data.registryRevision,false,refresh,dirty),selected=data.selected===item.definition.id;
   return <Modal title={t('currencies.archive')} restore={()=>restoreCurrency(item.definition.id)} onClose={save.disabled?undefined:onClose}>
     <p className="dialog-text">{t('currencies.archiveHelp',{name:item.definition.name})}</p>
-    {selected&&<fieldset className="currency-fields" disabled={save.disabled}><CurrencySelect title={t('currencies.replacement')} value={replacement} onChange={setReplacement} items={[...data.standards,...data.personal.filter(row=>row.archivedAt===null&&row.definition.id!==item.definition.id).map(row=>row.definition)]} /></fieldset>}
+    {selected&&<fieldset className="form-fields" disabled={save.disabled}><CurrencySelect title={t('currencies.replacement')} value={replacement} onChange={setReplacement} items={[...data.standards,...data.personal.filter(row=>row.archivedAt===null&&row.definition.id!==item.definition.id).map(row=>row.definition)]} /></fieldset>}
     <div className="button-row currency-actions"><button className="button" disabled={save.disabled} onClick={onClose}>{t('common.cancel')}</button><button className="button danger" disabled={save.disabled||selected&&!replacement} onClick={()=>save.send('/api/currencies/'+item.definition.id+'/archive',{...(replacement?{replacement}:{})},onClose)}>{t('currencies.archive')}</button></div>
     {save.notice}
   </Modal>;
@@ -113,7 +113,7 @@ function CurrencyRow({data,item,refresh,dirty,leave,onOpen}:{data:CurrencyManage
   const definition=item.definition,selected=data.selected===definition.id,builtin=definition.kind==='provider-credit';
   const duplicate=data.personal.some(row=>row.definition.id!==definition.id&&row.definition.name===definition.name&&row.definition.symbol===definition.symbol);
   return <li className="settings-list-row popover-row" ref={row}>
-    <button className="currency-open" data-currency-id={definition.id} type="button" aria-label={definition.name} aria-haspopup="dialog" onClick={()=>leave(onOpen)}>
+    <button className="settings-item-open currency-open" data-currency-id={definition.id} type="button" aria-label={definition.name} aria-haspopup="dialog" onClick={()=>leave(onOpen)}>
       <span className="settings-item-main"><span className="currency-identity"><span className="currency-name">{definition.name}</span>{selected&&<span className="currency-state is-selected">{t('currencies.selected')}</span>}</span><small>{definition.symbol}{duplicate?' — '+definition.id.slice(-6):''}</small></span>
       <span className="settings-item-detail currency-overview-rates">{archived?<span>{stamp(item.archivedAt!)}</span>:item.pairs.map(pair=><span key={pair.base} className="currency-equation">{pair.rate?pair.direction==='basePerUnit'?`1 ${t('money.codexCredit')} = ${rateText(pair.rate)} ${pair.base}`:`1 ${pair.base} = ${rateText(pair.rate)} ${definition.symbol}`:`${pair.base} — ${t('currencies.stopped')}`}</span>)}</span>
     </button>

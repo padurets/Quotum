@@ -21,7 +21,7 @@ const MIN = 60_000;
 const ACCOUNT = 'a1b2c3d4e5f6a1b2c3d4e5f6';
 const iso = (at: number) => new Date(at).toISOString();
 
-function hub(t: TestContext) {
+function hub(t: TestContext, modern = false) {
   const folder = mkdtempSync(path.join(tmpdir(), 'quotum-refresh-'));
   const store = new Store(path.join(folder, 'db.sqlite'), T);
   t.after(() => {
@@ -39,17 +39,20 @@ function hub(t: TestContext) {
   const credential = ingest.authenticate(`Bearer ${secret}`) as Credential;
   const agent = (name: string) => ({version: 1, agent: 'quotum/0.4.0', machine: {id: `${name}-0123456789abcd`, name, os: 'linux', arch: 'x86_64'}});
   const source = () => store.findSource('codex', ACCOUNT)!;
-  const ask = (at: number, minimum = MIN, name = 'laptop', paced = true) =>
-    ingest.checkin(
-      credential,
-      {
-        ...agent(name),
-        paced,
-        subscriptions: [{provider: 'codex', account: ACCOUNT, active: false, minIntervalMs: minimum}],
-      },
-      T + at,
-    ).subscriptions[0];
+  const commands = new Map<string, string>();
+  const ask = (at: number, minimum = MIN, name = 'laptop', paced = true) => {
+    const result = ingest.checkin(credential, {...agent(name),paced,
+      ...(modern ? {capabilities:{measurementPolicy:1,attemptContext:1}} : {}),
+      subscriptions:[{provider:'codex',account:ACCOUNT,active:false,minIntervalMs:minimum}]},T+at).subscriptions[0];
+    if(result.commandId)commands.set(name,result.commandId);
+    const {commandId: _command, accountKey: _account, ...directive}=result;
+    return directive;
+  };
   const deliver = (at: number, options: {observed?: number; name?: string; failure?: string; used?: number; stale?: number; skew?: number} = {}) => {
+    const name=options.name ?? 'laptop', device=directory.deviceByMachine(user.id,agent(name).machine.id);
+    const policy=device ? store.measurementPolicies.device(device.id) : null;
+    const context=modern && policy ? {attemptContext:{version:1,authority:policy.authority,collectorEpoch:0,
+      target:{kind:'verified',accountKey:ACCOUNT},...(commands.has(name)?{commandId:commands.get(name)}:{})}} : {};
     const behind = options.skew ?? 0;
     const observedAt = iso(T + (options.observed ?? at) - behind);
     return ingest.accept(
@@ -61,6 +64,7 @@ function hub(t: TestContext) {
           ? []
           : [
               {
+                ...context,
                 provider: 'codex',
                 account: ACCOUNT,
                 observedAt,
@@ -69,7 +73,7 @@ function hub(t: TestContext) {
                 windows: [{id: 'weekly', kind: 'weekly', usedPercent: options.used ?? 50}],
               },
             ],
-        failures: options.failure ? [{provider: 'codex', error: options.failure, observedAt}] : [],
+        failures: options.failure ? [{...context,provider: 'codex', error: options.failure, observedAt}] : [],
       },
       T + at,
     );
@@ -211,7 +215,7 @@ test('timeout, terminal expiry and late delivery behave the same without any ope
 });
 
 test('availability checks capability per subscription, silence, lease, and error pauses', t => {
-  const h = hub(t);
+  const h = hub(t, true);
   h.deliver(0);
   assert.equal(h.request(1).status, 'unavailable');
   assert.equal(h.refresh(1).unavailable, 'unsupported');
@@ -247,7 +251,7 @@ test('queued silence has a fixed terminal time and cannot be revived by a later 
 });
 
 test('freshness boundaries, duplicates, other-device success and failures stay distinct', t => {
-  const h = hub(t);
+  const h = hub(t, true);
   h.ask(0);
   h.deliver(0);
   // The other machine measures this subscription too: its failures are known to be about it.
@@ -748,7 +752,7 @@ test('duty handed over by a delivery or a legacy check-in ends the request at th
 
 test('a device whose clock runs behind answers the request in the hub\'s time', t => {
   for (const failure of [undefined, 'failed']) {
-    const h = hub(t);
+    const h = hub(t, true);
     h.ask(0);
     h.deliver(0);
     h.request(10_000);
@@ -772,14 +776,14 @@ test('a lowered device minimum lets a queued request go at once instead of endin
 });
 
 test('a pending request ends when its holder leaves the pace or waits out a failure', t => {
-  const legacy = hub(t);
+  const legacy = hub(t, true);
   legacy.ask(0);
   legacy.deliver(0);
   legacy.request(10_000);
   legacy.ask(20_000, MIN, 'laptop', false);
   assert.deepEqual([legacy.refresh(25_000).request?.status, legacy.refresh(25_000).request?.finishedAt], ['unavailable', T + 20_000]);
   // A failure too old to answer the request still pauses its holder.
-  const paused = hub(t);
+  const paused = hub(t, true);
   paused.ask(0);
   paused.deliver(0);
   paused.request(50_000);
@@ -808,7 +812,7 @@ test('an error pause is not advertised as a return time for a legacy device', t 
 });
 
 test('an expired duty lease does not advertise its former holder’s pause or change when it ends', t => {
-  const h = hub(t);
+  const h = hub(t, true);
   h.ask(0); h.deliver(0, {stale: MIN});
   h.deliver(10_000, {failure: 'failed'});
   const before = h.refresh(MIN);

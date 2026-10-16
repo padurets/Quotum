@@ -51,6 +51,7 @@ export type HubPart = {resets: Partial<Record<ResetProvider, ResetStatus>>; trac
 
 /** The whole board for one reader at once (spec: `snapshot`). */
 export type Snapshot = Omit<BoardPart, 'lineup'> & {
+  deviceContacts?: Record<string,number|null>;
   providers: typeof catalogue;
   sourceAccess:Record<string,SourceAccess>;
   historyStart: number;
@@ -256,6 +257,7 @@ export class Projection {
       mine: this.mine(user, lineup),
       boards: this.boards(user),
       connectionsRevision: this.hub.directory.connectionsRevision(user),
+      deviceContacts:Object.fromEntries(this.hub.directory.devices(user).map(device=>[device.id,device.lastSeenAt])),
       resets: this.hubPart(now).value,
     };
   }

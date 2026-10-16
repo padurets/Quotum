@@ -9,7 +9,7 @@ import {cellsOf, workFrom, type CellSamples} from '../domain/cells.js';
 import {tileOf,planRowBytes, type PlanRow, type Chunk, type HistoryMeta} from '../domain/history.js';
 import type {MeasureIntervalMs} from '../domain/frequency.js';
 import type {PlanChange, SeriesSample} from '../domain/forecast.js';
-import type {Origin, SessionRoute} from '../domain/ingest.js';
+import type {AgentSnapshot, Origin, SessionRoute} from '../domain/ingest.js';
 import type {Stretch} from '../domain/work.js';
 import {members, projectGroups, type ProjectGroup} from '../domain/projects.js';
 import {afterCommit, transaction, tell, trouble, type Touches} from '../touches.js';
@@ -29,6 +29,8 @@ import {LinkStore} from './links.js';
 import {CoverageStore} from './coverage.js';
 import {UsageWithoutWork} from '../usageWork.js';
 import {resolveLink, splitLinks, type AttributionInput, type Attribution} from '../domain/links.js';
+
+import {MeasurementPolicies} from './measurementPolicies.js';
 import {admitted,fundingOf,sessionsKnownFrom,sourceWorkFrom,workFundingKey,type WorkAccess} from '../domain/workAccess.js';
 
 /** A session credited with work (server/sessions.ts): its names as reported, '' for none. */
@@ -73,6 +75,8 @@ export class Store {
   readonly usageWork: UsageWithoutWork;
   private workGeneration=0;
   workRevision():number {return this.workGeneration;}
+
+  readonly measurementPolicies: MeasurementPolicies;
   private monetaryRecords=new Set<(source:string,state:SourceState)=>void>();
   private currencyChanges=new Set<(owner:string)=>void>();
   /** When this database was made. */
@@ -85,6 +89,7 @@ export class Store {
   constructor(file: string, now = Date.now()) {
     this.db = new DatabaseSync(file);
     migrate(this.db, now);
+    this.measurementPolicies = new MeasurementPolicies(this.db);
     this.attentionCyclesReady = bootstrapAttentionCycles(this.db);
     if (!this.attentionCyclesReady) trouble(new Error('invalid_attention_cycle'));
     this.links = new LinkStore(this.db);
@@ -604,6 +609,23 @@ export class Store {
       if (result.budget) afterCommit(() => {for (const listener of this.monetaryRecords) listener(id,state);});
       return result;
     });
+  }
+
+  /** Keep each resource's last accepted value producer separate from its latest status. */
+  recordOrigins(source: string, device: string, snapshot: AgentSnapshot, previous: SourceState, at: number) {
+    const origin = JSON.stringify({device, at, client: snapshot.clientEvidence ? snapshot.client : null, evidence: snapshot.clientEvidence ?? null});
+    const save = (resource: string, value: boolean) => this.db.prepare('INSERT INTO resource_origins VALUES (?,?,?,?) ON CONFLICT(source_id,resource) DO UPDATE SET value_origin=CASE WHEN excluded.value_origin IS NULL THEN resource_origins.value_origin ELSE excluded.value_origin END,observation_origin=excluded.observation_origin').run(source,resource,value ? origin : null,origin);
+    if (at > (previous.resources?.windows?.at ?? previous.successAt ?? -Infinity)) save('windows', (snapshot.resourceStatus?.windows ?? 'observed') === 'observed');
+    const resetStatus = snapshot.resourceStatus?.resets ?? (snapshot.resets ? 'observed' : null);
+    if (resetStatus && at > (previous.resources?.resets?.at ?? (previous.resets ? previous.successAt : null) ?? -Infinity)) save('resets',resetStatus === 'observed');
+    if (snapshot.balances?.[0] && at > (previous.creditBalance?.at ?? -Infinity)) save('funds', snapshot.balances[0].status === 'finite');
+  }
+
+  resourceOrigins(source: string) {
+    type Origin={device:string;at:number;client:string|null;evidence:'nativeHandshake'|'preLaunch'|null};
+    const read=(value:string|null):Origin|null=>value ? JSON.parse(value) as Origin : null;
+    return (this.db.prepare('SELECT resource,value_origin,observation_origin FROM resource_origins WHERE source_id=?').all(source) as {resource:string;value_origin:string|null;observation_origin:string}[])
+      .map(row => ({resource:row.resource,valueOrigin:read(row.value_origin),observationOrigin:read(row.observation_origin)}));
   }
 
   /** Records a failed attempt; the last good values stay on screen. */

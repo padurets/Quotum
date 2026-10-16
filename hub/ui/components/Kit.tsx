@@ -45,7 +45,7 @@ export function Modal({
   const [previous] = useState(() => document.activeElement as HTMLElement | null);
   useLayoutEffect(() => {
     const own = panel.current!;
-    const overlay = own.parentElement!;
+    const overlay = own.closest<HTMLElement>('.overlay')!;
     const page = document.documentElement;
     const root = document.getElementById('root');
     if (!dialogs.length) {
@@ -65,7 +65,7 @@ export function Modal({
       // A menu open in the dialog closes first (on the same key, by itself); the dialog, on the next.
       if (event.key === 'Escape') return own.querySelector('.popover') ? undefined : close.current?.();
       if (event.key !== 'Tab') return;
-      const fields = [...own.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], [tabindex], [contenteditable="true"]')]
+      const fields = [...own.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href], details > summary:first-of-type, [tabindex], [contenteditable="true"]')]
         .filter(field => field.tabIndex >= 0 && !field.matches(':disabled') && !field.closest('[inert]') && field.getClientRects().length);
       const first = fields[0];
       const last = fields.at(-1);
@@ -100,25 +100,28 @@ export function Modal({
       page.style.overflow = pageOverflow;
       // Out of reach until the page is no longer inert.
       if (root) root.inert = pageInert;
-      if (pageFocus?.isConnected) pageFocus.focus();
+      if (pageFocus?.isConnected && pageFocus !== document.body) pageFocus.focus();
       else back.current?.()?.focus();
       pageFocus = null;
     };
   }, []);
   return createPortal(
     <div className={`overlay ${side ? 'is-side' : ''}`} onMouseDown={event => event.target === event.currentTarget && onClose?.()}>
-      <div className={`dialog glass ${wide ? 'is-wide' : ''} ${side ? 'is-side' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panel} tabIndex={-1}>
-        <div className="dialog-head">
-          <h2>{title}</h2>
-          {onClose && (
-            <button type="button" className="icon-button" aria-label={t('common.close')} onClick={onClose}>
-              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                <path d="M4 4l8 8M12 4l-8 8" />
-              </svg>
-            </button>
-          )}
+      <div className={`dialog-frame ${wide ? 'is-wide' : ''} ${side ? 'is-side' : ''}`}>
+        <div className="dialog-backdrop glass" aria-hidden="true" />
+        <div className={`dialog ${side ? 'is-side' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panel} tabIndex={-1}>
+          <div className="dialog-head">
+            <h2>{title}</h2>
+            {onClose && (
+              <button type="button" className="icon-button" aria-label={t('common.close')} onClick={onClose}>
+                <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </button>
+            )}
+          </div>
+          {children}
         </div>
-        {children}
       </div>
     </div>,
     document.body,

@@ -6,6 +6,7 @@ import type {Store, WorkKey} from '../server/store/store.js';
 import {parseSessions} from '../server/domain/ingest.js';
 import {Agent, Person} from './client.js';
 import {
+  accountOf,
   awake,
   boards,
   cards,
@@ -82,7 +83,7 @@ export async function setUp(base: string, set: DemoSet, start: number, setupCode
     if (machine.byCode) agent = await Agent.byCode(base, info, person);
     else {
       if (!tokens.has(person.id)) tokens.set(person.id, await person.machineToken('Demo machines'));
-      agent = new Agent(base, info, tokens.get(person.id)!);
+      agent = new Agent(base, info, tokens.get(person.id)!,person.id);
     }
     await agent.sessions([], now());
     stand.agents.set(machine.id, agent);
@@ -112,7 +113,22 @@ export async function setUp(base: string, set: DemoSet, start: number, setupCode
   // Failures last: a later measurement of the same client would clear them.
   for (const machine of machines(set).filter(m => awake(m, -MIN))) {
     const failures = failuresAt(set, machine, start, -MIN);
-    if (failures.length) await stand.agents.get(machine.id)!.ingest([], failures, now());
+    if (failures.length) {
+      const agent=stand.agents.get(machine.id)!;
+      // Private client diagnostics need no account discovery. A verified failure does,
+      // and every command issued during that discovery needs its current outcome.
+      // The catalogue forbids another account on the same machine's failing collector.
+      for(const provider of new Set(failures.filter(failure=>failure.measurementTarget).map(failure=>failure.provider))) {
+        const group=cards(set).filter(card=>card.provider===provider&&card.machines.includes(machine.id));
+        const {subscriptions}=await agent.checkin(group.slice(0,16).map(card=>({provider,...accountOf(card)})));
+        for(const [index,answer] of subscriptions.entries())if(answer.measure) {
+          const card=group[index],failure=failures.find(failure=>failure.provider===provider&&JSON.stringify(failure.measurementTarget)===JSON.stringify(accountOf(card)));
+          const captured=now();
+          if(failure)failure.observedAt=new Date(captured).toISOString();
+        }
+      }
+      await agent.ingest([], failures, now());
+    }
   }
 
   for (const card of cards(set)) {
@@ -313,6 +329,7 @@ export class Live {
   private readonly requested = new Set<string>();
   private readonly checked = new Set<string>();
   private readonly pending = new Map<string, {at: number; next: number}>();
+  private readonly controlContacts=new Map<string,number>();
   /** When the machines first asked: the live demo starts asking up to a minute into its time. */
   private first: number | null = null;
 
@@ -371,28 +388,32 @@ export class Live {
     const {set, start} = this.stand;
     this.first ??= t;
     for (const machine of machines(set)) {
-      const live = cards(set).filter(card => card.machines.includes(machine.id) && delivered(card, t) && (!card.refresh?.silent || !this.checked.has(card.id)));
+      const live = cards(set).filter(card => card.machines.includes(machine.id) && (delivered(card, t)||card.failure&&t>=card.failure.from) && (!card.refresh?.silent || !this.checked.has(card.id)));
       if (!live.length || !awake(machine, t)) continue;
       const agent = this.stand.agents.get(machine.id)!;
       // The catalogue can put many example accounts on a machine; the protocol takes 16 at a time.
-      for (let offset = 0; offset < live.length; offset += 16) {
-        const batch = live.slice(offset, offset + 16);
-        const asks = batch.map(card => {
-          const {provider, account, accountName} = snapshot(card, start, t, MIN) as {provider: string; account?: string; accountName?: string};
-          const minimum = card.minimum ?? card.refresh?.minimum;
-          return {provider, account, accountName, active: false, ...(minimum ? {minIntervalMs: minimum} : {})};
-        });
-        const {subscriptions} = await agent.checkin(asks, !batch.some(card => card.refresh?.legacy));
-        for (const card of batch) this.checked.add(card.id);
-        for (const [i, card] of batch.entries()) {
-          const answer = subscriptions[i];
-          if (answer.measure && answer.nextInMs && !this.pending.has(card.id))
-            this.pending.set(card.id, {at: t + (this.requested.has(card.id) ? card.refresh?.delay ?? 0 : 0), next: answer.nextInMs});
-          const pending = this.pending.get(card.id);
-          if (pending && t >= pending.at) {
-            this.pending.delete(card.id);
-            if (this.requested.has(card.id) && card.refresh?.response === 'failed') await agent.ingest([], [{provider: card.provider, observedAt: new Date(now).toISOString(), error: 'failed'}], now);
-            else if (!this.requested.has(card.id) || card.refresh?.response !== 'lost') await agent.ingest([snapshot(card, start, t, pending.next)], [], now);
+      for (const provider of new Set(live.map(card=>card.provider))) {
+        const accounts=live.filter(card=>card.provider===provider),size=Math.ceil(accounts.length/Math.ceil(accounts.length/16));
+        for (let offset = 0; offset < accounts.length; offset += size) {
+          const batch = accounts.slice(offset, offset + size);
+          const asks = batch.map(card => {
+            const {provider, account, accountName} = snapshot(card, start, t, MIN) as {provider: string; account?: string; accountName?: string};
+            const minimum = card.minimum ?? card.refresh?.minimum;
+            return {provider, account, accountName, active: false, ...(minimum ? {minIntervalMs: minimum} : {})};
+          });
+          const {subscriptions} = await agent.checkin(asks, !batch.some(card => card.refresh?.legacy));
+          for (const card of batch) this.checked.add(card.id);
+          for (const [i, card] of batch.entries()) {
+            const answer = subscriptions[i];
+            if (answer.measure && answer.nextInMs && !this.pending.has(card.id))
+              this.pending.set(card.id, {at: t + (this.requested.has(card.id) ? card.refresh?.delay ?? 0 : 0), next: answer.nextInMs});
+            const pending = this.pending.get(card.id);
+            if (pending && t >= pending.at) {
+              this.pending.delete(card.id);
+              if(card.failure&&t>=card.failure.from) await agent.ingest([], [{provider:card.provider,observedAt:new Date(now).toISOString(),error:card.failure.error,measurementTarget:accountOf(card)}],now);
+              else if (this.requested.has(card.id) && card.refresh?.response === 'failed') await agent.ingest([], [{provider: card.provider, observedAt: new Date(now).toISOString(), error: 'failed',measurementTarget:accountOf(card)}], now);
+              else if (!this.requested.has(card.id) || card.refresh?.response !== 'lost') await agent.ingest([snapshot(card, start, t, pending.next)], [], now);
+            }
           }
         }
       }
@@ -414,6 +435,10 @@ export class Live {
   /** One machine tells its list as of `t`; the hub must file every agent on it. */
   async reportOne(machine: Machine, t: number, now: number) {
     if (!awake(machine, t)) return;
+    if(this.stand.set.id==='devices' && now-(this.controlContacts.get(machine.id) ?? -Infinity)>=MIN) {
+      this.controlContacts.set(machine.id,now);
+      await this.stand.agents.get(machine.id)!.checkin([{provider:'codex',...accountOf(cards(this.stand.set)[0]),minIntervalMs:3*HOUR}]);
+    }
     const sessions = this.reportSessions(machine, sessionsAt(this.stand.set, machine, this.stand.start, t));
     const agent = this.stand.agents.get(machine.id)!;
     const {accepted} = await agent.sessions(sessions, now);

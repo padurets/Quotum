@@ -1,4 +1,5 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {Devices, DeviceTokens} from './Machines';
+import {useCallback, useEffect, useId, useRef, useState} from 'react';
 import {t} from '../i18n';
 import {ApiError, call} from '../lib/http';
 import {boardTitle, type Board, type Session} from '../lib/session';
@@ -8,8 +9,9 @@ import {stamp} from '../lib/format';
 import {catalogue as providerCatalogue} from '../../server/domain/providers';
 import type {Credential} from '../../server/store/credentials';
 import {LABELS, type Demo, type Operation} from '../lib/addition';
-import {Modal, ErrorLine} from './Kit';
+import {Modal, ErrorLine, Segmented} from './Kit';
 import {logoOf} from './logos';
+import {navigate, useLocation} from '../lib/router';
 
 import {KeyForm, RecoveredAddition, DemoNotice} from './ConnectionForms';
 import {WidgetAdd} from './WidgetAdd';
@@ -77,7 +79,7 @@ function RecentAdditions({boardId, onRestore}: {boardId?: string; onRestore: (op
 
 type ConnectionDetails = Credential & {label: string; lastSuccessAt: number | null; placements: (Board & {visible: boolean})[]};
 
-export function ConnectionsPage({
+function ProviderConnections({
   userId,
   boards,
   trustedKeys,
@@ -157,7 +159,7 @@ export function ConnectionsPage({
   return (
     <div className="dialog-form">
       <div className="settings-section-head">
-        <h2>{t('settings.connections')}</h2>
+        <h2>{t('connections.accounts')}</h2>
         <button
           className="button primary"
           onClick={() => {
@@ -364,4 +366,20 @@ export function ConnectionsPage({
       )}
     </div>
   );
+}
+
+export function ConnectionsPage(props:Parameters<typeof ProviderConnections>[0]) {
+  const location=useLocation(),params=new URLSearchParams(location.split('?')[1]??''),tabs=useId();
+  const selected=params.get('tab');
+  const tab=selected==='devices'||selected==='tokens'&&!props.local?selected:params.has('source')?'devices':'accounts';
+  const [busy,setBusy]=useState(false);
+  return <div className="dialog-form connections-page">
+    <h2>{t('settings.connections')}</h2>
+    <Segmented label={t('settings.connections')} radioName={tabs} value={tab} disabled={busy}
+      options={props.local?[['accounts',t('connections.accounts')],['devices',t('devices.title')]]:[['accounts',t('connections.accounts')],['devices',t('devices.title')],['tokens',t('connections.tokens')]]}
+      onChange={next=>{if(next!==tab){const query=new URLSearchParams(params);query.set('tab',next);query.delete('source');navigate('/settings/connections?'+query,true);}}}/>
+    {tab==='accounts'&&<ProviderConnections {...props}/>}
+    {tab==='devices'&&<Devices local={props.local} onBusyChange={setBusy}/>}
+    {tab==='tokens'&&!props.local&&<section className="settings-section"><h2>{t('connect.tokenTitle')}</h2><DeviceTokens/></section>}
+  </div>;
 }

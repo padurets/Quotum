@@ -332,7 +332,7 @@ have your system start `quotum run`, the same in the foreground (a systemd user
 service, launchd, Windows autostart). With npx, put `npx` before every command.
 
 **Many machines at once** (images, VMs, containers): create a machine token in the
-dashboard (*Settings → Devices → Device tokens*) and start every machine with it. Each one joins as
+dashboard (*My connections → Tokens*) and start every machine with it. Each one joins as
 yours by itself:
 
 ```sh
@@ -348,7 +348,7 @@ QUOTUM_HUB_URL=https://quotum.example.com QUOTUM_HUB_TOKEN=qt_m_… quotum start
 ```
 
 A machine token is one person's: every teammate creates their own. Machines are named
-in *Settings → Devices*, so an image doesn't need a name per copy.
+in *My connections → Devices*, so an image doesn't need a name per copy.
 
 **Sharing with a team.** Create a shared board and invite people with a link from
 *Board controls → Members*. Share your subscriptions through the board's *Add widget*
@@ -694,6 +694,16 @@ These are estimates from adjacent observations, not prices of individual request
 sessions. Balance-only sources have no such estimate. A subscription's warning mark
 distinguishes quota growth with complete observations and no attributed work from
 growth during incomplete observation; silence never proves that no work happened.
+
+My connections also shows each device's Quotum version, its installed client observations
+and the origins of retained measurements. There you can allow measurements for the whole
+device or individual collectors while keeping activity and history. The hub excludes
+disabled measurements immediately; an agent stops starting them after receiving the
+setting and saves it for restart. Older agents may need an update before affected measurements resume.
+For a subscription, choose Auto or one of your eligible devices. That preference applies
+to all holders, who can replace or clear it; an unavailable device falls back to Auto.
+An issued command finishes or reaches its deadline before a preference switch. The desktop
+app's local hub shows diagnostics while its agent settings control its one machine.
 
 ### Hub
 

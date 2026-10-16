@@ -1685,4 +1685,14 @@ const linkedClients:DemoSet={id:'links',about:'Temporal client links, suggestion
   {kind:'machine',id:'remote',person:'boris',expect:[{via:'token'}]},
   {kind:'board',id:'team',name:'Shared linked sources',owner:'ana',members:['boris'],agents:true,expect:[{state:'widgets'}]},
 ]};
-export const SETS: DemoSet[] = [all, showcase, activity,SESSION_ANALYTICS,money,quotas,analytics, machineClients, linkedClients, ONBOARDING];
+/** Receipt loss, conflicts and handover are held by measurementPolicy/refresh tests. */
+export const MEASUREMENT_DEVICE_SCENES=[{id:'fleet',expect:['behind','ahead','same','unknown','disabled','not-configured','requires-epoch','preferred','origins','independent-funds','measurement-version','unavailable-preference']} ] as const;
+const measurementDevices:DemoSet={id:'devices',about:'Measurement participation, preferred collectors, versions and retained producers',scene:'quiet',entries:[
+  {kind:'person',id:'ana',name:'Ana',agents:true,expect:[{state:'widgets'}],look:['My connections has devices, collector controls and origins in EN/RU','Disconnect the preferred laptop: its saved preference stays explicitly unavailable and can be cleared to Auto while the other devices retain the subscription']},
+  {kind:'machine',id:'laptop',expect:[{name:'laptop'}]},
+  {kind:'machine',id:'desktop',expect:[{name:'desktop'}]},
+  {kind:'machine',id:'backup',expect:[{name:'backup'}]},
+  {kind:'machine',id:'local-only',expect:[{name:'local-only'}]},
+  {kind:'card',id:'codex-managed',provider:'codex',plan:'Plus',machines:['laptop','desktop','backup'],history:6*HOUR,windows:[weekly({since:-DAY,use:steady(0,5)})],on:{ana:{name:'Measurement selection'}},expect:[{title:'Measurement selection'}],look:['The existing status and settings open My connections without changing card height']},
+]};
+export const SETS: DemoSet[] = [all, showcase, activity,SESSION_ANALYTICS,money,quotas,analytics, machineClients,linkedClients,measurementDevices, ONBOARDING];

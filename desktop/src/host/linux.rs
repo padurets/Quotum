@@ -775,12 +775,27 @@ pub fn panel_height(shell: &Arc<Shell>, instance: u64, height: f64) {
     *shell.host.panel_height.lock().unwrap_or_else(|e| e.into_inner()) = height;
     panel_message(shell, instance, "height", Some(height));
 }
-pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64) {
+pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64, destination: Option<crate::ipc::MainDestination>) {
     if let Some(ticket) = panel_ticket(shell, instance) {
+        {
+            let foreground = shell.host.foreground.lock().unwrap_or_else(|e| e.into_inner());
+            if !foreground.current(ticket) {
+                return;
+            }
+            shell.main_navigation.lock().unwrap_or_else(|e| e.into_inner()).queue(
+                instance,
+                ticket.revision,
+                destination,
+            );
+        }
         if shell.host.native_panel {
             loading::main_from_panel(shell, instance, ticket);
-        } else if let Some(ticket) = accept_main_from_panel(shell, instance, ticket) {
-            open_at(shell, ticket);
+        } else if let Some(next) = accept_main_from_panel(shell, instance, ticket) {
+            if !shell.main_navigation.lock().unwrap_or_else(|e| e.into_inner()).commit(instance, ticket.revision) {
+                return;
+            }
+            crate::ipc::publish(shell);
+            open_at(shell, next);
         }
     }
 }

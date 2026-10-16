@@ -1,3 +1,5 @@
+import type {AttemptContext,MeasurementPolicy} from '../server/domain/measurementPolicy.js';
+import type {ClientProvider} from '../server/domain/providers.js';
 import {encodeView, VIEW_VERSION, VIEW_VERSION_HEADER, type View} from '../server/domain/view.js';
 /**
  * The hub's public requests, as people and agents make them: people sign in and keep a
@@ -124,39 +126,61 @@ export class Agent {
     readonly base: string,
     readonly machine: MachineInfo,
     private readonly token: string,
+    private readonly owner?: string,
   ) {}
 
+  private policy: MeasurementPolicy | undefined;
+  private readonly commands=new Map<string,string>();
+  private readonly current=new Map<ClientProvider,string>();
   private clientSessions: object[] = [];
   private clients: object[] | undefined;
   trackClients(sessions: object[], clients: object[]) { this.clientSessions = sessions; this.clients = clients; }
   get clientSessionCount() { return this.clientSessions.length; }
 
-  static readonly VERSION = 'quotum-demo/1';
+  static readonly VERSION = 'quotum/0.7.0';
+  reportedVersion=Agent.VERSION;
+  measurementControl=true;
+  configuredCollectors:ClientProvider[]|null=null;
 
   /** Connects a machine with a one-time code that `person` approves, as `quotum connect` does. */
   static async byCode(base: string, machine: MachineInfo, person: Person): Promise<Agent> {
     const started = (await call<{deviceCode: string; userCode: string}>(base, 'POST', '/v1/device/code', {body: {machine, agent: Agent.VERSION}})).body;
     await person.approve(started.userCode);
     const {token} = (await call<{token: string}>(base, 'POST', '/v1/device/token', {body: {deviceCode: started.deviceCode}})).body;
-    return new Agent(base, machine, token);
+    return new Agent(base, machine, token,person.id);
   }
 
   /** Delivers measurements and failures (spec: Batch), sent now. */
   async ingest(snapshots: object[], failures: object[], now: number) {
-    const body = {version: 1, agent: Agent.VERSION, machine: this.machine, sentAt: new Date(now).toISOString(), snapshots, failures};
+    if(!this.policy)await this.checkin([]);
+    const context=(item:Record<string,unknown>,success:boolean)=>{
+      const {measurementTarget,...wire}=item;
+      if(!this.policy)return wire;
+      const provider=item.provider as ClientProvider;
+      const identity=success?item:measurementTarget as Record<string,unknown>|undefined;
+      const key=identity ? typeof identity.account==='string' ? identity.account : this.owner ? `user:${this.owner}/${provider}${typeof identity.accountName==='string'?'/'+identity.accountName.trim().toLowerCase():''}` : null : null;
+      if(success&&key)this.current.set(provider,key);
+      const attemptContext:AttemptContext={version:1,authority:this.policy.authority,collectorEpoch:this.policy.collectors[provider].epoch,
+        target:key?{kind:'verified',accountKey:key}:{kind:'unknown'},...(key&&this.commands.has(key)?{commandId:this.commands.get(key)}:{})};
+      return {...wire,attemptContext,...(success&&item.client?{clientEvidence:provider==='codex'?'nativeHandshake':'preLaunch'}:{})};
+    };
+    const body = {version: 1, agent: this.reportedVersion, machine: this.machine, sentAt: new Date(now).toISOString(), snapshots:snapshots.map(item=>context(item as Record<string,unknown>,true)), failures:failures.map(item=>context(item as Record<string,unknown>,false))};
     return (await call<{accepted: number; duplicates: number; failures: number}>(this.base, 'POST', '/v1/ingest', {body, token: this.token})).body;
   }
 
   /** Asks whether to measure its subscriptions now, following the hub's pace (spec: Asking whether to measure). */
   async checkin(subscriptions: object[], paced = true) {
-    const body = {version: 1, agent: Agent.VERSION, paced, machine: this.machine, subscriptions};
-    type Told = {provider: string; measure: boolean; onDuty?: boolean; askInMs?: number; nextInMs?: number};
-    return (await call<{subscriptions: Told[]}>(this.base, 'POST', '/v1/checkin', {body, token: this.token})).body;
+    const body = {version: 1, agent: this.reportedVersion, paced, machine: this.machine, subscriptions,...(this.configuredCollectors?{collectors:this.configuredCollectors}:{}),...(this.measurementControl?{capabilities:{measurementPolicy:1,attemptContext:1},...(this.policy?{policyAck:{authority:this.policy.authority,revision:this.policy.revision}}:{})}:{})};
+    type Told = {provider: string; measure: boolean; onDuty?: boolean; askInMs?: number; nextInMs?: number;accountKey?:string;commandId?:string};
+    const reply=(await call<{subscriptions:Told[];policy?:MeasurementPolicy}>(this.base,'POST','/v1/checkin',{body,token:this.token})).body;
+    this.policy=reply.policy;
+    for(const answer of reply.subscriptions)if(answer.accountKey){this.current.set(answer.provider as ClientProvider,answer.accountKey);if(answer.commandId)this.commands.set(answer.accountKey,answer.commandId);}
+    return reply;
   }
 
   /** Tells the hub the machine's whole list of running agents, as of now. */
   async sessions(sessions: object[], now: number) {
-    const body = {version: 1, agent: Agent.VERSION, machine: this.machine, sentAt: new Date(now).toISOString(), sessions, clientSessions: this.clientSessions, ...(this.clients ? {clients: this.clients} : {})};
+    const body = {version: 1, agent: this.reportedVersion, machine: this.machine, sentAt: new Date(now).toISOString(), sessions, clientSessions: this.clientSessions, ...(this.clients ? {clients: this.clients} : {})};
     return (await call<{accepted: number}>(this.base, 'POST', '/v1/sessions', {body, token: this.token})).body;
   }
 }

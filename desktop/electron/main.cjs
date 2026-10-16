@@ -175,6 +175,7 @@ ipcMain.handle('quotum:invoke', (event, command, args) => {
   if (!entry || entry.dismissed || (entry.role === 'compact' && !current(entry)) || event.senderFrame !== entry.window.webContents.mainFrame || !policy.mayInvoke(event.senderFrame.url, target, command, entry.role)) throw new Error('not the board of the running hub');
   if (pending.size >= 16) throw new Error('too many pending app commands');
   const request = {command};
+  if (command === 'open_main') request.args = args ?? {};
   if (['save_settings', 'save_desktop_settings', 'set_autostart', 'report_panel_height'].includes(command)) request.args = args;
   const message = {type: 'request', id: ++nextId, origin: event.senderFrame.url, role: entry.role, instance: entry.instance, revision: entry.request, generation, request};
   if (Buffer.byteLength(JSON.stringify(message)) > 60000) throw new Error('app command too large');

@@ -86,8 +86,8 @@ function lowInterval(quietMs: number): number {
 const signatureOf = (windows: {id: string; usedPercent: number}[]) =>
   JSON.stringify(windows.map(w => [w.id, Math.round(w.usedPercent * 100)]).sort(([a], [b]) => String(a).localeCompare(String(b))));
 
-export type RefreshDuty = {holder: string | null; until: number | null; live: boolean};
-type Request = {view: RefreshRequest; device: string; baseline: number | null; freshnessFrom: number};
+export type RefreshDuty = {holder: string | null; until: number | null; live: boolean;retainedLive?:boolean};
+type Request = {view: RefreshRequest; device: string; baseline: number | null; freshnessFrom: number; retainedDuty?:boolean};
 /** `heardAt`: its last word on the subscription, asking or, within five minutes of asking, delivering. */
 type Capability = {paced: boolean; at: number; minIntervalMs: number | null; heardAt: number};
 const pending = (request: RefreshRequest) => request.finishedAt === null;
@@ -136,7 +136,10 @@ export class Cadence {
       // Once told to measure, it measures its subscriptions one after
       // another, asking nothing meanwhile: its silence is not a loss then either.
       if (request.dispatchAt === null && silentAt !== null) ends.push({at: silentAt, status: 'unavailable'});
-      if (duty.holder !== stored!.device || !duty.live || !capability?.paced || pause !== null) ends.push({at: now, status: 'unavailable'});
+      const retained=stored!.retainedDuty&&request.dispatchAt!==null;
+      const targetCapability=retained?this.capabilities.get(key)?.get(stored!.device):capability;
+      const targetPause=retained?this.pausedUntil(key,stored!.device,now):pause;
+      if ((!retained&&duty.holder !== stored!.device) || !(retained?duty.retainedLive:duty.live) || !targetCapability?.paced || request.dispatchAt===null&&targetPause !== null) ends.push({at: now, status: 'unavailable'});
       ends.sort((a, b) => a.at - b.at);
       const end = ends[0];
       if (end.at <= now) request = {...request, status: end.status, finishedAt: end.at};
@@ -159,6 +162,20 @@ export class Cadence {
     const {request} = this.refresh(key, duty, now).value;
     if (request) stored.view = request;
     else this.requests.delete(key);
+  }
+
+  retainDispatched(key:string,device:string) {
+    const request=this.requests.get(key);
+    if(request?.device===device&&pending(request.view)&&request.view.dispatchAt!==null)request.retainedDuty=true;
+  }
+  retainedDevice(key:string):string|null {
+    const request=this.requests.get(key);return request?.retainedDuty&&pending(request.view)?request.device:null;
+  }
+
+  dispatched(key:string):{device:string;at:number;deadline:number}|null {
+    const request=this.requests.get(key);
+    return request&&pending(request.view)&&request.view.dispatchAt!==null
+      ? {device:request.device,at:request.view.dispatchAt,deadline:request.view.deadline} : null;
   }
 
   requestRefresh(key: string, duty: RefreshDuty, baseline: number | null, now: number): {status: 'accepted' | 'unavailable' | 'too_soon'; retryAt?: number} {
@@ -228,6 +245,14 @@ export class Cadence {
     return [...keys];
   }
 
+  /** A collector gate closes without touching another collector's contact or failure history. */
+  withdraw(key: string, device: string, now: number) {
+    this.capabilities.get(key)?.delete(device);
+    this.released(key,device);
+    const request = this.requests.get(key);
+    if (request?.device === device && pending(request.view)) request.view = {...request.view,status:'unavailable',finishedAt:now};
+  }
+
   /**
    * Until when the holder is measuring what it was told to, null when it is not: it asks
    * nothing while it measures its providers one by one. Asking again with no answer given
@@ -273,8 +298,8 @@ export class Cadence {
   }
 
   /** An accepted measurement advances the shared delivery clock and its freshness promise. */
-  delivered(key: string, device: string, windows: {id: string; usedPercent: number}[] | null, observedAt: number, staleAfterMs: number, busy: boolean, now: number, onDuty = false) {
-    this.observed(key, device, windows, observedAt, busy, now);
+  delivered(key: string, device: string, windows: {id: string; usedPercent: number}[] | null, observedAt: number, staleAfterMs: number, busy: boolean, now: number, onDuty = false, acknowledge = true) {
+    this.observed(key, device, windows, observedAt, busy, now, acknowledge);
     const pace = this.pace(key, now);
     // A delivery that actually restores duty may restore its released waiting plan too.
     if (onDuty && pace.plannerDevice === null) pace.plannerDevice = device;
@@ -287,7 +312,7 @@ export class Cadence {
   }
 
   /** Accepted resource evidence changes the quota pace and answers its device, without seeding a delivery clock. */
-  observed(key: string, device: string, windows: {id: string; usedPercent: number}[] | null, observedAt: number, busy: boolean, now: number) {
+  observed(key: string, device: string, windows: {id: string; usedPercent: number}[] | null, observedAt: number, busy: boolean, now: number, acknowledge = true) {
     const pace = this.pace(key, now);
     if (windows !== null) {
       const signature = signatureOf(windows);
@@ -301,7 +326,7 @@ export class Cadence {
       if (pace.changed || busy) pace.busyAt = now;
       pace.signature = signature;
     }
-    this.answeredBy(pace, device, observedAt);
+    if (acknowledge) this.answeredBy(pace, device, observedAt);
     const pause = this.pauses.get(pauseKey(key, device));
     if (pause && observedAt > pause.at) this.pauses.delete(pauseKey(key, device));
   }
@@ -317,12 +342,12 @@ export class Cadence {
   }
 
   /** A device failed to measure subscription `key` at `at`: it waits longer each time. Older failures and repeats count once. */
-  failed(key: string, device: string, kind: string, at: number) {
+  failed(key: string, device: string, kind: string, at: number, acknowledge = true) {
     const pace = this.paces.get(key);
     const pause = this.pauses.get(pauseKey(key, device));
     if ((pace?.lastAt != null && at <= pace.lastAt) || (pause && at <= pause.at)) return false;
     this.pauses.set(pauseKey(key, device), {count: (pause?.count ?? 0) + 1, kind, at});
-    if (pace) this.answeredBy(pace, device, at);
+    if (pace && acknowledge) this.answeredBy(pace, device, at);
     return true;
   }
 

@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
+import {EventCounts,type Heard} from '../stream.js';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import type {Cdp} from '../cdp.js';
@@ -170,6 +171,8 @@ test('original trace preserves a missed edge, missing chart and unavailable thre
 /** Execute the actual index interval with the real collector and a passive transport. */
 async function originalIndex(collection:''|'1'|'trace') {
   let wall=540_000,plans=0,geometry=0,metricCalls=0;
+  const ledger=new EventCounts();
+  const heard:Heard={reset:()=>{cdp.commands.push('ORIGINAL.heard-reset');ledger.reset();},counts:()=>ledger.counts(),boardCounts:()=>ledger.boardCounts(),contacts:()=>ledger.contacts(),hints:()=>ledger.hints(),close:()=>{}};
   const saved:Saved[]=[],cdp=new class extends CurrentCdpFake {
     override async evaluate<T>(expression:string):Promise<T>{
       if(expression==='__quotumBench.reset()'){this.commands.push('ORIGINAL.reset');return undefined as T;}
@@ -183,8 +186,8 @@ async function originalIndex(collection:''|'1'|'trace') {
   assert.ok(start>=0&&end>start);
   const context={Date:class extends Date{static override now(){return wall;}},idleCpu,idleCpuMode:collection,seconds:120,cdp,reading:traceReading,
     planIdleEdge:(...args:Parameters<typeof planIdleEdge>)=>{plans++;return planIdleEdge(...args);},idleGeometry:async()=>{geometry++;return edgeGeometry(geometry>1);},
-    cellOf:()=>300_000,sleep:async(ms:number)=>{cdp.commands.push('ORIGINAL.sleep:'+ms);wall+=Math.max(0,ms);cdp.timestamp=121;},
-    overview:async()=>[],stillProblems:()=>[],Stop:Error,say:()=>{},heard:{reset:()=>{cdp.commands.push('ORIGINAL.heard-reset');},counts:()=>({ping:5})},requests:{counting:false,count:0,byPath:{}},
+    cellOf:()=>300_000,sleep:async(ms:number)=>{cdp.commands.push('ORIGINAL.sleep:'+ms);wall+=Math.max(0,ms);cdp.timestamp=121;for(let i=0;i<5;i++)ledger.push('event: ping\ndata: {}\n\n');},
+    overview:async()=>[],stillProblems:()=>[],Stop:Error,say:()=>{},heard,requests:{counting:false,count:0,byPath:{}},
     metrics:async()=>{cdp.commands.push(metricCalls++?'ORIGINAL.after-metrics':'ORIGINAL.before-metrics');return metricCalls===1?traceWindow.before:traceWindow.after;},
     round:(value:number)=>value,scriptPerSecond:()=>.1,idleProblems:()=>[],saveDiagnostic:(name:string,value:unknown)=>saved.push({name,value}),finish:async()=>{},run:undefined as unknown as()=>Promise<unknown>};
   runInNewContext(ts.transpileModule(`async function run(){${source.slice(start,end)}\nreturn {from,to};}globalThis.run=run;`,{compilerOptions:{target:ts.ScriptTarget.ES2023}}).outputText,context);

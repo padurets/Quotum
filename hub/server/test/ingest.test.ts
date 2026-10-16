@@ -281,7 +281,9 @@ test('a device failure shows only once its source has gone quiet', () => {
   ingest.accept(token, batch([snapshot(start, 5)]), start);
   const failure = (at: number) => ({provider: 'codex', observedAt: iso(at), error: 'not_logged_in', detail: 'run codex login'});
   assert.equal(ingest.accept(token, batch([], [failure(start + 60_000)]), start + 60_000).failures, 0);
-  assert.equal(ingest.accept(token, batch([], [failure(start + 600_000)]), start + 600_000).failures, 1);
+  const checkin=ingest.checkin(token,{...batch([]),paced:true,capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[{provider:'codex',account:snapshot(start,5).account}]},start+590_000);
+  const context={version:1,authority:checkin.policy!.authority,collectorEpoch:0,target:{kind:'verified',accountKey:snapshot(start,5).account},commandId:checkin.subscriptions[0].commandId};
+  assert.equal(ingest.accept(token, batch([], [{...failure(start + 600_000),attemptContext:context}]), start + 600_000).failures, 1);
   assert.equal(only(store, board, 'codex').error, 'not_logged_in');
   // A device that never delivered this provider keeps its failure to itself (shown on its row).
   assert.equal(ingest.accept(token, batch([], [failure(start + 600_000)], 'machine-two-0123456789'), start + 600_000).failures, 0);

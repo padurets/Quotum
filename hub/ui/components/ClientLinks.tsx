@@ -12,7 +12,6 @@ import {navigate, settingsHref, useLocation} from '../lib/router';
 import {ErrorLine, Field, Modal, Segmented, SelectField} from './Kit';
 import {Popover, PopoverHeading} from './Popover';
 import {ConnectionRow} from './Connections';
-import {logoOf} from './logos';
 import type {LiveSession} from '../lib/types';
 
 type LinkSource = {id: string; provider: string; name: string};
@@ -79,11 +78,11 @@ function LinkManager({context}: {context: URLSearchParams}) {
   if (!inventory) return <section className="settings-section"><h2>{t('links.title')}</h2>{error ? <><ErrorLine error={error}/><button className="button" onClick={() => void load()}>{t('links.reload')}</button></> : <p role="status">{t('links.loading')}</p>}</section>;
   const sourceName = (id: string | null) => targetOf(inventory, id)?.name ?? t('agents.unknownSource');
   const deviceName = (id: string | null) => id === null ? t('links.allDevices') : inventory.devices.find(device => device.id === id)?.name ?? t('devices.title');
-  const rows = (links: LinkInventory['links']) => <ul className="connections-list client-links-list">{links.map(link => <ConnectionRow key={link.id} id={'client-link-' + link.id}
+  const rows = (links: LinkInventory['links']) => <ul className="settings-list">{links.map(link => <ConnectionRow key={link.id} id={'client-link-' + link.id}
       name={clientName(link.clientId) + ' → ' + sourceName(link.sourceId)}
-      icon={<img src={logoOf(targetOf(inventory, link.sourceId)?.provider ?? 'unknown')} alt="" />}
-      detail={<><span>{deviceName(link.deviceId)}</span>{link.route && <span>{condition(link).split('\n').join(' / ')}</span>}</>}
-      status={<><span>{t(link.from > now ? 'links.scheduledFrom' : 'links.startedFrom', {at: stamp(link.from)})}</span>{link.to !== null && <span>{t('links.endsOn', {at: stamp(link.to)})}</span>}{!link.active && <span className="v-warn">{t('sources.disconnected')}</span>}</>}
+      onOpen={() => setEdit({operation: 'edit', link, revision: inventory.revision})}
+      detail={<><span>{deviceName(link.deviceId)}</span>{link.route && <><br /><span>{condition(link).split('\n').join(' / ')}</span></>}</>}
+      status={<><span>{t(link.from > now ? 'links.scheduledFrom' : 'links.startedFrom', {at: stamp(link.from)})}</span>{link.to !== null && <small>{t('links.endsOn', {at: stamp(link.to)})}</small>}{!link.active && <small className="v-warn">{t('sources.disconnected')}</small>}</>}
       actions={<><button className="popover-row" onClick={() => setEdit({operation: 'edit', link, revision: inventory.revision})}>{t('links.edit')}</button><button className="popover-row is-danger" onClick={() => setEdit({operation: 'delete', link, revision: inventory.revision})}>{t('links.delete')}</button></>}
     />)}</ul>;
   const shown = inventory.links.filter(link => history ? link.to !== null && link.to <= now : link.to === null || link.to > now);
@@ -143,7 +142,7 @@ function LinkForm({edit, inventory, onClose, onSaved, reload}: {edit: Edit; inve
     catch (failure) {setError(failure);} finally {setBusy(false);}
   };
   return <Modal title={t(`links.${remove ? 'delete' : edit.operation}`)} restore={() => {
-    const button = edit.link.id ? document.getElementById('client-link-' + edit.link.id)?.querySelector<HTMLElement>('.picker > button') : null;
+    const button = edit.link.id ? document.querySelector<HTMLElement>('[data-connection-id="client-link-' + CSS.escape(edit.link.id) + '"]') : null;
     return button?.getClientRects().length ? button : document.getElementById('create-client-link');
   }} onClose={busy ? undefined : onClose}><form className="dialog-form client-link-form" onSubmit={event => void submit(event)} onInvalidCapture={event => (event.target as HTMLElement).closest('details')?.setAttribute('open', '')}>
     {remove ? <><p className="dialog-text"><b>{clientName(edit.link.clientId)} → {source?.name ?? t('agents.unknownSource')}</b><br />{period(edit.link).split('\n').join(' — ')}</p><p className="dialog-text">{t('links.deleteEffect')}</p></> : <>

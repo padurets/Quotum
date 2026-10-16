@@ -1,0 +1,51 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import type {AddressInfo} from 'node:net';
+import {buildApp} from '../../server/api.js';
+import {Store} from '../../server/store/store.js';
+import {Directory} from '../../server/store/directory.js';
+import {Ingest} from '../../server/ingest.js';
+import {Duty} from '../../server/duty.js';
+import {Cadence} from '../../server/cadence.js';
+import {Pairing} from '../../server/pairing.js';
+import {Setup} from '../../server/setup.js';
+import {ResetFeed} from '../../server/resets.js';
+import {agentVersion,compareVersions} from '../../server/domain/versions.js';
+import {MEASUREMENT_DEVICE_SCENES,SETS} from '../catalogue.js';
+import {setUp} from '../setup.js';
+import {seedMeasurementDevices} from '../measurementDevices.js';
+import type {MeasurementPolicy} from '../../server/domain/measurementPolicy.js';
+
+test('the fleet catalogue exposes version evidence, epoch barriers, global preference and saved origins',async t=>{
+  const start=Date.now(),store=new Store(':memory:',start),directory=new Directory(store.db);
+  const app=await buildApp({store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),pairing:new Pairing(directory),setup:new Setup(true,'BCDF-GHJK'),resets:new ResetFeed(undefined,()=>{}),local:null});
+  t.after(async()=>{await app.close();store.close();});
+  await app.listen({host:'127.0.0.1',port:0});
+  const base=`http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+  const stand=await setUp(base,SETS.find(set=>set.id==='devices')!,start,'BCDF-GHJK',()=>Date.now(),true);
+  await seedMeasurementDevices(store,directory,stand);
+  const view=await stand.people.get('ana')!.get<{devices:{agent:string;policy:MeasurementPolicy;clients:{observedAt:number|null}[];control:{capable:boolean}}[];sources:ReturnType<Ingest['measurementSources']>}>('/api/devices?measurement=1');
+  const seen=new Set<string>();
+  for(const device of view.devices) {
+    const version=agentVersion(device.agent),comparison=version?compareVersions(version,'0.7.0'):null;
+    seen.add(comparison===-1?'behind':comparison===1?'ahead':comparison===0?'same':'unknown');
+    assert.equal(device.clients?.[0].observedAt,start-60_000,'contact does not move the installed version observation');
+    if(!device.policy?.enabled)seen.add('disabled');
+    if(device.policy?.collectors.codex.requiresEpoch&&!device.control?.capable)seen.add('requires-epoch');
+  }
+  const source=view.sources[0];
+  assert.equal(source.preference.kind,'preferred');seen.add('preferred');
+  assert.ok(source.origins.some(origin=>origin.valueOrigin&&origin.observationOrigin));seen.add('origins');
+  const funds=source.origins.find(origin=>origin.resource==='funds')!;
+  assert.notEqual(funds.valueOrigin!.device,funds.observationOrigin!.device);assert.equal(funds.status,'missing');seen.add('independent-funds');
+  assert.equal(funds.valueOrigin!.client,'1.2.3');assert.equal(funds.observationOrigin!.client,'1.2.4');seen.add('measurement-version');
+  assert.deepEqual(new Set(source.candidates.map(candidate=>candidate.reason)),new Set(['eligible','disabled','epoch_required','not_configured']));seen.add('not-configured');
+  const owner=stand.people.get('ana')!,preferred=source.preference.device!;
+  assert.equal((await fetch(base+'/api/devices/'+preferred,{method:'DELETE',headers:{cookie:owner.cookie,origin:base}})).ok,true);
+  const disconnected=(await owner.get<typeof view>('/api/devices?measurement=1')).sources.find(candidate=>candidate.source===source.source)!;
+  assert.equal(disconnected.preference.device,preferred);
+  assert.ok(disconnected.candidates.every(candidate=>candidate.device!==preferred));seen.add('unavailable-preference');
+  await owner.post(`/api/sources/${source.source}/measurement-preference`,{operationId:crypto.randomUUID(),expectedRevision:disconnected.preference.revision,desired:null});
+  assert.equal((await owner.get<typeof view>('/api/devices?measurement=1')).sources.find(candidate=>candidate.source===source.source)!.preference.kind,'auto');
+  for(const scene of MEASUREMENT_DEVICE_SCENES)for(const code of scene.expect)assert.ok(seen.has(code),scene.id+': '+code);
+});

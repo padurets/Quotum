@@ -706,14 +706,23 @@ pub fn close_panel(shell: &Arc<Shell>, instance: u64) {
         retire_panel(shell, paint);
     }
 }
-pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64) {
+pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64, destination: Option<crate::ipc::MainDestination>) {
+    let paint = shell.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let Some(paint) = paint.filter(|p| current_paint(shell, p) && current_panel(shell, instance).is_some()) else {
+        return;
+    };
+    {
+        let toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
+        if paint.cancelled.load(Ordering::SeqCst) || !toggle.requested(paint.request) {
+            return;
+        }
+        shell.main_navigation.lock().unwrap_or_else(|e| e.into_inner()).queue(instance, paint.request, destination);
+    }
     let shell = shell.clone();
     thread::spawn(move || {
-        let paint = shell.host.panel_paint.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let Some(paint) = paint.filter(|p| current_paint(&shell, p) && current_panel(&shell, instance).is_some())
-        else {
+        if !current_paint(&shell, &paint) || current_panel(&shell, instance).is_none() {
             return;
-        };
+        }
         let _intent = opening(&shell);
         let request = {
             let mut toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
@@ -723,6 +732,10 @@ pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64) {
             toggle.closed_at(paint.request);
             toggle.revision()
         };
+        if !shell.main_navigation.lock().unwrap_or_else(|e| e.into_inner()).commit(instance, paint.request) {
+            return;
+        }
+        crate::ipc::publish(&shell);
         open_now(&shell, "the compact panel", Role::Main, request);
         retire_panel(&shell, paint);
     });
