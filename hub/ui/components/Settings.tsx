@@ -115,7 +115,10 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
   const section = boardPath ? boardPath[2] ?? 'general' : path.split('/')[2] ?? first;
   const base = boardPath ? '/boards/' + boardPath[1] + '/settings' : '/settings';
   useEffect(() => {
-    if (!boardPath && section === 'devices') navigate('/settings/connections'+address.slice(path.length),true);
+    if (!boardPath && section === 'devices') {
+      const query=new URLSearchParams(address.split('?')[1]??'');query.set('tab','devices');
+      navigate('/settings/connections?'+query,true);
+    }
     if (path === base) navigate(settingsHref(base + '/' + section, board?.id), true);
   }, [path, base, section, board?.id]);
   if (boardPath && (local || board?.id !== boardPath[1])) return <main><section className="panel settings-content"><ErrorLine error={null} /><p>{t('settings.unavailable')}</p></section></main>;

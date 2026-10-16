@@ -993,31 +993,18 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .compact .money-body .limit-value small { font-size: 11px; }
 .compact .money-limits:not(:empty) { padding-top: 8px; margin-top: 0; }
 
-/* Connections use the same inset rows as other lists on glass. */
-.connections-toolbar { display: flex; justify-content: flex-end; }
-.connections-list { list-style: none; margin: 12px -8px 0; padding: 0; }
-.connection-row { gap: 12px; padding: 12px 8px; }
-.connection-row > .connection-icon { flex: 0 0 20px; overflow: visible; display: grid; }
-.connection-icon img { width: 20px; height: 20px; }
-.connection-icon svg { fill: none; stroke: var(--text-3); stroke-width: 1.4; }
-.connection-row > .connection-name { flex: 1; min-width: 0; }
-.connection-name > b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 560; }
-.connection-name > small { display: flex; align-items: center; flex-wrap: wrap; color: var(--text-3); font-size: 11.5px; gap: 8px; }
-.connection-row .connection-detail { flex: none; display: inline-flex; align-items: center; overflow: visible; }
-.connection-status, .connection-mobile-status { color: var(--text-3); font-size: 12px; }
-.connection-row .picker { flex-shrink: 0; }
-.connection-mobile-status { display: none; }
-.connection-mobile-status > span { display: block; white-space: normal; overflow-wrap: anywhere; }
+/* Connection overviews use the settings lists, including on narrow screens. */
+.connection-overview > .dialog-text { margin: 0; }
+.connection-overview .settings-item-main small > span, .connection-overview .settings-item-detail > span { display: block; white-space: normal; overflow: visible; }
+.connection-overview .settings-item-actions .picker { margin-left: 0; }
+.measurement-participation { grid-template-columns: minmax(0, 1fr) auto; }
+.measurement-participation .settings-item-actions { grid-column: 2; }
+.measurement-participation .settings-list-row { min-height: 48px; }
 .page-number { align-self: center; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .connection-back { align-self: flex-start; text-align: left; }
 .connection-tokens { border-top: 1px solid var(--hair); margin-top: 6px; padding-top: 16px; }
 .connection-tokens > summary { color: var(--text-2); cursor: pointer; font-size: 13px; }
 .connection-tokens > .dialog-form { margin-top: 16px; }
-@media (max-width: 680px) {
-  .connection-row { gap: 10px; }
-  .connection-status { display: none; }
-  .connection-mobile-status { display: block; }
-}
 
 /* Board actions and the account menu share the original header. */
 .status { flex-shrink: 1; }
@@ -1117,6 +1104,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .connection-facts { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: 10px 24px; font-size: 12px; margin: 20px 0; }
 .connection-facts dt { color: var(--text-4); }
 .connection-facts dd { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.connection-facts dd small { display: block; line-height: 1.5; }
 .placement-tag { display: inline-flex; flex-direction: column; margin: 0 12px 8px 0; }
 .placement-tag small { color: var(--text-4); }
 .source-selection { display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--hair); border-radius: 8px; padding: 16px; }
@@ -1196,8 +1184,8 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .currency-open:focus-visible { outline: none; }
 .currency-open:focus-visible::after { outline: 2px solid var(--accent); outline-offset: 2px; }
 .currency-registry-list .picker > button, .currency-row-notice button { position: relative; z-index: 2; }
-.currency-tabs .segmented-radio { min-width: 0; }
-.currency-tabs .segmented-radio span { padding: 8px 6px; }
+.currency-tabs .segmented-radio, .connections-page > .segmented .segmented-radio { min-width: 0; }
+.currency-tabs .segmented-radio span, .connections-page > .segmented .segmented-radio span { padding: 8px 6px; }
 @media (max-width: 700px) {
   .currency-open { grid-column: 1; grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .currency-tabs .segmented-radio span { font-size: 12px; }

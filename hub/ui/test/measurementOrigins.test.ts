@@ -15,6 +15,8 @@ test('resource disclosures expire positive observations, including unlimited fun
     if(name==='react/jsx-runtime')return {jsx,jsxs:jsx,Fragment:'fragment'};
     if(name.endsWith('/clock'))return {useClock:(deadline:typeof changesAt)=>{changesAt=deadline;return now;}};
     if(name.endsWith('/i18n'))return {t};
+    if(name.endsWith('/format'))return {stamp:(at:number)=>String(at)};
+    if(name==='lucide-react')return {Info:'info'};
     return {};
   }};
   const source=ts.transpileModule(readFileSync(new URL('../components/MeasurementDevices.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
@@ -28,7 +30,7 @@ test('resource disclosures expire positive observations, including unlimited fun
       const expected=at===101&&['observed','finite','unlimited'].includes(status)?'stale':status;
       assert.equal(tree.find(node=>node.props['data-time']!==undefined)!.props.children,t(`measurements.status.${expected}`),`${locale}/${status}/${at}`);
       assert.equal(changesAt(at),at<=100?101:null);
-      assert.deepEqual(tree.filter(node=>typeof node.type==='function').map(node=>node.props.origin),[valueOrigin,observationOrigin],'value and observation anchors remain independent');
+      assert.deepEqual(tree.filter(node=>typeof node.type==='function'&&'origin' in node.props).map(node=>node.props.origin),[valueOrigin,observationOrigin],'value and observation anchors remain independent');
     }
   }
   setLocale('en');

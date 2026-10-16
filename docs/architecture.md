@@ -1173,11 +1173,17 @@ and its limits.
   signs up without an invitation but with its setup code: a new hub prints one to its
   log, so only whoever started it can claim it. After that, signing up needs an invite
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
-- **Devices** are running agents, and each belongs to a person. The *My connections → Devices* section
-  shows a person's devices, what each delivers and the last failure of each client
-  there (not logged in, too old…); the person names them there. The page has two open
-  sections: devices with the one-time connection command, and device tokens with their
-  creation and revocation actions. Provider accounts and devices share *My connections*.
+- **Devices** are running agents, and each belongs to a person. *My connections* has
+  separate Accounts, Devices and Tokens segments. Devices shows aligned overviews of
+  the person's machines and measured subscriptions. Configure opens one object in the
+  shared dialog: a machine's measurement participation or diagnostics (Quotum and client
+  versions, observations, failures and sessions), or a subscription's preferred machine
+  and retained resource origins. Resource details use the shared popover; expanding
+  diagnostics never lengthens a machine row or the page. A widget's contextual link
+  opens its subscription dialog directly. Unsaved measurement drafts ask before leaving,
+  and a save stays locked through its authoritative read. Connect a device opens the
+  one-time command separately; token creation and revocation belong to Tokens. The
+  local app omits tokens and distributed measurement controls.
   *Agent activity → Settings → Manage projects* lists the projects their agents worked
   on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are
