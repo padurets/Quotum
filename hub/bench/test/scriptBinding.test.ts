@@ -165,7 +165,7 @@ test('source binding follows both original periods and final family cleanup, pre
   assert.equal(f.sent.filter(name=>name==='Tracing.start').length,6);assert.equal(f.sent.filter(name=>name==='Tracing.end').length,6);
 });
 
-test('failure cleanup without a completed family never enables source binding',async()=>{
+test('failed-family binding follows trace cleanup and retains an unavailable source as unknown',async()=>{
   const f=traceFixture(),error=new Error('original scenario failed');
   await assert.rejects(tracePanning(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},f.evidence,async cdp=>{
     f.emit('Network.responseReceived',{type:'Script',requestId:'private-canary',response:{url:'http://private-canary.invalid/assets/'+client.name}});
@@ -173,7 +173,9 @@ test('failure cleanup without a completed family never enables source binding',a
     await cdp.evaluate(`(()=>{document.getElementById('quotum-pan-layout')?.remove();})()`);
     throw error;
   },client),value=>value===error);
-  assert.equal(f.sent.includes('Debugger.enable'),false);assert.equal(f.listeners.size,0);
+  assert.ok(f.sent.indexOf('Debugger.enable')>f.sent.indexOf('Tracing.end'));
+  assert.equal(f.files.get('source-family-1').stage,'after-failed-family');
+  assert.equal(f.files.get('source-family-1').status,'mismatch');assert.equal(f.listeners.size,0);
 });
 
 test('source-binding diagnostics never attach to another browser',async()=>{
@@ -228,4 +230,111 @@ test('a failed native sampler installation preserves its error without rememberi
     await cdp.evaluate(expression);return {reports:[],problems:[]};
   },client),value=>value===error);
   assert.equal(f.files.has('source-injected-pending'),false);assert.deepEqual(f.sent,[]);assert.equal(f.listeners.size,0);
+});
+
+test('native postconditions remain in their original trace until the next setup command',async()=>{
+  const f=traceFixture(),inputs:{method:string;params:object}[]=[],send=f.cdp.send;
+  f.cdp.send=(async(method:string,params:object)=>{if(method.startsWith('Input.')||method.startsWith('Emulation.'))inputs.push({method,params});return send(method,params);}) as Cdp['send'];
+  await tracePanning(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},f.evidence,async cdp=>{
+    for(const id of [1,2]){
+      await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});
+      f.emit('Tracing.dataCollected',{value:[{name:'Paint',ph:'X',ts:id*10,dur:1}]});
+      await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
+      await cdp.send('Input.dispatchMouseEvent',{type:'mouseWheel',deltaX:24,deltaY:0,modifiers:8});
+      f.emit('Tracing.dataCollected',{value:[{name:'EventDispatch',ph:'X',ts:id*10+1,dur:1,args:{url:'private-canary'}}]});
+      cdp.at?.('native/activity/'+(id===1?'24h':'30d')+'/complete');
+      assert.equal(f.sent.filter(method=>method==='Tracing.end').length,id-1,'the synchronous boundary adds no command');
+      await cdp.evaluate('next setup');
+      f.emit('Tracing.dataCollected',{value:[{name:'Paint',ph:'X',ts:999,dur:1}]});
+      assert.deepEqual(f.files.get('trace-'+id+'-trace').events.map((event:any)=>event.ts),[id*10,id*10+1]);
+    }
+    return {reports:[],problems:[]};
+  });
+  assert.deepEqual(inputs,[1,2].flatMap(()=>[
+    {method:'Emulation.setCPUThrottlingRate',params:{rate:4}},
+    {method:'Emulation.setCPUThrottlingRate',params:{rate:1}},
+    {method:'Input.dispatchMouseEvent',params:{type:'mouseWheel',deltaX:24,deltaY:0,modifiers:8}},
+  ]));
+  assert.equal(f.listeners.size,0);assert.equal(f.sent.filter(method=>method==='Tracing.start').length,2);
+  assert.doesNotMatch(JSON.stringify([...f.files.values()].map(value=>safeEvidence(value))),/private-canary/);
+});
+
+test('a failed native family binds its original sources after trace drain without replacing its error',async()=>{
+  const f=traceFixture(),error=new Error('original held-wheel failure'),expression=nativeSampler('budget','30d'),probeHash=createHash('sha256').update(expression).digest('hex'),send=f.cdp.send;
+  f.cdp.send=(async(method:string,...args:unknown[])=>{
+    if(method==='Network.getResponseBody'){f.sent.push(method);return {body,base64Encoded:false};}
+    if(method==='Debugger.enable')for(const event of [{url,hash,scriptId:'132'},{url:'',hash:probeHash,scriptId:'178'}])f.emit('Debugger.scriptParsed',event);
+    return send(method,...args as [object]);
+  }) as Cdp['send'];
+  await assert.rejects(tracePanning(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},f.evidence,async cdp=>{
+    f.emit('Network.responseReceived',{type:'Script',requestId:'private-canary',response:{url}});
+    await cdp.evaluate(expression);await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});
+    await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseWheel',deltaX:24,deltaY:0,modifiers:8});
+    f.emit('Tracing.dataCollected',{value:[{name:'EventDispatch',ph:'X',ts:7,dur:1}]});
+    throw error;
+  },client),value=>value===error);
+  const report=f.files.get('source-family-1');
+  assert.equal(report?.stage,'after-failed-family');assert.equal(report?.status,'complete');assert.deepEqual(report?.intervals,[1]);
+  assert.equal(report.injected.status,'complete');assert.deepEqual(report.injected.owners.map((owner:any)=>[owner.scriptId,owner.intervals,owner.expectedHashMatches]),[[178,[1],true]]);
+  assert.deepEqual(f.files.get('trace-1-trace').events.map((event:any)=>event.ts),[7]);
+  assert.ok(f.sent.indexOf('Debugger.enable')>f.sent.indexOf('Tracing.end'));
+  assert.equal(f.sent.filter(method=>method==='Network.getResponseBody').length,1);
+  assert.equal(f.listeners.size,0);assert.equal(f.files.has('source-injected-pending'),false);
+  assert.doesNotMatch(JSON.stringify([...f.files.values()].map(value=>safeEvidence(value))),/private-canary|scriptSource|__quotumPan/);
+});
+
+for(const missing of ['Network.getResponseBody','Debugger.enable'])test(`failed-family ${missing} keeps its five-second deadline and original scenario error`,async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=traceFixture(),error=new Error('original held-wheel failure'),send=f.cdp.send;let reached=()=>{},aborted=false;
+  const pending=new Promise<void>(resolve=>{reached=resolve;});
+  f.cdp.send=(async(method:string,params:object,signal?:AbortSignal)=>{
+    if(method!==missing)return send(method,params,signal);
+    f.sent.push(method);reached();
+    return new Promise((_,reject)=>signal!.addEventListener('abort',()=>{aborted=true;reject(signal!.reason);},{once:true}));
+  }) as Cdp['send'];
+  const outcome=assert.rejects(tracePanning(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},f.evidence,async cdp=>{
+    f.emit('Network.responseReceived',{type:'Script',requestId:'private-canary',response:{url}});
+    await cdp.evaluate(nativeSampler('budget','30d'));await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});
+    await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});throw error;
+  },client),value=>value===error);
+  await pending;t.mock.timers.tick(4999);assert.equal(aborted,false);t.mock.timers.tick(1);await outcome;
+  assert.equal(aborted,true);assert.equal(f.sent.filter(method=>method===missing).length,1);
+  const report=f.files.get('source-family-1');assert.equal(report.status,'unavailable');assert.equal(report.debuggerDisabled,true);
+  assert.equal(report.injected.status,'unavailable');assert.equal(f.listeners.size,0);
+});
+
+for(const failed of [false,true])test(`an unconfirmed native trace drain prevents failed-family binding with ${failed?'an original input failure':'a boundary failure'}`,async()=>{
+  const f=traceFixture(),error=new Error('original held-wheel failure'),send=f.cdp.send;let closed=0;
+  f.cdp.send=(async(method:string,...args:unknown[])=>{
+    if(method==='Tracing.end'){f.sent.push(method);throw new Error('trace drain failed');}
+    return send(method,...args as [object]);
+  }) as Cdp['send'];
+  await assert.rejects(tracePanning(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{closed++;}},f.evidence,async cdp=>{
+    f.emit('Network.responseReceived',{type:'Script',requestId:'private-canary',response:{url}});
+    await cdp.evaluate(nativeSampler('budget','30d'));await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});
+    await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
+    if(failed)throw error;
+    cdp.at?.('native/budget/30d/complete');await cdp.evaluate('next setup');
+    assert.fail('a failed trace cannot enter the next setup');
+  },client),value=>failed?value===error:value instanceof Error&&value.message==='diagnostic trace drain failed at end-command');
+  assert.equal(closed,1);assert.equal(f.sent.includes('Debugger.enable'),false);assert.equal(f.sent.includes('Network.getResponseBody'),false);
+  assert.equal(f.files.get('source-injected-pending').status,'unavailable');assert.equal(f.listeners.size,0);
+});
+
+test('failed-family debugger cleanup cannot retry the family or replace the original input failure',async()=>{
+  const f=traceFixture(),error=new Error('original held-wheel failure'),send=f.cdp.send;
+  f.cdp.send=(async(method:string,...args:unknown[])=>{
+    if(method==='Debugger.disable'){f.sent.push(method);throw new Error('private-canary cleanup failure');}
+    return send(method,...args as [object]);
+  }) as Cdp['send'];
+  await assert.rejects(tracePanning(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},f.evidence,async cdp=>{
+    f.emit('Network.responseReceived',{type:'Script',requestId:'private-canary',response:{url}});
+    await cdp.evaluate(nativeSampler('budget','30d'));await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});throw error;
+  },client),value=>value===error);
+  assert.equal(f.sent.filter(method=>method==='Network.getResponseBody').length,1);
+  assert.equal(f.sent.filter(method=>method==='Debugger.enable').length,1);assert.equal(f.sent.filter(method=>method==='Debugger.disable').length,2);
+  assert.equal(f.files.get('source-family-1').debuggerDisabled,false);assert.equal(f.files.get('source-family-1').injected.status,'insufficient-evidence');
+  assert.equal(f.files.has('source-injected-pending'),false);assert.equal(f.listeners.size,0);
+  assert.doesNotMatch(JSON.stringify([...f.files.values()].map(value=>safeEvidence(value))),/private-canary/);
 });

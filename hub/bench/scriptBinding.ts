@@ -9,7 +9,7 @@ type Injected = {interval:number;kind:'native-sampler'|'idle-probe';bytes:number
 const digest=(value:unknown):value is string=>typeof value==='string'&&/^[a-f\d]{64}$/i.test(value);
 const scriptId=(value:unknown)=>typeof value==='string'&&/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value))?Number(value):null;
 
-/** Received bytes and parsed script IDs are joined only after a completed input family. */
+/** Received bytes and parsed script IDs are joined outside the family's trace. */
 export class ScriptBinding {
   private received:{requestId:string;url:string}[]=[];
   private omitted=0;
@@ -41,12 +41,12 @@ export class ScriptBinding {
     this.injected=[];this.injectedOmitted=this.injectedConflicts=0;
   }
 
-  async afterFamily(intervals:readonly number[]){
+  async afterFamily(intervals:readonly number[],stage:'after-family'|'after-failed-family'='after-family'){
     const family=++this.family,received=this.received;this.received=[];
     const expected=this.injected;this.injected=[];
     const omittedExpected=this.injectedOmitted,expectedConflicts=this.injectedConflicts;this.injectedOmitted=this.injectedConflicts=0;
     const injected:{[key:string]:unknown}={expected,omittedExpected,expectedConflicts,owners:[],conflicts:0,omittedOwners:0,anonymousScripts:0,omittedAnonymous:0,unmatchedIntervals:expected.map(value=>value.interval),status:expected.length||omittedExpected||expectedConflicts?'unavailable':'not-requested'};
-    const report:{[key:string]:unknown}={mode:'diagnostic',stage:'after-family',family,intervals,omitted:this.omitted,status:'unavailable',owners:[],debuggerDisabled:true};
+    const report:{[key:string]:unknown}={mode:'diagnostic',stage,family,intervals,omitted:this.omitted,status:'unavailable',owners:[],debuggerDisabled:true};
     report.injected=injected;
     if(this.client.status!=='available'||!received.length||this.omitted){report.reason=this.omitted?'received script limit':'received client unavailable';this.save('source-family-'+family,report);return;}
     const client=this.client,last=received.at(-1)!,owners=new Map<number,string>(),conflicting=new Set<number>();

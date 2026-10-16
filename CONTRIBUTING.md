@@ -69,7 +69,14 @@ original start/end timestamps. The optional
 `QUOTUM_BENCH_DIAGNOSE_PANNING=trace` (the `benchmark-trace-diagnostics` PR
 label) records an owned synthetic browser's new intervals with numeric
 script/layout/paint/GC events from `cc` and `devtools.timeline`, bounded to 32 MiB per
-scenario. Broad task instrumentation is excluded from this diagnostic; its delivery
+scenario. Each trace continues through the original rate-1 held-Shift and navigation
+checks, ending at completion before the next setup command. Both phases share the
+existing 100,000-event and byte limits; truncation remains insufficient evidence.
+After a confirmed drain, an interrupted family's received bundle and injected probe
+bindings are attempted once and marked as coming from a failed family. Missing
+bindings stay unknown, and this postmortem cannot change the scenario's failure.
+The longer traced interval has unqualified observer overhead. Broad task
+instrumentation is excluded from this diagnostic; its delivery
 can exceed the unchanged five-second drain. This is opt-in. Trace data
 never contains script sources, arguments, arbitrary URLs or user text. Callback events
 retain validated numeric script IDs and source coordinates; an entry position does not
@@ -77,7 +84,9 @@ partition nested work. Script IDs belong to their recorded browser context. Miss
 source identities, scheduler evidence and truncated timelines remain explicit. Trace
 events retain both
 elapsed and thread CPU time where Chrome supplies them, with start/end page clock
-markers. The opt-in timeline also records observed animation phases, including pending
+markers. Host request/response timestamps bracket the existing metric reads to bound
+their alignment with a failed DevTools command; they add no browser commands.
+The opt-in timeline also records observed animation phases, including pending
 start and the first sample after completion. These observations bound the phase;
 they do not replace actual moving frames or prove physical presentation. Traces retain
 compositor pipeline stages and interval-local numeric track identities, with reported

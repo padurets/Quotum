@@ -46,11 +46,18 @@ export async function panningPairs(cdp: Cdp, browser: Browser, evidence: Evidenc
 type TraceEvidence={save(name:string,value:unknown):void;saveTrace?(name:string,value:unknown):void};
 export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceEvidence, run=panning, client=clientIdentity()) {
   if(!browser.owned)throw new Error('browser-wide tracing requires an owned synthetic browser');
-  let active:Promise<unknown>|undefined,release=()=>{},interval=0,familyStart=0,failed=false;
+  let active:Promise<unknown>|undefined,release=()=>{},interval=0,familyStart=0,failed=false,completed=false,drained=true;
   const binding=new ScriptBinding(cdp,client,(name,value)=>evidence?.save(name,value));
-  const stop=async()=>{if(active){release();const pending=active;active=undefined;await pending;}};
-  const measured={on:cdp.on.bind(cdp),off:cdp.off.bind(cdp),at:cdp.at?.bind(cdp),snapshot:cdp.snapshot?.bind(cdp),
+  const stop=async()=>{completed=false;if(active){release();const pending=active;active=undefined;try{await pending;}catch(error){drained=false;throw error;}}};
+  const bindFamily=async(stage:'after-family'|'after-failed-family'='after-family')=>{
+    const intervals=Array.from({length:interval-familyStart},(_,index)=>familyStart+index+1);
+    familyStart=interval;
+    await binding.afterFamily(intervals,stage);
+  };
+  const measured={on:cdp.on.bind(cdp),off:cdp.off.bind(cdp),snapshot:cdp.snapshot?.bind(cdp),
+    at:(stage:string)=>{if(stage.startsWith('native/')&&stage.endsWith('/complete'))completed=true;cdp.at?.(stage);},
     evaluate:async<T>(expression:string,signal?:AbortSignal):Promise<T>=>{
+      if(completed)await stop();
       const value=await cdp.evaluate<T>(expression,signal);
       if(expression.startsWith('(() => {\n        const initiator=')&&expression.includes('const probe=window.__quotumPan={')&&expression.includes('probe.raf=schedule(tick);')){
         binding.rememberInjected(interval+1,expression);
@@ -58,12 +65,12 @@ export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceE
       // This original cleanup follows both periods and all extra family checks.
       if(expression===`document.getElementById('quotum-pan-layout')?.remove()`){
         await stop();
-        await binding.afterFamily(Array.from({length:interval-familyStart},(_,index)=>familyStart+index+1));
-        familyStart=interval;
+        await bindFamily();
       }
       return value;
     },
     send:async<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>=>{
+      if(completed)await stop();
       const rate=(params as {rate?:number}).rate;
       if(method==='Emulation.setCPUThrottlingRate'&&rate===4){
         await stop();
@@ -75,14 +82,19 @@ export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceE
           saveTrace:(name,value)=>evidence?.saveTrace?evidence.saveTrace('trace-'+id+'-'+name,value):evidence?.save('trace-'+id+'-'+name,value),
         });
         await Promise.race([started,active]);
-      } else if(method==='Emulation.setCPUThrottlingRate'&&rate===1)await stop();
+      }
       return cdp.send<T>(method,params,signal);
     }};
   try {return await run(measured,undefined,{timeline:true,save:(name,value)=>evidence?.save('trace-'+name,value)});}
   catch(error){failed=true;throw error;}
   finally {
-    binding.close();
-    try {await stop();}catch(error){if(!failed)throw error;}
+    try {
+      await stop();
+      // Failed postconditions still own their page. Bind it after the trace,
+      // before closing the listener that retained its received script.
+      if(failed&&drained&&interval>familyStart)await bindFamily('after-failed-family');
+    }catch(error){if(!failed){failed=true;throw error;}}
+    finally{try{binding.close();}catch(error){if(!failed)throw error;}}
   }
 }
 
@@ -122,10 +134,10 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
   let active=false;
   const clocks:unknown[]=[];
   const clock=async(stage:'start'|'end',signal:AbortSignal)=>{
-    const before=await metrics(cdp,signal);
+    const beforeFrom=performance.now(),before=await metrics(cdp,signal),beforeTo=performance.now();
     const page=await cdp.evaluate(`(()=>{const now=performance.now();console.timeStamp('quotum-trace-clock-${stage}');return {now,after:performance.now(),timeOrigin:performance.timeOrigin};})()`,signal);
-    const after=await metrics(cdp,signal);
-    clocks.push({stage,before:before.Timestamp,page,after:after.Timestamp});
+    const afterFrom=performance.now(),after=await metrics(cdp,signal),afterTo=performance.now();
+    clocks.push({stage,before:before.Timestamp,page,after:after.Timestamp,host:{before:{from:beforeFrom,to:beforeTo},after:{from:afterFrom,to:afterTo}}});
     evidence?.save('trace-clock',{clocks});
   };
   try {

@@ -30,6 +30,33 @@ test('a trace retains only allowed numeric events from its own original interval
   assert.deepEqual((f.files.get('trace') as {events:{threadTs:number;threadDuration:number}[]}).events.map(event=>[event.threadTs,event.threadDuration]),[[100,1]]);
 });
 
+test('existing trace metric reads bracket the host clock without extra browser commands',async()=>{
+  const f=fixture(),send=f.cdp.send,samples:{at:number;timestamp:number}[]=[],offset=10_000;
+  f.cdp.send=(async(method:string,...args:unknown[])=>{
+    if(method!=='Performance.getMetrics')return send(method,...args as [object]);
+    f.sent.push(method);
+    const at=performance.now(),timestamp=at+offset;samples.push({at,timestamp});
+    return {metrics:[{name:'Timestamp',value:timestamp/1000}]};
+  }) as Cdp['send'];
+  await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{},f.evidence);
+  const clocks=(f.files.get('trace-clock') as {clocks:{stage:string;before:number;after:number;host?:{before:{from:number;to:number};after:{from:number;to:number}}}[]}).clocks;
+  assert.deepEqual(clocks.map(value=>value.stage),['start','end']);
+  let lower=-Infinity,upper=Infinity;
+  for(const [i,clock]of clocks.entries()){
+    assert.ok(clock.host,'Chrome timestamps alone cannot locate a host command');
+    for(const [j,key]of (['before','after'] as const).entries()){
+      const host=clock.host[key],sample=samples[i*2+j],timestamp=clock[key]*1000;
+      assert.ok(host.from<=sample.at&&sample.at<=host.to);
+      assert.ok(Math.abs(timestamp-sample.timestamp)<1e-8);
+      lower=Math.max(lower,timestamp-host.to);upper=Math.min(upper,timestamp-host.from);
+    }
+    assert.ok(clock.host.before.to<=clock.host.after.from);
+  }
+  assert.ok(lower<=offset&&offset<=upper,'the independent sample offset stays inside all observed brackets');
+  assert.deepEqual(f.sent,['Tracing.start','Performance.getMetrics','Performance.getMetrics','Performance.getMetrics','Performance.getMetrics','Tracing.end']);
+  assert.equal(f.listeners.size,0);
+});
+
 test('a failing trace interval stops collection and preserves the original error', async()=>{
   const f=fixture(),error=new Error('original failure');
   await assert.rejects(traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{throw error;},f.evidence),value=>value===error);
