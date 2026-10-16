@@ -326,6 +326,8 @@ export const plotHeight = (width: number) => (width < 560 ? 220 : 300);
 const NO_PLANS: PlanLine[] = [];
 const NO_FORECASTS: ForecastLine[] = [];
 const NO_MARKERS: Marker[] = [];
+// Moving captions keep a stable callback so their memo can skip unchanged props.
+const ignoreEdge = () => {};
 
 export const Chart = memo(function Chart({
   lines: incomingLines,
@@ -765,7 +767,7 @@ export const Chart = memo(function Chart({
                 room={narrow?labelRoom(width-left-right):width - left - right - 6}
                 compact={narrow}
                 fonts={fonts} scale={scale} boxes={boxes}
-                onEdge={panning ? () => {} : setEdge}
+                onEdge={panning ? ignoreEdge : setEdge}
               />
             ))}
             {more.length > 0 && (
