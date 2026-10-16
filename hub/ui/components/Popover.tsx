@@ -75,9 +75,11 @@ export function Popover({
     // placed again at each scroll; only its content changing it is.
     let size = {width: 0, height: 0};
     const maximum = element.style.maxWidth, minimum = element.style.minWidth;
+    const dialog = trigger.closest<HTMLElement>('.dialog');
     const seen = () => {
       const at = picker.getBoundingClientRect();
-      return at.bottom > coverOf(at.bottom, trigger, bars) && at.top < innerHeight;
+      const bounds = dialog?.getBoundingClientRect();
+      return at.bottom > Math.max(coverOf(at.bottom, trigger, bars), bounds?.top ?? 0) && at.top < Math.min(innerHeight, bounds?.bottom ?? innerHeight);
     };
     // Focus in the panel goes back to the button, as on Escape, without scrolling the page to it.
     const unfocus = () => {
@@ -99,7 +101,6 @@ export function Popover({
       element.style.translate = '';
       element.style.maxWidth = maximum;
       element.style.minWidth = minimum;
-      const dialog = trigger.closest<HTMLElement>('.dialog');
       if (dialog) {
         // A dialog clips its contents even when the window has more room.
         const {maxWidth, minWidth} = getComputedStyle(element), room = Math.max(0, dialog.clientWidth - 16);
@@ -112,7 +113,8 @@ export function Popover({
       element.classList.add('is-up');
       const rect = element.getBoundingClientRect();
       const at = picker.getBoundingClientRect();
-      const {above, below} = roomOf(at, at.top - rect.bottom, coverOf(at.bottom, trigger, bars), innerHeight);
+      const bounds = dialog?.getBoundingClientRect();
+      const {above, below} = roomOf(at, at.top - rect.bottom, Math.max(coverOf(at.bottom, trigger, bars), bounds?.top ?? 0), Math.min(innerHeight, bounds?.bottom ?? innerHeight));
       const {up: next, cap} = sideOf(rect.height, above, below, upwards ?? up, upwards !== null);
       const least = list ? parseFloat(getComputedStyle(list).getPropertyValue('--least')) || 0 : 0;
       const cramped = !!list && crampedOf(cap, rect.height - list.getBoundingClientRect().height, least);
@@ -128,7 +130,7 @@ export function Popover({
       // or of its dialog, either without its own scrollbar.
       const placed = element.getBoundingClientRect();
       size = {width: placed.width, height: placed.height};
-      const left = dialog ? dialog.getBoundingClientRect().left + dialog.clientLeft : 0;
+      const left = dialog && bounds ? bounds.left + dialog.clientLeft : 0;
       const shift = shiftOf(placed.left - left, placed.right - left, (dialog ?? document.documentElement).clientWidth);
       if (shift) element.style.translate = `${shift}px 0`;
       setSide(same => (same?.up === next && same.cap === cap && same.cramped === cramped ? same : {up: next, cap, cramped}));
