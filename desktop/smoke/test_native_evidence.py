@@ -172,15 +172,16 @@ class PauseTests(unittest.TestCase):
                              patch('native_evidence.signal.pidfd_send_signal', failed_resume), \
                              patch.object(Path, 'write_bytes', side_effect=AssertionError('uncertain resume allowed a file write')):
                             expected = 'original scenario' if scenario_fails else 'native resume failed; evidence unavailable'
+                            original = RuntimeError('original scenario')
                             with self.assertRaisesRegex(RuntimeError, expected) as caught:
                                 with paused(identity(child.pid), identity(os.getpid()), evidence.record):
                                     if scenario_fails:
-                                        raise RuntimeError('original scenario')
+                                        raise original
                             self.assertTrue(native_evidence._resume_failed)
                             self.assertNotIn('resumed', [row['stage'] for row in evidence.records])
                             self.assertEqual(evidence.records[-1]['stage'], 'resume-failed')
                             if scenario_fails:
-                                self.assertIn('native resume failed; evidence unavailable', caught.exception.__notes__)
+                                self.assertIs(caught.exception, original)
                             evidence.finish('failed')
                 finally:
                     os.kill(child.pid, signal.SIGCONT)

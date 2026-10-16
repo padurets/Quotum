@@ -76,9 +76,7 @@ def paused(process, owner, record=lambda *args, **kwargs: None):
                 record('resume-failed', process=process, evidence='unavailable')
             except Exception:
                 pass
-            if failure is not None:
-                failure.add_note('native resume failed; evidence unavailable')
-            else:
+            if failure is None:
                 raise RuntimeError('native resume failed; evidence unavailable') from resume_error
         elif stopped:
             # The outermost resume publishes all original timestamped records.
