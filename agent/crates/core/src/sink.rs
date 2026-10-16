@@ -275,7 +275,8 @@ pub struct HubSink {
     sessions_retry_at: Option<Instant>,
     log: Box<dyn FnMut(&str) + Send>,
     policy: PolicyCache,
-    configured: Vec<Provider>,
+    /// Only the managed caller knows the complete local scope.
+    configured: Option<Vec<Provider>>,
     commands: Vec<Option<String>>,
     accounts: Vec<Option<String>>,
 }
@@ -310,7 +311,7 @@ impl HubSink {
             spool_file,
             spool,
             policy,
-            configured: Vec::new(),
+            configured: None,
             commands: Vec::new(),
             accounts: Vec::new(),
             retry_at: None,
@@ -457,7 +458,7 @@ impl Sink for HubSink {
         self.policy.needs_contact()
     }
     fn checkin_managed(&mut self, asks: &[Ask], collectors: &[Provider]) -> CheckinAnswer {
-        self.configured = collectors.to_vec();
+        self.configured = Some(collectors.to_vec());
         let directives = self.checkin(asks);
         CheckinAnswer {
             directives,
@@ -531,9 +532,11 @@ impl Sink for HubSink {
             "paced": true,
             "machine": self.machine,
             "subscriptions": subscriptions,
-            "collectors": self.configured,
             "capabilities": {"measurementPolicy":1,"attemptContext":1},
         });
+        if let Some(collectors) = &self.configured {
+            request["collectors"] = serde_json::json!(collectors);
+        }
         if self.policy.confirmed {
             if let Some(policy) = &self.policy.policy {
                 request["policyAck"] = serde_json::json!({"authority":policy.authority,"revision":policy.revision});
@@ -858,6 +861,25 @@ pub(crate) mod tests {
 
     fn ask(provider: Provider, account: Option<&str>) -> Ask<'_> {
         Ask { provider, account, account_name: None, active: false, min_interval_ms: None }
+    }
+
+    #[test]
+    fn a_public_check_in_declares_scope_only_after_a_managed_caller_provides_it() {
+        let (url, seen) = hub(|_, body| {
+            let subscriptions: Vec<_> =
+                body["subscriptions"].as_array().unwrap().iter().map(|_| json!({"measure":true})).collect();
+            json(200, json!({"subscriptions":subscriptions}))
+        });
+        let (mut sender, _) = sink(&url, "public-scope");
+        let asks = [ask(Provider::Codex, Some("a"))];
+        assert!(matches!(sender.checkin(&asks)[0], Directive::Measure { .. }));
+        assert!(seen.lock().unwrap()[0].1.get("collectors").is_none(), "unknown scope is not empty scope");
+        sender.checkin_managed(&asks, &[Provider::Codex]);
+        assert_eq!(seen.lock().unwrap()[1].1["collectors"], json!(["codex"]));
+        sender.checkin_managed(&[], &[]);
+        assert_eq!(seen.lock().unwrap()[2].1["collectors"], json!([]), "a managed empty scope is explicit");
+        sender.checkin(&asks);
+        assert_eq!(seen.lock().unwrap()[3].1["collectors"], json!([]), "an ask does not redefine known scope");
     }
 
     #[test]
