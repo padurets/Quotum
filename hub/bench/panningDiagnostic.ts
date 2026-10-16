@@ -173,6 +173,7 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
 export async function traceControls(browser: Browser, evidence: TraceEvidence) {
   if(!browser.owned)throw new Error('trace controls require an owned synthetic browser');
   const tab=await openTab(browser),intervals:{kind:string;rate:number;from:number;to:number}[]=[];
+  let failed = false;
   let trace:SafeTrace[]=[],complete=false;
   try {
     await tab.cdp.send('Performance.enable');
@@ -211,5 +212,8 @@ export async function traceControls(browser: Browser, evidence: TraceEvidence) {
       &&reports.filter(report=>report.rate===1).every(report=>('cpuInsideMs' in report)&&(report.kind==='busy'?report.cpuInsideMs!>40:report.cpuOutsideMs!<20));
     evidence.save('trace-controls',{mode:'diagnostic',status:valid?'passed':'insufficient-evidence',intervals:reports});
     if(!valid)throw new Error('thread-clock controls did not distinguish execution from timer waiting');
-  } finally {await tab.close();}
+  } catch (error) {failed = true; throw error;}
+  finally {
+    try {await tab.close();} catch (error) {if (!failed) throw error;}
+  }
 }

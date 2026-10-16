@@ -30,7 +30,9 @@ function fixture(t: TestContext, mode = 'ready', holdPort = false) {
       if (mode === 'oversize') {res.end('x'.repeat(17000));return;}
       if (mode === 'redirect') {res.writeHead(302, {location:'http://127.0.0.1:1/private'});res.end();return;}
       const port = server.address().port;
-      res.end(JSON.stringify({Browser:'Chrome/fixture',webSocketDebuggerUrl:'ws://127.0.0.1:'+port+'/devtools/browser/'+(mode === 'mismatch'?'foreign':'fixture')}));
+      const reply = () => res.end(JSON.stringify({Browser:'Chrome/fixture',webSocketDebuggerUrl:'ws://127.0.0.1:'+port+'/devtools/browser/'+(mode === 'mismatch'?'foreign':'fixture')}));
+      if (mode === 'body-delay') {res.writeHead(200);res.flushHeaders();}
+      if (mode === 'headers-delay' || mode === 'body-delay') setTimeout(reply, 1200); else reply();
     }).listen(0, '127.0.0.1', () => {
       const port = server.address().port;
       if (mode !== 'no-port' && !holdPort) fs.writeFileSync(profile+'/DevToolsActivePort', (mode === 'invalid'?'65536':port)+'\\n/devtools/browser/fixture\\n');
@@ -77,6 +79,32 @@ test('silent real DevTools readiness and idempotent cleanup close the endpoint a
   await browser.close(); await browser.close();
   assert.equal(existsSync(profile), false);
   await assert.rejects(fetch(browser.endpoint + '/json/version'));
+});
+
+for (const mode of ['headers-delay', 'body-delay']) test(`finite slow ${mode} readiness uses the remaining startup budget`, async t => {
+  const {profile, launch} = fixture(t, mode);
+  const browser = await launch(AbortSignal.timeout(3500));
+  try {
+    const report = browser.launchReport!() as LaunchReport;
+    assert.equal(report.stage, 'ready'); assert.equal(report.version, 'Chrome/fixture');
+    assert.equal(report.probes!.attempts, 1, 'a valid slow response must not be cancelled and retried');
+    assert.ok(report.probes!.elapsedMs >= 1100, 'the real HTTP response exceeded the former per-probe cutoff');
+  } finally {await browser.close();}
+  assert.equal(existsSync(profile), false);
+});
+
+test('an unfinished body exhausts the original twenty-second startup deadline and is cancelled', {timeout: 30_000}, async t => {
+  const {profile, launch} = fixture(t, 'body-hang');
+  await assert.rejects(launch(), error => {
+    assert.ok(error instanceof ChromeLaunchError);
+    assert.equal(error.report.failure, 'endpoint-unreachable');
+    assert.equal(error.report.probes!.stage, 'body');
+    assert.equal(error.report.probes!.attempts, 1);
+    assert.ok(error.report.elapsedMs >= 19_900);
+    assert.equal(error.report.cleanup!.status, 'closed');
+    return true;
+  });
+  assert.equal(existsSync(profile), false);
 });
 
 test('a port file timestamp cannot authorize publication or replace real silent readiness', async t => {

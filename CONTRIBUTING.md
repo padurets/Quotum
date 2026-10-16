@@ -222,8 +222,11 @@ collects bounded liveness and command identity, without recording command parame
 The first failed command stays recorded through cleanup, including protocol rejections
 and page evaluation failures. Its saved identity contains neither browser error text
 nor the evaluated expression.
-Debugger intervention belongs to an explicitly diagnostic replay, with mandatory
-resume and owned-target cleanup, and cannot provide a passing canonical result.
+After the original deadline has failed, a postmortem may pause the same failed owned
+target to collect bounded stack locations. Its report marks that intervention;
+mandatory resume and owned-target cleanup follow, and the original failure is retained.
+An explicit diagnostic replay may also intervene. Neither can provide a passing
+canonical result.
 The observer credits input after its coalesced position reaches the actual data layers
 in the production RAF. Stationary input-free gaps are excluded; delayed pending input
 remains measurable. A last input committed on release waits for the final geometry and
@@ -253,8 +256,11 @@ minimized, which restores that very window. It disables every provider. Each
 run also opens and closes the tray panel three times, including Escape and a repeated tray
 activation, checking that it stays visible and fits its monitor without changing the main window's geometry. Each
 run also pauses only its own app UI thread and checks that the native loader stays
-responsive, rounded and cancellable before WebView2 finishes. The thread is always
-resumed. Each run starts from a fresh WebView2 profile, as the first start on a machine does: the one
+responsive, rounded and cancellable before WebView2 finishes. A finally block always
+attempts to resume the thread. Stage readings keep their original timestamps in bounded
+memory during pauses; file writes follow the last confirmed resume. An unconfirmed
+resume fails the smoke and keeps the buffered stages unpublished.
+Each run starts from a fresh WebView2 profile, as the first start on a machine does: the one
 in `%LOCALAPPDATA%\com.padurets.quotum\EBWebView` is set aside and put back afterwards.
 With `-Diagnostics <dir>` it keeps bounded stage readings, owned process identities
 and a manifest with the source and package hashes. CI uploads these on every run;

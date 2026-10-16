@@ -7,8 +7,14 @@ from pathlib import Path
 import re
 import signal
 import subprocess
+import sys
 import time
 import uuid
+
+
+# One smoke owns one Evidence; nested pauses share its publication barrier.
+_pause_depth = 0
+_resume_failed = False
 
 
 def identity(pid):
@@ -35,28 +41,48 @@ def belongs(pid, owner):
 @contextmanager
 def paused(process, owner, record=lambda *args, **kwargs: None):
     """A pidfd keeps resume attached to exactly the process that was stopped."""
+    global _pause_depth, _resume_failed
     if not process or not belongs(process['pid'], owner):
         raise RuntimeError('pause target ownership unavailable')
     fd = os.pidfd_open(process['pid'])
     stopped = False
+    resume_error = None
     try:
         current = identity(process['pid'])
         if not current or current['birth'] != process['birth'] or not belongs(process['pid'], owner):
             raise RuntimeError('pause target identity changed')
         signal.pidfd_send_signal(fd, signal.SIGSTOP)
         stopped = True
+        _pause_depth += 1
         record('paused', process=process)
         yield
     finally:
+        failure = sys.exc_info()[1]
         try:
             if stopped:
                 try:
                     signal.pidfd_send_signal(fd, signal.SIGCONT)
-                except ProcessLookupError:
-                    pass
-                record('resumed', process=process)
+                except OSError as error:
+                    _resume_failed = True
+                    resume_error = error
+                finally:
+                    _pause_depth -= 1
         finally:
             os.close(fd)
+        if resume_error is not None:
+            # An uncertain resume never opens the publication barrier. Keep the
+            # original scenario failure when both operations failed.
+            try:
+                record('resume-failed', process=process, evidence='unavailable')
+            except Exception:
+                pass
+            if failure is not None:
+                failure.add_note('native resume failed; evidence unavailable')
+            else:
+                raise RuntimeError('native resume failed; evidence unavailable') from resume_error
+        elif stopped:
+            # The outermost resume publishes all original timestamped records.
+            record('resumed', process=process)
 
 
 class Evidence:
@@ -118,7 +144,7 @@ class Evidence:
             self.record('product-evidence-unavailable')
 
     def save(self):
-        if not self.directory:
+        if not self.directory or _pause_depth or _resume_failed:
             return
         try:
             data = json.dumps(dict(records=self.records, omitted=self.omitted)).encode()

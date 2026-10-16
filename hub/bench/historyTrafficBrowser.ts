@@ -323,7 +323,11 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
       const frame=()=>{if(!p.running)return;if(root.dataset.panEnd){const token=root.dataset.panToken;if(p.tokens.at(-1)!==token)p.tokens.push(token);const end=Number(root.dataset.panEnd),origin=Number(root.dataset.panOrigin);if(p.poses.at(-1)?.end!==end)p.poses.push({end,origin});}p.raf=requestAnimationFrame(frame);};p.raf=requestAnimationFrame(frame);
     })()`);
     return {cdp, bodies, settled, geometry, cell, seeds, close,capturePool};
-  } catch (error) {poolBinding?.close();await close(); throw error;}
+  } catch (error) {
+    try{poolBinding?.close();}catch{browser.owner?.failures.push('history source binding cleanup failed');}
+    try{await close();}catch{/* The target owner retains cleanup separately from the seed failure. */}
+    throw error;
+  }
 }
 
 /** Separate tabs use the fixed-codec proxy; this never changes the native perf route. */
@@ -415,7 +419,11 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
         evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name,status,geometry,cell,
           reads:trafficReadEvidence(bodies.reads),cold:bodies.diagnostic(`${name}/cold`),reports:reports.filter(report=>report.name.startsWith(name+'/')),
           transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),command:cdp.snapshot()});
-        try{await capturePool();}finally{await observer?.close();await close();}
+        const cleanupErrors:unknown[]=[];
+        try{await capturePool();}catch(error){cleanupErrors.push(error);browser.owner?.failures.push('history pool cleanup failed');}
+        try{await observer?.close();}catch(error){cleanupErrors.push(error);browser.owner?.failures.push('history observer cleanup failed');}
+        try{await close();}catch(error){cleanupErrors.push(error);}
+        if(status!=='failed'&&cleanupErrors.length)throw cleanupErrors[0];
       }
     }
   }
@@ -490,10 +498,12 @@ export async function browserCancellationTraffic(browser: Browser, proxy: Traffi
       } finally {
         evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name,stage,status,reads:trafficReadEvidence(bodies.reads),
           reports:reports.filter(report=>report.name===name),transfers:proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/')),command:cdp.snapshot()});
-        await observer?.close();
+        const cleanupErrors:unknown[]=[];
+        try{await observer?.close();}catch(error){cleanupErrors.push(error);browser.owner?.failures.push('history observer cleanup failed');}
         cdp.at(`${name}/release shift`);
-        await key('keyUp', 'Shift', 16, 0).catch(() => {}); await close();
-        console.error(`bench: ${name}: page closed`);
+        try{await key('keyUp', 'Shift', 16, 0);}catch(error){cleanupErrors.push(error);browser.owner?.failures.push('history input cleanup failed');}
+        try{await close();console.error(`bench: ${name}: page closed`);}catch(error){cleanupErrors.push(error);}
+        if(status!=='failed'&&cleanupErrors.length)throw cleanupErrors[0];
       }
     }
   }

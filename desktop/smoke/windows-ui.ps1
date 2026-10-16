@@ -40,13 +40,40 @@ if (-not ('QuotumWindowProbe' -as [type])) {
 . (Join-Path $PSScriptRoot 'windows-progress.ps1')
 
 $manifest=[ordered]@{schemaVersion=1;status='running';sha=((& git rev-parse HEAD).Trim());run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT;platform='windows';packageHash=(Get-FileHash -LiteralPath $appPath -Algorithm SHA256).Hash;files=@();errors=@()}
+# Capture native facts in memory while any owned UI thread is paused.
+$nativePauseDepth=0
+$nativeResumeFailed=$false
+function Write-NativeJson([string]$Name,$Value,[int]$Depth) {
+  New-Item -ItemType Directory -Force $Diagnostics | Out-Null
+  $temporary=Join-Path $Diagnostics ($Name+'.tmp')
+  [IO.File]::WriteAllText($temporary,(ConvertTo-Json -InputObject $Value -Depth $Depth))
+  Move-Item -LiteralPath $temporary -Destination (Join-Path $Diagnostics $Name) -Force
+}
+function Enter-NativePause([scriptblock]$Acquire) {
+  $script:nativePauseDepth++
+  try { & $Acquire } catch {
+    $script:nativePauseDepth--
+    # MainRequestThenPause also owns a guard before returning it to PowerShell.
+    $dispatch=[QuotumWindowProbe]::LastDispatch
+    if($dispatch -and $dispatch.Paused -and -not $dispatch.Resumed){
+      $script:nativeResumeFailed=$true
+      $manifest.errors=@('native resume failed; evidence unavailable')
+    }
+    throw
+  }
+}
+function Resume-NativePause($Target,[scriptblock]$Resume,$Failure) {
+  try { & $Resume $Target;return $true } catch {
+    $script:nativeResumeFailed=$true
+    $manifest.errors=@('native resume failed; evidence unavailable')
+    if($null -eq $Failure){throw}
+    return $false
+  } finally { $script:nativePauseDepth-- }
+}
 function Save-Manifest {
-  if(-not $Diagnostics){return}
-  try {
-    New-Item -ItemType Directory -Force $Diagnostics | Out-Null
-    [IO.File]::WriteAllText((Join-Path $Diagnostics 'manifest.json.tmp'),(ConvertTo-Json -InputObject $manifest -Depth 5))
-    Move-Item -LiteralPath (Join-Path $Diagnostics 'manifest.json.tmp') -Destination (Join-Path $Diagnostics 'manifest.json') -Force
-  } catch {Write-Warning 'Native evidence manifest unavailable'}
+  if(-not $Diagnostics -or $nativePauseDepth -or $nativeResumeFailed){return}
+  try { Write-NativeJson 'manifest.json' $manifest 5 }
+  catch {Write-Warning 'Native evidence manifest unavailable'}
 }
 Save-Manifest
 $timelineClock=[Diagnostics.Stopwatch]::StartNew()
@@ -60,9 +87,14 @@ function Prepare-WaitObserver {
   $waitObservers.Add($observer)
   return $observer
 }
+function Save-Timeline {
+  if(-not $Diagnostics -or $nativePauseDepth -or $nativeResumeFailed){return}
+  try { Write-NativeJson 'timeline.json' $timeline.ToArray() 10 }
+  catch {$manifest.errors=@('native stage evidence unavailable')}
+}
 function Save-Stage([string]$Stage,[IntPtr]$Window=[IntPtr]::Zero,[Nullable[bool]]$Resumed=$null) {
   try {
-    if($timeline.Count -ge 1000){$manifest.errors=@('timeline truncated');Save-Manifest;return}
+    if($timeline.Count -ge 1000){$manifest.errors=@('timeline truncated');Save-Manifest;Save-Timeline;return}
     $reading=[QuotumWindowProbe]::LastDispatch
     # Copy mutable dispatch fields now; a later resume must not rewrite earlier stages.
     $dispatch=if($reading){[ordered]@{Stage=$reading.Stage;Acceptance=$reading.Acceptance;Window=$reading.Window;ElapsedMs=$reading.ElapsedMs;Process=$reading.Process;Thread=$reading.Thread;Paused=$reading.Paused;ResumeAttempted=$reading.ResumeAttempted;Resumed=$reading.Resumed}}else{$null}
@@ -78,12 +110,11 @@ function Save-Stage([string]$Stage,[IntPtr]$Window=[IntPtr]::Zero,[Nullable[bool
     if($null -ne $Resumed){$entry.resumed=$Resumed}
     if($process){$entry.window=[QuotumWindowProbe]::Snapshot($Window,$process.Id)}
     $timeline.Add($entry)
-    if($Diagnostics){
-      New-Item -ItemType Directory -Force $Diagnostics | Out-Null
-      [IO.File]::WriteAllText((Join-Path $Diagnostics 'timeline.json.tmp'),(ConvertTo-Json -InputObject $timeline.ToArray() -Depth 10))
-      Move-Item -LiteralPath (Join-Path $Diagnostics 'timeline.json.tmp') -Destination (Join-Path $Diagnostics 'timeline.json') -Force
-    }
-  } catch {Write-Warning 'Native stage evidence unavailable'}
+    Save-Timeline
+  } catch {
+    # A warning sink may block too; failure evidence stays bounded in memory.
+    $manifest.errors=@('native stage evidence unavailable')
+  }
 }
 Save-Stage 'initial'
 
@@ -99,12 +130,19 @@ function Save-PanelProgress([int]$Cycle) {
   } catch {Write-Warning 'Numeric panel progress unavailable'}
 }
 
-function Save-ObservedPause($Observer,[string]$Kind,$From,$To,$Resumed) {
-  $observed=Stop-WaitObserver $Observer
-  if(-not $Diagnostics){return}
-  $observed.pause=@{from=$From;to=$To;resumed=$Resumed}
-  try {[IO.File]::WriteAllText((Join-Path $Diagnostics ('wait-chain-'+$Kind+'.json')),(ConvertTo-Json -InputObject $observed -Depth 9))} catch {Write-Warning 'Wait-chain artifact unavailable'}
-  if(-not $observed.stopped){$manifest.errors+=@('wait observer cleanup unconfirmed');Save-Manifest;throw 'Wait observer cleanup unconfirmed'}
+function Save-ObservedPause($Observer,[string]$Kind,$From,$To,$Resumed,$Failure=$null) {
+  if($nativePauseDepth -or $nativeResumeFailed){return}
+  try {
+    $observed=Stop-WaitObserver $Observer
+    if(-not $Diagnostics){return}
+    $observed.pause=@{from=$From;to=$To;resumed=$Resumed}
+    try {[IO.File]::WriteAllText((Join-Path $Diagnostics ('wait-chain-'+$Kind+'.json')),(ConvertTo-Json -InputObject $observed -Depth 9))} catch {Write-Warning 'Wait-chain artifact unavailable'}
+    if(-not $observed.stopped){throw 'Wait observer cleanup unconfirmed'}
+  } catch {
+    $manifest.errors+=@('wait observer cleanup unconfirmed')
+    try {Save-Manifest} catch {}
+    if($null -eq $Failure){throw}
+  }
 }
 
 function Wait-Window {
@@ -169,17 +207,20 @@ function Test-QueuedPanelReopen([IntPtr]$Except) {
   do {$panel=[QuotumWindowProbe]::FindOther($process.Id,$Except);if($panel -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
   if($process.HasExited){throw "Controller exited during queued reopen: $($process.ExitCode)"}
   if($panel -eq [IntPtr]::Zero){throw 'No panel for queued-close check'}
-  $paused=[QuotumWindowProbe]::PauseUi($panel,$process.Id)
-  Save-Stage 'queued-panel-paused' $panel
+  $paused=$null;$pauseFailure=$null
   try {
+    $paused=Enter-NativePause { [QuotumWindowProbe]::PauseUi($panel,$process.Id) }
+    Save-Stage 'queued-panel-paused' $panel
     [void][QuotumWindowProbe]::PostMessage($panel,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
     if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot toggle queued panel closed'}
     Start-Sleep -Milliseconds 100
     if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot request panel reopen'}
     Start-Sleep -Milliseconds 100
-  } finally {
+  } catch {$pauseFailure=$_;throw} finally {
     $resumed=$false
-    try {[QuotumWindowProbe]::ResumeUi($paused);$resumed=$true} finally {Save-Stage 'queued-panel-resume' $panel $resumed}
+    try {
+      if($paused){$resumed=Resume-NativePause $paused {param($target) [QuotumWindowProbe]::ResumeUi($target)} $pauseFailure}
+    } finally {Save-Stage 'queued-panel-resume' $panel $resumed}
   }
   $deadline=(Get-Date).AddSeconds(15)
   Start-Sleep -Seconds 2
@@ -196,15 +237,16 @@ function Test-QueuedPanelReopen([IntPtr]$Except) {
 
 function Test-MainPanelHandoff([IntPtr]$Main) {
   $observer=Prepare-WaitObserver
+  $handoffFailure=$null
   try {
     if(-not [QuotumWindowProbe]::OpenPanel($process.Id)){throw 'Cannot open panel before main handoff'}
     $deadline=(Get-Date).AddSeconds(15)
     do {$old=[QuotumWindowProbe]::FindOther($process.Id,$Main);if($old -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 50}while((Get-Date) -lt $deadline)
     if($old -eq [IntPtr]::Zero){throw 'No initial panel before main handoff'}
     $pauseFrom=$null;$resumeFrom=$null
-    $paused=$null
+    $paused=$null;$pauseFailure=$null
     try {
-      $paused=[QuotumWindowProbe]::MainRequestThenPause($process.Id,$appPath)
+      $paused=Enter-NativePause { [QuotumWindowProbe]::MainRequestThenPause($process.Id,$appPath) }
       $pauseFrom=[DateTime]::UtcNow.Ticks
       $tray=[QuotumWindowProbe]::Snapshot([QuotumWindowProbe]::Tray($process.Id),$process.Id)
       Watch-OwnedThreads $observer @([QuotumWindowProbe]::LastDispatch.Thread,$tray.Thread)
@@ -215,13 +257,17 @@ function Test-MainPanelHandoff([IntPtr]$Main) {
       Save-Stage 'main-handoff-loader' $loader
       if($loader -eq [IntPtr]::Zero){throw 'Main handoff: loader missing within 3s'}
       if(-not [QuotumWindowProbe]::Responsive($loader,$process.Id)){Save-Stage 'main-handoff-unresponsive-before-resume';throw 'Main handoff: loader unresponsive'}
-    } finally {
-      $resumeFrom=[DateTime]::UtcNow.Ticks
-      if($Diagnostics){Save-Stage 'main-handoff-before-resume'}
-      try {if($paused){$paused.Dispose()}} finally {
-        Save-Stage 'main-handoff-resume' $Main $(if($paused){$paused.Resumed}else{$null})
-        $kind=if($Main -eq [IntPtr]::Zero){'only-panel'}else{'with-main'}
-        Save-ObservedPause $observer $kind $pauseFrom $resumeFrom $(if($paused){$paused.Resumed}else{$null})
+    } catch {$pauseFailure=$_;throw} finally {
+      $resumed=$false
+      try {if($Diagnostics){Save-Stage 'main-handoff-before-resume'}} finally {
+        $resumeFrom=[DateTime]::UtcNow.Ticks
+        try {
+          if($paused){$resumed=Resume-NativePause $paused {param($target) $target.Dispose()} $pauseFailure}
+        } finally {
+          Save-Stage 'main-handoff-resume' $Main $(if($paused){$resumed}else{$null})
+          $kind=if($Main -eq [IntPtr]::Zero){'only-panel'}else{'with-main'}
+          Save-ObservedPause $observer $kind $pauseFrom $resumeFrom $(if($paused){$resumed}else{$null}) $pauseFailure
+        }
       }
     }
     Start-Sleep -Seconds 2
@@ -278,7 +324,9 @@ function Test-MainPanelHandoff([IntPtr]$Main) {
       $result.mainPanelHandoffRelease = [ordered]@{startedUtc=$recheckStartedUtc; endedUtc=[datetime]::UtcNow.ToString('o'); snapshotBrowserCount=$browsersLeft.Count; remainingBrowserCount=$remainingBrowserCount; visibleWindow=$remainingWindow.ToInt64(); browserChecks=$browserChecks; omittedBrowserChecks=[Math]::Max(0, $browsersLeft.Count - 16)}
       if($remainingBrowserCount -or $remainingWindow -ne [IntPtr]::Zero){throw 'Cancelled main creation retained a window or WebView'}
     }
-  } finally {if($observer -and $observer.Process){Save-ObservedPause $observer 'handoff-setup' $null $null $null}}
+  } catch {$handoffFailure=$_;throw} finally {
+    if($observer -and $observer.Process){Save-ObservedPause $observer 'handoff-setup' $null $null $null $handoffFailure}
+  }
 }
 
 try {
@@ -435,9 +483,9 @@ try {
   if(-not [QuotumWindowProbe]::IsIconic($window) -or [QuotumWindowProbe]::Foreground($window)){throw 'Could not put the test UI thread in the background'}
   foreach($cancel in @($false,$true)) {
     $observer=$loadingObservers[[int]$cancel]
-    $paused=$null;$pauseFrom=$null
+    $paused=$null;$pauseFrom=$null;$pauseFailure=$null
     try {
-      $paused=[QuotumWindowProbe]::PauseUi($window,$process.Id)
+      $paused=Enter-NativePause { [QuotumWindowProbe]::PauseUi($window,$process.Id) }
       $pauseFrom=[DateTime]::UtcNow.Ticks
       if(-not [QuotumWindowProbe]::IsIconic($window) -or [QuotumWindowProbe]::Foreground($window)){throw 'The test window left the background while pausing its UI thread'}
       $ui=[QuotumWindowProbe]::Snapshot($window,$process.Id)
@@ -459,14 +507,17 @@ try {
         while([QuotumWindowProbe]::IsWindowVisible($loader) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 10}
         if([QuotumWindowProbe]::IsWindowVisible($loader)){throw 'Escape could not cancel native loading'}
       }
-    } finally {
+    } catch {$pauseFailure=$_;throw} finally {
       $resumed=$false
-      $resumeFrom=[DateTime]::UtcNow.Ticks
-      if($Diagnostics){Save-Stage 'ui-before-resume'}
-      try {if($paused){[QuotumWindowProbe]::ResumeUi($paused);$resumed=$true}} finally {
-        Save-Stage 'ui-resume' $window $resumed
-        $kind=if($cancel){'cancel-loading'}else{'ready-loading'}
-        Save-ObservedPause $observer $kind $pauseFrom $resumeFrom $resumed
+      try {if($Diagnostics){Save-Stage 'ui-before-resume'}} finally {
+        $resumeFrom=[DateTime]::UtcNow.Ticks
+        try {
+          if($paused){$resumed=Resume-NativePause $paused {param($target) [QuotumWindowProbe]::ResumeUi($target)} $pauseFailure}
+        } finally {
+          Save-Stage 'ui-resume' $window $resumed
+          $kind=if($cancel){'cancel-loading'}else{'ready-loading'}
+          Save-ObservedPause $observer $kind $pauseFrom $resumeFrom $resumed $pauseFailure
+        }
       }
     }
     if($cancel){

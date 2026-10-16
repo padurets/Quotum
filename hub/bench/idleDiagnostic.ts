@@ -25,6 +25,7 @@ export function idleSensitivity(baselineScriptMsPerSecond:number,copies:readonly
 export async function doubledIdle(browser: Browser, primary: Cdp, base: string, seconds: number, cellMs: number, evidence: Evidence, heard: Heard, baselineScriptMsPerSecond:number) {
   if (!browser.owned) throw new Error('idle sensitivity requires an owned synthetic browser');
   const extra = await openTab(browser);
+  let failed = false;
   try {
     const {cdp} = extra;
     await cdp.send('Page.enable'); await cdp.send('Network.enable'); await cdp.send('Performance.enable');
@@ -64,5 +65,8 @@ export async function doubledIdle(browser: Browser, primary: Cdp, base: string, 
       ...idleSensitivity(baselineScriptMsPerSecond,reports.map(report=>report.scriptMsPerSecond),phaseValid)};
     evidence.save('idle-double', result);
     return result;
-  } finally {await extra.close();}
+  } catch (error) {failed = true; throw error;}
+  finally {
+    try {await extra.close();} catch (error) {if (!failed) throw error;}
+  }
 }

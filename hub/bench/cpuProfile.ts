@@ -301,6 +301,7 @@ export async function profilePanning(cdp: Cdp, browser: Browser, evidence?: File
 export async function profileControls(browser: Browser, evidence: Files) {
   if (!browser.owned) throw new Error('CPU profile controls require an owned synthetic browser');
   const tab = await openTab(browser), intervals: {kind: string; rate: number; from: number; to: number}[] = [];
+  let failed = false;
   let reading: {status: string; clocks: Clock[]; profile?: ReturnType<typeof numericProfile>} | undefined;
   try {
     await tab.cdp.send('Performance.enable');
@@ -331,5 +332,8 @@ export async function profileControls(browser: Browser, evidence: Files) {
         && (report.kind === 'busy' ? report.certainFunctionSamples! >= 20 : report.possibleFunctionSamples! < 20));
     evidence.save('cpu-controls', {mode: 'diagnostic', status: valid ? 'passed' : 'insufficient-evidence', intervals: reports});
     if (!valid) throw new Error('CPU sample controls did not distinguish execution from timer waiting');
-  } finally {await tab.close();}
+  } catch (error) {failed = true; throw error;}
+  finally {
+    try {await tab.close();} catch (error) {if (!failed) throw error;}
+  }
 }

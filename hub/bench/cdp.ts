@@ -246,7 +246,11 @@ export function openTab(browser: Browser): Promise<{cdp: Cdp; close(): Promise<v
         await response.body?.cancel();
         if (!response.ok) throw new Error('DevTools could not close the owned target');
       });
-    })();
+    })().catch(error => {
+      browser.owner?.failures.push('owned target cleanup failed');
+      console.error('bench: owned target cleanup failed');
+      throw error;
+    });
     const close = browser.owner?.resource(closeTab) ?? closeTab;
     try {
       signal?.throwIfAborted();
@@ -255,7 +259,7 @@ export function openTab(browser: Browser): Promise<{cdp: Cdp; close(): Promise<v
       signal?.addEventListener('abort', abortConnection, {once: true});
       signal?.throwIfAborted();
       return {cdp, close};
-    } catch (error) {try {await close();} catch {browser.owner?.failures.push('owned target cleanup failed');} throw error;}
+    } catch (error) {try {await close();} catch { /* The target closer retains its own failure. */ } throw error;}
   };
   return browser.owner ? browser.owner.operation(work) : work();
 }

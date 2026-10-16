@@ -234,13 +234,14 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
           const probeStarted=performance.now(), span = spans.probe();
           const probe=state.probes={attempts:(state.probes?.attempts??0)+1,stage:'headers',elapsedMs:0,failures:state.probes?.failures??{}} as NonNullable<LaunchReport['probes']>;
           try {
-            const reply = await deadline(1_000, async signal => {
-              try {return await devtoolsJson(candidate + '/json/version', signal, 'GET',(stage,status)=>{
+            let reply: {Browser?: unknown; webSocketDebuggerUrl?: unknown};
+            try {
+              // Headers and the entire body share the remaining startup deadline.
+              reply = await devtoolsJson(candidate + '/json/version', pending, 'GET',(stage,status)=>{
                 span[stage] = spans.clock(); if (status !== undefined) span.status = status;
                 probe.stage=stage;probe.status=status;progress?.(snapshot());
-              });}
-              catch(error){probe.reason=probeFailure(error,signal.aborted);throw error;}
-            }, pending) as {Browser?: unknown; webSocketDebuggerUrl?: unknown};
+              }) as typeof reply;
+            } catch(error){probe.reason=probeFailure(error,pending.aborted);throw error;}
             span.jsonTo = spans.clock();
             failure = 'invalid-reply'; state.failure = failure; state.stage = 'reply';
             probe.reason='invalid-endpoint';
