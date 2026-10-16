@@ -63,6 +63,22 @@ function harness(budget?: number, preparations?: Preparations, scope?: 'quota'|'
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
 
+test('metadata tokens belong to the retained board, run and meter selection', async () => {
+  const h=harness();
+  try {
+    assert.equal(h.store.metadataToken('b'),undefined);
+    await h.start();await h.reads[0].answer({meta:'captured'});
+    assert.equal(h.store.metadataToken('b'),'captured');
+    assert.equal(h.store.metadataToken('other'),undefined);
+    h.store.setMeters({unit:'USD',ids:[['s','balance']]});
+    assert.equal(h.store.metadataToken('b'),undefined);await flush();
+    await h.reads.at(-1)!.answer({meta:'selected'});assert.equal(h.store.metadataToken('b'),'selected');
+    h.store.hello('next-run');assert.equal(h.store.metadataToken('b'),undefined);
+    h.store.open('other');assert.equal(h.store.metadataToken('b'),undefined);
+    h.store.close();assert.equal(h.store.metadataToken('b'),undefined);
+  }finally{h.store.close();}
+});
+
 test('settings retain live invalidations without reading history until the dashboard returns', async () => {
   const h = harness();
   h.store.setActive(false);

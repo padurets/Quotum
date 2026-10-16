@@ -121,6 +121,8 @@ export class HistoryStore {
 
   constructor(private readonly env: HistoryEnv, private readonly budget = STORED_BYTES, readonly scope?: HistoryScope, private readonly pool?: HistoryPool) {this.planWatch=(env.clock??clock).watch();pool?.register(this);}
 
+  metadataToken(board:string) {return this.board===board&&this.meta?.run===this.run?this.meta?.meta:undefined;}
+
   /** Settings keep the board's live context without reading or preparing its charts. */
   setActive(active: boolean) {
     if (this.active === active) return;
@@ -965,6 +967,7 @@ function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
   value.setActive(false);return value;
 }
 export const quotaHistory = reader('quota'), budgetHistory = reader('budget'), fundsHistory = reader('budget','funds');
+boardPeriod.transport.metadataToken=(board,scope)=>(scope==='quota'?quotaHistory:scope==='funds'?fundsHistory:budgetHistory).metadataToken(board);
 export const loader = quotaHistory;
 let shellActive = false;
 const selectedMeters = (state: PageState, scope: HistoryScope, family: MoneyFamily = 'budget') => {

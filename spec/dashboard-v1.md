@@ -469,6 +469,10 @@ Each history section keeps the existing
 cell, selection and eight-tile limits below. `evidence` is its previously returned opaque
 tape cursor; `skip` asks only for cells during progressive panning. Conversely,
 `cells: 'skip'` reads the boundary tape while reusing already cached cells.
+A standalone tape request may reuse its drawing reader's metadata token from the
+same board and hub run. The browser captures only that token before waiting for
+transport admission; mixed cell and tape requests keep their captured cell bases.
+A changed token receives full metadata through the usual fallback below.
 
 The response has a common `basis` and only the requested sections. A basis is
 `{run, revision, evaluatedAt, evidenceCut, range: {from,to}}`. The hub expires quiet

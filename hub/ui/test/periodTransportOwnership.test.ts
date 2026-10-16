@@ -15,12 +15,12 @@ type ReaderState={flights:Set<{role:'visible'|'ahead';startedAt:number}>;respons
 const state=(reader:HistoryStore)=>reader as unknown as ReaderState;
 
 /** The HTTP boundary is a stand-in; the readers, tiles and yielding preparation are real. */
-function fixture() {
+function fixture(extras:Partial<PeriodRequest>={}) {
   const pool=new HistoryPool(),jobs:(()=>void)[]=[],attempts:Attempt[]=[],timers:number[]=[];
   let clock=0,elapsed=0,generation=1,now=NOW;
   const scheduled=new Map<object,{at:number;run():void}>();
   const preparer=new Preparations({now:()=>clock++,post:run=>jobs.push(run)},-1);
-  const intent=():PeriodIntent=>({board:'b',generation,revision:generation,request:{version:1,selection:{mode:'range',from:NOW-H,to:NOW},evaluatedAt:NOW}});
+  const intent=():PeriodIntent=>({board:'b',generation,revision:generation,request:{version:1,selection:{mode:'range',from:NOW-H,to:NOW},evaluatedAt:NOW,...extras}});
   const transport=new PeriodTransport(pool,intent,()=>{},(_board,body,signal,reserve)=>new Promise((resolve,reject)=>{
     const basis={run:'run',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:NOW-H,to:NOW}};
     const reply:PeriodReply={basis};
@@ -52,6 +52,7 @@ function fixture() {
     },pool.budget,scope==='quota'?'quota':'budget',pool);
     readers.set(scope,reader);
   }
+  transport.metadataToken=(board,scope)=>readers.get(scope)?.metadataToken(board);
   const start=(scope:PeriodScope)=>{
     const reader=readers.get(scope)!;
     reader.choose('1h',null);
@@ -76,6 +77,34 @@ function owner(initial:'visible'|'ahead'='visible') {
 }
 const query={cell:'60000',from:'10800000',to:'14400000'};
 const scopes=(body:PeriodRequest)=>PERIOD_SCOPES.filter(scope=>body[scope]);
+
+test('the first standalone baseline reuses metadata committed by its actual drawing reader',async()=>{
+  const h=fixture({quota:{...query,cells:'skip'}});try{
+    h.start('quota');await flush();assert.equal(h.attempts.length,1);
+    assert.equal(h.attempts[0].body.quota!.meta,'');
+    await h.attempts[0].answer();
+    for(let i=0;i<1000&&h.attempts.length<2;i++)await h.tick();
+    assert.equal(h.attempts.length,2);
+    assert.equal(h.readers.get('quota')!.metadataToken('b'),'metadata-quota');
+    assert.equal(h.attempts[1].body.quota!.cells,'skip');
+    assert.equal(h.attempts[1].body.quota!.meta,'metadata-quota');
+    await h.attempts[1].answer();await h.finish();
+  }finally{await h.close();}
+});
+
+test('a standalone baseline captures its metadata token before waiting for pool admission',async()=>{
+  const pool=new HistoryPool(),blockers=[{role:'visible' as const},{role:'visible' as const}],sent:PeriodRequest[]=[];
+  let token='captured';
+  const intent:PeriodIntent={board:'b',generation:1,revision:1,request:{version:1,selection:{mode:'range',from:NOW-H,to:NOW},evaluatedAt:NOW,quota:{...query,cells:'skip'}}};
+  const transport=new PeriodTransport(pool,()=>intent,()=>{},(_board,body,signal)=>new Promise((_resolve,reject)=>{sent.push(body);signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')),{once:true});}));
+  transport.metadataToken=()=>token;
+  try{
+    for(const flight of blockers)pool.request({estimatedBytes:0,evictionCandidates:()=>[]},flight,()=>{},()=>{});
+    transport.change();await flush();assert.equal(sent.length,0);
+    token='later';pool.release(blockers[0]);await flush();
+    assert.equal(sent.length,1);assert.equal(sent[0].quota!.meta,'captured');
+  }finally{transport.reset();for(const flight of blockers)pool.release(flight);await flush();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);}
+});
 
 test('three families share one HTTP slot and retain decoded input through actual COW commit or cancellation',async()=>{
   const h=fixture();try{

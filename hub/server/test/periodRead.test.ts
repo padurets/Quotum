@@ -64,6 +64,14 @@ test('opted-in period cells borrow source ordinals only from their captured hist
   assert.deepEqual(expandHistory(restored.quota.value,prior).chunks,initial.value.chunks);
   assert.equal(JSON.stringify(prior),retained,'decoding cannot mutate retained metadata');
   assert.equal((await h.read(request)).body,legacy.body,'packing cannot change cached server cells');
+  const baseline:PeriodRequest={...body,selection:{mode:'range',from:now-H,to:now},quota:{...body.quota!,cells:'skip',evidence:undefined,meta:''}};
+  const full=(await h.read(baseline)).json<PeriodReply>(),compactResponse=await h.read({...baseline,quota:{...baseline.quota!,meta:prior.meta}});
+  assert.equal(compactResponse.statusCode,200,compactResponse.body);
+  const compact=compactResponse.json<PeriodReply>();
+  if(full.quota?.state!=='complete'||compact.quota?.state!=='complete')throw new Error('missing baseline');
+  assert.ok('known' in full.quota.value);assert.equal('known' in compact.quota.value,false);
+  assert.deepEqual(expandHistory(compact.quota.value,prior),expandHistory(full.quota.value),'baseline tapes and all native facts survive metadata borrowing');
+  assert.ok(compactResponse.body.length<JSON.stringify(full).length);
   const source=h.store.source('codex','b'.repeat(24),now-H);h.store.hold(source,h.user.id,now-H);
   const changed=(await h.read(request,h.board,headers)).json();
   assert.ok(changed.quota.value.known.sources[source]!==undefined,'a changed source set supplies fresh metadata');

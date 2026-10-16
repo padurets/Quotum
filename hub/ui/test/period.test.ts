@@ -265,6 +265,33 @@ test('source capability covers every captured token and accepts an older hub rep
   assert.deepEqual(headers,['basis',null,null]);
 });
 
+test('standalone metadata borrowing preserves mixed drawing source capabilities',async t=>{
+  const prior:HistoryBasis={run:'r',now:1000,meta:'captured',historyStart:0,known:{work:0,sources:{source:0}}};
+  const basis={run:'r',revision:'1',evaluatedAt:1000,evidenceCut:1000,range:{from:0,to:1000}};
+  const sent:{body:PeriodRequest;header:string|null}[]=[];
+  t.mock.method(globalThis,'fetch',async(_url:RequestInfo|URL,init?:RequestInit)=>{
+    const body=JSON.parse(String(init?.body)) as PeriodRequest;sent.push({body,header:new Headers(init?.headers).get('x-quotum-history-sources')});
+    return new Response(JSON.stringify({basis,...Object.fromEntries((['quota','funds'] as const).filter(scope=>body[scope]).map(scope=>[scope,{state:'complete',basis,value:{run:'r',now:1000,meta:body[scope]!.meta,chunks:[]}}]))}));
+  });
+  for(const mixed of [false,true]){
+    const pool=new HistoryPool(),request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:1000},evaluatedAt:1000,quota:{cell:'1',from:'0',to:'1000',cells:'skip'},...(mixed?{funds:{cell:'1',from:'0',to:'1000',cells:'skip'}}:{})};
+    const intent:PeriodIntent={board:'b',generation:1,revision:1,request};let borrowed=0,received=0;
+    const transport=new PeriodTransport(pool,()=>intent,()=>{received++;},fetchPeriod);
+    transport.metadataToken=()=>{borrowed++;return 'standalone-token';};
+    try{
+      if(mixed){
+        transport.restoreEvidence(new Map(['quota','funds'].map(scope=>[JSON.stringify(['b',scope,undefined,undefined,undefined]),'cursor'])));
+        await transport.read('quota',{cell:'1',from:'0',to:'1000',meta:prior.meta},undefined,undefined,prior);
+      }else transport.change();
+      for(let i=0;i<100&&!received;i++)await new Promise(resolve=>setImmediate(resolve));
+      await settle();assert.equal(received,1);assert.equal(borrowed,mixed?0:1);
+      assert.equal(sent.at(-1)!.header,mixed?'basis':null);
+      assert.equal(sent.at(-1)!.body.quota!.meta,mixed?'captured':'standalone-token');
+      if(mixed)assert.equal(sent.at(-1)!.body.funds!.meta,undefined);
+    }finally{transport.reset();await settle();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);}
+  }
+});
+
 test('an aborted parsed source reply cannot decode or publish its numeric slots',async t=>{
   const prior:HistoryBasis={run:'r',now:1000,meta:'captured',historyStart:0,known:{work:0,sources:{source:0}}};
   const body={basis:{run:'r'},quota:{state:'complete',value:{run:'r',meta:prior.meta,sourceEncoding:'basis',chunks:[]}}};

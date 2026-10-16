@@ -14,6 +14,7 @@ const roleOf=(demand:Demand)=>demand.signal?.aborted?null:demand.owner?demand.ow
 
 /** One event-loop collection combines chart sections with the period's other visible consumers. */
 export class PeriodTransport implements HistoryMember {
+  metadataToken?: (board:string,scope:PeriodScope)=>string|undefined;
   private queue:Demand[]=[];
   private scheduled=false;
   private resetEpoch=0;
@@ -69,6 +70,12 @@ export class PeriodTransport implements HistoryMember {
     this.flights.add(flight);
     const exactQueries:Partial<Record<PeriodScope,HistoryQuery>>={};
     if(extras)for(const scope of PERIOD_SCOPES){const query=intent.request[scope];if(query)exactQueries[scope]={...query,evidence:query.evidence??this.cursors.get(cursorKey(scope,query))};}
+    // Standalone ledgers need no cells or source decoding. Borrow only the
+    // drawing's captured token; a mixed body keeps its own demand bases.
+    if(extras&&!demands.length)for(const scope of PERIOD_SCOPES){
+      const query=exactQueries[scope],meta=query?.cells==='skip'&&query.meta===undefined?this.metadataToken?.(intent.board,scope):undefined;
+      if(query&&meta!==undefined)query.meta=meta;
+    }
     const body:PeriodRequest={...intent.request,...(!extras?{values:undefined,sessions:undefined,quota:undefined,budget:undefined,funds:undefined}:exactQueries),...Object.fromEntries(demands.map(d=>[d.scope,{...d.query}]))};
     const pendingBaseline=(['quota','funds','budget'] as const).filter(scope=>body[scope]&&!this.baselineParts.has(scope));
     const splitBaseline=baseline&&extras&&intent.request.selection.mode==='live';
