@@ -175,8 +175,9 @@ interval after the complete traffic matrix, retaining its load and 120-second wi
 It samples every two milliseconds to fit the existing 100,000-sample limit, binds
 numeric locations to the received client, and stops after idle. Profiler overhead is
 unqualified; its outcome is diagnostic and cannot satisfy the required benchmark.
-The optional `benchmark-idle-timing-diagnostics` PR label keeps that same traffic
-matrix and original idle interval, without a CPU profiler. A second connection to
+The optional `benchmark-idle-timing-diagnostics` PR label uses the dashboard job's
+prefix and original idle interval, without a CPU profiler or traffic matrix. Manual
+diagnostics without `--scope dashboard` retain the full prefix. A second connection to
 the owned target collects `threadTicks` performance counters before and after the
 original measurement. The required benchmark keeps its default elapsed clock and
 budget. The report retains both sets of raw counters and verifies that the thread
@@ -681,7 +682,7 @@ states remain visible when a baseline is incomplete. Counts use the original com
 JSON before expansion and must conserve its whole size; they do not allocate Brotli
 bytes to individual sections or change the budget verdict. These observations share
 the existing 64-read diagnostic limit and retain no response text.
-In idle timing diagnostics only, those same baselines also measure a shadow reply
+When idle timing diagnostics include history, those baselines also measure a shadow reply
 with each final card replay interval omitted when the base value fully covers it.
 The original reply must survive a byte-exact expand/repack round trip, and its
 recompressed size must match the observed body under the proxy's exact codec.
