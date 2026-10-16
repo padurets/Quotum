@@ -133,8 +133,10 @@ async function main() {
     const dashboardPanning = options.scope === 'dashboard' && options.ci && (panDiagnostic === 'cpu' || panDiagnostic === 'trace');
     const dashboardIdleTiming = options.scope === 'dashboard' && options.ci && !options.cdp && idleTimingDiagnostic === '1'
       && ![panDiagnostic, idleDiagnostic, idleCpuMode, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE].some(Boolean);
+    const dashboardIdleProfile = options.scope === 'dashboard' && options.ci && !options.cdp && idleCpuMode === 'profile'
+      && ![panDiagnostic, idleDiagnostic, idleTimingDiagnostic, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE].some(Boolean);
     if ((panDiagnostic === 'cpu' || dashboardPanning) && (options.cdp || otherDiagnostics.some(Boolean))) throw new Stop('Panning diagnostics require an owned browser without another diagnostic mode');
-    if (options.scope !== 'all' && [panDiagnostic, ...otherDiagnostics].some(Boolean) && !dashboardPanning && !dashboardIdleTiming) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
+    if (options.scope !== 'all' && [panDiagnostic, ...otherDiagnostics].some(Boolean) && !dashboardPanning && !dashboardIdleTiming && !dashboardIdleProfile) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
     if (startupDiagnostic && (startupDiagnostic !== '1' || options.cdp || panDiagnostic || idleDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup diagnostic mode');
     if (startupWaitDiagnostic && (startupWaitDiagnostic !== '1' || !options.ci || process.platform !== 'linux' || options.cdp || startupDiagnostic || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup wait diagnostic mode');

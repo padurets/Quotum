@@ -89,7 +89,7 @@ jobs:
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
       - run: npm run build
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope dashboard
         env:
           # Keep the original window: aligning it can miss conditional preparation.
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: 'profile'

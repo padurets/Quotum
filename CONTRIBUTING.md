@@ -170,8 +170,9 @@ single-board baseline. The report retains both costs, their ratio and whether th
 sum crosses the unchanged 0.3 ms/s budget; crossing it is not required to detect
 growth. Invalid measurements or no growth fail this sensitivity experiment, which
 cannot replace CI.
-The optional `benchmark-idle-cpu-diagnostics` PR label profiles the original CI idle
-interval after the complete traffic matrix, retaining its load and 120-second window.
+The optional `benchmark-idle-cpu-diagnostics` PR label uses the dashboard job's prefix
+and profiles its original CI idle interval, retaining its load and 120-second window.
+Manual diagnostics without `--scope dashboard` retain the complete traffic matrix.
 It samples every two milliseconds to fit the existing 100,000-sample limit, binds
 numeric locations to the received client, and stops after idle. Profiler overhead is
 unqualified; its outcome is diagnostic and cannot satisfy the required benchmark.
