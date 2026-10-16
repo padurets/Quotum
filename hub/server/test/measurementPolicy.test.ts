@@ -293,17 +293,17 @@ test('semantic versions distinguish prereleases, build metadata, and malformed r
 });
 
 test('quota, resets and exact subscription funds retain independent value and observation producers',()=>{
-  const {store,directory,ingest,credential,sender,user,batch}=setup();
+  const {store,ingest,credential,sender,user,batch}=setup();
   const send=(name:string,at:number,extra:object)=>ingest.accept(credential,{...batch(at,{client:'1.2.3',clientEvidence:'nativeHandshake',...extra}),machine:{...sender.machine,id:`independent-${name}-0123456789`,name}},at);
   const balance=(status:string,amount?:string)=>[{id:'balance:credits',unit:'credits:codex',status,...(amount===undefined?{}:{amount})}];
-  send('A',now,{resets:{available:2},balances:balance('finite','9.2500')});
-  send('B',now+1000,{windows:[],resourceStatus:{windows:'missing',resets:'missing'},balances:balance('finite','1.2300')});
-  const source=store.held(user.id)[0].id,devices=directory.devices(user.id),a=devices.find(d=>d.name==='A')!.id,b=devices.find(d=>d.name==='B')!.id;
+  const a=send('A',now,{resets:{available:2},balances:balance('finite','9.2500')}).device.id;
+  const b=send('B',now+1000,{windows:[],resourceStatus:{windows:'missing',resets:'missing'},balances:balance('finite','1.2300')}).device.id;
+  const source=store.held(user.id)[0].id;
   let origins=store.resourceOrigins(source);
   for(const resource of ['windows','resets']) {assert.equal(origins.find(o=>o.resource===resource)!.valueOrigin!.device,a);assert.equal(origins.find(o=>o.resource===resource)!.observationOrigin!.device,b);}
   assert.equal(origins.find(o=>o.resource==='funds')!.valueOrigin!.device,b);
-  send('C',now+2000,{resets:{available:2},balances:balance('missing')});
-  const c=directory.devices(user.id).find(d=>d.name==='C')!.id;origins=store.resourceOrigins(source);
+  const c=send('C',now+2000,{resets:{available:2},balances:balance('missing')}).device.id;
+  origins=store.resourceOrigins(source);
   for(const resource of ['windows','resets'])assert.equal(origins.find(o=>o.resource===resource)!.valueOrigin!.device,c);
   assert.equal(origins.find(o=>o.resource==='funds')!.valueOrigin!.device,b);assert.equal(origins.find(o=>o.resource==='funds')!.observationOrigin!.device,c);
   assert.equal(store.state(source).meters?.[0].amount,'123');
