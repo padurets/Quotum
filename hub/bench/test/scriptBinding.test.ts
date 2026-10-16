@@ -1,6 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import ts from 'typescript';
+import {panEvidenceScript,panTransactionsScript} from '../panEvidence.js';
 import {ScriptBinding} from '../scriptBinding.js';
 import {safeEvidence} from '../evidence.js';
 import {tracePanning} from '../panningDiagnostic.js';
@@ -176,4 +179,53 @@ test('failure cleanup without a completed family never enables source binding',a
 test('source-binding diagnostics never attach to another browser',async()=>{
   const f=traceFixture();await assert.rejects(tracePanning(f.cdp,{endpoint:'fixture',close:async()=>{}},f.evidence,async()=>({reports:[],problems:[]})),/owned synthetic/);
   assert.equal(f.sent.length,0);assert.equal(f.listeners.size,0);
+});
+
+function nativeSampler(initiator:string,period:string) {
+  const source=ts.createSourceFile('panning.ts',readFileSync(new URL('../panning.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true),templates:ts.TemplateExpression[]=[];
+  const visit=(node:ts.Node)=>{if(ts.isTemplateExpression(node)&&node.getText(source).includes('const probe=window.__quotumPan={'))templates.push(node);ts.forEachChild(node,visit);};
+  visit(source);assert.equal(templates.length,1);
+  const values:Record<string,string>={'JSON.stringify(initiator)':JSON.stringify(initiator),'JSON.stringify(period)':JSON.stringify(period),
+    'panEvidenceScript(evidence?.timeline === true)':panEvidenceScript(true),'panTransactionsScript()':panTransactionsScript()};
+  return templates[0].head.text+templates[0].templateSpans.map(span=>{const value=values[span.expression.getText(source)];assert.notEqual(value,undefined);return value+span.literal.text;}).join('');
+}
+
+test('native trace binds its actual sampler after both periods without reusing another family',async()=>{
+  const f=traceFixture(),original=f.cdp.send,owners:{url:string;hash:string;scriptId:string}[]=[];
+  f.cdp.send=(async(name:string,...args:unknown[])=>{
+    if(name==='Debugger.enable')for(const event of [{url,hash,scriptId:'4'},...owners])f.emit('Debugger.scriptParsed',event);
+    if(name==='Network.getResponseBody'){f.sent.push(name);return {body,base64Encoded:false};}
+    return original(name,...args as [object]);
+  }) as Cdp['send'];
+  await tracePanning(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},f.evidence,async cdp=>{
+    for(const [index,initiator]of ['activity','funds'].entries()){
+      f.emit('Network.responseReceived',{type:'Script',requestId:'private-canary',response:{url}});
+      const expected=[];owners.length=0;
+      for(const [offset,period]of ['24h','30d'].entries()){
+        const expression=nativeSampler(initiator,period),sourceHash=createHash('sha256').update(expression).digest('hex'),interval=index*2+offset+1;
+        expected.push({interval,kind:'native-sampler',bytes:Buffer.byteLength(expression),sourceHash});owners.push({url:'',hash:sourceHash,scriptId:String(20+interval)});
+        await cdp.evaluate(expression);await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});
+        assert.equal(f.sent.filter(name=>name==='Debugger.enable').length,index);
+        await cdp.send('Emulation.setCPUThrottlingRate',{rate:1});
+      }
+      await cdp.evaluate(`document.getElementById('quotum-pan-layout')?.remove()`);
+      const report=safeEvidence(f.files.get('source-family-'+(index+1))) as any;
+      assert.equal(report.status,'complete');assert.equal(report.injected.status,'complete');assert.deepEqual(report.injected.expected,expected);
+      assert.deepEqual(report.injected.owners.map((owner:any)=>[owner.scriptId,owner.intervals,owner.expectedHashMatches]),expected.map(value=>[20+value.interval,[value.interval],true]));
+      assert.ok(f.sent.lastIndexOf('Debugger.enable')>f.sent.lastIndexOf('Tracing.end'));
+      assert.doesNotMatch(JSON.stringify(report),/private-canary|scriptSource|__quotumPan/);
+    }
+    return {reports:[],problems:[]};
+  },client);
+  assert.equal(f.listeners.size,0);
+  for(const method of ['Network.getResponseBody','Debugger.enable','Debugger.disable'])assert.equal(f.sent.filter(name=>name===method).length,2);
+});
+
+test('a failed native sampler installation preserves its error without remembering an owner',async()=>{
+  const f=traceFixture(),error=new Error('sampler installation failed'),expression=nativeSampler('activity','24h');
+  f.cdp.evaluate=(async()=>{throw error;}) as Cdp['evaluate'];
+  await assert.rejects(tracePanning(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},f.evidence,async cdp=>{
+    await cdp.evaluate(expression);return {reports:[],problems:[]};
+  },client),value=>value===error);
+  assert.equal(f.files.has('source-injected-pending'),false);assert.deepEqual(f.sent,[]);assert.equal(f.listeners.size,0);
 });
