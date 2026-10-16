@@ -548,11 +548,25 @@ class BoardPeriod {
         const changedWork=new Set<string>(),tapes=new Map(previousTapes);let changedBytes=0;
         if(work!==previousWork)for(const refs of [work?.refs??[],previousWork?.refs??[]])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)&&previousIndex?.curves.groups.source.get(ref.source)!==index?.curves.groups.source.get(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}
         for(const [scope,entry] of previousTapes){
-          let scratch=0;const tape=yield*retention.retainTape(entry.tape,from,bytes=>{scratch+=bytes;charge(scope,scratch);});
-          if(tape!==entry.tape||scope==='quota'&&work!==previousWork){
-            const owned={...tape,quota:tape.quota.filter(row=>!entry.tape.quota.includes(row)),money:tape.money.filter(row=>!entry.tape.money.includes(row))},base=tapeBytes(owned);
-            charge(scope,base);const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves,entry.accounting,changedWork,bytes=>charge(scope,base+bytes));tapes.set(scope,{...entry,tape,accounting});
-          }else sizes.delete(scope);
+          if(scope==='quota'){
+            let scratch=0,proofBytes=128;charge(scope,proofBytes);
+            const tails=new Map<PeriodTape['quota'][number],retention.QuotaTail>();
+            try{
+              const tape=yield*retention.retainTapeWithTails(entry.tape,from,bytes=>{scratch+=bytes;charge(scope,scratch+proofBytes);},(before,after)=>{proofBytes+=192;charge(scope,scratch+proofBytes);tails.set(after,{before,after,removed:1});});
+              if(tape!==entry.tape||work!==previousWork){
+                const owned={...tape,quota:tape.quota.filter(row=>!entry.tape.quota.includes(row)),money:tape.money.filter(row=>!entry.tape.money.includes(row))},base=tapeBytes(owned);
+                const progress=(bytes:number)=>charge(scope,base+proofBytes+bytes);charge(scope,base+proofBytes);
+                const accounting=yield*(tails.size?PeriodAccounting.prepareRetirement(tape,work,index?.curves,entry.accounting,changedWork,progress,tails):PeriodAccounting.prepare(tape,work,index?.curves,entry.accounting,changedWork,progress));
+                tapes.set(scope,{...entry,tape,accounting});
+              }else charge(scope,proofBytes);
+            }finally{tails.clear();}
+          }else{
+            let scratch=0;const tape=yield*retention.retainTape(entry.tape,from,bytes=>{scratch+=bytes;charge(scope,scratch);});
+            if(tape!==entry.tape){
+              const owned={...tape,quota:tape.quota.filter(row=>!entry.tape.quota.includes(row)),money:tape.money.filter(row=>!entry.tape.money.includes(row))},base=tapeBytes(owned);
+              charge(scope,base);const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves,entry.accounting,changedWork,bytes=>charge(scope,base+bytes));tapes.set(scope,{...entry,tape,accounting});
+            }else sizes.delete(scope);
+          }
           yield;
         }
         const edge=yield*retention.retirementEdge(work,[...tapes.values()].map(entry=>entry.tape),from);

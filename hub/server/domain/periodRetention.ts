@@ -122,3 +122,16 @@ export function* retirementEdge(work:WorkTrace|null,tapes:Iterable<PeriodTape>,f
   }
   return at;
 }
+
+export type QuotaTail={readonly before:PeriodTape['quota'][number];readonly after:PeriodTape['quota'][number];readonly removed:1};
+/** Mint retirement evidence only from the original producer's actual returned rows. */
+export function* retainTapeWithTails(tape:PeriodTape,from:number,reserve:(bytes:number)=>void,retained:(before:PeriodTape['quota'][number],after:PeriodTape['quota'][number])=>void):Preparation<PeriodTape>{
+  const value=yield*retainTape(tape,from,reserve);
+  if(value===tape||value.quota.length!==tape.quota.length)return value;
+  for(let i=0;i<value.quota.length;i++){
+    const before=tape.quota[i],after=value.quota[i];
+    if(before.source===after.source&&before.window===after.window&&sampleCount(before.samples)===sampleCount(after.samples)+1)retained(before,after);
+    yield;
+  }
+  return value;
+}

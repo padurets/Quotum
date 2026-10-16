@@ -1,8 +1,9 @@
+import type {QuotaTail} from './periodRetention.js';
 import type {PeriodValues} from './periodValues.js';
 import {drain,type Preparation} from './prepare.js';
 import {edge} from './quota.js';
 import type {History,HistorySeries} from './history.js';
-import {sampleAt,sampleDeadlineAt,sampleCount,numberAt,numberBytes,numberColumn,lowerNumber,rateAt,rateObservations,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
+import {sampleAt,sampleDeadlineAt,sampleCount,numberAt,numberBytes,numberColumn,numberTail,lowerNumber,rateAt,rateObservations,type NumberColumn,type Numbers,type MoneyTape,type PeriodTape} from './periodTape.js';
 import type {MeterHistory} from './meterHistory.js';
 import {locatedIn,meterStep,plottedAmount,semanticsOf,type ExceptionalStep,type MeterSpan,type Reading,type MeterSemantics} from './meters.js';
 import {convertBy} from './currency.js';
@@ -42,6 +43,55 @@ class Intervals {
   in(range:PeriodRange){return this.cumulative(range.to)-this.cumulative(range.from);}
 }
 type QuotaSummary=Pick<HistorySeries,'consumed'|'coveredMs'|'remainingAtStart'|'remainingAtEnd'|'work'>;
+// Strict integer observation order bounds every covered prefix by the complete time span.
+function* integerTimes(column:Numbers):Preparation<boolean> {
+  if(!('base' in column)||!Object.is(column.base,0)||column.values!==null||!column.runs)return false;
+  const {ends,bases,steps}=column.runs;
+  if(!ends.length||ends.length!==bases.length||ends.length!==steps.length||ends.at(-1)!==column.length)return false;
+  let from=0,previous=-1,first=0;
+  for(let i=0;i<ends.length;i++){
+    const to=ends[i],base=bases[i],step=steps[i],product=(to-from-1)*step,last=base+product;
+    if(to<=from||!Number.isSafeInteger(base)||base<0||!Number.isSafeInteger(step)||step<0||to-from>1&&step===0
+      ||!Number.isSafeInteger(product)||!Number.isSafeInteger(last)||base<=previous)return false;
+    if(!i)first=base;previous=last;from=to;yield;
+  }
+  return Number.isSafeInteger(previous-first)&&previous-first<=Number.MAX_SAFE_INTEGER;
+}
+function* numericDeadlines(column:Numbers):Preparation<boolean> {
+  if(!('base' in column))return false;
+  if(!column.runs)return column.values===null?!Number.isNaN(column.base):column.values instanceof Uint32Array&&Number.isFinite(column.base);
+  const {ends,bases,steps}=column.runs;
+  if(!Object.is(column.base,0)||column.values!==null||!ends.length||ends.length!==bases.length||ends.length!==steps.length||ends.at(-1)!==column.length)return false;
+  for(let i=0,from=0;i<ends.length;from=ends[i++]){
+    const to=ends[i],base=bases[i],step=steps[i],product=(to-from-1)*step;
+    if(to<=from||!Number.isSafeInteger(base)||!Number.isSafeInteger(step)||!Number.isSafeInteger(product)||!Number.isSafeInteger(base+product))return false;
+    yield;
+  }
+  return true;
+}
+function* integerTailReady(column:Numbers,origin:number):Preparation<boolean> {
+  if(!('base' in column)||!Number.isSafeInteger(origin)||origin<0||!Number.isSafeInteger(column.base-origin))return false;
+  if(column.runs){
+    const {ends,bases,steps}=column.runs;
+    if(column.values!==null||!ends.length||ends.length!==bases.length||ends.length!==steps.length||ends.at(-1)!==column.length)return false;
+    for(let i=0,from=0;i<ends.length;from=ends[i++]){
+      const to=ends[i],step=steps[i],base=bases[i],start=Math.max(1,from);
+      if(to<=from)return false;
+      if(to>1){
+        const offset=(start-from)*step,product=(to-from-1)*step,head=base+offset,last=base+product;
+        if(step<0||![step,base,offset,product,head,last,head-origin,last-origin].every(Number.isSafeInteger)||head-origin<0)return false;
+      }
+      yield;
+    }
+  }
+  return true;
+}
+function* integerTail(column:Numbers,origin:number,reserve:(bytes:number)=>void):Preparation<Numbers> {
+  const tail=yield*numberTail(column as NumberColumn,1,reserve);
+  if(tail.runs){for(let i=0;i<tail.runs.bases.length;i++){tail.runs.bases[i]-=origin;yield;}}
+  else tail.base-=origin;
+  return tail;
+}
 class QuotaIndex {
   readonly times:Numbers;
   private deadlines:Numbers=new Float64Array(0);
@@ -87,6 +137,30 @@ class QuotaIndex {
     }
     value.worked=worked?yield*numberColumn(count,i=>worked[i]):{length:count,base:0,values:null};
     value.during=during?yield*numberColumn(count,i=>during[i]):{length:count,base:0,values:null};
+    return value;
+  }
+
+  // This path consumes only a producer-issued, single-observation retirement proof.
+  static *retire(series:PeriodTape['quota'][number],activity:WorkTimeline|undefined,known:number,prior:QuotaIndex,tail:QuotaTail,reserve?:(bytes:number)=>void):Preparation<QuotaIndex|undefined>{
+    if(tail.removed!==1||tail.before!==prior.series||tail.after!==series||!('columns' in prior.series.samples)||!('columns' in series.samples)
+      ||sampleCount(prior.series.samples)!==sampleCount(series.samples)+1||prior.activity!==activity||!Object.is(prior.known,known)
+      ||!('base' in prior.spent)||!('base' in prior.during)||!('base' in prior.worked)
+      ||!Object.is(numberAt(prior.spent,1),0)||!Object.is(numberAt(prior.during,1),0)||!Object.is(numberAt(prior.worked,1),0))return undefined;
+    const dropped=sampleDeadlineAt(prior.series.samples,0),origin=numberAt(prior.covered,1)!;
+    if(!(Number.isFinite(dropped)||dropped===Infinity)||!Object.is(dropped,numberAt(prior.deadlines,0))
+      ||!(yield*integerTimes(prior.series.samples.columns[0]))||!(yield*numericDeadlines(prior.deadlines))||!(yield*integerTailReady(prior.covered,origin)))return undefined;
+    const value=new QuotaIndex(series,activity,known,true);let scratch=0;
+    const copying=(bytes:number)=>{scratch+=bytes;reserve?.(scratch);};
+    yield;
+    value.deadlines=yield*numberTail(prior.deadlines as NumberColumn,1,copying);
+    yield;
+    value.spent=yield*numberTail(prior.spent as NumberColumn,1,copying);
+    yield;
+    value.covered=yield*integerTail(prior.covered,origin,copying);
+    yield;
+    value.worked=yield*numberTail(prior.worked as NumberColumn,1,copying);
+    yield;
+    value.during=yield*numberTail(prior.during as NumberColumn,1,copying);
     return value;
   }
 
@@ -368,6 +442,37 @@ export class PeriodAccounting {
       value.money.set(key,index);
     }
     return value;
+  }
+  // Ordinary preparation stays unchanged; only an actual retirement can enter here.
+  static *prepareRetirement(tape:PeriodTape,work:WorkTrace|null,curves:PeriodCurves|undefined,prior:PeriodAccounting,changedWork:ReadonlySet<string>,progress:((bytes:number)=>void)|undefined,tails:ReadonlyMap<PeriodTape['quota'][number],QuotaTail>):Preparation<PeriodAccounting>{
+    if(tape.fixed||!tails.size)return yield*PeriodAccounting.prepare(tape,work,curves,prior,changedWork,progress);
+    let meta=2048+tape.quota.length*640+tape.money.length*256,owned=0,scratch=0,partial:PeriodAccounting|undefined;
+    const charge=()=>progress?.(meta+owned+scratch);charge();
+    const rows:{key:string;index:QuotaIndex|undefined}[]=[],fallback:PeriodTape['quota']=[];
+    try{
+      const workCurves=curves??(work?yield*PeriodCurves.prepare(work):undefined);
+      for(const series of tape.quota){
+        meta+=4*(series.source.length+series.window.length+1);charge();
+        const key=series.source+'\n'+series.window,old=prior.quota.get(key);
+        let index=old?.series===series&&!changedWork.has(series.source)?old:undefined;
+        if(!index){
+          const tail=tails.get(series);
+          if(tail&&old){
+            scratch=sampleCount(series.samples)*88+1024;charge();
+            index=yield*QuotaIndex.retire(series,workCurves?.groups.source.get(series.source),series.workFrom===null||work?.available===false?Infinity:Math.max(work?.knownFrom??Infinity,series.workFrom??0),old,tail,bytes=>{scratch=Math.max(scratch,bytes);charge();});
+            scratch=0;if(index)owned+=index.bytes;charge();
+          }
+          if(!index)fallback.push(series);
+        }
+        rows.push({key,index});yield;
+      }
+      for(const group of tape.money){meta+=4*(group.source.length+group.meter.length+(group.displayUnit??group.readings[0]?.unit??'undefined').length+2);charge();yield;}
+      partial=yield*PeriodAccounting.prepare({...tape,quota:fallback},work,workCurves,prior,changedWork,bytes=>{scratch=bytes;charge();});
+      const value=new PeriodAccounting(tape,work,workCurves,true);
+      for(const row of rows){const index=row.index??partial.quota.get(row.key)!;value.quota.set(row.key,index);value.sampleTimes.set(row.key,index.times);yield;}
+      for(const [key,index] of partial.money){value.money.set(key,index);yield;}
+      return value;
+    }finally{rows.length=0;fallback.length=0;partial=undefined;}
   }
   get quotaBytes(){let bytes=0;for(const index of this.quota.values())bytes+=index.bytes;return bytes;}
   get bytes(){let bytes=this.quotaBytes;for(const index of this.money.values())bytes+=index.bytes;return bytes;}
