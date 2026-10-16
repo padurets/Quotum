@@ -381,6 +381,11 @@ export type Title = {title: string; provider: string};
 
 /** The names worked out lately, by what they were worked out of: the same object for the same names, whoever asks. */
 const titles = new Map<string, Record<string, Title>>();
+const titleFingerprints = new WeakMap<BoardState, string>();
+const titleSourcesOf = (board: BoardState | null) => (board?.lineup ?? []).flatMap(id => {
+  const card = board!.cards[id];
+  return card ? [{id, provider: card.provider, owners: card.owners}] : [];
+});
 
 /**
  * Every source of the open board named (`titled`): by the owners when that tells them
@@ -389,14 +394,17 @@ const titles = new Map<string, Record<string, Title>>();
  * name changes.
  */
 export function titlesOf(board: BoardState | null, names: Record<string, string> = board?.view.names ?? {}): Record<string, Title> {
-  const named = (board?.lineup ?? []).flatMap(id => {
-    const card = board!.cards[id];
-    return card ? [{id, provider: card.provider, owners: card.owners}] : [];
-  });
-  const key = JSON.stringify([named, names]);
+  let named: ReturnType<typeof titleSourcesOf> | undefined;
+  let fingerprint = board ? titleFingerprints.get(board) : '[]';
+  if (fingerprint === undefined) {
+    named = titleSourcesOf(board);
+    fingerprint = JSON.stringify(named);
+    if (board) titleFingerprints.set(board, fingerprint);
+  }
+  const key = `[${fingerprint},${JSON.stringify(names)}]`;
   let value = titles.get(key);
   if (!value) {
-    value = Object.fromEntries(titled(named, names).map(s => [s.id, {title: s.title, provider: s.provider}]));
+    value = Object.fromEntries(titled(named ?? titleSourcesOf(board), names).map(s => [s.id, {title: s.title, provider: s.provider}]));
     // A few: the saved view and the owner's changes to it are asked for side by side.
     if (titles.size >= 4) titles.delete(titles.keys().next().value!);
     titles.set(key, value);

@@ -279,6 +279,30 @@ test('the names of the cards stay the same object while no name changes', () => 
   );
 });
 
+test('device contacts reuse the board title fingerprint while drafts and providers still change titles', () => {
+  let providerReads = 0;
+  const source = card('s1');
+  Object.defineProperty(source, 'provider', {enumerable: true, get: () => {providerReads++; return 'codex';}});
+  const initial = run(hub({type: 'snapshot', data: snapshot({sources: [source, card('s2')]})}));
+  const saved = titlesOf(initial.board);
+  assert.ok(providerReads > 0, 'the first fingerprint reads the actual card');
+  providerReads = 0;
+  const contacted = reduce(initial, hub({type: 'deviceContacts', data: {devices: [{deviceId: 'title-contact', lastSeenAt: 2000}]}}));
+  assert.equal(contacted.board, initial.board);
+  assert.equal(titlesOf(contacted.board), saved);
+  assert.equal(titlesOf(contacted.board), saved);
+  assert.equal(providerReads, 0, 'an unchanged board does not project title inputs again');
+  const names: Record<string, string> = {s1: 'Home'};
+  const drafted = titlesOf(contacted.board, names);
+  names.s1 = 'Work';
+  assert.equal(titlesOf(contacted.board, names).s1.title, 'Work');
+  assert.equal(drafted.s1.title, 'Home');
+  const replaced = reduce(contacted, hub({type: 'card', data: card('s1', 50, {provider: 'claude'})}));
+  assert.notEqual(replaced.board, contacted.board);
+  assert.equal(titlesOf(replaced.board).s1.provider, 'claude');
+  assert.notEqual(titlesOf(replaced.board).s1.title, saved.s1.title);
+});
+
 test('a board is shown only as the one opened: another still in the store is nothing, and closing keeps nothing of it', () => {
   const s = run(hub({type: 'snapshot', data: snapshot()}), {type: 'connection', status: 'retrying', lostAt: 5});
   assert.equal(metaOf(s, 'b1')?.id, 'b1');
