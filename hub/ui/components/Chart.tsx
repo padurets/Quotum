@@ -1,4 +1,4 @@
-import {Fragment, memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode} from 'react';
+import {Fragment, memo, useEffect, useId, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
 import {pointIndex, preciseReadout, type PlotBlock, type PlotLine as Line} from '../lib/lines';
@@ -107,8 +107,18 @@ class LabelBoxes {
   private scale = NaN;
   private readonly saved = new Map<string, LabelBox>();
   private readonly fits = new Map<string, number | null>();
+  private readonly fontKeys = new Map<boolean, string>();
+  clearFonts() {this.fontKeys.clear();}
   private loaded(fonts: number, scale: number) {
-    if (this.fonts !== fonts || this.scale !== scale) {this.fonts = fonts; this.scale = scale; this.saved.clear(); this.fits.clear();}
+    if (this.fonts !== fonts || this.scale !== scale) {this.fonts = fonts; this.scale = scale; this.saved.clear(); this.fits.clear(); this.clearFonts();}
+  }
+  font(forecast: boolean, fonts: number, scale: number, read: () => string): string {
+    this.loaded(fonts, scale);
+    const known = this.fontKeys.get(forecast);
+    if (known !== undefined) return known;
+    const value = read();
+    this.fontKeys.set(forecast, value);
+    return value;
   }
   fit(text: string, name: string, room: number, forecast: boolean, fonts: number, scale: number, read: () => number | null | undefined): number | null | undefined {
     this.loaded(fonts, scale);
@@ -155,10 +165,12 @@ function MarkerLabel({x,y,end,color,children,shorten,fonts,scale,boxes,onTip}: {
   const degraded=!!shorten?.bounded&&(!valid||!!fit?.degraded);
   const shown=degraded?shorten!.say('…'):shorten&&valid&&fit.keep!==null?shorten.say(shortName(shorten.name,fit.keep)):children;
   const room=Math.max(1,shorten?.room??1);
-  const fontOf=(element:SVGTextElement)=>{
+  const fontOf=(element:SVGTextElement)=>boxes.font(!!color,fonts,scale,()=>{
     const style=getComputedStyle(element);
     return JSON.stringify([fonts,scale,style.fontFamily,style.fontSize,style.fontWeight,style.fontStyle,style.letterSpacing,style.fontStretch]);
-  };
+  });
+  // Every participating label clears before any layout effects read the shared styles.
+  useInsertionEffect(()=>{boxes.clearFonts();});
   useLayoutEffect(()=>{
     if(!shorten||!whole.current||!rest.current)return;
     let keep:number|null=null,failed=false;

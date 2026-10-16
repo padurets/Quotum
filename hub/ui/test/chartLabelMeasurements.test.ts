@@ -11,9 +11,10 @@ function labels() {
   const source = ts.createSourceFile('Chart.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const marker = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'MarkerLabel');
   assert.ok(marker && ts.isFunctionDeclaration(marker) && marker.body);
-  const effects: ts.Expression[] = [];
+  const effects: ts.Expression[] = [], insertions: ts.Expression[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isCallExpression(node) && node.expression.getText(source) === 'useLayoutEffect') effects.push(node.arguments[0]);
+    if (ts.isCallExpression(node) && node.expression.getText(source) === 'useInsertionEffect') insertions.push(node.arguments[0]);
     ts.forEachChild(node, visit);
   };
   visit(marker);
@@ -22,17 +23,21 @@ function labels() {
   const font = marker.body.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration => declaration.name.getText(source) === 'fontOf'));
   assert.ok(cache && font);
   type Backing = {x: number; width: number};
-  const context = {reads: 0, backing: null, make: null, draw: null,
-    getComputedStyle: () => ({fontFamily: 'Test', fontSize: '12px', fontWeight: '400', fontStyle: 'normal', letterSpacing: '0px', fontStretch: 'normal'}),
+  const style = {fontFamily: 'Test', fontSize: '12px', fontWeight: '600', fontStyle: 'normal', letterSpacing: '0px', fontStretch: 'normal'}, styleReads = {count: 0};
+  const context = {reads: 0, backing: null, make: null, draw: null, style, styleReads,
+    getComputedStyle: (element: {forecast?: boolean}) => {styleReads.count++; return {...style, fontWeight: element.forecast ? '500' : style.fontWeight};},
   } as unknown as {
     reads: number;
+    style: typeof style; styleReads: {count: number};
+    commit(boxes: object, participants?: number): void;
     make(): object;
     draw(cache: object, shown: string, end: boolean, color: string | undefined, fonts: number, x: number, offset: number, width: number, scale?: number): Backing;
   };
   const script = `${cache.getText(source)}
     globalThis.make = () => new LabelBoxes();
+    globalThis.commit = (boxes, participants = 1) => {for (let i = 0; i < participants; i++) {${insertions.map(effect => `(${effect.getText(source)})();`).join('')}}};
     globalThis.draw = (boxes, shown, end, color, fonts, x, offset, width, scale = 1) => {
-      const text = {current: {getBBox() {reads++; return {x: x + offset, width};}}};
+      const text = {current: {forecast: !!color, getBBox() {reads++; return {x: x + offset, width};}}};
       const shorten = undefined, degraded = false;
       ${font.getText(source)}
       const setBox = update => {backing = update(backing);};
@@ -42,6 +47,35 @@ function labels() {
   runInNewContext(ts.transpileModule(script, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText, context);
   return context;
 }
+
+test('one chart commit shares normal and forecast font reads across its caption cohort', () => {
+  const label = labels(), cache = label.make();
+  label.commit(cache, 24);
+  for (let i = 0; i < 24; i++) {
+    const box = label.draw(cache, 'Caption '+i, true, i % 2 ? 'series' : undefined, 0, 100, -38, 37);
+    assert.equal(box.width, 49);
+  }
+  assert.equal(label.reads, 24, 'each distinct caption keeps its own native bounds');
+  assert.equal(label.styleReads.count, 2, 'all insertion clears precede the cohort layouts');
+});
+
+test('a caption remounted by its child refreshes fonts while position and forecast hue reuse bounds', () => {
+  const label = labels(), cache = label.make();
+  label.commit(cache);
+  label.draw(cache, 'Caption', true, undefined, 0, 100, -38, 37);
+  label.style.fontFamily = 'Changed';
+  label.commit(cache);
+  const changed = label.draw(cache, 'Caption', true, undefined, 0, 100, -44, 43);
+  assert.equal(changed.width, 55);
+  assert.equal(label.reads, 2, 'the same caption and fonts generation see the new actual font');
+  assert.equal(label.styleReads.count, 2);
+  label.draw(cache, 'Caption', true, undefined, 0, 300, -44, 43);
+  label.draw(cache, 'Caption', true, 'series', 0, 100, -40, 39);
+  const reads = label.reads, styles = label.styleReads.count;
+  label.draw(cache, 'Caption', true, 'other-series', 0, 300, -40, 39);
+  assert.equal(label.reads, reads, 'position and hue preserve native glyph bounds');
+  assert.equal(label.styleReads.count, styles, 'forecast hues share their actual font');
+});
 
 test('remounted chart captions reuse glyph bounds at another position', () => {
   const label = labels(), cache = label.make();
