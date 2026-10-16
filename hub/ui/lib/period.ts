@@ -301,6 +301,8 @@ class BoardPeriod {
     const board=state.board;
     if(!board||event?.type==='board-close'){this.identity='';this.generation++;this.clear();return;}
     if(!this.active)return;
+    // Contacts update the device view, not the board's analytical demand.
+    if(event?.type==='hub'&&event.event.type==='deviceContacts')return;
     const snapshot=event?.type==='hub'&&event.event.type==='snapshot';
     const changedWork=this.workAuthority!==undefined&&board.workAuthority!==this.workAuthority;
     if(snapshot||!this.identity||event?.type==='hub'&&event.event.type==='history'&&event.event.data.workAuthority)this.workAuthority=board.workAuthority;

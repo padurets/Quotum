@@ -91,6 +91,29 @@ for(const options of [{},{personal:true},{personal:true,privateWork:true},{perso
   } finally {await h.close();}
 });
 
+test('device contacts update their own state without projecting period demand again',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true,current:true,clocked:true});
+  try{
+    const before=h.period.get(),board=h.page.get().board,tape=h.period.tapes.get('quota'),bytes=h.pool.estimatedBytes;
+    assert.ok(tape);
+    const queries=t.mock.method(h.period,'queries');
+    let published=0;const stop=h.period.subscribe(()=>published++);
+    try{
+      for(let i=1;i<=8;i++)h.event({type:'deviceContacts',data:{devices:[{deviceId:h.device,lastSeenAt:NOW+i*1000}]}});
+      await flush();
+      const contactProjections=queries.mock.callCount();
+      assert.equal(h.page.get().deviceContacts![h.device],NOW+8000);
+      assert.equal(h.page.get().board,board);assert.equal(h.period.get(),before);
+      assert.equal(h.period.tapes.get('quota'),tape);assert.equal(h.pool.estimatedBytes,bytes);
+      assert.equal(published,0);assert.equal(h.requests.length,0);
+      h.event({type:'history',data:{sources:[h.source],since:NOW-3*M}});await flush();
+      assert.equal(h.requests.length,1,'a subsequent history event still reads its new evidence');
+      assert.ok(queries.mock.callCount()>contactProjections);
+      assert.equal(contactProjections,0,'contacts must not rebuild unchanged analytical selections');
+    }finally{stop();}
+  }finally{await h.close();}
+});
+
 for(const status of ['connecting','retrying','paused'] as const)test(`lost ${status} continuity clears only current presence until an actual snapshot`,async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture({current:true});try{
     const before=h.period.get().rows[0],readDialog=dialog(h);
