@@ -17,7 +17,7 @@ import {chartProblems, creditRenderProblems, HISTORY_BYTES_PER_MEASUREMENT, idle
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
-import {MARGIN_MS, foreseenAt, idlePhaseProblems, idlePhaseScript, idleWindow, overviewCards, stillProblems, stillSnapshot, warmUntil, type IdlePhase} from './still.js';
+import {MARGIN_MS, fixtureTiming, foreseenAt, idlePhaseProblems, idlePhaseScript, idleWindow, overviewCards, stillProblems, stillSnapshot, warmUntil, type IdlePhase} from './still.js';
 import {hear, type Heard} from './stream.js';
 import {frequencyKeys, moneyView, selectMoney} from './controls.js';
 import {panning} from './panning.js';
@@ -169,7 +169,9 @@ async function main() {
     process.exit(code);
   })();
   const set = panningSet(SETS[0]);
-  const demo = new Demo({set, scene: set.scene, still: true, idleAgents: true,money:false, address, onExit: () => void finish(1)});
+  const timing=fixtureTiming(Date.now());
+  evidence.save('fixture-timing',timing);
+  const demo = new Demo({set, scene: set.scene, still: true, idleAgents: true,money:false, start:timing.start, address, onExit: () => void finish(1)});
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => {cancelled = true; void finish(1);});
 
   try {
@@ -272,7 +274,7 @@ async function main() {
       await new Promise(requestAnimationFrame);
       if (!document.querySelector('.analytics-head:not([hidden]) .period')) throw new Error('shared filters did not open');
     })()`);
-    const warm = warmUntil(await overview(), opened);
+    const warm = Math.max(warmUntil(await overview(), opened),timing.warmAt);
     say(`the board is open; it settles for ${Math.round((warm - Date.now()) / 1000)} s`);
     await sleep(warm - Date.now());
     if (heard.counts().history) throw new Stop('The stand credited agent work during warmup; its agents must be idle.');
@@ -303,24 +305,25 @@ async function main() {
     let originalIdleTimingProblems: string[] | undefined;
     const readIdle = async () => {
       const before = await metrics(cdp);
-      const counterFrom=idleCpu?Date.now():null;
+      const counterFrom=Date.now();
       const firstReading = await cdp.evaluate<Reading>('__quotumBench.read()');
       await sleep(to - Date.now());
       const lastReading = await cdp.evaluate<Reading>('__quotumBench.read()');
-      const counterTo=idleCpu?Date.now():null;
+      const counterTo=Date.now();
       const after = await metrics(cdp);
       requests.counting = false;
       const events = heard!.counts();
       const reading = await cdp.evaluate<Reading>('__quotumBench.read()');
       const phase = await cdp.evaluate<IdlePhase>('(()=>{const p=__quotumIdlePhase.read();__quotumIdlePhase.stop();return p;})()');
       const actualSeconds = after.Timestamp - before.Timestamp;
-      const phaseProblems = idlePhaseProblems(phase, planned.boundary);
+      const phaseProblems = idlePhaseProblems(phase, planned.boundary, 'quotaBoundary' in planned ? planned.quotaBoundary : undefined);
+      if ('quotaBoundary' in planned && !(counterFrom < planned.quotaBoundary && planned.quotaBoundary < counterTo)) phaseProblems.push('idle counters did not include regular quota retirement');
       if (firstReading.commits || firstReading.mutations.length) phaseProblems.push('idle work crossed the opening measurement boundary');
       if (reading.commits !== lastReading.commits || JSON.stringify(reading.mutations) !== JSON.stringify(lastReading.mutations)) phaseProblems.push('idle work crossed the closing measurement boundary');
       if (!Number.isFinite(actualSeconds) || actualSeconds <= 0) phaseProblems.push('idle performance duration unavailable');
       const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
       const idle = {from, to, cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
-      evidence.save('idle', {...idle, planned, phase, actualSeconds, phaseProblems});
+      evidence.save('idle', {...idle, planned, phase, counterFrom, counterTo, actualSeconds, phaseProblems});
       if (idleTimingDiagnostic || idleCpu) {
         originalIdleTimingProblems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
         evidence.save(idleCpu?'idle-cpu-result':'idle-timing-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});

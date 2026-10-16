@@ -9,7 +9,7 @@ import {RunOwner} from '../runOwner.js';
 import {safeEvidence} from '../evidence.js';
 import {cellOf} from '../../server/domain/history.js';
 import {idleProblems,chartProblems,measuredProblems,percentile,HISTORY_BYTES_PER_MEASUREMENT} from '../budget.js';
-import {idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil} from '../still.js';
+import {DOT_STILL_AFTER,fixtureTiming,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil} from '../still.js';
 import {delta,round,scriptPerSecond,tally} from '../report.js';
 
 // Execute the actual caller and parser, not a second implementation of its phase branches.
@@ -22,10 +22,10 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw';
-async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true) {
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics';
+async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
-  const listeners=new Map<string,()=>void>();let now=Date.parse('2026-10-15T12:00:10Z'),metricStart=now,metricReads=0;
+  const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0;
   let terminal!:()=>void;const exited=new Promise<void>(resolve=>{terminal=resolve;});
   const mark=(name:string)=>{calls.push(name);};
   const red=(name:string)=>fault===name||fault==='all-red';
@@ -41,13 +41,15 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   const cdp={send:async()=>({}),evaluate:async(expression:string)=>{
     if(expression.includes(".card:not(.is-loading)"))return 1;
     if(expression==='__quotumBench.read()')return reading;
+    if(expression.includes('window.__quotumIdlePhase='))phaseStart=now;
     if(expression.includes('const p=__quotumIdlePhase.read()')){
-      const start=Math.floor(metricStart/300_000),end=Math.floor(now/300_000);
-      return{from:metricStart,to:now,monotonicFrom:metricStart,monotonicTo:now,cellMs:300_000,
+      const start=Math.floor(phaseStart/300_000),end=Math.floor(now/300_000);
+      return{from:phaseStart,to:now,monotonicFrom:phaseStart,monotonicTo:now,cellMs:300_000,
         starts:Array(5).fill(start),ends:Array(5).fill(end),transitions:Array(5).fill(end-start)};
     }
   }};
   class Demo {
+    constructor(options:{start:number}){stand.start=options.start;}
     dir='/unused';async run(){mark('demo');return stand;}async settled(){}
     async stop(){mark('demo-stop');if(fault==='demo-stop')throw Error('demo-stop-red');}
   }
@@ -67,15 +69,15 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
       on:(name:string,fn:()=>void)=>{listeners.set(name,fn);},exit:(code:number)=>{exits.push(code);terminal();}},
     Date:class extends Date {static now(){return now;}},console:{log:()=>{},error:(value:unknown)=>{logs.push(String(value));}},path,Buffer,RunOwner,Demo,Evidence,Requests,Stop,ChromeLaunchError,
     USAGE:'fixture usage',IDLE:{ci:120,full:300},SHOWN_MS:30_000,MEASURED:'fixture',HISTORY_BYTES_PER_MEASUREMENT,
-    SETS:[set],panningSet:(value:unknown)=>value,people:()=>[{id:'ana'}],freePort:async()=>{mark('freePort');return 1234;},
+    SETS:[set],fixtureTiming,panningSet:(value:unknown)=>value,people:()=>[{id:'ana'}],freePort:async()=>{mark('freePort');return 1234;},
     addressOf:()=>({base:'http://127.0.0.1:1234'}),prepare:async()=>{mark('prepare');},findChrome:()=>'/unused/chrome',
     seedPanningBudgets:()=>{mark('seed');},hear:async()=>({close:()=>{mark('stream-close');},reset:()=>{},counts:()=>({ping:5})}),
     launchChrome:async()=>{mark('launch');return browser;},openTab:async()=>{mark('openTab');return{cdp};},
     historyTraffic:async()=>{mark('history');if(fault==='throw')throw new Stop('history-original');
       if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;}
       return{reports:[{name:'history-marker'}],problems:red('red')?['history-red']:[]};},
-    probeScript:()=>'',sleep:async(ms:number)=>{now+=Math.max(0,ms);},say:(value:string)=>{logs.push(value);},
-    metrics:async()=>{const opening=metricReads++===0;if(opening)metricStart=now;
+    probeScript:()=>'',sleep:async(ms:number)=>{waits.push(ms);now+=Math.max(0,ms);},say:(value:string)=>{logs.push(value);},
+    metrics:async()=>{const opening=metricReads++===0;if(opening&&fault==='opening-metrics')now+=60_000;
       return{Timestamp:now/1000,ScriptDuration:!opening&&red('idle')?0.1:0};},
     cellOf,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,
     delta,round,scriptPerSecond,tally,measure:async()=>{mark('measure');return{source:'fixture',from:now,to:now,
@@ -98,10 +100,28 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   runInNewContext(code,context);
   const selected=(context as unknown as {selected:{main():Promise<void>;parseArgs(args:string[]):unknown}}).selected;
   let error:unknown;try{await selected.main();}catch(caught){error=caught;}
-  return{calls,saved,exits,statuses,logs,error,parse:selected.parseArgs};
+  return{calls,saved,exits,statuses,logs,error,waits,fixtureStart:stand.start,parse:selected.parseArgs};
 }
 const tail=['measure','work','private-work','frequency','panning','credits','money'];
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
+test('actual main passes the aligned fixture anchor and keeps the legacy warm wait',async()=>{
+  const cell=300_000,minute=60_000,base=Date.parse('2026-10-15T12:00:10Z');
+  for(let phase=0;phase<5;phase++){
+    const at=base+phase*minute,result=await run(['--scope','dashboard'],undefined,{},true,at);
+    assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);
+    assert.equal(result.fixtureStart,Math.floor((at+minute)/cell)*cell-minute);
+    assert.equal(result.waits[0],Math.floor(at/minute)*minute+DOT_STILL_AFTER-at);
+    assert.deepEqual(result.saved.get('fixture-timing'),{start:result.fixtureStart,warmAt:Math.floor(at/minute)*minute+DOT_STILL_AFTER});
+  }
+});
+test('actual main rejects quota retirement before the opening CPU counter even without DOM work',async()=>{
+  const result=await run(['--scope','dashboard'],'opening-metrics');
+  const idle=result.saved.get('idle') as {phase:{from:number;to:number};planned:{quotaBoundary:number};renders:unknown[];mutations:unknown[];phaseProblems:string[]};
+  assert.ok(idle.phase.from<idle.planned.quotaBoundary&&idle.planned.quotaBoundary<idle.phase.to);
+  assert.deepEqual(idle.renders,[]);assert.deepEqual(idle.mutations,[]);
+  assert.ok(idle.phaseProblems.includes('idle counters did not include regular quota retirement'));
+  assert.deepEqual(result.exits,[1]);
+});
 for(const args of [[],['--scope','all'],['--scope','dashboard']])test('actual main preserves the shared full tail '+args.join(' '),async()=>{
   const result=await run(args);assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);
   assert.deepEqual(order(result.calls),[...(args.includes('dashboard')?[]:['history']),'openTab',...tail]);

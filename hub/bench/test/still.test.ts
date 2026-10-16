@@ -10,6 +10,10 @@ import {scriptPerSecond, tally} from '../report.js';
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 
+test('an idle window too short for separate quota and axis deadlines is rejected',()=>{
+  for(const seconds of [10,30,60,69])assert.throws(()=>idleWindow(0,seconds,5*MIN),/unsupported idle phase/);
+});
+
 test('both idle durations include one cell transition and avoid minute ticks at their endpoints', () => {
   const cell = 5 * MIN;
   for (const seconds of [120, 300]) for (let ready = 0; ready < 2 * cell; ready++) {
@@ -20,17 +24,30 @@ test('both idle durations include one cell transition and avoid minute ticks at 
     assert.ok(planned.from < planned.boundary && planned.boundary < planned.to);
     assert.equal(planned.cellMs, cell);
     assert.equal(planned.expectedTransitions, 1);
-    assert.ok(planned.from - ready <= (seconds === 120 ? 190_000 : 10_000));
+    assert.ok(planned.from - ready <= (seconds === 120 ? 250_000 : 70_000));
+    assert.equal(planned.quotaBoundary,planned.boundary-MIN+1);
+    assert.ok(planned.from<planned.quotaBoundary&&planned.quotaBoundary<planned.to);
     for(const bound of [planned.from,planned.to])assert.ok(Math.min(bound%MIN,MIN-bound%MIN)>=5_000);
   }
 });
 
 test('an already eligible idle window starts without waiting for a fixed midpoint', () => {
-  const ready = Date.parse('2026-10-11T13:04:17.139Z');
+  const ready = Date.parse('2026-10-11T13:03:17.139Z');
   for (let difference = -1000; difference <= 1000; difference++) {
     const at = ready + difference;
     assert.equal(idleWindow(at, 120, 5 * MIN).from, at);
   }
+});
+
+test('a chart-only window waits for both the next quota retirement and axis transition',()=>{
+  const ready=Date.parse('2026-10-11T13:04:17.139Z'),planned=idleWindow(ready,120,5*MIN);
+  assert.equal(planned.boundary,Date.parse('2026-10-11T13:10:00Z'));
+  assert.equal(planned.quotaBoundary,Date.parse('2026-10-11T13:09:00.001Z'));
+  assert.ok(planned.from>=ready&&planned.from<planned.quotaBoundary);
+  const late:IdlePhase={from:ready,to:ready+120000,monotonicFrom:0,monotonicTo:120000,cellMs:300000,starts:Array(5).fill(Math.floor(ready/300000)),ends:Array(5).fill(Math.floor((ready+120000)/300000)),transitions:[1,1,1,1,1]};
+  const boundary=Date.parse('2026-10-11T13:05:00Z');
+  assert.deepEqual(idlePhaseProblems(late,boundary),[]);
+  assert.ok(idlePhaseProblems(late,boundary,boundary-MIN+1).includes('idle phase did not include regular quota retirement before the grid boundary'));
 });
 
 test('idle phase rejects missing coverage, extra grid movement and clock discontinuity', () => {

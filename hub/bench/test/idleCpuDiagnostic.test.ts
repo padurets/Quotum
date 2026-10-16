@@ -357,7 +357,7 @@ test('actual original-profile index preserves the counter sequence and samples w
 test('actual ordinary index installs no diagnostic and retains the original120s sequence',async()=>{
   const {cdp,plans,geometry,saved,failure}=await originalIndex('');assert.equal(failure,undefined);assert.equal(plans,0);assert.equal(geometry,0);assert.equal(saved.length,0);
   assert.ok(!cdp.commands.some(command=>/^(Profiler|Tracing|Debugger)\./.test(command)));
-  assert.deepEqual(cdp.commands,['ORIGINAL.sleep:5000',...canonicalCounterSequence]);
+  assert.deepEqual(cdp.commands,['ORIGINAL.sleep:245000',...canonicalCounterSequence]);
 });
 test('actual mode1 index retains aligned geometry and the existing2ms profiler',async()=>{
   const {cdp,plans,geometry,saved,failure}=await originalIndex('1');assert.equal(failure,undefined);assert.equal(plans,1);assert.equal(geometry,2);

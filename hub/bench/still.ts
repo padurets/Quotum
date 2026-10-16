@@ -1,18 +1,19 @@
 import {hourShift} from '../server/forecasts.js';
 import type {Snapshot} from '../server/projection.js';
 import {FADE_FOR, PULSE_FOR} from '../ui/lib/quota.js';
-import {snapshot, type Card} from '../demo/model.js';
+import {snapshot, DAY, MIN, type Card} from '../demo/model.js';
 import {STILL_FOR} from '../demo/setup.js';
+import {cellOf} from '../server/domain/history.js';
 
 const HOUR = 3_600_000;
 const IDLE_CHARTS = ['quota-history', 'quota-session-history', 'activity', 'budget-history', 'subscription-funds'] as const;
 
-/** Keep one real grid transition inside the existing duration, away from endpoint clock wakes. */
+/** Keep regular quota retirement and a later grid transition inside the existing duration. */
 export function idleWindow(readyAt: number, seconds: number, cellMs: number) {
   const duration = seconds * 1000;
   const minute = 60_000, margin = 5_000;
   if (!Number.isFinite(readyAt) || !Number.isFinite(cellMs) || !Number.isFinite(duration) || cellMs <= 0 || duration <= 0 || duration > cellMs) throw new Error('invalid idle phase');
-  if (duration < 2 * margin || cellMs % minute !== 0) throw new Error('unsupported idle phase');
+  if (duration < minute + 2 * margin || cellMs % minute !== 0) throw new Error('unsupported idle phase');
   // A fixed midpoint can skip a complete eligible window and wait almost a whole cell.
   let boundary = Math.ceil((readyAt + margin) / cellMs) * cellMs;
   for (;;) {
@@ -23,15 +24,16 @@ export function idleWindow(readyAt: number, seconds: number, cellMs: number) {
       if (unsafe === undefined) break;
       from += unsafe < margin ? margin - unsafe : minute + margin - unsafe;
     }
-    if (from <= boundary - margin) return {from, to: from + duration, boundary, cellMs, expectedTransitions: 1};
+    if (from <= boundary - minute - margin) return {from, to: from + duration, boundary, quotaBoundary: boundary - minute + 1, cellMs, expectedTransitions: 1};
     boundary += cellMs;
   }
 }
 
 export type IdlePhase = {from: number; to: number; monotonicFrom: number; monotonicTo: number; cellMs: number; starts: number[]; ends: number[]; transitions: number[]};
-export function idlePhaseProblems(phase: IdlePhase, boundary: number): string[] {
+export function idlePhaseProblems(phase: IdlePhase, boundary: number, quotaBoundary?: number): string[] {
   const errors: string[] = [];
   if (!(phase.from < boundary && boundary < phase.to) || Math.floor(phase.to / phase.cellMs) - Math.floor(phase.from / phase.cellMs) !== 1) errors.push('idle phase did not span exactly one grid boundary');
+  if (quotaBoundary !== undefined && !(phase.from < quotaBoundary && quotaBoundary < phase.to)) errors.push('idle phase did not include regular quota retirement before the grid boundary');
   if (Math.abs((phase.to - phase.from) - (phase.monotonicTo - phase.monotonicFrom)) > 1000) errors.push('idle phase clock changed during measurement');
   if (phase.transitions.length !== IDLE_CHARTS.length || phase.transitions.some(count => count !== 1)) errors.push('idle phase did not observe one transition in each chart');
   if (phase.starts.length !== IDLE_CHARTS.length || phase.ends.length !== IDLE_CHARTS.length || phase.starts.some(value => value !== Math.floor(phase.from / phase.cellMs)) || phase.ends.some(value => value !== Math.floor(phase.to / phase.cellMs))) errors.push('idle chart grid disagrees with the measurement clock');
@@ -81,6 +83,12 @@ export const MARGIN_MS = 5_000;
 export const SETTLE_MS = 30_000;
 /** A card's dot stops changing this long after its last measurement: it pulsed and faded out (ui/lib/quota.ts), with some to spare. */
 export const DOT_STILL_AFTER = PULSE_FOR + FADE_FOR + 30_000;
+
+/** Keep quota retirement a minute before the axis, with the original fade deadline. */
+export function fixtureTiming(now:number) {
+  const seededAt=Math.floor(now/MIN)*MIN,cell=cellOf(DAY);
+  return {start:Math.floor((seededAt+MIN)/cell)*cell-MIN,warmAt:seededAt+DOT_STILL_AFTER};
+}
 
 /** When the page may be counted: every dot has faded out, and it has been open `SETTLE_MS`. */
 export function warmUntil(cards: StillCard[], opened: number): number {
