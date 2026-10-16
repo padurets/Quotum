@@ -1679,7 +1679,7 @@ const machineClients: DemoSet = {id:'clients',about:'OpenCode sessions and insta
   {kind:'board',id:'team',name:'Shared clients',owner:'ana',members:[],agents:true,expect:[{state:'widgets'}]},
 ]};
 const linkedClients:DemoSet={id:'links',about:'Temporal client links, suggestions, monetary work and complete or partial observation',scene:'quiet',workHistoryMs:2*HOUR,entries:[
-  {kind:'person',id:'ana',name:'Ana',agents:true,expect:[{state:'widgets'}],look:['Clients and sources: one current/scheduled list and History switch; client/device/source/effective date visible in the editor; recommendations fill exact scope and dates before Save; device session source popovers explain manual links, account differences and disconnected targets']},
+  {kind:'person',id:'ana',name:'Ana',agents:true,expect:[{state:'widgets'}],look:['Clients and resources: one current/scheduled list and History switch; client/device/resource/effective date visible in the editor; choices distinguish Subscription and Budget; recommendations fill exact scope and dates before Save; device session resource popovers explain manual links, account differences and disconnected targets']},
   {kind:'person',id:'boris',name:'Boris',agents:true,expect:[{state:'widgets'}]},
   {kind:'machine',id:'laptop',person:'ana',expect:[{via:'token'}]},
   {kind:'machine',id:'remote',person:'boris',expect:[{via:'token'}]},

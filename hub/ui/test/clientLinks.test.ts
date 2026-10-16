@@ -5,6 +5,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {preparationFixture} from './preparationFixture';
 import {ApiError} from '../lib/http';
+import {widgetKind} from '../lib/widgetKind';
 import {resolveLink, type ClientLink, type LinkInput} from '../../server/domain/links';
 
 type Node = {type: unknown; props: Record<string, unknown>};
@@ -26,6 +27,7 @@ function fixture(operation: 'create' | 'edit' | 'delete', input: LinkInput & {id
     if (name.endsWith('/i18n')) return {t: (key: string) => key};
     if (name.endsWith('/board')) return {useDevicesRevision: () => 0};
     if (name.endsWith('/http')) return {ApiError, call: (method: string, url: string, body: Record<string, unknown>) => method === 'GET' ? Promise.resolve({suggestions}) : new Promise((resolve, reject) => reads.push({method, url, body, resolve, reject}))};
+    if (name.endsWith('/widgetKind')) return {widgetKind};
     if (name.endsWith('/format')) return {stamp: (at: number) => String(at)};
     if (name.endsWith('/router')) return {settingsHref: (path: string) => path + '?board=personal&from=10&to=20', navigate: (path: string) => paths.push(path)};
     if (name === './Kit') return {SelectField: select, Field: field, Modal: modal, ErrorLine: errorLine};

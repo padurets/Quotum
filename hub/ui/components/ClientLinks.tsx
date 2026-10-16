@@ -8,6 +8,7 @@ import {useConnectionsRevision, useDevicesRevision} from '../lib/board';
 import {ApiError, call} from '../lib/http';
 import {stamp} from '../lib/format';
 import {useClock} from '../lib/clock';
+import {widgetKind} from '../lib/widgetKind';
 import {navigate, settingsHref, useLocation} from '../lib/router';
 import {ErrorLine, Field, Modal, Segmented, SelectField} from './Kit';
 import {Popover, PopoverHeading} from './Popover';
@@ -21,6 +22,7 @@ type Edit = {operation: 'create' | 'edit' | 'delete'; link: LinkInput & {id?: st
 const localDate = (at: number) => {const date = new Date(at); return new Date(at - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);};
 const condition = (link: Pick<LinkInput, 'route'>) => link.route ? t(`links.${link.route.class}`) + (link.route.provider ? '\n' + (catalogue.find(p => p.id === link.route!.provider)?.name ?? link.route.provider) : '') : t('links.anyRoute');
 const period = (link: LinkInput) => stamp(link.from) + '\n' + (link.to === null ? t('links.openEnd') : stamp(link.to));
+const choiceName = (source?: LinkSource) => source ? `${t(widgetKind(source.id, source.provider))}: ${source.name}` : t('agents.unknownSource');
 const targetOf = (inventory: LinkInventory, id: string | null) => inventory.sources.find(source => source.id === id) ?? inventory.targets?.find(source => source.id === id);
 
 /** Contextual entry points edit the same winning rule as the live session. */
@@ -151,7 +153,7 @@ function LinkForm({edit, inventory, onClose, onSaved, reload}: {edit: Edit; inve
           <SelectField label={t('links.client')} required autoFocus value={link.clientId} onChange={event => setLink({...link, clientId: event.target.value})}><option value="" disabled>{t('links.chooseClient')}</option>{inventory.clients.map(client => <option key={client} value={client}>{clientName(client)}</option>)}</SelectField>
           <SelectField label={t('links.deviceScope')} value={link.deviceId ?? ''} onChange={event => setLink({...link, deviceId: event.target.value || null})}><option value="">{t('links.allDevices')}</option>{inventory.devices.map(device => <option key={device.id} value={device.id}>{device.name}</option>)}</SelectField>
         </div>
-        <SelectField label={t('links.source')} hint={recommendation ? t('links.recommendation', {source: targetOf(inventory, recommendation.sourceId)?.name ?? '', route: condition(recommendation).split('\n').join(' / ')}) : undefined} required value={link.sourceId} onChange={event => chooseSource(event.target.value)}><option value="" disabled>{t('links.chooseSource')}</option>{link.sourceId && !inventory.sources.some(source => source.id === link.sourceId) && <option value={link.sourceId} disabled>{targetOf(inventory, link.sourceId)?.name ?? t('agents.unknownSource')} ({t('sources.disconnected')})</option>}{inventory.sources.map(source => <option key={source.id} value={source.id}>{source.name}</option>)}</SelectField>
+        <SelectField label={t('links.source')} hint={recommendation ? t('links.recommendation', {source: targetOf(inventory, recommendation.sourceId)?.name ?? '', route: condition(recommendation).split('\n').join(' / ')}) : undefined} required value={link.sourceId} onChange={event => chooseSource(event.target.value)}><option value="" disabled>{t('links.chooseSource')}</option>{link.sourceId && !inventory.sources.some(source => source.id === link.sourceId) && <option value={link.sourceId} disabled>{choiceName(targetOf(inventory, link.sourceId))} ({t('sources.disconnected')})</option>}{inventory.sources.map(source => <option key={source.id} value={source.id}>{choiceName(source)}</option>)}</SelectField>
         <SelectField label={t(existing ? 'links.apply' : 'links.from')} value={starts} onChange={event => setStarts(event.target.value as typeof starts)}><option value="now">{t('currencies.fromNow')}</option><option value="date">{t('links.fromDate')}</option>{existing && <option value="original">{t('links.entirePeriod')}</option>}</SelectField>
         {starts !== 'now' && <Field type="datetime-local" required label={t('links.date')} value={from} onChange={event => setFrom(event.target.value)} />}
         {starts !== 'now' && <small>{t('links.timezone', {zone: Intl.DateTimeFormat().resolvedOptions().timeZone})}</small>}

@@ -662,7 +662,8 @@ active says how far to trust the pace.
 
 ## Storage and the rules
 
-One SQLite file (WAL). A **source** is one subscription, kept once for the whole hub:
+One SQLite file (WAL). The UI calls a subscription or budget a **resource**. Its
+internal **source** identity is kept once for the whole hub:
 keyed by the account pseudonym, or by the device's person for clients that don't name
 their account. Which boards show it is recorded apart from it (see below). Each source
 has its last state (what the card shows) and samples: one row per window per
@@ -1240,8 +1241,8 @@ and its limits.
   and a save stays locked through its authoritative read. Connect a device opens the
   one-time command separately; token creation and revocation belong to Tokens. The
   local app omits tokens and distributed measurement controls.
-  *Settings → Clients and sources* manages temporal client/source links. Device and
-  source entry points open the same editor with context, without creating a link.
+  *Settings → Clients and resources* manages temporal client/resource links. Device and
+  resource entry points open the same editor with context, without creating a link.
   An existing matching link opens for editing instead of creating an overlapping
   rule. The editor has one effective-date choice: saving time, a chosen date, or
   the entire period. A dated edit atomically preserves the old prefix and replaces
@@ -1251,14 +1252,15 @@ and its limits.
   disconnected label, but cannot be selected for new work. Their owner-only
   management metadata includes no measurements or other people's private labels.
   Current and scheduled links share one list; the History switch shows completed
-  periods in that same list. The editor keeps client, device, source and effective
+  periods in that same list. The editor keeps client, device, resource and effective
   date visible. Only the optional end and route conditions use a disclosure.
-  Source recommendations appear inside the editor after choosing a client and
-  device. Selecting one fills its condition and exact free period; the person
-  reviews these values before an ordinary manual Save. Opening the editor or
-  choosing a recommendation records nothing. Session source explanations live
+  Resource choices show their name and type (Subscription or Budget). Recommendations
+  appear inside the editor after choosing a client and device. Selecting one fills
+  its condition and exact free period; the person reviews these values before an
+  ordinary manual Save. Opening the editor or
+  choosing a recommendation records nothing. Session resource explanations live
   beside the session in its device dialog, including the saved name of a
-  disconnected winning source. Their private evidence loads only while the device
+  disconnected winning resource. Their private evidence loads only while the device
   diagnostics are open, follows owner presence changes and never enters board events.
   The owner device request adds `details=<device>` to include each session’s
   attribution in the same synchronous response. Project aliases and otherwise
