@@ -6,137 +6,12 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import type {Cdp} from '../cdp.js';
 import type {Reading} from '../probe.js';
-import {IdleCpuDiagnostic,sourceIdentity,idleEdgeProblems,originalTraceProblems,ownedClockFires,planIdleEdge,idleCommittedScript,type IdleGeometry} from '../idleCpuDiagnostic.js';
+import {IdleCpuDiagnostic,sourceIdentity,idleEdgeProblems,originalTraceProblems,ownedClockFires,planIdleEdge,type IdleGeometry} from '../idleCpuDiagnostic.js';
 import {numericProfile,profileWindow} from '../cpuProfile.js';
 import {idleWindow,idlePhaseScript,idlePhaseProblems} from '../still.js';
-import {drain} from '../../server/domain/prepare.js';
-import {safeEvidence} from '../evidence.js';
-import {fixture,flush,NOW,H,M} from '../../ui/test/periodRuntimeFixture.js';
 
 type Saved={name:string;value:unknown;large?:boolean};
 
-function committedReader(pool?:unknown) {
-  let clock=0;
-  const forbidden=()=>{throw Error('snapshot scheduled work');};
-  const context:Record<string,any>={exports:{},Map,Set,WeakMap,Date,btoa,performance:{now:()=>++clock},setTimeout:forbidden,setInterval:forbidden,requestAnimationFrame:forbidden,queueMicrotask:forbidden};
-  runInNewContext('window=globalThis;'+idleCommittedScript(),context);
-  if(pool)context.__quotumInspectHistoryPool(pool);
-  return {context,attach:context.__quotumInspectHistoryPool,read:(exact=false)=>JSON.parse(JSON.stringify(exact?context.__quotumIdleCommitted.read():safeEvidence(context.__quotumIdleCommitted.read())))};
-}
-
-/** Restore the fixed numeric shape using the actual production prototypes. */
-function rebuildInput(payload:any,input:any,index:any) {
-  const scalar=([kind,value]:[number,number|null])=>kind===0?value:kind===1?Infinity:kind===2?-Infinity:kind===4?-0:NaN;
-  const vectors=new Map<number,Float64Array|Uint32Array>(payload.vectors.map((row:any)=>{
-    const value=row.type==='f64'?new Float64Array(row.length):new Uint32Array(row.length);
-    const bytes=Buffer.from(row.base64,'base64');assert.equal(bytes.length,value.byteLength);new Uint8Array(value.buffer).set(bytes);return [row.id,value];
-  }));
-  const column=(v:any):any=>v.vector?vectors.get(v.vector):{length:v.length,base:scalar(v.base),values:v.values===null?null:vectors.get(v.values),...(v.runs?{runs:{ends:vectors.get(v.runs.ends),bases:vectors.get(v.runs.bases),steps:vectors.get(v.runs.steps)}}:{})};
-  const patterns=new Map(payload.patterns.map((p:any)=>[p.id,Object.assign(Object.create(Object.getPrototypeOf(index.activity.curves[0])),Object.fromEntries(['times','agents','active','slopes'].map(k=>[k,vectors.get(p[k])]))) ]));
-  const timelines=new Map(payload.timelines.map((v:any)=>[v.id,Object.assign(Object.create(Object.getPrototypeOf(index.activity)),{...Object.fromEntries(['hours','agents','active'].map(k=>[k,vectors.get(v[k])])),curves:v.curves.map((id:number)=>patterns.get(id))})]));
-  return {column,known:scalar(input.known),activity:input.activity===null?undefined:timelines.get(input.activity),samples:input.samples.vector?vectors.get(input.samples.vector):{length:input.samples.length,columns:input.samples.columns.map(column)}};
-}
-
-test('committed numeric inputs rebuild actual quota columns across retained history without requests',async t=>{
-  t.mock.method(Date,'now',()=>NOW);
-  const h=await fixture({personal:true,clocked:true,creditFrom:NOW-20*M,creditTo:NOW-5*M});
-  try{
-    const reader=committedReader(h.pool),requests=h.requests.length;
-    for(const now of [NOW,NOW+5*M]){
-      h.jump(now);await flush();
-      const current=h.period.index.curves.groups.source,first=[...current.entries()][0];
-      current.set(first[0],Object.assign(Object.create(Object.getPrototypeOf(first[1])),first[1]));
-      const snapshot=reader.read(true),payload=snapshot.rebuild;current.set(first[0],first[1]);assert.equal(payload.status,'complete');
-      assert.equal(payload.endian,'LE');assert.ok(payload.inputs.length>0);assert.ok(payload.timelines.length>0);
-      assert.ok(payload.inputs.some((row:any)=>row.activity!==null&&row.activity!==row.sourceCurve),'actual accounting activity stays distinct from the current source curve');
-      const entry=h.period.tapes.get('quota'),indices=[...entry.accounting.quota.values()];
-      const prototype=indices.find((v:any)=>v.activity?.curves.length);assert.ok(prototype);
-      for(let i=0;i<indices.length;i++){
-        const index=indices[i],input=payload.inputs[i],restored=rebuildInput(payload,input,prototype);
-        assert.deepEqual(restored.samples,index.series.samples);assert.ok(Object.is(restored.known,index.known));
-        const built:any=drain(index.constructor.prepare({...index.series,samples:restored.samples},restored.activity,restored.known));
-        for(const field of ['times','deadlines','spent','covered','worked','during']){assert.deepEqual(restored.column(input.outputs[field]),index[field]);assert.deepEqual(built[field],index[field]);}
-        assert.equal(built.bytes,index.bytes);
-        for(const from of [NOW-24*H,NOW-H,NOW-10*M])assert.deepEqual(built.at({from,to:now}),index.at({from,to:now}));
-      }
-      assert.ok(!JSON.stringify(payload).includes('PRIVATE_CANARY'));
-    }
-    assert.equal(h.requests.length,requests);
-  }finally{await h.close();}
-});
-
-test('committed numeric export copies only typed views and preserves floating bits',async t=>{
-  t.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true});
-  try{
-    const entry=h.period.tapes.get('quota'),index=entry.accounting.quota.values().next().value;
-    const backing=new Float64Array([123,-0,NaN,Infinity,-Infinity,1.25,456]);index.spent={length:5,base:-0,values:backing.subarray(1,6)};
-    const snapshot=committedReader(h.pool).read(true),payload=snapshot.rebuild;assert.equal(payload.status,'complete');
-    const output=payload.inputs[0].outputs.spent;assert.deepEqual(output.base,[4,null]);
-    const vector=payload.vectors.find((v:any)=>v.id===output.values);assert.equal(vector.length,5);
-    assert.deepEqual(Buffer.from(vector.base64,'base64'),Buffer.from(backing.buffer,8,40));
-    for(const [known,tag] of [[Infinity,1],[-Infinity,2],[NaN,3],[-0,4]]){index.known=known;assert.deepEqual(committedReader(h.pool).read(true).rebuild.inputs[0].known,[tag,null]);}
-  }finally{await h.close();}
-});
-
-test('numeric export limits and unknown shapes retain the compact committed evidence',async t=>{
-  t.mock.method(Date,'now',()=>NOW);const h=await fixture({personal:true});
-  try{
-    const entry=h.period.tapes.get('quota'),index=entry.accounting.quota.values().next().value,reader=committedReader(h.pool),spent=index.spent;
-    for(const value of [new Float64Array(400000),{length:1,base:0,values:{length:1}},{length:1,base:0,values:{[Symbol.toStringTag]:'Float64Array',length:1,byteLength:8}}]){
-      index.spent=value;const snapshot=reader.read(true);assert.equal(snapshot.status,'complete');assert.equal(snapshot.rebuild.status,'insufficient-evidence');assert.ok(snapshot.rows.length>0);
-    }
-    index.spent=spent;
-    const activity=index.activity;index.activity={hours:new Float64Array(0),agents:new Float64Array(0),active:new Float64Array(0),curves:Array(16385).fill({})};
-    const excessive=reader.read(true);assert.equal(excessive.status,'complete');assert.equal(excessive.rebuild.status,'insufficient-evidence');index.activity=activity;
-    const samples=index.series.samples,columns=Array(100000).fill({length:1,base:0,values:null});let mapped=0;
-    columns.map=(()=>{mapped++;throw Error('invalid columns traversed');}) as typeof columns.map;index.series.samples={length:5,columns};
-    const malformed=reader.read(true);assert.equal(malformed.status,'complete');assert.equal(malformed.rebuild.status,'insufficient-evidence');assert.equal(mapped,0);index.series.samples=samples;
-  }finally{await h.close();}
-});
-
-test('committed snapshots distinguish real work-only sharing from measurement-prefix replacement',async t=>{
-  const start=NOW-24*H;let now=NOW;t.mock.method(Date,'now',()=>now);
-  const h=await fixture({personal:true,periodName:'24h',clocked:true,creditFrom:start+2*M,creditTo:start+5*M});
-  try{
-    const source=h.store.source('codex','d'.repeat(24),start-H);h.store.hold(source,h.alice.id,start-H);
-    for(let i=0;i<12;i++)h.store.record(source,{observedAt:start+M+i*10*M,plan:'',resets:null,staleAfterMs:48*H,windows:['w','PRIVATE_CANARY'].map(id=>({id,kind:'weekly',label:null,minutes:10080,used:10+i*.1,remaining:90-i*.1,resetAt:NOW+24*H}))});
-    for(const [id,from,to] of [['d',start+2*M,start+5*M],['d',start+H+10*M,start+H+30*M]] as const)h.store.creditWork(h.device,from,to,[{source,client:'codex',origin:'terminal',startedAt:start-H,project:'PRIVATE_CANARY',folder:'PRIVATE_CANARY',identity:{kind:'stable',sessionId:id.repeat(32)}}]);
-    h.events.flush();await flush();
-    const reader=committedReader(h.pool),before=reader.read(),again=reader.read();
-    assert.equal(before.status,'complete');assert.equal(before.rows.length,3);assert.equal(new Set(before.rows.map((row:number[])=>row[0])).size,3);
-    assert.deepEqual(again.rows,before.rows);assert.equal(again.ownerId,before.ownerId);
-    const requests=h.requests.length;
-    now=NOW+5*M;h.jump(now);await flush();const workOnly=reader.read();assert.equal(workOnly.status,'complete');
-    assert.equal(workOnly.ownerId,before.ownerId);assert.notEqual(workOnly.workIndexId,before.workIndexId);
-    for(const old of before.rows){const row=workOnly.rows.find((r:number[])=>r[0]===old[0]);assert.equal(row[1],old[1]);assert.notEqual(row[5],old[5]);for(const column of [6,7,8,9])assert.equal(row[column],old[column]);}
-    now=NOW+12*M;h.jump(now);await flush();const trimmed=reader.read();assert.equal(trimmed.status,'complete');
-    const replaced=trimmed.rows.filter((row:number[])=>row[2]!==workOnly.rows.find((r:number[])=>r[0]===row[0])[2]);assert.equal(replaced.length,2);
-    for(const row of replaced){const old=workOnly.rows.find((r:number[])=>r[0]===row[0]);assert.notEqual(row[1],old[1]);assert.ok(row[3]<old[3]);for(const column of [5,7,8,9])assert.notEqual(row[column],old[column]);}
-    assert.equal(h.requests.length,requests);assert.ok(!JSON.stringify([before,workOnly,trimmed]).includes('PRIVATE_CANARY'));assert.ok(!JSON.stringify(trimmed).includes(source));
-    const integrated=committedReader(),module=readFileSync(new URL('../../ui/lib/historyPool.ts',import.meta.url),'utf8');
-    runInNewContext(ts.transpileModule(module,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,integrated.context);
-    assert.equal(integrated.read().status,'insufficient-evidence');integrated.context.exports.historyPool.register(h.period);
-    const singleton=integrated.read();assert.equal(singleton.status,'complete');assert.equal(singleton.rows.length,trimmed.rows.length);
-  }finally{await h.close();}
-});
-
-test('committed snapshots reject incomplete ownership and private shapes without invoking getters',async t=>{
-  t.mock.method(Date,'now',()=>NOW);
-  const h=await fixture({personal:true});
-  try{
-    const reader=committedReader();assert.equal(reader.read().status,'insufficient-evidence');reader.attach(h.pool);assert.equal(reader.read().status,'complete');
-    const entry=h.period.tapes.get('quota'),series=entry.tape.quota[0],indices=entry.accounting.quota,key=series.source+'\n'+series.window,index=indices.get(key);
-    indices.delete(key);assert.equal(reader.read().status,'insufficient-evidence');indices.set(key,index);
-    const descriptor=Object.getOwnPropertyDescriptor(series,'samples')!;let invoked=0;
-    Object.defineProperty(series,'samples',{configurable:true,get:()=>{invoked++;throw Error('PRIVATE_CANARY');}});
-    assert.equal(reader.read().status,'insufficient-evidence');assert.equal(invoked,0);Object.defineProperty(series,'samples',descriptor);
-    const rows=entry.tape.quota;entry.tape.quota=Array(129).fill(series);assert.equal(reader.read().status,'insufficient-evidence');entry.tape.quota=rows;
-    h.period.retiring=true;assert.equal(reader.read().status,'insufficient-evidence');h.period.retiring=false;
-    const known=index.known;for(const [value,kind] of [[Infinity,1],[-Infinity,2],[NaN,3]]){index.known=value;const snapshot=reader.read();assert.equal(snapshot.status,'complete');assert.deepEqual(snapshot.rows[0].slice(14),[kind,null]);}index.known=known;
-    const extra={tapes:new Map(),transport:{}};h.pool.register(extra as any);assert.equal(reader.read().status,'insufficient-evidence');(h.pool as any).members.delete(extra);
-    reader.attach(h.pool);assert.equal(reader.read().status,'insufficient-evidence');
-  }finally{await h.close();}
-});
 test('manual control reports its checked out source separately from the workflow event',()=>{
   const source='1'.repeat(40),event='2'.repeat(40),receipt=sourceIdentity({QUOTUM_BENCH_SOURCE_SHA:source,GITHUB_SHA:event},()=>source);
   assert.equal(receipt.status,'complete');assert.equal(receipt.sourceHead,source);assert.equal(receipt.checkoutSha,source);assert.equal(receipt.eventSha,event);
@@ -171,7 +46,7 @@ class CurrentCdpFake {
   on<T>(name:string,listener:(value:T)=>void){const rows=this.listeners.get(name)??[];rows.push(listener as (value:unknown)=>void);this.listeners.set(name,rows);}
   off<T>(name:string,listener:(value:T)=>void){this.listeners.set(name,(this.listeners.get(name)??[]).filter(value=>value!==listener));}
   emit(name:string,value:unknown){for(const listener of this.listeners.get(name)??[])listener(value);}
-  async evaluate<T>(expression:string):Promise<T>{assert.equal(arguments.length,1);if(expression.startsWith('window.__quotumIdleCommitted?')){this.commands.push('committed-snapshot');return {status:'insufficient-evidence'} as T;}this.commands.push('evaluate');assert.equal(expression,'performance.now()');return this.timestamp*1000 as T;}
+  async evaluate<T>(expression:string):Promise<T>{assert.equal(arguments.length,1);this.commands.push('evaluate');assert.equal(expression,'performance.now()');return this.timestamp*1000 as T;}
   async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
     assert.ok(arguments.length<=3);if(signal)assert.equal(signal.aborted,false);this.commands.push(method);
     if(this.options.forbidProfiler)assert.ok(!method.startsWith('Profiler.'),'trace-only must never send a profiler command');
@@ -346,11 +221,6 @@ test('actual original-profile index preserves the counter sequence and samples w
   assert.ok(cdp.commands.indexOf('Profiler.start')<cdp.commands.indexOf('ORIGINAL.reset'));
   assert.ok(cdp.commands.indexOf('Profiler.stop')>cdp.commands.indexOf('ORIGINAL.phase-stop'));
   assert.ok(cdp.commands.indexOf('Debugger.enable')>cdp.commands.indexOf('Profiler.stop'));
-  assert.equal(cdp.commands.filter(command=>command==='committed-snapshot').length,2);
-  assert.ok(cdp.commands.indexOf('committed-snapshot')<cdp.commands.indexOf('Profiler.enable'));
-  assert.ok(cdp.commands.lastIndexOf('committed-snapshot')>cdp.commands.indexOf('Tracing.end'));
-  assert.equal(record(result(saved,'idle-cpu-committed-before').value).status,'insufficient-evidence');
-  assert.equal(record(result(saved,'idle-cpu-committed-after').value).status,'insufficient-evidence');
   assert.equal(result(saved,'idle-cpu-profile').samplingInterval,2000);
   assert.equal(result(saved,'idle-cpu-original-trace').profileStatus,'complete');
 });

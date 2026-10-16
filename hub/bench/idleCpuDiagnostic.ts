@@ -51,83 +51,6 @@ export function planIdleEdge(now:number,seconds:number,cellMs:number):IdleEdgePl
   return{boundary,from:boundary-half,to:boundary+half,cellMs,seconds,marginMs:30_000};
 }
 
-/** Committed identities only: no wrapped methods, in-window work or retained old buffers. */
-export function idleCommittedScript() {
-  return `(() => {
-    const ids=new WeakMap(),keys=new Map();let serial=0,pool=null,invalid=false;
-    const own=(value,key)=>{const d=Object.getOwnPropertyDescriptor(value,key);if(d&&!('value'in d))throw 0;return d?.value;};
-    const map=value=>{try{Map.prototype.has.call(value,null);return true;}catch{return false;}};
-    const id=value=>{if(value===null||value===undefined)return null;if(typeof value!=='object')throw 0;if(!ids.has(value))ids.set(value,++serial);return ids.get(value);};
-    const numeric=value=>{if(typeof value!=='number')throw 0;return [Number.isFinite(value)?0:value===Infinity?1:value===-Infinity?2:3,Number.isFinite(value)?value:null];};
-    const key=(source,window)=>{if(typeof source!=='string'||typeof window!=='string'||source.length>512||window.length>512)throw 0;const k=source+'\\n'+window;if(!keys.has(k)){if(keys.size>=256)throw 0;keys.set(k,keys.size+1);}return keys.get(k);};
-    if(window.__quotumInspectHistoryPool!==undefined)invalid=true;
-    else window.__quotumInspectHistoryPool=value=>{if(pool)invalid=true;else pool=value;};
-    window.__quotumIdleCommitted={read:()=>{
-      const at=Date.now(),monotonic=performance.now();
-      try{
-        if(invalid||!pool)throw 0;
-        const members=own(pool,'members');Set.prototype.has.call(members,null);if(members.size>8)throw 0;
-        const owners=[...members].filter(member=>map(own(member,'tapes'))&&own(member,'transport'));
-        if(owners.length!==1)throw 0;
-        const owner=owners[0],entry=own(owner,'tapes').get('quota');if(!entry||own(owner,'retiring')!==false)throw 0;
-        const tape=own(entry,'tape'),accounting=own(entry,'accounting'),quota=own(tape,'quota'),indices=own(accounting,'quota');
-        if(!Array.isArray(quota)||!quota.length||quota.length>128||!map(indices)||indices.size!==quota.length||own(accounting,'tape')!==tape)throw 0;
-        const workIndex=own(owner,'index'),curves=workIndex?own(workIndex,'curves'):null,sourceCurves=curves?own(own(curves,'groups'),'source'):null;
-        if(sourceCurves!==null&&!map(sourceCurves))throw 0;
-        const seen=new Set(),rows=[];
-        for(const series of quota){
-          const source=own(series,'source'),window=own(series,'window'),ordinal=key(source,window);
-          if(seen.has(ordinal))throw 0;seen.add(ordinal);
-          const index=indices.get(source+'\\n'+window),samples=own(series,'samples');
-          if(!index||own(index,'series')!==series)throw 0;
-          const count=own(samples,'length')/5;if(!Number.isSafeInteger(count)||count<0)throw 0;
-          const prefixes=['times','deadlines','spent','covered','worked','during'].map(field=>{const value=own(index,field);if(!value||typeof value!=='object')throw 0;return id(value);});
-          rows.push([ordinal,id(series),id(samples),count,id(own(series,'descriptors')),id(index),...prefixes,id(own(index,'activity')),id(sourceCurves?.get(source)),...numeric(own(index,'known'))]);
-        }
-        const value={status:'complete',at,monotonic,ownerId:id(owner),generation:own(owner,'generation'),revision:own(owner,'revision'),retirement:numeric(own(owner,'retirementAt')),workId:id(own(own(owner,'work'),'value')),workIndexId:id(workIndex),curvesId:id(curves),tapeId:id(tape),accountingId:id(accounting),from:numeric(own(tape,'from')),cut:numeric(own(tape,'cut')),
-          columns:{key:0,seriesId:1,samplesId:2,samples:3,descriptorsId:4,indexId:5,timesId:6,deadlinesId:7,spentId:8,coveredId:9,workedId:10,duringId:11,activityId:12,sourceCurveId:13,knownKind:14,known:15},rows};
-        if(!Number.isSafeInteger(value.generation)||!Number.isSafeInteger(value.revision)||JSON.stringify(value).length>32768)throw 0;
-        // Exact committed quota inputs and outputs, outside the measured window.
-        // Typed views retain their bits; only this fixed private shape is copied.
-        try{
-          let bytes=0,sampleCount=0,curveLinks=0;const vectors=[],timelines=[],patterns=[],inputs=[],seenVectors=new Set(),seenTimelines=new Set(),seenPatterns=new Set();
-          const scalar=n=>Object.is(n,-0)?[4,null]:numeric(n);
-          const vector=v=>{
-            const kind=Object.prototype.toString.call(v),type=kind==='[object Float64Array]'?'f64':kind==='[object Uint32Array]'?'u32':null;if(!ArrayBuffer.isView(v)||!type||!Number.isSafeInteger(v.length)||v.byteLength!==v.length*(type==='f64'?8:4))throw 0;
-            const key=id(v);if(seenVectors.has(key))return key;if(seenVectors.size>=8192)throw 0;seenVectors.add(key);
-            bytes+=v.byteLength;if(bytes>2.75*1024*1024)throw 0;
-            const view=new Uint8Array(v.buffer,v.byteOffset,v.byteLength);let text='';
-            for(let i=0;i<view.length;i+=8192)text+=String.fromCharCode(...view.subarray(i,i+8192));
-            vectors.push({id:key,type,length:v.length,base64:btoa(text)});return key;
-          };
-          const column=v=>{
-            const base=own(v,'base');if(base===undefined)return {vector:vector(v)};
-            const length=own(v,'length'),values=own(v,'values'),runs=own(v,'runs');if(!Number.isSafeInteger(length)||length<0)throw 0;
-            return {id:id(v),length,base:scalar(base),values:values===null?null:vector(values),...(runs?{runs:{ends:vector(own(runs,'ends')),bases:vector(own(runs,'bases')),steps:vector(own(runs,'steps'))}}:{})};
-          };
-          const timeline=v=>{
-            if(v===undefined||v===null)return null;
-            const key=id(v);if(seenTimelines.has(key))return key;seenTimelines.add(key);if(seenTimelines.size>128)throw 0;
-            const parts=own(v,'curves');if(!Array.isArray(parts)||(curveLinks+=parts.length)>16384)throw 0;
-            const links=parts.map(p=>{const key=id(p);if(!seenPatterns.has(key)){if(seenPatterns.size>=1024)throw 0;seenPatterns.add(key);patterns.push({id:key,...Object.fromEntries(['times','agents','active','slopes'].map(k=>[k,vector(own(p,k))]))});}return key;});
-            timelines.push({id:key,...Object.fromEntries(['hours','agents','active'].map(k=>[k,vector(own(v,k))])),curves:links});return key;
-          };
-          for(const series of quota){
-            const index=indices.get(own(series,'source')+'\\n'+own(series,'window')),samples=own(series,'samples'),columns=own(samples,'columns');
-            if(columns!==undefined&&(!Array.isArray(columns)||columns.length!==5))throw 0;
-            sampleCount+=own(samples,'length')/5;if(sampleCount>100000)throw 0;
-            const workFrom=own(series,'workFrom');
-            inputs.push({key:key(own(series,'source'),own(series,'window')),samples:columns?{length:own(samples,'length'),columns:columns.map(column)}:{vector:vector(samples)},known:scalar(own(index,'known')),workFrom:workFrom===undefined?null:workFrom===null?['null']:scalar(workFrom),activity:timeline(own(index,'activity')),sourceCurve:timeline(sourceCurves?.get(own(series,'source'))),outputs:Object.fromEntries(['times','deadlines','spent','covered','worked','during'].map(k=>[k,column(own(index,k))]))});
-          }
-          const payload={status:'complete',kind:'Committed quota rebuild inputs and outputs; not a full pool or work-retirement replay.',endian:new Uint8Array(new Uint16Array([1]).buffer)[0]===1?'LE':'BE',bytes,sampleCount,vectors,timelines,patterns,inputs};
-          if(JSON.stringify(payload).length>4*1024*1024)throw 0;value.rebuild=payload;
-        }catch{value.rebuild={status:'insufficient-evidence'};}
-        return value;
-      }catch{return {status:'insufficient-evidence',at,monotonic};}
-    }};
-  })()`;
-}
-
 /** Trace callback coordinates are one-based; CPU sample coordinates are separate. */
 export function clockTimerSource(client:Client,directory=path.join(import.meta.dirname,'../dist/client/assets')):ClockSource {
   if(client.status!=='available')return null;
@@ -248,15 +171,6 @@ export class IdleCpuDiagnostic {
     this.clockSource=clockTimerSource(client);
     this.binding=new ScriptBinding(cdp,client,(name,value)=>{if(name.startsWith('source-family-'))this.sourceBinding=value;save('idle-cpu-'+name,value);});
     save('idle-cpu-client',{mode:'diagnostic',client,clockSource:this.clockSource});
-  }
-
-  /** Both calls surround, rather than extend, the original profiler/counter window. */
-  async captureCommitted(stage:'before'|'after'){
-    let value:unknown={status:'insufficient-evidence'};
-    if(!this.active&&!this.profiler&&!this.tracing&&(stage==='before'||this.ended))try{
-      value=await this.cdp.evaluate(`window.__quotumIdleCommitted?.read() ?? {status:'insufficient-evidence'}`);
-    }catch{/* Missing private shape is a diagnostic gap, never a new verdict. */}
-    this.save('idle-cpu-committed-'+stage,{mode:'diagnostic',kind:'Committed quota rebuild inputs, outputs and identities outside counters; intermediate commits, pool retirement and observer cost remain unknown.',value},true);
   }
 
   private async clock(stage:string){
