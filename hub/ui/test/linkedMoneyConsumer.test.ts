@@ -9,6 +9,10 @@ import {HistoryStore,follow} from '../lib/history';
 import {expandHistory,planEventsAt,planEventsDeadline,type HistoryReply} from '../../server/domain/history';
 import {moneyReadSelection} from '../lib/moneySelection';
 import {shallowEqual} from '../lib/store';
+import {centralFixture,at as capturedAt} from '../../server/test/centralFixture';
+import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire';
+import {PeriodAccounting} from '../../server/domain/periodAccounting';
+import {moneyTableValues} from '../lib/moneyTable';
 
 test('a sessions-only reply updates the wallet table consumer after creating a link',async t=>{
   let now=NOW;t.mock.method(Date,'now',()=>now);
@@ -69,4 +73,24 @@ test('a sessions-only reply updates the wallet table consumer after creating a l
     assert.equal(h.requests.length,1,'work updates share one period request');
     assert.equal(fRenders,fRendersBefore);assert.equal(fDrawingChanges,fDrawingsBefore);
   }finally{stops.forEach(stop=>stop());stop?.();loader?.close();await h.close();}
+});
+
+test('valid personal rates preserve large derived hourly estimates in the money table',async t=>{
+  const from=capturedAt,to=from+30*M+1;t.mock.method(Date,'now',()=>to);
+  const h=await centralFixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const board=h.directory.boards(h.owner.id).find(board=>board.personal)!.id;
+  const wallet=h.store.source('openrouter','large-derived-rate',from);h.store.hold(wallet,h.owner.id,from);
+  const unit=h.store.currencies.create(h.owner.id,{name:'Points',symbol:'PT',fractionDigits:2},'USD','1000000000000000000',from);h.store.currencies.select(h.owner.id,unit.id);
+  for(const [at,usage] of [[from,'0'],[from+30*M,'8000000']] as const){
+    h.store.record(wallet,{type:'meters',observedAt:at,staleAfterMs:H,meters:[['usage',usage],['credits','8010000']].map(([id,amount])=>({id,amount,at,kind:'counter' as const,unit:'USD',stale:false,staleAfterMs:H,limit:null,resetAt:null,minutes:null,scope:null,label:null})),keys:[],inventoryComplete:true,inventoryError:null});
+  }
+  h.store.creditWork(h.device.id,from,from+30*M,[{client:'opencode',source:null,origin:'terminal',project:'Rates',folder:'',startedAt:from,identity:{kind:'stable',sessionId:'a'.repeat(32)}}]);
+  h.store.links.mutate(h.owner.id,'create',null,{clientId:'opencode',deviceId:h.device.id,sourceId:wallet,route:null,from,to:null,expectedRevision:h.store.links.revision(h.owner.id),requestId:randomUUID()},from);
+  const response=await h.call('POST',`/api/boards/${board}/period`,{version:1,selection:{mode:'range',from,to},evaluatedAt:to,sessions:{},budget:{cell:String(M),from:String(from),to:String(from+31*M),unit:'USD',currency:unit.id,meters:JSON.stringify([[wallet,'balance']]),work:'1',cells:'skip'}});
+  assert.equal(response.statusCode,200,response.body);
+  const reply=expandPeriod(response.json<PeriodWireReply>());assert.ok(reply.budget?.state==='complete');assert.ok(reply.sessions?.state==='complete');
+  const tape=reply.budget.value.tape;assert.ok(tape?.fixed);
+  const range=reply.budget.basis.range,accounting=new PeriodAccounting(tape,reply.sessions.value),financial=tape.fixed.money[0],work=accounting.moneyWorkSummary(wallet,range);
+  assert.equal(financial.end,'10000000000000000');assert.equal(financial.spent,'8000000000000000000');assert.equal(work?.eligibleActiveMs,30*M);
+  assert.deepEqual(moneyTableValues(financial,range.from,range.to,work),{value:'10000000000000000',topup:'0',active:String(30*M),rate:'16000000000000000000',remaining:'2250'});
 });
