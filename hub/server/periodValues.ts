@@ -13,14 +13,15 @@ import {drain,type Preparation} from './domain/prepare.js';
 type WindowRow = {window_id:string;at:number;kind:WindowValue['kind'];label:string|null;used:number;reset_at:number|null;minutes:number|null;stale_after_ms:number};
 type ContextRow = {observed_from:number|null;from_at:number;to_at:number;stale_after_ms:number;payload:string};
 
+// Spending-pair anchors belong to work estimates, not financial card state changes.
 // Exclusive observations, compressed anchors and availability deadlines all end reuse.
 const valueChanges=`WITH changes(at) AS (
     SELECT at FROM events WHERE source_id=:source AND kind='quota_unavailable'
     UNION ALL SELECT at+1 FROM samples WHERE source_id=:source
     UNION ALL SELECT min(at+stale_after_ms+1,coalesce(reset_at,9223372036854775807)) FROM samples WHERE source_id=:source
-    UNION ALL SELECT at+1 FROM readings WHERE source_id=:source
-    UNION ALL SELECT at+stale_after_ms+1 FROM readings WHERE source_id=:source
-    UNION ALL SELECT reset_at FROM readings WHERE source_id=:source
+    UNION ALL SELECT at+1 FROM readings INDEXED BY readings_sparse WHERE source_id=:source AND pair_anchor=0
+    UNION ALL SELECT at+stale_after_ms+1 FROM readings INDEXED BY readings_sparse WHERE source_id=:source AND pair_anchor=0
+    UNION ALL SELECT reset_at FROM readings INDEXED BY readings_sparse WHERE source_id=:source AND pair_anchor=0
     UNION ALL SELECT observed_from+1 FROM meter_spans WHERE source_id=:source
     UNION ALL SELECT from_at+1 FROM meter_spans WHERE source_id=:source
     UNION ALL SELECT to_at+1 FROM meter_spans WHERE source_id=:source
@@ -82,7 +83,7 @@ function valueReader(store:Store,user:string,reserve:(bytes:number)=>void) {
   const target=store.currencies.preference(user).id;
   const batch=store.db.prepare('SELECT window_id,at,kind,label,used,reset_at,minutes,stale_after_ms FROM samples WHERE source_id=? AND at=(SELECT max(at) FROM samples WHERE source_id=? AND at<?)');
   const context=store.db.prepare('SELECT from_at,to_at,stale_after_ms,payload,observed_from FROM meter_contexts WHERE source_id=? AND item=? AND from_at<? ORDER BY from_at DESC LIMIT 1');
-  const ids=store.db.prepare('SELECT DISTINCT meter_id FROM readings WHERE source_id=? AND at<?');
+  const ids=store.db.prepare('SELECT DISTINCT meter_id FROM readings INDEXED BY readings_sparse WHERE source_id=? AND pair_anchor=0 AND at<?');
   const owner=store.db.prepare('SELECT 1 FROM holders WHERE source_id=? AND user_id=?');
   const bounds=store.db.prepare(`${valueChanges} SELECT coalesce(max(CASE WHEN at<=:edge THEN at END),0) AS start, coalesce(min(CASE WHEN at>:edge THEN at END),9007199254740991) AS end FROM changes`);
   return {target,batch,context,ids,owner,bounds};

@@ -118,8 +118,9 @@ export class MeterStore {
   }
 
   private nativeReadings(source: string, meter: string, from: number, to: number, dense: boolean, reserve?:(bytes:number)=>void): Reading[] {
-    const sparse = dense ? '' : ' AND pair_anchor=0';
-    const query = this.db.prepare(`SELECT at,previous_at,kind,unit,amount,amount_scale,limit_amount,reset_at,minutes,scope,label,stale_after_ms FROM readings WHERE source_id=? AND meter_id=?${sparse} AND at<? AND at>=coalesce((SELECT max(at) FROM readings WHERE source_id=? AND meter_id=?${sparse} AND at<?),?) ORDER BY at`);
+    const sparse = dense ? '' : ' AND pair_anchor=0', index = dense ? '' : ' INDEXED BY readings_sparse';
+    // Without this index SQLite may scan dense work anchors for non-covering financial reads.
+    const query = this.db.prepare(`SELECT at,previous_at,kind,unit,amount,amount_scale,limit_amount,reset_at,minutes,scope,label,stale_after_ms FROM readings${index} WHERE source_id=? AND meter_id=?${sparse} AND at<? AND at>=coalesce((SELECT max(at) FROM readings${index} WHERE source_id=? AND meter_id=?${sparse} AND at<?),?) ORDER BY at`);
     query.setReadBigInts(true);
     query.setReturnArrays(true);
     const rows:Reading[]=[];

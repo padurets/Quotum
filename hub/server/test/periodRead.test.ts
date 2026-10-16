@@ -21,6 +21,7 @@ import {sharedWork} from '../periodWork.js';
 import {expandPeriod,type PeriodWireReply} from '../domain/periodWire.js';
 import {HISTORY_BYTES_PER_MEASUREMENT} from '../../bench/budget.js';
 import {PeriodAccounting} from '../domain/periodAccounting.js';
+import {transaction} from '../touches.js';
 
 const M=60_000,H=60*M,now=1_800_000_000_000;
 async function fixture() {
@@ -146,6 +147,35 @@ test('nearby card states cross exclusive observations and deadlines without inte
       assert.ok(hasPeriodValue(value,to),String(to));const {states:_states,...snapshot}=periodValueAt(value,to)!;assert.deepEqual(snapshot,fresh[i]);
     }
   }
+});
+
+test('unchanged spending anchors preserve sparse financial card states and period replies',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const start=now-8*H,wallet=h.store.source('openrouter','dense-values',start),sources=[{id:wallet,provider:'openrouter'}];h.store.hold(wallet,h.user.id,start);
+  transaction(h.store.db,()=>{
+    for(let at=start;at<=now;at+=2*M)h.store.record(wallet,{type:'meters',observedAt:at,staleAfterMs:45*M,
+      meters:['usage','credits'].map(id=>({id,at,amount:id==='usage'?'0':'60000000',kind:'counter' as const,unit:'USD',stale:false,staleAfterMs:45*M,limit:null,resetAt:null,minutes:null,scope:null,label:null})),keys:[],inventoryComplete:true,inventoryError:null});
+  });
+  assert.equal(h.store.db.prepare('SELECT count(*) n FROM readings WHERE source_id=? AND pair_anchor=1').get(wallet)?.n,240);
+  const queries=new Set<string>(),prepare=h.store.db.prepare.bind(h.store.db);
+  t.mock.method(h.store.db,'prepare',(sql:string)=>{if(sql.includes('FROM readings'))queries.add(sql);return prepare(sql);});
+  const edge=now-2*H,read=()=>periodValues(h.store,sources,h.user.id,edge,()=>{},now),nearby=()=>nearbyPeriodValues(h.store,sources,h.user.id,edge,2*H,()=>{},()=>{},now);
+  const request={version:1 as const,selection:{mode:'range' as const,from:now-3*H,to:edge},evaluatedAt:now,values:[wallet]};
+  const dense=read(),denseNearby=nearby(),denseReply=await h.read(request);assert.equal(denseReply.statusCode,200,denseReply.body);
+  const densePart=denseReply.json<PeriodReply>().values;assert.equal(densePart?.state,'complete');
+  if(densePart?.state!=='complete')throw new Error('missing financial values');assert.equal(densePart.value[0].id,wallet);
+  for(const sql of queries){
+    const query=prepare('EXPLAIN QUERY PLAN '+sql),names=[...sql.matchAll(/:(\w+)/g)].map(match=>match[1]);
+    const plan=names.length?query.all(Object.fromEntries(names.map(name=>[name,0]))):query.all(...Array.from({length:(sql.match(/\?/g)??[]).length},()=>0));
+    const readings=plan.filter(row=>/\b(?:SEARCH|SCAN) readings\b/.test(String(row.detail)));
+    assert.ok(readings.length>0&&readings.every(row=>String(row.detail).includes('readings_sparse')),'actual financial queries must avoid dense anchors: '+sql);
+  }
+  // Keep every financial observation, current value and availability span unchanged.
+  h.store.db.prepare('DELETE FROM readings WHERE source_id=? AND pair_anchor=1').run(wallet);
+  assert.deepEqual(dense,read(),'private work endpoints cannot shorten financial value reuse');
+  assert.deepEqual(denseNearby,nearby(),'neighboring cards contain only financial state boundaries');
+  const sparseReply=await h.read(request);assert.equal(sparseReply.statusCode,200,sparseReply.body);
+  assert.deepEqual(denseReply.json<PeriodReply>().values,sparseReply.json<PeriodReply>().values,'the public period path preserves sparse card states');
 });
 
 test('sparse card states preserve optional fields and unchanged key context in either direction',()=>{
