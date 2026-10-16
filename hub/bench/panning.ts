@@ -24,24 +24,6 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
   };
   const settled = () => cdp.evaluate(`(async()=>{const until=Date.now()+15000,p=new URLSearchParams(location.search),wanted=p.has('from')?p.get('from')+'-'+p.get('to'):JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range||'24h';while(document.querySelector('.history.is-loading, .activity.is-loading, .budget-history.is-loading, .subscription-funds.is-loading, .agents-panel.is-loading') || document.querySelector('.chart > svg[data-pan-end], .chart > svg[data-draw-ready="false"], .chart > svg.is-panning')||[...document.querySelectorAll('.forecast,.budget-table,.agents-panel')].some(table=>table.dataset.historyRange!==wanted)){if(Date.now()>until)throw new Error('charts and complete totals did not settle: '+JSON.stringify({wanted,panels:[...document.querySelectorAll('.history,.activity,.budget-history,.subscription-funds,.forecast,.budget-table,.agents-panel')].map(panel=>({class:panel.className,range:panel.dataset.historyRange,error:panel.querySelector('.history-error')?.textContent,panning:panel.querySelector('.chart>svg')?.classList.contains('is-panning')??null,plot:panel.querySelector('.chart>svg')?.dataset})),flights:window.__quotumPan?[...window.__quotumPan.flights.values()]:[]}));await new Promise(r=>setTimeout(r,20));}await new Promise(r=>setTimeout(r,250));})()`);
   const reports: PanReading[] = [];
-  // Temporary opt-in instance evidence; ordinary benchmark runs never start it.
-  const tableWitnessEnabled=process.env.QUOTUM_BENCH_DIAGNOSE_PANNING==='trace';
-  let tableWitnessStarted=false,tableWitnessStopped=false;
-  const saveTableWitness=(value:unknown)=>{
-    const words=['capture-start','capture-stop','lifetime-start','lifetime-end','observer-start','observer-end','sync-effect','ro-start','ro-entry','ro-row','ro-decision','ro-end','update-start','update-end','bbox-start','bbox-end','report','root','live','measured','footer','multiFooter','singleFooter','row','unknown','sync','ro','table','list','unstarted','insufficient-evidence','active','complete'];
-    const encode=(item:unknown):unknown=>{
-      if(typeof item==='string'){const id=words.indexOf(item);if(id<0)throw new Error('Unknown table witness enum');return id;}
-      if(Array.isArray(item))return item.map(encode);
-      if(item!==null&&typeof item==='object')return Object.fromEntries(Object.entries(item).map(([key,field])=>[key,encode(field)]));
-      return item;
-    };
-    // The existing evidence sanitizer accepts numeric records and named enum words.
-    evidence?.save('table-instance-witness',{mode:'diagnostic',words:words.map(name=>({name})),payload:encode(value)});
-  };
-  const stopTableWitness=async(signal?:AbortSignal)=>{
-    const value=await cdp.evaluate(`(()=>{const api=globalThis.__quotumTableInstanceWitness;if(!api)throw new Error('Table witness absent');return api.stop();})()`,signal);
-    tableWitnessStopped=true;saveTableWitness(value);
-  };
   // Count independent measured series intersecting the visible plot, never path parts.
   // These layout reads happen after settling, outside the moving-frame probe.
   const density = () => cdp.evaluate<Omit<PanReading['edgeSeries'][number],'stage'>>(`(() => {
@@ -271,11 +253,6 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         probe.cleanup=()=>{probe.running=false;cancelAnimationFrame(probe.raf);probe.observer.disconnect();for(const type of types){owner.removeEventListener(type,capture,true);window.removeEventListener(type,input);}window.requestAnimationFrame=originalRAF;window.fetch=originalFetch;history.pushState=originalPush;};
         probe.raf=schedule(tick);
       })()`);
-      if(tableWitnessEnabled&&initiator==='session'&&period==='30d'){
-        const started=await cdp.evaluate<boolean>(`(()=>{const api=globalThis.__quotumTableInstanceWitness;if(!api)throw new Error('Table witness absent');return api.start();})()`);
-        if(started!==true)throw new Error('Table witness did not start');
-        tableWitnessStarted=true;
-      }
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 4});
       // A delayed cold edge is part of the moving interval, including arrivals/rebuilds.
       await cdp.send('Network.emulateNetworkConditions', {offline: false, latency: 400, downloadThroughput: -1, uploadThroughput: -1});
@@ -343,7 +320,6 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       evidence?.save('panning-'+initiator+'-'+period,report);
       at('postconditions');
       await cdp.send('Emulation.setCPUThrottlingRate', {rate: 1});
-      if(tableWitnessStarted&&!tableWitnessStopped)await stopTableWitness();
       const live = await cdp.evaluate<boolean>(`!new URLSearchParams(location.search).has('from')`);
       if (!live) {
         const returned = await cdp.evaluate<unknown>('({after:window.__quotumPan.returnAfter,input:window.__quotumPan.returnInput})');
@@ -403,18 +379,10 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
     const command = cdp.snapshot?.();
     failed = true;
     evidence?.save('panning-failure', {status: 'failed', ...scenario, completed: reports.length, command, settlement: panningSettlement(error)});
-    let answeredPartial:{value:unknown}|undefined;
     if (evidence) try {
-      const partial = await deadline(5000, signal => {
-        const reading=cdp.evaluate(panPartialScript(scenario?.initiator,scenario?.period),signal);
-        if(!tableWitnessStarted||tableWitnessStopped)return reading;
-        return Promise.allSettled([
-          reading.then(value=>{answeredPartial={value};return value;}),
-          stopTableWitness(signal).catch(()=>evidence.save('table-instance-witness',{status:'unavailable'})),
-        ]).then(([partial])=>{if(partial.status==='rejected')throw partial.reason;return partial.value;});
-      });
+      const partial = await deadline(5000, signal => cdp.evaluate(panPartialScript(scenario?.initiator,scenario?.period), signal));
       evidence.save('panning-partial', {...scenario, partial});
-    } catch {evidence.save('panning-partial', answeredPartial?{...scenario,partial:answeredPartial.value}:{status: 'unavailable', ...scenario});}
+    } catch {evidence.save('panning-partial', {status: 'unavailable', ...scenario});}
     throw error;
   } finally {
     at('cleanup');
