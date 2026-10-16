@@ -12,8 +12,9 @@ use ureq::http::Response;
 use ureq::{Body, ResponseExt};
 
 use crate::config::Hub;
+use crate::measurement_policy::{AttemptContext, MeasurementPolicy, PolicyCache, uuid};
 use crate::model::{
-    Batch, ErrorKind, Failure, INGEST_VERSION, Machine, Millis, Outcome, Provider, RunningSession, STALE_LIMIT_MS,
+    ErrorKind, Failure, INGEST_VERSION, Machine, Millis, Outcome, Provider, RunningSession, STALE_LIMIT_MS,
     SessionReport, Snapshot, now_ms, parse_time, ts,
 };
 
@@ -47,6 +48,13 @@ pub struct Paced {
     pub next_in_ms: u64,
 }
 
+pub struct CheckinAnswer {
+    pub directives: Vec<Directive>,
+    pub commands: Vec<Option<String>>,
+    pub policy: Option<MeasurementPolicy>,
+    pub accounts: Vec<Option<String>>,
+}
+
 pub trait Sink {
     fn deliver(&mut self, outcome: &Outcome);
 
@@ -54,6 +62,28 @@ pub trait Sink {
     /// subscriptions now; one directive for each, in order. Without a hub, always measure.
     fn checkin(&mut self, asks: &[Ask]) -> Vec<Directive> {
         asks.iter().map(|_| Directive::Measure { paced: None }).collect()
+    }
+
+    /// Additive lifecycle contract: a legacy sink is called exactly once.
+    fn checkin_managed(&mut self, asks: &[Ask], _collectors: &[Provider]) -> CheckinAnswer {
+        CheckinAnswer {
+            directives: self.checkin(asks),
+            commands: vec![None; asks.len()],
+            accounts: vec![None; asks.len()],
+            policy: None,
+        }
+    }
+    fn managed(&self) -> bool {
+        false
+    }
+    fn allows_measurement(&self, _provider: Provider) -> bool {
+        true
+    }
+    fn needs_policy_contact(&self) -> bool {
+        false
+    }
+    fn deliver_attempt(&mut self, outcome: &Outcome, _context: Option<&AttemptContext>) {
+        self.deliver(outcome);
     }
 
     /// Sends the measurements kept for later, when the hub answers again.
@@ -92,6 +122,8 @@ impl Sink for Discard {
 enum Item {
     Snapshot(Snapshot),
     Failure(Failure),
+    ManagedSnapshot { snapshot: Snapshot, context: Option<AttemptContext> },
+    ManagedFailure { failure: Failure, context: Option<AttemptContext> },
 }
 
 /// Keeps about two days of measurements of three providers every two minutes.
@@ -242,6 +274,11 @@ pub struct HubSink {
     sessions_unknown_until: Option<Instant>,
     sessions_retry_at: Option<Instant>,
     log: Box<dyn FnMut(&str) + Send>,
+    policy: PolicyCache,
+    /// Only the managed caller knows the complete local scope.
+    configured: Option<Vec<Provider>>,
+    commands: Vec<Option<String>>,
+    accounts: Vec<Option<String>>,
 }
 
 impl HubSink {
@@ -260,6 +297,12 @@ impl HubSink {
         let spool = fs::read_to_string(&spool_file)
             .map(|text| text.lines().filter_map(|line| serde_json::from_str(line).ok()).collect())
             .unwrap_or_default();
+        let policy = PolicyCache::load(
+            spool_file.with_extension("policy.json"),
+            hub.url.trim_end_matches('/'),
+            &machine.id,
+            &hub.token,
+        );
         HubSink {
             base: hub.url.trim_end_matches('/').to_string(),
             token: hub.token.clone(),
@@ -267,6 +310,10 @@ impl HubSink {
             http: agent(&hub.url, proxy),
             spool_file,
             spool,
+            policy,
+            configured: None,
+            commands: Vec::new(),
+            accounts: Vec::new(),
             retry_at: None,
             failures: 0,
             refused: None,
@@ -278,20 +325,29 @@ impl HubSink {
     }
 
     fn post(&self, items: &[Item]) -> Result<(), Trouble> {
-        let mut batch = Batch {
-            version: INGEST_VERSION,
-            agent: AGENT.into(),
-            machine: self.machine.clone(),
-            sent_at: now_ms(),
-            snapshots: Vec::new(),
-            failures: Vec::new(),
-        };
+        let mut snapshots = Vec::new();
+        let mut failures = Vec::new();
         for item in items {
             match item {
-                Item::Snapshot(s) => batch.snapshots.push(s.clone()),
-                Item::Failure(f) => batch.failures.push(f.clone()),
+                Item::Snapshot(s) => snapshots.push(serde_json::to_value(s).unwrap()),
+                Item::Failure(f) => failures.push(serde_json::to_value(f).unwrap()),
+                Item::ManagedSnapshot { snapshot, context } => {
+                    let mut value = serde_json::to_value(snapshot).unwrap();
+                    value["attemptContext"] = serde_json::to_value(context).unwrap();
+                    if snapshot.client.is_some() {
+                        value["clientEvidence"] =
+                            if snapshot.provider == Provider::Codex { "nativeHandshake" } else { "preLaunch" }.into();
+                    }
+                    snapshots.push(value);
+                }
+                Item::ManagedFailure { failure, context } => {
+                    let mut value = serde_json::to_value(failure).unwrap();
+                    value["attemptContext"] = serde_json::to_value(context).unwrap();
+                    failures.push(value);
+                }
             }
         }
+        let batch = serde_json::json!({"version":INGEST_VERSION,"agent":AGENT,"machine":self.machine,"sentAt":ts::format(now_ms()),"snapshots":snapshots,"failures":failures});
         let response = self
             .http
             .post(&format!("{}/v1/ingest", self.base))
@@ -362,7 +418,7 @@ impl HubSink {
                 }
                 Err(Trouble::Rejected(_)) if count > 1 => size = count / 2,
                 Err(Trouble::Rejected(mut reason)) => {
-                    if matches!(chunk.first(), Some(Item::Snapshot(s)) if s.provider == Provider::Codex && s.windows.is_empty() && s.resource_status.is_some())
+                    if matches!(chunk.first(), Some(Item::Snapshot(s) | Item::ManagedSnapshot {snapshot:s,..}) if s.provider == Provider::Codex && s.windows.is_empty() && s.resource_status.is_some())
                     {
                         reason.push_str("; this Codex resource observation needs a hub with credit-balance support");
                     }
@@ -392,6 +448,44 @@ impl HubSink {
 }
 
 impl Sink for HubSink {
+    fn managed(&self) -> bool {
+        true
+    }
+    fn allows_measurement(&self, provider: Provider) -> bool {
+        self.policy.allows(provider)
+    }
+    fn needs_policy_contact(&self) -> bool {
+        self.policy.needs_contact()
+    }
+    fn checkin_managed(&mut self, asks: &[Ask], collectors: &[Provider]) -> CheckinAnswer {
+        self.configured = Some(collectors.to_vec());
+        let directives = self.checkin(asks);
+        CheckinAnswer {
+            directives,
+            commands: self.commands.clone(),
+            accounts: self.accounts.clone(),
+            policy: self.policy.policy.clone(),
+        }
+    }
+    fn deliver_attempt(&mut self, outcome: &Outcome, context: Option<&AttemptContext>) {
+        let item = match outcome {
+            Ok(snapshot) => Item::ManagedSnapshot { snapshot: snapshot.clone(), context: context.cloned() },
+            Err(failure) if failure.error == ErrorKind::NotInstalled => {
+                self.flush();
+                return;
+            }
+            Err(failure) => Item::ManagedFailure { failure: failure.clone(), context: context.cloned() },
+        };
+        self.spool.push_back(item);
+        while self.spool.len() > SPOOL_LIMIT {
+            self.spool.pop_front();
+        }
+        if self.refused.is_some() || self.resting() {
+            self.save_spool();
+            return;
+        }
+        self.send(self.spool.len() > 1);
+    }
     fn deliver(&mut self, outcome: &Outcome) {
         match outcome {
             Ok(snapshot) => self.spool.push_back(Item::Snapshot(snapshot.clone())),
@@ -411,6 +505,8 @@ impl Sink for HubSink {
     }
 
     fn checkin(&mut self, asks: &[Ask]) -> Vec<Directive> {
+        self.commands = vec![None; asks.len()];
+        self.accounts = vec![None; asks.len()];
         let unanswered = vec![Directive::Unanswered; asks.len()];
         if self.refused.is_some() {
             return unanswered;
@@ -430,13 +526,22 @@ impl Sink for HubSink {
                 subscription
             })
             .collect();
-        let request = serde_json::json!({
+        let mut request = serde_json::json!({
             "version": INGEST_VERSION,
             "agent": AGENT,
             "paced": true,
             "machine": self.machine,
             "subscriptions": subscriptions,
+            "capabilities": {"measurementPolicy":1,"attemptContext":1},
         });
+        if let Some(collectors) = &self.configured {
+            request["collectors"] = serde_json::json!(collectors);
+        }
+        if self.policy.confirmed {
+            if let Some(policy) = &self.policy.policy {
+                request["policyAck"] = serde_json::json!({"authority":policy.authority,"revision":policy.revision});
+            }
+        }
         let url = format!("{}/v1/checkin", self.base);
         let answer = self
             .http
@@ -469,13 +574,28 @@ impl Sink for HubSink {
             self.report(Some("the hub answered a check-in with something else than JSON".into()));
             return unanswered;
         };
+        if let Ok(policy) = serde_json::from_value::<MeasurementPolicy>(body["policy"].clone()) {
+            if policy.valid() && self.policy.learn(policy).is_err() {
+                (self.log)(
+                    "measurement policy: cannot confirm durable state; enforcing learned restrictions without acknowledgement",
+                );
+            }
+        }
         let Some(directives) = body["subscriptions"].as_array().filter(|list| list.len() == asks.len()) else {
             self.report(Some("the hub answered a check-in about other subscriptions".into()));
             return unanswered;
         };
         // The hub answers: whatever was kept for it may go now.
-        self.failures = 0;
-        self.retry_at = None;
+        self.commands = directives
+            .iter()
+            .map(|directive| directive["commandId"].as_str().filter(|id| uuid(id)).map(str::to_string))
+            .collect();
+        self.accounts = directives
+            .iter()
+            .map(|directive| {
+                directive["accountKey"].as_str().filter(|key| key.len() <= 256 && !key.is_empty()).map(str::to_string)
+            })
+            .collect();
         self.report(None);
         let now = now_ms();
         directives.iter().map(|directive| read_directive(directive, now)).collect()
@@ -744,6 +864,25 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_public_check_in_declares_scope_only_after_a_managed_caller_provides_it() {
+        let (url, seen) = hub(|_, body| {
+            let subscriptions: Vec<_> =
+                body["subscriptions"].as_array().unwrap().iter().map(|_| json!({"measure":true})).collect();
+            json(200, json!({"subscriptions":subscriptions}))
+        });
+        let (mut sender, _) = sink(&url, "public-scope");
+        let asks = [ask(Provider::Codex, Some("a"))];
+        assert!(matches!(sender.checkin(&asks)[0], Directive::Measure { .. }));
+        assert!(seen.lock().unwrap()[0].1.get("collectors").is_none(), "unknown scope is not empty scope");
+        sender.checkin_managed(&asks, &[Provider::Codex]);
+        assert_eq!(seen.lock().unwrap()[1].1["collectors"], json!(["codex"]));
+        sender.checkin_managed(&[], &[]);
+        assert_eq!(seen.lock().unwrap()[2].1["collectors"], json!([]), "a managed empty scope is explicit");
+        sender.checkin(&asks);
+        assert_eq!(seen.lock().unwrap()[3].1["collectors"], json!([]), "an ask does not redefine known scope");
+    }
+
+    #[test]
     fn a_check_in_asks_about_every_provider_at_once_and_reads_the_hub_s_pace() {
         let (url, seen) = hub(|_, _| {
             json(
@@ -820,6 +959,102 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_removed_client_still_drains_managed_backlog_when_delivery_retry_is_due() {
+        let ready = Arc::new(AtomicBool::new(false));
+        let current = ready.clone();
+        let (url, seen) = hub(move |_, _| {
+            if current.load(Ordering::SeqCst) {
+                json(200, json!({"accepted":1}))
+            } else {
+                json(503, json!({"error":"unavailable"}))
+            }
+        });
+        let (mut sender, _) = sink(&url, "managed-removed-client");
+        sender.deliver_attempt(&failed("saved outcome"), None);
+        assert_eq!(sender.spool.len(), 1);
+        let gone = Err(crate::model::Failure::new(Provider::Codex, ErrorKind::NotInstalled, "fixture"));
+        ready.store(true, Ordering::SeqCst);
+        sender.deliver_attempt(&gone, None);
+        assert_eq!(seen.lock().unwrap().len(), 1, "a missing client cannot cancel ingest backoff");
+        sender.retry_at = Some(Instant::now());
+        sender.deliver_attempt(&gone, None);
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        assert!(sender.spool.is_empty());
+        let restored = HubSink::new(
+            &Hub { url, token: "qt_d_test".into() },
+            sender.machine.clone(),
+            sender.spool_file.clone(),
+            Box::new(|_| {}),
+        );
+        assert!(restored.spool.is_empty(), "the acknowledged backlog is removed from disk too");
+        let _ = fs::remove_file(sender.spool_file.clone());
+    }
+
+    #[test]
+    fn policy_recovery_and_restart_keep_the_attempt_stamped_before_delivery() {
+        let response = Arc::new(Mutex::new(
+            json!({"version":1,"authority":"11111111-1111-4111-8111-111111111111","revision":1,"enabled":true,
+            "collectors":{"claude":{"enabled":true,"epoch":0,"requiresEpoch":false,"changedAt":null},"codex":{"enabled":true,"epoch":0,"requiresEpoch":false,"changedAt":null},"antigravity":{"enabled":true,"epoch":0,"requiresEpoch":false,"changedAt":null}}}),
+        ));
+        let current = response.clone();
+        let ready = Arc::new(AtomicBool::new(false));
+        let delivery = ready.clone();
+        let (url, seen) = hub(move |path, _| {
+            if path == "/v1/checkin" {
+                json(200, json!({"subscriptions":[],"policy":current.lock().unwrap().clone()}))
+            } else if delivery.load(Ordering::SeqCst) {
+                json(200, json!({"accepted":0,"policySuppressed":1}))
+            } else {
+                json(503, json!({"error":"unavailable"}))
+            }
+        });
+        let (mut sender, _) = sink(&url, "managed-restart");
+        let first = sender.checkin_managed(&[], &Provider::ALL);
+        let original = first.policy.unwrap().attempt(
+            Provider::Codex,
+            Some("a".repeat(24)),
+            Some("22222222-2222-4222-8222-222222222222".into()),
+        );
+        sender.deliver_attempt(&failed("fixture"), Some(&original));
+        assert!(sender.resting());
+        {
+            let mut policy = response.lock().unwrap();
+            policy["revision"] = json!(2);
+            policy["enabled"] = json!(false);
+            policy["collectors"]["codex"]["epoch"] = json!(1);
+        }
+        sender.checkin_managed(&[], &Provider::ALL);
+        assert!(!sender.allows_measurement(Provider::Codex));
+        assert!(sender.resting(), "control must not reset failed delivery backoff");
+        let spool = sender.spool_file.clone();
+        let machine = sender.machine.clone();
+        drop(sender);
+        let mut restarted =
+            HubSink::new(&Hub { url, token: "qt_d_test".into() }, machine, spool.clone(), Box::new(|_| {}));
+        assert!(!restarted.allows_measurement(Provider::Codex));
+        ready.store(true, Ordering::SeqCst);
+        restarted.flush();
+        restarted.checkin_managed(&[], &Provider::ALL);
+        let requests = seen.lock().unwrap();
+        let attempts: Vec<_> = requests
+            .iter()
+            .filter(|(path, _)| path == "/v1/ingest")
+            .map(|(_, body)| body["failures"][0]["attemptContext"].clone())
+            .collect();
+        assert_eq!(attempts, vec![serde_json::to_value(&original).unwrap(); 2]);
+        let checkins: Vec<_> = requests
+            .iter()
+            .filter(|(path, _)| path == "/v1/checkin")
+            .map(|(_, body)| body["policyAck"].clone())
+            .collect();
+        assert!(checkins[0].is_null());
+        assert_eq!(checkins[1]["revision"], 1);
+        assert_eq!(checkins[2]["revision"], 2, "restart acknowledges only the durably saved policy");
+        let _ = fs::remove_file(&spool);
+        let _ = fs::remove_file(spool.with_extension("policy.json"));
+    }
+
+    #[test]
     fn a_check_in_the_hub_does_not_answer_is_asked_again_and_holds_back_no_delivery() {
         // A hub that fails every request, then answers again.
         let answers = Arc::new(AtomicBool::new(false));
@@ -848,10 +1083,11 @@ pub(crate) mod tests {
         assert_eq!(kept.checkin(&asks), [Directive::Unanswered; 2], "asked anyway");
         assert_eq!(seen.lock().unwrap().len(), 3);
 
-        // The hub answers again: the check-in ends the rest, and what was kept goes at once.
+        // Control recovers independently of delivery; it cannot lift the batch's backoff.
         answers.store(true, Ordering::SeqCst);
         assert!(matches!(kept.checkin(&asks)[0], Directive::Wait { on_duty: true, .. }));
-        assert!(!kept.resting());
+        assert!(kept.resting());
+        kept.retry_at = Some(Instant::now());
         kept.flush();
         let _ = fs::remove_file(&kept.spool_file);
         assert!(kept.spool.is_empty(), "delivered");

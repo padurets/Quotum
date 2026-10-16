@@ -82,6 +82,67 @@ is the effective permitted time, respecting the device minimum. Stale data can s
 have a next measurement and reason. A frequency write reaches all boards that show the
 source through the existing events, without polling or changing the agent protocol.
 
+## Measurement devices
+
+Devices and provider accounts share My connections. Contextual links from a card's
+settings and compact status open its source there. Native compact uses the existing
+origin/role/instance-checked `open_main` command with optional
+`destination: {kind: "devices", sourceId}`; it accepts only a bounded client-source ID,
+never a URL. The app keeps one latest numbered intent for a closed, loading or open
+main window. Unavailable source access falls back to the person's own connections.
+Local desktop shows versions and diagnostics without a fleet control competing with
+local configuration.
+
+`GET /api/devices?measurement=1` requires a user session and returns
+`{devices, hubVersion, sources}`. The ordinary `/api/devices` array remains compatible.
+Policy/control confirmation, installed observation times and own producer information
+are owner-only. Source diagnostics require a current holding; foreign preferences and
+producers have neutral summaries with no foreign device identifiers, names or versions.
+Value and observation origins are separate latest accepted resource anchors; missing
+observations preserve retained values, and unknown historical origins remain unknown.
+Quota, resets and subscription funds have independent status/freshness. A snapshot
+includes optional `deviceContacts: {[ownDeviceId]: lastSeenAt}` for reconnect.
+The page retains at most 1024 recent contacts; a reconnect replaces that baseline.
+Revocation, a verified failure releasing duty, and eligibility or duty expiry notify
+affected holders through the same private semantic hint. The existing owner-event
+deadline compares semantic selection state; a contact that extends an unchanged
+state neither sends a hint nor makes the page refetch. Accepted native destinations
+coalesce before asynchronous window handoff. Repeating a destination restores that
+source even after a manual selection in the already-open Devices view.
+An accepted navigation entry retires the previous connection dialogs before focusing
+the source. Opening the main window without a destination preserves the current draft.
+The hub reuses its private selection baseline between semantic changes and deadlines;
+eligibility changes notify holders even while they watch another board.
+Local collector configuration can make an own candidate unavailable without changing
+its account evidence, hub participation setting or retained resource producers. The
+reason stays private to that device's owner; other holders receive only a semantic
+hint when their subscription's effective selection changes.
+
+`POST /api/devices/:device/measurement-policy` takes
+`{operationId, expectedRevision, desired: {enabled, collectors: {claude, codex, antigravity}}}`.
+It requires a live own device. `POST /api/sources/:source/measurement-preference` takes
+`{operationId, expectedRevision, desired: ownDeviceId | null}` and requires current
+holdership of a client-measured source. A new target must have current matching account
+evidence and eligible participation. Null selects Auto. Preference is global; another
+holder can clear it or explicitly choose their own eligible device. It does not renew
+an idle lease, dispatch work, move an issued refresh or rank resource completeness.
+An unavailable preference keeps its intent while eligible Auto fallback works.
+
+Writes return `200 {result: {appliedRevision}, replayed}`. CAS rejects stale revisions,
+even identical desired state, with `409 measurement_conflict`. Operation IDs are UUIDs,
+scoped to the writer across these routes. Atomic receipts cover canonical route,
+resource, revision and desired payload; changed reuse is `409 mutation_conflict`.
+Receipts last seven days, at most 1024 unexpired per writer, with indexed cleanup of
+128 expired receipts at a time. Capacity is `429 mutation_capacity` with `Retry-After`.
+Replay rechecks current ownership/holdership before returning the original historical
+result without effects; clients reread current state rather than applying the receipt.
+
+A preference switch waits for completion or the existing bounded issued-command
+deadline. During a real pending handover, both refresh availability and new refresh
+POSTs report unavailable; POST returns `409 {error: "refresh_unavailable", reason:
+"handover_pending"}` without creating or joining a request. Existing dispatched
+requests retain their target/deadline. Stable Auto fallback remains refreshable.
+
 ## Adding widgets and saving views
 
 `GET /api/boards/:board/catalogue` requires membership. It returns the board,
@@ -273,11 +334,12 @@ change as it was.
 | `event` | `data` | When |
 |---|---|---|
 | `hello` | `{epoch, now, client, heartbeatMs}` | First. `epoch`: when this start of the hub began, base 36. `now`: the hub's clock. `client`: the path of the page's entry script the hub serves (`/assets/index-<hash>.js`), null without a build. `heartbeatMs`: 25000. |
-| `snapshot` | `{providers, sourceAccess, board, view, viewRevision, connectionsRevision, historyStart, workAuthority, sources, sessions, unattributedSessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
+| `snapshot` | `{providers, sourceAccess, board, view, viewRevision, connectionsRevision, deviceContacts?, historyStart, workAuthority, sources, sessions, unattributedSessions, cadence, refresh, forecast, mine, boards, resets}` | Second: the board for this reader. |
 | `board` | `{board: {id, name, personal}}` | The board was renamed. |
 | `view` | `{view, revision}` | The board's view was saved. The monotonic revision belongs to this board. |
 | `connections` | `{revision}` | Only this reader's connection structure or access health changed; no private IDs or labels. Successful measurements and unchanged device heartbeats do not increment it. |
-| `devices` | `{}` | Only this reader's current device sessions changed. Invalidate an open Devices disclosure; no session fields, IDs, counts or names are sent. |
+| `deviceContacts` | `{devices: [{deviceId, lastSeenAt}]}` | Coalesced contact timestamps for this reader's live devices only; update the small contact row without refetching Devices or rerendering board cards. |
+| `devices` | `{}` | Only this reader's device metadata, inventory, diagnostics, policy confirmation, selection or accepted producer evidence changed. Revalidate an open Devices view once per coalesced hint; a closed view makes no request. |
 | `lineup` | `{sources: string[]}` | The board's sources, in order, changed. |
 | `card` | a card | A source's state changed. |
 | `sessions` | `{id, sessions}` | The agents running on a source, on the machines of its people on this board, changed. |

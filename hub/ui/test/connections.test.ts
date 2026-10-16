@@ -46,7 +46,7 @@ function fixture(initialOwner='u',local=false,boards:Session['boards']=[]){
   }};
   for (const [name, file] of [['addition', '../lib/addition.ts'], ['forms', '../components/ConnectionForms.tsx'], ['connections', '../components/ConnectionsPage.tsx']]) {
     const exports = {};
-    runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,{...context,exports});
+    runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText+(name==='connections'?'\nexports.ConnectionsPage=ProviderConnections;':''),{...context,exports});
     modules[name] = exports;
     Object.assign(context.exports, exports);
   }

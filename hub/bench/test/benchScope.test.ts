@@ -7,6 +7,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {RunOwner} from '../runOwner.js';
 import {safeEvidence} from '../evidence.js';
+import {EventCounts} from '../stream.js';
 import {cellOf} from '../../server/domain/history.js';
 import {idleProblems,chartProblems,measuredProblems,percentile,HISTORY_BYTES_PER_MEASUREMENT} from '../budget.js';
 import {DOT_STILL_AFTER,fixtureTiming,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil} from '../still.js';
@@ -31,6 +32,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   const red=(name:string)=>fault===name||fault==='all-red';
   const problems=(name:string)=>red(name)?[name+'-red']:[];
   const reading={commits:0,instrumentMs:0,renders:[],mutations:[]};
+  const events=new EventCounts();for(let i=0;i<5;i++)events.push('event: ping\ndata: {}\n\n');
   const source={id:'fixture',successAt:now-600_000,staleAfterMs:3_600_000,windows:[]};
   const overview={sources:[source],forecast:{},board:{id:'board'}};
   const person={personalBoard:'board',cookie:'session=fixture',get:async()=>overview};
@@ -71,7 +73,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     USAGE:'fixture usage',IDLE:{ci:120,full:300},SHOWN_MS:30_000,MEASURED:'fixture',HISTORY_BYTES_PER_MEASUREMENT,
     SETS:[set],fixtureTiming,panningSet:(value:unknown)=>value,people:()=>[{id:'ana'}],freePort:async()=>{mark('freePort');return 1234;},
     addressOf:()=>({base:'http://127.0.0.1:1234'}),prepare:async()=>{mark('prepare');},findChrome:()=>'/unused/chrome',
-    seedPanningBudgets:()=>{mark('seed');},hear:async()=>({close:()=>{mark('stream-close');},reset:()=>{},counts:()=>({ping:5})}),
+    seedPanningBudgets:()=>{mark('seed');},hear:async()=>({close:()=>{mark('stream-close');},reset:()=>{},counts:()=>events.counts(),boardCounts:()=>events.boardCounts(),contacts:()=>events.contacts(),hints:()=>events.hints()}),
     launchChrome:async()=>{mark('launch');return browser;},openTab:async()=>{mark('openTab');return{cdp};},
     historyTraffic:async()=>{mark('history');if(fault==='throw')throw new Stop('history-original');
       if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;}

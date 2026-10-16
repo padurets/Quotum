@@ -383,6 +383,89 @@ A paced device that gets no answer keeps asking every 15 seconds, and measures o
 once the hub has been silent for 4 minutes and the promised time has passed. An answer
 that does not have `askInMs` is read as one without `"paced"`.
 
+## Managed measurement participation
+
+A dispatched refresh keeps its original command binding and deadline across a
+preferred-device handover. A matching failure may finish that request without
+acknowledging a newer command. Retained resource data never renew current-account
+evidence beyond its bounded observation time.
+
+A check-in may advertise `capabilities: {measurementPolicy: 1, attemptContext: 1}`.
+The hub returns `policy: {version: 1, authority, revision, enabled, collectors}`;
+`collectors` has exactly `claude`, `codex` and `antigravity`, each with
+`{enabled, epoch, requiresEpoch, changedAt}`. Authority is a persisted UUID;
+revision and epochs are nonnegative safe integers, and `changedAt` is a nullable
+hub timestamp in milliseconds. These fields do not change supplier identity.
+`policyAck: {authority, revision}` confirms only a policy durably saved by the agent.
+The optional `collectors` request lists locally configured collectors, without
+activating ones disabled in local configuration. A valid complete list, including
+`[]`, describes the active managed runner's scope (including `--only`). An absent
+collector makes that device temporarily ineligible for it; another eligible device
+uses Auto fallback. Listing a collector does not establish or renew account evidence.
+The hub retains this private declaration for at most twelve minutes after its last
+valid report, alongside bounded account evidence. Missing, malformed or unsupported
+lists supply no new declaration and do not renew an earlier one. This availability
+metadata never changes policy epochs, holdings or resource admission, nor cancels
+an issued command or a dispatched refresh's original binding and deadline.
+
+The agent asks for policy before first account discovery, including a single empty
+collector declaration when a managed runner has no local collectors. It keeps one bounded,
+connection-, credential- and machine-bound policy cache separately from config.
+Missing fields, HTTP failures and ordinary unanswered scheduling never clear a
+known denial. A blocked collector launches no measurement and cannot use offline
+fallback. Activity and connections remain independent. A known policy is checked
+in the existing runner loop at most once per 60 seconds when normal check-ins are
+not due, including with session reporting off. An unknown old hub adds no recovery
+heartbeat, and an entirely locally disabled scope adds no measurement loop.
+
+Each effectively changed collector gate increments its epoch, including whole-device
+disable and re-enable, and permanently sets `requiresEpoch`. Masked and no-op saves
+do not change epochs. Check-ins for denied or epoch-incapable collectors return
+`measure: false`, `onDuty: false`, and a bounded wait. Versions are descriptive;
+only explicit capabilities and launch evidence establish protocol support.
+
+A managed snapshot or failure may include:
+
+```json
+{"attemptContext":{"version":1,"authority":"11111111-1111-4111-8111-111111111111","collectorEpoch":2,"target":{"kind":"verified","accountKey":"a1b2c3d4e5f6a1b2c3d4e5f6"},"commandId":"22222222-2222-4222-8222-222222222222"}}
+```
+
+A target can instead be `{kind: "unknown"}`; commandId is optional. The account key
+is current supplier or declared identity evidence, never a historical device binding.
+A paced modern directive includes its `accountKey` and, when it actually issues a
+measurement, a fresh `commandId`. Issued acknowledgement mode and target remain
+immutable across later check-ins and capability changes. Capture the context before
+launch and preserve it unchanged through disk spooling and retry.
+
+Admission precedes source, holding, resource, history, duty, pause and refresh effects.
+A disabled gate, wrong authority/epoch, or missing epoch at a changed gate suppresses
+that outcome. An additive `policySuppressed` count reports suppressed outcomes in the
+normal terminal `200` response; allowed items in the same batch retain their usual
+counts and the whole delivered chunk can be drained. Clock correction never proves
+a launch happened after re-enable. Untouched legacy successful traffic is accepted.
+Legacy provider-only failures and unknown-target failures remain private device
+errors, with no source pause or command/refresh completion. Verified failures require
+current account evidence; failing a command or refresh also requires its exact issued
+command, account, device, collector, authority and epoch.
+
+Successful resource admission and command acknowledgement are independent. Missing
+or old modern command IDs can still supply accepted fresh resources and complete a
+same-source fresh-data request, including from another eligible device. They cannot
+acknowledge its current command or move the original target/deadline. Legacy issued
+commands retain successful account/device/corrected-time acknowledgement. Duplicates
+without accepted new delivery and policy-suppressed outcomes never fabricate a refresh
+success.
+
+Snapshots can report `clientEvidence: "nativeHandshake" | "preLaunch"` alongside
+`client`. Codex uses its native handshake; Claude and Antigravity use at most one fresh
+bounded pre-launch version probe per actual attempt. Installed-client observations
+have their own six-hour success cache and optional RFC3339 `observedAt`; heartbeat
+and UI reads launch no version probe. Failed probes retry after bounded 60/120/240/480/
+900-second negative caching; malformed output holds for 900 seconds. A probe has a
+five-second/16-KiB bound and the existing environment, working-directory and process
+cleanup isolation. Antigravity checks its minimum/off-version guard and executable
+image before `/usage`.
+
 ## Reporting running agents
 
 An agent may also tell the hub which coding agents run on its machine right now, so a
@@ -500,9 +583,11 @@ not classify routes. Unknown configuration IDs are warned about and ignored.
   this array never uses the machine's previous source binding. Hub-measured providers
   cannot supply an agent's source attribution.
 - `clients` replaces the device's installed inventory, with at most 64 accepted entries
-  `{clientId, version?: string|null}`. An omitted or malformed whole field preserves
+  `{clientId, version?: string|null, observedAt?: ISO-date|null}`. An omitted or malformed whole field preserves
   inventory, and `[]` clears it. Duplicate IDs keep the first accepted entry. Version
   is a bounded token, never raw stdout, stderr or an executable path.
+  Installed observation times use the same report clock correction as session times;
+  an absent legacy timestamp remains unknown.
 
 Client IDs are lower-case ASCII identifiers of one to 64 characters, beginning with a
 letter, followed by letters, digits, `_` or `-`. Unknown valid IDs are safely preserved.
@@ -558,6 +643,15 @@ The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
 
 ## Privacy
 
+Measurement policy, local collector availability, current candidate identities,
+command IDs, device versions and producer identities are owner/control metadata.
+Board readers do not receive foreign
+device IDs, names or versions. A preference is global per subscription and can be
+changed only by current holders to their own eligible device, or cleared by a holder.
+Resource producer evidence is saved at acceptance, with separate latest value and
+observation anchors; absent historical evidence stays unknown. Financial producer
+status follows the existing financial authority and never enriches a quota-only shared
+projection. No new provider credential, API call or model request is introduced.
 Reported nonempty plan names may become timestamped subscription-history events.
 Repeated names and empty reports add no event. Dashboard readers receive only plan
 observations allowed by their board's source visibility, sharing start and retention;

@@ -671,10 +671,11 @@ export type Snapshot = ReturnType<typeof snapshot>;
 
 /** The failures a machine reports at `t`: of the cards it measured first once they failed, and of clients it never measured. */
 export function failuresAt(set: DemoSet, machine: Machine, start: number, t: number) {
-  const failures = cards(set)
+  const failures: {provider:string;error:string;measurementTarget?:ReturnType<typeof accountOf>}[] = cards(set)
     .filter(card => card.failure && card.machines[0] === machine.id && t >= card.failure.from)
-    .map(card => ({provider: card.provider, error: card.failure!.error}));
-  failures.push(...(machine.failures ?? []));
+    .map(card => ({provider: card.provider, error: card.failure!.error,measurementTarget:accountOf(card)}));
+  const deviceFailures=(machine.failures ?? []).map(failure=>({...failure,measurementTarget:undefined}));
+  failures.push(...deviceFailures);
   return failures.map(f => ({...f, observedAt: iso(start, t), detail: 'demo'}));
 }
 

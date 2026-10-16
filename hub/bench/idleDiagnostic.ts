@@ -48,14 +48,15 @@ export async function doubledIdle(browser: Browser, primary: Cdp, base: string, 
     }));
     await sleep(planned.to - Date.now());
     const events = heard.counts();
+    const boardEvents=heard.boardCounts(),deviceContacts=heard.contacts(),deviceHints=heard.hints();
     const reports = await Promise.all(pages.map(async ({page, requests}, index) => {
       const reading = await page.evaluate<Reading>('__quotumBench.read()'), after = await metrics(page);
       requests.counting = false;
       const phase = await page.evaluate<IdlePhase>('(()=>{const p=__quotumIdlePhase.read();__quotumIdlePhase.stop();return p;})()');
       const seconds = after.Timestamp - starts[index].before.Timestamp;
       const scriptMsPerSecond = scriptPerSecond(starts[index].before, after, reading.instrumentMs, seconds);
-      const idle = {from: starts[index].from, to: Date.now(), cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
-      return {id: index, cards: starts[index].cards, seconds, scriptMsPerSecond, phase, events,
+      const idle = {from: starts[index].from, to: Date.now(), cellMs, requests, events:boardEvents, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
+      return {id: index, cards: starts[index].cards, seconds, scriptMsPerSecond, phase, events, boardEvents, deviceContacts, deviceHints,
         problems: [...idlePhaseProblems(phase, planned.boundary), ...idleProblems(idle)]};
     }));
     const phaseValid = reports.every(report => report.cards === reports[0].cards && report.cards > 0 && !report.problems.length);

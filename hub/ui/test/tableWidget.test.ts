@@ -12,7 +12,7 @@ import * as tables from '../lib/table';
 import type {TableWidget} from '../components/TableWidget';
 
 test('default session disclosure columns fit the shared wide dialog and stay compact on a narrow screen',()=>{
-  const css=readFileSync(new URL('../style.css',import.meta.url),'utf8'),maximum=Number(css.match(/\.dialog\.is-wide\s*\{\s*max-width:\s*(\d+)px/)![1]);
+  const css=readFileSync(new URL('../style.css',import.meta.url),'utf8'),maximum=Number(css.match(/\.dialog-frame\.is-wide\s*\{\s*max-width:\s*(\d+)px/)![1]);
   for(const by of ['project','machine','subscription'] as const){
     const columns=columnsOf(by,true).rest.filter(column=>columnShown(EMPTY_VIEW,AGENTS,column));
     assert.ok(columns.includes('client'),'default Client participates in the real disclosure geometry');

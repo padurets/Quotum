@@ -10,6 +10,7 @@ import {ScriptBinding} from '../scriptBinding.js';
 import {idleProblems} from '../budget.js';
 import {idlePhaseProblems} from '../still.js';
 import {scriptPerSecond, type Metrics} from '../report.js';
+import {EventCounts} from '../stream.js';
 
 const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
 const file = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true), matches: ts.Expression[] = [];
@@ -58,8 +59,9 @@ function fixture() {
   const thread = {send: async (method: string) => method === 'Performance.getMetrics'
     ? {metrics: Object.entries(metric(threadReads++ ? 123 : 1, threadReads === 1 ? 0 : 0.3)).map(([name, value]) => ({name, value}))} : {}, close: () => {}};
   const browser = {owned: true, endpoint: 'fixture', close: async () => {closes++;}};
+  const events=new EventCounts();events.push('event: ping\ndata: {}\n\nevent: history\ndata: {}\n\n');
   const context = {metrics: async () => metric(metricReads++ ? 122 : 2, metricReads === 1 ? 0 : 0.2), cdp, sleep: async () => {}, to,
-    Date: {now: () => to}, requests: {count: 1, byPath: {'/api/history': 1}, counting: true}, heard: {counts: () => ({ping: 1, history: 1})},
+    Date: {now: () => to}, requests: {count: 1, byPath: {'/api/history': 1}, counting: true}, heard:events,
     idlePhaseProblems, planned: {boundary: 1791891900000}, scriptPerSecond, from, cellMs: 300000, evidence, idleTimingDiagnostic: '1',idleCpu:undefined,
     traffic: {problems: ['fixture-traffic-1', 'fixture-traffic-2', 'fixture-traffic-3', 'fixture-traffic-4']}, idleProblems};
   const selected = runInNewContext('(()=>{let originalIdleTimingProblems;const readIdle=' + body

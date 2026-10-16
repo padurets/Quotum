@@ -313,6 +313,7 @@ async function main() {
       const after = await metrics(cdp);
       requests.counting = false;
       const events = heard!.counts();
+      const boardEvents=heard!.boardCounts(),deviceContacts=heard!.contacts(),deviceHints=heard!.hints();
       const reading = await cdp.evaluate<Reading>('__quotumBench.read()');
       const phase = await cdp.evaluate<IdlePhase>('(()=>{const p=__quotumIdlePhase.read();__quotumIdlePhase.stop();return p;})()');
       const actualSeconds = after.Timestamp - before.Timestamp;
@@ -322,16 +323,16 @@ async function main() {
       if (reading.commits !== lastReading.commits || JSON.stringify(reading.mutations) !== JSON.stringify(lastReading.mutations)) phaseProblems.push('idle work crossed the closing measurement boundary');
       if (!Number.isFinite(actualSeconds) || actualSeconds <= 0) phaseProblems.push('idle performance duration unavailable');
       const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
-      const idle = {from, to, cellMs, requests, events, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
-      evidence.save('idle', {...idle, planned, phase, counterFrom, counterTo, actualSeconds, phaseProblems});
+      const idle = {from, to, cellMs, requests, events:boardEvents, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
+      evidence.save('idle', {...idle, allEvents:events, boardEvents, deviceContacts, deviceHints, planned, phase, counterFrom, counterTo, actualSeconds, phaseProblems});
       if (idleTimingDiagnostic || idleCpu) {
         originalIdleTimingProblems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
         evidence.save(idleCpu?'idle-cpu-result':'idle-timing-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
       }
-      if(idleCpu)saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='1'?'Temporally aligned natural edge using the unchanged120s CI idle protocol; profiler and trace overhead is unqualified.':idleCpuMode==='trace'?'Original CI idle protocol; no CPU sampling, tracing overhead is unqualified.':'Original CI idle protocol with CPU sampling; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,reading,problems:originalIdleTimingProblems}});
-      return {idle, phaseProblems, actualSeconds, events, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo};
+      if(idleCpu)saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='1'?'Temporally aligned natural edge using the unchanged120s CI idle protocol; profiler and trace overhead is unqualified.':idleCpuMode==='trace'?'Original CI idle protocol; no CPU sampling, tracing overhead is unqualified.':'Original CI idle protocol with CPU sampling; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,reading,problems:originalIdleTimingProblems}});
+      return {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo};
     };
-    const {idle, phaseProblems, actualSeconds, events, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo} = idleTimingDiagnostic ? await traceIdle(cdp, browser, readIdle, evidence) : await readIdle();
+    const {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo} = idleTimingDiagnostic ? await traceIdle(cdp, browser, readIdle, evidence) : await readIdle();
     if(idleCpu){
       const diagnosticProblems=originalIdleTimingProblems!;
       const geometryAfter=idleCpuMode==='1'?await idleGeometry(cdp):undefined;
@@ -383,7 +384,7 @@ async function main() {
       }),
     ];
     // Keep completed measurements available if a later browser phase stops the job.
-    say(`initial readings: ${JSON.stringify({idle:{scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,renders:reading.renders,mutations:reading.mutations},measured:{historyBytes:measured.historyBytes,cardP95Ms:percentile(measured.latencies,.95),chartP95Ms:percentile(measured.chartLatencies,.95)},work:worked.reports,problems})}`);
+    say(`initial readings: ${JSON.stringify({idle:{scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,renders:reading.renders,mutations:reading.mutations},measured:{historyBytes:measured.historyBytes,cardP95Ms:percentile(measured.latencies,.95),chartP95Ms:percentile(measured.chartLatencies,.95)},work:worked.reports,problems})}`);
     // The readings above are frozen: keyboard checks do not enter the performance budget.
     say('checking consecutive frequency saves with native arrow keys');
     await frequencyKeys(cdp);
@@ -431,6 +432,9 @@ async function main() {
         seconds: actualSeconds, plannedSeconds: seconds, planned, phase, phaseProblems,
         requests: {count: requests.count, bytes: requests.bytes, byPath: requests.byPath},
         events,
+        boardEvents,
+        deviceContacts,
+        deviceHints,
         renders: {commits: reading.commits, ...tally(reading.renders)},
         mutations: tally(reading.mutations),
         scriptMsPerSecond,

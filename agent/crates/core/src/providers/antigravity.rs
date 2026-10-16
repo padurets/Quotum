@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::{Collector, Context, VersionCache, locate, process_failure, version_tuple};
+use super::{Collector, Context, VersionProbe, locate, process_failure, version_tuple};
 use crate::model::{
     ErrorKind, Failure, Kind, Millis, Outcome, Provider, SESSION_MINUTES, Snapshot, WEEK_MINUTES, Window, now_ms,
     parse_time,
@@ -24,7 +24,7 @@ const OFF_FILE: &str = "agy-usage-off";
 
 #[derive(Default)]
 pub struct Antigravity {
-    version: VersionCache,
+    version: VersionProbe,
     /// The agy version that took `/usage` for a prompt, as far as known in this run.
     off: Option<String>,
 }
@@ -38,10 +38,6 @@ impl Collector for Antigravity {
         let program = locate(self, ctx)?;
         let off_file = ctx.state_dir.join(OFF_FILE);
         let off = self.off.clone().or_else(|| fs::read_to_string(&off_file).ok().map(|v| v.trim().to_string()));
-        if off.is_some() {
-            // Only another version can answer differently: ask for it every time (it is free).
-            self.version.forget();
-        }
         let version = self.version.get(&program, ctx);
         match &version {
             Some(v) if off.as_deref() == Some(v) => return Err(prompted(v)),
@@ -54,6 +50,9 @@ impl Collector for Antigravity {
                 ));
             }
             None => return Err(Failure::new(P, ErrorKind::Failed, "agy --version did not answer")),
+        }
+        if !self.version.unchanged(&program) {
+            return Err(Failure::new(P, ErrorKind::Failed, "agy changed during version verification"));
         }
         // agy writes a new log file per run into its own directory unless told otherwise.
         let log = ctx.state_dir.join("agy.log");
@@ -237,6 +236,56 @@ mod tests {
         assert!(took_as_prompt(r#"{"status":"SUCCESS","response":"Usage: …","num_turns":0}"#), "no command block");
         assert!(!took_as_prompt(r#"{"status":"ERROR","error":"Please sign in with agy login"}"#));
         assert!(!took_as_prompt("not json"));
+    }
+
+    /// A stand-in for agy that logs its arguments and answers /usage like a model.
+    #[cfg(unix)]
+    #[test]
+    fn unchanged_launcher_probes_once_per_attempt_and_blocks_unsafe_payload_versions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("quotum-agy-payload-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("agy");
+        let version = dir.join("version");
+        let usage = dir.join("usage");
+        let calls = dir.join("calls");
+        fs::write(&usage, OUTPUT).unwrap();
+        fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\necho \"$1\" >> '{}'\nif [ \"$1\" = --version ]; then cat '{}'; else cat '{}'; fi\n",
+                calls.display(),
+                version.display(),
+                usage.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let image = crate::clients::executable_image(&program);
+        let stop = crate::stop::Stop::new();
+        let ctx = Context {
+            home: &dir,
+            work_dir: &dir,
+            state_dir: &dir,
+            program: Some(&program),
+            timeout: std::time::Duration::from_secs(5),
+            stop: &stop,
+        };
+        let mut collector = Antigravity::default();
+        for (reported, accepted) in [("1.2.0", true), ("1.1.10", false), ("unavailable", false), ("1.2.1", true)] {
+            fs::write(&version, reported).unwrap();
+            let result = collector.measure(&ctx);
+            assert_eq!(result.is_ok(), accepted, "{reported}");
+            if let Ok(snapshot) = result {
+                assert_eq!(snapshot.client.as_deref(), Some(reported));
+            }
+            assert_eq!(crate::clients::executable_image(&program), image);
+        }
+        assert_eq!(
+            fs::read_to_string(&calls).unwrap().lines().collect::<Vec<_>>(),
+            ["--version", "-p", "--version", "--version", "--version", "-p"]
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     /// A stand-in for agy that logs its arguments and answers /usage like a model.

@@ -57,8 +57,17 @@ pub fn panel_capability(port: u16) -> CapabilityBuilder {
     )
 }
 #[tauri::command(async)]
-pub fn open_main(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
-    execute(webview, shell, Request::OpenMain)
+pub fn open_main(
+    webview: Webview,
+    shell: State<'_, Arc<Shell>>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Value, String> {
+    let tauri::ipc::InvokeBody::Json(value) = request.body() else {
+        return Err("invalid main destination".into());
+    };
+    let request = serde_json::from_value(serde_json::json!({"command":"open_main","args":value}))
+        .map_err(|_| "invalid main destination")?;
+    execute(webview, shell, request)
 }
 #[tauri::command(async)]
 pub fn close_panel(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<Value, String> {

@@ -369,6 +369,20 @@ export const STEPS = [
   CREATE INDEX board_device_sessions_by_device ON board_device_sessions(device_id);`,
   // 26 — fixed subscription periods, with lossless view expansion.
   `SELECT 1;`,
+  // 27 — measurement participation is independent of device connection and transient duty.
+  `
+  CREATE TABLE device_measurement_policies (device_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+  CREATE TABLE source_measurement_preferences (source_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, device_id TEXT);
+  CREATE TABLE device_measurement_control (device_id TEXT PRIMARY KEY, capable INTEGER NOT NULL, confirmed_revision INTEGER);
+  CREATE TABLE measurement_mutations (writer TEXT NOT NULL, operation TEXT NOT NULL, hash TEXT NOT NULL,
+    result TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(writer,operation)) WITHOUT ROWID;
+  CREATE INDEX measurement_mutations_by_time ON measurement_mutations(created_at);
+  CREATE INDEX measurement_mutations_by_writer_time ON measurement_mutations(writer,created_at);
+  CREATE INDEX source_measurement_preferences_by_device ON source_measurement_preferences(device_id);
+  CREATE TABLE resource_origins (source_id TEXT NOT NULL, resource TEXT NOT NULL, value_origin TEXT, observation_origin TEXT NOT NULL,
+    PRIMARY KEY(source_id,resource)) WITHOUT ROWID;
+  ALTER TABLE device_clients ADD COLUMN observed_at INTEGER;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

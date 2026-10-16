@@ -7,8 +7,25 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {STEPS,SCHEMA_VERSION,migrate} from '../store/schema.js';
+
 import {Store} from '../store/store.js';
 import {CurrencyStore} from '../store/currencies.js';
+
+test('measurement controls upgrade the unified layout without changing session sharing or inventory',()=>{
+  const db=new DatabaseSync(':memory:');
+  try {
+    for(const step of STEPS.slice(0,26))db.exec(step);
+    db.exec('PRAGMA user_version=26');
+    db.prepare('INSERT INTO board_device_sessions VALUES (?,?,?,?)').run('board','device',123,'saved-revision');
+    db.prepare('INSERT INTO device_clients VALUES (?,?,?,?)').run('device','codex','1.2.3',456);
+    migrate(db,1000);migrate(db,1001);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,27);
+    assert.deepEqual({...db.prepare('SELECT * FROM board_device_sessions').get()!},{board_id:'board',device_id:'device',enabled_since:123,revision:'saved-revision'});
+    assert.deepEqual({...db.prepare('SELECT * FROM device_clients').get()!},{device_id:'device',client:'codex',version:'1.2.3',seen_at:456,observed_at:null});
+    for(const table of ['device_measurement_policies','source_measurement_preferences','device_measurement_control','measurement_mutations','resource_origins'])
+      assert.equal(db.prepare(`SELECT count(*) AS n FROM ${table}`).get()!.n,0);
+  }finally{db.close();}
+});
 
 /**
  * Every step a release shipped, by its hash. A database records which steps it has
@@ -170,7 +187,7 @@ test('board additions append to the integrated currency layout while analytics m
     const view=decodeView(JSON.parse(String(saved.payload)))!; assert.equal(view.version,4);
     assert.deepEqual(view.names,{legacy:'Kept'});
     assert.deepEqual(view.hidden,['source:deepseek:123456789abc']);
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,26);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,27);
   }finally{db.close();}
 });
 

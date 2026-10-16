@@ -19,6 +19,7 @@ export const routeLocation = () => committed ?? browserRoute();
 const address = () => {const route = routeLocation(); return route.pathname + route.search;};
 const changed = () => {for (const listener of [...listeners]) listener();};
 let guard: ((proceed: () => void) => void) | null = null;
+let guardEntries = false;
 let position = 0;
 let transition: Transition | null = null;
 const historyPosition = () => typeof history.state?.quotumPosition === 'number' ? history.state.quotumPosition as number : null;
@@ -60,7 +61,8 @@ function reconcile(pending: Transition) {
       });
       else saved();
     };
-    if (guard && pending.path !== origin.path) guard(proceed); else proceed();
+    // Some settings retire their forms on a new entry even when its URL is unchanged.
+    if (guard && (pending.path !== origin.path || guardEntries && !pending.replace)) guard(proceed); else proceed();
   } else if (pending.stage === 'replaying') {
     if (!pending.target) {
       if (pending.replace) history.replaceState({...history.state, quotumPosition: position}, '', pending.path);
@@ -83,8 +85,9 @@ const popped = () => {
 };
 
 /** A settings form can retain its draft across both links and native Back/Forward. */
-export function guardNavigation(ask: (proceed: () => void) => void) {
-  guard = ask; return () => {if (guard === ask) guard = null;};
+export function guardNavigation(ask: (proceed: () => void) => void, entries = false) {
+  guard = ask; guardEntries = entries;
+  return () => {if (guard === ask) {guard = null;guardEntries = false;}};
 }
 
 /** All client navigation, including chart ranges, publishes the same location. */
@@ -111,6 +114,9 @@ export function onLocation(listener: () => void) {
   };
 }
 
+/** An accepted entry changes even when an explicit destination has the same URL. */
+export function useNavigationEntry() {return useSyncExternalStore(onLocation,()=>position,()=>position);}
+
 export function useLocation() {
   return useSyncExternalStore(onLocation, address, address);
 }
@@ -133,6 +139,12 @@ export function settingsHref(path: string, boardId?: string) {
   if (board) query.set('board', board);
   for (const key of ['from', 'to']) if (params.has(key)) query.set(key, params.get(key)!);
   return path + (query.size ? '?' + query : '');
+}
+
+/** All measurement entry points retain the board and range while selecting an own connection. */
+export function measurementDevicesHref(sourceId:string,boardId?:string) {
+  const path=settingsHref('/settings/connections',boardId);
+  return path+(path.includes('?')?'&':'?')+'source='+encodeURIComponent(sourceId);
 }
 
 /** Returning to the selected board keeps its range; another destination starts live. */

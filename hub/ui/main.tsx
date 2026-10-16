@@ -5,11 +5,11 @@ import '@fontsource-variable/geist-mono';
 import './style.css';
 import {setPrefs, usePref} from './lib/prefs';
 import {showBoard} from './lib/timeRange';
-import {navigate, settingsHref, usePath} from './lib/router';
+import {navigate, measurementDevicesHref, settingsHref, usePath} from './lib/router';
 import {boardTitle, rememberBoard, rereadSession, useBoard, useSession, type Board, type Session, type User} from './lib/session';
 import {ACTIVITY, AGENTS, ANALYTICS, boardState, cardId, QUOTA_TABLE, QUOTA_HISTORY, QUOTA_SESSION_HISTORY, QUOTA_SESSION_TABLE, SUBSCRIPTION_FUNDS, BUDGET_HISTORY, BUDGET_TABLE, isHidden, useView} from './lib/view';
 import {withSparseArrangement} from './lib/grid';
-import {page, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles, useViewRevision} from './lib/board';
+import {page, useMainNavigation, useBoardId, useBoardMeta, useBoards, useLineup, useRole, useServerView, useTitles, useViewRevision} from './lib/board';
 import {heardHub, hubNow, wakeDue} from './lib/clock';
 import {startLive} from './lib/live';
 import {historyReaders as history} from './lib/history';
@@ -59,7 +59,8 @@ const live = startLive({
 });
 
 /** The desktop app's state, as it sends it and as its commands answer: into the page's state, the newest kept. */
-const setAppState = (state: AppState) => { appLocale(state); page.dispatch({type: 'app', state}); };
+let navigationRevision = 0;
+const setAppState = (state: AppState) => {appLocale(state);page.dispatch({type:'app',state});};
 if (inApp()) followApp(setAppState);
 
 const NO_BOARDS: Board[] = [];
@@ -82,6 +83,13 @@ function Dashboard({
   const additionScope = useMemo(() => () => ownerScope.current, []);
   useEffect(() => {ownerScope.current = true; return () => {ownerScope.current = false;};}, []);
   const path = usePath();
+  const nativeIntent=useMainNavigation();
+  useEffect(()=>{
+    const intent=nativeIntent;
+    if(path==='/compact'||!intent||intent.revision<=navigationRevision)return;
+    navigationRevision=intent.revision;
+    if(intent.destination?.kind==='devices')navigate(measurementDevicesHref(intent.destination.sourceId));
+  },[nativeIntent,path]);
   const active = path === '/' || path === '/local';
   const boards = useBoards() ?? NO_BOARDS;
   const [board, selectBoard] = useBoard();

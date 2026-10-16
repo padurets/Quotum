@@ -1,7 +1,7 @@
 import type {Attention} from './attention.js';
 import {secretKind} from './domain/auth.js';
 import {CLOCK_TOLERANCE_MS, Invalid, parseBatch, parseCheckin, parseSessions, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
-import {deliveryOf} from './domain/quota.js';
+import {deliveryOf,quotaObservation} from './domain/quota.js';
 import {Forecasts} from './forecasts.js';
 import {Sessions} from './sessions.js';
 import {ACTIVE_WITHIN_MS, type Cadence, type Signals, type Why} from './cadence.js';
@@ -10,12 +10,16 @@ import {clientProviders as providers, type Provider} from './domain/providers.js
 import type {Device, Directory, Token} from './store/directory.js';
 import type {Store} from './store/store.js';
 import {afterCommit, tell, type Touches} from './touches.js';
+import {admitMeasurement, type MeasurementPolicy} from './domain/measurementPolicy.js';
+import {MeasurementSelection} from './measurementSelection.js';
+import type {ClientProvider} from './domain/providers.js';
 
-export type IngestResult = {accepted: number; duplicates: number; failures: number; device: {id: string}};
+export type IngestResult = {accepted: number; duplicates: number; failures: number; policySuppressed?: number; device: {id: string}};
 
 /** What a device is told of each subscription; a device following the hub's pace also learns whether it is on duty and when to ask again. */
 export type CheckinResult = {
-  subscriptions: {provider: Provider; measure: boolean; until: string; onDuty?: boolean; askInMs?: number; nextInMs?: number}[];
+  subscriptions: {provider: Provider; measure: boolean; until: string; onDuty?: boolean; askInMs?: number; nextInMs?: number; commandId?: string; accountKey?: string}[];
+  policy?: MeasurementPolicy;
 };
 
 /** Who is delivering: a device with its own token, or a machine with its person's machine token. */
@@ -41,6 +45,7 @@ export class Ingest {
   readonly forecasts: Forecasts;
   private observer: Touches | null = null;
   attention: Attention | null = null;
+  readonly measurementSelection: MeasurementSelection;
 
   constructor(
     private readonly store: Store,
@@ -50,6 +55,11 @@ export class Ingest {
   ) {
     this.live = new Sessions(store);
     this.forecasts = new Forecasts(store);
+    this.measurementSelection = new MeasurementSelection(store, directory, duty, cadence,key=>{
+      const sources=providers.flatMap(provider=>this.store.findSource(provider,key)??[]);
+      for(const source of sources)this.notifyMeasurementOwners(source,false);
+      tell(this.observer,o=>o.touchSources(sources));
+    });
   }
 
   /** Tells `observer` which sources every delivery, check-in and list of agents touches (events of open dashboards). */
@@ -89,10 +99,16 @@ export class Ingest {
     const accepted = this.directory.transaction(() => {
       const device = this.device(credential, batch, now);
       const result: IngestResult = {accepted: 0, duplicates: 0, failures: 0, device: {id: device.id}};
+      const policy = this.store.measurementPolicies.device(device.id);
       // Every source the batch is about: its pace and its holder's duty move even when nothing new is recorded.
       const touched = new Set<string>();
+      const evidenceGroups=new Map<ClientProvider,Set<string>>();
 
       for (const snapshot of [...batch.snapshots].sort((a, b) => a.observedAt - b.observedAt)) {
+        if (admitMeasurement(policy, snapshot.provider, snapshot.attemptContext ?? null) !== 'accepted') {
+          result.policySuppressed = (result.policySuppressed ?? 0)+1;
+          continue;
+        }
         const observedAt = snapshot.observedAt + skew;
         const account = subscriptionKey(snapshot, device.userId);
         const source = this.store.source(snapshot.provider, account, now);
@@ -102,45 +118,59 @@ export class Ingest {
         const previous = this.store.state(source);
         const measurement = {...toMeasurement(snapshot), observedAt};
         const recorded = this.store.record(source, measurement);
+        const acknowledge = this.measurementSelection.acknowledges(account, snapshot.provider, device.id, observedAt, snapshot.attemptContext ?? null, true);
+        if (recorded.accepted) this.store.recordOrigins(source, device.id, snapshot, previous, observedAt);
+        if (recorded.accepted) this.notifyMeasurementOwners(source);
         if (recorded.accepted) result.accepted++; else result.duplicates++;
         if (recorded.windows) attention?.record(previous, measurement, now);
         if (recorded.unavailable) attention?.unavailable(previous, observedAt);
+        if(recorded.delivery){let group=evidenceGroups.get(snapshot.provider);if(!group)evidenceGroups.set(snapshot.provider,group=new Set());group.add(account);}
         afterCommit(() => {
+          const evidence=recorded.delivery ? this.measurementSelection.observe(account, snapshot.provider, device.id, observedAt,120_000,evidenceGroups.get(snapshot.provider)!.size===1) : null;
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
           let onDuty = false;
           if (recorded.delivery) {
             this.cadence.refreshResult(account, device.id, observedAt, true, now);
-            if (this.cadence.canRenewDuty(account, device.id, observedAt)) {
-              this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now);
+            if (evidence?.current && evidence.expiresAt>now && this.cadence.canRenewDuty(account, device.id, observedAt) && this.measurementSelection.configured(device.id,snapshot.provider,now)) {
+              this.duty.delivered(account, device.id, observedAt, snapshot.staleAfterMs, now, acknowledge);
               onDuty = this.duty.holder(account) === device.id;
-            }
-          } else this.duty.acknowledge(account, device.id, observedAt);
+            }else if(acknowledge&&!this.measurementSelection.configured(device.id,snapshot.provider,now))this.duty.acknowledge(account,device.id,observedAt);
+          } else if (acknowledge) this.duty.acknowledge(account, device.id, observedAt);
           this.cadence.settleRefresh(account, this.refreshDuty(account), now);
-          if (recorded.delivery) this.cadence.delivered(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,snapshot.staleAfterMs,this.signals(source,account,now).inUse,now,onDuty);
-          else if (recorded.accepted) this.cadence.observed(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,this.signals(source,account,now).inUse,now);
-          else this.cadence.acknowledge(account,device.id,observedAt);
+          if (recorded.delivery) this.cadence.delivered(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,snapshot.staleAfterMs,this.signals(source,account,now).inUse,now,onDuty,acknowledge);
+          else if (recorded.accepted) this.cadence.observed(account,device.id,recorded.windows ? snapshot.windows : null,observedAt,this.signals(source,account,now).inUse,now,acknowledge);
+          else if (acknowledge) this.cadence.acknowledge(account,device.id,observedAt);
+          this.measurementSelection.releaseUnconfigured(account,snapshot.provider,now);
         });
       }
 
       for (const failure of batch.failures) {
+        if (admitMeasurement(policy, failure.provider, failure.attemptContext ?? null) !== 'accepted') {
+          result.policySuppressed = (result.policySuppressed ?? 0)+1;
+          continue;
+        }
         const at = failure.observedAt + skew;
-        const source = this.store.deviceSource(device.id, failure.provider);
-        // The device waits out its failures, whether or not another device measures the subscription fine.
-        const key = this.cadence.measuredBy(device.id, failure.provider) ?? (source && this.store.account(source));
+        this.store.deviceFailed(device.id, failure.provider, failure.error, failure.detail, at);
+        this.directory.measurementsChanged(device.userId);
+        const key = this.measurementSelection.failureAccount(failure.provider, device.id, failure.attemptContext ?? null, now);
+        if (!key) continue;
+        const source = this.store.findSource(failure.provider, key);
+        const acknowledge = this.measurementSelection.acknowledges(key, failure.provider, device.id, at, failure.attemptContext ?? null, false);
+        const refreshAcknowledged=this.measurementSelection.acknowledgesRefreshFailure(key,failure.provider,device.id,at,failure.attemptContext??null);
         const known=key&&this.store.findSource(failure.provider,key);
         const failureFloor=known?deliveryOf(this.store.state(known))?.at??-Infinity:-Infinity;
         if (key&&at>failureFloor) afterCommit(() => {
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-          if (this.cadence.failed(key, device.id, failure.error, at)) {
-            if (this.duty.failed(key, device.id, at)) this.cadence.released(key, device.id);
-            this.cadence.refreshResult(key, device.id, at, false, now);
+          if (this.cadence.failed(key, device.id, failure.error, at, acknowledge)) {
+            if(source)this.notifyMeasurementOwners(source,false);
+            if (acknowledge && this.duty.failed(key, device.id, at)) this.cadence.released(key, device.id);
+            if (refreshAcknowledged) this.cadence.refreshResult(key, device.id, at, false, now);
           }
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
         });
         const paused = key && this.store.findSource(failure.provider, key);
         if (paused) touched.add(paused);
         if (source) touched.add(source);
-        this.store.deviceFailed(device.id, failure.provider, failure.error, failure.detail, at);
         if (!source) continue;
         const state = this.store.state(source);
         // Another device may measure the same account fine; only a source gone quiet shows the problem.
@@ -152,7 +182,11 @@ export class Ingest {
       // Heard from, the device is not silent: nor are the subscriptions it holds, those its
       // measurements just handed it included, and delivers nothing for now.
       afterCommit(() => {
-      const held = this.cadence.keysOf([device.id]).filter(key => this.duty.holder(key) === device.id);
+      const held = this.cadence.keysOf([device.id]).filter(key => this.duty.holder(key) === device.id && providers.some(provider => {
+        if (!this.store.findSource(provider,key)) return false;
+        const gate=policy.collectors[provider];
+        return policy.enabled && gate.enabled && (!gate.requiresEpoch || [...batch.snapshots,...batch.failures].some(outcome=>outcome.provider===provider && admitMeasurement(policy,provider,outcome.attemptContext??null)==='accepted'));
+      }));
       for (const key of held) this.cadence.settleRefresh(key, this.refreshDuty(key), now);
       this.cadence.heard(device.id, held, now);
       for (const source of held.flatMap(key => providers.flatMap(provider => this.store.findSource(provider, key) ?? []))) touched.add(source);
@@ -174,41 +208,77 @@ export class Ingest {
   checkin(credential: Credential, body: unknown, now = Date.now()): CheckinResult {
     const request = parseCheckin(body);
     const device = this.device(credential, request, now);
+    const policy = this.store.measurementPolicies.device(device.id);
+    const configured=this.measurementSelection.configure(device.id,request.collectors,now);
+    if(configured.changed)this.directory.measurementsChanged(device.userId);
+    for(const {key,provider} of configured.accounts) {
+      const source=this.store.findSource(provider,key);
+      if(source)this.notifyMeasurementOwners(source,false);
+    }
+    const confirmation=this.store.measurementPolicies.confirm(device.id, request.measurementPolicy && request.attemptContext, request.policyAck?.revision ?? null, request.policyAck?.authority ?? null);
+    if (confirmation.changed) this.directory.measurementsChanged(device.userId);
+    // Capability changes affect existing account candidates even without a subscription directive.
+    if (confirmation.capabilityChanged) for(const {key,provider} of this.measurementSelection.candidateAccounts(device.id)) {
+      const source=this.store.findSource(provider,key);
+      if(source)this.notifyMeasurementOwners(source,false);
+    }
+    const currentAccounts=new Map<ClientProvider,Set<string>>();
+    for(const subscription of request.subscriptions) {
+      if('measuredBy' in subscription)continue;
+      let accounts=currentAccounts.get(subscription.provider);
+      if(!accounts)currentAccounts.set(subscription.provider,accounts=new Set());
+      accounts.add(subscriptionKey(subscription,device.userId));
+    }
+    this.measurementSelection.current(device.id,currentAccounts,now);
     const iso = (ms: number) => new Date(ms).toISOString();
     // Asking moves the pace and who is on duty, which the board shows.
     tell(this.observer, o => o.touchSources(request.subscriptions.flatMap(s => 'measuredBy' in s ? [] : this.store.findSource(s.provider, subscriptionKey(s, device.userId)) ?? [])));
     return {
+      ...(request.measurementPolicy ? {policy} : {}),
       subscriptions: request.subscriptions.map(s => {
         if ('measuredBy' in s) return {provider: s.provider, measure: false, onDuty: false, askInMs: 86_400_000, until: iso(now + 86_400_000)};
+        if (!policy.enabled || !policy.collectors[s.provider].enabled || policy.collectors[s.provider].requiresEpoch && !request.attemptContext) {
+          return {provider: s.provider, measure: false, onDuty: false, askInMs: 60_000, until: iso(now+60_000)};
+        }
         const key = subscriptionKey(s, device.userId);
         const source = this.store.findSource(s.provider, key);
-        this.restoreFixed(source, key, now);
-        this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-        this.cadence.capability(key, device.id, request.paced, s.minIntervalMs, now);
-        this.protect(source, key, now);
-        this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-        if (!request.paced) {
-          const directive = this.duty.claim(key, device.id, s.active, now);
+        const before=this.measurementSelection.state(source,s.provider,key,now);
+        const reply=(()=>{
+          if (this.measurementSelection.observe(key, s.provider, device.id, now,120_000,false).changed) this.directory.measurementsChanged(device.userId);
+          this.restoreFixed(source, key, now);
           this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-          return {provider: s.provider, measure: directive.measure, until: iso(directive.until)};
-        }
-        const paused = this.cadence.pausedUntil(key, device.id, now);
-        const holder = this.duty.holder(key);
-        const leased = (this.duty.until(key) ?? 0) > now;
-        if (paused !== null && !(holder === device.id && leased)) {
-          // Another device measures it, or none does until this one's pause is over.
-          const askInMs = Math.ceil(Math.min(paused - now, 10 * 60_000));
-          return {provider: s.provider, measure: false, onDuty: !(holder !== null && holder !== device.id && leased), askInMs, until: iso(now + askInMs)};
-        }
-        const directive = this.duty.claim(key, device.id, s.active, now);
-        this.cadence.settleRefresh(key, this.refreshDuty(key), now);
-        if (!directive.measure) {
-          return {provider: s.provider, measure: false, onDuty: false, askInMs: directive.until - now, until: iso(directive.until)};
-        }
-        const answer = this.cadence.answer(key, device.id, s.provider, now, s.minIntervalMs, this.signals(source, key, now));
-        if (answer.measure) this.duty.asked(key, device.id, now);
-        this.protect(source, key, now);
-        return {provider: s.provider, ...answer, until: iso(now + answer.askInMs)};
+          this.cadence.capability(key, device.id, request.paced, s.minIntervalMs, now);
+          this.protect(source, key, now);
+          this.cadence.settleRefresh(key, this.refreshDuty(key), now);
+          if (!request.paced) {
+            const directive = this.measurementSelection.claim(source, s.provider, key, device.id, s.active, now);
+            this.cadence.settleRefresh(key, this.refreshDuty(key), now);
+            return {provider: s.provider, measure: directive.measure, until: iso(directive.until)};
+          }
+          const paused = this.cadence.pausedUntil(key, device.id, now);
+          const holder = this.duty.holder(key);
+          const leased = (this.duty.until(key) ?? 0) > now;
+          if (paused !== null && !(holder === device.id && leased)) {
+            // Another device measures it, or none does until this one's pause is over.
+            const askInMs = Math.ceil(Math.min(paused - now, 10 * 60_000));
+            return {provider: s.provider, measure: false, onDuty: !(holder !== null && holder !== device.id && leased), askInMs, until: iso(now + askInMs)};
+          }
+          const directive = this.measurementSelection.claim(source, s.provider, key, device.id, s.active, now);
+          this.cadence.settleRefresh(key, this.refreshDuty(key), now);
+          if (!directive.measure) {
+            return {provider: s.provider, measure: false, onDuty: false, askInMs: directive.until - now, until: iso(directive.until)};
+          }
+          const answer = this.cadence.answer(key, device.id, s.provider, now, s.minIntervalMs, this.signals(source, key, now));
+          if (answer.measure) this.duty.asked(key, device.id, now);
+          const commandId = answer.measure ? this.measurementSelection.issue(key, s.provider, device.id, request.attemptContext, now) : undefined;
+          this.protect(source, key, now);
+          return {provider: s.provider, ...answer, ...(request.attemptContext ? {accountKey:key} : {}), ...(commandId ? {commandId} : {}), until: iso(now + answer.askInMs)};
+        })();
+        // Every allowed wait keeps its account evidence until the next requested contact.
+        this.measurementSelection.observe(key, s.provider, device.id, now, Date.parse(reply.until)-now,false);
+        const after=this.measurementSelection.state(source,s.provider,key,now);
+        if(source&&(before.holder!==after.holder||before.pending!==after.pending))this.notifyMeasurementOwners(source,false);
+        return reply;
       }),
     };
   }
@@ -238,17 +308,25 @@ export class Ingest {
 
   private refreshDuty(key: string) {
     const holder = this.duty.holder(key);
-    return {holder, until: this.duty.until(key), live: holder !== null && this.directory.deviceLive(holder)};
+    const retained=this.cadence.retainedDevice(key);
+    return {holder, until: this.duty.until(key), live: holder !== null && this.directory.deviceLive(holder),retainedLive:retained!==null&&this.directory.deviceLive(retained)};
   }
 
   refresh(source: string, now: number) {
     const key = this.store.account(source)!;
-    return this.cadence.refresh(key, this.refreshDuty(key), now);
+    const value = this.cadence.refresh(key, this.refreshDuty(key), now);
+    const provider = this.store.state(source).provider;
+    if (providers.includes(provider as typeof providers[number]) && this.measurementSelection.pending(source, provider as typeof providers[number], key, now)) {
+      return {...value, value: {...value.value, unavailable: 'handover_pending' as const}};
+    }
+    return value;
   }
 
   requestRefresh(source: string, now: number) {
+    if (this.refresh(source, now).value.unavailable === 'handover_pending') return {status: 'unavailable' as const, reason: 'handover_pending'};
     const key = this.store.account(source)!;
     const result = this.cadence.requestRefresh(key, this.refreshDuty(key), deliveryOf(this.store.state(source))?.at ?? null, now);
+    this.measurementSelection.bindRefresh(key);
     tell(this.observer, o => o.touchSources([source]));
     return result;
   }
@@ -259,6 +337,54 @@ export class Ingest {
     this.restoreFixed(source, key, now);
     this.protect(source, key, now);
     tell(this.observer, o => o.touchSources([source]));
+  }
+
+  preferenceChanged(source: string) {
+    // Intent waits for the next pull; it neither renews a lease nor moves a dispatched request.
+    afterCommit(() => {
+      this.notifyMeasurementOwners(source);
+      tell(this.observer, o => o.touchSources([source]));
+    });
+  }
+
+  participationChanged(device: string, collectors: ClientProvider[], now: number) {
+    afterCommit(() => {
+    const keys = this.measurementSelection.invalidate(device, collectors);
+    for (const key of keys) this.cadence.withdraw(key, device, now);
+    const sources = keys.flatMap(key => providers.flatMap(provider => this.store.findSource(provider,key) ?? []));
+    tell(this.observer, o => o.touchSources(sources));
+    });
+  }
+
+  private notifyMeasurementOwners(source: string, metadata = true) {
+    for (const row of this.store.db.prepare('SELECT user_id FROM holders WHERE source_id=?').all(source)) this.directory.measurementsChanged(String(row.user_id),metadata);
+  }
+
+  measurementSources(user: string, now: number) {
+    const personal=this.directory.boards(user).find(board=>board.personal);
+    const names=personal ? this.directory.view(personal.id).names : {};
+    return this.store.held(user).filter(source => providers.includes(source.provider as ClientProvider)).map(source => {
+      const key = this.store.account(source.id)!, provider = source.provider as ClientProvider;
+      const preference = this.store.measurementPolicies.preference(source.id);
+      const state=this.store.state(source.id);
+      const {holder,pending}=this.measurementSelection.state(source.id,provider,key,now);
+      const own = preference.device !== null && this.directory.deviceById(preference.device)?.userId === user;
+      const producer = (origin: {device:string;at:number;client:string|null;evidence:string|null} | null): {device?:string;name?:string;at:number;client?:string|null;evidence?:string|null;external?:boolean} | null => {
+        if (!origin) return null;
+        const device = this.directory.deviceById(origin.device);
+        return device?.userId === user ? {...origin,name:device.label ?? device.name} : {external:true,at:origin.at};
+      };
+      return {source:source.id,provider,label:names[source.id] ?? (key.startsWith(`user:${user}/${provider}/`) ? key.slice(`user:${user}/${provider}/`.length) : null),
+        duty:holder===null ? 'none' as const : this.directory.deviceById(holder)?.userId===user ? 'own' as const : 'external' as const,
+        preference:{revision:preference.revision,kind:preference.device === null ? 'auto' as const : 'preferred' as const,device:own ? preference.device : null},
+        pending,
+        candidates:this.measurementSelection.ownCandidates(user,source.id,provider,key,now),
+        origins:this.store.resourceOrigins(source.id).map(origin=>{
+          const observation=origin.resource==='funds'?state.creditBalance:quotaObservation(state,origin.resource==='resets'?'resets':'windows');
+          const status: 'observed'|'finite'|'unlimited'|'missing'|'unsupported'|'invalid'|'unknown'=observation?.status ?? 'unknown';
+          return {...origin,status,stale:observation ? now-observation.at>observation.staleAfterMs : true,staleAt:observation ? observation.at+observation.staleAfterMs : null,valueOrigin:producer(origin.valueOrigin),observationOrigin:producer(origin.observationOrigin)};
+        })};
+    });
   }
 
   private protect(source: string | null, key: string, now: number) {
@@ -289,6 +415,7 @@ export class Ingest {
 
   /** Devices taken off the hub: their agents stop showing at once. */
   forget(devices: string[], now = Date.now()) {
+    for (const device of devices) this.measurementSelection.invalidate(device);
     for (const key of this.cadence.keysOf(devices)) this.cadence.settleRefresh(key, this.refreshDuty(key), now);
     const keys = this.cadence.forget(devices, now);
     const sources = [
@@ -325,7 +452,7 @@ export class Ingest {
         const lastWorkedAt = session.lastWorkedAt === null ? null : Math.max(startedAt, Math.min(now, session.lastWorkedAt + skew));
         return {...session, startedAt, sentStartedAt: session.startedAt, lastWorkedAt, device: {id: device.id, name}};
       });
-      if (report.clients !== null) this.directory.saveDeviceClients(device.id, device.userId, report.clients, now);
+      if (report.clients !== null) this.directory.saveDeviceClients(device.id, device.userId, report.clients.map(client=>({...client,observedAt:client.observedAt==null?null:Math.min(now,client.observedAt+skew)})), now);
 
       const before = this.live.sourcesOf(device.id).filter(source => this.store.holds(device.userId, source));
       this.live.report(device.id, device.userId, sessions, now);

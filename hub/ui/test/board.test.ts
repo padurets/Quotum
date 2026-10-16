@@ -20,6 +20,14 @@ const card = (id: string, used = 50, extra: Partial<Card> = {}): Card => ({
 });
 
 const VIEW = {version:4 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
+test('contact storage stays bounded across abandoned devices and reconnect replaces its baseline',()=>{
+  const devices=Array.from({length:1100},(_,index)=>({deviceId:`device-${index}`,lastSeenAt:index+1}));
+  const first=reduce(INITIAL,{type:'hub',event:{type:'deviceContacts',data:{devices}}});
+  assert.equal(Object.keys(first.deviceContacts!).length,1024);
+  assert.equal(first.deviceContacts!['device-0'],undefined);assert.equal(first.deviceContacts!['device-1099'],1100);
+  const resumed=reduce(first,{type:'hub',event:{type:'snapshot',data:snapshot({deviceContacts:{live:1200}})}});
+  assert.deepEqual(resumed.deviceContacts,{live:1200});
+});
 const session = {device: {id: 'd', name: 'laptop'}, origin: 'terminal' as const, project: 'quotum', folder: null, startedAt: 1, lastWorkedAt: null, working: true, workedMs: 0};
 const ahead = (F: number): SeriesForecast => ({
   state: 'lasts',
@@ -55,6 +63,16 @@ function snapshot(change: Partial<Snapshot> = {}): Snapshot {
     ...change,
   };
 }
+
+test('device contact deltas preserve every board selector and ignore older contacts',()=>{
+  const accept=(state:PageState,event:HubEvent)=>reduce(state,{type:'hub',event});
+  const initial=accept(INITIAL,{type:'snapshot',data:snapshot()});
+  const next=accept(initial,{type:'deviceContacts',data:{devices:[{deviceId:'a',lastSeenAt:2000},{deviceId:'b',lastSeenAt:1000}]}});
+  assert.equal(next.board,initial.board);
+  assert.equal(next.devicesRevision,initial.devicesRevision);
+  assert.deepEqual(next.deviceContacts,{a:2000,b:1000});
+  assert.equal(accept(next,{type:'deviceContacts',data:{devices:[{deviceId:'a',lastSeenAt:1000}]}}),next);
+});
 
 const hub = (event: HubEvent): PageEvent => ({type: 'hub', event});
 const run = (...events: PageEvent[]) => events.reduce(reduce, INITIAL);

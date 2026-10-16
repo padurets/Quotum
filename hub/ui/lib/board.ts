@@ -27,6 +27,7 @@ export type HubResets = {resets: Resets; trackers: TrackerHealth[]; past: PastRe
 
 /** The board as the hub gives it to its reader (spec: `snapshot`). */
 export type Snapshot = {
+  deviceContacts?: Record<string,number|null>;
   currencies?:CurrencyContext;
   sourceAccess?:Record<string,SourceAccess>;
   board: BoardMeta;
@@ -48,6 +49,7 @@ export type Snapshot = {
 
 /** What the hub tells, as the page applies it; `hello` also tells history the hub's run; `ping` and `bye` are the connection's own (live.ts). */
 export type HubEvent =
+  | {type: 'deviceContacts'; data: {devices: {deviceId:string;lastSeenAt:number}[]}}
   | {type: 'devices'; data: Record<string, never>}
   | {type: 'hello'; data: {epoch: string}}
   | {type: 'snapshot'; data: Snapshot}
@@ -93,6 +95,7 @@ export type BoardState = {
 };
 
 export type PageState = {
+  deviceContacts?: Record<string,number|null>;
   /** Owner-device invalidation; snapshots also refresh a disclosure after reconnecting. */
   devicesRevision?: number;
   connection: {status: ConnectionStatus; lostAt: number | null};
@@ -158,6 +161,12 @@ function keepCurrencyContext(old:CurrencyContext|undefined,next:CurrencyContext)
   const target=keep(old?.target,next.target),definitions=keep(old?.definitions,next.definitions),sources=keepEach(old?.sources,next.sources);
   return old&&target===old.target&&definitions===old.definitions&&sources===old.sources&&next.revision===old.revision&&next.registryRevision===old.registryRevision?old:{target,definitions,sources,revision:next.revision,registryRevision:next.registryRevision};
 }
+
+/** A closed Devices view keeps only recent own contacts, without a heartbeat journal. */
+function boundedContacts(contacts:Record<string,number|null>) {
+  const entries=Object.entries(contacts);
+  return entries.length<=1024?contacts:Object.fromEntries(entries.sort((a,b)=>(b[1]??0)-(a[1]??0)).slice(0,1024));
+}
 function snapshot(state: PageState, data: Snapshot): PageState {
   const old = state.board?.id === data.board.id ? state.board : null;
   const board: BoardState = {
@@ -186,6 +195,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
   return {
     ...state,
     devicesRevision: (state.devicesRevision ?? 0)+1,
+    deviceContacts: boundedContacts(data.deviceContacts ?? {}),
     board: old && shallowEqual(old, board) ? old : board,
     boards: keep(state.boards ?? undefined, data.boards),
     resets: withResets(state.resets, data.resets),
@@ -207,6 +217,12 @@ function set<K extends 'cards' | 'sessions' | 'cadence' | 'refresh' | 'forecast'
 
 function hub(state: PageState, event: HubEvent): PageState {
   switch (event.type) {
+    case 'deviceContacts': {
+      const contacts = {...state.deviceContacts};
+      let changed = false;
+      for (const {deviceId,lastSeenAt} of event.data.devices) if (lastSeenAt > (contacts[deviceId] ?? 0)) {contacts[deviceId]=lastSeenAt;changed=true;}
+      return changed ? {...state,deviceContacts:boundedContacts(contacts)} : state;
+    }
     case 'hello':
       return patch(state, board => board.presenceConfirmed ? {...board, presenceConfirmed: false} : board);
     case 'devices':
@@ -317,6 +333,7 @@ export const useServerView = () => usePage(s => s.board?.view ?? null);
 export const useViewRevision = () => usePage(s => s.board?.viewRevision ?? 0);
 export const useConnectionsRevision = () => usePage(s => s.board?.connectionsRevision ?? 0);
 export const useDevicesRevision = () => usePage(s => s.devicesRevision ?? 0);
+export const useDeviceContact = (device: string, baseline: number | null) => usePage(s => Math.max(s.deviceContacts?.[device] ?? 0,baseline ?? 0) || null);
 export const useHistoryStart = () => usePage(s => s.board?.historyStart ?? null);
 /** Membership only: changing a figure never re-renders the compact list itself. */
 export const useVisibleLimits = () => usePage(s => {
@@ -357,6 +374,7 @@ export const useMine = (id: string) => usePage(s => !!s.board?.mine.includes(id)
 export const useBoards = () => usePage(s => s.boards);
 export const useConnection = () => usePage(s => s.connection);
 export const useApp = () => usePage(s => s.app);
+export const useMainNavigation = () => usePage(s => s.app?.mainNavigation,sameJson);
 
 /** A card's name and provider on the board: what the chart, the table and the list of agents call it. */
 export type Title = {title: string; provider: string};

@@ -36,14 +36,18 @@ function hub(t: TestContext) {
   const ingest = new Ingest(store, directory, duty, cadence);
   const credential = ingest.authenticate(`Bearer ${secret}`) as Credential;
   const agent = (name: string) => ({version: 1, agent: 'quotum/0.4.0', machine: {id: `${name}-0123456789abcdef`, name, os: 'linux', arch: 'x86_64'}});
-  const ask = (at: number, minimum = MIN, name = 'laptop', active = false, paced = true) => ingest.checkin(credential, {
-    ...agent(name), paced, subscriptions: [{provider: 'codex', account: ACCOUNT, active, minIntervalMs: minimum}],
-  }, T + at).subscriptions[0];
+  const commands=new Map<string,string>();
+  const context=(name='laptop',commandId=commands.get(name))=>({version:1,authority:store.measurementPolicies.authority,collectorEpoch:0,target:{kind:'verified',accountKey:ACCOUNT},...(commandId?{commandId}:{})});
+  const ask = (at: number, minimum = MIN, name = 'laptop', active = false, paced = true)  => {
+    const result=ingest.checkin(credential,{...agent(name),paced,capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[{provider:'codex',account:ACCOUNT,active,minIntervalMs:minimum}]},T+at).subscriptions[0];
+    if(result.commandId)commands.set(name,result.commandId);
+    const {commandId:_id,accountKey:_key,...answer}=result;return answer;
+  };
   const deliver = (at: number, options: {observed?: number; stale?: number; name?: string; used?: number; failure?: string; reset?: number; credits?:string;windowless?:boolean} = {}) => ingest.accept(credential, {
     ...agent(options.name ?? 'laptop'), sentAt: iso(at),
-    snapshots: options.failure ? [] : [{provider: 'codex', account: ACCOUNT, observedAt: iso(options.observed ?? at), via: 'codex/app-server', staleAfterMs: options.stale ?? 348_000,
+    snapshots: options.failure ? [] : [{attemptContext:context(options.name),provider: 'codex', account: ACCOUNT, observedAt: iso(options.observed ?? at), via: 'codex/app-server', staleAfterMs: options.stale ?? 348_000,
       windows: options.windowless?[]:[{id: 'weekly', kind: 'weekly', usedPercent: options.used ?? 50, ...(options.reset === undefined ? {} : {resetsAt: iso(options.reset)})}],...(options.windowless?{resourceStatus:{windows:'missing',resets:'missing'}}:{}),...(options.credits===undefined?{}:{balances:[{id:'balance:credits',unit:'credits:codex',status:'finite',amount:options.credits}]})}],
-    failures: options.failure ? [{provider: 'codex', error: options.failure, observedAt: iso(options.observed ?? at)}] : [],
+    failures: options.failure ? [{attemptContext:context(options.name),provider: 'codex', error: options.failure, observedAt: iso(options.observed ?? at)}] : [],
   }, T + at);
   const source = () => store.findSource('codex', ACCOUNT)!;
   const frequency = (value: MeasureIntervalMs, at = 15_000) => {
@@ -51,7 +55,7 @@ function hub(t: TestContext) {
   };
   const device = (name = 'laptop') => directory.deviceByMachine(user.id, agent(name).machine.id)!.id;
   const parts = {store, directory, ingest, resets: new ResetFeed(undefined, () => {})};
-  return {store, directory, user, duty, cadence, ingest, credential, agent, ask, deliver, source, frequency, device, parts};
+  return {store, directory, user, duty, cadence, ingest, credential, agent, ask, deliver, source, frequency, device, parts,context};
 }
 
 test('failed handover retains fixed plans from successful data and each device minimum', t => {
@@ -131,6 +135,7 @@ test('another failed device can advance the shared baseline without restoring th
   h.ask(0);
   h.deliver(0);
   h.deliver(1000, {name: 'other', observed: 0});
+  h.ask(1001,MIN,'other');
   h.frequency(900_000, 1001);
   h.ingest.requestRefresh(h.source(), T + MIN);
   h.ask(MIN);
@@ -454,12 +459,16 @@ test('a fixed preference after Auto cold start hydrates stored success without r
     const h = hub(t);
     h.deliver(0);
     const restarted = new Ingest(h.store, h.directory, new Duty(), new Cadence());
-    const ask = (at: number, name = 'laptop', active = false) => restarted.checkin(h.credential, {...h.agent(name), paced: true, subscriptions: [{provider: 'codex', account: ACCOUNT, active}]}, T + at).subscriptions[0];
+    let commandId:string|undefined;
+    const ask = (at: number, name = 'laptop', active = false) => {
+      const answer=restarted.checkin(h.credential,{...h.agent(name),paced:true,capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[{provider:'codex',account:ACCOUNT,active}]},T+at).subscriptions[0];
+      if(answer.commandId)commandId=answer.commandId;return answer;
+    };
     assert.equal(ask(2 * MIN).measure, true);
     h.store.setMeasureInterval(h.source(), 900_000);
     restarted.frequencyChanged(h.source(), T + 2 * MIN + 15_000);
     assert.equal(ask(2 * MIN + 15_000).measure, false, 'the boot command is still outstanding');
-    restarted.accept(h.credential, {...h.agent('laptop'), sentAt: iso(2 * MIN + 30_000), snapshots: [], failures: [{provider: 'codex', observedAt: iso(2 * MIN + 30_000), error: 'timeout'}]}, T + 2 * MIN + 30_000);
+    restarted.accept(h.credential, {...h.agent('laptop'), sentAt: iso(2 * MIN + 30_000), snapshots: [], failures: [{attemptContext:h.context('laptop',commandId),provider: 'codex', observedAt: iso(2 * MIN + 30_000), error: 'timeout'}]}, T + 2 * MIN + 30_000);
     if (handover) {
       const result = ask(8 * MIN, 'desk', true);
       assert.deepEqual([result.onDuty, result.measure], [true, false]);
@@ -579,7 +588,7 @@ test('late independent funds preserve the newer fixed plan and old failures cann
   h.deliver(3*MIN,{observed:MIN,failure:'failed'});
   assert.deepEqual(h.ingest.nextMeasurement(h.source(),ACCOUNT,T+3*MIN).value,before);
   const restarted=new Ingest(h.store,h.directory,new Duty(),new Cadence());
-  restarted.accept(h.credential,{...h.agent('laptop'),sentAt:iso(3*MIN),snapshots:[],failures:[{provider:'codex',error:'not_logged_in',observedAt:iso(MIN)}]},T+3*MIN);
+  restarted.accept(h.credential,{...h.agent('laptop'),sentAt:iso(3*MIN),snapshots:[],failures:[{attemptContext:h.context(),provider:'codex',error:'not_logged_in',observedAt:iso(MIN)}]},T+3*MIN);
   assert.equal(restarted.checkin(h.credential,{...h.agent('laptop'),paced:true,subscriptions:[{provider:'codex',account:ACCOUNT,active:false}]},T+17*MIN).subscriptions[0].measure,true);
 });
 

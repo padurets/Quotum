@@ -448,13 +448,60 @@ own schedule (eco mode) once the hub has been silent for four minutes and that
 measurement is due. An agent's log says when another device measures; waiting for the
 hub's pace is not logged.
 
+### Device participation and preferred collectors
+
+Schema 27 adds durable per-device participation gates, collector epochs, policy
+confirmation, global source preferences, bounded mutation receipts and latest resource
+producer anchors. Device participation restricts admission independently of tracking,
+connections, holdings and history. Effective gate changes permanently require launch
+epoch evidence; a delayed packet cannot bypass disable/re-enable using corrected time.
+The agent bootstraps policy before discovery and enforces its connection-bound durable
+cache separately from local configuration and scheduler waits.
+A managed runner with no local collectors declares that empty scope once at bootstrap;
+it does not add a recurring policy loop for an empty local scope.
+
+MeasurementSelection indexes current account evidence in both directions. Explicit
+check-ins can declare several accounts across batches; a singleton replaces the previous
+login, while a delivery group containing several accounts preserves each account and
+multiplexed evidence expires independently. Account evidence covers every allowed
+check-in's requested wait, with bounded grace, including off-duty and paused devices.
+Old resource backlog
+cannot refresh newer account evidence. Historical device
+bindings are display facts. Auto uses Duty and Cadence; a global preferred own eligible
+device waits for the issued measurement's safe boundary, falls back on ordinary eligible
+collectors when unavailable, and returns on recovery. Reads and intent saves do not
+extend leases. No per-resource parallel collector or completeness ranking is added.
+An explicit complete collector list supplies bounded local availability independently
+of account evidence. An omitted collector cannot be preferred while the declaration
+is current; listing one never establishes or renews an account. The twelve-minute
+cache and its private event deadlines use the existing maintenance and event clocks.
+Unchanged declarations update their deadline without enumerating candidate accounts.
+Configuration does not revoke an issued command or change resource admission.
+
+Ingest decides resource admission, issued-command acknowledgement, source failure and
+manual fresh-data completion separately. Modern commands have immutable IDs and launch
+scope; an accepted fresh resource can complete a request without acknowledging its
+command. Unknown/legacy failures remain private device diagnostics. Producer capture
+keeps independent latest value/observation anchors for windows, resets and funds.
+Unavailable readings preserve the value producer; equal finite readings advance the
+latest accepted producer. Historical absent evidence stays unknown.
+
+Owner contact events are coalesced separately from semantic Devices hints, rechecked
+at disclosure, and consumed by small contact-row selectors. My connections hosts the
+controls; widgets offer contextual navigation. Semver age, capability confirmation,
+collector eligibility and resource availability are distinct diagnostics. Native compact
+navigation carries a bounded typed destination through the existing command and keeps
+one latest intent. Local desktop retains its local measurement configuration.
+
 ## Delivery
 
 The agent posts each measurement right away. When the hub is unreachable, measurements
 wait in a spool file (at most 5,000, about two days, rewritten atomically) and go out
 oldest first when it answers again; meanwhile the agent tries again after a minute,
-then less and less often, up to once an hour. A check-in the hub answers ends that wait
-at once, and what was kept goes right after it. Resending
+then less and less often, up to once an hour. Check-ins and policy recovery keep their
+own contact schedule; their success never shortens an ingest retry deadline. Once
+that deadline allows it, contact or delivery retries send the retained spool even
+without an installed or enabled collector. Resending
 is safe: a measurement the hub already has counts as a duplicate. When the hub says
 the device was removed or its token revoked, the agent stops; any other refusal only
 makes it wait. A sign-in page in front of the hub (a redirect, or a web page where the
@@ -1128,11 +1175,20 @@ and its limits.
   signs up without an invitation but with its setup code: a new hub prints one to its
   log, so only whoever started it can claim it. After that, signing up needs an invite
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
-- **Devices** are running agents, and each belongs to a person. The *Settings → Devices* page
-  shows a person's devices, what each delivers and the last failure of each client
-  there (not logged in, too old…); the person names them there. The page has two open
-  sections: devices with the one-time connection command, and device tokens with their
-  creation and revocation actions. Provider accounts have their own *My connections* page.
+- **Devices** are running agents, and each belongs to a person. *My connections* has
+  separate Accounts, Devices and Tokens segments. Devices shows aligned overviews of
+  the person's machines and measured subscriptions. Selecting a row opens its object
+  in the shared dialog: a machine's measurement participation or diagnostics (Quotum and client
+  versions, observations, failures and sessions), or a subscription's preferred machine
+  and retained resource origins. Resource details use the shared popover, fitted to
+  the dialog's scrollport without enlarging it. The shared dialog keeps its glass
+  backing beside its scrolling content so nested popovers can blur the text behind
+  them with the same glass as other menus. Expanding diagnostics never lengthens
+  a machine row or the page. A widget's contextual link
+  opens its subscription dialog directly. Unsaved measurement drafts ask before leaving,
+  and a save stays locked through its authoritative read. Connect a device opens the
+  one-time command separately; token creation and revocation belong to Tokens. The
+  local app omits tokens and distributed measurement controls.
   *Agent activity → Settings → Manage projects* lists the projects their agents worked
   on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are
@@ -1305,6 +1361,9 @@ wholly beyond its current grid cut returns to the chosen period.
 renders only what shows time. It also checks measurements reach the card and chart
 within a second, small reads per measurement, and one small read for a machine report
 crediting work, rendering only that card, agents and analytics.
+The event observer retains raw traffic and separately validates owner-private contact
+metadata and empty device-selection hints. Board events, including refreshes, still
+fail the idle budget; private hints cannot permit page requests or extra rendering.
 Nothing on the page is fixed and the widgets are not frosted, so a
 scroll paints only what comes into view, even in a WebKitGTK window that draws without
 the GPU.

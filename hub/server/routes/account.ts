@@ -1,5 +1,5 @@
 import type {FastifyInstance, FastifyReply} from 'fastify';
-import {config} from '../config.js';
+import {config, version} from '../config.js';
 import {
   hashPassword,
   newSecret,
@@ -19,6 +19,9 @@ import {validFrequency} from '../domain/frequency.js';
 import {providerOf} from '../domain/providers.js';
 import {currentUser, Limiter, publicOrigin, sessionSecret, setSession} from '../session.js';
 import {AdditionError} from '../additions.js';
+import {OPERATION_ID, participation} from '../domain/measurementPolicy.js';
+import {PolicyError} from '../store/measurementPolicies.js';
+import type {ClientProvider} from '../domain/providers.js';
 
 type Body = Record<string, unknown>;
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -75,7 +78,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     const now = Date.now();
     const result = byHub?hub.hubSources?.requestRefresh(source,now)??{status:'unavailable',retryAt:null}:hub.ingest.requestRefresh(source, now);
     if (result.status === 'too_soon') return reply.header('Retry-After', Math.ceil((result.retryAt! - now) / 1000)).code(429).send({error: 'refresh_too_soon'});
-    if (result.status === 'unavailable') return reply.code(409).send({error: 'refresh_unavailable'});
+    if (result.status === 'unavailable') return reply.code(409).send({error: 'refresh_unavailable',...('reason' in result ? {reason:result.reason} : {})});
     return reply.code(202).send({ok: true});
   });
 
@@ -386,12 +389,12 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
 
   // ---------- one's machines: devices and machine tokens ----------
 
-  app.get('/api/devices', (request, reply) => {
+  app.get<{Querystring:{measurement?:string}}>('/api/devices', (request, reply) => {
     const user = guards.user(request, reply);
     if (!user) return reply;
     const delivered = store.deviceSources(user.id);
     const failures = store.deviceFailures(user.id);
-    return directory.devices(user.id).map(device => ({
+    const devices = directory.devices(user.id).map(device => ({
       id: device.id,
       name: device.label ?? device.name,
       reported: device.name,
@@ -404,7 +407,59 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       sessions: hub.ingest.live.deviceSessions(user.id, device.id, Date.now()),
       sources: delivered.filter(d => d.device === device.id).map(({provider, source, seenAt}) => ({provider, source, seenAt})),
       failures: failures.filter(f => f.device === device.id).map(({provider, error, detail, at}) => ({provider, error, detail, at})),
+      policy: store.measurementPolicies.device(device.id),
+      control: store.measurementPolicies.control(device.id),
     }));
+    return request.query.measurement === '1' ? {devices,hubVersion:version,sources:hub.ingest.measurementSources(user.id,Date.now())} : devices;
+  });
+
+  const mutation = (input: unknown) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    const body = input as Body;
+    if (typeof body.operationId !== 'string' || !OPERATION_ID.test(body.operationId) || !Number.isSafeInteger(body.expectedRevision) || (body.expectedRevision as number)<0) return null;
+    return {operation:body.operationId,revision:body.expectedRevision as number,desired:body.desired};
+  };
+  const policyError = (error: unknown, reply: FastifyReply) => {
+    if (!(error instanceof PolicyError)) throw error;
+    if (error.retryAfter) reply.header('Retry-After',error.retryAfter);
+    return reply.code(error.code === 'mutation_capacity' ? 429 : 409).send({error:error.code});
+  };
+  app.post<{Params:{device:string}}>('/api/devices/:device/measurement-policy',{bodyLimit:4096},(request,reply)=>{
+    const user=guards.user(request,reply);if(!user)return reply;
+    const device=directory.deviceById(request.params.device);
+    if(local || !device || device.userId!==user.id || !directory.deviceLive(device.id))return notFound(reply);
+    const input=mutation(request.body), desired=input && participation(input.desired);
+    if(!input || !desired)return reply.code(400).send({error:'measurement_invalid'});
+    try {
+      return store.measurementPolicies.mutate(user.id,input.operation,['participation',device.id,input.revision,desired],Date.now(),()=>{
+        const result=store.measurementPolicies.saveDevice(device.id,input.revision,desired,Date.now());
+        hub.ingest.participationChanged(device.id,result.changed,Date.now());
+        if(result.policy.revision!==input.revision)directory.measurementsChanged(user.id);
+        return {appliedRevision:result.policy.revision};
+      });
+    }catch(error){return policyError(error,reply);}
+  });
+  app.post<{Params:{source:string}}>('/api/sources/:source/measurement-preference',{bodyLimit:4096},(request,reply)=>{
+    const user=guards.user(request,reply);if(!user)return reply;
+    const source=request.params.source;
+    if(local || !store.holds(user.id,source))return notFound(reply);
+    const provider=store.state(source).provider;
+    if(providerOf(provider)?.measuredBy!=='client')return notFound(reply);
+    const input=mutation(request.body);
+    if(!input || input.desired!==null && (typeof input.desired!=='string' || !/^[A-Za-z0-9_-]{12}$/.test(input.desired)))return reply.code(400).send({error:'measurement_invalid'});
+    const target=input.desired as string|null;
+    if(target!==null && directory.deviceById(target)?.userId!==user.id)return notFound(reply);
+    try {
+      return store.measurementPolicies.mutate(user.id,input.operation,['preference',source,input.revision,target],Date.now(),()=>{
+        if(target!==null && hub.ingest.measurementSelection.reason(store.account(source)!,provider as ClientProvider,target,Date.now())!=='eligible')throw new PolicyError('measurement_conflict');
+        const prior=store.measurementPolicies.preference(source);
+        const saved=store.measurementPolicies.savePreference(source,input.revision,target);
+        if(saved.revision!==prior.revision) {
+          hub.ingest.preferenceChanged(source);
+        }
+        return {appliedRevision:saved.revision};
+      });
+    }catch(error){return policyError(error,reply);}
   });
 
   // A device is named on the hub; an empty name gives it back the one its machine reports.

@@ -1,17 +1,19 @@
 import {VIEW_VERSION, VIEW_VERSION_HEADER} from '../../server/domain/view';
-import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
+import {useCallback, useEffect, useLayoutEffect, useId, useRef, useState, type FormEvent} from 'react';
 import {stamp} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
 import {errorText} from '../lib/quota';
 import {call} from '../lib/http';
-import {logoOf} from './logos';
-import {CopyField, ErrorLine, Field, Modal} from './Kit';
+import {CopyField, ErrorLine, Field, Modal, Segmented} from './Kit';
 import {rich, t} from '../i18n';
 import {Ago} from './Time';
 import {ConnectionRow} from './Connections';
 import {clientName} from '../../server/domain/clients';
 import type {LiveSession} from '../lib/types';
-import {useConnectionsRevision, useDevicesRevision} from '../lib/board';
+import {useConnectionsRevision, useDevicesRevision, useDeviceContact} from '../lib/board';
+import type {MeasurementPolicy} from '../../server/domain/measurementPolicy';
+import {ParticipationSettings, PreferenceSettings, VersionInfo, versionSummary, type MeasurementFormState, type MeasurementSource} from './MeasurementDevices';
+import {guardNavigation, useLocation} from '../lib/router';
 
 export type Device = {
   id: string;
@@ -24,90 +26,146 @@ export type Device = {
   via: 'code' | 'token';
   lastSeenAt: number | null;
   sources: {provider: string; source: string; seenAt: number}[];
-  clients?: {clientId: string; version: string | null; seenAt: number}[];
+  clients?: {clientId: string; version: string | null; seenAt: number;observedAt?:number|null}[];
   sessions?: (LiveSession & {source: string | null})[];
   failures: {provider: string; error: string; detail: string | null; at: number}[];
+  policy?: MeasurementPolicy;
+  control?: {capable:boolean;confirmedRevision:number|null};
 };
 type Token = {id: string; name: string; hint: string; createdAt: number; lastUsedAt: number | null};
 
 const origin = () => location.origin;
 const tokenName = (token: {name: string}) => token.name || t('connect.tokenDefault');
 
-/** The agents of a device: the providers it delivers, and the ones whose client failed there. */
-function Agents({device}: {device: Device}) {
-  const providers = [...new Set([...device.sources.map(s => s.provider), ...device.failures.map(f => f.provider)])];
-  if (!providers.length) return <>—</>;
-  return (
-    <span className="agent-icons">
-      {providers.map(provider => {
-        const failure = device.failures.find(f => f.provider === provider);
-        const title = [PROVIDERS[provider]?.name ?? provider, failure && errorText(failure.error), failure?.detail].filter(Boolean).join(' — ');
-        return (
-          <span key={provider} className={`agent-icon ${failure ? 'is-failing' : ''}`} title={title}>
-            <img src={logoOf(provider)} alt={title} />
-          </span>
-        );
-      })}
-    </span>
-  );
+function Contact({device}:{device:Device}) {
+  const at=useDeviceContact(device.id,device.lastSeenAt);
+  return <span title={at?stamp(at):undefined}>{at?<Ago at={at}/>:t('connect.unused')}</span>;
 }
 
+function participationSummary(device:Device) {
+  if(!device.policy)return t('measurements.unsupportedControl');
+  if(!device.policy.enabled)return t('measurements.disabled');
+  if(!Object.values(device.policy.collectors).some(collector=>collector.enabled))return t('measurements.collectorsDisabled');
+  if(!device.control?.capable)return t('measurements.limitedControl');
+  return t(device.control.confirmedRevision===device.policy.revision?'measurements.allowed':'measurements.awaitingConfirmation');
+}
+
+const sourceName=(source:MeasurementSource,index:number)=>source.label ?? `${PROVIDERS[source.provider]?.name ?? source.provider} ${index+1}`;
+const restoreConnection=(id:string)=>document.querySelector<HTMLButtonElement>(`[data-connection-id="${CSS.escape(id)}"]`)??document.querySelector<HTMLButtonElement>('#devices button');
+const effectiveDevice=(source:MeasurementSource,devices:Device[])=>devices.find(device=>source.candidates.some(candidate=>candidate.device===device.id&&candidate.onDuty))?.name ?? t(source.duty==='none'?'measurements.none':'measurements.otherDevice');
+
 /** The reader's devices; on the desktop app's board, its one machine, which cannot be disconnected (it is the app's own agent). */
-export function Devices({local}: {local: boolean}) {
+export function Devices({local,onBusyChange}: {local: boolean;onBusyChange?:(busy:boolean)=>void}) {
   const [detailsId, setDetails] = useState<string | null>(null);
+  const [tab,setTab]=useState<'measurements'|'diagnostics'>('measurements'),tabs=useId();
+  const [connecting,setConnecting]=useState(false),[revoking,setRevoking]=useState<Device|null>(null);
+  const [formState,setFormState]=useState<MeasurementFormState>({dirty:false,busy:false}),[actionBusy,setActionBusy]=useState(false);
+  const [discard,setDiscard]=useState<{go:()=>void}|null>(null);
   const revision = useConnectionsRevision();
   const presence = useDevicesRevision();
   const request = useRef(0);
   const [devices, setDevices] = useState<Device[] | null>(null);
+  const [hubVersion,setHubVersion]=useState(''),[sources,setSources]=useState<MeasurementSource[]>([]);
+  const location=useLocation(),focused=new URLSearchParams(location.split('?')[1]??'').get('source');
+  const [sourceId,setSource]=useState<string|null>(focused);
+  const unavailable=useRef<HTMLParagraphElement>(null),lastFocus=useRef<string|null>(null);
+  useEffect(()=>{setSource(focused);},[focused]);
+  useEffect(()=>{
+    if(!focused||sourceId!==focused||lastFocus.current===focused||!devices)return;
+    const target=sources.some(source=>source.source===focused)?null:unavailable.current;
+    if(!target)return;
+    target.scrollIntoView({block:'center'});target.focus({preventScroll:true});lastFocus.current=focused;
+  },[focused,sourceId,sources,devices]);
   const details = devices?.find(device=>device.id===detailsId) ?? null;
   const [renaming,setRenaming]=useState<Device|null>(null),[name,setName]=useState('');
+  // The menu item disappears when its dialog opens; return to the menu's trigger.
+  const actionFocus=useRef<HTMLElement|null>(null);
+  const rememberAction=(button:HTMLButtonElement)=>{actionFocus.current=button.closest('.picker')?.querySelector<HTMLButtonElement>('button')??null;};
+  const restoreAction=()=>actionFocus.current?.isConnected?actionFocus.current:document.querySelector<HTMLElement>('#devices button');
+  const restoreDetails=()=>sourceId?restoreConnection(sourceId):detailsId?restoreConnection(`device:${detailsId}`):restoreAction();
+  const busy=formState.busy||actionBusy,dirty=formState.dirty||!!renaming&&name!==renaming.name;
+  const leave=useCallback((go:()=>void)=>{if(busy)return;if(dirty)setDiscard({go});else go();},[busy,dirty]);
+  useLayoutEffect(()=>guardNavigation(leave,true),[leave]);
+  useLayoutEffect(()=>{onBusyChange?.(busy);return ()=>onBusyChange?.(false);},[busy,onBusyChange]);
+  useLayoutEffect(()=>{if(!dirty&&!busy)return;const unload=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue='';};window.addEventListener('beforeunload',unload);return ()=>window.removeEventListener('beforeunload',unload);},[dirty,busy]);
   const [error, setError] = useState<unknown>(null);
+  const newest=useRef<{promise:Promise<void>}|null>(null);
   const load = useCallback(() => {
     const current = ++request.current;
-    call<Device[]>('GET', '/api/devices').then(value => {
+    const result=call<{devices:Device[];hubVersion:string;sources:MeasurementSource[]}>('GET', '/api/devices?measurement=1').then(value => {
       if (current !== request.current) return;
-      setDevices(value); setError(null);
-    }, failure => {if (current === request.current) setError(failure);});
+      setDevices(value.devices);setHubVersion(value.hubVersion);setSources(value.sources);setError(null);
+    }, failure => {if (current === request.current) setError(failure);throw failure;});
+    // Save waits for the authoritative read even when a newer owner hint supersedes it.
+    const entry={promise:Promise.resolve()};
+    entry.promise=result.then(()=>newest.current!==entry?newest.current?.promise:undefined,failure=>{
+      if(newest.current&&newest.current!==entry)return newest.current.promise;
+      throw failure;
+    });
+    newest.current=entry;return entry.promise;
   }, []);
-  useEffect(load, [load, revision]);
-  useEffect(() => {if (detailsId !== null) load();}, [load, detailsId, presence]);
+  useEffect(()=>{void load().catch(()=>{});}, [load, revision,presence]);
   useEffect(() => () => {++request.current;}, []);
 
   const revoke = async (device: Device) => {
-    if (!confirm(t('devices.confirmRevoke', {name: device.name}))) return;
-    setError(null);
+    if(actionBusy)return;setActionBusy(true);setError(null);
     try {
       await call('DELETE', `/api/devices/${encodeURIComponent(device.id)}`);
-      load();
+      await load();
+      setRevoking(null);
     } catch (failure) {
       setError(failure);
-    }
+    }finally{setActionBusy(false);}
   };
 
   const rename = async(event:FormEvent) => {
-    event.preventDefault();if(!renaming)return;
-    try {await call('POST',`/api/devices/${encodeURIComponent(renaming.id)}`,{name:name.trim()});setRenaming(null);load();}catch(failure){setError(failure);}
+    event.preventDefault();if(!renaming||actionBusy)return;setActionBusy(true);
+    try {await call('POST',`/api/devices/${encodeURIComponent(renaming.id)}`,{name:name.trim()});await load();setRenaming(null);}catch(failure){setError(failure);}finally{setActionBusy(false);}
   };
+  const selected=sources.find(source=>source.source===sourceId);
   return <>
-    {error&&<li><ErrorLine error={error}/></li>}
-    {devices?.length===0&&<li className="admin-empty">{t(local?'local.devicesEmpty':'devices.empty')}</li>}
-    {devices?.map(device=><ConnectionRow key={device.id} name={device.name}
-      icon={<svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><rect x="2" y="3" width="12" height="8" rx="1.5"/><path d="M5.5 13.5h5M8 11v2.5"/></svg>}
-      detail={<><span>{device.os}</span><span className="connection-detail"><Agents device={device}/></span></>}
-      status={<span title={device.lastSeenAt?stamp(device.lastSeenAt):undefined}>{device.lastSeenAt?<Ago at={device.lastSeenAt}/>:t('connect.unused')}</span>}
-      actions={<><button className="popover-row" onClick={()=>setDetails(device.id)}><span>{t('devices.clients')}</span></button><button className="popover-row" onClick={()=>{setError(null);setName(device.name);setRenaming(device);}}><span>{t('connections.rename')}</span></button>{!local&&<button className="popover-row danger" onClick={()=>void revoke(device)}><span>{t('devices.revoke')}</span></button>}</>}
-    />)}
-    {details&&<Modal title={t('devices.clientsOn',{name:details.name})} onClose={()=>setDetails(null)}>
-      <div className="settings-section"><h3>{t('devices.clients')}</h3><ul className="settings-list">
-        {(details.clients ?? []).map(client=><li className="settings-list-row popover-row" key={client.clientId}><span className="settings-item-main"><b>{clientName(client.clientId)}</b></span><span className="settings-item-detail">{client.version ?? t('devices.versionUnknown')}</span></li>)}
-      </ul></div>
-      <div className="settings-section"><h3>{t('agents.title')}</h3><ul className="settings-list">
-        {(details.sessions ?? []).map((session,i)=><li className="settings-list-row popover-row" key={i}><span className="settings-item-main"><b>{clientName(session.clientId ?? 'unknown')}</b><small>{session.project ?? t('agents.noProject')}</small></span><span className="settings-item-detail">{session.source ? PROVIDERS[session.source.split(':')[0]]?.name ?? session.source : t('agents.unknownSource')}</span></li>)}
-      </ul></div>
+    {focused&&devices&&!selected&&sourceId===focused&&<p className="dialog-text" role="alert" tabIndex={-1} ref={unavailable}>{t('measurements.unavailableSource')}</p>}
+    <ErrorLine error={error}/>
+    {error&&<div><button type="button" className="button" onClick={()=>void load().catch(()=>{})}>{t('refresh.action')}</button></div>}
+    <section className="settings-section connection-overview" id="devices">
+      <div className="settings-section-head"><h2>{t('devices.machines')}</h2>{!local&&<button type="button" className="button primary" aria-haspopup="dialog" onClick={()=>setConnecting(true)}>{t('connections.connectDevice')}</button>}</div>
+      <p className="dialog-text">{t('connections.devicesHelp')}</p>
+      {!devices&&!error&&<p role="status">{t('connections.loading')}</p>}
+      {devices?.length===0&&<p className="admin-empty">{t(local?'local.devicesEmpty':'devices.empty')}</p>}
+      <ul className="settings-list">{devices?.slice().sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id)).map(device=><ConnectionRow key={device.id} id={`device:${device.id}`} name={device.name}
+        detail={<><span>{device.os}</span><span>{versionSummary(device.agent,hubVersion)}</span></>}
+        status={<>{!local&&<span>{participationSummary(device)}</span>}<small><Contact device={device}/></small></>}
+        onOpen={()=>{setDetails(device.id);setTab(local||!device.policy?'diagnostics':'measurements');}}
+        actions={<><button className="popover-row" onClick={event=>{rememberAction(event.currentTarget);setError(null);setName(device.name);setRenaming(device);}}>{t('connections.rename')}</button>{!local&&<button className="popover-row danger" onClick={event=>{rememberAction(event.currentTarget);setError(null);setRevoking(device);}}>{t('devices.revoke')}</button>}</>}
+      />)}</ul>
+    </section>
+    {!!sources.length&&<section className="settings-section connection-overview"><h2>{t('measurements.subscriptions')}</h2><p className="dialog-text">{t(local?'measurements.localSourcesHelp':'measurements.sourcesHelp')}</p>
+      <ul className="settings-list">{sources.map((source,index)=><ConnectionRow key={source.source} id={source.source} name={sourceName(source,index)} detail={PROVIDERS[source.provider]?.name ?? source.provider}
+        status={<>{!local&&<span>{t('measurements.preferredSummary',{device:source.preference.kind==='auto'?t('measurements.auto'):source.preference.device?devices?.find(device=>device.id===source.preference.device)?.name??t('measurements.unavailablePreference'):t('measurements.externalPreference')})}</span>}<small>{t('measurements.effective',{device:effectiveDevice(source,devices??[])})}</small></>}
+        onOpen={()=>setSource(source.source)}/>)}</ul>
+    </section>}
+    {selected&&<Modal title={sourceName(selected,sources.indexOf(selected))} restore={restoreDetails} onClose={busy?undefined:()=>leave(()=>setSource(null))}>
+      <PreferenceSettings key={selected.source} source={selected} devices={devices??[]} reload={load} readOnly={local} onStateChange={setFormState}/>
     </Modal>}
-    {renaming&&<Modal title={t('devices.rename',{name:renaming.name})} onClose={()=>setRenaming(null)}>
-      <form className="dialog-form" onSubmit={rename}><Field label={t('devices.nameLabel')} value={name} maxLength={80} placeholder={renaming.reported} autoFocus onChange={e=>setName(e.target.value)}/><ErrorLine error={error}/><div className="button-row"><button className="button" type="button" onClick={()=>setRenaming(null)}>{t('common.cancel')}</button><button className="button primary">{t('boards.save')}</button></div></form>
+    {details&&<Modal title={details.name} restore={restoreDetails} onClose={busy?undefined:()=>leave(()=>setDetails(null))}>
+      {!local&&details.policy&&<Segmented label={t('connections.deviceSections')} radioName={tabs} value={tab} disabled={busy} options={[["measurements",t('measurements.participation')],["diagnostics",t('connections.diagnostics')]]} onChange={next=>leave(()=>setTab(next))}/>}
+      {!local&&details.policy&&tab==='measurements'?<ParticipationSettings key={details.id} device={details} reload={load} onStateChange={setFormState}/>:<>
+        <VersionInfo agent={details.agent} hub={hubVersion}/>
+        {!!details.failures.length&&<section className="settings-section"><h3>{t('measurements.lastFailure')}</h3><ul className="settings-list">{details.failures.map(failure=><li className="settings-list-row popover-row" key={failure.provider}><div className="settings-item-main"><b>{PROVIDERS[failure.provider]?.name ?? failure.provider}</b><small>{errorText(failure.error)}</small>{failure.detail&&<small>{failure.detail}</small>}</div><div className="settings-item-detail">{stamp(failure.at)}</div></li>)}</ul></section>}
+        <div className="settings-section"><h3>{t('devices.clients')}</h3><ul className="settings-list">
+          {(details.clients ?? []).map(client=><li className="settings-list-row popover-row" key={client.clientId}><div className="settings-item-main"><b>{clientName(client.clientId)}</b><small>{client.version ?? t('devices.versionUnknown')}</small></div><div className="settings-item-detail">{client.observedAt ? stamp(client.observedAt) : t('measurements.originUnknown')}</div></li>)}
+        </ul>{!details.clients?.length&&<p className="dialog-text">{t('devices.noClientData')}</p>}</div>
+        <div className="settings-section"><h3>{t('agents.title')}</h3><ul className="settings-list">
+          {(details.sessions ?? []).map((session,i)=><li className="settings-list-row popover-row" key={i}><div className="settings-item-main"><b>{clientName(session.clientId ?? 'unknown')}</b><small>{session.project ?? t('agents.noProject')}</small></div><div className="settings-item-detail">{session.source ? PROVIDERS[session.source.split(':')[0]]?.name ?? session.source : t('agents.unknownSource')}</div></li>)}
+        </ul>{!details.sessions?.length&&<p className="dialog-text">{t('devices.noSessions')}</p>}</div>
+      </>}
     </Modal>}
+    {connecting&&<Modal title={t('connections.connectDevice')} onClose={()=>setConnecting(false)}><DeviceCode/></Modal>}
+    {renaming&&<Modal title={t('devices.rename',{name:renaming.name})} restore={restoreAction} onClose={busy?undefined:()=>leave(()=>setRenaming(null))}>
+      <form className="dialog-form" onSubmit={rename}><fieldset className="form-fields" disabled={busy}><Field label={t('devices.nameLabel')} value={name} maxLength={80} placeholder={renaming.reported} autoFocus onChange={e=>setName(e.target.value)}/></fieldset><ErrorLine error={error}/><div className="button-row"><button className="button" type="button" disabled={busy} onClick={()=>leave(()=>setRenaming(null))}>{t('common.cancel')}</button><button className="button primary" disabled={busy}>{t('boards.save')}</button></div></form>
+    </Modal>}
+    {revoking&&<Modal title={t('devices.revoke')} restore={restoreAction} onClose={busy?undefined:()=>setRevoking(null)}><p className="dialog-text">{t('devices.confirmRevoke',{name:revoking.name})}</p><ErrorLine error={error}/><div className="button-row"><button className="button" disabled={busy} onClick={()=>setRevoking(null)}>{t('common.cancel')}</button><button className="button danger" disabled={busy} onClick={()=>void revoke(revoking)}>{t('devices.revoke')}</button></div></Modal>}
+    {discard&&<Modal title={t('connections.unsaved')} restore={restoreDetails} onClose={()=>setDiscard(null)}><p className="dialog-text">{t('connections.discardHelp')}</p><div className="button-row"><button className="button" onClick={()=>setDiscard(null)}>{t('connections.stay')}</button><button className="button danger" onClick={()=>{const go=discard.go;setDiscard(null);setFormState({dirty:false,busy:false});go();}}>{t('connections.discard')}</button></div></Modal>}
   </>;
 }
 

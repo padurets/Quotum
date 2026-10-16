@@ -108,13 +108,13 @@ export class Duty {
   }
 
   /** A measurement arrived: its sender holds duty until the measurement goes stale. */
-  delivered(subscription: string, device: string, observedAt: number, staleAfterMs: number, now: number) {
+  delivered(subscription: string, device: string, observedAt: number, staleAfterMs: number, now: number, acknowledge = true) {
     const holder = this.holders.get(subscription);
     if (holder && holder.device !== device && leaseOf(holder) > now) return;
     const mine = holder?.device === device;
     const activeAt = mine ? holder.activeAt : 0;
     // An older measurement, sent late, does not answer what the holder is measuring now.
-    const late = mine && !answers(holder, observedAt);
+    const late = mine && (!acknowledge || !answers(holder, observedAt));
     const [askedAt, answering] = late ? [holder.askedAt, holder.answering] : [null, true];
     // Expired backlog that leaves a command unanswered is no new sign of a working measurer.
     const staleAt = observedAt + staleAfterMs;
@@ -124,6 +124,16 @@ export class Duty {
 
   holder(subscription: string): string | null {
     return this.holders.get(subscription)?.device ?? null;
+  }
+
+  /** Participation revokes authority immediately; preferences wait for the issued command. */
+  release(subscription: string, device: string) {
+    if (this.holder(subscription) === device) this.holders.delete(subscription);
+  }
+
+  measuring(subscription: string, now: number): boolean {
+    const holder = this.holders.get(subscription);
+    return !!holder && measuring(holder, now);
   }
 
   /** When the holder's lease runs out. */

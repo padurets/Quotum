@@ -30,6 +30,7 @@ const ASK_TOGETHER_MS: Millis = 5_000;
 
 #[derive(Clone, Debug)]
 struct Slot {
+    blocked: bool,
     base_ms: u64,
     due: Millis,
     /// Current multiple of the base interval (eco mode doubles it while nothing happens).
@@ -70,6 +71,7 @@ impl Schedule {
             .iter()
             .enumerate()
             .map(|(i, &interval)| Slot {
+                blocked: false,
                 base_ms: interval.max(MIN_INTERVAL_MS),
                 due: now,
                 stretch: 1,
@@ -86,7 +88,29 @@ impl Schedule {
 
     /// The slot to run next and when; ties go to the earlier-listed provider.
     pub fn next(&self) -> Option<(usize, Millis)> {
-        self.slots.iter().enumerate().min_by_key(|(i, s)| (s.due, *i)).map(|(i, s)| (i, s.due))
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.blocked)
+            .min_by_key(|(i, s)| (s.due, *i))
+            .map(|(i, s)| (i, s.due))
+    }
+
+    /// A durable denial has no fallback deadline and clears already granted launches.
+    pub fn block(&mut self, index: usize, blocked: bool, now: Millis) {
+        let slot = &mut self.slots[index];
+        if blocked {
+            self.cleared.retain(|(i, _)| *i != index);
+            slot.fallback_at = None;
+        }
+        if slot.blocked && !blocked {
+            slot.due = slot.due.max(now);
+        }
+        slot.blocked = blocked;
+    }
+
+    pub fn has_cleared(&self) -> bool {
+        !self.cleared.is_empty()
     }
 
     /// Records a finished measurement and plans the next one of that provider.
@@ -143,12 +167,15 @@ impl Schedule {
     /// any of them is due (they share one timer), and the others due within a few
     /// seconds. None while slots cleared by the last answer wait to be measured.
     pub fn asks(&self, now: Millis) -> Vec<usize> {
-        if !self.cleared.is_empty() || !self.slots.iter().any(|s| s.due <= now) {
+        if !self.cleared.is_empty() || !self.slots.iter().any(|s| !s.blocked && s.due <= now) {
             return Vec::new();
         }
-        let paced = self.slots.iter().any(|s| s.paced && s.due <= now + ASK_TOGETHER_MS);
+        let paced = self.slots.iter().any(|s| !s.blocked && s.paced && s.due <= now + ASK_TOGETHER_MS);
         (0..self.slots.len())
-            .filter(|&i| if self.slots[i].paced { paced } else { self.slots[i].due <= now + ASK_TOGETHER_MS })
+            .filter(|&i| {
+                !self.slots[i].blocked
+                    && if self.slots[i].paced { paced } else { self.slots[i].due <= now + ASK_TOGETHER_MS }
+            })
             .collect()
     }
 
@@ -183,6 +210,9 @@ impl Schedule {
         let mut waiting = Vec::new();
         for &(index, directive) in answers {
             let slot = &mut self.slots[index];
+            if slot.blocked {
+                continue;
+            }
             match directive {
                 Directive::Wait { ask_at, on_duty: false } => {
                     slot.paced = false;
@@ -352,6 +382,37 @@ mod tests {
         assert_eq!(s.complete(0, 30 * MIN, &fail(ErrorKind::Timeout), false, 0.0) - 30 * MIN, 4 * MIN);
         assert_eq!(s.complete(0, 34 * MIN, &fail(ErrorKind::Timeout), false, 0.0) - 34 * MIN, 8 * MIN);
         assert_eq!(s.complete(0, 42 * MIN, &measured(1.0, None), false, 0.0) - 42 * MIN, 2 * MIN);
+    }
+    #[test]
+    fn participation_closes_cleared_and_unanswered_slots_until_explicit_recovery() {
+        let mut s = Schedule::new(&[120_000, 120_000], 0, false);
+        s.answer(&[(0, Directive::Measure { paced: None }), (1, Directive::Unanswered)], 0);
+        s.block(0, true, 1);
+        s.block(1, true, 1);
+        assert!(s.take_cleared().is_none());
+        assert!(s.asks(900_000).is_empty());
+        assert!(s.next().is_none());
+        s.answer(&[(0, Directive::Unanswered)], 900_000);
+        assert!(s.take_cleared().is_none());
+        s.block(0, false, 900_001);
+        assert_eq!(s.asks(900_001), vec![0]);
+        assert!(s.slots[1].blocked);
+    }
+
+    #[test]
+    fn restoring_policy_keeps_a_future_local_backoff_or_hub_ask() {
+        let mut s = Schedule::new(&[120_000], 0, false);
+        s.answer(&[(0, wait(60_000))], 0);
+        s.block(0, true, 1);
+        s.block(0, false, 2);
+        assert!(s.asks(2).is_empty());
+        assert_eq!(s.next(), Some((0, 60_000)));
+        s.complete(0, 60_000, &Err(Failure::new(Provider::Codex, ErrorKind::NotLoggedIn, "fixture")), false, 0.0);
+        let due = s.due(0);
+        s.block(0, true, 60_001);
+        s.block(0, false, 60_002);
+        assert_eq!(s.due(0), due);
+        assert!(s.asks(60_002).is_empty());
     }
 
     #[test]

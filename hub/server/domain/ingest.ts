@@ -3,6 +3,7 @@ import {providers, type Provider} from './sources.js';
 import {providerOf, type ClientProvider} from './providers.js';
 import type {FreeResets, Kind, WindowMeasurement, Win} from './quota.js';
 import {exactDecimal, scalarDecimal} from './amount.js';
+import {attemptContext, type AttemptContext} from './measurementPolicy.js';
 import type {CreditBalance, ResourceStatuses} from './resources.js';
 
 /** Clocks within this of the hub's are taken as they are; beyond it, agent times are shifted. */
@@ -30,14 +31,16 @@ export type AgentSnapshot = {
   observedAt: number;
   via: string;
   client: string | null;
+  clientEvidence?: 'nativeHandshake' | 'preLaunch';
   staleAfterMs: number;
   windows: AgentWindow[];
   resets: FreeResets | null;
   resourceStatus?: ResourceStatuses;
   balances?: CreditBalance[];
+  attemptContext?: AttemptContext | null;
 };
 
-export type AgentFailure = {provider: ClientProvider; observedAt: number; error: string; detail: string | null};
+export type AgentFailure = {provider: ClientProvider; observedAt: number; error: string; detail: string | null; attemptContext?: AttemptContext | null};
 
 export type AgentBatch = {
   version: 1;
@@ -191,11 +194,13 @@ function parseSnapshot(value: unknown): AgentSnapshot {
     observedAt: time(value.observedAt, 'observedAt')!,
     via: text(value.via, 'via')!,
     client: text(value.client, 'client', true),
+    ...(value.clientEvidence === 'nativeHandshake' || value.clientEvidence === 'preLaunch' ? {clientEvidence: value.clientEvidence} : {}),
     staleAfterMs: stale as number,
     windows,
     resets,
     ...(resourceStatus ? {resourceStatus} : {}),
     ...(balances ? {balances} : {}),
+    ...(value.attemptContext !== undefined ? {attemptContext: attemptContext(value.attemptContext)} : {}),
   };
 }
 
@@ -207,6 +212,7 @@ function parseFailure(value: unknown): AgentFailure {
     observedAt: time(value.observedAt, 'observedAt')!,
     error: value.error as string,
     detail: typeof value.detail === 'string' ? value.detail.slice(0, 200) : null,
+    ...(value.attemptContext !== undefined ? {attemptContext: attemptContext(value.attemptContext)} : {}),
   };
 }
 
@@ -253,6 +259,10 @@ type ClientSubscription = {provider: ClientProvider; account: string | null; acc
 type HubSubscription = {provider: Exclude<Provider, ClientProvider>; measuredBy: 'hub'};
 export type Checkin = AgentSender & {
   paced: boolean;
+  measurementPolicy: boolean;
+  attemptContext: boolean;
+  policyAck: {authority: string; revision: number} | null;
+  collectors: ClientProvider[] | null;
   subscriptions: (ClientSubscription | HubSubscription)[];
 };
 
@@ -275,7 +285,13 @@ export function parseCheckin(body: unknown): Checkin {
       minIntervalMs: least as number | null,
     };
   });
-  return {...sender, paced, subscriptions};
+  const input = body as Obj;
+  const capabilities = isObject(input.capabilities) ? input.capabilities : {};
+  const ack = isObject(input.policyAck) && typeof input.policyAck.authority === 'string' && Number.isSafeInteger(input.policyAck.revision) && (input.policyAck.revision as number) >= 0
+    ? {authority: input.policyAck.authority, revision: input.policyAck.revision as number} : null;
+  const collectors = Array.isArray(input.collectors) && input.collectors.length <= 16 && input.collectors.every(id=>typeof id==='string'&&providerOf(id)?.measuredBy==='client')
+    ? [...new Set(input.collectors as ClientProvider[])] : null;
+  return {...sender, paced, subscriptions, measurementPolicy: capabilities.measurementPolicy === 1, attemptContext: capabilities.attemptContext === 1, policyAck: ack, collectors};
 }
 
 /**
@@ -331,7 +347,7 @@ export type ClientSession = Omit<AgentSession, 'provider' | 'account' | 'account
   clientId: string;
   source: {provider: ClientProvider; account: string | null; accountName: string | null} | null;
 };
-export type DeviceClient = {clientId: string; version: string | null};
+export type DeviceClient = {clientId: string; version: string | null; observedAt?: number | null};
 export type SessionReport = AgentSender & {sentAt: number; sessions: AgentSession[]; clientSessions: ClientSession[]; clients: DeviceClient[] | null};
 
 function soft<T>(read: () => T): T | null {
@@ -404,7 +420,7 @@ export function parseSessions(body: unknown): SessionReport {
       if (!isObject(value) || !validClientId(value.clientId) || seen.has(value.clientId)) continue;
       seen.add(value.clientId);
       const version = typeof value.version === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9.+_-]{0,63}$/.test(value.version) ? value.version : null;
-      inventory.push({clientId: value.clientId, version});
+      inventory.push({clientId: value.clientId, version, ...(value.observedAt !== undefined ? {observedAt:soft(()=>time(value.observedAt,'client observedAt'))} : {})});
     }
   }
   return {...sender, sentAt: time(input.sentAt, 'sentAt')!, sessions, clientSessions, clients: inventory};

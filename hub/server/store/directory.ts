@@ -207,24 +207,33 @@ export class Directory {
   }
 
   deviceClients(device: string): (import('../domain/ingest.js').DeviceClient & {seenAt: number})[] {
-    return this.db.prepare('SELECT client AS clientId,version,seen_at AS seenAt FROM device_clients WHERE device_id=? ORDER BY client').all(device) as (import('../domain/ingest.js').DeviceClient & {seenAt: number})[];
+    return this.db.prepare('SELECT client AS clientId,version,seen_at AS seenAt,observed_at AS observedAt FROM device_clients WHERE device_id=? ORDER BY client').all(device) as (import('../domain/ingest.js').DeviceClient & {seenAt: number})[];
   }
 
   saveDeviceClients(device: string, user: string, clients: import('../domain/ingest.js').DeviceClient[], now: number) {
-    const before = this.deviceClients(device).map(({clientId, version}) => ({clientId, version}));
-    const next = [...clients].sort((a, b) => a.clientId < b.clientId ? -1 : a.clientId > b.clientId ? 1 : 0);
+    const before = this.deviceClients(device).map(({clientId, version, observedAt}) => ({clientId, version,observedAt:observedAt??null}));
+    const next = clients.map(({clientId,version,observedAt})=>({clientId,version,observedAt:observedAt == null ? null : Math.min(now,observedAt)})).sort((a, b) => a.clientId < b.clientId ? -1 : a.clientId > b.clientId ? 1 : 0);
     const changed = JSON.stringify(before) !== JSON.stringify(next);
+    if (!changed) {
+      this.db.prepare('UPDATE device_clients SET seen_at=? WHERE device_id=? AND seen_at<>?').run(now,device,now);
+      return;
+    }
     this.db.prepare('DELETE FROM device_clients WHERE device_id=?').run(device);
-    const insert = this.db.prepare('INSERT INTO device_clients VALUES (?,?,?,?)');
-    for (const client of next) insert.run(device, client.clientId, client.version, now);
+    const insert = this.db.prepare('INSERT INTO device_clients VALUES (?,?,?,?,?)');
+    for (const client of next) insert.run(device, client.clientId, client.version, now,client.observedAt == null ? null : Math.min(now,client.observedAt));
     if (changed) {
       this.db.prepare('INSERT INTO account_revisions(user_id,revision) VALUES (?,1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1').run(user);
       tell(this.observer, o => o.touchUser(user));
+      this.measurementsChanged(user);
     }
   }
 
   connectionsRevision(userId: string): number {
     return (this.db.prepare('SELECT revision FROM account_revisions WHERE user_id=?').get(userId) as {revision: number} | undefined)?.revision ?? 0;
+  }
+
+  measurementsChanged(user: string, metadata = true) {
+    tell(this.observer, o => o.touchDevices?.(user,metadata));
   }
 
   // ---------- boards, members, invites ----------
@@ -410,7 +419,8 @@ export class Directory {
             ' revoked_at = NULL, last_seen_at = ? WHERE id = ?',
         )
         .run(input.machine.name, input.machine.os, input.machine.arch, input.agent, input.tokenId, hashed, now, existing.id);
-      tell(this.observer, o => o.touchUser(input.userId));
+      if (existing.name !== input.machine.name || existing.os !== input.machine.os || existing.arch !== input.machine.arch || existing.agent !== input.agent || existing.tokenId !== input.tokenId || existing.revoked) this.measurementsChanged(input.userId);
+      tell(this.observer, o => o.deviceContact?.(input.userId,existing.id,now));
       return this.deviceById(existing.id)!;
     }
     const id = newId();
@@ -436,7 +446,12 @@ export class Directory {
   }
 
   touchDevice(id: string, machine: Machine, agent: string, now: number) {
+    const previous = this.deviceById(id);
     this.db.prepare('UPDATE devices SET name = ?, os = ?, arch = ?, agent = ?, last_seen_at = ? WHERE id = ?').run(machine.name, machine.os, machine.arch, agent, now, id);
+    if (previous) {
+      if (previous.name !== machine.name || previous.os !== machine.os || previous.arch !== machine.arch || previous.agent !== agent) this.measurementsChanged(previous.userId);
+      tell(this.observer, o => o.deviceContact?.(previous.userId,id,now));
+    }
   }
 
   devices(userId: string): Device[] {
@@ -459,6 +474,7 @@ export class Directory {
 
   /** Forgets sessions, invites and device codes that expired a day ago or earlier. */
   prune(now: number) {
+    this.db.prepare('DELETE FROM measurement_mutations WHERE (writer,operation) IN (SELECT writer,operation FROM measurement_mutations WHERE created_at<=? ORDER BY created_at LIMIT 128)').run(now-7*86_400_000);
     const cutoff = now - 86_400_000;
     for (const table of ['sessions', 'invites', 'device_codes']) this.db.prepare(`DELETE FROM ${table} WHERE expires_at < ?`).run(cutoff);
     this.pruneActions(now);
