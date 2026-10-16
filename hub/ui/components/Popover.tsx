@@ -74,6 +74,7 @@ export function Popover({
     // news, as a panel cut anew as its button moves would be cut again and again, and a hidden one
     // placed again at each scroll; only its content changing it is.
     let size = {width: 0, height: 0};
+    const maximum = element.style.maxWidth, minimum = element.style.minWidth;
     const seen = () => {
       const at = picker.getBoundingClientRect();
       return at.bottom > coverOf(at.bottom, trigger, bars) && at.top < innerHeight;
@@ -96,6 +97,15 @@ export function Popover({
       const read = !list ? element.scrollTop : scroller === element ? element.scrollTop - list.offsetTop : list.scrollTop || -list.offsetTop;
       element.style.maxHeight = '';
       element.style.translate = '';
+      element.style.maxWidth = maximum;
+      element.style.minWidth = minimum;
+      const dialog = trigger.closest<HTMLElement>('.dialog');
+      if (dialog) {
+        // A dialog clips its contents even when the window has more room.
+        const {maxWidth, minWidth} = getComputedStyle(element), room = Math.max(0, dialog.clientWidth - 16);
+        element.style.maxWidth = `min(${maxWidth}, ${room}px)`;
+        element.style.minWidth = `min(${minWidth}, ${room}px)`;
+      }
       element.classList.remove('is-capped', 'is-cramped');
       // Measured above its button only, where it cannot lengthen the page as it is measured; the
       // stylesheet sets it as far below its button as above.
@@ -118,7 +128,8 @@ export function Popover({
       // or of its dialog, either without its own scrollbar.
       const placed = element.getBoundingClientRect();
       size = {width: placed.width, height: placed.height};
-      const shift = shiftOf(placed.left, placed.right, (trigger.closest<HTMLElement>('.overlay') ?? document.documentElement).clientWidth);
+      const left = dialog ? dialog.getBoundingClientRect().left + dialog.clientLeft : 0;
+      const shift = shiftOf(placed.left - left, placed.right - left, (dialog ?? document.documentElement).clientWidth);
       if (shift) element.style.translate = `${shift}px 0`;
       setSide(same => (same?.up === next && same.cap === cap && same.cramped === cramped ? same : {up: next, cap, cramped}));
     };
