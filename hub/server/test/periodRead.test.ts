@@ -169,6 +169,7 @@ test('unchanged spending anchors preserve sparse financial card states and perio
     const plan=names.length?query.all(Object.fromEntries(names.map(name=>[name,0]))):query.all(...Array.from({length:(sql.match(/\?/g)??[]).length},()=>0));
     const readings=plan.filter(row=>/\b(?:SEARCH|SCAN) readings\b/.test(String(row.detail)));
     assert.ok(readings.length>0&&readings.every(row=>String(row.detail).includes('readings_sparse')),'actual financial queries must avoid dense anchors: '+sql);
+    if(sql.startsWith('WITH changes'))assert.ok(readings.every(row=>String(row.detail).includes('COVERING INDEX')),'financial card boundaries must not fetch table rows for deadlines and resets');
   }
   // Keep every financial observation, current value and availability span unchanged.
   h.store.db.prepare('DELETE FROM readings WHERE source_id=? AND pair_anchor=1').run(wallet);

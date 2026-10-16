@@ -449,6 +449,11 @@ export const STEPS = [
     DELETE FROM device_tracking_policy WHERE device_id=OLD.id;
   END;
   `,
+  // 31 — financial card boundaries read availability from the sparse index itself.
+  `
+  DROP INDEX readings_sparse;
+  CREATE INDEX readings_sparse ON readings(source_id,meter_id,at,stale_after_ms,reset_at) WHERE pair_anchor=0;
+  `,
 
 ];
 

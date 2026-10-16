@@ -187,7 +187,24 @@ test('board additions append to the integrated currency layout while analytics m
     const view=decodeView(JSON.parse(String(saved.payload)))!; assert.equal(view.version,4);
     assert.deepEqual(view.names,{legacy:'Kept'});
     assert.deepEqual(view.hidden,['source:deepseek:123456789abc']);
-    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,30);
+    assert.equal(db.prepare('PRAGMA user_version').get()!.user_version,SCHEMA_VERSION);assert.equal(SCHEMA_VERSION,31);
+  }finally{db.close();}
+});
+
+test('financial availability bounds upgrade without changing sparse or pair readings',()=>{
+  const db=new DatabaseSync(':memory:');try {
+    for(const step of STEPS.slice(0,30))db.exec(step);db.exec('PRAGMA user_version=30');
+    db.exec("INSERT INTO sources(id,provider,account,created_at) VALUES ('s','openrouter','native',1)");
+    const insert=db.prepare('INSERT INTO readings(source_id,meter_id,at,previous_at,kind,unit,amount,limit_amount,reset_at,minutes,scope,label,stale_after_ms,pair_anchor) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    for(const [at,pair] of [[1,0],[2,1]])insert.run('s','usage',at,at-1,'counter','USD',9007199254740993n,null,100,null,null,null,60000,pair);
+    const read=()=>{const query=db.prepare('SELECT * FROM readings ORDER BY at');query.setReadBigInts(true);return query.all();},before=read();
+    migrate(db,3);
+    assert.deepEqual(read(),before,'upgrading the index preserves exact native amounts and every pair endpoint');
+    const sql='SELECT at,stale_after_ms,reset_at FROM readings INDEXED BY readings_sparse WHERE source_id=? AND pair_anchor=0';
+    assert.deepEqual(db.prepare(sql).all('s').map(row=>({...row})),[{at:1,stale_after_ms:60000,reset_at:100}]);
+    const plan=db.prepare('EXPLAIN QUERY PLAN '+sql).all('s');
+    assert.ok(plan.some(row=>String(row.detail).includes('COVERING INDEX readings_sparse')),'availability boundaries need no table lookups');
+    assert.equal(db.prepare('PRAGMA user_version').get()?.user_version,SCHEMA_VERSION);
   }finally{db.close();}
 });
 
