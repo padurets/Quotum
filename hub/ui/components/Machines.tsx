@@ -85,7 +85,7 @@ export function Devices({local,onBusyChange}: {local: boolean;onBusyChange?:(bus
   const restoreDetails=()=>sourceId?restoreConnection(sourceId):detailsId?restoreConnection(`device:${detailsId}`):restoreAction();
   const busy=formState.busy||actionBusy,dirty=formState.dirty||!!renaming&&name!==renaming.name;
   const leave=useCallback((go:()=>void)=>{if(busy)return;if(dirty)setDiscard({go});else go();},[busy,dirty]);
-  useLayoutEffect(()=>guardNavigation(leave),[leave]);
+  useLayoutEffect(()=>guardNavigation(leave,true),[leave]);
   useLayoutEffect(()=>{onBusyChange?.(busy);return ()=>onBusyChange?.(false);},[busy,onBusyChange]);
   useLayoutEffect(()=>{if(!dirty&&!busy)return;const unload=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue='';};window.addEventListener('beforeunload',unload);return ()=>window.removeEventListener('beforeunload',unload);},[dirty,busy]);
   const [error, setError] = useState<unknown>(null);

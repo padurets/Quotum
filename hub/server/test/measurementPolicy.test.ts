@@ -34,6 +34,29 @@ function setup() {
   return {store,directory,duty,cadence,ingest,credential,sender,user,device,batch};
 }
 
+for(const mode of ['paced','legacy','paused'] as const) {
+  test(`a ${mode} candidate retains account evidence through its instructed check-in deadline`,()=>{
+    const {store,ingest,credential,sender,batch,directory,user,cadence}=setup();
+    try {
+      ingest.accept(credential,batch(now,{staleAfterMs:3*3_600_000}),now);
+      const source=store.held(user.id)[0].id,other={...sender,machine:{...sender.machine,id:'waiting-machine-012345',name:'B'}};
+      ingest.checkin(credential,{...other,subscriptions:[]},now);
+      const device=directory.devices(user.id).find(device=>device.name==='B')!.id;
+      if(mode==='paused')cadence.failed(account,device,'not_logged_in',now+1);
+      const answer=ingest.checkin(credential,{...other,paced:mode!=='legacy',subscriptions:[{provider:'codex',account,active:false}]},now+1).subscriptions[0];
+      assert.equal(answer.measure,false,mode);
+      const until=Date.parse(answer.until);
+      assert.ok(until>now+240_000,`${mode} exercises a wait longer than the provisional evidence`);
+      store.measurementPolicies.savePreference(source,0,device);
+      for(const at of [now+240_002,until-1,until]) {
+        assert.equal(ingest.measurementSelection.reason(account,'codex',device,at),mode==='paused'?'paused':'eligible',`${mode} at ${at}`);
+        if(mode!=='paused')assert.equal(ingest.measurementSelection.preferred(source,'codex',account,at),device,`${mode} preference survives the allowed wait`);
+      }
+      assert.equal(ingest.measurementSelection.reason(account,'codex',device,until+120_000),'offline',`${mode} evidence still expires`);
+    }finally{store.close();}
+  });
+}
+
 test('effective collector epochs survive re-enable and invalidate only the changed gate',()=>{
   const {store,device} = setup(), policies = store.measurementPolicies;
   const initial = policies.device(device);
@@ -477,10 +500,10 @@ for(const mode of ['pause','recovery'] as const)test(`preferred candidate ${mode
   const {store,directory,ingest,user,duty,credential,sender,device,batch}=setup();ingest.accept(credential,batch(now),now);
   const second={...sender,machine:{...sender.machine,id:'measurement-global-B012345'}};
   const ask=(machine:typeof sender,at:number)=>ingest.checkin(credential,{...machine,paced:true,capabilities:{measurementPolicy:1,attemptContext:1},subscriptions:[{provider:'codex',account}]},at);
-  ask(second,now+1);ask(sender,now+120000);
+  const waiting=ask(second,now+1).subscriptions[0];ask(sender,now+120000);
   const target=directory.devices(user.id).find(candidate=>candidate.id!==device)!.id,source=store.held(user.id)[0].id;
   store.measurementPolicies.savePreference(source,0,target);
-  const at=now+(mode==='pause'?120001:250000),bob=directory.createUser('global-bob@example.com','Bob','x',now);store.hold(source,bob.id,now);
+  const at=mode==='pause'?now+120001:Date.parse(waiting.until)+120001,bob=directory.createUser('global-bob@example.com','Bob','x',now);store.hold(source,bob.id,now);
   const empty=directory.createBoard('Other board',bob.id,now),secret=newSecret('qt_s');directory.createSession(secret,bob.id,now,86400000);
   const events=new Events({store,directory,ingest,resets:new ResetFeed(undefined,()=>{})},undefined,{now:()=>at+1,after:()=>()=>{}});events.attach();t.after(()=>{events.close();store.close();});
   const frames:Frame[]=[];events.open({user:bob.id,secret,board:empty.id,kind:'stream',send:batch=>frames.push(...batch),end:()=>{}});events.flush();frames.length=0;

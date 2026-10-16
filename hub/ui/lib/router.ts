@@ -19,6 +19,7 @@ export const routeLocation = () => committed ?? browserRoute();
 const address = () => {const route = routeLocation(); return route.pathname + route.search;};
 const changed = () => {for (const listener of [...listeners]) listener();};
 let guard: ((proceed: () => void) => void) | null = null;
+let guardEntries = false;
 let position = 0;
 let transition: Transition | null = null;
 const historyPosition = () => typeof history.state?.quotumPosition === 'number' ? history.state.quotumPosition as number : null;
@@ -60,7 +61,8 @@ function reconcile(pending: Transition) {
       });
       else saved();
     };
-    if (guard && pending.path !== origin.path) guard(proceed); else proceed();
+    // Some settings retire their forms on a new entry even when its URL is unchanged.
+    if (guard && (pending.path !== origin.path || guardEntries && !pending.replace)) guard(proceed); else proceed();
   } else if (pending.stage === 'replaying') {
     if (!pending.target) {
       if (pending.replace) history.replaceState({...history.state, quotumPosition: position}, '', pending.path);
@@ -83,8 +85,9 @@ const popped = () => {
 };
 
 /** A settings form can retain its draft across both links and native Back/Forward. */
-export function guardNavigation(ask: (proceed: () => void) => void) {
-  guard = ask; return () => {if (guard === ask) guard = null;};
+export function guardNavigation(ask: (proceed: () => void) => void, entries = false) {
+  guard = ask; guardEntries = entries;
+  return () => {if (guard === ask) {guard = null;guardEntries = false;}};
 }
 
 /** All client navigation, including chart ranges, publishes the same location. */

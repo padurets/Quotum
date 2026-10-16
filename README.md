@@ -332,7 +332,7 @@ have your system start `quotum run`, the same in the foreground (a systemd user
 service, launchd, Windows autostart). With npx, put `npx` before every command.
 
 **Many machines at once** (images, VMs, containers): create a machine token in the
-dashboard (*My connections → Devices → Device tokens*) and start every machine with it. Each one joins as
+dashboard (*My connections → Tokens*) and start every machine with it. Each one joins as
 yours by itself:
 
 ```sh

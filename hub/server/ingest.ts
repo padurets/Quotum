@@ -271,10 +271,11 @@ export class Ingest {
           const answer = this.cadence.answer(key, device.id, s.provider, now, s.minIntervalMs, this.signals(source, key, now));
           if (answer.measure) this.duty.asked(key, device.id, now);
           const commandId = answer.measure ? this.measurementSelection.issue(key, s.provider, device.id, request.attemptContext, now) : undefined;
-          this.measurementSelection.observe(key, s.provider, device.id, now, answer.askInMs,false);
           this.protect(source, key, now);
           return {provider: s.provider, ...answer, ...(request.attemptContext ? {accountKey:key} : {}), ...(commandId ? {commandId} : {}), until: iso(now + answer.askInMs)};
         })();
+        // Every allowed wait keeps its account evidence until the next requested contact.
+        this.measurementSelection.observe(key, s.provider, device.id, now, Date.parse(reply.until)-now,false);
         const after=this.measurementSelection.state(source,s.provider,key,now);
         if(source&&(before.holder!==after.holder||before.pending!==after.pending))this.notifyMeasurementOwners(source,false);
         return reply;

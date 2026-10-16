@@ -299,14 +299,12 @@ impl Runner {
                 // As the sign-in files were before it: a sign-in during the measurement (or a token
                 // it refreshed) leaves the account unknown until the next one, never another's.
                 let signed_in = last_activity(&identity_paths[index]);
-                let current =
-                    current_account(self.adapters[index].local_account(&self.home), &accounts[index], signed_in);
-                let target = current.flatten().or_else(|| {
-                    accounts[index]
-                        .as_ref()
-                        .filter(|(_, before)| *before == signed_in)
-                        .and_then(|_| command_accounts[index].clone())
-                });
+                let target = measurement_account(
+                    self.adapters[index].local_account(&self.home),
+                    &accounts[index],
+                    signed_in,
+                    command_accounts[index].clone(),
+                );
                 let attempt =
                     policy.as_ref().map(|policy| policy.attempt(providers[index], target, commands[index].take()));
                 let mut outcome = self.measure(index);
@@ -590,6 +588,18 @@ fn current_account(
     }
 }
 
+/// A command's account remains launch evidence only while the client's identity files are unchanged.
+fn measurement_account(
+    local: Option<String>,
+    measured: &Option<(Option<String>, Option<SystemTime>)>,
+    signed_in: Option<SystemTime>,
+    commanded: Option<String>,
+) -> Option<String> {
+    current_account(local, measured, signed_in)
+        .flatten()
+        .or_else(|| measured.as_ref().filter(|(_, before)| *before == signed_in).and(commanded))
+}
+
 /// The account to check in with, when known without starting the client: the one it
 /// names on this machine, else the one it last reported while its sign-in files are as
 /// they were then. While the hub sets the pace, the last one reported stands even after a
@@ -786,6 +796,59 @@ mod tests {
         assert_eq!(current_account(None, &measured, later), None, "signed in again since: not known");
         assert_eq!(current_account(None, &None, later), Some(None), "not measured yet: the hub's guess");
         assert_eq!(current_account(None, &Some((None, then)), then), Some(None), "measured, and named no account");
+    }
+
+    #[test]
+    fn claude_logout_cannot_reuse_the_measured_or_commanded_account() {
+        for removed in [false, true] {
+            let home = std::env::temp_dir().join(format!("quotum-claude-logout-{}-{removed}", std::process::id()));
+            std::fs::create_dir_all(&home).unwrap();
+            let config = home.join(".claude.json");
+            std::fs::write(
+                &config,
+                r#"{"oauthAccount":{"emailAddress":"fixture@example.com","organizationName":"Fixture"}}"#,
+            )
+            .unwrap();
+            let first = SystemTime::UNIX_EPOCH + Duration::from_secs(1000);
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&config)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(first))
+                .unwrap();
+            let client = adapter(Provider::Claude);
+            let account = client.local_account(&home).unwrap();
+            let paths = client.identity_paths(&home);
+            let measured = Some((Some(account.clone()), last_activity(&paths)));
+            assert_eq!(
+                measurement_account(
+                    client.local_account(&home),
+                    &measured,
+                    last_activity(&paths),
+                    Some(account.clone())
+                ),
+                Some(account.clone())
+            );
+            if removed {
+                std::fs::remove_file(&config).unwrap();
+            } else {
+                std::fs::write(&config, "{}").unwrap();
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&config)
+                    .unwrap()
+                    .set_times(std::fs::FileTimes::new().set_modified(first + Duration::from_secs(1)))
+                    .unwrap();
+            }
+            assert_eq!(client.local_account(&home), None);
+            let target =
+                measurement_account(client.local_account(&home), &measured, last_activity(&paths), Some(account));
+            std::fs::remove_dir_all(&home).unwrap();
+            assert_eq!(
+                target, None,
+                "clearing or removing the account invalidates the launch target: removed={removed}"
+            );
+        }
     }
 
     #[test]

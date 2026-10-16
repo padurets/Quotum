@@ -70,6 +70,10 @@ impl Collector for Claude {
         vec![home.join(".claude/history.jsonl"), global_config(home)]
     }
 
+    fn identity_paths(&self, home: &Path) -> Vec<PathBuf> {
+        vec![global_config(home)]
+    }
+
     /// The signed-in account from Claude Code's own config (no tokens there): the same
     /// e-mail and organization `initialize` reports, so the same pseudonym.
     fn local_account(&self, home: &Path) -> Option<String> {
