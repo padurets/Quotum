@@ -113,7 +113,7 @@ export function Devices({local}: {local: boolean}) {
         {(details.clients ?? []).map(client=><li className="settings-list-row popover-row" key={client.clientId}><span className="settings-item-main"><b>{clientName(client.clientId)}</b></span><span className="settings-item-detail">{client.version ?? t('devices.versionUnknown')}</span><button className="button" onClick={()=>openClientLinks({deviceId:details.id,clientId:client.clientId})}>{t('links.manage')}</button></li>)}
       </ul></div>
       <div className="settings-section"><h3>{t('agents.title')}</h3><ul className="settings-list">
-        {(details.sessions ?? []).map((session,i)=><li className="settings-list-row popover-row" key={JSON.stringify([session.clientId,session.startedAt,session.project,session.route,i])}><span className="settings-item-main"><b>{clientName(session.clientId ?? 'unknown')}</b><small>{session.project ?? t('agents.noProject')}</small></span><span className="settings-item-detail"><SessionFunding session={session} inventory={funding} evidence={session.attribution} error={fundingError}/></span></li>)}
+        {(details.sessions ?? []).map((session,i)=><li className="settings-list-row popover-row" key={JSON.stringify([session.clientId,session.startedAt,session.project,session.route,i])}><span className="settings-item-main"><b>{clientName(session.clientId ?? 'unknown')}</b><small>{session.project ?? t('agents.noProject')}</small></span><div className="settings-item-actions"><SessionFunding session={session} inventory={funding} evidence={session.attribution} error={fundingError}/></div></li>)}
       </ul></div>
     </Modal>}
     {renaming&&<Modal title={t('devices.rename',{name:renaming.name})} onClose={()=>setRenaming(null)}>

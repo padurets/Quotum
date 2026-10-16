@@ -1,3 +1,4 @@
+import {ChevronDown} from 'lucide-react';
 import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
 import {clientName} from '../../server/domain/clients';
 import {catalogue} from '../../server/domain/providers';
@@ -75,7 +76,7 @@ function LinkManager({context}: {context: URLSearchParams}) {
     for (const link of inventory?.links ?? []) for (const boundary of [link.from, link.to]) if (boundary !== null && boundary > at) next = Math.min(next, boundary);
     return Number.isFinite(next) ? next : null;
   }, [inventory?.links]);
-  if (!inventory) return <section className="settings-section"><h2>{t('links.title')}</h2><p role="status">{t('links.loading')}</p><ErrorLine error={error} /></section>;
+  if (!inventory) return <section className="settings-section"><h2>{t('links.title')}</h2>{error ? <><ErrorLine error={error}/><button className="button" onClick={() => void load()}>{t('links.reload')}</button></> : <p role="status">{t('links.loading')}</p>}</section>;
   const sourceName = (id: string | null) => targetOf(inventory, id)?.name ?? t('agents.unknownSource');
   const deviceName = (id: string | null) => id === null ? t('links.allDevices') : inventory.devices.find(device => device.id === id)?.name ?? t('devices.title');
   const rows = (links: LinkInventory['links']) => <ul className="connections-list client-links-list">{links.map(link => <ConnectionRow key={link.id} id={'client-link-' + link.id}
@@ -90,8 +91,9 @@ function LinkManager({context}: {context: URLSearchParams}) {
     <div className="settings-section-head"><h2>{t('links.title')}</h2><button id="create-client-link" className="button primary" disabled={!inventory.sources.length} onClick={() => setEdit({operation: 'create', revision: inventory.revision, link: draft()})}>{t('links.create')}</button></div>
     <p className="dialog-text">{t('links.description')}</p>
     {!inventory.sources.length && <><p className="dialog-text">{t('links.noSources')}</p><div><button className="button" onClick={() => navigate(settingsHref('/settings/connections'))}>{t('settings.connections')}</button></div></>}
-    <Segmented options={[["links", t('links.saved')], ["history", t('links.history')]]} value={history ? 'history' : 'links'} onChange={value => setHistory(value === 'history')} label={t('links.list')} />
+    <div className="settings-section-head"><Segmented options={[['links', t('links.saved')], ['history', t('links.history')]]} value={history ? 'history' : 'links'} onChange={value => setHistory(value === 'history')} label={t('links.list')} /></div>
     <ErrorLine error={error} />
+    {error && <button className="button" onClick={() => void load()}>{t('links.reload')}</button>}
     {!shown.length && <p className="admin-empty">{t(history ? 'links.emptyHistory' : inventory.links.length ? 'links.noCurrent' : 'links.empty')}</p>}
     {rows(shown)}
     {edit && <LinkForm key={edit.operation + edit.link.id} edit={edit} inventory={inventory} onClose={() => setEdit(null)} onSaved={async () => {await load(); setEdit(null);}} reload={load} />}
@@ -158,6 +160,7 @@ function LinkForm({edit, inventory, onClose, onSaved, reload}: {edit: Edit; inve
           <Field type="datetime-local" label={t('links.to')} value={to} onChange={event => setTo(event.target.value)} />
           <SelectField label={t('links.routeType')} value={link.route?.class ?? ''} onChange={event => setLink({...link, route: event.target.value ? {class: event.target.value as 'api' | 'subscription' | 'unknown', provider: null} : null})}><option value="">{t('links.anyRoute')}</option>{(['subscription', 'api', 'unknown'] as const).map(value => <option key={value} value={value}>{t(`links.${value}`)}</option>)}</SelectField>
           {link.route && <SelectField label={t('links.provider')} value={link.route.provider ?? ''} onChange={event => setLink({...link, route: {...link.route!, provider: event.target.value || null}})}><option value="">{t('links.anyProvider')}</option>{catalogue.map(provider => <option key={provider.id} value={provider.id}>{provider.name}</option>)}</SelectField>}
+          {starts === 'now' && <small>{t('links.timezone', {zone: Intl.DateTimeFormat().resolvedOptions().timeZone})}</small>}
           <small>{t('links.conditionAdvice')}</small>
         </div></details>
       </fieldset>
@@ -176,7 +179,7 @@ export function SessionFunding({session, evidence, inventory, error}: {session: 
   const link = inventory?.links.find(link => link.id === evidence?.linkId);
   const source = name(evidence ? evidence.source : session.source);
   const inactive = evidence?.by === 'link' && !evidence.active;
-  return <Popover label={t('links.whySource')} trigger={source} open={open} onOpenChange={setOpen} width={350}>
+  return <Popover label={t('links.whySource')} trigger={<>{source}<ChevronDown size={12} aria-hidden="true" /></>} open={open} onOpenChange={setOpen} width={350}>
     <PopoverHeading onClose={() => setOpen(false)}>{source}</PopoverHeading>
     <ErrorLine error={error} />
     {!inventory && !error ? <p className="dialog-text">{t('links.loading')}</p> : !evidence ? !error && <p className="dialog-text">{t(inventory ? 'links.sessionEnded' : 'links.loading')}</p> : <>
