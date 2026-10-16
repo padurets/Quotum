@@ -499,6 +499,20 @@ retains every field of the original leg; `conversion.original` and additional `s
 remain unchanged. Both dictionaries are scoped to this one reply.
 Tapes, card values and the standalone history route retain their existing shape.
 
+The request header `x-quotum-history-sources: basis` also opts into source ordinals
+in compact history sections. Only a section borrowing its matching `meta` may carry
+`sourceEncoding: 'basis'`. A numeric source is a zero-based index into
+`Object.keys(known.sources)` from the metadata captured by that exact request, in its
+original order. This applies only to chunk series and meter-series `source`, activity
+session source, source-work source, source-dimension group key, and reset, grant and
+plan source. Unknown source strings and null remain literal; project/device keys,
+money and all tape fields keep their shape. A reader requires the captured token and
+run, rejects invalid ordinals, and restores these fields before publishing the reply.
+The client opts in only when every requested nonempty metadata token has its captured
+basis. A full metadata reply and requests without this header retain the legacy shape;
+older hubs may ignore the header. Optional packing cannot fail a native section that
+already fits, and lookup allocations share the existing response reservation.
+
 Quota, wallet budget and subscription-funds values contain the compatible history reply below and, unless skipped,
 a `tape`. A tape contains exact native sample anchors and monetary readings, availability
 spans, original allowances and recorded currency bindings. Native quota series also

@@ -14,7 +14,7 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {evaluatedRange,periodKey} from '../../server/domain/period.js';
-import {cellOf} from '../../server/domain/history.js';
+import {cellOf,type HistoryBasis} from '../../server/domain/history.js';
 import {fixedTape,fixedWork} from '../../server/periodFixed.js';
 import {hasPeriodValue,periodValueAt,withValueStates} from '../../server/domain/periodValues.js';
 import {canShift,shifted} from '../../server/domain/periodShift.js';
@@ -231,6 +231,49 @@ test('restored replay programs stay inside the shared transport reservation',asy
   assert.ok(peak>size);
   if(restored.values?.state!=='complete')throw new Error('missing values');
   assert.deepEqual(restored.values.value[0].states,{paths:[['validFor','from'],['validFor','to']],pieces:[[1,2,[[0,1],[1,2]]]]});
+});
+
+test('source decoding keeps the previous frame and releases its flight at the actual shared ceiling',async t=>{
+  const prior:HistoryBasis={run:'r',now:1000,meta:'captured',historyStart:0,known:{work:0,sources:{source:0}}};
+  const basis={run:'r',revision:'1',evaluatedAt:1000,evidenceCut:1000,range:{from:0,to:1000}};
+  const wire={basis,quota:{state:'complete',basis,value:{run:'r',now:1000,meta:prior.meta,sourceEncoding:'basis',chunks:[{from:0,to:1000,series:[{source:0,window:'weekly',open:0,hold:1000,cells:[]}],activity:{sessions:[],devices:{},cells:[]},resets:[],grants:[]}]}}};
+  const json=JSON.stringify(wire),pool=new HistoryPool(),pressure={role:'visible' as const};
+  const pinned=pool.budget-new TextEncoder().encode(json).length*3;
+  assert.equal(pool.reserve(pressure,pinned),true);
+  t.mock.method(globalThis,'fetch',async(_url:RequestInfo|URL,init?:RequestInit)=>{assert.equal(new Headers(init?.headers).get('x-quotum-history-sources'),'basis');return new Response(json);});
+  const request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:1000},evaluatedAt:1000};
+  const intent:PeriodIntent={board:'b',generation:1,revision:1,request};
+  const frame={source:'previous'},retained=frame;
+  let current=frame,received=0;
+  const transport=new PeriodTransport(pool,()=>intent,reply=>{received++;if(reply.quota?.state==='complete')current={source:reply.quota.value.chunks[0].series[0].source};},fetchPeriod);
+  await assert.rejects(transport.read('quota',{cell:'1',from:'0',to:'1000',meta:prior.meta},undefined,undefined,prior),{code:'history_limit'});
+  await settle();assert.equal(received,0);assert.equal(current,retained);
+  assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,pinned);
+  pool.release(pressure);assert.equal(pool.estimatedBytes,0);
+});
+
+test('source capability covers every captured token and accepts an older hub reply',async t=>{
+  const prior:HistoryBasis={run:'r',now:1000,meta:'captured',historyStart:0,known:{work:0,sources:{source:0}}};
+  const basis={run:'r',revision:'1',evaluatedAt:1000,evidenceCut:1000,range:{from:0,to:1000}};
+  const legacy={basis,quota:{state:'complete',basis,value:{run:'r',now:1000,meta:prior.meta,chunks:[]}}};
+  const headers:(string|null)[]=[];
+  t.mock.method(globalThis,'fetch',async(_url:RequestInfo|URL,init?:RequestInit)=>{headers.push(new Headers(init?.headers).get('x-quotum-history-sources'));return new Response(JSON.stringify(legacy));});
+  const request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:1000},evaluatedAt:1000,quota:{meta:prior.meta}};
+  assert.deepEqual(await fetchPeriod('b',request,new AbortController().signal,()=>true,{quota:prior}),legacy);
+  await fetchPeriod('b',{...request,funds:{meta:'uncovered'}},new AbortController().signal,()=>true,{quota:prior});
+  await fetchPeriod('b',request,new AbortController().signal,()=>true,{quota:{...prior,meta:'stale'}});
+  assert.deepEqual(headers,['basis',null,null]);
+});
+
+test('an aborted parsed source reply cannot decode or publish its numeric slots',async t=>{
+  const prior:HistoryBasis={run:'r',now:1000,meta:'captured',historyStart:0,known:{work:0,sources:{source:0}}};
+  const body={basis:{run:'r'},quota:{state:'complete',value:{run:'r',meta:prior.meta,sourceEncoding:'basis',chunks:[]}}};
+  const controller=new AbortController(),response=new Response(JSON.stringify(body)),parse=response.json.bind(response);
+  let reads=0;
+  t.mock.method(response,'json',async()=>{const parsed=await parse();controller.abort();return parsed;});
+  t.mock.method(globalThis,'fetch',async()=>response);
+  await assert.rejects(fetchPeriod('b',{version:1,selection:{mode:'range',from:0,to:1000},evaluatedAt:1000,quota:{meta:prior.meta}},controller.signal,()=>{reads++;return true;},{quota:prior}),{name:'AbortError'});
+  assert.equal(reads,1,'only raw transport staging was reserved');assert.equal(body.quota.value.sourceEncoding,'basis');
 });
 
 test('a stale A response cannot publish after A to B to A or after new evidence during its flight',async()=>{

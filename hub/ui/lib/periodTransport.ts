@@ -1,4 +1,5 @@
-import type {HistoryReply} from '../../server/domain/history';
+import type {HistoryBasis,HistoryReply} from '../../server/domain/history';
+import type {HistoryBases} from '../../server/domain/periodSourceWire';
 import {PERIOD_SCOPES,type PeriodScope,type HistoryQuery,type PeriodRequest,type PeriodReply} from '../../server/domain/periodRead';
 import {ApiError} from './http';
 import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire';
@@ -6,7 +7,7 @@ import type {HistoryPool,HistoryMember} from './historyPool';
 
 export type PeriodIntent={board:string;generation:number;revision:number;proofEpoch?:number;request:PeriodRequest};
 export type HistoryReadOwner={finished:Promise<void>;started?():void;role():'visible'|'ahead'|null;cancel():void};
-type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;owner?:HistoryReadOwner;resolve(value:HistoryReply):void;reject(error:unknown):void};
+type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;owner?:HistoryReadOwner;basis?:HistoryBasis;resolve(value:HistoryReply):void;reject(error:unknown):void};
 type Flight={role:'visible'|'ahead';intent:PeriodIntent;controller:AbortController;demands:Demand[];extras:boolean;preparing?:boolean};
 const aborted=()=>new DOMException('Aborted','AbortError');
 const roleOf=(demand:Demand)=>demand.signal?.aborted?null:demand.owner?demand.owner.role():'visible';
@@ -23,7 +24,7 @@ export class PeriodTransport implements HistoryMember {
   private readonly baselineParts=new Set<string>();
   private readonly cursors=new Map<string,string>();
   constructor(private readonly pool:HistoryPool,private readonly intent:()=>PeriodIntent|null,private readonly receive:(reply:PeriodReply,intent:PeriodIntent,reserve?:(bytes:number)=>boolean)=>void|Promise<void>,
-    private readonly send:(board:string,body:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean)=>Promise<PeriodReply>,private readonly accessLost:()=>void=()=>{}) {}
+    private readonly send:(board:string,body:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean,bases?:HistoryBases)=>Promise<PeriodReply>,private readonly accessLost:()=>void=()=>{}) {}
   get estimatedBytes(){return 0;}
   evictionCandidates(){return [];}
   private key(intent:PeriodIntent){return `${intent.generation}:${intent.revision}`;}
@@ -33,10 +34,10 @@ export class PeriodTransport implements HistoryMember {
   restoreEvidence(cursors:ReadonlyMap<string,string>){this.cursors.clear();for(const [key,value] of cursors)this.cursors.set(key,value);}
   reset(){this.resetEpoch++;this.completed=this.failed=this.baselineKey='';this.baselineParts.clear();this.cursors.clear();for(const flight of this.flights)this.abort(flight);for(const demand of this.queue)demand.reject(aborted());this.queue=[];}
   retry(){this.failed='';this.change();}
-  read(scope:PeriodScope,query:HistoryQuery,signal?:AbortSignal,owner?:HistoryReadOwner):Promise<HistoryReply> {
+  read(scope:PeriodScope,query:HistoryQuery,signal?:AbortSignal,owner?:HistoryReadOwner,basis?:HistoryBasis):Promise<HistoryReply> {
     return new Promise((resolve,reject)=>{
       if(signal?.aborted){reject(aborted());return;}
-      const demand={scope,query,signal,owner,resolve,reject};this.queue.push(demand);
+      const demand={scope,query,signal,owner,basis,resolve,reject};this.queue.push(demand);
       signal?.addEventListener('abort',()=>{reject(aborted());this.queue=this.queue.filter(d=>d!==demand);for(const flight of this.flights)if(flight.demands.includes(demand)&&flight.demands.every(d=>d.signal?.aborted)&&!flight.extras)this.abort(flight);this.schedule();},{once:true});
       this.schedule();
     });
@@ -93,7 +94,8 @@ export class PeriodTransport implements HistoryMember {
       }
       if(!demands.length&&!extras){this.abort(flight);this.schedule();return;}
       for(const demand of demands)demand.owner?.started?.();
-      this.send(intent.board,body,flight.controller.signal,bytes=>this.pool.reserve(flight,bytes)).then(async reply=>{
+      const bases:HistoryBases={};for(const demand of demands)if(demand.basis&&body[demand.scope]?.meta===demand.basis.meta)bases[demand.scope]=demand.basis;
+      this.send(intent.board,body,flight.controller.signal,bytes=>this.pool.reserve(flight,bytes),bases).then(async reply=>{
         if(flight.controller.signal.aborted)return;
         // A→B→A is three generations. Equal target text does not revive the first response.
         const current=this.intent();
@@ -125,8 +127,9 @@ export class PeriodTransport implements HistoryMember {
 }
 
 /** Charge transport staging before decoding; all consumers use the same retained budget. */
-export async function fetchPeriod(board:string,body:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean):Promise<PeriodReply> {
-  const response=await fetch(`/api/boards/${encodeURIComponent(board)}/period`,{method:'POST',cache:'no-store',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.any([signal,AbortSignal.timeout(12_000)])});
+export async function fetchPeriod(board:string,body:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean,bases:HistoryBases={}):Promise<PeriodReply> {
+  const sources=PERIOD_SCOPES.some(scope=>!!bases[scope]?.meta)&&PERIOD_SCOPES.every(scope=>!body[scope]?.meta||body[scope]!.meta===bases[scope]?.meta);
+  const response=await fetch(`/api/boards/${encodeURIComponent(board)}/period`,{method:'POST',cache:'no-store',headers:{'content-type':'application/json',...(sources?{'x-quotum-history-sources':'basis'}:{})},body:JSON.stringify(body),signal:AbortSignal.any([signal,AbortSignal.timeout(12_000)])});
   if(!response.body)throw new Error('empty_period_reply');
   // The native response consumer finishes Chromium's network record. A bounded
   // clone drains first, while the original branch retains the bytes for parsing.
@@ -140,7 +143,8 @@ export async function fetchPeriod(board:string,body:PeriodRequest,signal:AbortSi
     }
     const parsed=await response.json();
     if(!response.ok)throw new ApiError(response.status,parsed.error??'history_failed');
+    if(signal.aborted)throw aborted();
     let expanded=0;
-    return expandPeriod(parsed as PeriodWireReply,extra=>{expanded+=extra;if(!reserve(bytes*3+expanded))throw new ApiError(413,'history_limit');});
+    return expandPeriod(parsed as PeriodWireReply,extra=>{expanded+=extra;if(!reserve(bytes*3+expanded))throw new ApiError(413,'history_limit');},sources?bases:{});
   }finally{reader.releaseLock();}
 }

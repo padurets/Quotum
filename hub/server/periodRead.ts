@@ -18,6 +18,7 @@ import {drain,type Preparation} from './domain/prepare.js';
 import {PeriodPreparation} from './periodPrepare.js';
 import {selectionOf} from './domain/meterHistory.js';
 import {cellOf} from './domain/history.js';
+import type {SourceBases} from './domain/periodSourceWire.js';
 
 class PeriodChanged extends Error {}
 
@@ -100,15 +101,15 @@ export class PeriodReader {
     }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}
     finally{reservation.close();}
   }
-  read(board:string,user:string,raw:unknown):string {return drain(this.prepareRead(board,user,raw));}
-  async readAsync(board:string,user:string,raw:unknown,signal?:AbortSignal):Promise<string> {
+  read(board:string,user:string,raw:unknown,sources=false):string {return drain(this.prepareRead(board,user,raw,undefined,sources));}
+  async readAsync(board:string,user:string,raw:unknown,signal?:AbortSignal,sources=false):Promise<string> {
     for(let attempt=0;;attempt++){
       let check=()=>{};
-      try{return await this.preparation.run(()=>this.prepareRead(board,user,raw,guard=>{check=guard;}),signal,()=>check());}
+      try{return await this.preparation.run(()=>this.prepareRead(board,user,raw,guard=>{check=guard;},sources),signal,()=>check());}
       catch(error){if(!(error instanceof PeriodChanged))throw error;if(attempt===1)fail(503,'unavailable');}
     }
   }
-  private *prepareRead(board:string,user:string,raw:unknown,guard?:(check:()=>void)=>void):Preparation<string> {
+  private *prepareRead(board:string,user:string,raw:unknown,guard?:(check:()=>void)=>void,sources=false):Preparation<string> {
     const self=this;
     if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','quota','budget','funds','values','sessions'].includes(k)))fail(400,'invalid_request');
     const selection=parsePeriod(raw.selection);if(!selection)fail(400,'invalid_request');
@@ -143,6 +144,7 @@ export class PeriodReader {
     const workFrontier=frontier(delta?previous:null,self.workChanges,true),replaceFrom=workFrontier.from;
     const basis:PeriodBasis={run:self.events.epoch,revision:String(revision),evaluatedAt,evidenceCut:cut,range};
     const response:PeriodReply={basis};
+    const sourceScopes:Partial<Record<typeof PERIOD_SCOPES[number],boolean>>={};
     let replyBytes=0;
     const reserve=(bytes:number)=>{reservation.add(bytes);replyBytes+=bytes;};
     const release=(bytes:number)=>{reservation.remove(bytes);replyBytes-=bytes;};
@@ -224,7 +226,12 @@ export class PeriodReader {
       yield;
       for(const scope of PERIOD_SCOPES)if(request[scope])response[scope]=yield*section((function*(){
         const historyScope=scope==='funds'?'budget':scope;
-        const query=request[scope]!,json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},work,query.cells!=='skip',now);
+        const query=request[scope]!,json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},work,query.cells!=='skip',now,sources?known=>{
+          // Keep only eligibility, never optional metadata across native preparation.
+          const ids=shown.keys();
+          for(const id in known)if(Object.hasOwn(known,id)&&id!==ids.next().value)return;
+          sourceScopes[scope]=ids.next().done===true;
+        }:undefined);
         reserve(Buffer.byteLength(json)*2);const value=JSON.parse(json) as HistoryReply;
         if(query.evidence==='skip')return value;
         const tapeIdentity=createHash('sha256').update(JSON.stringify([board,user,scope,scope==='quota'?identity:null,[...shown].map(([id,s])=>[id,s.since]),scope==='quota'?null:store.financialKey(board),query.meters,query.unit,query.currency,store.currencies.registryRevision(user)])).digest('base64url');
@@ -260,7 +267,13 @@ export class PeriodReader {
       }
       const before=replyBytes;
       try {
-        const dictionary=periodDictionary(response,reserve);
+        let sourceBases:SourceBases|undefined;
+        if(PERIOD_SCOPES.some(scope=>sourceScopes[scope]&&response[scope]?.state==='complete')){
+          // Optional lookups are allocated only after every native section fits.
+          reserve(256+shown.size*16);const sourceIds=[...shown.keys()];sourceBases={};
+          for(const scope of PERIOD_SCOPES){const part=response[scope];if(sourceScopes[scope]&&part?.state==='complete'&&part.value.meta)sourceBases[scope]={run:part.value.run,meta:part.value.meta,sourceIds};}
+        }
+        const dictionary=periodDictionary(response,reserve,sourceBases);
         return compactJSON({...response,...(dictionary.moneySemantics.length?{moneySemantics:dictionary.moneySemantics}:{}),...(dictionary.rateLegs.length?{rateLegs:dictionary.rateLegs}:{})},dictionary.replacer);
       } catch(error){
         if(!(error instanceof HistoryLimit))throw error;
@@ -282,7 +295,7 @@ export function periodRoutes(app:FastifyInstance,guards:Guards,reader:PeriodRead
     const closed=()=>{if(!reply.raw.writableFinished)abort();};
     request.raw.once('aborted',abort);reply.raw.once('close',closed);
     try{
-      const json=await read(access.board.id,access.user.id,request.body,controller.signal);
+      const json=await read(access.board.id,access.user.id,request.body,controller.signal,request.headers['x-quotum-history-sources']==='basis');
       if(!guards.board(request,reply,request.params.board))return reply;
       return reply.type('application/json').send(json);
     }catch(error){

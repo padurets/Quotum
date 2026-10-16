@@ -8,6 +8,46 @@ import {withShiftWindow,shifted} from '../domain/periodShift.js';
 import {withValueStates,periodValueAt,type PeriodValues} from '../domain/periodValues.js';
 import {brotliCompressSync,constants} from 'node:zlib';
 import {ValueChanges,applyValueChanges} from '../domain/valueChanges.js';
+import type {Chunk,HistoryBasis} from '../domain/history.js';
+import {PERIOD_SCOPES} from '../domain/periodRead.js';
+import type {HistoryBases,SourceBases} from '../domain/periodSourceWire.js';
+
+test('source ordinals preserve each captured order and every non-source field after JSON parsing',()=>{
+  const a='a-source',b='b-source',basis={run:'r',revision:'1',evaluatedAt:3000,evidenceCut:3000,range:{from:0,to:3000}};
+  const chunk:Chunk={from:0,to:3000,series:[{source:a,window:a,hold:2000,open:0,cells:[[0,0,0,0]]}],
+    meterSeries:[{source:b,meter:a,kind:'balance',unit:'USD',semantics:{limit:null,resetAt:null,minutes:null,scope:null,label:a},cells:[[0,'900719925474099312345',null,null,2000]]}],
+    activity:{sessions:[['ref',a,a,a],['unknown',null,null,a],['unheld','unprovided',a,a,'notProvided']],sourceWork:[[b,0,0,0]],devices:{[a]:a},cells:[[0,0,[0],[['s',a,0],['p',a,0],['d',a,0]]]]},
+    resets:[[a,a,1000]],grants:[[b,2000,0]],plans:[[a,1000,a,{at:0,plan:b},3000]]};
+  const reply:PeriodReply={basis},bases:HistoryBases={},sourceBases:SourceBases={};
+  for(const [index,scope] of PERIOD_SCOPES.entries()){
+    const sourceIds=index%2?[b,a]:[a,b],meta='meta-'+scope;
+    const prior:HistoryBasis={run:'r',now:3000,meta,historyStart:0,known:{work:0,sources:Object.fromEntries(sourceIds.map(id=>[id,0]))}};
+    bases[scope]=prior;sourceBases[scope]={run:'r',meta,sourceIds};
+    reply[scope]={state:'complete',basis,value:{run:'r',now:3000,meta,chunks:[structuredClone(chunk)]}};
+  }
+  const original=structuredClone(reply),savedBases=JSON.stringify(bases);let producerBytes=0,readerBytes=0;
+  const dictionary=periodDictionary(reply,n=>{producerBytes+=n;},sourceBases),json=compactJSON({...reply,...(dictionary.moneySemantics.length?{moneySemantics:dictionary.moneySemantics}:{})},dictionary.replacer),wire=JSON.parse(json);
+  for(const scope of PERIOD_SCOPES){
+    const value=wire[scope].value,ids=sourceBases[scope]!.sourceIds;
+    assert.equal(value.sourceEncoding,'basis');assert.equal(value.chunks[0].series[0].source,ids.indexOf(a));
+    assert.equal(value.chunks[0].meterSeries[0].source,ids.indexOf(b));
+    assert.deepEqual(value.chunks[0].activity.cells[0][3], [['s',ids.indexOf(a),0],['p',a,0],['d',a,0]]);
+    assert.equal(value.chunks[0].activity.sessions[1][1],null);assert.equal(value.chunks[0].activity.sessions[2][1],'unprovided');
+  }
+  const restored=expandPeriod(wire,n=>{readerBytes+=n;},bases);
+  assert.deepEqual(restored,original);assert.ok(producerBytes>0&&readerBytes>0);
+  assert.deepEqual(reply,original,'serialization cannot change shared native cells');assert.equal(JSON.stringify(bases),savedBases);
+  assert.equal(expandPeriod(restored,()=>{throw new Error('already decoded');}),restored);
+  const denied=JSON.parse(json),unchanged=JSON.stringify(denied);
+  assert.throws(()=>expandPeriod(denied,()=>{throw new Error('denied');},bases),/denied/);
+  assert.equal(JSON.stringify(denied),unchanged,'allocation denial precedes replacement of the first source');
+  for(const mutate of [
+    (value:any)=>{value.sourceEncoding='other';},(value:any)=>{value.known=bases.quota!.known;},
+    (value:any)=>{value.run='other';},(value:any)=>{value.meta='other';},
+    ...[-1,.5,2,NaN,Infinity].map(index=>(value:any)=>{value.chunks[0].series[0].source=index;}),
+  ]){const invalid=JSON.parse(json);mutate(invalid.quota.value);assert.throws(()=>expandPeriod(invalid,()=>{},bases),/invalid_period_sources/);}
+  assert.throws(()=>expandPeriod(JSON.parse(json)),/invalid_period_sources/);
+});
 
 test('record array tails keep exact changed prefix fields without resending their monetary evidence',()=>{
   const semantics:MeterSemantics={limit:null,resetAt:null,minutes:null,scope:null,label:null,scale:6,

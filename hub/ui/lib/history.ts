@@ -954,7 +954,7 @@ export {historyPool} from './historyPool';
 function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
   const value=new HistoryStore({
     sharedTransport:true,
-    read: (_board, cell, from, to, signal, meters, meta, owner) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})},signal,owner).then(reply=>expandHistory(reply,meta)),
+    read: (_board, cell, from, to, signal, meters, meta, owner) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})},signal,owner,meta).then(reply=>expandHistory(reply,meta)),
     now: hubNow,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
