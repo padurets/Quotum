@@ -991,6 +991,8 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
     else if (event.type === 'board-close') {pan.cancel(); loader.close();}
     else if (event.type === 'hub') {
       const hub = event.event;
+      // Contacts update device rows without changing any history selection.
+      if(hub.type==='deviceContacts')return;
       if (hub.type === 'hello') loader.hello(hub.data.epoch);
       else if(hub.type==='snapshot'){
         const board=state.board,ids=board?.lineup??[];

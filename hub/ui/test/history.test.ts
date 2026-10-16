@@ -1656,6 +1656,54 @@ test('subscription funds read independently from wallet budgets and retire on fi
   }finally{stopB();stopF();b.store.close();f.store.close();setPrefs(before);}
 });
 
+test('device contacts retain all three history frames without rebuilding their selections',async t=>{
+  const before=prefs(),pool=new HistoryPool(),q=harness(undefined,undefined,'quota',pool),b=harness(undefined,undefined,'budget',pool),f=harness(undefined,undefined,'budget',pool),store=createStore(reduce,INITIAL);
+  const readers=[q,b,f],stops=[follow(q.store,store),follow(b.store,store),follow(f.store,store,'funds')];
+  setPrefs({money:DEFAULT_MONEY,funds:DEFAULT_MONEY});
+  const base={plan:'',resets:null,owners:[],windows:[],error:null,successAt:NOW,stale:false,staleAfterMs:10*M,measureIntervalMs:null};
+  const meter={kind:'balance' as const,amount:'10000000',at:NOW,staleAfterMs:10*M,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null};
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:EMPTY_VIEW,historyStart:0,sources:[
+    {...base,id:'subscription',provider:'codex',windows:[{id:'w',kind:'weekly',label:null,used:20,remaining:80,resetAt:null,minutes:10080}],budget:{enabled:true,since:1,anchor:1,revision:'on'},meters:[{...meter,id:'balance:credits',unit:'credits:codex'}]},
+    {...base,id:'wallet',provider:'openrouter',meters:[{...meter,id:'balance',unit:'USD'}]},
+    {...base,id:'zai:fixture',provider:'zai'},
+  ],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
+  const known={work:0,sources:{subscription:0,wallet:0,'zai:fixture':0}};
+  try {
+    store.dispatch({type:'board-open',id:'b'});store.dispatch({type:'hub',event:{type:'hello',data:{epoch:'run'}}});store.dispatch({type:'hub',event:{type:'snapshot',data:snapshot}});await flush();
+    // Answer the first two shared slots; the queued third reader then starts normally.
+    for(const [index,h] of readers.entries()){
+      assert.equal(h.reads.length,1);await h.reads[0].answer({meta:'warm-'+index,known});
+    }
+    assert.deepEqual(q.reads[0].meters?.ids,QUOTA_IDS.map(id=>['zai:fixture',id]));
+    assert.deepEqual(b.reads[0].meters?.ids,[['wallet','balance']]);
+    assert.deepEqual(f.reads[0].meters?.ids,[['subscription','balance:credits']]);
+    const shown=readers.map(h=>h.store.get()),plots=readers.map(h=>h.store.getPlot()),metadata=readers.map(h=>h.store.metadataToken('b'));
+    for(const [index,value] of shown.entries()){assert.ok(value.history);assert.equal(metadata[index],'warm-'+index);}
+    const board=store.get().board,preferences=prefs(),bytes=pool.estimatedBytes,counts=readers.map(h=>h.reads.length);
+    assert.equal(pool.activeFlights,0);
+    const calls=readers.map(h=>t.mock.method(h.store,'setMeters'));
+    let published=0;const subscriptions=readers.flatMap(h=>[h.store.subscribe(()=>published++),h.store.subscribePlot(()=>published++)]);
+    try {
+      for(let i=1;i<=8;i++)store.dispatch({type:'hub',event:{type:'deviceContacts',data:{devices:[{deviceId:'own-device',lastSeenAt:NOW+i*1000}]}}});
+      await flush();const contactCalls=calls.map(call=>call.mock.callCount());
+      assert.equal(store.get().deviceContacts!['own-device'],NOW+8000);assert.equal(store.get().board,board);assert.equal(prefs(),preferences);
+      for(const [index,h] of readers.entries()){
+        assert.equal(h.store.get(),shown[index]);assert.equal(h.store.getPlot(),plots[index]);assert.equal(h.store.metadataToken('b'),metadata[index]);
+      }
+      assert.deepEqual(readers.map(h=>h.reads.length),counts);assert.equal(pool.estimatedBytes,bytes);assert.equal(pool.activeFlights,0);assert.equal(published,0);
+      for(const [index,source,scope] of [[0,'zai:fixture','quota'],[1,'wallet','budget'],[2,'subscription','budget']] as const){
+        store.dispatch({type:'hub',event:{type:'history',data:{sources:[source],since:NOW,changes:[{source,scope,since:NOW}]}}});await flush();
+        counts[index]++;assert.deepEqual(readers.map(h=>h.reads.length),counts,'real history still reads only its admitted family');
+        await readers[index].reads.at(-1)!.answer({meta:'updated-'+index,known});
+      }
+      assert.ok(calls.every(call=>call.mock.callCount()>0),'non-contact events still compute each reader selection');
+      assert.equal(prefs(),preferences,'admission does not rewrite saved preferences');
+      store.dispatch({type:'board-close'});assert.ok(readers.every(h=>h.store.get().history===null));
+      assert.deepEqual(contactCalls,[0,0,0],'contacts must not rebuild quota, budget or funds selections');
+    }finally{for(const stop of subscriptions)stop();}
+  }finally{for(const stop of stops)stop();for(const h of readers)h.store.close();setPrefs(before);}
+});
+
 test('source-free cutoffs reread admitted activity on personal and shared boards without financial reads',async()=>{
   const q=harness(undefined,undefined,'quota'),b=harness(undefined,undefined,'budget'),page=createStore(reduce,INITIAL);
   const stopQ=follow(q.store,page),stopB=follow(b.store,page);
