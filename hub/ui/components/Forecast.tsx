@@ -1,6 +1,6 @@
 import {AnalyticsPanel, AnalyticsNote} from './AnalyticsPanel';
 import {AnalyticsTable, TableSettings, type AnalyticsRow, type AnalyticsColumn, type Cell, type TimedCell} from './AnalyticsTable';
-import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type RefObject} from 'react';
+import {memo, useCallback, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type RefObject} from 'react';
 import {num, rateText} from '../lib/format';
 import {level} from '../lib/quota';
 import {
@@ -87,7 +87,6 @@ const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,ran
   },[watch]);
   const subscribe=useCallback((listener:()=>void)=>clock.subscribe(watch,listener),[watch]);
   const ordered=useSyncExternalStore(subscribe,evaluate,evaluate);
-  useLayoutEffect(()=>{evaluate();});
   const onSort=useCallback((column:SortColumn|null,cycle?:boolean)=>setPrefs({[sortKey]:nextForecastSort(active,column,cycle)}),[active,sortKey]);
   const sorting={active,onSort,headers:[{id:'name' as const,title:t('table.limit')},...columns],label:t('table.sort'),defaultLabel:t('table.defaultOrder')};
   const widget=useTableWidget(panel,columns.map(column=>column.width),FORECAST_WIDTHS.limit,ordered.map(row=>row.key),JSON.stringify([rangeKey,active]));
