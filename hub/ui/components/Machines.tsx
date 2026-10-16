@@ -12,7 +12,7 @@ import {ConnectionRow} from './Connections';
 import {clientName} from '../../server/domain/clients';
 import type {LiveSession} from '../lib/types';
 import {useConnectionsRevision, useDevicesRevision} from '../lib/board';
-import {openClientLinks} from './ClientLinks';
+import {openClientLinks, SessionFunding, type LinkEvidence, type LinkInventory} from './ClientLinks';
 
 export type Device = {
   id: string;
@@ -26,7 +26,7 @@ export type Device = {
   lastSeenAt: number | null;
   sources: {provider: string; source: string; seenAt: number}[];
   clients?: {clientId: string; version: string | null; seenAt: number}[];
-  sessions?: (LiveSession & {source: string | null})[];
+  sessions?: (LiveSession & {source: string | null; attribution?: LinkEvidence})[];
   failures: {provider: string; error: string; detail: string | null; at: number}[];
 };
 type Token = {id: string; name: string; hint: string; createdAt: number; lastUsedAt: number | null};
@@ -58,14 +58,15 @@ export function Devices({local}: {local: boolean}) {
   const [detailsId, setDetails] = useState<string | null>(null);
   const revision = useConnectionsRevision();
   const presence = useDevicesRevision();
-  const request = useRef(0);
+  const request = useRef(0), requestedDetails = useRef<string | null>(null);
+  requestedDetails.current = detailsId;
   const [devices, setDevices] = useState<Device[] | null>(null);
   const details = devices?.find(device=>device.id===detailsId) ?? null;
   const [renaming,setRenaming]=useState<Device|null>(null),[name,setName]=useState('');
   const [error, setError] = useState<unknown>(null);
   const load = useCallback(() => {
-    const current = ++request.current;
-    call<Device[]>('GET', '/api/devices').then(value => {
+    const current = ++request.current, detail = requestedDetails.current;
+    call<Device[]>('GET', '/api/devices' + (detail === null ? '' : '?details=' + encodeURIComponent(detail))).then(value => {
       if (current !== request.current) return;
       setDevices(value); setError(null);
     }, failure => {if (current === request.current) setError(failure);});
@@ -73,6 +74,15 @@ export function Devices({local}: {local: boolean}) {
   useEffect(load, [load, revision]);
   useEffect(() => {if (detailsId !== null) load();}, [load, detailsId, presence]);
   useEffect(() => () => {++request.current;}, []);
+
+  const [funding, setFunding] = useState<LinkInventory | null>(null), [fundingError, setFundingError] = useState<unknown>(null);
+  useEffect(() => {
+    setFunding(null); setFundingError(null);
+    if (detailsId === null) return;
+    let current = true;
+    call<LinkInventory>('GET', '/api/links').then(inventory => {if (current) setFunding(inventory);}, failure => {if (current) setFundingError(failure);});
+    return () => {current = false;};
+  }, [detailsId, revision]);
 
   const revoke = async (device: Device) => {
     if (!confirm(t('devices.confirmRevoke', {name: device.name}))) return;
@@ -103,7 +113,7 @@ export function Devices({local}: {local: boolean}) {
         {(details.clients ?? []).map(client=><li className="settings-list-row popover-row" key={client.clientId}><span className="settings-item-main"><b>{clientName(client.clientId)}</b></span><span className="settings-item-detail">{client.version ?? t('devices.versionUnknown')}</span><button className="button" onClick={()=>openClientLinks({deviceId:details.id,clientId:client.clientId})}>{t('links.manage')}</button></li>)}
       </ul></div>
       <div className="settings-section"><h3>{t('agents.title')}</h3><ul className="settings-list">
-        {(details.sessions ?? []).map((session,i)=><li className="settings-list-row popover-row" key={i}><span className="settings-item-main"><b>{clientName(session.clientId ?? 'unknown')}</b><small>{session.project ?? t('agents.noProject')}</small></span><span className="settings-item-detail">{session.source ? PROVIDERS[session.source.split(':')[0]]?.name ?? session.source : t('agents.unknownSource')}</span><button className="button" onClick={()=>openClientLinks({deviceId:details.id,clientId:session.clientId,route:session.route})}>{t('links.manage')}</button></li>)}
+        {(details.sessions ?? []).map((session,i)=><li className="settings-list-row popover-row" key={JSON.stringify([session.clientId,session.startedAt,session.project,session.route,i])}><span className="settings-item-main"><b>{clientName(session.clientId ?? 'unknown')}</b><small>{session.project ?? t('agents.noProject')}</small></span><span className="settings-item-detail"><SessionFunding session={session} inventory={funding} evidence={session.attribution} error={fundingError}/></span></li>)}
       </ul></div>
     </Modal>}
     {renaming&&<Modal title={t('devices.rename',{name:renaming.name})} onClose={()=>setRenaming(null)}>

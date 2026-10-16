@@ -680,10 +680,13 @@ a disconnected winning source keeps the work unassigned. Correcting a rule chang
 retained work is displayed without rewriting the machine's original observations.
 One editor handles both new links and changes. Active links default to applying
 changes from saving time, preserving earlier assignments; the period control also
-allows a specific date or correction of the entire period. Past links stay in a disclosure,
-and disconnected targets keep their name. Suggestions show
-their exact dates and require your acceptance; API work is never assigned from a host
-alone. Detailed route evidence and disagreements remain private.
+allows a specific date or correction of the entire period. Current and scheduled
+links share one list, with completed periods under History. Disconnected targets
+keep their name. The editor suggests sources after choosing a client and device;
+selecting a recommendation fills its condition and period for review before saving.
+In a device’s current sessions, select the source to see why it was chosen.
+API work is never assigned from a host alone. Detailed route evidence and
+account differences remain private.
 
 The budget table can show source spending per active hour and remaining active hours
 when a source reports a spending counter and at least 30 minutes of eligible work.

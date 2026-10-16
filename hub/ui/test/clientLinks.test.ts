@@ -12,30 +12,31 @@ const nodes = (value: unknown): Node[] => Array.isArray(value) ? value.flatMap(n
 const flush = async () => {for (let i = 0; i < 10; i++) await Promise.resolve();};
 const link: ClientLink = {id: 'rule', clientId: 'opencode', deviceId: 'laptop', sourceId: 'openrouter:one', route: {class: 'api', provider: 'openrouter'}, from: 1_791_675_600_123, to: 1_791_679_200_456, createdAt: 1};
 
-function fixture(operation: 'create' | 'edit' | 'delete', input: LinkInput & {id?: string} = link) {
+function fixture(operation: 'create' | 'edit' | 'delete', input: LinkInput & {id?: string} = link, suggestions: LinkInput[] = []) {
   const hooks = preparationFixture(), select = {}, field = {}, modal = {}, errorLine = {};
   const reads: {method: string; url: string; body: Record<string, unknown>; resolve: (value: unknown) => void; reject: (error: Error) => void}[] = [];
   const paths: string[] = []; let request = 0, saved = 0;
   const inventory = {revision: '1', links: [], clients: ['codex', 'opencode'], devices: [{id: 'laptop', name: 'Laptop'}], sources: [{id: 'openrouter:one', provider: 'openrouter', name: 'Wallet'}, {id: 'codex:one', provider: 'codex', name: 'Subscription'}]};
-  const context = {exports: {} as {LinkForm: (props: unknown) => Node; contextualLink: (inventory: unknown, device: string | null, client: string, route: LinkInput['route']) => ClientLink | undefined; openClientLinks: (context?: {deviceId: string; clientId?: string; route?: LinkInput['route']}, sourceId?: string) => void}, URL, location: {origin: 'https://hub.invalid'}, Date, crypto: {randomUUID: () => 'request-' + ++request}, require: (name: string) => {
-    if (name === 'react') return {useState: hooks.useState, useRef: hooks.useRef};
+  const context = {exports: {} as {LinkForm: (props: unknown) => Node; contextualLink: (inventory: unknown, device: string | null, client: string, route: LinkInput['route']) => ClientLink | undefined; SessionFunding: (props: unknown) => Node; openClientLinks: (context?: {deviceId: string; clientId?: string; route?: LinkInput['route']}, sourceId?: string) => void}, URL, location: {origin: 'https://hub.invalid'}, Date, crypto: {randomUUID: () => 'request-' + ++request}, require: (name: string) => {
+    if (name === 'react') return {useState: hooks.useState, useRef: hooks.useRef, useEffect: hooks.useLayoutEffect};
     if (name === 'react/jsx-runtime') return {jsx: (type: unknown, props: Node['props']) => ({type, props}), jsxs: (type: unknown, props: Node['props']) => ({type, props}), Fragment: 'fragment'};
     if (name.endsWith('/clients')) return {clientName: (id: string) => id};
     if (name.endsWith('/links')) return {resolveLink};
     if (name.endsWith('/providers')) return {catalogue: [{id: 'openrouter', name: 'OpenRouter'}]};
     if (name.endsWith('/i18n')) return {t: (key: string) => key};
-    if (name.endsWith('/http')) return {ApiError, call: (method: string, url: string, body: Record<string, unknown>) => new Promise((resolve, reject) => reads.push({method, url, body, resolve, reject}))};
+    if (name.endsWith('/board')) return {useDevicesRevision: () => 0};
+    if (name.endsWith('/http')) return {ApiError, call: (method: string, url: string, body: Record<string, unknown>) => method === 'GET' ? Promise.resolve({suggestions}) : new Promise((resolve, reject) => reads.push({method, url, body, resolve, reject}))};
     if (name.endsWith('/format')) return {stamp: (at: number) => String(at)};
     if (name.endsWith('/router')) return {settingsHref: (path: string) => path + '?board=personal&from=10&to=20', navigate: (path: string) => paths.push(path)};
     if (name === './Kit') return {SelectField: select, Field: field, Modal: modal, ErrorLine: errorLine};
     return {};
   }};
-  const source = readFileSync(new URL('../components/ClientLinks.tsx', import.meta.url), 'utf8') + '\nexports.LinkForm = LinkForm;exports.contextualLink=contextualLink;';
+  const source = readFileSync(new URL('../components/ClientLinks.tsx', import.meta.url), 'utf8') + '\nexports.LinkForm = LinkForm;exports.contextualLink=contextualLink;exports.SessionFunding=SessionFunding;';
   runInNewContext(ts.transpileModule(source, {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX}}).outputText, context);
   const render = () => {hooks.begin(); const tree = context.exports.LinkForm({edit: {operation, link: input, revision: '1'}, inventory, onClose: () => {}, onSaved: async () => {saved++;}, reload: async () => ({...inventory, revision: '4'})}); hooks.commit(); return nodes(tree);};
   const choose = (label: string, value: string) => {const control = render().find(node => (node.type === select || node.type === field) && node.props.label === label)!; assert.ok(control, label); (control.props.onChange as (event: unknown) => void)({target: {value}});};
   const submit = () => {const form = render().find(node => node.type === 'form')!; (form.props.onSubmit as (event: unknown) => void)({preventDefault() {}});};
-  return {render, choose, submit, reads, paths, open: context.exports.openClientLinks, contextual: context.exports.contextualLink, inventory, saved: () => saved, errors: () => render().filter(node => node.type === errorLine && node.props.error)};
+  return {funding: (props: unknown) => {hooks.begin(); return nodes(context.exports.SessionFunding(props));}, render, choose, submit, reads, paths, open: context.exports.openClientLinks, contextual: context.exports.contextualLink, inventory, saved: () => saved, errors: () => render().filter(node => node.type === errorLine && node.props.error)};
 }
 
 test('device and source entry points open the visible section without writing and preserve the board range', () => {
@@ -135,4 +136,35 @@ test('device and session context selects its existing winning link, including di
   assert.equal(f.contextual(inventory,'another-device','opencode',link.route)?.id,'generic');
   assert.equal(f.contextual(inventory,'laptop','codex',null),undefined);
   assert.equal(f.contextual(inventory,null,'opencode',link.route),undefined,'a source-only entry still starts a deliberate new link');
+});
+
+
+test('choosing a recommended source fills its exact device, route and free period without writing before Save', async () => {
+  const candidate = {...link, id: undefined, createdAt: undefined};
+  const f = fixture('create', {...link, id: undefined, clientId: '', sourceId: '', deviceId: null, route: null, to: null}, [candidate]);
+  f.render(); await flush(); f.choose('links.client', 'opencode'); f.choose('links.deviceScope', 'laptop');
+  assert.ok(f.render().some(node => node.props.hint === 'links.recommendation'));
+  f.choose('links.source', 'openrouter:one'); assert.equal(f.reads.length, 0);
+  const date = f.render().find(node => node.props.label === 'links.date'); assert.ok(date, 'the suggested start is visible without expanding anything');
+  f.submit(); assert.equal(f.reads.length, 1);
+  const body = JSON.parse(JSON.stringify(f.reads[0].body));
+  assert.equal(body.deviceId, 'laptop'); assert.deepEqual(body.route, link.route);
+  assert.equal(body.from, link.from); assert.equal(body.to, link.to);
+  assert.equal(body.suggestion, undefined, 'reviewed form values are an explicit manual command');
+});
+
+test('an ambiguous recommendation or another device leaves the manual source and period choices intact', async () => {
+  const f = fixture('create', {...link, id: undefined, sourceId: '', deviceId: null, route: null, to: null}, [link, {...link, sourceId: 'codex:one'}]);
+  f.render(); await flush(); assert.ok(!f.render().some(node => node.props.hint));
+  f.choose('links.deviceScope', 'laptop'); assert.ok(!f.render().some(node => node.props.hint));
+  f.choose('links.source', 'openrouter:one'); f.submit();
+  assert.equal(f.reads[0].body.route, null); assert.equal(f.reads[0].body.to, null);
+});
+
+test('a disconnected winning link is explained with its saved name instead of suggesting account fallback', () => {
+  const f = fixture('edit');
+  const tree = f.funding({session: {source: null, device: {id: 'laptop'}}, evidence: {source: null, by: 'link', active: false, linkId: 'rule', accountSourceId: 'codex:one', disagreement: 'account'}, inventory: {...f.inventory, links: [{...link, active: false}], sources: [f.inventory.sources[1]], targets: [f.inventory.sources[0]]}, error: null});
+  assert.ok(tree.some(node => node.props.children === 'links.inactiveExplanation'));
+  assert.ok(tree.some(node => node.type === 'dd' && Array.isArray(node.props.children) && node.props.children[0] === 'Wallet'));
+  assert.ok(!tree.some(node => node.props.children === 'links.disagreement'), 'a disconnected target has one actionable explanation');
 });

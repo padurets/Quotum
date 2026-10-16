@@ -51,6 +51,18 @@ for (const local of [false, true]) test(`link API enforces owner scope, origin, 
     const route = {class: 'api' as const, provider: 'openrouter', by: 'session' as const, host: 'openrouter.ai'};
     const session = {clientId: 'codex', source: null, sessionId: 'a'.repeat(32), origin: 'terminal' as const, project: 'Project', folder: null, startedAt: now - 20 * 60_000, sentStartedAt: now - 20 * 60_000, lastWorkedAt: null, working: true, route, device: {id: device, name: 'Laptop'}};
     ingest.live.report(device, owner.id, [session], now);
+    store.nameProjects(owner.id, ['Project'], 'Renamed project');
+    const twin = {...session, source, sessionId: 'c'.repeat(32), folder: '/another/worktree'};
+    ingest.live.report(device, owner.id, [session, twin], now);
+    const plainDevices = (await request('GET', '/api/devices')).json();
+    assert.ok(plainDevices.every((item: {sessions: {attribution?: unknown}[]}) => item.sessions.every(row => row.attribution === undefined)), 'closed device lists carry no private explanation');
+    const deviceDetails = (await request('GET', '/api/devices?details=' + device)).json().find((item: {id: string}) => item.id === device);
+    assert.equal(deviceDetails.sessions[0].project, 'Renamed project');
+    assert.equal(deviceDetails.sessions[0].attribution.accountSourceId, null);
+    assert.equal(deviceDetails.sessions[1].attribution.accountSourceId, source, 'identical client/start/project routes retain their own explanation');
+    assert.equal(deviceDetails.sessions[1].attribution.host, 'openrouter.ai');
+    assert.ok((await request('GET', '/api/devices?details=foreign')).json().every((item: {sessions: {attribution?: unknown}[]}) => item.sessions.every(row => row.attribution === undefined)));
+    ingest.live.report(device, owner.id, [session], now);
     const future = {...body, deviceId: device, clientId: 'codex', route: {class: 'api', provider: 'openrouter'}, from: now + 10 * 60_000, expectedRevision: '2', requestId: randomUUID()};
     assert.equal((await request('POST', '/api/links', future)).statusCode, 201);
     const past = {...future, from: now - 10 * 60_000, to: now - 2 * 60_000, expectedRevision: '3', requestId: randomUUID()};
@@ -70,6 +82,8 @@ for (const local of [false, true]) test(`link API enforces owner scope, origin, 
     assert.deepEqual((await request('POST', '/api/links', suggestionBody)).json(), accepted.json());
     const attribution = (await request('GET', '/api/links/attribution')).json().sessions[0];
     assert.equal(attribution.route, null); assert.equal(attribution.host, undefined);
+    const suppressed=(await request('GET','/api/devices?details='+device)).json().find((item:{id:string})=>item.id===device).sessions[0].attribution;
+    assert.equal(suppressed.route,null);assert.equal(suppressed.host,undefined);
     if (!local) assert.deepEqual((await request('GET', '/api/links/attribution', undefined, other.id)).json().sessions, []);
     const board=directory.boards(owner.id).find(board=>board.personal)!.id,cell=60_000,from=Math.floor(now/cell)*cell,to=from+cell;
     const budget={scope:'budget',cell,from,to,unit:'USD',meters:[[source,'balance']],work:1};

@@ -391,6 +391,9 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
     if (!user) return reply;
     const delivered = store.deviceSources(user.id);
     const failures = store.deviceFailures(user.id);
+    const details = (request.query as {details?: unknown}).details, now = Date.now();
+    // Both arrays follow the same synchronous report order; display names are not identity.
+    const evidence = typeof details === 'string' ? hub.ingest.live.attributions(user.id, now).filter(session => session.deviceId === details) : [];
     return directory.devices(user.id).map(device => ({
       id: device.id,
       name: device.label ?? device.name,
@@ -401,7 +404,7 @@ export function accountRoutes(app: FastifyInstance, hub: Hub, guards: Guards) {
       via: device.byCode ? 'code' : 'token',
       lastSeenAt: device.lastSeenAt,
       clients: directory.deviceClients(device.id),
-      sessions: hub.ingest.live.deviceSessions(user.id, device.id, Date.now()),
+      sessions: hub.ingest.live.deviceSessions(user.id, device.id, now).map((session, index) => device.id === details ? {...session, attribution: evidence[index]} : session),
       sources: delivered.filter(d => d.device === device.id).map(({provider, source, seenAt}) => ({provider, source, seenAt})),
       failures: failures.filter(f => f.device === device.id).map(({provider, error, detail, at}) => ({provider, error, detail, at})),
     }));

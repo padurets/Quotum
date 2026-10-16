@@ -1194,8 +1194,19 @@ and its limits.
   Disconnected targets retain their owner-visible identity and the shared
   disconnected label, but cannot be selected for new work. Their owner-only
   management metadata includes no measurements or other people's private labels.
-  Current and scheduled links are listed separately; past periods stay in the
-  standard disclosure rather than growing the current list after every change.
+  Current and scheduled links share one list; the History switch shows completed
+  periods in that same list. The editor keeps client, device, source and effective
+  date visible. Only the optional end and route conditions use a disclosure.
+  Source recommendations appear inside the editor after choosing a client and
+  device. Selecting one fills its condition and exact free period; the person
+  reviews these values before an ordinary manual Save. Opening the editor or
+  choosing a recommendation records nothing. Session source explanations live
+  beside the session in its device dialog, including the saved name of a
+  disconnected winning source. Their private evidence loads only while the device
+  dialog is open, follows owner presence changes and never enters board events.
+  The owner device request adds `details=<device>` to include each session’s
+  attribution in the same synchronous response. Project aliases and otherwise
+  identical session metadata cannot attach another row’s explanation.
   *Agent activity → Settings → Manage projects* lists the projects their agents worked
   on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are

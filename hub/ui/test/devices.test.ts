@@ -16,6 +16,8 @@ const device:Device={id:'d',name:'Laptop',reported:'Laptop',os:'linux',arch:'x86
 const session={clientId:'opencode',device:{id:'d',name:'Laptop'},source:null,origin:'terminal' as const,project:'Current project',folder:null,startedAt:1,lastWorkedAt:null,working:false,workedMs:0};
 
 function fixture(){
+  const urls: string[]=[];
+  const fundingNode={}, fundingReads: {url:string;resolve:(value:unknown)=>void}[]=[];
   const hooks=preparationFixture(),row={},modal={},errorLine={},reads:{resolve:(value:Device[])=>void;reject:(error:Error)=>void}[]=[];
   let state:PageState=reduce(INITIAL,{type:'hub',event:{type:'snapshot',data:snapshot}});
   const memo=(fn:unknown,deps:unknown[])=>{
@@ -27,7 +29,7 @@ function fixture(){
     if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect:hooks.useLayoutEffect,useCallback:memo};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'])=>({type,props}),jsxs:(type:unknown,props:Node['props'])=>({type,props}),Fragment:'fragment'};
     if(name.endsWith('/board'))return {useConnectionsRevision:()=>state.board?.connectionsRevision??0,useDevicesRevision:()=>state.devicesRevision??0};
-    if(name.endsWith('/http'))return {call:(method:string,url:string)=>{assert.equal(method,'GET');assert.equal(url,'/api/devices');return new Promise<Device[]>((resolve,reject)=>reads.push({resolve,reject}));}};
+    if(name.endsWith('/http'))return {call:(method:string,url:string)=>{assert.equal(method,'GET');urls.push(url);if(url==='/api/links')return new Promise(resolve=>fundingReads.push({url,resolve}));assert.ok(url.startsWith('/api/devices'));return new Promise<Device[]>((resolve,reject)=>reads.push({resolve,reject}));}};
     if(name.endsWith('/providers'))return {PROVIDERS:{}};
     if(name.endsWith('/format'))return {stamp:()=>''};
     if(name.endsWith('/quota'))return {errorText:()=>''};
@@ -36,7 +38,7 @@ function fixture(){
     if(name.endsWith('/view'))return view;
     if(name==='./Kit')return {Modal:modal,ErrorLine:errorLine};
     if(name==='./Connections')return {ConnectionRow:row};
-    if(name==='./ClientLinks')return {openClientLinks:()=>{}};
+    if(name==='./ClientLinks')return {openClientLinks:()=>{},SessionFunding:fundingNode};
     if(name==='./Time')return {Ago:{}};
     if(name==='./logos')return {logoOf:()=>''};
     throw new Error(name);
@@ -48,7 +50,7 @@ function fixture(){
   const hint=()=>{state=reduce(state,{type:'hub',event:{type:'devices',data:{}}});render();};
   const reconnect=()=>{state=reduce(state,{type:'hub',event:{type:'snapshot',data:snapshot}});render();};
   const projects=()=>render().filter(node=>node.type==='small').map(node=>node.props.children);
-  return {render,reads,open,close,hint,reconnect,projects,errorLine};
+  return {render,reads,open,close,hint,reconnect,projects,errorLine,fundingReads,fundingNode,urls};
 }
 
 test('device disclosure refreshes on opening, presence and reconnect, but closed presence hints make no reads',async()=>{
@@ -71,4 +73,17 @@ test('an obsolete device reply or error cannot restore a closed session after ne
   f.reads[1].resolve([{...device,sessions:[session]}]);await flush();assert.deepEqual(f.projects(),[]);
   f.hint();f.hint();f.reads[4].resolve([device]);await flush();f.reads[3].reject(new Error('obsolete failure'));await flush();
   assert.ok(!f.render().some(node=>node.type===f.errorLine));
+});
+
+
+test('private source names load only inside an open device and an obsolete reply cannot replace newer names', async () => {
+  const f=fixture(); f.render(); f.reads[0].resolve([{...device,sessions:[session]}]); await flush();
+  f.hint(); assert.equal(f.fundingReads.length,0);
+  f.open(); assert.ok(f.urls.includes('/api/devices?details=d')); assert.equal(f.fundingReads.length,1); f.close(); f.open(); assert.equal(f.fundingReads.length,2);
+  const inventory={links:[],sources:[],revision:'fresh'};
+  f.fundingReads[1].resolve(inventory); await flush();
+  assert.equal(f.render().find(node=>node.type===f.fundingNode)?.props.inventory,inventory);
+  f.fundingReads[0].resolve({links:[],sources:[],revision:'obsolete'});await flush();
+  assert.equal(f.render().find(node=>node.type===f.fundingNode)?.props.inventory,inventory);
+  f.close();f.hint();assert.equal(f.fundingReads.length,2);
 });
