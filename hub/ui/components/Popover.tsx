@@ -70,13 +70,22 @@ export function Popover({
     let upwards: boolean | null = null;
     // The bars are found again as the page is laid out, not at every scroll.
     let bars = barsOf();
+    const dialog = trigger.closest<HTMLElement>('.dialog');
+    // A dialog clips its children: fitting the window can still make the dialog scroll.
+    const bounds = () => {
+      if (!dialog) return {top: 0, bottom: innerHeight, left: 0, right: document.documentElement.clientWidth};
+      const rect = dialog.getBoundingClientRect();
+      const top = rect.top + dialog.clientTop, left = rect.left + dialog.clientLeft;
+      return {top: Math.max(0, top), bottom: Math.min(innerHeight, top + dialog.clientHeight), left: Math.max(0, left), right: Math.min(document.documentElement.clientWidth, left + dialog.clientWidth)};
+    };
     // The panel's size as it was placed, or none while hidden: its observer telling of that is no
     // news, as a panel cut anew as its button moves would be cut again and again, and a hidden one
     // placed again at each scroll; only its content changing it is.
     let size = {width: 0, height: 0};
     const seen = () => {
       const at = picker.getBoundingClientRect();
-      return at.bottom > coverOf(at.bottom, trigger, bars) && at.top < innerHeight;
+      const room = bounds();
+      return at.bottom > Math.max(room.top, coverOf(at.bottom, trigger, bars)) && at.top < room.bottom;
     };
     // Focus in the panel goes back to the button, as on Escape, without scrolling the page to it.
     const unfocus = () => {
@@ -88,6 +97,8 @@ export function Popover({
     };
     const place = () => {
       element.style.display = '';
+      const room = bounds();
+      if (dialog) element.style.setProperty('--popover-room', `${Math.max(0, room.right - room.left - 16)}px`);
       const list = element.querySelector<HTMLElement>('.popover-scroll');
       // Measuring takes the cut off, and what scrolls may change: its reader keeps their place in
       // the list where there is one (at its top, the panel's top, the title in sight), or its end.
@@ -102,7 +113,7 @@ export function Popover({
       element.classList.add('is-up');
       const rect = element.getBoundingClientRect();
       const at = picker.getBoundingClientRect();
-      const {above, below} = roomOf(at, at.top - rect.bottom, coverOf(at.bottom, trigger, bars), innerHeight);
+      const {above, below} = roomOf(at, at.top - rect.bottom, Math.max(room.top, coverOf(at.bottom, trigger, bars)), room.bottom);
       const {up: next, cap} = sideOf(rect.height, above, below, upwards ?? up, upwards !== null);
       const least = list ? parseFloat(getComputedStyle(list).getPropertyValue('--least')) || 0 : 0;
       const cramped = !!list && crampedOf(cap, rect.height - list.getBoundingClientRect().height, least);
@@ -118,7 +129,7 @@ export function Popover({
       // or of its dialog, either without its own scrollbar.
       const placed = element.getBoundingClientRect();
       size = {width: placed.width, height: placed.height};
-      const shift = shiftOf(placed.left, placed.right, (trigger.closest<HTMLElement>('.overlay') ?? document.documentElement).clientWidth);
+      const shift = shiftOf(placed.left - room.left, placed.right - room.left, room.right - room.left);
       if (shift) element.style.translate = `${shift}px 0`;
       setSide(same => (same?.up === next && same.cap === cap && same.cramped === cramped ? same : {up: next, cap, cramped}));
     };
@@ -135,7 +146,7 @@ export function Popover({
     // the page; and again if other bars stick at the top once the page has moved.
     if (!seen()) {
       element.style.display = 'none';
-      const block = picker.getBoundingClientRect().top >= innerHeight ? 'end' : 'start';
+      const block = picker.getBoundingClientRect().top >= bounds().bottom ? 'end' : 'start';
       let margin = NaN;
       for (let pass = 0; pass < 3; pass++) {
         const next = coverOf(Infinity, trigger, bars) + 8;
@@ -216,6 +227,7 @@ export function Popover({
     // with its own widget held, which it goes along with.
     const scrolled = (event: Event) => {
       if (event.target instanceof Node && element.contains(event.target)) return;
+      if (dialog && event.target === dialog) return seen() ? place() : close();
       const holds = held();
       if (seen()) {
         if (holds && !size.height && !trigger.closest(holding)) place();
@@ -284,9 +296,10 @@ export function Popover({
       {open && (
         <div
           className={`popover glass ${align === 'left' ? 'is-left' : ''} ${(side?.up ?? up) ? 'is-up' : ''} ${side?.cap != null ? 'is-capped' : ''} ${side?.cramped ? 'is-cramped' : ''}`}
-          style={width !== undefined || side?.cap != null ? {...(width !== undefined ? {width, maxWidth: 'calc(100vw - 32px)'} : {}), ...(side?.cap != null ? {maxHeight: side.cap} : {})} : undefined}
+          style={width !== undefined || side?.cap != null ? {...(width !== undefined ? {width, maxWidth: 'min(calc(100vw - 32px), var(--popover-room, 100vw))'} : {}), ...(side?.cap != null ? {maxHeight: side.cap} : {})} : undefined}
           role="dialog"
           aria-label={label}
+          tabIndex={side?.cap != null ? 0 : undefined}
           ref={panelRef}
         >
           {children}

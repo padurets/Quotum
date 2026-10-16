@@ -4,8 +4,6 @@ import type {Catalog} from './index';
 export const ru = {
   'connections.accounts': 'Аккаунты',
   'connections.tokens': 'Токены',
-  'connections.configure': 'Настроить',
-  'connections.configureNamed': 'Настроить {name}',
   'connections.devicesHelp': 'Выберите машину, чтобы посмотреть её состояние и настроить измерения.',
   'connections.deviceSections': 'Настройки устройства',
   'connections.diagnostics': 'Диагностика',

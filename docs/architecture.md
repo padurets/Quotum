@@ -1175,11 +1175,12 @@ and its limits.
   link unless the hub is open (`QUOTUM_SIGNUP=open`).
 - **Devices** are running agents, and each belongs to a person. *My connections* has
   separate Accounts, Devices and Tokens segments. Devices shows aligned overviews of
-  the person's machines and measured subscriptions. Configure opens one object in the
-  shared dialog: a machine's measurement participation or diagnostics (Quotum and client
+  the person's machines and measured subscriptions. Selecting a row opens its object
+  in the shared dialog: a machine's measurement participation or diagnostics (Quotum and client
   versions, observations, failures and sessions), or a subscription's preferred machine
-  and retained resource origins. Resource details use the shared popover; expanding
-  diagnostics never lengthens a machine row or the page. A widget's contextual link
+  and retained resource origins. Resource details use the shared popover, fitted to
+  the dialog's scrollport without enlarging it. Expanding diagnostics never lengthens
+  a machine row or the page. A widget's contextual link
   opens its subscription dialog directly. Unsaved measurement drafts ask before leaving,
   and a save stays locked through its authoritative read. Connect a device opens the
   one-time command separately; token creation and revocation belong to Tokens. The

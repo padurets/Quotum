@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState, type FormEvent} from 'react';
+import {useEffect, useLayoutEffect, useRef, useState, type FormEvent} from 'react';
 import type {MeasurementPolicy, Participation} from '../../server/domain/measurementPolicy';
 import type {Ingest} from '../../server/ingest';
 import {agentVersion, compareVersions} from '../../server/domain/versions';
@@ -19,8 +19,9 @@ export type MeasurementFormState={dirty:boolean;busy:boolean};
 type FormStateChanged=(state:MeasurementFormState)=>void;
 
 function useFormState(dirty:boolean,busy:boolean,onChange?:FormStateChanged) {
-  useEffect(()=>{onChange?.({dirty,busy});},[dirty,busy,onChange]);
-  useEffect(()=>()=>onChange?.({dirty:false,busy:false}),[onChange]);
+  // Escape and navigation can follow the edit before passive effects have run.
+  useLayoutEffect(()=>{onChange?.({dirty,busy});},[dirty,busy,onChange]);
+  useLayoutEffect(()=>()=>onChange?.({dirty:false,busy:false}),[onChange]);
 }
 
 function OriginDetails({origin}:{origin:ResourceOrigin['valueOrigin']}) {

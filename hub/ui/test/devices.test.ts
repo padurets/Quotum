@@ -17,6 +17,13 @@ const session={clientId:'opencode',device:{id:'d',name:'Laptop'},source:null,ori
 
 function fixture(focused:string|null=null){
   const hooks=preparationFixture(),row={},modal={},errorLine={},participation={},preference={},reads:{resolve:(value:Device[])=>void;reject:(error:Error)=>void}[]=[];
+  const passive:(()=>void)[]=[],busy:boolean[]=[],events=new EventTarget();
+  const onBusyChange=(value:boolean)=>{busy.push(value);};
+  const useEffect=(effect:()=>void|(()=>void),deps:unknown[])=>hooks.useLayoutEffect(()=>{
+    let active=true,cleanup:(()=>void)|undefined;
+    passive.push(()=>{if(active){const stop=effect();if(typeof stop==='function')cleanup=stop;}});
+    return()=>{active=false;cleanup?.();};
+  },deps);
   const sources=focused?[focused,'codex:bbbbbbbbbbbb'].map(source=>({source,provider:'codex',preference:{kind:'auto',device:null,revision:0},candidates:[],origins:[],duty:'none',pending:false})):[];
   let guarded:(go:()=>void)=>void=go=>go();
   let focuses=0;
@@ -27,8 +34,8 @@ function fixture(focused:string|null=null){
     if(!slot.current||deps.some((value,i)=>!Object.is(value,slot.current!.deps[i])))slot.current={fn,deps};
     return slot.current.fn;
   };
-  const context={URLSearchParams,window:new EventTarget(),exports:{} as {Devices:(props:{local:boolean})=>unknown},require:(name:string)=>{
-    if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect:hooks.useLayoutEffect,useCallback:memo,useId:()=> 'device-tabs'};
+  const context={URLSearchParams,window:events,exports:{} as {Devices:(props:{local:boolean;onBusyChange?:(busy:boolean)=>void})=>unknown},require:(name:string)=>{
+    if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect,useLayoutEffect:hooks.useLayoutEffect,useCallback:memo,useId:()=> 'device-tabs'};
     if(name==='react/jsx-runtime')return {jsx,jsxs:jsx,Fragment:'fragment'};
     if(name.endsWith('/router'))return {useLocation:()=>'/settings/connections'+(focused?'?source='+focused:''),guardNavigation:(leave:typeof guarded)=>{guarded=leave;return ()=>{};}};
     if(name==='./MeasurementDevices')return {ParticipationSettings:participation,PreferenceSettings:preference,versionSummary:()=> 'Agent 0.7.0'};
@@ -47,7 +54,7 @@ function fixture(focused:string|null=null){
     throw new Error(name);
   }};
   runInNewContext(ts.transpileModule(readFileSync(new URL('../components/Machines.tsx',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
-  const render=()=>{hooks.begin();const tree=nodes(context.exports.Devices({local:false}));hooks.commit();return tree;};
+  const render=(effects=true)=>{hooks.begin();const tree=nodes(context.exports.Devices({local:false,onBusyChange}));hooks.commit();if(effects)passive.splice(0).forEach(run=>run());return tree;};
   const open=()=>{const connection=render().find(node=>node.type===row)!;(connection.props.onOpen as ()=>void)();render();};
   const close=()=>{(render().find(node=>node.type===modal)!.props.onClose as ()=>void)();render();};
   const hint=()=>{state=reduce(state,{type:'hub',event:{type:'devices',data:{}}});render();};
@@ -56,8 +63,9 @@ function fixture(focused:string|null=null){
   const projects=()=>{const section=render().find(node=>node.type==='div'&&nodes(node.props.children).some(child=>child.type==='h3'&&child.props.children==='agents.title'));return Array.from(nodes(section?.props.children).filter(node=>node.type==='small').map(node=>node.props.children));};
   const reload=()=>render().find(node=>node.type===participation)!.props.reload as ()=>Promise<void>;
   const select=(value:string)=>{const index=sources.findIndex(source=>source.source===value);const connection=render().filter(node=>node.type===row)[index+1];(connection.props.onOpen as ()=>void)();};
-  const formState=(dirty:boolean,busy=false)=>{const form=render().find(node=>node.type===participation||node.type===preference)!;(form.props.onStateChange as (state:unknown)=>void)({dirty,busy});render();};
-  return {render,reads,open,close,hint,contact,reconnect,projects,errorLine,reload,select,formState,modal,preference,navigate:(go:()=>void)=>guarded(go),focuses:()=>focuses};
+  const formState=(dirty:boolean,busy=false,effects=true)=>{const form=render().find(node=>node.type===participation||node.type===preference)!;(form.props.onStateChange as (state:unknown)=>void)({dirty,busy});render(effects);};
+  const unload=()=>{const event=new Event('beforeunload',{cancelable:true});events.dispatchEvent(event);return event.defaultPrevented;};
+  return {render,reads,open,close,hint,contact,reconnect,projects,errorLine,reload,select,formState,modal,preference,busy,unload,navigate:(go:()=>void)=>guarded(go),focuses:()=>focuses};
 }
 
 test('an open Devices view coalesces owner hints, contacts make no reads, and a disclosure shares its data',async()=>{
@@ -110,4 +118,18 @@ test('a source dialog retains a draft on close or navigation and cannot close du
   f.formState(true,false);f.navigate(()=>{left=true;});assert.equal(left,false);
   const discard=f.render().find(node=>node.type==='button'&&node.props.children==='connections.discard')!;(discard.props.onClick as ()=>void)();
   assert.equal(left,true,'explicit discard permits the requested navigation');
+});
+
+test('navigation and unload guards protect the committed form before delayed effects run',async()=>{
+  const f=fixture('codex:aaaaaaaaaaaa');f.render();f.reads[0].resolve([device]);await flush();f.render();
+  f.formState(true,false,false);
+  let left=false;f.navigate(()=>{left=true;});
+  assert.equal(left,false,'navigation immediately after editing must see the draft');
+  assert.equal(f.unload(),true,'closing the tab must see the same committed draft');
+  f.formState(true,true,false);
+  assert.equal(f.busy.at(-1),true,'connection segments lock with the form');
+  f.navigate(()=>{left=true;});assert.equal(left,false);
+  f.formState(false,false,false);
+  assert.equal(f.busy.at(-1),false);assert.equal(f.unload(),false);
+  f.navigate(()=>{left=true;});assert.equal(left,true);
 });

@@ -100,7 +100,7 @@ export function Modal({
       page.style.overflow = pageOverflow;
       // Out of reach until the page is no longer inert.
       if (root) root.inert = pageInert;
-      if (pageFocus?.isConnected) pageFocus.focus();
+      if (pageFocus?.isConnected && pageFocus !== document.body) pageFocus.focus();
       else back.current?.()?.focus();
       pageFocus = null;
     };

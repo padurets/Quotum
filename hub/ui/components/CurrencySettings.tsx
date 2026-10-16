@@ -113,7 +113,7 @@ function CurrencyRow({data,item,refresh,dirty,leave,onOpen}:{data:CurrencyManage
   const definition=item.definition,selected=data.selected===definition.id,builtin=definition.kind==='provider-credit';
   const duplicate=data.personal.some(row=>row.definition.id!==definition.id&&row.definition.name===definition.name&&row.definition.symbol===definition.symbol);
   return <li className="settings-list-row popover-row" ref={row}>
-    <button className="currency-open" data-currency-id={definition.id} type="button" aria-label={definition.name} aria-haspopup="dialog" onClick={()=>leave(onOpen)}>
+    <button className="settings-item-open currency-open" data-currency-id={definition.id} type="button" aria-label={definition.name} aria-haspopup="dialog" onClick={()=>leave(onOpen)}>
       <span className="settings-item-main"><span className="currency-identity"><span className="currency-name">{definition.name}</span>{selected&&<span className="currency-state is-selected">{t('currencies.selected')}</span>}</span><small>{definition.symbol}{duplicate?' — '+definition.id.slice(-6):''}</small></span>
       <span className="settings-item-detail currency-overview-rates">{archived?<span>{stamp(item.archivedAt!)}</span>:item.pairs.map(pair=><span key={pair.base} className="currency-equation">{pair.rate?pair.direction==='basePerUnit'?`1 ${t('money.codexCredit')} = ${rateText(pair.rate)} ${pair.base}`:`1 ${pair.base} = ${rateText(pair.rate)} ${definition.symbol}`:`${pair.base} — ${t('currencies.stopped')}`}</span>)}</span>
     </button>

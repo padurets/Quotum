@@ -1,5 +1,5 @@
 import {VIEW_VERSION, VIEW_VERSION_HEADER} from '../../server/domain/view';
-import {useCallback, useEffect, useId, useRef, useState, type FormEvent} from 'react';
+import {useCallback, useEffect, useLayoutEffect, useId, useRef, useState, type FormEvent} from 'react';
 import {stamp} from '../lib/format';
 import {PROVIDERS} from '../lib/providers';
 import {errorText} from '../lib/quota';
@@ -51,6 +51,7 @@ function participationSummary(device:Device) {
 }
 
 const sourceName=(source:MeasurementSource,index:number)=>source.label ?? `${PROVIDERS[source.provider]?.name ?? source.provider} ${index+1}`;
+const restoreConnection=(id:string)=>document.querySelector<HTMLButtonElement>(`[data-connection-id="${CSS.escape(id)}"]`)??document.querySelector<HTMLButtonElement>('#devices button');
 const effectiveDevice=(source:MeasurementSource,devices:Device[])=>devices.find(device=>source.candidates.some(candidate=>candidate.device===device.id&&candidate.onDuty))?.name ?? t(source.duty==='none'?'measurements.none':'measurements.otherDevice');
 
 /** The reader's devices; on the desktop app's board, its one machine, which cannot be disconnected (it is the app's own agent). */
@@ -77,11 +78,16 @@ export function Devices({local,onBusyChange}: {local: boolean;onBusyChange?:(bus
   },[focused,sourceId,sources,devices]);
   const details = devices?.find(device=>device.id===detailsId) ?? null;
   const [renaming,setRenaming]=useState<Device|null>(null),[name,setName]=useState('');
+  // The menu item disappears when its dialog opens; return to the menu's trigger.
+  const actionFocus=useRef<HTMLElement|null>(null);
+  const rememberAction=(button:HTMLButtonElement)=>{actionFocus.current=button.closest('.picker')?.querySelector<HTMLButtonElement>('button')??null;};
+  const restoreAction=()=>actionFocus.current?.isConnected?actionFocus.current:document.querySelector<HTMLElement>('#devices button');
+  const restoreDetails=()=>sourceId?restoreConnection(sourceId):detailsId?restoreConnection(`device:${detailsId}`):restoreAction();
   const busy=formState.busy||actionBusy,dirty=formState.dirty||!!renaming&&name!==renaming.name;
   const leave=useCallback((go:()=>void)=>{if(busy)return;if(dirty)setDiscard({go});else go();},[busy,dirty]);
-  useEffect(()=>guardNavigation(leave),[leave]);
-  useEffect(()=>{onBusyChange?.(busy);return ()=>onBusyChange?.(false);},[busy,onBusyChange]);
-  useEffect(()=>{if(!dirty&&!busy)return;const unload=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue='';};window.addEventListener('beforeunload',unload);return ()=>window.removeEventListener('beforeunload',unload);},[dirty,busy]);
+  useLayoutEffect(()=>guardNavigation(leave),[leave]);
+  useLayoutEffect(()=>{onBusyChange?.(busy);return ()=>onBusyChange?.(false);},[busy,onBusyChange]);
+  useLayoutEffect(()=>{if(!dirty&&!busy)return;const unload=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue='';};window.addEventListener('beforeunload',unload);return ()=>window.removeEventListener('beforeunload',unload);},[dirty,busy]);
   const [error, setError] = useState<unknown>(null);
   const newest=useRef<{promise:Promise<void>}|null>(null);
   const load = useCallback(() => {
@@ -126,22 +132,22 @@ export function Devices({local,onBusyChange}: {local: boolean;onBusyChange?:(bus
       <p className="dialog-text">{t('connections.devicesHelp')}</p>
       {!devices&&!error&&<p role="status">{t('connections.loading')}</p>}
       {devices?.length===0&&<p className="admin-empty">{t(local?'local.devicesEmpty':'devices.empty')}</p>}
-      <ul className="settings-list">{devices?.slice().sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id)).map(device=><ConnectionRow key={device.id} name={device.name}
+      <ul className="settings-list">{devices?.slice().sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id)).map(device=><ConnectionRow key={device.id} id={`device:${device.id}`} name={device.name}
         detail={<><span>{device.os}</span><span>{versionSummary(device.agent,hubVersion)}</span></>}
         status={<>{!local&&<span>{participationSummary(device)}</span>}<small><Contact device={device}/></small></>}
         onOpen={()=>{setDetails(device.id);setTab(local||!device.policy?'diagnostics':'measurements');}}
-        actions={<><button className="popover-row" onClick={()=>{setError(null);setName(device.name);setRenaming(device);}}>{t('connections.rename')}</button>{!local&&<button className="popover-row danger" onClick={()=>{setError(null);setRevoking(device);}}>{t('devices.revoke')}</button>}</>}
+        actions={<><button className="popover-row" onClick={event=>{rememberAction(event.currentTarget);setError(null);setName(device.name);setRenaming(device);}}>{t('connections.rename')}</button>{!local&&<button className="popover-row danger" onClick={event=>{rememberAction(event.currentTarget);setError(null);setRevoking(device);}}>{t('devices.revoke')}</button>}</>}
       />)}</ul>
     </section>
     {!!sources.length&&<section className="settings-section connection-overview"><h2>{t('measurements.subscriptions')}</h2><p className="dialog-text">{t(local?'measurements.localSourcesHelp':'measurements.sourcesHelp')}</p>
-      <ul className="settings-list">{sources.map((source,index)=><ConnectionRow key={source.source} name={sourceName(source,index)} detail={PROVIDERS[source.provider]?.name ?? source.provider}
+      <ul className="settings-list">{sources.map((source,index)=><ConnectionRow key={source.source} id={source.source} name={sourceName(source,index)} detail={PROVIDERS[source.provider]?.name ?? source.provider}
         status={<>{!local&&<span>{t('measurements.preferredSummary',{device:source.preference.kind==='auto'?t('measurements.auto'):source.preference.device?devices?.find(device=>device.id===source.preference.device)?.name??t('measurements.unavailablePreference'):t('measurements.externalPreference')})}</span>}<small>{t('measurements.effective',{device:effectiveDevice(source,devices??[])})}</small></>}
         onOpen={()=>setSource(source.source)}/>)}</ul>
     </section>}
-    {selected&&<Modal title={sourceName(selected,sources.indexOf(selected))} onClose={busy?undefined:()=>leave(()=>setSource(null))}>
+    {selected&&<Modal title={sourceName(selected,sources.indexOf(selected))} restore={restoreDetails} onClose={busy?undefined:()=>leave(()=>setSource(null))}>
       <PreferenceSettings key={selected.source} source={selected} devices={devices??[]} reload={load} readOnly={local} onStateChange={setFormState}/>
     </Modal>}
-    {details&&<Modal title={details.name} onClose={busy?undefined:()=>leave(()=>setDetails(null))}>
+    {details&&<Modal title={details.name} restore={restoreDetails} onClose={busy?undefined:()=>leave(()=>setDetails(null))}>
       {!local&&details.policy&&<Segmented label={t('connections.deviceSections')} radioName={tabs} value={tab} disabled={busy} options={[["measurements",t('measurements.participation')],["diagnostics",t('connections.diagnostics')]]} onChange={next=>leave(()=>setTab(next))}/>}
       {!local&&details.policy&&tab==='measurements'?<ParticipationSettings key={details.id} device={details} reload={load} onStateChange={setFormState}/>:<>
         <VersionInfo agent={details.agent} hub={hubVersion}/>
@@ -155,11 +161,11 @@ export function Devices({local,onBusyChange}: {local: boolean;onBusyChange?:(bus
       </>}
     </Modal>}
     {connecting&&<Modal title={t('connections.connectDevice')} onClose={()=>setConnecting(false)}><DeviceCode/></Modal>}
-    {renaming&&<Modal title={t('devices.rename',{name:renaming.name})} onClose={busy?undefined:()=>leave(()=>setRenaming(null))}>
+    {renaming&&<Modal title={t('devices.rename',{name:renaming.name})} restore={restoreAction} onClose={busy?undefined:()=>leave(()=>setRenaming(null))}>
       <form className="dialog-form" onSubmit={rename}><fieldset className="form-fields" disabled={busy}><Field label={t('devices.nameLabel')} value={name} maxLength={80} placeholder={renaming.reported} autoFocus onChange={e=>setName(e.target.value)}/></fieldset><ErrorLine error={error}/><div className="button-row"><button className="button" type="button" disabled={busy} onClick={()=>leave(()=>setRenaming(null))}>{t('common.cancel')}</button><button className="button primary" disabled={busy}>{t('boards.save')}</button></div></form>
     </Modal>}
-    {revoking&&<Modal title={t('devices.revoke')} onClose={busy?undefined:()=>setRevoking(null)}><p className="dialog-text">{t('devices.confirmRevoke',{name:revoking.name})}</p><ErrorLine error={error}/><div className="button-row"><button className="button" disabled={busy} onClick={()=>setRevoking(null)}>{t('common.cancel')}</button><button className="button danger" disabled={busy} onClick={()=>void revoke(revoking)}>{t('devices.revoke')}</button></div></Modal>}
-    {discard&&<Modal title={t('connections.unsaved')} onClose={()=>setDiscard(null)}><p className="dialog-text">{t('connections.discardHelp')}</p><div className="button-row"><button className="button" onClick={()=>setDiscard(null)}>{t('connections.stay')}</button><button className="button danger" onClick={()=>{const go=discard.go;setDiscard(null);setFormState({dirty:false,busy:false});go();}}>{t('connections.discard')}</button></div></Modal>}
+    {revoking&&<Modal title={t('devices.revoke')} restore={restoreAction} onClose={busy?undefined:()=>setRevoking(null)}><p className="dialog-text">{t('devices.confirmRevoke',{name:revoking.name})}</p><ErrorLine error={error}/><div className="button-row"><button className="button" disabled={busy} onClick={()=>setRevoking(null)}>{t('common.cancel')}</button><button className="button danger" disabled={busy} onClick={()=>void revoke(revoking)}>{t('devices.revoke')}</button></div></Modal>}
+    {discard&&<Modal title={t('connections.unsaved')} restore={restoreDetails} onClose={()=>setDiscard(null)}><p className="dialog-text">{t('connections.discardHelp')}</p><div className="button-row"><button className="button" onClick={()=>setDiscard(null)}>{t('connections.stay')}</button><button className="button danger" onClick={()=>{const go=discard.go;setDiscard(null);setFormState({dirty:false,busy:false});go();}}>{t('connections.discard')}</button></div></Modal>}
   </>;
 }
 

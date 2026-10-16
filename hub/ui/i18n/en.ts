@@ -9,8 +9,6 @@ import type {Message} from './types';
 export const en = {
   'connections.accounts': 'Accounts',
   'connections.tokens': 'Tokens',
-  'connections.configure': 'Configure',
-  'connections.configureNamed': 'Configure {name}',
   'connections.devicesHelp': 'Choose a machine to inspect its state and configure measurements.',
   'connections.deviceSections': 'Device settings',
   'connections.diagnostics': 'Diagnostics',
