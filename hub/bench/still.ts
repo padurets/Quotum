@@ -7,6 +7,7 @@ import {cellOf} from '../server/domain/history.js';
 
 const HOUR = 3_600_000;
 const IDLE_CHARTS = ['quota-history', 'quota-session-history', 'activity', 'budget-history', 'subscription-funds'] as const;
+const QUOTA_LEAD_MS = 50_000;
 
 /** Keep regular quota retirement and a later grid transition inside the existing duration. */
 export function idleWindow(readyAt: number, seconds: number, cellMs: number) {
@@ -24,7 +25,7 @@ export function idleWindow(readyAt: number, seconds: number, cellMs: number) {
       if (unsafe === undefined) break;
       from += unsafe < margin ? margin - unsafe : minute + margin - unsafe;
     }
-    if (from <= boundary - minute - margin) return {from, to: from + duration, boundary, quotaBoundary: boundary - minute + 1, cellMs, expectedTransitions: 1};
+    if (from <= boundary - QUOTA_LEAD_MS - margin) return {from, to: from + duration, boundary, quotaBoundary: boundary - QUOTA_LEAD_MS + 1, cellMs, expectedTransitions: 1};
     boundary += cellMs;
   }
 }
@@ -84,10 +85,10 @@ export const SETTLE_MS = 30_000;
 /** A card's dot stops changing this long after its last measurement: it pulsed and faded out (ui/lib/quota.ts), with some to spare. */
 export const DOT_STILL_AFTER = PULSE_FOR + FADE_FOR + 30_000;
 
-/** Keep quota retirement a minute before the axis, with the original fade deadline. */
+/** Separate quota retirement from the axis while admitting the original warm deadline. */
 export function fixtureTiming(now:number) {
   const seededAt=Math.floor(now/MIN)*MIN,cell=cellOf(DAY);
-  return {start:Math.floor((seededAt+MIN)/cell)*cell-MIN,warmAt:seededAt+DOT_STILL_AFTER};
+  return {start:Math.floor((now+QUOTA_LEAD_MS)/cell)*cell-QUOTA_LEAD_MS,warmAt:seededAt+DOT_STILL_AFTER};
 }
 
 /** When the page may be counted: every dot has faded out, and it has been open `SETTLE_MS`. */

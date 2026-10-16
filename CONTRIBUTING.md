@@ -624,8 +624,9 @@ The history traffic matrix runs first, while the seeded measurements age, and cl
 its temporary pages before the idle board opens. The same warmup requirements still
 apply. Idle measurement starts at a planned grid phase with its endpoints away from
 minute ticks and includes one real five-minute cell transition in each chart.
-The benchmark anchors regular quota retirement one minute before the chart grid
-transition, keeping their deadlines separate. Planning includes both in the
+The benchmark anchors regular quota retirement fifty seconds before the chart grid
+transition, keeping their deadlines separate while admitting the warm deadline one
+minute before that grid edge. Planning includes both in the
 same observation window, retaining the original fade deadline, minimum settle wait
 and job limits. Sparse and eco histories keep their own cadence.
 Reports retain planned and observed bounds, inner CPU counter bounds, transition counts and actual

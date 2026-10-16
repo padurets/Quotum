@@ -4,18 +4,29 @@ import {SETS} from '../../demo/catalogue.js';
 import {cards, DAY, MIN, historyTimes} from '../../demo/model.js';
 import {STILL_FOR} from '../../demo/setup.js';
 import {panningSet} from '../fixture.js';
-import {DOT_STILL_AFTER,fixtureTiming,idleWindow} from '../still.js';
+import {DOT_STILL_AFTER,fixtureTiming,idleWindow,warmUntil} from '../still.js';
 import {drain} from '../../server/domain/prepare.js';
 import {packSamples,sampleAt,sampleCount,type PeriodTape} from '../../server/domain/periodTape.js';
 import {retainTape,retirementEdge} from '../../server/domain/periodRetention.js';
 import {PageClock} from '../../ui/lib/clock.js';
 
+test('the ten-second fixture anchor preserves both the legacy warm floor and its actual fade',()=>{
+  const crossing=Date.parse('2026-10-15T10:34:10Z');
+  const before=fixtureTiming(crossing-1),after=fixtureTiming(crossing);
+  assert.equal(before.start,crossing-5*MIN);
+  assert.equal(after.start,crossing);
+  assert.equal(before.warmAt,after.warmAt);
+  assert.equal(after.warmAt,crossing-10_000+DOT_STILL_AFTER);
+  const cards=[{id:'fixture',successAt:after.start,staleAfterMs:STILL_FOR,windows:[],forecast:undefined}];
+  assert.equal(Math.max(after.warmAt,warmUntil(cards,crossing)),crossing+DOT_STILL_AFTER);
+});
+
 test('each launch-minute phase includes regular quota retirement in the measured chart transition',()=>{
   const set=panningSet(SETS[0]),dense=cards(set).find(card=>card.id==='claude-max')!;
   const relative=historyTimes(set,dense);
   const seed=Date.parse('2026-10-15T10:30:00Z');
-  for(let phase=0;phase<5;phase++){
-    const now=seed+phase*MIN+12345,timing=fixtureTiming(now);
+  for(let phase=0;phase<5;phase++)for(const offset of [0,9999,10000,59999]){
+    const now=seed+phase*MIN+offset,timing=fixtureTiming(now);
     assert.equal(timing.warmAt,Math.floor(now/MIN)*MIN+DOT_STILL_AFTER,'alignment keeps the original fade deadline');
     assert.ok(timing.start<=now);
     for(let cell=0;cell<3;cell++){
@@ -26,11 +37,11 @@ test('each launch-minute phase includes regular quota retirement in the measured
       const tape:PeriodTape={from:timing.start+relative[0].t,cut:timing.start,replaceFrom:timing.start,cursor:'',quota:[{source:dense.id,window:'cadence',samples}],money:[]};
       const from=planned.from-DAY,to=planned.to-DAY,before=drain(retainTape(tape,from));
       const edge=drain(retirementEdge(null,[before],from));
-      assert.equal(edge+DAY,boundary-MIN+1,`seed phase ${phase} must retire quota before the measured cell`);
+      assert.equal(edge+DAY,boundary-50_000+1,`seed phase ${phase} must retire quota before the measured cell`);
       const after=drain(retainTape(before,to));
       assert.equal(sampleCount(after.quota[0].samples),sampleCount(before.quota[0].samples)-1);
       assert.notEqual(after,before);
-      assert.equal(sampleAt(after.quota[0].samples,0)!.at,boundary-MIN-DAY,'the real boundary predecessor remains');
+      assert.equal(sampleAt(after.quota[0].samples,0)!.at,boundary-50_000-DAY,'the real boundary predecessor remains');
       assert.equal(sampleCount(tape.quota[0].samples),relative.length,'no seeded observation was removed');
     }
   }
@@ -62,7 +73,7 @@ test('quota retirement and the axis keep separate wakes instead of coalescing at
   assert.deepEqual(wakes(boundary+1).map(w=>w.events),[['quota','axis']],'axis-aligned quota can hide a separate wave under the real clock');
   const separate=wakes(quotaAt);
   assert.deepEqual(separate.map(w=>w.events),[['quota'],['axis']]);
-  assert.equal(separate[1].at-separate[0].at,MIN-1);
+  assert.equal(separate[1].at-separate[0].at,50_000-1);
 });
 
 test('the still benchmark retains every quota value and past reset across grid alignment', () => {

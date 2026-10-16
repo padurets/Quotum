@@ -77,7 +77,8 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
       if(fault==='cancel'){listeners.get('SIGTERM')!();await exited;}
       return{reports:[{name:'history-marker'}],problems:red('red')?['history-red']:[]};},
     probeScript:()=>'',sleep:async(ms:number)=>{waits.push(ms);now+=Math.max(0,ms);},say:(value:string)=>{logs.push(value);},
-    metrics:async()=>{const opening=metricReads++===0;if(opening&&fault==='opening-metrics')now+=60_000;
+    metrics:async()=>{const opening=metricReads++===0;
+      if(opening&&fault==='opening-metrics')now=(saved.get('idle-plan') as {quotaBoundary:number}).quotaBoundary+1;
       return{Timestamp:now/1000,ScriptDuration:!opening&&red('idle')?0.1:0};},
     cellOf,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,
     delta,round,scriptPerSecond,tally,measure:async()=>{mark('measure');return{source:'fixture',from:now,to:now,
@@ -109,16 +110,17 @@ test('actual main passes the aligned fixture anchor and keeps the legacy warm wa
   for(let phase=0;phase<5;phase++){
     const at=base+phase*minute,result=await run(['--scope','dashboard'],undefined,{},true,at);
     assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);
-    assert.equal(result.fixtureStart,Math.floor((at+minute)/cell)*cell-minute);
+    assert.equal(result.fixtureStart,Math.floor((at+50_000)/cell)*cell-50_000);
     assert.equal(result.waits[0],Math.floor(at/minute)*minute+DOT_STILL_AFTER-at);
     assert.deepEqual(result.saved.get('fixture-timing'),{start:result.fixtureStart,warmAt:Math.floor(at/minute)*minute+DOT_STILL_AFTER});
   }
 });
 test('actual main rejects quota retirement before the opening CPU counter even without DOM work',async()=>{
   const result=await run(['--scope','dashboard'],'opening-metrics');
-  const idle=result.saved.get('idle') as {phase:{from:number;to:number};planned:{quotaBoundary:number};renders:unknown[];mutations:unknown[];phaseProblems:string[]};
+  const idle=result.saved.get('idle') as {phase:{from:number;to:number};planned:{quotaBoundary:number};counterFrom:number;renders:unknown[];mutations:unknown[];phaseProblems:string[]};
   assert.ok(idle.phase.from<idle.planned.quotaBoundary&&idle.planned.quotaBoundary<idle.phase.to);
   assert.deepEqual(idle.renders,[]);assert.deepEqual(idle.mutations,[]);
+  assert.equal(idle.counterFrom,idle.planned.quotaBoundary+1);
   assert.ok(idle.phaseProblems.includes('idle counters did not include regular quota retirement'));
   assert.deepEqual(result.exits,[1]);
 });
