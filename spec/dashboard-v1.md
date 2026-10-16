@@ -1788,7 +1788,10 @@ With every collector disabled and tracking enabled, the agent state is `tracking
 ## Private client links
 
 `GET /api/links` returns the authenticated owner's `revision`, temporal `links`, held
-`sources` choices, own `devices` and known `clients`. A link has `id`, `clientId`, nullable
+`sources` choices, saved `targets`, own `devices` and known `clients`. Both resource
+lists contain `{id,provider,name}`. `sources` contains currently held choices;
+`targets` identifies the targets of saved links, including disconnected ones, without
+measurements or another person's private account labels. A link has `id`, `clientId`, nullable
 `deviceId` (all devices), nullable `route` (`class` and nullable catalogue `provider`),
 `sourceId`, `from`, nullable `to` and `createdAt`. Management adds current `active`.
 Periods use safe nonnegative Unix milliseconds and are half-open `[from,to)`.
@@ -1801,16 +1804,26 @@ Both period bounds are shown before acceptance. A create with `suggestion` conta
 that same rule recomputes its basis before writing; a changed basis returns 409
 `suggestion_changed`. Successful receipts replay before this freshness check.
 `GET /api/links/attribution` returns only the owner's current sessions and detailed
-attribution evidence. Host and custom gateway hints are confined to this endpoint;
-disabled route policy suppresses both route conditions and host disclosure.
+attribution evidence. `GET /api/devices?details=<device>` also adds `attribution` to
+each session of that owner's selected device, in the same response and session order.
+Without `details`, or with an unknown or foreign device, session attribution is absent.
+The ordinary response is the device array; `measurement=1` keeps the existing
+`{devices,hubVersion,sources}` envelope and can be combined with `details`.
+Host and custom gateway hints stay in these owner-only attribution responses;
+disabled route policy suppresses both route conditions and host disclosure. Neither
+ordinary device lists nor board events carry this private evidence.
 
 `POST /api/links` creates a rule (201), `POST /api/links/:id` corrects it,
-`POST /api/links/:id/change` changes only its source from `at` with `newSourceId`, and
+`POST /api/links/:id/change` replaces the rule from `at` with `newSourceId` and
+optional `clientId`, `deviceId`, `route` and `to` fields. Omitted fields preserve the
+saved scope and end, so source-only callers keep their behavior. `at` must lie within
+the saved period; the replacement end must be after `at` and may extend that period.
 `DELETE /api/links/:id` removes it (200). Create/correction supply all rule fields;
 every mutation includes `expectedRevision` and a UUID `requestId`, including DELETE's
 JSON body. The reply is `{revision,links}`. A material mutation increments the revision
 once. A correction with identical fields keeps it. A dated change preserves the previous
-period and adds the new period atomically; at its beginning it replaces the source.
+prefix and replaces the remaining rule atomically; at its beginning it replaces the
+rule without an empty prefix. An unchanged dated replacement creates no split.
 
 Exact owner/client/device/class/provider tuples, including nulls, cannot overlap;
 different scopes and conditions may overlap. Validation, ownership, holding, overlap,
