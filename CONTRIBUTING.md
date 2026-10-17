@@ -667,6 +667,9 @@ and job limits. Sparse and eco histories keep their own cadence.
 Reports retain planned and observed bounds, inner CPU counter bounds, transition counts and actual
 performance duration; missing coverage is a failure and the 0.3 ms/s budget includes
 the transition's work.
+Two read-only storage snapshots inside those counters also require the admitted quota
+rows due in that window to lose their expected predecessor, with unchanged evidence
+and no additional history requests. Passing the clock and axes alone is insufficient.
 
 The completed measurement phase's React/DOM observer is disconnected before native
 panning. Native wheel and Shift-drag start separately from the weekly limit, five-hour

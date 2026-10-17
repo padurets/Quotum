@@ -12,6 +12,7 @@ import {cellOf} from '../../server/domain/history.js';
 import {idleProblems,chartProblems,measuredProblems,percentile,HISTORY_BYTES_PER_MEASUREMENT} from '../budget.js';
 import {DOT_STILL_AFTER,fixtureTiming,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil} from '../still.js';
 import {delta,round,scriptPerSecond,tally} from '../report.js';
+import {idleRetentionScript,idleRetentionProblems} from '../idleRetention.js';
 
 // Execute the actual caller and parser, not a second implementation of its phase branches.
 // Leaf phases and browser IO are stand-ins; these tests prove routing/failure propagation only.
@@ -23,10 +24,10 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
-  const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0;
+  const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0,retentionReads=0;
   let terminal!:()=>void;const exited=new Promise<void>(resolve=>{terminal=resolve;});
   const mark=(name:string)=>{calls.push(name);};
   const red=(name:string)=>fault===name||fault==='all-red'||name==='idle'&&['idle-trace-throw','idle-binding'].includes(fault??'');
@@ -43,6 +44,13 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   const cdp={send:async()=>({}),evaluate:async(expression:string)=>{
     if(expression.includes(".card:not(.is-loading)"))return 1;
     if(expression==='__quotumBench.read()')return reading;
+    if(expression==='window.__quotumIdleRetention()'){
+      mark('retention-'+(++retentionReads));
+      const R=(saved.get('idle-plan') as {quotaBoundary:number}).quotaBoundary,periodMs=86_400_000,second=R-periodMs-1;
+      const retired=retentionReads===2&&fault!=='idle-retention';
+      return {at:now,evaluatedAt:now,identity:'board/live',generation:1,revision:1,proofEpoch:1,scopeKey:'quota',selection:{mode:'live',periodMs},settled:true,retirementAt:R+(retired?300000:0),
+        quota:{from:stand.start-periodMs,cut:stand.start,cursor:'same',rows:[{sourceId:'fixture',windowId:'weekly',count:retired?2:3,first:retired?second:second-300000,second:retired?second+300000:second,third:retired?null:second+300000,last:second+300000}]}};
+    }
     if(expression.includes('window.__quotumIdlePhase='))phaseStart=now;
     if(expression.includes('const p=__quotumIdlePhase.read()')){
       const start=Math.floor(phaseStart/300_000),end=Math.floor(now/300_000);
@@ -91,8 +99,8 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     probeScript:()=>'',sleep:async(ms:number)=>{waits.push(ms);now+=Math.max(0,ms);},say:(value:string)=>{logs.push(value);},
     metrics:async()=>{const opening=metricReads++===0;
       if(opening&&fault==='opening-metrics')now=(saved.get('idle-plan') as {quotaBoundary:number}).quotaBoundary+1;
-      return{Timestamp:now/1000,ScriptDuration:!opening&&red('idle')?0.1:0};},
-    cellOf,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,
+      mark(opening?'metrics-before':'metrics-after');return{Timestamp:now/1000,ScriptDuration:!opening&&red('idle')?0.1:0};},
+    cellOf,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,idleRetentionScript,idleRetentionProblems,
     delta,round,scriptPerSecond,tally,measure:async()=>{mark('measure');return{source:'fixture',from:now,to:now,
       ingestLatencies:[1],latencies:[red('measure')?Infinity:1],chartLatencies:[red('measure')?Infinity:1],historyBytes:1,
       reading:{...reading,renders:[{node:'card',region:'card:fixture',time:false,kind:null,count:1}]}};},
@@ -165,6 +173,19 @@ test('the default full run retains history budget failures through the complete 
   const result=await run([],'red');assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);
   assert.deepEqual(order(result.calls),['history','openTab',...tail]);assert.deepEqual(result.statuses,['failed']);
   assert.ok((result.saved.get('result') as {problems:string[]}).problems.includes('history-red'));
+});
+test('dashboard rejects an idle interval without actual quota retirement',async()=>{
+  const result=await run(['--scope','dashboard'],'idle-retention');
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);
+  const idle=result.saved.get('idle') as {phaseProblems:string[]};
+  assert.ok(idle.phaseProblems.some(problem=>problem.includes('prefix did not retire')));
+  assert.deepEqual(order(result.calls),['openTab',...tail],'a coverage failure still runs the remaining budgets');
+});
+test('both actual quota snapshots are inside the original performance counters',async()=>{
+  const result=await run(['--scope','dashboard']);
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);
+  const positions=['metrics-before','retention-1','retention-2','metrics-after'].map(name=>result.calls.indexOf(name));
+  assert.ok(positions.every((position,i)=>position>=0&&(!i||position>positions[i-1])));
 });
 test('the actual full caller retains simultaneous history and every dashboard budget failure',async()=>{
   const result=await run([],'all-red');assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);

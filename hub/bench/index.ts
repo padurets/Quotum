@@ -41,6 +41,7 @@ import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
 import {traceIdle} from './idleTiming.js';
 import {IdleCpuDiagnostic,sourceIdentity,idleGeometry,planIdleEdge,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
+import {idleRetentionScript,idleRetentionProblems,type IdleRetention} from './idleRetention.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -244,7 +245,9 @@ async function main() {
     // their own subscribed-selector tests, including equal displayed labels.
     const bootstrapSource=`localStorage.setItem('quotum.locale','en');
       localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),agentsSort:{column:'project',descending:false}}));
-      window.__quotumInspectHistoryPool=pool=>{window.__quotumWalletState=(source,authority)=>{
+      window.__quotumInspectHistoryPool=pool=>{
+        window.__quotumIdleRetention=()=>(${idleRetentionScript()})(pool);
+        window.__quotumWalletState=(source,authority)=>{
         const p=[...pool.members].find(m=>m.tapes),reader=[...pool.members].find(m=>m.scope==='budget'),tape=p?.tapes.get('budget');
         const work=p?.moneyWorkAt(source,Date.now()),group=tape?.tape.money.find(m=>m.source===source),shown=reader?.get();
         return {authorityReady:authority===undefined?undefined:!!p&&p.workAuthority===authority,periodLoading:p?.get().loading,periodError:!!p?.get().error,workNeeded:p?.workNeeded,work:work?{activeMs:work.activeMs,knownFrom:work.knownFrom}:null,
@@ -321,9 +324,12 @@ async function main() {
     const readIdle = async () => {
       const before = await metrics(cdp);
       const counterFrom=Date.now();
+      // Both storage reads must finish inside the counters to prove when cleanup happened.
+      const retentionBefore='quotaBoundary' in planned?await cdp.evaluate<IdleRetention|null>('window.__quotumIdleRetention()'):null;
       const firstReading = await cdp.evaluate<Reading>('__quotumBench.read()');
       await sleep(to - Date.now());
       const lastReading = await cdp.evaluate<Reading>('__quotumBench.read()');
+      const retentionAfter='quotaBoundary' in planned?await cdp.evaluate<IdleRetention|null>('window.__quotumIdleRetention()'):null;
       const counterTo=Date.now();
       const after = await metrics(cdp);
       requests.counting = false;
@@ -334,13 +340,14 @@ async function main() {
       const actualSeconds = after.Timestamp - before.Timestamp;
       const phaseProblems = idlePhaseProblems(phase, planned.boundary, 'quotaBoundary' in planned ? planned.quotaBoundary : undefined);
       if ('quotaBoundary' in planned && !(counterFrom < planned.quotaBoundary && planned.quotaBoundary < counterTo)) phaseProblems.push('idle counters did not include regular quota retirement');
+      if ('quotaBoundary' in planned)phaseProblems.push(...idleRetentionProblems(retentionBefore,retentionAfter,counterFrom,counterTo,planned.quotaBoundary));
       if (firstReading.commits || firstReading.mutations.length) phaseProblems.push('idle work crossed the opening measurement boundary');
       if (reading.commits !== lastReading.commits || JSON.stringify(reading.mutations) !== JSON.stringify(lastReading.mutations)) phaseProblems.push('idle work crossed the closing measurement boundary');
       if (!Number.isFinite(actualSeconds) || actualSeconds <= 0) phaseProblems.push('idle performance duration unavailable');
       const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
       const calendar=heard!.calendar();
       const idle = {from, to, cellMs, requests, events:boardEvents, calendar, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
-      evidence.save('idle', {...idle, allEvents:events, boardEvents, deviceContacts, deviceHints, planned, phase, counterFrom, counterTo, actualSeconds, phaseProblems});
+      evidence.save('idle', {...idle, allEvents:events, boardEvents, deviceContacts, deviceHints, planned, phase, retentionBefore,retentionAfter,counterFrom, counterTo, actualSeconds, phaseProblems});
       if (idleTimingDiagnostic || idleCpu) {
         originalIdleTimingProblems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
         evidence.save(idleCpu?'idle-cpu-result':'idle-timing-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});

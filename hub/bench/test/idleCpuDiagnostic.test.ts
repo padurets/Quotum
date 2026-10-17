@@ -181,6 +181,7 @@ async function originalIndex(collection:''|'1'|'trace'|'profile',boundaryFailure
     override async evaluate<T>(expression:string):Promise<T>{
       if(expression==='__quotumBench.reset()'){this.commands.push('ORIGINAL.reset');return undefined as T;}
       if(expression===idlePhaseScript(300_000)){phaseFrom=wall;this.commands.push('ORIGINAL.phase-start');return undefined as T;}
+      if(expression==='window.__quotumIdleRetention()'){this.commands.push('ORIGINAL.retention');return null as T;}
       if(expression==='__quotumBench.read()'){
         const stage=['opening','closing','final'][readingCalls++];this.commands.push('ORIGINAL.readout:'+stage);
         const empty={...traceReading,commits:0,renders:[],mutations:[]};
@@ -199,7 +200,7 @@ async function originalIndex(collection:''|'1'|'trace'|'profile',boundaryFailure
   assert.ok(start>=0&&end>start);
   const context={Date:class extends Date{static override now(){return wall;}},idleCpu,idleCpuMode:collection,seconds:120,cdp,reading:traceReading,
     planIdleEdge:(...args:Parameters<typeof planIdleEdge>)=>{plans++;return planIdleEdge(...args);},idleGeometry:async()=>{geometry++;return edgeGeometry(geometry>1);},
-    idleWindow,idlePhaseScript,idlePhaseProblems,
+    idleWindow,idlePhaseScript,idlePhaseProblems,idleRetentionProblems:()=>[],
     cellOf:()=>300_000,sleep:async(ms:number)=>{cdp.commands.push('ORIGINAL.sleep:'+ms);wall+=Math.max(0,ms);if(ms===120_000){cdp.timestamp=121;for(let i=0;i<5;i++)ledger.push('event: ping\ndata: {}\n\n');}},
     overview:async()=>[],stillProblems:()=>[],Stop:Error,say:()=>{},heard,requests:{counting:false,count:0,byPath:{}},
     metrics:async()=>{cdp.commands.push(metricCalls++?'ORIGINAL.after-metrics':'ORIGINAL.before-metrics');return metricCalls===1?traceWindow.before:traceWindow.after;},
@@ -211,7 +212,7 @@ async function originalIndex(collection:''|'1'|'trace'|'profile',boundaryFailure
   try{await context.run();}catch(error){failure=error;}finally{await idleCpu?.close();}
   return{cdp,plans,geometry,saved,evidenceSaved,failure};
 }
-const canonicalCounterSequence=['ORIGINAL.reset','ORIGINAL.phase-start','ORIGINAL.heard-reset','ORIGINAL.before-metrics','ORIGINAL.readout:opening','ORIGINAL.sleep:120000','ORIGINAL.readout:closing','ORIGINAL.after-metrics','ORIGINAL.readout:final','ORIGINAL.phase-stop'];
+const canonicalCounterSequence=['ORIGINAL.reset','ORIGINAL.phase-start','ORIGINAL.heard-reset','ORIGINAL.before-metrics','ORIGINAL.retention','ORIGINAL.readout:opening','ORIGINAL.sleep:120000','ORIGINAL.readout:closing','ORIGINAL.retention','ORIGINAL.after-metrics','ORIGINAL.readout:final','ORIGINAL.phase-stop'];
 test('actual trace index skips alignment and all geometry while preserving the original counter sequence',async()=>{
   const {cdp,plans,geometry,saved,failure}=await originalIndex('trace');assert.equal(failure,undefined);assert.equal(plans,0);assert.equal(geometry,0);
   assert.ok(!cdp.commands.some(command=>command.startsWith('Profiler.')));
