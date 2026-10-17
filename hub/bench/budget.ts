@@ -59,6 +59,11 @@ function tooOften(parts: Counted[], from: number, to: number, cellMs: number, wh
  * board heard the hub all along.
  */
 export function idleProblems(idle: Idle): string[] {
+  return [...idleObservationProblems(idle), ...idleScriptProblems(idle.scriptMsPerSecond)];
+}
+
+/** Traffic, rendering and observation guards, independent of the script budget. */
+export function idleObservationProblems(idle: Idle): string[] {
   const found: string[] = [];
   if (idle.requests.count) found.push(`the page asked the hub ${idle.requests.count} times: ${JSON.stringify(idle.requests.byPath)}`);
   const told = Object.entries(idle.events).filter(([type]) => type !== 'ping');
@@ -75,8 +80,11 @@ export function idleProblems(idle: Idle): string[] {
     if (outside.length) found.push(`${what} outside what shows time: ${outside.map(part => `${part.region} ${part.node} ×${part.count}`).join(', ')}`);
     found.push(...tooOften(parts.filter(part => part.time), idle.from, idle.to, idle.cellMs, what));
   }
-  if (idle.scriptMsPerSecond > IDLE_SCRIPT_MS_PER_SECOND) found.push(`script took ${idle.scriptMsPerSecond} ms a second, more than ${IDLE_SCRIPT_MS_PER_SECOND}`);
   return found;
+}
+
+export function idleScriptProblems(scriptMsPerSecond: number): string[] {
+  return scriptMsPerSecond > IDLE_SCRIPT_MS_PER_SECOND ? [`script took ${scriptMsPerSecond} ms a second, more than ${IDLE_SCRIPT_MS_PER_SECOND}`] : [];
 }
 
 /** The value `share` of the samples are at or under. */

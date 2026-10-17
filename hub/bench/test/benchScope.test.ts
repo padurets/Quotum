@@ -10,12 +10,13 @@ import {RunOwner} from '../runOwner.js';
 import {safeEvidence} from '../evidence.js';
 import {EventCounts} from '../stream.js';
 import {cellOf} from '../../server/domain/history.js';
-import {idleProblems,chartProblems,measuredProblems,percentile,HISTORY_BYTES_PER_MEASUREMENT} from '../budget.js';
+import {idleObservationProblems,idleProblems,chartProblems,measuredProblems,percentile,HISTORY_BYTES_PER_MEASUREMENT} from '../budget.js';
 import {DOT_STILL_AFTER,fixtureTiming,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil} from '../still.js';
 import {delta,round,scriptPerSecond,tally} from '../report.js';
 import {idleRetentionScript,idleRetentionProblems} from '../idleRetention.js';
 import {gridSnapshotScript,gridReadScript} from '../idleCpuDiagnostic.js';
 import {ScriptBinding as SourceBinding} from '../scriptBinding.js';
+import {idleSensitivity} from '../idleDiagnostic.js';
 
 // Execute the actual caller and parser, not a second implementation of its phase branches.
 // Leaf phases and browser IO are stand-ins; these tests prove routing/failure propagation only.
@@ -27,7 +28,7 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close'|'retirement-binding-mismatch'|'retirement-debugger-active'|'retirement-probe-missing';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close'|'retirement-binding-mismatch'|'retirement-debugger-active'|'retirement-probe-missing'|'idle-request'|'double-no-growth';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const injected:{interval:number;expression:string;kind:'idle-probe'}[]=[];
@@ -71,7 +72,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     begin(name:string){mark('phase:'+name);}save(name:string,value:unknown){saved.set(name,value);}
     finish(status:string){statuses.push(status);}
   }
-  class Requests {count=0;bytes=0;byPath={};counting=false;}
+  class Requests {count=fault==='idle-request'?1:0;bytes=0;byPath={};counting=false;}
   class IdleCpuDiagnostic {
     binding={rememberInjected:(_context:number,source:string,role:string)=>{assert.match(source,/quotum\.locale/);assert.equal(role,'idle-probe');mark('idle-cpu-probe');}};
     constructor(_target:unknown,_save:unknown,_client:unknown,owned:boolean,collection:string){assert.equal(owned,true);assert.equal(collection,'profile');}
@@ -103,13 +104,16 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     probeScript:()=>'',sleep:async(ms:number)=>{waits.push(ms);now+=Math.max(0,ms);},say:(value:string)=>{logs.push(value);},
     metrics:async()=>{const opening=metricReads++===0;
       if(opening&&fault==='opening-metrics')now=(saved.get('idle-plan') as {quotaBoundary:number}).quotaBoundary+1;
-      mark(opening?'metrics-before':'metrics-after');return{Timestamp:now/1000,ScriptDuration:!opening&&red('idle')?0.1:0};},
-    cellOf,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,idleRetentionScript,idleRetentionProblems,
+      mark(opening?'metrics-before':'metrics-after');return{Timestamp:now/1000,ScriptDuration:opening?0:red('idle')?.1:env.QUOTUM_BENCH_DIAGNOSE_IDLE==='double'?.012:0};},
+    cellOf,idleObservationProblems,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,idleRetentionScript,idleRetentionProblems,
     delta,round,scriptPerSecond,tally,measure:async()=>{mark('measure');return{source:'fixture',from:now,to:now,
       ingestLatencies:[1],latencies:[red('measure')?Infinity:1],chartLatencies:[red('measure')?Infinity:1],historyBytes:1,
       reading:{...reading,renders:[{node:'card',region:'card:fixture',time:false,kind:null,count:1}]}};},
     work:async()=>{mark('work');return{reports:[],problems:problems('work')};},
     workPrivate:async()=>{mark('private-work');return{reports:[],problems:problems('private-work')};},
+    doubledIdle:async(_browser:unknown,_page:unknown,_base:unknown,_seconds:unknown,_cellMs:unknown,output:Evidence,_heard:unknown,baseline:number)=>{
+      mark('double-idle');const result=idleSensitivity(baseline,fault==='double-no-growth'?[.01,.01]:[.6,.6],true);output.save('idle-double',result);return result;
+    },
     frequencyKeys:async()=>{mark('frequency');},panning,
     creditPhase:async()=>{mark('credits');if(fault==='credits-throw')throw new Stop('credits-original');return{updates:[],problems:problems('credits')};},
     moneyPhase:async()=>{mark('money');return{problems:problems('money')};},
@@ -147,6 +151,30 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
 }
 const tail=['measure','work','private-work','frequency','panning','credits','money'];
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
+test('a CPU-only red baseline still records sensitivity and finishes red',async()=>{
+  const result=await run([], 'idle', {QUOTUM_BENCH_DIAGNOSE_IDLE:'double'});
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);
+  assert.ok(result.calls.includes('double-idle'));
+  const control=result.saved.get('idle-double') as ReturnType<typeof idleSensitivity>;
+  assert.equal(control.valid,true);assert.equal(control.growthDetected,true);
+  assert.ok(control.baselineScriptMsPerSecond>.3);
+  assert.equal(control.baselineOverBudget,true);
+  assert.ok(!result.calls.includes('measure'));assert.ok(!result.calls.includes('history'));
+});
+test('valid sensitivity with a healthy baseline remains diagnostic, and no growth fails',async()=>{
+  for(const fault of [undefined,'double-no-growth'] as const){
+    const result=await run([],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE:'double'});
+    assert.equal(result.error,undefined);assert.deepEqual(result.exits,[fault?1:0]);
+    const control=result.saved.get('idle-double') as ReturnType<typeof idleSensitivity>;
+    assert.equal(control.valid,true);assert.equal(control.growthDetected,!fault);assert.equal(control.baselineOverBudget,false);
+    assert.ok(!result.calls.includes('measure'));assert.ok(!result.calls.includes('history'));
+  }
+});
+for(const fault of ['idle-retention','opening-metrics','idle-request'] as const)test('an invalid sensitivity baseline still stops before copies: '+fault,async()=>{
+  const result=await run([],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE:'double'});
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[2]);
+  assert.ok(!result.calls.includes('double-idle'));assert.ok(!result.saved.has('idle-double'));
+});
 test('actual main passes the aligned fixture anchor and keeps the legacy warm wait',async()=>{
   const cell=300_000,minute=60_000,base=Date.parse('2026-10-15T12:00:10Z');
   for(let phase=0;phase<5;phase++){

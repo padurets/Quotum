@@ -1,7 +1,7 @@
 import {openTab, type Browser, type Cdp} from './cdp.js';
 import type {Reading} from './probe.js';
 import {Requests} from './requests.js';
-import {idleProblems, IDLE_SCRIPT_MS_PER_SECOND} from './budget.js';
+import {idleObservationProblems, idleScriptProblems, IDLE_SCRIPT_MS_PER_SECOND} from './budget.js';
 import {scriptPerSecond, type Metrics} from './report.js';
 import {idleWindow, idlePhaseScript, idlePhaseProblems, type IdlePhase} from './still.js';
 import type {Evidence} from './evidence.js';
@@ -13,13 +13,15 @@ const metrics = async (cdp: Cdp): Promise<Metrics> => Object.fromEntries((await 
 
 /** Sensitivity is measured growth; crossing the absolute idle budget is reported separately. */
 export function idleSensitivity(baselineScriptMsPerSecond:number,copies:readonly number[],phaseValid:boolean) {
-  const valid=phaseValid&&copies.length===2&&Number.isFinite(baselineScriptMsPerSecond)&&baselineScriptMsPerSecond>0&&copies.every(cost=>Number.isFinite(cost)&&cost>=0);
+  const costsValid=copies.length===2&&copies.every(cost=>Number.isFinite(cost)&&cost>=0);
+  const valid=phaseValid&&costsValid&&Number.isFinite(baselineScriptMsPerSecond)&&baselineScriptMsPerSecond>0;
   const scriptMsPerSecond=copies.reduce((sum,cost)=>sum+cost,0);
   return {baselineScriptMsPerSecond,scriptMsPerSecond,valid,
     increaseMsPerSecond:valid?scriptMsPerSecond-baselineScriptMsPerSecond:null,
     ratio:valid?scriptMsPerSecond/baselineScriptMsPerSecond:null,
     growthDetected:valid&&scriptMsPerSecond>baselineScriptMsPerSecond,
-    overBudget:valid&&scriptMsPerSecond>IDLE_SCRIPT_MS_PER_SECOND,threshold:IDLE_SCRIPT_MS_PER_SECOND};
+    baselineOverBudget:Number.isFinite(baselineScriptMsPerSecond)&&baselineScriptMsPerSecond>IDLE_SCRIPT_MS_PER_SECOND,
+    overBudget:costsValid&&scriptMsPerSecond>IDLE_SCRIPT_MS_PER_SECOND,threshold:IDLE_SCRIPT_MS_PER_SECOND};
 }
 
 /** Two independent live boards execute the same clock work; no measured cost is multiplied. */
@@ -66,7 +68,8 @@ export async function doubledIdle(browser: Browser, primary: Cdp, base: string, 
       const calendar=heard.calendar();
       const start=starts[index],idle = {from:start.from,to,cellMs,requests,events:boardEvents,calendar,renders:reading.renders,mutations:reading.mutations,scriptMsPerSecond};
       const problems=[...idlePhaseProblems(phase,planned.boundary,planned.quotaBoundary),
-        ...idleRetentionProblems(start.retentionBefore,retentionAfter,start.from,to,planned.quotaBoundary),...idleProblems(idle)];
+        ...idleRetentionProblems(start.retentionBefore,retentionAfter,start.from,to,planned.quotaBoundary),...idleObservationProblems(idle)];
+      const budgetProblems=idleScriptProblems(scriptMsPerSecond);
       if(!(start.from<planned.quotaBoundary&&planned.quotaBoundary<to))problems.push('idle counters did not include regular quota retirement');
       if(start.firstReading.commits||start.firstReading.mutations.length)problems.push('idle work crossed the opening measurement boundary');
       if(reading.commits!==lastReading.commits||JSON.stringify(reading.mutations)!==JSON.stringify(lastReading.mutations))problems.push('idle work crossed the closing measurement boundary');
@@ -75,7 +78,7 @@ export async function doubledIdle(browser: Browser, primary: Cdp, base: string, 
       const due=start.retentionBefore?.quota?.rows.filter(row=>row.second!==null&&start.from<row.second+1+period&&row.second+1+period<to)
         .map(row=>({sourceId:row.sourceId,windowId:row.windowId})).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
       return {id:index,cards:start.cards,seconds,scriptMsPerSecond,phase,events,boardEvents,calendar,deviceContacts,deviceHints,
-        counterFrom:start.from,counterTo:to,retentionBefore:start.retentionBefore,retentionAfter,due,problems};
+        counterFrom:start.from,counterTo:to,retentionBefore:start.retentionBefore,retentionAfter,due,problems,budgetProblems,overBudget:budgetProblems.length>0};
     }));
     // Different calendar windows can retire different 5/15-minute rows. Preserve
     // their snapshots; growth concerns two live boards, not identical retirement cost.

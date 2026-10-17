@@ -113,7 +113,7 @@ for (const [file, name] of [['cpuProfile.ts', 'profileControls'], ['panningDiagn
     let stamp = 0;
     const run = caller(file, name, {
       openTab, probeScript: () => '', Requests: class {}, idleWindow: () => ({from: 0, to: 120_000, boundary: 60_000}), sleep: async () => {},
-      metrics: async () => ({Timestamp: ++stamp}), scriptPerSecond: () => .15, idlePhaseScript: () => '', idlePhaseProblems: () => [], idleRetentionProblems:()=>[], idleProblems: () => [], idleSensitivity,
+      metrics: async () => ({Timestamp: ++stamp}), scriptPerSecond: () => .15, idlePhaseScript: () => '', idlePhaseProblems: () => [], idleRetentionProblems:()=>[], idleObservationProblems: () => [], idleScriptProblems: () => [], idleSensitivity,
       profileInterval: async (_cdp: unknown, _browser: unknown, work: () => Promise<unknown>, output: {saveTrace(name: string, value: unknown): void}) => {
         await work(); output.saveTrace('profile', {status: 'complete', profile: {}, clocks: []});
       },

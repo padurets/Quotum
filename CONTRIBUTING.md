@@ -172,7 +172,9 @@ real cell transition. The sum of their measured script costs must exceed the
 single-board baseline. The report retains both costs, their ratio and whether the
 sum crosses the unchanged 0.3 ms/s budget; crossing it is not required to detect
 growth. Invalid measurements or no growth fail this sensitivity experiment, which
-cannot replace CI.
+cannot replace CI. Budget failures of the baseline, each copy and their sum remain
+visible independently of measurement validity. A baseline above budget still exits
+unsuccessfully after recording the sensitivity result.
 The optional `benchmark-idle-cpu-diagnostics` PR label uses the dashboard job's prefix
 and profiles its original CI idle interval, retaining its load and 120-second window.
 Manual diagnostics without `--scope dashboard` retain the complete traffic matrix.

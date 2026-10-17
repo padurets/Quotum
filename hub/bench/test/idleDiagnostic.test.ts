@@ -4,7 +4,7 @@ import {idleSensitivity} from '../idleDiagnostic.js';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
-import {idleProblems} from '../budget.js';
+import {idleProblems,idleObservationProblems,idleScriptProblems} from '../budget.js';
 import {idlePhaseProblems,idlePhaseScript} from '../still.js';
 import {idleRetentionProblems,type IdleRetention} from '../idleRetention.js';
 import {scriptPerSecond} from '../report.js';
@@ -85,11 +85,11 @@ async function doubleControl(options:{missed?:number;scope?:number;cohort?:numbe
   const declaration=source.statements.find((node):node is ts.FunctionDeclaration=>ts.isFunctionDeclaration(node)&&node.name?.text==='doubledIdle');
   assert.ok(declaration);
   const metricReads=[0,0];
-  const context={run:undefined as ((...args:unknown[])=>Promise<{valid:boolean;growthDetected:boolean;baselineRetention:IdleRetention;reports:{problems:string[];due:{sourceId:string;windowId:string}[]}[]}> )|undefined,
+  const context={run:undefined as ((...args:unknown[])=>Promise<ReturnType<typeof idleSensitivity>&{baselineRetention:IdleRetention;reports:{problems:string[];budgetProblems:string[];overBudget:boolean;due:{sourceId:string;windowId:string}[]}[]}> )|undefined,
     openTab:async()=>({cdp:pages[1],close:async()=>{closed++;}}),probeScript:()=>'',Requests:class{count=0;byPath={};counting=false;},
     idleWindow:()=>({from,to,boundary,quotaBoundary,cellMs:300_000}),sleep:async()=>{now=++waits===1?from:to;},Date:{now:()=>now},
     metrics:async(page:{id:number})=>{if(options.lateCounter&&metricReads[page.id]===0)now=quotaBoundary;return {Timestamp:metricReads[page.id]++?to/1000:from/1000,ScriptDuration:metricReads[page.id]>1?(options.costs?.[page.id]??.15)*120/1000:0};},
-    scriptPerSecond,idlePhaseScript,idlePhaseProblems,idleRetentionProblems,idleProblems,idleSensitivity};
+    scriptPerSecond,idlePhaseScript,idlePhaseProblems,idleRetentionProblems,idleObservationProblems,idleScriptProblems,idleSensitivity};
   runInNewContext(ts.transpileModule(declaration.getText(source).replace(/^export /,'')+'\nglobalThis.run=doubledIdle;',{
     compilerOptions:{target:ts.ScriptTarget.ES2022},
   }).outputText,context);
@@ -116,8 +116,25 @@ for(const option of ['scope','cohort','opening','closing'] as const)test(`the do
   assert.equal(result.growthDetected,false);assert.equal(result.valid,false);
 });
 
-test('the double control preserves each copy budget and rejects no growth',async()=>{
-  assert.equal((await doubleControl({costs:[.301,.15]})).growthDetected,false);
+test('copy budget excess stays separate from valid measured growth',async()=>{
+  const result=await doubleControl({costs:[.301,.15]});
+  assert.equal(result.valid,true);assert.equal(result.growthDetected,true);
+  assert.equal(result.overBudget,true);
+  assert.equal(result.reports[0].overBudget,true);assert.equal(result.reports[1].overBudget,false);
+  assert.equal(result.reports[0].budgetProblems.length,1);assert.equal(result.reports[0].problems.length,0);
+});
+
+test('an invalid phase cannot demonstrate growth but retains the measured budget excess',()=>{
+  const result=idleSensitivity(.1,[.301,.15],false);
+  assert.equal(result.valid,false);assert.equal(result.growthDetected,false);
+  assert.equal(result.overBudget,true);
+});
+
+test('the canonical idle check still rejects script above the unchanged budget',()=>{
+  assert.deepEqual(idleProblems({from:0,to:120_000,cellMs:300_000,requests:{count:0,byPath:{}},events:{ping:4},renders:[],mutations:[],scriptMsPerSecond:.301}),['script took 0.301 ms a second, more than 0.3']);
+});
+
+test('the double control still rejects no measured growth',async()=>{
   assert.equal((await doubleControl({costs:[.04,.04]})).growthDetected,false);
 });
 

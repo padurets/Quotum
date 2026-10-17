@@ -14,7 +14,7 @@ import {SETS} from '../demo/catalogue.js';
 import {addressOf, Demo, prepare, Stop} from '../demo/index.js';
 import {cards, people} from '../demo/model.js';
 import type {Snapshot} from '../server/projection.js';
-import {activityCreditProblems, chartProblems, creditRenderProblems, HISTORY_BYTES_PER_MEASUREMENT, idleProblems, measuredProblems, percentile, privateWorkRenderProblems, renderProblems} from './budget.js';
+import {activityCreditProblems, chartProblems, creditRenderProblems, HISTORY_BYTES_PER_MEASUREMENT, idleObservationProblems, idleProblems, measuredProblems, percentile, privateWorkRenderProblems, renderProblems} from './budget.js';
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
@@ -405,12 +405,12 @@ async function main() {
       await finish(problems.length ? 1 : 0); return;
     }
     if (idleDiagnostic) {
-      const baselineProblems=[...phaseProblems,...idleProblems(idle)];
+      const baselineProblems=[...phaseProblems,...idleObservationProblems(idle)];
       if(baselineProblems.length)throw new Stop('idle sensitivity baseline failed: '+baselineProblems.join('; '));
       say('checking sensitivity with two independent copies of the same idle board');
       const control=await doubledIdle(browser,cdp,address.base,seconds,cellMs,evidence,heard,scriptMsPerSecond,{retention:retentionBefore,bootstrapSource});
       say(`idle double control: ${JSON.stringify(control)}`);
-      await finish(control.growthDetected?0:1);return;
+      await finish(control.growthDetected&&!control.baselineOverBudget?0:1);return;
     }
 
     evidence.begin('measurements');
