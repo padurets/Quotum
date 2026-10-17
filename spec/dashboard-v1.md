@@ -590,8 +590,10 @@ session source, source-work source, source-dimension group key, and reset, grant
 plan source. Unknown source strings and null remain literal; project/device keys,
 money and all tape fields keep their shape. A reader requires the captured token and
 run, rejects invalid ordinals, and restores these fields before publishing the reply.
-The client opts in only when every requested nonempty metadata token has its captured
-basis. A full metadata reply and requests without this header retain the legacy shape;
+The client opts in only when every cell-returning section's nonempty metadata token has
+its captured basis. A `cells:"skip"` section may reuse its metadata token without a source
+dictionary: its chunks are empty, and source fields in its tape remain literal.
+A full metadata reply and requests without this header retain the legacy shape;
 older hubs may ignore the header. Optional packing cannot fail a native section that
 already fits, and lookup allocations share the existing response reservation.
 

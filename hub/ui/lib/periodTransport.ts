@@ -90,11 +90,11 @@ export class PeriodTransport implements HistoryMember {
     const drawingSources=demands.some(demand=>!!demand.basis?.meta&&demand.query.meta===demand.basis.meta);
     for(const scope of PERIOD_SCOPES){const original=body[scope];if(!original)continue;const query=body[scope]={...original};
       query.evidence??=!extras?'skip':this.cursors.get(cursorKey(scope,query));
-      // A sibling token has no captured source dictionary. Standalone ledgers can
-      // reuse it without disabling a drawing reader's source encoding.
+      // Cell-free ledgers need no source dictionary. A sibling returning cells
+      // still needs full metadata beside a drawing's captured source basis.
       if(extras&&!demands.some(demand=>demand.scope===scope)){
         const prior=this.metadata.get(scope);
-        query.meta??=!drawingSources&&prior&&prior.board===intent.board&&prior.meters===query.meters&&prior.unit===query.unit&&prior.currency===query.currency&&prior.work===query.work?prior.tag:'';
+        query.meta??=(!drawingSources||query.cells==='skip')&&prior&&prior.board===intent.board&&prior.meters===query.meters&&prior.unit===query.unit&&prior.currency===query.currency&&prior.work===query.work?prior.tag:'';
       }
     }
     const appliedIntent={...intent,request:body};
@@ -148,7 +148,7 @@ export class PeriodTransport implements HistoryMember {
 
 /** Charge transport staging before decoding; all consumers use the same retained budget. */
 export async function fetchPeriod(board:string,body:PeriodRequest,signal:AbortSignal,reserve:(bytes:number)=>boolean,bases:HistoryBases={}):Promise<PeriodReply> {
-  const sources=PERIOD_SCOPES.some(scope=>!!bases[scope]?.meta)&&PERIOD_SCOPES.every(scope=>!body[scope]?.meta||body[scope]!.meta===bases[scope]?.meta);
+  const sources=PERIOD_SCOPES.some(scope=>!!bases[scope]?.meta)&&PERIOD_SCOPES.every(scope=>!body[scope]?.meta||body[scope]!.cells==='skip'||body[scope]!.meta===bases[scope]?.meta);
   const response=await fetch(`/api/boards/${encodeURIComponent(board)}/period`,{method:'POST',cache:'no-store',headers:{'content-type':'application/json',...(sources?{'x-quotum-history-sources':'basis'}:{})},body:JSON.stringify(body),signal:AbortSignal.any([signal,AbortSignal.timeout(12_000)])});
   if(!response.body)throw new Error('empty_period_reply');
   // The native response consumer finishes Chromium's network record. A bounded

@@ -262,7 +262,8 @@ test('source capability covers every captured token and accepts an older hub rep
   assert.deepEqual(await fetchPeriod('b',request,new AbortController().signal,()=>true,{quota:prior}),legacy);
   await fetchPeriod('b',{...request,funds:{meta:'uncovered'}},new AbortController().signal,()=>true,{quota:prior});
   await fetchPeriod('b',request,new AbortController().signal,()=>true,{quota:{...prior,meta:'stale'}});
-  assert.deepEqual(headers,['basis',null,null]);
+  await fetchPeriod('b',{...request,funds:{cells:'skip',meta:'uncovered'}},new AbortController().signal,()=>true,{quota:prior});
+  assert.deepEqual(headers,['basis',null,null,'basis']);
 });
 
 test('standalone metadata borrowing preserves mixed drawing source capabilities',async t=>{
@@ -273,8 +274,8 @@ test('standalone metadata borrowing preserves mixed drawing source capabilities'
     const body=JSON.parse(String(init?.body)) as PeriodRequest;sent.push({body,header:new Headers(init?.headers).get('x-quotum-history-sources')});
     return new Response(JSON.stringify({basis,...Object.fromEntries((['quota','funds'] as const).filter(scope=>body[scope]).map(scope=>[scope,{state:'complete',basis,value:{run:'r',now:1000,meta:scope==='funds'?'funds-captured':body[scope]!.meta,chunks:[]}}]))}));
   });
-  for(const mixed of [false,true]){
-    const pool=new HistoryPool(),request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:1000},evaluatedAt:1000,quota:{cell:'1',from:'0',to:'1000',cells:'skip'},...(mixed?{funds:{cell:'1',from:'0',to:'1000',cells:'skip'}}:{})};
+  for(const [mixed,skipSibling] of [[false,true],[true,true],[true,false]]){
+    const pool=new HistoryPool(),request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:1000},evaluatedAt:1000,quota:{cell:'1',from:'0',to:'1000',cells:'skip'},...(mixed?{funds:{cell:'1',from:'0',to:'1000',...(skipSibling?{cells:'skip' as const}:{})}}:{})};
     const intent:PeriodIntent={board:'b',generation:1,revision:1,request};let borrowed=0,received=0;
     const transport=new PeriodTransport(pool,()=>intent,()=>{received++;},fetchPeriod);
     transport.metadataToken=()=>{borrowed++;return 'standalone-token';};
@@ -294,10 +295,18 @@ test('standalone metadata borrowing preserves mixed drawing source capabilities'
         await settle();assert.equal(received,2);assert.equal(borrowed,0);
         assert.equal(sent.at(-1)!.header,'basis','a cached sibling token cannot disable the drawing reader source capability');
         assert.equal(sent.at(-1)!.body.quota!.meta,prior.meta);
-        assert.equal(sent.at(-1)!.body.funds!.meta,'');
+        assert.equal(sent.at(-1)!.body.funds!.meta,skipSibling?'funds-captured':'','only a cell-free sibling can reuse a token without a captured source dictionary');
       }
     }finally{transport.reset();await settle();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);}
   }
+});
+
+test('a cell-free sibling cannot publish source ordinals without its own captured basis',async t=>{
+  const prior:HistoryBasis={run:'r',now:1000,meta:'captured',historyStart:0,known:{work:0,sources:{source:0}}};
+  const basis={run:'r',revision:'1',evaluatedAt:1000,evidenceCut:1000,range:{from:0,to:1000}};
+  const reply={basis,funds:{state:'complete',basis,value:{run:'r',now:1000,meta:'sibling',sourceEncoding:'basis',chunks:[]}}};
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify(reply)));
+  await assert.rejects(fetchPeriod('b',{version:1,selection:{mode:'range',from:0,to:1000},evaluatedAt:1000,quota:{meta:prior.meta},funds:{cells:'skip',meta:'sibling'}},new AbortController().signal,()=>true,{quota:prior}),/invalid_period_sources/);
 });
 
 test('an aborted parsed source reply cannot decode or publish its numeric slots',async t=>{
