@@ -8,6 +8,7 @@ import {Sessions,KEEP_MS,CREDIT_MS} from '../../server/sessions';
 import {sessionPresent,runningFrom,runningChangesAt,since} from '../lib/agents';
 import * as agents from '../lib/agents';
 import {selector,sameJson} from '../lib/store';
+import {namedCardsOf} from '../lib/board';
 import {columnShown,colorOf,AGENTS} from '../lib/view';
 import {timeRangeLabel} from '../lib/timeRange';
 import {t as translate} from '../i18n';
@@ -96,12 +97,24 @@ test('device contacts update their own state without projecting period demand ag
   try{
     const before=h.period.get(),board=h.page.get().board,tape=h.period.tapes.get('quota'),bytes=h.pool.estimatedBytes;
     assert.ok(tape);
+    const source=board!.cards[h.source],windows=source.windows,used=windows[0].used;
+    const windowsProperty=Object.getOwnPropertyDescriptor(source,'windows')!,usedProperty=Object.getOwnPropertyDescriptor(windows[0],'used')!;
+    let windowReads=0,valueReads=0;
+    Object.defineProperty(source,'windows',{enumerable:true,configurable:true,get:()=>{windowReads++;return windows;}});
+    Object.defineProperty(windows[0],'used',{enumerable:true,configurable:true,get:()=>{valueReads++;return used;}});
+    // Both chart/table pairs subscribe through this same selector and equality check.
+    const readers=Array.from({length:4},()=>selector(h.page,()=>({select:state=>namedCardsOf(state,'quota'),equal:sameJson})));
+    const selected=readers.map(read=>read()),stops=readers.map(read=>h.page.subscribe(read));
+    assert.equal(selected[0].find(card=>card.id===h.source)!.windows[0].used,used);
+    assert.ok(windowReads>0&&valueReads>0,'the initial consumers read the real source and its quota value');
+    windowReads=valueReads=0;
     const queries=t.mock.method(h.period,'queries');
     let published=0;const stop=h.period.subscribe(()=>published++);
     try{
       for(let i=1;i<=8;i++)h.event({type:'deviceContacts',data:{devices:[{deviceId:h.device,lastSeenAt:NOW+i*1000}]}});
       await flush();
       const contactProjections=queries.mock.callCount();
+      const contactReads={windowReads,valueReads};
       assert.equal(h.page.get().deviceContacts![h.device],NOW+8000);
       assert.equal(h.page.get().board,board);assert.equal(h.period.get(),before);
       assert.equal(h.period.tapes.get('quota'),tape);assert.equal(h.pool.estimatedBytes,bytes);
@@ -110,7 +123,9 @@ test('device contacts update their own state without projecting period demand ag
       assert.equal(h.requests.length,1,'a subsequent history event still reads its new evidence');
       assert.ok(queries.mock.callCount()>contactProjections);
       assert.equal(contactProjections,0,'contacts must not rebuild unchanged analytical selections');
-    }finally{stop();}
+      assert.deepEqual(readers.map(read=>read()),selected);
+      assert.deepEqual(contactReads,{windowReads:0,valueReads:0},'contacts must not rebuild or serialize unchanged UI quota cards');
+    }finally{stop();stops.forEach(stop=>stop());Object.defineProperty(source,'windows',windowsProperty);Object.defineProperty(windows[0],'used',usedProperty);}
   }finally{await h.close();}
 });
 

@@ -122,6 +122,25 @@ test('credit heartbeats preserve quota drawing inputs but quota windows, resets 
   store.dispatch(hub({type:'card',data:{...cap,meters:[{...cap.meters![0],amount:'2400'}]}}));
   assert.notEqual(quota(),beforeCap);
 });
+
+test('named card scopes keep their order and cannot reuse a closed board with the same id',()=>{
+  const subscription=card('subscription'),wallet=card('wallet',0,{provider:'openrouter',windows:[]});
+  const initial=run(hub({type:'snapshot',data:snapshot({sources:[subscription,wallet]})}));
+  const ids=(state:PageState,scope?:'quota'|'budget'|'funds')=>namedCardsOf(state,scope).map(card=>card.id);
+  assert.deepEqual(ids(initial),['subscription','wallet']);
+  assert.deepEqual(ids(initial,'quota'),['subscription']);
+  assert.deepEqual(ids(initial,'funds'),['subscription']);
+  assert.deepEqual(ids(initial,'budget'),['wallet']);
+  const reversed=reduce(initial,hub({type:'lineup',data:{sources:['wallet','subscription']}}));
+  assert.deepEqual(ids(reversed),['wallet','subscription']);
+  const closed=reduce(reversed,{type:'board-close'});
+  for(const scope of [undefined,'quota','budget','funds'] as const)assert.deepEqual(ids(closed,scope),[]);
+  const reopened=reduce(closed,hub({type:'snapshot',data:snapshot({sources:[card('subscription',73)]})}));
+  assert.equal(reopened.board!.id,initial.board!.id);
+  assert.equal(namedCardsOf(reopened,'quota')[0].windows[0].used,73);
+  assert.equal(namedCardsOf(initial,'quota')[0].windows[0].used,50,'the earlier projection remains unchanged');
+  assert.deepEqual(ids(reopened,'budget'),[]);
+});
 /** Every slice of the state, to compare what stayed the same object. */
 const slices = (s: PageState) => ({
   meta: s.board!.meta,
