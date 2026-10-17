@@ -17,6 +17,8 @@ import {idleRetentionScript,idleRetentionProblems} from '../idleRetention.js';
 import {gridSnapshotScript,gridReadScript} from '../idleCpuDiagnostic.js';
 import {ScriptBinding as SourceBinding} from '../scriptBinding.js';
 import {idleSensitivity} from '../idleDiagnostic.js';
+import {preparationOwnersScript} from '../preparationOwners.js';
+import {deadline} from '../deadline.js';
 
 // Execute the actual caller and parser, not a second implementation of its phase branches.
 // Leaf phases and browser IO are stand-ins; these tests prove routing/failure propagation only.
@@ -28,7 +30,7 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close'|'retirement-binding-mismatch'|'retirement-debugger-active'|'retirement-probe-missing'|'idle-request'|'double-no-growth';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close'|'retirement-binding-mismatch'|'retirement-debugger-active'|'retirement-probe-missing'|'idle-request'|'double-no-growth'|'owner-read';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const injected:{interval:number;expression:string;kind:'idle-probe'}[]=[];
@@ -47,6 +49,11 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     mark('browser-close');if(fault==='browser-close')throw Error('browser-close-red');
   }};
   const cdp={send:async()=>({}),evaluate:async(expression:string)=>{
+    if(expression.includes('__quotumPreparationOwners?.start()'))mark('owner-start');
+    if(expression.startsWith('window.__quotumPreparationOwners?.stop()')){
+      mark('owner-stop');if(fault==='owner-read')throw Error('owner observer read unavailable');
+      return {mode:'diagnostic',status:'complete'};
+    }
     if(expression.includes(".card:not(.is-loading)"))return 1;
     if(expression==='__quotumBench.read()')return reading;
     if(expression==='window.__quotumIdleRetention()'){
@@ -105,7 +112,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     metrics:async()=>{const opening=metricReads++===0;
       if(opening&&fault==='opening-metrics')now=(saved.get('idle-plan') as {quotaBoundary:number}).quotaBoundary+1;
       mark(opening?'metrics-before':'metrics-after');return{Timestamp:now/1000,ScriptDuration:opening?0:red('idle')?.1:env.QUOTUM_BENCH_DIAGNOSE_IDLE==='double'?.012:0};},
-    cellOf,idleObservationProblems,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,idleRetentionScript,idleRetentionProblems,
+    cellOf,idleObservationProblems,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,idleRetentionScript,idleRetentionProblems,preparationOwnersScript,deadline,
     delta,round,scriptPerSecond,tally,measure:async()=>{mark('measure');return{source:'fixture',from:now,to:now,
       ingestLatencies:[1],latencies:[red('measure')?Infinity:1],chartLatencies:[red('measure')?Infinity:1],historyBytes:1,
       reading:{...reading,renders:[{node:'card',region:'card:fixture',time:false,kind:null,count:1}]}};},
@@ -141,7 +148,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     traceIdle:async(_target:unknown,actualBrowser:unknown,read:()=>Promise<unknown>)=>{
       assert.equal(actualBrowser,browser);mark('idle-trace');
       if(fault==='idle-trace-cancel'){listeners.get('SIGTERM')!();await exited;throw Error('cancelled-idle-trace');}
-      const value=await read();if(fault==='idle-trace-throw')throw Error('idle-trace-original');return value;
+      const value=await read();if(fault==='idle-trace-throw')throw Error('idle-trace-original');mark('idle-trace-complete');return value;
     },
   };
   runInNewContext(code,context);
@@ -263,6 +270,13 @@ for(const scope of ['all','dashboard'])for(const fault of [undefined,'idle','ope
   assert.equal(result.error,undefined);assert.deepEqual(result.exits,[fault?1:0]);
   assert.deepEqual(result.statuses,[fault==='idle-trace-cancel'?'cancelled':fault?'failed':'diagnostic']);
   assert.equal(result.calls.includes('history'),scope==='all');assert.ok(result.calls.includes('idle-trace'));
+  const interrupted=['idle-trace-cancel','idle-trace-throw'].includes(fault??'');
+  assert.equal(result.calls.filter(call=>call==='owner-start').length,1);
+  assert.equal(result.calls.filter(call=>call==='owner-stop').length,interrupted?0:1);
+  const owners=result.saved.get('idle-preparation-owners') as {status:string;reason?:string};
+  assert.equal(owners.status,interrupted?'insufficient-evidence':'complete');
+  if(interrupted)assert.equal(owners.reason,'original idle recording interrupted');
+  else {const completed=result.calls.indexOf('idle-trace-complete');assert.ok(completed>=0&&result.calls.indexOf('owner-stop')>completed,'the extra command follows successful trace cleanup');}
   assert.ok(tail.every(name=>!result.calls.includes(name)));
   assert.equal(result.calls.includes('idle-binding'),!['idle-trace-cancel','idle-trace-throw'].includes(fault??''));
   if(fault!=='idle-trace-cancel'){
@@ -272,6 +286,12 @@ for(const scope of ['all','dashboard'])for(const fault of [undefined,'idle','ope
     assert.equal((result.saved.get('idle-timing-result') as {problems:unknown[]}).problems.length>0,['idle','opening-metrics','idle-trace-throw','idle-binding'].includes(fault??''));
   }
   for(const name of ['stream-close','browser-close','demo-stop','idle-binding-close'])assert.equal(result.calls.filter(call=>call===name).length,1);
+});
+test('an owner-observer read failure preserves the original successful idle verdict and records missing evidence',async()=>{
+  const result=await run(['--scope','dashboard'],'owner-read',{QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'1'});
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);assert.deepEqual(result.statuses,['diagnostic']);
+  assert.equal(result.calls.filter(call=>call==='owner-stop').length,1);
+  assert.deepEqual(safeEvidence(result.saved.get('idle-preparation-owners')),{mode:'diagnostic',status:'insufficient-evidence',reason:'owner observer read unavailable'});
 });
 for(const [mode,next] of [['timing','idle-cpu'],['cpu','browser-startup']])test('idle '+mode+' workflow uses the required dashboard prefix and unchanged deadline',()=>{
   const workflow=readFileSync(new URL('../../../.github/workflows/bench-diagnostics.yml',import.meta.url),'utf8').split('  idle-'+mode+':\n')[1].split('\n  '+next+':')[0];

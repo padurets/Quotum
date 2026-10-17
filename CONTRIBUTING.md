@@ -217,6 +217,13 @@ reads and disable each have a two-second diagnostic bound; the secondary socket
 always closes. This outcome cannot satisfy the required benchmark.
 After that measurement and thread-session cleanup, the diagnostic binds the received
 client bytes and parsed script owner, outside both measured intervals.
+This mode also observes preparation selections through the existing history readers.
+It preserves lazy scheduler creation and records at most 2,048 scalar owner/job receipts,
+classifying period, history-plot and history-compose owners by object identity.
+Other owners stay unknown. A selected job need not advance: validity can cancel it.
+Deletion or replacement does not prove completion. Missing setup, observer errors and
+omitted receipts remain insufficient evidence. These observations identify jobs in
+that instrumented run; they do not attribute inner operations or CPU cost.
 The owned headless browser uses one raster worker: concurrent software raster jobs
 in Chrome 154 can leave a tile unfinished and deadlock an input frame's commit.
 An attached CDP browser retains its own launch settings.

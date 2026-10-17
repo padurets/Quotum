@@ -42,6 +42,8 @@ import {reloadHubProbe} from './panningReload.js';
 import {traceIdle} from './idleTiming.js';
 import {IdleCpuDiagnostic,sourceIdentity,idleGeometry,planIdleEdge,idleBoundaryProfile,retirementReadScript,gridSnapshotScript,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
 import {idleRetentionScript,idleRetentionProblems,type IdleRetention} from './idleRetention.js';
+import {preparationOwnersScript} from './preparationOwners.js';
+import {deadline} from './deadline.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -254,7 +256,7 @@ async function main() {
     const bootstrapSource=`localStorage.setItem('quotum.locale','en');
       localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),agentsSort:{column:'project',descending:false}}));
       window.__quotumInspectHistoryPool=pool=>{
-        window.__quotumIdleRetention=()=>(${idleRetentionScript()})(pool);
+        window.__quotumIdleRetention=()=>(${idleRetentionScript()})(pool);${idleTimingDiagnostic?`window.__quotumPreparationOwners=(${preparationOwnersScript()})(pool);`:''}
         window.__quotumWalletState=(source,authority)=>{
         const p=[...pool.members].find(m=>m.tapes),reader=[...pool.members].find(m=>m.scope==='budget'),tape=p?.tapes.get('budget');
         const work=p?.moneyWorkAt(source,Date.now()),group=tape?.tape.money.find(m=>m.source===source),shown=reader?.get();
@@ -325,7 +327,7 @@ async function main() {
 
     say(`watching the idle page for ${seconds} s`);
     evidence.begin('idle');
-    await cdp.evaluate('__quotumBench.reset()');
+    await cdp.evaluate('__quotumBench.reset()'+(idleTimingDiagnostic?';window.__quotumPreparationOwners?.start()':''));
     const phaseSource=idlePhaseScript(cellMs)+(idleCpuMode==='grid'?';'+gridSnapshotScript:'');
     await cdp.evaluate(phaseSource);
     if(idleCpuMode==='grid')idleBinding?.rememberInjected(2,phaseSource,'idle-probe');
@@ -372,7 +374,16 @@ async function main() {
       if(idleCpu)saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='1'?'Temporally aligned natural edge using the unchanged120s CI idle protocol; profiler and trace overhead is unqualified.':idleCpuMode==='trace'?'Original CI idle protocol; no CPU sampling, tracing overhead is unqualified.':'Original CI idle protocol with CPU sampling; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,reading,problems:originalIdleTimingProblems}});
       return {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore};
     };
-    const {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore} = idleTimingDiagnostic ? await traceIdle(cdp, browser, readIdle, evidence) : await readIdle();
+    const observedIdle=async()=>{
+      let completed=false;
+      try{const value=idleTimingDiagnostic?await traceIdle(cdp,browser!,readIdle,evidence):await readIdle();completed=true;return value;}
+      finally{if(idleTimingDiagnostic){
+        if(!completed)evidence.save('idle-preparation-owners',{mode:'diagnostic',status:'insufficient-evidence',reason:'original idle recording interrupted'});
+        else try{evidence.save('idle-preparation-owners',await deadline(2000,signal=>cdp.evaluate('window.__quotumPreparationOwners?.stop()??{mode:"diagnostic",status:"insufficient-evidence",reason:"owner observer unavailable"}',signal),owner.signal));}
+        catch{evidence.save('idle-preparation-owners',{mode:'diagnostic',status:'insufficient-evidence',reason:'owner observer read unavailable'});}
+      }}
+    };
+    const {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore} = await observedIdle();
     if(shortIdleProfile){
       const problems=[...originalIdleTimingProblems!];
       const original={seconds,from,to,cellMs,before,after,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,reading,phaseProblems};
