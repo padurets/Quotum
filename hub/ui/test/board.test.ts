@@ -74,6 +74,33 @@ test('device contact deltas preserve every board selector and ignore older conta
   assert.equal(accept(next,{type:'deviceContacts',data:{devices:[{deviceId:'a',lastSeenAt:1000}]}}),next);
 });
 
+test('unused calendar summaries retain card and analytics inputs while all displayed data still updates',()=>{
+  const meter={id:'balance',kind:'balance' as const,unit:'USD',amount:'9007199254740993',at:1000,staleAfterMs:10000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null};
+  const summary={from:0,to:1000,amount:'7',complete:true,knownFrom:0,uncertain:false,unlocated:[]};
+  const spending={day:summary,week:summary,month:summary};
+  const wallet=card('wallet',0,{provider:'openrouter',windows:[],meters:[meter],spending});
+  const funds=card('funds',50,{spending:null});
+  const data=snapshot({sources:[wallet,funds]}),wire=JSON.stringify(data),store=createStore(reduce,INITIAL);
+  store.dispatch({type:'hub',event:{type:'snapshot',data}});
+  const before=store.get().board!,named=selector(store,()=>({select:s=>namedCardsOf(s,'budget'),equal:shallowEqual})),names=named();
+  assert.equal(JSON.stringify(data),wire,'snapshot ingestion does not mutate the wire');
+  const changed={...wallet,spending:{...spending,day:{...summary,from:2000,to:2000,amount:null,complete:false,knownFrom:null}}};
+  const packet=JSON.stringify(changed);
+  store.dispatch({type:'hub',event:{type:'card',data:changed}});
+  assert.equal(store.get().board,before,'an unconsumed calendar summary cannot wake card or analytical subscribers');
+  assert.equal(named(),names);assert.equal(JSON.stringify(changed),packet);
+  for(const value of [null,undefined]){const next={...wallet,spending:value};store.dispatch({type:'hub',event:{type:'card',data:next}});assert.equal(store.get().board,before);assert.ok(Object.hasOwn(next,'spending'));}
+  store.dispatch({type:'hub',event:{type:'snapshot',data:{...data,sources:[changed,{...funds,spending}]}}});
+  assert.equal(store.get().board,before,'reconnects use the same displayed-card boundary');assert.equal(named(),names);
+  for(const patch of [{successAt:2000},{meters:[{...meter,amount:'9007199254740994'}]},{meters:[{...meter,at:2000}]},{keys:[]},{inventory:{complete:false,observed:1,missing:0,error:null}},{budget:{enabled:false,since:null,anchor:null,revision:'off'}},{owners:['Other']},{provider:'deepseek'},{plan:'new'},{error:'failed'},{stale:true},{measureIntervalMs:300_000 as const},{extra:'retained'}]) {
+    const old=store.get().board!.cards.wallet;
+    store.dispatch({type:'hub',event:{type:'card',data:{...wallet,...patch}}});
+    assert.notEqual(store.get().board!.cards.wallet,old,'all non-calendar data retains its original update semantics');
+    for(const [key,value]of Object.entries(patch))assert.deepEqual((store.get().board!.cards.wallet as unknown as Record<string,unknown>)[key],value);
+  }
+  const current=store.get().board;store.dispatch({type:'hub',event:{type:'deviceContacts',data:{devices:[{deviceId:'own-device',lastSeenAt:2000}]}}});assert.equal(store.get().board,current);
+});
+
 const hub = (event: HubEvent): PageEvent => ({type: 'hub', event});
 const run = (...events: PageEvent[]) => events.reduce(reduce, INITIAL);
 

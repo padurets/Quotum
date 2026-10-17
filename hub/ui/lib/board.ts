@@ -126,6 +126,13 @@ export const INITIAL: PageState = {connection: {status: 'connecting', lostAt: nu
 /** The value that was there when it is the same, so whatever reads it renders nothing. */
 const keep = <T>(old: T | undefined, next: T): T => (old !== undefined && sameJson(old, next) ? old : next);
 
+/** Displayed amounts use the period index, not the wire's calendar spending summary. */
+function displayCard(card:Card):Card {
+  if(!Object.hasOwn(card,'spending'))return card;
+  const {spending:_spending,...shown}=card;
+  return shown;
+}
+
 /** A record whose entries each stay as they were when the same; the record itself too when all are. */
 function keepEach<T>(old: Record<string, T> | undefined, next: Record<string, T>): Record<string, T> {
   const kept: Record<string, T> = {};
@@ -182,7 +189,7 @@ function snapshot(state: PageState, data: Snapshot): PageState {
       old?.lineup,
       data.sources.map(card => card.id),
     ),
-    cards: keepEach(old?.cards, Object.fromEntries(data.sources.map(card => [card.id, card]))),
+    cards: keepEach(old?.cards, Object.fromEntries(data.sources.map(card => [card.id, displayCard(card)]))),
     sessions: keepEach(old?.sessions, Object.fromEntries(Object.entries(data.sessions).map(([id, sessions]) => [id, normalizedSessions(sessions)]))),
     unattributedSessions: keep(old?.unattributedSessions, normalizedSessions(data.unattributedSessions??[])),
     cadence: keepEach(old?.cadence, data.cadence),
@@ -255,7 +262,7 @@ function hub(state: PageState, event: HubEvent): PageState {
         return shallowEqual(next, board) ? board : next;
       });
     case 'card':
-      return patch(state, board => set(board, 'cards', event.data.id, event.data));
+      return patch(state, board => set(board, 'cards', event.data.id, displayCard(event.data)));
     case 'unattributedSessions':
       return patch(state, board => {
         const unattributedSessions = keep(board.unattributedSessions, normalizedSessions(event.data.sessions));
