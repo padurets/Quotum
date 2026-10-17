@@ -40,7 +40,7 @@ import {startupTrials} from './startupDiagnostic.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
 import {traceIdle} from './idleTiming.js';
-import {IdleCpuDiagnostic,sourceIdentity,idleGeometry,planIdleEdge,retirementProfile,retirementReadScript,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
+import {IdleCpuDiagnostic,sourceIdentity,idleGeometry,planIdleEdge,idleBoundaryProfile,retirementReadScript,gridSnapshotScript,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
 import {idleRetentionScript,idleRetentionProblems,type IdleRetention} from './idleRetention.js';
 
 /**
@@ -115,6 +115,7 @@ async function main() {
   const panDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_PANNING;
   const idleDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE;
   const idleCpuMode = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_CPU;
+  const shortIdleProfile = idleCpuMode === 'retirement' || idleCpuMode === 'grid';
   const idleTimingDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING;
   const startupDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP;
   const startupWaitDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS;
@@ -135,17 +136,17 @@ async function main() {
     const dashboardPanning = options.scope === 'dashboard' && options.ci && (panDiagnostic === 'cpu' || panDiagnostic === 'trace');
     const dashboardIdleTiming = options.scope === 'dashboard' && options.ci && !options.cdp && idleTimingDiagnostic === '1'
       && ![panDiagnostic, idleDiagnostic, idleCpuMode, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE].some(Boolean);
-    const dashboardIdleProfile = options.scope === 'dashboard' && options.ci && !options.cdp && (idleCpuMode === 'profile' || idleCpuMode === 'retirement')
+    const dashboardIdleProfile = options.scope === 'dashboard' && options.ci && !options.cdp && (idleCpuMode === 'profile' || shortIdleProfile)
       && ![panDiagnostic, idleDiagnostic, idleTimingDiagnostic, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE].some(Boolean);
     if ((panDiagnostic === 'cpu' || dashboardPanning) && (options.cdp || otherDiagnostics.some(Boolean))) throw new Stop('Panning diagnostics require an owned browser without another diagnostic mode');
     if (options.scope !== 'all' && [panDiagnostic, ...otherDiagnostics].some(Boolean) && !dashboardPanning && !dashboardIdleTiming && !dashboardIdleProfile) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
-    if(idleCpuMode==='retirement'&&options.scope!=='dashboard')throw new Stop('Retirement profiling requires the dashboard CI scope');
+    if(shortIdleProfile&&options.scope!=='dashboard')throw new Stop('Short idle profiling requires the dashboard CI scope');
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
     if (startupDiagnostic && (startupDiagnostic !== '1' || options.cdp || panDiagnostic || idleDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup diagnostic mode');
     if (startupWaitDiagnostic && (startupWaitDiagnostic !== '1' || !options.ci || process.platform !== 'linux' || options.cdp || startupDiagnostic || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup wait diagnostic mode');
     if (idleDiagnostic && (idleDiagnostic !== 'double' || panDiagnostic)) throw new Stop('Unknown or conflicting idle diagnostic mode');
     if (panDiagnostic && !['pairs', 'trace', 'cpu'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
-    if (idleCpuMode && (!['1','trace','profile','retirement'].includes(idleCpuMode) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleTimingDiagnostic || startupDiagnostic || startupWaitDiagnostic || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
+    if (idleCpuMode && (!['1','trace','profile','retirement','grid'].includes(idleCpuMode) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleTimingDiagnostic || startupDiagnostic || startupWaitDiagnostic || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
     if (idleTimingDiagnostic && (idleTimingDiagnostic !== '1' || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleCpuMode || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle timing diagnostic mode');
     if(poolDiagnostic&&(poolDiagnostic!=='1'||!options.ci||options.cdp||panDiagnostic||idleDiagnostic||idleCpuMode||idleTimingDiagnostic||startupDiagnostic||startupWaitDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE))throw new Stop('Unknown or conflicting history pool diagnostic mode');
     await prepare(address);
@@ -228,10 +229,10 @@ async function main() {
     }
     tab = await openTab(browser);
     const {cdp} = tab;
-    let retirementBinding:{status?:string;debuggerDisabled?:boolean;injected?:{status?:string}}|undefined;
-    const idleBinding = idleTimingDiagnostic || idleCpuMode === 'retirement' ? new ScriptBinding(cdp, clientIdentity(), (name, value) => {
-      if(idleCpuMode==='retirement'){
-        if(name==='source-family-1')retirementBinding=value as typeof retirementBinding;
+    let boundaryBinding:{status?:string;debuggerDisabled?:boolean;injected?:{status?:string}}|undefined;
+    const idleBinding = idleTimingDiagnostic || shortIdleProfile ? new ScriptBinding(cdp, clientIdentity(), (name, value) => {
+      if(shortIdleProfile){
+        if(name==='source-family-1')boundaryBinding=value as typeof boundaryBinding;
         saveDiagnostic('idle-cpu-'+name,value);
       }else evidence.save(name,value);
     }) : undefined;
@@ -240,7 +241,7 @@ async function main() {
     await cdp.send('Page.enable');
     await cdp.send('Network.enable');
     await cdp.send('Performance.enable');
-    if(idleCpuMode&&idleCpuMode!=='retirement'){
+    if(idleCpuMode&&!shortIdleProfile){
       idleCpu=new IdleCpuDiagnostic(cdp,saveDiagnostic,clientIdentity(),!options.cdp,idleCpuMode==='trace'?'trace':'profile');
     }
     if(idleCpuMode)saveDiagnostic('idle-cpu-source',sourceIdentity());
@@ -267,7 +268,7 @@ async function main() {
       ${probeScript()}`;
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source:bootstrapSource});
     idleCpu?.binding.rememberInjected(1,bootstrapSource,'idle-probe');
-    if(idleCpuMode==='retirement')idleBinding?.rememberInjected(1,bootstrapSource,'idle-probe');
+    if(shortIdleProfile)idleBinding?.rememberInjected(1,bootstrapSource,'idle-probe');
     await cdp.send('Page.navigate', {url: `${address.base}/`});
 
     const shownBy = Date.now() + SHOWN_MS;
@@ -325,21 +326,23 @@ async function main() {
     say(`watching the idle page for ${seconds} s`);
     evidence.begin('idle');
     await cdp.evaluate('__quotumBench.reset()');
-    await cdp.evaluate(idlePhaseScript(cellMs));
+    const phaseSource=idlePhaseScript(cellMs)+(idleCpuMode==='grid'?';'+gridSnapshotScript:'');
+    await cdp.evaluate(phaseSource);
+    if(idleCpuMode==='grid')idleBinding?.rememberInjected(2,phaseSource,'idle-probe');
     heard.reset({from,to});
     requests.counting = true;
     let originalIdleTimingProblems: string[] | undefined;
-    let retirementCapture:Awaited<ReturnType<typeof retirementProfile>>|undefined;
+    let boundaryCapture:Awaited<ReturnType<typeof idleBoundaryProfile>>|undefined;
     const readIdle = async () => {
       const before = await metrics(cdp);
       const counterFrom=Date.now();
       // Both storage reads must finish inside the counters to prove when cleanup happened.
       const retentionBefore='quotaBoundary' in planned?await cdp.evaluate<IdleRetention|null>('window.__quotumIdleRetention()'):null;
       const firstReading = await cdp.evaluate<Reading>('__quotumBench.read()');
-      if(idleCpuMode==='retirement'){
+      if(shortIdleProfile){
         if(!('quotaBoundary' in planned))throw new Stop('Retirement profiling requires the original quota boundary');
-        retirementCapture=await retirementProfile(cdp,browser!,{from,to,quotaBoundary:planned.quotaBoundary},retentionBefore,saveDiagnostic);
-        idleBinding?.rememberInjected(2,retirementReadScript,'idle-probe');
+        boundaryCapture=await idleBoundaryProfile(cdp,browser!,{from,to,quotaBoundary:planned.quotaBoundary,boundary:planned.boundary,cellMs},retentionBefore,saveDiagnostic,idleCpuMode==='grid'?'grid':'retirement');
+        if(idleCpuMode==='retirement')idleBinding?.rememberInjected(2,retirementReadScript,'idle-probe');
       }
       await sleep(to - Date.now());
       const lastReading = await cdp.evaluate<Reading>('__quotumBench.read()');
@@ -362,7 +365,7 @@ async function main() {
       const calendar=heard!.calendar();
       const idle = {from, to, cellMs, requests, events:boardEvents, calendar, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
       evidence.save('idle', {...idle, allEvents:events, boardEvents, deviceContacts, deviceHints, planned, phase, retentionBefore,retentionAfter,counterFrom, counterTo, actualSeconds, phaseProblems});
-      if (idleTimingDiagnostic || idleCpu || idleCpuMode==='retirement') {
+      if (idleTimingDiagnostic || idleCpu || shortIdleProfile) {
         originalIdleTimingProblems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
         evidence.save(idleCpuMode?'idle-cpu-result':'idle-timing-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
       }
@@ -370,18 +373,18 @@ async function main() {
       return {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore};
     };
     const {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore} = idleTimingDiagnostic ? await traceIdle(cdp, browser, readIdle, evidence) : await readIdle();
-    if(idleCpuMode==='retirement'){
+    if(shortIdleProfile){
       const problems=[...originalIdleTimingProblems!];
       const original={seconds,from,to,cellMs,before,after,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,reading,phaseProblems};
       // A failed post-window binding must not erase the already frozen idle reading.
-      saveDiagnostic('idle-cpu-result',{mode:'diagnostic',status:'insufficient-evidence',reason:'post-window source binding pending',capture:retirementCapture,original,problems});
+      saveDiagnostic('idle-cpu-result',{mode:'diagnostic',status:'insufficient-evidence',reason:'post-window source binding pending',capture:boundaryCapture,original,problems});
       await idleBinding!.afterFamily([1,2]);
-      if(retirementCapture?.status!=='complete')problems.push('retirement capture incomplete');
-      if(retirementBinding?.status!=='complete'||retirementBinding.debuggerDisabled!==true||retirementBinding.injected?.status!=='complete')problems.push('retirement received or injected source binding incomplete');
-      saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:'Original120s idle counters include the short natural quota retirement capture; observer overhead is unqualified.',
-        status:problems.length?'insufficient-evidence':'complete',capture:retirementCapture,
+      if(boundaryCapture?.status!=='complete')problems.push('short idle capture incomplete');
+      if(boundaryBinding?.status!=='complete'||boundaryBinding.debuggerDisabled!==true||boundaryBinding.injected?.status!=='complete')problems.push('short idle received or injected source binding incomplete');
+      saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='grid'?'Original120s idle counters include the short natural grid capture and coincident clock work; observer overhead is unqualified.':'Original120s idle counters include the short natural quota retirement capture; observer overhead is unqualified.',
+        status:problems.length?'insufficient-evidence':'complete',capture:boundaryCapture,
         original,problems});
-      say('diagnostic only: natural quota retirement captured; sampled widths are not thread CPU time');
+      say(`diagnostic only: natural ${idleCpuMode} captured; sampled widths are not thread CPU time`);
       await finish(problems.length?1:0);return;
     }
     if(idleCpu){

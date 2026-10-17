@@ -191,6 +191,16 @@ order and the existing 100,000-entry and 32 MiB limits; the nominal 40,000 sampl
 not a guarantee. Cancellation joins the existing bounded profiler cleanup, without
 searching for another window or retrying. Sample widths are elapsed observations,
 not thread CPU time; profiler overhead remains unqualified.
+The manual `grid` option reuses this short profile around the original chart grid
+boundary, from six seconds before it to four seconds after it. Passive phase snapshots
+must observe all five axes advance once, after the original quota cleanup has finished.
+The admitted quota storage and its next deadline must stay unchanged during recording.
+The profile and cleanup must finish inside the original 120 seconds. Coincident
+minute-label updates are included; the recording does not isolate exclusive grid CPU.
+The same limits apply, without tracing, heap sampling or retries. Two declared source
+bindings cover the bootstrap and the combined phase observer and snapshot function.
+The thin command that calls that function remains a separate, unbound script in raw
+samples; it cannot inherit the function's source ownership.
 The optional `benchmark-idle-timing-diagnostics` PR label uses the dashboard job's
 prefix and original idle interval, without a CPU profiler or traffic matrix. Manual
 diagnostics without `--scope dashboard` retain the full prefix. A second connection to

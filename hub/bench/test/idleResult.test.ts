@@ -62,7 +62,7 @@ function fixture() {
   const events=new EventCounts();events.push('event: ping\ndata: {}\n\nevent: history\ndata: {}\n\n');
   const context = {metrics: async () => metric(metricReads++ ? 122 : 2, metricReads === 1 ? 0 : 0.2), cdp, sleep: async () => {}, to,
     Date: {now: () => to}, requests: {count: 1, byPath: {'/api/history': 1}, counting: true}, heard:events,
-    idlePhaseProblems, planned: {boundary: 1791891900000}, scriptPerSecond, from, cellMs: 300000, evidence, idleTimingDiagnostic: '1',idleCpu:undefined,idleCpuMode:undefined,
+    idlePhaseProblems, planned: {boundary: 1791891900000}, scriptPerSecond, from, cellMs: 300000, evidence, idleTimingDiagnostic: '1',idleCpu:undefined,idleCpuMode:undefined,shortIdleProfile:false,
     traffic: {problems: ['fixture-traffic-1', 'fixture-traffic-2', 'fixture-traffic-3', 'fixture-traffic-4']}, idleProblems};
   const selected = runInNewContext('(()=>{let originalIdleTimingProblems;const readIdle=' + body
     + ';return {readIdle,problems:()=>originalIdleTimingProblems};})()', context) as Selected;

@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import {runInNewContext} from 'node:vm';
@@ -13,6 +14,8 @@ import {idleProblems,chartProblems,measuredProblems,percentile,HISTORY_BYTES_PER
 import {DOT_STILL_AFTER,fixtureTiming,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil} from '../still.js';
 import {delta,round,scriptPerSecond,tally} from '../report.js';
 import {idleRetentionScript,idleRetentionProblems} from '../idleRetention.js';
+import {gridSnapshotScript,gridReadScript} from '../idleCpuDiagnostic.js';
+import {ScriptBinding as SourceBinding} from '../scriptBinding.js';
 
 // Execute the actual caller and parser, not a second implementation of its phase branches.
 // Leaf phases and browser IO are stand-ins; these tests prove routing/failure propagation only.
@@ -27,6 +30,7 @@ const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={ma
 type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close'|'retirement-binding-mismatch'|'retirement-debugger-active'|'retirement-probe-missing';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
+  const injected:{interval:number;expression:string;kind:'idle-probe'}[]=[];
   const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0,retentionReads=0;
   let terminal!:()=>void;const exited=new Promise<void>(resolve=>{terminal=resolve;});
   const mark=(name:string)=>{calls.push(name);};
@@ -120,14 +124,14 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     clientIdentity:()=>({status:'unavailable'}),
     ScriptBinding:class {
       constructor(_target:unknown,_client:unknown,readonly save:(name:string,value:unknown)=>void){}
-      rememberInjected(interval:number){mark('idle-probe-'+interval);}
-      async afterFamily(){mark('idle-binding');if(fault==='idle-binding')throw Error('idle-binding-original');
+      rememberInjected(interval:number,expression:string,kind:'idle-probe'){injected.push({interval,expression,kind});mark('idle-probe-'+interval);}
+      async afterFamily(intervals:number[]){mark('idle-binding');if(env.QUOTUM_BENCH_DIAGNOSE_IDLE_CPU==='grid')assert.equal(intervals.join(','),'1,2');if(fault==='idle-binding')throw Error('idle-binding-original');
         this.save('source-family-1',{status:fault==='retirement-binding-mismatch'?'mismatch':'complete',debuggerDisabled:fault!=='retirement-debugger-active',injected:{status:fault==='retirement-probe-missing'?'unavailable':'complete'}});
       }
       close(){mark('idle-binding-close');}
     },
-    retirementReadScript:'passive retirement snapshot',retirementProfile:async(_target:unknown,_browser:unknown,planned:{from:number;to:number;quotaBoundary:number})=>{
-      mark('retirement-profile');assert.ok(planned.from<=now);now=planned.quotaBoundary+5000;
+    retirementReadScript:'passive retirement snapshot',gridSnapshotScript,idleBoundaryProfile:async(_target:unknown,_browser:unknown,planned:{from:number;to:number;quotaBoundary:number;boundary:number},_opening:unknown,_save:unknown,target='retirement')=>{
+      mark(target+'-profile');assert.ok(planned.from<=now);now=target==='grid'?planned.boundary+4000:planned.quotaBoundary+5000;
       return{status:fault==='idle-profile-incomplete'?'insufficient-evidence':'complete'};
     },
     traceIdle:async(_target:unknown,actualBrowser:unknown,read:()=>Promise<unknown>)=>{
@@ -139,7 +143,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   runInNewContext(code,context);
   const selected=(context as unknown as {selected:{main():Promise<void>;parseArgs(args:string[]):unknown}}).selected;
   let error:unknown;try{await selected.main();}catch(caught){error=caught;}
-  return{calls,saved,diagnosticFiles,exits,statuses,logs,error,waits,fixtureStart:stand.start,parse:selected.parseArgs};
+  return{calls,saved,diagnosticFiles,exits,statuses,logs,error,waits,injected,fixtureStart:stand.start,parse:selected.parseArgs};
 }
 const tail=['measure','work','private-work','frequency','panning','credits','money'];
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
@@ -269,15 +273,15 @@ for(const [key,value] of Object.entries(diagnostics).filter(([key])=>key!=='QUOT
   const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'profile',[key]:value});
   assert.match(String(result.error),/scope|panning diagnostics/i);assert.deepEqual(result.calls,[]);
 });
-for(const fault of [undefined,'idle','opening-metrics','idle-retention','idle-binding','idle-profile-incomplete','retirement-binding-mismatch','retirement-debugger-active','retirement-probe-missing'] as const)test('short retirement keeps original counters and rejects '+String(fault),async()=>{
-  const result=await run(['--scope','dashboard'],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'retirement'});
+for(const mode of ['retirement','grid'])for(const fault of [undefined,'idle','opening-metrics','idle-retention','idle-binding','idle-profile-incomplete','retirement-binding-mismatch','retirement-debugger-active','retirement-probe-missing'] as const)test('short '+mode+' keeps original counters and rejects '+String(fault),async()=>{
+  const result=await run(['--scope','dashboard'],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});
   assert.equal(result.error,undefined);assert.deepEqual(result.exits,[fault?1:0]);
   const idle=result.saved.get('idle') as {from:number;to:number;actualSeconds:number;scriptMsPerSecond:number;phaseProblems:string[]};
   assert.equal(idle.to-idle.from,120_000);
   if(fault==='opening-metrics')assert.ok(idle.actualSeconds<120&&idle.phaseProblems.length>0);else assert.equal(idle.actualSeconds,120);
   assert.equal(idle.scriptMsPerSecond>.3,['idle','idle-binding'].includes(fault??''));
-  assert.ok(result.calls.indexOf('metrics-before')<result.calls.indexOf('retirement-profile'));
-  assert.ok(result.calls.indexOf('retirement-profile')<result.calls.indexOf('metrics-after'));
+  assert.ok(result.calls.indexOf('metrics-before')<result.calls.indexOf(mode+'-profile'));
+  assert.ok(result.calls.indexOf(mode+'-profile')<result.calls.indexOf('metrics-after'));
   assert.ok(result.calls.indexOf('metrics-after')<result.calls.indexOf('idle-binding'));
   assert.ok(result.waits.some(wait=>wait>0&&wait<120_000),'waits through the unchanged remainder after the capture');
   assert.ok(!result.calls.includes('idle-cpu-start'));assert.ok(!result.calls.includes('history'));assert.ok(tail.every(name=>!result.calls.includes(name)));
@@ -285,13 +289,40 @@ for(const fault of [undefined,'idle','opening-metrics','idle-retention','idle-bi
   assert.equal(original.original.seconds,120);assert.equal(original.problems.length>0,!!fault);
   if(fault==='idle-binding')assert.equal(original.status,'insufficient-evidence');
   assert.equal(result.calls.filter(name=>name==='idle-binding-close').length,1);
+  if(mode==='grid')assert.equal(result.calls.filter(name=>name==='idle-probe-2').length,1);
 });
-for(const [key,value] of Object.entries(diagnostics).filter(([key])=>key!=='QUOTUM_BENCH_DIAGNOSE_IDLE_CPU'))test('retirement rejects mixed '+key,async()=>{
-  const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'retirement',[key]:value});
+test('the actual grid caller fits both declared sources in the real binding limit, leaving its thin wrapper unknown',async()=>{
+  const actual=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'grid'});
+  assert.equal(actual.error,undefined);assert.deepEqual(actual.exits,[0]);assert.deepEqual(actual.injected.map(value=>value.interval),[1,2]);
+  assert.ok(actual.injected[1].expression.includes('window.__quotumIdlePhase='));assert.ok(actual.injected[1].expression.includes(gridSnapshotScript));
+  const hash=(body:string)=>createHash('sha256').update(body).digest('hex'),body='globalThis.fixture=true;',url='http://fixture.invalid/assets/index-test.js';
+  for(const extra of [false,true]){
+    const listeners=new Map<string,(value:unknown)=>void>(),files=new Map<string,any>();
+    const expressions=extra?[actual.injected[0],{...actual.injected[1],interval:3},{interval:2,expression:gridReadScript,kind:'idle-probe' as const}]:actual.injected;
+    const parsed=[{url,hash:hash(body),scriptId:'4'},...actual.injected.map((value,i)=>({url:'',hash:hash(value.expression),scriptId:String(21+i)})),{url:'',hash:hash(gridReadScript),scriptId:'24'}];
+    const transport={on:(name:string,listener:(value:unknown)=>void)=>listeners.set(name,listener),off:(name:string)=>{listeners.delete(name);},send:async(name:string)=>{
+      if(name==='Debugger.enable')for(const value of parsed)listeners.get('Debugger.scriptParsed')?.(value);
+      return name==='Network.getResponseBody'?{body,base64Encoded:false}:{};
+    }};
+    const binding=new SourceBinding(transport as never,{status:'available',name:'index-test.js',bytes:Buffer.byteLength(body),sha256:hash(body)},(name,value)=>files.set(name,value));
+    try{
+      for(const value of expressions)binding.rememberInjected(value.interval,value.expression,value.kind);
+      listeners.get('Network.responseReceived')?.({type:'Script',requestId:'fixture',response:{url}});
+      await binding.afterFamily(expressions.map(value=>value.interval));const report=files.get('source-family-1');
+      assert.equal(report.status,'complete');assert.equal(report.debuggerDisabled,true);assert.equal(report.injected.expected.length,2);
+      assert.equal(report.injected.status,extra?'insufficient-evidence':'complete');assert.equal(report.injected.omittedExpected,Number(extra));
+      assert.ok(report.injected.owners.every((value:{scriptId:number})=>value.scriptId!==24));
+      assert.equal(report.injected.owners.find((value:{scriptId:number})=>value.scriptId===22).parsedHash,hash(actual.injected[1].expression));
+    }finally{binding.close();}
+    assert.equal(listeners.size,0);
+  }
+});
+for(const mode of ['retirement','grid'])for(const [key,value] of Object.entries(diagnostics).filter(([key])=>key!=='QUOTUM_BENCH_DIAGNOSE_IDLE_CPU'))test(mode+' rejects mixed '+key,async()=>{
+  const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode,[key]:value});
   assert.match(String(result.error),/scope|panning diagnostics/i);assert.deepEqual(result.calls,[]);
 });
-for(const args of [[],['--scope','history'],['--scope','dashboard','--cdp','http://127.0.0.1:9222']])test('retirement requires an owned dashboard CI scope '+JSON.stringify(args),async()=>{
-  const result=await run(args,undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'retirement'});assert.match(String(result.error),/scope|idle CPU/i);assert.deepEqual(result.calls,[]);
+for(const mode of ['retirement','grid'])for(const args of [[],['--scope','history'],['--scope','dashboard','--cdp','http://127.0.0.1:9222']])test(mode+' requires an owned dashboard CI scope '+JSON.stringify(args),async()=>{
+  const result=await run(args,undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:mode});assert.match(String(result.error),/scope|idle CPU/i);assert.deepEqual(result.calls,[]);
 });
 for(const [args,ci,value] of [[['--scope','dashboard','--cdp','http://127.0.0.1:9222'],true,'profile'],[['--scope','dashboard'],false,'profile'],[['--scope','dashboard'],true,'1'],[['--scope','dashboard'],true,'trace'],[['--scope','dashboard'],true,'unknown']] as const)test('dashboard idle CPU profile rejects '+JSON.stringify({args,ci,value}),async()=>{
   const result=await run([...args],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:value},ci);
