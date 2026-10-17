@@ -304,7 +304,7 @@ async function main() {
     evidence.begin('idle');
     await cdp.evaluate('__quotumBench.reset()');
     await cdp.evaluate(idlePhaseScript(cellMs));
-    heard.reset();
+    heard.reset({from,to});
     requests.counting = true;
     let originalIdleTimingProblems: string[] | undefined;
     const readIdle = async () => {
@@ -327,7 +327,8 @@ async function main() {
       if (reading.commits !== lastReading.commits || JSON.stringify(reading.mutations) !== JSON.stringify(lastReading.mutations)) phaseProblems.push('idle work crossed the closing measurement boundary');
       if (!Number.isFinite(actualSeconds) || actualSeconds <= 0) phaseProblems.push('idle performance duration unavailable');
       const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
-      const idle = {from, to, cellMs, requests, events:boardEvents, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
+      const calendar=heard!.calendar();
+      const idle = {from, to, cellMs, requests, events:boardEvents, calendar, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
       evidence.save('idle', {...idle, allEvents:events, boardEvents, deviceContacts, deviceHints, planned, phase, counterFrom, counterTo, actualSeconds, phaseProblems});
       if (idleTimingDiagnostic || idleCpu) {
         originalIdleTimingProblems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];

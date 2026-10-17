@@ -175,8 +175,8 @@ test('original trace preserves a missed edge, missing chart and unavailable thre
 /** Execute the actual index interval with the real collector and a passive transport. */
 async function originalIndex(collection:''|'1'|'trace'|'profile',boundaryFailure?:'opening'|'closing',failTraceStop=false,failProfileStop=false) {
   let wall=540_000,plans=0,geometry=0,metricCalls=0,readingCalls=0,phaseFrom=0;
-  const ledger=new EventCounts();
-  const heard:Heard={reset:()=>{cdp.commands.push('ORIGINAL.heard-reset');ledger.reset();},counts:()=>ledger.counts(),boardCounts:()=>ledger.boardCounts(),contacts:()=>ledger.contacts(),hints:()=>ledger.hints(),close:()=>{}};
+  const ledger=new EventCounts(()=>wall);
+  const heard:Heard={reset:window=>{cdp.commands.push('ORIGINAL.heard-reset');ledger.reset(window);},counts:()=>ledger.counts(),boardCounts:()=>ledger.boardCounts(),calendar:()=>ledger.calendar(),contacts:()=>ledger.contacts(),hints:()=>ledger.hints(),close:()=>{}};
   const saved:Saved[]=[],evidenceSaved:Saved[]=[],cdp=new class extends CurrentCdpFake {
     override async evaluate<T>(expression:string):Promise<T>{
       if(expression==='__quotumBench.reset()'){this.commands.push('ORIGINAL.reset');return undefined as T;}

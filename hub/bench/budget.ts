@@ -1,5 +1,7 @@
 import type {Counted} from './probe.js';
 
+export type CalendarReading={packets:number;bytes:number;rejected:number;expected:{id:string}[];received:{id:string}[];missing:{id:string}[]};
+
 /**
  * What an idle dashboard may cost, per second of watching it (index.ts, `--ci`).
  *
@@ -27,6 +29,7 @@ export type Idle = {
   requests: {count: number; byPath: Record<string, number>};
   /** What the hub told the benchmark's own reader of the board. */
   events: Record<string, number>;
+  calendar?:CalendarReading;
   renders: Counted[];
   mutations: Counted[];
   scriptMsPerSecond: number;
@@ -60,6 +63,7 @@ export function idleProblems(idle: Idle): string[] {
   if (idle.requests.count) found.push(`the page asked the hub ${idle.requests.count} times: ${JSON.stringify(idle.requests.byPath)}`);
   const told = Object.entries(idle.events).filter(([type]) => type !== 'ping');
   if (told.length) found.push(`the hub told the board ${told.map(([type, count]) => `${type} ×${count}`).join(', ')}`);
+  if(idle.calendar?.missing.length)found.push(`missing calendar updates for ${idle.calendar.missing.map(card=>card.id).join(', ')}`);
   const pings = idle.events.ping ?? 0;
   const least = Math.floor((idle.to - idle.from) / HEARTBEAT_MS) - 1;
   if (pings < least) found.push(`the benchmark's own reader of the board heard ${pings} pings, fewer than ${least}: it heard nothing it could count`);

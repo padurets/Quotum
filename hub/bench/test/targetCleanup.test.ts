@@ -1,5 +1,6 @@
 import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
+import {EventCounts} from '../stream.js';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
@@ -110,7 +111,7 @@ for (const [file, name] of [['cpuProfile.ts', 'profileControls'], ['panningDiagn
     ]).flat();
     let stamp = 0;
     const run = caller(file, name, {
-      openTab, probeScript: () => '', Requests: class {}, idleWindow: () => ({from: 0, to: 0, boundary: 1}), sleep: async () => {},
+      openTab, probeScript: () => '', Requests: class {}, idleWindow: () => ({from: 0, to: 120_000, boundary: 60_000}), sleep: async () => {},
       metrics: async () => ({Timestamp: ++stamp}), scriptPerSecond: () => .15, idlePhaseScript: () => '', idlePhaseProblems: () => [], idleProblems: () => [], idleSensitivity,
       profileInterval: async (_cdp: unknown, _browser: unknown, work: () => Promise<unknown>, output: {saveTrace(name: string, value: unknown): void}) => {
         await work(); output.saveTrace('profile', {status: 'complete', profile: {}, clocks: []});
@@ -122,7 +123,7 @@ for (const [file, name] of [['cpuProfile.ts', 'profileControls'], ['panningDiagn
       threadCpuWindow: (_trace: unknown, _pid: unknown, _tid: unknown, from: number) => ({status: 'observed', cpuInsideMs: from / 1000 % 3 === 1 ? 0 : 50, cpuOutsideMs: 0}),
       Date,
     });
-    const heard = {reset: () => {}, counts: () => ({}), boardCounts: () => ({}), contacts: () => [], hints: () => []};
+    const heard = new EventCounts();
     const result = name === 'doubledIdle' ? run(f.browser, f.cdp, 'http://fixture.invalid', 120, 300_000, f.evidence, heard, .1) : run(f.browser, f.evidence);
     await assert.rejects(result, error => error === (fails ? f.primary : f.cleanup));
     if (!fails) assert.ok(f.files.has(name === 'profileControls' ? 'cpu-controls' : name === 'traceControls' ? 'trace-controls' : 'idle-double'), 'the actual workload reached its successful result before cleanup');

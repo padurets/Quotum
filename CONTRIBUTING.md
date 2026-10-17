@@ -27,7 +27,10 @@ callbacks and missing samples fail. The previous idle, measurement, work and nat
 frequency-focus checks retain their budgets. Mixed Codex subscriptions also exercise
 changed credit balances and unchanged-value heartbeats: each updates its own card and
 funds history without waking quota or wallet analytics. No browser means the check
-was not run.
+was not run. UTC calendar-only card events must match the stream's unchanged observation
+baseline and the exact new period. Raw traffic remains reported; missing, repeated or
+unrelated updates fail. This exception permits no extra page rendering or requests and
+retains the 0.3 ms/s idle script budget.
 CI runs the unchanged history traffic matrix and dashboard phases on separate runners,
 each with a 20-minute job limit. `--scope history` selects the matrix, including native
 traffic and cancellation checks; `--scope dashboard` selects idle, measurements, work,

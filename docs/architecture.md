@@ -1362,8 +1362,12 @@ renders only what shows time. It also checks measurements reach the card and cha
 within a second, small reads per measurement, and one small read for a machine report
 crediting work, rendering only that card, agents and analytics.
 The event observer retains raw traffic and separately validates owner-private contact
-metadata and empty device-selection hints. Board events, including refreshes, still
-fail the idle budget; private hints cannot permit page requests or extra rendering.
+metadata and empty device-selection hints. At a UTC calendar boundary, it also verifies
+each expected card against its stream baseline: only the exact new unknown spending
+period is allowed, with every other field unchanged. Raw events remain reported;
+missing, duplicate and unrelated updates fail. These exceptions permit no page requests,
+extra rendering or increased script cost. Other board events, including refreshes,
+still fail the idle budget.
 Nothing on the page is fixed and the widgets are not frosted, so a
 scroll paints only what comes into view, even in a WebKitGTK window that draws without
 the GPU.
