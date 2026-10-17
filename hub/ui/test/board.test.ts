@@ -347,6 +347,13 @@ test('device contacts reuse the board title fingerprint while drafts and provide
   assert.notEqual(replaced.board, contacted.board);
   assert.equal(titlesOf(replaced.board).s1.provider, 'claude');
   assert.notEqual(titlesOf(replaced.board).s1.title, saved.s1.title);
+  const named=reduce(contacted,hub({type:'view',data:{view:{...VIEW,names:{s1:'Saved'}}}}));
+  assert.equal(titlesOf(named.board,named.board!.view.names).s1.title,'Saved');
+  const closed=reduce(named,{type:'board-close'});
+  assert.deepEqual(titlesOf(closed.board),{});
+  const reopened=reduce(closed,hub({type:'snapshot',data:snapshot()}));
+  assert.equal(reopened.board!.id,named.board!.id);
+  assert.equal(titlesOf(reopened.board).s1.title,'Codex');
 });
 
 test('a board is shown only as the one opened: another still in the store is nothing, and closing keeps nothing of it', () => {

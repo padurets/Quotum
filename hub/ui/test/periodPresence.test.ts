@@ -8,7 +8,7 @@ import {Sessions,KEEP_MS,CREDIT_MS} from '../../server/sessions';
 import {sessionPresent,runningFrom,runningChangesAt,since} from '../lib/agents';
 import * as agents from '../lib/agents';
 import {selector,sameJson} from '../lib/store';
-import {namedCardsOf} from '../lib/board';
+import {namedCardsOf,titlesOf} from '../lib/board';
 import {columnShown,colorOf,AGENTS} from '../lib/view';
 import {timeRangeLabel} from '../lib/timeRange';
 import {t as translate} from '../i18n';
@@ -108,6 +108,15 @@ test('device contacts update their own state without projecting period demand ag
     assert.equal(selected[0].find(card=>card.id===h.source)!.windows[0].used,used);
     assert.ok(windowReads>0&&valueReads>0,'the initial consumers read the real source and its quota value');
     windowReads=valueReads=0;
+    const names=board!.view.names,namesJSON=JSON.stringify(names),namesProperty=Object.getOwnPropertyDescriptor(names,'toJSON');
+    let nameSerializations=0;
+    Object.defineProperty(names,'toJSON',{configurable:true,value:()=>{nameSerializations++;return {...names};}});
+    assert.equal(JSON.stringify(names),namesJSON,'the witness preserves the saved names');
+    // One name reader per card, and one shared name reader for each chart/table.
+    const titleReaders=Array.from({length:board!.lineup.length+4},()=>selector(h.page,()=>({select:state=>titlesOf(state.board,state.board?.view.names),equal:Object.is})));
+    const titleSelection=titleReaders.map(read=>read()),titleStops=titleReaders.map(read=>h.page.subscribe(read));
+    assert.equal(titleSelection[0][h.source].provider,source.provider);
+    nameSerializations=0;
     const queries=t.mock.method(h.period,'queries');
     let published=0;const stop=h.period.subscribe(()=>published++);
     try{
@@ -115,6 +124,7 @@ test('device contacts update their own state without projecting period demand ag
       await flush();
       const contactProjections=queries.mock.callCount();
       const contactReads={windowReads,valueReads};
+      const contactNameSerializations=nameSerializations;
       assert.equal(h.page.get().deviceContacts![h.device],NOW+8000);
       assert.equal(h.page.get().board,board);assert.equal(h.period.get(),before);
       assert.equal(h.period.tapes.get('quota'),tape);assert.equal(h.pool.estimatedBytes,bytes);
@@ -125,7 +135,13 @@ test('device contacts update their own state without projecting period demand ag
       assert.equal(contactProjections,0,'contacts must not rebuild unchanged analytical selections');
       assert.deepEqual(readers.map(read=>read()),selected);
       assert.deepEqual(contactReads,{windowReads:0,valueReads:0},'contacts must not rebuild or serialize unchanged UI quota cards');
-    }finally{stop();stops.forEach(stop=>stop());Object.defineProperty(source,'windows',windowsProperty);Object.defineProperty(windows[0],'used',usedProperty);}
+      assert.deepEqual(titleReaders.map(read=>read()),titleSelection);
+      assert.equal(contactNameSerializations,0,'contacts must not serialize unchanged saved names again');
+    }finally{
+      stop();stops.forEach(stop=>stop());titleStops.forEach(stop=>stop());
+      Object.defineProperty(source,'windows',windowsProperty);Object.defineProperty(windows[0],'used',usedProperty);
+      if(namesProperty)Object.defineProperty(names,'toJSON',namesProperty);else delete names.toJSON;
+    }
   }finally{await h.close();}
 });
 

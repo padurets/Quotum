@@ -389,6 +389,7 @@ export type Title = {title: string; provider: string};
 /** The names worked out lately, by what they were worked out of: the same object for the same names, whoever asks. */
 const titles = new Map<string, Record<string, Title>>();
 const titleFingerprints = new WeakMap<BoardState, string>();
+const savedTitles = new WeakMap<BoardState, Record<string, Title>>();
 const titleSourcesOf = (board: BoardState | null) => (board?.lineup ?? []).flatMap(id => {
   const card = board!.cards[id];
   return card ? [{id, provider: card.provider, owners: card.owners}] : [];
@@ -401,6 +402,9 @@ const titleSourcesOf = (board: BoardState | null) => (board?.lineup ?? []).flatM
  * name changes.
  */
 export function titlesOf(board: BoardState | null, names: Record<string, string> = board?.view.names ?? {}): Record<string, Title> {
+  // The saved names share the board's lifetime; explicit drafts can mutate in place.
+  const saved=board&&names===board.view.names?savedTitles.get(board):undefined;
+  if(saved)return saved;
   let named: ReturnType<typeof titleSourcesOf> | undefined;
   let fingerprint = board ? titleFingerprints.get(board) : '[]';
   if (fingerprint === undefined) {
@@ -416,6 +420,7 @@ export function titlesOf(board: BoardState | null, names: Record<string, string>
     if (titles.size >= 4) titles.delete(titles.keys().next().value!);
     titles.set(key, value);
   }
+  if(board&&names===board.view.names)savedTitles.set(board,value);
   return value;
 }
 
