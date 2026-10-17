@@ -573,7 +573,7 @@ test('an agent request without a valid token is refused before its body arrives'
     const response = await Promise.race([answer, late]);
     return [response.statusCode, JSON.parse(response.body).error];
   };
-  for (const url of ['/v1/checkin', '/v1/sessions', '/v1/ingest']) {
+  for (const url of ['/v1/checkin', '/v1/sessions', '/v1/ingest', '/v1/activity']) {
     assert.deepEqual(await hanging(url, {}), [401, 'unauthorized'], `${url} without a token`);
     assert.deepEqual(await hanging(url, {authorization: 'Bearer qt_m_someone-elses-token-0123456789'}), [401, 'unauthorized'], `${url} with an unknown token`);
     assert.deepEqual(await hanging(url, {authorization: `Bearer ${revokedToken.secret}`}), [403, 'device_revoked'], `${url} with a revoked token`);

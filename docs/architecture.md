@@ -261,7 +261,30 @@ exit within five seconds. It never retains raw output or reads client secrets.
 
 ### Tracking coverage and quota growth
 
-Session reports carry optional configured tracking scope and delivery completeness.
+Agents using `/v1/activity` negotiate a persistent observed-interval capability.
+Schema 32 saves one fenced queue, accepted sequence, immutable prefix clock anchor
+and bounded state checkpoint per device, plus at most 256 issued topology proofs.
+The initial transaction closes the legacy writer and establishes an activation
+floor. Every legacy report and sweep checks the durable barrier; later presence
+never extends history. Unmigrated devices retain their existing session path.
+
+Completed working intervals enter the existing work ledger in chronological slices
+containing every concurrent key. Cursor, clock checkpoint, history and captured
+coverage commit together; notifications and live presence publish after commit.
+Retries discard their committed prefix before comparing the current anchor, so an
+older epoch can be retried after a newer one without remapping time. Missing FIFO
+prefixes need an explicit unknown skip. Queue replacement compares its authority
+and establishes a new conservative floor; it never reconstructs lost history.
+Captured account evidence never falls back to a login first seen at delivery.
+
+Coverage uses the witness captured with the interval, including its original
+issuance time, exact scope and current topology version. Rehello and hub restart
+reuse applicable proofs. Topology changes invalidate them even if the same devices
+return. Missing proof leaves positive work intact and asks for a coalesced refresh.
+Witness release is bounded and idempotent. These internal references never enter
+board projections; the existing admission and funding rules remain authoritative.
+
+Legacy session reports carry optional configured tracking scope and delivery completeness.
 The agent repeats empty reports every two minutes while that scope is enabled, and
 requires a positively acknowledged incomplete report after any capture or delivery fault.
 The hub stores completed intervals separately from positive work. Two compatible complete

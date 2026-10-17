@@ -455,6 +455,27 @@ export const STEPS = [
   CREATE INDEX readings_sparse ON readings(source_id,meter_id,at,stale_after_ms,reset_at) WHERE pair_anchor=0;
   `,
 
+  // 32 — observed intervals fence legacy credit and commit their cursor with history.
+  `
+  INSERT INTO meta VALUES ('activityHubId',lower(hex(randomblob(16))));
+  CREATE TABLE device_activity (
+    device_id TEXT PRIMARY KEY,requires_intervals INTEGER NOT NULL DEFAULT 1,
+    queue_id TEXT NOT NULL,authority_epoch TEXT NOT NULL,floor_at INTEGER NOT NULL,
+    last_open_id TEXT NOT NULL,accepted_seq INTEGER NOT NULL DEFAULT 0,
+    checkpoint TEXT,clock_anchor TEXT,capture_epoch TEXT,last_tick INTEGER,last_at INTEGER,
+    latest_at INTEGER
+  );
+  CREATE TABLE device_activity_witnesses (
+    device_id TEXT NOT NULL,queue_id TEXT NOT NULL,authority_epoch TEXT NOT NULL,
+    witness_id TEXT NOT NULL,topology_version INTEGER NOT NULL,scope_digest TEXT NOT NULL,
+    issued_at INTEGER NOT NULL,issued_open_id TEXT NOT NULL,
+    PRIMARY KEY(device_id,witness_id)
+  ) WITHOUT ROWID;
+  CREATE TRIGGER activity_device_removed AFTER DELETE ON devices BEGIN
+    DELETE FROM device_activity WHERE device_id=OLD.id;
+    DELETE FROM device_activity_witnesses WHERE device_id=OLD.id;
+  END;
+  `,
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

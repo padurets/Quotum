@@ -114,6 +114,7 @@ const KEPT: [string, string][] = [
   ['POST', '/v1/checkin'],
   ['POST', '/v1/ingest'],
   ['POST', '/v1/sessions'],
+  ['POST', '/v1/activity'],
 ];
 /** A route that is not there answers the hub's own `not_found`; one that is answers otherwise, even with 404. */
 const missing = (answer: {status: number; body: any}) => answer.status === 404 && answer.body?.error === 'not_found';
@@ -134,7 +135,7 @@ test('without the window’s session nothing of the board can be read, and the h
   }
   const session = (await call('GET', '/api/session')).body;
   assert.deepEqual([session.user, session.local, session.signup], [null, true, {first: false, open: false}]);
-  for (const url of ['/v1/checkin', '/v1/ingest', '/v1/sessions']) {
+  for (const url of ['/v1/checkin', '/v1/ingest', '/v1/sessions', '/v1/activity']) {
     assert.equal((await call('POST', url, {body: {}})).status, 401, `${url} without a token`);
     const foreign = {authorization: 'Bearer qt_m_someone-elses-token-0123456789'};
     assert.equal((await call('POST', url, {body: {}, headers: foreign})).status, 401, `${url} with another token`);
