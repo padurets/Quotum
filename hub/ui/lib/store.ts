@@ -53,7 +53,7 @@ export function selector<S, T>(store: Pick<Store<S, unknown>, 'get'>, pick: () =
 }
 
 /** A part of a store's state for a component: it renders when that part changes, and only then. */
-export function useSelect<S, T>(store: Store<S, unknown>, select: (state: S) => T, equal: (a: T, b: T) => boolean = Object.is): T {
+export function useSelect<S, T>(store: Pick<Store<S, unknown>, 'get'|'subscribe'>, select: (state: S) => T, equal: (a: T, b: T) => boolean = Object.is): T {
   // The selector may be a new function every render (it closes over props): the latest is read.
   const latest = useRef({select, equal});
   latest.current = {select, equal};

@@ -45,6 +45,36 @@ function dialog(h:Awaited<ReturnType<typeof fixture>>) {
   };
 }
 
+/** Actual board hooks and store selectors; the hook host only reads and subscribes. */
+function boardConsumers(h:Awaited<ReturnType<typeof fixture>>) {
+  const cells:{notifications:number;reads:number;value:unknown;stop:()=>void}[]=[];
+  const react={useMemo:(read:()=>unknown)=>read(),useRef:(value:unknown)=>({current:value}),
+    useState:(value:unknown)=>[typeof value==='function'?value():value,()=>{}],
+    useSyncExternalStore:(subscribe:(listener:()=>void)=>()=>void,read:()=>unknown)=>{
+      const cell={notifications:0,reads:0,value:read(),stop:()=>{}};
+      cell.stop=subscribe(()=>{cell.notifications++;cell.reads++;cell.value=read();});cells.push(cell);return cell.value;
+    }};
+  const store={exports:{} as any,require:()=>react};
+  const compile=(url:URL)=>ts.transpileModule(readFileSync(url,'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+  runInNewContext(compile(new URL('../lib/store.ts',import.meta.url)),store);
+  const boardRequire=createRequire(new URL('../lib/board.ts',import.meta.url));
+  const board={exports:{} as any,require:(id:string)=>id==='react'?react:id==='./store'?{...store.exports,createStore:()=>h.page}:boardRequire(id)};
+  runInNewContext(compile(new URL('../lib/board.ts',import.meta.url)),board);
+  const api=board.exports;
+  api.useCard(h.source);api.useMine(h.source);api.useTitle(h.source,h.page.get().board!.view.names);api.useCadence(h.source);api.useRefresh(h.source);
+  for(let i=0;i<4;i++)api.useNamed(undefined,'quota');
+  const count=cells.length,card=cells[0],titles=cells[6];
+  api.useDeviceContact(h.device,NOW);const contact=cells.at(-1)!;
+  api.useRole();const role=cells.at(-1)!;
+  api.useConnection();const connection=cells.at(-1)!;
+  api.useApp();const app=cells.at(-1)!;
+  api.useResetNews();const resets=cells.at(-1)!;
+  return {card,titles,contact,role,connection,app,resets,
+    read:()=>({notifications:cells.slice(0,count).reduce((sum,cell)=>sum+cell.notifications,0),reads:cells.slice(0,count).reduce((sum,cell)=>sum+cell.reads,0)}),
+    again:()=>{api.useCard(h.source);return cells.at(-1)!;},
+    close:()=>cells.forEach(cell=>{cell.stop();cell.stop=()=>{};})};
+}
+
 for(const options of [{},{personal:true},{personal:true,privateWork:true},{personal:true,privateWork:true,unknown:true}])test(`an empty live report clears presence through the period row and actual state/running consumers ${JSON.stringify(options)}`,async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture({...options,current:true});
   try {
@@ -116,6 +146,11 @@ test('device contacts update their own state without projecting period demand ag
     const titleReaders=Array.from({length:board!.lineup.length+4},()=>selector(h.page,()=>({select:state=>titlesOf(state.board,state.board?.view.names),equal:Object.is})));
     const titleSelection=titleReaders.map(read=>read()),titleStops=titleReaders.map(read=>h.page.subscribe(read));
     assert.equal(titleSelection[0][h.source].provider,source.provider);
+    let activePageSubscriptions=0;
+    const subscribe=h.page.subscribe;
+    t.mock.method(h.page,'subscribe',(listener:()=>void)=>{activePageSubscriptions++;const stop=subscribe(listener);return()=>{activePageSubscriptions--;stop();};});
+    const hooks=boardConsumers(h);
+    windowReads=valueReads=0;
     nameSerializations=0;
     const queries=t.mock.method(h.period,'queries');
     let published=0;const stop=h.period.subscribe(()=>published++);
@@ -125,6 +160,9 @@ test('device contacts update their own state without projecting period demand ag
       const contactProjections=queries.mock.callCount();
       const contactReads={windowReads,valueReads};
       const contactNameSerializations=nameSerializations;
+      const contactHookReads=hooks.read();
+      assert.equal(hooks.contact.notifications,8,'the actual contact hook still hears every accepted renewal');
+      assert.equal(hooks.contact.value,NOW+8000);
       assert.equal(h.page.get().deviceContacts![h.device],NOW+8000);
       assert.equal(h.page.get().board,board);assert.equal(h.period.get(),before);
       assert.equal(h.period.tapes.get('quota'),tape);assert.equal(h.pool.estimatedBytes,bytes);
@@ -137,8 +175,34 @@ test('device contacts update their own state without projecting period demand ag
       assert.deepEqual(contactReads,{windowReads:0,valueReads:0},'contacts must not rebuild or serialize unchanged UI quota cards');
       assert.deepEqual(titleReaders.map(read=>read()),titleSelection);
       assert.equal(contactNameSerializations,0,'contacts must not serialize unchanged saved names again');
+      assert.deepEqual(contactHookReads,{notifications:0,reads:0},'unchanged boards must not notify their UI hooks or read their selectors');
+      assert.equal(activePageSubscriptions,6,'all thirteen board consumers share one page subscription; five global consumers remain independent');
+
+      const retained=h.page.get().board;
+      h.page.dispatch({type:'session-boards',boards:h.page.get().boards!.map(board=>({...board,role:'member'}))});
+      assert.equal(hooks.role.value,'member');
+      h.page.dispatch({type:'connection',status:'polling',lostAt:null});
+      assert.equal(hooks.connection.value,h.page.get().connection);
+      h.page.dispatch({type:'app',state:{seq:1,agent:{state:'idle'},providers:[],sessions:true,autostart:false,configPath:'',logPath:'',version:'test',commit:''}});
+      assert.equal(hooks.app.value,h.page.get().app);
+      h.event({type:'resets',data:{...h.page.get().resets!,resets:{codex:{scheduled:null,watch:null,latest:{at:NOW,url:'https://example.com/reset',text:'reset',scope:'all'},policy:null,credit:{name:'Resets',url:'https://example.com'}}}}});
+      assert.equal(hooks.resets.value,h.page.get().resets!.resets);
+      assert.equal(h.page.get().board,retained);assert.deepEqual(hooks.read(),{notifications:0,reads:0});
+
+      h.event({type:'card',data:{...source,plan:'Changed'}});
+      assert.equal(hooks.card.value,h.page.get().board!.cards[h.source]);assert.notEqual(hooks.card.value,source);
+      h.event({type:'view',data:{revision:(h.page.get().board!.viewRevision??0)+1,view:{...board!.view,names:{[h.source]:'Renamed'}}}});
+      assert.equal((hooks.titles.value as ReturnType<typeof titlesOf>)[h.source].title,'Renamed');
+      h.page.dispatch({type:'board-close'});assert.equal(hooks.card.value,undefined);
+      h.disconnect();h.reconnect();await flush();
+      assert.equal(h.page.get().board!.id,board!.id);assert.equal(hooks.card.value,h.page.get().board!.cards[h.source]);
+      hooks.close();assert.equal(activePageSubscriptions,0,'the last board consumer releases the shared subscription');
+      h.event({type:'card',data:{...source,plan:'While unsubscribed'}});
+      const resumed=hooks.again();assert.equal(resumed.value,h.page.get().board!.cards[h.source]);
+      h.event({type:'card',data:{...source,plan:'After resubscribe'}});
+      assert.equal(resumed.value,h.page.get().board!.cards[h.source]);assert.equal(resumed.notifications,1);
     }finally{
-      stop();stops.forEach(stop=>stop());titleStops.forEach(stop=>stop());
+      stop();stops.forEach(stop=>stop());titleStops.forEach(stop=>stop());hooks.close();
       Object.defineProperty(source,'windows',windowsProperty);Object.defineProperty(windows[0],'used',usedProperty);
       if(namesProperty)Object.defineProperty(names,'toJSON',namesProperty);else delete names.toJSON;
     }

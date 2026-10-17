@@ -330,54 +330,78 @@ const NO_FORECAST: SourceForecast = {};
 
 const usePage = <T>(select: (state: PageState) => T, equal?: (a: T, b: T) => boolean) => useSelect(page, select, equal);
 
-export const useBoardId = () => usePage(s => s.board?.id ?? null);
+/** Contacts and app state need no snapshot checks in components reading only the board. */
+const boardStore = (() => {
+  const listeners = new Set<() => void>();
+  let stop: (() => void) | null = null;
+  return {
+    get: () => page.get().board,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      if (!stop) {
+        let previous = page.get().board;
+        stop = page.subscribe(() => {
+          const next = page.get().board;
+          if (next === previous) return;
+          previous = next;
+          for (const listener of [...listeners]) listener();
+        });
+      }
+      return () => {listeners.delete(listener);if (!listeners.size) {stop?.();stop = null;}};
+    },
+  };
+})();
+const useBoard = <T>(select: (board: BoardState | null) => T, equal?: (a: T, b: T) => boolean) => useSelect(boardStore, select, equal);
+
+export const useBoardId = () => useBoard(board => board?.id ?? null);
 /** The open board's name and kind, once the hub told it: nothing of another board still in the store before this one opens. */
-export const metaOf = (state: PageState, board: string) => (state.board?.id === board ? state.board.meta : null);
-export const useBoardMeta = (board: string) => usePage(s => metaOf(s, board));
+const boardMetaOf = (current: BoardState | null, board: string) => current?.id === board ? current.meta : null;
+export const metaOf = (state: PageState, board: string) => boardMetaOf(state.board, board);
+export const useBoardMeta = (board: string) => useBoard(current => boardMetaOf(current, board));
 /** The reader's role on the open board: their own, from their list of boards. */
 export const useRole = () => usePage(s => s.boards?.find(b => b.id === s.board?.id)?.role ?? null);
-export const useServerView = () => usePage(s => s.board?.view ?? null);
-export const useViewRevision = () => usePage(s => s.board?.viewRevision ?? 0);
-export const useConnectionsRevision = () => usePage(s => s.board?.connectionsRevision ?? 0);
+export const useServerView = () => useBoard(board => board?.view ?? null);
+export const useViewRevision = () => useBoard(board => board?.viewRevision ?? 0);
+export const useConnectionsRevision = () => useBoard(board => board?.connectionsRevision ?? 0);
 export const useDevicesRevision = () => usePage(s => s.devicesRevision ?? 0);
 export const useDeviceContact = (device: string, baseline: number | null) => usePage(s => Math.max(s.deviceContacts?.[device] ?? 0,baseline ?? 0) || null);
-export const useHistoryStart = () => usePage(s => s.board?.historyStart ?? null);
+export const useHistoryStart = () => useBoard(board => board?.historyStart ?? null);
 /** Membership only: changing a figure never re-renders the compact list itself. */
-export const useVisibleLimits = () => usePage(s => {
-  const b = s.board;
+export const useVisibleLimits = () => useBoard(b => {
   if (!b) return NONE;
   return b.lineup.filter(id => {
     const card=b.cards[id],periods=card?quotaPeriods(card):[];
     return !b.view.hidden.includes(`source:${id}`)&&(!!card&&budgetVisible(card)||!periods.length||periods.some(w=>!b.view.windows.includes(`${id}/${w.id}`)));
   });
 }, shallowEqual);
-export const useLineup = () => usePage(s => s.board?.lineup ?? NONE);
-export const useCard = (id: string) => usePage(s => s.board?.cards[id]);
-export const useSourceAccess=(id:string)=>usePage(s=>s.board?.sourceAccess?.[id]??null);
+export const useLineup = () => useBoard(board => board?.lineup ?? NONE);
+export const useCard = (id: string) => useBoard(board => board?.cards[id]);
+export const useSourceAccess=(id:string)=>useBoard(board=>board?.sourceAccess?.[id]??null);
 const NO_ACCESS:Record<string,SourceAccess>={};
-export const useSourceAccesses=()=>usePage(s=>s.board?.sourceAccess??NO_ACCESS);
+export const useSourceAccesses=()=>useBoard(board=>board?.sourceAccess??NO_ACCESS);
 const NO_CURRENCY_BINDINGS:CurrencyContext['sources'][string]=[];
-export const currencyContextOf=(state:PageState)=>state.board?.currencies??defaultCurrencyContext;
-export const useCurrencyRegistryRevision=()=>usePage(s=>currencyContextOf(s).registryRevision);
+const boardCurrencyContext=(board:BoardState|null)=>board?.currencies??defaultCurrencyContext;
+export const currencyContextOf=(state:PageState)=>boardCurrencyContext(state.board);
+export const useCurrencyRegistryRevision=()=>useBoard(board=>boardCurrencyContext(board).registryRevision);
 export function useCurrencyContext(source?:string):CurrencyContext {
-  const target=usePage(s=>currencyContextOf(s).target),definitions=usePage(s=>currencyContextOf(s).definitions);
-  const bindings=usePage(s=>source?currencyContextOf(s).sources[source]??NO_CURRENCY_BINDINGS:NO_CURRENCY_BINDINGS);
-  const revision=usePage(s=>source?undefined:currencyContextOf(s).revision);
+  const target=useBoard(board=>boardCurrencyContext(board).target),definitions=useBoard(board=>boardCurrencyContext(board).definitions);
+  const bindings=useBoard(board=>source?boardCurrencyContext(board).sources[source]??NO_CURRENCY_BINDINGS:NO_CURRENCY_BINDINGS);
+  const revision=useBoard(board=>source?undefined:boardCurrencyContext(board).revision);
   return useMemo(()=>({target,definitions,sources:source?{[source]:bindings}:{},...(revision?{revision}:{})}),[target,definitions,source,bindings,revision]);
 }
-export const useMoneyUnits=()=>usePage(s=>[...new Set(Object.values(s.board?.cards??{}).filter(budgetVisible).flatMap(c=>c.meters?.map(m=>/^[A-Z]{3}$/.test(m.unit)||m.unit==='credits:codex'?DEFAULT_CURRENCY:m.unit)??[]))].sort(),shallowEqual);
+export const useMoneyUnits=()=>useBoard(board=>[...new Set(Object.values(board?.cards??{}).filter(budgetVisible).flatMap(c=>c.meters?.map(m=>/^[A-Z]{3}$/.test(m.unit)||m.unit==='credits:codex'?DEFAULT_CURRENCY:m.unit)??[]))].sort(),shallowEqual);
 /** The cards of these sources, in their order; the same list while each card is. */
-export const useCards = (ids: string[]) => usePage(s => ids.flatMap(id => s.board?.cards[id] ?? []), shallowEqual);
-export const useSessions = (id: string) => usePage(s => s.board?.sessions[id] ?? NONE);
+export const useCards = (ids: string[]) => useBoard(board => ids.flatMap(id => board?.cards[id] ?? []), shallowEqual);
+export const useSessions = (id: string) => useBoard(board => board?.sessions[id] ?? NONE);
 /** The agents of several sources at once, for a list of them all: not a hook per source. */
-export const useSessionsOf = (ids: string[]) => usePage(s => ids.map(id => s.board?.sessions[id] ?? NONE), shallowEqual);
-export const useRefresh = (id: string) => usePage(s => s.board?.refresh[id] ?? null);
-export const useCanRefreshSources = (ids: string[]) => usePage(s => !!s.board && ids.some(id => s.board!.refresh[id]?.by !== 'hub' || s.board!.sourceAccess?.[id]?.canRefresh === true));
-export const useCadence = (id: string) => usePage(s => s.board?.cadence[id] ?? null);
+export const useSessionsOf = (ids: string[]) => useBoard(board => ids.map(id => board?.sessions[id] ?? NONE), shallowEqual);
+export const useRefresh = (id: string) => useBoard(board => board?.refresh[id] ?? null);
+export const useCanRefreshSources = (ids: string[]) => useBoard(board => !!board && ids.some(id => board.refresh[id]?.by !== 'hub' || board.sourceAccess?.[id]?.canRefresh === true));
+export const useCadence = (id: string) => useBoard(board => board?.cadence[id] ?? null);
 /** The hub's forecasts of several sources' weekly windows at once, for the table and the chart: not a hook per source. */
-export const useForecastsOf = (ids: string[]) => usePage(s => ids.map(id => s.board?.forecast[id] ?? NO_FORECAST), shallowEqual);
+export const useForecastsOf = (ids: string[]) => useBoard(board => ids.map(id => board?.forecast[id] ?? NO_FORECAST), shallowEqual);
 /** Whether the reader's devices measure this source: theirs to take off a shared board. */
-export const useMine = (id: string) => usePage(s => !!s.board?.mine.includes(id));
+export const useMine = (id: string) => useBoard(board => !!board?.mine.includes(id));
 export const useBoards = () => usePage(s => s.boards);
 export const useConnection = () => usePage(s => s.connection);
 export const useApp = () => usePage(s => s.app);
@@ -425,9 +449,9 @@ export function titlesOf(board: BoardState | null, names: Record<string, string>
 }
 
 /** The names of the board's cards (`titlesOf`), by the view on screen when given. */
-export const useTitles = (names?: Record<string, string>) => usePage(s => titlesOf(s.board, names));
+export const useTitles = (names?: Record<string, string>) => useBoard(board => titlesOf(board, names));
 /** One card's name on the board (`titlesOf`). */
-export const useTitle = (id: string, names?: Record<string, string>) => usePage(s => titlesOf(s.board, names)[id]?.title ?? '');
+export const useTitle = (id: string, names?: Record<string, string>) => useBoard(board => titlesOf(board, names)[id]?.title ?? '');
 
 export type Named = Card & {title?: string};
 
@@ -435,7 +459,10 @@ const namedCards = new WeakMap<BoardState, Map<'quota'|MoneyFamily|undefined, Ca
 
 /** Financial heartbeats of a subscription cannot change its quota drawing inputs. */
 export function namedCardsOf(state:PageState,scope?:'quota'|MoneyFamily):Card[] {
-  const board=state.board;if(!board)return [];
+  return namedBoardCardsOf(state.board,scope);
+}
+function namedBoardCardsOf(board:BoardState|null,scope?:'quota'|MoneyFamily):Card[] {
+  if(!board)return [];
   let cached=namedCards.get(board);
   const prior=cached?.get(scope);if(prior)return prior;
   // Contacts retain the board; they need no new projection or quota JSON comparison.
@@ -454,7 +481,7 @@ export function namedCardsOf(state:PageState,scope?:'quota'|MoneyFamily):Card[] 
 
 /** The board's cards in its order, each with its name: what the chart and the table draw. Not their agents or pace. */
 export function useNamed(names?: Record<string, string>, scope?: 'quota'|MoneyFamily): Named[] {
-  const cards = usePage(s=>namedCardsOf(s,scope),scope==='quota'?sameJson:shallowEqual);
+  const cards = useBoard(board=>namedBoardCardsOf(board,scope),scope==='quota'?sameJson:shallowEqual);
   const titles = useTitles(names);
   return useMemo(() => cards.map(card => ({...card, title: titles[card.id]?.title})), [cards, titles]);
 }
@@ -479,5 +506,5 @@ export function usePastResets(): PastResets {
   return shown ? past : NO_PAST;
 }
 
-export const useUnattributedSessions = () => usePage(s => s.board?.unattributedSessions ?? NONE);
-export const usePersonalBoard = () => usePage(s => s.board?.meta.personal ?? false);
+export const useUnattributedSessions = () => useBoard(board => board?.unattributedSessions ?? NONE);
+export const usePersonalBoard = () => useBoard(board => board?.meta.personal ?? false);
