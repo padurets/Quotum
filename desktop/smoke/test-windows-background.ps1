@@ -235,5 +235,64 @@ try {
 Save-Stage 'bounded-resume' ([IntPtr]1) $true
 $saved=ConvertFrom-Json -InputObject ([IO.File]::ReadAllText((Join-Path $root 'timeline.json')))
 if($saved.Count -ne 1000 -or $saved[0].utcTicks -ne $stamp -or $saved[0].ms -ne $milliseconds){$failed.Add('original-timestamps-after-resume')}
+# Exercise the actual child selection and survivor cleanup with CIM's birth precision.
+foreach($function in @($ast.FindAll({param($n)
+  $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Invoke-Step','Stop-Owned')
+},$true))){. ([scriptblock]::Create($function.Extent.Text))}
+$selection=@($ast.FindAll({param($n)
+  $n -is [Management.Automation.Language.ForEachStatementAst] -and $n.Variable.VariablePath.UserPath -eq 'info' -and $n.Condition.Extent.Text -eq '$tree'
+},$true))
+$survivor=@($ast.FindAll({param($n)
+  $n -is [Management.Automation.Language.ForEachStatementAst] -and $n.Variable.VariablePath.UserPath -eq 'child' -and $n.Condition.Extent.Text -eq '$children'
+},$true))
+if($selection.Count -ne 1 -or $survivor.Count -ne 1){throw 'Expected the actual owned-child cleanup loops'}
+$selectChildren=[scriptblock]::Create($selection[0].Extent.Text)
+$statements=@($survivor[0].Parent.Statements);$index=[Array]::IndexOf($statements,$survivor[0])
+$cleanupText=($statements[($index-1)..($index+2)] | ForEach-Object {$_.Extent.Text}) -join "`n"
+if($cleanupText -notmatch '\$result.leftovers\s*=\s*\$leftovers' -or $cleanupText -notmatch 'Children survived the controller'){throw 'The survivor check changed shape'}
+$cleanupChildren=[scriptblock]::Create($cleanupText)
+Add-Type @'
+public sealed class QuotumCleanupProcess : System.IDisposable {
+  public int Id=99, Waits, Kills;
+  public System.DateTime? Birth, PinnedBirth;
+  public bool Held, Disposed, FailBirth, FailHandle;
+  public System.DateTime? StartTime { get { if(FailBirth)throw new System.InvalidOperationException("unavailable birth");return Held ? PinnedBirth ?? Birth : Birth; } }
+  public System.IntPtr Handle { get { if(FailHandle)throw new System.InvalidOperationException("unavailable handle");Held=true;return new System.IntPtr(1); } }
+  public bool WaitForExit(int timeout) { if(!Held || Disposed || timeout!=10000)throw new System.InvalidOperationException("unowned wait");Waits++;return Kills>0; }
+  public void Kill() { if(!Held || Disposed)throw new System.InvalidOperationException("unowned kill");Kills++; }
+  public void Dispose() { Disposed=true;Held=false; }
+}
+'@
+function Get-Process { [CmdletBinding()]param([int]$Id) if($Id -ne 99){throw 'Unexpected cleanup PID'};return $script:cleanupProcess }
+$birth=[datetime]::SpecifyKind([datetime]::new(2026,1,1),[DateTimeKind]::Utc).AddTicks(1234560)
+foreach($case in @('exact','submicrosecond','local-time','different-birth','changed-before-pin','missing-snapshot','missing-native','unavailable-birth','unavailable-handle','missing-process')){
+  $candidate=[QuotumCleanupProcess]::new();$candidate.Birth=$birth
+  $info=[pscustomobject]@{ProcessId=99;CreationDate=$birth}
+  switch($case){
+    'submicrosecond' {$candidate.Birth=$birth.AddTicks(7)}
+    'local-time' {$candidate.Birth=$birth.AddTicks(7).ToLocalTime()}
+    'different-birth' {$candidate.Birth=$birth.AddTicks(10)}
+    'changed-before-pin' {$candidate.PinnedBirth=$birth.AddTicks(10)}
+    'missing-snapshot' {$info.CreationDate=$null}
+    'missing-native' {$candidate.Birth=$null}
+    'unavailable-birth' {$candidate.FailBirth=$true}
+    'unavailable-handle' {$candidate.FailHandle=$true}
+  }
+  $script:cleanupProcess=if($case -eq 'missing-process'){$null}else{$candidate}
+  $script:children=@();$tree=@($info);$result=@{errors=@()}
+  . $selectChildren
+  $admitted=$case -in @('exact','submicrosecond','local-time')
+  $ok=$children.Count -eq [int]$admitted
+  if($admitted){$ok=$ok -and $children[0].Process -eq $candidate -and $candidate.Held -and -not $candidate.Disposed}
+  elseif($case -ne 'missing-process'){$ok=$ok -and $candidate.Disposed -and -not $candidate.Held}
+  $cleanupFailed=$false
+  try {. $cleanupChildren} catch {$cleanupFailed=$true;$ok=$false}
+  $ok=$ok -and $result.leftovers.Count -eq [int]$admitted -and $candidate.Kills -eq [int]$admitted -and $candidate.Waits -eq (2*[int]$admitted)
+  if($admitted){$ok=$ok -and @($result.errors | Where-Object {$_ -like 'Children survived the controller:*'}).Count -eq 1}
+  $status=if($ok){'PASS'}else{'FAIL'}
+  Write-Output "$status cleanup/${case}: children=$($children.Count) leftovers=$($result.leftovers.Count) kills=$($candidate.Kills) cleanupFailed=$cleanupFailed"
+  if(-not $ok){$failed.Add('cleanup/'+$case)}
+  $candidate.Dispose()
+}
 Remove-Item -LiteralPath $root -Recurse -Force
 if($failed.Count){throw "Background setup controls failed: $($failed -join ', ')"}

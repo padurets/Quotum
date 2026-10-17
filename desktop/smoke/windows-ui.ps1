@@ -578,7 +578,18 @@ try {
     foreach ($info in $tree) {
       Invoke-Step "holding child $($info.ProcessId)" {
         $owned = Get-Process -Id $info.ProcessId -ErrorAction SilentlyContinue
-        if ($owned -and $owned.StartTime -eq $info.CreationDate) { $null = $owned.Handle; $script:children += [pscustomobject]@{Process=$owned; Info=$info} }
+        if ($owned) {
+          $keepChild = $false
+          try {
+            $handle = $owned.Handle
+            if ($null -eq $handle -or $handle -eq [IntPtr]::Zero) { throw 'Cannot hold a child process' }
+            # Check the pinned process at CIM's UTC microsecond precision.
+            if ($info.CreationDate -and $owned.StartTime.ToUniversalTime().ToString('yyyyMMddHHmmssffffff') -eq $info.CreationDate.ToUniversalTime().ToString('yyyyMMddHHmmssffffff')) {
+              $script:children += [pscustomobject]@{Process=$owned; Info=$info}
+              $keepChild = $true
+            }
+          } finally { if (-not $keepChild) { $owned.Dispose() } }
+        }
       }
     }
   }
