@@ -586,7 +586,10 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
     const forecasts=cards.map(foreseenAt).filter((at):at is number=>at!==null&&at>=from-MARGIN_MS&&at<=from+windowMs+MARGIN_MS);
     if(!resets.length&&!fades.length&&!forecasts.length)break;
     const until=Math.max(...resets,...fades,...forecasts)+MARGIN_MS;
-    if(until>setupUntil)throw new Stop('credit measurement has no quiet quota interval');
+    if(until>setupUntil){
+      evidence.save('credit-setup-failure',{from,until,setupUntil,windowMs,resets,fades,forecasts,waits});
+      throw new Stop('credit measurement has no quiet quota interval');
+    }
     waits.push({from,until,resets,fades,forecasts});
     await sleep(until-from);
   }

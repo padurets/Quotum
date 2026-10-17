@@ -16,7 +16,7 @@ import {FADE_FOR,PULSE_FOR} from '../../ui/lib/quota.js';
 import {chartProblems,creditRenderProblems,HISTORY_BYTES_PER_MEASUREMENT,measuredProblems} from '../budget.js';
 
 /** Execute the whole production phase; the stand and CDP only supply its observations. */
-async function phase({resetIn=Infinity,fadesIn=-Infinity,forecastIn=Infinity,extraQuota=false,setupDrift=0}: {resetIn?:number;fadesIn?:number;forecastIn?:number;extraQuota?:boolean;setupDrift?:number}={}) {
+async function phase({resetIn=Infinity,fadesIn=-Infinity,forecastIn=Infinity,extraQuota=false,setupDrift=0}: {resetIn?:number;fadesIn?:number;forecastIn?:number;extraQuota?:boolean;setupDrift?:number}={},evidence={save(_name:string,_value:unknown){}}) {
   const hour=3_600_000,anchor=Date.parse('2026-10-15T05:00:00Z');
   const forecastStore=Number.isFinite(forecastIn)?new Store(':memory:',anchor-hour):undefined;
   try {
@@ -84,7 +84,7 @@ async function phase({resetIn=Infinity,fadesIn=-Infinity,forecastIn=Infinity,ext
   };
   const code=ts.transpileModule(declaration.getText(sourceFile)+'\nglobalThis.phase=creditPhase;', {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
   runInNewContext(code,context);
-  const result=await (context as unknown as {phase:(demo:unknown,stand:unknown,cdp:unknown,evidence:unknown)=>Promise<{qualification:{from:number;to:number;waits:unknown[]};updates:{amount:string;from:number;to:number;renders:unknown[];mutations:unknown[]}[];problems:string[]}>}).phase({dir:'/unused'},stand,cdp,{save(){}});
+  const result=await (context as unknown as {phase:(demo:unknown,stand:unknown,cdp:unknown,evidence:unknown)=>Promise<{qualification:{from:number;to:number;waits:unknown[]};updates:{amount:string;from:number;to:number;renders:unknown[];mutations:unknown[]}[];problems:string[]}>}).phase({dir:'/unused'},stand,cdp,evidence);
   return{result,waits,boundary,forecastAt,worked};
   } finally {forecastStore?.close();}
 }
@@ -121,7 +121,17 @@ for(const fadesIn of [8000,40_000,55_400])test(`credit setup waits for the earli
 });
 
 test('credit setup keeps its original shared deadline when another card cannot finish fading',async()=>{
-  await assert.rejects(phase({fadesIn:55_401}),/credit measurement has no quiet quota interval/);
+  const failures:{name:string;value:{from:number;until:number;setupUntil:number;windowMs:number;resets:number[];fades:number[];forecasts:number[];waits:unknown[]}}[]=[];
+  await assert.rejects(phase({fadesIn:55_401},{save(name,value){failures.push({name,value:value as typeof failures[number]['value']});}}),/credit measurement has no quiet quota interval/);
+  assert.equal(failures.length,1);
+  assert.equal(failures[0].name,'credit-setup-failure');
+  const failed=failures[0].value;
+  assert.equal(failed.until,failed.setupUntil+1);
+  assert.deepEqual(Array.from(failed.fades),[failed.until-MARGIN_MS]);
+  assert.equal(failed.windowMs,40_400);
+  assert.deepEqual(Array.from(failed.resets),[]);
+  assert.deepEqual(Array.from(failed.forecasts),[]);
+  assert.deepEqual(Array.from(failed.waits),[],'the failed wait is never slept or added to completed waits');
 });
 
 test('an already faded measurement adds no setup wait',async()=>{
