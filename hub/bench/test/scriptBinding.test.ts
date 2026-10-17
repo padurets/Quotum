@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import ts from 'typescript';
-import {panEvidenceScript,panTransactionsScript} from '../panEvidence.js';
+import {panErrorsScript,panEvidenceScript,panTransactionsScript} from '../panEvidence.js';
 import {ScriptBinding} from '../scriptBinding.js';
 import {safeEvidence} from '../evidence.js';
 import {tracePanning} from '../panningDiagnostic.js';
@@ -188,7 +188,7 @@ function nativeSampler(initiator:string,period:string) {
   const visit=(node:ts.Node)=>{if(ts.isTemplateExpression(node)&&node.getText(source).includes('const probe=window.__quotumPan={'))templates.push(node);ts.forEachChild(node,visit);};
   visit(source);assert.equal(templates.length,1);
   const values:Record<string,string>={'JSON.stringify(initiator)':JSON.stringify(initiator),'JSON.stringify(period)':JSON.stringify(period),
-    'panEvidenceScript(evidence?.timeline === true)':panEvidenceScript(true),'panTransactionsScript()':panTransactionsScript()};
+    'panEvidenceScript(evidence?.timeline === true)':panEvidenceScript(true),'panTransactionsScript()':panTransactionsScript(),'panErrorsScript()':panErrorsScript()};
   return templates[0].head.text+templates[0].templateSpans.map(span=>{const value=values[span.expression.getText(source)];assert.notEqual(value,undefined);return value+span.literal.text;}).join('');
 }
 

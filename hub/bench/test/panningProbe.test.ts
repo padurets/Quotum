@@ -2,7 +2,10 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
-import {panEvidenceScript, panTransactionsScript, panPartialScript, type PanTransactions} from '../panEvidence.js';
+import ts from 'typescript';
+import {panEvidenceScript, panTransactionsScript, panPartialScript, panErrorsScript, type PanTransactions} from '../panEvidence.js';
+import {deadline} from '../deadline.js';
+import {panningSettlement} from '../panningFailure.js';
 import {safeEvidence} from '../evidence.js';
 import {panningProblems, type PanReading} from '../panningBudget';
 const edgeSeries=():PanReading['edgeSeries']=>['wheel','drag'].map(stage=>({stage:stage as 'wheel'|'drag',series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12}));
@@ -48,10 +51,10 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
     requestAnimationFrame: schedule, cancelAnimationFrame: () => {},
     MutationObserver: class {constructor(read:(records:unknown[])=>void){observe=read;}observe() {} disconnect() {}},
     DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);if(value?.startsWith('scaleX'))this.e*=this.a;}},
-    window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: () => {}},
+    window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: (type:string,callback:(event:object)=>void) => {if(bubble.get(type)===callback)bubble.delete(type);}},
   };
-  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${JSON.stringify(period)}', JSON.stringify('24h')).replace('${panEvidenceScript(evidence?.timeline === true)}', panEvidenceScript(timeline)).replace('${panTransactionsScript()}', panTransactionsScript()), context);
-  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; timeline: {read(): {entries: {kind: string; inputId?: number; frameId?: number}[]}}}}).__quotumPan;
+  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${JSON.stringify(period)}', JSON.stringify('24h')).replace('${panEvidenceScript(evidence?.timeline === true)}', panEvidenceScript(timeline)).replace('${panTransactionsScript()}', panTransactionsScript()).replace('${panErrorsScript()}',panErrorsScript()), context);
+  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; timeline: {read(): {entries: {kind: string; inputId?: number; frameId?: number}[]}}}}).__quotumPan;
   for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: '-1000000000', panMaxEnd: '1000000000'});
   const limits = (min: number, max: number) => {for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: String(min), panMaxEnd: String(max)});};
   const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}, deltaX = initiator==='activity'?7:12) => {
@@ -106,6 +109,103 @@ test('failure evidence cannot credit an earlier or retired scenario probe', () =
   assert.equal(runInNewContext(panPartialScript('budget','24h'),f.context).status,'unavailable');
   f.reading.cleanup();
   assert.equal(runInNewContext(panPartialScript('quota','24h'),f.context).status,'unavailable');
+});
+
+test('the original native interval retains asynchronous faults without reading their private contents',()=>{
+  const f=fixture();
+  const error=f.bubble.get('error'),rejection=f.bubble.get('unhandledrejection');
+  assert.ok(error&&rejection,'the native probe must observe asynchronous failures');
+  const forbidden=()=>{throw new Error('private-fault-canary');};
+  const event=Object.defineProperties({lineno:12,colno:7,filename:'https://example.test/assets/index-public.js?token=private-fault-canary'},Object.fromEntries(['message','error','reason','stack'].map(key=>[key,{get:forbidden}])));
+  error(event);rejection(event);
+  const receipt=runInNewContext('window.__quotumPan.errors.read()',f.context);
+  assert.equal(receipt.count,2);assert.equal(receipt.omitted,0);
+  assert.deepEqual(JSON.parse(JSON.stringify(receipt.events)),[
+    {kind:'error',at:0,line:12,column:7,publicAsset:true,trusted:null},
+    {kind:'unhandledrejection',at:0,line:null,column:null,publicAsset:null,trusted:null},
+  ]);
+  assert.doesNotMatch(JSON.stringify(safeEvidence(receipt)),/private-fault-canary|https:|filename|message|stack/);
+});
+
+test('held-Shift faults remain observable after movement retires without reviving its old samples',()=>{
+  const f=fixture();f.wheel(100,100);f.reading.cleanup();
+  const error=f.bubble.get('error');assert.ok(error,'fault collection must outlive movement');
+  error({lineno:0,colno:0,filename:''});
+  const partial=runInNewContext(panPartialScript('quota','24h'),f.context);
+  assert.equal(partial.status,'unavailable');assert.equal(partial.errors.count,1);
+  assert.equal(partial.frames,undefined);assert.equal(partial.pending,undefined);
+  assert.equal(runInNewContext(panPartialScript('quota','30d'),f.context).errors,undefined);
+  runInNewContext('window.__quotumPan.errors.stop()',f.context);
+  assert.equal(runInNewContext(panPartialScript('quota','24h'),f.context).errors,undefined);
+  assert.equal(f.bubble.has('error'),false);assert.equal(f.bubble.has('unhandledrejection'),false);
+});
+
+test('fault receipts retain complete counts while bounding data and exposing unavailable clocks',()=>{
+  const f=fixture();const error=f.bubble.get('error');assert.ok(error);
+  for(let i=0;i<18;i++)error({lineno:-1,colno:Infinity,filename:'https://elsewhere.test/assets/index-public.js'});
+  const receipt=runInNewContext('window.__quotumPan.errors.read()',f.context);
+  assert.equal(receipt.count,18);assert.equal(receipt.events.length,16);assert.equal(receipt.omitted,2);
+  assert.ok(receipt.events.every((row:{line:unknown;column:unknown;publicAsset:boolean})=>row.line===null&&row.column===null&&row.publicAsset===false));
+  const other=fixture();other.context.performance.now=()=>NaN;
+  const rejected=other.bubble.get('error');assert.ok(rejected);rejected({lineno:1,colno:1,filename:''});
+  const invalid=runInNewContext('window.__quotumPan.errors.read()',other.context);
+  assert.equal(invalid.count,1);assert.equal(invalid.invalid,1);assert.equal(invalid.events.length,0);
+  const reversed=fixture();reversed.context.performance.now=()=>20;
+  reversed.bubble.get('error')!({lineno:1,colno:1,filename:''});reversed.context.performance.now=()=>10;
+  assert.equal(runInNewContext('window.__quotumPan.errors.read()',reversed.context).status,'insufficient-evidence');
+});
+
+test('actual report and postcondition statements retain faults until completion, including without an evidence sink',async()=>{
+  const ast=ts.createSourceFile('panning.ts',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
+  const fn=ast.statements.find((node):node is ts.FunctionDeclaration=>ts.isFunctionDeclaration(node)&&node.name?.text==='panning')!;
+  const outer=fn.body!.statements.find(ts.isTryStatement)!;
+  let periodLoop:ts.ForOfStatement|undefined;
+  const visit=(node:ts.Node)=>{if(ts.isForOfStatement(node)&&node.initializer.getText(ast).includes('[period, index]'))periodLoop=node;ts.forEachChild(node,visit);};visit(outer);
+  const statements=(periodLoop!.statement as ts.Block).statements;
+  const declared=(node:ts.Statement,name:string)=>ts.isVariableStatement(node)&&node.declarationList.declarations.some(d=>d.name.getText(ast)===name);
+  const helpers=fn.body!.statements.filter(node=>['wait','key','mouse','settled'].some(name=>declared(node,name)));
+  const wheel=statements.find(node=>declared(node,'wheel'))!;
+  const tail=statements.slice(statements.findIndex(node=>declared(node,'report')));
+  // Execute exact integration statements and their original catch/finally. Native
+  // geometry assertions are controlled at CDP; this is not a browser performance run.
+  const script=`globalThis.run=async()=>{${[...helpers,wheel].map(node=>node.getText(ast)).join('\n')}try{${tail.map(node=>node.getText(ast)).join('\n')}}${outer.catchClause!.getText(ast)}finally${outer.finallyBlock!.getText(ast)}};`;
+  for(const fail of [false,true]){
+    const f=fixture(),files=new Map<string,any>(),original=new Error('controlled held-Shift failure');
+    let context='',held=false,complete=false,matrices=0,legends=0;
+    const cleanDocument={querySelector:()=>null,querySelectorAll:()=>[],getElementById:()=>null};
+    const globals={...f.context,document:cleanDocument,setTimeout:(run:()=>void)=>{run();},localStorage:{getItem:()=>null,setItem:()=>{}}};
+    const read=(code:string)=>runInNewContext(code,globals);
+    const cdp={
+      snapshot:()=>({context,failure:{method:'Input.dispatchMouseEvent'}}),
+      send:async(method:string,args?:{type?:string})=>{
+        if(method==='Input.dispatchMouseEvent'&&args?.type==='mouseWheel'&&context==='held-shift-first-minus-12'){
+          held=true;assert.equal(f.reading.running,false);assert.equal(read('window.__quotumPan.errors.active'),true);
+          if(fail){f.bubble.get('error')!({lineno:1,colno:2,filename:''});throw original;}
+        }
+      },
+      evaluate:async(code:string)=>{
+        if(code.includes('const p=window.__quotumPan;p.cleanup()')||code.includes("const until=Date.now()+15000,p=new URLSearchParams")||code.includes("status:'partial'")||code.includes("window.__quotumPan?.cleanup()")||code.startsWith('new Promise(')||code==='window.__quotumPan.returnInput=null')return read(code);
+        if(code.startsWith('new DOMMatrix('))return ++matrices*12;
+        if(code.startsWith("[...document.querySelectorAll('.activity-legend-tip"))return ++legends===1;
+        if(code.includes('.tooltip,')||code.startsWith("!document.querySelector('.analytics-head"))return false;
+        if(code.startsWith('new URLSearchParams(')||code.startsWith('!new URLSearchParams(')||code.startsWith("!!document.querySelector('[data-pan-end]')")||code.startsWith("!document.querySelector('[data-pan-end]')"))return true;
+        if(code==='history.back()'||code==='history.forward()'||code==="document.querySelector('.activity .legend-item').focus()")return;
+        assert.fail('Unexpected integration boundary: '+code.slice(0,80));
+      },
+    };
+    const evidence=fail?{save:(name:string,value:unknown)=>files.set(name,value)}:undefined;
+    const sandbox={...globals,cdp,evidence,deadline,panPartialScript,panningSettlement,selector:'[data-widget="quota-history"]',initiator:'quota',period:'24h',geometry:{x:0,y:0,series:12,sessionSeries:12,budgetSeries:12,fundsSeries:12,charts:5},edgeSeries:[],costStart:undefined,costEnd:undefined,reports:[],scenario:{initiator:'quota',period:'24h'},failed:false,stage:'controlled',interception:false,originalHorizon:'auto',click:async()=>{},at:(value:string)=>{context=value;},progress:(value:string)=>{
+      if(value.endsWith('/complete')){complete=true;assert.equal(read('window.__quotumPan.errors.active'),false,'completion must stop faults before general cleanup, even without evidence');assert.equal(f.bubble.has('error'),false);}
+    }};
+    runInNewContext(ts.transpileModule(script,{compilerOptions:{target:ts.ScriptTarget.ES2023}}).outputText,sandbox);
+    const run=(sandbox as typeof sandbox&{run():Promise<void>}).run;
+    if(fail){
+      await assert.rejects(run(),error=>error===original);
+      const partial=files.get('panning-partial').partial;
+      assert.equal(partial.errors.count,1);assert.equal(partial.status,'unavailable');assert.equal(partial.frames,undefined);assert.equal(complete,false);
+    }else{await run();assert.equal(complete,true);}
+    assert.equal(held,true);assert.equal(f.bubble.has('error'),false);assert.equal(f.bubble.has('unhandledrejection'),false);
+  }
 });
 
 test('the probe retains clamped input and credits its reached boundary without inventing movement', () => {

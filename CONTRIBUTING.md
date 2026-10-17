@@ -62,6 +62,14 @@ changing the gesture-completion assertions or their 200 ms pause rule.
 Failed scenarios retain these receipts and their pending inputs in the partial report.
 A missing, retired or different scenario probe is marked unavailable instead of
 attributing an earlier scenario's measurements to the failure.
+Each native scenario also keeps at most sixteen numeric error and unhandled-rejection
+receipts through its held-Shift and navigation checks, after the motion sampler stops.
+It never reads error messages, exception objects, rejection values or stacks. Error
+coordinates and a same-origin public-bundle match are observations, not a received-source
+binding; rejections have no source coordinates. Counts, omissions and invalid clocks stay
+explicit. The existing failure read can retain these receipts without reviving retired
+motion samples. An unresponsive page leaves them unavailable, and an empty buffer does
+not establish that no error occurred. Listeners do not change default error handling.
 `QUOTUM_BENCH_DIAGNOSE_PANNING=pairs` runs a fixed OFF/ON, ON/OFF, OFF/ON
 experiment for bounded input/frame/history correlation. Every result is retained;
 these diagnostic runs cannot satisfy the canonical gate. Input traces retain only
