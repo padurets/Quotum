@@ -353,9 +353,9 @@ async function main() {
         evidence.save(idleCpu?'idle-cpu-result':'idle-timing-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
       }
       if(idleCpu)saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='1'?'Temporally aligned natural edge using the unchanged120s CI idle protocol; profiler and trace overhead is unqualified.':idleCpuMode==='trace'?'Original CI idle protocol; no CPU sampling, tracing overhead is unqualified.':'Original CI idle protocol with CPU sampling; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,reading,problems:originalIdleTimingProblems}});
-      return {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo};
+      return {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore};
     };
-    const {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo} = idleTimingDiagnostic ? await traceIdle(cdp, browser, readIdle, evidence) : await readIdle();
+    const {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore} = idleTimingDiagnostic ? await traceIdle(cdp, browser, readIdle, evidence) : await readIdle();
     if(idleCpu){
       const diagnosticProblems=originalIdleTimingProblems!;
       const geometryAfter=idleCpuMode==='1'?await idleGeometry(cdp):undefined;
@@ -377,7 +377,7 @@ async function main() {
       const baselineProblems=[...phaseProblems,...idleProblems(idle)];
       if(baselineProblems.length)throw new Stop('idle sensitivity baseline failed: '+baselineProblems.join('; '));
       say('checking sensitivity with two independent copies of the same idle board');
-      const control=await doubledIdle(browser,cdp,address.base,seconds,cellMs,evidence,heard,scriptMsPerSecond);
+      const control=await doubledIdle(browser,cdp,address.base,seconds,cellMs,evidence,heard,scriptMsPerSecond,{retention:retentionBefore,bootstrapSource});
       say(`idle double control: ${JSON.stringify(control)}`);
       await finish(control.growthDetected?0:1);return;
     }

@@ -35,6 +35,7 @@ async function target(t: TestContext, send: (method: string, params?: object) =>
       if (expression.includes('const from=performance.now()')) {const from = interval++ * 100; return {from, to: from + 100};}
       if (expression.startsWith('document.querySelectorAll(\'.card:not')) return true;
       if (expression === 'document.querySelectorAll(".card").length') return 2;
+      if (expression === 'window.__quotumIdleRetention()') return null;
       return {instrumentMs: 0, renders: [], mutations: []};
     },
   } as unknown as Cdp;
@@ -112,7 +113,7 @@ for (const [file, name] of [['cpuProfile.ts', 'profileControls'], ['panningDiagn
     let stamp = 0;
     const run = caller(file, name, {
       openTab, probeScript: () => '', Requests: class {}, idleWindow: () => ({from: 0, to: 120_000, boundary: 60_000}), sleep: async () => {},
-      metrics: async () => ({Timestamp: ++stamp}), scriptPerSecond: () => .15, idlePhaseScript: () => '', idlePhaseProblems: () => [], idleProblems: () => [], idleSensitivity,
+      metrics: async () => ({Timestamp: ++stamp}), scriptPerSecond: () => .15, idlePhaseScript: () => '', idlePhaseProblems: () => [], idleRetentionProblems:()=>[], idleProblems: () => [], idleSensitivity,
       profileInterval: async (_cdp: unknown, _browser: unknown, work: () => Promise<unknown>, output: {saveTrace(name: string, value: unknown): void}) => {
         await work(); output.saveTrace('profile', {status: 'complete', profile: {}, clocks: []});
       },
@@ -124,7 +125,7 @@ for (const [file, name] of [['cpuProfile.ts', 'profileControls'], ['panningDiagn
       Date,
     });
     const heard = new EventCounts();
-    const result = name === 'doubledIdle' ? run(f.browser, f.cdp, 'http://fixture.invalid', 120, 300_000, f.evidence, heard, .1) : run(f.browser, f.evidence);
+    const result = name === 'doubledIdle' ? run(f.browser, f.cdp, 'http://fixture.invalid', 120, 300_000, f.evidence, heard, .1,{retention:null,bootstrapSource:''}) : run(f.browser, f.evidence);
     await assert.rejects(result, error => error === (fails ? f.primary : f.cleanup));
     if (!fails) assert.ok(f.files.has(name === 'profileControls' ? 'cpu-controls' : name === 'traceControls' ? 'trace-controls' : 'idle-double'), 'the actual workload reached its successful result before cleanup');
     assert.deepEqual(f.actions, ['target']);
