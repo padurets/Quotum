@@ -1,5 +1,14 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# Only the native fixture enables numeric stage observations; stderr stays private.
+$observeStages = $env:QUOTUM_TEST_KEY_STAGES -eq '1'
+$setupWatch = if ($observeStages) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+function Observe-SetupStage([int]$stage) {
+  if ($observeStages) {
+    try { [Console]::Error.WriteLine('QKS1 ' + $stage + ' ' + $setupWatch.ElapsedMilliseconds); [Console]::Error.Flush() } catch {}
+  }
+}
+Observe-SetupStage 1
 try {
   Add-Type -TypeDefinition @'
 using System;
@@ -12,6 +21,10 @@ using System.Security.Principal;
 using System.Security.Cryptography;
 
 public static class QuotumManagedKey {
+  static readonly bool ObserveStages = Environment.GetEnvironmentVariable("QUOTUM_TEST_KEY_STAGES") == "1";
+  static void Stage(int stage,Stopwatch watch) {
+    if(ObserveStages)try {Console.Error.WriteLine("QKS1 "+stage+" "+watch.ElapsedMilliseconds);Console.Error.Flush();}catch{}
+  }
   [StructLayout(LayoutKind.Sequential)] struct SA { public int Length; public IntPtr Descriptor; public int Inherit; }
   [DllImport("advapi32.dll", CharSet=CharSet.Unicode)] static extern int RegOpenKeyEx(IntPtr key,string name,int options,int rights,out IntPtr opened);
   [DllImport("advapi32.dll", CharSet=CharSet.Unicode)] static extern int RegCreateKeyEx(IntPtr key,string name,int reserved,string cls,int options,int rights,ref SA security,out IntPtr opened,out int disposition);
@@ -71,9 +84,11 @@ public static class QuotumManagedKey {
   public static void Run() {
     var input=new byte[84];byte[] value=null;IntPtr mutex=IntPtr.Zero,leaf=IntPtr.Zero;bool held=false;
     var security=new SA();byte status=3;var watch=Stopwatch.StartNew();
+    Stage(3,watch);
     try {
       var stream=Console.OpenStandardInput();int count=0;
       while(count<input.Length){var n=stream.Read(input,count,input.Length-count);if(n==0)throw new Exception();count+=n;}
+      Stage(4,watch);
       if(Encoding.ASCII.GetString(input,0,4)!="QKI1"||input[40]>1)throw new Exception();
       var id=Encoding.ASCII.GetString(input,4,36);Guid parsed;
       if(!Guid.TryParseExact(id,"D",out parsed)||parsed.ToString("D")!=id)throw new Exception();
@@ -85,11 +100,14 @@ public static class QuotumManagedKey {
       mutex=CreateMutexEx(ref security,"Global\\QuotumHubKeys-v1-"+hash,0,0x120001);
       Marshal.FreeHGlobal(security.Descriptor);security.Descriptor=IntPtr.Zero;
       if(mutex==IntPtr.Zero)throw new Exception();Private(mutex,6,sid,0x120001);
+      Stage(5,watch);
       var waited=WaitForSingleObject(mutex,8000);
       if(waited!=0&&waited!=0x80)throw new Exception();held=true;
+      Stage(6,watch);
       Private(mutex,6,sid,0x120001);
       if(watch.ElapsedMilliseconds>=9000)throw new Exception();
       IntPtr software;
+      Stage(7,watch);
       if(RegOpenKeyEx(HKCU,"Software",0,0x20007|Wow64,out software)!=0)throw new Exception();
       leaf=software;security=Security(sid,"KA");
       foreach(var part in new string[]{"Quotum","HubKeys","v1",id}) {
@@ -99,12 +117,15 @@ public static class QuotumManagedKey {
         RegCloseKey(leaf);leaf=next;Private(leaf,4,sid,Rights);
       }
       bool missing;value=Query(leaf,out missing);
+      Stage(8,watch);
       if(missing) {
         if(!create){status=1;return;}
         if(watch.ElapsedMilliseconds>=9000)throw new Exception();
         if(RegSetValueEx(leaf,"CurrentKey",0,3,candidate,43)!=0)throw new Exception();value=candidate;
       }
+      Stage(9,watch);
       if(RegFlushKey(leaf)!=0)throw new Exception();
+      Stage(10,watch);
       var readback=Query(leaf,out missing);
       if(missing||Encoding.ASCII.GetString(readback)!=Encoding.ASCII.GetString(value))throw new Exception();
       Array.Clear(value,0,value.Length);value=readback;Array.Clear(candidate,0,candidate.Length);status=0;
@@ -115,12 +136,14 @@ public static class QuotumManagedKey {
       if(security.Descriptor!=IntPtr.Zero)Marshal.FreeHGlobal(security.Descriptor);
       Array.Clear(input,0,input.Length);
       var output=Console.OpenStandardOutput();var header=new byte[]{81,75,82,49,status};
+      Stage(11,watch);
       try {output.Write(header,0,header.Length);if(status==0)output.Write(value,0,value.Length);output.Flush();}catch{}
       if(value!=null)Array.Clear(value,0,value.Length);
     }
   }
 }
 '@ -ErrorAction Stop | Out-Null
+  Observe-SetupStage 2
   [QuotumManagedKey]::Run()
 } catch {
   try { $out = [Console]::OpenStandardOutput(); $bytes = [byte[]](81,75,82,49,3); $out.Write($bytes,0,5); $out.Flush() } catch {}

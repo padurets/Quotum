@@ -87,6 +87,23 @@ test('numerical labels freeze during a gesture and retire on an authority replac
   }finally{totals.close();d.close();await h.close();}
 });
 
+test('closed legend metrics follow current work while retaining the drawing and distinguish unavailable from zero',async test=>{
+  test.mock.method(Date,'now',()=>NOW);setLocale('en');
+  const h=await fixture(),d=await drawings(h);let now=NOW,timers=0;
+  const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:()=>{timers++;return {};},clearTimeout:()=>{}});
+  const history=d.render().drawing!,group=history.activity.by.project[0];
+  const props=(available=true)=>{const current=h.period.project(history,'quota',now).activity.by.project.find((value:any)=>value.key===group.key);return {history,by:'project',groupKey:group.key,group,active:false,available,agentMs:current?.agentMs??0,activeMs:current?.activeMs??0,agents:current?.agents??0};};
+  const metrics=consumer('LegendMetrics',clock,h.period,props());
+  try {
+    assert.ok(metrics.render().includes(`>${t('activity.agents')}</span><strong>1</strong>`));
+    now=NOW+H;h.advance(now);
+    assert.equal(h.period.get().rows.length,0);
+    assert.ok(metrics.update(props()).includes(`>${t('activity.agents')}</span><strong>0</strong>`),'expired work cannot survive in the closed tooltip');
+    assert.ok(metrics.update(props(false)).includes(t('activity.pendingRange')),'unavailable work is distinct from confirmed zero');
+    assert.equal(timers,0,'closed metrics do not poll their retained drawing');
+  }finally{metrics.close();d.close();await h.close();}
+});
+
 test('fixed-period numerical consumers never subscribe to a time deadline',async test=>{
   test.mock.method(Date,'now',()=>NOW);const h=await fixture({fixed:true});let timers=0;
   const clock=new PageClock({now:()=>NOW,visible:()=>true,setTimeout:()=>{timers++;return {};},clearTimeout:()=>{}});

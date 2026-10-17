@@ -96,7 +96,8 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
         // Finish renders its fold before this check. Its class change releases the
         // legend only after the animation. A changed pan keeps its viewport for
         // the resulting range too; fewer entries must not enlarge the plot.
-        queueMicrotask(() => {if (alive && !locked() && !held.current?.keep) {restore(); measure.current();}});
+        const saved = held.current;
+        queueMicrotask(() => {if (alive && held.current === saved && !locked() && !saved.keep) {restore(); measure.current();}});
       }
     };
     const unsubscribe = pan.onPhase(changed);
@@ -124,7 +125,7 @@ export function usePlot(panel: RefObject<HTMLElement | null>) {
   useLayoutEffect(() => {
     let legend:HTMLElement|null=null;
     const observer = new ResizeObserver(entries => {
-      for(const entry of entries)if(entry.target===legend)legendSize.current={legend:legend!,height:entry.borderBoxSize?.[0]?.blockSize??entry.contentRect.height};
+      for(const entry of entries)if(entry.target===legend&&!locked()&&!held.current)legendSize.current={legend:legend!,height:entry.borderBoxSize?.[0]?.blockSize??entry.contentRect.height};
       measure.current();
     });
     const follow=()=>{

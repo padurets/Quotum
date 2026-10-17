@@ -12,6 +12,9 @@ import * as plan from '../lib/plan';
 import * as jsx from 'react/jsx-runtime';
 import {num} from '../lib/format';
 import {t} from '../i18n';
+import {Fragment} from 'react';
+import {tableCell} from '../components/TableCell';
+import {renderToStaticMarkup} from 'react-dom/server';
 import {since, sinceChangesAt} from '../lib/agents';
 import {frameChangesAt, step, stepChangesAt} from '../lib/periods';
 import {cellChangesAt, forecastLine, outlook, outlookText, planCell, planEndOf, type Context} from '../lib/forecast';
@@ -116,6 +119,46 @@ test('later labels and unchanged deadlines keep the timer; an earlier label and 
   assert.deepEqual(c.woken, ['minute']);
 });
 
+test('many labels with unchanged deadlines keep one timer without searching every label again', () => {
+  const c = pageClock(), count = 800;
+  let reads = 0;
+  const watches = Array.from({length: count}, (_, i) => {
+    const watch = c.clock.watch();
+    let due = watch.due;
+    Object.defineProperty(watch, 'due', {get: () => {reads++; return due;}, set: value => {due = value;}});
+    c.clock.subscribe(watch, () => {
+      c.woken.push(String(i));
+      c.clock.due(watch, c.now() + MIN, c.now());
+    });
+    c.clock.due(watch, T0 + MIN, c.now());
+    return watch;
+  });
+  assert.ok(reads < count * 20, 'initial deadlines need linear work');
+  const before = reads, timer = c.timers[0].id;
+  for (const watch of watches) c.clock.due(watch, T0 + MIN, c.now());
+  assert.ok(reads - before < count * 10, 'unchanged label commits need linear work');
+  assert.equal(c.timers.length, 1);
+  assert.equal(c.timers[0].id, timer);
+  c.advance(MIN);
+  assert.deepEqual(c.woken, watches.map((_, i) => String(i)));
+  assert.equal(c.timers[0].at, T0 + 2 * MIN);
+});
+
+test('a deadline set before subscribing joins the clock only while subscribed', () => {
+  const c = pageClock();
+  c.part('minute', () => T0 + MIN);
+  const pending = c.clock.watch(), kept = c.timers[0].id;
+  c.clock.due(pending, T0 + 30 * S, c.now());
+  assert.equal(c.timers[0].id, kept);
+  const remove = c.clock.subscribe(pending, () => c.woken.push('pending'));
+  assert.equal(c.timers[0].at, T0 + 30 * S);
+  remove();
+  c.clock.due(pending, T0 + 10 * S, c.now());
+  assert.equal(c.timers[0].at, T0 + MIN);
+  c.advance(MIN);
+  assert.deepEqual(c.woken, ['minute']);
+});
+
 test('a moment that is not after now is a mistake of its part: taken as a minute on, never a spin', () => {
   const c = pageClock();
   c.part('wrong', now => now);
@@ -123,6 +166,41 @@ test('a moment that is not after now is a mistake of its part: taken as a minute
   assert.deepEqual(c.woken, []);
   c.advance(S);
   assert.deepEqual(c.woken, ['wrong']);
+});
+
+test('reaffirming an owed deadline keeps its pending wake without restarting the minimum delay', () => {
+  const c = pageClock(), due = T0 + 1;
+  const watch = c.part('pending', () => due), timer = {...c.timers[0]};
+  for (const elapsed of [10, 10]) {
+    c.jump(elapsed);
+    c.clock.due(watch, due, c.now());
+    assert.equal(watch.due, due);
+    assert.equal(c.timers[0].id, timer.id);
+    assert.equal(c.timers[0].at, timer.at);
+  }
+  c.advance(timer.at - c.now());
+  assert.deepEqual(c.woken, ['pending']);
+  c.advance(MIN - 1);
+  assert.deepEqual(c.woken, ['pending'], 'a newly repeated invalid deadline still cannot spin');
+  c.advance(1);
+  assert.deepEqual(c.woken, ['pending', 'pending']);
+  c.clock.due(watch, null, c.now());
+  assert.equal(c.timers.length, 0);
+});
+
+test('a small hub skew still retargets future and newly overdue pending deadlines', () => {
+  for (const elapsed of [S, MIN - 400]) {
+    const c = pageClock(), due = T0 + MIN;
+    const watch = c.part('skewed', () => null);
+    c.clock.due(watch, due, c.now());
+    c.jump(elapsed);
+    c.clock.heard(c.now() + 500, c.now());
+    c.clock.due(watch, due, c.clock.hubNow());
+    const expected = elapsed === S ? due - 500 : c.now() + 250;
+    assert.equal(c.timers[0].at, expected);
+    c.advance(expected - c.now());
+    assert.deepEqual(c.woken, ['skewed']);
+  }
 });
 
 test('a hidden tab has no timer; shown again, whatever came due meanwhile is woken at once', () => {
@@ -477,4 +555,47 @@ test('the shared timed table cell retains its deadline and value through layout 
   now+=5_000;assert.equal(render('hours'),'hours: 1 at '+T0);assert.equal(deadlines,1);assert.equal(values,1,'layout changes do not rescan rolling accounting');
   value=2;cell={...cell};assert.equal(render(),'work: 2 at '+now);assert.equal(deadlines,2);assert.equal(values,2);
   now+=MIN;clock.wakeDue();assert.equal(render(),'work: 2 at '+now);assert.equal(deadlines,3);assert.equal(values,3,'the retained cell still advances exactly when its shared clock wakes');
+});
+
+test('a live table cell keeps its component and host position across timed and static values',()=>{
+  const render=(cell:{content:unknown})=>jsx.jsx('td',{children:cell.content});
+  const timed={time:'work',at:()=>({content:'live'}),changesAt:()=>null};
+  const live=tableCell('work',timed,render),fixed=tableCell('work',{content:'selected'},render),again=tableCell('work',timed,render);
+  assert.equal(live.key,fixed.key);
+  assert.equal(live.type,fixed.type,'switching a retained cell to a selected range must not unmount its host subtree');
+  assert.equal(fixed.type,again.type);
+  assert.equal(tableCell('work',timed,render,true).type,Fragment,'static measurement never mounts a clock consumer');
+});
+
+test('a static table cell renders on the server without clock planning',()=>{
+  const render=(cell:{content:unknown})=>jsx.jsx('td',{children:cell.content});
+  assert.equal(renderToStaticMarkup(tableCell('work',{content:'selected'},render)),'<td>selected</td>');
+  assert.equal(renderToStaticMarkup(tableCell('work',{time:'work',changesAt:()=>{throw new Error('measurement planned a clock');},at:()=>({content:'measured'})},render,true)),'<td>measured</td>');
+});
+
+test('a disabled clock hook releases its deadline and recaptures time when the same context resumes',()=>{
+  let now=T0,index=0,active=0,plans=0,wakes=0;
+  const slots:any[]=[],timers=new Map<object,{at:number;run:()=>void}>();
+  let layout:(()=>void)[]=[],passive:(()=>void)[]=[];
+  const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:(run,ms)=>{const handle={};timers.set(handle,{run,at:now+ms});return handle;},clearTimeout:handle=>{timers.delete(handle as object);}});
+  const subscribe=clock.subscribe.bind(clock);clock.subscribe=(watch,listener)=>{active++;const stop=subscribe(watch,listener);return()=>{active--;stop();};};
+  const slot=(create:()=>any)=>{const at=index++;return slots[at]??(slots[at]=create());};
+  const context={clock,hubNow:clock.hubNow,exports:{} as {useClock:(changesAt:(at:number)=>number|null,context:readonly unknown[],enabled?:boolean)=>number},
+    useState:(create:()=>unknown)=>[slot(create)],useRef:(current:unknown)=>slot(()=>({current})),
+    useSyncExternalStore:(start:(listener:()=>void)=>()=>void,read:()=>number)=>{const state=slot(()=>({start:null,stop:null}));if(state.start!==start)passive.push(()=>{state.stop?.();state.start=start;state.stop=start(()=>{wakes++;});});return read();},
+    useLayoutEffect:(run:()=>void,deps:unknown[])=>{const state=slot(()=>({deps:null}));if(!state.deps||deps.some((value,i)=>!Object.is(value,state.deps[i]))){state.deps=deps;layout.push(run);}},
+  };
+  const source=readFileSync(new URL('../lib/clock.ts',import.meta.url),'utf8');
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export function useClock(')),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
+  const identity={},deadline=T0+MIN,changesAt=()=>{plans++;return deadline;};
+  const render=(enabled:boolean)=>{index=0;layout=[];passive=[];const shown=context.exports.useClock(changesAt,[identity],enabled);layout.forEach(run=>run());passive.forEach(run=>run());return shown;};
+  assert.equal(render(false),T0);assert.equal(active,0);assert.equal(timers.size,0);assert.equal(plans,0,'a static value never plans a deadline');
+  now+=1000;assert.equal(render(true),now);assert.equal(active,1);assert.equal(timers.size,1);
+  now+=1000;assert.equal(render(false),now);assert.equal(active,0);assert.equal(timers.size,0);
+  const planned=plans;now=deadline+MIN;clock.wakeDue();assert.equal(wakes,0);assert.equal(render(false),now);assert.equal(plans,planned);
+  assert.equal(render(true),now,'the same callback and context cannot restore the old render time');
+  assert.equal(active,1);assert.equal(timers.size,1);
+  assert.equal([...timers.values()][0].at,now+MIN,'a cancelled deadline is invalid, not an owed wake at the old minimum delay');
+  now+=MIN;clock.wakeDue();assert.equal(wakes,1);assert.equal(render(true),now);
+  render(false);assert.equal(active,0);assert.equal(timers.size,0);
 });

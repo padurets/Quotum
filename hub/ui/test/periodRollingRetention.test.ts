@@ -5,11 +5,165 @@ import {expandPeriod} from '../../server/domain/periodWire';
 import {workedSessions} from '../../server/domain/periodWork';
 import {PeriodAccounting} from '../../server/domain/periodAccounting';
 import {PeriodIndex} from '../../server/domain/periodIndex';
-import {decodeSamples,sampleCount,mergeTape,bindRate,rateAt,type PeriodTape,type MoneyTape} from '../../server/domain/periodTape';
+import {cellOf} from '../../server/domain/history';
+import {decodeSamples,sampleCount,sampleAt,packSamples,retainSamplesPrepared,numberColumn,numberTail,numberAt,numberBytes,mergeTape,mergeTapePrepared,bindRate,rateAt,type NumberColumn,type PeriodTape,type MoneyTape} from '../../server/domain/periodTape';
 import {retainTape} from '../../server/domain/periodRetention';
 import {drain,Preparations} from '../lib/prepare';
 import {PERIOD_SCOPES} from '../../server/domain/periodRead';
 import type {Meter} from '../../server/domain/meters';
+
+test('financial and work observations share storage only when every native fact agrees',()=>{
+  const readings=Array.from({length:3},(_,i)=>({id:'usage',at:i*100,previousAt:i?(i-1)*100:null,kind:'counter' as const,unit:'USD',amount:String(i*1000000),limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:1000}));
+  for(const prior of [false,true])for(const change of ['none','dense','amount','deadline','predecessor'] as const){
+    const native=structuredClone(readings);
+    if(change==='dense')native.splice(1,0,{...native[0],at:50});
+    if(change==='amount')native[1].amount='1000001';
+    if(change==='deadline')native[1].staleAfterMs++;
+    if(change==='predecessor')native[1].previousAt=1;
+    const tape:PeriodTape={from:0,cut:301,replaceFrom:0,cursor:'current',quota:[],money:[{source:'wallet',meter:'balance',readings,spans:[],workCounter:{source:'wallet',unit:'USD',knownFrom:0,workFrom:0,readings:native,spans:[]}}]},before=JSON.stringify(tape);
+    const previous=prior?{...tape,money:[]}:undefined,merged=mergeTape(previous,tape);
+    assert.equal(JSON.stringify(merged),before);assert.equal(JSON.stringify(tape),before);
+    assert.equal(merged.money[0].workCounter!.readings===merged.money[0].readings,change==='none');
+    assert.equal(tape.money[0].workCounter!.readings,native,'the caller keeps its original generation');
+    if(change==='none'){
+      const retired=drain(retainTape(merged,150));
+      assert.equal(retired.money[0].workCounter!.readings,retired.money[0].readings,'clock retirement preserves the shared native suffix');
+      assert.deepEqual(retired.money[0].readings,readings.slice(1));
+      assert.deepEqual(merged.money[0].readings,readings,'retirement preserves the earlier generation');
+      const limited=new Error('capacity');
+      assert.throws(()=>drain(mergeTapePrepared(previous,tape,()=>{throw limited;})),error=>error===limited);
+      const canceled=mergeTapePrepared(previous,tape);assert.equal(canceled.next().done,false);canceled.return(tape);
+      assert.equal(JSON.stringify(tape),before);assert.equal(tape.money[0].workCounter!.readings,native);
+    }
+  }
+});
+
+test('work-order subscriptions cannot postpone an already due live retirement',async t=>{
+  let now=NOW;t.mock.method(Date,'now',()=>now);
+  const h=await fixture({clocked:true,periodName:'24h',creditFrom:NOW-24*H+2*M,creditTo:NOW-24*H+5*M});
+  let remove=()=>{};
+  try{
+    const due=NOW+5*M,before=h.period.get().value,revision=h.period.revision,bytes=h.pool.estimatedBytes;
+    assert.equal(h.period.retirementAt,due);
+    now=due-1;h.advance(now);h.period.refreshWorkClock();await flush();
+    now=due+1;h.advance(now);remove=h.period.subscribeWorkOrder(()=>null);
+    now=due+300;h.advance(now);await flush();
+    assert.equal(h.period.get().error,null);
+    assert.equal(h.period.get().rows.length,0,'expired work leaves the visible period without another minute of delay');
+    assert.notStrictEqual(h.period.get().value,before,'the actual producer ledger retires its expired storage');
+    assert.equal(h.period.get().value.refs.length,0);
+    assert.equal(h.period.revision,revision);
+    assert.equal(h.requests.length,0);
+    assert.ok(h.pool.estimatedBytes<bytes);
+    assert.equal(h.pool.activeFlights,0);
+  }finally{remove();await h.close();}
+});
+
+for(const {elapsed,subscribeLate} of [{elapsed:0,subscribeLate:false},{elapsed:2,subscribeLate:false},{elapsed:2,subscribeLate:true}])test(`quota retirement survives ${elapsed} ms elapsed ${subscribeLate?'before a late subscription':'in the preceding work wake'}`,async t=>{
+  const periodMs=24*H,start=NOW-periodMs,due=NOW+2*M+1;
+  let readNow=()=>NOW;t.mock.method(Date,'now',()=>readNow());
+  const h=await fixture({personal:true,clocked:true,periodName:'24h',creditFrom:start+2*M,creditTo:start+5*M});
+  readNow=h.clock.hubNow;
+  let remove=()=>{};
+  try{
+    const source=h.store.source('codex','d'.repeat(24),start-H);h.store.hold(source,h.alice.id,start-H);
+    for(const at of [start+M,start+2*M,start+3*M,NOW-2*M])h.store.record(source,{observedAt:at,plan:'',resets:null,staleAfterMs:2*periodMs,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:NOW+periodMs}]});
+    h.events.flush();await flush();
+    const before=h.period.tapes.get('quota'),row=before.tape.quota.find((row:any)=>row.source===source),revision=h.period.revision,proof=h.period.proofEpoch,projection=h.period.getProjectionRevision('quota'),requests=h.requests.length;
+    assert.equal(sampleCount(row.samples),4);
+    assert.equal(sampleAt(row.samples,1)!.at+periodMs+1,due);
+    assert.equal(h.period.retirementAt,due);
+    assert.equal(h.period.watch.due,due-1,'the real work curve wakes immediately before quota retirement');
+    const index=h.period.index,advance=index.advance.bind(index);let crossed=0;
+    index.advance=(...args:Parameters<typeof advance>)=>{
+      const result=advance(...args);
+      if(args[1]===due-1){crossed++;h.elapse(elapsed);}
+      return result;
+    };
+    if(subscribeLate){h.elapse(due+1-h.clock.hubNow());remove=h.period.subscribeWorkOrder(()=>null);}
+    // Only scheduled timers run: a forced wake would conceal the missed deadline.
+    h.advance(due+10);await flush();
+    assert.equal(crossed,subscribeLate?0:1);
+    h.advance(due+500);await flush();
+    const after=h.period.tapes.get('quota'),kept=after.tape.quota.find((row:any)=>row.source===source);
+    assert.equal(sampleCount(kept.samples),3,`deadline must survive the work wake; next watch=${h.period.watch.due}`);
+    for(let i=0;i<3;i++)assert.deepEqual(sampleAt(kept.samples,i),sampleAt(row.samples,i+1));
+    assert.equal(after.tape.cursor,before.tape.cursor);
+    assert.equal(h.period.revision,revision);assert.equal(h.period.proofEpoch,proof);
+    assert.equal(h.period.getProjectionRevision('quota'),projection);
+    assert.equal(h.requests.length,requests,'clock retirement reads no history');
+    assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes,'all staging is released');
+    assert.equal(h.pool.activeFlights,0);
+    const now=h.clock.hubNow(),range={from:now-periodMs,to:now},queries=h.period.queries(h.page.get().board,range);
+    const fresh=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'live',periodMs},evaluatedAt:now,...queries,sessions:{}})));
+    assert.ok(fresh.quota?.state==='complete'&&fresh.quota.value.tape);
+    assert.ok(fresh.sessions&&fresh.sessions.state!=='error');
+    const tape=fresh.quota.value.tape;
+    for(const series of tape.quota)if(series.samplesEncoding==='delta'){series.samples=decodeSamples(series.samples);delete series.samplesEncoding;}
+    const oracle=new PeriodAccounting(tape,fresh.sessions.value,new PeriodIndex(fresh.sessions.value).curves);
+    assert.deepEqual(after.accounting.fixed(range,cellOf(periodMs)),oracle.fixed(range,cellOf(periodMs)));
+  }finally{remove();await h.close();}
+});
+
+test('numeric prefix retirement preserves every value and releases expired buffers',()=>{
+  const cases=[
+    Array.from({length:256},()=>17.125),
+    Array.from({length:256},(_,i)=>1_800_000_000_000+i*60_000),
+    Array.from({length:256},(_,i)=>i<97?i*3:1000-(i-97)*7),
+    Array.from({length:256},(_,i)=>(i*137)%251),
+    Array.from({length:256},(_,i)=>Math.sin(i)+i*.125),
+  ].map(values=>drain(numberColumn(values.length,i=>values[i])));
+  const large=Number.MAX_SAFE_INTEGER-10;
+  cases.push({length:3,base:0,values:null,runs:{ends:new Uint32Array([3]),bases:new Float64Array([large]),steps:new Float64Array([-large])}});
+  const buffers=(column:NumberColumn)=>column.runs?[column.runs.ends.buffer,column.runs.bases.buffer,column.runs.steps.buffer]:column.values?[column.values.buffer]:[];
+  for(const column of cases)for(const start of [0,1,96,97,98,Math.floor(column.length/2),column.length-1,column.length].filter(start=>start<=column.length)){
+    const before=Array.from({length:column.length},(_,i)=>numberAt(column,i)),bytes=numberBytes(column);
+    const tail=drain(numberTail(column,start));
+    assert.deepEqual(Array.from({length:tail.length},(_,i)=>numberAt(tail,i)),before.slice(start));
+    assert.deepEqual(Array.from({length:column.length},(_,i)=>numberAt(column,i)),before,'retirement cannot mutate a visible or cached ledger');
+    assert.ok(numberBytes(tail)<=bytes,'retirement cannot grow retained storage');
+    if(start)for(const buffer of buffers(tail))assert.ok(!buffers(column).includes(buffer),'the expired prefix must not remain reachable through a subarray');
+    else assert.equal(tail,column);
+  }
+});
+
+test('retirement reserves a dense compressed suffix before copying and can abandon it',()=>{
+  const length=8192+128,start=8192;
+  const column=drain(numberColumn(length,i=>i<start?i:start+(i*137)%251));
+  assert.ok(column.runs);
+  const before=Array.from({length},(_,i)=>numberAt(column,i));let copied=false;
+  const bases=column.runs.bases,slice=bases.slice.bind(bases);
+  bases.slice=(from,to)=>{copied=true;return slice(from,to);};
+  const limited=new Error('capacity');
+  assert.throws(()=>drain(numberTail(column,start,()=>{throw limited;})),error=>error===limited);
+  assert.equal(copied,false,'capacity refusal must precede new typed buffers');
+  let charged=0;
+  const tail=drain(numberTail(column,start,bytes=>{charged+=bytes;}));
+  assert.equal(charged,numberBytes(tail));
+  assert.ok(charged*5>(length-start)*40+512,'five dense suffixes exceed the former row-based reserve');
+  const cancelled=numberTail(column,start,()=>{});
+  assert.equal(cancelled.next().done,false);
+  cancelled.return(column);
+  assert.deepEqual(Array.from({length},(_,i)=>numberAt(column,i)),before);
+  assert.deepEqual(Array.from({length:tail.length},(_,i)=>numberAt(tail,i)),before.slice(start));
+});
+
+for(const count of [128,8192])test(`retiring compressed quota cadences does bounded work for ${count} observations`,()=>{
+  const origin=1_800_000_000_000,step=60_000;
+  const flat=packSamples(Array.from({length:count},(_,i)=>({at:origin+i*step,used:i%512,resetAt:origin+count*step,staleAfterMs:count*step,validUntil:origin+count*step+1})));
+  const samples=drain(retainSamplesPrepared(flat));
+  const tape:PeriodTape={from:origin,cut:origin+count*step,replaceFrom:origin,cursor:'cursor',quota:Array.from({length:12},(_,i)=>({source:String(i),window:'w',samples})),money:[]};
+  const work=retainTape(tape,origin+2*step+1);let steps=0,result=work.next();
+  while(!result.done){steps++;result=work.next();}
+  assert.ok(steps<256,`a single expired prefix performed ${steps} preparation steps`);
+  const retained=result.value.quota[0].samples;
+  assert.equal(sampleCount(retained),count-2,'the actual predecessor observation stays available');
+  for(let i=0;i<count-2;i++)assert.deepEqual(sampleAt(retained,i),sampleAt(flat,i+2));
+  assert.equal(sampleCount(samples),count,'the old ledger stays intact until commit');
+  const reference=drain(retainTape({...tape,quota:[{...tape.quota[0],samples:flat}]},origin+2*step+1));
+  const range={from:origin+2*step+1,to:origin+count*step};
+  assert.deepEqual(new PeriodAccounting(result.value,null).quotaSummary('0','w',range),new PeriodAccounting(reference,null).quotaSummary('0','w',range));
+});
 
 test('financial reuse follows effective retention coverage and native evidence',()=>{
   const group:MoneyTape={source:'wallet',meter:'balance',displayUnit:'USD',retainedFrom:100,readings:[{id:'balance',at:5000,previousAt:null,kind:'balance',unit:'USD',amount:'1000000',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:1000}],spans:[{from:5000,to:6000,staleAfterMs:1000}]};

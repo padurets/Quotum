@@ -36,6 +36,13 @@ export class ValueChanges {
       output.push([this.pathId(path),after-before,0]);return output;
     }
     if(Array.isArray(before)&&Array.isArray(after)&&before.length!==after.length){
+      // Record fields can change at both edges while most of their evidence stays.
+      // The tail splice leaves every field edited below its start in place.
+      if(before.length&&after.length&&before.every(value=>value&&typeof value==='object'&&!Array.isArray(value))&&after.every(value=>value&&typeof value==='object'&&!Array.isArray(value))){
+        const length=Math.min(before.length,after.length);
+        for(let i=0;i<length;i++)this.compare(before[i],after[i],[...path,i],output,advance?.children?.get(String(i)));
+        output.push([this.pathId(path),length,before.length-length,after.slice(length)]);return output;
+      }
       // Boundary points enter or leave while the other exact points stay unchanged.
       let first=0,last=0;
       while(first<Math.min(before.length,after.length)&&equal(before[first],after[first],advance?.children?.get(String(first))))first++;

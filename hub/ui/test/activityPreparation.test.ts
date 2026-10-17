@@ -60,6 +60,8 @@ test('actual Activity generators hold one coherent model and produce exact stack
   const source = readFileSync(new URL('../components/Activity.tsx', import.meta.url), 'utf8');
   const start = source.indexOf('  const prepared = usePrepared(');
   const region = source.slice(start, source.indexOf('  const currentGroups=', start));
+  const stacksStart = source.indexOf('const StackArtwork = memo(function StackArtwork(');
+  assert.ok(stacksStart >= 0, 'the fixture includes the actual prepared stack artwork');
   type Model = {identities: {key: string; name: string | null}[]; shown: {group: PlotGroup; color: string; name: string}[]; strip: PlotBuffer};
   const navigation = {context: 'test', range: 'range'};
   const axis = {box: {current: null}, svg: {current: null}, width: 400, scale: 1, hover: null, drag: null, clip: 'c', handlers: {}, basis: {from: 0, to: length, end: length}, active: false, screenX: (at: number) => 48 + (at - axis.basis.from) / length * 340, commitDrawing: () => {}};
@@ -72,9 +74,9 @@ test('actual Activity generators hold one coherent model and produce exact stack
     useTimeAxis: () => axis,
     useTip: () => ({tip: {current: null}, style: {}}), PlotLayer: () => null, PlotOverlay: () => null, Tooltip: () => null,
     clock: () => '', shortDay: () => '', workHours: () => '', stamp: () => '', t: (key: string) => key,
-    prepareParent: null as unknown as () => {value: Model | null; ready: boolean}, Stacks: null as unknown as (props: object) => React.ReactNode,
+    prepareParent: null as unknown as () => {value: Model | null; ready: boolean}, Stacks: null as unknown as (props: object) => React.ReactNode, StackArtwork: null as unknown as (props: object) => React.ReactNode,
   };
-  runInNewContext(ts.transpileModule(`function prepareParent(){${region}\nreturn prepared;}\n${source.slice(source.indexOf('const Stacks = memo(function Stacks('))}\nglobalThis.prepareParent=prepareParent;globalThis.Stacks=Stacks;`, {compilerOptions: {target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React}}).outputText, context);
+  runInNewContext(ts.transpileModule(`function prepareParent(){${region}\nreturn prepared;}\n${source.slice(stacksStart)}\nglobalThis.prepareParent=prepareParent;globalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;`, {compilerOptions: {target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React}}).outputText, context);
   const renderParent = () => {Object.assign(context, parent); parent.begin(); return context.prepareParent();};
   assert.equal(renderParent().value, null); assert.equal(aggregates, 0); parent.commit(); parent.finish();
   const first = renderParent().value!; assert.equal(first.identities.length, 30); assert.equal(aggregates, 1);
@@ -89,6 +91,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
   const pathsOf = (node: React.ReactNode): string[] => {
     if (Array.isArray(node)) return node.flatMap(pathsOf);
     if (!React.isValidElement<{className?: string; d?: string; children?: React.ReactNode}>(node)) return [];
+    if (node.type === context.StackArtwork) return pathsOf(context.StackArtwork(node.props));
     return node.props.className === 'activity-stack' && node.props.d !== undefined ? [node.props.d] : pathsOf(node.props.children);
   };
   const props = {activity: {barMs}, origin: 0, groups: current.shown, from: 0, to: length, unknownTo: null, plot: undefined, onBase: () => {}, onSelect: () => {}, strip: current.strip as PlotBuffer | null, prepared: true, navigation, by: 'project', allMuted: false, empty: null};
@@ -96,6 +99,7 @@ test('actual Activity generators hold one coherent model and produce exact stack
   assert.deepEqual(renderChild(), []); assert.equal(draws, 0); child.commit(); child.finish();
   const actual = renderChild();
   const expected = new StackPaths().draw(current.shown, 0, 340 / length, barMs, 160, activityScale(465 * 60_000).max);
+  assert.ok(actual.some(path => path.length > 0), 'prepared stacks contain nonempty geometry');
   assert.deepEqual([...actual], expected); assert.equal(draws, 1);
   props.from += 60_000; props.to += 60_000;
   axis.basis = {from: props.from, to: props.to, end: props.to};

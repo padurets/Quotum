@@ -80,7 +80,7 @@ test('money preparation keeps cold history reusable across cached return and rep
   };
   t.mock.method(globalThis,'fetch',async(_url:any,init:any)=>{
    const body=JSON.parse(init.body);attempts.push(phase);
-   const reply=server.read(owner.personalBoard,user.id,body);return new Response(reply,{headers:{'content-type':'application/json'}});
+   const reply=server.read(owner.personalBoard,user.id,body,new Headers(init.headers).get('x-quotum-history-sources')==='basis');return new Response(reply,{headers:{'content-type':'application/json'}});
   });
   const context={exports:{} as any,hubNow:()=>clockNow,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod,page:{get:()=>({board}),dispatch:console.error},pan:{get:()=>panning?{}:null},preparations:()=>preparer,
    prepareAsync:(owner:object,work:any,valid:()=>boolean)=>productionPrepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
@@ -90,8 +90,8 @@ test('money preparation keeps cold history reusable across cached return and rep
   for(const [i,scope] of (['quota','budget','budget'] as const).entries()){
    const meter=i===0?undefined:moneyReadSelection(snapshot.sources,board.view,i===2?settings.funds:settings.money,board.currencies,i===2?'funds':'budget');
    const family=i===2?'funds':scope;
-   const reader=new HistoryStore({workInPresentation:scope!=='budget',now:()=>clockNow,preparations:preparer,setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:t=>clearTimeout(t as any),dropTimeRange:()=>{throw Error('dropRange')},
-    read:(_board,cell,from,to,signal,meters,meta)=>period.transport.read(family,{cell:String(cell),from:String(from),to:String(to),...(panning?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal).then((reply:any)=>expandHistory(reply,meta)),
+   const reader=new HistoryStore({sharedTransport:true,workInPresentation:scope!=='budget',now:()=>clockNow,preparations:preparer,setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:t=>clearTimeout(t as any),dropTimeRange:()=>{throw Error('dropRange')},
+    read:(_board,cell,from,to,signal,meters,meta,owner)=>period.transport.read(family,{cell:String(cell),from:String(from),to:String(to),...(panning?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal,owner,meta).then((reply:any)=>expandHistory(reply,meta)),
    },pool.budget,scope,pool);
    readers.push(reader);reader.choose('30d',null);reader.setMeters(meter);reader.open(board.id);reader.hello(events.epoch);reader.snapshot(board.lineup,quotas.flatMap(id=>store.state(id).windows.map(w=>`${id} ${w.id}`)),NOW-75*DAY);
   }
@@ -111,7 +111,7 @@ test('money preparation keeps cold history reusable across cached return and rep
     const reply=fresh[expectedScope];assert.equal(reply?.state,'complete');const tape=reply.value.tape;assert.ok(tape);
     for(const row of tape.quota){row.samples=drain(retainSamplesPrepared(row.samples,row.samplesEncoding==='delta'));delete row.samplesEncoding;}
     const baseline=new PeriodAccounting(tape,work,workIndex.curves).project(shown.history,range,values),actual=period.project(shown.history,expectedScope,clockNow);
-    assert.equal(actual.since,range.from);assert.equal(actual.to,range.to);assert.deepEqual(actual.series,baseline.series,`${label}: exact quota projection`);assert.deepEqual(actual.meterSeries,baseline.meterSeries,`${label}: exact money projection`);
+    assert.equal(actual.since,range.from);assert.equal(actual.to,range.to);assert.deepEqual(actual.series,baseline.series,`${label}: exact quota projection`);assert.deepEqual(actual.meterSeries,baseline.meterSeries,`${label}: exact money projection`);assert.deepEqual(actual.moneyWork,baseline.moneyWork,`${label}: exact monetary work`);
     if(expectedScope==='quota'){const activity=new PeriodActivity(work,workIndex.curves);activity.update(rows);const expected=activity.project(baseline.activity,range);const knownFrom=Math.max(range.from,period.work.value.knownFrom),knownTo=Math.min(range.to,period.work.value.cut);expected.known=knownFrom<knownTo?{from:knownFrom,to:knownTo}:null;assert.deepEqual(actual.activity,expected,`${label}: exact activity and retained evidence cut`);}
    }
 

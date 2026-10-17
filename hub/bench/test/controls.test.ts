@@ -23,6 +23,7 @@ function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
   const context = {
     localStorage: {getItem: () => '{}', setItem: (_key: string, value: string) => {ids = JSON.parse(value).money.selected.USD;}},
     Date: {now: () => frame * 16},
+    performance: {now: () => frame * 16}, window: {},
     requestAnimationFrame: (callback: (stamp: number) => void) => queueMicrotask(() => callback(++frame * 16)),
     document: {
       querySelector: (selector: string) => selector===balance?panel:selector === balance+' .chart > svg'||selector==='.budget-history .chart > svg' ? root
@@ -36,6 +37,7 @@ function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
   };
   const cdp = {
     on: (_method: string, callback: () => void) => {loaded = callback;},
+    off: () => {loaded = () => {};},
     send: async (method: string) => {if (method === 'Page.reload') loaded();},
     evaluate: async (source: string) => runInNewContext(source, context),
   } as unknown as Cdp;

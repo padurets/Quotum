@@ -69,7 +69,7 @@ export async function fixture({personal=false,ownerDevice=false,transportLive=fa
   const timers=new Map<object,{at:number;run:()=>void}>();
   const events=new Events(hub,undefined,{now:()=>now,after:(ms,run)=>{const token={};timers.set(token,{at:now+ms,run});return ()=>{timers.delete(token);};}},null),tiles=new HistoryTiles(store),reader=new PeriodReader(hub,tiles,events);
   events.onHistory=(source,since,scopes,work)=>{tiles.touch(source,since,scopes);reader.touch(source,since,scopes,work);};
-  events.onClientHistory=(user,since)=>{tiles.touchClient(user,since);reader.touchClient(user,since);};events.attach();
+  events.onClientHistory=(user,since,device)=>{tiles.touchClient(user,since,device);reader.touchClient(user,since,device);};events.attach();
   const page=createStore(reduce,INITIAL),frames:Frame[]=[],requests:PeriodRequest[]=[],pool=new HistoryPool();
   let stream:ReadableStreamDefaultController<Uint8Array>|null=null;
   const connection=transportLive?new Live({fetch:async()=>new Response(new ReadableStream<Uint8Array>({start:controller=>{stream=controller;}}),{headers:{'content-type':'text/event-stream'}}),now:()=>now,setTimeout:(run,ms)=>{const token={};timers.set(token,{at:now+ms,run});return token;},clearTimeout:token=>{timers.delete(token as object);},random:()=>0.5,visible:()=>true,hubNow:()=>now,heard:()=>{},dispatch:event=>page.dispatch(event),unauthorized:()=>{},gone:()=>{},epochChanged:()=>{},script:null,reload:()=>{},storage:()=>({getItem:()=>null,setItem:()=>{}})}):null;
@@ -83,6 +83,7 @@ export async function fixture({personal=false,ownerDevice=false,transportLive=fa
   const initial=events.open({user:alice.id,secret,board,kind:'stream',send:feed,end:()=>{}});
   if(!initial||initial==='limit')throw new Error('stream did not open');let opened=initial;feed(opened.frames);
   if(connection)await flush();
+  let selectedRange=fixed?{from:NOW-H,to:NOW}:null;
   const settings={range:periodName,kind:'session',money:DEFAULT_MONEY,funds:DEFAULT_MONEY};
   const code=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   let wait:Promise<void>|null=null,preparer:Preparations|null=null;
@@ -92,13 +93,13 @@ export async function fixture({personal=false,ownerDevice=false,transportLive=fa
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body)))));const pending=wait;wait=null;await pending;return reply;},
     periodTextChangesAt,page,pan,preparations:()=>preparer,prepareAsync:(owner:object,work:Parameters<typeof drain>[0],valid:()=>boolean)=>prepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
     packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
-    timeRange:()=>fixed?{from:NOW-H,to:NOW}:null,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
+    timeRange:()=>selectedRange,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,context);
   const period=new context.exports.BoardPeriod();pan.onPhase(()=>period.refreshWorkClock());page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
   assert.equal(period.get().error,null);assert.equal(period.get().rows.length,1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
-  const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;timers.delete(next[0]);next[1].run();events.flush();}now=at;if(!clocked)period.tick();};
+  const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=Math.max(now,next[1].at);timers.delete(next[0]);next[1].run();events.flush();}now=Math.max(now,at);if(!clocked)period.tick();};
   const jump=(at:number)=>{now=at;for(const [token,timer] of [...timers])if(timer.at<=at){timers.delete(token);timer.run();}events.flush();if(clocked)pageClock.wakeDue();else period.tick();};
-  return {hub,device,owner,advance,jump,pan,clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
+  return {elapse:(ms:number)=>{now+=ms;},selectRange:(range:{from:number;to:number}|null)=>{selectedRange=range;period.changed();},hub,device,owner,advance,jump,pan,clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
     report:(working=false,at=NOW)=>{now=at;hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(at).toISOString(),sessions:[{provider:'codex',...(funding?{account:(privateWork?'b':'a').repeat(24)}:{}),sessionId:stable?'c'.repeat(32):null,origin:'terminal',project:'Work project',folder:'Private folder',startedAt:new Date(start).toISOString(),lastWorkedAt:new Date(NOW-2*M).toISOString(),working}]},at);events.flush();},
     endIdle:()=>{hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(NOW).toISOString(),sessions:[]},NOW);events.flush();},
     event:(event:HubEvent)=>page.dispatch({type:'hub',event}),
@@ -141,10 +142,10 @@ export function consumer(h: any) {
     quotaHistory:{retry:()=>{}},AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,LegendItem:()=>null,
     setTimeRange:()=>{},navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
     PlotLayer:()=>null,PlotOverlay:()=>null,Tooltip:()=>null,clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',
-    CSS:{escape:(id:any)=>id},Stacks:null as any};
-  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,context);
+    CSS:{escape:(id:any)=>id},Stacks:null as any,StackArtwork:null as any};
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,context);
   function find(node:any,type:any):any{if(Array.isArray(node))return node.map(n=>find(n,type)).find(Boolean);if(!React.isValidElement(node))return null;if(node.type===type)return node;return find((node.props as any).children,type);}
-  const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
+  const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;if(node.type===context.StackArtwork)return pathsOf(context.StackArtwork(p));return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
   let latestParent:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
   const renderChild=(props:any)=>{Object.assign(context,child);child.begin();return pathsOf(context.Stacks(props));};
 
@@ -159,7 +160,8 @@ import {HistoryStore,follow} from '../lib/history';
 import {expandHistory} from '../../server/domain/history';
 
 export async function drawings(h:any){
- const loader=new HistoryStore({now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,meta)=>h.period.transport.read('quota',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??''},signal).then((reply:import('../../server/domain/history').HistoryReply)=>expandHistory(reply,meta)),setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,'quota',h.pool);
+ const scheduled=new Map<object,{run:()=>void;ms:number}>();
+ const loader=new HistoryStore({sharedTransport:true,now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,meta,owner)=>h.period.transport.read('quota',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??''},signal,owner).then((reply:import('../../server/domain/history').HistoryReply)=>expandHistory(reply,meta)),setTimeout:(run,ms)=>{const token={};scheduled.set(token,{run,ms});return token;},clearTimeout:token=>{scheduled.delete(token as object);},dropTimeRange:()=>{}},undefined,'quota',h.pool);
  const stop=follow(loader,h.page);loader.choose(h.settings.range,null);loader.open(h.board);loader.hello(h.events.epoch);
  const board=h.page.get().board;loader.snapshot(board.lineup,Object.values(board.cards).flatMap((c:any)=>c.windows.map((w:any)=>`${c.id} ${w.id}`)),board.historyStart,board.workAuthority);await flush();
  const slots:any[]=[];let cursor=0;
@@ -169,7 +171,7 @@ export async function drawings(h:any){
  const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
  runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
  const render=()=>{cursor=0;return context.read(loader,true);};
- return {loader,render,close:()=>{stop();loader.close();}};
+ return {loader,render,runScheduled:()=>{const timers=[...scheduled];for(const [token,timer] of timers){scheduled.delete(token);timer.run();}return timers.map(([,timer])=>timer.ms);},close:()=>{stop();loader.close();}};
 }
 import {subscriptionLinesOf} from '../lib/subscription';
 import {lineWork,workText} from '../lib/work';

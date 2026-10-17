@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {randomBytes} from 'node:crypto';
 import {request, type ClientRequest} from 'node:http';
 import {syncBuiltinESMExports} from 'node:module';
-import {Readable} from 'node:stream';
+import {Readable, Transform, pipeline} from 'node:stream';
 import {test} from 'node:test';
 import zlib from 'node:zlib';
 import Fastify from 'fastify';
@@ -86,59 +86,95 @@ test('native codec errors preserve the ordinary HTTP error before headers and ab
   });
 });
 
-test('a paused HTTP reader applies backpressure to the native encoder', {timeout: 10_000}, async t => {
+test('a blocked response sink pauses and resumes the native encoder', {timeout: 10_000}, async t => {
   const payload = JSON.stringify({text: randomBytes(8 * 1024 * 1024).toString('base64')});
-  for (const coding of ['br', 'gzip']) await t.test(coding, async t => {
-    let codec: Codec | undefined, produced = 0;
+  for (const coding of ['br', 'gzip']) for (const phase of ['resume', 'cancel']) await t.test(`${coding} ${phase}`, async t => {
+    let codec: Codec | undefined, produced = 0, release: (() => void) | undefined;
+    let blocked!: () => void, finished!: () => void;
+    const pressure = new Promise<void>((resolve, reject) => {
+      blocked = resolve;
+      finished = () => reject(new Error('the encoder finished without applying native readable backpressure'));
+    });
     const gzip = zlib.createGzip, brotli = zlib.createBrotliCompress;
     const record = (stream: Codec) => {
       codec = stream;
+      stream.once('finish', finished);
       const push = stream.push;
       stream.push = (chunk: Buffer | null, encoding?: BufferEncoding) => {
         produced += chunk?.length ?? 0;
-        return push.call(stream, chunk, encoding);
+        const accepted = push.call(stream, chunk, encoding);
+        if (chunk && !accepted) blocked();
+        return accepted;
       };
       return stream;
     };
     t.mock.method(zlib, 'createGzip', (options?: zlib.ZlibOptions) => record(gzip(options)));
     t.mock.method(zlib, 'createBrotliCompress', (options?: zlib.BrotliOptions) => record(brotli(options)));
     syncBuiltinESMExports();
+    // Hold one write callback so socket buffer capacity cannot hide a blocked reader.
+    const sink = new Transform({highWaterMark: 16 * 1024, transform(chunk, _encoding, done) {
+      if (release) return done(null, chunk);
+      release = () => done(null, chunk);
+    }});
     const app = Fastify();
-    t.after(async () => {codec?.destroy(); app.server.closeAllConnections(); await app.close(); t.mock.restoreAll(); syncBuiltinESMExports();});
+    t.after(async () => {sink.destroy(); codec?.destroy(); app.server.closeAllConnections(); await app.close(); t.mock.restoreAll(); syncBuiltinESMExports();});
     await responseCompression(app, false);
+    app.addHook('onSend', (_req, _reply, body, done) => {
+      if (!(body instanceof Readable)) return done(null, body);
+      assert.equal(body, codec, 'the production hook supplies the real native encoder');
+      pipeline(codec!, sink, () => {});
+      done(null, sink);
+    });
     app.get('/api/overview', (_req, reply) => reply.type('application/json').send(payload));
     await app.listen({host: '127.0.0.1', port: 0});
     const base = `http://127.0.0.1:${(app.server.address() as {port: number}).port}/api/overview`;
-    let req: ClientRequest;
-    await new Promise<void>((resolve, reject) => {
+    let req!: ClientRequest;
+    const response = new Promise<Buffer>((resolve, reject) => {
       req = request(base, {headers: {'accept-encoding': coding}}, res => {
-        res.pause();
-        res.on('error', () => {});
-        resolve();
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.headers['content-encoding'], coding);
+        const chunks: Buffer[] = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('error', reject);
+        res.on('end', () => resolve(Buffer.concat(chunks)));
       });
       req.on('error', reject);
       req.end();
     });
+    void response.catch(() => {});
+    await pressure;
     let previous = -1, stable = 0;
     for (let n = 0; n < 40 && stable < 3; n++) {
       await new Promise(resolve => setTimeout(resolve, 50));
       stable = produced === previous ? stable + 1 : 0;
       previous = produced;
     }
-    assert.equal(stable, 3, 'the encoder pauses while its socket cannot drain');
+    assert.equal(stable, 3, 'the encoder pauses while the response sink cannot drain');
     assert.ok(codec);
+    assert.equal(sink.writableNeedDrain, true, 'the controlled sink has actually applied backpressure');
     assert.equal(codec.readableEnded, false, 'the paused response still has unread encoded output');
     assert.ok(codec.readableLength >= codec.readableHighWaterMark, 'the native readable queue is applying backpressure');
     assert.ok(codec.readableLength <= codec.readableHighWaterMark + 16 * 1024, 'native output remains bounded');
     assert.ok(produced > 0);
-    req!.destroy();
-    await new Promise<void>(resolve => codec!.once('close', resolve));
+    const closed = new Promise<void>(resolve => codec!.once('close', resolve));
+    if (phase === 'resume') {
+      assert.ok(release);
+      release();
+      const wire = await response;
+      assert.equal((coding === 'br' ? zlib.brotliDecompressSync(wire) : zlib.gunzipSync(wire)).toString(), payload);
+      assert.equal(produced, wire.length, 'every produced byte reaches the resumed HTTP reader');
+    } else {
+      req.destroy();
+      await assert.rejects(response, {code: 'ECONNRESET'});
+    }
+    await closed;
     const stopped = produced;
     await app.close();
     assert.equal(produced, stopped);
     assert.equal((codec as Codec & {_handle: unknown})._handle, null);
   });
 });
+
 
 test('HTTP cancellation closes the native codec and its source before headers and after data', {timeout: 15_000}, async t => {
   const payload = JSON.stringify({text: randomBytes(4 * 1024 * 1024).toString('base64')});

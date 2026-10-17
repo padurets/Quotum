@@ -27,14 +27,283 @@ callbacks and missing samples fail. The previous idle, measurement, work and nat
 frequency-focus checks retain their budgets. Mixed Codex subscriptions also exercise
 changed credit balances and unchanged-value heartbeats: each updates its own card and
 funds history without waking quota or wallet analytics. No browser means the check
-was not run.
+was not run. UTC calendar-only card events must match the stream's unchanged observation
+baseline and the exact new period. Raw traffic remains reported; missing, repeated or
+unrelated updates fail. This exception permits no extra page rendering or requests and
+retains the 0.3 ms/s idle script budget.
+CI runs the unchanged history traffic matrix and dashboard phases on separate runners,
+each with a 20-minute job limit. `--scope history` selects the matrix, including native
+traffic and cancellation checks; `--scope dashboard` selects idle, measurements, work,
+frequency, all ten native panning scenarios, subscription credits and currency checks.
+The `bench` check passes only when both jobs succeed; a failed, skipped or cancelled job
+fails this check. The default `--scope all` keeps the full local run and its original
+order. CPU panning and dashboard trace diagnostics require an owned browser and no
+other diagnostic mode. CPU and trace may use `--ci --scope dashboard`; other diagnostic
+modes require the full scope. The existing CPU/trace job uses this dashboard prefix.
+Default/all CPU runs keep the full prefix, and default/all trace keeps its diagnostic-only
+short prefix. Separate jobs retain normal warmup, chart-grid alignment and budgets.
+DevTools commands keep their thirty-second response deadline. An explicit renderer
+crash or target-detach event fails pending commands immediately, even if the socket
+stays open, and retains the original failure before cleanup. It does not retry work.
+Page-evaluation exceptions retain their original command and scenario too, without
+page text or source. Later cleanup timeouts or crashes cannot replace the first failure.
+Gesture-completion frames follow each data plot's actual HTML or SVG animation,
+including a budget or funds plot that finishes after quota. The last input remains
+uncredited until every data plot has finished and its final geometry has committed.
+If the original settle wait fails, its captured panel state survives cleanup as
+bounded numeric timestamps and readiness/loading/movement flags. No page text is
+retained, and extracting that evidence sends no additional browser command.
+Every original panning report also retains the largest native wheel timestamp and
+delivery gaps within each feeding segment, and at most 32 numeric receipts for
+address writes while input is being fed. Omitted receipts and invalid clocks remain
+explicit. A single native scroll command can stop generating events while its target
+is blocked; these observations distinguish that gap from continuous delivery without
+changing the gesture-completion assertions or their 200 ms pause rule.
+Failed scenarios retain these receipts and their pending inputs in the partial report.
+A missing, retired or different scenario probe is marked unavailable instead of
+attributing an earlier scenario's measurements to the failure.
+Each native scenario also keeps at most sixteen numeric error and unhandled-rejection
+receipts through its held-Shift and navigation checks, after the motion sampler stops.
+It never reads error messages, exception objects, rejection values or stacks. Error
+coordinates and a same-origin public-bundle match are observations, not a received-source
+binding; rejections have no source coordinates. Counts, omissions and invalid clocks stay
+explicit. The existing failure read can retain these receipts without reviving retired
+motion samples. An unresponsive page leaves them unavailable, and an empty buffer does
+not establish that no error occurred. Listeners do not change default error handling.
+`QUOTUM_BENCH_DIAGNOSE_PANNING=pairs` runs a fixed OFF/ON, ON/OFF, OFF/ON
+experiment for bounded input/frame/history correlation. Every result is retained;
+these diagnostic runs cannot satisfy the canonical gate. Input traces retain only
+fixed native event types and numeric generation, compositor-delivery and main-handler
+stages; interval tracks may be reused by later inputs, so attribution also needs the
+original start/end timestamps. The optional
+`benchmark-diagnostics` PR label requests the same experiment in a separate CI job.
+`QUOTUM_BENCH_DIAGNOSE_PANNING=trace` (the `benchmark-trace-diagnostics` PR
+label) records an owned synthetic browser's new intervals with numeric
+script/layout/paint/GC events from `cc` and `devtools.timeline`, bounded to 32 MiB per
+scenario. Each trace continues through the original rate-1 held-Shift and navigation
+checks, ending at completion before the next setup command. Both phases share the
+existing 100,000-event and byte limits; truncation remains insufficient evidence.
+After a confirmed drain, an interrupted family's received bundle and injected probe
+bindings are attempted once and marked as coming from a failed family. Missing
+bindings stay unknown, and this postmortem cannot change the scenario's failure.
+The longer traced interval has unqualified observer overhead. Broad task
+instrumentation is excluded from this diagnostic; its delivery
+can exceed the unchanged five-second drain. This is opt-in. Trace data
+never contains script sources, arguments, arbitrary URLs or user text. Callback events
+retain validated numeric script IDs and source coordinates; an entry position does not
+partition nested work. Script IDs belong to their recorded browser context. Missing
+source identities, scheduler evidence and truncated timelines remain explicit. Trace
+events retain both
+elapsed and thread CPU time where Chrome supplies them, with start/end page clock
+markers. Host request/response timestamps bracket the existing metric reads to bound
+their alignment with a failed DevTools command; they add no browser commands.
+The opt-in timeline also records observed animation phases, including pending
+start and the first sample after completion. These observations bound the phase;
+they do not replace actual moving frames or prove physical presentation. Traces retain
+compositor pipeline stages and interval-local numeric track identities, with reported
+frame sequences, animation flags, main-frame duration breakdowns and raster layer/source
+frame numbers. Raw opaque IDs and arbitrary arguments are omitted. A raster source
+frame number is not a pipeline sequence; concurrent events alone do not establish a
+dependency. Missing identities and unsupported fields remain unavailable. Collection
+counts and handler duration, the original five-second drain stage and the end-command
+acknowledgement distinguish incomplete trace delivery from a scenario failure. An
+unconfirmed drain closes only its owned browser and stops the diagnostic; it preserves
+any earlier scenario failure. CPU time
+includes Chrome's Linux throttling spin and is not a JavaScript
+cost estimate. Separate fixed busy/timer/busy controls run afterwards on an empty
+owned tab, first without throttling and then at fourfold throttle. The unthrottled
+controls must distinguish execution from timer waiting; both sets retain their
+readings. Missing thread clocks cannot pass. Cumulative CPU differences use observed
+anchors inside and outside each interval, never interpolation across missing samples.
+Wall and CPU clocks are sampled independently: reported CPU can exceed elapsed time,
+and that excess remains visible instead of being clipped. These are counter readings,
+not exact on/off-CPU intervals. Off-CPU time alone cannot distinguish scheduler delay
+from deliberate sleep or a lock wait. An input's final
+geometry must still commit before it can be credited.
+`QUOTUM_BENCH_DIAGNOSE_PANNING=cpu` (the `benchmark-cpu-diagnostics` PR label)
+samples JavaScript stacks during each of the ten native scenarios in an owned
+synthetic browser. It retains only numeric sample graphs, public bundle positions and
+fixed browser operation names, bounded to 100,000 entries and 32 MiB per scenario.
+Profiler setup and stop keep five-second deadlines; an unconfirmed stop closes its
+owned browser and preserves an earlier scenario failure. Page clock brackets retain
+alignment uncertainty. Sample widths include throttling and are not thread CPU time;
+sampling overhead remains unqualified. V8's signed sample deltas and their original
+order are retained; timestamps are never clipped.
+The profile's local script ordinals remain separate from browser script IDs. After
+each complete chart family and after profiling stops, the received bundle hash and
+parsed script IDs bind its sample positions to that renderer's actual script.
+Missing or mismatched bindings remain unavailable; IDs from another family or run
+cannot establish a source match. Fixed busy/timer/busy controls at
+rates 1 and 4 follow on an empty owned tab. The unthrottled controls must distinguish function samples
+from timer waiting; contradictory or missing calibration cannot pass. This is a
+diagnostic result and cannot satisfy the canonical gate. If both CPU and trace labels
+are present, the existing diagnostic job runs the CPU mode.
+CPU diagnostics also match the exact successfully injected native sampler to anonymous
+parsed script IDs in the same window after the input family. Missing or conflicting
+owners and collection limits remain insufficient evidence. Matching source bytes
+does not establish a callback instance or its execution cost.
+The original budget/24h scenario also samples allocation ancestry, requesting objects
+collected by both minor and major GC. Numeric parent links, node-local self sizes and
+bundle positions use the ordinary 1 MiB evidence limit, with omissions explicit.
+The existing family binding supplies source ownership separately. Allocation samples
+have no timestamps and cannot identify a particular delayed frame or the cost of GC.
+Requested flags and runtime version receipts do not by themselves qualify collection
+semantics; observer overhead and raw profile transfer memory remain unqualified.
+Setup and drain share the existing five-second CPU deadlines. An unavailable sampler
+that never starts preserves the original workload; unconfirmed active-state cleanup
+closes only the owned browser and retains the original readings and failure.
+In `--scope all`, CPU mode also observes cache pressure, eviction and read freshness on the original
+`browser/30d/activity/0ms/0.5/take1` page. Ordinary reservations are counted but remain
+unobserved; they add no flight records, owner scans, timestamps or serialization.
+A complete critical scope does not imply complete ordinary-flight evidence or
+qualified observer overhead. Failed or pending renderer commands still close directly.
+The same full-scope CPU observer follows one fixed physical tile, binding its chart family only
+through an actual chart read reaching the shared transport with the same owner and
+range. Numeric state changes distinguish retained coverage from synchronous clears,
+including a history-limit clear without eviction. Asynchronous publication or clearing
+between observations remains unknown; absence alone cannot prove that a tile never
+committed. Shared collection limits and omitted observations remain explicit.
+`QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL=1` (the
+`benchmark-history-pool-diagnostics` PR label) keeps the original benchmark phases
+and full traffic matrix. Only its `browser/30d/activity/0ms/0.5/take1` page records
+shared cache reservations, actual evictions, missing cells and history requests.
+The observer attaches before that page initializes its pool; ordinary pages retain
+their original methods. Its received and parsed client source is bound after the
+input family, outside the gesture. Missing receipts, exceeded collection limits and
+observer errors remain insufficient evidence. Collector overhead is unqualified,
+and this diagnostic cannot satisfy the canonical gate. The existing diagnostic
+job uses this mode when its label is present, ahead of CPU or trace mode. Its
+20-minute timeout, operation deadlines, loads and assertions are unchanged.
+`QUOTUM_BENCH_DIAGNOSE_IDLE=double` (the `benchmark-idle-diagnostics` PR
+label) checks one idle board, then two independent live copies over the same
+real cell transition. The sum of their measured script costs must exceed the
+single-board baseline. The report retains both costs, their ratio and whether the
+sum crosses the unchanged 0.3 ms/s budget; crossing it is not required to detect
+growth. Invalid measurements or no growth fail this sensitivity experiment, which
+cannot replace CI. Budget failures of the baseline, each copy and their sum remain
+visible independently of measurement validity. A baseline above budget still exits
+unsuccessfully after recording the sensitivity result.
+The optional `benchmark-idle-cpu-diagnostics` PR label uses the dashboard job's prefix
+and profiles its original CI idle interval, retaining its load and 120-second window.
+Manual diagnostics without `--scope dashboard` retain the complete traffic matrix.
+It samples every two milliseconds to fit the existing 100,000-sample limit, binds
+numeric locations to the received client, and stops after idle. Profiler overhead is
+unqualified; its outcome is diagnostic and cannot satisfy the required benchmark.
+The manual CI `retirement` option samples only the natural quota cleanup, at 250 µs,
+waiting until five seconds before its existing boundary and stopping after five seconds
+past it. Actual snapshot and profile bounds remain explicit. It uses
+the original dashboard prefix and 120-second counter window, including all observer
+commands and the unchanged 0.3 ms/s budget. Passive storage snapshots must prove the
+same admitted quota prefixes retired during recording; they retain page-clock bounds.
+Received client and injected probe bindings follow the original closing counters.
+This mode starts neither tracing nor heap sampling. Signed samples keep their original
+order and the existing 100,000-entry and 32 MiB limits; the nominal 40,000 samples are
+not a guarantee. Cancellation joins the existing bounded profiler cleanup, without
+searching for another window or retrying. Sample widths are elapsed observations,
+not thread CPU time; profiler overhead remains unqualified.
+The manual `grid` option reuses this short profile around the original chart grid
+boundary, from six seconds before it to four seconds after it. Passive phase snapshots
+must observe all five axes advance once, after the original quota cleanup has finished.
+The admitted quota storage and its next deadline must stay unchanged during recording.
+The profile and cleanup must finish inside the original 120 seconds. Coincident
+minute-label updates are included; the recording does not isolate exclusive grid CPU.
+The same limits apply, without tracing, heap sampling or retries. Two declared source
+bindings cover the bootstrap and the combined phase observer and snapshot function.
+The thin command that calls that function remains a separate, unbound script in raw
+samples; it cannot inherit the function's source ownership.
+The optional `benchmark-idle-timing-diagnostics` PR label runs
+`QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING=routes` with the dashboard prefix and original idle
+interval, without a profiler, thread trace or traffic matrix. It counts actual quota
+retirement factory calls through already admitted accounting objects, returning their
+original iterators without advancing or wrapping them. At most 2,048 rows identify
+one-tail incremental accounting and full-build fallback separately from non-tail
+preparations that may reuse observations. Other accounting factories stay separate.
+A complete route receipt requires one retirement, valid unchanged basis, settled
+boundaries and the exact published tape and indices. Missing runtime, cancellation,
+replacement, omitted rows or observer errors remain insufficient evidence. Exact
+received client and injected bootstrap bindings are checked after the original
+measurement. Interrupted readings produce no further observer command. These are
+factory-call and input counts, not numeric-operation counts or CPU attribution;
+observer overhead is unqualified. The original idle verdict remains separate and
+cannot be repaired by the diagnostic.
+
+Manual `QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING=1` uses elapsed and thread counters.
+Diagnostics without `--scope dashboard` retain the full prefix. A second connection to
+the owned target collects `threadTicks` performance counters before and after the
+original measurement. The required benchmark keeps its default elapsed clock and
+budget. The report retains both sets of raw counters and verifies that the thread
+interval brackets the original interval; missing, reversed or unsupported counters
+remain insufficient evidence. The thread interval includes the probe and diagnostic
+work, whose overhead is unqualified. A difference between elapsed and CPU script
+time does not distinguish a native wait from scheduling delay. Connection, counter
+reads and disable each have a two-second diagnostic bound; the secondary socket
+always closes. This outcome cannot satisfy the required benchmark.
+After that measurement and thread-session cleanup, the diagnostic binds the received
+client bytes and parsed script owner, outside both measured intervals.
+The manual timing mode also observes preparation selections through existing history readers.
+It preserves lazy scheduler creation and records at most 2,048 scalar owner/job receipts,
+classifying period, history-plot and history-compose owners by object identity.
+Other owners stay unknown. A selected job need not advance: validity can cancel it.
+Deletion or replacement does not prove completion. Missing setup, observer errors and
+omitted receipts remain insufficient evidence. These observations identify jobs in
+that instrumented run; they do not attribute inner operations or CPU cost.
 The owned headless browser uses one raster worker: concurrent software raster jobs
 in Chrome 154 can leave a tile unfinished and deadlock an input frame's commit.
 An attached CDP browser retains its own launch settings.
+The optional `benchmark-startup-wait-diagnostics` PR label runs the original CI
+workload with `QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS=1`. It samples only the owned
+browser root at the existing 500-ms checkpoints, with one pending collector and no
+additional timer or readiness await. Both identity reads must match the captured PID,
+birth, parent, group and session. Bounded I/O and scheduler counters and numeric
+kernel-symbol categories retain unavailable, overflowing and pending observations.
+Counters and categories do not prove a waiting cause; observer cost and units remain
+unqualified. The snapshot freezes at the original startup outcome, and later reads
+cannot revise it. The 20-second deadline, launch flags, cleanup and benchmark phases
+are unchanged. Without the flag, no extra process reads or samples run. This outcome
+is diagnostic and cannot satisfy the required benchmark. The `make bench` wrapper
+forwards the flag without loading preview configuration.
+The optional `benchmark-startup-diagnostics` PR label runs a fixed first/repeat launch
+pair on three runners after the same benchmark fixture preparation. Each launch keeps
+the 20-second deadline and a fresh profile. Numeric process, scheduler, I/O and pressure
+counters are sampled separately from performance gates; missing counters and sampling
+cost remain explicit. All six outcomes are retained, and a repeat success never replaces
+a first failure. These diagnostics cannot satisfy the canonical benchmark.
+An owned browser is ready only when its private `DevToolsActivePort` and a bounded
+loopback `/json/version` reply identify the same browser. Its stderr announcement
+is optional. Startup stays bounded at 20 seconds; cancellation drains pending tab
+creation and closes every identified benchmark target, including auxiliary tabs.
+Cleanup escalates only the owned process group and reports unconfirmed exits or
+lost target-creation replies as failures. A profile is retained when exit cannot be
+confirmed. Attached browsers and their existing tabs remain outside that ownership.
+Launch diagnostics contain version, timing, process identity and classified stream
+counters; arbitrary browser output and command arguments are omitted.
+On Linux, the existing ownership reads also retain bounded root-process fault and CPU
+tick samples during startup, and the first observed port publication time. No extra
+process reads or sampling timers are added. These counters are not a scheduler trace;
+missing samples and unsupported counters stay explicit.
+`QUOTUM_BENCH_DIAGNOSTICS_DIR` keeps a unique run manifest and completed phase reports
+before cleanup, including when a later phase fails. CI retains these artifacts for
+every attempt. The `make bench` wrapper forwards this setting without loading preview
+configuration. A pending CDP command still has its 30-second deadline; the canonical
+observer does not pause JavaScript or start a profiler while waiting. On failure it
+collects bounded liveness and command identity, without recording command parameters.
+The first failed command stays recorded through cleanup, including protocol rejections
+and page evaluation failures. Its saved identity contains neither browser error text
+nor the evaluated expression.
+After the original deadline has failed, a postmortem may pause the same failed owned
+target to collect bounded stack locations. Its report marks that intervention;
+mandatory resume and owned-target cleanup follow, and the original failure is retained.
+An explicit diagnostic replay may also intervene. Neither can provide a passing
+canonical result.
 The observer credits input after its coalesced position reaches the actual data layers
 in the production RAF. Stationary input-free gaps are excluded; delayed pending input
 remains measurable. A last input committed on release waits for the final geometry and
 fold. These RAF proxies do not establish physical presentation.
+The expected position respects the transaction's captured history and live bounds,
+discarding overscroll on each delta as the gesture does. Every input remains measured,
+including one that reaches an already displayed boundary without scheduling a new RAF;
+stationary boundaries add no movement samples. Only the same gesture's reached position
+can credit its input, so a new gesture cannot hide an unfinished previous gesture.
 
 **The desktop app** (`desktop/`) shares a Rust controller between Electron on Linux
 and Tauri/WebView2 on Windows. `node desktop/prepare.mjs` builds the hub, downloads
@@ -55,24 +324,54 @@ minimized, which restores that very window. It disables every provider. Each
 run also opens and closes the tray panel three times, including Escape and a repeated tray
 activation, checking that it stays visible and fits its monitor without changing the main window's geometry. Each
 run also pauses only its own app UI thread and checks that the native loader stays
-responsive, rounded and cancellable before WebView2 finishes. The thread is always
-resumed. Each run starts from a fresh WebView2 profile, as the first start on a machine does: the one
+responsive, rounded and cancellable before WebView2 finishes. A finally block always
+attempts to resume the thread. Stage readings keep their original timestamps in bounded
+memory during pauses; file writes follow the last confirmed resume. An unconfirmed
+resume fails the smoke and keeps the buffered stages unpublished.
+Each run starts from a fresh WebView2 profile, as the first start on a machine does: the one
 in `%LOCALAPPDATA%\com.padurets.quotum\EBWebView` is set aside and put back afterwards.
-With `-Diagnostics <dir>` it keeps its report (the times of every close and reopen), the
-app's logs and the app's processes there. CI uploads them when the UI smoke fails and in
-every manual run; a manual run of the Desktop workflow takes `ui-runs`, how many times
+With `-Diagnostics <dir>` it keeps bounded stage readings, owned process identities
+and a manifest with the source and package hashes. CI uploads these on every run;
+raw application logs and command lines are excluded. A separate observer samples the
+owned UI and tray threads during a pause, with timestamps delimiting that interval.
+It starts before the pause and is stopped only after the UI resumes; startup and stop
+each wait at most two seconds. A stuck observer cannot delay resume. Wait-chain
+artifacts exclude lock names and foreign thread identities, and retain partial samples.
+A successful WCT call with only its root thread is inconclusive: unsupported waits
+can hide their dependencies. It does not establish responsiveness or exclude a lock
+dependency; native window checks still establish responsiveness independently.
+If an observer cannot start, later artifact capture retains its original worker
+cleanup receipt, including an unconfirmed exit, after disposing the process handle.
+A manual run of the Desktop workflow takes `ui-runs`, how many times
 the UI smoke runs on the installed app and on the portable one each.
 The queued-close check runs with the main window open and with only the compact
 panel: a delayed close must neither lose the latest open nor crash the last WebView.
 The handoff check also pauses the app UI just after accepting a main-window request,
-then opens the tray panel. That newer panel must keep focus; an obsolete main creation
+then opens the tray panel. Its cross-process dispatch has a shared three-second
+preflight/acceptance deadline; a timeout leaves acceptance unknown and never pauses
+the UI. The native probe's accepted, rejected, unresponsive and late-response cases
+run through `desktop/smoke/test-window-probe.ps1`. That newer panel must keep focus; an obsolete main creation
 must leave no hidden WebView after it is cancelled.
+With `-Diagnostics`, Windows UI smoke also enables `QUOTUM_WINDOW_PROBE=1` for
+the owned app and reads its loader's numeric window property. Its hexadecimal
+nibbles retain nested operations: 1 idle, 2 position, 3 rounding, 4 show,
+5 foreground, 6 focus, 7 timer, 8 update, 9 hide, A completion, B dismissal,
+C paint, D blur and E repeated show. The failed one-second response check
+captures this property before the mandatory UI resume, without sending another
+message to the tray thread. The original failure remains a failure. Missing,
+malformed and foreign readings are unavailable. These best-effort markers identify
+the last published operations; they do not establish a wait dependency or qualify
+the diagnostic's timing overhead. Ordinary app runs do not publish them.
 
 Run `node --test desktop/electron/policy.test.cjs` for the Linux bridge/navigation
 policy. CI runs the installed packages with `--smoke`: the hub starts, a stand-in client
 is measured, its board appears, the window opens twice and the app quits. Linux checks
 need `xvfb`, `xauth` and Python 3; `desktop/smoke/monitor.py` adopts surviving
 children and audits their exits, alongside Electron's live child-failure reports.
+Navigation failures record the window instance, original and current activation request,
+navigation sequence and hub generation, native error number, code availability and
+presentation state before smoke exits. They never record the destination, entry key or
+raw error message.
 This uses no ptrace and keeps Chromium's sandbox intact. The installed-package checks also start the controller before a stand-in tray watcher
 (`desktop/smoke/tray.sh`, Python 3 with PyGObject) to cover early start at login.
 The panel check also queues three activations while its own controller is briefly paused,
@@ -410,6 +709,22 @@ focus in the card's menu and fails otherwise. It needs Chrome:
 one already running. CI runs it on every push; run it when you change the dashboard
 and have Chrome.
 
+The history traffic matrix runs first, while the seeded measurements age, and closes
+its temporary pages before the idle board opens. The same warmup requirements still
+apply. Idle measurement starts at a planned grid phase with its endpoints away from
+minute ticks and includes one real five-minute cell transition in each chart.
+The benchmark anchors regular quota retirement fifty seconds before the chart grid
+transition, keeping their deadlines separate while admitting the warm deadline one
+minute before that grid edge. Planning includes both in the
+same observation window, retaining the original fade deadline, minimum settle wait
+and job limits. Sparse and eco histories keep their own cadence.
+Reports retain planned and observed bounds, inner CPU counter bounds, transition counts and actual
+performance duration; missing coverage is a failure and the 0.3 ms/s budget includes
+the transition's work.
+Two read-only storage snapshots inside those counters also require the admitted quota
+rows due in that window to lose their expected predecessor, with unchanged evidence
+and no additional history requests. Passing the clock and axes alone is insufficient.
+
 The completed measurement phase's React/DOM observer is disconnected before native
 panning. Native wheel and Shift-drag start separately from the weekly limit, five-hour
 limit, activity, budget balance and subscription-funds charts at both periods.
@@ -432,8 +747,28 @@ loopback proxy uses fixed Brotli settings (quality 4, text mode, window 22), wit
 adding production compression. Decoded JSON may reach 1.5 times, and encoded body
 bytes twice, the reference for the exact missing union and permitted buffer or
 within-tile bridge. The report separates complete bodies, partial byte bounds and
-unknown transfers; headers are never counted as body bytes. Independent whole-cell
-composition also checks series, activity and events. Each history attempt gets its
+unknown transfers; headers are never counted as body bytes. Only HTTP 200 responses
+qualify as accounting data, including metadata-only reads. Error bodies still count
+their physical bytes, and reports retain numeric HTTP status without response contents.
+The two 1d activity cold cohorts at 100 and 400 ms also retain decoded wire component
+sizes for their final baseline. Numeric rows separate history headers, fixed summaries
+and shift programs, card values and neighboring states, and session summaries. Section
+states remain visible when a baseline is incomplete. Counts use the original compact
+JSON before expansion and must conserve its whole size; they do not allocate Brotli
+bytes to individual sections or change the budget verdict. These observations share
+the existing 64-read diagnostic limit and retain no response text.
+When idle timing diagnostics include history, those baselines also measure a shadow reply
+with each final card replay interval omitted when the base value fully covers it.
+The original reply must survive a byte-exact expand/repack round trip, and its
+recompressed size must match the observed body under the proxy's exact codec.
+Cached card-state anchors make the whole packet unavailable to this fresh-reply model.
+Numeric readings retain the original and alternative whole-body sizes, omitted
+interval count, card-program layouts and observation time; mismatches stay unavailable.
+The live reply, reference reads and original verdict are unchanged. This measures
+one packet alternative, not a shipped producer fix or compatibility with older
+readers. Its extra serialization/compression work has unqualified observer overhead.
+Independent whole-cell composition also checks series, activity and events. Each
+history attempt gets its
 fixture identity before HTTP starts, so aborts before response headers cannot borrow
 another attempt's byte proof. Separate real HTTP and native Shift-wheel cohorts
 exercise cancellation before headers, after delivery and reversal with a repeated
@@ -496,7 +831,10 @@ it. On X11/XWayland, the native loading surface appears before Chromium starts;
 check Escape and outside clicks during loading too. Neither loading nor ready panel
 belongs in the taskbar. `QUOTUM_TEST_PANEL=1 xvfb-run -a sh desktop/smoke/tray.sh <app>`
 checks the native handoff and cancellation with its own suspended browser on a
-private bus, with providers disabled. Check a click outside followed by a new tray
+private bus, with providers disabled. It verifies the controller ancestry and process
+birth before using a pidfd for pause/resume. `QUOTUM_SMOKE_DIAGNOSTICS_DIR` saves
+bounded native window and process timelines before temporary data is removed.
+Check a click outside followed by a new tray
 click too, so the blur from the same press cannot reopen it or consume a different
 gesture.
 On Wayland, also open *Limits* from the tray menu before any direct tray click,

@@ -1,4 +1,4 @@
-import {Fragment, memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode} from 'react';
+import {Fragment, memo, useEffect, useId, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode} from 'react';
 import {clock, countdown, countdownChangesAt, num, shortDay, stamp} from '../lib/format';
 import {t, useLocale} from '../i18n';
 import {pointIndex, preciseReadout, type PlotBlock, type PlotLine as Line} from '../lib/lines';
@@ -100,32 +100,83 @@ export function edgeFit<T>(inside: number, past: T[], rows: number): {shown: T[]
   return {shown: past.slice(0, room), more: past.slice(room)};
 }
 
+type LabelBox = {offset: number; width: number};
+/** Repeated captions reuse native bounds and shortening measurements across mounts. */
+class LabelBoxes {
+  private fonts = -1;
+  private scale = NaN;
+  private readonly saved = new Map<string, LabelBox>();
+  private readonly fits = new Map<string, number | null>();
+  private readonly fontKeys = new Map<boolean, string>();
+  clearFonts() {this.fontKeys.clear();}
+  private loaded(fonts: number, scale: number) {
+    if (this.fonts !== fonts || this.scale !== scale) {this.fonts = fonts; this.scale = scale; this.saved.clear(); this.fits.clear(); this.clearFonts();}
+  }
+  font(forecast: boolean, fonts: number, scale: number, read: () => string): string {
+    this.loaded(fonts, scale);
+    const known = this.fontKeys.get(forecast);
+    if (known !== undefined) return known;
+    const value = read();
+    this.fontKeys.set(forecast, value);
+    return value;
+  }
+  fit(text: string, name: string, room: number, forecast: boolean, fonts: number, scale: number, read: () => number | null | undefined): number | null | undefined {
+    this.loaded(fonts, scale);
+    const key = JSON.stringify([text, name, room, forecast]);
+    if (this.fits.has(key)) return this.fits.get(key);
+    const value = read();
+    if (value !== undefined) {
+      if (this.fits.size >= 256) this.fits.delete(this.fits.keys().next().value!);
+      this.fits.set(key, value);
+    }
+    return value;
+  }
+  measure(text: string, end: boolean, forecast: boolean, fonts: number, scale: number, read: () => LabelBox | null): LabelBox | null {
+    this.loaded(fonts, scale);
+    const key = JSON.stringify([text, end, forecast]);
+    const known = this.saved.get(key);
+    if (known) return known;
+    const value = read();
+    if (value) {
+      if (this.saved.size >= 256) this.saved.delete(this.saved.keys().next().value!);
+      this.saved.set(key, value);
+    }
+    return value;
+  }
+}
+
 /**
  * A label on the chart on a backing sized to its text, so no line under it gets in the way.
  * One pointing past the right edge tells its exact time under the pointer or on a tap
  * (`onTip`).
  */
-function MarkerLabel({x,y,end,color,children,shorten,fonts,onTip}: {
+function MarkerLabel({x,y,end,color,children,shorten,fonts,scale,boxes,onTip}: {
   x:number;y:number;end:boolean;color?:string;children:string;
   shorten?:{name:string;say:(name:string)=>string;room:number;bounded?:boolean};
-  fonts:number;onTip?:(shown:boolean,tapped:boolean)=>void;
+  fonts:number;scale:number;boxes:LabelBoxes;onTip?:(shown:boolean,tapped:boolean)=>void;
 }) {
   const text=useRef<SVGTextElement>(null),whole=useRef<SVGTextElement>(null),rest=useRef<SVGTextElement>(null);
   const cache=useRef<{identity:string;widths:number[];ellipsis:number;full:number}|null>(null);
   const suffixCache=useRef<{identity:string;width:number}|null>(null);
   const [box,setBox]=useState<{offset:number;width:number}|null>(null);
-  const input=shorten?JSON.stringify([children,shorten.name,shorten.room,fonts,!!color,!!shorten.bounded]):'';
+  const input=shorten?JSON.stringify([children,shorten.name,shorten.room,fonts,scale,!!color,!!shorten.bounded]):'';
   const [fit,setFit]=useState<{input:string;keep:number|null;degraded:boolean}|null>(null);
   const valid=fit?.input===input;
   const degraded=!!shorten?.bounded&&(!valid||!!fit?.degraded);
   const shown=degraded?shorten!.say('…'):shorten&&valid&&fit.keep!==null?shorten.say(shortName(shorten.name,fit.keep)):children;
   const room=Math.max(1,shorten?.room??1);
+  const fontOf=(element:SVGTextElement)=>boxes.font(!!color,fonts,scale,()=>{
+    const style=getComputedStyle(element);
+    return JSON.stringify([fonts,scale,style.fontFamily,style.fontSize,style.fontWeight,style.fontStyle,style.letterSpacing,style.fontStretch]);
+  });
+  // Every participating label clears before any layout effects read the shared styles.
+  useInsertionEffect(()=>{boxes.clearFonts();});
   useLayoutEffect(()=>{
     if(!shorten||!whole.current||!rest.current)return;
     let keep:number|null=null,failed=false;
     try {
-      const element=whole.current,style=getComputedStyle(element);
-      const font=JSON.stringify([fonts,style.fontFamily,style.fontSize,style.fontWeight,style.fontStyle,style.letterSpacing,style.fontStretch]);
+      const element=whole.current,suffixElement=rest.current,font=fontOf(element);
+      const read=()=>{
       const identity=JSON.stringify([shorten.name,font]);
       if(cache.current?.identity!==identity){
         if(element.getNumberOfChars()!==shorten.name.length+1)throw new Error('unavailable SVG character mapping');
@@ -140,28 +191,35 @@ function MarkerLabel({x,y,end,color,children,shorten,fonts,onTip}: {
       }
       const suffix=shorten.say(''),suffixIdentity=JSON.stringify([suffix,font]);
       if(suffixCache.current?.identity!==suffixIdentity){
-        const width=rest.current.getComputedTextLength();
+        const width=suffixElement.getComputedTextLength();
         if(!Number.isFinite(width)||width<0||suffix.length>0&&width===0)throw new Error('unavailable SVG suffix');
         suffixCache.current={identity:suffixIdentity,width};
       }
       const measured=cache.current;
-      keep=fitting(measured.widths,suffixCache.current.width,measured.ellipsis,shorten.room);
+      return fitting(measured.widths,suffixCache.current.width,measured.ellipsis,shorten.room);
+      };
+      // Bounded labels must verify the shaping of their own mounted text.
+      keep=shorten.bounded?read():boxes.fit(JSON.stringify([children,font]),shorten.name,shorten.room,!!color,fonts,scale,read)??null;
     }catch{failed=true;}
     setFit(previous=>previous?.input===input&&previous.keep===keep&&previous.degraded===failed?previous:{input,keep,degraded:failed});
   },[input]);
   useLayoutEffect(()=>{
     if(degraded)return;
     try {
-      const measured=text.current?.getBBox();
-      if(!measured||!Number.isFinite(measured.width)||measured.width<=0)throw new Error('unavailable SVG bounds');
-      if(shorten?.bounded&&measured.width>shorten.room+.01)throw new Error('SVG shaping exceeds room');
-      const offset=measured.x-x,width=measured.width;
-      setBox(previous=>previous?.offset===offset&&previous.width===width?previous:{offset,width});
+      const element=text.current;if(!element)throw new Error('unavailable SVG text');
+      const read=()=>{
+        const measured=element.getBBox();
+        if(!Number.isFinite(measured.width)||measured.width<=0)throw new Error('unavailable SVG bounds');
+        if(shorten?.bounded&&measured.width>shorten.room+.01)throw new Error('SVG shaping exceeds room');
+        return {offset:measured.x-x,width:measured.width};
+      };
+      const measured=shorten?.bounded?read():boxes.measure(JSON.stringify([shown,fontOf(element)]),end,!!color,fonts,scale,read);
+      if(measured)setBox(previous=>previous?.offset===measured.offset&&previous.width===measured.width?previous:measured);
     }catch{
       if(shorten?.bounded)setFit(previous=>previous?.input===input&&previous.degraded?previous:{input,keep:null,degraded:true});
     }
     // Position only applies the cached local bounds; it never measures text.
-  },[end,shown,fonts,!!color,degraded,shorten?.bounded,shorten?.room]);
+  },[end,shown,fonts,scale,!!color,degraded,shorten?.bounded,shorten?.room]);
   const local=degraded?{offset:end?-room:0,width:room}:box;
   return <g className={`marker-label ${onTip?'is-pointed':''} ${color?'is-forecast':''}`} style={color?({'--label-color':color} as CSSProperties):undefined}
     onPointerEnter={onTip&&(event=>event.pointerType!=='touch'&&onTip(true,false))}
@@ -191,6 +249,8 @@ const EdgeLabel = memo(function EdgeLabel({
   room,
   compact,
   fonts,
+  scale,
+  boxes,
   onEdge,
 }: {
   id: string;
@@ -204,6 +264,9 @@ const EdgeLabel = memo(function EdgeLabel({
   room: number;
   compact?:boolean;
   fonts: number;
+  /** Native glyph metrics also follow the SVG viewport scale. */
+  scale: number;
+  boxes: LabelBoxes;
   onEdge: (edge: {key: string; tapped: boolean} | null) => void;
 }) {
   const now = useClock(now => countdownChangesAt(at, now));
@@ -217,7 +280,7 @@ const EdgeLabel = memo(function EdgeLabel({
         y={y}
         end
         color={color}
-        fonts={fonts}
+        fonts={fonts} scale={scale} boxes={boxes}
         // It ends at the plot's right edge, and its backing, 6 wider than the text, starts within the plot.
         shorten={runsOut||compact ? {name, say, room,bounded:compact} : undefined}
         onTip={(shown, tapped) => onEdge(shown ? {key: id, tapped} : null)}
@@ -228,11 +291,11 @@ const EdgeLabel = memo(function EdgeLabel({
   );
 });
 
-function InsideLabel({marker,x,y,end,room,fonts,compact,onEdge}:{marker:Marker;x:number;y:number;end:boolean;room:number;fonts:number;compact:boolean;onEdge:(edge:{key:string;tapped:boolean}|null)=>void}) {
+function InsideLabel({marker,x,y,end,room,fonts,scale,boxes,compact,onEdge}:{marker:Marker;x:number;y:number;end:boolean;room:number;fonts:number;scale:number;boxes:LabelBoxes;compact:boolean;onEdge:(edge:{key:string;tapped:boolean}|null)=>void}) {
   const now=useClock(now=>compact?countdownChangesAt(marker.at,now):null);
   useLocale();
   const name=marker.name??marker.label,say=(label:string)=>t('chart.compact',{label,time:countdown(marker.at-now)});
-  return <g data-time={compact?'countdown':undefined}><MarkerLabel x={x} y={y} end={end} fonts={fonts} shorten={compact?{name,say,room,bounded:true}:undefined} onTip={(shown,tapped)=>onEdge(shown?{key:marker.key,tapped}:null)}>{compact?say(name):marker.label}</MarkerLabel></g>;
+  return <g data-time={compact?'countdown':undefined}><MarkerLabel x={x} y={y} end={end} fonts={fonts} scale={scale} boxes={boxes} shorten={compact?{name,say,room,bounded:true}:undefined} onTip={(shown,tapped)=>onEdge(shown?{key:marker.key,tapped}:null)}>{compact?say(name):marker.label}</MarkerLabel></g>;
 }
 
 function MarkerTime({at,time}:{at:number;time:string}) {
@@ -263,6 +326,8 @@ export const plotHeight = (width: number) => (width < 560 ? 220 : 300);
 const NO_PLANS: PlanLine[] = [];
 const NO_FORECASTS: ForecastLine[] = [];
 const NO_MARKERS: Marker[] = [];
+// Moving captions keep a stable callback so their memo can skip unchanged props.
+const ignoreEdge = () => {};
 
 export const Chart = memo(function Chart({
   lines: incomingLines,
@@ -334,8 +399,9 @@ export const Chart = memo(function Chart({
     for (const line of incomingLines) {
       let latest: string | undefined;
       let observation: string | undefined;
-      let lastAt:number|undefined;
-      for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; lastAt=at; yield;}
+      let lastAt:number|undefined,lastRemaining:number|undefined;
+      for (const [at, remaining] of line.points) {if (at > drawNow) break; lastAt=at; lastRemaining=remaining; yield;}
+      if(lastAt!==undefined)latest=`${lastAt}:${lastRemaining}`;
       if(lastAt!==undefined&&valueAxis?.rawValue){
         const value=valueAxis.rawValue(line.key,lastAt);latest=`${lastAt}:${value}`;
         // An unchanged balance can advance its observation without moving its drawing cell.
@@ -451,6 +517,7 @@ export const Chart = memo(function Chart({
   const markerReadout = hover === null ? [] : markers.filter(m => m.at >= hover && m.at < hover + cellMs || m.past && Math.abs(axis.screenX(m.at)-axis.screenX(pointedAt!))<=4);
   // Labels are measured: a web font that arrives later makes them as wide as they are drawn.
   const [fonts, setFonts] = useState(0);
+  const [boxes] = useState(() => new LabelBoxes());
   useEffect(() => {
     const loaded = () => setFonts(count => count + 1);
     document.fonts?.addEventListener('loadingdone', loaded);
@@ -496,8 +563,10 @@ export const Chart = memo(function Chart({
     let low = 0;
     let high = 0;
     for (const line of lines) {
-      for (let i = pointIndex(line.points, a); i < line.points.length && line.points[i][0] <= b; i++) {
-        const value = line.points[i][1];
+      const points=line.points;
+      for (let i = pointIndex(points, a); i < points.length; i++) {
+        const [at,value]=points[i];
+        if(at>b)break;
         if (value < LABEL_BAND) low++;
         else if (value > 100 - LABEL_BAND) high++;
       }
@@ -520,8 +589,13 @@ export const Chart = memo(function Chart({
       if (value < band) low++;
       else if (value > 100 - band) high++;
     };
-    for (const line of lines) {
-      for (let i = pointIndex(line.points, a); i < line.points.length && line.points[i][0] <= b; i++) count(line.points[i][1]);
+    if(a<=b)for (const line of lines) {
+      const points=line.points;
+      for (let i = pointIndex(points, a); i < points.length; i++) {
+        const [at,value]=points[i];
+        if(at>b)break;
+        count(value);
+      }
     }
     const across = [0, 0.25, 0.5, 0.75, 1].map(share => a + (b - a) * share);
     for (const forecast of forecasts) for (const at of across) count(valueAt([forecast.points], at));
@@ -572,7 +646,7 @@ export const Chart = memo(function Chart({
     addEventListener('scroll', scrolled, {passive: true});
     return () => removeEventListener('scroll', scrolled);
   }, [edgeShown]);
-  const bandWidth = Math.max(1, axis.screenX(Math.min(to, (hover ?? 0) + cellMs)) - axis.screenX(hover ?? 0));
+  const bandWidth = hover === null ? 0 : Math.max(1, axis.screenX(Math.min(to, hover + cellMs)) - axis.screenX(hover));
 
   // Clock and gesture renders move the retained artwork through its owner.
   // Only new prepared data needs to visit every series and path again.
@@ -673,7 +747,7 @@ export const Chart = memo(function Chart({
           const mx = x(marker.at);
           const {end,x:lx,room}=announcementLayout(mx,left,width-right,narrow);
           return (
-            <InsideLabel key={marker.key} marker={marker} x={lx} y={stackRows.get(marker.key) ?? labelY(lx,end)} end={end} room={room} fonts={fonts} compact={narrow} onEdge={panning?()=>{}:setEdge}/>
+            <InsideLabel key={marker.key} marker={marker} x={lx} y={stackRows.get(marker.key) ?? labelY(lx,end)} end={end} room={room} fonts={fonts} scale={scale} boxes={boxes} compact={narrow} onEdge={panning?()=>{}:setEdge}/>
           );
         })}
         {hover === null && seriesEnds}
@@ -693,8 +767,8 @@ export const Chart = memo(function Chart({
                 y={stackRows.get(label.key)!}
                 room={narrow?labelRoom(width-left-right):width - left - right - 6}
                 compact={narrow}
-                fonts={fonts}
-                onEdge={panning ? () => {} : setEdge}
+                fonts={fonts} scale={scale} boxes={boxes}
+                onEdge={panning ? ignoreEdge : setEdge}
               />
             ))}
             {more.length > 0 && (
@@ -702,7 +776,7 @@ export const Chart = memo(function Chart({
                 x={width - right}
                 y={stackRows.get(MORE)!}
                 end
-                fonts={fonts}
+                fonts={fonts} scale={scale} boxes={boxes}
                 onTip={(shown, tapped) => !panning && setEdge(shown ? {key: MORE, tapped} : null)}
               >
                 {t('chart.more', {count: more.length})}

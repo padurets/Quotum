@@ -10,7 +10,7 @@ use crate::{
     shell::{self, Shell},
     smoke, window,
 };
-use foreground::{Foreground, Head, Target};
+use foreground::{Foreground, Head, MainRequests, Target};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::hash_map::DefaultHasher;
@@ -45,6 +45,7 @@ struct Gui {
     publisher: Arc<publishing::Publishing>,
     pid: u32,
     windows: Mutex<std::collections::BTreeMap<window::Role, (u64, u64)>>,
+    main: Mutex<MainRequests>,
 }
 impl Gui {
     fn send(&self, value: &Value) -> io::Result<()> {
@@ -341,9 +342,15 @@ fn launch(shell: &Arc<Shell>) -> io::Result<()> {
             loading::published(&shell, pid, head);
         }
     })?;
-    let gui = Arc::new(Gui { publisher, pid: process.id(), windows: Mutex::default() });
+    let started = head(shell);
+    let gui = Arc::new(Gui {
+        publisher,
+        pid: process.id(),
+        windows: Mutex::default(),
+        main: Mutex::new(MainRequests::new(started)),
+    });
     *shell.host.gui.lock().unwrap_or_else(|e| e.into_inner()) = Some(gui.clone());
-    gui.publish(head(shell));
+    gui.publish(started);
     shell.hub_log.line(&format!("app: Chromium starts (pid {})", gui.pid));
     let logging = shell.clone();
     let stderr = process.stderr.take().expect("piped stderr");
@@ -379,6 +386,14 @@ fn launch(shell: &Arc<Shell>) -> io::Result<()> {
         waiting.host.stopped.notify_all();
         drop(current);
         if !waiting.exiting() {
+            // A new main request may reach an engine that has already committed
+            // to its idle exit. Surface acknowledgements survive window closure,
+            // so only an unopened newer request starts a replacement engine.
+            if status.as_ref().is_ok_and(|s| s.success())
+                && let Some(ticket) = gui.main.lock().unwrap_or_else(|e| e.into_inner()).pending(head(&waiting))
+            {
+                open_at(&waiting, ticket);
+            }
             if waiting.host.native_panel {
                 loading::engine_ended(&waiting, status.as_ref().is_ok_and(|s| s.success()));
             }
@@ -437,6 +452,7 @@ enum Message {
     Fault {
         process: String,
         reason: String,
+        navigation: Option<NavigationFailure>,
     },
     Graphics {
         electron: String,
@@ -445,6 +461,53 @@ enum Message {
         compositing: String,
         rasterization: String,
     },
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NavigationFailure {
+    role: window::Role,
+    instance: u64,
+    request: u64,
+    current_request: u64,
+    sequence: u64,
+    current_sequence: u64,
+    requested_generation: u64,
+    current_generation: u64,
+    started_ms: f64,
+    rejected_ms: f64,
+    error_number: Option<i32>,
+    code_type: NavigationCodeType,
+    loaded: bool,
+    painted: bool,
+    revealed: bool,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum NavigationCodeType {
+    String,
+    Undefined,
+    Other,
+}
+impl NavigationFailure {
+    fn receipt(&self) -> String {
+        format!(
+            "app: navigation role={:?} instance={} request={}/{} sequence={}/{} generation={}/{} error_number={:?} code_type={:?} elapsed_ms={:.1} loaded={} painted={} revealed={}",
+            self.role,
+            self.instance,
+            self.request,
+            self.current_request,
+            self.sequence,
+            self.current_sequence,
+            self.requested_generation,
+            self.current_generation,
+            self.error_number,
+            self.code_type,
+            self.rejected_ms - self.started_ms,
+            self.loaded,
+            self.painted,
+            self.revealed,
+        )
+    }
 }
 /// Bounded frames: neither a broken GUI nor stderr can allocate unbounded memory.
 fn read_frame(reader: &mut impl BufRead) -> io::Result<Option<String>> {
@@ -471,6 +534,9 @@ fn read_messages(shell: &Arc<Shell>, gui: &Arc<Gui>, socket: UnixStream) {
                 send_state(shell, gui, false);
             }
             Message::Surface { role, instance, revision, open } => {
+                if open && role == window::Role::Main {
+                    gui.main.lock().unwrap_or_else(|e| e.into_inner()).opened(revision);
+                }
                 let mut windows = gui.windows.lock().unwrap_or_else(|e| e.into_inner());
                 if open {
                     windows.insert(role, (instance, revision));
@@ -519,7 +585,10 @@ fn read_messages(shell: &Arc<Shell>, gui: &Arc<Gui>, socket: UnixStream) {
             Message::Graphics { electron, chromium, backend, compositing, rasterization } => {
                 shell.hub_log.line(&format!("app: Electron {electron}, Chromium {chromium}, display {backend}, compositing {compositing}, rasterization {rasterization}"));
             }
-            Message::Fault { process, reason } => {
+            Message::Fault { process, reason, navigation } => {
+                if let Some(navigation) = navigation {
+                    shell.hub_log.line(&navigation.receipt());
+                }
                 shell.hub_log.line(&format!("app: Chromium child ended unexpectedly ({process}: {reason})"));
                 if shell.smoke.is_some() {
                     smoke::fail("a Chromium child failed");
@@ -803,6 +872,160 @@ pub fn open_main_from_panel(shell: &Arc<Shell>, instance: u64, destination: Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn navigation_fault_transport_keeps_numeric_context_and_rejects_raw_error_fields() {
+        let frame = json!({
+            "type": "fault", "process": "navigation", "reason": "load failed",
+            "navigation": {
+                "role": "main", "instance": 1, "request": 0, "currentRequest": 1,
+                "sequence": 2, "currentSequence": 3,
+                "requestedGeneration": 1, "currentGeneration": 2,
+                "startedMs": 100.0, "rejectedMs": 123.0, "errorNumber": -2,
+                "codeType": "undefined", "loaded": false, "painted": true, "revealed": true,
+            }
+        });
+        let Message::Fault { navigation: Some(navigation), .. } = serde_json::from_value(frame.clone()).unwrap() else {
+            panic!("navigation context missing");
+        };
+        assert_eq!(
+            navigation.receipt(),
+            "app: navigation role=Main instance=1 request=0/1 sequence=2/3 generation=1/2 error_number=Some(-2) code_type=Undefined elapsed_ms=23.0 loaded=false painted=true revealed=true"
+        );
+        for field in ["url", "message", "stack"] {
+            let mut unsafe_frame = frame.clone();
+            unsafe_frame["navigation"][field] = json!("private entry key");
+            assert!(serde_json::from_value::<Message>(unsafe_frame).is_err());
+        }
+        let mut unsafe_frame = frame;
+        unsafe_frame["navigation"]["codeType"] = json!("private entry key");
+        assert!(serde_json::from_value::<Message>(unsafe_frame).is_err());
+        assert!(matches!(
+            serde_json::from_str::<Message>(r#"{"type":"fault","process":"renderer","reason":"crashed"}"#).unwrap(),
+            Message::Fault { navigation: None, .. }
+        ));
+    }
+    #[test]
+    fn a_main_accepted_during_engine_exit_starts_once_and_stays_closed_after_acknowledgement() {
+        use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
+        use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+        let root = std::env::temp_dir().join(format!(
+            "quotum-engine-exit-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let dirs = Dirs { data: root.join("data"), logs: root.join("logs"), webview: None };
+        dirs.ensure().unwrap();
+        let log_path = dirs.hub_log();
+        let electron = root.join("engine.sh");
+        // The first process has committed to exit and cannot consume the newer
+        // head. Its replacement acknowledges and closes that actual revision.
+        std::fs::write(
+            &electron,
+            r#"#!/bin/sh
+set -eu
+root=$(dirname "$0")
+printf '{"type":"ready"}\n' >&3
+IFS= read -r init <&3
+if [ ! -e "$root/started" ]; then
+    touch "$root/started"
+    IFS= read -r release < "$root/gate"
+    exit 0
+fi
+printf '{"type":"surface","role":"main","instance":1,"revision":2,"open":true}\n' >&3
+touch "$root/replacement"
+IFS= read -r release < "$root/gate"
+while IFS= read -r frame <&3; do
+    case "$frame" in
+        *'"revision":3'*) break ;;
+    esac
+done
+printf '{"type":"surface","role":"main","instance":1,"revision":3,"open":true}\n' >&3
+printf '{"type":"surface","role":"main","instance":1,"revision":3,"open":false}\n' >&3
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&electron, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let gate = root.join("gate");
+        let name = std::ffi::CString::new(gate.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let lock = std::fs::File::create(dirs.app_lock()).unwrap();
+        let shell = Arc::new(Shell::new(
+            dirs,
+            PathBuf::new(),
+            PathBuf::new(),
+            None,
+            lock,
+            Host {
+                native_panel: false,
+                resources: root.clone(),
+                electron,
+                software: false,
+                inspector: None,
+                gui: Mutex::default(),
+                stopped: Condvar::new(),
+                tray: Mutex::default(),
+                panel_height: Mutex::new(180.0),
+                foreground: Mutex::default(),
+            },
+        ));
+        struct Cleanup(Arc<Shell>, PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                close(&self.0);
+                let _ = std::fs::remove_dir_all(&self.1);
+            }
+        }
+        let _cleanup = Cleanup(shell.clone(), root.clone());
+        let wait = |condition: &dyn Fn() -> bool| {
+            let until = Instant::now() + Duration::from_secs(5);
+            while !condition() {
+                assert!(Instant::now() < until, "the isolated engine transition did not complete");
+                thread::sleep(Duration::from_millis(2));
+            }
+        };
+        let release = || {
+            use std::os::unix::fs::OpenOptionsExt;
+            let until = Instant::now() + Duration::from_secs(5);
+            loop {
+                match std::fs::OpenOptions::new().write(true).custom_flags(libc::O_NONBLOCK).open(&gate) {
+                    Ok(mut file) => {
+                        file.write_all(b"exit\n").unwrap();
+                        break;
+                    }
+                    Err(e) if e.raw_os_error() == Some(libc::ENXIO) && Instant::now() < until => {
+                        thread::sleep(Duration::from_millis(2));
+                    }
+                    Err(e) => panic!("the isolated engine gate could not open: {e}"),
+                }
+            }
+        };
+        accept(&shell, window::Role::Compact, None, false, None);
+        launch(&shell).unwrap();
+        wait(&|| root.join("started").exists());
+        let first = shell.host.gui.lock().unwrap().as_ref().unwrap().clone();
+        open_role(&shell, window::Role::Main);
+        assert_eq!(head(&shell).revision, 2);
+        assert!(Arc::ptr_eq(shell.host.gui.lock().unwrap().as_ref().unwrap(), &first));
+        release();
+        wait(&|| {
+            shell.host.gui.lock().unwrap().as_ref().is_some_and(|gui| {
+                !Arc::ptr_eq(gui, &first) && gui.windows.lock().unwrap().get(&window::Role::Main) == Some(&(1, 2))
+            })
+        });
+        let replacement = shell.host.gui.lock().unwrap().as_ref().unwrap().clone();
+        open_role(&shell, window::Role::Main);
+        assert_eq!(head(&shell).revision, 3);
+        release();
+        // The private reader and exit worker both retain this exact Gui until
+        // acknowledgements are drained and the recovery decision has finished.
+        wait(&|| Arc::strong_count(&replacement) == 1);
+        assert!(!is_open(&shell));
+        assert!(!window::is_open_or_opening(&shell));
+        assert_eq!(head(&shell).target, Target::Main);
+        let log = std::fs::read_to_string(log_path).unwrap();
+        assert_eq!(log.matches("app: Chromium starts (pid ").count(), 2);
+    }
     #[test]
     fn inspection_is_only_for_explicit_isolated_debug_runs_on_loopback() {
         assert_eq!(qa_inspector(Some("1"), Some("127.0.0.1:9123"), true).is_some(), cfg!(debug_assertions));

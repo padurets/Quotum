@@ -21,6 +21,8 @@ import {sharedWork} from '../periodWork.js';
 import {expandPeriod,type PeriodWireReply} from '../domain/periodWire.js';
 import {HISTORY_BYTES_PER_MEASUREMENT} from '../../bench/budget.js';
 import {PeriodAccounting} from '../domain/periodAccounting.js';
+import {shifted,canShift} from '../domain/periodShift.js';
+import {expandHistory,type HistoryBasis} from '../domain/history.js';
 import {transaction} from '../touches.js';
 
 const M=60_000,H=60*M,now=1_800_000_000_000;
@@ -32,11 +34,57 @@ async function fixture() {
   const device=directory.saveDevice({userId:user.id,machine:{id:'machine-0123456789',name:'Laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},now-3*H).id;
   const hub:Hub={store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{}),pairing:new Pairing(directory),setup:new Setup(false,null),local:null};
   const app=await buildApp(hub);
-  const read=(body:PeriodRequest,asBoard=board)=>app.inject({method:'POST',url:`/api/boards/${asBoard}/period`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body});
+  const read=(body:PeriodRequest,asBoard=board,headers:Record<string,string>={})=>app.inject({method:'POST',url:`/api/boards/${asBoard}/period`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`,...headers},payload:body});
   const credit=(from:number,to:number,id='stable')=>store.creditWork(device,from,to,[{source,origin:'terminal',startedAt:now-3*H,project:'Project',folder:'folder',identity:{kind:'stable',sessionId:id}}]);
   const details=(body:unknown)=>app.inject({method:'POST',url:`/api/boards/${board}/period/sessions`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body as object});
   return {store,directory,hub,app,user,board,source,device,read,credit,details};
 }
+
+test('opted-in period cells borrow source ordinals only from their captured history metadata',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  h.store.record(h.source,{observedAt:now-3*M,plan:'pro',resets:null,staleAfterMs:H,windows:[{id:'weekly',kind:'weekly',label:null,minutes:10080,used:25,remaining:75,resetAt:now+H}]});
+  h.credit(now-2*M,now-M);
+  const headers={'x-quotum-history-sources':'basis'};
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,quota:{cell:String(M),from:String(now-4*M),to:String(now),meta:'',evidence:'skip'}};
+  const seed=await h.read(body),optedSeed=await h.read(body,h.board,headers);
+  assert.equal(seed.statusCode,200,seed.body);assert.equal(optedSeed.body,seed.body,'full metadata keeps the legacy wire even after opting in');
+  const initial=expandPeriod(seed.json<PeriodWireReply>()).quota!;
+  if(initial.state!=='complete'||!('known' in initial.value))throw new Error('missing full metadata');
+  const prior:HistoryBasis={run:initial.value.run,now:initial.value.now,historyStart:initial.value.historyStart,known:initial.value.known,meta:initial.value.meta};
+  const retained=JSON.stringify(prior),request={...body,quota:{...body.quota!,meta:prior.meta}};
+  const legacy=await h.read(request),packed=await h.read(request,h.board,headers);
+  assert.equal(packed.statusCode,200,packed.body);
+  const wire=packed.json();
+  assert.equal(wire.quota.value.sourceEncoding,'basis');
+  assert.equal(typeof wire.quota.value.chunks[0].series[0].source,'number');
+  let reserved=0;
+  const restored=expandPeriod(wire,n=>{reserved+=n;},{quota:prior});
+  assert.ok(reserved>0,'decoding reserves its source lookup before allocation');
+  assert.deepEqual(restored,expandPeriod(legacy.json<PeriodWireReply>()),'the real serialized reply restores every original field');
+  if(restored.quota?.state!=='complete')throw new Error('missing quota');
+  assert.deepEqual(expandHistory(restored.quota.value,prior).chunks,initial.value.chunks);
+  assert.equal(JSON.stringify(prior),retained,'decoding cannot mutate retained metadata');
+  assert.equal((await h.read(request)).body,legacy.body,'packing cannot change cached server cells');
+  const baseline:PeriodRequest={...body,selection:{mode:'range',from:now-H,to:now},quota:{...body.quota!,cells:'skip',evidence:undefined,meta:''}};
+  const full=(await h.read(baseline)).json<PeriodReply>(),compactResponse=await h.read({...baseline,quota:{...baseline.quota!,meta:prior.meta}});
+  assert.equal(compactResponse.statusCode,200,compactResponse.body);
+  const compact=compactResponse.json<PeriodReply>();
+  if(full.quota?.state!=='complete'||compact.quota?.state!=='complete')throw new Error('missing baseline');
+  assert.ok('known' in full.quota.value);assert.equal('known' in compact.quota.value,false);
+  assert.deepEqual(expandHistory(compact.quota.value,prior),expandHistory(full.quota.value),'baseline tapes and all native facts survive metadata borrowing');
+  assert.ok(compactResponse.body.length<JSON.stringify(full).length);
+  const source=h.store.source('codex','b'.repeat(24),now-H);h.store.hold(source,h.user.id,now-H);
+  const changed=(await h.read(request,h.board,headers)).json();
+  assert.ok(changed.quota.value.known.sources[source]!==undefined,'a changed source set supplies fresh metadata');
+  assert.equal(changed.quota.value.sourceEncoding,undefined,'an old token cannot authorize new source ordinals');
+  const known=h.store.historyKnown.bind(h.store);
+  t.mock.method(h.store,'historyKnown',(...args:Parameters<Store['historyKnown']>)=>{const value=known(...args);return {...value,sources:Object.fromEntries(Object.entries(value.sources).reverse())};});
+  const reordered=(await h.read(body)).json().quota.value;
+  const reorderedRequest={...body,quota:{...body.quota!,meta:reordered.meta}};
+  const reorderedLegacy=await h.read(reorderedRequest),reorderedPacked=await h.read(reorderedRequest,h.board,headers);
+  assert.equal('known' in reorderedPacked.json().quota.value,false,'the reversed metadata token really matched');
+  assert.equal(reorderedPacked.body,reorderedLegacy.body,'a different captured key order keeps literal source IDs');
+});
 
 test('a period response rechecks authentication after cooperative preparation',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
@@ -147,6 +195,45 @@ test('nearby card states cross exclusive observations and deadlines without inte
       assert.ok(hasPeriodValue(value,to),String(to));const {states:_states,...snapshot}=periodValueAt(value,to)!;assert.deepEqual(snapshot,fresh[i]);
     }
   }
+});
+
+test('neighboring endpoint cells retain exact quota, work and cards through a native repeat',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const wallet=h.store.source('deepseek','b'.repeat(24),now-H);h.store.hold(wallet,h.user.id,now-H);
+  for(let i=0;i<12;i++){
+    const at=now-(24-2*i)*M;
+    h.store.record(h.source,{observedAt:at,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:i+.125,remaining:100-i-.125,resetAt:now+H}]});
+    h.store.record(wallet,deepSeekMeasurement({is_available:true,balance_infos:[{currency:'USD',total_balance:`9007199254.7409${String(93-i).padStart(2,'0')}`,granted_balance:'0',topped_up_balance:`9007199254.7409${String(93-i).padStart(2,'0')}`}]},at));
+  }
+  h.credit(now-25*M,now-3*M);
+  const sources=[{id:h.source,provider:'codex'},{id:wallet,provider:'deepseek'}],edge=now-10*M;
+  const read=async(to:number)=>{
+    const response=await h.read({version:1,selection:{mode:'range',from:to-24*H,to},evaluatedAt:now,values:sources.map(s=>s.id),sessions:{},quota:{cell:String(5*M),from:String(now-H),to:String(now),cells:'skip'}});
+    assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());
+    if(reply.values?.state!=='complete'||reply.quota?.state!=='complete'||reply.sessions?.state!=='complete')throw new Error('incomplete period');
+    return {values:reply.values.value,fixed:reply.quota.value.tape!.fixed!,work:reply.sessions.value.fixed!};
+  };
+  const retained=await read(edge),before=JSON.stringify(retained);
+  const plain=<T extends object>(value:T,key:string)=>{const {[key]:_,...rest}=value as Record<string,unknown>;return rest;};
+  // A real return/repeat moved 165,715 ms after the live plot lost its future area.
+  // This remains inside a five-minute cell, but exceeds a one-minute neighborhood.
+  for(const offset of [165715,-165715,-4*M,-M,-.25,0,.25,1,M,4*M]){
+    const to=edge+offset,fresh=await read(Math.floor(to));
+    assert.ok(canShift(retained.fixed,{from:to-24*H,to}),String(offset));
+    assert.deepEqual(plain(shifted(retained.fixed,{from:to-24*H,to})!,'shift'),plain(shifted(fresh.fixed,{from:to-24*H,to})!,'shift'));
+    assert.ok(canShift(retained.work,{from:to-24*H,to}),String(offset));
+    assert.deepEqual(plain(shifted(retained.work,{from:to-24*H,to})!,'shift'),plain(shifted(fresh.work,{from:to-24*H,to})!,'shift'));
+    // Protocol positions are integer milliseconds; fractional replay keeps that admission.
+    const actual=periodValues(h.store,sources,h.user.id,Math.floor(to),()=>{});
+    for(const [i,value]of retained.values.entries())assert.deepEqual(plain(periodValueAt(value,to)!,'states'),actual[i]);
+  }
+  const outside=edge+8*M;
+  assert.equal(canShift(retained.fixed,{from:outside-24*H,to:outside}),false);
+  assert.ok(retained.values.some(value=>!hasPeriodValue(value,outside)),'positions beyond retained evidence require another read');
+  const fresh=await read(outside),actual=periodValues(h.store,sources,h.user.id,outside,()=>{});
+  for(const [i,value]of fresh.values.entries())assert.deepEqual(plain(value,'states'),actual[i]);
+  assert.notDeepEqual(fresh.values.map(v=>v.windows),retained.values.map(v=>v.windows));
+  assert.equal(JSON.stringify(retained),before,'reads and replays preserve the original retained projection');
 });
 
 test('unchanged spending anchors preserve sparse financial card states and period replies',async t=>{

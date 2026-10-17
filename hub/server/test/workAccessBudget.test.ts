@@ -114,6 +114,32 @@ for(const ceiling of [5000,50_000])test(`retained authority names share the ${ce
  if(ceiling===5000){assert.throws(()=>readHistory(h.hub,h.tiles,h.events,h.board,h.owner.id,h.quota),(error:unknown)=>error instanceof ReadError&&error.statusCode===413&&error.code==='history_limit');}
 });
 
+test('optional source packing preserves a native response at its measured reservation ceiling',async t=>{
+ const ceiling=50_000,h=await fixture(t,ceiling),body={...h.body,sessions:undefined,quota:{...h.quota,from:String(at+10*M),to:String(at+11*M),meta:'',evidence:'skip'}};
+ const seed=JSON.parse(h.period.read(h.board,h.owner.id,body));assert.equal(seed.quota.state,'complete');
+ const request={...body,quota:{...body.quota,meta:seed.quota.value.meta}};
+ const reservation=h.tiles.reservation.bind(h.tiles);let live=0,peak=0,refusals=0,cells=0;
+ t.mock.method(h.tiles,'reservation',()=>{
+  const original=reservation();let used=0;
+  return {
+   add(bytes:number){try{original.add(bytes);}catch(error){refusals++;throw error;}used+=bytes;live+=bytes;peak=Math.max(peak,live);},
+   remove(bytes:number){original.remove(bytes);used-=bytes;live-=bytes;},
+   close(){original.close();live-=used;used=0;},
+  };
+ });
+ const read=h.store.cells.bind(h.store);t.mock.method(h.store,'cells',(...args:Parameters<Store['cells']>)=>{cells++;return read(...args);});
+ const native=h.period.read(h.board,h.owner.id,request);assert.equal(JSON.parse(native).quota.state,'complete');
+ assert.equal(live,0);assert.equal(cells,1);assert.ok(peak>0&&peak<ceiling);
+ const pressure=reservation();pressure.add(ceiling-peak);
+ try{
+  const packed=h.period.read(h.board,h.owner.id,request,true);
+  assert.equal(packed,native,'wire allocation refusal retains the complete native response');
+  assert.ok(refusals>0,'the optional path actually met the shared ceiling');
+  assert.equal(cells,2,'fallback must not repeat a history read');assert.equal(live,0);
+ }finally{pressure.close();}
+ const all=reservation();try{all.add(ceiling);}finally{all.close();}
+});
+
 test('composite quota, closed tile keys, metadata and tape share one reserved access snapshot',async t=>{
  const h=await fixture(t);let cells=0;const read=h.store.cells.bind(h.store);t.mock.method(h.store,'cells',(...args:Parameters<Store['cells']>)=>{cells++;return read(...args);});
  for(let i=0;i<2;i++){h.calls.length=0;const reply=JSON.parse(h.period.read(h.board,h.owner.id,h.body));assert.equal(reply.sessions.state,'complete');assert.equal(reply.quota.state,'complete');assert.deepEqual(h.calls,[true],'closed cache hits and misses reuse exactly the captured reserved map');}

@@ -93,15 +93,15 @@ function LegendAmount({history,by,groupKey,group}:{history:History|null;by:Activ
   return <b data-time="activity-work">{activity?text(activity):group?workHours(group.agentMs):'—'}</b>;
 }
 
-function LegendMetrics({history,by,groupKey,group,active}:{history:History|null;by:ActivityDimension;groupKey:string;group:ActivityGroup|null;active:boolean}) {
+function LegendMetrics({history,by,groupKey,group,active,available,agentMs,activeMs,agents}:{history:History|null;by:ActivityDimension;groupKey:string;group:ActivityGroup|null;active:boolean;available:boolean;agentMs:number;activeMs:number;agents:number}) {
   const part=(activity:ActivityData)=>activity.by[by].find(g=>g.key===groupKey)??{agentMs:0,activeMs:0,agents:0};
   const activity=useActivityNumbers(history,by,value=>JSON.stringify(metricsText(part(value))),active,undefined,groupKey);
-  const value=activity?part(activity):group;
+  const value=active?(activity?part(activity):group):available?{agentMs,activeMs,agents}:null;
   return <span data-time="activity-metrics">{value?<Metrics agentMs={value.agentMs} activeMs={value.activeMs} agents={value.agents}/>:<span>{t('activity.pendingRange')}</span>}</span>;
 }
 
 /** Hover and touch state belong to one legend entry, leaving the stacks untouched. */
-const LegendItem = memo(function LegendItem({history, group, groupKey, by, name, color, muted}: {history:History|null;group: ActivityGroup | null; groupKey: string; by: ActivityDimension; name: string; color: string; muted: boolean}) {
+const LegendItem = memo(function LegendItem({history, group, groupKey, by, name, color, muted, available, agentMs, activeMs, agents}: {history:History|null;group: ActivityGroup | null; groupKey: string; by: ActivityDimension; name: string; color: string; muted: boolean;available:boolean;agentMs:number;activeMs:number;agents:number}) {
   useLocale();
   const shifting = useShifting();
   const id = useId();
@@ -148,7 +148,7 @@ const LegendItem = memo(function LegendItem({history, group, groupKey, by, name,
       onClick={event => event.stopPropagation()}
     >
       <span className="tooltip-time">{name}</span>
-      <LegendMetrics history={history} by={by} groupKey={groupKey} group={group} active={active}/>
+      <LegendMetrics history={history} by={by} groupKey={groupKey} group={group} active={active} available={available} agentMs={agentMs} activeMs={activeMs} agents={agents}/>
     </span>
   );
   return (
@@ -330,9 +330,10 @@ export const Activity = memo(function Activity({arrange}: {arrange: Arrange}) {
             empty={!history ? empty : emptyFrame}
           />
           <div className="legend">
-            {(emptyFrame ? [] : presentation.identities).map(identity => (
-              <LegendItem key={identity.key} history={drawing} groupKey={identity.key} by={by} group={currentGroups.find(group => group.key === identity.key) ?? null} name={groupName(identity, by, titles)} color={identity.color} muted={!!groupMuted(identity.key)} />
-            ))}
+            {(emptyFrame ? [] : presentation.identities).map(identity => {
+              const current=currentGroups.find(group=>group.key===identity.key);
+              return <LegendItem key={identity.key} history={drawing} groupKey={identity.key} by={by} group={groups.find(group=>group.key===identity.key)??null} name={groupName(identity, by, titles)} color={identity.color} muted={!!groupMuted(identity.key)} available={activity!==null} agentMs={current?.agentMs??0} activeMs={current?.activeMs??0} agents={current?.agents??0} />;
+            })}
           </div>
       </>
     </AnalyticsPanel>
@@ -366,6 +367,17 @@ function ActivityReadout({history,by,hover,barMs,bar,parts,tipProps}:{history:Hi
     </div>
   </Tooltip>;
 }
+
+/** The prepared stack paths remain unchanged while their parent moves or clips them. */
+const StackArtwork = memo(function StackArtwork({model,by}: {by:ActivityDimension;model: {
+  groups: {group: PlotGroup; color: string}[];
+  paths: string[];
+} | null}) {
+  if (!model) return null;
+  return <>{model.groups.map(({group, color}, i) => (
+    <path key={group.key} d={model.paths[i]} fill={color} className="activity-stack" style={seriesFocusStyle(mutedKey(by,group.key))} />
+  ))}</>;
+});
 
 const Stacks = memo(function Stacks({
   history,
@@ -460,7 +472,7 @@ const Stacks = memo(function Stacks({
   const groups = model?.groups ?? [], strip = model?.strip ?? null, activity = currentActivity ?? model?.activity ?? incomingActivity;
   const barMs = model?.barMs ?? incomingActivity.barMs;
   const vertical = model?.vertical ?? activityScale(0);
-  const paths = model?.paths ?? [], perMs = model?.perMs ?? (width - left - right) / Math.max(MINUTE, basis.to - basis.from), pathOrigin = model?.pathOrigin ?? basis.from;
+  const perMs = model?.perMs ?? (width - left - right) / Math.max(MINUTE, basis.to - basis.from), pathOrigin = model?.pathOrigin ?? basis.from;
   const hatchFrom = strip?.from ?? basis.from;
   const knownFrom = strip?.knownFrom ?? model?.originUnknownTo ?? incomingUnknownTo;
   const unknownTo = knownFrom !== null && knownFrom > hatchFrom ? knownFrom : null;
@@ -593,9 +605,7 @@ const Stacks = memo(function Stacks({
       <PlotLayer width={width} height={height} scale={scale} left={left} right={right} clipRef={bandClip} top={top} bottom={bottom}>
         <g clipPath={(strip || currentActivity) && !active ? `url(#${CSS.escape(innerClip)})` : undefined}>
           <g transform={`translate(${(left + (pathOrigin - basis.from) * perMs).toFixed(1)} 0)`}>
-            {groups.map(({group, color}, i) => (
-              <path key={group.key} d={paths[i]} fill={color} className="activity-stack" style={seriesFocusStyle(mutedKey(by, group.key))}/>
-            ))}
+            <StackArtwork model={model} by={by} />
           </g>
         </g>
       </PlotLayer>

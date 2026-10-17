@@ -8,16 +8,21 @@ import {announcementLayout, fitting, graphemes, labelRoom, shortName} from '../c
 type Node={type:string;props:Record<string,any>};
 function fixture() {
   let index=0,dirty=false,font='12px',broken=false,overrun=false,mapping=false;
-  const slots:any[]=[],effects:(()=>void)[]=[];
+  const slots:any[]=[],effects:(()=>void)[]=[],insertions:(()=>void)[]=[];
   const calls={glyph:0,suffix:0,box:0,state:0};
   const jsx=(type:string,props:Node['props']):Node=>({type,props});
   const useRef=(value:unknown)=>slots[index++]??(slots[index-1]={current:value});
   const useState=(value:unknown)=>{const at=index++;if(!(at in slots))slots[at]=value;return [slots[at],(next:any)=>{const value=typeof next==='function'?next(slots[at]):next;if(value!==slots[at]){slots[at]=value;dirty=true;calls.state++;}}];};
   const useLayoutEffect=(run:()=>void,deps:unknown[])=>{const at=index++,old=slots[at];if(old&&deps.every((v,i)=>Object.is(v,old[i])))return;slots[at]=deps;effects.push(run);};
+  const useInsertionEffect=(run:()=>void)=>{index++;insertions.push(run);};
   const source=readFileSync(new URL('../components/Chart.tsx',import.meta.url),'utf8');
+  const ast=ts.createSourceFile('Chart.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  const boxes=ast.statements.find(node=>ts.isClassDeclaration(node)&&node.name?.text==='LabelBoxes');assert.ok(boxes);
   const region=source.slice(source.indexOf('function MarkerLabel('),source.indexOf('/**\n * A label past',source.indexOf('function MarkerLabel(')));
-  const context={exports:{} as {MarkerLabel:(props:Record<string,unknown>)=>Node},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),useRef,useState,useLayoutEffect,graphemes,shortName,fitting,getComputedStyle:()=>({fontFamily:'Test',fontSize:font,fontWeight:'400',fontStyle:'normal',letterSpacing:'0px',fontStretch:'normal'})};
-  runInNewContext(ts.transpileModule(`export ${region}`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
+  const context={exports:{} as {MarkerLabel:(props:Record<string,unknown>)=>Node;boxes:object},require:()=>({jsx,jsxs:jsx,Fragment:'fragment'}),useRef,useState,useLayoutEffect,useInsertionEffect,graphemes,shortName,fitting,getComputedStyle:()=>({fontFamily:'Test',fontSize:font,fontWeight:'400',fontStyle:'normal',letterSpacing:'0px',fontStretch:'normal'})};
+  runInNewContext(ts.transpileModule(`${boxes.getText(ast)}
+export const boxes=new LabelBoxes();
+export ${region}`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const refs=(node:Node)=>{if(!node?.props)return;const {ref,children}=node.props;
     if(ref)ref.current={
       getNumberOfChars:()=>String(children).length+(mapping?1:0),
@@ -27,7 +32,7 @@ function fixture() {
     };
     (Array.isArray(children)?children:[children]).forEach(child=>{if(Array.isArray(child))child.forEach(refs);else refs(child);});
   };
-  const render=(props:Record<string,unknown>)=>{let node:Node;for(let turns=0;turns<10;turns++){index=0;dirty=false;node=context.exports.MarkerLabel(props);refs(node);effects.splice(0).forEach(run=>run());if(!dirty)return node;}throw Error('label did not settle');};
+  const render=(props:Record<string,unknown>)=>{let node:Node;for(let turns=0;turns<10;turns++){index=0;dirty=false;node=context.exports.MarkerLabel({boxes:context.exports.boxes,scale:1,...props});insertions.splice(0).forEach(run=>run());refs(node);effects.splice(0).forEach(run=>run());if(!dirty)return node;}throw Error('label did not settle');};
   return {render,calls,font:(value:string)=>font=value,break:()=>broken=true,repair:()=>broken=false,overrun:()=>overrun=true,mapping:()=>mapping=true};
 }
 const props=(name='Team 🇷🇺 👩‍💻 e\u0301',suffix=' 12h →',room=120)=>({x:250,y:100,end:true,fonts:0,children:name+suffix,shorten:{name,say:(label:string)=>label+suffix,room,bounded:true}});

@@ -7,6 +7,7 @@ import {HISTORY_COHORT_TAKES, historyCutInvalidation, bodyTotals, readUnion, sta
 import {HISTORY_CODEC, historyBody, historyProxy, type BodyCount} from './historyProxy';
 import {browserCancellationTraffic, browserHistoryTraffic} from './historyTrafficBrowser';
 import type {Browser} from './cdp';
+import type {Evidence} from './evidence';
 import {cancellationTraffic} from './historyCancellation';
 
 const DAY = 86_400_000;
@@ -17,17 +18,17 @@ const gridsOf = (store: HistoryStore) => (store as unknown as {grids: Map<number
 
 /** Controlled traffic uses the production gesture, loader and actual HTTP parser;
  * native presentation is measured separately on the unchanged browser route. */
-export async function historyTraffic(upstream: string, cookie: string, board: string, windows: string[], browser?: Browser) {
-  const proxy = await historyProxy(upstream), reports = [], invalidated = [], problems: string[] = [];
+export async function historyTraffic(upstream: string, cookie: string, board: string, windows: string[], browser?: Browser, evidence?: Pick<Evidence, 'save'>) {
+  const proxy = await historyProxy(upstream, browser?.owner), reports = [], invalidated = [], problems: string[] = [];
   try {
     for (const length of [DAY, 30 * DAY]) for (const future of [DAY, 0]) for (const latency of [0, 100, 400]) for (const fraction of [.5, .04]) {
       for (let take = 1; take <= HISTORY_COHORT_TAKES; take++) {
         const name = `${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`, anchor = cellStart(Date.now() - 60_000, 60_000);
         let selected: {from: number; to: number} | null = {from: anchor - length, to: anchor};
-        let phase = `${name}/seed`, inFlight = 0, peakFlights = 0, latest: HistoryAnswer | undefined;
+        let phase = `${name}/seed`, inFlight = 0, peakFlights = 0, latest: HistoryAnswer | undefined, latestTo = 0;
         const bodies: {phase: string; count: BodyCount; from: number; to: number}[] = [], attempts: {from: number; to: number; cell: number; phase: string}[] = [];
         const requested = new Set<number>(), visited = new Set<number>(), bridges = new Set<number>();
-        let interest: {from: number; to: number} | null = null, freshOverlap = 0, ownershipOverlap = 0;
+        let interest: {from: number; to: number} | null = null, freshOverlap = 0, closedFreshOverlap = 0, seedNow = Infinity, ownershipOverlap = 0;
         const pending = new Set<Promise<unknown>>();
         const store = new HistoryStore({now: () => anchor, preparations: null,
           read: (_board, cell, from, to, signal, _meters, meta) => {
@@ -36,7 +37,10 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
               const tiles = gridsOf(store).get(cell);
               for (const at of cellsOf(from, to, cell)) {
                 const tile = tiles?.get(tileOf(at, cell));
-                if (tile && at >= tile.readFrom && at < tile.validTo) freshOverlap++;
+                if (tile && at >= tile.readFrom && at < tile.validTo) {
+                  freshOverlap++;
+                  if (at + cell <= seedNow) closedFreshOverlap++;
+                }
                 requested.add(at);
               }
               const flights = (store as unknown as {flights: Set<{cell: number; from: number; to: number; controller: AbortController}>}).flights;
@@ -51,7 +55,7 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
               }
             }
             inFlight++; peakFlights = Math.max(peakFlights, inFlight);
-            const result = historyBody(`${proxy.url}/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}`, cookie, signal, count => bodies.push({phase: readPhase, count, from, to})).then(value => {latest = expandHistory(value as HistoryReply, meta); return latest;});
+            const result = historyBody(`${proxy.url}/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}&meta=${encodeURIComponent(meta?.meta ?? '')}`, cookie, signal, count => bodies.push({phase: readPhase, count, from, to})).then(value => {latestTo = to; latest = expandHistory(value as HistoryReply, meta);if(readPhase.endsWith('/seed'))seedNow=Math.min(seedNow,latest.now);return latest;});
             pending.add(result);
             void result.then(() => {pending.delete(result); inFlight--;}, () => {pending.delete(result); inFlight--;});
             return result;
@@ -67,6 +71,8 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
             if (Date.now() > deadline) throw new Error(`${name}: history did not complete`);
           }
         };
+        let status = 'failed';
+        evidence?.save('traffic-stage', {name, phase});
         try {
           proxy.phase(phase); store.choose('24h', selected); store.open(board); store.hello((await historyBody(`${proxy.url}/api/history?board=${encodeURIComponent(board)}&cell=300000&from=${cellStart(anchor - DAY, 300000)}&to=${cellStart(anchor, 300000) + 300000}`, cookie) as HistoryAnswer).run); store.snapshot([], windows);
           await settle();
@@ -92,19 +98,20 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
           const totals = bodyTotals(coldBodies.map(({count}) => ({count, transfer: transferFor(count, proxy.transfers)})));
           const maxAttempts = fraction === .04 ? 2 : future ? 7 : 5;
           assert.ok(coldBodies.length <= maxAttempts, 'controlled history exceeded its request cap');
-          stableHistory(meta, seed, cell);
+          assert.equal(closedFreshOverlap, 0, 'closed fresh cells were read again');
+          stableHistory(meta, seed, cell, latestTo);
           assert.equal(freshOverlap, 0, 'fresh cells were read again');
           proxy.phase(`${name}/reference`);
           let referenceDecoded = 0, referenceEncoded = 0;
           const readReference = async (from: number, to: number) => {
             const answer = await historyBody(`${proxy.url}/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}`, cookie, undefined, count => {assert.ok(count.complete); referenceDecoded += count.decoded!; referenceEncoded += count.lower;}) as HistoryAnswer;
-            stableHistory(answer, seed, cell); return answer;
+            stableHistory(answer, seed, cell, to); return answer;
           };
           for (const [from, to] of readUnion(requested, cell)) await readReference(from, to);
           const referenceCells = new Set(cellsOf(cellStart(selected!.from, cell), Math.ceil(selected!.to / cell) * cell, cell)), chunks: Chunk[] = [];
           for (const [from, to] of readUnion(referenceCells, cell)) {
             const answer = await historyBody(`${proxy.url}/api/history?board=${encodeURIComponent(board)}&cell=${cell}&from=${from}&to=${to}`, cookie) as HistoryAnswer;
-            stableHistory(answer, seed, cell); chunks.push(...answer.chunks);
+            stableHistory(answer, seed, cell, to); chunks.push(...answer.chunks);
           }
           assert.deepEqual(final, {...compose(chunks, meta, targetOf(length, anchor, final.range, selected), new Set(windows)), board}, 'independently read series, activity and events differ');
           assert.ok(final.series.length >= 12, 'dense fixture must contain twelve actual series');
@@ -118,15 +125,23 @@ export async function historyTraffic(upstream: string, cookie: string, board: st
           const report = {name, attempts: attempts.filter(r => r.phase.endsWith('/cold')).length, maxAttempts, ...totals, referenceDecoded, referenceEncoded, ratios: fraction === .5, warmAttempts: attempts.length - warmStart, bridgeCells: bridges.size, optionalUnvisitedCells: [...requested].filter(at => !visited.has(at) && !bridges.has(at)).length, peakFlights, freshOverlap, ownershipOverlap, series: final.series.length, range: final.range, requests: attempts.filter(r => r.phase.endsWith('/cold'))};
           reports.push(report); problems.push(...trafficProblems(report)); unsubscribe();
           console.error(`bench: ${name}: ${report.attempts} GETs, ${report.warmAttempts} warm GETs, decoded ratio ${report.decoded === null ? 'unknown' : report.decoded / referenceDecoded}, encoded ratio ${report.encodedUpper === null ? 'unknown' : report.encodedUpper / referenceEncoded}`);
+          status = trafficProblems(report).length ? 'over-budget' : 'passed';
           break;
         } catch (error) {
-          invalidated.push({...historyCutInvalidation(error,name,take),attempts,bodies});
-        } finally {store.close(); await Promise.allSettled([...pending]);}
+          const cut=historyCutInvalidation(error,name,take);
+          status = 'invalidated';
+          invalidated.push({...cut, attempts, bodies});
+        } finally {
+          evidence?.save('traffic-'+name.replace(/[^a-zA-Z0-9_-]/g,'-'), {name, status, phase, codec: HISTORY_CODEC,
+            attempts, bodies, reports: reports.filter(report=>report.name===name),
+            transfers: proxy.transfers.filter(transfer=>transfer.phase.startsWith(name+'/'))});
+          store.close(); await Promise.allSettled([...pending]);
+        }
       }
     }
     const cancellations = await cancellationTraffic(proxy, cookie, board, windows);
-    const native = browser ? await browserHistoryTraffic(browser, proxy, cookie, board) : null;
-    const nativeCancellations = browser ? await browserCancellationTraffic(browser, proxy, cookie) : null;
+    const native = browser ? await browserHistoryTraffic(browser, proxy, cookie, board, evidence) : null;
+    const nativeCancellations = browser ? await browserCancellationTraffic(browser, proxy, cookie, false, false, evidence) : null;
     if (native) problems.push(...native.problems);
     return {codec: HISTORY_CODEC, reports, invalidated, cancellations, native, nativeCancellations, problems};
   } finally {await proxy.close();}

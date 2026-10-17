@@ -49,7 +49,7 @@ test('budget names omit repeated total words in EN/RU while distinct components 
 });
 
 test('actual money order follows an exclusive availability boundary without replacing cells or waking unchanged order',()=>{
-  let now=H,sort:MoneySort={column:'value',descending:false},index=0,dirty=false;
+  let now=H,sort:MoneySort={column:'value',descending:false},index=0,dirty=false,moneyReads=0;
   const timers=new Map<object,{run:()=>void;at:number}>(),slots:any[]=[],effects:(()=>void)[]=[];
   const clock=new PageClock({now:()=>now,visible:()=>true,setTimeout:(run,ms)=>{const id={};timers.set(id,{run,at:now+ms});return id;},clearTimeout:id=>{timers.delete(id as object);}});
   const entries=[series('A','10'),series('B','20')];
@@ -61,17 +61,19 @@ test('actual money order follows an exclusive availability boundary without repl
     usePref:()=>sort,useLocale:()=> 'en',useRef:(current:unknown)=>slot(()=>({current})),useState:(make:()=>unknown)=>[slot(make)],useMemo:(make:()=>unknown)=>make(),useCallback:(fn:unknown)=>fn,
     useLayoutEffect:(run:()=>void)=>effects.push(run),useSyncExternalStore:(subscribe:(notify:()=>void)=>()=>void,read:()=>unknown)=>{const state=slot(()=>{const state={value:read(),stop:()=>{}};state.stop=subscribe(()=>{const next=read();if(next!==state.value){state.value=next;dirty=true;}});return state;});state.value=read();return state.value;},
     clock,hubNow:()=>now,moneyTableValues,moneyComparator,nextMoneySort,visibleMoneySort,
-    boardPeriod:{moneyWorkAt:()=>undefined,moneyAt:(entry:MeterHistory,at:number)=>({...entry,...accounting.moneySummary(entry.sourceId,entry.meterId,entry.unit,{from:at-H,to:at})}),rangeAt:(_scope:string,at:number)=>({from:at-H,to:at}),moneyOrderAt:(at:number)=>accounting.changesAt(at,H)},
+    boardPeriod:{moneyWorkAt:()=>undefined,moneyAt:(entry:MeterHistory,at:number)=>(moneyReads++,{...entry,...accounting.moneySummary(entry.sourceId,entry.meterId,entry.unit,{from:at-H,to:at})}),rangeAt:(_scope:string,at:number)=>({from:at-H,to:at}),moneyOrderAt:(at:number)=>accounting.changesAt(at,H)},
     AnalyticsPanel:()=>{},TableSortMenu:()=>{},TableMeasure:()=>{},WidgetPages:()=>{},useTableWidget:(_panel:unknown,_columns:unknown,_name:unknown,keys:string[])=>({layout:'table',from:0,to:keys.length,measureFrom:0,measureTo:0}),AnalyticsTable:()=>{},setPrefs:()=>{},t:()=> 'Account'};
   const source=readFileSync(new URL('../components/MoneyAnalytics.tsx',import.meta.url),'utf8'),start=source.indexOf('const SortedMoney=');
   runInNewContext(ts.transpileModule(`export ${source.slice(start,source.indexOf('const pointAt=',start))}`,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   const render=()=>{index=0;dirty=false;const value=context.exports.SortedMoney(props).props.children[1].props.children[0].props.rows as typeof rows;effects.splice(0).forEach(run=>run());return value;};
   assert.deepEqual(Array.from(render(),row=>row.key),['A','B']);
-  now=H+4999;clock.wakeDue();assert.equal(dirty,false);
+  const beforeWake=moneyReads;
+  now=H+4999;clock.wakeDue();const unchangedReads=moneyReads-beforeWake;assert.equal(dirty,false);
   now++;clock.wakeDue();assert.equal(dirty,true);const ordered=render();assert.deepEqual(Array.from(ordered,row=>row.key),['B','A']);assert.equal(ordered[1],rows[0]);assert.equal(ordered[1].cells,rows[0].cells);
   now++;clock.wakeDue();assert.equal(dirty,false);
   sort=null;assert.deepEqual(Array.from(render(),row=>row.key),['A','B']);
   for(const state of slots)state.stop?.();assert.equal(timers.size,0);
+  assert.equal(unchangedReads,entries.length,'an unchanged order wake evaluates each balance once through the snapshot reader');
 });
 
 test('active-time sorting wakes at a linear crossing before the next work boundary',()=>{

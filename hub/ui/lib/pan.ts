@@ -51,13 +51,14 @@ export class Pan {
   private raf: unknown = null;
   private timer: unknown = null;
   private swipe: Swipe = SWIPE;
+  private deliveredAt: number | null = null;
   private shift = false;
   private readonly listeners = new Set<() => void>();
   private readonly phaseListeners = new Set<() => void>();
   private readonly stopListeners = new Set<(stop: PanStop) => void>();
   private readonly charts = new Map<symbol, () => {end: number; future: number}>();
 
-  constructor(private readonly env: PanEnv) {}
+  constructor(private readonly env: PanEnv, private readonly inputNow = () => performance.now()) {}
   get = () => this.state;
   active = () => this.draft?.token ?? null;
   shifting = () => this.shift;
@@ -67,6 +68,8 @@ export class Pan {
   onStop = (listener: (stop: PanStop) => void) => {this.stopListeners.add(listener); return () => void this.stopListeners.delete(listener);};
   get input() {return this.draft?.input ?? null;}
   get source() {return this.draft?.source ?? null;}
+  get oldestEnd() {return this.minEnd;}
+  get newestEnd() {return this.maxEnd;}
   setShift(held: boolean) {
     if (held === this.shift) return;
     this.shift = held;
@@ -128,9 +131,13 @@ export class Pan {
     if (this.input === 'pointer') return false;
     if (event.shiftKey && event.cancelable) this.setShift(true);
     const shifted = this.shift || event.shiftKey;
-    const result = swiped(this.swipe, {deltaX: event.deltaX, deltaY: event.deltaY, deltaMode: event.deltaMode, cancelable: event.cancelable, timeStamp: event.timeStamp, shiftKey: shifted});
+    const deliveredAt = this.inputNow();
+    // A blocked renderer can separate capture and delivery without an idle gesture.
+    const idleMs = this.deliveredAt === null ? Infinity : Math.min(event.timeStamp - this.swipe.last, deliveredAt - this.deliveredAt);
+    const result = swiped(this.swipe, {deltaX: event.deltaX, deltaY: event.deltaY, deltaMode: event.deltaMode, cancelable: event.cancelable, timeStamp: event.timeStamp, shiftKey: shifted}, idleMs);
     if (result.ended && this.draft && this.input !== 'shift-wheel') this.finish(this.draft.token);
     this.swipe = result.state;
+    if (event.cancelable) this.deliveredAt = deliveredAt;
     if (!result.own) return false;
     const token = this.draft?.token ?? this.begin({...typeof start === 'function' ? start() : start, input: shifted ? 'shift-wheel' : 'wheel'});
     if (token === null) return false;
@@ -175,6 +182,7 @@ export class Pan {
     this.raf = this.timer = null;
     this.draft = this.state = null;
     this.swipe = SWIPE;
+    this.deliveredAt = null;
   }
   private notify() {for (const listener of this.listeners) listener();}
   private phase() {for (const listener of this.phaseListeners) listener();}

@@ -19,7 +19,7 @@ export class ReadError extends Error {
 export function fail(status:number, code:string):never {throw new ReadError(status,code);}
 
 /** Both transports enforce the same tile, authority and currency contract. */
-export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, work?:WorkRead, cells=true, capturedAt?:number, workCells=true):string {
+export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, work?:WorkRead, cells=true, capturedAt?:number,workCells=true,captureSources?:(sources:Readonly<Record<string,number>>)=>void):string {
   const {store,directory}=hub;
     const scope = query.scope;
     if(scope!==undefined&&scope!=='quota'&&scope!=='budget')fail(400, 'invalid_request');
@@ -92,6 +92,7 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
     }
     const basis = {run: events.epoch, historyStart: store.historyStart(now), known: store.historyKnown(shown,access?.owner??null,access)};
     const tag = query.meta === undefined ? undefined : history.metadata(board, basis, scope);
+    if(tag&&query.meta===tag)captureSources?.(basis.known.sources);
     const meta = JSON.stringify(tag && query.meta === tag ? {now, run: events.epoch, meta: tag} : {now, ...basis, ...(tag ? {meta: tag} : {})});
 
     return `${meta.slice(0, -1)},"chunks":[${chunks.join(',')}]}`;

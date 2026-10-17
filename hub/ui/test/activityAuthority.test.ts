@@ -38,10 +38,10 @@ function consumer(h: ReturnType<typeof harness>) {
     quotaHistory:{retry:()=>{}},AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,LegendItem:()=>null,
     setTimeRange:()=>{},navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
     PlotLayer:()=>null,PlotOverlay:()=>null,Tooltip:()=>null,clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',
-    CSS:{escape:(id:any)=>id},Stacks:null as any};
-  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,context);
+    CSS:{escape:(id:any)=>id},Stacks:null as any,StackArtwork:null as any};
+  runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;globalThis.StackArtwork=StackArtwork;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,context);
   function find(node:any,type:any):any{if(Array.isArray(node))return node.map(n=>find(n,type)).find(Boolean);if(!React.isValidElement(node))return null;if(node.type===type)return node;return find((node.props as any).children,type);}
-  const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
+  const pathsOf=(node:any):string[]=>{if(Array.isArray(node))return node.flatMap(pathsOf);if(!React.isValidElement(node))return [];const p=node.props as any;if(node.type===context.StackArtwork)return pathsOf(context.StackArtwork(p));return p.className==='activity-stack'&&p.d!==undefined?[p.d]:pathsOf(p.children);};
   let latestParent:any;const renderParent=()=>{Object.assign(context,parent);parent.begin();latestParent=context.exports.Activity({arrange:{view:h.page.get().board!.view}});return find(latestParent,context.Stacks).props;};
   const renderChild=(props:any)=>{Object.assign(context,child);child.begin();return pathsOf(context.Stacks(props));};
 
@@ -84,7 +84,7 @@ test('a same-ID authority replacement before the next React render cannot borrow
 
 test('same-authority period changes and transient errors retain the final activity drawing',async()=>{
   const h=harness(true);try{
-    await h.start();const c=consumer(h),initial=c.settle();h.exact(false);h.choose('6h');await h.answerCells();
+    await h.start();const c=consumer(h),initial=c.settle();assert.ok(initial.paths.some(path=>path.length>0),'retention starts from prepared geometry');h.exact(false);h.choose('6h');await h.answerCells();
     assert.deepEqual(c.render().paths,initial.paths);h.exact(false,'history_failed');assert.deepEqual(c.settle().paths,initial.paths);
   }finally{h.close();}
 });

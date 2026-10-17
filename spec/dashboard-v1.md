@@ -547,6 +547,10 @@ Each history section keeps the existing
 cell, selection and eight-tile limits below. `evidence` is its previously returned opaque
 tape cursor; `skip` asks only for cells during progressive panning. Conversely,
 `cells: 'skip'` reads the boundary tape while reusing already cached cells.
+A standalone tape request may reuse its drawing reader's metadata token from the
+same board and hub run. The browser captures only that token before waiting for
+transport admission; mixed cell and tape requests keep their captured cell bases.
+A changed token receives full metadata through the usual fallback below.
 
 The response has a common `basis` and only the requested sections. A basis is
 `{run, revision, evaluatedAt, evidenceCut, range: {from,to}}`. The hub expires quiet
@@ -576,6 +580,22 @@ Within those monetary cell semantics (inline or in `moneySemantics`), a numeric
 retains every field of the original leg; `conversion.original` and additional `steps`
 remain unchanged. Both dictionaries are scoped to this one reply.
 Tapes, card values and the standalone history route retain their existing shape.
+
+The request header `x-quotum-history-sources: basis` also opts into source ordinals
+in compact history sections. Only a section borrowing its matching `meta` may carry
+`sourceEncoding: 'basis'`. A numeric source is a zero-based index into
+`Object.keys(known.sources)` from the metadata captured by that exact request, in its
+original order. This applies only to chunk series and meter-series `source`, activity
+session source, source-work source, source-dimension group key, and reset, grant and
+plan source. Unknown source strings and null remain literal; project/device keys,
+money and all tape fields keep their shape. A reader requires the captured token and
+run, rejects invalid ordinals, and restores these fields before publishing the reply.
+The client opts in only when every cell-returning section's nonempty metadata token has
+its captured basis. A `cells:"skip"` section may reuse its metadata token without a source
+dictionary: its chunks are empty, and source fields in its tape remain literal.
+A full metadata reply and requests without this header retain the legacy shape;
+older hubs may ignore the header. Optional packing cannot fail a native section that
+already fits, and lookup allocations share the existing response reservation.
 
 Quota, wallet budget and subscription-funds values contain the compatible history reply below and, unless skipped,
 a `tape`. A tape contains exact native sample anchors and monetary readings, availability
@@ -644,7 +664,9 @@ the exact replacement, deletion, integer delta and array splice operations of fi
 Each piece retains its own `validFor` interval, including actual observations and
 availability changes. Without `start`, replay starts from the value carrying the sequence;
 the first patch reaches the first interval. A restored value retains that immutable
-starting projection for subsequent replays. No numeric
+starting projection for subsequent replays. Candidate lookup also checks that starting
+projection's own `validFor` interval. Reusing it retains its full recorded values and
+the same sequence without extending its interval. No numeric
 interpolation or nested state sequences occur. Candidate lookup checks intervals
 without allocating a replay; staging accounts for copies before they are built.
 Current errors, credentials, actions, forecasts
@@ -743,11 +765,19 @@ Each `paths` entry is then `[sharedLength,...suffix]`, extending the preceding d
 path (initially empty). The last changes array is removed from each piece; a parallel
 `changes` array has one row per path. Each row contains the original operations with
 their first element replaced by the zero-based piece index. Restore those operations
-into their pieces before replay. Edits within a piece address disjoint fields: a parent
-replacement never accompanies a descendant edit. Restoring them in path order preserves
+into their pieces before replay. A tail splice may accompany field edits in the retained
+prefix; their indices are below the splice start, so either order preserves them. Other
+edits address disjoint fields: a parent replacement never accompanies a descendant edit.
+Restoring them in path order preserves
 the exact result, including deletions, nulls, splices and fractional values. Clients
 charge the additional path and operation containers before allocating them. The encoding
 is optional and scoped to a single response; it does not change proof coverage or evidence.
+The server prepares optional summaries and card states across neighboring endpoint
+cells, bounded further by evidence coverage. Summary pieces retain exact partition
+boundaries and card states retain full actual validity intervals. This covers a repeated
+native gesture whose pixel coordinates move the selected edge within a drawing cell.
+An uncovered position requires an ordinary bounded period read, with the same
+observation admission rules.
 These optional proofs and nearby value states share existing memory limits and may
 be omitted when they cannot fit. Outside proven positions a new summary is required.
 Only optional current presence can change or lose confirmation while a fixed selection

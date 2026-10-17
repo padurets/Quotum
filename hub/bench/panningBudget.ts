@@ -1,13 +1,20 @@
 import {percentile} from './budget.js';
+import type {PanTransactions} from './panEvidence.js';
+
+type SessionDensity={groups:number;nonempty:number;intersecting:number;leftOnly:number;rightOnly:number;drawFrom:number|null;drawTo:number|null;axisEnd:number|null};
 
 export type PanReading = {
-  initiator: 'quota' | 'session' | 'activity' | 'budget' | 'funds'; period: string; series: number; budgetSeries: number; fundsSeries: number; sessionSeries:number;  charts: number; rate: number;
+  initiator: 'quota' | 'session' | 'activity' | 'budget' | 'funds'; period: string; series: number; budgetSeries: number; fundsSeries: number; sessionSeries:number; charts: number; rate: number;
+  sessionDensity?:SessionDensity;
+  timeline?: {status: string; count: number; omitted: number; entries: unknown[]};
+  transactions?: PanTransactions;
+  cost?: {valid: boolean; scriptMs: number; taskMs: number; seconds: number};
   frames: number[]; latency: number[]; inputs: number; updated: number;
   chartUpdates: number[]; synchronized: boolean;
   peakFlights: number; maxTiles: number; duplicateReads: number;
   pushesDuring: number; pushesAfter: number; expectedPushes: number;
   forbiddenMutations: number; coldReads: number; undimmed: boolean; sizeStable: boolean;
-  edgeSeries: {stage:'wheel'|'drag';series:number;sessionSeries:number;budgetSeries:number;fundsSeries:number}[];
+  edgeSeries: {stage:'wheel'|'drag';series:number;sessionSeries:number;budgetSeries:number;fundsSeries:number;sessionDensity?:SessionDensity}[];
   wheelGapMs:number;
   segments?: Record<string, {count: number; p95: number; max: number}>;
   outliers?: {ms: number; segment: string; pending: number; requests: number}[];

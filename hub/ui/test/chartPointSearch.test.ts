@@ -105,9 +105,9 @@ test('actual chart overlap reads the selected band rather than every retained po
   assert.equal(linear, 12 * 4096);
   assert.ok(bounded < 12 * 120, `${bounded} point reads for two selected-band calculations`);
   // Restore the old loops only in this VM: it must regain the full retained-series cost.
-  const restoredLabel = labelCode.replace(/for \(let i = pointIndex\(line\.points, a\); i < line\.points\.length && line\.points\[i\]\[0\] <= b; i\+\+\) \{\s+const value = line\.points\[i\]\[1\];/,
+  const restoredLabel = labelCode.replace(/for \(let i = pointIndex\(points, a\); i < points\.length; i\+\+\) \{\s+const \[at,value\]=points\[i\];\s+if\(at>b\)break;/,
     'for (const [at,value] of line.points) {if (at < a || at > b) continue;');
-  const restoredStack = stackCode.replace(/for \(const line of lines\) \{\s+for \(let i = pointIndex\(line\.points, a\); i < line\.points\.length && line\.points\[i\]\[0\] <= b; i\+\+\) count\(line\.points\[i\]\[1\]\);\s+\}/,
+  const restoredStack = stackCode.replace(/if\(a<=b\)for \(const line of lines\) \{\s+const points=line\.points;\s+for \(let i = pointIndex\(points, a\); i < points\.length; i\+\+\) \{\s+const \[at,value\]=points\[i\];\s+if\(at>b\)break;\s+count\(value\);\s+\}\s+\}/,
     'for (const line of lines) for (const [at,value] of line.points) if (at >= a && at <= b) count(value);');
   assert.notEqual(restoredLabel,labelCode);assert.notEqual(restoredStack,stackCode);
   rows.forEach(row=>row.reset());const restored = chartReader(restoredLabel,restoredStack).read(input,true);

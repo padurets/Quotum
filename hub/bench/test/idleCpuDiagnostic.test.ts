@@ -9,8 +9,10 @@ import type {Cdp} from '../cdp.js';
 import type {Reading} from '../probe.js';
 import {IdleCpuDiagnostic,sourceIdentity,idleEdgeProblems,originalTraceProblems,ownedClockFires,planIdleEdge,type IdleGeometry} from '../idleCpuDiagnostic.js';
 import {numericProfile,profileWindow} from '../cpuProfile.js';
+import {idleWindow,idlePhaseScript,idlePhaseProblems} from '../still.js';
 
 type Saved={name:string;value:unknown;large?:boolean};
+
 test('manual control reports its checked out source separately from the workflow event',()=>{
   const source='1'.repeat(40),event='2'.repeat(40),receipt=sourceIdentity({QUOTUM_BENCH_SOURCE_SHA:source,GITHUB_SHA:event},()=>source);
   assert.equal(receipt.status,'complete');assert.equal(receipt.sourceHead,source);assert.equal(receipt.checkoutSha,source);assert.equal(receipt.eventSha,event);
@@ -39,13 +41,15 @@ class CurrentCdpFake {
   timestamp=1;
   stopCalls=0;
   traceStopCalls=0;
+  readonly responseBodies=new Map<string,string>();
+  readonly responseReads:string[]=[];
   constructor(readonly options:Options={}){}
   on<T>(name:string,listener:(value:T)=>void){const rows=this.listeners.get(name)??[];rows.push(listener as (value:unknown)=>void);this.listeners.set(name,rows);}
   off<T>(name:string,listener:(value:T)=>void){this.listeners.set(name,(this.listeners.get(name)??[]).filter(value=>value!==listener));}
   emit(name:string,value:unknown){for(const listener of this.listeners.get(name)??[])listener(value);}
   async evaluate<T>(expression:string):Promise<T>{assert.equal(arguments.length,1);this.commands.push('evaluate');assert.equal(expression,'performance.now()');return this.timestamp*1000 as T;}
-  async send<T=unknown>(method:string,params:object={}):Promise<T>{
-    assert.ok(arguments.length<=2,'the current transport has no signal third argument');this.commands.push(method);
+  async send<T=unknown>(method:string,params:object={},signal?:AbortSignal):Promise<T>{
+    assert.ok(arguments.length<=3);if(signal)assert.equal(signal.aborted,false);this.commands.push(method);
     if(this.options.forbidProfiler)assert.ok(!method.startsWith('Profiler.'),'trace-only must never send a profiler command');
     let value:unknown={};
     if(method==='Performance.getMetrics')value={metrics:[{name:'Timestamp',value:this.timestamp},{name:'ScriptDuration',value:.08}]};
@@ -59,7 +63,7 @@ class CurrentCdpFake {
       if(this.options.failTraceStop&&this.traceStopCalls++===0)throw Error('synthetic trace stop failure');
       this.emit('Tracing.tracingComplete',{});
     }
-    if(method==='Network.getResponseBody')value={body,base64Encoded:false};
+    if(method==='Network.getResponseBody'){const id=(params as {requestId:string}).requestId;this.responseReads.push(id);value={body:this.responseBodies.get(id)??body,base64Encoded:false};}
     if(method==='Debugger.enable')this.emit('Debugger.scriptParsed',{url:asset,scriptId:'11',hash:this.options.wrongHash?'0'.repeat(64):hash});
     return value as T;
   }
@@ -169,45 +173,85 @@ test('original trace preserves a missed edge, missing chart and unavailable thre
 });
 
 /** Execute the actual index interval with the real collector and a passive transport. */
-async function originalIndex(collection:''|'1'|'trace') {
-  let wall=540_000,plans=0,geometry=0,metricCalls=0;
-  const ledger=new EventCounts();
-  const heard:Heard={reset:()=>{cdp.commands.push('ORIGINAL.heard-reset');ledger.reset();},counts:()=>ledger.counts(),boardCounts:()=>ledger.boardCounts(),contacts:()=>ledger.contacts(),hints:()=>ledger.hints(),close:()=>{}};
-  const saved:Saved[]=[],cdp=new class extends CurrentCdpFake {
+async function originalIndex(collection:''|'1'|'trace'|'profile',boundaryFailure?:'opening'|'closing',failTraceStop=false,failProfileStop=false) {
+  let wall=540_000,plans=0,geometry=0,metricCalls=0,readingCalls=0,phaseFrom=0;
+  const ledger=new EventCounts(()=>wall);
+  const heard:Heard={reset:window=>{cdp.commands.push('ORIGINAL.heard-reset');ledger.reset(window);},counts:()=>ledger.counts(),boardCounts:()=>ledger.boardCounts(),calendar:()=>ledger.calendar(),contacts:()=>ledger.contacts(),hints:()=>ledger.hints(),close:()=>{}};
+  const saved:Saved[]=[],evidenceSaved:Saved[]=[],cdp=new class extends CurrentCdpFake {
     override async evaluate<T>(expression:string):Promise<T>{
       if(expression==='__quotumBench.reset()'){this.commands.push('ORIGINAL.reset');return undefined as T;}
-      if(expression==='__quotumBench.read()'){this.commands.push('ORIGINAL.readout');return traceReading as T;}
+      if(expression===idlePhaseScript(300_000)){phaseFrom=wall;this.commands.push('ORIGINAL.phase-start');return undefined as T;}
+      if(expression==='window.__quotumIdleRetention()'){this.commands.push('ORIGINAL.retention');return null as T;}
+      if(expression==='__quotumBench.read()'){
+        const stage=['opening','closing','final'][readingCalls++];this.commands.push('ORIGINAL.readout:'+stage);
+        const empty={...traceReading,commits:0,renders:[],mutations:[]};
+        return (stage==='opening'&&boundaryFailure!=='opening'?empty:stage==='final'&&boundaryFailure==='closing'?{...traceReading,commits:2}:traceReading) as T;
+      }
+      if(expression==='(()=>{const p=__quotumIdlePhase.read();__quotumIdlePhase.stop();return p;})()'){
+        this.commands.push('ORIGINAL.phase-stop');
+        return {from:phaseFrom,to:wall,monotonicFrom:phaseFrom,monotonicTo:wall,cellMs:300_000,starts:Array(5).fill(Math.floor(phaseFrom/300_000)),ends:Array(5).fill(Math.floor(wall/300_000)),transitions:[1,1,1,1,1]} as T;
+      }
       return super.evaluate<T>(expression);
     }
-  }({forbidProfiler:collection==='trace'});
+  }({forbidProfiler:collection==='trace',failTraceStop,failStop:failProfileStop});
   const idleCpu=collection?new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,collection==='trace'?'trace':'profile'):undefined;
   cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
   const source=readFileSync(new URL('../index.ts',import.meta.url),'utf8'),start=source.indexOf('    let edgePlan:'),end=source.indexOf('    const measured =',start);
   assert.ok(start>=0&&end>start);
-  const context={Date:class extends Date{static override now(){return wall;}},idleCpu,idleCpuMode:collection,seconds:120,cdp,reading:traceReading,
+  const context={Date:class extends Date{static override now(){return wall;}},idleCpu,idleCpuMode:collection,shortIdleProfile:false,seconds:120,cdp,reading:traceReading,
     planIdleEdge:(...args:Parameters<typeof planIdleEdge>)=>{plans++;return planIdleEdge(...args);},idleGeometry:async()=>{geometry++;return edgeGeometry(geometry>1);},
-    cellOf:()=>300_000,sleep:async(ms:number)=>{cdp.commands.push('ORIGINAL.sleep:'+ms);wall+=Math.max(0,ms);cdp.timestamp=121;for(let i=0;i<5;i++)ledger.push('event: ping\ndata: {}\n\n');},
+    idleWindow,idlePhaseScript,idlePhaseProblems,idleRetentionProblems:()=>[],
+    cellOf:()=>300_000,sleep:async(ms:number)=>{cdp.commands.push('ORIGINAL.sleep:'+ms);wall+=Math.max(0,ms);if(ms===120_000){cdp.timestamp=121;for(let i=0;i<5;i++)ledger.push('event: ping\ndata: {}\n\n');}},
     overview:async()=>[],stillProblems:()=>[],Stop:Error,say:()=>{},heard,requests:{counting:false,count:0,byPath:{}},
     metrics:async()=>{cdp.commands.push(metricCalls++?'ORIGINAL.after-metrics':'ORIGINAL.before-metrics');return metricCalls===1?traceWindow.before:traceWindow.after;},
+    idleTimingDiagnostic:undefined,idleDiagnostic:undefined,traffic:undefined,
+    evidence:{begin:()=>{},save:(name:string,value:unknown)=>evidenceSaved.push({name,value})},
     round:(value:number)=>value,scriptPerSecond:()=>.1,idleProblems:()=>[],saveDiagnostic:(name:string,value:unknown)=>saved.push({name,value}),finish:async()=>{},run:undefined as unknown as()=>Promise<unknown>};
   runInNewContext(ts.transpileModule(`async function run(){${source.slice(start,end)}\nreturn {from,to};}globalThis.run=run;`,{compilerOptions:{target:ts.ScriptTarget.ES2023}}).outputText,context);
-  await context.run();await idleCpu?.close();return{cdp,plans,geometry,saved};
+  let failure:unknown;
+  try{await context.run();}catch(error){failure=error;}finally{await idleCpu?.close();}
+  return{cdp,plans,geometry,saved,evidenceSaved,failure};
 }
+const canonicalCounterSequence=['ORIGINAL.reset','ORIGINAL.phase-start','ORIGINAL.heard-reset','ORIGINAL.before-metrics','ORIGINAL.retention','ORIGINAL.readout:opening','ORIGINAL.sleep:120000','ORIGINAL.readout:closing','ORIGINAL.retention','ORIGINAL.after-metrics','ORIGINAL.readout:final','ORIGINAL.phase-stop'];
 test('actual trace index skips alignment and all geometry while preserving the original counter sequence',async()=>{
-  const {cdp,plans,geometry,saved}=await originalIndex('trace');assert.equal(plans,0);assert.equal(geometry,0);
+  const {cdp,plans,geometry,saved,failure}=await originalIndex('trace');assert.equal(failure,undefined);assert.equal(plans,0);assert.equal(geometry,0);
   assert.ok(!cdp.commands.some(command=>command.startsWith('Profiler.')));
-  assert.deepEqual(cdp.commands.slice(cdp.commands.indexOf('ORIGINAL.reset'),cdp.commands.indexOf('ORIGINAL.readout')+1),['ORIGINAL.reset','ORIGINAL.heard-reset','ORIGINAL.before-metrics','ORIGINAL.sleep:120000','ORIGINAL.after-metrics','ORIGINAL.readout']);
+  assert.deepEqual(cdp.commands.slice(cdp.commands.indexOf('ORIGINAL.reset'),cdp.commands.indexOf('ORIGINAL.phase-stop')+1),canonicalCounterSequence);
   assert.equal(result(saved,'idle-cpu-window').seconds,120);assert.ok(saved.some(row=>row.name==='idle-cpu-original-trace'));
 });
+test('actual original-profile index preserves the counter sequence and samples without alignment or geometry reads',async()=>{
+  const {cdp,plans,geometry,saved,failure}=await originalIndex('profile');assert.equal(failure,undefined);assert.equal(plans,0);assert.equal(geometry,0);
+  assert.deepEqual(cdp.commands.slice(cdp.commands.indexOf('ORIGINAL.reset'),cdp.commands.indexOf('ORIGINAL.phase-stop')+1),canonicalCounterSequence);
+  assert.ok(cdp.commands.indexOf('Profiler.start')<cdp.commands.indexOf('ORIGINAL.reset'));
+  assert.ok(cdp.commands.indexOf('Profiler.stop')>cdp.commands.indexOf('ORIGINAL.phase-stop'));
+  assert.ok(cdp.commands.indexOf('Debugger.enable')>cdp.commands.indexOf('Profiler.stop'));
+  assert.equal(result(saved,'idle-cpu-profile').samplingInterval,2000);
+  assert.equal(result(saved,'idle-cpu-original-trace').profileStatus,'complete');
+});
 test('actual ordinary index installs no diagnostic and retains the original120s sequence',async()=>{
-  const {cdp,plans,geometry,saved}=await originalIndex('');assert.equal(plans,0);assert.equal(geometry,0);assert.equal(saved.length,0);
+  const {cdp,plans,geometry,saved,failure}=await originalIndex('');assert.equal(failure,undefined);assert.equal(plans,0);assert.equal(geometry,0);assert.equal(saved.length,0);
   assert.ok(!cdp.commands.some(command=>/^(Profiler|Tracing|Debugger)\./.test(command)));
-  assert.deepEqual(cdp.commands,['ORIGINAL.reset','ORIGINAL.heard-reset','ORIGINAL.before-metrics','ORIGINAL.sleep:120000','ORIGINAL.after-metrics','ORIGINAL.readout']);
+  assert.deepEqual(cdp.commands,['ORIGINAL.sleep:5000',...canonicalCounterSequence]);
 });
 test('actual mode1 index retains aligned geometry and the existing2ms profiler',async()=>{
-  const {cdp,plans,geometry,saved}=await originalIndex('1');assert.equal(plans,1);assert.equal(geometry,2);
+  const {cdp,plans,geometry,saved,failure}=await originalIndex('1');assert.equal(failure,undefined);assert.equal(plans,1);assert.equal(geometry,2);
   assert.ok(cdp.commands.includes('Profiler.start'));assert.ok(cdp.commands.includes('Profiler.stop'));
   assert.equal(result(saved,'idle-cpu-profile').samplingInterval,2000);assert.ok(saved.some(row=>row.name==='idle-cpu-edge'));
+});
+for(const boundary of ['opening','closing'] as const)test(`actual index retains ${boundary} measurement-boundary failures before trace cleanup`,async()=>{
+  const {saved,evidenceSaved,failure}=await originalIndex('trace',boundary,true);assert.ok(failure);
+  assert.equal((failure as Error).message,'synthetic trace stop failure');
+  const original=record(result(saved,'idle-cpu-result').original);
+  assert.ok((original.problems as string[]).some(problem=>problem.includes(boundary+' measurement boundary')));
+  const idle=result(evidenceSaved,'idle');assert.equal(idle.actualSeconds,120);
+  assert.ok((idle.phaseProblems as string[]).some(problem=>problem.includes(boundary+' measurement boundary')));
+});
+for(const boundary of ['opening','closing'] as const)test(`original-profile index retains ${boundary} measurement-boundary failures when profiler stop fails`,async()=>{
+  const {saved,evidenceSaved,failure}=await originalIndex('profile',boundary,false,true);assert.ok(failure);
+  assert.equal((failure as Error).message,'synthetic stop failure');
+  assert.equal(result(saved,'idle-cpu-profile').status,'insufficient-evidence');
+  assert.ok((record(result(saved,'idle-cpu-result').original).problems as string[]).some(problem=>problem.includes(boundary+' measurement boundary')));
+  assert.ok((result(evidenceSaved,'idle').phaseProblems as string[]).some(problem=>problem.includes(boundary+' measurement boundary')));
 });
 
 const numericBase:RawProfile={...profile,startTime:2_000_000,endTime:2_006_000};

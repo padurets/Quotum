@@ -1,6 +1,6 @@
 import {AnalyticsPanel, AnalyticsNote} from './AnalyticsPanel';
 import {AnalyticsTable, TableSettings, type AnalyticsRow, type AnalyticsColumn, type Cell, type TimedCell} from './AnalyticsTable';
-import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type RefObject} from 'react';
+import {memo, useCallback, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type RefObject} from 'react';
 import {num, rateText} from '../lib/format';
 import {level} from '../lib/quota';
 import {
@@ -32,7 +32,7 @@ import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
 import {quotaHistory, useHistory} from '../lib/history';
 import {boardPeriod} from '../lib/period';
 import {observationDeadline} from '../../server/domain/resources';
-import {t, useLocale, type Key} from '../i18n';
+import {formatLocale, t, useLocale, type Key} from '../i18n';
 import {useTableWidget, WidgetPages, TableMeasure, TableSortMenu} from './TableWidget';
 
 const spentText = (spent: Spent) => (spent.key === 'points' ? t('table.points', {value: num(spent.value, 1)}) : spent.key === 'unused' ? t('table.unused') : '—');
@@ -85,9 +85,8 @@ const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,ran
     if(ordered.length!==cached.current.length||ordered.some((row,i)=>row!==cached.current[i]))cached.current=ordered;
     return cached.current;
   },[watch]);
-  const subscribe=useCallback((listener:()=>void)=>clock.subscribe(watch,()=>{evaluate();listener();}),[watch,evaluate]);
+  const subscribe=useCallback((listener:()=>void)=>clock.subscribe(watch,listener),[watch]);
   const ordered=useSyncExternalStore(subscribe,evaluate,evaluate);
-  useLayoutEffect(()=>{evaluate();});
   const onSort=useCallback((column:SortColumn|null,cycle?:boolean)=>setPrefs({[sortKey]:nextForecastSort(active,column,cycle)}),[active,sortKey]);
   const sorting={active,onSort,headers:[{id:'name' as const,title:t('table.limit')},...columns],label:t('table.sort'),defaultLabel:t('table.defaultOrder')};
   const widget=useTableWidget(panel,columns.map(column=>column.width),FORECAST_WIDTHS.limit,ordered.map(row=>row.key),JSON.stringify([rangeKey,active]));
@@ -151,23 +150,42 @@ const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {ar
     // A rolling left edge changes credited work locally. Only the affected cell
     // reads its exact summary; its table and the other lines remain asleep.
     const lineAt=(now:number)=>range?line:boardPeriod.quotaAt(line,now,history!.range);
+    const rangeCells=range?lineWork(line,true,resetAt,0):null;
     const workCell = (column: WorkColumn, now: number): Cell => {
-      const value=lineAt(now),cells=lineWork(value,range,resetAt,now),perWork=cells&&'value' in cells.perwork?cells.perwork.value:null;
+      const value=lineAt(now),cells=range?rangeCells:lineWork(value,range,resetAt,now),perWork=cells&&'value' in cells.perwork?cells.perwork.value:null;
       const since=range?history!.since:boardPeriod.rangeAt('quota',now,history!.range)?.from??history!.since;
       return cells&&value.work?workText(column,cells[column],value.work,since,resetAt,perWork):{content:'—'};
     };
-    const timed=(column:WorkColumn):Cell|TimedCell=>range?workCell(column,0):{time:column,
-      changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>JSON.stringify(workCell(column,at)),column==='workleft'?at=>workLeftChangesAt(lineAt(at),resetAt,at):undefined,line.sourceId,history!.range),at:now=>workCell(column,now)};
-    const workCells:Record<WorkColumn,Cell|TimedCell>={work:timed('work'),agenthours:timed('agenthours'),perwork:timed('perwork'),during:timed('during'),workleft:timed('workleft')};
+    const timed=(column:WorkColumn):Cell|TimedCell=>{
+      if(range)return workCell(column,0);
+      // Reuse the displayed value once, while its accounting and locale still match.
+      let stamp:{now:number;cell:Cell;locale:string;basis:WeakRef<object>}|undefined;
+      return {time:column,
+        changesAt:(now:number,shown?:Cell)=>{
+          const captured=stamp;stamp=undefined;
+          const basis=captured?.basis.deref();
+          const initial=captured&&basis!==undefined&&captured.now===now&&captured.cell===shown&&captured.locale===formatLocale()&&basis===boardPeriod.cellBasis('quota')?JSON.stringify(shown):undefined;
+          return boardPeriod.cellChangesAt('quota',now,at=>JSON.stringify(workCell(column,at)),column==='workleft'?at=>workLeftChangesAt(lineAt(at),resetAt,at):undefined,line.sourceId,history!.range,line.windowId,initial);
+        },
+        at:(now:number)=>{const cell=workCell(column,now),basis=boardPeriod.cellBasis('quota');stamp=basis&&typeof WeakRef==='function'?{now,cell,locale:formatLocale(),basis:new WeakRef(basis)}:undefined;return cell;}
+      };
+    };
     if (range) {
-      return {
-        ...workCells,
-        start: edge(line.remainingAtStart),
-        end: edge(line.remainingAtEnd),
-        spent: {content: spentText(spentOf(line))},
-        pace: {content: line.coveredMs >= PACE_FROM ? t('table.perHour', {value: rateText(line.consumed / (line.coveredMs / 3_600_000))}) : '—'},
-      } as Record<ForecastColumn, Cell>;
+      // Hidden range columns do not need their values formatted.
+      const cells: Partial<Record<ForecastColumn, Cell>> = {};
+      for (const column of columns) {
+        switch (column) {
+          case 'start': cells.start = edge(line.remainingAtStart); break;
+          case 'end': cells.end = edge(line.remainingAtEnd); break;
+          case 'spent': cells.spent = {content: spentText(spentOf(line))}; break;
+          case 'pace': cells.pace = {content: line.coveredMs >= PACE_FROM ? t('table.perHour', {value: rateText(line.consumed / (line.coveredMs / 3_600_000))}) : '—'}; break;
+          case 'work': case 'agenthours': case 'perwork': case 'during': case 'workleft':
+            cells[column] = workCell(column, 0); break;
+        }
+      }
+      return cells as Record<ForecastColumn, Cell>;
     }
+    const workCells:Record<WorkColumn,Cell|TimedCell>={work:timed('work'),agenthours:timed('agenthours'),perwork:timed('perwork'),during:timed('during'),workleft:timed('workleft')};
     const weekly = planOf(view, line.sourceId);
     // A weekly window as the hub foresees it; a five-hour one the table foresees itself.
     const ahead = live?.kind === 'weekly' ? (forecasts[lineup.indexOf(line.sourceId)]?.[line.windowId] ?? null) : null;
@@ -201,7 +219,7 @@ const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {ar
           };
         },
       },
-      spent: {time:'spent',changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>spentText(spentOf(lineAt(at))),undefined,line.sourceId,history!.range),at:now=>({content:spentText(spentOf(lineAt(now)))})},
+      spent: {time:'spent',changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>spentText(spentOf(lineAt(at))),undefined,line.sourceId,history!.range,line.windowId),at:now=>({content:spentText(spentOf(lineAt(now)))})},
       forecast: {
         time: 'forecast',
         changesAt: now => cellChangesAt(live, measuredAt, now, ahead, context, chosen),
