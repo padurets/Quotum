@@ -105,6 +105,80 @@ for(const {elapsed,subscribeLate} of [{elapsed:0,subscribeLate:false},{elapsed:2
   }finally{remove();await h.close();}
 });
 
+test('quota retirement catches a deadline crossed by successful asynchronous compaction',async t=>{
+  const periodMs=24*H,start=NOW-periodMs,workDue=NOW+2*M,quotaDue=workDue+1;
+  let readNow=()=>NOW;t.mock.method(Date,'now',()=>readNow());
+  const h=await fixture({personal:true,clocked:true,periodName:'24h',creditFrom:start+M,creditTo:start+2*M});
+  readNow=h.clock.hubNow;
+  const queue:(()=>void)[]=[];let time=0;
+  const preparer=new Preparations({now:()=>++time,post:run=>queue.push(run)});
+  try{
+    const source=h.store.source('codex','d'.repeat(24),start-H);h.store.hold(source,h.alice.id,start-H);
+    for(const at of [start+M,start+2*M,start+3*M,NOW-2*M])h.store.record(source,{observedAt:at,plan:'',resets:null,staleAfterMs:2*periodMs,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:NOW+periodMs}]});
+    h.events.flush();await flush();
+    const before=h.period.tapes.get('quota'),row=before.tape.quota.find((row:any)=>row.source===source),work=h.period.get().value;
+    const samples=Array.from({length:sampleCount(row.samples)},(_,i)=>sampleAt(row.samples,i));
+    const revision=h.period.revision,proof=h.period.proofEpoch,projection=h.period.getProjectionRevision('quota'),requests=h.requests.length;
+    assert.equal(samples.length,4);assert.equal(samples[1]!.at+periodMs+1,quotaDue);
+    assert.equal(h.period.retirementAt,workDue,'actual credited work ends one millisecond before the quota tail');
+    h.prepareWith(preparer);
+    h.advance(workDue);await flush();
+    assert.equal(h.period.retirementPreparing,true);assert.ok(queue.length);
+    // Keep the started job's captured boundary while its real task finishes later.
+    h.elapse(6);
+    for(let i=0;h.period.get().value===work;i++){assert.ok(i<1000);assert.ok(queue.length);queue.shift()!();await flush();}
+    assert.equal(h.period.get().value.refs.length,0,'the first compaction really retires work');
+    assert.equal(sampleCount(h.period.tapes.get('quota').tape.quota.find((row:any)=>row.source===source).samples),4,'that captured boundary still precedes quota retirement');
+    assert.equal(h.period.retirementAt,quotaDue);assert.ok(h.period.evaluatedAt>=quotaDue);
+    // Do not force a coordinator tick or a clock wake to conceal a missed timer.
+    h.advance(workDue+500);await flush();
+    for(let i=0;queue.length||preparer.size||h.period.retiring;i++){assert.ok(i<1000);queue.shift()?.();await flush();}
+    const after=h.period.tapes.get('quota'),kept=after.tape.quota.find((row:any)=>row.source===source);
+    assert.equal(sampleCount(kept.samples),3,`the crossed deadline remains owed; next watch=${h.period.watch.due}`);
+    for(let i=0;i<3;i++)assert.deepEqual(sampleAt(kept.samples,i),samples[i+1]);
+    assert.deepEqual(Array.from({length:sampleCount(row.samples)},(_,i)=>sampleAt(row.samples,i)),samples);
+    assert.equal(after.tape.cursor,before.tape.cursor);assert.equal(h.period.revision,revision);assert.equal(h.period.proofEpoch,proof);
+    assert.equal(h.period.getProjectionRevision('quota'),projection);assert.equal(h.requests.length,requests);
+    assert.equal(preparer.size,0);assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes);assert.equal(h.pool.activeFlights,0);
+    const now=h.clock.hubNow(),range={from:now-periodMs,to:now},queries=h.period.queries(h.page.get().board,range);
+    const fresh=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'live',periodMs},evaluatedAt:now,...queries,sessions:{}})));
+    assert.ok(fresh.quota?.state==='complete'&&fresh.quota.value.tape);assert.ok(fresh.sessions&&fresh.sessions.state!=='error');
+    const tape=fresh.quota.value.tape;
+    for(const series of tape.quota)if(series.samplesEncoding==='delta'){series.samples=decodeSamples(series.samples);delete series.samplesEncoding;}
+    const oracle=new PeriodAccounting(tape,fresh.sessions.value,new PeriodIndex(fresh.sessions.value).curves);
+    assert.deepEqual(after.accounting.fixed(range,cellOf(periodMs)),oracle.fixed(range,cellOf(periodMs)));
+  }finally{await h.close();preparer.dispose();}
+});
+
+test('failed asynchronous retirement does not immediately retry its newly exposed deadline',async t=>{
+  const periodMs=24*H,start=NOW-periodMs,workDue=NOW+2*M;
+  let readNow=()=>NOW;t.mock.method(Date,'now',()=>readNow());
+  const h=await fixture({personal:true,clocked:true,periodName:'24h',creditFrom:start+M,creditTo:start+2*M});
+  readNow=h.clock.hubNow;
+  const queue:(()=>void)[]=[];let time=0;
+  const preparer=new Preparations({now:()=>++time,post:run=>queue.push(run)});
+  try{
+    const source=h.store.source('codex','d'.repeat(24),start-H);h.store.hold(source,h.alice.id,start-H);
+    for(const at of [start+M,start+2*M,start+3*M,NOW-2*M])h.store.record(source,{observedAt:at,plan:'',resets:null,staleAfterMs:2*periodMs,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:NOW+periodMs}]});
+    h.events.flush();await flush();
+    const work=h.period.get().value,requests=h.requests.length,retire=h.period.retireExpired.bind(h.period),measure=h.period.measureBytes.bind(h.period);
+    let started=0,failures=0;
+    h.period.retireExpired=(at:number)=>{const active=h.period.retiring;retire(at);if(!active&&h.period.retiring)started++;};
+    h.period.measureBytes=()=>{measure();if(!failures&&h.period.get().value!==work){failures++;throw new Error('controlled post-commit failure');}};
+    h.prepareWith(preparer);h.advance(workDue);await flush();
+    assert.equal(h.period.retirementPreparing,true);h.elapse(6);
+    for(let i=0;queue.length||preparer.size||h.period.retiring;i++){assert.ok(i<1000);queue.shift()?.();await flush();}
+    assert.equal(failures,1);assert.notStrictEqual(h.period.get().value,work,'the injected failure follows a real storage commit');
+    h.advance(workDue+500);await flush();
+    for(let i=0;queue.length||preparer.size||h.period.retiring;i++){assert.ok(i<1000);queue.shift()?.();await flush();}
+    assert.equal(started,1,'an unexpected failure cannot start a second preparation');
+    assert.equal(h.period.retirementAt,workDue+1);assert.equal(h.period.retiring,false);
+    assert.equal(sampleCount(h.period.tapes.get('quota').tape.quota.find((row:any)=>row.source===source).samples),4);
+    assert.equal(h.requests.length,requests);assert.equal(preparer.size,0);
+    assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes);assert.equal(h.pool.activeFlights,0);
+  }finally{await h.close();preparer.dispose();}
+});
+
 test('numeric prefix retirement preserves every value and releases expired buffers',()=>{
   const cases=[
     Array.from({length:256},()=>17.125),

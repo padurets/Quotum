@@ -538,6 +538,7 @@ class BoardPeriod {
     this.retiring=true;
     const generation=this.generation,revision=this.revision,from=evaluatedRange(this.selection,now).from,period=this.selection.periodMs;
     const valid=()=>this.active&&generation===this.generation&&revision===this.revision&&!pan.get();
+    let committed=false;
     const run=async()=>{
       if(!valid())return;
       const previousWork=this.work.value,previousIndex=this.index,previousTapes=new Map(this.tapes),staging={role:'visible' as const};
@@ -589,11 +590,16 @@ class BoardPeriod {
         this.tapes.clear();for(const [scope,entry] of result.tapes)this.tapes.set(scope,entry);
         // Compaction changes storage, not evidence or a chart's drawing revision.
         this.retirementAt=result.edge+period;
-        this.workState={...this.workState,value:result.work};this.tick();this.measureBytes();
+        this.workState={...this.workState,value:result.work};this.tick();this.measureBytes();committed=true;
       }catch(error){if(error!==limited)throw error;historyPool.release(staging);await this.planRetirement();}
       finally{this.retirementPreparing=false;historyPool.release(staging);}
     };
-    const next=this.receiving.then(run).finally(()=>{this.retiring=false;this.scheduleClock();});this.receiving=next.catch(()=>{});
+    const next=this.receiving.then(run).finally(()=>{
+      this.retiring=false;
+      // A completed job can expose an edge that passed while it was preparing.
+      if(committed&&valid())this.retireExpired(hubNow());
+      this.scheduleClock();
+    });this.receiving=next.catch(()=>{});
   }
   private measureBytes(){
     this.bytes=JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+(this.work.value?0:JSON.stringify(this.workRows).length*3)+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
