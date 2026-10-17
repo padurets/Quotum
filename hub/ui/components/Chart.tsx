@@ -399,8 +399,9 @@ export const Chart = memo(function Chart({
     for (const line of incomingLines) {
       let latest: string | undefined;
       let observation: string | undefined;
-      let lastAt:number|undefined;
-      for (const [at, remaining] of line.points) {if (at > drawNow) break; latest = `${at}:${remaining}`; lastAt=at; yield;}
+      let lastAt:number|undefined,lastRemaining:number|undefined;
+      for (const [at, remaining] of line.points) {if (at > drawNow) break; lastAt=at; lastRemaining=remaining; yield;}
+      if(lastAt!==undefined)latest=`${lastAt}:${lastRemaining}`;
       if(lastAt!==undefined&&valueAxis?.rawValue){
         const value=valueAxis.rawValue(line.key,lastAt);latest=`${lastAt}:${value}`;
         // An unchanged balance can advance its observation without moving its drawing cell.
