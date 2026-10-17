@@ -18,7 +18,7 @@ import {gridSnapshotScript,gridReadScript} from '../idleCpuDiagnostic.js';
 import {ScriptBinding as SourceBinding} from '../scriptBinding.js';
 import {idleSensitivity} from '../idleDiagnostic.js';
 import {preparationOwnersScript} from '../preparationOwners.js';
-import {deadline} from '../deadline.js';
+import {observePreparations,retirementRoutesScript} from '../retirementRoutes.js';
 
 // Execute the actual caller and parser, not a second implementation of its phase branches.
 // Leaf phases and browser IO are stand-ins; these tests prove routing/failure propagation only.
@@ -30,12 +30,12 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close'|'retirement-binding-mismatch'|'retirement-debugger-active'|'retirement-probe-missing'|'idle-request'|'double-no-growth'|'owner-read';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close'|'retirement-binding-mismatch'|'retirement-debugger-active'|'retirement-probe-missing'|'idle-request'|'double-no-growth'|'owner-read'|'route-incomplete'|'route-read'|'route-past-abort';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const injected:{interval:number;expression:string;kind:'idle-probe'}[]=[];
   const listeners=new Map<string,()=>void>(),waits:number[]=[];let now=startedAt,phaseStart=now,metricReads=0,retentionReads=0;
-  let terminal!:()=>void;const exited=new Promise<void>(resolve=>{terminal=resolve;});
+  let terminal!:()=>void;const exited=new Promise<void>(resolve=>{terminal=resolve;});let cancellationStarted=false;
   const mark=(name:string)=>{calls.push(name);};
   const red=(name:string)=>fault===name||fault==='all-red'||name==='idle'&&['idle-trace-throw','idle-binding'].includes(fault??'');
   const problems=(name:string)=>red(name)?[name+'-red']:[];
@@ -49,10 +49,10 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     mark('browser-close');if(fault==='browser-close')throw Error('browser-close-red');
   }};
   const cdp={send:async()=>({}),evaluate:async(expression:string)=>{
-    if(expression.includes('__quotumPreparationOwners?.start()'))mark('owner-start');
-    if(expression.startsWith('window.__quotumPreparationOwners?.stop()')){
+    if(expression.includes('__quotumPreparationProbe?.start()'))mark('owner-start');
+    if(expression.startsWith('window.__quotumPreparationProbe?.stop()')){
       mark('owner-stop');if(fault==='owner-read')throw Error('owner observer read unavailable');
-      return {mode:'diagnostic',status:'complete'};
+      return {mode:'diagnostic',status:fault==='route-incomplete'?'insufficient-evidence':'complete'};
     }
     if(expression.includes(".card:not(.is-loading)"))return 1;
     if(expression==='__quotumBench.read()')return reading;
@@ -66,6 +66,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
     if(expression.includes('window.__quotumIdlePhase='))phaseStart=now;
     if(expression.includes('const p=__quotumIdlePhase.read()')){
       const start=Math.floor(phaseStart/300_000),end=Math.floor(now/300_000);
+      if(fault==='route-past-abort'){cancellationStarted=true;listeners.get('SIGTERM')!();}
       return{from:phaseStart,to:now,monotonicFrom:phaseStart,monotonicTo:now,cellMs:300_000,
         starts:Array(5).fill(start),ends:Array(5).fill(end),transitions:Array(5).fill(end-start)};
     }
@@ -110,9 +111,10 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
       return{reports:[{name:'history-marker'}],problems:red('red')?['history-red']:[]};},
     probeScript:()=>'',sleep:async(ms:number)=>{waits.push(ms);now+=Math.max(0,ms);},say:(value:string)=>{logs.push(value);},
     metrics:async()=>{const opening=metricReads++===0;
+      if(opening&&fault==='route-read')throw Error('route-read-original');
       if(opening&&fault==='opening-metrics')now=(saved.get('idle-plan') as {quotaBoundary:number}).quotaBoundary+1;
       mark(opening?'metrics-before':'metrics-after');return{Timestamp:now/1000,ScriptDuration:opening?0:red('idle')?.1:env.QUOTUM_BENCH_DIAGNOSE_IDLE==='double'?.012:0};},
-    cellOf,idleObservationProblems,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,idleRetentionScript,idleRetentionProblems,preparationOwnersScript,deadline,
+    cellOf,idleObservationProblems,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,idleRetentionScript,idleRetentionProblems,preparationOwnersScript,retirementRoutesScript,observePreparations,
     delta,round,scriptPerSecond,tally,measure:async()=>{mark('measure');return{source:'fixture',from:now,to:now,
       ingestLatencies:[1],latencies:[red('measure')?Infinity:1],chartLatencies:[red('measure')?Infinity:1],historyBytes:1,
       reading:{...reading,renders:[{node:'card',region:'card:fixture',time:false,kind:null,count:1}]}};},
@@ -154,6 +156,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   runInNewContext(code,context);
   const selected=(context as unknown as {selected:{main():Promise<void>;parseArgs(args:string[]):unknown}}).selected;
   let error:unknown;try{await selected.main();}catch(caught){error=caught;}
+  if(cancellationStarted)await exited;
   return{calls,saved,diagnosticFiles,exits,statuses,logs,error,waits,injected,fixtureStart:stand.start,parse:selected.parseArgs};
 }
 const tail=['measure','work','private-work','frequency','panning','credits','money'];
@@ -210,6 +213,7 @@ for(const args of [[],['--scope','all'],['--scope','dashboard']])test('actual ma
   assert.equal((safeEvidence(result.saved.get('result')) as {mode:string}).mode,mode);
   assert.ok(result.calls.indexOf('phase:idle')<result.calls.indexOf('measure'));
   assert.equal((result.saved.get('panning') as {reports:unknown[]}).reports.length,10);
+  assert.ok(!result.calls.includes('owner-start'));assert.ok(!result.calls.includes('owner-stop'));assert.equal(result.injected.length,0);
 });
 test('history-only runs its matrix and closes all owners without opening the dashboard',async()=>{
   const result=await run(['--scope','history']);assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);
@@ -291,11 +295,57 @@ test('an owner-observer read failure preserves the original successful idle verd
   const result=await run(['--scope','dashboard'],'owner-read',{QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'1'});
   assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);assert.deepEqual(result.statuses,['diagnostic']);
   assert.equal(result.calls.filter(call=>call==='owner-stop').length,1);
-  assert.deepEqual(safeEvidence(result.saved.get('idle-preparation-owners')),{mode:'diagnostic',status:'insufficient-evidence',reason:'owner observer read unavailable'});
+  assert.deepEqual(safeEvidence(result.saved.get('idle-preparation-owners')),{mode:'diagnostic',status:'insufficient-evidence',reason:'preparation observer read unavailable'});
+});
+for(const scope of ['all','dashboard'])test('retirement routing '+scope+' uses direct original idle without owner or thread tracing',async()=>{
+  const result=await run(['--scope',scope],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'routes'});
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);assert.deepEqual(result.statuses,['diagnostic']);
+  assert.equal(result.calls.includes('history'),scope==='all');assert.ok(!result.calls.includes('idle-trace'));assert.ok(!result.saved.has('idle-preparation-owners'));
+  assert.equal(result.calls.filter(value=>value==='owner-start').length,1);assert.equal(result.calls.filter(value=>value==='owner-stop').length,1);
+  assert.ok(result.calls.indexOf('metrics-after')<result.calls.indexOf('owner-stop'));assert.ok(result.calls.indexOf('owner-stop')<result.calls.indexOf('idle-binding'));
+  assert.ok(tail.every(name=>!result.calls.includes(name)));assert.equal((result.saved.get('idle') as {to:number;from:number}).to-(result.saved.get('idle') as {from:number}).from,120_000);
+  assert.deepEqual(result.injected.map(value=>value.interval),[1]);assert.ok(result.injected[0].expression.includes(retirementRoutesScript()));
+  const report=result.saved.get('idle-timing-result') as {originalProblems:unknown[];diagnosticProblems:unknown[];problems:unknown[]};
+  assert.equal(report.originalProblems.length,0);assert.equal(report.diagnosticProblems.length,0);assert.equal(report.problems.length,0);
+});
+for(const fault of ['idle','owner-read','route-incomplete','retirement-binding-mismatch','retirement-debugger-active','retirement-probe-missing'] as const)test('actual retirement routing separates original and diagnostic failure '+fault,async()=>{
+  const result=await run(['--scope','dashboard'],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'routes'});
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);assert.deepEqual(result.statuses,['failed']);
+  assert.ok(!result.calls.includes('idle-trace'));assert.ok(result.saved.has('idle'));assert.ok(tail.every(name=>!result.calls.includes(name)));
+  const report=result.saved.get('idle-timing-result') as {originalProblems:unknown[];diagnosticProblems:unknown[];problems:unknown[]};
+  assert.equal(report.originalProblems.length>0,fault==='idle');assert.equal(report.diagnosticProblems.length>0,fault!=='idle');
+  assert.equal(report.problems.length,report.originalProblems.length+report.diagnosticProblems.length);
+});
+for(const fault of ['route-read','route-past-abort'] as const)test('interrupted routing never starts another observer or source-binding command '+fault,async()=>{
+  const result=await run(['--scope','dashboard'],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'routes'});
+  assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);assert.deepEqual(result.statuses,[fault==='route-past-abort'?'cancelled':'failed']);
+  assert.equal(result.calls.filter(value=>value==='owner-start').length,1);assert.ok(!result.calls.includes('owner-stop'));assert.ok(!result.calls.includes('idle-binding'));
+  assert.equal((result.saved.get('idle-retirement-routes') as {status:string}).status,'insufficient-evidence');
+  if(fault==='route-read')assert.ok(result.logs.some(value=>value.includes('route-read-original')));else assert.ok(result.saved.has('idle'));
+  for(const name of ['browser-close','demo-stop','idle-binding-close'])assert.equal(result.calls.filter(value=>value===name).length,1);
+});
+test('the routing caller binds its exact bootstrap with the real source binding',async()=>{
+  const actual=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'routes'}),expression=actual.injected[0].expression;
+  const hash=(value:string)=>createHash('sha256').update(value).digest('hex'),body='globalThis.fixture=true;',url='http://fixture.invalid/assets/index-test.js';
+  assert.equal(actual.injected.length,1);assert.ok(Buffer.byteLength(expression)<64*1024);
+  for(const mismatch of [false,true]){
+    const listeners=new Map<string,(value:unknown)=>void>(),files=new Map<string,any>();
+    const transport={on:(name:string,listener:(value:unknown)=>void)=>listeners.set(name,listener),off:(name:string)=>listeners.delete(name),send:async(name:string)=>{
+      if(name==='Debugger.enable')for(const value of [{url,hash:hash(body),scriptId:'4'},{url:'',hash:hash(expression),scriptId:'21'}])listeners.get('Debugger.scriptParsed')?.(value);
+      return name==='Network.getResponseBody'?{body,base64Encoded:false}:{};
+    }};
+    const binding=new SourceBinding(transport as never,{status:'available',name:'index-test.js',bytes:Buffer.byteLength(body),sha256:hash(body)},(name,value)=>files.set(name,value));
+    try{
+      binding.rememberInjected(1,expression+(mismatch?' ':''),'idle-probe');listeners.get('Network.responseReceived')?.({type:'Script',requestId:'fixture',response:{url}});
+      await binding.afterFamily([1]);const report=files.get('source-family-1');assert.equal(report.status,'complete');assert.equal(report.debuggerDisabled,true);
+      assert.equal(report.injected.expected.length,1);assert.equal(report.injected.status,mismatch?'insufficient-evidence':'complete');
+    }finally{binding.close();}assert.equal(listeners.size,0);
+  }
 });
 for(const [mode,next] of [['timing','idle-cpu'],['cpu','browser-startup']])test('idle '+mode+' workflow uses the required dashboard prefix and unchanged deadline',()=>{
   const workflow=readFileSync(new URL('../../../.github/workflows/bench-diagnostics.yml',import.meta.url),'utf8').split('  idle-'+mode+':\n')[1].split('\n  '+next+':')[0];
   assert.ok(workflow.includes('npm run bench -- --ci --scope dashboard'));assert.ok(workflow.includes('timeout-minutes: 20'));assert.ok(!workflow.includes('continue-on-error:'));
+  if(mode==='timing')assert.match(workflow,/QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING: routes/);
 });
 for(const scope of ['all','dashboard'])for(const fault of [undefined,'idle','opening-metrics','idle-trace-cancel','idle-trace-throw','idle-binding','idle-profile-incomplete','idle-profile-close','browser-close','demo-stop'] as const)test('idle CPU profile '+scope+' preserves '+String(fault),async()=>{
   const result=await run(['--scope',scope],fault,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'profile'});
@@ -380,7 +430,7 @@ for(const [key,value] of Object.entries(diagnostics).filter(([key])=>key!=='QUOT
   const result=await run(['--scope','dashboard'],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'1',[key]:value});
   assert.match(String(result.error),/scope|panning diagnostics/i);assert.deepEqual(result.calls,[]);
 });
-for(const [args,ci,value] of [[['--scope','dashboard','--cdp','http://127.0.0.1:9222'],true,'1'],[['--scope','dashboard'],false,'1'],[['--scope','dashboard'],true,'2']] as const)test('dashboard idle timing rejects '+JSON.stringify({args,ci,value}),async()=>{
+for(const [args,ci,value] of [[['--scope','dashboard','--cdp','http://127.0.0.1:9222'],true,'1'],[['--scope','dashboard'],false,'1'],[['--scope','dashboard'],true,'2'],[['--scope','dashboard','--cdp','http://127.0.0.1:9222'],true,'routes'],[['--scope','dashboard'],false,'routes']] as const)test('dashboard idle timing rejects '+JSON.stringify({args,ci,value}),async()=>{
   const result=await run([...args],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:value},ci);
   assert.match(String(result.error),/scope/i);assert.deepEqual(result.calls,[]);
 });

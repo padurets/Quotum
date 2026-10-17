@@ -62,9 +62,9 @@ jobs:
       - run: npm run build
       - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci --scope dashboard
         env:
-          QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING: '1'
+          QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING: routes
           QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-idle-timing
-      - name: Original-load idle elapsed and thread counters
+      - name: Original idle and quota retirement factory routes
         if: always()
         uses: actions/upload-artifact@v7
         with:

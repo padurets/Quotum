@@ -43,7 +43,7 @@ import {traceIdle} from './idleTiming.js';
 import {IdleCpuDiagnostic,sourceIdentity,idleGeometry,planIdleEdge,idleBoundaryProfile,retirementReadScript,gridSnapshotScript,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
 import {idleRetentionScript,idleRetentionProblems,type IdleRetention} from './idleRetention.js';
 import {preparationOwnersScript} from './preparationOwners.js';
-import {deadline} from './deadline.js';
+import {observePreparations,retirementRoutesScript} from './retirementRoutes.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -119,6 +119,7 @@ async function main() {
   const idleCpuMode = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_CPU;
   const shortIdleProfile = idleCpuMode === 'retirement' || idleCpuMode === 'grid';
   const idleTimingDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING;
+  const idleRoutingDiagnostic = idleTimingDiagnostic === 'routes';
   const startupDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP;
   const startupWaitDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS;
   const poolDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
@@ -136,7 +137,7 @@ async function main() {
   try {
     const otherDiagnostics = [idleDiagnostic, idleCpuMode, idleTimingDiagnostic, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE];
     const dashboardPanning = options.scope === 'dashboard' && options.ci && (panDiagnostic === 'cpu' || panDiagnostic === 'trace');
-    const dashboardIdleTiming = options.scope === 'dashboard' && options.ci && !options.cdp && idleTimingDiagnostic === '1'
+    const dashboardIdleTiming = options.scope === 'dashboard' && options.ci && !options.cdp && (idleTimingDiagnostic === '1' || idleRoutingDiagnostic)
       && ![panDiagnostic, idleDiagnostic, idleCpuMode, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE].some(Boolean);
     const dashboardIdleProfile = options.scope === 'dashboard' && options.ci && !options.cdp && (idleCpuMode === 'profile' || shortIdleProfile)
       && ![panDiagnostic, idleDiagnostic, idleTimingDiagnostic, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE].some(Boolean);
@@ -149,7 +150,7 @@ async function main() {
     if (idleDiagnostic && (idleDiagnostic !== 'double' || panDiagnostic)) throw new Stop('Unknown or conflicting idle diagnostic mode');
     if (panDiagnostic && !['pairs', 'trace', 'cpu'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
     if (idleCpuMode && (!['1','trace','profile','retirement','grid'].includes(idleCpuMode) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleTimingDiagnostic || startupDiagnostic || startupWaitDiagnostic || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
-    if (idleTimingDiagnostic && (idleTimingDiagnostic !== '1' || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleCpuMode || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle timing diagnostic mode');
+    if (idleTimingDiagnostic && (!['1','routes'].includes(idleTimingDiagnostic) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleCpuMode || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle timing diagnostic mode');
     if(poolDiagnostic&&(poolDiagnostic!=='1'||!options.ci||options.cdp||panDiagnostic||idleDiagnostic||idleCpuMode||idleTimingDiagnostic||startupDiagnostic||startupWaitDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE))throw new Stop('Unknown or conflicting history pool diagnostic mode');
     await prepare(address);
     chrome = options.cdp ? null : findChrome(process.env);
@@ -233,9 +234,9 @@ async function main() {
     const {cdp} = tab;
     let boundaryBinding:{status?:string;debuggerDisabled?:boolean;injected?:{status?:string}}|undefined;
     const idleBinding = idleTimingDiagnostic || shortIdleProfile ? new ScriptBinding(cdp, clientIdentity(), (name, value) => {
-      if(shortIdleProfile){
+      if(shortIdleProfile || idleRoutingDiagnostic){
         if(name==='source-family-1')boundaryBinding=value as typeof boundaryBinding;
-        saveDiagnostic('idle-cpu-'+name,value);
+        if(shortIdleProfile)saveDiagnostic('idle-cpu-'+name,value);else evidence.save(name,value);
       }else evidence.save(name,value);
     }) : undefined;
     if (idleBinding) owner.resource(async () => idleBinding.close());
@@ -256,7 +257,7 @@ async function main() {
     const bootstrapSource=`localStorage.setItem('quotum.locale','en');
       localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),agentsSort:{column:'project',descending:false}}));
       window.__quotumInspectHistoryPool=pool=>{
-        window.__quotumIdleRetention=()=>(${idleRetentionScript()})(pool);${idleTimingDiagnostic?`window.__quotumPreparationOwners=(${preparationOwnersScript()})(pool);`:''}
+        window.__quotumIdleRetention=()=>(${idleRetentionScript()})(pool);${idleTimingDiagnostic?`window.__quotumPreparationProbe=(${idleRoutingDiagnostic?retirementRoutesScript():preparationOwnersScript()})(pool);`:''}
         window.__quotumWalletState=(source,authority)=>{
         const p=[...pool.members].find(m=>m.tapes),reader=[...pool.members].find(m=>m.scope==='budget'),tape=p?.tapes.get('budget');
         const work=p?.moneyWorkAt(source,Date.now()),group=tape?.tape.money.find(m=>m.source===source),shown=reader?.get();
@@ -270,7 +271,7 @@ async function main() {
       ${probeScript()}`;
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source:bootstrapSource});
     idleCpu?.binding.rememberInjected(1,bootstrapSource,'idle-probe');
-    if(shortIdleProfile)idleBinding?.rememberInjected(1,bootstrapSource,'idle-probe');
+    if(shortIdleProfile || idleRoutingDiagnostic)idleBinding?.rememberInjected(1,bootstrapSource,'idle-probe');
     await cdp.send('Page.navigate', {url: `${address.base}/`});
 
     const shownBy = Date.now() + SHOWN_MS;
@@ -327,7 +328,7 @@ async function main() {
 
     say(`watching the idle page for ${seconds} s`);
     evidence.begin('idle');
-    await cdp.evaluate('__quotumBench.reset()'+(idleTimingDiagnostic?';window.__quotumPreparationOwners?.start()':''));
+    await cdp.evaluate('__quotumBench.reset()'+(idleTimingDiagnostic?';window.__quotumPreparationProbe?.start()':''));
     const phaseSource=idlePhaseScript(cellMs)+(idleCpuMode==='grid'?';'+gridSnapshotScript:'');
     await cdp.evaluate(phaseSource);
     if(idleCpuMode==='grid')idleBinding?.rememberInjected(2,phaseSource,'idle-probe');
@@ -374,14 +375,13 @@ async function main() {
       if(idleCpu)saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='1'?'Temporally aligned natural edge using the unchanged120s CI idle protocol; profiler and trace overhead is unqualified.':idleCpuMode==='trace'?'Original CI idle protocol; no CPU sampling, tracing overhead is unqualified.':'Original CI idle protocol with CPU sampling; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,reading,problems:originalIdleTimingProblems}});
       return {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore};
     };
+    let routingStatus:string|undefined;
     const observedIdle=async()=>{
-      let completed=false;
-      try{const value=idleTimingDiagnostic?await traceIdle(cdp,browser!,readIdle,evidence):await readIdle();completed=true;return value;}
-      finally{if(idleTimingDiagnostic){
-        if(!completed)evidence.save('idle-preparation-owners',{mode:'diagnostic',status:'insufficient-evidence',reason:'original idle recording interrupted'});
-        else try{evidence.save('idle-preparation-owners',await deadline(2000,signal=>cdp.evaluate('window.__quotumPreparationOwners?.stop()??{mode:"diagnostic",status:"insufficient-evidence",reason:"owner observer unavailable"}',signal),owner.signal));}
-        catch{evidence.save('idle-preparation-owners',{mode:'diagnostic',status:'insufficient-evidence',reason:'owner observer read unavailable'});}
-      }}
+      if(!idleTimingDiagnostic)return readIdle();
+      const result=await observePreparations(()=>idleRoutingDiagnostic?readIdle():traceIdle(cdp,browser!,readIdle,evidence),cdp,evidence,
+        idleRoutingDiagnostic?'idle-retirement-routes':'idle-preparation-owners',owner.signal);
+      if(idleRoutingDiagnostic)routingStatus=result.status;
+      return result.reading;
     };
     const {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore} = await observedIdle();
     if(shortIdleProfile){
@@ -409,9 +409,17 @@ async function main() {
       await finish(diagnosticProblems.length||edge.status!=='complete'?1:0);return;
     }
     if (idleTimingDiagnostic) {
+      if(idleRoutingDiagnostic)owner.signal.throwIfAborted();
       if (idleBinding) await idleBinding.afterFamily([1]);
-      const problems = originalIdleTimingProblems ?? [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
-      evidence.save('idle-timing-result', {mode: 'diagnostic', problems: problems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
+      const originalProblems = originalIdleTimingProblems ?? [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
+      const diagnosticProblems:string[]=[];
+      if(idleRoutingDiagnostic){
+        if(routingStatus!=='complete')diagnosticProblems.push('idle retirement routing evidence incomplete');
+        if(boundaryBinding?.status!=='complete'||boundaryBinding.debuggerDisabled!==true||boundaryBinding.injected?.status!=='complete')diagnosticProblems.push('idle retirement received or injected source binding incomplete');
+      }
+      const problems=[...originalProblems,...diagnosticProblems];
+      evidence.save('idle-timing-result', {mode: 'diagnostic', problems: problems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond,
+        ...(idleRoutingDiagnostic?{originalProblems:originalProblems.map(reason=>({reason})),diagnosticProblems:diagnosticProblems.map(reason=>({reason}))}:{})});
       say(`original ${options.scope === 'dashboard' ? 'dashboard prefix' : 'history matrix'} and CI idle interval captured; observer overhead is unqualified`);
       await finish(problems.length ? 1 : 0); return;
     }

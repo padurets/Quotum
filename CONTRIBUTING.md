@@ -203,9 +203,24 @@ The same limits apply, without tracing, heap sampling or retries. Two declared s
 bindings cover the bootstrap and the combined phase observer and snapshot function.
 The thin command that calls that function remains a separate, unbound script in raw
 samples; it cannot inherit the function's source ownership.
-The optional `benchmark-idle-timing-diagnostics` PR label uses the dashboard job's
-prefix and original idle interval, without a CPU profiler or traffic matrix. Manual
-diagnostics without `--scope dashboard` retain the full prefix. A second connection to
+The optional `benchmark-idle-timing-diagnostics` PR label runs
+`QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING=routes` with the dashboard prefix and original idle
+interval, without a profiler, thread trace or traffic matrix. It counts actual quota
+retirement factory calls through already admitted accounting objects, returning their
+original iterators without advancing or wrapping them. At most 2,048 rows identify
+one-tail incremental accounting and full-build fallback separately from non-tail
+preparations that may reuse observations. Other accounting factories stay separate.
+A complete route receipt requires one retirement, valid unchanged basis, settled
+boundaries and the exact published tape and indices. Missing runtime, cancellation,
+replacement, omitted rows or observer errors remain insufficient evidence. Exact
+received client and injected bootstrap bindings are checked after the original
+measurement. Interrupted readings produce no further observer command. These are
+factory-call and input counts, not numeric-operation counts or CPU attribution;
+observer overhead is unqualified. The original idle verdict remains separate and
+cannot be repaired by the diagnostic.
+
+Manual `QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING=1` uses elapsed and thread counters.
+Diagnostics without `--scope dashboard` retain the full prefix. A second connection to
 the owned target collects `threadTicks` performance counters before and after the
 original measurement. The required benchmark keeps its default elapsed clock and
 budget. The report retains both sets of raw counters and verifies that the thread
@@ -217,7 +232,7 @@ reads and disable each have a two-second diagnostic bound; the secondary socket
 always closes. This outcome cannot satisfy the required benchmark.
 After that measurement and thread-session cleanup, the diagnostic binds the received
 client bytes and parsed script owner, outside both measured intervals.
-This mode also observes preparation selections through the existing history readers.
+The manual timing mode also observes preparation selections through existing history readers.
 It preserves lazy scheduler creation and records at most 2,048 scalar owner/job receipts,
 classifying period, history-plot and history-compose owners by object identity.
 Other owners stay unknown. A selected job need not advance: validity can cancel it.

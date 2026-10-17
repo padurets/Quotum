@@ -24,7 +24,7 @@ visit(file); assert.equal(matches.length, 1);
 const body = ts.transpileModule('const selected=' + matches[0].getText(file) + ';', {
   compilerOptions: {module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022},
 }).outputText.replace('const selected =', '');
-assert.match(source, /const problems = originalIdleTimingProblems \?\? \[/);
+assert.match(source, /const originalProblems = originalIdleTimingProblems \?\? \[/);
 
 const metric = (Timestamp: number, ScriptDuration: number): Metrics => ({Timestamp, ScriptDuration, TaskDuration: ScriptDuration,
   ThreadTime: ScriptDuration, DevToolsCommandDuration: 0, V8CompileDuration: 0, LayoutDuration: 0, RecalcStyleDuration: 0});
