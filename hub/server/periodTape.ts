@@ -1,3 +1,5 @@
+import {sourceCounterOf} from './domain/providers.js';
+import {sourceWorkEligible} from './domain/moneyWork.js';
 import {sourceWorkFrom} from './domain/workAccess.js';
 import type {CellSamples} from './domain/cells.js';
 import type {Store,Shown,WorkRead} from './store/store.js';
@@ -71,6 +73,15 @@ export function periodTape(store:Store,board:string,shown:Shown,user:string,scop
               }
             }
           }
+        }
+      }
+      if(scope==='budget'&&query.work==='1'&&group.role==='total'&&sourceWorkEligible(store.state(group.source).provider,id[1])) {
+        const meter=sourceCounterOf(store.state(group.source).provider);
+        if(meter) {
+          const access=work?.ensureAccess?.()??store.workAccess(board,evidenceCut,reserve),from=sourceWorkFrom(access)[group.source]??Infinity;
+          const pairs=store.meters.pairReadings(group.source,meter,replaceFrom,admitted,reserve);
+          const knownFrom=pairs.knownFrom===null||!Number.isFinite(from)?null:Math.max(pairs.knownFrom,from);
+          group.workCounter={source:group.source,unit:pairs.readings.at(-1)?.unit??'USD',knownFrom,workFrom:Number.isFinite(from)?from:null,readings:pairs.readings,spans:pairs.spans};
         }
       }
       tape.money.push(group);

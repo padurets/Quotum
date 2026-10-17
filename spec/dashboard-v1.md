@@ -402,6 +402,22 @@ staleAfterMs, measureIntervalMs}`: the source's last measurement (`successAt`, i
 its numbers hold, and its shared measuring preference. `stale` is the hub's to say, and
 it says so: a card sent when its numbers get too old.
 
+A card may include `usageWork`, an array of `{windowId,from,to,growth,quality,expiresAt}`.
+It describes the latest qualifying quota-growth interval per window: at least one
+reported percentage point between adjacent valid observations no more than 30 minutes
+apart in the same reset period. Any resolved source work overlapping that interval
+vetoes the finding, including held work outside this board. `quality` is `confirmed`
+only when every currently connected holder device completely witnessed the interval in
+its configured client scope; otherwise it is `partial`. It identifies no other request
+or actor. Wallet money and subscription funds do not qualify. Reported caps use their
+own historical allowance, generation and exclusive observation bounds.
+
+Findings end at the next known reset or after 24 hours, whichever comes first; an early
+reset or generation change removes them. Later ordinary work does not erase a past
+finding, while reattribution can remove it. The card event and shared deadline machinery
+update this status. All windows share one warning tray mark in dashboard and compact;
+its details distinguish incomplete data from fully witnessed absence of observed work.
+
 A source's `sessions` are the agents running on it, on the machines of its people on the
 board, each `{device, origin, project, folder, startedAt, lastWorkedAt, working,
 workedMs, clientId?, sourceStatus?, presenceKey?, currentPresence?}`: its machine (`{id, name}`), where it runs, its project as its person named it
@@ -502,7 +518,7 @@ The body is at most 76 KiB:
   selection: {mode: 'live'; periodMs: number} | {mode: 'range'; from: number; to: number};
   evaluatedAt: number;
   quota?: {cell: string; from: string; to: string; meters?: string; unit?: string; meta?: string; evidence?: string; cells?: 'skip'};
-  budget?: {cell: string; from: string; to: string; meters: string; unit: string; currency?: string; meta?: string; evidence?: string; cells?: 'skip'};
+  budget?: {cell: string; from: string; to: string; meters: string; unit: string; currency?: string; meta?: string; evidence?: string; cells?: 'skip'; work?: '1'};
   funds?: {cell: string; from: string; to: string; meters: string; unit: string; currency?: string; meta?: string; evidence?: string; cells?: 'skip'};
   values?: string[];
   sessions?: {cursor?: string};
@@ -660,7 +676,7 @@ Session evidence is a complete temporal index:
 {
   anchor: number; cut: number; knownFrom: number; available?: false; cursor: string;
   refs: {
-    ref: string; source: string | null; sourceStatus?: 'notProvided'; clientId: string; device: {id: string; name: string};
+    ref: string; identityRef?: string; source: string | null; sourceStatus?: 'notProvided'; clientId: string; device: {id: string; name: string};
     origin: 'terminal' | 'editor' | 'app'; project: string | null; folder: string | null;
     startedAt: number; presenceKey?: string;
     currentPresence?: {working: boolean; through: number; workingThrough: number; startedAt: number};
@@ -880,7 +896,7 @@ type Chunk = {
     }][];
   }[];
   activity: {
-    sessions: [ref: string, source: string | null, project: string | null, device: string, sourceStatus?: 'notProvided'][];
+    sessions: [ref: string, source: string | null, project: string | null, device: string, sourceStatus?: 'notProvided', identityRef?: string][];
     sourceWork?: [source: string, cellIndex: number, activeMs: number, agentMs: number][];
     devices: Record<string, string>;
     cells: [index: number, active: number,
@@ -1226,9 +1242,10 @@ Quota reads cannot request private monetary conversion. Validated ranges outside
 bounds return `400 history_range_invalid` for scoped readers, independently of malformed
 selection errors. Existing cell, tile, meter, response and retention limits remain.
 
-Cache and metadata identities include the read scope. Work-name changes invalidate only
-quota caches; metadata offered by another scope cannot be reused. A `history` event keeps
-its legacy `sources` union and minimum `since`, and adds `changes: [{source, scope, since}]`.
+Cache and metadata identities include the read scope. Work-name changes invalidate quota
+and opted-in source-work caches; pure financial caches retain their resource identity.
+Metadata offered by another scope cannot be reused. A `history` event keeps
+its legacy `sources` union and minimum `since`, and adds `changes: [{source, scope, since, workSince?: number}]`.
 Each source/scope keeps its own earliest changed time. Native samples, subscription caps
 and credited work affect quota; monetary observations and valuation changes affect budget.
 Work refreshes preserve coalesced budget changes. Clients without `changes` conservatively
@@ -1542,7 +1559,10 @@ each board, goes to their streams only. Events carry no secrets, no email addres
 no sign-in session ids.
 History exposes each selected coding-agent session's time by cell, with its project and
 machine. Its opaque eight-character reference is stable only within one board and one
-start of the hub, derived with a fresh secret key; it reveals neither database session
+start of the hub, derived with a fresh secret key from the ledger row and effective
+source. A temporal source change creates display fragments with different references.
+The optional `identityRef` identifies their one original row within this board/runtime;
+distinct-agent counts deduplicate by it, or by `ref` for older tuples. It reveals neither database session
 ids nor how many sessions other boards have. These are coding-agent sessions, separate
 from sign-in sessions. A restart changes the references and `run` together.
 Metadata tokens are scoped to the board, hub instance and exact visible metadata.
@@ -1792,3 +1812,114 @@ measuring settings are separate in desktop
 `app_save_settings` accepts client enabled/route patches without a new bridge command.
 With every collector disabled and tracking enabled, the agent state is `tracking`;
 `idle` means both measurement and client tracking are off.
+
+## Private client links
+
+`GET /api/links` returns the authenticated owner's `revision`, temporal `links`, held
+`sources` choices, saved `targets`, own `devices` and known `clients`. Both resource
+lists contain `{id,provider,name}`. `sources` contains currently held choices;
+`targets` identifies the targets of saved links, including disconnected ones, without
+measurements or another person's private account labels. A link has `id`, `clientId`, nullable
+`deviceId` (all devices), nullable `route` (`class` and nullable catalogue `provider`),
+`sourceId`, `from`, nullable `to` and `createdAt`. Management adds current `active`.
+Periods use safe nonnegative Unix milliseconds and are half-open `[from,to)`.
+Provider conditions require a class. Dropping a holding retains its rules.
+
+`GET /api/links/suggestions` returns `{revision,suggestions}` without writing. Each
+suggestion is a device-specific API/provider rule for the unique held source, clipped
+to the free exact-tuple gap containing now and the earliest live session start.
+Both period bounds are shown before acceptance. A create with `suggestion` containing
+that same rule recomputes its basis before writing; a changed basis returns 409
+`suggestion_changed`. Successful receipts replay before this freshness check.
+`GET /api/links/attribution` returns only the owner's current sessions and detailed
+attribution evidence. `GET /api/devices?details=<device>` also adds `attribution` to
+each session of that owner's selected device, in the same response and session order.
+Without `details`, or with an unknown or foreign device, session attribution is absent.
+The ordinary response is the device array; `measurement=1` keeps the existing
+`{devices,hubVersion,sources}` envelope and can be combined with `details`.
+Host and custom gateway hints stay in these owner-only attribution responses;
+disabled route policy suppresses both route conditions and host disclosure. Neither
+ordinary device lists nor board events carry this private evidence.
+
+`POST /api/links` creates a rule (201), `POST /api/links/:id` corrects it,
+`POST /api/links/:id/change` replaces the rule from `at` with `newSourceId` and
+optional `clientId`, `deviceId`, `route` and `to` fields. Omitted fields preserve the
+saved scope and end, so source-only callers keep their behavior. `at` must lie within
+the saved period; the replacement end must be after `at` and may extend that period.
+`DELETE /api/links/:id` removes it (200). Create/correction supply all rule fields;
+every mutation includes `expectedRevision` and a UUID `requestId`, including DELETE's
+JSON body. The reply is `{revision,links}`. A material mutation increments the revision
+once. A correction with identical fields keeps it. A dated change preserves the previous
+prefix and replaces the remaining rule atomically; at its beginning it replaces the
+rule without an empty prefix. An unchanged dated replacement creates no split.
+
+Exact owner/client/device/class/provider tuples, including nulls, cannot overlap;
+different scopes and conditions may overlap. Validation, ownership, holding, overlap,
+revision and write share one transaction. An identical successful request replays its
+original result for seven days, before revision checking; reusing its UUID with another
+body returns 409 `mutation_conflict`. A stale revision is 409 `links_changed`, overlap
+is 409 `link_overlap`, a known own unavailable target is 409 `source_not_held`, invalid
+input is 400 `invalid_link`, and foreign or unknown objects are 404 `not_found`.
+Errors contain no rejected identifiers or raw evidence. Session and Origin guards apply
+in web and desktop local mode. Rules and held choices never enter shared projections.
+
+Links, current holdings, route policy and strengthened context evidence invalidate
+quota/activity history, including closed tiles without an active reader. Their cache
+key also tracks names reachable through effective attribution. Ordinary work arrival
+does not invalidate pure financial history. Live route display carries only class and
+recognized provider; hosts, custom gateway hints and link details stay owner-private.
+
+Prepared event batches recheck current attribution authority before disclosure. A
+long-poll lease whose authority changed discards its entire undisclosed queue and
+returns one fresh permitted snapshot, together with current financial bindings.
+Holding release/reacquisition, link changes, revocation, joining/sharing/visibility
+cutoffs and reached temporal boundaries cannot revive an older queued generation.
+Each SSE reader is checked after batch preparation and before its send.
+
+
+## Monetary work estimates
+
+Budget history opts into source work with `work=1`. The selection must include at
+least one account-level row of a wallet with a catalogue source spending counter.
+Mixed account, key and balance-only selections retain every financial row; only
+eligible sources receive `moneyWork`. Quota, subscription funds and unsupported-only
+selections do not accept this flag. Ordinary work emits budget history changes with
+`workSince` in the affected scoped change; financial readers ignore a work-only change unless they opted in. Financial changes
+without that flag still invalidate both kinds of readers.
+
+Each chunk may include `moneyWork` groups with `source`, native `unit`, nullable
+`knownFrom`, `partial`, `cells` and `edges`. Cells contain
+`[index,activeMs,agentMs,spentInternal,eligibleActiveMs,eligibleAgentMs,coveredMs,duringWorkInternal]`.
+Edges contain `[from,to,spent,eligibleActiveMs,eligibleAgentMs,coveredMs,duringWork,evidence]`.
+Money values are exact decimal integer strings. Active time is the union of permitted
+resolved work; agent time counts the separate retained contexts. Financial basis uses
+whole adjacent accepted native counter pairs, including unchanged endpoints captured
+at observation time. An edge is carried once at its closing cell. Crossing period,
+retention or visibility boundaries and discontinuous observations are excluded from
+the basis and identify partial data. Work after the last actual observation never
+extends its basis. No source link prices an individual session, project or key.
+
+At least 30 active minutes in complete native pairs permit an estimated spending rate:
+`round(spent * 3600000 / eligibleActiveMs)`, using exact integer arithmetic. Fresh known
+remaining funds permit `floor(remaining * eligibleActiveMs / spent)` active milliseconds.
+Zero spending has no finite positive forecast; nonpositive available funds imply zero
+remaining active time. Stale or unknown funds have no current forecast. Native rates
+use the shared exact currency conversion and the selected period balance row’s recorded
+display binding. Remaining active time uses that row’s native end balance. Conversion
+does not change original spending or work history.
+
+The shared period coordinator combines these demands with sessions, activity and the
+financial sections in `POST /api/boards/:board/period`; no separate composite history
+endpoint is used. `budget.work: '1'` adds native `workCounter` evidence only to eligible
+source-total monetary tapes. Composite drawing chunks remain financial-only and do
+not duplicate the GET route's `moneyWork` cells. The tape includes the original
+readings, availability spans, `knownFrom` and the admitted source-work cutoff. Plain financial requests do not read
+or carry these dense observation pairs.
+
+The common period accounting index evaluates whole native pairs and source work curves
+at the exact selected endpoints. Fixed summaries include `moneyWork` alongside money
+values and participate in the same bounded shift window. Live tables read this index
+for values and sorting; a new source-work interval invalidates only work-derived
+accounting. Financial indexes, drawing evidence and subscriptions remain reusable
+when their native facts have not changed. The ordinary GET history route also accepts
+`work=1` with the same source permissions and history bounds.

@@ -4,11 +4,11 @@ import {providerOf,supportsBudget,type MoneyFamily} from '../../server/domain/pr
 import {memo,useCallback,useLayoutEffect,useMemo,useRef,useState,useSyncExternalStore,type ComponentProps,type RefObject} from 'react';
 import {DEFAULT_CURRENCY,currencySymbol} from '../../server/domain/currency';
 import {useBoardId,useNamed,useServerView,useCurrencyContext} from '../lib/board';
-import {useBudgetHistory,useHistoryBegins,useBudgetHistoryPlot,budgetHistory,fundsHistory} from '../lib/history';
+import {useBudgetFinancialHistory,useBudgetHistory,useHistoryBegins,useBudgetHistoryPlot,budgetHistory,fundsHistory} from '../lib/history';
 import {usePref,setPrefs,setMuted,useChartMuted,chartSeriesMuted,chartMuteKey} from '../lib/prefs';
 import {moneySelection,fundsLegacyMuted} from '../lib/moneySelection';
-import {money} from '../lib/money';
-import {moneySeriesName as nameOf,moneySeriesDetail,moneyTableValues,moneyBalanceSeries,moneyComparator,nextMoneySort,visibleMoneySort,type MoneyColumn} from '../lib/moneyTable';
+import {money,activeHours} from '../lib/money';
+import {moneySeriesName as nameOf,moneySeriesDetail,moneyTableValues,moneyWorkValues,moneyBalanceSeries,moneyComparator,nextMoneySort,visibleMoneySort,type MoneyColumn} from '../lib/moneyTable';
 import {moneyIdentity,moneyPointAt,meterPointIn,moneyTotal,type MeterHistory} from '../lib/moneyView';
 import {colorOf,columnShown,SUBSCRIPTION_FUNDS,BUDGET_HISTORY,BUDGET_TABLE,type Arrange} from '../lib/view';
 import {frameOf,frameChangesAt,measuredTo} from '../lib/periods';
@@ -38,6 +38,9 @@ function SelectionNotice({family='budget'}:{family?:MoneyFamily}) {
 const MONEY_COLUMNS = [
   {id: 'value', label: 'money.value', width: 140},
   {id: 'topup', label: 'money.topup', width: 140},
+  {id: 'active', label: 'money.activeTime', width: 140},
+  {id: 'rate', label: 'money.activeRate', width: 180},
+  {id: 'remaining', label: 'money.remainingActiveHours', width: 180},
 ] as const;
 
 /** Values and order share the period index; clock changes retain every cell. */
@@ -48,13 +51,14 @@ const SortedMoney=memo(function SortedMoney({rows,entries,columns,history,panel,
   const [watch]=useState(()=>clock.watch()),cached=useRef<AnalyticsRow<MoneyColumn>[]>([]);
   const evaluate=useCallback(()=>{
     const {rows,entries,active,history,locale}=current.current,now=hubNow();
-    let ordered=rows;
-    if(active&&history){
-      const range=history.live?boardPeriod.rangeAt('budget',now,history.range):null;
-      const values=entries.map((series,i)=>({key:rows[i].key,name:rows[i].name,values:moneyTableValues(history.live?boardPeriod.moneyAt(series,now,history.range):series,range?.from??history.since,range?.to??history.to)})).sort(moneyComparator(active,locale));
-      const byKey=new Map(rows.map(row=>[row.key,row]));ordered=values.map(value=>byKey.get(value.key)!);
-    }
-    clock.due(watch,history?.live&&active&&active.column!=='name'?boardPeriod.moneyOrderAt(now,history.range):null,now);
+    const orderAt=(at:number)=>{
+      if(!active||!history)return rows;
+      const range=history.live?boardPeriod.rangeAt('budget',at,history.range):null;
+      const values=entries.map((series,i)=>({key:rows[i].key,name:rows[i].name,values:moneyTableValues(history.live?boardPeriod.moneyAt(series,at,history.range):series,range?.from??history.since,range?.to??history.to,boardPeriod.moneyWorkAt(series.sourceId,at,history.range))})).sort(moneyComparator(active,locale));
+      const byKey=new Map(rows.map(row=>[row.key,row]));return values.map(value=>byKey.get(value.key)!);
+    };
+    const ordered=orderAt(now);
+    clock.due(watch,history?.live&&active&&active.column!=='name'?boardPeriod.moneyOrderAt(now,history.range,active.column==='active'?at=>JSON.stringify(orderAt(at).map(row=>row.key)):undefined):null,now);
     if(ordered.length!==cached.current.length||ordered.some((row,i)=>row!==cached.current[i]))cached.current=ordered;
     return cached.current;
   },[watch]);
@@ -83,7 +87,7 @@ const MoneyLegendAmount=memo(function MoneyLegendAmount({value,unit,context}:{va
 
 export function MoneyHistory({arrange,family='budget'}:{arrange:Arrange;family?:MoneyFamily}) {
   const widget=family==='funds'?SUBSCRIPTION_FUNDS:BUDGET_HISTORY;
-  const context=useCurrencyContext(),board=useBoardId(),locale=useLocale(),{history,drawing,loading,error,presentation:authority}=useBudgetHistory(family,true),sources=useNamed(arrange.view.names,family);
+  const context=useCurrencyContext(),board=useBoardId(),locale=useLocale(),{history,drawing,loading,error,presentation:authority}=useBudgetFinancialHistory(family,true),sources=useNamed(arrange.view.names,family);
   const range=usePref('range'),horizon=usePref('horizon'),muted=useChartMuted(widget),moneyPrefs=usePref(family==='funds'?'funds':'money');
   const prefs=useMemo(()=>({range,horizon,muted,money:moneyPrefs,funds:moneyPrefs}),[range,horizon,muted,moneyPrefs]);
   const funds=family==='funds',settings=moneyPrefs,reader=funds?fundsHistory:budgetHistory;
@@ -158,10 +162,19 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
   const definitions = MONEY_COLUMNS.map(({id, label, width}) => ({id, title: t(label), width, align: 'right' as const}));
   const columns = definitions.filter(column => columnShown(arrange.view, widget, column.id));
   const panel=useRef<HTMLElement>(null);
-  const cellAt=(original:MeterHistory,id:MoneyColumn,now:number):{content:string;title?:string;partial?:boolean}=>{
+  const cellAt=(original:MeterHistory,id:MoneyColumn,now:number):{content:string;title?:string;partial?:boolean;activeMs?:number}=>{
     const s=history?.live?boardPeriod.moneyAt(original,now,history.range):original;
     const range=history?.live?boardPeriod.rangeAt('budget',now,history.range):null;
-    const values=moneyTableValues(s,range?.from??history!.since,range?.to??history!.to);
+    const work=boardPeriod.moneyWorkAt(s.sourceId,now,history?.range);
+    const values=moneyTableValues(s,range?.from??history!.since,range?.to??history!.to,work);
+    if(id==='active'||id==='rate'||id==='remaining') {
+      const eligible=moneyWorkValues(s,work);
+      const proof=work?[t('money.workEstimate'),t('money.workBasis',{active:activeHours(String(work.eligibleActiveMs))}),work.partial?t('money.partial'):null].filter(Boolean).join('\n'):t('money.noWorkRate');
+      if(eligible.active===null)return {content:'—',title:proof};
+      if(id==='active')return {content:activeHours(eligible.active),title:proof,activeMs:work!.activeMs};
+      if(id==='remaining')return {content:activeHours(eligible.remaining),title:proof};
+      return {content:money(eligible.rate,s.unit,false,context),title:eligible.rate===null?t('money.workInsufficient')+'\n'+proof:proof};
+    }
     if(id==='value')return {title:money(values.value,s.unit,true,context),content:money(values.value,s.unit,false,context)};
     if(s.topup===null)return {title:t('money.noSpending'),content:t('money.unavailable')};
     if(s.kind!=='balance')return {content:'—'};
@@ -170,8 +183,9 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
     return {title,content:money(values[id],s.unit,false,context),partial:total.partial};
   };
   const cellOf=(s:MeterHistory,id:MoneyColumn):Cell|TimedCell=>{
-    const at=(now:number):Cell=>{const {partial,content,...cell}=cellAt(s,id,now);return {...cell,content:<>{content}{partial&&<small className="money-partial">*</small>}</>};};
-    return history?.live?{time:'money-'+id,changesAt:now=>boardPeriod.cellChangesAt('budget',now,at=>JSON.stringify(cellAt(s,id,at)),undefined,s.sourceId,history.range),at}:at(hubNow());
+    const at=(now:number):Cell=>{const {partial,content,activeMs,...cell}=cellAt(s,id,now);return {...cell,content:<><span {...(activeMs===undefined?{}:{'data-work-source':s.sourceId,'data-active-ms':activeMs})}>{content}</span>{partial&&<small className="money-partial">*</small>}</>};};
+    const textAt=(now:number)=>{const {activeMs:_,...visible}=cellAt(s,id,now);return JSON.stringify(visible);};
+    return history?.live?{time:'money-'+id,changesAt:now=>boardPeriod.cellChangesAt('budget',now,textAt,undefined,s.sourceId,history.range),at}:at(hubNow());
   };
   // Retained rows stay mounted through pan-only panel updates; their cells own
   // the clock and replan only when the table's data or display settings change.
@@ -179,7 +193,7 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
       const source=sources.find(card=>card.id===series.sourceId);
       return {key:moneyIdentity(series),name:nameOf(series,source?.title??series.sourceId,context),hint:moneySeriesDetail(series,context),
         color:colorOf(arrange.view,series.sourceId,source?.provider??''),
-        cells:{value:cellOf(series,'value'),topup:cellOf(series,'topup')}};
+        cells:{value:cellOf(series,'value'),topup:cellOf(series,'topup'),active:cellOf(series,'active'),rate:cellOf(series,'rate'),remaining:cellOf(series,'remaining')}};
     }),[history,unit,sources,context,arrange.view,locale]);
   return <SortedMoney rows={rows} entries={entries} columns={columns} panel={panel} unit={unit} className="budget-table" title={t('widgets.budgetTable')} history={history} loading={loading} error={error} retry={budgetHistory.retry}
     settings={<TableSettings arrange={arrange} widget={widget} columns={definitions} visible={columns.map(column=>column.id)}><MoneySettings sources={sources} hidden={arrange.view.hidden} series={history?.meterSeries??[]}/></TableSettings>}

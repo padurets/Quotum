@@ -2,7 +2,7 @@ import {sourceKey} from './workAccess.js';
 import {earlyReset} from './attention.js';
 import {cellStart, encodeCells, tileEnd, tileOf, type Chunk, type DecodedCell, type HistoryMeta} from './history.js';
 import {edge} from './quota.js';
-import {overlap, union, workTime, type Stretch} from './work.js';
+import {overlap,union,workTime,type Stretch} from './work.js';
 
 /** A window read once through a run of missing tiles, including its preceding sample. */
 export type CellSamples = {source: string; window: string; samples: {at: number; used: number; resetAt: number | null; staleAfterMs: number; validUntil?: number}[]};
@@ -77,40 +77,56 @@ export function cellsOf(groups: CellSamples[], stretches: Stretch[], devices: Re
   // `from` proves incoming steps but does not belong to activity in these chunks.
   const activity = new Map<number, Stretch[]>();
   for (const s of stretches) for (let at = cellStart(Math.max(s.from, from), cell); at < Math.min(s.to, to); at += cell) {
-    const part = {...s, from: Math.max(s.from, at, from), to: Math.min(s.to, at + cell, to)};
-    if (part.to <= part.from) continue;
+    const start=Math.max(s.from,at,from),end=Math.min(s.to,at+cell,to);
+    if (end <= start) continue;
+    const part=start===s.from&&end===s.to?s:{...s,from:start,to:end};
     if (!activity.has(at)) activity.set(at, []);
     activity.get(at)!.push(part);
   }
-  const sessionIndexes = chunks.map(() => new Map<number, number>());
+  const sessionIndexes = chunks.map(() => new Map<string, number>());
+  const dimensions = ['s', 'p', 'd'] as const;
+  const projects=new Map<string|null,string>();
+  const keyOf=(dim:typeof dimensions[number],s:Stretch)=>{
+    if(dim==='s')return sourceKey(s);
+    if(dim==='d')return s.device;
+    let key=projects.get(s.project);
+    if(key===undefined){key=JSON.stringify(s.project);projects.set(s.project,key);}
+    return key;
+  };
   for (const [at, spans] of [...activity].sort((a, b) => a[0] - b[0])) {
     const chunk = chunkOf(at);
     const indexes = sessionIndexes[tileOf(at, cell) - firstTile];
-    const sessions = new Map<number, {ms: number; s: Stretch}>();
+    const sessions = new Map<string, {ms: number; s: Stretch}>();
     for (const s of spans) {
-      if (!indexes.has(s.session)) {
-        indexes.set(s.session, chunk.activity.sessions.length);
+      const key = JSON.stringify([s.session,s.source,s.sourceStatus]);
+      if (!indexes.has(key)) {
+        indexes.set(key, chunk.activity.sessions.length);
         chunk.activity.sessions.push(s.sourceStatus?[s.session,s.source,s.project,s.device,s.sourceStatus]:[s.session,s.source,s.project,s.device]);
         chunk.activity.devices[s.device] = devices[s.device];
       }
-      const session = sessions.get(s.session) ?? {ms: 0, s};
+      const session = sessions.get(key) ?? {ms: 0, s};
       session.ms += s.to - s.from;
-      sessions.set(s.session, session);
+      sessions.set(key, session);
     }
-    const active = workTime(spans);
-    const row: (typeof chunk.activity.cells)[number] = [(at - chunk.from) / cell, active, [...sessions].map(([id, {ms}]) => ms === active ? indexes.get(id)! : [indexes.get(id)!, ms]), []];
-    const dimensions = ['s', 'p', 'd'] as const;
-    for (const dim of dimensions) {
-      const keyOf = (s: Stretch) => dim === 's' ? sourceKey(s) : dim === 'p' ? JSON.stringify(s.project) : s.device;
-      const grouped = new Map<string, Stretch[]>();
-      for (const s of spans) {
-        const key = keyOf(s);
-        if (!grouped.has(key)) grouped.set(key, []);
-        grouped.get(key)!.push(s);
+    // One chronological pass measures the total and each grouping's union. Sorting
+    // every source, project and device separately repeats most of the same work.
+    const unions = {s:new Map<string,{to:number;ms:number}>(),p:new Map<string,{to:number;ms:number}>(),d:new Map<string,{to:number;ms:number}>()};
+    let active=0,coveredTo=-Infinity;
+    for(const s of spans.slice().sort((a,b)=>a.from-b.from||a.to-b.to)) {
+      active+=Math.max(0,s.to-Math.max(s.from,coveredTo));coveredTo=Math.max(coveredTo,s.to);
+      for(const dim of dimensions) {
+        const key=keyOf(dim,s),value=unions[dim].get(key)??{to:-Infinity,ms:0};
+        value.ms+=Math.max(0,s.to-Math.max(s.from,value.to));value.to=Math.max(value.to,s.to);unions[dim].set(key,value);
       }
-      for (const [key, members] of grouped) {
-        const ms = workTime(members);
-        const defaultMs = Math.max(...[...sessions.values()].filter(v => keyOf(v.s) === key).map(v => v.ms));
+    }
+    const row: (typeof chunk.activity.cells)[number] = [(at - chunk.from) / cell, active, [...sessions].map(([id, {ms}]) => ms === active ? indexes.get(id)! : [indexes.get(id)!, ms]), []];
+    for (const dim of dimensions) {
+      const defaults=new Map<string,number>();
+      for(const {s,ms} of sessions.values()) {
+        const key=keyOf(dim,s);defaults.set(key,Math.max(defaults.get(key)??0,ms));
+      }
+      for (const [key, defaultMs] of defaults) {
+        const ms = unions[dim].get(key)!.ms;
         if (ms !== defaultMs) row[3].push([dim, key, ms]);
       }
     }

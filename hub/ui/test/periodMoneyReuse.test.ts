@@ -20,7 +20,7 @@ import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/
 import {hasPeriodValue,periodValueAt} from '../../server/domain/periodValues';
 import {canShift,shifted} from '../../server/domain/periodShift';
 import {periodOf} from '../lib/periods';
-import {moneySelection,DEFAULT_MONEY} from '../lib/moneySelection';
+import {moneyReadSelection,DEFAULT_MONEY} from '../lib/moneySelection';
 import {subscriptionSelection} from '../lib/subscription';
 import {sameJson} from '../lib/store';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
@@ -50,14 +50,14 @@ test('money preparation keeps cold history reusable across cached return and rep
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
   const coordinatorCode=ts.transpileModule(source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
   const dir=mkdtempSync(join(tmpdir(),'quotum-full-memory-')),file=join(dir,'fixture.sqlite');
-  let store=new Store(file),directory=new Directory(store.db);
+  let store=new Store(file,NOW-75*DAY),directory=new Directory(store.db);
   const user=directory.createUser('fixture@example.com','Fixture','fixture',NOW-75*DAY),owner={...user,personalBoard:directory.boards(user.id)[0].id};store.close();
   seedPanningBudgets(file,{start:NOW,people:new Map([['fixture',owner]])} as any);
   store=new Store(file);directory=new Directory(store.db);
   store.db.exec('BEGIN');const quotas:string[]=[];
   for(let i=0;i<12;i++){
    const id=store.source('claude',`quota-fixture-${i}`,NOW-75*DAY);quotas.push(id);store.hold(id,user.id,NOW-75*DAY);
-   for(let at=NOW-75*DAY;at<=NOW;at+=3*3_600_000)store.record(id,{observedAt:at,staleAfterMs:6*3_600_000,plan:'pro',resets:null,windows:[{id:'weekly',kind:'weekly',used:20+i,remaining:80-i,minutes:10080,resetAt:NOW+7*DAY,label:null}]});
+   for(let at=NOW-75*DAY;at<=NOW;at+=3*3_600_000)store.record(id,{observedAt:at,staleAfterMs:6*3_600_000,plan:'pro',resets:null,windows:[{id:'weekly',kind:'weekly',used:20+i,remaining:80-i,minutes:10080,resetAt:NOW+7*DAY,label:null},{id:'session',kind:'session',used:20+i,remaining:80-i,minutes:300,resetAt:NOW+7*DAY,label:null}]});
   }
   store.db.exec('COMMIT');
   const device=directory.saveDevice({userId:user.id,machine:{id:'test-machine',name:'Laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.7.0',tokenId:null},NOW-75*DAY).id;
@@ -65,7 +65,7 @@ test('money preparation keeps cold history reusable across cached return and rep
   const hub:any={store,directory,ingest:new Ingest(store,directory,new Duty(),new Cadence()),resets:new ResetFeed(undefined,()=>{}),pairing:new Pairing(directory),setup:new Setup(false,null),local:null};
   const events=new Events(hub,undefined,{now:()=>NOW,after:()=>()=>{}},null),server=new PeriodReader(hub,new HistoryTiles(store),events),projection=new Projection(hub);
   const snapshot=projection.snapshot(user.id,owner.personalBoard,NOW)!;
-  const board={id:owner.personalBoard,meta:snapshot.board,cards:Object.fromEntries(snapshot.sources.map(c=>[c.id,c])),lineup:snapshot.sources.map(c=>c.id),view:{...snapshot.view,shown:['quota-history','budget-history',SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS]},currencies:snapshot.currencies};
+  const board={id:owner.personalBoard,meta:snapshot.board,cards:Object.fromEntries(snapshot.sources.map(c=>[c.id,c])),lineup:snapshot.sources.map(c=>c.id),view:{...snapshot.view,shown:['quota-history','budget-history','budget-table',SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS]},currencies:snapshot.currencies};
   let selected:PeriodRange|null=null,panning=false,phase='seed';
   const settings={range:'30d',kind:'weekly',money:{...DEFAULT_MONEY},funds:{...DEFAULT_MONEY}};
   const preparer=new Preparations({now:()=>performance.now(),post:run=>setImmediate(run)});
@@ -80,18 +80,18 @@ test('money preparation keeps cold history reusable across cached return and rep
   };
   t.mock.method(globalThis,'fetch',async(_url:any,init:any)=>{
    const body=JSON.parse(init.body);attempts.push(phase);
-   const reply=server.read(owner.personalBoard,user.id,body);return new Response(reply,{headers:{'content-type':'application/json'}});
+   const reply=server.read(owner.personalBoard,user.id,body,new Headers(init.headers).get('x-quotum-history-sources')==='basis');return new Response(reply,{headers:{'content-type':'application/json'}});
   });
   const context={exports:{} as any,hubNow:()=>clockNow,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod,page:{get:()=>({board}),dispatch:console.error},pan:{get:()=>panning?{}:null},preparations:()=>preparer,
    prepareAsync:(owner:object,work:any,valid:()=>boolean)=>productionPrepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
-   empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneySelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
+   empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(coordinatorCode,context);const period=new context.exports.BoardPeriod();
   const readers:HistoryStore[]=[];
   for(const [i,scope] of (['quota','budget','budget'] as const).entries()){
-   const meter=i===0?undefined:moneySelection(snapshot.sources,board.view.hidden,i===2?settings.funds:settings.money,board.currencies,i===2?'funds':'budget').selection;
+   const meter=i===0?undefined:moneyReadSelection(snapshot.sources,board.view,i===2?settings.funds:settings.money,board.currencies,i===2?'funds':'budget');
    const family=i===2?'funds':scope;
-   const reader=new HistoryStore({sharedTransport:true,now:()=>clockNow,preparations:preparer,setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:t=>clearTimeout(t as any),dropTimeRange:()=>{throw Error('dropRange')},
-    read:(_board,cell,from,to,signal,meters,meta,owner)=>period.transport.read(family,{cell:String(cell),from:String(from),to:String(to),...(panning?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})},signal,owner).then((reply:any)=>expandHistory(reply,meta)),
+   const reader=new HistoryStore({sharedTransport:true,workInPresentation:scope!=='budget',now:()=>clockNow,preparations:preparer,setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:t=>clearTimeout(t as any),dropTimeRange:()=>{throw Error('dropRange')},
+    read:(_board,cell,from,to,signal,meters,meta,owner)=>period.transport.read(family,{cell:String(cell),from:String(from),to:String(to),...(panning?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal,owner,meta).then((reply:any)=>expandHistory(reply,meta)),
    },pool.budget,scope,pool);
    readers.push(reader);reader.choose('30d',null);reader.setMeters(meter);reader.open(board.id);reader.hello(events.epoch);reader.snapshot(board.lineup,quotas.flatMap(id=>store.state(id).windows.map(w=>`${id} ${w.id}`)),NOW-75*DAY);
   }
@@ -111,7 +111,7 @@ test('money preparation keeps cold history reusable across cached return and rep
     const reply=fresh[expectedScope];assert.equal(reply?.state,'complete');const tape=reply.value.tape;assert.ok(tape);
     for(const row of tape.quota){row.samples=drain(retainSamplesPrepared(row.samples,row.samplesEncoding==='delta'));delete row.samplesEncoding;}
     const baseline=new PeriodAccounting(tape,work,workIndex.curves).project(shown.history,range,values),actual=period.project(shown.history,expectedScope,clockNow);
-    assert.equal(actual.since,range.from);assert.equal(actual.to,range.to);assert.deepEqual(actual.series,baseline.series,`${label}: exact quota projection`);assert.deepEqual(actual.meterSeries,baseline.meterSeries,`${label}: exact money projection`);
+    assert.equal(actual.since,range.from);assert.equal(actual.to,range.to);assert.deepEqual(actual.series,baseline.series,`${label}: exact quota projection`);assert.deepEqual(actual.meterSeries,baseline.meterSeries,`${label}: exact money projection`);assert.deepEqual(actual.moneyWork,baseline.moneyWork,`${label}: exact monetary work`);
     if(expectedScope==='quota'){const activity=new PeriodActivity(work,workIndex.curves);activity.update(rows);const expected=activity.project(baseline.activity,range);const knownFrom=Math.max(range.from,period.work.value.knownFrom),knownTo=Math.min(range.to,period.work.value.cut);expected.known=knownFrom<knownTo?{from:knownFrom,to:knownTo}:null;assert.deepEqual(actual.activity,expected,`${label}: exact activity and retained evidence cut`);}
    }
 
@@ -122,6 +122,7 @@ test('money preparation keeps cold history reusable across cached return and rep
   }
   try{
    period.activate(true);await settle();
+   assert.ok(period.get().rows.some((row:any)=>row.workedMs>0),'the retained work fixture must have positive credit inside its known period');
    const end=NOW-(length+DAY)*.5;await gesture('cold',end,{from:end-length,to:end});
    await gesture('warm-return',NOW,null);await gesture('warm-repeat',end,{from:end-length,to:end});
    assert.equal(attempts.filter(stage=>stage.startsWith('warm')).length,0,'warm return/repeat must not read any history section');

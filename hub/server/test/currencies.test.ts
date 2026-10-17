@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {deepSeek,deepSeekMeasurement} from '../connectors/deepseek.js';
 import {ConnectorTransport} from '../connectors/transport.js';
-import {convertMoney,conversionId,ratePath,type RateSnapshot,type ExchangeRates} from '../domain/currency.js';
+import {convertBy,convertDerivedBy,convertMoney,conversionId,ratePath,type RateSnapshot,type ExchangeRates} from '../domain/currency.js';
 import {parseEcb,ecbReader} from '../currencies/ecb.js';
 import {Currencies} from '../currencies/service.js';
 import {Store} from '../store/store.js';
@@ -79,6 +79,19 @@ test('currency arithmetic handles arbitrary pairs, exact signs, zero and values 
   assert.equal(convertMoney(native('EUR','9007199254740993'),'USD',{...quote,rates:{...quote.rates,USD:'500000'}})?.amount,'4503599627370497');
   assert.equal(convertMoney(native('JPY'),'USD',quote),null);assert.equal(convertMoney(native('tokens'),'USD',quote),null);
   assert.deepEqual(convertMoney(native('USD'),'USD',{...quote,rates:{}}),{amount:'110000000',unit:'USD'});
+});
+
+test('derived currency estimates keep exact large values while observations retain storage bounds',()=>{
+  const above=1n<<63n,half=[{from:'2',to:'1'}],path=[{from:'3',to:'1'},{from:'1',to:'3'}];
+  assert.equal(convertDerivedBy(above,half),(above/2n).toString());
+  assert.equal(convertDerivedBy(-above,half),(-above/2n).toString());
+  assert.equal(convertDerivedBy(1n,path),'1','the complete conversion path rounds once');
+  assert.equal(convertDerivedBy(-1n,half),'-1','ties round away from zero');
+  assert.equal(convertDerivedBy(0n,path),'0');
+  assert.throws(()=>convertBy(above.toString(),half),/amount_overflow/,'stored inputs remain bounded even if the result fits');
+  assert.throws(()=>convertBy((above-1n).toString(),[{from:'1',to:'2'}]),/amount_overflow/,'stored outputs remain bounded');
+  for(const invalid of [{from:'0',to:'1'},{from:'1',to:'-1'},{from:above.toString(),to:'1'}])assert.throws(()=>convertDerivedBy(1n,[invalid]));
+  assert.throws(()=>convertDerivedBy(1n,[],19),/invalid_scale/);
 });
 
 test('the public source validates dated quotes and bounds its fixed credential-free transport',async()=>{

@@ -15,6 +15,13 @@ export const subscriptionFundsVisible=(source:Pick<Card,'provider'|'budget'|'cre
   (!!source.meters?.some(m=>m.kind==='balance')||['finite','unlimited'].includes(source.creditBalance?.status??''));
 export const unitLabel=(unit:string)=>unit==='credits:codex'?t('money.codexCredits'):unit==='credits:zai'?t('quota.zaiCredits'):unit;
 export const amountUnitLabel=(unit:string)=>unit==='credits:codex'?t('money.codexCreditUnit'):unit==='credits:zai'?t('quota.credits'):unitLabel(unit);
+/** Keep large active-hour forecasts exact through display rounding. */
+export function activeHours(milliseconds:string|null):string {
+  if(milliseconds===null)return '—';
+  const tenths=BigInt(milliseconds)/360_000n,whole=tenths/10n,fraction=tenths%10n;
+  const separator=new Intl.NumberFormat(formatLocale()).formatToParts(1.1).find(part=>part.type==='decimal')?.value??'.';
+  return t('money.activeHoursValue',{hours:new Intl.NumberFormat(formatLocale()).format(whole)+(fraction?separator+fraction:'')});
+}
 export const capName=(meter:Pick<Meter,'id'|'scope'|'label'>)=>meter.id==='quota:credit:5h'?t('kind.title.session'):meter.id==='quota:credit:week'?t('kind.title.weekly'):meter.label??meter.id;
 export const amountText=(value:string|null|undefined,unit:string,exact=false)=>{const formatted=money(value,unit,exact);return value==null?formatted:formatted.slice(0,-amountUnitLabel(unit).length-1);};
 

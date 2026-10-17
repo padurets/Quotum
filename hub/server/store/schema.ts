@@ -383,6 +383,78 @@ export const STEPS = [
     PRIMARY KEY(source_id,resource)) WITHOUT ROWID;
   ALTER TABLE device_clients ADD COLUMN observed_at INTEGER;
   `,
+  // 28 — temporal declarations never replace the account evidence in the work ledger.
+  `
+  CREATE TABLE client_links (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, client TEXT NOT NULL, device_id TEXT,
+    route_class TEXT CHECK(route_class IN ('subscription','api','unknown')), route_provider TEXT,
+    source_id TEXT NOT NULL, from_at INTEGER NOT NULL CHECK(from_at>=0 AND from_at<=9007199254740991),
+    to_at INTEGER CHECK(to_at IS NULL OR to_at>from_at AND to_at<=9007199254740991), created_at INTEGER NOT NULL,
+    CHECK(route_class IS NOT NULL OR route_provider IS NULL));
+  CREATE INDEX client_links_by_owner ON client_links(user_id,client,device_id,route_class,route_provider,from_at,to_at);
+  CREATE TABLE link_versions (user_id TEXT PRIMARY KEY, version INTEGER NOT NULL) WITHOUT ROWID;
+  CREATE TABLE link_mutations (user_id TEXT NOT NULL,request_id TEXT NOT NULL,hash TEXT NOT NULL,
+    status INTEGER NOT NULL,response TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(user_id,request_id)) WITHOUT ROWID;
+  CREATE TABLE device_tracking_policy (device_id TEXT NOT NULL,client TEXT NOT NULL,route_enabled INTEGER NOT NULL CHECK(route_enabled IN (0,1)),
+    PRIMARY KEY(device_id,client)) WITHOUT ROWID;
+  CREATE INDEX devices_by_owner ON devices(user_id,id);
+  `,
+  // 29 — accepted source-counter endpoints preserve native zero intervals for work estimates.
+  `
+  ALTER TABLE readings ADD COLUMN pair_anchor INTEGER NOT NULL DEFAULT 0 CHECK(pair_anchor IN (0,1));
+  CREATE INDEX readings_sparse ON readings(source_id,meter_id,at) WHERE pair_anchor=0;
+  CREATE TABLE meter_pair_starts (source_id TEXT NOT NULL,meter_id TEXT NOT NULL,known_from_at INTEGER NOT NULL,
+    PRIMARY KEY(source_id,meter_id)) WITHOUT ROWID;
+  CREATE TRIGGER meter_pairs_source_removed AFTER DELETE ON sources BEGIN
+    DELETE FROM meter_pair_starts WHERE source_id=OLD.id;
+  END;
+  `,
+  // 30 — coverage witnesses prove completed observations only within the current topology.
+  `
+  CREATE TABLE device_tracking (device_id TEXT PRIMARY KEY,payload TEXT NOT NULL,last_at INTEGER NOT NULL,
+    epoch TEXT NOT NULL,topology_version INTEGER NOT NULL);
+  CREATE TABLE work_coverage (device_id TEXT NOT NULL,from_at INTEGER NOT NULL,to_at INTEGER NOT NULL,
+    scope_digest TEXT NOT NULL,epoch TEXT NOT NULL,topology_version INTEGER NOT NULL,
+    PRIMARY KEY(device_id,from_at)) WITHOUT ROWID;
+  CREATE INDEX work_coverage_by_end ON work_coverage(to_at,device_id);
+  CREATE TABLE owner_coverage_versions (user_id TEXT PRIMARY KEY,version INTEGER NOT NULL) WITHOUT ROWID;
+  CREATE TABLE quota_anchors (source_id TEXT NOT NULL,window_id TEXT NOT NULL,at INTEGER NOT NULL,payload TEXT NOT NULL,
+    PRIMARY KEY(source_id,window_id,at)) WITHOUT ROWID;
+  CREATE INDEX quota_anchors_by_time ON quota_anchors(at);
+  CREATE TRIGGER quota_anchors_source_deleted AFTER DELETE ON sources BEGIN
+    DELETE FROM quota_anchors WHERE source_id=OLD.id;
+  END;
+  INSERT INTO owner_coverage_versions SELECT id,1 FROM users;
+  CREATE TRIGGER coverage_device_added AFTER INSERT ON devices BEGIN
+    INSERT INTO owner_coverage_versions VALUES (NEW.user_id,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1;
+  END;
+  CREATE TRIGGER coverage_device_removed AFTER DELETE ON devices BEGIN
+    INSERT INTO owner_coverage_versions VALUES (OLD.user_id,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1;
+  END;
+  CREATE TRIGGER coverage_device_status AFTER UPDATE OF revoked_at ON devices WHEN OLD.revoked_at IS NOT NEW.revoked_at BEGIN
+    INSERT INTO owner_coverage_versions VALUES (NEW.user_id,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1;
+  END;
+  CREATE TRIGGER coverage_holding_added AFTER INSERT ON holders BEGIN
+    INSERT INTO owner_coverage_versions VALUES (NEW.user_id,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1;
+  END;
+  CREATE TRIGGER coverage_holding_removed AFTER DELETE ON holders BEGIN
+    INSERT INTO owner_coverage_versions VALUES (OLD.user_id,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1;
+  END;
+  CREATE TRIGGER coverage_holding_changed AFTER UPDATE ON holders BEGIN
+    INSERT INTO owner_coverage_versions VALUES (NEW.user_id,1) ON CONFLICT(user_id) DO UPDATE SET version=version+1;
+  END;
+  CREATE TRIGGER coverage_device_deleted AFTER DELETE ON devices BEGIN
+    DELETE FROM device_tracking WHERE device_id=OLD.id;
+    DELETE FROM work_coverage WHERE device_id=OLD.id;
+    DELETE FROM device_tracking_policy WHERE device_id=OLD.id;
+  END;
+  `,
+  // 31 — financial card boundaries read availability from the sparse index itself.
+  `
+  DROP INDEX readings_sparse;
+  CREATE INDEX readings_sparse ON readings(source_id,meter_id,at,stale_after_ms,reset_at) WHERE pair_anchor=0;
+  `,
+
 ];
 
 export const SCHEMA_VERSION = STEPS.length;

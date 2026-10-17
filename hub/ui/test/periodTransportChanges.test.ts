@@ -20,7 +20,7 @@ import {retainSamplesPrepared,sampleBytes,mergeTapePrepared} from '../../server/
 import {hasPeriodValue,periodValueAt} from '../../server/domain/periodValues';
 import {canShift,shifted} from '../../server/domain/periodShift';
 import {periodOf} from '../lib/periods';
-import {moneySelection,DEFAULT_MONEY} from '../lib/moneySelection';
+import {moneyReadSelection,DEFAULT_MONEY} from '../lib/moneySelection';
 import {subscriptionSelection} from '../lib/subscription';
 import {sameJson} from '../lib/store';
 import {EMPTY_VIEW} from '../../server/domain/view';
@@ -50,7 +50,7 @@ function harness(visible:string[]=['quota-history']) {
   };
   const context={exports:{} as {BoardPeriod:new()=>Coordinator},hubNow:()=>NOW,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>({board})},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:object,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,
-    empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneySelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
+    empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,timeRange:()=>selected,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(coordinatorCode,context);
   const period=new context.exports.BoardPeriod();
   return {board,settings,pool,period,attempts,fail,select:(range:PeriodRange|null)=>{selected=range;period.changed();},hold:(fn:typeof held)=>{held=fn;},failWork:(value:boolean)=>{failWork=value;},failValues:(value:boolean)=>{failValues=value;}};
@@ -214,4 +214,32 @@ test('card retry restores only failed values, and a failed value target cannot e
   h.attempts.length=0;h.failValues(false);h.period.retry();assert.equal(h.period.getValue('A').loading,true);assert.equal(h.period.getValue('A').error,null);await flush();
   assert.equal(h.attempts.length,1);assert.deepEqual(scopes(h.attempts[0].body),[]);assert.equal(h.attempts[0].body.sessions,undefined);assert.deepEqual([...h.attempts[0].body.values!],['A','B']);
   assert.equal(h.period.getValue('A').loading,false);assert.equal(h.period.getValue('A').error,null);h.period.activate(false);
+});
+
+test('internal metadata tokens follow their exact resource and never replace a drawing reader basis',async()=>{
+  const pool=new HistoryPool(),sent:PeriodRequest[]=[];
+  let generation=0,board='b',query:any={meters:'[["A","balance"]]',unit:'USD',work:'1',cells:'skip'},tag='A'.repeat(43);
+  const basis={run:'run',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:0,to:NOW}};
+  const intent=():PeriodIntent=>({board,generation,revision:generation,request:{version:1,selection:{mode:'live',periodMs:1_000_000},evaluatedAt:NOW,budget:{...query}}});
+  let held:((reply:PeriodReply)=>void)|null=null,hold=false,failApply=false;
+  const reply=(meta:string):PeriodReply=>({basis,budget:{state:'complete',basis,value:{now:NOW,run:'run',historyStart:0,known:{work:0,sources:{}},chunks:[],meta}}});
+  const transport=new PeriodTransport(pool,intent,async reply=>{if(failApply&&reply.budget?.state==='complete')throw new Error('preparation failed');},async(_board,body)=>{
+    sent.push(structuredClone(body));if(hold){hold=false;return new Promise<PeriodReply>(resolve=>{held=resolve;});}return reply(tag);
+  });
+  const update=async()=>{generation++;transport.change();await flush();return sent.at(-1)!.budget!;};
+  try{
+    assert.equal((await update()).meta,'');assert.equal((await update()).meta,tag);
+    const drawing=transport.read('budget',{...query,meta:'D'.repeat(43),evidence:'skip'});await flush();await drawing;
+    assert.equal(sent.at(-1)!.budget!.meta,'D'.repeat(43),'the chart keeps its own captured metadata');
+    for(const next of [{...query,work:undefined},{...query,meters:'[["B","balance"]]'},{...query,unit:'EUR'},{...query,currency:'EUR'}]){
+      query=next;assert.equal((await update()).meta,'','a different work/resource/currency context does not borrow a token');
+    }
+    board='another';assert.equal((await update()).meta,'');
+    hold=true;await update();const stale=held!;tag='C'.repeat(43);await update();stale(reply('B'.repeat(43)));await flush();
+    assert.equal((await update()).meta,tag,'a late aborted generation cannot overwrite current metadata');
+    failApply=true;tag='E'.repeat(43);await update();failApply=false;
+    assert.equal((await update()).meta,'C'.repeat(43),'failed preparation cannot publish a token');
+    transport.forgetEvidence('budget');assert.equal((await update()).meta,'');
+    transport.reset();assert.equal((await update()).meta,'','board closure clears the metadata context');
+  }finally{transport.reset();}
 });

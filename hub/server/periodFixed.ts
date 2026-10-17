@@ -29,11 +29,11 @@ export function* prepareFixedTape(tape:PeriodTape,work:WorkTrace|null,range:Peri
       for(const descriptor of series.descriptors??[])yield descriptor.at;
       for(let i=0;i<sampleCount(series.samples);i++){const s=sampleAt(series.samples,i)!;yield s.at;yield s.at+s.staleAfterMs+1;yield s.resetAt??Infinity;yield s.validUntil??Infinity;}
     }
-    for(const group of tape.money)for(const part of [group,...(group.paired?[group.paired]:[])]){
+    for(const group of tape.money)for(const part of [group,...(group.paired?[group.paired]:[]),...(group.workCounter?[group.workCounter]:[])]){
       for(const r of part.readings){yield r.at;yield r.previousAt??Infinity;yield r.resetAt??Infinity;yield r.at+r.staleAfterMs+1;}
       for(const s of part.spans){yield s.from;yield s.to;yield s.observedFrom??Infinity;yield s.to+s.staleAfterMs+1;yield s.holdUntil??Infinity;yield s.interruptedAt??Infinity;}
     }
-    for(const group of tape.money)for(const [,at] of rateObservations(group))yield at;
+    for(const group of tape.money){if(group.workCounter){yield group.workCounter.knownFrom??Infinity;yield group.workCounter.workFrom??Infinity;}for(const [,at] of rateObservations(group))yield at;}
     if(work)yield*workAnchors(work);
   }
   const fixed=yield*reusable(base,offset=>accounting.fixed({from:range.from+offset,to:range.to+offset},cell),cell,tape.from,tape.cut,[cell],anchors(),reserve,release);
@@ -56,7 +56,8 @@ export function* prepareFixedWork(trace:WorkTrace,range:PeriodRange,cell:number,
     const activity=projection.project(blank,range);
     for(const at of new Set([Math.floor(range.from/barMs)*barMs,Math.floor((range.to-1)/barMs)*barMs])){
       const part={from:Math.max(range.from,at),to:Math.min(range.to,at+barMs)};
-      activity.cells.push([at,index.curves.all.read(part,true),index.curves.all.read(part),index.curves.contexts.filter(curve=>curve.read(part)>0).length]);
+      const agents=new Set(trace.refs.filter((_,i)=>index.curves.contexts[i].read(part)>0).map(ref=>ref.identityRef??ref.ref)).size;
+      activity.cells.push([at,index.curves.all.read(part,true),index.curves.all.read(part),agents]);
       for(const by of ['source','project','device'] as const)for(const group of activity.by[by])group.cells.push([at,index.curves.groups[by].get(group.key)!.read(part)]);
     }
     return {range,totals:rows.map(row=>[ids.get(row.ref)!,row.workedMs,row.lastWorkedAt]),activity};

@@ -454,9 +454,11 @@ export class Ingest {
       });
       if (report.clients !== null) this.directory.saveDeviceClients(device.id, device.userId, report.clients.map(client=>({...client,observedAt:client.observedAt==null?null:Math.min(now,client.observedAt+skew)})), now);
 
-      const before = this.live.sourcesOf(device.id).filter(source => this.store.holds(device.userId, source));
+      const before = this.live.sourcesOf(device.id, now).filter(source => this.store.holds(device.userId, source));
       this.live.report(device.id, device.userId, sessions, now);
-      tell(this.observer, o => o.touchSources([...new Set([...before, ...sessions.flatMap(s => s.source && this.store.holds(device.userId, s.source) ? [s.source] : [])])]));
+      const tracking=this.store.coverage.record(device.id,device.userId,report.tracking,now);
+      if(tracking.policy)afterCommit(()=>this.store.links.onChange?.(device.userId));
+      tell(this.observer, o => o.touchSources([...new Set([...before, ...this.live.sourcesOf(device.id, now),...(tracking.coverage?this.store.held(device.userId).map(s=>s.id):[])])]));
       return {accepted: sessions.length};
     });
   }

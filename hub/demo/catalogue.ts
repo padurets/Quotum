@@ -37,6 +37,7 @@ export {QUOTA_SCENES} from './quotas.js';
 export {MONEY_SCENES} from './money.js';
 export {CODEX_CREDIT_SCENES} from './codexCredits.js';
 export {CURRENCY_SCENES} from './currencies.js';
+export {LINK_SCENES} from './links.js';
 
 /** Mixed analytics stays visible; loading and read failures are held by history tests.
  * Legend mutes, table-only views and explicit empty Add are exercised on this set in
@@ -1677,6 +1678,13 @@ const machineClients: DemoSet = {id:'clients',about:'OpenCode sessions and insta
   {kind:'machine',id:'laptop',expect:[{name:'Laptop'}]},
   {kind:'board',id:'team',name:'Shared clients',owner:'ana',members:[],agents:true,expect:[{state:'widgets'}]},
 ]};
+const linkedClients:DemoSet={id:'links',about:'Temporal client links, suggestions, monetary work and complete or partial observation',scene:'quiet',workHistoryMs:2*HOUR,entries:[
+  {kind:'person',id:'ana',name:'Ana',agents:true,expect:[{state:'widgets'}],look:['Clients and resources: one current/scheduled list and History switch; client/device/resource/effective date visible in the editor; choices distinguish Subscription and Budget; recommendations fill exact scope and dates before Save; device session resource popovers explain manual links, account differences and disconnected targets']},
+  {kind:'person',id:'boris',name:'Boris',agents:true,expect:[{state:'widgets'}]},
+  {kind:'machine',id:'laptop',person:'ana',expect:[{via:'token'}]},
+  {kind:'machine',id:'remote',person:'boris',expect:[{via:'token'}]},
+  {kind:'board',id:'team',name:'Shared linked sources',owner:'ana',members:['boris'],agents:true,expect:[{state:'widgets'}]},
+]};
 /** Receipt loss, conflicts and handover are held by measurementPolicy/refresh tests. */
 export const MEASUREMENT_DEVICE_SCENES=[{id:'fleet',expect:['behind','ahead','same','unknown','disabled','not-configured','requires-epoch','preferred','origins','independent-funds','measurement-version','unavailable-preference']} ] as const;
 const measurementDevices:DemoSet={id:'devices',about:'Measurement participation, preferred collectors, versions and retained producers',scene:'quiet',entries:[
@@ -1687,4 +1695,4 @@ const measurementDevices:DemoSet={id:'devices',about:'Measurement participation,
   {kind:'machine',id:'local-only',expect:[{name:'local-only'}]},
   {kind:'card',id:'codex-managed',provider:'codex',plan:'Plus',machines:['laptop','desktop','backup'],history:6*HOUR,windows:[weekly({since:-DAY,use:steady(0,5)})],on:{ana:{name:'Measurement selection'}},expect:[{title:'Measurement selection'}],look:['The existing status and settings open My connections without changing card height']},
 ]};
-export const SETS: DemoSet[] = [all, showcase, activity,SESSION_ANALYTICS,money,quotas,analytics, machineClients,measurementDevices, ONBOARDING];
+export const SETS: DemoSet[] = [all, showcase, activity,SESSION_ANALYTICS,money,quotas,analytics, machineClients,linkedClients,measurementDevices, ONBOARDING];

@@ -14,6 +14,7 @@ import {useConnectionsRevision, useDevicesRevision, useDeviceContact} from '../l
 import type {MeasurementPolicy} from '../../server/domain/measurementPolicy';
 import {ParticipationSettings, PreferenceSettings, VersionInfo, versionSummary, type MeasurementFormState, type MeasurementSource} from './MeasurementDevices';
 import {guardNavigation, useLocation} from '../lib/router';
+import {openClientLinks, SessionFunding, type LinkEvidence, type LinkInventory} from './ClientLinks';
 
 export type Device = {
   id: string;
@@ -27,7 +28,7 @@ export type Device = {
   lastSeenAt: number | null;
   sources: {provider: string; source: string; seenAt: number}[];
   clients?: {clientId: string; version: string | null; seenAt: number;observedAt?:number|null}[];
-  sessions?: (LiveSession & {source: string | null})[];
+  sessions?: (LiveSession & {source: string | null; attribution?: LinkEvidence})[];
   failures: {provider: string; error: string; detail: string | null; at: number}[];
   policy?: MeasurementPolicy;
   control?: {capable:boolean;confirmedRevision:number|null};
@@ -63,7 +64,9 @@ export function Devices({local,onBusyChange}: {local: boolean;onBusyChange?:(bus
   const [discard,setDiscard]=useState<{go:()=>void}|null>(null);
   const revision = useConnectionsRevision();
   const presence = useDevicesRevision();
-  const request = useRef(0);
+  const request = useRef(0), requestedDetails = useRef<string | null>(null);
+  const evidenceId = tab === 'diagnostics' ? detailsId : null;
+  requestedDetails.current = evidenceId;
   const [devices, setDevices] = useState<Device[] | null>(null);
   const [hubVersion,setHubVersion]=useState(''),[sources,setSources]=useState<MeasurementSource[]>([]);
   const location=useLocation(),focused=new URLSearchParams(location.split('?')[1]??'').get('source');
@@ -91,8 +94,8 @@ export function Devices({local,onBusyChange}: {local: boolean;onBusyChange?:(bus
   const [error, setError] = useState<unknown>(null);
   const newest=useRef<{promise:Promise<void>}|null>(null);
   const load = useCallback(() => {
-    const current = ++request.current;
-    const result=call<{devices:Device[];hubVersion:string;sources:MeasurementSource[]}>('GET', '/api/devices?measurement=1').then(value => {
+    const current = ++request.current, detail = requestedDetails.current;
+    const result=call<{devices:Device[];hubVersion:string;sources:MeasurementSource[]}>('GET', '/api/devices?measurement=1' + (detail === null ? '' : '&details=' + encodeURIComponent(detail))).then(value => {
       if (current !== request.current) return;
       setDevices(value.devices);setHubVersion(value.hubVersion);setSources(value.sources);setError(null);
     }, failure => {if (current === request.current) setError(failure);throw failure;});
@@ -105,7 +108,17 @@ export function Devices({local,onBusyChange}: {local: boolean;onBusyChange?:(bus
     newest.current=entry;return entry.promise;
   }, []);
   useEffect(()=>{void load().catch(()=>{});}, [load, revision,presence]);
+  useEffect(() => {if (evidenceId !== null) void load().catch(() => {});}, [load, evidenceId]);
   useEffect(() => () => {++request.current;}, []);
+
+  const [funding, setFunding] = useState<LinkInventory | null>(null), [fundingError, setFundingError] = useState<unknown>(null);
+  useEffect(() => {
+    setFunding(null); setFundingError(null);
+    if (evidenceId === null) return;
+    let current = true;
+    call<LinkInventory>('GET', '/api/links').then(inventory => {if (current) setFunding(inventory);}, failure => {if (current) setFundingError(failure);});
+    return () => {current = false;};
+  }, [evidenceId, revision]);
 
   const revoke = async (device: Device) => {
     if(actionBusy)return;setActionBusy(true);setError(null);
@@ -153,10 +166,10 @@ export function Devices({local,onBusyChange}: {local: boolean;onBusyChange?:(bus
         <VersionInfo agent={details.agent} hub={hubVersion}/>
         {!!details.failures.length&&<section className="settings-section"><h3>{t('measurements.lastFailure')}</h3><ul className="settings-list">{details.failures.map(failure=><li className="settings-list-row popover-row" key={failure.provider}><div className="settings-item-main"><b>{PROVIDERS[failure.provider]?.name ?? failure.provider}</b><small>{errorText(failure.error)}</small>{failure.detail&&<small>{failure.detail}</small>}</div><div className="settings-item-detail">{stamp(failure.at)}</div></li>)}</ul></section>}
         <div className="settings-section"><h3>{t('devices.clients')}</h3><ul className="settings-list">
-          {(details.clients ?? []).map(client=><li className="settings-list-row popover-row" key={client.clientId}><div className="settings-item-main"><b>{clientName(client.clientId)}</b><small>{client.version ?? t('devices.versionUnknown')}</small></div><div className="settings-item-detail">{client.observedAt ? stamp(client.observedAt) : t('measurements.originUnknown')}</div></li>)}
+          {(details.clients ?? []).map(client=><li className="settings-list-row popover-row" key={client.clientId}><div className="settings-item-main"><b>{clientName(client.clientId)}</b><small>{client.version ?? t('devices.versionUnknown')}</small></div><div className="settings-item-detail">{client.observedAt ? stamp(client.observedAt) : t('measurements.originUnknown')}</div><div className="settings-item-actions"><button className="button" onClick={()=>openClientLinks({deviceId:details.id,clientId:client.clientId})}>{t('links.manage')}</button></div></li>)}
         </ul>{!details.clients?.length&&<p className="dialog-text">{t('devices.noClientData')}</p>}</div>
         <div className="settings-section"><h3>{t('agents.title')}</h3><ul className="settings-list">
-          {(details.sessions ?? []).map((session,i)=><li className="settings-list-row popover-row" key={i}><div className="settings-item-main"><b>{clientName(session.clientId ?? 'unknown')}</b><small>{session.project ?? t('agents.noProject')}</small></div><div className="settings-item-detail">{session.source ? PROVIDERS[session.source.split(':')[0]]?.name ?? session.source : t('agents.unknownSource')}</div></li>)}
+          {(details.sessions ?? []).map((session,i)=><li className="settings-list-row popover-row" key={i}><div className="settings-item-main"><b>{clientName(session.clientId ?? 'unknown')}</b><small>{session.project ?? t('agents.noProject')}</small></div><div className="settings-item-actions"><SessionFunding session={session} inventory={funding} evidence={session.attribution} error={fundingError}/></div></li>)}
         </ul>{!details.sessions?.length&&<p className="dialog-text">{t('devices.noSessions')}</p>}</div>
       </>}
     </Modal>}

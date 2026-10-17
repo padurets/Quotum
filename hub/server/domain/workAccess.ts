@@ -2,6 +2,8 @@
 export type PublicFunding = {source:string|null;sourceStatus?:'notProvided'};
 export type WorkAccess = {
   fundingRevision?:string;
+  attribution?:import('../store/links.js').LinkBatch;
+  attributionRevision?:string;
   owner:string|null;
   knownFrom:number;
   devices:ReadonlyMap<string,{owner:string;from:number;revision:string}>;

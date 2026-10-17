@@ -4,7 +4,7 @@ import {randomBytes} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import {config} from './config.js';
-import {catalogue} from './domain/providers.js';
+import {catalogue,sourceCounterOf} from './domain/providers.js';
 import type {Credentials} from './secrets/credentials.js';
 import type {HubSources} from './hubSources.js';
 import type {Ingest} from './ingest.js';
@@ -248,6 +248,7 @@ export class Events implements Touches {
   // ---------- touches ----------
 
   touchSources(ids: string[]) {
+    for (const id of ids) this.parts.hubSources?.activityChanged(id, this.clock.now());
     for (const watched of this.watched.values()) {
       for (const id of ids) {
         if (!watched.lineup.includes(id)) continue;
@@ -293,6 +294,7 @@ export class Events implements Touches {
 
   clientHistory(user:string,since:number,device?:string,sources:readonly string[]=[]) {
     try{this.onClientHistory?.(user,since,device);}catch(error){trouble(error);}
+    const budget=new Set(sources.filter(source=>sourceCounterOf(String(this.parts.store.db.prepare('SELECT provider FROM sources WHERE id=?').get(source)?.provider??''))!==null));
     for(const watched of this.watched.values()){
       const access=this.parts.store.workAccess(watched.id,this.clock.now());
       if(!(device?access.devices.get(device)?.owner===user:[...access.devices.values()].some(d=>d.owner===user)))continue;
@@ -301,7 +303,9 @@ export class Events implements Touches {
       this.workHistories.set(watched.id,Math.min(this.workHistories.get(watched.id)??admittedSince,admittedSince));
       for(const source of sources)if(access.sources.get(source)?.holders.has(user)){
         let pending=this.histories.get(watched.id);if(!pending)this.histories.set(watched.id,pending=new Map());
-        const key=JSON.stringify([source,'quota']),quotaSince=admittedSince===0?0:Math.max(admittedSince,access.sources.get(source)!.since);pending.set(key,{source,scope:'quota',since:Math.min(pending.get(key)?.since??quotaSince,quotaSince),workSince:Math.min(pending.get(key)?.workSince??quotaSince,quotaSince)});
+        const sourceSince=admittedSince===0?0:Math.max(admittedSince,access.sources.get(source)!.since);
+        const scopes:readonly HistoryScope[]=budget.has(source)?['quota','budget']:['quota'];
+        for(const scope of scopes){const key=JSON.stringify([source,scope]);pending.set(key,{source,scope,since:Math.min(pending.get(key)?.since??sourceSince,sourceSince),workSince:Math.min(pending.get(key)?.workSince??sourceSince,sourceSince)});}
       }
     }
     this.schedule();
@@ -510,7 +514,7 @@ export class Events implements Touches {
         try {
           const replacement=this.financialSnapshot(sub,financialKey,sub.workKey);
           if(replacement)frames=[frame('snapshot',replacement.snapshot)];
-          sub.workKey=this.projection.workKey(sub.board);
+          sub.workKey=this.projection.workKey(sub.board,undefined,this.clock.now());
         }catch(error){trouble(error);this.end(sub,'restart');continue;}
         if (sub.desktop && (sources.has(watched.id) || whole.has(watched.id) || frames.length || sub.pending.length || sub.invalidations.size || sub.rebaseline)) {
           const attention = this.attentionFrames(sub, sub.rebaseline, now);
@@ -538,9 +542,9 @@ export class Events implements Touches {
   /**
    * The events of one board: its name and view when touched as a whole, then the touched
    * sources, sources new to it first, then its sources when they changed. Null once the
-   * board is gone: its readers are let go. Touched as a whole, it also checks the work
-   * authority, invalidating credited history when it changes. Delivery replaces an
-   * authority-changing delta with a snapshot, including changed presentation names;
+   * board is gone: its readers are let go. Each refresh also checks the work authority,
+   * including reached session deadlines, invalidating credited history when it changes.
+   * Delivery replaces an authority-changing delta with a snapshot, including changed presentation names;
    * view-only changes preserve admitted work.
    */
   private refresh(
@@ -585,14 +589,14 @@ export class Events implements Touches {
       ids = part.lineup;
       watched.lineup = ids;
       computed = lineup;
-      const work = projection.workKey(watched.id,roster.access);
-      if (watched.work !== null && watched.work !== work) {
-        let pending=histories.get(watched.id);if(!pending)histories.set(watched.id,(pending=new Map()));
-        for(const source of ids)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0,workSince:0});
-        workHistories.set(watched.id,0);
-      }
-      watched.work = work;
     }
+    const work = projection.workKey(watched.id,roster.access);
+    if (watched.work !== null && watched.work !== work) {
+      let pending=histories.get(watched.id);if(!pending)histories.set(watched.id,(pending=new Map()));
+      for(const {id:source} of lineup)pending.set(JSON.stringify([source,'quota']),{source,scope:'quota',since:0,workSince:0});
+      workHistories.set(watched.id,0);
+    }
+    watched.work = work;
     if (computed.length) {
       const members = projection.members(watched.id);
       for (const source of computed) {
@@ -794,7 +798,7 @@ export class Events implements Touches {
       this.watched.set(id, watched);
     }
     const financialKey=this.parts.store.financialKey(reader.board);
-    const sub: Subscriber = {...reader, id: this.next++, fresh: true, stopPing: () => {}, seq:0,baselineAt:0,workKey:this.projection.workKey(reader.board),attentionKey: '', pending: [], invalidations: new Map(), pendingBytes: 0, rebaseline: false};
+    const sub: Subscriber = {...reader, id: this.next++, fresh: true, stopPing: () => {}, seq:0,baselineAt:0,workKey:this.projection.workKey(reader.board,undefined,this.clock.now()),attentionKey: '', pending: [], invalidations: new Map(), pendingBytes: 0, rebaseline: false};
     this.subscribers.set(sub.id, sub);
     watched.subscribers.add(sub);
     if (!this.stopHubRecheck) this.stopHubRecheck = this.every(this.options.recheckMs, () => this.touchHub());
@@ -839,7 +843,7 @@ export class Events implements Touches {
       };
       const replacement=this.financialSnapshot(sub,financialKey,sub.workKey);
       if(replacement)snapshot=replacement.snapshot;
-      sub.workKey=this.projection.workKey(sub.board);
+      sub.workKey=this.projection.workKey(sub.board,undefined,this.clock.now());
     } catch (error) {
       // Refused with an error, and nothing of it is left behind.
       this.unsubscribe(sub);
@@ -958,7 +962,7 @@ export class Events implements Touches {
       return {lease: known.id, now: this.clock.now(), frames};
     }
 
-    const lease: Lease = {...reader, id: randomBytes(16).toString('base64url'), subscriber: null, financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board), queue: [], bytes: 0, waiting: null, stopExpiry: () => {}, tomb: null};
+    const lease: Lease = {...reader, id: randomBytes(16).toString('base64url'), subscriber: null, financialKey:this.parts.store.financialKey(reader.board),workKey:this.projection.workKey(reader.board,undefined,this.clock.now()), queue: [], bytes: 0, waiting: null, stopExpiry: () => {}, tomb: null};
     const opened = this.subscribe({
       ...reader,
       kind: 'lease',
@@ -1000,7 +1004,7 @@ export class Events implements Touches {
       const replacement=this.financialSnapshot(lease,lease.financialKey,lease.workKey);
       if(replacement){lease.financialKey=replacement.key;lease.workKey=replacement.workKey;return [frame('snapshot',replacement.snapshot)];}
     }catch(error){trouble(error);this.expire(lease);return [bye('restart')];}
-    lease.workKey=this.projection.workKey(lease.board);
+    lease.workKey=this.projection.workKey(lease.board,undefined,this.clock.now());
     return frames.flatMap(packet=>{
       if(packet.type==='snapshot') {
         const snapshot=JSON.parse(packet.data) as Snapshot;
@@ -1017,7 +1021,7 @@ export class Events implements Touches {
 
   /** Prepared frames are not yet disclosed: replace their dataset and private bindings together. */
   private financialSnapshot(reader: Pick<Reader,'user'|'board'>, previous:string,previousWork:string) {
-    const key=this.parts.store.financialKey(reader.board),workKey=this.projection.workKey(reader.board);
+    const key=this.parts.store.financialKey(reader.board),workKey=this.projection.workKey(reader.board,undefined,this.clock.now());
     if(key===previous&&workKey===previousWork)return null;
     const snapshot=this.projection.snapshot(reader.user,reader.board,this.clock.now());
     if(!snapshot)throw new Error('the board could not be worked out');

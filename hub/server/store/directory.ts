@@ -379,7 +379,7 @@ export class Directory {
     return this.transaction(() => {
       const changed = this.db.prepare('UPDATE tokens SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').run(now, id, userId).changes;
       if (changed) this.db.prepare('UPDATE devices SET revoked_at = ? WHERE token_id = ? AND revoked_at IS NULL').run(now, id);
-      if (changed) tell(this.observer, o => o.touchUser(userId));
+      if (changed) {tell(this.observer, o => o.touchUser(userId));this.topologyChanged(userId);}
       return changed > 0;
     });
   }
@@ -421,6 +421,7 @@ export class Directory {
         .run(input.machine.name, input.machine.os, input.machine.arch, input.agent, input.tokenId, hashed, now, existing.id);
       if (existing.name !== input.machine.name || existing.os !== input.machine.os || existing.arch !== input.machine.arch || existing.agent !== input.agent || existing.tokenId !== input.tokenId || existing.revoked) this.measurementsChanged(input.userId);
       tell(this.observer, o => o.deviceContact?.(input.userId,existing.id,now));
+      if(existing.revoked)this.topologyChanged(input.userId);
       return this.deviceById(existing.id)!;
     }
     const id = newId();
@@ -428,6 +429,7 @@ export class Directory {
       .prepare('INSERT INTO devices VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL)')
       .run(id, input.userId, input.machine.id, input.machine.name, input.machine.os, input.machine.arch, input.agent, input.tokenId, hashed, now, now);
     tell(this.observer, o => o.touchUser(input.userId));
+    this.topologyChanged(input.userId);
     return this.deviceById(id)!;
   }
 
@@ -468,8 +470,13 @@ export class Directory {
 
   revokeDevice(userId: string, id: string, now: number): boolean {
     const changed = this.db.prepare('UPDATE devices SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL').run(now, id, userId).changes > 0;
-    if (changed) tell(this.observer, o => o.touchUser(userId));
+    if (changed) {tell(this.observer, o => o.touchUser(userId));this.topologyChanged(userId);}
     return changed;
+  }
+
+  private topologyChanged(user:string) {
+    const sources=(this.db.prepare('SELECT source_id FROM holders WHERE user_id=?').all(user) as {source_id:string}[]).map(r=>r.source_id);
+    tell(this.observer,o=>o.touchSources(sources));
   }
 
   /** Forgets sessions, invites and device codes that expired a day ago or earlier. */

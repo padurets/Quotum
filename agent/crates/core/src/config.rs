@@ -214,6 +214,10 @@ impl Config {
         self.clients.get(client.id()).and_then(|c| c.enabled).unwrap_or(true)
     }
 
+    pub fn routes(&self, client: ClientId) -> bool {
+        self.clients.get(client.id()).and_then(|c| c.route).unwrap_or(true)
+    }
+
     pub fn client_program(&self, client: ClientId) -> Option<&Path> {
         self.clients
             .get(client.id())

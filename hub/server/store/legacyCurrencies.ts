@@ -15,14 +15,14 @@ export function importLegacyCurrencies(db:DatabaseSync,currencies:CurrencyStore)
         return [{source:row.source_id,from:row.from_at,quote}];
       }catch{return [];}
     });
-    const query=db.prepare("SELECT * FROM readings WHERE meter_id LIKE 'converted:%:USD' ORDER BY at");query.setReadBigInts(true);
+    const query=db.prepare("SELECT * FROM readings WHERE pair_anchor=0 AND meter_id LIKE 'converted:%:USD' ORDER BY at");query.setReadBigInts(true);
     const rows=query.all() as {source_id:string;meter_id:string;at:bigint;previous_at:bigint|null;amount:bigint;scope:string|null;stale_after_ms:bigint}[];
     const groups=new Map<string,typeof rows>();
     for(const row of rows){const key=JSON.stringify([row.source_id,row.meter_id]);let group=groups.get(key);if(!group)groups.set(key,group=[]);group.push(row);}
     for(const group of groups.values()) {
       const proven=group.flatMap(row=>{
         const origin=/^converted:(balance|granted|topped_up):USD$/.exec(row.meter_id);if(!origin)return [];
-        const nativeId=origin[1]+':CNY',nativeQuery=db.prepare('SELECT * FROM readings WHERE source_id=? AND meter_id=? AND at<=? ORDER BY at DESC LIMIT 1');nativeQuery.setReadBigInts(true);
+        const nativeId=origin[1]+':CNY',nativeQuery=db.prepare('SELECT * FROM readings WHERE pair_anchor=0 AND source_id=? AND meter_id=? AND at<=? ORDER BY at DESC LIMIT 1');nativeQuery.setReadBigInts(true);
         const native=nativeQuery.get(row.source_id,nativeId,row.at) as {amount:bigint;limit_amount:bigint|null;reset_at:bigint|null;minutes:bigint|null;scope:string|null;label:string|null}|undefined;
         const quote=quotes.filter(q=>q.source===row.source_id&&q.from<=Number(row.at)).sort((a,b)=>b.from-a.from)[0]?.quote;
         if(!native||!quote||row.scope!=='ecb:'+new Date(quote.date).toISOString().slice(0,10)||convertMoney({amount:native.amount.toString(),unit:'CNY'},'USD',quote)?.amount!==row.amount.toString())return [];

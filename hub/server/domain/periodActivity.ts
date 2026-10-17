@@ -8,7 +8,7 @@ import type {PeriodRange} from './period.js';
 import type {WorkedSession,WorkTrace} from './periodWork.js';
 import {PeriodCurves,type WorkTimeline} from './periodCurves.js';
 
-type Group={name:string|null;curve:WorkTimeline;contexts:WorkTimeline[];agentMs:number;agents:number};
+type Group={name:string|null;curve:WorkTimeline;contexts:WorkTimeline[];identities:string[];counts:Map<string,number>;agentMs:number;agents:number};
 const dimensions:ActivityDimension[]=['source','project','device'];
 const keys=(row:WorkTrace['refs'][number])=>({source:sourceKey(row),project:JSON.stringify(row.project),device:row.device.id});
 export type ActivityOrder={by:ActivityDimension;column:'active'|'concurrency';keys:readonly string[]};
@@ -46,8 +46,8 @@ export class PeriodActivity {
     this.cut=trace.cut??curves.all.last(Infinity);
     for(let id=0;id<trace.refs.length;id++){this.contexts.set(trace.refs[id].ref,curves.contexts[id]);yield;}
     const devices=new Map(trace.refs.map(r=>[r.device.id,r.device.name]));
-    for(const by of dimensions)for(const [key,curve] of curves.groups[by]){this.groups[by].set(key,{name:by==='source'?null:by==='project'?JSON.parse(key):devices.get(key)??key,curve,contexts:[],agentMs:0,agents:0});yield;}
-    for(const ref of trace.refs){const context=this.contexts.get(ref.ref)!;for(const by of dimensions)this.groups[by].get(keys(ref)[by])?.contexts.push(context);yield;}
+    for(const by of dimensions)for(const [key,curve] of curves.groups[by]){this.groups[by].set(key,{name:by==='source'?null:by==='project'?JSON.parse(key):devices.get(key)??key,curve,contexts:[],identities:[],counts:new Map(),agentMs:0,agents:0});yield;}
+    for(const ref of trace.refs){const context=this.contexts.get(ref.ref)!;for(const by of dimensions){const group=this.groups[by].get(keys(ref)[by]);if(group){group.contexts.push(context);group.identities.push(ref.identityRef??ref.ref);}}yield;}
   }
 
   update(rows:Omit<WorkedSession,'currentPresence'>[]) {
@@ -56,7 +56,7 @@ export class PeriodActivity {
     for(const ref of new Set([...this.previous.keys(),...next.keys()])) {
       const old=this.previous.get(ref),row=next.get(ref);if(row===old)continue;
       const groupKeys=keys((row??old)!);
-      for(const by of dimensions){const group=this.groups[by].get(groupKeys[by]);if(!group)continue;group.agentMs+=(row?.workedMs??0)-(old?.workedMs??0);group.agents+=Number(!!row)-Number(!!old);}
+      for(const by of dimensions){const group=this.groups[by].get(groupKeys[by]);if(!group)continue;group.agentMs+=(row?.workedMs??0)-(old?.workedMs??0);const identity=(row??old)!.identityRef??(row??old)!.ref,count=(group.counts.get(identity)??0)+Number(!!row)-Number(!!old);if(count)group.counts.set(identity,count);else group.counts.delete(identity);group.agents=group.counts.size;}
     }
     this.previous=next;
   }
@@ -65,7 +65,7 @@ export class PeriodActivity {
     if(this.trace.fixed)return activity;
     const selected=key===undefined?this.groups[dimension]:new Map(this.groups[dimension].has(key)?[[key,this.groups[dimension].get(key)!]]:[]);
     const groups:ActivityGroup[]=[];let agents=0;
-    for(const [id,group] of selected){const count=range.to>range.from?group.contexts.reduce((sum,curve)=>sum+Number(curve.read(range)>0),0):0;agents+=count;if(count)groups.push({key:id,name:group.name,agentMs:group.curve.read(range),activeMs:group.curve.read(range,true),agents:count,cells:[]});}
+    const identities=new Set<string>();for(const [id,group] of selected){const present=new Set<string>();if(range.to>range.from)group.contexts.forEach((curve,i)=>{if(curve.read(range)>0){present.add(group.identities[i]);identities.add(group.identities[i]);}});if(present.size)groups.push({key:id,name:group.name,agentMs:group.curve.read(range),activeMs:group.curve.read(range,true),agents:present.size,cells:[]});}agents=identities.size;
     const from=Math.max(range.from,this.trace.knownFrom),to=Math.min(range.to,this.cut);
     return {...activity,...(this.trace.available===false?{available:false as const}:{}),known:this.trace.available!==false&&from<to?{from,to}:null,agentMs:key!==undefined?groups[0]?.agentMs??0:agents?this.all.read(range):0,activeMs:key!==undefined?groups[0]?.activeMs??0:agents?this.all.read(range,true):0,agents,by:{...activity.by,[dimension]:groups}};
   }
@@ -119,7 +119,7 @@ export class PeriodActivity {
     const part=(at:number)=>({from:Math.max(range.from,at),to:Math.min(range.to,at+activity.barMs)});
     const cells:Activity['cells']=activity.cells.filter(([at])=>at<range.to&&at+activity.barMs>range.from).map(cell=>{
       const [at]=cell,cut=part(at);if(cut.from===at&&cut.to===at+activity.barMs)return cell;
-      let agents=0;for(const curve of this.contexts.values())if(curve.read(cut)>0)agents++;
+      const identities=new Set<string>();for(const ref of this.trace.refs)if(this.contexts.get(ref.ref)!.read(cut)>0)identities.add(ref.identityRef??ref.ref);const agents=identities.size;
       return [at,this.all.read(cut,true),this.all.read(cut),agents];
     });
     const by:Activity['by']={source:[],project:[],device:[]};
@@ -132,6 +132,6 @@ export class PeriodActivity {
       by[dimension].sort((a,b)=>b.agentMs-a.agentMs||a.key.localeCompare(b.key));
     }
     const from=Math.max(range.from,this.trace.knownFrom),to=Math.min(range.to,this.cut);
-    return {...activity,...(this.trace.available===false?{available:false as const}:{}),since:this.trace.knownFrom,known:this.trace.available!==false&&from<to?{from,to}:null,activeMs:this.all.read(range,true),agentMs:this.all.read(range),agents:this.previous.size,cells,by};
+    return {...activity,...(this.trace.available===false?{available:false as const}:{}),since:this.trace.knownFrom,known:this.trace.available!==false&&from<to?{from,to}:null,activeMs:this.all.read(range,true),agentMs:this.all.read(range),agents:new Set([...this.previous.values()].map(row=>row.identityRef??row.ref)).size,cells,by};
   }
 }

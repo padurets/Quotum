@@ -1,5 +1,5 @@
 import {chooseLocale} from '../lib/app';
-import {useLayoutEffect, useId, useRef, useState, type InputHTMLAttributes, type MouseEventHandler, type ReactNode} from 'react';
+import {useLayoutEffect, useId, useRef, useState, type InputHTMLAttributes, type SelectHTMLAttributes, type MouseEventHandler, type ReactNode} from 'react';
 import {createPortal} from 'react-dom';
 import {LOCALES, t, useLocale, type Locale} from '../i18n';
 import {messageOf} from '../lib/http';
@@ -138,6 +138,16 @@ export function Field({label, hint, ...input}: {label: string; hint?: string} & 
       {hint && <small id={`${id}-hint`}>{hint}</small>}
     </div>
   );
+}
+
+/** A native choice uses the same label and hint as an input. */
+export function SelectField({label, hint, compact, children, ...select}: {label: string; hint?: string; compact?: boolean} & SelectHTMLAttributes<HTMLSelectElement>) {
+  const id = useId();
+  return <div className="field">
+    <label htmlFor={id} className={compact ? 'sr-only' : undefined}>{label}</label>
+    <select id={id} aria-describedby={hint ? `${id}-hint` : undefined} {...select}>{children}</select>
+    {hint && <small id={`${id}-hint`}>{hint}</small>}
+  </div>;
 }
 
 /** A value to copy: a command, a token, a link. */

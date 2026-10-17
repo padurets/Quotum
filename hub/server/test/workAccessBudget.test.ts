@@ -6,9 +6,73 @@ import {Events} from '../events.js';
 import {PeriodReader} from '../periodRead.js';
 import {readHistory,ReadError} from '../historyRead.js';
 import {Store} from '../store/store.js';
+import {Directory} from '../store/directory.js';
 import {PeriodAccounting} from '../domain/periodAccounting.js';
 import {createHash} from 'node:crypto';
 const M=60_000,H=60*M;
+
+test('captured holdings and route policies reserve their retained maps before allocation',()=>{
+ const store=new Store(':memory:',at),directory=new Directory(store.db),owner=directory.createUser('memory@example.com','Memory','fixture',at);
+ try{
+  for(let i=0;i<300;i++)store.hold(store.source('codex',String(i).padStart(24,'0'),at),owner.id,at);
+  const device=directory.saveDevice({userId:owner.id,machine:{id:'fixture',name:'Laptop',os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},at).id;
+  store.db.prepare('INSERT INTO device_tracking_policy VALUES (?,?,0)').run(device,'*');
+  const reservation=new HistoryTiles(store,8192).reservation();
+  try{assert.throws(()=>store.links.batch([owner.id],reservation.add),HistoryLimit);}finally{reservation.close();}
+  let bytes=0;const context=store.links.batch([owner.id],size=>bytes+=size);
+  assert.equal(context(owner.id,device,'codex').held.size,300);assert.equal(context(owner.id,device,'codex').routeEnabled,false);
+  assert.ok(bytes>300*256,'holdings and disabled policies belong to the same captured budget');
+ }finally{store.close();}
+});
+
+test('the default history ceiling admits context rows before materializing a dense month',t=>{
+ const start=Math.floor(Date.now()/(2*H))*2*H-28*24*H,store=new Store(':memory:',start),directory=new Directory(store.db);
+ try{
+  const owner=directory.createUser('contexts@example.com','Contexts','fixture',start),source=store.source('codex','contexts',start);
+  store.hold(source,owner.id,start);
+  const device=directory.saveDevice({userId:owner.id,machine:{id:'contexts',name:'Laptop',os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},start).id;
+  const count=40000,project='P'.repeat(120),folder='F'.repeat(120);
+  const session=store.db.prepare('INSERT INTO agent_sessions(id,device_id,client,source_id,origin,started_at,project,folder,ordinal,producer_id,account_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)'),work=store.db.prepare('INSERT INTO agent_work VALUES(?,?,?)');
+  store.db.exec('BEGIN');
+  for(let id=1;id<=count;id++){session.run(id,device,'codex',source,'terminal',start+(id-1)*M,project,folder,0,id.toString(16).padStart(32,'0'),'login');work.run(id,start+(id-1)*M,start+id*M);}
+  store.db.exec('COMMIT');
+  const tiles=new HistoryTiles(store),reservation=tiles.reservation.bind(tiles);let reserved=0,materialized=0,unadmitted=0;
+  t.mock.method(tiles,'reservation',()=>{const value=reservation();let own=0;return {add:(bytes:number)=>{value.add(bytes);reserved+=bytes;own+=bytes;},remove:(bytes:number)=>{value.remove(bytes);reserved-=bytes;own-=bytes;},close:()=>{value.close();reserved-=own;own=0;}};});
+  const prepare=store.db.prepare.bind(store.db),observe=(rows:number)=>{materialized+=rows;unadmitted=Math.max(unadmitted,materialized*512-reserved);};
+  t.mock.method(store.db,'prepare',(sql:string)=>{
+   const statement=prepare(sql);if(!sql.startsWith('SELECT s.id,s.client AS clientId'))return statement;
+   const all=statement.all.bind(statement),iterate=statement.iterate.bind(statement);
+   t.mock.method(statement,'all',(...args:Parameters<typeof all>)=>{const rows=all(...args);observe(rows.length);return rows;});
+   t.mock.method(statement,'iterate',function*(...args:Parameters<typeof iterate>){for(const row of iterate(...args)){observe(1);yield row;}});
+   return statement;
+  });
+  const board=directory.boards(owner.id).find(board=>board.personal)!.id;
+  assert.throws(()=>tiles.read(board,2*H,start,start+40080*M,Date.now(),store.shown(board,[]),undefined,'quota'),HistoryLimit);
+  assert.ok(materialized<count,'over-budget contexts are refused before full native materialization');
+  assert.ok(unadmitted<=4096,'a native context batch cannot allocate ahead of its reservation');assert.equal(reserved,0);
+ }finally{store.close();}
+});
+
+for(const links of [64,128])test(`the default history ceiling bounds ${links} temporal cuts and releases a refused read`,t=>{
+ const start=Math.floor(Date.now()/(12*H))*12*H-28*24*H,end=start+28*24*H,store=new Store(':memory:',start),directory=new Directory(store.db);
+ try{
+  const owner=directory.createUser('fragments@example.com','Fragments','fixture',start),board=directory.boards(owner.id).find(board=>board.personal)!.id;
+  const devices=Array.from({length:20},(_,i)=>directory.saveDevice({userId:owner.id,machine:{id:'fragments-'+i,name:'Laptop '+i,os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},start).id);
+  const sources=['a','b'].map(account=>store.source('openrouter',account,start));for(const source of sources)store.hold(source,owner.id,start);
+  const session=store.db.prepare('INSERT INTO agent_sessions(id,device_id,client,source_id,origin,started_at,project,folder,ordinal,producer_id,account_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)'),work=store.db.prepare('INSERT INTO agent_work VALUES(?,?,?)'),link=store.db.prepare('INSERT INTO client_links VALUES(?,?,?,?,?,?,?,?,?,?)');
+  store.db.exec('BEGIN');
+  for(let n=0;n<links;n++)link.run('link-'+n,owner.id,'opencode',null,null,null,sources[n%2],start+(end-start)*n/links,start+(end-start)*(n+1)/links,start);
+  for(let id=1;id<=2400;id++){session.run(id,devices[(id-1)%20],'opencode',null,'terminal',start,'Project','Folder',0,id.toString(16).padStart(32,'0'),null);work.run(id,start,end);}
+  store.db.exec('COMMIT');
+  const tiles=new HistoryTiles(store),reservation=tiles.reservation.bind(tiles);let reserved=0;
+  t.mock.method(tiles,'reservation',()=>{const value=reservation();let own=0;return {add:(bytes:number)=>{value.add(bytes);reserved+=bytes;own+=bytes;},remove:(bytes:number)=>{value.remove(bytes);reserved-=bytes;own-=bytes;},close:()=>{value.close();reserved-=own;own=0;}};});
+  assert.throws(()=>tiles.read(board,12*H,start,end,Date.now(),store.shown(board,[]),undefined,'quota'),HistoryLimit,'small raw input must not admit an unbounded temporal projection');
+  assert.equal(reserved,0,'a refused projection releases all request reservations');
+  store.db.prepare('DELETE FROM client_links WHERE id NOT IN (?,?)').run('link-0','link-1');
+  assert.equal(tiles.read(board,12*H,start,end,Date.now(),store.shown(board,[]),undefined,'quota').length,2,'a smaller projection still succeeds on the same tiles');
+  assert.equal(reserved,0);
+ }finally{store.close();}
+});
 
 async function fixture(t:TestContext,ceiling?:number,devices=1){
  t.mock.method(Date,'now',()=>at+2*H);const h=await centralFixture(),events=new Events(h.hub,undefined,{now:()=>at+2*H,after:()=>()=>{}},null),tiles=new HistoryTiles(h.store,ceiling),period=new PeriodReader(h.hub,tiles,events);
@@ -30,7 +94,7 @@ for(const ceiling of [5000,50_000])test(`retained authority names share the ${ce
   h.store.db.prepare('INSERT INTO project_names VALUES (?,?,?)').run(h.owner.id,reported,name);names.push({user_id:h.owner.id,reported,name});
  }
  assert.ok(Buffer.byteLength(JSON.stringify(names))>ceiling,'authority metadata exceeds the requested ceiling although the selected ledger is empty');
- const access=h.store.workAccess(h.board),expected=createHash('sha256').update(JSON.stringify([access.knownFrom,[...access.devices],access.fundingRevision??'',[[h.source,at-M,[h.owner.id]]],names,[{id:h.device.id,name:'Laptop'}]])).digest('base64url').slice(0,16);
+ const access=h.store.workAccess(h.board),expected=createHash('sha256').update(JSON.stringify([access.knownFrom,[...access.devices],access.fundingRevision??'',access.attributionRevision??'',[[h.source,at-M,[h.owner.id]]],names,[{id:h.device.id,name:'Laptop'}]])).digest('base64url').slice(0,16);
  assert.equal(h.store.workKey(h.board,undefined,access),expected,'incremental hashing preserves the existing JSON authority namespace');
  const prepare=h.store.db.prepare.bind(h.store.db);
  t.mock.method(h.store.db,'prepare',(sql:string)=>{

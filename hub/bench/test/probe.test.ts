@@ -129,7 +129,7 @@ test('credit heartbeats require a new DOM commit of the exact observation, serie
 
 test('the live probe distinguishes subscription funds, quota and wallets inside shared analytics',()=>{
   const p=page(),analytics=el('section',null,{},'analytics');
-  for(const [name,widget] of [['history','quota'],['forecast','quota'],['budget-history','budget'],['budget-table','budget'],['subscription-funds','funds'],['activity','activity']] as const) {
+  for(const [name,widget] of [['history','quota'],['forecast','quota'],['budget-history','budget'],['budget-table','budget'],['subscription-funds','funds'],['activity','activity'],['activity history','activity']] as const) {
     const panel=el('section',analytics,name.endsWith('table')||name==='forecast'?{}:{'data-time':'chart'},name);
     p.bench.reset();
     p.hook.onCommitFiberRoot(1,{current:fiber(FUNCTION,{children:[fiber(HOST,{stateNode:panel})]})});

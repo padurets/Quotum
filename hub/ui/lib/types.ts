@@ -30,6 +30,7 @@ export type FreeResets = {available: number; expiring?: Expiring[]};
  * the board whose devices measure it, and whether its numbers are too old, as the hub says.
  */
 export type Card = {
+  usageWork?:import('../../server/domain/usageWork').UsageWork[];
   id: string;
   provider: string;
   plan: string;
@@ -63,11 +64,13 @@ export type CadenceWhy = 'low' | 'inUse' | 'changed' | 'idle' | 'reset' | 'fixed
 
 /** A coding agent running on a machine, spending the subscription of its card. */
 export type LiveSession = {
+  identityRef?:string;
   /** Present only on retained period rows. */
   ref?: string;
   presenceKey?: string;
   currentPresence?: {working:boolean;startedAt:number};
   clientId?: string;
+  route?: {class: 'subscription' | 'api' | 'unknown'; provider: string | null};
   sourceStatus?:'notProvided';
   device: {id: string; name: string};
   /** A terminal; an editor or the provider's app, which run one client per window. */

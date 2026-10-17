@@ -5,7 +5,7 @@ import {timeRangeLabel,timeRangeKey,useTimeRange} from '../lib/timeRange';
 import {memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject} from 'react';
 import type {LiveSession} from '../lib/types';
 import {clientName} from '../../server/domain/clients';
-import {agentSourceLabel} from '../lib/agents';
+import {agentCount,agentSourceLabel,distinctAgents} from '../lib/agents';
 import {AGENTS, colorOf, columnShown, withColumn, withHidden, type Arrange} from '../lib/view';
 import {
   AGENT_WIDTHS,
@@ -247,19 +247,20 @@ function RunningTime({group,still}:{group:AgentGroup;still:boolean}){
 
 /** How many of a group's agents work, of how many, as a card's tray counts them, and a mark for each while they are few. */
 function Tally({group, color}: {group: AgentGroup; color: Context['color']}) {
+  const agents=distinctAgents(group.rows);
   return (
     <span className="agents-tally">
       <span className="agents-count" aria-hidden="true">
-        <b>{group.working}</b>/{group.rows.length}
+        <b>{group.working}</b>/{agentCount(group.rows)}
       </span>
-      {drawn(group.rows) && (
+      {drawn(agents) && (
         <span className="agents-marks" aria-hidden="true">
-          {group.rows.map((row, i) => (
+          {agents.map((row, i) => (
             <Mark key={i} session={row.session} style={color(row.source)} />
           ))}
         </span>
       )}
-      <span className="sr-only">{t('agents.machineSummary', {working: group.working, count: group.rows.length})}</span>
+      <span className="sr-only">{t('agents.machineSummary', {working: group.working, count:agentCount(group.rows)})}</span>
     </span>
   );
 }
@@ -603,13 +604,13 @@ export const AgentsPanel = memo(function AgentsPanel({arrange}: {arrange: Arrang
   const worked=rows.some(row=>row.session.workedMs===null)?null:rows.reduce((sum,row)=>sum+row.session.workedMs!,0);
   const workedText=(now:number)=>!boardPeriod.activitySummaryAt(activityDimension(by),now)?.known||worked===null?'—':workHours(boardPeriod.workedAt(refs,worked,now)!);
   const metrics:TableMetric[]=[
-    ...(single||columns.includes('agents')?[{id:'sessions',column:'agents',label:t('activity.agents'),cell:{time:'session-count',changesAt:(now:number)=>boardPeriod.activityCoverageChangesAt(now),at:(now:number)=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?rows.length:'—',title:t('activity.agentsHint')})}}]:[]),
+    ...(single||columns.includes('agents')?[{id:'sessions',column:'agents',label:t('activity.agents'),cell:{time:'session-count',changesAt:(now:number)=>boardPeriod.activityCoverageChangesAt(now),at:(now:number)=>({content:boardPeriod.activitySummaryAt(activityDimension(by),now)?.known?agentCount(rows):'—',title:t('activity.agentsHint')})}}]:[]),
     ...(columns.includes('worked')?[{id:'worked',label:t('agents.worked'),cell:{time:'worked',changesAt:(now:number)=>withCoverage(now,worked===null?null:boardPeriod.workedChangesAt(refs,now,workedText)),at:(now:number)=>({content:workedText(now),title:t('agents.workedHint')})}}]:[]),
     ...(['active','concurrency'] as const).filter(column=>columns.includes(column)).map(column=>({id:column,label:t(COLUMNS[column].title),compactLabel:column==='concurrency'?t('activity.atOnce'):undefined,cell:activityCell(by,column)})),
   ];
   const workingSummary:TimedCell={time:'working-count',changesAt:now=>boardPeriod.activityCoverageChangesAt(now),at:now=>{
     const known=boardPeriod.activitySummaryAt(activityDimension(by),now)?.known;
-    return {content:t('agents.machineSummary',{working:known?working:'—',count:known?rows.length:'—'})};
+    return {content:t('agents.machineSummary',{working:known?working:'—',count:known?agentCount(rows):'—'})};
   }};
   // Who may change what: every viewer how the list gathers, the owner its columns and whether it shows.
   const toggles = columnsOf(agentsBy).rest;

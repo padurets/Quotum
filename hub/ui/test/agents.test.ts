@@ -5,6 +5,8 @@ import {
   AGENT_WIDTHS,
   NAME_WIDTH,
   agentRows,
+  agentCount,
+  distinctAgents,
   agentsLayout,
   byActivity,
   columnsOf,
@@ -38,6 +40,14 @@ const row = (project: string | null, change: Partial<LiveSession> = {}, title = 
 const each = (...rows: AgentRow[]) => groupsOf(rows, 'none');
 const projects = (groups: AgentGroup[]) => groups.map(g => g.rows[0].session.project);
 const sort = (groups: AgentGroup[], column: AgentColumn, descending = false, shown: readonly AgentColumn[] = AGENT_COLUMNS) => sortedGroups(groups, {column, descending}, shown);
+
+test('agent counts, sorting and marks share logical identity across funding fragments',()=>{
+  const fragments=[0,1,2].map(i=>row('A',{ref:'fragment-'+i,identityRef:'one',lastWorkedAt:100+i,working:i===2}));
+  const rows=[...fragments,row('B',{ref:'two'}),row('B',{ref:'three'})],groups=groupsOf(rows,'project');
+  assert.deepEqual(groups.map(group=>agentCount(group.rows)),[1,2]);
+  assert.deepEqual(projects(sort(groups,'agents')),['A','B']);assert.deepEqual(projects(sort(groups,'agents',true)),['B','A']);
+  assert.equal(distinctAgents(fragments).length,1);assert.equal(distinctAgents(fragments)[0],fragments[2]);
+});
 const active = [
   session('new working', {working: true, startedAt: 300}),
   session('old working', {working: true, startedAt: 10}),

@@ -65,7 +65,7 @@ function activity(stretches: Stretch[], known: {from: number; to: number}, cell:
   const to = Math.ceil(known.to / cell) * cell;
   const thresholds = {work: known.from, sources: Object.fromEntries(stretches.map(s => [s.source, known.from]))};
   const within = stretches.map(s => ({...s, from: Math.max(s.from, known.from), to: Math.min(s.to, known.to)})).filter(s => s.to > s.from);
-  const chunks: Chunk[] = cellsOf([], within, Object.fromEntries(names), cell, from, to, thresholds).map(c => ({...c, activity: {...c.activity, sessions: c.activity.sessions.map(([id, ...rest]) => [String(id), ...rest])}}));
+  const chunks: Chunk[] = cellsOf([], within, Object.fromEntries(names), cell, from, to, thresholds).map(c => ({...c, activity: {...c.activity, sessions: c.activity.sessions.map(([id,source,project,device,sourceStatus])=>[JSON.stringify([id,source,sourceStatus]),source,project,device,sourceStatus,String(id)])}}));
   const {since: _since, known: _known, ...result} = compose(chunks, {now: known.to, historyStart: 0, known: thresholds}, {cell, k0: from / cell, k1: to / cell - 1, length: to - from, live: false, key: '', now: known.to}, new Set()).activity;
   return result;
 }
@@ -75,7 +75,7 @@ function windowWork(samples: Sample[], stretches: Stretch[], known: {from: numbe
   const to = Math.ceil(known.to / MIN) * MIN;
   const thresholds = {work: known.from, sources: {'codex:1': 0}};
   const within = stretches.map(s => ({...s, from: Math.max(s.from, known.from), to: Math.min(s.to, known.to)})).filter(s => s.to > s.from);
-  const chunks: Chunk[] = cellsOf([{source: 'codex:1', window: 'weekly', samples}], within, {}, MIN, from, to, thresholds).map(c => ({...c, activity: {...c.activity, sessions: c.activity.sessions.map(([id, ...rest]) => [String(id), ...rest])}}));
+  const chunks: Chunk[] = cellsOf([{source: 'codex:1', window: 'weekly', samples}], within, {}, MIN, from, to, thresholds).map(c => ({...c, activity: {...c.activity, sessions: c.activity.sessions.map(([id,source,project,device,sourceStatus])=>[JSON.stringify([id,source,sourceStatus]),source,project,device,sourceStatus,String(id)])}}));
   return compose(chunks, {now: known.to, historyStart: 0, known: thresholds}, {cell: MIN, k0: from / MIN, k1: to / MIN - 1, length: to - from, live: false, key: '', now: known.to}, new Set(['codex:1 weekly'])).series[0].work!;
 }
 

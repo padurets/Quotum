@@ -1,3 +1,4 @@
+import {openClientLinks} from './ClientLinks';
 import {MeasurementClock,useMeasurementClock,useMeasurementTime} from '../lib/measurementClock';
 import {usePeriodValues,useSourcePeriodSessions} from '../lib/period';
 import {useTimeRange} from '../lib/timeRange';
@@ -25,6 +26,7 @@ import {providerOf} from '../../server/domain/providers';
 import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
+import {UsageWorkMark} from './UsageWorkMark';
 import {EyeOffIcon, HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
 import {RefreshAction} from './RefreshAction';
 import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
@@ -342,6 +344,7 @@ function SourceSettings({source, title, arrange, boardId, takeOff}: {source: Car
         </div>
       )}
       <Frequency key={`${boardId}:${source.id}`} source={source} board={boardId} />
+      {mine && <button className="popover-row" onClick={() => {setOpen(false); openClientLinks(undefined, source.id);}}>{t('links.manage')}</button>}
       {mine&&providerOf(source.provider)?.measuredBy==='client'&&<button type="button" className="popover-row" onClick={()=>{
         navigate(measurementDevicesHref(source.id,boardId));
       }}>{t('measurements.manage')}</button>}
@@ -479,7 +482,9 @@ function CardTray({source, funds}: {source: Card; funds?: ReactNode}) {
   const quotaIssue=source.quota&&!source.quota.complete;
   const news=providerOf(source.provider)?.funding==='wallet'||source.balanceStatus||access||quotaIssue?<><BalanceMark source={source}/>{access&&<AccessMark id={source.id}/>}
     {quotaIssue&&<QuotaMark source={source}/>}</>:null;
-  return <Tray resets={resets} news={news} current={funds||source.resets?.available?<>{funds}{!!source.resets?.available&&<FreeResets resets={source.resets} observation={source.resources?.resets}/>}</>:null} sessions={sessions.rows} sessionPeriod={sessions} />;
+  const selected=useTimeRange();
+  const allNews=!selected&&source.usageWork?.length?<>{news}<UsageWorkMark source={source}/></>:news;
+  return <Tray resets={resets} news={allNews} current={funds||source.resets?.available?<>{funds}{!!source.resets?.available&&<FreeResets resets={source.resets} observation={source.resources?.resets}/>}</>:null} sessions={sessions.rows} sessionPeriod={sessions} />;
 }
 
 /**

@@ -106,7 +106,7 @@ test('returning from settings resumes the actual period coordinator after prefer
     PeriodTransport:class{change(){reads++;}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
     timeRange:()=>({from:1_400_000,to:5_000_000}),prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),cellOf:()=>60_000,
-    subscriptionSelection:()=>undefined,moneySelection:()=>({selection:undefined}),
+    subscriptionSelection:()=>undefined,moneyReadSelection:()=>undefined,
     PERIOD_SCOPES:['quota','budget','funds'],widgetVisible:()=>true,QUOTA_WIDGETS:['history'],BUDGET_WIDGETS:['budget'],SUBSCRIPTION_FUNDS:'funds',AGENTS:'agents',ACTIVITY:'activity',noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8');
@@ -140,7 +140,7 @@ test('monetary evidence refreshes only the selected resource family',()=>{
     PeriodTransport:class{change(){}reset(){}},fetchPeriod:()=>{},page:{get:()=>state},preparations:()=>null,
     evaluatedRange,periodKey,empty:()=>({value:null,basis:null,loading:false,error:null}),
     timeRange:()=>null,prefs:()=>({range:'1h'}),periodOf:()=>({ms:3_600_000}),cellOf:()=>60_000,subscriptionSelection:()=>undefined,
-    moneySelection:(_cards:unknown,_hidden:unknown,_prefs:unknown,_currency:unknown,family:string)=>({selection:{ids:[[family==='funds'?'credit':'wallet','balance']]}}),
+    moneyReadSelection:(_cards:unknown,_view:unknown,_prefs:unknown,_currency:unknown,family:string)=>({ids:[[family==='funds'?'credit':'wallet','balance']]}),
     PERIOD_SCOPES:['quota','budget','funds'],widgetVisible:()=>true,QUOTA_WIDGETS:['history'],BUDGET_WIDGETS:['budget'],SUBSCRIPTION_FUNDS:'funds',AGENTS:'agents',ACTIVITY:'activity',noSessions:[],noValue:{},
   };
   const source=readFileSync(new URL('../lib/period.ts',import.meta.url),'utf8'),body=source.slice(source.indexOf('class BoardPeriod'),source.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod');
@@ -271,7 +271,7 @@ test('standalone metadata borrowing preserves mixed drawing source capabilities'
   const sent:{body:PeriodRequest;header:string|null}[]=[];
   t.mock.method(globalThis,'fetch',async(_url:RequestInfo|URL,init?:RequestInit)=>{
     const body=JSON.parse(String(init?.body)) as PeriodRequest;sent.push({body,header:new Headers(init?.headers).get('x-quotum-history-sources')});
-    return new Response(JSON.stringify({basis,...Object.fromEntries((['quota','funds'] as const).filter(scope=>body[scope]).map(scope=>[scope,{state:'complete',basis,value:{run:'r',now:1000,meta:body[scope]!.meta,chunks:[]}}]))}));
+    return new Response(JSON.stringify({basis,...Object.fromEntries((['quota','funds'] as const).filter(scope=>body[scope]).map(scope=>[scope,{state:'complete',basis,value:{run:'r',now:1000,meta:scope==='funds'?'funds-captured':body[scope]!.meta,chunks:[]}}]))}));
   });
   for(const mixed of [false,true]){
     const pool=new HistoryPool(),request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:1000},evaluatedAt:1000,quota:{cell:'1',from:'0',to:'1000',cells:'skip'},...(mixed?{funds:{cell:'1',from:'0',to:'1000',cells:'skip'}}:{})};
@@ -287,7 +287,15 @@ test('standalone metadata borrowing preserves mixed drawing source capabilities'
       await settle();assert.equal(received,1);assert.equal(borrowed,mixed?0:1);
       assert.equal(sent.at(-1)!.header,mixed?'basis':null);
       assert.equal(sent.at(-1)!.body.quota!.meta,mixed?'captured':'standalone-token');
-      if(mixed)assert.equal(sent.at(-1)!.body.funds!.meta,undefined);
+      if(mixed){
+        assert.equal(sent.at(-1)!.body.funds!.meta,'','an uncaptured sibling requests a full metadata baseline');
+        intent.revision++;
+        await transport.read('quota',{cell:'1',from:'0',to:'1000',meta:prior.meta},undefined,undefined,prior);
+        await settle();assert.equal(received,2);assert.equal(borrowed,0);
+        assert.equal(sent.at(-1)!.header,'basis','a cached sibling token cannot disable the drawing reader source capability');
+        assert.equal(sent.at(-1)!.body.quota!.meta,prior.meta);
+        assert.equal(sent.at(-1)!.body.funds!.meta,'');
+      }
     }finally{transport.reset();await settle();assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);}
   }
 });

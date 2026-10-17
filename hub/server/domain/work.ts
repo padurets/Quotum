@@ -13,7 +13,7 @@ export type Stretch = {
   /** Internal quota attribution cutoff; never serialized as session metadata. */
   quotaFrom?:number;
   /** Request-local immutable ledger identity, omitted from public projections. */
-  rawContext?:{source:string|null;client:string;producer:string|null;project:string;folder:string;deviceName:string};
+  rawContext?:{source:string|null;client:string;producer:string|null;project:string;folder:string;deviceName:string;accountBy?:import('./sessionEvidence.js').SessionEvidence['accountBy'];route?:import('./ingest.js').SessionRoute|null};
   device: string;
   user: string;
   origin: Origin;

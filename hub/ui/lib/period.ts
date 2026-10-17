@@ -1,4 +1,4 @@
-import {moneySelection} from './moneySelection';
+import {moneyReadSelection} from './moneySelection';
 import {subscriptionSelection} from './subscription';
 import {cellOf} from '../../server/domain/history';
 import {PERIOD_SCOPES,type PeriodScope,type HistoryQuery} from '../../server/domain/periodRead';
@@ -130,6 +130,7 @@ class BoardPeriod {
     }});
   }
   get=()=>this.workState;
+  getFinancialProjectionRevision=(scope:PeriodScope)=>this.tapes.get(scope)?.accounting.financialAuthority??null;
   getProjectionRevision=(scope:PeriodScope)=>this.projectionRevision[scope];
   subscribeProjection=(scope:PeriodScope,listener:()=>void)=>{this.projectionListeners[scope].add(listener);return()=>{this.projectionListeners[scope].delete(listener);};};
   private publishProjection(scopes:readonly PeriodScope[]=PERIOD_SCOPES){this.forgetProjection(scopes);for(const scope of scopes){this.projectionRevision[scope]++;for(const listener of this.projectionListeners[scope])listener();}}
@@ -211,10 +212,13 @@ class BoardPeriod {
     const summary=tape.accounting.moneySummary(series.sourceId,series.meterId,series.unit,this.tapeRange(tape,now));
     return summary?{...series,...summary}:series;
   }
+  moneyWorkAt(source:string,now:number,rangeKey?:string){const tape=this.tapes.get('budget');return this.work.value&&tape&&this.workRangeKey===tape.rangeKey&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;}
   rangeAt(scope:PeriodScope,now:number,rangeKey?:string){const tape=this.tapes.get(scope);return tape&&(rangeKey===undefined||tape.rangeKey===rangeKey)?this.tapeRange(tape,now):null;}
-  moneyOrderAt(now:number,rangeKey:string) {
+  moneyOrderAt(now:number,rangeKey:string,readOrder?:(at:number)=>string) {
     const tape=this.tapes.get('budget');
-    return tape?.selection.mode==='live'&&tape.rangeKey===rangeKey&&evaluatedRange(tape.selection,now).from>=tape.tape.from?tape.accounting.changesAt(now,tape.selection.periodMs):null;
+    if(tape?.selection.mode!=='live'||tape.rangeKey!==rangeKey||evaluatedRange(tape.selection,now).from<tape.tape.from)return null;
+    const boundary=(at:number)=>tape.accounting.changesAt(at,tape.selection.mode==='live'?tape.selection.periodMs:0);
+    return readOrder?periodTextChangesAt(now,boundary,readOrder):boundary(now);
   }
   private workBoundary(now:number,refs?:readonly string[],source?:string) {
     if(!this.index||!this.workAdvances(now))return null;
@@ -248,7 +252,7 @@ class BoardPeriod {
   refreshWorkClock=()=>{if(this.evaluatedAt!==hubNow())this.tick();else{this.retireExpired(hubNow());this.scheduleClock();}};
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   subscribeValue=(id:string,listener:()=>void)=>{let set=this.valueListeners.get(id);if(!set)this.valueListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
-  private queryKey(query:HistoryQuery,scope?:PeriodScope){const board=page.get().board;return JSON.stringify([query.meters,query.unit,query.currency,scope==='quota'?board?.lineup.filter(id=>!board.view.hidden.includes('source:'+id)):scope&&board?.lineup.map(id=>[id,board.cards[id]?.budget])]);}
+  private queryKey(query:HistoryQuery,scope?:PeriodScope){const board=page.get().board;return JSON.stringify([query.meters,query.unit,query.currency,query.work,scope==='quota'?board?.lineup.filter(id=>!board.view.hidden.includes('source:'+id)):scope&&board?.lineup.map(id=>[id,board.cards[id]?.budget])]);}
   private tapeCovers(entry:{tape:PeriodTape;selection:PeriodSelection},range:{from:number;to:number}) {
     const {tape,selection}=entry;
     // A complete fixed summary covers its requested endpoints, even when minute
@@ -263,8 +267,8 @@ class BoardPeriod {
     const queries:Partial<Record<PeriodScope,HistoryQuery>>={};
     for(const scope of PERIOD_SCOPES) {
       const visible=(scope==='quota'?[ACTIVITY,...QUOTA_WIDGETS]:scope==='funds'?[SUBSCRIPTION_FUNDS]:BUDGET_WIDGETS).some(id=>widgetVisible(board.view,id,board.lineup.length));if(!visible)continue;
-      const meters=scope==='quota'?subscriptionSelection(cards,board.view):moneySelection(cards,board.view.hidden,scope==='funds'?prefs().funds:prefs().money,board.currencies,scope==='funds'?'funds':'budget').selection;
-      const query:HistoryQuery={cell:String(cell),from:String(Math.floor(range.from/cell)*cell),to:String(Math.ceil(range.to/cell)*cell),cells:'skip',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{})}:{})};
+      const meters=scope==='quota'?subscriptionSelection(cards,board.view):moneyReadSelection(cards,board.view,scope==='funds'?prefs().funds:prefs().money,board.currencies,scope==='funds'?'funds':'budget');
+      const query:HistoryQuery={cell:String(cell),from:String(Math.floor(range.from/cell)*cell),to:String(Math.ceil(range.to/cell)*cell),cells:'skip',...(meters?{unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})};
       queries[scope]=query;
     }
     return queries;
@@ -279,12 +283,15 @@ class BoardPeriod {
   private publishWork() {this.forgetProjection(['quota']);this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence};for(const listener of this.listeners)listener();}
   private retireWork() {
     this.retained.clear();preparations()?.cancel(this.preparationOwner);
+    // Work evidence belongs to its captured attribution. Native financial values
+    // retain their independent authority across the replacement.
+    if(this.tapes.get('budget')?.tape.fixed?.moneyWork||this.tapes.get('budget')?.tape.money.some(group=>group.workCounter))this.dirtyScopes.add('budget');
     this.workEvidence++;this.retirementAt=Infinity;
     this.work=empty();this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;this.workProofEpoch=-1;
     this.tapes.delete('quota');delete this.projectionErrors.quota;this.transport.forgetEvidence('quota');
     this.workRows=[];
     const previous=this.rowsBySource;this.rowsBySource=new Map();for(const id of previous.keys())for(const listener of this.sourceListeners.get(id)??[])listener();
-    this.work={...this.work,loading:this.wantsWork};this.publishWork();this.publishProjection(['quota']);
+    this.work={...this.work,loading:this.wantsWork};this.publishWork();this.publishProjection(['quota','budget']);
     this.measureBytes();clock.due(this.watch,null,hubNow());
   }
   private clear() {
@@ -392,8 +399,8 @@ class BoardPeriod {
           for(const scope of PERIOD_SCOPES){
             const visible=(scope==='quota'?[ACTIVITY,...QUOTA_WIDGETS]:scope==='funds'?[SUBSCRIPTION_FUNDS]:BUDGET_WIDGETS).some(id=>widgetVisible(board.view,id,board.lineup.length));
             if(!visible)continue;
-            const selected=scope==='quota'?new Set(sources):new Set(moneySelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view.hidden,scope==='funds'?prefs().funds:prefs().money,board.currencies,scope==='funds'?'funds':'budget').selection?.ids.map(([id])=>id));
-            if(scope==='quota'&&own||(hub.data.changes?hub.data.changes.some(c=>selected.has(c.source)&&c.scope===(scope==='funds'?'budget':scope)&&(selection.mode==='live'||c.since<selection.to)):hub.data.sources.some(id=>selected.has(id))))this.dirtyScopes.add(scope);
+            const selected=scope==='quota'?new Set(sources):new Set(moneyReadSelection(board.lineup.flatMap(id=>board.cards[id]??[]),board.view,scope==='funds'?prefs().funds:prefs().money,board.currencies,scope==='funds'?'funds':'budget')?.ids.map(([id])=>id));
+            if(scope==='quota'&&own||(hub.data.changes?hub.data.changes.some(c=>selected.has(c.source)&&c.scope===(scope==='funds'?'budget':scope)&&(c.workSince===undefined||c.since<c.workSince||scope==='budget'&&JSON.parse(this.scopeKeys.budget??'[]')[3]==='1')&&(selection.mode==='live'||c.since<selection.to)):hub.data.sources.some(id=>selected.has(id))))this.dirtyScopes.add(scope);
           }
           const work=hub.data.changes?.some(c=>sources.includes(c.source)&&c.scope==='quota'&&c.workSince!==undefined)??true;if(retired||work||own)this.workNeeded=wantsWork;this.revision++;this.transport.change();
         }
@@ -471,18 +478,19 @@ class BoardPeriod {
         charge('work',workBytes(work,0)+workPreparationBytes(work));index=yield*PeriodIndex.prepare(work);activity=yield*PeriodActivity.prepare(work,index.curves);charge('work',workBytes(work,index.curves.bytes));
       }catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};work=priorWork;index=null;activity=null;discard('work');}
       const workPart=reply.sessions,changedWork=new Set<string>();let changedBytes=0;
-      try{if(workPart&&workPart.state!=='error')for(const refs of [workPart.value.refs,...(workPart.state==='complete'||retired?[priorWork?.refs??[]]:[])])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}}
+      try{if(workPart?.state==='complete'&&!priorWork)for(const group of priorTapes.get('budget')?.tape.money??[])if(group.workCounter&&!changedWork.has(group.source)){changedBytes+=64+group.source.length*2;charge('changedWork',changedBytes);changedWork.add(group.source);yield;}
+      if(workPart&&workPart.state!=='error')for(const refs of [workPart.value.refs,...(workPart.state==='complete'||retired?[priorWork?.refs??[]]:[])])for(const ref of refs){if(ref.source&&!changedWork.has(ref.source)){changedBytes+=64+ref.source.length*2;charge('changedWork',changedBytes);changedWork.add(ref.source);}yield;}}
       catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};work=priorWork;index=null;activity=null;changedWork.clear();discard('changedWork');discard('work');}
       const tapes=new Map(priorTapes);
       for(const scope of PERIOD_SCOPES){
         const old=tapes.get(scope),incoming=incomingTapes.get(scope);
-        if(!incoming&&!(scope==='quota'&&old&&index))continue;
+        if(!incoming&&!((scope==='quota'||old?.tape.money.some(g=>g.workCounter&&changedWork.has(g.source)))&&old&&index))continue;
         const queryKey=incoming?queryKeyFor(scope):old!.queryKey,tape=incoming??old!.tape;
         const base=staged.get(scope)??0;
         try{
           const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves??priorIndex?.curves,old?.accounting,changedWork,bytes=>charge(scope,base+bytes));
           if(incoming){changed.add(scope);tapes.set(scope,{tape,accounting,generation:intent.generation,proofEpoch,selection:intent.request.selection,rangeKey:intent.request.selection.mode==='range'?periodKey(intent.request.selection):prefs().range,queryKey,basisRange:reply[scope]?.state==='complete'?reply[scope]!.basis.range:reply.basis.range});}
-          else tapes.set(scope,{...old!,accounting});
+          else {tapes.set(scope,{...old!,accounting});changed.add(scope);}
         }catch(error){if(error!==limited)throw error;incomingTapes.delete(scope);failScope(scope);}
       }
       const edge=retainedFrom===null?Infinity:yield*retention.retirementEdge(work,[...tapes.values()].map(entry=>entry.tape),retainedFrom);
@@ -564,7 +572,7 @@ class BoardPeriod {
             }finally{tails.clear();}
           }else{
             let scratch=0;const tape=yield*retention.retainTape(entry.tape,from,bytes=>{scratch+=bytes;charge(scope,scratch);});
-            if(tape!==entry.tape){
+            if(tape!==entry.tape||entry.tape.money.some(g=>g.workCounter)&&work!==previousWork){
               const owned={...tape,quota:tape.quota.filter(row=>!entry.tape.quota.includes(row)),money:tape.money.filter(row=>!entry.tape.money.includes(row))},base=tapeBytes(owned);
               charge(scope,base);const accounting=yield*PeriodAccounting.prepare(tape,work,index?.curves,entry.accounting,changedWork,bytes=>charge(scope,base+bytes));tapes.set(scope,{...entry,tape,accounting});
             }else sizes.delete(scope);
@@ -673,7 +681,8 @@ class BoardPeriod {
 // Each context also belongs to three numerical group indexes (arrays of shared curve references).
 const workBytes=(trace:WorkTrace|null,curves?:number)=>trace?JSON.stringify({...trace,spans:[],packed:undefined}).length*2+(trace.packed?trace.packed.blocks.length*8+trace.packed.patterns.reduce((n,p)=>n+p.length*8+32,0)+(curves??trace.packed.blocks.length/3*144+trace.packed.patterns.reduce((n,p)=>n+p.length*128,0)):trace.spans.length*640)+trace.refs.length*864:0;
 const quotaTapeBytes=(series:PeriodTape['quota'][number],wire:boolean)=>JSON.stringify({...series,samples:[]}).length*2+(wire&&!('columns' in series.samples)?series.samples.length*8:sampleBytes(series.samples,series.samplesEncoding==='delta'));
-const tapeBytes=(tape:PeriodTape,wire=false)=>JSON.stringify({...tape,quota:tape.quota.map(s=>({...s,samples:[]})),money:tape.money.map(s=>({...s,readings:[],spans:[],...(s.paired?{paired:{readings:[],spans:[]}}:{})}))}).length*2+tape.quota.reduce((n,s)=>n+(wire&&!('columns' in s.samples)?s.samples.length*8:sampleBytes(s.samples,s.samplesEncoding==='delta')),0)+tape.money.reduce((n,s)=>n+[...s.readings,...s.paired?.readings??[]].reduce((bytes,r)=>bytes+256+2*((r.amount?.length??0)+(r.unit?.length??0)+(r.label?.length??0)+(r.scope?.length??0)+(r.limit?.length??0)),0)+(s.spans.length+(s.paired?.spans.length??0))*192,0);
+const nativeBytes=(part:Pick<PeriodTape['money'][number],'readings'|'spans'>,shared?:PeriodTape['money'][number]['readings'])=>(part.readings===shared?0:part.readings.reduce((bytes,r)=>bytes+256+2*((r.amount?.length??0)+(r.unit?.length??0)+(r.label?.length??0)+(r.scope?.length??0)+(r.limit?.length??0)),0))+part.spans.length*192;
+const tapeBytes=(tape:PeriodTape,wire=false)=>JSON.stringify({...tape,quota:tape.quota.map(s=>({...s,samples:[]})),money:tape.money.map(s=>({...s,readings:[],spans:[],...(s.paired?{paired:{readings:[],spans:[]}}:{}),...(s.workCounter?{workCounter:{...s.workCounter,readings:[],spans:[]}}:{})}))}).length*2+tape.quota.reduce((n,s)=>n+(wire&&!('columns' in s.samples)?s.samples.length*8:sampleBytes(s.samples,s.samplesEncoding==='delta')),0)+tape.money.reduce((n,s)=>n+nativeBytes(s)+(s.paired?nativeBytes(s.paired):0)+(s.workCounter?nativeBytes(s.workCounter,s.readings):0),0);
 
 export const boardPeriod=new BoardPeriod();
 export function followPeriod(){const stop=page.listen((event,state)=>boardPeriod.changed(event,state));const choose=()=>boardPeriod.changed();const stops=[stop,onPrefs(choose),onTimeRange(choose),pan.onPhase(()=>boardPeriod.refreshWorkClock())];choose();return()=>stops.forEach(stop=>stop());}

@@ -13,10 +13,12 @@ import {DeleteBoard} from './Header';
 import {ErrorLine, Field} from './Kit';
 import {ConnectionsPage} from './ConnectionsPage';
 import {CurrencySettings} from './CurrencySettings';
+import {ClientLinks} from './ClientLinks';
 
 type Section = {id: string; title: Key};
 const PERSONAL: Section[] = [
   {id: 'profile', title: 'settings.profile'}, {id: 'connections', title: 'settings.connections'},
+  {id: 'links', title: 'links.title'},
   {id: 'projects', title: 'projects.manage'},
   {id: 'currencies', title: 'currencies.title'},
   {id: 'interface', title: 'settings.interface'}, {id: 'application', title: 'settings.application'},
@@ -115,17 +117,23 @@ export function Settings({user, board, boards, local, trustedKeys, refresh, onAp
   const section = boardPath ? boardPath[2] ?? 'general' : path.split('/')[2] ?? first;
   const base = boardPath ? '/boards/' + boardPath[1] + '/settings' : '/settings';
   useEffect(() => {
+    if (!boardPath && section === 'connections' && new URLSearchParams(address.split('?')[1]).has('links')) {
+      const query = new URLSearchParams(address.split('?')[1]); query.delete('links');
+      navigate('/settings/links' + (query.size ? '?' + query : ''), true);
+      return;
+    }
     if (!boardPath && section === 'devices') {
       const query=new URLSearchParams(address.split('?')[1]??'');query.set('tab','devices');
       navigate('/settings/connections?'+query,true);
     }
     if (path === base) navigate(settingsHref(base + '/' + section, board?.id), true);
-  }, [path, base, section, board?.id]);
+  }, [address, path, base, section, board?.id]);
   if (boardPath && (local || board?.id !== boardPath[1])) return <main><section className="panel settings-content"><ErrorLine error={null} /><p>{t('settings.unavailable')}</p></section></main>;
   const visible = boardPath ? (board?.personal ? BOARD.slice(0, 1) : BOARD) : sections;
   return <SettingsFrame title={boardPath ? t('boardSettings.forBoard', {board: boardTitle(board!)}) : t('header.settings')} sections={visible} section={section} base={base} board={board}>
     {boardPath ? section === 'general' ? <General board={board!} /> : section === 'members' ? <MembersTab board={board!} userId={user.id} /> : <SharesTab board={board!} userId={user.id} /> :
       section === 'profile' ? <><Profile user={user} onChanged={refresh} /><Password /></> :
+      section === 'links' ? <ClientLinks key={user.id} userId={user.id} /> :
       section === 'connections' ? <ConnectionsPage key={entry+':'+(new URLSearchParams(address.split('?')[1]??'').get('source')??'')} userId={user.id} boards={boards} trustedKeys={trustedKeys} local={local} /> :
       section === 'currencies' ? <CurrencySettings key={user.id} /> :
       section === 'projects' ? <Projects /> : section === 'interface' ? <><p className="dialog-text">{t('settings.browserScope')}</p><Browser title={t('settings.interface')} /></> :

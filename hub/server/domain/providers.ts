@@ -5,12 +5,12 @@ export const catalogue = [
   {id: 'claude', name: 'Claude', color: '#de7b5b', logoAsset: 'claude', order: 0, measuredBy: 'client', funding:'subscription', meterKinds: ['window'], resets: true, clientId: 'claude'},
   {id: 'codex', name: 'Codex', color: '#6897f0', logoAsset: 'codex', order: 1, measuredBy: 'client', funding:'subscription', meterKinds: ['window', 'balance'], resets: true, clientId: 'codex', monetary:{spending:'unavailable',topups:'unavailable',balances:[{meterId:'balance:credits',unit:'credits:codex',role:'total'}]}},
   {id: 'antigravity', name: 'Antigravity', color: '#d271b3', logoAsset: 'antigravity', order: 2, measuredBy: 'client', funding:'subscription', meterKinds: ['window'], resets: false, clientId: 'antigravity'},
-  {id: 'openrouter', name: 'OpenRouter', color: '#c8ff00', logoAsset: 'openrouter', order: 3, measuredBy: 'hub', meterKinds: ['counter', 'balance', 'cap'], resets: false, connectorId: 'openrouter',funding:'wallet', monetary:{spending:'counter',topups:'counter',balances:[{meterId:'balance',unit:'USD',role:'total'}]}},
-  {id:'deepseek',name:'DeepSeek',color:'#4d6bfe',logoAsset:'deepseek',order:4,measuredBy:'hub',meterKinds:['balance'],resets:false,connectorId:'deepseek',funding:'wallet',monetary:{spending:'unavailable',topups:'unavailable',balances:[
+  {id: 'openrouter', routeHosts: ['openrouter.ai'], name: 'OpenRouter', color: '#c8ff00', logoAsset: 'openrouter', order: 3, measuredBy: 'hub', meterKinds: ['counter', 'balance', 'cap'], resets: false, connectorId: 'openrouter',funding:'wallet', monetary:{sourceCounter:'usage',spending:'counter',topups:'counter',balances:[{meterId:'balance',unit:'USD',role:'total'}]}},
+  {id:'deepseek',routeHosts:['api.deepseek.com'],name:'DeepSeek',color:'#4d6bfe',logoAsset:'deepseek',order:4,measuredBy:'hub',meterKinds:['balance'],resets:false,connectorId:'deepseek',funding:'wallet',monetary:{spending:'unavailable',topups:'unavailable',balances:[
     {meterId:'balance:CNY',unit:'CNY',role:'total'},{meterId:'granted:CNY',unit:'CNY',role:'granted'},{meterId:'topped_up:CNY',unit:'CNY',role:'toppedUp'},
     {meterId:'balance:USD',unit:'USD',role:'total'},{meterId:'granted:USD',unit:'USD',role:'granted'},{meterId:'topped_up:USD',unit:'USD',role:'toppedUp'},
   ]}},
-  {id: 'zai', quotaMeters: QUOTA_IDS, funding: 'subscription', name: 'z.ai', color: '#f0f0f0', logoAsset: 'zai', order: 4, measuredBy: 'hub', meterKinds: ['cap'], resets: false, connectorId: 'zai'},
+  {id: 'zai', routeHosts: ['api.z.ai'], quotaMeters: QUOTA_IDS, funding: 'subscription', name: 'z.ai', color: '#f0f0f0', logoAsset: 'zai', order: 4, measuredBy: 'hub', meterKinds: ['cap'], resets: false, connectorId: 'zai'},
 ] as const;
 
 export type Provider = (typeof catalogue)[number]['id'];
@@ -36,3 +36,6 @@ export const budgetMeter = (provider: ResourceDescriptor | undefined, id: string
 export type MoneyFamily = 'budget' | 'funds';
 export const moneyFamily = (provider: ReturnType<typeof providerOf>): MoneyFamily | null =>
   !supportsBudget(provider) ? null : provider?.funding === 'subscription' ? 'funds' : 'budget';
+
+/** Only this source-level native counter can establish monetary work estimates. */
+export const sourceCounterOf = (provider: string): string | null => {const policy = monetaryOf(provider); return policy && 'sourceCounter' in policy ? policy.sourceCounter : null;};

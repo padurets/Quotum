@@ -205,8 +205,18 @@ collectors keeps reporting clients while session reporting is enabled.
 Legacy sessions retain their released subset and cap priority. Supplemental sessions
 carry work that cannot enter that subset. Schema 21 adds a client namespace, nullable
 source and evidence metadata to session contexts, preserving ledger row/producer IDs
-and every work interval; device inventory is stored separately. Evidence is neither a
-resolver nor identity. A single immutable WorkAccess snapshot admits saved-device
+and every work interval; device inventory is stored separately. Evidence never changes
+process identity. Temporal owner rules resolve attribution when read: device scope
+precedes all devices, then provider-conditioned class, class alone and no condition.
+An inactive winning rule gives no source and masks weaker rules and account fallback.
+Without a matching rule, API and unknown routes have no source; absent or subscription
+routes may use a currently held observed account. Explicit route suppression disables
+route conditions. Only exact catalogue endpoints and session evidence identify providers.
+Live sessions, working state, retained counters and history share this resolver.
+History cuts raw work at rule boundaries without rewriting the ledger. Display fragments
+share a board-scoped row identity so source splitting adds no agents. Stronger context
+evidence applies to retained history, including when received in an idle report.
+A single immutable WorkAccess snapshot admits saved-device
 work independently of subscriptions. Personal boards always admit their owner's work.
 Settings, admission and funding dependencies use the same device inventory: connected
 devices and disconnected devices with retained work. A disconnected device without
@@ -248,6 +258,26 @@ OpenCode native local TUI attribution is proven only by bounded Linux invocation
 shared or unproven invocations and other operating systems have no project authority.
 Version transport bounds bytes before line parsing and waits for both EOF and successful
 exit within five seconds. It never retains raw output or reads client secrets.
+
+### Tracking coverage and quota growth
+
+Session reports carry optional configured tracking scope and delivery completeness.
+The agent repeats empty reports every two minutes while that scope is enabled, and
+requires a positively acknowledged incomplete report after any capture or delivery fault.
+The hub stores completed intervals separately from positive work. Two compatible complete
+endpoints within 200 seconds prove an interval; silence, restarts and topology changes
+cannot repair a gap. Finished intervals survive restarts and are coalesced and retained
+with measurement history. Installed-client inventory is never coverage evidence.
+
+A source-level helper compares adjacent native quota observations over the last 24 hours.
+Growth of at least one percentage point within 30 minutes and the same valid reset period
+can produce one tray finding per window. Reported caps retain actual native endpoints
+before sparse deduplication, with their own allowance and generation. Any overlapping
+resolved work from current holders vetoes the finding, including work outside the reader's
+board. Complete coverage of all current holder devices makes it confirmed; other cases
+explicitly report incomplete work data. This describes configured observation only.
+Findings contain no actor guesses, private scope, holder identity or money attribution.
+They expire at reset or 24 hours and share existing event deadlines and warning surfaces.
 
 ## Scheduling
 
@@ -632,7 +662,8 @@ active says how far to trust the pace.
 
 ## Storage and the rules
 
-One SQLite file (WAL). A **source** is one subscription, kept once for the whole hub:
+One SQLite file (WAL). The UI calls a subscription or budget a **resource**. Its
+internal **source** identity is kept once for the whole hub:
 keyed by the account pseudonym, or by the device's person for clients that don't name
 their account. Which boards show it is recorded apart from it (see below). Each source
 has its last state (what the card shows) and samples: one row per window per
@@ -1058,6 +1089,22 @@ historical cap semantics and original spending intervals stay separate from the 
 Float64 codec. A logical balance selection internally reads its two counters. Axes and
 arithmetic never combine units; money does not contribute percentage attention,
 forecast or quota notifications.
+Source-level spending counters also retain every accepted unchanged native endpoint
+in the same readings ledger, with a capture fence established at the first supported
+observation. Sparse financial access uses its partial index and excludes these extra
+anchors. Retention preserves both the sparse financial predecessor and the accepted
+pair predecessor. Legacy spans never reconstruct missing timestamps.
+Optional wallet work history correlates whole continuous counter pairs with the union
+of resolved work. It estimates spending per active hour after thirty active minutes and
+remaining active hours from fresh native funds. Balance-only sources, subscription
+funds, individual keys and quota caps supply no monetary work rate. A single source
+correlation is shown once among its selected account rows, with its native evidence
+and partial coverage. Current currency presentation uses the shared recorded binding.
+A work burst combines quota/activity and opt-in budget tails through the shared
+authenticated read-only period POST. Their grids remain independent and share a
+bounded work read. Composite drawing cells contain financial data; work estimates
+use the common period tape and curves. Ordinary finance-only history keeps its
+existing path and cache dependencies, and the legacy GET history route remains available.
 Money cells are packed separately, with small header and interval leaves; unchanged
 cells share their byte buffers during private staging. Packing, decoding and composition
 yield between leaves and cells through the shared preparation scheduler. Monetary
@@ -1080,6 +1127,11 @@ source holding and shares a one-minute cooldown across boards. Owner source acce
 projected separately for each reader, outside the shared board cache.
 Frequency saves publish the new preference during an active poll; its cadence is
 recomputed after that poll finishes.
+Resolved held client work keeps healthy Auto polling at two minutes. Starting work
+shortens an idle promise while preserving the last-dispatch minute, supplier retry
+floor and fixed settings. A single activity timer follows rule boundaries and report
+expiry without a dashboard reader. In-flight observations use current activity for
+their next interval and freshness promise.
 
 ## Trusted connector keys
 
@@ -1189,6 +1241,30 @@ and its limits.
   and a save stays locked through its authoritative read. Connect a device opens the
   one-time command separately; token creation and revocation belong to Tokens. The
   local app omits tokens and distributed measurement controls.
+  *Settings → Clients and resources* manages temporal client/resource links. Device and
+  resource entry points open the same editor with context, without creating a link.
+  An existing matching link opens for editing instead of creating an overlapping
+  rule. The editor has one effective-date choice: saving time, a chosen date, or
+  the entire period. A dated edit atomically preserves the old prefix and replaces
+  the remaining rule, including its device and route scope; a whole-period edit
+  can also move the original bounds. Active links default to preserving earlier work.
+  Disconnected targets retain their owner-visible identity and the shared
+  disconnected label, but cannot be selected for new work. Their owner-only
+  management metadata includes no measurements or other people's private labels.
+  Current and scheduled links share one list; the History switch shows completed
+  periods in that same list. The editor keeps client, device, resource and effective
+  date visible. Only the optional end and route conditions use a disclosure.
+  Resource choices show their name and type (Subscription or Budget). Recommendations
+  appear inside the editor after choosing a client and device. Selecting one fills
+  its condition and exact free period; the person reviews these values before an
+  ordinary manual Save. Opening the editor or
+  choosing a recommendation records nothing. Session resource explanations live
+  beside the session in its device dialog, including the saved name of a
+  disconnected winning resource. Their private evidence loads only while the device
+  diagnostics are open, follows owner presence changes and never enters board events.
+  The owner device request adds `details=<device>` to include each session’s
+  attribution in the same synchronous response. Project aliases and otherwise
+  identical session metadata cannot attach another row’s explanation.
   *Agent activity → Settings → Manage projects* lists the projects their agents worked
   on, with the machines and when they last did:
   the person renames them and merges several into one, which applies everywhere they are
@@ -1544,8 +1620,11 @@ Current operational status, connector failures, actions, forecasts and reset new
 live. Compact mode and native notifications also remain live.
 
 The board's period coordinator collects quota, wallet budget, subscription funds, value and session demands into
-one read-only `POST /api/boards/:board/period`. The old history route and the composite
-route call the same cell reader. Sections succeed or fail independently. Within the
+one read-only `POST /api/boards/:board/period`. The GET history route and the period
+route call the same cell reader. Source-work budget estimates join this coordinator
+through an explicit work demand; their native observation pairs and admitted source
+curves use the same period accounting and fixed shift machinery. Unchanged financial
+indexes retain their identity when work alone changes. Sections succeed or fail independently. Within the
 same authorized scope, a retained complete presentation keeps its own interval while
 a replacement loads or fails, including across reconnects. A source or resource removal,
 changed currency context or changed permission to read work retires both the displayed
@@ -1805,7 +1884,7 @@ ahead until movement or history news changes what is needed.
 For ordinary discrete navigation the chart moves to the new period at once, drawing
 the answer it has until the next frame is assembled. A run of quick steps reads its
 first and last missing parts. Tiles are kept across frames on the same grid, so a return
-or switching 12h and 24h asks nothing once both have been seen. A new lineup makes them stale; changed work attribution invalidates only quota/activity; a late measurement or credited work makes only cells from
+or switching 12h and 24h asks nothing once both have been seen. A new lineup makes them stale; changed work attribution invalidates quota/activity and explicitly requested source-work budget accounting; a late measurement or credited work makes only cells from
 its actual time stale, and the page reads them when a frame needs them.
 
 Dashboard agent lists contain contexts with credited work intersecting the selected

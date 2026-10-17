@@ -16,6 +16,7 @@ const device:Device={id:'d',name:'Laptop',reported:'Laptop',os:'linux',arch:'x86
 const session={clientId:'opencode',device:{id:'d',name:'Laptop'},source:null,origin:'terminal' as const,project:'Current project',folder:null,startedAt:1,lastWorkedAt:null,working:false,workedMs:0};
 
 function fixture(focused:string|null=null){
+  const urls:string[]=[],fundingNode={},fundingReads:{url:string;resolve:(value:unknown)=>void}[]=[];
   const hooks=preparationFixture(),row={},modal={},errorLine={},participation={},preference={},reads:{resolve:(value:Device[])=>void;reject:(error:Error)=>void}[]=[];
   const passive:(()=>void)[]=[],busy:boolean[]=[],events=new EventTarget();
   const onBusyChange=(value:boolean)=>{busy.push(value);};
@@ -40,7 +41,7 @@ function fixture(focused:string|null=null){
     if(name.endsWith('/router'))return {useLocation:()=>'/settings/connections'+(focused?'?source='+focused:''),guardNavigation:(leave:typeof guarded)=>{guarded=leave;return ()=>{};}};
     if(name==='./MeasurementDevices')return {ParticipationSettings:participation,PreferenceSettings:preference,versionSummary:()=> 'Agent 0.7.0'};
     if(name.endsWith('/board'))return {useConnectionsRevision:()=>state.board?.connectionsRevision??0,useDevicesRevision:()=>state.devicesRevision??0};
-    if(name.endsWith('/http'))return {call:(method:string,url:string)=>{assert.equal(method,'GET');assert.equal(url,'/api/devices?measurement=1');return new Promise((resolve,reject)=>reads.push({resolve:devices=>resolve({devices,hubVersion:'0.7.0',sources}),reject}));}};
+    if(name.endsWith('/http'))return {call:(method:string,url:string)=>{assert.equal(method,'GET');urls.push(url);if(url==='/api/links')return new Promise(resolve=>fundingReads.push({url,resolve}));assert.match(url,/^\/api\/devices\?measurement=1(?:&details=d)?$/);return new Promise((resolve,reject)=>reads.push({resolve:devices=>resolve({devices,hubVersion:'0.7.0',sources}),reject}));}};
     if(name.endsWith('/providers'))return {PROVIDERS:{}};
     if(name.endsWith('/format'))return {stamp:()=>''};
     if(name.endsWith('/quota'))return {errorText:()=>''};
@@ -49,6 +50,7 @@ function fixture(focused:string|null=null){
     if(name.endsWith('/view'))return view;
     if(name==='./Kit')return {Modal:modal,ErrorLine:errorLine};
     if(name==='./Connections')return {ConnectionRow:row};
+    if(name==='./ClientLinks')return {openClientLinks:()=>{},SessionFunding:fundingNode};
     if(name==='./Time')return {Ago:{}};
     if(name==='./logos')return {logoOf:()=>''};
     throw new Error(name);
@@ -65,28 +67,29 @@ function fixture(focused:string|null=null){
   const select=(value:string)=>{const index=sources.findIndex(source=>source.source===value);const connection=render().filter(node=>node.type===row)[index+1];(connection.props.onOpen as ()=>void)();};
   const formState=(dirty:boolean,busy=false,effects=true)=>{const form=render().find(node=>node.type===participation||node.type===preference)!;(form.props.onStateChange as (state:unknown)=>void)({dirty,busy});render(effects);};
   const unload=()=>{const event=new Event('beforeunload',{cancelable:true});events.dispatchEvent(event);return event.defaultPrevented;};
-  return {render,reads,open,close,hint,contact,reconnect,projects,errorLine,reload,select,formState,modal,preference,busy,unload,navigate:(go:()=>void)=>guarded(go),focuses:()=>focuses};
+  return {render,reads,open,close,hint,contact,reconnect,projects,errorLine,fundingReads,fundingNode,urls,reload,select,formState,modal,preference,busy,unload,navigate:(go:()=>void)=>guarded(go),focuses:()=>focuses};
 }
 
-test('an open Devices view coalesces owner hints, contacts make no reads, and a disclosure shares its data',async()=>{
+test('an open Devices view coalesces owner hints and loads private explanations only for diagnostics',async()=>{
   const f=fixture();f.render();assert.equal(f.reads.length,1);
   f.reads[0].resolve([device]);await flush();f.render();
   for(let at=2;at<=10;at++)f.contact(at);
   assert.equal(f.reads.length,1,'live contact deltas do not reload an open Devices view');
-  f.open();assert.equal(f.reads.length,1,'the disclosure consumes the same owner projection');
-  f.hint();assert.equal(f.reads.length,2);
-  f.reads[1].resolve([{...device,sessions:[session]}]);await flush();assert.deepEqual(f.projects(),['Current project']);
+  f.open();assert.equal(f.reads.length,2,'opening diagnostics requests same-row private evidence');
+  f.reads[1].resolve([device]);await flush();
   f.hint();assert.equal(f.reads.length,3);
-  f.reads[2].resolve([device]);await flush();assert.deepEqual(f.projects(),[]);
-  f.reconnect();assert.equal(f.reads.length,4);
-  f.reads[3].resolve([device]);await flush();f.close();f.open();assert.equal(f.reads.length,4);
+  f.reads[2].resolve([{...device,sessions:[session]}]);await flush();assert.deepEqual(f.projects(),['Current project']);
+  f.hint();assert.equal(f.reads.length,4);
+  f.reads[3].resolve([device]);await flush();assert.deepEqual(f.projects(),[]);
+  f.reconnect();assert.equal(f.reads.length,5);
+  f.reads[4].resolve([device]);await flush();f.close();assert.equal(f.reads.length,5);f.open();assert.equal(f.reads.length,6);
 });
 
 test('an obsolete device reply or error cannot restore a session after newer owner data',async()=>{
   const f=fixture();f.render();f.reads[0].resolve([device]);await flush();f.open();
-  f.hint();f.hint();f.reads[2].resolve([device]);await flush();
-  f.reads[1].resolve([{...device,sessions:[session]}]);await flush();assert.deepEqual(f.projects(),[]);
-  f.hint();f.hint();f.reads[4].resolve([device]);await flush();f.reads[3].reject(new Error('obsolete failure'));await flush();
+  f.hint();f.hint();f.reads[3].resolve([device]);await flush();
+  f.reads[2].resolve([{...device,sessions:[session]}]);await flush();assert.deepEqual(f.projects(),[]);
+  f.hint();f.hint();f.reads[5].resolve([device]);await flush();f.reads[4].reject(new Error('obsolete failure'));await flush();
   assert.ok(!f.render().some(node=>node.type===f.errorLine&&node.props.error));
 });
 
@@ -132,4 +135,17 @@ test('navigation and unload guards protect the committed form before delayed eff
   f.formState(false,false,false);
   assert.equal(f.busy.at(-1),false);assert.equal(f.unload(),false);
   f.navigate(()=>{left=true;});assert.equal(left,true);
+});
+
+
+test('private source names load only inside an open device and an obsolete reply cannot replace newer names', async () => {
+  const f=fixture(); f.render(); f.reads[0].resolve([{...device,sessions:[session]}]); await flush();
+  f.hint(); assert.equal(f.fundingReads.length,0);
+  f.open(); assert.ok(f.urls.includes('/api/devices?measurement=1&details=d')); assert.equal(f.fundingReads.length,1); f.close(); f.open(); assert.equal(f.fundingReads.length,2);
+  const inventory={links:[],sources:[],revision:'fresh'};
+  f.fundingReads[1].resolve(inventory); await flush();
+  assert.equal(f.render().find(node=>node.type===f.fundingNode)?.props.inventory,inventory);
+  f.fundingReads[0].resolve({links:[],sources:[],revision:'obsolete'});await flush();
+  assert.equal(f.render().find(node=>node.type===f.fundingNode)?.props.inventory,inventory);
+  f.close();f.hint();assert.equal(f.fundingReads.length,2);
 });

@@ -10,7 +10,7 @@ use crate::config::{Config, Paths, home, jitter};
 use crate::measurement_policy::MeasurementPolicy;
 use crate::model::{
     ClientSession, ClientSource, ErrorKind, Millis, Outcome, Provider, RunningSession, STALE_LIMIT_MS, SessionReport,
-    now_ms,
+    Tracking, now_ms,
 };
 use crate::providers::{Collector, Context, adapter, find_client, last_activity};
 use crate::schedule::Schedule;
@@ -35,18 +35,66 @@ struct Watch {
     looked: Option<Instant>,
     reported: Option<(Instant, SessionReport)>,
     inventory: Inventory,
+    continuity_fault: bool,
 }
 
 impl Watch {
+    /// The captured list cannot close coverage across a clock discontinuity.
+    fn clocked_witness(
+        &mut self,
+        report: &mut SessionReport,
+        captured: bool,
+        clock: &mut Clock,
+        wall: Millis,
+    ) -> Millis {
+        let back = clock.went_back(wall);
+        self.continuity_fault |= clock.discontinuous;
+        self.witness(report, captured);
+        back
+    }
+
     /// Whether `now` is a new list to send: the first one, a change, or one repeated in time.
     fn worth_sending(&self, report: &SessionReport) -> bool {
+        if self.continuity_fault {
+            return true;
+        }
         match &self.reported {
             None => true,
             Some((at, before)) => {
                 before != report
-                    || ((!report.sessions.is_empty() || !report.client_sessions.is_empty())
+                    || ((!report.sessions.is_empty()
+                        || !report.client_sessions.is_empty()
+                        || report.tracking.as_ref().is_some_and(|t| !t.clients.is_empty()))
                         && at.elapsed() >= REPORT_EVERY)
             }
+        }
+    }
+
+    fn witness(&mut self, report: &mut SessionReport, captured: bool) {
+        let Some(tracking) = &mut report.tracking else { return };
+        if !captured
+            || !tracking.complete
+            || self.reported.as_ref().is_some_and(|(_, before)| {
+                before
+                    .tracking
+                    .as_ref()
+                    .is_none_or(|t| t.clients != tracking.clients || t.route_disabled != tracking.route_disabled)
+            })
+        {
+            self.continuity_fault = true;
+        }
+        tracking.complete &= !self.continuity_fault;
+    }
+
+    fn acknowledged(&mut self, report: SessionReport, accepted: bool) {
+        if accepted {
+            // A false witness must reach the hub before continuity can start anew.
+            if report.tracking.as_ref().is_some_and(|t| !t.complete) {
+                self.continuity_fault = false;
+            }
+            self.reported = Some((Instant::now(), report));
+        } else {
+            self.continuity_fault = true;
         }
     }
 }
@@ -55,11 +103,12 @@ impl Watch {
 struct Clock {
     at: Instant,
     wall: Millis,
+    discontinuous: bool,
 }
 
 impl Clock {
     fn new(wall: Millis) -> Clock {
-        Clock { at: Instant::now(), wall }
+        Clock { at: Instant::now(), wall, discontinuous: false }
     }
 
     /// How far the wall clock went back since the last look, measured against the
@@ -68,6 +117,7 @@ impl Clock {
     fn went_back(&mut self, wall: Millis) -> Millis {
         let back = self.at.elapsed().as_millis() as Millis - (wall - self.wall);
         *self = Clock::new(wall);
+        self.discontinuous = back.abs() > CLOCK_SLACK_MS;
         if back > CLOCK_SLACK_MS { back } else { 0 }
     }
 }
@@ -194,6 +244,7 @@ impl Runner {
             looked: None,
             reported: None,
             inventory: Inventory::default(),
+            continuity_fault: true,
         });
 
         if let Some(watch) = &mut watch {
@@ -208,11 +259,15 @@ impl Runner {
             // (now: an older one is asked again later, and looking starts over then).
             if let Some(watch) = watch.as_mut().filter(|_| !sink.takes_sessions()) {
                 watch.looked = None;
+                watch.continuity_fault = true;
             }
             if let Some(watch) =
                 watch.as_mut().filter(|w| sink.takes_sessions() && w.looked.is_none_or(|at| at.elapsed() >= LOOK_EVERY))
             {
                 let first = watch.looked.is_none();
+                if watch.looked.is_some_and(|at| at.elapsed() > Duration::from_millis(200_000)) {
+                    watch.continuity_fault = true;
+                }
                 watch.looked = Some(Instant::now());
                 let seen = watch.activity.look();
                 // The first look cannot tell working from idle: the list goes out from the second.
@@ -226,9 +281,14 @@ impl Runner {
                         &self.stop,
                         &watch.activity.client_paths(),
                     );
+                    let back = watch.clocked_witness(&mut report, watch.activity.complete(), &mut clock, now_ms());
+                    if back > 0 {
+                        schedule.shift(-back);
+                    }
                     // A list the hub did not take goes out again at the next look.
-                    if watch.worth_sending(&report) && sink.report(&report) {
-                        watch.reported = Some((Instant::now(), report));
+                    if watch.worth_sending(&report) {
+                        let accepted = sink.report(&report);
+                        watch.acknowledged(report, accepted);
                     }
                 }
             }
@@ -238,8 +298,16 @@ impl Runner {
             // A clock set back (by hand, or synced after a wrong start) would leave every
             // due time far ahead: move them back with it.
             let back = clock.went_back(now_ms());
+            if clock.discontinuous {
+                if let Some(watch) = &mut watch {
+                    watch.continuity_fault = true;
+                }
+            }
             if back > 0 {
                 schedule.shift(-back);
+                if let Some(watch) = &mut watch {
+                    watch.continuity_fault = true;
+                }
             }
 
             // One recovery contact in the existing loop, including with sessions and every collector off.
@@ -492,6 +560,8 @@ impl Runner {
         accounts: &[Option<(Option<String>, Option<SystemTime>)>],
         identity_paths: &[Vec<PathBuf>],
     ) -> SessionReport {
+        let complete = seen.iter().filter(|s| self.clients.contains(&s.client)).all(|s| s.working.is_some())
+            && seen.iter().filter(|s| self.clients.contains(&s.client)).count() <= MAX_SESSIONS;
         let contexts = self.current_accounts(accounts, identity_paths);
         let sessions = self.running_with(seen.clone(), &contexts);
         let salt = crate::session_identity::salt(&self.paths);
@@ -540,7 +610,17 @@ impl Runner {
             });
             supplemental.truncate(left);
         }
-        SessionReport { sessions, client_sessions: supplemental, clients: Vec::new() }
+        SessionReport {
+            sessions,
+            client_sessions: supplemental,
+            clients: Vec::new(),
+            tracking: Some(Tracking {
+                version: 1,
+                clients: self.clients.clone(),
+                route_disabled: ClientId::ALL.into_iter().filter(|c| !self.config.routes(*c)).collect(),
+                complete,
+            }),
+        }
     }
 }
 
@@ -704,6 +784,11 @@ mod tests {
         let wire = crate::sink::tests::capture_report(&report);
         assert_eq!(wire["clientSessions"][0]["clientId"], "opencode");
         assert_eq!(wire["sessions"][0]["clientId"], "codex");
+        assert_eq!(wire["tracking"]["version"], 1);
+        assert!(
+            wire["tracking"]["clients"].as_array().unwrap().contains(&serde_json::json!("claude")),
+            "disabled measurement collectors remain in the tracking scope"
+        );
         let many = (0..201)
             .map(|i| {
                 let mut s = crate::activity::attribution::corrected_sessions()[0].clone();
@@ -719,6 +804,7 @@ mod tests {
         let full = runner.report(many, &contexts, &paths);
         assert_eq!(full.sessions.len(), 200);
         assert!(full.client_sessions.is_empty());
+        assert!(!full.tracking.unwrap().complete, "truncation cannot certify complete observation");
     }
 
     #[test]
@@ -871,6 +957,7 @@ mod tests {
             looked: None,
             reported: None,
             inventory: Inventory::default(),
+            continuity_fault: false,
         };
         assert!(
             watch.worth_sending(&SessionReport::default()),
@@ -892,6 +979,88 @@ mod tests {
         assert!(watch.worth_sending(&report(vec![session(true)])), "in time, so the hub keeps it");
         watch.reported = Some((Instant::now() - REPORT_EVERY, report(vec![])));
         assert!(!watch.worth_sending(&SessionReport::default()), "an empty list said once is enough");
+    }
+
+    #[test]
+    fn continuity_requires_an_accepted_false_witness_and_empty_scope_heartbeats() {
+        let mut watch = Watch {
+            activity: Activity::new(PathBuf::from("/nowhere"), false),
+            looked: None,
+            reported: None,
+            inventory: Inventory::default(),
+            continuity_fault: true,
+        };
+        let report = || SessionReport {
+            tracking: Some(Tracking {
+                version: 1,
+                clients: vec![ClientId::OpenCode],
+                route_disabled: vec![ClientId::Codex],
+                complete: true,
+            }),
+            ..SessionReport::default()
+        };
+        let mut first = report();
+        watch.witness(&mut first, true);
+        assert!(!first.tracking.as_ref().unwrap().complete);
+        watch.acknowledged(first, false);
+        let mut lost = report();
+        watch.witness(&mut lost, true);
+        assert!(!lost.tracking.as_ref().unwrap().complete);
+        assert!(watch.worth_sending(&lost));
+        watch.acknowledged(lost, true);
+        let mut recovered = report();
+        watch.witness(&mut recovered, true);
+        assert!(recovered.tracking.as_ref().unwrap().complete);
+        assert!(watch.worth_sending(&recovered));
+        watch.acknowledged(recovered.clone(), true);
+        assert!(!watch.worth_sending(&recovered));
+        watch.reported.as_mut().unwrap().0 = Instant::now() - REPORT_EVERY;
+        assert!(watch.worth_sending(&recovered), "configured empty scope must report in time");
+        let mut incomplete = report();
+        watch.witness(&mut incomplete, false);
+        watch.acknowledged(incomplete, false);
+        let mut retry = report();
+        watch.witness(&mut retry, true);
+        assert!(!retry.tracking.as_ref().unwrap().complete, "recovery cannot erase failed delivery");
+        watch.acknowledged(retry, true);
+        let mut changed = report();
+        changed.tracking.as_mut().unwrap().clients.push(ClientId::Claude);
+        watch.witness(&mut changed, true);
+        assert!(!changed.tracking.as_ref().unwrap().complete, "scope changes break continuity");
+    }
+
+    #[test]
+    fn a_due_complete_list_checks_clock_continuity_before_its_witness() {
+        for jump in [-3_600_000, 3_600_000] {
+            let start = 10 * 3_600_000;
+            let mut report = SessionReport {
+                tracking: Some(Tracking {
+                    version: 1,
+                    clients: vec![ClientId::OpenCode],
+                    route_disabled: vec![],
+                    complete: true,
+                }),
+                ..SessionReport::default()
+            };
+            let mut watch = Watch {
+                activity: Activity::new(PathBuf::from("/nowhere"), false),
+                looked: Some(Instant::now()),
+                reported: Some((Instant::now() - REPORT_EVERY, report.clone())),
+                inventory: Inventory::default(),
+                continuity_fault: false,
+            };
+            assert!(watch.worth_sending(&report));
+            let mut clock = Clock::new(start);
+            clock.at = Instant::now() - REPORT_EVERY;
+            let back =
+                watch.clocked_witness(&mut report, true, &mut clock, start + REPORT_EVERY.as_millis() as Millis + jump);
+            assert_eq!(back > 0, jump < 0);
+            assert!(!report.tracking.as_ref().unwrap().complete);
+            watch.acknowledged(report.clone(), false);
+            report.tracking.as_mut().unwrap().complete = true;
+            watch.clocked_witness(&mut report, true, &mut clock, start + REPORT_EVERY.as_millis() as Millis + jump);
+            assert!(!report.tracking.as_ref().unwrap().complete, "a lost false witness stays latched");
+        }
     }
 
     #[test]

@@ -463,6 +463,11 @@ quotas in credits, unknown resets, exhausted and closed allowances, partial and
 unsupported readings, and private access failures. The other catalogue cards remain
 available through Add widget.
 `DEV_SET=analytics DEV_STILL=true make dev` shows native quotas, z.ai, OpenRouter and DeepSeek with the quota and budget analytics and the separate subscription-funds chart.
+`DEV_SET=links DEV_STILL=true make dev` shows temporal client links, suggestions with
+their exact free intervals, inactive targets, account disagreements, spending per
+active hour, and complete or partial work observation. Its durable codes are in
+`LINK_SCENES` and checked by `hub/demo/test/links.test.ts`.
+
 `DEV_SET=devices DEV_STILL=true make dev` shows agent versions, disabled collectors, an epoch barrier, a preferred device and retained measurement origins in My connections.
 `DEV_SET=onboarding DEV_STILL=true make dev` exercises board and account onboarding.
 Ana owns *Studio* and *New board*; Boris is a member of both. OpenRouter starts
@@ -601,6 +606,15 @@ the README images come from; `--resets <scene>` picks what the reset trackers sa
 scene a run, the list is printed). Set `QUOTUM_PORT` if 8080 is taken. After changing
 the UI, `npm run build` and reload the page; after changing the server, `npm run build`
 and start the demo again.
+
+`npm run demo -- links --still` opens the client-link scenarios. For the synthetic
+month history comparison, archive the control revision into a separate temporary
+directory, install its hub dependencies, then run
+`node --import tsx bench/month.mjs --control /absolute/control/root` from `hub/`.
+It serializes with the component gates and compares five warmups and 25 alternating
+takes per path, with both median and p95 limited to 1.20 times the control, including
+authenticated HTTP and pure financial controls. The fixture includes 10 owners,
+20 devices, 2,400 contexts, 86,400 work stretches and a second cohort of 1,200 links.
 
 A new state of the board gets an entry in the catalogue, with the codes it shows in
 `expect` (the file's header explains them): `npm test` then checks it holds, and it is

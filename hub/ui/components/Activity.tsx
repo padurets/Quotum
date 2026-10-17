@@ -170,6 +170,7 @@ const LegendItem = memo(function LegendItem({history, group, groupKey, by, name,
         type="button"
         className="legend-item"
         data-series-key={mutedKey(by, groupKey)}
+        data-agent-ms={group?.agentMs}
         style={seriesFocusStyle(mutedKey(by, groupKey))}
         aria-describedby={id}
         aria-pressed={!muted}
@@ -203,7 +204,7 @@ const Totals = memo(function Totals({history,by,muted,since}: {history:History|n
   if (!activity?.known || activity.activeMs <= 0) return null;
   const shownMs=shown(activity);
   return (
-    <div className="activity-totals" data-time="activity-totals">
+    <div className="activity-totals" data-time="activity-totals" data-agent-ms={activity.agentMs}>
       <span title={t('activity.agentHoursHint')}>
         {t('activity.agentHours')} <b>{workHours(activity.agentMs)}</b>
         {shownMs < activity.agentMs && <span className="activity-since activity-shown">{t('activity.shown', {time: workHours(shownMs)})}</span>}

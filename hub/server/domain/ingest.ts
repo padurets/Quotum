@@ -1,4 +1,4 @@
-import {clientFor, validClientId} from './clients.js';
+import {clients as knownClients,clientFor, validClientId} from './clients.js';
 import {providers, type Provider} from './sources.js';
 import {providerOf, type ClientProvider} from './providers.js';
 import type {FreeResets, Kind, WindowMeasurement, Win} from './quota.js';
@@ -348,7 +348,16 @@ export type ClientSession = Omit<AgentSession, 'provider' | 'account' | 'account
   source: {provider: ClientProvider; account: string | null; accountName: string | null} | null;
 };
 export type DeviceClient = {clientId: string; version: string | null; observedAt?: number | null};
-export type SessionReport = AgentSender & {sentAt: number; sessions: AgentSession[]; clientSessions: ClientSession[]; clients: DeviceClient[] | null};
+export type Tracking = {version:1;clients:string[];routeDisabled:string[];complete:boolean};
+export type SessionReport = AgentSender & {sentAt: number; sessions: AgentSession[]; clientSessions: ClientSession[]; clients: DeviceClient[] | null;tracking:Tracking|null};
+
+function trackingOf(value:unknown):Tracking|null {
+  if(!isObject(value)||value.version!==1||typeof value.complete!=='boolean'||!Array.isArray(value.clients)||!Array.isArray(value.routeDisabled))return null;
+  const ids=(input:unknown[])=>{if(input.length>64||input.some(id=>!validClientId(id))||new Set(input).size!==input.length)return null;return (input as string[]).slice().sort();};
+  const clients=ids(value.clients),routeDisabled=ids(value.routeDisabled);
+  if(!clients||!routeDisabled||routeDisabled.some(id=>!knownClients.some(c=>c.id===id)))return null;
+  return {version:1,clients,routeDisabled,complete:value.complete};
+}
 
 function soft<T>(read: () => T): T | null {
   try { return read(); } catch (error) { if (error instanceof Invalid) return null; throw error; }
@@ -365,8 +374,10 @@ function sessionRoute(value: unknown): SessionRoute | null {
 export function parseSessions(body: unknown): SessionReport {
   const sender = parseSender(body);
   const input = body as Obj;
+  const tracking=trackingOf(input.tracking);
+  let complete=true;
   const ids = new Set<string>();
-  const sessions = list(input.sessions, 'sessions', 200).filter(value => clientItem(value, 'session')).map(value => {
+  const sessions = list(input.sessions, 'sessions', 200).filter(value => {const kept=clientItem(value, 'session');complete&&=kept;return kept;}).map(value => {
     if (!isObject(value)) throw new Invalid('session');
     const sessionId = value.sessionId ?? null;
     if (sessionId !== null) {
@@ -392,12 +403,13 @@ export function parseSessions(body: unknown): SessionReport {
   });
   const clientSessions: ClientSession[] = [];
   if (Array.isArray(input.clientSessions)) for (const value of input.clientSessions) {
-    if (sessions.length + clientSessions.length >= 200) break;
-    if (!isObject(value) || !validClientId(value.clientId) || !(ORIGINS as readonly unknown[]).includes(value.origin) || typeof value.working !== 'boolean') continue;
+    if (sessions.length + clientSessions.length >= 200) {complete=false;break;}
+    if (!isObject(value) || !validClientId(value.clientId) || !(ORIGINS as readonly unknown[]).includes(value.origin) || typeof value.working !== 'boolean') {complete=false;continue;}
     const startedAt = soft(() => time(value.startedAt, 'startedAt'));
-    if (startedAt === null) continue;
+    if (startedAt === null) {complete=false;continue;}
     const sessionId = typeof value.sessionId === 'string' && /^[0-9a-f]{32}$/.test(value.sessionId) ? value.sessionId : null;
-    if (sessionId !== null && ids.has(sessionId)) continue;
+    if (sessionId !== null && ids.has(sessionId)) {complete=false;continue;}
+    if(value.sessionId!==undefined&&value.sessionId!==null&&sessionId===null)complete=false;
     if (sessionId !== null) ids.add(sessionId);
     const source = isObject(value.source) ? soft(() => {
       const candidate = value.source as Obj;
@@ -405,6 +417,8 @@ export function parseSessions(body: unknown): SessionReport {
       if (providerOf(id)?.measuredBy !== 'client') return null;
       return {provider: id as ClientProvider, account: account(candidate.account), accountName: text(candidate.accountName, 'accountName', true)};
     }) : null;
+    if(value.source!==undefined&&value.source!==null&&source===null)complete=false;
+    if(value.route!==undefined&&value.route!==null&&sessionRoute(value.route)===null)complete=false;
     clientSessions.push({clientId: value.clientId, sessionId, source, route: sessionRoute(value.route),
       origin: value.origin as Origin, working: value.working, startedAt,
       project: soft(() => cut(value.project, 'project')), folder: soft(() => cut(value.folder, 'folder')),
@@ -423,5 +437,7 @@ export function parseSessions(body: unknown): SessionReport {
       inventory.push({clientId: value.clientId, version, ...(value.observedAt !== undefined ? {observedAt:soft(()=>time(value.observedAt,'client observedAt'))} : {})});
     }
   }
-  return {...sender, sentAt: time(input.sentAt, 'sentAt')!, sessions, clientSessions, clients: inventory};
+  if(input.clientSessions!==undefined&&!Array.isArray(input.clientSessions))complete=false;
+  if(tracking)tracking.complete&&=complete&&[...sessions,...clientSessions].every(s=>tracking.clients.includes(s.clientId!));
+  return {...sender, sentAt: time(input.sentAt, 'sentAt')!, sessions, clientSessions, clients: inventory,tracking};
 }

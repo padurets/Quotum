@@ -24,6 +24,7 @@ import {credentialRoutes} from './routes/credentials.js';
 import {Credentials, startSecrets, type SecretInputs} from './secrets/index.js';
 import type {HubSources} from './hubSources.js';
 import {currencyRoutes} from './routes/currencies.js';
+import {linkRoutes} from './routes/links.js';
 import {sourceKeyRoutes} from './routes/sourceKeys.js';
 import {BoardAdditions} from './additions.js';
 import {additionRoutes} from './routes/additions.js';
@@ -110,7 +111,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   const history = new HistoryTiles(store);
   const events = hub.events ?? new Events(hub);
   const periods = new PeriodReader(hub,history,events);
-  events.onHistory = (source, since, scopes, work) => {history.touch(source, since, scopes);periods.touch(source,since,scopes,work);};
+  events.onHistory = (source, since, scopes, work) => {history.touch(source, since, scopes,work);periods.touch(source,since,scopes,work);};
   events.onClientHistory=(user,since,device)=>{history.touchClient(user,since,device);periods.touchClient(user,since,device);};
   events.attach();
   hub.credentials!.setObserver(events);
@@ -198,6 +199,7 @@ export async function buildApp(hub: Hub, extend?: ExtendHub) {
   accountRoutes(app, hub, guards);
   sourceKeyRoutes(app,hub,guards);
   currencyRoutes(app,hub,guards);
+  linkRoutes(app,hub,guards);
   await extend?.(app, hub, guards);
   const verificationAttempts=new Limiter(10,60_000);
   await app.register(async scope => credentialRoutes(scope, hub.credentials!, guards, verificationAttempts, additions, directory));

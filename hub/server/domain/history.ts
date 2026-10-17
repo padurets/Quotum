@@ -6,6 +6,7 @@ import {sourceKey} from './workAccess.js';
 import {drain, ordered, type Preparation} from './prepare.js';
 import {barOf, type Activity, type ActivityGroup, type Dimension, type SeriesWork} from './work.js';
 import {composeMetersPrepared, type MeterHistory, type MeterSeriesCells} from './meterHistory.js';
+import {composeMoneyWorkPrepared, type MoneyWork, type MoneyWorkCells} from './moneyWork.js';
 
 /** The shared grid, from the finest cell that keeps a frame within its budget. */
 export const CELLS = [1, 5, 15, 30, 60, 120, 360, 720].map(minutes => minutes * 60_000);
@@ -42,7 +43,7 @@ export type SeriesCells = {source: string; window: string; hold: number; open: n
 export type SessionCell = number | [number, number];
 export type GroupCell = [dimension: 's' | 'p' | 'd', key: string, activeMs: number];
 export type ActivityCells<Ref = string> = {
-  sessions: [ref: Ref, source: string | null, project: string | null, device: string, sourceStatus?:'notProvided'][];
+  sessions: [ref: Ref, source: string | null, project: string | null, device: string, sourceStatus?:'notProvided', identityRef?:Ref][];
   sourceWork?:[source:string,index:number,activeMs:number,agentMs:number][];
   devices: Record<string, string>;
   cells: [index: number, active: number, sessions: SessionCell[], groups: GroupCell[]][];
@@ -52,6 +53,7 @@ export type Chunk<Ref = string> = {
   to: number;
   series: SeriesCells[];
   meterSeries?: MeterSeriesCells[];
+  moneyWork?: MoneyWorkCells[];
   activity: ActivityCells<Ref>;
   resets: [string, string, number][];
   grants: [string, number, number][];
@@ -128,6 +130,7 @@ export type History = {
   historyStart: number;
   series: HistorySeries[];
   meterSeries?: MeterHistory[];
+  moneyWork?: MoneyWork[];
   events: SourceEvent[];
   activity: Activity & {available?:false;since: number; known: {from: number; to: number} | null};
 };
@@ -232,7 +235,8 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
       for (const member of members) {
         yield;
         const [n, ms] = typeof member === 'number' ? [member, active] : member;
-        const [ref, source, project, device,sourceStatus] = chunk.activity.sessions[n];
+        const [fragmentRef, source, project, device,sourceStatus,identityRef] = chunk.activity.sessions[n];
+        const ref = identityRef ?? fragmentRef;
         refs.add(ref);
         total.refs.add(ref);
         total.agent += ms;
@@ -329,6 +333,7 @@ export function* composePrepared(chunks: readonly Chunk[], meta: HistoryMeta, ta
   return {
     range: target.key, live: target.live, since, to, cellMs: cell, historyStart: meta.historyStart,
     ...(chunksInOrder.some(c => c.meterSeries !== undefined) ? {meterSeries: yield* composeMetersPrepared(chunksInOrder,cell,since,to)} : {}),
+    ...(chunksInOrder.some(c => c.moneyWork !== undefined) ? {moneyWork: yield* composeMoneyWorkPrepared(chunksInOrder,cell,since,to)} : {}),
     series: yield* ordered(lines, (a, b) => compare(a.sourceId, b.sourceId) || compare(a.windowId, b.windowId)),
     events: yield* ordered([...resets, ...grants,...yield*planEventsPrepared(chunksInOrder,since,(k1+1)*cell,Math.max(target.now,meta.now))], (a, b) => a.at - b.at),
     activity: {...(meta.known.sessions===null?{available:false as const}:{}),since: activitySince, known: knownFrom < to ? {from: knownFrom, to} : null, barMs, activeMs, agentMs, agents: refs.size, cells: activityCells, by: groups},

@@ -139,7 +139,7 @@ test('random measurements and parallel work compose as the direct definitions, a
       const before = samples.filter(s => s.at < a).at(-1);
       const rows = [...(before ? [before] : []), ...samples.filter(s => s.at >= a && s.at < b)];
       const built = cellsOf([{source: 's', window: 'w', samples: rows}], work, names, M, a, b, known);
-      chunks.push(...built.map((c): Chunk => ({...c, activity: {...c.activity, sessions: c.activity.sessions.map(([id, ...rest]) => [String(id), ...rest])}})));
+      chunks.push(...built.map((c): Chunk => ({...c, activity: {...c.activity, sessions: c.activity.sessions.map(([id,source,project,device,sourceStatus])=>[JSON.stringify([id,source,sourceStatus]),source,project,device,sourceStatus,String(id)])}})));
       a = b;
     }
     const target = targetOf(to - from, to, 'past', {from, to});

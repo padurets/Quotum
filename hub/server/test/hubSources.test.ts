@@ -8,7 +8,12 @@ import {SecretError,SecretKey} from '../secrets/crypto.js';
 import {startSecrets} from '../secrets/start.js';
 import {ConnectorTransport} from '../connectors/transport.js';
 import type {Connector,ConnectorIdentity} from '../connectors/registry.js';
-import type {Clock} from '../events.js';
+import {Events, type Clock} from '../events.js';
+import {Ingest} from '../ingest.js';
+import {Duty} from '../duty.js';
+import {Cadence} from '../cadence.js';
+import {ResetFeed} from '../resets.js';
+import {randomUUID} from 'node:crypto';
 import type {Meter} from '../domain/meters.js';
 
 class TestClock implements Clock {
@@ -31,10 +36,35 @@ function harness() {
   };
   const connector:Connector={id:'openrouter',secretFormat:s=>s.length>=16,abilities:['balance','usage'],transport:new ConnectorTransport({host:'127.0.0.1',port:443,operations:{}}),map:()=>null,
     identify:async()=>identity(),measure:async()=>{calls++;if(revoked)throw new SecretError('credential_revoked');if(delayed)return new Promise(resolve=>{late=resolve;});return identity();}};
-  const credentials=new Credentials(store,key,report,new Map([['openrouter',connector]])),sources=new HubSources(store,credentials,clock);
+  const ingest=new Ingest(store,directory,new Duty(),new Cadence());
+  const credentials=new Credentials(store,key,report,new Map([['openrouter',connector]])),sources=new HubSources(store,credentials,clock,ingest.live);
   const connect=(owner=alice.id,requestId?:string)=>credentials.create(owner,'openrouter','fixture-secret-key',{requestId,allowNoExpiry:true});
-  return {clock,store,directory,alice,bob,credentials,sources,connect,identity,get calls(){return calls;},delay:()=>{delayed=true;},finish:()=>{assert.ok(late);late(identity());delayed=false;},revoke:()=>{revoked=true;},setAccount:(id:string)=>{account=id;},setExpiry:(value:number|null)=>{expiry=value;},setUsage:(value:string)=>{usage=value;},rateLimit:(ms:number)=>{retryAfterMs=ms;}};
+  return {clock,store,directory,alice,bob,credentials,sources,ingest,connect,identity,get calls(){return calls;},delay:()=>{delayed=true;},finish:()=>{assert.ok(late);late(identity());delayed=false;},revoke:()=>{revoked=true;},setAccount:(id:string)=>{account=id;},setExpiry:(value:number|null)=>{expiry=value;},setUsage:(value:string)=>{usage=value;},rateLimit:(ms:number)=>{retryAfterMs=ms;}};
 }
+
+test('resolved activity changes hub cadence without a dashboard reader and expires at rule boundaries',async()=>{
+  const h=harness(),events=new Events({store:h.store,directory:h.directory,ingest:h.ingest,resets:new ResetFeed(undefined,()=>{}),hubSources:h.sources},undefined,h.clock);
+  events.attach();h.sources.setObserver(events);
+  try {
+    const source=(await h.connect()).sourceId!,device=h.directory.saveDevice({userId:h.alice.id,machine:{id:'fixture',name:'Laptop',os:'linux',arch:'x86_64'},agent:'fixture',tokenId:null},h.clock.now());
+    h.clock.tick(1);h.sources.start();h.clock.tick();await settle();
+    for(let i=0;i<3;i++){h.clock.tick(h.sources.cadence(source).value!.next-h.clock.now());await settle();}
+    assert.equal(h.sources.cadence(source).value?.why,'idle');assert.ok(h.sources.cadence(source).value!.next-h.clock.now()>=900_000);
+    const at=h.clock.now(),end=at+90_000;
+    h.ingest.live.report(device.id,h.alice.id,[{clientId:'opencode',source:null,sessionId:'a'.repeat(32),origin:'terminal',project:'Project',folder:null,startedAt:at,sentStartedAt:at,lastWorkedAt:null,working:true,device:{id:device.id,name:'Laptop'}}],at);
+    h.store.links.mutate(h.alice.id,'create',null,{clientId:'opencode',deviceId:device.id,route:null,sourceId:source,from:at+10_000,to:end,expectedRevision:'0',requestId:randomUUID()},at);
+    assert.equal(h.sources.cadence(source).value?.why,'idle');
+    h.clock.tick(10_000);assert.equal(h.sources.cadence(source).value?.why,'inUse');
+    assert.ok(h.sources.cadence(source).value!.next<=at+120_001);
+    h.clock.tick(80_000);assert.notEqual(h.sources.cadence(source).value?.why,'inUse');
+    h.store.links.mutate(h.alice.id,'create',null,{clientId:'opencode',deviceId:device.id,route:null,sourceId:source,from:end,to:null,expectedRevision:'1',requestId:randomUUID()},end);
+    assert.equal(h.sources.cadence(source).value?.why,'inUse');
+    h.store.setMeasureInterval(source,900_000);h.sources.frequencyChanged(source,h.clock.now());
+    assert.equal(h.sources.cadence(source).value?.why,'fixed');
+    h.clock.tick(at+200_001-h.clock.now());assert.equal(h.ingest.live.working(source,h.clock.now()),false);
+    h.store.setMeasureInterval(source,null);h.sources.frequencyChanged(source,h.clock.now());assert.notEqual(h.sources.cadence(source).value?.why,'inUse');
+  }finally{events.close();h.sources.stop();h.store.close();}
+});
 
 test('a partial inventory retry delay survives a fixed cadence, manual refresh and frequency changes',async()=>{
   const h=harness();try {
@@ -50,6 +80,20 @@ test('a partial inventory retry delay survives a fixed cadence, manual refresh a
     h.clock.tick(60_000);await settle();assert.equal(h.calls,1);
     h.clock.tick(3_540_000);await settle();assert.equal(h.calls,2);
   }finally{h.sources.stop();h.store.close();}
+});
+
+test('busy activity preserves supplier retry floors, fixed frequency and permanent access failures',async()=>{
+  const h=harness(),sources=new HubSources(h.store,h.credentials,h.clock,{working:()=>true,workingChangesAt:()=>null});
+  try {
+    const source=(await h.connect()).sourceId!;h.rateLimit(1_800_000);
+    h.clock.tick(1);sources.start();h.clock.tick();await settle();
+    const next=sources.cadence(source).value!.next;sources.activityChanged(source);
+    assert.equal(next,h.clock.now()+1_800_000);assert.equal(sources.cadence(source).value!.next,next);
+    h.store.setMeasureInterval(source,900_000);sources.frequencyChanged(source,h.clock.now());
+    assert.equal(sources.cadence(source).value?.why,'fixed');assert.equal(sources.cadence(source).value?.next,next);
+    h.revoke();h.clock.tick(next-h.clock.now());await settle();
+    assert.equal(sources.cadence(source).value,null);sources.activityChanged(source);h.clock.tick(3_600_000);await settle();assert.equal(h.calls,2);
+  }finally{sources.stop();h.sources.stop();h.store.close();}
 });
 
 test('a connector-completed partial round is committed without a competing poll timeout',async(t)=>{

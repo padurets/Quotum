@@ -193,6 +193,17 @@ pub struct SessionReport {
     pub sessions: Vec<RunningSession>,
     pub client_sessions: Vec<ClientSession>,
     pub clients: Vec<crate::clients::InstalledClient>,
+    pub tracking: Option<Tracking>,
+}
+
+/// Delivery completeness in the configured client scope, independent of discovery.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tracking {
+    pub version: u8,
+    pub clients: Vec<crate::clients::ClientId>,
+    pub route_disabled: Vec<crate::clients::ClientId>,
+    pub complete: bool,
 }
 
 /// A successful measurement of one provider account on one machine.

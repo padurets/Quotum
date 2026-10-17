@@ -42,10 +42,14 @@ export const ratesCover=(rates:ExchangeRates,at:number)=>rates.date<=at&&(rates.
 
 /** Round once after the complete path, including amounts above Number precision. */
 export function convertBy(amountValue:string,steps:readonly Pick<RateLeg,'from'|'to'>[],scale=6):string {
-  const value=amount(amountValue);let numerator=value<0n?-value:value,denominator=1n;
+  const result=convertDerivedBy(amount(amountValue),steps,scale);amount(result);return result;
+}
+/** Totals and rates are derived values, not bounded stored observations. */
+export function convertDerivedBy(value:bigint,steps:readonly Pick<RateLeg,'from'|'to'>[],scale=6):string {
+  let numerator=value<0n?-value:value,denominator=1n;
   const shift=6-amountScale(scale);if(shift>=0)numerator*=10n**BigInt(shift);else denominator*=10n**BigInt(-shift);
   for(const step of steps){const from=amount(step.from),to=amount(step.to);if(from<=0n||to<=0n)throw new Error('invalid_exchange_rates');numerator*=to;denominator*=from;}
-  const rounded=numerator/denominator+(numerator%denominator*2n>=denominator?1n:0n),result=(value<0n?-rounded:rounded).toString();amount(result);return result;
+  const rounded=numerator/denominator+(numerator%denominator*2n>=denominator?1n:0n);return (value<0n?-rounded:rounded).toString();
 }
 export function convertMoney(original:Money,target:string,rates:ExchangeRates):Money|null {
   amount(original.amount);if(!isConvertible(original.unit)||!isCurrency(target))return null;

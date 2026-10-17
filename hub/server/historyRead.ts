@@ -19,14 +19,14 @@ export class ReadError extends Error {
 export function fail(status:number, code:string):never {throw new ReadError(status,code);}
 
 /** Both transports enforce the same tile, authority and currency contract. */
-export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, work?:WorkRead, cells=true, capturedAt?:number,captureSources?:(sources:Readonly<Record<string,number>>)=>void):string {
+export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:string, user:string, query:HistoryQuery, work?:WorkRead, cells=true, capturedAt?:number,workCells=true,captureSources?:(sources:Readonly<Record<string,number>>)=>void):string {
   const {store,directory}=hub;
     const scope = query.scope;
     if(scope!==undefined&&scope!=='quota'&&scope!=='budget')fail(400, 'invalid_request');
     const now = capturedAt??Date.now();
     // Credit quiet machines before deciding whether their tiles can be reused.
     // A composite read already swept before capturing its journal frontier.
-    if(scope!=='budget'&&capturedAt===undefined)hub.ingest.live.sweep(now);
+    if((scope!=='budget'||query.work==='1')&&capturedAt===undefined)hub.ingest.live.sweep(now);
     const number = (value: string | undefined) => value && /^\d{1,15}$/.test(value) ? Number(value) : NaN;
     const cell = number(query.cell);
     const from = number(query.from);
@@ -52,12 +52,14 @@ export function readHistory(hub:Hub, history:HistoryTiles, events:Events, board:
       if(meters.ids.some(([source,id])=>!(scope==='quota'?quotaMeter:budgetMeter)(sources.get(source),id)))fail(400, 'invalid_request');
     }
     if (to <= from || from < oldest) fail(400, scope ? 'history_range_invalid' : 'invalid_request');
-    const reservation=!work&&scope!=='budget'?history.reservation():null;
+    const sourceWork=query.work!==undefined;
+    if(sourceWork&&(query.work!=='1'||scope!=='budget'||!meters||!store.moneyWorkSources(board,meters).length))fail(400,'invalid_request');
+    const reservation=!work&&(scope!=='budget'||sourceWork)?history.reservation():null;
     try{
     if(reservation)work=sharedWork(hub,shown,{from,to},reservation.add,reservation.remove,null,now,board);
-    const access=scope==='budget'?undefined:work!.ensureAccess!();
+    const access=scope==='budget'&&!sourceWork?undefined:work!.ensureAccess!();
     let chunks: string[];
-    try {chunks=cells?history.read(board, cell, from, to, now, shown, meters, scope, work):[];}
+    try {chunks=cells?history.read(board, cell, from, to, now, shown, meters, scope, work,sourceWork&&workCells):[];}
     catch(error){if(error instanceof HistoryLimit)fail(413, 'history_limit');throw error;}
     if(query.currency!==undefined){
       if(!meters)fail(400, 'invalid_request');

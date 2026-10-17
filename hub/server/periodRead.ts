@@ -113,12 +113,13 @@ export class PeriodReader {
     const self=this;
     if(!object(raw)||raw.version!==1||!number(raw.evaluatedAt)||Object.keys(raw).some(k=>!['version','selection','evaluatedAt','quota','budget','funds','values','sessions'].includes(k)))fail(400,'invalid_request');
     const selection=parsePeriod(raw.selection);if(!selection)fail(400,'invalid_request');
-    for(const name of PERIOD_SCOPES)if(raw[name]!==undefined&&(!object(raw[name])||Object.values(raw[name]).some(v=>typeof v!=='string')||Object.keys(raw[name]).some(k=>!['cell','from','to','meters','unit','currency','meta','evidence','cells'].includes(k))))fail(400,'invalid_request');
+    for(const name of PERIOD_SCOPES)if(raw[name]!==undefined&&(!object(raw[name])||Object.values(raw[name]).some(v=>typeof v!=='string')||Object.keys(raw[name]).some(k=>!['cell','from','to','meters','unit','currency','meta','evidence','cells','work'].includes(k))))fail(400,'invalid_request');
     for(const name of PERIOD_SCOPES)if(object(raw[name])&&raw[name].cells!==undefined&&raw[name].cells!=='skip')fail(400,'invalid_request');
+    for(const name of PERIOD_SCOPES)if(object(raw[name])&&raw[name].work!==undefined&&(name!=='budget'||raw[name].work!=='1'))fail(400,'invalid_request');
     if(raw.values!==undefined&&(!Array.isArray(raw.values)||raw.values.length>2000||raw.values.some(v=>typeof v!=='string'||v.length>256)))fail(400,'invalid_request');
     if(raw.sessions!==undefined&&(!object(raw.sessions)||Object.keys(raw.sessions).some(k=>k!=='cursor')||raw.sessions.cursor!==undefined&&(typeof raw.sessions.cursor!=='string'||raw.sessions.cursor.length>2048)))fail(400,'invalid_request');
     const request=raw as PeriodRequest,{store,directory}=self.hub,now=Date.now();
-    if(request.quota||request.sessions)self.hub.ingest.live.sweep(now);
+    if(request.quota||request.sessions||request.budget?.work==='1')self.hub.ingest.live.sweep(now);
     const revision=self.revision;
     const evaluatedAt=Math.min(request.evaluatedAt,now),range=evaluatedRange(selection,evaluatedAt);
     if(range.from<now-config.retention.sampleDays*86_400_000||range.from>=now)fail(400,'history_range_invalid');
@@ -126,9 +127,9 @@ export class PeriodReader {
     const reservation=self.history.reservation();
     try{
     let workRange:import('./domain/period.js').PeriodRange|null=null;
-    const work:import('./store/store.js').WorkRead=request.sessions||request.quota?sharedWork(self.hub,shown,()=>workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now,board):()=>[],access=work.access;
+    const work:import('./store/store.js').WorkRead=request.sessions||request.quota||request.budget?.work==='1'?sharedWork(self.hub,shown,()=>workRange,bytes=>reservation.add(bytes),bytes=>reservation.remove(bytes),owner,now,board):()=>[],access=work.access;
     if(request.values?.some(id=>!shown.has(id)))fail(404,'not_found');
-    const workRequested=!!(request.sessions||request.quota);
+    const workRequested=!!(request.sessions||request.quota||request.budget?.work==='1');
     const identity=workRequested&&access?self.identity(board,user,access,reservation,work.authority):'';
     const resourceKey=()=>JSON.stringify([[...store.shown(board,directory.view(board).hidden)].map(([id,s])=>[id,s.since]),request.budget||request.funds||request.values?store.sources(board).map(s=>[s.id,s.budget]):null]);
     const capturedResources=resourceKey();
@@ -163,7 +164,7 @@ export class PeriodReader {
         }
       }
       for(const id of request.values??[]){include(id,'quota');include(id,'budget');}
-      const workUpper=request.quota||request.sessions?Math.max(upper,selection.mode==='range'?fixedRange.to:workFrontier.to):0;
+      const workUpper=request.quota||request.sessions||request.budget?.work==='1'?Math.max(upper,selection.mode==='range'?fixedRange.to:workFrontier.to):0;
       const currency=()=>JSON.stringify([store.currencies.registryRevision(user),store.currencies.pathRevision(user),store.db.prepare("SELECT value FROM meta WHERE key='currencyRatesRevision::public'").get()?.value??0]);
       const currencyKey=currency();
       if(!directory.boards(user).some(part=>part.id===board))fail(404,'board_not_found');
@@ -193,7 +194,7 @@ export class PeriodReader {
         }
       });
     }
-    workRange=selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip')?fixedRange:request.sessions?{from:replaceFrom,to:workFrontier.to}:null;
+    workRange=selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip'||request.budget?.work==='1')?fixedRange:request.sessions?{from:replaceFrom,to:workFrontier.to}:null;
     function* section<T>(read:Preparation<T>):Preparation<PeriodSection<T>> {
       const before=replyBytes;
       try {return {state:'complete',basis,value:yield*read};}
@@ -218,7 +219,7 @@ export class PeriodReader {
     }
     function* temporary<T>(read:()=>Preparation<T>):Preparation<T>{const before=replyBytes;try{return yield*read();}finally{reservation.remove(replyBytes-before);replyBytes=before;}}
     try {
-      if(request.quota||request.sessions){
+      if(request.quota||request.sessions||request.budget?.work==='1'){
         let bytes=0;
         try{work.ensureAccess?.();presence=self.hub.ingest.live.presenceSnapshot(size=>{reservation.add(size);bytes+=size;},(device,person)=>work.access?.devices.get(device)?.owner===person);}
         catch(error){reservation.remove(bytes);if(!(error instanceof HistoryLimit))throw error;presenceLimited=true;}
@@ -226,7 +227,8 @@ export class PeriodReader {
       yield;
       for(const scope of PERIOD_SCOPES)if(request[scope])response[scope]=yield*section((function*(){
         const historyScope=scope==='funds'?'budget':scope;
-        const query=request[scope]!,json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},work,query.cells!=='skip',now,sources?known=>{
+        // Work estimates use the common tape and curves, without a second copy in drawing cells.
+        const query=request[scope]!,json=readHistory(self.hub,self.history,self.events,board,user,{...query,scope:historyScope},work,query.cells!=='skip',now,false,sources?known=>{
           // Keep only eligibility, never optional metadata across native preparation.
           const ids=shown.keys();
           for(const id in known)if(Object.hasOwn(known,id)&&id!==ids.next().value)return;
@@ -234,16 +236,16 @@ export class PeriodReader {
         }:undefined);
         reserve(Buffer.byteLength(json)*2);const value=JSON.parse(json) as HistoryReply;
         if(query.evidence==='skip')return value;
-        const tapeIdentity=createHash('sha256').update(JSON.stringify([board,user,scope,scope==='quota'?identity:null,[...shown].map(([id,s])=>[id,s.since]),scope==='quota'?null:store.financialKey(board),query.meters,query.unit,query.currency,store.currencies.registryRevision(user)])).digest('base64url');
+        const tapeIdentity=createHash('sha256').update(JSON.stringify([board,user,scope,scope==='quota'||query.work==='1'?identity:null,[...shown].map(([id,s])=>[id,s.since]),scope==='quota'?null:store.financialKey(board),query.meters,query.unit,query.currency,query.work,store.currencies.registryRevision(user)])).digest('base64url');
         const previous=self.decode(query.evidence);
-        const delta=selection.mode==='live'&&previous&&previous.identity===tapeIdentity&&previous.revision>=Math.max(self.measurementFloor,scope==='quota'?self.workFloor:0)&&previous.revision<=revision&&range.from>=previous.from;
+        const delta=selection.mode==='live'&&previous&&previous.identity===tapeIdentity&&previous.revision>=Math.max(self.measurementFloor,scope==='quota'||query.work==='1'?self.workFloor:0)&&previous.revision<=revision&&range.from>=previous.from;
         const changes=delta?self.measurements.filter(c=>c.revision>previous.revision&&c.revision<=revision&&shown.has(c.source)&&(!c.scopes||c.scopes.includes(historyScope))):[];
         const patch=frontier(delta?previous:null,changes);
         const changed=new Set(changes.map(c=>c.source));
         const tapeShown=delta?new Map([...shown].filter(([id])=>changed.has(id))):shown;
         const cursor=self.encode({identity:tapeIdentity,revision,from:patch.coveredFrom,cut:patch.coveredTo});
         if(selection.mode==='range'){
-          const trace=scope==='quota'?yield*retainedWork():null;
+          const trace=scope==='quota'||query.work==='1'?yield*retainedWork():null;
           const tape=yield*temporary(()=>prepareFixedTape(periodTape(store,board,tapeShown,user,historyScope,query,fixedRange,cursor,fixedRange.from,reserve,fixedRange.to,release,true,now,work),trace,range,Number(query.cell),reserve,release));
           reserve(Buffer.byteLength(JSON.stringify(tape))*3);return {...value,tape};
         }

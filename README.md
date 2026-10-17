@@ -179,9 +179,9 @@ notifications also stay live, independently of the board's historical range.
 - **Reset announcements** from the community trackers [Codex Resets](https://codex-resets.com)
   and [Claude Resets](https://claude-resets.com), with a link to the source. You
   can turn them off.
-- **Boards made of widgets**, like a dashboard in Grafana: source cards, agent activity,
+- **Boards made of widgets**, like a dashboard in Grafana: resource cards, agent activity,
   charts, tables and an optional Agent sessions table share one grid. The table gathers
-  sessions by project, machine or subscription, with work within the selected period,
+  sessions by project, machine or resource, with work within the selected period,
   the date and time of their last recorded work in it and current working counts when
   known. Individual agents with their machines and subscriptions are a click away.
   The header's filter button reveals the common period, quota window and forecast
@@ -351,9 +351,9 @@ A machine token is one person's: every teammate creates their own. Machines are 
 in *My connections → Devices*, so an image doesn't need a name per copy.
 
 **Sharing with a team.** Create a shared board and invite people with a link from
-*Board controls → Members*. Share your subscriptions through the board's *Add widget*
+*Board controls → Members*. Share your resources through the board's *Add widget*
 menu. In *Board settings → Provided data*, you can take yours off again at any time;
-the board's owner can take any shared source off their board.
+the board's owner can take any shared resource off their board.
 
 **By hand:** every [release](https://github.com/padurets/quotum/releases) has the agent
 for Linux, macOS and Windows as an archive (`quotum-cli-<version>-<platform>`, with the
@@ -401,7 +401,7 @@ cannot establish spending. An omitted currency keeps its last value as stale and
 breaks its history until a valid observation returns. A failed request preserves the
 last valid reading. The supplier's insufficient-funds notice is separate from rejected
 access. Saved access and private account names remain owner-only on shared boards.
-Only holders may refresh the source.
+Only holders may refresh the resource.
 
 ## Connecting OpenRouter
 
@@ -449,7 +449,7 @@ A top-up is separate from spending: spending comes from the lifetime usage count
 Before the first baseline, history is unknown. Partial history and spending observed
 after a gap retain their uncertainty and original interval. Key names and monetary
 measurements are shared with board members, while saved access details stay private.
-Only holders can refresh a hub-measured source. Replace or remove your saved access in
+Only holders can refresh a hub-measured resource. Replace or remove your saved access in
 **Settings → My connections**; removing it does not revoke the provider key. Revoked or expired access
 preserves the last measurements. The compact panel displays money too; tray minimums
 and quota notifications continue to use percentage windows only.
@@ -479,13 +479,13 @@ availability or concurrency.
 
 Both quotas also appear in the ordinary subscription chart and measurement table:
 choose **5-hour** or **Weekly**, alongside the other subscriptions. The chart's legend,
-source colours, time range and period visibility are shared. Historical percentages
+resource colours, time range and period visibility are shared. Historical percentages
 use the allowance reported at each measurement. The quotas overlap and are never
 added or converted to money. Forecasts, agent-work attribution and native quota
 notifications are unavailable for this provider. Gaps and expired readings stay
-unknown in history. Only source holders may refresh or change frequency.
+unknown in history. Only resource holders may refresh or change frequency.
 
-Every new connection creates a separate source local to its owner. Replacing a key
+Every new connection creates a separate resource local to its owner. Replacing a key
 requires confirmation that it belongs to the same account and preserves history;
 the quota API cannot verify that declaration. For another account, connect separately.
 Credential details remain private on shared boards.
@@ -672,6 +672,29 @@ available on Linux; shared or unproven invocations, and macOS/Windows, report pr
 without a project. Generic Node/bun hosts are not detected. Version probes are bounded
 and never read credentials or make model requests. Working states estimate process CPU
 activity; they are not provider reports of model work.
+
+In **Settings → Clients and resources**, assign a client to a connected resource
+(subscription or budget) on one device or all your devices, with an explicit start
+and optional end date. Optional conditions
+match a reported subscription/API route and known provider. Device rules take priority;
+a disconnected winning resource keeps the work unassigned. Correcting a rule changes how
+retained work is displayed without rewriting the machine's original observations.
+One editor handles both new links and changes. Active links default to applying
+changes from saving time, preserving earlier assignments; the period control also
+allows a specific date or correction of the entire period. Current and scheduled
+links share one list, with completed periods under History. Disconnected targets
+keep their name. The editor suggests resources after choosing a client and device;
+selecting a recommendation fills its condition and period for review before saving.
+In a device’s current sessions, select the resource to see why it was chosen.
+API work is never assigned from a host alone. Detailed route evidence and
+account differences remain private.
+
+The budget table can show resource spending per active hour and remaining active hours
+when a resource reports a spending counter and at least 30 minutes of eligible work.
+These are estimates from adjacent observations, not prices of individual requests or
+sessions. Balance-only resources have no such estimate. A subscription's warning mark
+distinguishes quota growth with complete observations and no attributed work from
+growth during incomplete observation; silence never proves that no work happened.
 
 My connections also shows each device's Quotum version, its installed client observations
 and the origins of retained measurements. There you can allow measurements for the whole

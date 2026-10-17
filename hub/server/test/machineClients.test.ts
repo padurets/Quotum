@@ -63,7 +63,7 @@ test('unknown and unheld work is admitted by device while ownership protects sou
   assert.ok(h.ingest.live.deviceSessions(h.owner.id, device, at).every(s => s.source === null));
   assert.deepEqual(h.directory.deviceClients(device).map(({clientId, version}) => ({clientId, version})), report.clients);
   h.ingest.sessions(h.credential, {...packet, sentAt: iso(at+60_000)}, at+60_000);
-  const raw = h.store.agentWork(at, at+60_000); assert.equal(raw.length, 2); assert.ok(raw.some(s => s.source === foreign));
+  const raw = h.store.agentWork(at, at+60_000); assert.equal(raw.length, 2); assert.ok(h.store.db.prepare('SELECT 1 FROM agent_sessions WHERE source_id=?').get(foreign), 'raw evidence remains retained');
   const history = readHistory(h.store, h.board, at, 60_000, {to: at+60_000});
   assert.equal(history.activity.agentMs, 120_000); assert.equal(history.activity.activeMs, 60_000);
   assert.deepEqual(history.activity.by.source.map(s => s.key), ['unknown']);

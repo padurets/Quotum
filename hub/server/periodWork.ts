@@ -1,3 +1,5 @@
+import {resolveLink} from './domain/links.js';
+import {fundingOf} from './domain/workAccess.js';
 import type {Hub} from './api.js';
 import type {HistoryTiles} from './history.js';
 import type {Shown, WorkRead} from './store/store.js';
@@ -35,17 +37,22 @@ export function* preparePeriodWork(hub:Hub,history:HistoryTiles,board:string,sho
   const access=work.ensureAccess?.()??work.access??hub.store.workAccess(board,now,reserve),known=hub.store.historyKnown(shown,access.owner,access),anchor=range.from;
   const from=workKnownFrom(known);
   const trace:WorkTrace={anchor,cut:range.to,knownFrom:from??range.to,...(from===null?{available:false}:{}),refs:[],spans:[]};
-  const indices=new Map<number,number>();
+  const indices=new Map<string,number>();
   for(const row of work(range.from,range.to)) {
-    let index=indices.get(row.session);
+    const fragment=JSON.stringify([row.session,row.source,row.sourceStatus]);
+    let index=indices.get(fragment);
     if(index===undefined) {
-      index=trace.refs.length;indices.set(row.session,index);
+      index=trace.refs.length;indices.set(fragment,index);
       const saved=row.rawContext!;
-      const presenceKey=hub.ingest.live.binding(row.device,saved.client,saved.source,saved.producer,row.origin,saved.project,saved.folder);
-      const currentPresence=presence(row.device,saved.client,saved.source,saved.producer,row.origin,saved.project,saved.folder,now);
+      const binding=hub.ingest.live.binding(row.device,saved.client,saved.source,saved.producer,row.origin,saved.project,saved.folder);
+      const context=access.attribution?.(row.user,row.device,saved.client);
+      const current=context?resolveLink({clientId:saved.client,deviceId:row.device,source:saved.source,accountBy:saved.accountBy,route:saved.route},context,now).source:saved.source;
+      const funding=fundingOf(access,row.user,current);
+      const presenceKey=funding.source===row.source&&funding.sourceStatus===row.sourceStatus?binding:undefined;
+      const currentPresence=presenceKey?presence(row.device,saved.client,saved.source,saved.producer,row.origin,saved.project,saved.folder,now):undefined;
       const deviceName=saved.deviceName,folder=row.folder??(row.project!==saved.project?saved.project:null);
-      reserve(416+2*((row.project?.length??0)+(folder?.length??0)+deviceName.length));
-      trace.refs.push({ref:history.ref(board,row.session),source:row.source,...(row.sourceStatus?{sourceStatus:row.sourceStatus}:{}),clientId:saved.client,device:{id:row.device,name:deviceName},origin:row.origin,project:row.project,folder,startedAt:row.startedAt,...(presenceKey?{presenceKey}:{}),...(currentPresence?{currentPresence}:{})});
+      reserve(640+2*((row.project?.length??0)+(folder?.length??0)+deviceName.length));
+      trace.refs.push({ref:history.fragmentRef(board,row.session,row.source,row.sourceStatus),identityRef:history.ref(board,row.session),source:row.source,...(row.sourceStatus?{sourceStatus:row.sourceStatus}:{}),clientId:saved.client,device:{id:row.device,name:deviceName},origin:row.origin,project:row.project,folder,startedAt:row.startedAt,...(presenceKey?{presenceKey}:{}),...(currentPresence?{currentPresence}:{})});
     }
     const start=row.from-anchor,end=row.to-anchor,last=trace.spans.at(-1);
     if(last&&last[0]===index&&last[2]>=start)last[2]=Math.max(last[2],end);

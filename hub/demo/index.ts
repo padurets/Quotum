@@ -17,6 +17,7 @@ import {seedQuotas} from './quotas.js';
 import {seedMoney} from './money.js';
 import {seedCodexCredits} from './codexCredits.js';
 import {seedClients} from './clients.js';
+import {seedLinks} from './links.js';
 import {seedMeasurementDevices} from './measurementDevices.js';
 import {seedCurrencies} from './currencies.js';
 import {Directory} from '../server/store/directory.js';
@@ -125,6 +126,8 @@ export class Demo {
   private hub: ChildProcess | undefined;
   private trackers: Trackers | undefined;
   private timer: NodeJS.Timeout | undefined;
+  private tick: ((manual?: boolean) => Promise<void>) | undefined;
+  private reporting = Promise.resolve();
   stopping = false;
   private benchWork = false;
   private readonly reports = new Set<(machine: string, at: number) => void>();
@@ -141,6 +144,17 @@ export class Demo {
       const heard = (id: string, at: number) => {if (id === machine) {clearTimeout(timer); this.reports.delete(heard); resolve(at);}};
       this.reports.add(heard);
     });
+  }
+
+  /** Bench cases advance the same list writer without waiting for its next timer. */
+  async reportNow(machine: string): Promise<number> {
+    if (!this.options.idleAgents || !this.tick || this.stopping) throw new Error('manual reports need a running idle-agent stand');
+    clearTimeout(this.timer);
+    await this.reporting;
+    clearTimeout(this.timer);
+    const heard = this.nextReport(machine);
+    await this.tick(true);
+    return heard;
   }
 
   constructor(
@@ -171,8 +185,8 @@ export class Demo {
       QUOTUM_ALLOWED_HOSTS: address.hosts,
       QUOTUM_SECRET_KEY:Buffer.alloc(32,31).toString('base64url'),
     });
-    if (set.id === 'clients') {
-      // With no quota samples, the synthetic work needs its historical database start.
+    if (set.id === 'clients' || set.id === 'links') {
+      // These sets begin with work before their first native measurement.
       const seeded = new Store(path.join(this.dir, 'quotum.sqlite'), this.start + earliest(set));
       seeded.close();
     }
@@ -197,6 +211,7 @@ export class Demo {
       seedWork(store, stand);
       if(set.id==='devices')await seedMeasurementDevices(store,new Directory(store.db),stand);
       if(set.id==='clients')await seedClients(store,new Directory(store.db),stand);
+      if(set.id==='links')await seedLinks(store,new Directory(store.db),stand);
       if(set.id==='sessions')await seedSessionClients(store,new Directory(store.db),stand);
       if(this.options.money!==false&&(set.id==='all'||set.id==='money'||set.id==='analytics')){await seedMoney(store,new Directory(store.db),stand);await seedDeepSeek(store,new Directory(store.db),stand);seedCurrencies(store,stand);seedCodexCredits(store,new Directory(store.db),stand);}
       if(this.options.money!==false&&(set.id==='all'||set.id==='quotas'||set.id==='analytics'))await seedQuotas(store,new Directory(store.db),stand);
@@ -214,7 +229,7 @@ export class Demo {
       }
       return idle;
     }, (machine, at) => {for (const heard of this.reports) heard(machine.id, at);});
-    const tick = async () => {
+    const tick = (manual = false) => this.reporting = this.reporting.then(async () => {
       const t = Date.now() - this.start;
       try {
         if (still) await live.report(0, Date.now());
@@ -227,8 +242,9 @@ export class Demo {
         await this.settled();
         if (!this.stopping) console.error(`demo: ${(error as Error).message}`);
       }
-      if (!this.stopping) this.timer = setTimeout(() => void tick(), TICK - ((Date.now() - this.start) % TICK));
-    };
+      if (!this.stopping) this.timer = setTimeout(() => void tick(), manual ? TICK : TICK - ((Date.now() - this.start) % TICK));
+    });
+    this.tick = tick;
     await tick();
     return stand;
   }

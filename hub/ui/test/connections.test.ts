@@ -39,6 +39,7 @@ function fixture(initialOwner='u',local=false,boards:Session['boards']=[]){
     if(name==='./Popover')return {};
     if(name==='./logos')return {logoOf:()=>''};
     if(name==='./Machines')return {};
+    if(name==='./ClientLinks')return {ClientLinks: function ClientLinks() {}};
     if(name.endsWith('/addition'))return modules.addition;
     if(name==='./ConnectionForms')return modules.forms;
     if(name==='./WidgetAdd')return {WidgetAdd: function WidgetAdd() {}};

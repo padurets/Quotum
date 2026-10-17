@@ -1,5 +1,6 @@
 import {cellOf, cellStart} from '../server/domain/history.js';
 import {createServer} from 'node:net';
+import {randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
 import {mkdirSync,realpathSync,writeFileSync} from 'node:fs';
@@ -13,7 +14,7 @@ import {SETS} from '../demo/catalogue.js';
 import {addressOf, Demo, prepare, Stop} from '../demo/index.js';
 import {cards, people} from '../demo/model.js';
 import type {Snapshot} from '../server/projection.js';
-import {chartProblems, creditRenderProblems, HISTORY_BYTES_PER_MEASUREMENT, idleProblems, measuredProblems, percentile, privateWorkRenderProblems, renderProblems} from './budget.js';
+import {activityCreditProblems, chartProblems, creditRenderProblems, HISTORY_BYTES_PER_MEASUREMENT, idleProblems, measuredProblems, percentile, privateWorkRenderProblems, renderProblems} from './budget.js';
 import {attachedChrome, findChrome, launchChrome, openTab, type Browser, type Cdp} from './cdp.js';
 import {probeScript, type Reading} from './probe.js';
 import {delta, round, scriptPerSecond, tally, type Metrics} from './report.js';
@@ -243,6 +244,16 @@ async function main() {
     // their own subscribed-selector tests, including equal displayed labels.
     const bootstrapSource=`localStorage.setItem('quotum.locale','en');
       localStorage.setItem('quotum.prefs',JSON.stringify({...JSON.parse(localStorage.getItem('quotum.prefs')||'{}'),agentsSort:{column:'project',descending:false}}));
+      window.__quotumInspectHistoryPool=pool=>{window.__quotumWalletState=(source,authority)=>{
+        const p=[...pool.members].find(m=>m.tapes),reader=[...pool.members].find(m=>m.scope==='budget'),tape=p?.tapes.get('budget');
+        const work=p?.moneyWorkAt(source,Date.now()),group=tape?.tape.money.find(m=>m.source===source),shown=reader?.get();
+        return {authorityReady:authority===undefined?undefined:!!p&&p.workAuthority===authority,periodLoading:p?.get().loading,periodError:!!p?.get().error,workNeeded:p?.workNeeded,work:work?{activeMs:work.activeMs,knownFrom:work.knownFrom}:null,
+          preparation:p?{generation:p.generation,revision:p.revision,retiring:p.retiring,retirementPreparing:p.retirementPreparing,quotaSeries:p.tapes.get('quota')?.tape.quota.length,
+            flights:[...p.transport.flights].slice(0,6).map(f=>({generation:f.intent.generation,revision:f.intent.revision,preparing:!!f.preparing,aborted:f.controller.signal.aborted,extras:f.extras,sections:Object.keys(f.intent.request)}))}:null,
+          recentPeriods:performance.getEntriesByType('resource').filter(r=>/\\/period$/.test(new URL(r.name).pathname)).slice(-4).map(r=>({start:r.startTime,duration:r.duration,responseEnd:r.responseEnd,bytes:r.decodedBodySize})),
+          budget:group?{meter:group.meter,counter:!!group.workCounter,readings:group.workCounter?.readings.length,workFrom:group.workCounter?.workFrom}:null,
+          drawing:shown?{loading:shown.loading,error:shown.error,range:shown.history?.range,series:shown.history?.meterSeries?.slice(0,24).map(m=>({source:m.sourceId,meter:m.meterId,unit:m.unit,kind:m.kind,role:m.role}))}:null};
+      };};
       ${probeScript()}`;
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source:bootstrapSource});
     idleCpu?.binding.rememberInjected(1,bootstrapSource,'idle-probe');
@@ -389,7 +400,7 @@ async function main() {
       }),
     ];
     // Keep completed measurements available if a later browser phase stops the job.
-    say(`initial readings: ${JSON.stringify({idle:{scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,renders:reading.renders,mutations:reading.mutations},measured:{historyBytes:measured.historyBytes,cardP95Ms:percentile(measured.latencies,.95),chartP95Ms:percentile(measured.chartLatencies,.95)},work:worked.reports,problems})}`);
+    say(`initial readings: ${JSON.stringify({idle:{scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,renders:reading.renders,mutations:reading.mutations},measured:{historyBytes:measured.historyBytes,ingestP95Ms:percentile(measured.ingestLatencies,.95),cardP95Ms:percentile(measured.latencies,.95),chartP95Ms:percentile(measured.chartLatencies,.95)},work:worked.reports,problems})}`);
     // The readings above are frozen: keyboard checks do not enter the performance budget.
     say('checking consecutive frequency saves with native arrow keys');
     await frequencyKeys(cdp);
@@ -507,6 +518,7 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
   const from = Date.now();
   const latencies: number[] = [];
   const chartLatencies: number[] = [];
+  const ingestLatencies: number[] = [];
   const requests = new Requests(cdp); requests.counting = true;
   const overview = await stand.people.get(people(stand.set)[0].id)!.get<Snapshot>('/api/overview');
   const initial = overview.sources.find(s => s.id === source)!.windows.find(w => w.id === 'gemini:weekly')!.used;
@@ -518,6 +530,7 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
     const last = `${cellStart(Date.parse(taken.observedAt), cellOf(86_400_000))}:${Math.round((100 - used) * 100) / 100}`;
     const sent = Date.now();
     await agent.ingest([{...taken, windows}], [], sent);
+    ingestLatencies.push(Date.now()-sent);
     let changed: number | null = null;
     let chart: number | null = null;
     while ((changed === null || chart === null) && Date.now() < sent + SHOWN_WITHIN) {
@@ -538,7 +551,7 @@ async function measure(stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
     await sleep(sent + MEASURE_EVERY - Date.now());
   }
   await drain(requests); requests.counting = false;
-  return {source, latencies, chartLatencies, historyBytes: requests.historyBytes / MEASUREMENTS, reading: await cdp.evaluate<Reading>('__quotumBench.read()'), from, to: Date.now()};
+  return {source, latencies, chartLatencies, ingestLatencies, historyBytes: requests.historyBytes / MEASUREMENTS, reading: await cdp.evaluate<Reading>('__quotumBench.read()'), from, to: Date.now()};
 }
 
 /** Mixed-source credit updates retain quota drawings and only read their own financial tail. */
@@ -680,11 +693,12 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
   const previous=state.sources.find(s=>s.id===source)!;
   const previousBalance=previous.meters?.find(m=>m.id==='balance')?.amount;
   const ledger=new DatabaseSync(path.join(demo.dir,'quotum.sqlite'),{readOnly:true});
-  let heartbeat:{historyRequests:number;historyBytes:number;coverageAdvanced:boolean;ledgerRowsUnchanged:boolean;valuesUnchanged:boolean};
+  let heartbeat:{historyRequests:number;historyBytes:number;coverageAdvanced:boolean;ledgerRowsUnchanged:boolean;pairAnchorAdvanced:boolean;valuesUnchanged:boolean};
   try {
-    const rows=()=>Number(ledger.prepare("SELECT count(*) AS count FROM readings WHERE source_id=? AND meter_id IN ('credits','usage')").get(source)!.count);
+    const rows=()=>Number(ledger.prepare("SELECT count(*) AS count FROM readings WHERE source_id=? AND pair_anchor=0 AND meter_id IN ('credits','usage')").get(source)!.count);
+    const anchors=()=>Number(ledger.prepare("SELECT count(*) AS count FROM readings WHERE source_id=? AND pair_anchor=1 AND meter_id='usage'").get(source)!.count);
     const coverage=()=>Number(ledger.prepare("SELECT max(to_at) AS at FROM meter_spans WHERE source_id=? AND meter_id='usage'").get(source)!.at);
-    const beforeRows=rows(),beforeCoverage=coverage(),heartbeatFrom=Date.now(),heartbeatRequests=new Requests(cdp);
+    const beforeRows=rows(),beforeAnchors=anchors(),beforeCoverage=coverage(),heartbeatFrom=Date.now(),heartbeatRequests=new Requests(cdp);
     heartbeatRequests.counting=true;await cdp.evaluate('__quotumBench.reset()');
     // A later observation of identical values must travel through the real event and history path.
     writeFileSync(path.join(demo.dir,'money-control.json'),JSON.stringify({at:heartbeatFrom,credits:90,usage:33.6}));
@@ -694,12 +708,14 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
     await drain(heartbeatRequests);heartbeatRequests.counting=false;
     const current=(await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard)).sources.find(s=>s.id===source)!;
     const browserBalance=await cdp.evaluate<string|null>(`document.querySelector('[data-card="${source}"] [data-money]')?.getAttribute('data-money')??null`);
-    heartbeat={historyRequests:heartbeatRequests.historyRequests,historyBytes:heartbeatRequests.historyBytes,coverageAdvanced:coverage()>beforeCoverage&&current.successAt!>previous.successAt!,ledgerRowsUnchanged:rows()===beforeRows,valuesUnchanged:current.meters?.find(m=>m.id==='balance')?.amount===previousBalance&&browserBalance===previousBalance};
+    heartbeat={historyRequests:heartbeatRequests.historyRequests,historyBytes:heartbeatRequests.historyBytes,coverageAdvanced:coverage()>beforeCoverage&&current.successAt!>previous.successAt!,ledgerRowsUnchanged:rows()===beforeRows,pairAnchorAdvanced:anchors()===beforeAnchors+1,valuesUnchanged:current.meters?.find(m=>m.id==='balance')?.amount===previousBalance&&browserBalance===previousBalance};
     if(!heartbeat.coverageAdvanced||!heartbeat.ledgerRowsUnchanged||!heartbeat.valuesUnchanged)problems.push('unchanged money observation lost freshness or changed the ledger or balance');
+    if(!heartbeat.pairAnchorAdvanced)problems.push('unchanged money observation did not retain its native spending endpoint');
     if(heartbeat.historyRequests>1||heartbeat.historyBytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push('unchanged money observation exceeds the existing history traffic budget');
     const heartbeatReading=await cdp.evaluate<Reading>('__quotumBench.read()');
     problems.push(...renderProblems({card:source,renders:heartbeatReading.renders,mutations:heartbeatReading.mutations,from:heartbeatFrom,to:Date.now()}));
   }finally{ledger.close();}
+  const linkedWork=await workLinkedWallet(demo,stand,cdp,source);problems.push(...linkedWork.problems);
   const currencies=await currencyPhase(demo,stand,cdp,source,record.id);problems.push(...currencies.problems);
   const capped=await owner.post<Credential>('/api/credentials',{provider:'openrouter',secret:MONEY_KEY(5),allowNoExpiry:true});
   const cappedSource=capped.sourceId!;
@@ -711,7 +727,81 @@ async function moneyPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:C
     if(!cap){if(Date.now()>cappedBy)throw new Stop('zero-cap money fixture did not appear');await sleep(20);}
   }
   await moneyView(cdp,source,cappedSource,cap.id);
-  return {count:latencies.length,p95Ms:Math.round(percentile(latencies,.95)),chartP95Ms:Math.round(percentile(chartLatencies,.95)),historyBytesPerMeasurement:bytes,heartbeat,currencies,problems};
+  return {count:latencies.length,p95Ms:Math.round(percentile(latencies,.95)),chartP95Ms:Math.round(percentile(chartLatencies,.95)),historyBytesPerMeasurement:bytes,heartbeat,linkedWork,currencies,problems};
+}
+
+/** Attributed wallet credit updates work readers once while financial drawing stays still. */
+async function workLinkedWallet(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp,source:string) {
+  say('checking linked wallet credit with Activity, money work columns and a stable financial chart');
+  const owner=stand.people.get(people(stand.set)[0].id)!,agent=stand.agents.get('laptop')!,start=Date.now();
+  const initial=new Requests(cdp);initial.counting=true;
+  const revision=(await owner.get<{revision:string}>('/api/links')).revision;
+  const created=await owner.post<{revision:string;links:{id:string}[]}>('/api/links',{clientId:'opencode',deviceId:null,route:null,sourceId:source,from:start,to:null,expectedRevision:revision,requestId:randomUUID()});
+  const session={clientId:'opencode',sessionId:'e'.repeat(32),source:null,origin:'terminal',project:'Linked benchmark',startedAt:new Date(start).toISOString(),working:true};
+  agent.trackClients([session],[]);await demo.reportNow('laptop');
+  const setupFrom=Date.now(),readyBy=setupFrom+SHOWN_WITHIN;
+  const authority=(await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard)).workAuthority;
+  const geometry=()=>cdp.evaluate<string>(`JSON.stringify(Array.from(document.querySelectorAll('.budget-history [data-series]')).map(node=>[node.getAttribute('data-series'),node.getAttribute('data-last'),Array.from(node.querySelectorAll('path')).map(path=>path.getAttribute('d'))]))`);
+  const active=()=>cdp.evaluate<number>(`Number(document.querySelector('[data-work-source="${source}"]')?.getAttribute('data-active-ms')??-1)`);
+  // A rolling board can lose more old work than this credit adds. Observe its own rendered project.
+  const activitySelector='.activity [data-series-key='+JSON.stringify('activity:project:'+JSON.stringify(session.project))+']';
+  const activityRead=`Number(document.querySelector(${JSON.stringify(activitySelector)})?.getAttribute('data-agent-ms')??0)`;
+  const agentTime=()=>cdp.evaluate<number>(activityRead);
+  const unavailable=async()=>{
+    const state=await cdp.evaluate(`(()=>({period:window.__quotumWalletState?.(${JSON.stringify(source)})??null,table:document.querySelector('.budget-table')?.textContent?.slice(0,1600),markers:document.querySelectorAll('[data-work-source]').length,range:JSON.parse(localStorage.getItem('quotum.prefs')||'{}').range,selected:new URLSearchParams(location.search).has('from')}))()`).catch(()=>({status:'unavailable'}));
+    console.error('bench: linked wallet state '+JSON.stringify(state));throw new Stop('linked wallet work columns are not ready');
+  };
+  // The first list starts a lease. Configuration changes need a cold baseline before credit measurements.
+  let previous='',stable=0;
+  while(stable<3){
+    const layout=await cdp.evaluate<string|null>(`(()=>{
+      const baseline=window.__quotumWalletState?.(${JSON.stringify(source)},${JSON.stringify(authority)});
+      if(!baseline?.authorityReady||baseline.periodLoading||baseline.periodError||baseline.workNeeded||!baseline.work||baseline.preparation?.flights.length)return null;
+      if(!document.querySelector('[data-work-source="${source}"]')||!document.querySelector('.activity-totals')||document.querySelector('.agents-panel.is-loading,.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]'))return null;
+      if(document.getAnimations().some(animation=>animation.playState==='running'&&animation.effect?.target?.matches('.widget,.widget-body')))return null;
+      return JSON.stringify(Array.from(document.querySelectorAll('.widgets>.widget')).map(node=>{const box=node.getBoundingClientRect();return[box.x,box.y,box.width,box.height];}));
+    })()`);
+    stable=!initial.historyPending&&layout!==null&&layout===previous?stable+1:0;previous=layout??'';
+    if(stable<3){if(Date.now()>=readyBy)await unavailable();await sleep(20);}
+  }
+  initial.counting=false;
+  const setup={waitMs:Date.now()-setupFrom,historyRequests:initial.historyRequests,historyBytes:initial.historyBytes};
+  const reports:{at:number;capturedAt:number;reads:number;bytes:number;activeMs:number;activityAgentMs:number;activeMsLatency:number|null;activityMsLatency:number|null}[]=[],problems:string[]=[];
+  for(let i=0;i<3;i++) {
+    const before=await active(),beforeAgent=await agentTime(),drawing=await geometry();
+    if(before<0||beforeAgent<0)await unavailable();
+    await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
+    await cdp.evaluate(`(()=>{
+      let activeAt=null,activityAt=null;
+      const values=()=>({activeMs:Number(document.querySelector('[data-work-source="${source}"]')?.getAttribute('data-active-ms')??-1),activityAgentMs:${activityRead}});
+      const observer=new MutationObserver(()=>{
+        const value=values(),now=Date.now();
+        if(activeAt===null&&value.activeMs>${before})activeAt=now;
+        if(activityAt===null&&value.activityAgentMs>${beforeAgent})activityAt=now;
+      });
+      observer.observe(document.body,{attributes:true,attributeFilter:['data-active-ms','data-agent-ms'],childList:true,subtree:true});
+      window.__quotumLinkedWork=()=>{observer.disconnect();delete window.__quotumLinkedWork;return{...values(),activeAt,activityAt,capturedAt:Date.now(),reading:__quotumBench.read()};};
+    })()`);
+    if(i===2)agent.trackClients([{...session,working:false}],[]);
+    const at=await demo.reportNow('laptop');await sleep(at+1000-Date.now());
+    const shown=await cdp.evaluate<{activeMs:number;activityAgentMs:number;activeAt:number|null;activityAt:number|null;capturedAt:number;reading:Reading}>('window.__quotumLinkedWork()');
+    // Drain only accounts for terminal traffic and late renders; it cannot extend the credit deadline.
+    await drain(requests);requests.counting=false;
+    const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.historyRequests,bytes=requests.historyBytes;
+    const activeMsLatency=shown.activeAt===null?null:shown.activeAt-at,activityMsLatency=shown.activityAt===null?null:shown.activityAt-at;
+    reports.push({at,capturedAt:shown.capturedAt,reads,bytes,activeMs:shown.activeMs,activityAgentMs:shown.activityAgentMs,activeMsLatency,activityMsLatency});
+    if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`linked wallet work read history ${reads} times, ${bytes} bytes`);
+    if(shown.activeMs<=before||activeMsLatency===null||activeMsLatency<0||activeMsLatency>1000)problems.push('linked wallet active time did not advance within 1000 ms');
+    problems.push(...activityCreditProblems(shown.reading.renders,beforeAgent,shown.activityAgentMs));
+    if(activityMsLatency===null||activityMsLatency<0||activityMsLatency>1000)problems.push('linked wallet Activity did not advance within 1000 ms');
+    if(await geometry()!==drawing)problems.push('linked wallet work changed financial geometry');
+    if(reading.renders.some(part=>!part.time&&part.widget==='budget'&&part.node.includes('.budget-history')))problems.push('linked wallet work rendered the financial chart');
+    problems.push(...renderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from,to:Date.now()}));
+  }
+  agent.trackClients([],[]);await demo.reportNow('laptop');
+  const response=await fetch(owner.base+'/api/links/'+created.links.at(-1)!.id,{method:'DELETE',headers:{cookie:owner.cookie,origin:new URL(owner.base).origin,'content-type':'application/json'},body:JSON.stringify({expectedRevision:created.revision,requestId:randomUUID()})});
+  if(!response.ok)throw new Stop('linked wallet fixture could not remove its rule');
+  return {setup,activityProject:session.project,reports,problems};
 }
 
 /** The personal display path uses the same measurement and render budgets as native money. */
@@ -790,18 +880,18 @@ async function workPrivate(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, 
   say('checking private client credit without card, header or financial renders');
   const agent=stand.agents.get('laptop')!,start=Date.now();
   const session={clientId:'opencode',sessionId:'d'.repeat(32),source:null,origin:'terminal',project:'Private benchmark',startedAt:new Date(start).toISOString(),working:true};
-  agent.trackClients([session],[]);await demo.nextReport('laptop');await sleep(1000);
+  agent.trackClients([session],[]);await demo.reportNow('laptop');await sleep(1000);
   const reports:{at:number;reads:number;bytes:number}[]=[],problems:string[]=[];
   for(let i=0;i<3;i++) {
     await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;const from=Date.now();
     if(i===2)agent.trackClients([{...session,working:false}],[]);
-    const at=await demo.nextReport('laptop');await sleep(1000);await drain(requests);requests.counting=false;
+    const at=await demo.reportNow('laptop');await sleep(1000);await drain(requests);requests.counting=false;
     const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.historyRequests,bytes=requests.historyBytes;
     reports.push({at,reads,bytes});
     if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`private work read history ${reads} times, ${bytes} bytes`);
     problems.push(...privateWorkRenderProblems({renders:reading.renders,mutations:reading.mutations,from,to:Date.now(),cellMs:cellOf(86_400_000)}));
   }
-  agent.trackClients([],[]);await demo.nextReport('laptop');
+  agent.trackClients([],[]);await demo.reportNow('laptop');
   return {reports,problems};
 }
 

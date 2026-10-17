@@ -75,7 +75,7 @@ function consumer(sourceId:string,board:string,range:PeriodRange) {
     'react/jsx-runtime':jsx,react:{memo:reactMemo,useRef:hooks.useRef,useMemo:memo},
     '../../server/domain/providers':providers,'../../server/domain/currency':currency,'../../server/domain/meterHistory':{composeMetersPrepared},
     '../lib/board':{useBoardId:()=>board,useCurrencyContext:()=>currency.defaultCurrencyContext,useNamed:()=>sources},
-    '../lib/history':{useBudgetHistory:()=>({history,drawing:history,loading:false,presentation:0}),useBudgetHistoryPlot:()=>strip,useHistoryBegins:()=>NOW-3*H,budgetHistory:{retry:()=>{}}},
+    '../lib/history':{useBudgetFinancialHistory:()=>({history,drawing:history,loading:false,presentation:0}),useBudgetHistoryPlot:()=>strip,useHistoryBegins:()=>NOW-3*H,budgetHistory:{retry:()=>{}}},
     '../lib/prefs':{useChartMuted:()=>prefs.muted,chartSeriesMuted,usePref:(key:keyof typeof prefs)=>prefs[key]},'../lib/moneySelection':{moneySelection:()=>({selection:{unit:'USD',ids:[[sourceId,'balance']]},omitted:0,removed:0})},
     '../lib/moneyView':moneyView,'../lib/money':money,'../lib/moneyTable':moneyTable,'./seriesFocus':{useSeriesFocus:()=>{}},'../lib/view':{...widgets,colorOf:()=> '#fff'},
     '../lib/periods':{frameOf:()=>({...range,live:false}),measuredTo:()=>range.to},'../lib/timeRange':{useTimeRange:()=>range,timeRangeKey},

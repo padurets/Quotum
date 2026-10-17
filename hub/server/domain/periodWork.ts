@@ -3,7 +3,7 @@ import type {Origin} from './ingest.js';
 import type {PeriodRange} from './period.js';
 
 export type WorkRef = {
-  ref:string;source:string|null;sourceStatus?:'notProvided';clientId?:string;device:{id:string;name:string};origin:Origin;
+  ref:string;identityRef?:string;source:string|null;sourceStatus?:'notProvided';clientId?:string;device:{id:string;name:string};origin:Origin;
   project:string|null;folder:string|null;startedAt:number;
   presenceKey?:string;
   currentPresence?:{working:boolean;through:number;workingThrough?:number;startedAt:number};
@@ -56,7 +56,7 @@ export function workPackingBytes(trace:WorkTrace) {
 
 /** Curves, context/group indexes and their scratch share the same request budget. */
 export function workPreparationBytes(trace:WorkTrace) {
-  return trace.refs.length*512+(trace.packed
+  return trace.refs.length*768+(trace.packed
     ?trace.packed.blocks.length*64+trace.packed.patterns.reduce((n,p)=>n+p.length*128,0)
     :workPackingBytes(trace)+expandedBlocks(trace)*192+trace.spans.length*640);
 }

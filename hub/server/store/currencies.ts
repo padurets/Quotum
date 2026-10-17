@@ -182,7 +182,7 @@ export class CurrencyStore extends CurrencyRegistry {
       AND NOT EXISTS(SELECT 1 FROM state,json_each(state.payload,'$.meters') m
         WHERE state.source_id=currency_bindings.source_id AND json_extract(m.value,'$.unit')=currency_bindings.from_currency
           AND json_extract(m.value,'$.at') BETWEEN currency_bindings.observation_at AND currency_bindings.through_at)
-      AND NOT EXISTS(SELECT 1 FROM readings r WHERE r.source_id=currency_bindings.source_id AND r.unit=currency_bindings.from_currency
+      AND NOT EXISTS(SELECT 1 FROM readings r WHERE r.pair_anchor=0 AND r.source_id=currency_bindings.source_id AND r.unit=currency_bindings.from_currency
         AND (r.at BETWEEN currency_bindings.observation_at AND currency_bindings.through_at
           OR r.previous_at BETWEEN currency_bindings.observation_at AND currency_bindings.through_at))
       AND NOT EXISTS(SELECT 1 FROM meter_spans s WHERE s.source_id=currency_bindings.source_id

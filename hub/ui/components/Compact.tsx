@@ -11,6 +11,7 @@ import {CardMark, ResetLine} from './SourceCard';
 import {PercentLimit} from './Meter';
 import {MoneyCard,QuotaCard,BalanceMark} from './MoneyCard';
 import {FreeResets} from './ResetMarks';
+import {UsageWorkMark} from './UsageWorkMark';
 import {providerOf} from '../../server/domain/providers';
 import {hasSubscriptionCaps} from '../lib/providers';
 import {quotaPeriods} from '../lib/subscription';
@@ -39,7 +40,8 @@ const Row = memo(function Row({id}: {id: string}) {
     {hasSubscriptionCaps(card.provider)?<QuotaCard source={card} ids={shownPeriods.map(w=>w.id)} compact/>:!budgetVisible(card)&&!windows.length&&<p className="compact-quality">{t('desktop.unavailable')}</p>}
     {windows.map(w => <PercentLimit key={w.id} name={windowName(w)} remaining={w.remaining} reset={<ResetLine w={w} short/>} compact/>)}
     {budgetVisible(card)&&!funds&&<MoneyCard source={card} board={board??''} view={view} compact/>}
-    {(subscriptionFundsVisible(card)||!!card.resets?.available)&&<footer className="card-foot">
+    {(providerOf(card.provider)?.funding==='subscription'||subscriptionFundsVisible(card)||!!card.resets?.available||!!card.usageWork?.length)&&<footer className="card-foot">
+      {!!card.usageWork?.length&&<div className="tray-news"><UsageWorkMark source={card}/></div>}
       {subscriptionFundsVisible(card)&&<MoneyCard source={card} board={board??''} view={view} tray/>}
       {!!card.resets?.available&&<FreeResets resets={card.resets} observation={card.resources?.resets}/>}
     </footer>}

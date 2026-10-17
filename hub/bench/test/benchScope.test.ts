@@ -94,7 +94,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
       return{Timestamp:now/1000,ScriptDuration:!opening&&red('idle')?0.1:0};},
     cellOf,idleProblems,chartProblems,measuredProblems,percentile,idlePhaseProblems,idlePhaseScript,idleWindow,overviewCards,stillProblems,warmUntil,
     delta,round,scriptPerSecond,tally,measure:async()=>{mark('measure');return{source:'fixture',from:now,to:now,
-      latencies:[red('measure')?Infinity:1],chartLatencies:[red('measure')?Infinity:1],historyBytes:1,
+      ingestLatencies:[1],latencies:[red('measure')?Infinity:1],chartLatencies:[red('measure')?Infinity:1],historyBytes:1,
       reading:{...reading,renders:[{node:'card',region:'card:fixture',time:false,kind:null,count:1}]}};},
     work:async()=>{mark('work');return{reports:[],problems:problems('work')};},
     workPrivate:async()=>{mark('private-work');return{reports:[],problems:problems('private-work')};},

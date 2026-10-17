@@ -636,6 +636,7 @@ impl Sink for HubSink {
             }).collect::<Vec<_>>(),
             "clientSessions": report.client_sessions,
             "clients": report.clients,
+            "tracking": report.tracking,
         });
         let url = format!("{}/v1/sessions", self.base);
         let answer = self

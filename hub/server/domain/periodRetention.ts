@@ -42,16 +42,27 @@ function* tail<T>(rows:readonly T[],start:number,reserve:(bytes:number)=>void):P
   if(!start)return rows as T[];
   reserve((rows.length-start)*16+32);const kept:T[]=[];for(let i=start;i<rows.length;i++){kept.push(rows[i]);yield;}return kept;
 }
-function* partAfter<T extends {readings:Reading[];spans:MeterSpan[]}>(part:T,from:number,reserve:(bytes:number)=>void):Preparation<T>{
-  const readings=yield*tail(part.readings,before(part.readings,from,r=>r.at),reserve);
+function* partAfter<T extends {readings:Reading[];spans:MeterSpan[]}>(part:T,from:number,reserve:(bytes:number)=>void,retainedReadings?:Reading[]):Preparation<T>{
+  const readings=retainedReadings??(yield*tail(part.readings,before(part.readings,from,r=>r.at),reserve));
   // The predecessor span retains its real head, endpoint and availability bounds.
   // Clipping its head would change gap classification and invent an observation.
   const spans=yield*tail(part.spans,before(part.spans,from,s=>s.from),reserve);
   return readings===part.readings&&spans===part.spans?part:{...part,readings,spans};
 }
 function* moneyAfter(group:MoneyTape,from:number,reserve:(bytes:number)=>void):Preparation<MoneyTape>{
-  const own=yield*partAfter(group,from,reserve),paired=group.paired?yield*partAfter(group.paired,from,reserve):undefined;
+  const raw=yield*partAfter(group,from,reserve),paired=group.paired?yield*partAfter(group.paired,from,reserve):undefined,workCounter=group.workCounter?yield*partAfter(group.workCounter,from,reserve,group.workCounter.readings===group.readings?raw.readings:undefined):undefined;
+  const own=workCounter!==group.workCounter?{...raw,workCounter}:raw;
   if(!group.rates&&!group.rateBindings)return own===group&&paired===group.paired?group:{...own,...(paired?{paired}:{})};
+  if(raw===group&&paired===group.paired){
+    // With no expired financial rows, future bindings and one predecessor per
+    // unit already form the complete retained dictionary. Avoid copying it.
+    const previous=new Set<string>();let reusable=true;
+    for(const key of rateKeys(group)){
+      const split=key.lastIndexOf('\n'),unit=key.slice(0,split),at=Number(key.slice(split+1));
+      if(at<from){if(previous.has(unit)){reusable=false;break;}reserve(64+unit.length*2);previous.add(unit);}yield;
+    }
+    if(reusable)return own;
+  }
   const keys=new Set<string>(),previous=new Map<string,{at:number;key:string}>();let count=0;
   const add=(unit:string,at:number)=>{reserve(64+unit.length*2+32);keys.add(unit+'\n'+at);};
   for(const [part,original] of [[own,group],...(paired&&group.paired?[[paired,group.paired]]:[])]){
@@ -68,7 +79,7 @@ function* moneyAfter(group:MoneyTape,from:number,reserve:(bytes:number)=>void):P
   }
   for(const {key} of previous.values()){reserve(64+key.length*2);keys.add(key);yield;}
   let retained=0;for(const key of keys){if(rateAt(group,key)!==undefined)retained++;yield;}
-  if(own===group&&paired===group.paired&&retained===count)return group;
+  if(own===group&&paired===group.paired&&workCounter===group.workCounter&&retained===count)return group;
   const result:MoneyTape={...own,...(paired?{paired}:{}),rates:undefined,rateBindings:undefined};
   for(const key of keys){
     const path=rateAt(group,key);if(path===undefined)continue;
@@ -113,7 +124,7 @@ export function* retirementEdge(work:WorkTrace|null,tapes:Iterable<PeriodTape>,f
       if(series.descriptors){const i=Math.max(1,lower(series.descriptors,from,d=>d.at));consider((series.descriptors[i]?.at??Infinity)+1);}yield;
     }
     for(const group of tape.money){
-      for(const part of [group,...(group.paired?[group.paired]:[])]){
+      for(const part of [group,...(group.paired?[group.paired]:[]),...(group.workCounter?[group.workCounter]:[])]){
         consider((part.readings[Math.max(1,lower(part.readings,from,r=>r.at))]?.at??Infinity)+1);
         consider((part.spans[Math.max(1,lower(part.spans,from,s=>s.from))]?.from??Infinity)+1);yield;
       }
