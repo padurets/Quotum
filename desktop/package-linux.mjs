@@ -26,6 +26,11 @@ mkdirSync(bin, {recursive: true});
 mkdirSync(share, {recursive: true});
 copyFileSync(path.join(output, 'quotum-desktop'), path.join(bin, 'quotum-desktop'));
 copyFileSync(path.join(here, `binaries/quotum-node-${target}`), path.join(bin, 'quotum-node'));
+cpSync(path.join(here, 'resources/hook'), path.join(share, 'hook'), {recursive: true});
+// The installed source must stay trusted even when the builder uses a shared umask.
+for (const directory of [appdir, path.join(appdir, 'usr'), bin, path.join(appdir, 'usr/share'), share, path.join(share, 'hook')]) chmodSync(directory, 0o755);
+chmodSync(path.join(share, 'hook/payload-manifest.json'), 0o644);
+chmodSync(path.join(share, 'hook/quotum-hook'), 0o755);
 for (const name of ['quotum-desktop', 'quotum-node']) chmodSync(path.join(bin, name), 0o755);
 for (const name of ['hub', 'licenses', 'electron', 'tray']) cpSync(path.join(here, 'resources', name), path.join(share, name), {recursive: true});
 mkdirSync(path.join(share, 'gui'), {recursive: true});

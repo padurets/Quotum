@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+node "$(dirname "$0")/native-qa.mjs"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cat > "$work/bus.conf" <<'EOF'

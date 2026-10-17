@@ -313,8 +313,18 @@ impl Client {
     /// Inventory reads are bounded before any line allocation or reader queue. Success
     /// requires both EOF and the terminal exit; dropping a failed probe reaps its tree.
     pub fn version_output(program: &Path, cwd: &Path, stop: &Stop) -> Result<Vec<u8>, ProcError> {
-        let mut client =
-            Self::spawn_reader(program, &["--version"], &[], cwd, Duration::from_secs(5), stop, Some(16 * 1024))?;
+        Self::bounded_output(program, &["--version"], &[], cwd, stop, 16 * 1024)
+    }
+
+    pub(crate) fn bounded_output(
+        program: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+        cwd: &Path,
+        stop: &Stop,
+        limit: usize,
+    ) -> Result<Vec<u8>, ProcError> {
+        let mut client = Self::spawn_reader(program, args, env, cwd, Duration::from_secs(5), stop, Some(limit))?;
         client.stdin = None;
         let bytes = client.bytes.take().ok_or(ProcError::Closed)?;
         let mut output = None;

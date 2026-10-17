@@ -45,6 +45,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage the shared, consented Claude Code session-route hook.
+    Hook {
+        #[command(subcommand)]
+        command: HookCommand,
+    },
     /// Measure once and show the limits (the default).
     Status,
     /// Keep measuring on the schedule and deliver to the hub, if one is configured.
@@ -90,12 +95,45 @@ enum Command {
     },
 }
 
+#[derive(Clone, Copy, Subcommand)]
+enum HookCommand {
+    Status,
+    Enable,
+    Disable,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Some(Command::Hook { command }) = &cli.command {
+        let service = match quotum_core::hook::Lifecycle::for_user() {
+            Ok(service) => service,
+            Err(code) => return fail(&code.to_string()),
+        };
+        let result = match command {
+            HookCommand::Status => Ok(service.status()),
+            HookCommand::Enable => service.set_enabled(true),
+            HookCommand::Disable => service.set_enabled(false),
+        };
+        return match result {
+            Ok(status) => {
+                println!("{}", serde_json::to_string(&status).unwrap_or_default());
+                ExitCode::SUCCESS
+            }
+            Err(code) => {
+                eprintln!("quotum: hook {code}");
+                println!("{}", serde_json::to_string(&service.status()).unwrap_or_default());
+                ExitCode::FAILURE
+            }
+        };
+    }
     // Before the settings are read: an update needs none of them, and should work even
     // when they are broken.
     if let Some(Command::Update { check }) = cli.command {
         return self_update(check);
+    }
+    if let Err(code) = quotum_core::hook::Lifecycle::for_user().and_then(|service| service.reconcile_existing_consent())
+    {
+        log(&format!("hook: {code}"));
     }
     let mut only = Vec::new();
     for name in &cli.only {
@@ -146,7 +184,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Config => show_config(&config, &paths),
-        Command::Update { .. } => unreachable!("handled before the settings are read"),
+        Command::Update { .. } | Command::Hook { .. } => unreachable!("handled before the settings are read"),
     }
 }
 

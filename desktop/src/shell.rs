@@ -55,6 +55,7 @@ pub struct Shell {
     pub notifier: Notifier,
     pub attention: crate::attention::Attention,
     pub secret_keys: crate::keys::Control,
+    pub claude_hook: crate::hook::Control,
     wakes: Wake,
     exiting: AtomicBool,
     proc: Mutex<Option<Arc<Proc>>>,
@@ -95,6 +96,7 @@ impl Shell {
             dirs,
             node,
             hub_dir,
+            claude_hook: crate::hook::Control::new(smoke.is_some()),
             smoke,
             host,
             state: Mutex::new(State { hub: HubState::Starting, generation: 0, capabilities: Vec::new() }),
@@ -293,6 +295,15 @@ pub fn next(ending: Ending, port_retried: bool, exiting: bool, restarts: &mut Re
 /// for starts it again, with a new key and token, up to three times in five minutes.
 /// A new start waits until the one before exited: two would share the database.
 pub fn run_hub(shell: Arc<Shell>) {
+    shell.claude_hook.startup();
+    let hook = shell.claude_hook.state();
+    let error = hook.error.or(match hook.status {
+        quotum_core::hook::Status::Error { code } => Some(code),
+        _ => None,
+    });
+    if let Some(code) = error {
+        shell.hub_log.line(&format!("app: Claude hook {code}"));
+    }
     shell.attention.start(&shell);
     let mut restarts = Restarts::default();
     let mut port_retried = false;

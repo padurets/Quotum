@@ -12,7 +12,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use url::Url;
 #[cfg(not(target_os = "linux"))]
-pub const COMMANDS: [&str; 9] = [
+pub const COMMANDS: [&str; 10] = [
+    "set_claude_hook",
     "app_state",
     "save_settings",
     "take_over",
@@ -27,6 +28,9 @@ pub const COMMANDS: [&str; 9] = [
 #[derive(Deserialize)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
+    SetClaudeHook {
+        on: bool,
+    },
     AppState,
     ResetSecretKey,
     OpenMain {
@@ -104,6 +108,7 @@ impl MainNavigation {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppState {
+    pub claude_hook: crate::hook::PublicState,
     pub main_navigation: MainNavigation,
     pub secret_key: crate::keys::PublicState,
     pub agent: agent::State,
@@ -126,6 +131,7 @@ fn state_of(shell: &Arc<Shell>) -> AppState {
     let (agent, providers, clients, sessions) = agent::snapshot(shell);
     let (notifications, locale) = shell.desktop_settings();
     AppState {
+        claude_hook: shell.claude_hook.state(),
         main_navigation: shell.main_navigation.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         secret_key: shell.secret_keys.state(),
         agent,
@@ -225,6 +231,10 @@ pub fn execute(
             shell.secret_keys.request_reset().map_err(str::to_owned)?;
             shell.wake();
         }
+        Request::SetClaudeHook { on } => {
+            shell.claude_hook.set(on);
+            shell.wake();
+        }
         Request::SaveSettings { patch } => agent::save_settings(shell, &patch)?,
         Request::TakeOver => agent::take_over(shell)?,
         Request::SetAutostart { on } => autostart::set(shell, on)?,
@@ -263,6 +273,13 @@ mod tests {
     }
     #[test]
     fn requests_are_typed_and_unknown_commands_are_rejected() {
+        assert!(serde_json::from_str::<Request>(r#"{"command":"set_claude_hook","args":{"on":true}}"#).is_ok());
+        for args in [r#"{"on":"yes"}"#, r#"{"on":true,"path":"/tmp/canary"}"#, r#"{"on":false,"command":"arbitrary"}"#]
+        {
+            assert!(
+                serde_json::from_str::<Request>(&format!(r#"{{"command":"set_claude_hook","args":{args}}}"#)).is_err()
+            );
+        }
         assert!(serde_json::from_str::<Request>(r#"{"command":"app_state"}"#).is_ok());
         assert!(serde_json::from_str::<Request>(r#"{"command":"reset_secret_key"}"#).is_ok());
         assert!(serde_json::from_str::<Request>(r#"{"command":"reset_secret_key","args":{"key":"canary"}}"#).is_err());

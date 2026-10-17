@@ -23,6 +23,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {PLATFORMS} from './platforms.mjs';
 import {thirdPartyLicenses} from './licenses.mjs';
+import {copyHook} from './hook-artifact.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -67,6 +68,7 @@ for (const p of platforms) {
   const binary = path.join(dir, 'bin', `quotum${p.exe ?? ''}`);
   copyFileSync(path.join(agent, 'target', p.target, 'release', `quotum${p.exe ?? ''}`), binary);
   chmodSync(binary, 0o755);
+  copyHook(process.env.QUOTUM_HOOK_ARTIFACT || path.join(agent,'target/hook-dist'),p.name,version,path.join(dir,'bin'));
   copyFileSync(path.join(root, 'LICENSE'), path.join(dir, 'LICENSE'));
   copyFileSync(notices, path.join(dir, 'THIRD_PARTY_LICENSES.md'));
   write(path.join(dir, 'README.md'), `# @quotum/${p.name}\n\nThe [Quotum](${main.homepage}) agent built for ${p.title}. Install \`quotum\` instead: it picks this package when it matches your platform.\n`);

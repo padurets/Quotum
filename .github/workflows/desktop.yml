@@ -12,6 +12,10 @@ on:
   pull_request:
   workflow_call:
     inputs:
+      hook-artifact:
+        description: Canonical helper artifact shared with the CLI packages
+        type: string
+        default: ''
       ui-runs:
         description: How many times to run the Windows UI smoke on each package
         type: number
@@ -31,7 +35,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  hooks:
+    if: inputs.hook-artifact == ''
+    uses: ./.github/workflows/hooks.yml
   app:
+    needs: hooks
+    if: always() && (needs.hooks.result == 'success' || inputs.hook-artifact != '')
     strategy:
       fail-fast: false
       matrix:
@@ -72,9 +81,27 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: System packages
         if: runner.os == 'Linux'
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev libnss3 libgtk-3-dev libgbm1 libasound2 xvfb xauth strace dbus-daemon gnome-keyring python3-gi unzip rpm squashfs-tools
+          sudo apt-get install -y libssl-dev libnss3 libgtk-3-dev libgbm1 libasound2 xvfb xauth strace dbus-daemon gnome-keyring python3-gi unzip rpm squashfs-tools bubblewrap socat
+          # The hosted image leaves /usr/share world-writable. Fresh package sources
+          # need trusted ancestry before native hook consent can use them.
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test ! -L /usr/share
+          test "$(stat -c %u /usr/share)" = 0
+          sudo chmod go-w /usr/share
+      - name: Disposable native QA account (Linux)
+        if: runner.os == 'Linux'
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT node desktop/smoke/provision-native-qa.mjs --user "$(id -un)"
+      - name: Disposable native QA account (Windows)
+        if: runner.os == 'Windows'
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: node desktop/smoke/provision-native-qa.mjs
       - name: Smoke supervisor tests
         if: runner.os == 'Linux'
         env:
@@ -87,6 +114,11 @@ jobs:
         run: |
           echo "QUOTUM_COMMIT=${COMMIT::7}" >> "$GITHUB_ENV"
           echo "VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' desktop/Cargo.toml | head -n 1)" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ inputs.hook-artifact || needs.hooks.outputs.artifact-id }}
+          path: agent/target/hook-dist
+          merge-multiple: true
       - run: node desktop/prepare.mjs --target ${{ matrix.target }}
       - name: Bundled hub startup diagnostics
         working-directory: hub
@@ -131,11 +163,27 @@ jobs:
         working-directory: desktop
         run: xvfb-run -a cargo test --locked native_signals_keep_their_presentation -- --ignored --test-threads=1
       - name: Chromium policy tests
-        run: node --test desktop/electron/policy.test.cjs
+        run: node --test desktop/electron/policy.test.cjs desktop/smoke/native-qa.test.mjs
       - name: Isolated key helper (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./desktop/smoke/test-keys-windows.ps1
+      # For the live check: `quotum` of this very commit, next to the app.
+      - name: Command-line agent
+        working-directory: agent
+        shell: bash
+        env:
+          # No dependency on the Visual C++ runtime on a clean Windows.
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
+        run: cargo build --release --locked -p quotum
+      - name: Real Claude Code for explicit hook acceptance
+        run: npm install --prefix agent/target/live-claude --no-save @anthropic-ai/claude-code@2.1.293
+      - name: Live native hook and startup canary
+        shell: bash
+        run: |
+          suffix=''
+          if [ "$RUNNER_OS" = Windows ]; then suffix='.cmd'; fi
+          node desktop/smoke/hook.mjs --claude "$GITHUB_WORKSPACE/agent/target/live-claude/node_modules/.bin/claude$suffix" --keep-consent
       - name: Build (Linux)
         if: runner.os == 'Linux'
         run: node desktop/package-linux.mjs
@@ -154,6 +202,10 @@ jobs:
           bundle=desktop/target/${{ matrix.target }}/release/bundle
           deb=$(ls "$bundle"/deb/*.deb)
           appimage=$(ls "$bundle"/appimage/*.AppImage)
+          extracted=$(mktemp -d)
+          dpkg-deb -x "$deb" "$extracted"
+          node desktop/smoke/verify-hook.mjs "$extracted/usr/share/quotum/hook" linux-x64
+          node desktop/smoke/verify-hook.mjs "$bundle/Quotum.AppDir/usr/share/quotum/hook" linux-x64
           # The deb puts only its own names in /usr/bin: `node` is the nodejs package's.
           binaries=$(dpkg -c "$deb" | awk '{print $6}' | sed 's|^\./||' | grep '^usr/bin/.' | sort | tr '\n' ' ')
           echo "usr/bin: $binaries"
@@ -181,7 +233,9 @@ jobs:
             set -e
             dnf -y install nodejs xorg-x11-server-Xvfb xorg-x11-xauth procps-ng strace dbus-daemon python3-gobject-base /work/$rpm > /tmp/dnf.log || { cat /tmp/dnf.log; exit 1; }
             rpm -ql quotum | grep '^/usr/bin/'
+            node desktop/smoke/verify-hook.mjs /usr/share/quotum/hook linux-x64
             useradd -m smoke
+            node desktop/smoke/provision-native-qa.mjs --disposable-container --user smoke
             runuser -u smoke -- sh desktop/smoke/linux.sh normal quotum-desktop
             runuser -u smoke -- sh desktop/smoke/linux.sh crash quotum-desktop
             runuser -u smoke -- sh desktop/smoke/tray.sh /usr/bin/quotum-desktop
@@ -233,6 +287,8 @@ jobs:
           Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait
           $app = "$env:LOCALAPPDATA\Quotum\quotum-desktop.exe"
           if (-not (Test-Path $app)) { throw "not installed: $app" }
+          node desktop/smoke/verify-hook.mjs (Split-Path $app) win32-x64
+          if ($LASTEXITCODE -ne 0) { throw 'Installed helper differs from the canonical payload' }
           Smoke normal $app
           Smoke crash $app
           Ui installed $app
@@ -241,6 +297,8 @@ jobs:
           $portable = Join-Path $env:RUNNER_TEMP 'Quotum portable'
           Expand-Archive -LiteralPath $zip.FullName -DestinationPath $portable
           $app = Join-Path $portable 'Quotum/quotum-desktop.exe'
+          node desktop/smoke/verify-hook.mjs (Split-Path $app) win32-x64
+          if ($LASTEXITCODE -ne 0) { throw 'Portable helper differs from the canonical payload' }
           Smoke normal $app
           Smoke crash $app
           Ui portable $app
@@ -258,14 +316,8 @@ jobs:
           path: ${{ runner.temp }}/quotum-ui-diagnostics
           if-no-files-found: ignore
 
-      # For the live check: `quotum` of this very commit, next to the app.
-      - name: Command-line agent
-        working-directory: agent
-        shell: bash
-        env:
-          # No dependency on the Visual C++ runtime on a clean Windows.
-          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
-        run: cargo build --release --locked -p quotum
+      - name: Verify normal startup reconciliation and remove hook consent
+        run: node desktop/smoke/hook.mjs --finish
       # One artifact per installer, the file itself (not zipped), named after the version and
       # commit the app shows in its settings. A download loses the executable bit: the
       # AppImage is made executable by hand, the Linux agent comes in a tarball.
@@ -278,12 +330,13 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then
             cp "$bundle"/nsis/*-setup.exe "$app-setup.exe"
             cp "$bundle"/portable/*.zip "$app-portable.zip"
-            cp agent/target/release/quotum.exe "out/quotum-cli-$QUOTUM_COMMIT-${{ matrix.platform }}.exe"
+            cp agent/target/release/quotum.exe agent/target/hook-dist/win32-x64/
+            (cd agent/target/hook-dist/win32-x64 && 7z a "$GITHUB_WORKSPACE/out/quotum-cli-$QUOTUM_COMMIT-${{ matrix.platform }}.zip" quotum.exe quotum-hook.exe payload-manifest.json)
           else
             cp "$bundle"/deb/*.deb "$app.deb"
             cp "$bundle"/rpm/*.rpm "$app.rpm"
             cp "$bundle"/appimage/*.AppImage "$app.AppImage"
-            tar -czf "out/quotum-cli-$QUOTUM_COMMIT-${{ matrix.platform }}.tar.gz" -C agent/target/release quotum
+            tar -czf "out/quotum-cli-$QUOTUM_COMMIT-${{ matrix.platform }}.tar.gz" -C agent/target/release quotum -C "$GITHUB_WORKSPACE/agent/target/hook-dist/linux-x64" quotum-hook payload-manifest.json
           fi
           ls -la out
       - if: runner.os == 'Linux'
@@ -319,7 +372,7 @@ jobs:
       - if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7
         with:
-          path: out/quotum-cli-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}.exe
+          path: out/quotum-cli-${{ env.QUOTUM_COMMIT }}-${{ matrix.platform }}.zip
           archive: false
 
       # The release downloads these only after every package above passed its smoke checks.

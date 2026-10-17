@@ -44,6 +44,7 @@ const HOLD_MS: u128 = 60_000;
 /// A running client: a coding agent's session on this machine.
 #[derive(Clone, PartialEq)]
 pub struct Session {
+    pub route: Option<crate::route::Route>,
     pub client: ClientId,
     pub pid: u32,
     pub(crate) native_birth: Option<Vec<u8>>,
@@ -57,6 +58,38 @@ pub struct Session {
     /// When an idle session last spent CPU like a working one, if seen on reliable clocks.
     pub last_worked: Option<Millis>,
     pub origin: Origin,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct HookParent {
+    pub pid: u32,
+    pub birth: Vec<u8>,
+    self_birth: Vec<u8>,
+}
+#[cfg(test)]
+impl HookParent {
+    pub(crate) fn fixture() -> Self {
+        Self { pid: 42, birth: vec![1, 2, 3], self_birth: vec![4, 5, 6] }
+    }
+}
+
+/// A direct helper parent, checked independently of the activity accounting tree.
+pub(crate) fn hook_parent() -> Option<HookParent> {
+    sys::hook_parent()
+}
+
+pub(crate) fn matches_hook_parent(pid: u32, birth: &[u8]) -> bool {
+    sys::hook_client(pid).is_some_and(|current| current == birth)
+}
+
+pub(crate) fn hook_record_dead(pid: u32, birth: &[u8]) -> bool {
+    // Missing telemetry alone proves nothing; a different native birth cannot return.
+    sys::birth(pid).is_some_and(|current| current != birth) || sys::gone(pid)
+}
+
+#[cfg(any(windows, test))]
+pub(crate) fn hook_parent_order(self_boot: u32, self_sequence: u64, parent_boot: u32, parent_sequence: u64) -> bool {
+    self_boot == parent_boot && parent_sequence > 0 && self_sequence > parent_sequence
 }
 
 /// Where a session runs. An editor or the app runs one client per window for all its chats,
@@ -906,6 +939,7 @@ impl Activity {
                 folders.push((key.clone(), f.pid));
             }
             result.push(Session {
+                route: None,
                 client: f.client,
                 pid: f.pid,
                 native_birth: root.native_birth.clone(),
@@ -1565,9 +1599,27 @@ mod sys {
         stat(pid)?.times
     }
 
-    #[cfg(test)]
     pub fn birth(pid: u32) -> Option<Vec<u8>> {
         stat(pid)?.native_birth
+    }
+
+    pub fn hook_client(pid: u32) -> Option<Vec<u8>> {
+        if !mine(pid) {
+            return None;
+        }
+        let process = stat(pid)?;
+        (super::client_of(&process.name) == Some(crate::clients::ClientId::Claude))
+            .then_some(process.native_birth)
+            .flatten()
+    }
+    pub fn hook_parent() -> Option<super::HookParent> {
+        let pid = unsafe { libc::getppid() } as u32;
+        let self_birth = birth(std::process::id())?;
+        let birth = hook_client(pid)?;
+        if pid != unsafe { libc::getppid() } as u32 {
+            return None;
+        }
+        Some(super::HookParent { pid, birth, self_birth })
     }
 
     fn boot_id() -> Option<&'static str> {
@@ -1767,6 +1819,27 @@ mod sys {
         })
     }
 
+    pub fn hook_client(pid: u32) -> Option<Vec<u8>> {
+        let before = birth(pid)?;
+        let bsd: libc::proc_bsdinfo = info(pid, libc::PROC_PIDTBSDINFO)?;
+        if !mine(pid)
+            || super::client_of(&process_name(pid, &bsd)) != Some(crate::clients::ClientId::Claude)
+            || birth(pid).as_ref() != Some(&before)
+        {
+            return None;
+        }
+        Some(before)
+    }
+    pub fn hook_parent() -> Option<super::HookParent> {
+        let pid = unsafe { libc::getppid() } as u32;
+        let self_birth = birth(std::process::id())?;
+        let birth = hook_client(pid)?;
+        if pid != unsafe { libc::getppid() } as u32 {
+            return None;
+        }
+        Some(super::HookParent { pid, birth, self_birth })
+    }
+
     pub fn birth(pid: u32) -> Option<Vec<u8>> {
         static BOOT: OnceLock<Option<Vec<u8>>> = OnceLock::new();
         let boot = BOOT
@@ -1919,6 +1992,9 @@ mod sys {
     /// A bounded optional native identity capability. No telemetry offsets or tails
     /// are interpreted; APIs demanding a larger buffer remain unsupported here.
     pub fn birth(pid: u32) -> Option<Vec<u8>> {
+        telemetry(pid).map(|facts| facts.0)
+    }
+    fn telemetry(pid: u32) -> Option<(Vec<u8>, u32, u64)> {
         use windows_sys::Win32::Foundation::HANDLE;
         use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
         type Query = unsafe extern "system" fn(HANDLE, u32, *mut core::ffi::c_void, u32, *mut u32) -> i32;
@@ -1944,13 +2020,33 @@ mod sys {
             let status = query(process, 64, header.0.as_mut_ptr().cast(), 96, &mut returned);
             CloseHandle(process);
             if status < 0 {
+                #[cfg(test)]
+                if pid == std::process::id() {
+                    eprintln!(
+                        "Own fixed telemetry query: NTSTATUS {status:#x}, returned {returned}, header size {}",
+                        u32::from_le_bytes(header.0[..4].try_into().unwrap())
+                    );
+                }
                 return None;
             }
-            telemetry_birth(&header.0, returned, pid)
+            let facts = telemetry_facts(&header.0, returned, pid);
+            #[cfg(test)]
+            if facts.is_none() && pid == std::process::id() {
+                eprintln!(
+                    "Own fixed telemetry validation: returned {returned}, header size {}, matching PID {}",
+                    u32::from_le_bytes(header.0[..4].try_into().unwrap()),
+                    u32::from_le_bytes(header.0[4..8].try_into().unwrap()) == pid
+                );
+            }
+            facts
         }
     }
 
+    #[cfg(test)]
     fn telemetry_birth(bytes: &[u8; 96], returned: u32, pid: u32) -> Option<Vec<u8>> {
+        telemetry_facts(bytes, returned, pid).map(|facts| facts.0)
+    }
+    fn telemetry_facts(bytes: &[u8; 96], returned: u32, pid: u32) -> Option<(Vec<u8>, u32, u64)> {
         let u32_at = |at| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
         let u64_at = |at| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
         let size = u32_at(0);
@@ -1964,7 +2060,28 @@ mod sys {
         }
         let mut boot = u32_at(60).to_be_bytes().to_vec();
         boot.extend_from_slice(&start_key.to_be_bytes());
-        Some(crate::session_identity::birth(&boot, pid, sequence))
+        Some((crate::session_identity::birth(&boot, pid, sequence), u32_at(60), sequence))
+    }
+
+    pub fn hook_client(pid: u32) -> Option<Vec<u8>> {
+        if !mine(pid) || !crate::hook::same_process_user(pid) {
+            return None;
+        }
+        named_birth(pid, "claude.exe")
+    }
+    pub fn hook_parent() -> Option<super::HookParent> {
+        let current = std::process::id();
+        let parent = capture().0.into_iter().find(|p| p.pid == current)?.parent;
+        let self_before = telemetry(current)?;
+        let parent_before = telemetry(parent)?;
+        if !super::hook_parent_order(self_before.1, self_before.2, parent_before.1, parent_before.2)
+            || hook_client(parent).as_ref() != Some(&parent_before.0)
+            || telemetry(current).as_ref() != Some(&self_before)
+            || telemetry(parent).as_ref() != Some(&parent_before)
+        {
+            return None;
+        }
+        Some(super::HookParent { pid: parent, birth: parent_before.0, self_birth: self_before.0 })
     }
 
     pub fn verified(listed: &Proc) -> Option<Proc> {
@@ -2063,6 +2180,12 @@ mod sys {
     use super::{Proc, Times};
     use crate::model::Millis;
 
+    pub fn hook_parent() -> Option<super::HookParent> {
+        None
+    }
+    pub fn hook_client(_: u32) -> Option<Vec<u8>> {
+        None
+    }
     pub fn capture() -> (Vec<Proc>, bool) {
         (Vec::new(), false)
     }
@@ -2954,6 +3077,12 @@ mod tests {
         let before = sys::birth(pid);
         let after = sys::birth(pid);
         assert!(before == after, "native process birth changed during own-process probe");
+        if let Some(birth) = &before {
+            assert!(!hook_record_dead(pid, birth), "a live native birth must survive pruning");
+            let mut replaced = birth.clone();
+            replaced.push(0);
+            assert!(hook_record_dead(pid, &replaced), "a different native birth proves the recorded one ended");
+        }
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         assert!(before.is_some(), "own process must have a native boot and birth token");
         #[cfg(any(target_os = "linux", target_os = "macos"))]

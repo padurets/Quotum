@@ -5,6 +5,7 @@ mod attention;
 mod autostart;
 mod desktop_settings;
 mod files;
+mod hook;
 #[cfg(target_os = "linux")]
 #[path = "host/linux.rs"]
 mod host;

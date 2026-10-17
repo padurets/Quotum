@@ -595,8 +595,9 @@ three have subscription collectors; OpenCode never appears in snapshots, failure
 check-ins. Tracking is controlled independently by `[clients.<id>] enabled`; turning
 measurement off does not turn tracking off. `sessions = false` disables all reporting
 of sessions and inventory. `[clients.<id>] path` takes precedence over the legacy
-provider path. `route` reserves consent for future route observations; this agent does
-not classify routes. Unknown configuration IDs are warned about and ignored.
+provider path. `route = false` disables route acquisition and transmission for that
+client; `sessions = false` disables the entire route pipeline. Unknown configuration
+IDs are warned about and ignored. Global hook consent is separate from these switches.
 
 `POST /v1/sessions` accepts these additive fields:
 
@@ -643,6 +644,55 @@ retained work on read and never rewrites the raw source or credited intervals.
 Stored account evidence (`login`, `inferred`, `legacy`) and route evidence are metadata,
 not process identity. Stronger evidence replaces weaker; equal-strength route conflicts
 become unknown with identifying details removed. Updates never split a work context.
+
+The reference agent observes Claude's machine route through bounded
+`claude auth status --json`, using only `authMethod` and `apiProvider`:
+
+| Input, in priority order | Machine class |
+| --- | --- |
+| `api_key`, `api_key_helper`, `third_party`, or a nonempty provider other than `firstParty` | `api` |
+| `claude.ai` with `firstParty` | `subscription` |
+| `oauth_token`, `none`, unfamiliar/missing fields, malformed output or a completed probe failure | `unknown` |
+
+One asynchronous probe runs at a time, only while Claude is tracked and present.
+Its five-second deadline includes exit and EOF; stdout is capped at 64 KiB and stderr
+is discarded. The 60-second cache follows executable and sign-in/settings metadata.
+Cold acquisition and refresh pending omit the field; they are not unknown evidence
+and do not revoke a retained route. A completed failure is unknown evidence and can
+create a sticky conflict with a previous subscription result. A later successful
+machine probe does not clear that conflict. A session observation or an owner link
+can decide attribution. Machine routes never identify a host or provider.
+
+An explicitly installed `quotum-hook` captures a Claude SessionStart environment:
+
+| Session observation, in priority order | Class | Host |
+| --- | --- | --- |
+| `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` | `unknown` | Valid base host, if present |
+| Nonempty Bedrock, Vertex or Foundry switch | `api` | None |
+| Nonempty `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` | `api` | Valid base host |
+| Nonempty `CLAUDE_CODE_OAUTH_TOKEN` | `unknown` | Valid base host |
+| Empty base URL, or `api.anthropic.com` without token flags | `subscription` | None |
+| Other valid base URL without token flags | `unknown` | Its host |
+| Nonempty invalid base URL without token flags | `unknown` | None |
+
+The switches are `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and
+`CLAUDE_CODE_USE_FOUNDRY`. Only absolute HTTP(S) URLs with a DNS host are accepted;
+IP literals and control bytes are rejected. The host is lower-case, without its root
+dot or any other URL components. The hook is silent, including recoverable failures,
+and uses direct execution with a one-second hook timeout. Its private records are
+matched only to the same owned Claude process root and native birth. A folded child
+does not lend evidence to its ancestor. Windows additionally requires same-boot native
+parent sequence strictly before the helper's sequence; timestamps are not a substitute.
+
+Codex classification requires a complete thread set and authentication proven to
+belong to that native process: `openai` with ChatGPT is subscription, `openai` with an
+API key is API, another nonempty provider is API, and unfamiliar inputs are unknown.
+Different classes in one bound window are unknown; different API providers retain API
+without a provider hint. Custom provider names do not identify catalogue providers.
+Codex 0.162.1 does not supply a proven binding through the supported interface, so the
+production agent omits its route. Global thread history, working directories and
+timestamps cannot establish the binding. The released subscription fallback can still
+be wrong in these cases; an owner link is the correction.
 
 Accepted work with no known source is stored with a null source. A known source the
 owner does not hold remains stored internally but is projected as unknown. Personal
@@ -804,6 +854,18 @@ Waiting eligibility belongs to that same in-memory holder, independently of the
 subscription's shared observation clock; it adds no device fields or persisted identity.
 
 ### Client discovery privacy
+
+The consented helper examines only presence/nonempty authentication and provider
+variables, the fixed scrub marker, and the DNS host of `ANTHROPIC_BASE_URL` inherited
+by that hook. It never opens credential files, another process's environment or a
+transcript. Token values, URL user info, port, path, query and fragment are never
+stored, logged or sent. A private bounded record contains flags, host and local process
+birth matching data. PID, native birth, session UUID and installation-generation UUID
+remain on the machine. Capture uses the existing protected lifecycle lock and active
+generation; Off waits for a writer or reports pending/error. An old invocation cannot
+publish after Off or into a later installation. CLI/app profile overrides never move
+this per-user channel. The installer alone may edit its exact hook entry in the user's
+settings JSON, preserving other settings and a symlink's target.
 
 Manual client links belong to their owner and are kept separately from account and
 route evidence. Neither rule IDs nor disagreements or suggestions are shared.

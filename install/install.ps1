@@ -32,7 +32,7 @@
         $version = ($location -split '/')[-1]
     }
     $version = $version.TrimStart('v')
-    if ($version -notmatch '^\d+\.\d+\.\d+') { throw "quotum: cannot tell the latest version from $releases/latest" }
+    if ($version -notmatch '\A[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?\z') { throw 'quotum: invalid release version' }
     Write-Host "quotum: installing $version into $dir"
 
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("quotum-" + [Guid]::NewGuid())
@@ -50,17 +50,48 @@
         if ((Get-FileHash -Algorithm SHA256 $binary).Hash.ToLower() -ne $expected) {
             throw 'quotum: the download does not match its checksum; nothing was installed'
         }
+        $payload = Join-Path $tmp 'payload'
+        New-Item -ItemType Directory -Path $payload | Out-Null
+        foreach ($item in @(@('quotum-hook-windows-x64.exe','quotum-hook.exe'),@('quotum-hook-windows-x64.json','payload-manifest.json'))) {
+            $download, $name = $item
+            $file = Join-Path $payload $name
+            Invoke-WebRequest -UseBasicParsing -Uri "$releases/download/v$version/$download" -OutFile $file
+            $expected = foreach ($line in $sums -split "`n") {
+                $hash, $assetName = $line.Trim() -split '\s+', 2
+                if ($assetName -and $assetName.TrimStart('*') -eq $download) { $hash.ToLower() }
+            }
+            if (-not $expected -or (Get-FileHash -Algorithm SHA256 $file).Hash.ToLower() -ne $expected) { throw 'quotum: invalid hook payload; nothing was installed' }
+        }
 
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $payloads = Join-Path $dir '.quotum-hook-payloads'
+        New-Item -ItemType Directory -Force -Path $payloads | Out-Null
+        $destination = Join-Path $payloads $version
+        if (Test-Path $destination) {
+            foreach ($name in @('quotum-hook.exe','payload-manifest.json')) {
+                if ((Get-FileHash -Algorithm SHA256 (Join-Path $payload $name)).Hash -ne (Get-FileHash -Algorithm SHA256 (Join-Path $destination $name)).Hash) { throw 'quotum: conflicting payload version; nothing was installed' }
+            }
+        } else {
+            $stage = Join-Path $payloads ('.new.' + [Guid]::NewGuid())
+            try { Copy-Item -Recurse $payload $stage; Move-Item $stage $destination }
+            finally { if (Test-Path $stage) { Remove-Item -Recurse -Force $stage } }
+        }
         $target = Join-Path $dir 'quotum.exe'
+        $stagedBinary = Join-Path $dir ('.quotum-install.' + [Guid]::NewGuid() + '.exe')
+        Move-Item $binary $stagedBinary
         # A running quotum.exe cannot be overwritten, but it can be moved aside; `quotum update`
         # moves it to the same name and removes it later.
         $aside = Join-Path $dir 'quotum.old.exe'
-        if (Test-Path $target) {
-            Remove-Item -Force -ErrorAction SilentlyContinue $aside
-            Move-Item -Force $target $aside
-        }
-        Move-Item -Force $binary $target
+        try {
+            if (Test-Path $target) {
+                Remove-Item -Force -ErrorAction SilentlyContinue $aside
+                Move-Item -Force $target $aside
+            }
+            Move-Item $stagedBinary $target
+        } catch {
+            if (-not (Test-Path $target) -and (Test-Path $aside)) { Move-Item $aside $target }
+            throw
+        } finally { Remove-Item -Force -ErrorAction SilentlyContinue $stagedBinary }
         Remove-Item -Force -ErrorAction SilentlyContinue $aside
     } finally {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp

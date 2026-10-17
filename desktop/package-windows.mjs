@@ -16,6 +16,8 @@ rmSync(stage, {recursive: true, force: true});
 mkdirSync(stage, {recursive: true});
 copyFileSync(path.join(output, 'quotum-desktop.exe'), path.join(stage, 'quotum-desktop.exe'));
 copyFileSync(path.join(here, `binaries/quotum-node-${target}.exe`), path.join(stage, 'quotum-node.exe'));
+copyFileSync(path.join(here, `binaries/quotum-hook-${target}.exe`),path.join(stage,'quotum-hook.exe'));
+copyFileSync(path.join(here,'resources/hook/payload-manifest.json'),path.join(stage,'payload-manifest.json'));
 for (const name of ['hub', 'licenses', 'tray']) cpSync(path.join(here, 'resources', name), path.join(stage, name), {recursive: true});
 rmSync(archive, {force: true});
 execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',

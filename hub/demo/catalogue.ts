@@ -31,7 +31,10 @@ import {
   type Work,
 } from './model.js';
 /** Durable app settings, in `npm run demo:keys`; checking and reset busy are transient and tested. */
-export {KEY_STORAGE} from './key-storage.js';
+export {KEY_STORAGE,HOOK_STATES} from './key-storage.js';
+/** Hook startup, publication races and panics are held by the native hook tests.
+ * Durable consent/no-records/observing/pending/error states use the isolated app renderer.
+ */
 export {DEEPSEEK_SCENES} from './deepseek.js';
 export {QUOTA_SCENES} from './quotas.js';
 export {MONEY_SCENES} from './money.js';

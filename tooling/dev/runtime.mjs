@@ -54,6 +54,9 @@ export async function build(ctx) {
     if (prior?.inputs !== inputs || !fileHash(path.join(hub, 'dist')) || prior.output !== fileHash(path.join(hub, 'dist'))) {
       console.log('Building current worktree code.');
       await run('npm', ['run', 'build'], hub);
+      // This synthetic settings renderer belongs only to managed development builds.
+      // Production hub/desktop packaging continues to build the ordinary client alone.
+      await run('npm', ['run', 'build:demo-ui'], hub);
     }
     if (sourceBuild(ctx) !== inputs) throw new Error('Source changed during the build; run make dev again.');
     const output = fileHash(path.join(hub, 'dist'));

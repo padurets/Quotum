@@ -22,8 +22,9 @@
     "shortDescription": "How much of your coding-agent subscriptions is left",
     "longDescription": "Quotum measures the subscription limits of Claude Code, Codex and Antigravity on this machine through their own command-line clients and shows them on a board of its own.",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
-    "externalBin": ["binaries/quotum-node"],
+    "externalBin": ["binaries/quotum-node", "binaries/quotum-hook"],
     "resources": {
+      "resources/hook/payload-manifest.json":"payload-manifest.json",
       "resources/hub/": "hub/",
       "resources/licenses/": "licenses/",
       "resources/tray/": "tray/"

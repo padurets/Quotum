@@ -9,7 +9,7 @@ import type {Stand} from './setup.js';
 /** Conflicts, lost replies, expiry and fault recovery are held by linksApi/coverage tests. */
 export const LINK_SCENES=[
   {id:'free-gap',expect:['suggestion-one','shown-dates','past-and-future-rules','unbound-api']},
-  {id:'routes',expect:['subscription-api','manual-disagreement','inactive-mask','private-gateway','suggestion-zero','suggestion-multiple']},
+  {id:'routes',expect:['subscription-api','unknown-route','manual-disagreement','inactive-mask','private-gateway','suggestion-zero','suggestion-multiple']},
   {id:'money-work',expect:['active-hour-rate','remaining-active-hours','balance-only-unsupported']},
   {id:'coverage',expect:['quota-growth-confirmed','quota-growth-partial','shared-safe-status']},
 ] as const;
@@ -56,6 +56,7 @@ export async function seedLinks(store:Store,directory:Directory,stand:Stand) {
     session('4','opencode',null,{class:'api',by:'session',host:'api.z.ai',provider:'zai'}),
     session('5','opencode',null,{class:'api',by:'session',host:'gateway.example',provider:null}),
     session('6','antigravity',{provider:'antigravity',account:otherAccount,accountName:null},{class:'subscription',by:'session',host:null,provider:null}),
+    session('7','opencode',null,{class:'unknown',by:'session',host:null,provider:null}),
   ],[{clientId:'opencode',version:'1.2.3'},{clientId:'codex',version:'1.0.0'},{clientId:'claude',version:null},{clientId:'antigravity',version:null}]);
   await agent.sessions([],now);
   // Complete witnesses use the final holding topology.

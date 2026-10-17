@@ -62,13 +62,19 @@ jobs:
           echo "version=$agent" >> "$GITHUB_OUTPUT"
 
   desktop:
-    needs: [checks, version]
+    needs: [checks, version, hooks]
     uses: ./.github/workflows/desktop.yml
+    with:
+      hook-artifact: ${{ needs.hooks.outputs.artifact-id }}
+
+  hooks:
+    needs: [checks, version]
+    uses: ./.github/workflows/hooks.yml
 
   # The same recipe as a local `node npm/build.mjs`: every platform cross-compiled
   # with cargo-zigbuild, Linux ones static.
   agent:
-    needs: [checks, version]
+    needs: [checks, version, hooks]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -89,7 +95,13 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: agent
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.hooks.outputs.artifact-id }}
+          path: agent/target/hook-dist
+          merge-multiple: true
       - run: node npm/build.mjs
+      - run: node npm/verify-hook-packages.mjs
       - name: Archives and checksums
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -102,12 +114,15 @@ jobs:
             # build them from the platform alone (see agent/crates/cli/src/update.rs).
             case $platform in
               windows-*)
-                zip -j "release/$archive.zip" "$dir/bin/quotum.exe" LICENSE "$dir/THIRD_PARTY_LICENSES.md"
-                cp "$dir/bin/quotum.exe" "release/quotum-cli-$platform.exe" ;;
+                zip -j "release/$archive.zip" "$dir/bin/quotum.exe" "$dir/bin/quotum-hook.exe" "$dir/bin/payload-manifest.json" LICENSE "$dir/THIRD_PARTY_LICENSES.md"
+                cp "$dir/bin/quotum.exe" "release/quotum-cli-$platform.exe"
+                cp "$dir/bin/quotum-hook.exe" "release/quotum-hook-$platform.exe" ;;
               *)
-                tar -czf "release/$archive.tar.gz" -C "$dir/bin" quotum -C "$GITHUB_WORKSPACE" LICENSE -C "$GITHUB_WORKSPACE/$dir" THIRD_PARTY_LICENSES.md
-                cp "$dir/bin/quotum" "release/quotum-cli-$platform" ;;
+                tar -czf "release/$archive.tar.gz" -C "$dir/bin" quotum quotum-hook payload-manifest.json -C "$GITHUB_WORKSPACE" LICENSE -C "$GITHUB_WORKSPACE/$dir" THIRD_PARTY_LICENSES.md
+                cp "$dir/bin/quotum" "release/quotum-cli-$platform"
+                cp "$dir/bin/quotum-hook" "release/quotum-hook-$platform" ;;
             esac
+            cp "$dir/bin/payload-manifest.json" "release/quotum-hook-$platform.json"
           done
           cp install/install.sh install/install.ps1 release/
           (cd release && sha256sum -- * > SHA256SUMS)
@@ -119,6 +134,7 @@ jobs:
         with:
           subject-path: |
             release/quotum-cli-*
+            release/quotum-hook-*
             release/install.*
       - uses: actions/upload-artifact@v7
         with:
@@ -154,7 +170,7 @@ jobs:
           for package in linux-x64.deb linux-x64.rpm linux-x64.AppImage windows-x64-setup.exe windows-x64-portable.zip; do
             test -s "quotum-desktop-$VERSION-$package"
           done
-          sha256sum -- quotum-cli-* install.sh install.ps1 quotum-desktop-* > SHA256SUMS
+          sha256sum -- quotum-cli-* quotum-hook-* install.sh install.ps1 quotum-desktop-* > SHA256SUMS
           sha256sum --check SHA256SUMS
       - if: github.ref_type == 'tag'
         uses: actions/attest-build-provenance@v4

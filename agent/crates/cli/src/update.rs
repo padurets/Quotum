@@ -73,9 +73,71 @@ pub fn update(
     if actual != expected {
         return Err(format!("the download of {asset} does not match its checksum; nothing was changed"));
     }
+    // Publish immutable versioned sidecars first. An old CLI keeps its own whole
+    // payload through a failed download, interrupted staging or final CLI replacement.
+    let hook_name = asset.replace("quotum-cli-", "quotum-hook-");
+    let manifest_name = format!("{}.json", hook_name.trim_end_matches(".exe"));
+    let helper = get(&format!("{download}/{hook_name}"))?;
+    let manifest = get(&format!("{download}/{manifest_name}"))?;
+    for (name, bytes) in [(&hook_name, &helper), (&manifest_name, &manifest)] {
+        if checksum(&sums, name).as_deref() != Some(&hex(&Sha256::digest(bytes))) {
+            return Err(format!("the download of {name} does not match its checksum; nothing was changed"));
+        }
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(&manifest).map_err(|_| "invalid hook payload manifest")?;
+    let (platform, target) = hook_platform().ok_or("there is no hook payload for this platform")?;
+    if metadata["schemaVersion"] != 1
+        || metadata["version"] != latest
+        || metadata["sha256"] != hex(&Sha256::digest(&helper))
+        || metadata["platform"] != platform
+        || metadata["target"] != target
+    {
+        return Err("invalid hook payload manifest".into());
+    }
+    stage_payload(program, &latest, &helper, &manifest)
+        .map_err(|_| "could not stage the hook payload; nothing was changed")?;
     replace(program, &binary, |fresh| runs(fresh, &latest))
         .map_err(|e| format!("could not replace {}: {e}", program.display()))?;
     Ok(Outcome::Updated { from: CURRENT.into(), to: latest, program: program.to_path_buf() })
+}
+
+fn hook_platform() -> Option<(&'static str, &'static str)> {
+    Some(match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => ("linux-x64", "x86_64-unknown-linux-musl"),
+        ("linux", "aarch64") => ("linux-arm64", "aarch64-unknown-linux-musl"),
+        ("macos", "x86_64") => ("darwin-x64", "x86_64-apple-darwin"),
+        ("macos", "aarch64") => ("darwin-arm64", "aarch64-apple-darwin"),
+        ("windows", "x86_64") => ("win32-x64", "x86_64-pc-windows-gnu"),
+        _ => return None,
+    })
+}
+
+fn stage_payload(program: &Path, version: &str, helper: &[u8], manifest: &[u8]) -> io::Result<()> {
+    let parent =
+        program.parent().ok_or_else(|| io::Error::other("missing install directory"))?.join(".quotum-hook-payloads");
+    fs::create_dir_all(&parent)?;
+    let target = parent.join(version);
+    let name = if cfg!(windows) { "quotum-hook.exe" } else { "quotum-hook" };
+    if target.try_exists()? {
+        if fs::read(target.join(name))? != helper || fs::read(target.join("payload-manifest.json"))? != manifest {
+            return Err(io::Error::other("conflicting payload version"));
+        }
+        return Ok(());
+    }
+    let stage = parent.join(format!(".new-{}", std::process::id()));
+    fs::create_dir(&stage)?;
+    let result = (|| {
+        fs::write(stage.join(name), helper)?;
+        fs::write(stage.join("payload-manifest.json"), manifest)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(stage.join(name), fs::Permissions::from_mode(0o755))?;
+        }
+        fs::rename(&stage, &target)
+    })();
+    let _ = fs::remove_dir_all(&stage);
+    result
 }
 
 /// The latest release's version, read from where `releases/latest` redirects to
@@ -90,7 +152,9 @@ fn latest(releases: &str) -> Result<String, String> {
     })?;
     let tag = location.trim_end_matches('/').rsplit('/').next().unwrap_or_default();
     let version = tag.strip_prefix('v').unwrap_or(tag);
-    if parts(version).is_none() {
+    if parts(version).is_none()
+        || !version.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+'))
+    {
         return Err(format!("the latest release is not a version: {location}"));
     }
     Ok(version.to_string())
@@ -302,9 +366,28 @@ mod tests {
     fn a_newer_release_replaces_the_program_once_its_checksum_and_start_are_right() {
         let name = asset().unwrap().to_string();
         let binary = b"new release".to_vec();
-        let sums = format!("{}  {name}\n", hex(&Sha256::digest(&binary)));
-        let (base, _) =
-            releases("v999.0.0", vec![(name.clone(), binary.clone()), ("SHA256SUMS".into(), sums.into_bytes())]);
+        let helper = b"new helper".to_vec();
+        let hook_name = name.replace("quotum-cli-", "quotum-hook-");
+        let manifest_name = format!("{}.json", hook_name.trim_end_matches(".exe"));
+        let manifest = serde_json::to_vec(
+            &serde_json::json!({"schemaVersion":1,"version":"999.0.0","sha256":hex(&Sha256::digest(&helper)),"platform":hook_platform().unwrap().0,"target":hook_platform().unwrap().1}),
+        )
+        .unwrap();
+        let sums = format!(
+            "{}  {name}\n{}  {hook_name}\n{}  {manifest_name}\n",
+            hex(&Sha256::digest(&binary)),
+            hex(&Sha256::digest(&helper)),
+            hex(&Sha256::digest(&manifest))
+        );
+        let (base, _) = releases(
+            "v999.0.0",
+            vec![
+                (name.clone(), binary.clone()),
+                (hook_name, helper.clone()),
+                (manifest_name, manifest),
+                ("SHA256SUMS".into(), sums.into_bytes()),
+            ],
+        );
         let dir = scratch("newer");
         let program = installed(&dir);
 
@@ -321,6 +404,15 @@ mod tests {
         let outcome = update(&base, &program, false, |_, version| version == "999.0.0").unwrap();
         assert_eq!(outcome, Outcome::Updated { from: CURRENT.into(), to: "999.0.0".into(), program: program.clone() });
         assert_eq!(fs::read(&program).unwrap(), binary);
+        assert_eq!(
+            fs::read(dir.join(".quotum-hook-payloads/999.0.0").join(if cfg!(windows) {
+                "quotum-hook.exe"
+            } else {
+                "quotum-hook"
+            }))
+            .unwrap(),
+            helper
+        );
         let left: Vec<_> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
         assert!(
             left.iter().all(|name| !name.to_string_lossy().starts_with(".quotum-update")),
@@ -339,6 +431,32 @@ mod tests {
         let error = update(&base, &program, false, |_, _| true).unwrap_err();
         assert!(error.contains("checksum"), "{error}");
         assert_eq!(fs::read(&program).unwrap(), b"old");
+    }
+
+    #[test]
+    fn a_missing_helper_preserves_the_previous_whole_pair() {
+        let name = asset().unwrap().to_string();
+        let binary = b"new release".to_vec();
+        let sums = format!("{}  {name}\n", hex(&Sha256::digest(&binary)));
+        let (base, _) = releases("v999.0.0", vec![(name, binary), ("SHA256SUMS".into(), sums.into_bytes())]);
+        let dir = scratch("missing-helper");
+        let program = installed(&dir);
+        stage_payload(&program, CURRENT, b"old helper", b"old manifest").unwrap();
+        assert!(update(&base, &program, false, |_, _| true).is_err());
+        assert_eq!(fs::read(program).unwrap(), b"old");
+        let previous = dir.join(".quotum-hook-payloads").join(CURRENT);
+        assert_eq!(fs::read(previous.join("payload-manifest.json")).unwrap(), b"old manifest");
+        assert!(!dir.join(".quotum-hook-payloads/999.0.0").exists());
+    }
+
+    #[test]
+    fn a_release_tag_cannot_escape_the_versioned_payload_directory() {
+        let (base, _) = releases("v999.0.0-..\\..\\outside", vec![]);
+        let dir = scratch("unsafe-version");
+        let program = installed(&dir);
+        assert!(update(&base, &program, false, |_, _| true).is_err());
+        assert_eq!(fs::read(program).unwrap(), b"old");
+        assert!(!dir.join(".quotum-hook-payloads").exists());
     }
 
     #[test]

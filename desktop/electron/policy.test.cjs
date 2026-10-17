@@ -200,6 +200,20 @@ test('the startup page can only quit', () => {
   assert.equal(allowed('file:///tmp/page.html', hub), false);
   assert.equal(allowed('quotum://elsewhere/index.html', hub), false);
 });
+
+test('hook consent is forwarded only from the current main frame',async()=>{
+  assert.equal(mayInvoke(hub,hub,'set_claude_hook','main'),true);
+  for(const role of ['compact','loader','unknown'])assert.equal(mayInvoke(hub,hub,'set_claude_hook',role),false);
+  for(const url of ['quotum://localhost/index.html','https://foreign.example/'])assert.equal(mayInvoke(url,hub,'set_claude_hook'),false);
+  const main=await mainProcess();main.deliver({type:'state',generation:1,url:hub});
+  const board=main.windows[0];board.url='http://127.0.0.1:23456/';
+  const event={sender:board.webContents,senderFrame:board.webContents.mainFrame};
+  assert.throws(()=>main.invoke({...event,senderFrame:{}},'set_claude_hook',{on:true}),/not the board/);
+  const pending=main.invoke(event,'set_claude_hook',{on:false}).catch(()=>{});
+  assert.deepEqual(main.traffic.at(-1).request,{command:'set_claude_hook',args:{on:false}});
+  board.close();assert.throws(()=>main.invoke(event,'set_claude_hook',{on:true}),/not the board/);
+  main.deliver({type:'reply',id:main.traffic.at(-1).id,error:'closed'});await pending;
+});
 test('external links cannot run programs or carry credentials', () => {
   assert.equal(external('https://github.com/padurets/Quotum'), true);
   for (const url of ['file:///bin/sh', 'javascript:alert(1)', 'custom:run', 'https://user:password@example.org/']) assert.equal(external(url), false);

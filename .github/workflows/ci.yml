@@ -208,6 +208,8 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
       - run: cargo test --locked native_birth_of_own_process_is_stable_or_explicit_windows_fallback -- --nocapture
+      - run: cargo build --release --locked -p quotum-hook --bin quotum-hook --example panic
+      - run: node check-hook-canary.mjs
 
   # The installers run on people's machines straight from a download: they must at least
   # be sound as scripts (shellcheck is on the runner; pwsh parses without running).
@@ -217,6 +219,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: shellcheck --shell=sh install/install.sh
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: node --test install/install.test.mjs
       - shell: pwsh
         run: |
           $errors = $null

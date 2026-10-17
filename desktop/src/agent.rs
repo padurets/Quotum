@@ -345,6 +345,9 @@ fn measure(
         Box::new(move |line: &str| delivered.line(line)),
     );
     let mut runner = Runner::new(config, paths, &[], stop);
+    if cfg!(test) || shell.smoke.is_some() {
+        runner = runner.without_route_observations();
+    }
     let mut failing: BTreeMap<Provider, String> = BTreeMap::new();
     runner.run(&mut sink, |event| match event {
         Event::Measured(outcome, _) => {
@@ -513,6 +516,7 @@ pub fn take_over(shell: &Arc<Shell>) -> Result<(), String> {
 /// Every five seconds, window or not: takes a machine let go, follows config.toml, and
 /// notices an agent that stopped by itself.
 pub fn tick(shell: &Arc<Shell>) {
+    shell.claude_hook.refresh();
     let Ok(_ops) = shell.agent_ops.try_lock() else { return };
     if shell.exiting() || matches!(shell.hub().0, HubState::Down) {
         return;

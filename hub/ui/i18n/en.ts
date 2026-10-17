@@ -7,6 +7,19 @@ import type {Message} from './types';
  * monetary measurements keep their explicit units and never become window percentages.
  */
 export const en = {
+  'hook.title':'Claude Code session routes',
+  'hook.consent':'Allow a silent SessionStart hook to report which authentication variables are present and the base URL host. Token values and the rest of the URL stay private. This consent is shared with the CLI; turning it off removes the hook.',
+  'hook.enable':'Enable hook',
+  'hook.disable':'Remove hook',
+  'hook.status.off':'Hook is off',
+  'hook.status.enabled_no_records':'Installed; no session records yet',
+  'hook.status.observing':'Session records received',
+  'hook.status.update_pending':'Installation or update pending',
+  'hook.status.remove_pending':'Removal pending; retry to finish',
+  'hook.status.error':'Hook status unavailable',
+  'hook.safeInstall':'Use a native or trusted global installation. A temporary npm cache, AppImage or writable path cannot install or update the hook.',
+  'hook.failed':'The change could not be completed. The current status is shown above; retry after checking the installation.',
+  'hook.limits':'Tracking and route opt-outs still apply. Bare mode or client policy can prevent records. Without a proven Codex process binding, account fallback may be wrong; use a client link to correct it.',
   'usageWork.mark': 'Work evidence',
   'usageWork.confirmed': 'Usage rose without observed work',
   'usageWork.partial': 'Usage rose; work data is incomplete',

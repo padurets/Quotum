@@ -35,6 +35,7 @@ struct Watch {
     looked: Option<Instant>,
     reported: Option<(Instant, SessionReport)>,
     inventory: Inventory,
+    routes: crate::route::Tracker,
     continuity_fault: bool,
 }
 
@@ -131,6 +132,7 @@ pub struct Runner {
     /// Ends this run, a measurement under way included.
     stop: Stop,
     policy_contact_every: Duration,
+    route_observations: bool,
 }
 
 impl Runner {
@@ -156,7 +158,22 @@ impl Runner {
         stop: Stop,
     ) -> Runner {
         let clients = ClientId::ALL.into_iter().filter(|c| config.tracks(*c)).collect();
-        Runner { config, paths, home, adapters, clients, stop, policy_contact_every: Duration::from_secs(60) }
+        Runner {
+            config,
+            paths,
+            home,
+            adapters,
+            clients,
+            stop,
+            policy_contact_every: Duration::from_secs(60),
+            route_observations: !cfg!(test),
+        }
+    }
+
+    /// A synthetic host must choose this before any shared hook-root lookup or probe.
+    pub fn without_route_observations(mut self) -> Self {
+        self.route_observations = false;
+        self
     }
 
     pub fn clients(&self) -> &[ClientId] {
@@ -244,6 +261,7 @@ impl Runner {
             looked: None,
             reported: None,
             inventory: Inventory::default(),
+            routes: crate::route::Tracker::default(),
             continuity_fault: true,
         });
 
@@ -269,7 +287,16 @@ impl Runner {
                     watch.continuity_fault = true;
                 }
                 watch.looked = Some(Instant::now());
-                let seen = watch.activity.look();
+                let mut seen = watch.activity.look();
+                if self.route_observations {
+                    watch.routes.look(
+                        &self.config,
+                        &mut seen,
+                        &self.home,
+                        &self.paths.work,
+                        &watch.activity.client_paths(),
+                    );
+                }
                 // The first look cannot tell working from idle: the list goes out from the second.
                 if !first {
                     let mut report = self.report(seen, &accounts, &identity_paths);
@@ -536,6 +563,7 @@ impl Runner {
                 };
                 let (project, folder) = names(session.project, session.folder, self.config.projects());
                 Some(RunningSession {
+                    route: self.config.routes(session.client).then_some(session.route).flatten(),
                     session_id: session.native_birth.as_deref().and_then(|native| {
                         salt.as_ref().map(|salt| crate::session_identity::identify(salt, session.client, native))
                     }),
@@ -590,6 +618,7 @@ impl Runner {
             };
             let (project, folder) = names(session.project, session.folder, self.config.projects());
             supplemental.push(ClientSession {
+                route: self.config.routes(session.client).then_some(session.route).flatten(),
                 client_id: session.client,
                 session_id: session.native_birth.as_deref().and_then(|native| {
                     salt.as_ref().map(|salt| crate::session_identity::identify(salt, session.client, native))
@@ -710,6 +739,83 @@ pub enum Event<'a> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn acquired_route_wire_trace_is_shared_with_the_hubs_retained_history_test() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/session-route-observations.json")).unwrap();
+        let state = std::env::temp_dir().join(format!("quotum-route-wire-{}", crate::config::random_hex()));
+        std::fs::create_dir(&state).unwrap();
+        std::fs::write(state.join("session-salt"), "0123456789abcdef0123456789abcdef").unwrap();
+        let program = state.join("claude-standin");
+        let subscription = "#!/bin/sh\nprintf '{\"authMethod\":\"claude.ai\",\"apiProvider\":\"firstParty\"}'\n";
+        std::fs::write(&program, subscription).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let paths = Paths { config: state.join("config.toml"), work: state.clone(), state: state.clone() };
+        let mut runner = Runner::new(Config::default(), paths, &[ClientId::Claude], Stop::new());
+        runner.home = state.clone();
+        let mut session = crate::activity::attribution::corrected_sessions()[0].clone();
+        session.client = ClientId::Claude;
+        session.native_birth = Some(vec![1, 2, 3]);
+        session.project = Some("Fixture".into());
+        session.folder = None;
+        session.origin = crate::activity::Origin::Terminal;
+        session.started_at = crate::model::parse_time(fixture["base"]["startedAt"].as_str().unwrap()).unwrap();
+        session.last_worked = None;
+        let accounts = [Some((Some(fixture["base"]["account"].as_str().unwrap().to_owned()), None))];
+        let mut cache = crate::route::Tracker::default();
+        let mut identity = None;
+        let wait = |cache: &mut crate::route::Tracker| {
+            let deadline = Instant::now() + Duration::from_secs(8);
+            loop {
+                if let Some(route) = cache.fixture_probe(&program, &state) {
+                    break Some(route);
+                }
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+        for (index, frame) in fixture["frames"].as_array().unwrap().iter().enumerate() {
+            session.route = match index {
+                0 => cache.fixture_probe(&program, &state),
+                1 | 3 | 5 | 7 => wait(&mut cache),
+                2 => {
+                    cache.fixture_expire();
+                    cache.fixture_probe(&program, &state)
+                }
+                4 => {
+                    std::fs::write(&program, "#!/bin/sh\nsleep 10\n").unwrap();
+                    cache.fixture_probe(&program, &state)
+                }
+                6 => {
+                    std::fs::write(&program, subscription).unwrap();
+                    cache.fixture_probe(&program, &state)
+                }
+                8 => Some(crate::route::claude_hook(&crate::route::ClaudeFlags {
+                    api_key: true,
+                    host: Some("openrouter.ai".into()),
+                    ..Default::default()
+                })),
+                _ => unreachable!(),
+            };
+            session.working = frame["working"].as_bool();
+            let report = runner.report(vec![session.clone()], &accounts, &[Vec::new()]);
+            let mut wire = crate::sink::tests::capture_report(&report)["sessions"][0].clone();
+            let current = wire["sessionId"].as_str().unwrap().to_owned();
+            assert_eq!(identity.get_or_insert(current.clone()), &current, "evidence never changes producer identity");
+            // The shared trace normalizes only the OS-specific opaque ID.
+            wire["sessionId"] = fixture["base"]["sessionId"].clone();
+            let mut expected = fixture["base"].clone();
+            expected["working"] = frame["working"].clone();
+            if let Some(route) = frame.get("route") {
+                expected["route"] = route.clone();
+            }
+            assert_eq!(wire, expected, "{}", frame["phase"]);
+        }
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
     #[test]
     fn corrected_shared_sessions_keep_native_ids_through_the_wire() {
         let state = std::env::temp_dir().join(format!("quotum-attribution-ids-{}-{}", std::process::id(), now_ms()));
@@ -733,6 +839,39 @@ mod tests {
         changed[0].working = Some(true);
         changed[0].project = Some("another-project".into());
         assert_eq!(runner.running(changed, &accounts, &[Vec::new()])[0].session_id.as_ref(), Some(&expected[0]));
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn routes_preserve_released_sessions_and_omission_is_distinct_from_unknown() {
+        use crate::route::{By, Class, Route};
+        let state = std::env::temp_dir().join(format!("quotum-route-report-{}", crate::config::random_hex()));
+        std::fs::create_dir(&state).unwrap();
+        std::fs::write(state.join("session-salt"), "0123456789abcdef0123456789abcdef").unwrap();
+        let paths = Paths { config: state.join("config.toml"), work: state.join("work"), state: state.clone() };
+        let mut runner = Runner::new(Config::default(), paths, &[ClientId::Codex], Stop::new());
+        let mut seen = crate::activity::attribution::corrected_sessions();
+        let accounts = [Some((Some("4b7e0c1d2e3f4a5b6c7d8e9f".into()), None))];
+        let omitted = runner.report(seen.clone(), &accounts, &[Vec::new()]);
+        let before = crate::sink::tests::capture_report(&omitted);
+        assert!(before["sessions"].as_array().unwrap().iter().all(|s| s.get("route").is_none()));
+        seen[0].route = Some(Route::new(Class::Unknown, By::Session));
+        let unknown = runner.report(seen.clone(), &accounts, &[Vec::new()]);
+        let after = crate::sink::tests::capture_report(&unknown);
+        assert_eq!(after["sessions"][0]["route"], serde_json::json!({"class":"unknown","by":"session"}));
+        assert_eq!(
+            crate::sink::tests::legacy_sessions(&before["sessions"]),
+            crate::sink::tests::legacy_sessions(&after["sessions"])
+        );
+        assert_eq!(
+            omitted.sessions.iter().map(|s| &s.session_id).collect::<Vec<_>>(),
+            unknown.sessions.iter().map(|s| &s.session_id).collect::<Vec<_>>()
+        );
+        runner
+            .config
+            .clients
+            .insert("codex".into(), crate::config::ClientSettings { route: Some(false), ..Default::default() });
+        assert!(runner.report(seen, &accounts, &[Vec::new()]).sessions.iter().all(|s| s.route.is_none()));
         std::fs::remove_dir_all(state).unwrap();
     }
 
@@ -830,6 +969,7 @@ mod tests {
     #[test]
     fn a_long_list_keeps_the_working_sessions_and_then_the_newest() {
         let session = |working, started_at| RunningSession {
+            route: None,
             session_id: None,
             provider: Provider::Claude,
             account: None,
@@ -940,6 +1080,7 @@ mod tests {
     #[test]
     fn a_list_of_running_agents_goes_out_first_on_change_and_then_in_time() {
         let session = |working| RunningSession {
+            route: None,
             session_id: None,
             provider: Provider::Claude,
             account: None,
@@ -957,6 +1098,7 @@ mod tests {
             looked: None,
             reported: None,
             inventory: Inventory::default(),
+            routes: crate::route::Tracker::default(),
             continuity_fault: false,
         };
         assert!(
@@ -971,6 +1113,9 @@ mod tests {
         idle.last_worked_at = Some(15_000);
         watch.reported = Some((Instant::now(), report(vec![idle.clone()])));
         assert!(!watch.worth_sending(&report(vec![idle.clone()])), "a remembered date stays equal on later idle looks");
+        let mut routed = idle.clone();
+        routed.route = Some(crate::route::Route::new(crate::route::Class::Api, crate::route::By::Session));
+        assert!(watch.worth_sending(&report(vec![routed])), "new evidence is sent even while idle");
         idle.last_worked_at = None;
         assert!(watch.worth_sending(&report(vec![idle.clone()])), "a clock correction can send one changed list");
         watch.reported = Some((Instant::now(), report(vec![idle.clone()])));
@@ -988,6 +1133,7 @@ mod tests {
             looked: None,
             reported: None,
             inventory: Inventory::default(),
+            routes: crate::route::Tracker::default(),
             continuity_fault: true,
         };
         let report = || SessionReport {
@@ -1047,6 +1193,7 @@ mod tests {
                 looked: Some(Instant::now()),
                 reported: Some((Instant::now() - REPORT_EVERY, report.clone())),
                 inventory: Inventory::default(),
+                routes: crate::route::Tracker::default(),
                 continuity_fault: false,
             };
             assert!(watch.worth_sending(&report));

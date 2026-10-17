@@ -1248,6 +1248,7 @@ pub(crate) mod tests {
     #[test]
     fn running_agents_are_told_to_the_hub_that_knows_them_and_an_older_one_is_left_alone() {
         let session = RunningSession {
+            route: None,
             session_id: None,
             provider: Provider::Codex,
             account: Some("4b7e0c1d2e3f4a5b6c7d8e9f".into()),

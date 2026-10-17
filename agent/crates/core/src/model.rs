@@ -137,6 +137,8 @@ impl Window {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunningSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::route::Route>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     pub provider: Provider,
@@ -171,6 +173,8 @@ pub struct ClientSource {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClientSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::route::Route>,
     pub client_id: crate::clients::ClientId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,

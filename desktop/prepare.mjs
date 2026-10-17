@@ -28,6 +28,7 @@ import {prepareText} from './prepare-text.mjs';
 import {prepareTray} from './prepare-tray.mjs';
 import {prepareElectron} from './prepare-electron.mjs';
 import {thirdPartyLicenses} from '../npm/licenses.mjs';
+import {copyHook} from '../npm/hook-artifact.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const hub = path.resolve(here, '../hub');
@@ -56,6 +57,11 @@ const target = option('--target') ?? hostTarget();
 const node = NODE[target];
 if (!node) throw new Error(`the app is built for ${Object.keys(NODE).join(' and ')}, not ${target}`);
 const windows = target.includes('windows');
+const hookPlatform=windows?'win32-x64':'linux-x64';
+const version=JSON.parse(readFileSync(path.join(hub,'package.json'),'utf8')).version;
+const hookRoot=option('--hook-artifacts')??process.env.QUOTUM_HOOK_ARTIFACT??path.join(here,'../agent/target/hook-dist');
+copyHook(hookRoot,hookPlatform,version,path.join(here,'resources/hook'));
+copyHook(hookRoot,hookPlatform,version,path.join(here,'binaries'),`quotum-hook-${target}${windows?'.exe':''}`);
 
 const run = (command, commandArgs, cwd) =>
   // npm is a .cmd on Windows, which only a shell starts.
@@ -117,6 +123,9 @@ writeFileSync(
     '(node-LICENSE next to this file) and the Quotum hub: the packages bundled into its',
     'server are listed with their licenses in hub/dist/app/server-licenses.md, those of',
     'its dashboard in hub/dist/client/third-party-licenses.md.',
+    'The bundled session hook uses musl on Linux (MIT, https://musl.libc.org/COPYRIGHT)',
+    'and the MinGW-w64 runtime on Windows',
+    '(https://github.com/mingw-w64/mingw-w64/blob/master/COPYING).',
   ]),
 );
 
