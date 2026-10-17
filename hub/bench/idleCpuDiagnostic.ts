@@ -2,11 +2,14 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {readFileSync,readdirSync} from 'node:fs';
 import path from 'node:path';
-import type {Cdp} from './cdp.js';
+import {setTimeout as wait} from 'node:timers/promises';
+import type {Browser,Cdp} from './cdp.js';
 import {bounded} from './reversalDiagnostic.js';
-import {numericProfile} from './cpuProfile.js';
+import {numericProfile,profileInterval} from './cpuProfile.js';
 import {ScriptBinding} from './scriptBinding.js';
 import type {Reading} from './probe.js';
+import {idleRetentionProblems,type IdleRetention} from './idleRetention.js';
+import {safeEvidence} from './evidence.js';
 
 type Client={status:'available';name:string;bytes:number;sha256:string}|{status:'unavailable'};
 type RawEvent={name:string;ph:string;ts?:number;dur?:number;tts?:number;tdur?:number;pid?:number;tid?:number;args?:{data?:{frame?:string;timerId?:number;timeout?:number;singleShot?:boolean;scriptId?:string|number;lineNumber?:number;columnNumber?:number;stackTrace?:unknown;message?:string}}};
@@ -25,6 +28,68 @@ const location=(value:any)=>{
   return Number.isSafeInteger(scriptId)&&scriptId>0&&Number.isSafeInteger(value?.lineNumber)&&value.lineNumber>=0&&Number.isSafeInteger(value?.columnNumber)&&value.columnNumber>=0
     ?{scriptId,lineNumber:value.lineNumber,columnNumber:value.columnNumber}:null;
 };
+
+export const retirementReadScript=`(()=>{const monotonicFrom=performance.now(),retention=window.__quotumIdleRetention();return {monotonicFrom,retention,monotonicTo:performance.now()};})()`;
+type RetirementRead={monotonicFrom:number;monotonicTo:number;retention:IdleRetention|null};
+
+/** Observe one natural retirement inside the original idle counters, without a trace-clock join. */
+export async function retirementProfile(cdp:Cdp,browser:Browser,planned:{from:number;to:number;quotaBoundary:number},opening:IdleRetention|null,save:Save){
+  const owner=browser.owner;
+  if(!browser.owned||!owner)throw Error('Retirement profiling requires an owned synthetic run');
+  return owner.operation(async()=>{
+    const boundary=planned.quotaBoundary;
+    if(![planned.from,planned.to,boundary].every(Number.isFinite)||!(planned.from<boundary&&boundary+5000<planned.to))throw Error('Retirement profiling requires the original quota window');
+    let before:RetirementRead|null=null,after:RetirementRead|null=null,failed=false,failure:unknown,writesFailed=false,runtimeAvailable=false;
+    let capture:{status?:string;samplingInterval?:number;profile?:{samples?:number[];startTime?:number;endTime?:number}}|undefined;
+    const write=(name:string,value:unknown,large=false)=>{try{
+      const safe=safeEvidence(value,'',0,large?100_000:10_000);
+      if(Buffer.byteLength(JSON.stringify(safe))>(large?32:1)*1024*1024)writesFailed=true;
+      save('idle-cpu-retirement-'+name,safe,large);
+    }catch{writesFailed=true;}};
+    write('plan',{mode:'diagnostic',...planned,from:boundary-5000,to:boundary+5000,samplingInterval:250});
+    try{
+      const runtime=await bounded('retirement runtime',signal=>cdp.send<{product?:string;revision?:string;jsVersion?:string;protocolVersion?:string}>('Browser.getVersion',{},signal),5000,owner.signal);
+      const dotted=(value:unknown)=>typeof value==='string'&&/^\d+(?:\.\d+)+$/.test(value)&&value.length<=120?value:null;
+      const version=dotted(runtime.product?.replace(/^Chrome\//,'')),v8=dotted(runtime.jsVersion);
+      runtimeAvailable=!!version&&!!v8;
+      write('runtime',{chromium:{version,sha:/^@?[a-f\d]{40}$/.test(runtime.revision??'')?runtime.revision!.replace(/^@/,''):null},v8:{version:v8},protocol:{version:dotted(runtime.protocolVersion)}});
+      await wait(Math.max(0,boundary-5000-Date.now()),undefined,{signal:owner.signal});
+      if(Date.now()>=boundary)throw Error('Retirement profiling missed the opening boundary');
+      await profileInterval(cdp,browser,async()=>{
+        before=await cdp.evaluate<RetirementRead>(retirementReadScript,owner.signal);write('before',before);
+        await wait(Math.max(0,boundary+5000-Date.now()),undefined,{signal:owner.signal});
+        after=await cdp.evaluate<RetirementRead>(retirementReadScript,owner.signal);write('after',after);
+      },{save:(name,value)=>write(name,value),saveTrace:(name,value)=>{
+        if(name==='profile')capture=value as typeof capture;
+        write(name,value,true);
+      }},250);
+    }catch(error){failed=true;failure=error;}
+    const firstRead=before as RetirementRead|null,lastRead=after as RetirementRead|null;
+    const first=firstRead?.retention??null,last=lastRead?.retention??null;
+    const problems=idleRetentionProblems(first,last,first?.at??NaN,last?.at??NaN,boundary);
+    const basis=(value:IdleRetention|null)=>value?.quota?JSON.stringify([value.identity,value.generation,value.revision,value.proofEpoch,value.scopeKey,value.selection,
+      value.quota.cut,value.quota.cursor,value.quota.rows.map(row=>JSON.stringify([row.sourceId,row.windowId,row.count,row.first,row.second,row.third,row.last])).sort()]):null;
+    const due=(value:IdleRetention|null)=>value?.quota?.rows.filter(row=>row.second!==null&&row.second+1+(value.selection.periodMs??NaN)===boundary)
+      .map(row=>({sourceId:row.sourceId,windowId:row.windowId})).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))??[];
+    const expected=due(opening),observed=due(first);
+    if(!opening?.settled||!basis(opening)||basis(opening)!==basis(first)||!expected.length||JSON.stringify(expected)!==JSON.stringify(observed))problems.push('retirement capture differs from the opening quota evidence');
+    if(!firstRead||!lastRead||![firstRead.monotonicFrom,firstRead.monotonicTo,lastRead.monotonicFrom,lastRead.monotonicTo].every(finite)
+      ||firstRead.monotonicFrom>firstRead.monotonicTo||firstRead.monotonicTo>=lastRead.monotonicFrom||lastRead.monotonicFrom>lastRead.monotonicTo)problems.push('retirement snapshot page clocks unavailable');
+    if(!first||!last||!(planned.from<first.at&&last.at<planned.to))problems.push('retirement capture escaped the original idle counters');
+    const samples=capture?.profile?.samples?.length??0;
+    if(capture?.status!=='complete'||capture.samplingInterval!==250||!samples||samples>100_000)problems.push('retirement CPU profile incomplete');
+    if(!runtimeAvailable)problems.push('retirement runtime identity unavailable');
+    if(failed)problems.push('retirement capture did not finish');
+    if(writesFailed)problems.push('retirement evidence write failed');
+    const receipt={mode:'diagnostic',kind:'Natural quota retirement only; recording order brackets both snapshots. Sampled widths are not thread CPU time; observer overhead is unqualified.',
+      status:problems.length?'insufficient-evidence':'complete',planned,expectedRDue:expected,observedRDue:observed,samplingInterval:250,samples,
+      actual:{snapshotFrom:first?.at??null,snapshotTo:last?.at??null,profileStart:capture?.profile?.startTime??null,profileEnd:capture?.profile?.endTime??null},problems};
+    write('result',{...receipt,problems:problems.map(reason=>({reason}))});
+    if(writesFailed&&!problems.includes('retirement evidence write failed')){problems.push('retirement evidence write failed');receipt.status='insufficient-evidence';}
+    if(failed)throw failure;
+    return receipt;
+  });
+}
 
 /** Compiled positions are valid only for the bytes the page actually received. */
 export function clientIdentity(directory=path.join(import.meta.dirname,'../dist/client/assets')):Client {

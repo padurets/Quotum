@@ -26,6 +26,11 @@ on:
         required: false
         type: boolean
         default: false
+      retirement:
+        description: Sample only the natural quota retirement inside the original dashboard idle window
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -169,6 +174,7 @@ jobs:
           node --import tsx --input-type=module <<'JS'
           import {execFileSync} from 'node:child_process';
           import {clientIdentity} from './bench/idleCpuDiagnostic.ts';
+          if([process.env.TRACE_ONLY,process.env.ORIGINAL_TIMING,process.env.RETIREMENT].filter(value=>value==='true').length>1)throw Error('Choose one diagnostic mode');
           const requested=process.env.QUOTUM_BENCH_SOURCE_SHA,expected=process.env.EXPECTED_CLIENT_SHA256;
           const actual=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),client=clientIdentity();
           if(!/^[a-f0-9]{40}$/.test(requested??'')||actual!==requested||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected)throw Error('Diagnostic control source or client mismatch');
@@ -177,16 +183,21 @@ jobs:
         env:
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
           EXPECTED_CLIENT_SHA256: ${{ inputs.expected_client_sha256 }}
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci
+          TRACE_ONLY: ${{ inputs.trace_only }}
+          ORIGINAL_TIMING: ${{ inputs.original_timing }}
+          RETIREMENT: ${{ inputs.retirement }}
+      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci ${{ inputs.retirement && '--scope dashboard' || '' }}
         env:
-          QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.trace_only && 'trace' || inputs.original_timing && 'profile' || '1' }}
+          QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.retirement && 'retirement' || inputs.trace_only && 'trace' || inputs.original_timing && 'profile' || '1' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
+          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-idle-control
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: idle-cpu-control
           path: |
             /tmp/quotum-idle-cpu-diagnostic/
+            ${{ runner.temp }}/quotum-idle-control/
             hub/dist/client/assets/index-*.js
           if-no-files-found: warn
 

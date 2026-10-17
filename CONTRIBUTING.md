@@ -179,6 +179,18 @@ Manual diagnostics without `--scope dashboard` retain the complete traffic matri
 It samples every two milliseconds to fit the existing 100,000-sample limit, binds
 numeric locations to the received client, and stops after idle. Profiler overhead is
 unqualified; its outcome is diagnostic and cannot satisfy the required benchmark.
+The manual CI `retirement` option samples only the natural quota cleanup, at 250 µs,
+waiting until five seconds before its existing boundary and stopping after five seconds
+past it. Actual snapshot and profile bounds remain explicit. It uses
+the original dashboard prefix and 120-second counter window, including all observer
+commands and the unchanged 0.3 ms/s budget. Passive storage snapshots must prove the
+same admitted quota prefixes retired during recording; they retain page-clock bounds.
+Received client and injected probe bindings follow the original closing counters.
+This mode starts neither tracing nor heap sampling. Signed samples keep their original
+order and the existing 100,000-entry and 32 MiB limits; the nominal 40,000 samples are
+not a guarantee. Cancellation joins the existing bounded profiler cleanup, without
+searching for another window or retrying. Sample widths are elapsed observations,
+not thread CPU time; profiler overhead remains unqualified.
 The optional `benchmark-idle-timing-diagnostics` PR label uses the dashboard job's
 prefix and original idle interval, without a CPU profiler or traffic matrix. Manual
 diagnostics without `--scope dashboard` retain the full prefix. A second connection to

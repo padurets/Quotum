@@ -178,7 +178,7 @@ export function profileWindow(profile: ReturnType<typeof numericProfile>, clocks
 }
 
 /** Sampling reports elapsed sample widths, including throttling; these are not thread CPU clocks. */
-export async function profileInterval<T>(cdp: Cdp, browser: Browser, run: () => Promise<T>, evidence?: Files, samplingInterval: 1000 | 2000 = 1000, allocations = false) {
+export async function profileInterval<T>(cdp: Cdp, browser: Browser, run: () => Promise<T>, evidence?: Files, samplingInterval: 250 | 1000 | 2000 = 1000, allocations = false) {
   if (!browser.owned) throw new Error('CPU profiling requires an owned synthetic browser');
   const clocks: Clock[] = [];
   const clock = async (stage: string, signal: AbortSignal) => {
