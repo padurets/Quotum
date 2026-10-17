@@ -249,7 +249,7 @@ class BoardPeriod {
   getValue=(id:string)=>this.values.get(id)??noValue;
   subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener);};};
   subscribeWorkOrder=(read:(rows:WorkedSession[])=>SessionOrder|null)=>{this.workOrders.add(read);this.scheduleClock();return()=>{this.workOrders.delete(read);this.scheduleClock();};};
-  refreshWorkClock=()=>{if(this.evaluatedAt!==hubNow())this.tick();else{this.retireExpired(hubNow());this.scheduleClock();}};
+  refreshWorkClock=()=>{const now=hubNow();if(this.evaluatedAt!==now)this.tick();else{this.retireExpired(now);this.scheduleClock();}};
   subscribeSource=(id:string,listener:()=>void)=>{let set=this.sourceListeners.get(id);if(!set)this.sourceListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   subscribeValue=(id:string,listener:()=>void)=>{let set=this.valueListeners.get(id);if(!set)this.valueListeners.set(id,set=new Set());set.add(listener);return()=>{set!.delete(listener);};};
   private queryKey(query:HistoryQuery,scope?:PeriodScope){const board=page.get().board;return JSON.stringify([query.meters,query.unit,query.currency,query.work,scope==='quota'?board?.lineup.filter(id=>!board.view.hidden.includes('source:'+id)):scope&&board?.lineup.map(id=>[id,board.cards[id]?.budget])]);}
@@ -661,7 +661,8 @@ class BoardPeriod {
     const due=this.workAdvances(now)?this.index?.changesAt(now,this.workSelection.mode==='live'?this.workSelection.periodMs:0,orders)??null:null;
     const activityDue=this.workAdvances(now)?this.activity?.orderChangesAt(now,this.workSelection.mode==='live'?this.workSelection.periodMs:0,demands.flatMap(order=>order.activity?[order.activity]:[])):null;
     const next=Math.min(due??Infinity,activityDue??Infinity,this.retiring||pan.get()?Infinity:this.retirementAt);
-    clock.due(this.watch,Number.isFinite(next)?next:null,now);
+    // A deadline after the last evaluation stays owed even if time passed meanwhile.
+    clock.due(this.watch,Number.isFinite(next)?next:null,Math.min(now,this.evaluatedAt));
   }
   retryHistory(scope:PeriodScope){
     if(!this.projectionErrors[scope])return;

@@ -5,6 +5,7 @@ import {expandPeriod} from '../../server/domain/periodWire';
 import {workedSessions} from '../../server/domain/periodWork';
 import {PeriodAccounting} from '../../server/domain/periodAccounting';
 import {PeriodIndex} from '../../server/domain/periodIndex';
+import {cellOf} from '../../server/domain/history';
 import {decodeSamples,sampleCount,sampleAt,packSamples,retainSamplesPrepared,numberColumn,numberTail,numberAt,numberBytes,mergeTape,mergeTapePrepared,bindRate,rateAt,type NumberColumn,type PeriodTape,type MoneyTape} from '../../server/domain/periodTape';
 import {retainTape} from '../../server/domain/periodRetention';
 import {drain,Preparations} from '../lib/prepare';
@@ -55,6 +56,52 @@ test('work-order subscriptions cannot postpone an already due live retirement',a
     assert.equal(h.requests.length,0);
     assert.ok(h.pool.estimatedBytes<bytes);
     assert.equal(h.pool.activeFlights,0);
+  }finally{remove();await h.close();}
+});
+
+for(const {elapsed,subscribeLate} of [{elapsed:0,subscribeLate:false},{elapsed:2,subscribeLate:false},{elapsed:2,subscribeLate:true}])test(`quota retirement survives ${elapsed} ms elapsed ${subscribeLate?'before a late subscription':'in the preceding work wake'}`,async t=>{
+  const periodMs=24*H,start=NOW-periodMs,due=NOW+2*M+1;
+  let readNow=()=>NOW;t.mock.method(Date,'now',()=>readNow());
+  const h=await fixture({personal:true,clocked:true,periodName:'24h',creditFrom:start+2*M,creditTo:start+5*M});
+  readNow=h.clock.hubNow;
+  let remove=()=>{};
+  try{
+    const source=h.store.source('codex','d'.repeat(24),start-H);h.store.hold(source,h.alice.id,start-H);
+    for(const at of [start+M,start+2*M,start+3*M,NOW-2*M])h.store.record(source,{observedAt:at,plan:'',resets:null,staleAfterMs:2*periodMs,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:NOW+periodMs}]});
+    h.events.flush();await flush();
+    const before=h.period.tapes.get('quota'),row=before.tape.quota.find((row:any)=>row.source===source),revision=h.period.revision,proof=h.period.proofEpoch,projection=h.period.getProjectionRevision('quota'),requests=h.requests.length;
+    assert.equal(sampleCount(row.samples),4);
+    assert.equal(sampleAt(row.samples,1)!.at+periodMs+1,due);
+    assert.equal(h.period.retirementAt,due);
+    assert.equal(h.period.watch.due,due-1,'the real work curve wakes immediately before quota retirement');
+    const index=h.period.index,advance=index.advance.bind(index);let crossed=0;
+    index.advance=(...args:Parameters<typeof advance>)=>{
+      const result=advance(...args);
+      if(args[1]===due-1){crossed++;h.elapse(elapsed);}
+      return result;
+    };
+    if(subscribeLate){h.elapse(due+1-h.clock.hubNow());remove=h.period.subscribeWorkOrder(()=>null);}
+    // Only scheduled timers run: a forced wake would conceal the missed deadline.
+    h.advance(due+10);await flush();
+    assert.equal(crossed,subscribeLate?0:1);
+    h.advance(due+500);await flush();
+    const after=h.period.tapes.get('quota'),kept=after.tape.quota.find((row:any)=>row.source===source);
+    assert.equal(sampleCount(kept.samples),3,`deadline must survive the work wake; next watch=${h.period.watch.due}`);
+    for(let i=0;i<3;i++)assert.deepEqual(sampleAt(kept.samples,i),sampleAt(row.samples,i+1));
+    assert.equal(after.tape.cursor,before.tape.cursor);
+    assert.equal(h.period.revision,revision);assert.equal(h.period.proofEpoch,proof);
+    assert.equal(h.period.getProjectionRevision('quota'),projection);
+    assert.equal(h.requests.length,requests,'clock retirement reads no history');
+    assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes,'all staging is released');
+    assert.equal(h.pool.activeFlights,0);
+    const now=h.clock.hubNow(),range={from:now-periodMs,to:now},queries=h.period.queries(h.page.get().board,range);
+    const fresh=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,{version:1,selection:{mode:'live',periodMs},evaluatedAt:now,...queries,sessions:{}})));
+    assert.ok(fresh.quota?.state==='complete'&&fresh.quota.value.tape);
+    assert.ok(fresh.sessions&&fresh.sessions.state!=='error');
+    const tape=fresh.quota.value.tape;
+    for(const series of tape.quota)if(series.samplesEncoding==='delta'){series.samples=decodeSamples(series.samples);delete series.samplesEncoding;}
+    const oracle=new PeriodAccounting(tape,fresh.sessions.value,new PeriodIndex(fresh.sessions.value).curves);
+    assert.deepEqual(after.accounting.fixed(range,cellOf(periodMs)),oracle.fixed(range,cellOf(periodMs)));
   }finally{remove();await h.close();}
 });
 
