@@ -33,7 +33,7 @@ for(const compressed of [false,true])test(`ordered quota deadlines keep retireme
   const evidence={...tape(),cut:count*step,quota:[{source:'s',window:'w',samples:compressed?drain(retainSamplesPrepared(samples)):samples}]};
   const before=JSON.stringify(evidence),prepared=PeriodAccounting.prepare(evidence,null);
   let steps=0,result=prepared.next();while(!result.done){steps++;result=prepared.next();}
-  assert.ok(steps<count*2.25,`already ordered deadlines took ${steps} cooperative steps for ${count} samples`);
+  assert.ok(steps<count*1.25,`already ordered deadlines took ${steps} cooperative steps for ${count} samples`);
   assert.deepEqual(result.value.quotaSummary('s','w',{from:0,to:(count-1)*step+1}),{
     consumed:(count/cycle)*(cycle-1)*.125,coveredMs:(count/cycle)*(cycle-1)*step,
     remainingAtStart:90,remainingAtEnd:100-10-(cycle-1)*.125,work:null,

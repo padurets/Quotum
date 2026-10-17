@@ -112,13 +112,16 @@ class QuotaIndex {
     // Work retirement can leave quota observations untouched. Keep their exact prefixes.
     const reuse=prior?.series===series;
     const deadlines=reuse?null:new Float64Array(count),spent=reuse?null:new Float64Array(count),covered=reuse?null:new Float64Array(count),worked=activity?new Float64Array(count):null,during=activity?new Float64Array(count):null;
-    let previous:ReturnType<typeof sampleAt>;
+    let previous:ReturnType<typeof sampleAt>,orderedDeadlines=true;
     // Decode each observation once; unavailable work keeps constant zero prefixes.
     for(let i=0;i<count&&(!reuse||activity);i++) {
       yield;
       const sample=sampleAt(series.samples,i)!;
       if(!reuse&&value.times instanceof Float64Array)value.times[i]=sample.at;
-      if(deadlines)deadlines[i]=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity);
+      if(deadlines){
+        deadlines[i]=Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity);
+        if(i&&!(deadlines[i-1]<=deadlines[i]))orderedDeadlines=false;
+      }
       if(i) {
         if(spent&&covered){spent[i]=spent[i-1];covered[i]=covered[i-1];}
         if(worked&&during){worked[i]=worked[i-1];during[i]=during[i-1];}
@@ -133,7 +136,7 @@ class QuotaIndex {
     }
     if(reuse){value.deadlines=prior.deadlines;value.spent=prior.spent;value.covered=prior.covered;}
     else if(deadlines&&spent&&covered){
-      const sorted=yield*sortedNumbers(deadlines);value.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
+      const sorted=orderedDeadlines?deadlines:yield*sortedNumbers(deadlines);value.deadlines=yield*numberColumn(sorted.length,i=>sorted[i]);
       value.spent=yield*numberColumn(spent.length,i=>spent[i]);value.covered=yield*numberColumn(covered.length,i=>covered[i]);
     }
     value.worked=worked?yield*numberColumn(count,i=>worked[i]):{length:count,base:0,values:null};
