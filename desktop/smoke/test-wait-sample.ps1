@@ -63,6 +63,7 @@ if(-not $cancelled){throw 'Sample wait hid cancellation'}
 
 # Execute the actual opt-in branches. Default must not poll; loading uses its
 # original clock even when Escape has a new, later deadline.
+# Keep the branch in its caller's clock scope when it creates the closure.
 $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'windows-ui.ps1'),[ref]$tokens,[ref]$errors)
 if($errors.Count){throw 'UI smoke did not parse'}
@@ -81,7 +82,7 @@ foreach($branch in $branches){
     $loadingClock=[pscustomobject]@{ElapsedMilliseconds=$(if($loading -eq $fresh){0}else{3000})}
     $deadline=if($loading -ne $fresh){(Get-Date).AddSeconds(3)}else{(Get-Date).AddSeconds(-1)}
     $cancelled=$false
-    try {& ([scriptblock]::Create($branch.Extent.Text))}
+    try {. ([scriptblock]::Create($branch.Extent.Text))}
     catch {if($case -ne 'cancel' -or $_.Exception.GetBaseException() -isnot [OperationCanceledException]){throw};$cancelled=$true}
     if($case -eq 'cancel'){
       if(-not $cancelled -or $observer.HeldSampleWait.status -ne 'interrupted'){throw 'Caller hid its interrupted wait'}
