@@ -204,7 +204,8 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
         else:
             server = Server(("127.0.0.1", 0), Hub)
             threading.Thread(target=server.serve_forever, daemon=True).start()
-            duration = args.seconds + args.warmup
+            # Keep both CPU sample endpoints inside a complete acceptance window.
+            duration = args.seconds + args.warmup + 2
             command = [str(probe), "run", str(duration), str(root / "daemon"), f"http://127.0.0.1:{server.server_port}", str(client), "60000" if args.mode == "slow" else "0"]
             env = dict(os.environ, OBSERVED_VERSION_MS="5000" if args.mode == "slow" else "0")
             bootstrap = None
@@ -239,6 +240,7 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
             assert len(steady) >= args.seconds - 3
             a, b = steady[0], steady[-1]
             seconds = b[0] - a[0]
+            assert seconds >= args.seconds, (seconds,args.seconds)
             cpu = {name: (value - a[1]["threads"].get(name, 0)) / seconds * 100 for name, value in b[1]["threads"].items()}
             queue = list((root / "daemon/state/activity").glob("*/manifest.json"))
             assert len(queue) == 1, stderr
