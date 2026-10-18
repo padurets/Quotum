@@ -293,6 +293,9 @@ suffix while keeping its verified prefix. Full-state transitions too large toget
 split into an old-state interval and a zero-duration new capture checkpoint. Batches
 carry at most 64 frames within 512 KiB. An acknowledged prefix is persisted before
 its files or referenced clock mappings and coverage proofs can be reclaimed.
+Before a calibrated clock can be sent, the manifest records its commitment. A partial
+metadata restore that loses that anchor explicitly retires its pending suffix and
+starts a new clock identity; it cannot recalibrate an epoch already known to the hub.
 
 One writer and a directory budget cover all destination namespaces, including inactive
 ones: 64 MiB on disk, at most 128 segments per namespace, 256 clock mappings and 256
@@ -300,7 +303,8 @@ proofs, with 64 KiB manifest and 256 KiB metadata bounds. Inactive namespaces ar
 validated and bounded before a writer starts. Seven-day expiry uses only calibrated
 UTC. Overflow, age, corruption and privacy restrictions persist explicit unknown
 loss before deleting payloads. Reporting, project or scope opt-out changes a durable
-privacy revision before a namespace can send again. Queue binding is checked against
+privacy revision before a namespace can send again. Desktop file reloads apply the same
+barrier even when the new configuration leaves its agent idle. Queue binding is checked against
 the authenticated hub and device before replay; a bound mismatch fences the current
 capture run instead of replacing its authority. Before that binding exists, a private
 one-way credential scope prevents a changed credential from inheriting the pending

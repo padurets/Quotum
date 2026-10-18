@@ -272,7 +272,7 @@ pub fn start(shell: &Arc<Shell>) {
 fn begin(shell: &Arc<Shell>) {
     let _settings = shell.settings_ops.lock().unwrap_or_else(|e| e.into_inner());
     let seen = stat(&shell.paths);
-    let loaded = Config::load(&shell.paths.config);
+    let loaded = load_settings(&shell.paths, &shell.agent);
     let mut agent = shell.agent();
     agent.restart_pending = false;
     agent.seen = seen;
@@ -605,6 +605,18 @@ pub fn save_settings(shell: &Arc<Shell>, patch: &Patch) -> Result<(), String> {
 fn accept_settings(paths: &Paths, state: &Mutex<Agent>, writes: &Mutex<()>, patch: &Patch) -> Result<u64, String> {
     let _settings = writes.lock().unwrap_or_else(|e| e.into_inner());
     settings::save(&paths.config, patch)?;
+    let config = load_settings(paths, state)?;
+    let mut agent = state.lock().unwrap_or_else(|e| e.into_inner());
+    // Publish accepted settings now; replacing the running worker is debounced.
+    agent.config = config;
+    // Its own write is no change to follow: the ticker would restart once more.
+    agent.seen = stat(paths);
+    agent.saves += 1;
+    Ok(agent.saves)
+}
+
+/// File watchers and native saves accept the same durable privacy barrier, including Idle.
+fn load_settings(paths: &Paths, state: &Mutex<Agent>) -> Result<Config, String> {
     let config = Config::load(&paths.config)?;
     {
         let agent = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -620,13 +632,7 @@ fn accept_settings(paths: &Paths, state: &Mutex<Agent>, writes: &Mutex<()>, patc
     }
     quotum_core::observed::update_privacy(paths, &config)
         .map_err(|_| "could not persist activity privacy settings".to_string())?;
-    let mut agent = state.lock().unwrap_or_else(|e| e.into_inner());
-    // Publish accepted settings now; replacing the running worker is debounced.
-    agent.config = config;
-    // Its own write is no change to follow: the ticker would restart once more.
-    agent.seen = stat(paths);
-    agent.saves += 1;
-    Ok(agent.saves)
+    Ok(config)
 }
 
 /// The board's view of the agent (`app_state`). The intervals are always there, `null`
@@ -856,6 +862,39 @@ mod tests {
         let resumed = saved["revision"].as_str().unwrap();
         assert_eq!(resumed, disabled);
         assert_eq!(state.lock().unwrap().saves, 2);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn externally_loaded_opt_out_persists_before_an_idle_run_can_be_skipped() {
+        let dir = std::env::temp_dir().join(format!("quotum-external-privacy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let paths = Paths { config: dir.join("config.toml"), work: dir.join("work"), state: dir.clone() };
+        let providers = "[providers.claude]\nenabled=false\n[providers.codex]\nenabled=false\n[providers.antigravity]\nenabled=false\n";
+        fs::write(&paths.config, providers).unwrap();
+        let state = Mutex::new(Agent::new());
+        let initial = load_settings(&paths, &state).unwrap();
+        state.lock().unwrap().config = initial;
+        let policy = || {
+            serde_json::from_slice::<serde_json::Value>(&fs::read(paths.state.join("activity-policy.json")).unwrap())
+                .unwrap()
+        };
+        let before = policy()["revision"].clone();
+        // The watcher reads these external file edits; no native settings save or Runner is involved.
+        fs::write(&paths.config, format!("sessions=false\n{providers}")).unwrap();
+        let disabled = load_settings(&paths, &state).unwrap();
+        assert!(!disabled.sessions());
+        assert!(!Provider::ALL.into_iter().any(|p| disabled.enabled(p)));
+        let saved = policy();
+        assert_eq!(saved["enabled"], false);
+        assert_ne!(saved["revision"], before);
+        state.lock().unwrap().config = disabled;
+        fs::write(&paths.config, providers).unwrap();
+        load_settings(&paths, &state).unwrap();
+        assert_eq!(policy()["enabled"], true);
+        assert_eq!(policy()["revision"], saved["revision"]);
+        assert!(state.lock().unwrap().run.is_none());
         fs::remove_dir_all(dir).unwrap();
     }
 

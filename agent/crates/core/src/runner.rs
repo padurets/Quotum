@@ -236,8 +236,19 @@ impl Runner {
         let route_policy = ClientId::ALL.into_iter().filter(|c| !self.config.routes(*c)).collect::<Vec<_>>();
         let enabled = self.config.sessions() && !self.clients.is_empty();
         let privacy = target.as_ref().and_then(|_| {
-            crate::observed::privacy::update(&self.paths, enabled, self.config.projects(), &self.clients, &route_policy)
-                .ok()
+            match crate::observed::privacy::update(
+                &self.paths,
+                enabled,
+                self.config.projects(),
+                &self.clients,
+                &route_policy,
+            ) {
+                Ok(privacy) => Some(privacy),
+                Err(_) => {
+                    sink.activity_failed();
+                    None
+                }
+            }
         });
         let mut activity_delivery = target.filter(|_| enabled).and_then(|target| {
             let privacy = privacy.clone()?;
@@ -260,6 +271,7 @@ impl Runner {
                 stop: self.stop.clone(),
                 privacy,
             })
+            .map_err(|_| sink.activity_failed())
             .ok()
             .map(crate::observed::delivery::Delivery::new)
         });
@@ -1411,6 +1423,58 @@ mod tests {
         assert!(events.is_empty(), "waiting at the hub's pace is not news");
         assert_eq!(sink.flushed, 1, "the hub answered: what it did not take goes now");
     }
+    #[test]
+    fn a_privacy_initialization_failure_is_reported_without_stopping_quota_checkins() {
+        struct Recording {
+            stop: Stop,
+            warnings: usize,
+            checkins: usize,
+        }
+        impl Sink for Recording {
+            fn managed(&self) -> bool {
+                true
+            }
+            fn activity_target(&self) -> Option<crate::observed::Target> {
+                Some(crate::observed::Target { namespace: "a".repeat(64), credential_scope: "b".repeat(64) })
+            }
+            fn activity_failed(&mut self) {
+                self.warnings += 1;
+            }
+            fn checkin_managed(&mut self, _: &[Ask], _: &[Provider]) -> crate::sink::CheckinAnswer {
+                self.checkins += 1;
+                self.stop.request(crate::stop::How::Exit);
+                crate::sink::CheckinAnswer {
+                    directives: Vec::new(),
+                    commands: Vec::new(),
+                    accounts: Vec::new(),
+                    policy: None,
+                }
+            }
+            fn deliver(&mut self, _: &Outcome) {
+                panic!("no collectors were configured");
+            }
+            fn activity_request(&mut self, _: &serde_json::Value, _: bool) -> crate::observed::Answer {
+                panic!("a broken privacy barrier must not send activity");
+            }
+        }
+        for lock_is_directory in [false, true] {
+            let root = std::env::temp_dir().join(format!("quotum-runner-privacy-{}", crate::config::random_hex()));
+            std::fs::create_dir_all(&root).unwrap();
+            if lock_is_directory {
+                std::fs::create_dir(root.join("activity-policy.lock")).unwrap();
+            } else {
+                std::fs::write(root.join("activity-policy.json"), "{}").unwrap();
+            }
+            let stop = Stop::new();
+            let paths = Paths { config: root.join("config.toml"), work: root.join("work"), state: root.clone() };
+            let mut runner = Runner::with_adapters(Config::default(), paths, Vec::new(), root.clone(), stop.clone());
+            let mut sink = Recording { stop, warnings: 0, checkins: 0 };
+            runner.run(&mut sink, |_| panic!("no collector events"));
+            assert_eq!((sink.warnings, sink.checkins), (1, 1));
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
     #[test]
     fn an_empty_local_scope_is_declared_once_without_starting_a_recovery_loop() {
         struct Empty {

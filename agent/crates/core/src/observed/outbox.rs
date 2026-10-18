@@ -1,6 +1,6 @@
 //! A bounded append journal for undelivered completed intervals, never a second history store.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -233,6 +233,8 @@ struct Manifest {
     privacy_revision: Option<String>,
     #[serde(default)]
     credential_scope: Option<String>,
+    #[serde(default)]
+    anchored_clocks: BTreeSet<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -383,7 +385,8 @@ impl Outbox {
                     && m.namespace == namespace
                     && m.next_seq > m.ack
                     && m.next_seq <= SAFE_INTEGER
-                    && m.segments.len() <= MAX_SEGMENTS =>
+                    && m.segments.len() <= MAX_SEGMENTS
+                    && m.anchored_clocks.len() <= MAX_METADATA =>
             {
                 m
             }
@@ -407,6 +410,7 @@ impl Outbox {
                     losses: Vec::new(),
                     privacy_revision: None,
                     credential_scope: None,
+                    anchored_clocks: BTreeSet::new(),
                 };
                 atomic(&file, &m, MANIFEST_BYTES)?;
                 m
@@ -618,16 +622,33 @@ impl Outbox {
             drop(file);
             fs::remove_file(entry.path())?;
         }
+        let lost_anchors: BTreeSet<_> = self
+            .metadata
+            .clocks
+            .iter()
+            .filter(|(id, epoch)| self.manifest.anchored_clocks.contains(*id) && epoch.anchor.is_none())
+            .map(|(id, _)| id.clone())
+            .collect();
         let missing_clock = self
             .manifest
             .segments
             .iter()
-            .filter(|segment| !self.discarded(segment) && !self.metadata.clocks.contains_key(&segment.clock))
+            .filter(|segment| {
+                !self.discarded(segment)
+                    && (!self.metadata.clocks.contains_key(&segment.clock) || lost_anchors.contains(&segment.clock))
+            })
             .map(|segment| segment.first)
             .min();
         if let Some(first) = missing_clock {
             // Unrecoverable UTC evidence is an explicit lost prefix, never a permanently empty batch.
             self.lose(first, self.manifest.next_seq - 1, "corruption")?;
+        }
+        if !lost_anchors.is_empty() {
+            self.metadata.clocks.retain(|id, _| !lost_anchors.contains(id));
+            if self.metadata.active_clock.as_ref().is_some_and(|id| lost_anchors.contains(id)) {
+                self.metadata.active_clock = None;
+            }
+            self.save_metadata()?;
         }
         self.collect()?;
         Ok(())
@@ -673,7 +694,11 @@ impl Outbox {
 
     fn discarded(&self, segment: &Segment) -> bool {
         segment.last <= self.manifest.ack
-            || self.manifest.losses.iter().any(|l| l.first_seq <= segment.first && l.last_seq >= segment.last)
+            || self
+                .manifest
+                .losses
+                .iter()
+                .any(|l| l.first_seq <= segment.first.max(self.manifest.ack + 1) && l.last_seq >= segment.last)
     }
 
     fn collect(&mut self) -> io::Result<()> {
@@ -729,6 +754,12 @@ impl Outbox {
                 return Err(invalid());
             };
             self.lose(self.manifest.ack + 1, first.last, "overflow")?;
+        }
+        if epoch.anchor.is_some() && !self.manifest.anchored_clocks.contains(&epoch.id) {
+            self.manifest.anchored_clocks.retain(|id| self.metadata.clocks.contains_key(id));
+            self.manifest.anchored_clocks.insert(epoch.id.clone());
+            // Publish the calibration commitment before its metadata can be used on the wire.
+            self.save()?;
         }
         self.metadata.clocks.insert(epoch.id.clone(), epoch);
         self.save_metadata()
@@ -1135,6 +1166,55 @@ mod tests {
         assert_eq!(batch.frames.iter().map(|f| f.seq).collect::<Vec<_>>(), [2]);
         let loss = batch.skip.unwrap();
         assert_eq!((loss.first_seq, loss.last_seq, loss.reason.as_str()), (1, 1, "corruption"));
+    }
+
+    #[test]
+    fn a_restored_unanchored_clock_cannot_recalibrate_an_already_committed_epoch() {
+        let stand = Stand::new();
+        let mut q = stand.open();
+        let calibrated = epoch();
+        let mut unanchored = calibrated.clone();
+        unanchored.anchor = None;
+        unanchored.wall_offset = None;
+        q.install_clock(unanchored).unwrap();
+        let before_calibration = fs::read(stand.0.join("metadata.json")).unwrap();
+        q.install_clock(calibrated.clone()).unwrap();
+        q.append(&state(), raw(&calibrated, 0), None).unwrap();
+        q.append(&state(), raw(&calibrated, 1), None).unwrap();
+        q.acknowledge(1, &[]).unwrap();
+        drop(q);
+        fs::write(stand.0.join("metadata.json"), before_calibration).unwrap();
+        let mut q = stand.open();
+        assert!(!q.metadata.clocks.contains_key(&calibrated.id));
+        assert!(q.metadata.active_clock.is_none(), "restart must choose a fresh epoch identity");
+        let fresh = epoch();
+        q.install_clock(fresh.clone()).unwrap();
+        q.append(&state(), raw(&fresh, 2), None).unwrap();
+        let batch = q.prepare().unwrap();
+        assert_eq!(batch.frames.iter().map(|f| f.seq).collect::<Vec<_>>(), [3]);
+        let loss = batch.skip.unwrap();
+        assert_eq!((loss.first_seq, loss.last_seq, loss.reason.as_str()), (2, 2, "corruption"));
+        drop(q);
+        let q = stand.open();
+        assert_eq!(q.prepare().unwrap().frames[0].seq, 3);
+    }
+
+    #[test]
+    fn a_never_calibrated_epoch_preserves_its_pending_work_across_a_compatible_restart() {
+        let stand = Stand::new();
+        let mut q = stand.open();
+        let mut e = epoch();
+        e.anchor = None;
+        e.wall_offset = None;
+        q.install_clock(e.clone()).unwrap();
+        q.append(&state(), raw(&e, 0), None).unwrap();
+        drop(q);
+        let mut q = stand.open();
+        assert_eq!(q.metadata.active_clock.as_ref(), Some(&e.id));
+        assert!(q.prepare().unwrap().skip.is_none());
+        assert!(e.bind(&Reading { boot: e.boot.clone(), tick: 2000, wall: e.zero_wall + 2000 }, e.zero_wall + 2000));
+        q.install_clock(e).unwrap();
+        assert_eq!(q.prepare().unwrap().frames[0].seq, 1);
     }
 
     #[test]

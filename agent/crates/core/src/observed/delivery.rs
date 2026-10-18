@@ -590,10 +590,10 @@ mod tests {
             working,
             last_worked_at: None,
         };
-        capture.latest.state = Arc::new(State {
-            tracking: capture.latest.state.tracking.clone(),
-            contexts: vec![context("a", Some(true)), context("b", None)],
-        });
+        let mut tracking = capture.latest.state.tracking.clone();
+        tracking.complete = true;
+        capture.latest.state =
+            Arc::new(State { tracking, contexts: vec![context("a", Some(true)), context("b", None)] });
         capture.order = vec!["a".repeat(32), "b".repeat(32)];
         delivery.legacy_fault = false;
         let mut sink = Recorder::default();
