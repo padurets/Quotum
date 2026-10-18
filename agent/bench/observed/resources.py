@@ -273,6 +273,7 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
             child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
             origin = time.monotonic()
             samples = []
+            fixture_cpu = []
             churn_at = 30.0
             while child.poll() is None:
                 if args.churn and clients and time.monotonic() - origin >= churn_at:
@@ -284,6 +285,12 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
                     churn_at += 30.0
                 try:
                     samples.append((time.monotonic() - origin, snapshot(child.pid)))
+                    if (args.idle or args.ui) and len(fixture_cpu) < 4096:
+                        counters = []
+                        for client_process in clients[:args.roots]:
+                            fields = pathlib.Path(f"/proc/{client_process.pid}/stat").read_text().rsplit(")", 1)[1].split()
+                            counters.append((int(fields[11]) + int(fields[12])) * 1000 / ticks)
+                        fixture_cpu.append([round((time.monotonic() - origin) * 1000), counters])
                 except (FileNotFoundError, ProcessLookupError):
                     pass
                 time.sleep(1)
@@ -307,6 +314,7 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
                        requests=Hub.requests, operations=Hub.operations, restoration=Hub.restoration,serverErrors=Hub.errors, deliveredPeriodsMs=Hub.periods,
                        deliveredContextMs=dict(positive=Hub.positive_context_ms,unknown=Hub.unknown_context_ms),stopDelaySeconds=result["wallSeconds"] - duration)
             row["observedContextCounts"]=sorted(set(Hub.context_counts))
+            row["fixtureCPUSamplesMs"]=fixture_cpu
             row["discovery"]=Hub.discovery()
             files=[p for p in (root/"daemon/state/activity").rglob('*') if p.is_file()]
             row["queue"]["fileBytes"]=sum(p.stat().st_size for p in files)
