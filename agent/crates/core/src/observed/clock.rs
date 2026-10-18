@@ -72,9 +72,26 @@ impl Epoch {
             return false;
         }
         let offset = if (server - sent.wall).abs() > 30_000 { server - sent.wall } else { 0 };
-        self.anchor =
-            Some(Anchor { clock_epoch: self.id.clone(), anchor_tick: self.tick(sent), anchor_at: sent.wall + offset });
+        self.restore(Anchor {
+            clock_epoch: self.id.clone(),
+            anchor_tick: self.tick(sent),
+            anchor_at: sent.wall + offset,
+        })
+    }
+
+    pub fn restore(&mut self, anchor: Anchor) -> bool {
+        if self.anchor.is_some()
+            || anchor.clock_epoch != self.id
+            || anchor.anchor_tick > SAFE_INTEGER
+            || !(0..=SAFE_INTEGER as i64).contains(&anchor.anchor_at)
+        {
+            return false;
+        }
+        // Context dates and frame ticks share one recoverable UTC mapping, including small wall drift.
+        let offset = i128::from(anchor.anchor_at) - i128::from(self.zero_wall) - i128::from(anchor.anchor_tick);
+        let Ok(offset) = Millis::try_from(offset) else { return false };
         self.wall_offset = Some(offset);
+        self.anchor = Some(anchor);
         true
     }
 
@@ -203,6 +220,24 @@ fn native() -> Option<(String, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_recovered_anchor_restores_the_canonical_offset_even_with_small_wall_drift() {
+        let first = Reading { boot: Some("boot".into()), tick: 1000, wall: 10_000 };
+        let mut epoch = Epoch::new(&first);
+        let mut backup = epoch.clone();
+        let sent = Reading { tick: 11_000, wall: 20_500, ..first.clone() };
+        assert!(epoch.bind(&sent, sent.wall));
+        assert_eq!(epoch.wall_offset, Some(500));
+        let anchor = epoch.anchor.clone().unwrap();
+        assert!(backup.restore(anchor.clone()));
+        assert_eq!(backup.wall_offset, epoch.wall_offset);
+        assert_eq!(backup.anchor, epoch.anchor);
+        assert!(!backup.restore(Anchor { anchor_at: anchor.anchor_at + 1, ..anchor }));
+        let mut bad = Epoch::new(&first);
+        assert!(!bad.restore(Anchor { clock_epoch: bad.id.clone(), anchor_at: 10_000, anchor_tick: u64::MAX }));
+        assert!(bad.anchor.is_none());
+    }
+
     #[test]
     fn restart_preserves_a_compatible_boot_basis_but_not_holds_or_clock_faults() {
         let first = Reading { boot: Some("boot".into()), tick: 1000, wall: 10_000 };

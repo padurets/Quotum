@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 use super::cadence::Cadence;
 use super::clock::{Clock, Epoch, Reading};
 use super::outbox::{Binding, Outbox, Raw};
-use super::{BODY_BYTES, Batch, Context, Latest, Scope, Source, State, Witness, digest};
+use super::{Anchor, BODY_BYTES, Batch, Context, Latest, Scope, Source, State, Witness, digest};
 use crate::activity::{Activity, Session};
 use crate::clients::ClientId;
 use crate::config::Paths;
@@ -93,7 +93,11 @@ mod tests {
             })
         }
         fn record(&mut self, ms: u64, state: Arc<State>, hold: Option<u64>) {
-            let reading = Reading { boot: self.epoch.boot.clone(), tick: ms, wall: self.epoch.zero_wall + ms as i64 };
+            let reading = Reading {
+                boot: self.epoch.boot.clone(),
+                tick: self.epoch.zero_tick + ms,
+                wall: self.epoch.zero_wall + ms as i64,
+            };
             let holds = hold.map(|h| ("a".repeat(32), self.at + Duration::from_millis(h))).into_iter().collect();
             self.sampler
                 .record(&state, &reading, &self.epoch, true, self.at + Duration::from_millis(ms), holds)
@@ -117,6 +121,99 @@ mod tests {
     impl Drop for Stand {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn pending_native_clock() -> (Stand, Reading, Anchor, u64) {
+        let mut stand = Stand::new();
+        let sent = stand.sampler.clock.read();
+        let elapsed = sent.tick.min(55_000);
+        stand.epoch = Epoch::new(&Reading {
+            boot: sent.boot.clone(),
+            tick: sent.tick - elapsed,
+            wall: sent.wall - elapsed as i64,
+        });
+        stand.sampler.queue.install_clock(stand.epoch.clone()).unwrap();
+        let interval = elapsed.min(15_000);
+        stand.record(elapsed - interval, stand.state(Some(true)), None);
+        stand.record(elapsed, stand.state(Some(true)), None);
+        let accepted =
+            Anchor { clock_epoch: stand.epoch.id.clone(), anchor_tick: 0, anchor_at: stand.epoch.zero_wall + 500 };
+        (stand, sent, accepted, interval)
+    }
+
+    fn rebound(s: &mut Stand, sent: Reading, accepted_anchor: Option<Anchor>, timely: bool) {
+        s.sampler
+            .control(
+                Control::Bind {
+                    binding: Box::new(Binding {
+                        hub_id: "a".repeat(32),
+                        device_id: "fixture".into(),
+                        authority_epoch: "b".repeat(32),
+                        floor_at: 0,
+                    }),
+                    epoch: if timely { s.epoch.id.clone() } else { String::new() },
+                    server: sent.wall,
+                    sent,
+                    accepted_anchor,
+                    witness: None,
+                    ack: 1,
+                    recover: false,
+                },
+                &mut s.epoch,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_committed_anchor_restores_pending_context_dates_after_an_old_queue_backup() {
+        for timely in [false, true] {
+            let (mut s, sent, accepted, interval) = pending_native_clock();
+            let mut expected = s.state(Some(true)).as_ref().clone();
+            expected.contexts[0].started_at += 500;
+            rebound(&mut s, sent.clone(), Some(accepted.clone()), timely);
+            assert_eq!(s.epoch.anchor.as_ref(), Some(&accepted));
+            assert_eq!(s.epoch.wall_offset, Some(500));
+            let batch = s.sampler.queue.prepare().unwrap();
+            assert!(batch.skip.is_none());
+            assert_eq!(batch.clock_anchor.as_ref(), Some(&accepted));
+            assert_eq!(batch.frames.len(), 1);
+            assert_eq!(batch.frames[0].seq, 2);
+            assert_eq!(
+                (batch.frames[0].from_at, batch.frames[0].to_at),
+                (sent.wall - interval as i64 + 500, sent.wall + 500)
+            );
+            assert_eq!(batch.checkpoint.unwrap().as_ref(), &expected);
+            assert_eq!(batch.frames[0].base_state_digest, expected.digest());
+        }
+    }
+
+    #[test]
+    fn an_acknowledged_uncalibrated_clock_without_a_matching_anchor_starts_a_fresh_identity() {
+        for matching_field_missing in [false, true] {
+            for timely in [false, true] {
+                let (mut s, sent, mut different, _) = pending_native_clock();
+                let old_id = s.epoch.id.clone();
+                let old_capture = s.sampler.run.clone();
+                different.clock_epoch = crate::config::random_hex();
+                rebound(&mut s, sent, (!matching_field_missing).then_some(different), timely);
+                assert_ne!(s.epoch.id, old_id);
+                assert!(s.epoch.anchor.is_none());
+                assert!(s.sampler.previous.is_none());
+                assert_ne!(s.sampler.run, old_capture);
+                let batch = s.sampler.queue.prepare().unwrap();
+                assert!(batch.frames.is_empty());
+                let loss = batch.skip.unwrap();
+                assert_eq!((loss.first_seq, loss.last_seq), (2, 2));
+                let fresh_id = s.epoch.id.clone();
+                s.record(0, s.state(Some(true)), None);
+                let next_sent = s.sampler.clock.read();
+                rebound(&mut s, next_sent, None, true);
+                assert_eq!(s.epoch.id, fresh_id, "a clock born after the cursor is safe to calibrate");
+                let batch = s.sampler.queue.prepare().unwrap();
+                assert_eq!(batch.frames[0].seq, 3);
+                assert_eq!(batch.clock_anchor.unwrap().clock_epoch, fresh_id);
+            }
         }
     }
 
@@ -306,10 +403,11 @@ pub(crate) struct Capture {
 pub(crate) enum Control {
     Accounts(BTreeMap<ClientId, Account>),
     Bind {
-        binding: Binding,
+        binding: Box<Binding>,
         epoch: String,
         sent: Reading,
         server: Millis,
+        accepted_anchor: Option<Anchor>,
         witness: Option<Witness>,
         ack: u64,
         recover: bool,
@@ -540,13 +638,19 @@ impl Sampler {
                     }
                     let before = { shared.lock().unwrap_or_else(|e| e.into_inner()).clone() };
                     if let Some(before) = before {
-                        let mut next = (*before).clone();
-                        next.binding = self.queue.binding().cloned();
-                        next.ack = self.queue.ack();
-                        next.epoch = epoch.clone();
-                        next.witness = self.active_witness();
-                        next.release_pending = !self.queue.metadata.releases.is_empty();
-                        Self::publish(shared, next);
+                        if before.latest.clock_epoch != epoch.id {
+                            // Recovery chose a new clock; its first real endpoint must publish its state.
+                            shared.lock().unwrap_or_else(|e| e.into_inner()).take();
+                            cadence.reset_grid(origin.elapsed().as_millis() as u64);
+                        } else {
+                            let mut next = (*before).clone();
+                            next.binding = self.queue.binding().cloned();
+                            next.ack = self.queue.ack();
+                            next.epoch = epoch.clone();
+                            next.witness = self.active_witness();
+                            next.release_pending = !self.queue.metadata.releases.is_empty();
+                            Self::publish(shared, next);
+                        }
                     }
                     cadence.control(
                         origin.elapsed().as_millis() as u64,
@@ -709,16 +813,36 @@ impl Sampler {
                 self.run = crate::config::random_hex();
             }
             Control::Ack { through, released } => self.queue.acknowledge(through, &released)?,
-            Control::Bind { binding, epoch: sent_epoch, sent, server, witness, ack, recover } => {
+            Control::Bind { binding, epoch: sent_epoch, sent, server, accepted_anchor, witness, ack, recover } => {
                 self.legacy = false;
-                self.queue.bind(binding)?;
+                let acknowledged_clock = self.queue.clock_started_by(&epoch.id, ack);
+                self.queue.bind(*binding)?;
                 if recover {
                     self.queue.rewind_acknowledgement(ack)?;
                 } else {
                     self.queue.acknowledge(ack, &[])?;
                 }
-                if sent_epoch == epoch.id && epoch.compatible(&self.clock.read(), false) && epoch.bind(&sent, server) {
+                let restored = accepted_anchor.filter(|anchor| anchor.clock_epoch == epoch.id);
+                if epoch.anchor.is_none() && restored.is_none() && acknowledged_clock {
+                    // A coherent old backup can forget a previously accepted clock. Never rebind that identity.
+                    self.queue.retire_unanchored(&epoch.id)?;
+                    *epoch = Epoch::new(&self.clock.read());
+                    self.previous = None;
+                    self.activity.reset_evidence();
+                    self.run = crate::config::random_hex();
                     self.queue.install_clock(epoch.clone())?;
+                } else {
+                    let bound = match restored {
+                        // This restores an immutable historical mapping, independently of the current HTTP sample.
+                        Some(anchor) => epoch.restore(anchor),
+                        None if sent_epoch == epoch.id && epoch.compatible(&self.clock.read(), false) => {
+                            epoch.bind(&sent, server)
+                        }
+                        None => false,
+                    };
+                    if bound {
+                        self.queue.install_clock(epoch.clone())?;
+                    }
                 }
                 let witness = witness.filter(|w| w.scope_digest == self.scope.digest());
                 self.queue.install_witness(witness)?;

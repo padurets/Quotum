@@ -110,6 +110,23 @@ test('hello B never remaps anchored A, and an old duplicate is safe after B or p
   }finally{s.close();}
 });
 
+test('hello returns the committed prefix anchor for recovery without replacing it with its current calibration',()=>{
+  const s=setup();try{
+    assert.equal(s.opened.acceptedClockAnchor,null);
+    s.batch([s.frame(1,0,15_000)]);
+    const accepted={clockEpoch:id(12),anchorTick:0,anchorAt:start};
+    const recovered=s.hello({acknowledgedThrough:1,clock:{clockEpoch:id(12),tick:40_000,wall:start+40_000}},start+40_000);
+    assert.deepEqual(recovered.acceptedClockAnchor,accepted);
+    const different=s.hello({clock:{clockEpoch:id(22),tick:0,wall:start+45_000}},start+45_000);
+    assert.deepEqual(different.acceptedClockAnchor,accepted);
+    s.reopen();
+    assert.deepEqual(s.hello().acceptedClockAnchor,accepted);
+    s.batch([],{skip:{firstSeq:2,lastSeq:2,fromAt:null,toAt:null,reason:'recovery'}});
+    assert.equal(s.hello().acceptedClockAnchor,null,'a committed skip can clear the anchor at a nonzero cursor');
+    assert.equal(total(s.store),15_000);
+  }finally{s.close();}
+});
+
 test('replaced queues are fenced and a stale replace cannot discard the new writer',()=>{
   const s=setup();try{
     s.hello({latest:{clockEpoch:id(12),tick:0,state:state()}});

@@ -296,6 +296,12 @@ its files or referenced clock mappings and coverage proofs can be reclaimed.
 Before a calibrated clock can be sent, the manifest records its commitment. A partial
 metadata restore that loses that anchor explicitly retires its pending suffix and
 starts a new clock identity; it cannot recalibrate an epoch already known to the hub.
+For a coherent older backup, hello returns the authenticated stream's committed
+prefix anchor. The worker restores that exact mapping, including the canonical
+context-date offset derived from its private origin, before publishing it. If the
+remote cursor consumed positions of an uncalibrated clock without a recoverable
+matching anchor, its remaining intervals become explicit loss and capture starts
+with a new clock identity. Already calibrated mappings remain immutable.
 
 One writer and a directory budget cover all destination namespaces, including inactive
 ones: 64 MiB on disk, at most 128 segments per namespace, 256 clock mappings and 256

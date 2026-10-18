@@ -73,6 +73,7 @@ export class ActivityIngest {
     }
     return {version:1,protocol:'observed-intervals',hubId:String(this.store.db.prepare("SELECT value FROM meta WHERE key='activityHubId'").get()!.value),deviceId:device.id,
       queueId:row.queue_id,authorityEpoch:row.authority_epoch,floorAt:row.floor_at,acknowledgedThrough:row.accepted_seq,serverTime:now,topologyVersion,
+      acceptedClockAnchor:row.clock_anchor?JSON.parse(row.clock_anchor) as ClockAnchor:null,
       topologyWitness:witness?{id:witness.witness_id,topologyVersion,scopeDigest:scope,issuedAt:witness.issued_at}:null,
       coverageRefreshRequired:!witness,presenceAccepted,...(!witness?{reason:'witness_capacity'}:{})};
   }

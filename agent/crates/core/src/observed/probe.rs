@@ -102,7 +102,9 @@ fn queue(root: PathBuf, namespace: String) {
                     if epoch.anchor.as_ref().is_some_and(|old| old != &anchor) {
                         return Err(io::ErrorKind::InvalidData.into());
                     }
-                    epoch.anchor = Some(anchor);
+                    if epoch.anchor.is_none() && !epoch.restore(anchor) {
+                        return Err(io::ErrorKind::InvalidData.into());
+                    }
                     queue.install_clock(epoch)?;
                     queue.install_witness(
                         serde_json::from_value(value["witness"].clone()).map_err(|_| io::ErrorKind::InvalidData)?,

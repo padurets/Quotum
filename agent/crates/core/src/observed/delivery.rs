@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::outbox::Binding;
 use super::worker::{Account, Capture, Control, Worker};
-use super::{Answer, BODY_BYTES, Batch, Latest, SAFE_INTEGER, Witness};
+use super::{Anchor, Answer, BODY_BYTES, Batch, Latest, SAFE_INTEGER, Witness};
 use crate::clients::{ClientId, InstalledClient};
 use crate::model::{ClientSession, ClientSource, Provider, RunningSession, SessionReport, Tracking, now_ms};
 use crate::sink::Sink;
@@ -204,6 +204,31 @@ impl Delivery {
                             self.unavailable();
                             return;
                         }
+                        let accepted_anchor = if value["acceptedClockAnchor"].is_null() {
+                            None
+                        } else {
+                            match serde_json::from_value::<Anchor>(value["acceptedClockAnchor"].clone()) {
+                                Ok(anchor)
+                                    if valid_id(&anchor.clock_epoch)
+                                        && anchor.anchor_tick <= SAFE_INTEGER
+                                        && (0..=SAFE_INTEGER as i64).contains(&anchor.anchor_at) =>
+                                {
+                                    Some(anchor)
+                                }
+                                _ => {
+                                    self.failed();
+                                    return;
+                                }
+                            }
+                        };
+                        if accepted_anchor.as_ref().is_some_and(|anchor| {
+                            anchor.clock_epoch == capture.epoch.id
+                                && capture.epoch.anchor.as_ref().is_some_and(|saved| saved != anchor)
+                        }) {
+                            sink.activity_failed();
+                            self.unavailable();
+                            return;
+                        }
                         let witness = if value["topologyWitness"].is_null() {
                             None
                         } else {
@@ -229,13 +254,17 @@ impl Delivery {
                         self.refresh = false;
                         self.replace = None;
                         self.rollback_probe = false;
+                        // Binding can restore a lost clock or retire an unrecoverable one; prepare again afterward.
+                        self.batch = None;
+                        self.preparing = None;
                         let timely = started.elapsed() <= Duration::from_secs(5)
                             && capture.epoch.compatible(&self.worker.clock.read(), false);
                         self.pending(Control::Bind {
-                            binding,
+                            binding: Box::new(binding),
                             epoch: if timely { capture.epoch.id.clone() } else { String::new() },
                             sent,
                             server,
+                            accepted_anchor,
                             witness,
                             ack,
                             recover,
@@ -565,6 +594,7 @@ mod tests {
         reports: Vec<SessionReport>,
         requests: usize,
         failures: usize,
+        response: Option<Value>,
     }
     impl Sink for Recorder {
         fn deliver(&mut self, _: &Outcome) {}
@@ -574,10 +604,56 @@ mod tests {
         }
         fn activity_request(&mut self, _: &Value, _: bool) -> Answer {
             self.requests += 1;
-            Answer::Unanswered
+            self.response.clone().map_or(Answer::Unanswered, Answer::Accepted)
         }
         fn activity_failed(&mut self) {
             self.failures += 1;
+        }
+    }
+
+    #[test]
+    fn hello_recovers_only_a_valid_committed_anchor_and_never_rebinds_a_saved_one() {
+        for case in ["recovered", "unsafe", "conflict"] {
+            let mut stand = Stand::new();
+            let delivery = stand.delivery.as_mut().unwrap();
+            let reading = delivery.worker.clock.read();
+            let mut capture = (*delivery.worker.snapshot().unwrap()).clone();
+            capture.epoch = super::super::clock::Epoch::new(&reading);
+            capture.reading = reading.clone();
+            capture.latest.clock_epoch = capture.epoch.id.clone();
+            capture.sequence = 2;
+            let accepted =
+                Anchor { clock_epoch: capture.epoch.id.clone(), anchor_tick: 0, anchor_at: reading.wall + 500 };
+            if case == "conflict" {
+                capture.epoch.anchor = Some(Anchor { anchor_at: reading.wall, ..accepted.clone() });
+            }
+            let mut wire = serde_json::to_value(&accepted).unwrap();
+            if case == "unsafe" {
+                wire["anchorTick"] = json!(SAFE_INTEGER + 1);
+            }
+            let response = json!({"version":1,"protocol":"observed-intervals","hubId":"a".repeat(32),"deviceId":"fixture",
+                "queueId":capture.queue_id,"authorityEpoch":"b".repeat(32),"floorAt":0,"acknowledgedThrough":1,
+                "serverTime":reading.wall,"acceptedClockAnchor":wire,"topologyWitness":null});
+            let privacy = super::super::privacy::update(&stand.paths, true, true, &[ClientId::Codex], &[]).unwrap();
+            delivery.worker = Worker::with_capture(stand.paths.clone(), privacy, capture);
+            let mut sink = Recorder { response: Some(response), ..Recorder::default() };
+            delivery.turn(&mut sink, &[]);
+            assert_eq!(sink.requests, 1);
+            match case {
+                "recovered" => assert!(matches!(
+                    delivery.pending.as_ref(),
+                    Some(Control::Bind { accepted_anchor: Some(anchor), .. }) if anchor == &accepted
+                )),
+                "unsafe" => {
+                    assert!(delivery.pending.is_none());
+                    assert!(matches!(delivery.mode, Mode::Hello));
+                }
+                _ => {
+                    assert!(delivery.pending.is_none());
+                    assert!(matches!(delivery.mode, Mode::Unavailable));
+                    assert_eq!(sink.failures, 1);
+                }
+            }
         }
     }
 

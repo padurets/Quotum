@@ -679,8 +679,16 @@ Hello adds `openId`, `clock:{clockEpoch,tick,wall}`, `tracking`, optional
 `knownWitnessId`, optional `latest` and `acknowledgedThrough` (zero initially).
 The reply contains `version:1`, `protocol:"observed-intervals"`, persisted `hubId`,
 authenticated `deviceId`, `queueId`, `authorityEpoch`, `floorAt`,
-`acknowledgedThrough`, fresh `serverTime`, `topologyVersion`, `topologyWitness`
+`acknowledgedThrough`, nullable `acceptedClockAnchor`, fresh `serverTime`, `topologyVersion`, `topologyWitness`
 and `coverageRefreshRequired`.
+`acceptedClockAnchor` is the exact committed prefix anchor, not a calibration from
+the current hello. It is null before accepted frames or after a committed skip.
+A sender that restored an uncalibrated local backup may recover this matching
+anchor after verifying the same remote binding. It persists the recovered mapping
+before preparing or publishing data. An already calibrated epoch is never rebound.
+If a remote cursor has consumed positions of an uncalibrated clock and its matching
+anchor cannot be recovered (including from an older reply without this field), the
+sender retires its unmappable suffix and chooses a fresh clock and capture identity.
 
 The first hello closes permissible legacy credit, then atomically establishes a
 sticky interval requirement and a floor at least the current hub time and the
@@ -746,6 +754,9 @@ for `toAt`. All dates, ticks and durations are exact safe integers in millisecon
 Context dates use that same trusted UTC basis before the state digest is computed,
 including `startedAt` and `lastWorkedAt`. Raw local dates can stay in the agent's
 journal; preparing a retry must use its original epoch's immutable mapping.
+Their canonical offset is `anchorAt-zeroWall-anchorTick`, where `zeroWall` is the
+private local epoch origin; the origin never enters a request. Thus a restored
+anchor also restores context dates and state digests despite small wall-clock drift.
 The anchor for an epoch is immutable. The accepted FIFO prefix saves only its
 current anchor, state and capture boundary. A new epoch requires a full checkpoint
 and a different capture epoch. Hello and presence never replace the prefix anchor.
@@ -827,6 +838,8 @@ their captured bounded context, with opaque queue/clock references and a committ
 cursor for retries. They carry no bearer token in stored records, raw PID, native
 process birth, boot ID, uptime, filesystem path, client credentials or conversation.
 Internal authority and topology proofs stay private to the authenticated device.
+Hello echoes only that device's committed prefix clock anchor for local recovery;
+it exposes neither the private clock origin nor another stream's state.
 Captured account evidence is never replaced by a later login at delivery. A sticky
 capability can suppress legacy activity while independently accepting inventory
 and quota operations; suppressed data establishes neither history nor coverage.

@@ -454,6 +454,9 @@ impl Outbox {
     pub fn next_sequence(&self) -> u64 {
         self.manifest.next_seq
     }
+    pub fn clock_started_by(&self, clock: &str, through: u64) -> bool {
+        self.manifest.segments.iter().any(|segment| segment.clock == clock && segment.first <= through)
+    }
     pub fn rewind_acknowledgement(&mut self, through: u64) -> io::Result<()> {
         let old = self.manifest.ack;
         if through >= old {
