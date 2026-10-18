@@ -9,6 +9,7 @@ use crate::model::Millis;
 
 pub(crate) mod cadence;
 pub(crate) mod clock;
+pub(crate) mod cost;
 pub(crate) mod delivery;
 pub(crate) mod outbox;
 pub(crate) mod privacy;

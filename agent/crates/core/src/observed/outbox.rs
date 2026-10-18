@@ -107,6 +107,8 @@ pub(super) fn atomic(path: &Path, value: &impl Serialize, cap: usize) -> io::Res
     let mut file = plain(&temp, true, true)?;
     let result = (|| {
         file.write_all(&bytes)?;
+        #[cfg(all(feature = "activity-bench", target_os = "linux"))]
+        super::probe::before_sync();
         file.sync_all()?;
         fs::rename(&temp, path)?;
         sync_dir(path.parent().ok_or_else(invalid)?)

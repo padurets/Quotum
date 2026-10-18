@@ -2,7 +2,7 @@
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -23,6 +23,19 @@ pub(crate) static CONTEXT_CPU_NS: AtomicU64 = AtomicU64::new(0);
 type Costs = std::collections::BTreeMap<&'static str, Vec<(u64, f64, f64)>>;
 static COSTS: OnceLock<Mutex<Costs>> = OnceLock::new();
 static RUN_START: OnceLock<Instant> = OnceLock::new();
+static SYNC_DELAYED: AtomicBool = AtomicBool::new(false);
+pub(crate) fn before_sync() {
+    let Some(start) = RUN_START.get() else {
+        return;
+    };
+    if start.elapsed() < Duration::from_secs(45) || SYNC_DELAYED.load(Ordering::Relaxed) {
+        return;
+    }
+    let delay = std::env::var("OBSERVED_SYNC_DELAY_MS").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0).min(5000);
+    if delay > 0 && !SYNC_DELAYED.swap(true, Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(delay));
+    }
+}
 pub(crate) fn cost(name: &'static str, cpu_ns: u64, wall_ms: f64) {
     let mut costs = COSTS.get_or_init(Mutex::default).lock().unwrap();
     let entries = costs.entry(name).or_default();
@@ -252,6 +265,7 @@ fn run(args: &[String]) {
     println!(
         "{}",
         json!({"cpuMs":after.0-before.0,"childCPUms":child_after.0-children.0,"wallSeconds":start.elapsed().as_secs_f64(),"voluntaryContextSwitches":after.1-before.1,
+        "cadenceCostUsesCPU":super::cost::cpu().is_some(),"syncDelayInjected":SYNC_DELAYED.load(Ordering::Relaxed),
         "involuntaryContextSwitches":after.2-before.2,"contextCPUms":CONTEXT_CPU_NS.load(Ordering::Relaxed)as f64/1e6,"memoryKiB":memory(),"costs":costs(),"debugAssertions":cfg!(debug_assertions)})
     );
 }

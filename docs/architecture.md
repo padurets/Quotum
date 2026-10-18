@@ -271,11 +271,14 @@ Capture and classification have separate clocks. CPU thresholds and the one-minu
 hold use complete fifteen-second judgement windows. New roots first establish a
 baseline on that grid; extra looks do not judge short typing or redraw bursts or
 renew the hold. Capture aims at eight subdivisions per window while active, three
-after thirty seconds of known idle, and one with no clients. A bounded cost allowance
+after thirty seconds of known idle, and one with no clients. A bounded CPU allowance
 uses the greater of an EWMA and the last four costs, charges journal and command
 work too, and reduces subdivisions under pressure. Large descendant trees and large
 root rosters use the dense cost allowance. It repays the initial calibration
-burst and never catches up with a polling loop. Delayed looks, clock faults, suspend,
+burst and never catches up with a polling loop. Thread CPU clocks measure capture,
+context, journal and control work; an unavailable CPU clock uses elapsed time as a
+conservative fallback. Waiting time spends no CPU allowance when the CPU clock is
+available. Delayed looks, clock faults, suspend,
 incomplete ownership and restarts break evidence instead of filling a gap with idle
 or work. A hold expiring between captures is cut at its monotonic deadline.
 

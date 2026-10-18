@@ -450,6 +450,7 @@ impl Sampler {
             match received {
                 Ok(control) => {
                     let control_started = Instant::now();
+                    let budget_cost = super::cost::Cost::start();
                     #[cfg(all(feature = "activity-bench", target_os = "linux"))]
                     let control_cpu = super::probe::cpu();
                     self.control(control, &mut epoch)?;
@@ -467,8 +468,10 @@ impl Sampler {
                         next.release_pending = !self.queue.metadata.releases.is_empty();
                         Self::publish(shared, next);
                     }
-                    cadence
-                        .control(origin.elapsed().as_millis() as u64, control_started.elapsed().as_secs_f64() * 1000.0);
+                    cadence.control(
+                        origin.elapsed().as_millis() as u64,
+                        budget_cost.elapsed_ms(control_started.elapsed()),
+                    );
                     #[cfg(all(feature = "activity-bench", target_os = "linux"))]
                     super::probe::cost(
                         "control",
@@ -484,6 +487,7 @@ impl Sampler {
                 continue;
             }
             let started = Instant::now();
+            let budget_cost = super::cost::Cost::start();
             #[cfg(all(feature = "activity-bench", target_os = "linux"))]
             let capture_cpu = super::probe::cpu();
             let reading = self.clock.read();
@@ -577,7 +581,7 @@ impl Sampler {
             super::probe::cost("capture", super::probe::cpu() - capture_cpu, started.elapsed().as_secs_f64() * 1000.0);
             cadence.completed(
                 now,
-                started.elapsed().as_secs_f64() * 1000.0,
+                budget_cost.elapsed_ms(started.elapsed()),
                 empty,
                 idle,
                 Cadence::pressure(self.activity.contributors(), roots),
