@@ -266,6 +266,9 @@ collection and HTTP stay on the coordinator, with no capture lock held while the
 run. The worker publishes one immutable bounded snapshot and accepts at most eight
 pending metadata commands. Stopping the runner disconnects and joins this worker;
 the CLI and app use the same state directory and writer lock after their handoff.
+A replacement waits interruptibly for a preceding writer still finishing delivery.
+Permanent capture failure produces one bounded warning instead of silently leaving
+the quota loop without activity capture.
 
 Capture and classification have separate clocks. CPU thresholds and the one-minute
 hold use complete fifteen-second judgement windows. New roots first establish a
@@ -299,8 +302,16 @@ UTC. Overflow, age, corruption and privacy restrictions persist explicit unknown
 loss before deleting payloads. Reporting, project or scope opt-out changes a durable
 privacy revision before a namespace can send again. Queue binding is checked against
 the authenticated hub and device before replay; a bound mismatch fences the current
-capture run instead of replacing its authority. A compatible boot clock and immutable
-anchor survive a process restart, while CPU baselines and holds do not. Native clocks
+capture run instead of replacing its authority. Before that binding exists, a private
+one-way credential scope prevents a changed credential from inheriting the pending
+prefix. Bound token rotation still requires the same remote device and authority.
+Desktop settings persist a restriction even when tracking is idle or a later save
+coalesces the restart. A private policy lock serializes that acceptance with delivery;
+subsequent sends require the worker's original privacy revision. Capture never waits
+on this lock. Missing clock metadata retires the unmappable suffix as explicit loss,
+preserving the verified prefix and allowing new observations to be delivered.
+A compatible boot clock and immutable anchor survive a process restart, while CPU
+baselines and holds do not. Native clocks
 include suspend; without a verified native boot clock, continuity is limited to one run.
 
 Agents using `/v1/activity` negotiate a persistent observed-interval capability.
@@ -327,6 +338,8 @@ Witness release is bounded and idempotent. These internal references never enter
 board projections; the existing admission and funding rules remain authoritative.
 
 Legacy session reports carry optional configured tracking scope and delivery completeness.
+An initially old hub still receives known roots when another root is unknown, with
+an incomplete witness that breaks coverage across the uncertain observation.
 The agent repeats empty reports every two minutes while that scope is enabled, and
 requires a positively acknowledged incomplete report after any capture or delivery fault.
 The hub stores completed intervals separately from positive work. Two compatible complete

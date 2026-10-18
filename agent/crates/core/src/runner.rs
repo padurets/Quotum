@@ -255,6 +255,7 @@ impl Runner {
                 clients: self.clients.clone(),
                 scope: crate::observed::Scope { version: 1, clients, route_disabled, complete: true },
                 namespace: target.namespace,
+                credential_scope: target.credential_scope,
                 projects: self.config.projects(),
                 stop: self.stop.clone(),
                 privacy,

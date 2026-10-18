@@ -107,6 +107,8 @@ pub trait Sink {
         crate::observed::Answer::Unanswered
     }
 
+    fn activity_failed(&mut self) {}
+
     /// Tells the hub which coding agents run on this machine now (all of them); whether it took the list.
     fn sessions(&mut self, _sessions: &[RunningSession]) -> bool {
         false
@@ -462,6 +464,9 @@ impl HubSink {
 }
 
 impl Sink for HubSink {
+    fn activity_failed(&mut self) {
+        (self.log)("activity: capture is unavailable; check local state and restart the agent");
+    }
     fn managed(&self) -> bool {
         true
     }
@@ -628,6 +633,7 @@ impl Sink for HubSink {
     fn activity_target(&self) -> Option<crate::observed::Target> {
         Some(crate::observed::Target {
             namespace: crate::observed::digest(&serde_json::json!([self.base, self.machine.id])),
+            credential_scope: self.policy.credential_scope(),
         })
     }
 
@@ -925,6 +931,23 @@ pub(crate) mod tests {
             let (mut sender, _) = sink(&url, "activity-uncertain");
             assert!(matches!(sender.activity_request(&request, false), Answer::Unanswered));
         }
+    }
+
+    #[test]
+    fn provisional_activity_scope_changes_with_credentials_without_changing_the_destination_namespace() {
+        let (first, _) = sink("https://fixture.invalid", "provisional-scope");
+        let changed = HubSink::new(
+            &Hub { url: first.base.clone(), token: "another-synthetic-token".into() },
+            first.machine.clone(),
+            first.spool_file.clone(),
+            Box::new(|_| {}),
+        );
+        let a = first.activity_target().unwrap();
+        let b = changed.activity_target().unwrap();
+        assert_eq!(a.namespace, b.namespace);
+        assert_ne!(a.credential_scope, b.credential_scope);
+        assert_eq!(a.credential_scope.len(), 64);
+        assert!(!a.credential_scope.contains(&first.token));
     }
 
     #[test]

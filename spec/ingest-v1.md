@@ -830,6 +830,11 @@ Internal authority and topology proofs stay private to the authenticated device.
 Captured account evidence is never replaced by a later login at delivery. A sticky
 capability can suppress legacy activity while independently accepting inventory
 and quota operations; suppressed data establishes neither history nor coverage.
+The reference agent protects an unbound local prefix with a private credential scope
+and retires it before replay if that scope changes. Confirmed bindings still verify
+the authenticated hub and device when a token rotates. These local guards are never
+sent to the hub. Accepted tracking restrictions persist before subsequent delivery,
+including when the desktop app is idle or coalesces an OFF/ON restart.
 Board admission, temporal attribution and funding redaction apply equally to delayed
 intervals, without revealing private scope or producer references. Presence alone
 never changes retained work.

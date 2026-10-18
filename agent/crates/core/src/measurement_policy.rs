@@ -98,6 +98,10 @@ pub struct PolicyCache {
 }
 
 impl PolicyCache {
+    pub(crate) fn credential_scope(&self) -> String {
+        self.scope.clone()
+    }
+
     pub fn load(file: PathBuf, base: &str, machine: &str, token: &str) -> Self {
         let mut hash = Sha256::new();
         for part in [base, machine, token] {

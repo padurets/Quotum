@@ -65,15 +65,15 @@ pub(crate) fn cpu() -> u64 {
 pub fn main() {
     let args = std::env::args().collect::<Vec<_>>();
     match args.get(1).map(String::as_str) {
-        Some("queue") => queue(PathBuf::from(&args[2])),
+        Some("queue") => queue(PathBuf::from(&args[2]), args.get(3).cloned().unwrap_or_else(|| "a".repeat(64))),
         Some("capture") => capture(&args),
         Some("run") => run(&args),
         _ => panic!("expected queue, capture or run"),
     }
 }
 
-fn queue(root: PathBuf) {
-    let mut queue = Outbox::open_bounded(root, "a".repeat(64)).expect("isolated queue");
+fn queue(root: PathBuf, namespace: String) {
+    let mut queue = Outbox::open_bounded(root, namespace).expect("isolated queue");
     for line in io::stdin().lock().lines() {
         let value: Value = serde_json::from_str(&line.expect("command")).expect("command JSON");
         let reply = (|| -> io::Result<Value> {
@@ -81,6 +81,10 @@ fn queue(root: PathBuf) {
                 "status" => Ok(
                     json!({"queueId":queue.queue_id(),"openId":queue.open_id(),"ack":queue.ack(),"nextSeq":queue.next_sequence()}),
                 ),
+                "credentials" => {
+                    queue.check_credentials(value["scope"].as_str().ok_or(io::ErrorKind::InvalidData)?.into())?;
+                    Ok(json!({"ok":true}))
+                }
                 "clock" => {
                     let epoch: Epoch =
                         serde_json::from_value(value["epoch"].clone()).map_err(|_| io::ErrorKind::InvalidData)?;
@@ -247,7 +251,10 @@ fn run(args: &[String]) {
         arch: std::env::consts::ARCH.into(),
     };
     let mut sink = HubSink::new(
-        &Hub { url, token: "qt_m_synthetic_activity_fixture".into() },
+        &Hub {
+            url,
+            token: std::env::var("OBSERVED_TEST_TOKEN").unwrap_or_else(|_| "qt_m_synthetic_activity_fixture".into()),
+        },
         machine,
         root.join("measurements"),
         Box::new(|line| eprintln!("{line}")),

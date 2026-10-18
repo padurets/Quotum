@@ -345,6 +345,7 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
                     assert Hub.positive_context_ms >= (duration-60)*1000*args.roots*0.7, row
             if args.idle or args.ui:
                 assert Hub.positive_context_ms == 0, row
+                assert all(state[2] == 0 for state in row["journal"]["pendingStates"]), row
             if args.restore_after is not None:
                 assert Hub.restoration and Hub.restoration["declaredLoss"]>0,row
             print(json.dumps(row), flush=True)

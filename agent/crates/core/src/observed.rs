@@ -19,12 +19,20 @@ pub(crate) mod worker;
 
 pub struct Target {
     pub namespace: String,
+    pub credential_scope: String,
 }
 pub enum Answer {
     Accepted(Value),
     Unsupported,
     Conflict(Value),
     Unanswered,
+}
+
+/// Persist privacy restrictions even when the application does not start a Runner.
+pub fn update_privacy(paths: &crate::config::Paths, config: &crate::config::Config) -> std::io::Result<String> {
+    let clients = crate::clients::ClientId::ALL.into_iter().filter(|c| config.tracks(*c)).collect::<Vec<_>>();
+    let route_disabled = crate::clients::ClientId::ALL.into_iter().filter(|c| !config.routes(*c)).collect::<Vec<_>>();
+    privacy::update(paths, config.sessions() && !clients.is_empty(), config.projects(), &clients, &route_disabled)
 }
 
 pub(crate) const BODY_BYTES: usize = 512 * 1024;

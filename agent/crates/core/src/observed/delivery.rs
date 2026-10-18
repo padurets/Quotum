@@ -42,6 +42,7 @@ pub(crate) struct Delivery {
     drain_through: u64,
     proof_retry: Option<Instant>,
     rollback_probe: bool,
+    reported_failure: bool,
 }
 
 impl Delivery {
@@ -67,6 +68,7 @@ impl Delivery {
             drain_through: 0,
             proof_retry: None,
             rollback_probe: false,
+            reported_failure: false,
         }
     }
     pub fn accounts(&mut self, accounts: BTreeMap<ClientId, Account>) {
@@ -113,6 +115,10 @@ impl Delivery {
 
     pub fn turn(&mut self, sink: &mut dyn Sink, inventory: &[InstalledClient]) {
         if self.worker.failed() {
+            if !self.reported_failure {
+                sink.activity_failed();
+                self.reported_failure = true;
+            }
             return;
         }
         if let Some(control) = self.pending.take() {
@@ -124,6 +130,18 @@ impl Delivery {
         if matches!(self.mode, Mode::Unavailable) {
             return;
         }
+        let _privacy = match self.worker.delivery_guard() {
+            Ok(Some(guard)) => guard,
+            Ok(None) => {
+                self.unavailable();
+                return;
+            }
+            Err(_) => {
+                sink.activity_failed();
+                self.unavailable();
+                return;
+            }
+        };
         let Some(capture) = self.worker.snapshot() else {
             return;
         };
@@ -390,9 +408,6 @@ impl Delivery {
     }
 
     fn legacy(&mut self, sink: &mut dyn Sink, capture: &Capture, inventory: &[InstalledClient]) {
-        if capture.latest.state.contexts.iter().any(|c| c.working.is_none()) {
-            return;
-        }
         let mut report = legacy_report(capture, inventory);
         report.tracking.as_mut().unwrap().complete &= !self.legacy_fault;
         if self.legacy.as_ref().is_some_and(|(at, old)| *old == report && at.elapsed() < Duration::from_secs(120)) {
@@ -437,7 +452,7 @@ fn legacy_report(capture: &Capture, inventory: &[InstalledClient]) -> SessionRep
             version: 1,
             clients: state.tracking.clients.iter().filter_map(|c| ClientId::parse(c)).collect(),
             route_disabled: state.tracking.route_disabled.iter().filter_map(|c| ClientId::parse(c)).collect(),
-            complete: state.tracking.complete,
+            complete: state.tracking.complete && state.contexts.iter().all(|context| context.working.is_some()),
         }),
         ..SessionReport::default()
     };
@@ -485,4 +500,157 @@ fn legacy_report(capture: &Capture, inventory: &[InstalledClient]) -> SessionRep
         }
     }
     report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Paths;
+    use crate::model::Outcome;
+    use crate::observed::worker::Start;
+    use crate::observed::{Context, Scope, State};
+    use crate::stop::Stop;
+    use std::path::PathBuf;
+
+    struct Stand {
+        root: PathBuf,
+        paths: Paths,
+        delivery: Option<Delivery>,
+    }
+    impl Stand {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("quotum-activity-delivery-{}", crate::config::random_hex()));
+            let paths = Paths { config: root.join("config"), work: root.join("work"), state: root.join("state") };
+            let privacy = super::super::privacy::update(&paths, true, true, &[ClientId::Codex], &[]).unwrap();
+            let worker = Worker::start(Start {
+                paths: paths.clone(),
+                home: root.clone(),
+                clients: Vec::new(),
+                scope: Scope { version: 1, clients: vec!["codex".into()], route_disabled: Vec::new(), complete: true },
+                namespace: "a".repeat(64),
+                credential_scope: "b".repeat(64),
+                projects: true,
+                stop: Stop::new(),
+                privacy,
+            })
+            .unwrap();
+            let until = Instant::now() + Duration::from_secs(5);
+            while worker.snapshot().is_none() {
+                assert!(!worker.failed());
+                assert!(Instant::now() < until);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Self { root, paths, delivery: Some(Delivery::new(worker)) }
+        }
+    }
+    impl Drop for Stand {
+        fn drop(&mut self) {
+            self.delivery.take();
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+    #[derive(Default)]
+    struct Recorder {
+        reports: Vec<SessionReport>,
+        requests: usize,
+        failures: usize,
+    }
+    impl Sink for Recorder {
+        fn deliver(&mut self, _: &Outcome) {}
+        fn report(&mut self, report: &SessionReport) -> bool {
+            self.reports.push(report.clone());
+            true
+        }
+        fn activity_request(&mut self, _: &Value, _: bool) -> Answer {
+            self.requests += 1;
+            Answer::Unanswered
+        }
+        fn activity_failed(&mut self) {
+            self.failures += 1;
+        }
+    }
+
+    #[test]
+    fn old_hub_fallback_sends_known_roots_and_an_incomplete_witness_for_unknown_roots() {
+        let mut stand = Stand::new();
+        let delivery = stand.delivery.as_mut().unwrap();
+        let mut capture = (*delivery.worker.snapshot().unwrap()).clone();
+        let context = |id: &str, working| Context {
+            context_id: id.repeat(32),
+            client_id: "codex".into(),
+            session_id: Some(id.repeat(32)),
+            ordinal: None,
+            source: None,
+            account_by: None,
+            origin: "terminal".into(),
+            project: None,
+            folder: None,
+            started_at: now_ms() - 1000,
+            route: None,
+            working,
+            last_worked_at: None,
+        };
+        capture.latest.state = Arc::new(State {
+            tracking: capture.latest.state.tracking.clone(),
+            contexts: vec![context("a", Some(true)), context("b", None)],
+        });
+        capture.order = vec!["a".repeat(32), "b".repeat(32)];
+        delivery.legacy_fault = false;
+        let mut sink = Recorder::default();
+        delivery.legacy(&mut sink, &capture, &[]);
+        assert_eq!(sink.reports.len(), 1);
+        assert_eq!(sink.reports[0].client_sessions.len(), 2);
+        assert!(sink.reports[0].client_sessions[0].working);
+        assert!(!sink.reports[0].client_sessions[1].working);
+        assert!(!sink.reports[0].tracking.as_ref().unwrap().complete);
+        Arc::make_mut(&mut capture.latest.state).contexts[1].working = Some(false);
+        delivery.legacy(&mut sink, &capture, &[]);
+        assert_eq!(sink.reports.len(), 2);
+        assert!(sink.reports[1].tracking.as_ref().unwrap().complete);
+    }
+
+    #[test]
+    fn accepting_off_then_on_blocks_the_old_delivery_before_its_next_request() {
+        let mut stand = Stand::new();
+        super::super::privacy::update(&stand.paths, false, true, &[ClientId::Codex], &[]).unwrap();
+        super::super::privacy::update(&stand.paths, true, true, &[ClientId::Codex], &[]).unwrap();
+        let mut sink = Recorder::default();
+        let delivery = stand.delivery.as_mut().unwrap();
+        delivery.turn(&mut sink, &[]);
+        assert_eq!(sink.requests, 0);
+        assert!(matches!(delivery.mode, Mode::Unavailable));
+    }
+
+    #[test]
+    fn an_unrecoverable_capture_failure_reports_one_bounded_warning() {
+        let root = std::env::temp_dir().join(format!("quotum-activity-failed-{}", crate::config::random_hex()));
+        let paths = Paths { config: root.join("config"), work: root.join("work"), state: root.join("state") };
+        let privacy = super::super::privacy::update(&paths, true, true, &[ClientId::Codex], &[]).unwrap();
+        std::fs::write(paths.state.join("activity"), b"not a directory").unwrap();
+        let worker = Worker::start(Start {
+            paths,
+            home: root.clone(),
+            clients: Vec::new(),
+            scope: Scope { version: 1, clients: vec!["codex".into()], route_disabled: Vec::new(), complete: true },
+            namespace: "a".repeat(64),
+            credential_scope: "b".repeat(64),
+            projects: true,
+            stop: Stop::new(),
+            privacy,
+        })
+        .unwrap();
+        let until = Instant::now() + Duration::from_secs(3);
+        while !worker.failed() {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut delivery = Delivery::new(worker);
+        let mut sink = Recorder::default();
+        delivery.turn(&mut sink, &[]);
+        delivery.turn(&mut sink, &[]);
+        assert_eq!(sink.failures, 1);
+        assert_eq!(sink.requests, 0);
+        drop(delivery);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

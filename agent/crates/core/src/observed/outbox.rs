@@ -25,7 +25,7 @@ fn invalid() -> io::Error {
     io::ErrorKind::InvalidData.into()
 }
 
-fn plain(path: &Path, write: bool, create: bool) -> io::Result<File> {
+pub(super) fn plain(path: &Path, write: bool, create: bool) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(write).create_new(create);
     #[cfg(unix)]
@@ -37,14 +37,22 @@ fn plain(path: &Path, write: bool, create: bool) -> io::Result<File> {
     {
         use std::os::windows::fs::OpenOptionsExt;
         options
-            .share_mode(if path.file_name().is_some_and(|name| name == "writer.lock" || name == "budget.lock") {
-                0
-            } else {
-                7
-            })
+            .share_mode(
+                if path.file_name().is_some_and(|name| {
+                    name == "writer.lock" || name == "budget.lock" || name == "activity-policy.lock"
+                }) {
+                    0
+                } else {
+                    7
+                },
+            )
             .custom_flags(0x0020_0000);
     }
-    let file = options.open(path)?;
+    let opened = options.open(path);
+    #[cfg(windows)]
+    let opened =
+        opened.map_err(|error| if error.raw_os_error() == Some(32) { io::ErrorKind::WouldBlock.into() } else { error });
+    let file = opened?;
     if !file.metadata()?.is_file() {
         return Err(invalid());
     }
@@ -223,6 +231,8 @@ struct Manifest {
     losses: Vec<Loss>,
     #[serde(default)]
     privacy_revision: Option<String>,
+    #[serde(default)]
+    credential_scope: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -396,6 +406,7 @@ impl Outbox {
                     segments: Vec::new(),
                     losses: Vec::new(),
                     privacy_revision: None,
+                    credential_scope: None,
                 };
                 atomic(&file, &m, MANIFEST_BYTES)?;
                 m
@@ -460,6 +471,20 @@ impl Outbox {
         if self.manifest.privacy_revision.as_ref() != Some(&revision) {
             self.retire_all("privacy")?;
             self.manifest.privacy_revision = Some(revision);
+            self.save()?;
+        }
+        Ok(())
+    }
+    pub fn check_credentials(&mut self, scope: String) -> io::Result<()> {
+        if scope.len() != 64 || !scope.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(invalid());
+        }
+        if self.manifest.credential_scope.as_ref() != Some(&scope) {
+            // Without a confirmed remote device, another credential cannot inherit this prefix.
+            if self.manifest.binding.is_none() {
+                self.retire_all("privacy")?;
+            }
+            self.manifest.credential_scope = Some(scope);
             self.save()?;
         }
         Ok(())
@@ -592,6 +617,17 @@ impl Outbox {
             }
             drop(file);
             fs::remove_file(entry.path())?;
+        }
+        let missing_clock = self
+            .manifest
+            .segments
+            .iter()
+            .filter(|segment| !self.discarded(segment) && !self.metadata.clocks.contains_key(&segment.clock))
+            .map(|segment| segment.first)
+            .min();
+        if let Some(first) = missing_clock {
+            // Unrecoverable UTC evidence is an explicit lost prefix, never a permanently empty batch.
+            self.lose(first, self.manifest.next_seq - 1, "corruption")?;
         }
         self.collect()?;
         Ok(())
@@ -1032,6 +1068,94 @@ mod tests {
             complete: true,
         }
     }
+    #[test]
+    fn provisional_credentials_cannot_transfer_a_pending_context_to_another_owner() {
+        let stand = Stand::new();
+        let mut q = stand.open();
+        let e = epoch();
+        q.check_credentials("a".repeat(64)).unwrap();
+        q.install_clock(e.clone()).unwrap();
+        q.append(&state(), raw(&e, 0), None).unwrap();
+        drop(q);
+        let mut q = stand.open();
+        q.check_credentials("a".repeat(64)).unwrap();
+        assert_eq!(q.prepare().unwrap().frames.len(), 1, "same credential preserves an unbound restart");
+        q.check_credentials("b".repeat(64)).unwrap();
+        let batch = q.prepare().unwrap();
+        assert!(batch.frames.is_empty());
+        assert!(batch.checkpoint.is_none());
+        let loss = batch.skip.unwrap();
+        assert_eq!((loss.first_seq, loss.last_seq, loss.reason.as_str()), (1, 1, "privacy"));
+    }
+
+    #[test]
+    fn credential_rotation_keeps_a_bound_prefix_for_remote_device_verification() {
+        let stand = Stand::new();
+        let mut q = stand.open();
+        let e = epoch();
+        q.check_credentials("a".repeat(64)).unwrap();
+        q.install_clock(e.clone()).unwrap();
+        q.append(&state(), raw(&e, 0), None).unwrap();
+        q.bind(Binding {
+            hub_id: "a".repeat(32),
+            device_id: "device".into(),
+            authority_epoch: "b".repeat(32),
+            floor_at: 0,
+        })
+        .unwrap();
+        drop(q);
+        let mut q = stand.open();
+        q.check_credentials("b".repeat(64)).unwrap();
+        assert_eq!(q.prepare().unwrap().frames.len(), 1);
+        assert!(
+            q.bind(Binding {
+                hub_id: "a".repeat(32),
+                device_id: "other-device".into(),
+                authority_epoch: "c".repeat(32),
+                floor_at: 0
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_clock_metadata_retires_the_unmappable_prefix_and_allows_new_work() {
+        let stand = Stand::new();
+        let mut q = stand.open();
+        let e = epoch();
+        q.install_clock(e.clone()).unwrap();
+        q.append(&state(), raw(&e, 0), None).unwrap();
+        drop(q);
+        fs::remove_file(stand.0.join("metadata.json")).unwrap();
+        let mut q = stand.open();
+        let fresh = epoch();
+        q.install_clock(fresh.clone()).unwrap();
+        q.append(&state(), raw(&fresh, 1), None).unwrap();
+        let batch = q.prepare().unwrap();
+        assert_eq!(batch.frames.iter().map(|f| f.seq).collect::<Vec<_>>(), [2]);
+        let loss = batch.skip.unwrap();
+        assert_eq!((loss.first_seq, loss.last_seq, loss.reason.as_str()), (1, 1, "corruption"));
+    }
+
+    #[test]
+    fn stale_clock_metadata_preserves_the_verified_prefix_before_the_lost_mapping() {
+        let stand = Stand::new();
+        let mut q = stand.open();
+        let e = epoch();
+        q.install_clock(e.clone()).unwrap();
+        q.append(&state(), raw(&e, 0), None).unwrap();
+        let saved = fs::read(stand.0.join("metadata.json")).unwrap();
+        let fresh = epoch();
+        q.install_clock(fresh.clone()).unwrap();
+        q.append(&state(), raw(&fresh, 1), None).unwrap();
+        drop(q);
+        fs::write(stand.0.join("metadata.json"), saved).unwrap();
+        let mut q = stand.open();
+        assert_eq!(q.prepare().unwrap().frames.iter().map(|f| f.seq).collect::<Vec<_>>(), [1]);
+        q.acknowledge(1, &[]).unwrap();
+        assert_eq!(q.prepare().unwrap().skip.unwrap().first_seq, 2);
+    }
+
     #[test]
     fn committed_intervals_reopen_with_the_same_sequence_payload_and_clock_mapping() {
         let stand = Stand::new();

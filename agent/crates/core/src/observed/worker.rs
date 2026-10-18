@@ -213,6 +213,7 @@ mod tests {
             clients: Vec::new(),
             scope: Scope { version: 1, clients: vec!["codex".into()], route_disabled: Vec::new(), complete: true },
             namespace: namespace.clone(),
+            credential_scope: "c".repeat(64),
             projects: true,
             stop: stop.clone(),
             privacy: "b".repeat(32),
@@ -237,6 +238,49 @@ mod tests {
         assert_eq!(batch.skip.unwrap().reason, "recovery");
         drop(q);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_replacement_waits_for_the_old_writer_and_can_be_cancelled_while_waiting() {
+        for cancel in [false, true] {
+            let root = std::env::temp_dir().join(format!("quotum-capture-handoff-{}", crate::config::random_hex()));
+            let paths = Paths { config: root.join("config"), work: root.join("work"), state: root.join("state") };
+            let namespace = "a".repeat(64);
+            let held = Outbox::open_bounded(paths.state.join("activity"), namespace.clone()).unwrap();
+            let stop = Stop::new();
+            let worker = Worker::start(Start {
+                paths,
+                home: root.clone(),
+                clients: Vec::new(),
+                scope: Scope { version: 1, clients: vec!["codex".into()], route_disabled: Vec::new(), complete: true },
+                namespace,
+                credential_scope: "c".repeat(64),
+                projects: true,
+                stop: stop.clone(),
+                privacy: "b".repeat(32),
+            })
+            .unwrap();
+            thread::sleep(Duration::from_millis(100));
+            assert!(!worker.failed());
+            assert!(worker.snapshot().is_none());
+            if cancel {
+                stop.request(crate::stop::How::Exit);
+                let started = Instant::now();
+                drop(worker);
+                assert!(started.elapsed() < Duration::from_secs(1));
+                drop(held);
+            } else {
+                drop(held);
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while worker.snapshot().is_none() {
+                    assert!(!worker.failed());
+                    assert!(Instant::now() < deadline);
+                    thread::sleep(Duration::from_millis(5));
+                }
+                drop(worker);
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 }
 
@@ -286,6 +330,8 @@ pub(crate) struct Worker {
     snapshot: Arc<Mutex<Option<Arc<Capture>>>>,
     failed: Arc<AtomicBool>,
     retiring: Arc<AtomicBool>,
+    paths: Paths,
+    privacy: String,
     pub clock: Arc<Clock>,
 }
 
@@ -295,6 +341,7 @@ pub(crate) struct Start {
     pub clients: Vec<ClientId>,
     pub scope: Scope,
     pub namespace: String,
+    pub credential_scope: String,
     pub projects: bool,
     pub stop: Stop,
     pub privacy: String,
@@ -302,7 +349,7 @@ pub(crate) struct Start {
 
 impl Worker {
     pub fn start(start: Start) -> io::Result<Self> {
-        let Start { paths, home, clients, scope, namespace, projects, stop, privacy } = start;
+        let Start { paths, home, clients, scope, namespace, credential_scope, projects, stop, privacy } = start;
         let (tx, rx) = mpsc::sync_channel(8);
         let snapshot = Arc::new(Mutex::new(None));
         let shared = snapshot.clone();
@@ -312,9 +359,30 @@ impl Worker {
         let retirement = retiring.clone();
         let clock = Arc::new(Clock::new());
         let time = clock.clone();
+        let policy_paths = paths.clone();
+        let policy_revision = privacy.clone();
         let thread = thread::Builder::new().name("quotum-activity".into()).spawn(move || {
             let run = || -> io::Result<()> {
-                let mut queue = Outbox::open_bounded(paths.state.join("activity"), namespace)?;
+                let mut initial_accounts = BTreeMap::new();
+                let mut queue = loop {
+                    if stop.requested() || retirement.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    match Outbox::open_bounded(paths.state.join("activity"), namespace.clone()) {
+                        Ok(queue) => break queue,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            // Handoff releases the run lock before a pending HTTP reply releases its writer.
+                            match rx.recv_timeout(Duration::from_millis(50)) {
+                                Ok(Control::Accounts(accounts)) => initial_accounts = accounts,
+                                Ok(Control::Fence) | Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                                Ok(_) => return Err(io::ErrorKind::InvalidData.into()),
+                            }
+                        }
+                        Err(error) => return Err(error),
+                    }
+                };
+                queue.check_credentials(credential_scope)?;
                 queue.apply_privacy(privacy)?;
                 let salt = crate::session_identity::salt(&paths);
                 let mut activity = Activity::new(home, projects);
@@ -325,7 +393,7 @@ impl Worker {
                     queue,
                     clock: time,
                     scope,
-                    accounts: BTreeMap::new(),
+                    accounts: initial_accounts,
                     salt,
                     producers: HashMap::new(),
                     run: crate::config::random_hex(),
@@ -340,7 +408,19 @@ impl Worker {
                 failure.store(true, Ordering::Release);
             }
         })?;
-        Ok(Self { tx: Some(tx), thread: Some(thread), snapshot, failed, retiring, clock })
+        Ok(Self {
+            tx: Some(tx),
+            thread: Some(thread),
+            snapshot,
+            failed,
+            retiring,
+            paths: policy_paths,
+            privacy: policy_revision,
+            clock,
+        })
+    }
+    pub(crate) fn delivery_guard(&self) -> io::Result<Option<super::privacy::Guard>> {
+        super::privacy::allow(&self.paths, &self.privacy)
     }
     pub fn snapshot(&self) -> Option<Arc<Capture>> {
         self.snapshot.lock().unwrap_or_else(|e| e.into_inner()).clone()
