@@ -255,8 +255,11 @@ mod tests {
         let paths = state("wait");
         client_missing(&paths, 120);
         let app = paths.lock_run(Holder::App).unwrap();
-        let (ended, _, _) = start(&paths);
-        eventually("it waits", || paths.waiting().is_some());
+        let (ended, _, logged) = start(&paths);
+        eventually("it waits", || {
+            logged.lock().unwrap().iter().any(|line| line.starts_with("the Quotum app measures"))
+        });
+        assert!(paths.waiting().is_some(), "it owns the waiting slot");
 
         // A second one does not wait too.
         let (second, _, _) = start(&paths);
@@ -289,8 +292,11 @@ mod tests {
         client_missing(&paths, 120);
         fs::write(paths.wait_stop_file(), "").unwrap();
         let app = paths.lock_run(Holder::App).unwrap();
-        let (ended, _, _) = start(&paths);
-        eventually("it waits", || paths.waiting().is_some());
+        let (ended, _, logged) = start(&paths);
+        eventually("it waits", || {
+            logged.lock().unwrap().iter().any(|line| line.starts_with("the Quotum app measures"))
+        });
+        assert!(paths.waiting().is_some(), "it owns the waiting slot");
         thread::sleep(Duration::from_millis(100));
         assert!(ended.try_recv().is_err(), "still waiting");
         drop(app);
