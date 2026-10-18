@@ -322,12 +322,14 @@ Current clock continuity and the five-second calibration deadline still apply.
 One writer and a directory budget cover all destination namespaces, including inactive
 ones: 64 MiB on disk, at most 128 segments per namespace, 256 clock mappings and 256
 proofs, with 64 KiB manifest and 256 KiB metadata bounds. Inactive namespaces are
-validated and bounded before a writer starts. Seven-day expiry uses only calibrated
-UTC. Every history attempt, including a retry, asks the writer to expire and prepare
-again. A prepared reply permits one immediate attempt within five seconds of the
-start of that maintenance; coordinator delays discard it. Both elapsed time and
-the private boot/tick/wall sample bound the handoff, including suspend and clock
-faults when the elapsed clock alone would look fresh. An immutable request
+validated and bounded before a writer starts. Seven-day expiry uses each completed
+frame's calibrated UTC endpoint. A fresh tail does not retain an expired prefix in
+the same segment; its file stays intact until the remaining suffix is retired or
+acknowledged. Every history attempt, including a retry, asks the writer to expire
+and prepare again. A prepared reply permits one immediate attempt within five
+seconds of the start of that maintenance; coordinator delays discard it. Both elapsed
+time and the private boot/tick/wall sample bound the handoff, including suspend and
+clock faults when the elapsed clock alone would look fresh. An immutable request
 already authorized within that bound may finish its five-second HTTP operation
 while capture retires later data, without holding a writer lock.
 Overflow, age, corruption and privacy restrictions persist explicit unknown

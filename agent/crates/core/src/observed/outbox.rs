@@ -995,17 +995,40 @@ impl Outbox {
 
     pub fn expire(&mut self, now: Millis) -> io::Result<()> {
         let mut through = None;
-        for segment in &self.manifest.segments {
+        let cutoff = now - AGE_MS;
+        for segment in self.manifest.segments.iter().filter(|s| !self.discarded(s)) {
             let Some(epoch) = self.metadata.clocks.get(&segment.clock) else {
                 break;
             };
             let Some(anchor) = epoch.anchor.as_ref() else {
                 break;
             };
-            if anchor.project(segment.end_tick).is_none_or(|at| at >= now - AGE_MS) {
+            let Some(end) = anchor.project(segment.end_tick) else {
                 break;
+            };
+            if end < cutoff {
+                through = Some(segment.last);
+                continue;
             }
-            through = Some(segment.last);
+            // A fresh tail keeps its physical segment, but cannot keep an expired completed prefix.
+            let mut file = plain(&self.file(segment.first), false, false)?;
+            let _: Header = read_payload(&mut file)?.ok_or_else(invalid)?;
+            for expected in segment.first..=segment.last {
+                let raw: Raw = read_payload(&mut file)?.ok_or_else(invalid)?;
+                if raw.seq != expected || file.stream_position()? > segment.bytes {
+                    return Err(invalid());
+                }
+                if raw.seq <= self.manifest.ack
+                    || self.manifest.losses.iter().any(|l| l.first_seq <= raw.seq && l.last_seq >= raw.seq)
+                {
+                    continue;
+                }
+                if anchor.project(raw.to_tick).is_none_or(|at| at >= cutoff) {
+                    break;
+                }
+                through = Some(raw.seq);
+            }
+            break;
         }
         if let Some(last) = through {
             self.lose(self.manifest.ack + 1, last, "age")?;
@@ -1189,6 +1212,238 @@ mod tests {
             complete: true,
         }
     }
+
+    #[test]
+    fn age_expiry_retires_a_mixed_segment_prefix_without_changing_its_suffix() {
+        let stand = Stand::new();
+        let mut q = stand.open();
+        let server = 1_800_000_000_000;
+        let reading = Reading { boot: Some("fixture".into()), tick: 0, wall: server + 120_000 };
+        let mut e = Epoch::new(&reading);
+        assert!(e.bind(&reading, server));
+        q.install_clock(e.clone()).unwrap();
+        let mut initial = state();
+        initial.contexts[0].started_at = reading.wall - 1000;
+        let mut idle = initial.clone();
+        idle.contexts[0].working = Some(false);
+        idle.contexts[0].last_worked_at = Some(reading.wall + 2000);
+        let mut first = raw(&e, 0);
+        first.base_state_digest = initial.digest();
+        first.next_state = Some(Arc::new(idle.clone()));
+        q.append(&initial, first, None).unwrap();
+        let mut second = raw(&e, 1);
+        second.base_state_digest = idle.digest();
+        q.append(&idle, second, None).unwrap();
+        assert_eq!(q.manifest.segments.len(), 1);
+        assert_eq!((q.manifest.segments[0].first, q.manifest.segments[0].last), (1, 2));
+        let file = q.file(1);
+        let physical = fs::read(&file).unwrap();
+        let before = q.prepare().unwrap();
+        assert_eq!(before.frames[0].to_at, server + 2000);
+        assert_eq!(before.frames[1].to_at, server + 4000);
+        let exact_cutoff = before.frames[0].to_at + AGE_MS;
+        q.expire(exact_cutoff).unwrap();
+        assert_eq!(serde_json::to_vec(&q.prepare().unwrap()).unwrap(), serde_json::to_vec(&before).unwrap());
+
+        q.expire(exact_cutoff + 1).unwrap();
+        let mut expected = before.clone();
+        expected.checkpoint = expected.frames.remove(0).next_state;
+        expected.skip = Some(Loss { first_seq: 1, last_seq: 1, from_at: None, to_at: None, reason: "age".into() });
+        let expected_bytes = serde_json::to_vec(&expected).unwrap();
+        let after = q.prepare().unwrap();
+        assert_eq!(after.frames.iter().map(|frame| frame.seq).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(serde_json::to_vec(&after).unwrap(), expected_bytes);
+        assert_eq!(after.clock_anchor, e.anchor);
+        let checkpoint = after.checkpoint.as_ref().unwrap();
+        assert_eq!(checkpoint.contexts[0].working, Some(false));
+        assert_eq!(checkpoint.contexts[0].started_at, server - 1000);
+        assert_eq!(checkpoint.contexts[0].last_worked_at, Some(server + 2000));
+        assert_eq!(after.frames[0].base_state_digest, checkpoint.digest());
+        assert_eq!(fs::read(&file).unwrap(), physical);
+        assert_eq!(q.ack(), 0, "retirement does not acknowledge the skipped prefix");
+        assert!(q.clock_started_by(&e.id, 1));
+        drop(q);
+
+        // A lost skip acknowledgement replays the same loss, checkpoint, digest and fresh payload.
+        let mut q = stand.open();
+        q.expire(exact_cutoff + 1).unwrap();
+        assert_eq!(serde_json::to_vec(&q.prepare().unwrap()).unwrap(), expected_bytes);
+        assert_eq!(fs::read(&file).unwrap(), physical);
+        q.acknowledge(1, &[]).unwrap();
+        expected.skip = None;
+        assert_eq!(serde_json::to_vec(&q.prepare().unwrap()).unwrap(), serde_json::to_vec(&expected).unwrap());
+        assert_eq!(fs::read(&file).unwrap(), physical, "acknowledging the prefix keeps the suffix's file");
+        drop(q);
+        let mut q = stand.open();
+        assert_eq!(q.ack(), 1);
+        assert_eq!(serde_json::to_vec(&q.prepare().unwrap()).unwrap(), serde_json::to_vec(&expected).unwrap());
+        q.acknowledge(2, &[]).unwrap();
+        assert!(!file.exists());
+        drop(q);
+        let q = stand.open();
+        assert_eq!(q.ack(), 2);
+        assert!(q.prepare().unwrap().frames.is_empty());
+        assert!(q.prepare().unwrap().skip.is_none());
+    }
+
+    #[test]
+    fn age_expiry_skips_acknowledged_and_already_retired_positions() {
+        let stand = Stand::new();
+        let mut q = stand.open();
+        let e = epoch();
+        q.install_clock(e.clone()).unwrap();
+        for i in 0..4 {
+            q.append(&state(), raw(&e, i), None).unwrap();
+        }
+        let file = q.file(1);
+        let physical = fs::read(&file).unwrap();
+        q.acknowledge(1, &[]).unwrap();
+        q.lose(2, 2, "corruption").unwrap();
+        let now = e.zero_wall + 6001 + AGE_MS;
+        q.expire(now).unwrap();
+        let batch = q.prepare().unwrap();
+        assert_eq!(batch.frames.iter().map(|frame| frame.seq).collect::<Vec<_>>(), vec![4]);
+        assert_eq!(
+            batch.skip.as_ref().unwrap(),
+            &Loss { first_seq: 2, last_seq: 3, from_at: None, to_at: None, reason: "age".into() }
+        );
+        let expected = serde_json::to_vec(&batch).unwrap();
+        assert_eq!(q.ack(), 1);
+        assert_eq!(fs::read(&file).unwrap(), physical);
+        drop(q);
+        let mut q = stand.open();
+        // Repeating maintenance has no new retirement publication for old ACK/loss positions.
+        q.interrupt_after(1);
+        q.expire(now).unwrap();
+        q.interrupt_after.set(None);
+        assert_eq!(serde_json::to_vec(&q.prepare().unwrap()).unwrap(), expected);
+        q.acknowledge(2, &[]).unwrap();
+        assert_eq!(q.prepare().unwrap().skip.unwrap().first_seq, 3);
+        assert_eq!(fs::read(&file).unwrap(), physical);
+        q.acknowledge(4, &[]).unwrap();
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn age_expiry_publishes_whole_and_mixed_segment_loss_before_reclamation() {
+        let stand = Stand::new();
+        let mut q = stand.open();
+        let e = epoch();
+        q.install_clock(e.clone()).unwrap();
+        for i in 0..4 {
+            if i == 2 {
+                q.current = None;
+            }
+            q.append(&state(), raw(&e, i), None).unwrap();
+        }
+        assert_eq!(q.manifest.segments.len(), 2);
+        let old_file = q.file(1);
+        let mixed_file = q.file(3);
+        let physical = fs::read(&mixed_file).unwrap();
+        let expected_frame = serde_json::to_vec(&q.prepare().unwrap().frames[3]).unwrap();
+        q.interrupt_after(1);
+        assert!(q.expire(e.zero_wall + 6001 + AGE_MS).is_err());
+        assert!(old_file.exists(), "loss is durable before either file can be reclaimed");
+        assert_eq!(fs::read(&mixed_file).unwrap(), physical);
+        drop(q);
+        let mut q = stand.open();
+        let batch = q.prepare().unwrap();
+        assert_eq!(batch.frames.len(), 1);
+        assert_eq!(serde_json::to_vec(&batch.frames[0]).unwrap(), expected_frame);
+        assert_eq!(
+            batch.skip.unwrap(),
+            Loss { first_seq: 1, last_seq: 3, from_at: None, to_at: None, reason: "age".into() }
+        );
+        assert!(!old_file.exists());
+        assert_eq!(fs::read(&mixed_file).unwrap(), physical);
+        q.expire(e.zero_wall + 8001 + AGE_MS).unwrap();
+        assert!(!mixed_file.exists(), "a wholly expired suffix can reclaim its segment");
+        drop(q);
+        let q = stand.open();
+        assert!(q.prepare().unwrap().frames.is_empty());
+        assert_eq!(q.prepare().unwrap().skip.unwrap().last_seq, 4);
+        assert_eq!(q.ack(), 0);
+    }
+
+    #[test]
+    fn age_expiry_waits_for_a_trusted_anchor_and_keeps_fresh_frames() {
+        let stand = Stand::new();
+        let mut q = stand.open();
+        let mut e = epoch();
+        e.anchor = None;
+        e.wall_offset = None;
+        q.install_clock(e.clone()).unwrap();
+        q.append(&state(), raw(&e, 0), None).unwrap();
+        q.append(&state(), raw(&e, 1), None).unwrap();
+        let file = q.file(1);
+        let physical = fs::read(&file).unwrap();
+        q.expire(e.zero_wall + 10 * AGE_MS).unwrap();
+        assert!(q.prepare().unwrap().skip.is_none());
+        assert_eq!(fs::read(&file).unwrap(), physical);
+        drop(q);
+        let mut q = stand.open();
+        assert!(q.prepare().unwrap().skip.is_none());
+        assert_eq!(fs::read(&file).unwrap(), physical);
+        assert!(e.bind(&Reading { boot: e.boot.clone(), tick: 0, wall: e.zero_wall }, e.zero_wall));
+        q.install_clock(e.clone()).unwrap();
+        let fresh = serde_json::to_vec(&q.prepare().unwrap()).unwrap();
+        q.expire(e.zero_wall + AGE_MS).unwrap();
+        assert_eq!(serde_json::to_vec(&q.prepare().unwrap()).unwrap(), fresh);
+        q.expire(e.zero_wall + 3000 + AGE_MS).unwrap();
+        let batch = q.prepare().unwrap();
+        assert_eq!(batch.frames.iter().map(|frame| frame.seq).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(batch.skip.unwrap().last_seq, 1);
+        assert_eq!(fs::read(file).unwrap(), physical);
+    }
+
+    #[test]
+    fn age_expiry_bounds_and_checks_each_boundary_record_and_stops_at_the_fresh_endpoint() {
+        for fault in ["checksum", "oversized", "sequence", "commit"] {
+            let stand = Stand::new();
+            let mut q = stand.open();
+            let e = epoch();
+            q.install_clock(e.clone()).unwrap();
+            q.append(&state(), raw(&e, 0), None).unwrap();
+            q.append(&state(), raw(&e, 1), None).unwrap();
+            let path = q.file(1);
+            let original = fs::read(&path).unwrap();
+            let mut file = plain(&path, true, false).unwrap();
+            let _: Header = read_payload(&mut file).unwrap().unwrap();
+            let first = file.stream_position().unwrap();
+            let _: Raw = read_payload(&mut file).unwrap().unwrap();
+            let second = file.stream_position().unwrap();
+            file.seek(SeekFrom::Start(second)).unwrap();
+            file.write_all(&((BODY_BYTES + 1) as u32).to_be_bytes()).unwrap();
+            q.expire(e.zero_wall + 1000 + AGE_MS).unwrap();
+            assert!(q.manifest.losses.is_empty(), "maintenance stops after the first fresh endpoint");
+            fs::write(&path, &original).unwrap();
+            file.seek(SeekFrom::Start(first)).unwrap();
+            match fault {
+                "oversized" => file.write_all(&((BODY_BYTES + 1) as u32).to_be_bytes()).unwrap(),
+                "checksum" => {
+                    file.seek(SeekFrom::Current(4)).unwrap();
+                    file.write_all(b"!").unwrap();
+                }
+                "sequence" => {
+                    let mut record = raw(&e, 0);
+                    record.seq = 9;
+                    write_payload(&mut file, &record).unwrap();
+                }
+                "commit" => q.manifest.segments[0].bytes = second - 1,
+                _ => unreachable!(),
+            }
+            let damaged = fs::read(&path).unwrap();
+            assert_eq!(
+                q.expire(e.zero_wall + 3000 + AGE_MS).unwrap_err().kind(),
+                io::ErrorKind::InvalidData,
+                "{fault}"
+            );
+            assert!(q.manifest.losses.is_empty(), "invalid evidence cannot publish a partial age loss");
+            assert_eq!(q.ack(), 0);
+            assert_eq!(fs::read(path).unwrap(), damaged);
+        }
+    }
+
     #[test]
     fn a_clock_origin_survives_privacy_and_credential_reclamation() {
         for credential in [false, true] {
