@@ -1,13 +1,13 @@
 //! The coordinator owns network calls; the capture writer receives only bounded controls.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
 use super::outbox::Binding;
-use super::worker::{Account, Capture, Control, Worker};
+use super::worker::{Account, Capture, Control, Prepared, Worker};
 use super::{Anchor, Answer, BODY_BYTES, Batch, Latest, SAFE_INTEGER, Witness};
 use crate::clients::{ClientId, InstalledClient};
 use crate::model::{ClientSession, ClientSource, Provider, RunningSession, SessionReport, Tracking, now_ms};
@@ -29,8 +29,7 @@ pub(crate) struct Delivery {
     refresh: bool,
     replace: Option<String>,
     pending: Option<Control>,
-    preparing: Option<mpsc::Receiver<std::io::Result<Batch>>>,
-    batch: Option<Arc<Batch>>,
+    preparing: Option<mpsc::Receiver<std::io::Result<Prepared>>>,
     accounts: BTreeMap<ClientId, Account>,
     last_state: Option<String>,
     last_live: Option<Instant>,
@@ -56,7 +55,6 @@ impl Delivery {
             replace: None,
             pending: None,
             preparing: None,
-            batch: None,
             accounts: BTreeMap::new(),
             last_state: None,
             last_live: None,
@@ -93,7 +91,6 @@ impl Delivery {
         self.mode = Mode::Unavailable;
         self.worker.fence();
         self.pending = None;
-        self.batch = None;
         self.preparing = None;
     }
 
@@ -104,7 +101,6 @@ impl Delivery {
         {
             self.rollback_probe = true;
             self.mode = Mode::Hello;
-            self.batch = None;
             self.preparing = None;
             self.last_history = None;
             self.success();
@@ -255,7 +251,6 @@ impl Delivery {
                         self.replace = None;
                         self.rollback_probe = false;
                         // Binding can restore a lost clock or retire an unrecoverable one; prepare again afterward.
-                        self.batch = None;
                         self.preparing = None;
                         let timely = started.elapsed() <= Duration::from_secs(5)
                             && capture.epoch.compatible(&self.worker.clock.read(), false);
@@ -322,27 +317,30 @@ impl Delivery {
             || changed
             || capture.ack < self.drain_through
             || capture.release_pending;
-        if self.batch.is_none() {
-            if let Some(receiver) = &self.preparing {
-                match receiver.try_recv() {
-                    Ok(Ok(batch)) => {
-                        self.batch = Some(Arc::new(batch));
-                        self.preparing = None;
-                    }
-                    Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
-                        self.unavailable();
-                        return;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {}
+        let prepared = if let Some(receiver) = &self.preparing {
+            match receiver.try_recv() {
+                Ok(Ok(prepared)) => {
+                    self.preparing = None;
+                    // Coordinator work can block while the writer's reply waits in this channel.
+                    Some(prepared).filter(|prepared| prepared.fresh(&self.worker.clock.read()))
                 }
-            } else if history_due && (capture.ack + 1 < capture.sequence || capture.release_pending) {
+                Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
+                    self.unavailable();
+                    return;
+                }
+                Err(mpsc::TryRecvError::Empty) => None,
+            }
+        } else {
+            if history_due && (capture.ack + 1 < capture.sequence || capture.release_pending) {
                 let (tx, rx) = mpsc::sync_channel(1);
                 if self.worker.control(Control::Prepare(tx)) {
                     self.preparing = Some(rx);
                 }
             }
-        }
-        let same_anchor = self.batch.as_ref().is_some_and(|b| b.clock_anchor.as_ref() == capture.epoch.anchor.as_ref());
+            None
+        };
+        let same_anchor =
+            prepared.as_ref().is_some_and(|ready| ready.batch.clock_anchor.as_ref() == capture.epoch.anchor.as_ref());
         if live_due && !same_anchor {
             if let Some(anchor) = capture.epoch.anchor.as_ref() {
                 let request = json!({"op":"presence","sentAt":now_ms(),"queueId":capture.queue_id,"authorityEpoch":bound.authority_epoch,
@@ -351,11 +349,11 @@ impl Delivery {
             }
             return;
         }
-        let Some(batch) = self.batch.as_ref().cloned() else {
+        let Some(prepared) = prepared else {
             return;
         };
+        let batch = &prepared.batch;
         if batch.frames.is_empty() && batch.skip.is_none() && batch.release_witnesses.is_empty() {
-            self.batch = None;
             if live_due {
                 if let Some(anchor) = capture.epoch.anchor.as_ref() {
                     let request = json!({"op":"presence","sentAt":now_ms(),"queueId":capture.queue_id,"authorityEpoch":bound.authority_epoch,
@@ -368,7 +366,7 @@ impl Delivery {
         if !history_due && batch.skip.is_none() && batch.release_witnesses.is_empty() {
             return;
         }
-        let mut request = serde_json::to_value(&*batch).expect("activity batch serialization");
+        let mut request = serde_json::to_value(batch).expect("activity batch serialization");
         request["op"] = json!("batch");
         request["sentAt"] = json!(now_ms());
         request["queueId"] = json!(capture.queue_id);
@@ -379,7 +377,10 @@ impl Delivery {
                 request.as_object_mut().unwrap().remove("latest");
             }
         }
-        self.answer(sink, &capture, &request, Some(&batch));
+        // A ready payload authorizes only this immediate attempt, including an unanswered or invalid reply.
+        if prepared.fresh(&self.worker.clock.read()) {
+            self.answer(sink, &capture, &request, Some(batch));
+        }
     }
 
     fn answer(&mut self, sink: &mut dyn Sink, capture: &Capture, request: &Value, batch: Option<&Batch>) {
@@ -412,7 +413,6 @@ impl Delivery {
                         return;
                     }
                     self.pending(Control::Ack { through, released });
-                    self.batch = None;
                     self.last_history = Some(Instant::now());
                 }
                 if value["presenceAccepted"] == true {
@@ -537,10 +537,12 @@ mod tests {
     use crate::config::Paths;
     use crate::model::Outcome;
     use crate::observed::clock::{Epoch, Reading};
-    use crate::observed::worker::Start;
+    use crate::observed::outbox::{Outbox, Raw};
+    use crate::observed::worker::{Start, WriterFixture};
     use crate::observed::{Context, Scope, State};
     use crate::stop::Stop;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     struct Stand {
         root: PathBuf,
@@ -582,6 +584,84 @@ mod tests {
             let worker = Worker::with_capture(paths.clone(), privacy, capture);
             Self { root, paths, delivery: Some(Delivery::new(worker)) }
         }
+
+        fn history() -> (Self, WriterFixture) {
+            Self::history_with_boot(Some("fixture".into()))
+        }
+
+        fn history_with_boot(boot: Option<String>) -> (Self, WriterFixture) {
+            let mut stand = Self::new();
+            let initial = Reading { boot, tick: 0, wall: 1_800_000_000_000 };
+            let mut historical = Epoch::new(&initial);
+            assert!(historical.bind(&initial, initial.wall));
+            let mut queue = Outbox::open(stand.root.join("queue"), "fixture".into()).unwrap();
+            let privacy = super::super::privacy::update(&stand.paths, true, true, &[ClientId::Codex], &[]).unwrap();
+            queue.apply_privacy(privacy.clone()).unwrap();
+            queue.install_clock(historical.clone()).unwrap();
+            let mut capture = (*stand.delivery.as_ref().unwrap().worker.snapshot().unwrap()).clone();
+            let mut state = (*capture.latest.state).clone();
+            state.contexts.push(Context {
+                context_id: "c".repeat(32),
+                client_id: "codex".into(),
+                session_id: Some("d".repeat(32)),
+                ordinal: None,
+                source: None,
+                account_by: None,
+                origin: "terminal".into(),
+                project: Some("captured project".into()),
+                folder: None,
+                started_at: initial.wall - 1000,
+                route: None,
+                working: Some(true),
+                last_worked_at: None,
+            });
+            let state = Arc::new(state);
+            queue
+                .append(
+                    &state,
+                    Raw {
+                        seq: 0,
+                        capture_epoch: "e".repeat(32),
+                        clock_epoch: historical.id,
+                        from_tick: 0,
+                        to_tick: 15_000,
+                        from_wall: initial.wall,
+                        to_wall: initial.wall + 15_000,
+                        base_state_digest: state.digest(),
+                        next_state: None,
+                        complete: false,
+                    },
+                    None,
+                )
+                .unwrap();
+            let reading = Reading { tick: 60_000, wall: initial.wall + 60_000, ..initial };
+            let mut epoch = Epoch::new(&reading);
+            assert!(epoch.bind(&reading, reading.wall));
+            queue.install_clock(epoch.clone()).unwrap();
+            capture.binding = Some(Binding {
+                hub_id: "a".repeat(32),
+                device_id: "fixture".into(),
+                authority_epoch: "b".repeat(32),
+                floor_at: 0,
+            });
+            queue.bind(capture.binding.clone().unwrap()).unwrap();
+            capture.epoch = epoch.clone();
+            capture.reading = reading;
+            capture.latest = Latest { clock_epoch: epoch.id.clone(), tick: 0, state };
+            capture.digest = capture.latest.state.digest();
+            capture.queue_id = queue.queue_id().into();
+            capture.open_id = queue.open_id().into();
+            capture.sequence = queue.next_sequence();
+            let digest = capture.digest.clone();
+            let (worker, writer) = Worker::with_outbox(stand.paths.clone(), privacy, queue, epoch, capture);
+            let mut delivery = Delivery::new(worker);
+            delivery.mode = Mode::Intervals;
+            delivery.inventory = Some(Vec::new());
+            delivery.last_live = Some(Instant::now());
+            delivery.last_state = Some(digest);
+            stand.delivery = Some(delivery);
+            (stand, writer)
+        }
     }
     impl Drop for Stand {
         fn drop(&mut self) {
@@ -609,6 +689,198 @@ mod tests {
         fn activity_failed(&mut self) {
             self.failures += 1;
         }
+    }
+
+    #[derive(Default)]
+    struct ActivitySink {
+        requests: Vec<Value>,
+        accepted: bool,
+        invalid_ack: bool,
+        committed: u64,
+    }
+    impl Sink for ActivitySink {
+        fn deliver(&mut self, _: &Outcome) {}
+        fn activity_request(&mut self, request: &Value, _: bool) -> Answer {
+            self.requests.push(request.clone());
+            let through = request["frames"]
+                .as_array()
+                .and_then(|frames| frames.last())
+                .and_then(|frame| frame["seq"].as_u64())
+                .or_else(|| request["skip"]["lastSeq"].as_u64())
+                .expect("history request");
+            // A lost reply can leave this authenticated prefix committed at the remote end.
+            self.committed = self.committed.max(through);
+            if self.accepted {
+                Answer::Accepted(json!({"queueId":request["queueId"],"authorityEpoch":request["authorityEpoch"],
+                    "acknowledgedThrough":if self.invalid_ack {0}else{self.committed},"releasedWitnesses":[]}))
+            } else {
+                Answer::Unanswered
+            }
+        }
+    }
+
+    fn advance_eight_days(delivery: &mut Delivery, writer: &mut WriterFixture) {
+        let reading = delivery.worker.clock.read();
+        let elapsed = 8 * 86_400_000;
+        writer.reading(
+            &mut delivery.worker,
+            Reading { tick: reading.tick + elapsed, wall: reading.wall + elapsed as i64, ..reading },
+        );
+        // Make the network retry eligible without waiting through its actual backoff.
+        delivery.due = Instant::now();
+    }
+
+    #[test]
+    fn every_failed_history_attempt_prepares_again_and_observes_durable_age_loss() {
+        for invalid_ack in [false, true] {
+            let (mut stand, mut writer) = Stand::history();
+            let delivery = stand.delivery.as_mut().unwrap();
+            let original = serde_json::to_value(writer.pending()).unwrap();
+            let mut sink = ActivitySink { accepted: invalid_ack, invalid_ack, ..ActivitySink::default() };
+            delivery.turn(&mut sink, &[]);
+            assert!(sink.requests.is_empty());
+            writer.process();
+            delivery.turn(&mut sink, &[]);
+            assert_eq!(sink.requests.len(), 1);
+            assert_eq!(sink.requests[0]["frames"], original["frames"]);
+            assert_eq!(sink.requests[0]["clockAnchor"], original["clockAnchor"]);
+            assert_ne!(sink.requests[0]["clockAnchor"]["clockEpoch"], delivery.worker.snapshot().unwrap().epoch.id);
+            assert!(delivery.pending.is_none());
+            assert_eq!(delivery.failures, 1);
+
+            advance_eight_days(delivery, &mut writer);
+            delivery.turn(&mut sink, &[]);
+            assert_eq!(sink.requests.len(), 1, "a retry needs fresh writer authorization");
+            writer.process();
+            let retired = writer.pending();
+            sink.accepted = true;
+            sink.invalid_ack = false;
+            delivery.turn(&mut sink, &[]);
+            assert_eq!(sink.requests.len(), 2);
+            assert_eq!(sink.requests[1]["frames"], json!([]));
+            assert!(retired.frames.is_empty());
+            let loss = retired.skip.unwrap();
+            assert_eq!((loss.first_seq, loss.last_seq, loss.reason.as_str()), (1, 1, "age"));
+            assert_eq!(sink.requests[1]["skip"], serde_json::to_value(loss).unwrap());
+            assert_eq!(sink.committed, 1, "skip preserves the prefix whose reply was lost");
+            assert!(matches!(delivery.pending, Some(Control::Ack { through: 1, .. })));
+            assert_eq!(delivery.worker.snapshot().unwrap().ack, 0);
+            delivery.turn(&mut sink, &[]);
+            assert_eq!(delivery.worker.snapshot().unwrap().ack, 0, "only the writer persists the ACK");
+            writer.process();
+            assert_eq!(delivery.worker.snapshot().unwrap().ack, 1);
+            assert!(writer.pending().skip.is_none());
+        }
+    }
+
+    #[test]
+    fn a_fresh_retry_keeps_captured_payload_and_its_historical_anchor() {
+        let (mut stand, mut writer) = Stand::history();
+        let delivery = stand.delivery.as_mut().unwrap();
+        let mut sink = ActivitySink::default();
+        delivery.turn(&mut sink, &[]);
+        writer.process();
+        delivery.turn(&mut sink, &[]);
+        delivery.due = Instant::now();
+        delivery.turn(&mut sink, &[]);
+        assert_eq!(sink.requests.len(), 1);
+        writer.process();
+        sink.accepted = true;
+        delivery.turn(&mut sink, &[]);
+        assert_eq!(sink.requests.len(), 2);
+        for field in ["frames", "checkpoint", "clockAnchor", "topologyWitnessId", "skip"] {
+            assert_eq!(sink.requests[0][field], sink.requests[1][field], "{field}");
+        }
+        assert!(matches!(delivery.pending, Some(Control::Ack { through: 1, .. })));
+        delivery.turn(&mut sink, &[]);
+        writer.process();
+        assert_eq!(delivery.worker.snapshot().unwrap().ack, 1);
+        assert!(writer.pending().frames.is_empty());
+    }
+
+    #[test]
+    fn an_unsent_reply_aged_by_coordinator_work_is_dropped_before_expiry_is_prepared_again() {
+        let (mut stand, mut writer) = Stand::history();
+        let delivery = stand.delivery.as_mut().unwrap();
+        let mut sink = ActivitySink::default();
+        delivery.turn(&mut sink, &[]);
+        writer.process();
+        let mut prepared = delivery.preparing.take().unwrap().try_recv().unwrap().unwrap();
+        assert!(prepared.fresh(&delivery.worker.clock.read()));
+        assert_eq!(prepared.batch.frames.len(), 1);
+        // Simulate quota/version/coordinator work exceeding the handoff, without a native sleep.
+        prepared.prepared_at = Instant::now() - Duration::from_secs(6);
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.send(Ok(prepared)).unwrap();
+        delivery.preparing = Some(rx);
+        delivery.turn(&mut sink, &[]);
+        assert!(sink.requests.is_empty(), "stale unsent data must never reach the network");
+        assert!(delivery.preparing.is_none());
+        assert_eq!(writer.pending().frames.len(), 1, "expiry belongs to the next production Prepare");
+        advance_eight_days(delivery, &mut writer);
+        delivery.turn(&mut sink, &[]);
+        writer.process();
+        delivery.turn(&mut sink, &[]);
+        assert_eq!(sink.requests.len(), 1);
+        assert_eq!(sink.requests[0]["frames"], json!([]));
+        assert_eq!(sink.requests[0]["skip"]["reason"], "age");
+    }
+
+    #[test]
+    fn suspend_and_clock_faults_expire_an_unsent_reply_even_with_a_fresh_instant() {
+        for case in ["suspend", "boot", "tick rollback", "wall jump", "wall rollback", "fallback wall jump"] {
+            let boot = (case != "fallback wall jump").then(|| "fixture".into());
+            let (mut stand, mut writer) = Stand::history_with_boot(boot);
+            let delivery = stand.delivery.as_mut().unwrap();
+            let mut sink = ActivitySink::default();
+            delivery.turn(&mut sink, &[]);
+            writer.process();
+            let prepared = delivery.preparing.take().unwrap().try_recv().unwrap().unwrap();
+            let mut reading = delivery.worker.clock.read();
+            assert!(prepared.fresh(&reading));
+            match case {
+                "suspend" => {
+                    reading.tick += 8 * 86_400_000;
+                    reading.wall += 8 * 86_400_000;
+                }
+                "boot" => reading.boot = Some("replacement boot".into()),
+                "tick rollback" => reading.tick -= 1,
+                "wall rollback" => reading.wall -= 1,
+                _ => reading.wall += 6000,
+            }
+            assert!(prepared.prepared_at.elapsed() < Duration::from_secs(5));
+            let (tx, rx) = mpsc::sync_channel(1);
+            tx.send(Ok(prepared)).unwrap();
+            delivery.preparing = Some(rx);
+            writer.reading(&mut delivery.worker, reading);
+            delivery.turn(&mut sink, &[]);
+            assert!(sink.requests.is_empty(), "{case} must invalidate the unsent authorization");
+            assert!(delivery.preparing.is_none());
+            assert_eq!(writer.pending().frames.len(), 1);
+            if case == "suspend" {
+                delivery.turn(&mut sink, &[]);
+                writer.process();
+                delivery.turn(&mut sink, &[]);
+                assert_eq!(sink.requests.len(), 1);
+                assert_eq!(sink.requests[0]["frames"], json!([]));
+                assert_eq!(sink.requests[0]["skip"]["reason"], "age");
+            }
+        }
+    }
+
+    #[test]
+    fn a_prepared_history_reply_cannot_bypass_an_accepted_privacy_restriction() {
+        let (mut stand, mut writer) = Stand::history();
+        let delivery = stand.delivery.as_mut().unwrap();
+        let mut sink = ActivitySink::default();
+        delivery.turn(&mut sink, &[]);
+        writer.process();
+        super::super::privacy::update(&stand.paths, false, true, &[ClientId::Codex], &[]).unwrap();
+        super::super::privacy::update(&stand.paths, true, true, &[ClientId::Codex], &[]).unwrap();
+        delivery.turn(&mut sink, &[]);
+        assert!(sink.requests.is_empty());
+        assert!(delivery.preparing.is_none());
+        assert!(matches!(delivery.mode, Mode::Unavailable));
     }
 
     #[test]

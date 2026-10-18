@@ -233,7 +233,7 @@ pub struct Loss {
     pub reason: String,
 }
 
-/// The sender supplies authenticated envelope fields; these bytes remain pinned until acknowledgement.
+/// Immutable journal projection. The sender supplies the authenticated envelope for each attempt.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Batch {

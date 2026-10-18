@@ -497,10 +497,30 @@ pub(crate) enum Control {
         through: u64,
         released: Vec<String>,
     },
-    Prepare(mpsc::SyncSender<io::Result<Batch>>),
+    Prepare(mpsc::SyncSender<io::Result<Prepared>>),
     Legacy(bool),
     Replacement,
     Fence,
+}
+
+const PREPARED_HANDOFF: Duration = Duration::from_secs(5);
+
+#[derive(Debug)]
+pub(crate) struct Prepared {
+    pub batch: Batch,
+    pub prepared_at: Instant,
+    pub reading: Reading,
+}
+
+impl Prepared {
+    pub fn fresh(&self, current: &Reading) -> bool {
+        let limit = PREPARED_HANDOFF.as_millis() as u64;
+        self.prepared_at.elapsed() <= PREPARED_HANDOFF
+            && self.reading.boot == current.boot
+            && current.tick.checked_sub(self.reading.tick).is_some_and(|elapsed| elapsed <= limit)
+            && current.wall >= self.reading.wall
+            && current.wall.abs_diff(self.reading.wall) <= limit
+    }
 }
 
 pub(crate) struct Worker {
@@ -722,21 +742,8 @@ impl Sampler {
                         shared.lock().unwrap_or_else(|e| e.into_inner()).take();
                         break;
                     }
-                    let before = { shared.lock().unwrap_or_else(|e| e.into_inner()).clone() };
-                    if let Some(before) = before {
-                        if before.latest.clock_epoch != epoch.id {
-                            // Recovery chose a new clock; its first real endpoint must publish its state.
-                            shared.lock().unwrap_or_else(|e| e.into_inner()).take();
-                            cadence.reset_grid(origin.elapsed().as_millis() as u64);
-                        } else {
-                            let mut next = (*before).clone();
-                            next.binding = self.queue.binding().cloned();
-                            next.ack = self.queue.ack();
-                            next.epoch = epoch.clone();
-                            next.witness = self.active_witness();
-                            next.release_pending = !self.queue.metadata.releases.is_empty();
-                            Self::publish(shared, next);
-                        }
+                    if self.publish_control(shared, &epoch) {
+                        cadence.reset_grid(origin.elapsed().as_millis() as u64);
                     }
                     cadence.control(
                         origin.elapsed().as_millis() as u64,
@@ -867,6 +874,24 @@ impl Sampler {
         let old = shared.lock().unwrap_or_else(|e| e.into_inner()).replace(Arc::new(capture));
         drop(old);
     }
+    fn publish_control(&self, shared: &Mutex<Option<Arc<Capture>>>, epoch: &Epoch) -> bool {
+        let before = { shared.lock().unwrap_or_else(|e| e.into_inner()).clone() };
+        if let Some(before) = before {
+            if before.latest.clock_epoch != epoch.id {
+                // Recovery chose a new clock; its first real endpoint must publish its state.
+                shared.lock().unwrap_or_else(|e| e.into_inner()).take();
+                return true;
+            }
+            let mut next = (*before).clone();
+            next.binding = self.queue.binding().cloned();
+            next.ack = self.queue.ack();
+            next.epoch = epoch.clone();
+            next.witness = self.active_witness();
+            next.release_pending = !self.queue.metadata.releases.is_empty();
+            Self::publish(shared, next);
+        }
+        false
+    }
     fn active_witness(&self) -> Option<Witness> {
         self.queue.metadata.active_witness.as_ref().and_then(|id| self.queue.metadata.witnesses.get(id)).cloned()
     }
@@ -884,13 +909,15 @@ impl Sampler {
                 self.previous = None;
             }
             Control::Prepare(sender) => {
+                // Clock reads, expiry and journal IO all spend this one attempt's handoff time.
+                let prepared_at = Instant::now();
                 let reading = self.clock.read();
                 if epoch.compatible(&reading, false) {
                     if let Some(now) = epoch.anchor.as_ref().and_then(|a| a.project(epoch.tick(&reading))) {
                         self.queue.expire(now)?;
                     }
                 }
-                let _ = sender.send(self.queue.prepare());
+                let _ = sender.send(self.queue.prepare().map(|batch| Prepared { batch, prepared_at, reading }));
             }
             Control::Legacy(legacy) => {
                 self.legacy = legacy;
@@ -1243,5 +1270,68 @@ impl Worker {
             privacy,
             clock: Arc::new(Clock::new()),
         }
+    }
+
+    /// Only native scanning and clock input are stood in; queued controls use the production sampler.
+    pub(super) fn with_outbox(
+        paths: Paths,
+        privacy: String,
+        queue: Outbox,
+        epoch: Epoch,
+        capture: Capture,
+    ) -> (Self, WriterFixture) {
+        let (tx, rx) = mpsc::sync_channel(8);
+        let scope = capture.latest.state.tracking.clone();
+        let clock = Arc::new(Clock::fixed(capture.reading.clone()));
+        let mut worker = Self::with_capture(paths.clone(), privacy, capture);
+        worker.tx = Some(tx);
+        worker.clock = clock.clone();
+        let fixture = WriterFixture {
+            sampler: Sampler {
+                activity: Activity::new(paths.state, true),
+                first_sequence: queue.next_sequence(),
+                queue,
+                clock,
+                scope,
+                accounts: BTreeMap::new(),
+                salt: None,
+                producers: HashMap::new(),
+                run: crate::config::random_hex(),
+                previous: None,
+                legacy: false,
+                fenced: false,
+            },
+            epoch,
+            rx,
+            shared: worker.snapshot.clone(),
+        };
+        (worker, fixture)
+    }
+}
+
+#[cfg(test)]
+pub(super) struct WriterFixture {
+    sampler: Sampler,
+    epoch: Epoch,
+    rx: mpsc::Receiver<Control>,
+    shared: Arc<Mutex<Option<Arc<Capture>>>>,
+}
+
+#[cfg(test)]
+impl WriterFixture {
+    pub fn process(&mut self) {
+        let control = self.rx.try_recv().expect("queued writer control");
+        self.sampler.control(control, &mut self.epoch).unwrap();
+        self.sampler.publish_control(&self.shared, &self.epoch);
+    }
+
+    pub fn reading(&mut self, worker: &mut Worker, reading: Reading) {
+        let clock = Arc::new(Clock::fixed(reading));
+        worker.clock = clock.clone();
+        self.sampler.clock = clock;
+    }
+
+    pub fn pending(&self) -> Batch {
+        self.sampler.queue.prepare().unwrap()
     }
 }
