@@ -182,6 +182,12 @@ jobs:
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Observe committed cell identities once
+        if: contains(github.event.pull_request.labels.*.name, 'benchmark-trace-diagnostics')
+        run: node bench/cellCommitIdentitiesOnce.mjs
+        env:
+          QUOTUM_DIAGNOSTIC_CELL_COMMITS: once
+          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quotum-panning-trace
       - run: |
           if [ "$QUOTUM_BENCH_DIAGNOSE_PANNING" = cpu ] || [ "$QUOTUM_BENCH_DIAGNOSE_PANNING" = trace ]; then
             set -- --scope dashboard
