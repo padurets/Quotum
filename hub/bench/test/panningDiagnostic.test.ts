@@ -16,6 +16,52 @@ function fixture() {
   return {cdp,listeners,sent,files,starts,evidence:{save:(name:string,value:unknown)=>files.set(name,value),saveTrace:(name:string,value:unknown)=>files.set(name,value)}};
 }
 
+const flushFrame={scriptId:'8',lineNumber:9,columnNumber:245638,functionName:'private-canary',url:'https://private-canary.invalid'};
+const flushEvent=(name:string,stackTrace:unknown)=>({name,ph:'B',ts:100,pid:3,tid:4,args:{beginData:{stackTrace},data:{stackTrace:[{...flushFrame,scriptId:'99'}]}}});
+
+test('native trace retains the synchronous flush callsite separately from invalidation and callback locations',async()=>{
+  const f=fixture();
+  await tracePanning(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},f.evidence,async cdp=>{
+    await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});
+    f.listeners.get('Tracing.dataCollected')?.({value:[flushEvent('Layout',[flushFrame]),{...flushEvent('UpdateLayoutTree',[flushFrame]),ph:'X',dur:12},
+      {name:'Layout',ph:'E',ts:120},flushEvent('Paint',[flushFrame])]});
+    return {reports:[],problems:[]};
+  });
+  const report=safeEvidence(f.files.get('trace-1-trace')) as {events:SafeTrace[]};
+  assert.deepEqual(report.events.map(event=>event.flush),[
+    {status:'available',frames:[{scriptId:8,lineNumber:9,columnNumber:245638}],invalid:0,omitted:0},
+    {status:'available',frames:[{scriptId:8,lineNumber:9,columnNumber:245638}],invalid:0,omitted:0},undefined,undefined,
+  ]);
+  assert.deepEqual(f.starts,[{categories:'cc,devtools.timeline,disabled-by-default-devtools.timeline.stack',transferMode:'ReportEvents'}]);
+  assert.equal(f.sent.filter(method=>method==='Tracing.start').length,1);
+  assert.equal(f.sent.filter(method=>method==='Tracing.end').length,1);
+  assert.equal(f.listeners.size,0);
+  assert.doesNotMatch(JSON.stringify(report),/private-canary|functionName|https:|\"url\"|stackTrace/);
+});
+
+test('flush stacks keep absent, invalid and bounded-out observations explicit',async()=>{
+  const f=fixture(),frames=Array.from({length:33},()=>flushFrame);
+  const stacks=[undefined,[],null,{},[{...flushFrame,scriptId:'0'}],[{...flushFrame,scriptId:'08'}],[{...flushFrame,lineNumber:-1}],[{...flushFrame,columnNumber:Infinity}],[{...flushFrame,lineNumber:0}],[{...flushFrame,columnNumber:0}],frames];
+  await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
+    f.listeners.get('Tracing.dataCollected')?.({value:stacks.map(stack=>flushEvent('Layout',stack))});
+  },f.evidence,false,true);
+  const report=safeEvidence(f.files.get('trace')) as {events:{flush:{status:string;frames:object[];invalid:number;omitted:number}}[]};
+  assert.deepEqual(report.events.map(event=>event.flush?.status),['unavailable','unavailable',...Array(9).fill('insufficient-evidence')]);
+  assert.deepEqual(report.events.map(event=>event.flush.invalid),[0,0,1,1,1,1,1,1,1,1,0]);
+  assert.equal(report.events.at(-1)!.flush.frames.length,32);
+  assert.equal(report.events.at(-1)!.flush.omitted,1);
+  assert.doesNotMatch(JSON.stringify(report),/private-canary|functionName|https:|\"url\"|stackTrace/);
+});
+
+test('ordinary trace does not request or retain flush stacks',async()=>{
+  const f=fixture();
+  await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
+    f.listeners.get('Tracing.dataCollected')?.({value:[flushEvent('Layout',[flushFrame])]});
+  },f.evidence);
+  assert.equal((f.files.get('trace') as {events:{flush?:unknown}[]}).events[0].flush,undefined);
+  assert.deepEqual(f.starts,[{categories:'cc,devtools.timeline',transferMode:'ReportEvents'}]);
+});
+
 test('a trace retains only allowed numeric events from its own original interval', async()=>{
   const f=fixture();
   const result=await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{

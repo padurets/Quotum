@@ -80,7 +80,7 @@ export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceE
         active=traceInterval(cdp,browser,()=>{ready();return new Promise(resolve=>{release=()=>resolve(undefined);});},{
           save:(name,value)=>evidence?.save('trace-'+id+'-'+name,value),
           saveTrace:(name,value)=>evidence?.saveTrace?evidence.saveTrace('trace-'+id+'-'+name,value):evidence?.save('trace-'+id+'-'+name,value),
-        });
+        },false,true);
         await Promise.race([started,active]);
       }
       return cdp.send<T>(method,params,signal);
@@ -98,10 +98,10 @@ export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceE
   }
 }
 
-export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promise<T>, evidence?: TraceEvidence, timers = false) {
+export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promise<T>, evidence?: TraceEvidence, timers = false, flushStacks = false) {
   if(!browser.owned)throw new Error('browser-wide tracing requires an owned synthetic browser');
   const events:SafeTrace[]=[];
-  const sanitize=traceSanitizer(timers);
+  const sanitize=traceSanitizer(timers,flushStacks);
   const timerEvidence=timers?{install:0,remove:0,fire:0,invalid:0,missingInstallOwners:0,invalidOwners:0,omittedOwners:0,omittedEvents:0}:undefined;
   let omitted=0,bytes=0,ended=false,succeeded=false;
   const collection={chunks:0,sourceEvents:0,handlerMs:0,maxHandlerMs:0};
@@ -145,7 +145,7 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
     await deadline(5000,async signal=>{
       // Broad task instrumentation can outgrow the unchanged drain deadline.
       // Timeline and compositor events retain the measured work and thread clocks.
-      await cdp.send('Tracing.start',{categories:timers?'cc,devtools.timeline,disabled-by-default-devtools.timeline.stack':'cc,devtools.timeline',transferMode:'ReportEvents'},signal);
+      await cdp.send('Tracing.start',{categories:timers||flushStacks?'cc,devtools.timeline,disabled-by-default-devtools.timeline.stack':'cc,devtools.timeline',transferMode:'ReportEvents'},signal);
       await clock('start',signal);
     },browser.owner?.signal);
     const result=await run();succeeded=true;return result;

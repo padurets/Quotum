@@ -93,7 +93,12 @@ never contains script sources, arguments, arbitrary URLs or user text. Callback 
 retain validated numeric script IDs and source coordinates; an entry position does not
 partition nested work. Script IDs belong to their recorded browser context. Missing
 source identities, scheduler evidence and truncated timelines remain explicit. Trace
-events retain both
+records also retain up to 32 numeric stack frames at each style or layout update's
+entry, with missing, invalid and omitted frames explicit. These identify the current
+JavaScript caller when bound to that family's received and parsed source; they do not
+identify an earlier invalidation writer or establish execution cost. Stack collection
+adds unqualified observer overhead. Missing or unbound stacks remain unknown.
+Trace events retain both
 elapsed and thread CPU time where Chrome supplies them, with start/end page clock
 markers. Host request/response timestamps bracket the existing metric reads to bound
 their alignment with a failed DevTools command; they add no browser commands.
