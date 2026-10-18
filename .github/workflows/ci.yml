@@ -36,6 +36,11 @@ on:
         required: false
         type: boolean
         default: false
+      native_permission:
+        description: Open and immediately close one disabled self-only perf event without collecting data
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -179,7 +184,7 @@ jobs:
           node --import tsx --input-type=module <<'JS'
           import {execFileSync} from 'node:child_process';
           import {clientIdentity} from './bench/idleCpuDiagnostic.ts';
-          if([process.env.TRACE_ONLY,process.env.ORIGINAL_TIMING,process.env.RETIREMENT,process.env.GRID].filter(value=>value==='true').length>1)throw Error('Choose one diagnostic mode');
+          if([process.env.TRACE_ONLY,process.env.ORIGINAL_TIMING,process.env.RETIREMENT,process.env.GRID,process.env.NATIVE_PERMISSION].filter(value=>value==='true').length>1)throw Error('Choose one diagnostic mode');
           const requested=process.env.QUOTUM_BENCH_SOURCE_SHA,expected=process.env.EXPECTED_CLIENT_SHA256;
           const actual=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),client=clientIdentity();
           if(!/^[a-f0-9]{40}$/.test(requested??'')||actual!==requested||!/^[a-f0-9]{64}$/.test(expected??'')||client.status!=='available'||client.sha256!==expected)throw Error('Diagnostic control source or client mismatch');
@@ -192,7 +197,72 @@ jobs:
           ORIGINAL_TIMING: ${{ inputs.original_timing }}
           RETIREMENT: ${{ inputs.retirement }}
           GRID: ${{ inputs.grid }}
-      - run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci ${{ (inputs.retirement || inputs.grid) && '--scope dashboard' || '' }}
+          NATIVE_PERMISSION: ${{ inputs.native_permission }}
+      - name: Check disabled self-only perf event access
+        if: inputs.native_permission
+        run: |
+          set -euo pipefail
+          quotum_native_dir="$RUNNER_TEMP/quotum-idle-control"
+          quotum_probe_exe="$RUNNER_TEMP/quotum-disabled-perf-open"
+          mkdir -p "$quotum_native_dir"
+          trap 'rm -f -- "$quotum_probe_exe"' EXIT
+          test "$(uname -m)" = x86_64
+          uname -srmo
+          printf 'Runner image: %s / %s\n' "$ImageOS" "$ImageVersion"
+          cat /proc/sys/kernel/perf_event_paranoid
+          cat > "$quotum_native_dir/disabled-perf-open.c" <<'C'
+          #include <errno.h>
+          #include <linux/perf_event.h>
+          #include <stdio.h>
+          #include <string.h>
+          #include <sys/syscall.h>
+          #include <unistd.h>
+
+          int main(void) {
+            unsigned long long cap_eff = 0;
+            unsigned int no_new_privs = 0;
+            int have_caps = 0, have_privs = 0;
+            char line[256];
+            FILE *status = fopen("/proc/self/status", "r");
+            if (!status) return 2;
+            while (fgets(line, sizeof(line), status)) {
+              if (sscanf(line, "CapEff: %llx", &cap_eff) == 1) have_caps = 1;
+              if (sscanf(line, "NoNewPrivs: %u", &no_new_privs) == 1) have_privs = 1;
+            }
+            if (fclose(status) || !have_caps || !have_privs) return 2;
+            struct perf_event_attr attr;
+            memset(&attr, 0, sizeof(attr));
+            attr.type = PERF_TYPE_SOFTWARE;
+            attr.size = sizeof(attr);
+            attr.config = PERF_COUNT_SW_TASK_CLOCK;
+            attr.disabled = 1;
+            attr.exclude_kernel = 1;
+            attr.exclude_hv = 1;
+            printf("{\"uid\":%lu,\"euid\":%lu,\"pid\":%ld,\"capEff\":\"%016llx\",\"noNewPrivs\":%u,\"attr\":{\"type\":%u,\"size\":%u,\"config\":%llu,\"disabled\":1,\"inherit\":0,\"exclude_kernel\":1,\"exclude_hv\":1,\"sample_period\":0,\"sample_type\":0},\"target\":\"self\",\"cpu\":-1,\"group_fd\":-1,\"flags\":%lu,\"attr_hex\":\"",
+              (unsigned long)getuid(), (unsigned long)geteuid(), (long)getpid(), cap_eff, no_new_privs, attr.type, attr.size,
+              (unsigned long long)attr.config, (unsigned long)PERF_FLAG_FD_CLOEXEC);
+            for (unsigned int i = 0; i < sizeof(attr); i++) printf("%02x", ((unsigned char *)&attr)[i]);
+            printf("\",");
+            if (fflush(stdout)) return 2;
+            errno = 0;
+            int fd = syscall(__NR_perf_event_open, &attr, 0, -1, -1, PERF_FLAG_FD_CLOEXEC);
+            int open_errno = fd < 0 ? errno : 0;
+            if (fd < 0) {
+              printf("\"open\":false,\"errno\":%d,\"closed\":null,\"enabled\":false,\"mmap\":false,\"read\":false}\n", open_errno);
+              return 1;
+            }
+            errno = 0;
+            int closed = close(fd);
+            int close_errno = closed ? errno : 0;
+            printf("\"open\":true,\"errno\":0,\"closed\":%s,\"close_errno\":%d,\"enabled\":false,\"mmap\":false,\"read\":false}\n", closed == 0 ? "true" : "false", close_errno);
+            return closed == 0 ? 0 : 1;
+          }
+          C
+          cc -Wall -Wextra -Werror "$quotum_native_dir/disabled-perf-open.c" -o "$quotum_probe_exe"
+          sha256sum "$quotum_native_dir/disabled-perf-open.c"
+          timeout --kill-after=1s 5s "$quotum_probe_exe" | tee "$quotum_native_dir/disabled-perf-open.json"
+      - if: ${{ !inputs.native_permission }}
+        run: QUOTUM_CHROME="$(command -v google-chrome)" npm run bench -- --ci ${{ (inputs.retirement || inputs.grid) && '--scope dashboard' || '' }}
         env:
           QUOTUM_BENCH_DIAGNOSE_IDLE_CPU: ${{ inputs.grid && 'grid' || inputs.retirement && 'retirement' || inputs.trace_only && 'trace' || inputs.original_timing && 'profile' || '1' }}
           QUOTUM_BENCH_SOURCE_SHA: ${{ inputs.diagnostic_ref }}
