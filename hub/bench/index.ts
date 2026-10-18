@@ -367,7 +367,9 @@ async function main() {
       const scriptMsPerSecond = scriptPerSecond(before, after, reading.instrumentMs, actualSeconds);
       const calendar=heard!.calendar();
       const idle = {from, to, cellMs, requests, events:boardEvents, calendar, renders: reading.renders, mutations: reading.mutations, scriptMsPerSecond};
-      evidence.save('idle', {...idle, allEvents:events, boardEvents, deviceContacts, deviceHints, planned, phase, retentionBefore,retentionAfter,counterFrom, counterTo, actualSeconds, phaseProblems});
+      evidence.save('idle', {...idle, allEvents:events, boardEvents, deviceContacts, deviceHints, planned, phase, retentionBefore,retentionAfter,counterFrom, counterTo, actualSeconds, phaseProblems,
+        performance:{before:{Timestamp:before.Timestamp??null,ScriptDuration:before.ScriptDuration??null},
+          after:{Timestamp:after.Timestamp??null,ScriptDuration:after.ScriptDuration??null},instrumentMs:reading.instrumentMs}});
       if (idleTimingDiagnostic || idleCpu || shortIdleProfile) {
         originalIdleTimingProblems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
         evidence.save(idleCpuMode?'idle-cpu-result':'idle-timing-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
