@@ -235,8 +235,10 @@ day, not a script thrown together over a weekend. In practice that meant:
   and then every five as it stays quiet for hours; and less often while nothing happens,
   down to once every 15 minutes. The machine on duty asks the hub every 15 seconds, which
   starts nothing.
-- **Client credentials stay where they are.** The agent never reads, stores or sends provider
-  tokens or cookies. What leaves the machine: percentages and reset times, reported
+- **Client credentials stay where they are.** The agent never opens provider credential
+  files or stores or sends tokens or cookies. The optional consented hook checks only
+  inherited variable presence and the base URL's host, discarding token values and
+  other URL components. What leaves the machine: percentages and reset times, reported
   Codex credit balances and resource availability, plan names,
   a one-way hash of each account id (so the hub can tell two machines share one
   account), the machine's name and random id, the short message of a client that
@@ -642,7 +644,7 @@ token = "qt_m_…"
 
 [clients.opencode]
 enabled = true          # track independently of subscription measurement
-route = false           # reserved consent for route observations (not collected yet)
+route = false           # skip route observations for this client
 # path = "/opt/opencode/bin/opencode"
 
 [providers.antigravity]
@@ -672,6 +674,33 @@ available on Linux; shared or unproven invocations, and macOS/Windows, report pr
 without a project. Generic Node/bun hosts are not detected. Version probes are bounded
 and never read credentials or make model requests. Working states estimate process CPU
 activity; they are not provider reports of model work.
+
+Claude Code's machine route comes from `claude auth status --json`. API-key/helper and
+third-party logins are API; OAuth-token, signed-out and unfamiliar answers are unknown.
+Only `claude.ai` with `firstParty` permits subscription fallback. A shell's own exports
+are visible only with the optional session hook:
+
+```sh
+quotum hook status
+quotum hook enable
+quotum hook disable
+```
+
+The app offers the same consent in its application settings. One per-user copy is
+shared by the CLI and app, and either can remove it. Keep the helper and its payload
+manifest with the installed package. Native releases and trusted global npm installs
+can enable it; temporary `npx` caches, AppImage mounts and writable paths cannot import
+or update a helper. Their remove command remains available for an existing installation.
+The hook is silent and records only authentication-variable presence and the base URL
+host. Bare mode and hook policy can prevent observations; “no session records yet”
+does not promise the hook ran. Tracking and route opt-outs still apply independently.
+
+Cold/refresh acquisition temporarily omits machine evidence. A completed failure is
+conservative unknown evidence; a later successful machine answer does not clear a
+retained equal-strength conflict. Codex 0.162.1 supplies no proven process/thread
+binding through the supported interface, so its route is omitted and the existing
+subscription fallback can still be wrong. Use a client link for these cases, a gateway,
+`apiKeyHelper`, a Console login, or an overridden Codex base URL.
 
 In **Settings → Clients and resources**, assign a client to a connected resource
 (subscription or budget) on one device or all your devices, with an explicit start

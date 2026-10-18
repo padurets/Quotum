@@ -1,0 +1,22 @@
+{
+  "base": {
+    "sessionId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "provider": "claude",
+    "clientId": "claude",
+    "account": "4b7e0c1d2e3f4a5b6c7d8e9f",
+    "origin": "terminal",
+    "project": "Fixture",
+    "startedAt": "2026-09-22T12:00:00Z"
+  },
+  "frames": [
+    {"phase": "cold_pending", "working": true},
+    {"phase": "subscription", "working": true, "route": {"class": "subscription", "by": "machine"}},
+    {"phase": "ttl_pending", "working": false},
+    {"phase": "refreshed", "working": false, "route": {"class": "subscription", "by": "machine"}},
+    {"phase": "timeout_pending", "working": false},
+    {"phase": "terminal_timeout", "working": false, "route": {"class": "unknown", "by": "machine"}},
+    {"phase": "success_pending", "working": false},
+    {"phase": "recovered_machine", "working": false, "route": {"class": "subscription", "by": "machine"}},
+    {"phase": "session_api", "working": false, "route": {"class": "api", "by": "session", "host": "openrouter.ai"}}
+  ]
+}

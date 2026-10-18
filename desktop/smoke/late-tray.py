@@ -5,11 +5,14 @@ and the hidden app writes only to temporary data and start-at-login directories.
 """
 from pathlib import Path
 import os
+import stat
 import subprocess
 import sys
 import tempfile
 
 from gi.repository import Gio, GLib
+
+subprocess.run(['node', str(Path(__file__).with_name('native-qa.mjs'))], check=True)
 
 if os.environ.get('QUOTUM_TEST_PRIVATE_BUS') != '1':
     raise SystemExit('run this check through tray.sh, on its private bus')
@@ -123,6 +126,40 @@ with tempfile.TemporaryDirectory(prefix='quotum-late-tray-') as directory:
                 child.kill()
                 child.wait()
             result['exit'] = child.returncode
+
+    hub_log = root / 'app/logs/hub.log'
+    result['hookErrors'] = []
+    if hub_log.exists():
+        for line in hub_log.read_text().splitlines():
+            if 'app: Claude hook ' in line:
+                code = line.rsplit('app: Claude hook ', 1)[1]
+                if code in {'unsafe_path', 'untrusted_payload', 'invalid_manifest', 'invalid_settings',
+                            'conflict', 'busy', 'file_failure', 'no_entry', 'no_access',
+                            'update_pending', 'remove_pending'}:
+                    result['hookErrors'].append(code)
+    if 'untrusted_payload' in result['hookErrors']:
+        executable = Path(sys.argv[1]).resolve()
+        payload = (executable.parent / '../share/quotum/hook').resolve()
+        checks = []
+        for family, target in [('frontend', executable), ('payload', payload / 'payload-manifest.json'),
+                               ('helper', payload / 'quotum-hook')]:
+            for level, part in enumerate([target, *target.parents][:16]):
+                try:
+                    meta = part.lstat()
+                    checks.append({'family': family, 'level': level, 'mode': oct(stat.S_IMODE(meta.st_mode)),
+                                   'ownerTrusted': meta.st_uid in (0, os.geteuid()),
+                                   'links': meta.st_nlink if level == 0 else None,
+                                   'regular': stat.S_ISREG(meta.st_mode), 'directory': stat.S_ISDIR(meta.st_mode),
+                                   'symlink': stat.S_ISLNK(meta.st_mode)})
+                except OSError:
+                    checks.append({'family': family, 'level': level, 'unavailable': True})
+        result['hookSourceChecks'] = checks
+        result['hookFrontendNameMatches'] = executable.name == 'quotum-desktop'
+        result['hookAppDirPresent'] = 'APPDIR' in os.environ
+        result['hookAdjacentManifestPresent'] = (executable.parent / 'payload-manifest.json').exists()
+        version = os.environ.get('VERSION', '')
+        if version and all(char.isalnum() or char in '.-+' for char in version):
+            result['hookVersionedManifestPresent'] = (executable.parent / '.quotum-hook-payloads' / version / 'payload-manifest.json').exists()
 
     print(result)
     if not (result.get('lateRegistration') and result.get('controllerAlive')

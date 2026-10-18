@@ -10,3 +10,13 @@ export const KEY_STORAGE = {
   missing: {state: 'missing', outcome: 'missing', wasFile: false, retainedFile: false, resetAvailable: true, busy: false},
   mismatch: {state: 'missing', outcome: 'mismatch', wasFile: false, retainedFile: false, resetAvailable: true, busy: false},
 } satisfies Record<string, NonNullable<AppState['secretKey']>>;
+
+export const HOOK_STATES={
+  off:{status:{state:'off'},error:null},
+  enabled_no_records:{status:{state:'enabled_no_records'},error:null},
+  observing:{status:{state:'observing'},error:null},
+  update_pending:{status:{state:'update_pending'},error:null},
+  remove_pending:{status:{state:'remove_pending'},error:null},
+  error:{status:{state:'error',code:'conflict'},error:'conflict'},
+  untrusted:{status:{state:'off'},error:'untrusted_payload'},
+} satisfies Record<string,NonNullable<AppState['claudeHook']>>;

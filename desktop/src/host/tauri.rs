@@ -67,6 +67,7 @@ pub fn run(args: Args) {
             tauri_ipc::reset_secret_key,
             tauri_ipc::take_over,
             tauri_ipc::set_autostart,
+            tauri_ipc::set_claude_hook,
             tauri_ipc::reenter,
             tauri_ipc::quit,
             tauri_ipc::watch_state,

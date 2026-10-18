@@ -127,6 +127,17 @@ pub fn set_autostart(webview: Webview, shell: State<'_, Arc<Shell>>, on: bool) -
     execute(webview, shell, Request::SetAutostart { on })
 }
 #[tauri::command(async)]
+pub fn set_claude_hook(
+    webview: Webview,
+    shell: State<'_, Arc<Shell>>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Value, String> {
+    let tauri::ipc::InvokeBody::Json(value) = request.body() else { return Err("invalid hook request".into()) };
+    let request = serde_json::from_value(serde_json::json!({"command":"set_claude_hook","args":value}))
+        .map_err(|_| "invalid hook request")?;
+    execute(webview, shell, request)
+}
+#[tauri::command(async)]
 pub fn reenter(webview: Webview, shell: State<'_, Arc<Shell>>) -> Result<Value, String> {
     execute(webview, shell, Request::Reenter)
 }
@@ -199,7 +210,7 @@ mod tests {
         let urls = &hub.remote.as_ref().unwrap().urls;
         assert_eq!(urls, &["http://127.0.0.1:23456/*"]);
         assert_eq!(hub.windows, ["main"]);
-        assert_eq!(hub.permissions.len(), 9);
+        assert_eq!(hub.permissions.len(), 10);
         assert!(hub.permissions.iter().any(|p| p.identifier().get() == "allow-watch-state"));
         assert!(hub.permissions.iter().any(|p| p.identifier().get() == "allow-reset-secret-key"));
         let own = built(own_capability());

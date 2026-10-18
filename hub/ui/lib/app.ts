@@ -34,7 +34,9 @@ export type ProviderSettings = {
   last?: Measured;
 };
 /** `seq`: a later state has a larger one (desktop/src/notifier.rs); the page keeps the newest. */
+export type HookStatus = {state:'off'|'enabled_no_records'|'observing'|'update_pending'|'remove_pending'|'error';code?:string};
 export type AppState = {
+  claudeHook?: {status:HookStatus;error:string|null};
   mainNavigation?: {revision:number;destination:{kind:'devices';sourceId:string}|null};
   secretKey?: {state: 'keystore' | 'file' | 'waiting' | 'missing'; outcome: 'created' | 'ok' | 'rotated' | 'mismatch' | 'missing' | null; wasFile: boolean; retainedFile: boolean; resetAvailable: boolean; busy: boolean};
   seq: number;
@@ -106,6 +108,7 @@ function reportPanelHeight(heightCssPx: number): Promise<void> {
 }
 
 export const app = {
+  setClaudeHook: (on:boolean) => change('set_claude_hook', {on}),
   resetSecretKey: () => change('reset_secret_key'),
   saveDesktopSettings: (patch: {notifications?: Partial<NonNullable<AppState['notifications']>>; locale?: Locale}) => change('save_desktop_settings', {patch}),
   openMain: (destination?: {kind:'devices';sourceId:string}) => ask<void>('open_main',destination ? {destination} : {}),

@@ -23,6 +23,7 @@ fn main() {
             "reset_secret_key",
             "take_over",
             "set_autostart",
+            "set_claude_hook",
             "reenter",
             "quit",
             "watch_state",

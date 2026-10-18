@@ -23,6 +23,7 @@
     "start": "node dist/server/index.js",
     "demo": "node --import tsx demo/index.ts",
     "demo:keys": "vite build --config vite.demo.config.ts && node --import tsx demo/keys-server.ts",
+    "build:demo-ui":"vite build --config vite.demo.config.ts --outDir ../../dist/client/_app-demo --base /_app-demo/",
     "bench": "node --import tsx bench/index.ts",
     "bundle": "vite build --config vite.bundle.config.ts"
   },

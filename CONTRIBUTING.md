@@ -105,6 +105,27 @@ also provide Chromium's setuid helper.
 Tests never start a real Claude Code, Codex or Antigravity client: they use recorded
 answers and stand-in programs, so they cost nothing and don't depend on your accounts.
 
+The optional `quotum-hook` is silent before parsing its arguments, input or inherited
+environment. Tests of its presence flags and normalized host use synthetic records and
+roots; never introduce a test switch that redirects a production user's shared consent.
+Unit and explicit `--smoke` app hosts select their fake lifecycle before any shared-root
+lookup. Ordinary startup and `--hidden` QA keep production reconciliation and require a
+disposable OS account, verified by `desktop/smoke/native-qa.mjs` before launch. A temporary
+Quotum/XDG profile alone does not isolate consent. In an ephemeral runner, its administrator
+provisions the protected account receipt with `desktop/smoke/provision-native-qa.mjs`.
+Unsafe or unknown local accounts are refused before any native child starts.
+The explicit live-client check is `node desktop/smoke/hook.mjs --claude <executable>`
+in that disposable account, using the release CLI and canonical payloads built first.
+It makes no model request. On Linux, Claude's scrub scenario also requires bubblewrap
+and socat; missing client isolation dependencies fail the check rather than passing it.
+
+`node npm/build-hook.mjs <platform>` is the sole producer of release helper payloads,
+using the targets in `npm/platforms.mjs` with cargo-zigbuild and Zig 0.14.1. npm and desktop
+preparation consume its checked immutable payloads from `agent/target/hook-dist` (or an
+explicit build-time artifact path). A missing or mismatched payload fails preparation.
+`make check-desktop` produces the local payload in Docker first. Packaging a given
+OS/architecture across channels must retain those exact bytes and manifest.
+
 ### Trusted-key storage
 
 Ordinary tests use synthetic keys and store ports. The real system-store tests are
@@ -175,6 +196,10 @@ states at its printed loopback address. Select `?state=waiting&lang=ru` or the o
 states listed in `hub/demo/key-storage.ts`. Check both languages, a narrow window and
 reset confirmation. This fixture has no native store authority; also inspect the
 actual packaged app. The board benchmark and ordinary package smoke remain required.
+The same isolated renderer accepts `?hook=enabled_no_records&lang=ru` and the other
+`HOOK_STATES` from that file. It changes synthetic consent only. Managed `make dev`
+builds also serve it at `/_app-demo/` on their actual address, for the configured remote
+browser. Production hub and desktop packaging do not include this development fixture.
 
 ## The demo board
 

@@ -96,6 +96,12 @@ and platform smoke checks still apply.
   credential files, never makes a model request and never calls provider APIs. A new
   provider is an adapter in `agent/crates/core/src/providers/` that asks the provider's
   own command-line client.
+  The explicitly consented `quotum-hook` may inspect presence/nonempty flags in its
+  own inherited environment and parse only a base URL's DNS host. Token values and
+  other URL components never enter records, output or errors. It remains silent;
+  SessionStart output would enter Claude's model context. Only its installer may
+  edit its own user settings entry. Tests use synthetic roots and stand-in clients;
+  normal/hidden native QA requires a verified disposable OS account.
 - **Trusted hub keys are write-only.** Connector credentials pass through the hub's
   secrets service, are encrypted before SQLite sees them, and never enter board
   projections, errors or logs. Connectors use only their fixed HTTPS transport;

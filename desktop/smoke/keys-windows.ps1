@@ -6,6 +6,8 @@ param(
   [switch]$VerifyOnly
 )
 $ErrorActionPreference = 'Stop'
+& node (Join-Path $PSScriptRoot 'native-qa.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Native key QA requires a disposable OS account' }
 $appPath = (Resolve-Path -LiteralPath $App).Path
 $workPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Work)
 $appData = Join-Path $workPath 'app'

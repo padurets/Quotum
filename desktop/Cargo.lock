@@ -2976,13 +2976,16 @@ name = "quotum-core"
 version = "0.7.0"
 dependencies = [
  "dirs 7.0.0",
+ "getrandom 0.4.3",
  "jiff",
  "libc",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "toml 1.1.6+spec-1.1.0",
  "ureq",
+ "url",
  "windows-sys 0.61.2",
 ]
 

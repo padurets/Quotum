@@ -34,6 +34,7 @@ test('linked-client catalogue codes hold through production reports, projections
     assert.ok(links.some(link=>link.to===now-hour)&&links.some(link=>link.from===now+hour));seen.add('past-and-future-rules');
     const {sessions}=await owner.get<{sessions:(Attribution&{clientId:string;accountSourceId:string|null;host?:string})[]}>('/api/links/attribution');
     assert.ok(sessions.some(session=>session.route?.class==='subscription')&&sessions.some(session=>session.route?.class==='api'));seen.add('subscription-api');
+    assert.ok(sessions.some(session=>session.route?.class==='unknown'&&session.source===null));seen.add('unknown-route');
     assert.ok(sessions.some(session=>session.route?.provider==='openrouter'&&session.source===null));seen.add('unbound-api');
     assert.ok(sessions.some(session=>session.disagreement==='account'&&session.source!==session.accountSourceId));seen.add('manual-disagreement');
     assert.ok(sessions.some(session=>session.by==='link'&&!session.active&&session.source===null&&session.accountSourceId));seen.add('inactive-mask');

@@ -37,7 +37,7 @@ await locked(path.join(ctx.shared, 'heavy.lock'), async () => {
   } else if (action === 'check-agent') {
     await docker(false, 'cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked');
   } else if (action === 'check-desktop') {
-    await docker(true, 'node desktop/prepare.mjs && cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked');
+    await docker(true, 'node npm/build-hook.mjs linux-x64 && node desktop/prepare.mjs && cd desktop && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked');
   } else if (action === 'bench') {
     const benchEnv = {...env};
     if (process.env.QUOTUM_CHROME) benchEnv.QUOTUM_CHROME = process.env.QUOTUM_CHROME;

@@ -174,7 +174,7 @@ including an ancestor whose metadata becomes readable later.
 macOS and Windows currently have no invocation-role or process-session detector for
 these shared branches; their existing process observation remains the fallback, not
 proof of shared ownership. Persistent/remote-only servers are not hidden simply for
-being detached or idle. Collection reads process metadata only, starts no program,
+being detached or idle. Process accounting reads metadata only, starts no program,
 and looks once through the process list, then validates the relevant ancestry and CPU
 trees. Not seen: a client that runs as `node` (an npm install on macOS and Windows),
 and on Windows the folder, which the system does not tell of another process. macOS names
@@ -201,6 +201,44 @@ of quota collectors. Claude Code, Codex and Antigravity map explicitly to their 
 collectors; OpenCode has no collector. Client enabled/path settings apply to discovery
 and activity; collector enabled settings apply only to measuring. A runner with no
 collectors keeps reporting clients while session reporting is enabled.
+
+Route acquisition decorates those same process sessions after accounting and identity
+selection. Claude's machine route uses a bounded asynchronous `auth status --json`
+probe while a tracked Claude is present. It reads only auth method/provider, with a
+60-second executable/metadata cache and five-second execution budget. Acquisition
+pending omits route; terminal failures produce conservative unknown evidence. The
+cache TTL never expires retained hub evidence, and a later successful machine probe
+does not undo an equal-strength conflict.
+
+With explicit consent, the shared CLI/app installer edits only its own SessionStart
+handler in the user's Claude settings. This is the narrow exception to leaving client
+settings unchanged. The native `quotum-hook` is invoked directly, never through a shell,
+and redirects both output streams before parsing anything. It records only whitelisted
+environment presence flags and a normalized DNS host, matched to the owned Claude
+root's native birth. No credential value, transcript or other process environment is
+read. A Windows parent must have an older same-boot native sequence than the helper;
+unavailable ordering leaves session evidence unavailable. A folded descendant's record
+cannot colour an ancestor session.
+
+One protected per-user copy and channel serve both frontends, independently of their
+Quotum profile overrides. A common lock and installation-generation UUID serialize
+capture, install, update, relocation and removal. A successful Off removes the own
+entry, copy and records; a busy or incomplete removal is reported.
+Frontends reclaim checked records only when native evidence proves their process ended
+or its PID has a different birth; unknown liveness never authorizes deletion.
+Updates are monotonic; equal versions with different hashes conflict. Payload paths must be trusted
+throughout their chain; AppImage mounts and temporary npm caches cannot enable or
+update the hook, while either frontend may remove an existing installation. Package
+consumers use the same canonical helper bytes for an OS/architecture. Native CLI
+updates stage immutable versioned sidecars before replacing the CLI, preserving the
+old complete pair on download or replacement failure.
+
+The hook's table and the machine fallback are specified in `spec/ingest-v1.md`.
+Without the hook, a terminal's local exports remain invisible. Codex 0.162.1 exposes no
+proven native process/thread/authentication binding, so its production route is omitted.
+Global history and a fresh app-server are not a binding. Its existing subscription
+fallback can still be wrong; manual client links remain the correction. No observation
+proves the cost of an individual request.
 
 Legacy sessions retain their released subset and cap priority. Supplemental sessions
 carry work that cannot enter that subset. Schema 21 adds a client namespace, nullable

@@ -4,6 +4,8 @@
 # -Diagnostics <dir> keeps there, passed or not, the report, the app's logs and its processes.
 param([Parameter(Mandatory=$true)][string]$App, [string]$Report, [string]$Diagnostics)
 $ErrorActionPreference = 'Stop'
+& node (Join-Path $PSScriptRoot 'native-qa.mjs')
+if ($LASTEXITCODE -ne 0) { throw 'Native UI QA requires a disposable OS account' }
 # Relative to PowerShell's location: .NET would take them relative to the process's.
 if ($Report) { $Report = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Report) }
 if ($Diagnostics) { $Diagnostics = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Diagnostics) }
