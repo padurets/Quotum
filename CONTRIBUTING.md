@@ -98,6 +98,20 @@ entry, with missing, invalid and omitted frames explicit. These identify the cur
 JavaScript caller when bound to that family's received and parsed source; they do not
 identify an earlier invalidation writer or establish execution cost. Stack collection
 adds unqualified observer overhead. Missing or unbound stacks remain unknown.
+The native trace timeline records the returned web RAF handles at each movement
+sample. Trace RAF events retain their numeric callback ID and an interval-local,
+process-scoped frame alias shared with callback events and clock markers; opaque
+frame IDs are discarded. Handles can collide with Blink's internal callbacks. A match therefore
+also requires the private recorder callback's exact received-source location in
+that RAF event's own `FunctionCall`, with a unique matching context and invocation.
+Only work strictly between the previous matched callback's end and the next one's
+start can be assigned without a cross-clock conversion. Endpoint callbacks and
+missing or ambiguous matches remain unknown. This does not establish cost or
+physical presentation, and callback wrapping adds unqualified observer overhead.
+The native trace also counts existing Page navigation, frame-detachment and
+document-open events until its drain ends. Any such event, missing counter or
+changed page time origin prevents a document-lifetime match; frame aliases alone
+do not prove it. The benchmark already enables Page before tracing.
 Trace events retain both
 elapsed and thread CPU time where Chrome supplies them, with start/end page clock
 markers. Host request/response timestamps bracket the existing metric reads to bound

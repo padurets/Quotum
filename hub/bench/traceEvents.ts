@@ -13,6 +13,7 @@ export type SafeTrace = {name:string;phase:string;ts?:number;duration?:number;th
   source?:{scriptId:number;lineNumber:number;columnNumber:number};
   timer?:{id?:number;timeout?:number;singleShot?:boolean;invalid:number;ownerFrames:SourceFrames};
   flush?:SourceFrames;
+  callbackId?:number;contextFrame?:number;
   frame?:{source?:number;sequence?:number;hostId?:number;state?:string;mainAnimation?:boolean;compositorAnimation?:boolean};
   input?:{type?:string};tile?:{layerId?:number;sourceFrame?:number};breakdown?:Partial<Record<typeof BREAKDOWN[number],number>>};
 const fields = (value:unknown):Fields => value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Fields:{};
@@ -37,12 +38,22 @@ const sourceFrames = (original:unknown,minCoordinate=0):SourceFrames => {
 /** Async tracks are scoped to this interval and process. Their original opaque IDs never leave it. */
 export function traceSanitizer(timers = false, flushStacks = false) {
   const tracks = new Map<string,number>();
+  const contexts = new Map<string,number>();
   return (event:TraceEvent):SafeTrace|undefined => {
     if((!NAMES.has(event.name)&&!(timers&&TIMERS.has(event.name)))||!['B','E','X','I','b','e'].includes(event.ph))return;
     const args=fields(event.args),data=fields(args.data);
     const stage=event.name==='TimeStamp'&&typeof data.message==='string'&&CLOCK_MARKERS.has(data.message)?data.message:undefined;
     if(event.name==='TimeStamp'&&!stage)return;
     const safe:SafeTrace={name:event.name,phase:event.ph,ts:numeric(event.ts),duration:numeric(event.dur),threadTs:numeric(event.tts),threadDuration:numeric(event.tdur),pid:integer(event.pid),tid:integer(event.tid),stage};
+    if(flushStacks&&(event.name==='FireAnimationFrame'||event.name==='FunctionCall'||stage)) {
+      // RAF IDs can collide between Blink's internal and web callback collections.
+      if(event.name==='FireAnimationFrame')safe.callbackId=integer(data.id);
+      if(safe.pid!==undefined&&typeof data.frame==='string'&&data.frame.length>0&&data.frame.length<=128) {
+        const key=safe.pid+':'+data.frame;
+        if(!contexts.has(key)&&contexts.size<100_000)contexts.set(key,contexts.size+1);
+        safe.contextFrame=contexts.get(key);
+      }
+    }
     if(['b','e'].includes(event.ph)) {
       const id=fields(event.id2).local;
       if(typeof id==='string'&&/^0x[0-9a-f]{1,16}$/i.test(id)&&safe.pid!==undefined) {

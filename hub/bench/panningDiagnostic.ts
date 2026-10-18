@@ -85,7 +85,7 @@ export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceE
       }
       return cdp.send<T>(method,params,signal);
     }};
-  try {return await run(measured,undefined,{timeline:true,save:(name,value)=>evidence?.save('trace-'+name,value)});}
+  try {return await run(measured,undefined,{timeline:true,frameIds:true,save:(name,value)=>evidence?.save('trace-'+name,value)});}
   catch(error){failed=true;throw error;}
   finally {
     try {
@@ -102,6 +102,10 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
   if(!browser.owned)throw new Error('browser-wide tracing requires an owned synthetic browser');
   const events:SafeTrace[]=[];
   const sanitize=traceSanitizer(timers,flushStacks);
+  // Page is already enabled by the benchmark. A frame alias alone outlives navigation.
+  const documentLifetime=flushStacks?{frameNavigated:0,frameDetached:0,documentOpened:0}:undefined;
+  const lifetimeListeners=documentLifetime?(['frameNavigated','frameDetached','documentOpened'] as const)
+    .map(name=>['Page.'+name,()=>{documentLifetime[name]++;}] as const):[];
   const timerEvidence=timers?{install:0,remove:0,fire:0,invalid:0,missingInstallOwners:0,invalidOwners:0,omittedOwners:0,omittedEvents:0}:undefined;
   let omitted=0,bytes=0,ended=false,succeeded=false;
   const collection={chunks:0,sourceEvents:0,handlerMs:0,maxHandlerMs:0};
@@ -131,6 +135,7 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
   };
   const complete=()=>{ended=true;};
   cdp.on('Tracing.dataCollected',collected);cdp.on('Tracing.tracingComplete',complete);
+  for(const [method,listener]of lifetimeListeners)cdp.on(method,listener);
   let active=false;
   const clocks:unknown[]=[];
   const clock=async(stage:'start'|'end',signal:AbortSignal)=>{
@@ -169,7 +174,8 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
     drain.elapsedMs=performance.now()-started;
     if(cleanup==='incomplete'&&typeof cdp.snapshot==='function')drain.command=cdp.snapshot();
     cdp.off('Tracing.dataCollected',collected);cdp.off('Tracing.tracingComplete',complete);
-    const report={mode:'diagnostic',status:omitted||!ended?'insufficient-evidence':'complete',scheduler:'unavailable',threadClock:{status:events.some(event=>event.threadTs!==undefined)?'available':'unavailable'},omitted,bytes,cleanup,collection,drain,events};
+    for(const [method,listener]of lifetimeListeners)cdp.off(method,listener);
+    const report={mode:'diagnostic',status:omitted||!ended?'insufficient-evidence':'complete',scheduler:'unavailable',threadClock:{status:events.some(event=>event.threadTs!==undefined)?'available':'unavailable'},omitted,bytes,cleanup,collection,drain,...(documentLifetime?{documentLifetime}:{}),events};
     if(timerEvidence)Object.assign(report,{timerEvidence:{...timerEvidence,
       status:ended&&cleanup==='complete'&&!omitted&&timerEvidence.install>0&&!timerEvidence.invalid&&!timerEvidence.missingInstallOwners&&!timerEvidence.invalidOwners&&!timerEvidence.omittedOwners?'captured':'insufficient-evidence',
       kind:'Raw timer fields; source ownership, coordinate convention, carry-in lifetimes and observer and extra stack-capture overhead remain unqualified'}});

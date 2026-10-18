@@ -14,11 +14,12 @@ const edgeSeries=():PanReading['edgeSeries']=>['wheel','drag'].map(stage=>({stag
 const source = readFileSync(new URL('../panning.ts', import.meta.url), 'utf8');
 const probe = source.match(/await cdp\.evaluate\(`(\(\(\) => \{\n\s*const initiator=[\s\S]+?\}\)\(\))`\);/)![1];
 
-function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota', timeline = false) {
+function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota', timeline = false, frameIds = false) {
   let time = 0;
   let observe:(records:unknown[])=>void=()=>{};
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
-  const schedule = (callback: (stamp: number) => void) => {callbacks.push(callback); return callbacks.length;};
+  let nextHandle=0;
+  const schedule = (callback: (stamp: number) => void) => {callbacks.push(callback); return ++nextHandle;};
   const layer = (data = false) => {const slides = {isConnected:true,style: {transform: 'none'}, getAnimations: (): {playState: string}[] => []}; return {isConnected:true,style: {transform: 'none'}, getAnimations: (): {playState: string}[] => [], slides, querySelector: (selector: string) => selector === '.activity-stack' ? data ? {} : null : slides};};
   const fundsLayer = layer(), budgetLayer = layer(),sessionLayer=layer(),historyLayer = layer(), activityLayer = layer(true), activityTicks = layer(), activityEdge = layer(true);
   const restoreClip = {style: {transform: 'none'}, firstElementChild: activityLayer};
@@ -53,8 +54,8 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
     DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);if(value?.startsWith('scaleX'))this.e*=this.a;}},
     window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: (type:string,callback:(event:object)=>void) => {if(bubble.get(type)===callback)bubble.delete(type);}},
   };
-  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${JSON.stringify(period)}', JSON.stringify('24h')).replace('${panEvidenceScript(evidence?.timeline === true)}', panEvidenceScript(timeline)).replace('${panTransactionsScript()}', panTransactionsScript()).replace('${panErrorsScript()}',panErrorsScript()), context);
-  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; timeline: {read(): {entries: {kind: string; inputId?: number; frameId?: number}[]}}}}).__quotumPan;
+  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${JSON.stringify(period)}', JSON.stringify('24h')).replace('${panEvidenceScript(evidence?.timeline === true, 10_000, evidence?.frameIds === true)}', panEvidenceScript(timeline,10_000,frameIds)).replace('${panTransactionsScript()}', panTransactionsScript()).replace('${panErrorsScript()}',panErrorsScript()).replace("${evidence?.timeline === true && evidence?.frameIds === true ? 'timeline.wrap(originalRAF)' : 'callback=>originalRAF.call(window,callback)'}",timeline&&frameIds?'timeline.wrap(originalRAF)':'callback=>originalRAF.call(window,callback)'), context);
+  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; timeline: {read(): {entries: {kind: string; inputId?: number; frameId?: number; rafFrom?:number|null;rafTo?:number|null}[]}}}}).__quotumPan;
   for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: '-1000000000', panMaxEnd: '1000000000'});
   const limits = (min: number, max: number) => {for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: String(min), panMaxEnd: String(max)});};
   const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}, deltaX = initiator==='activity'?7:12) => {
@@ -78,6 +79,17 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
   const runFrame = (at: number) => frame(at).forEach(callback => callback(at));
   return {reading, wheel, limits, listeners, bubble, update, frame, runFrame,observe:(records:unknown[])=>observe(records), requestFrame: context.window.requestAnimationFrame, context,sessionSvg,sessionLayer,historySvg, activitySvg, budgetSvg, fundsSvg, fundsLayer, budgetLayer, historyLayer, activityLayer, activityClip};
 }
+
+test('opt-in callback handles follow the actual movement samples without changing frame credit',()=>{
+  const f=fixture('quota',true,true);
+  f.wheel(0,0);const first=f.requestFrame(()=>f.update(1,16));f.runFrame(16);
+  f.wheel(20,20);const second=f.requestFrame(()=>f.update(2,32));f.runFrame(32);
+  const entries=f.reading.timeline.read().entries.filter(entry=>entry.kind==='frame');
+  assert.deepEqual(Array.from(entries,entry=>[entry.rafFrom,entry.rafTo]),[[null,first],[first,second]]);
+  assert.deepEqual(Array.from(f.reading.frames),[16]);assert.equal(f.reading.updated,2);
+  assert.equal(f.reading.pending.length,0);assert.equal(f.reading.latency.length,2);
+  f.reading.cleanup();
+});
 
 test('the original probe records a native generation pause before a handler writes the address', () => {
   const f=fixture();f.reading.feeding=true;

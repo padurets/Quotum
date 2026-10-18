@@ -7,7 +7,7 @@ import {panMetrics, panCost} from './panningMetrics.js';
 import {panningSettlement} from './panningFailure.js';
 
 /** Native input against the real charts; the temporary layout brings all five into view. */
-export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {timeline?: boolean; save(name: string, value: unknown): void}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic) {
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {timeline?: boolean; frameIds?: boolean; save(name: string, value: unknown): void}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic) {
   const evidence=typeof options==='function'?undefined:options;
   diagnoseReload??=typeof options==='function'?options:undefined;
   cdp.at?.('panning/setup');
@@ -90,7 +90,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await cdp.evaluate(`(() => {
         const initiator=${JSON.stringify(initiator)},period=${JSON.stringify(period)};
         window.__quotumPan?.errors?.stop();
-        const timeline=${panEvidenceScript(evidence?.timeline === true)},transactions=${panTransactionsScript()},staged=new Set();let nextRequest=0;
+        const timeline=${panEvidenceScript(evidence?.timeline === true, 10_000, evidence?.frameIds === true)},transactions=${panTransactionsScript()},staged=new Set();let nextRequest=0;
         const charts=['quota-history','activity','budget-history','subscription-funds','quota-session-history'].map(id=>document.querySelector('[data-widget="'+id+'"] .chart>svg')),driver=({quota:0,activity:1,budget:2,funds:3,session:4})[initiator],root=charts[driver],views=charts.map(svg=>svg.viewBox.baseVal.width),scales=charts.map((svg,i)=>svg.getBoundingClientRect().width/views[i]),size=svg=>svg.getAttribute('viewBox')+':'+svg.style.height,sizes=charts.map(size);
         // PlotLayer retains these owners while React replaces their path children.
         // Repeated selectors inside every production RAF would load the measurement itself.
@@ -183,7 +183,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
           }}
         });probe.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true});
         const originalRAF=window.requestAnimationFrame||requestAnimationFrame;
-        const schedule=callback=>originalRAF.call(window,callback);
+        const schedule=${evidence?.timeline === true && evidence?.frameIds === true ? 'timeline.wrap(originalRAF)' : 'callback=>originalRAF.call(window,callback)'};
         let previous=charts.map(()=>'0:1'),phase='idle',lastFrame=null,paintedToken=null,observedAnimation=null,observedPending=false;
         const consume=(count,now,stamp,reachedGesture)=>{const reached=probe.pending.slice(0,count).filter(input=>input.gesture===reachedGesture);probe.pending=probe.pending.filter((input,i)=>i>=count||input.gesture!==reachedGesture);for(const input of reached){const ms=now-input.at;probe.latency.push(ms);if(timeline)timeline.add('credit',{inputId:input.id,frameId:stamp,token:Number(input.gesture.token),stamp:input.at,delivered:input.delivered,credited:now,pixels:input.pixels,segment:input.segment});probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size});}};
         const sample=(stamp,afterCallback=false)=>{

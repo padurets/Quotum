@@ -21,7 +21,8 @@ const flushEvent=(name:string,stackTrace:unknown)=>({name,ph:'B',ts:100,pid:3,ti
 
 test('native trace retains the synchronous flush callsite separately from invalidation and callback locations',async()=>{
   const f=fixture();
-  await tracePanning(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},f.evidence,async cdp=>{
+  await tracePanning(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},f.evidence,async(cdp,_pace,options)=>{
+    assert.ok(options&&typeof options!=='function');assert.equal(options.timeline,true);assert.equal(options.frameIds,true);
     await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});
     f.listeners.get('Tracing.dataCollected')?.({value:[flushEvent('Layout',[flushFrame]),{...flushEvent('UpdateLayoutTree',[flushFrame]),ph:'X',dur:12},
       {name:'Layout',ph:'E',ts:120},flushEvent('Paint',[flushFrame])]});
@@ -37,6 +38,46 @@ test('native trace retains the synchronous flush callsite separately from invali
   assert.equal(f.sent.filter(method=>method==='Tracing.end').length,1);
   assert.equal(f.listeners.size,0);
   assert.doesNotMatch(JSON.stringify(report),/private-canary|functionName|https:|\"url\"|stackTrace/);
+});
+
+test('native RAF identities retain numeric handles and process-scoped frame aliases without leaking opaque IDs',async()=>{
+  const f=fixture();
+  const event=(pid:number,id:unknown,frame:unknown)=>({name:'FireAnimationFrame',ph:'B',ts:100,pid,tid:4,args:{data:{id,frame}}});
+  const events=[{name:'TimeStamp',ph:'I',ts:90,pid:3,tid:4,args:{data:{message:'quotum-trace-clock-start',frame:'private-canary'}}},
+    event(3,7,'private-canary'),event(3,7,'another-private-frame'),event(4,7,'private-canary'),event(3,7,'private-canary'),
+    event(3,'7',''),event(3,-1,null),event(3,Infinity,{}),event(3,8,'x'.repeat(129)),
+    ...['private-canary','another-private-frame'].map(frame=>({name:'FunctionCall',ph:'B',ts:100,pid:3,tid:4,args:{data:{frame,id:999}}}))];
+  await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
+    f.listeners.get('Tracing.dataCollected')?.({value:events});
+  },f.evidence,false,true);
+  const rows=(safeEvidence(f.files.get('trace')) as {events:SafeTrace[]}).events;
+  assert.deepEqual(rows.map(row=>row.contextFrame),[1,1,2,3,1,undefined,undefined,undefined,undefined,1,2]);
+  assert.deepEqual(rows.map(row=>row.callbackId),[undefined,7,7,7,7,undefined,undefined,undefined,8,undefined,undefined]);
+  assert.doesNotMatch(JSON.stringify(rows),/private-canary|another-private-frame/);
+  const ordinary=fixture();
+  await traceInterval(ordinary.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
+    ordinary.listeners.get('Tracing.dataCollected')?.({value:events});
+  },ordinary.evidence);
+  assert.ok((ordinary.files.get('trace') as {events:SafeTrace[]}).events.every(row=>row.callbackId===undefined&&row.contextFrame===undefined));
+});
+
+test('native trace brackets document lifetime with existing Page events and removes its listeners',async()=>{
+  const f=fixture(),browser={owned:true,endpoint:'fixture',close:async()=>{}};
+  await traceInterval(f.cdp,browser,async()=>{
+    for(const name of ['frameNavigated','frameDetached','documentOpened']){
+      assert.ok(f.listeners.has('Page.'+name));
+      f.listeners.get('Page.'+name)?.({frame:{id:'private-canary',url:'https://private-canary.invalid'}});
+    }
+    assert.equal(f.listeners.has('Page.navigatedWithinDocument'),false);
+  },f.evidence,false,true);
+  const first=f.files.get('trace') as {documentLifetime:object};
+  assert.deepEqual(first.documentLifetime,{frameNavigated:1,frameDetached:1,documentOpened:1});
+  assert.equal(f.listeners.size,0);assert.doesNotMatch(JSON.stringify(first),/private-canary/);
+  await traceInterval(f.cdp,browser,async()=>{},f.evidence,false,true);
+  assert.deepEqual((f.files.get('trace') as {documentLifetime:object}).documentLifetime,{frameNavigated:0,frameDetached:0,documentOpened:0});
+  assert.deepEqual(first.documentLifetime,{frameNavigated:1,frameDetached:1,documentOpened:1});
+  assert.equal(f.sent.filter(method=>method==='Page.enable').length,0,'the benchmark already enables Page');
+  assert.equal(f.listeners.size,0);
 });
 
 test('flush stacks keep absent, invalid and bounded-out observations explicit',async()=>{
@@ -56,9 +97,11 @@ test('flush stacks keep absent, invalid and bounded-out observations explicit',a
 test('ordinary trace does not request or retain flush stacks',async()=>{
   const f=fixture();
   await traceInterval(f.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{
+    assert.equal(f.listeners.has('Page.frameNavigated'),false);
     f.listeners.get('Tracing.dataCollected')?.({value:[flushEvent('Layout',[flushFrame])]});
   },f.evidence);
   assert.equal((f.files.get('trace') as {events:{flush?:unknown}[]}).events[0].flush,undefined);
+  assert.equal((f.files.get('trace') as {documentLifetime?:unknown}).documentLifetime,undefined);
   assert.deepEqual(f.starts,[{categories:'cc,devtools.timeline',transferMode:'ReportEvents'}]);
 });
 

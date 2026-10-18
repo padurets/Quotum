@@ -188,7 +188,8 @@ function nativeSampler(initiator:string,period:string) {
   const visit=(node:ts.Node)=>{if(ts.isTemplateExpression(node)&&node.getText(source).includes('const probe=window.__quotumPan={'))templates.push(node);ts.forEachChild(node,visit);};
   visit(source);assert.equal(templates.length,1);
   const values:Record<string,string>={'JSON.stringify(initiator)':JSON.stringify(initiator),'JSON.stringify(period)':JSON.stringify(period),
-    'panEvidenceScript(evidence?.timeline === true)':panEvidenceScript(true),'panTransactionsScript()':panTransactionsScript(),'panErrorsScript()':panErrorsScript()};
+    'panEvidenceScript(evidence?.timeline === true, 10_000, evidence?.frameIds === true)':panEvidenceScript(true,10_000,true),'panTransactionsScript()':panTransactionsScript(),'panErrorsScript()':panErrorsScript(),
+    "evidence?.timeline === true && evidence?.frameIds === true ? 'timeline.wrap(originalRAF)' : 'callback=>originalRAF.call(window,callback)'":'timeline.wrap(originalRAF)'};
   return templates[0].head.text+templates[0].templateSpans.map(span=>{const value=values[span.expression.getText(source)];assert.notEqual(value,undefined);return value+span.literal.text;}).join('');
 }
 
