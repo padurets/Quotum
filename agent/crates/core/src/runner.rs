@@ -231,6 +231,53 @@ impl Runner {
         let mut commands: Vec<Option<String>> = vec![None; self.adapters.len()];
         let mut command_accounts: Vec<Option<String>> = vec![None; self.adapters.len()];
         let mut policy_contact = Instant::now();
+        let target = if !self.stop.requested() { sink.activity_target() } else { None };
+        let observed = target.is_some();
+        let route_policy = ClientId::ALL.into_iter().filter(|c| !self.config.routes(*c)).collect::<Vec<_>>();
+        let enabled = self.config.sessions() && !self.clients.is_empty();
+        let privacy = target.as_ref().and_then(|_| {
+            match crate::observed::privacy::update(
+                &self.paths,
+                enabled,
+                self.config.projects(),
+                &self.clients,
+                &route_policy,
+            ) {
+                Ok(privacy) => Some(privacy),
+                Err(_) => {
+                    sink.activity_failed();
+                    None
+                }
+            }
+        });
+        let mut activity_delivery = target.filter(|_| enabled).and_then(|target| {
+            let privacy = privacy.clone()?;
+            let mut clients = self.clients.iter().map(|c| c.id().to_string()).collect::<Vec<_>>();
+            clients.sort();
+            let mut route_disabled = ClientId::ALL
+                .into_iter()
+                .filter(|c| !self.config.routes(*c))
+                .map(|c| c.id().to_string())
+                .collect::<Vec<_>>();
+            route_disabled.sort();
+            crate::observed::worker::Worker::start(crate::observed::worker::Start {
+                paths: self.paths.clone(),
+                home: self.home.clone(),
+                clients: self.clients.clone(),
+                scope: crate::observed::Scope { version: 1, clients, route_disabled, complete: true },
+                namespace: target.namespace,
+                credential_scope: target.credential_scope,
+                projects: self.config.projects(),
+                stop: self.stop.clone(),
+                privacy,
+            })
+            .map_err(|_| sink.activity_failed())
+            .ok()
+            .map(crate::observed::delivery::Delivery::new)
+        });
+        let mut observed_inventory = Inventory::default();
+        let mut inventory_at: Option<Instant> = None;
+        let mut inventory = Vec::new();
         if sink.managed() {
             policy = sink.checkin_managed(&[], &providers).policy;
             sink.flush();
@@ -239,7 +286,7 @@ impl Runner {
             }
         }
         let mut clock = Clock::new(now_ms());
-        let mut watch = self.config.sessions().then(|| Watch {
+        let mut watch = (self.config.sessions() && !observed).then(|| Watch {
             activity: Activity::new(self.home.clone(), self.config.projects()),
             looked: None,
             reported: None,
@@ -254,6 +301,28 @@ impl Runner {
         while !self.stop.requested() {
             if let Some(reason) = sink.refused() {
                 return Some(reason.to_string());
+            }
+            if let Some(delivery) = &mut activity_delivery {
+                #[cfg(all(feature = "activity-bench", target_os = "linux"))]
+                let context_cpu = crate::observed::probe::cpu();
+                delivery.accounts(self.activity_accounts(&accounts, &identity_paths));
+                #[cfg(all(feature = "activity-bench", target_os = "linux"))]
+                crate::observed::probe::CONTEXT_CPU_NS
+                    .fetch_add(crate::observed::probe::cpu() - context_cpu, std::sync::atomic::Ordering::Relaxed);
+                if inventory_at.is_none_or(|at| at.elapsed() >= LOOK_EVERY) {
+                    if let Some(capture) = delivery.worker.snapshot() {
+                        inventory = observed_inventory.look_running(
+                            &self.config,
+                            &self.clients,
+                            &self.home,
+                            &self.paths.work,
+                            &self.stop,
+                            &capture.paths,
+                        );
+                        inventory_at = Some(Instant::now());
+                    }
+                }
+                delivery.turn(sink, &inventory);
             }
             // Only while the list can go somewhere: no looking for a hub that does not take it
             // (now: an older one is asked again later, and looking starts over then).
@@ -517,6 +586,58 @@ impl Runner {
             .collect()
     }
 
+    fn activity_accounts(
+        &self,
+        accounts: &[Option<(Option<String>, Option<SystemTime>)>],
+        identity_paths: &[Vec<PathBuf>],
+    ) -> std::collections::BTreeMap<ClientId, crate::observed::worker::Account> {
+        let mut result = std::collections::BTreeMap::new();
+        for &client in &self.clients {
+            let Some(provider) = client.collector() else {
+                continue;
+            };
+            let index = self.adapters.iter().position(|a| a.provider() == provider);
+            let account = if let Some(i) = index {
+                self.activity_account(self.adapters[i].as_ref(), &accounts[i], identity_paths[i].clone(), true)
+            } else {
+                let collector = adapter(provider);
+                let paths = collector.identity_paths(&self.home);
+                self.activity_account(collector.as_ref(), &None, paths, false)
+            };
+            result.insert(client, account);
+        }
+        result
+    }
+
+    fn activity_account(
+        &self,
+        collector: &dyn Collector,
+        measured: &Option<(Option<String>, Option<SystemTime>)>,
+        paths: Vec<PathBuf>,
+        legacy: bool,
+    ) -> crate::observed::worker::Account {
+        let provider = collector.provider();
+        let identity = last_activity(&paths);
+        let account = if collector.identifies_account() {
+            current_account(collector.local_account(&self.home), measured, identity).flatten()
+        } else {
+            None
+        };
+        // The resolved account and its reusable witness must describe the same sign-in.
+        let source = (identity == last_activity(&paths)
+            && (account.is_some() || (legacy && !collector.identifies_account())))
+        .then(|| crate::observed::Source {
+            provider: provider.id().into(),
+            account,
+            account_name: legacy
+                .then_some(self.config.account_name(provider))
+                .flatten()
+                .map(|name| name.chars().take(120).collect()),
+        });
+        let by = source.as_ref().map(|s| if s.account.is_some() { "login" } else { "inferred" }.into());
+        crate::observed::worker::Account { source, by, identity, paths, legacy }
+    }
+
     fn running_with(
         &self,
         seen: Vec<crate::activity::Session>,
@@ -627,7 +748,11 @@ impl Runner {
 /// The names a session is reported with: none when project names are turned off; its
 /// folder only where it is not its project. Each as long as a hub takes it (spec: text
 /// fields); the hub would cut it too.
-fn names(project: Option<String>, folder: Option<String>, allowed: bool) -> (Option<String>, Option<String>) {
+pub(crate) fn names(
+    project: Option<String>,
+    folder: Option<String>,
+    allowed: bool,
+) -> (Option<String>, Option<String>) {
     if !allowed {
         return (None, None);
     }
@@ -882,6 +1007,170 @@ mod tests {
         assert_eq!(current_account(None, &measured, later), None, "signed in again since: not known");
         assert_eq!(current_account(None, &None, later), Some(None), "not measured yet: the hub's guess");
         assert_eq!(current_account(None, &Some((None, then)), then), Some(None), "measured, and named no account");
+    }
+
+    mod observed_accounts {
+        use super::*;
+        use std::path::Path;
+
+        const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaa";
+        const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbb";
+
+        fn first() -> SystemTime {
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_000)
+        }
+        fn second() -> SystemTime {
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_060)
+        }
+
+        #[derive(Clone, Copy)]
+        enum Read {
+            Local,
+            Measured,
+            LocalThenSignIn,
+            MeasuredThenSignIn,
+        }
+
+        struct AccountCollector {
+            path: PathBuf,
+            read: Read,
+        }
+        impl Collector for AccountCollector {
+            fn provider(&self) -> Provider {
+                Provider::Codex
+            }
+            fn measure(&mut self, _: &Context) -> Outcome {
+                panic!("account capture must not invoke a client");
+            }
+            fn activity_paths(&self, _: &Path) -> Vec<PathBuf> {
+                Vec::new()
+            }
+            fn local_account(&self, _: &Path) -> Option<String> {
+                let account = match self.read {
+                    Read::Local | Read::LocalThenSignIn => Some(std::fs::read_to_string(&self.path).unwrap()),
+                    _ => None,
+                };
+                if matches!(self.read, Read::LocalThenSignIn | Read::MeasuredThenSignIn) {
+                    // Publish another login after reading A, before returning it to Runner.
+                    identity(&self.path, B, second());
+                }
+                account
+            }
+        }
+
+        struct Stand(PathBuf);
+        impl Stand {
+            fn new() -> Self {
+                let path =
+                    std::env::temp_dir().join(format!("quotum-account-snapshot-{}", crate::config::random_hex()));
+                std::fs::create_dir(&path).unwrap();
+                Self(path)
+            }
+            fn runner(&self, adapters: Vec<Box<dyn Collector>>) -> Runner {
+                let paths =
+                    Paths { config: self.0.join("config.toml"), state: self.0.clone(), work: self.0.join("work") };
+                Runner::with_adapters(Config::default(), paths, adapters, self.0.clone(), Stop::new())
+            }
+        }
+        impl Drop for Stand {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        fn identity(path: &Path, contents: &str, at: SystemTime) {
+            std::fs::write(path, contents).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(at))
+                .unwrap();
+        }
+
+        fn durable(
+            accounts: std::collections::BTreeMap<ClientId, crate::observed::worker::Account>,
+            client: ClientId,
+            expected: Option<&str>,
+        ) {
+            let batch = crate::observed::worker::captured_accounts(accounts, client);
+            let checkpoint = batch.checkpoint.unwrap();
+            assert_eq!(checkpoint.contexts.len(), 1);
+            let context = &checkpoint.contexts[0];
+            assert_eq!(context.client_id, client.id());
+            assert_eq!(context.source.as_ref().and_then(|s| s.account.as_deref()), expected);
+            assert_eq!(context.account_by.as_deref(), expected.map(|_| "login"));
+            assert_eq!(context.working, Some(true));
+            assert_eq!(
+                context.session_id,
+                Some(crate::session_identity::identify("0123456789abcdef0123456789abcdef", client, &[4, 2])),
+                "funding uncertainty preserves the captured producer"
+            );
+            assert!(batch.frames.iter().all(|frame| frame.next_state.is_none()));
+            assert_eq!(batch.frames.iter().map(|frame| frame.to_tick - frame.from_tick).sum::<u64>(), 15_000);
+        }
+
+        #[test]
+        fn observed_account_resolution_rejects_mid_read_sign_in_and_keeps_stable_evidence() {
+            for (read, contents, at, expected) in [
+                (Read::Local, A, first(), Some(A)),
+                (Read::Local, B, second(), Some(B)),
+                (Read::Measured, A, first(), Some(A)),
+                (Read::Measured, B, second(), None),
+                (Read::LocalThenSignIn, A, first(), None),
+                (Read::MeasuredThenSignIn, A, first(), None),
+            ] {
+                let stand = Stand::new();
+                let path = stand.0.join("identity");
+                identity(&path, contents, at);
+                let collector = AccountCollector { path: path.clone(), read };
+                let mut runner = stand.runner(vec![Box::new(collector)]);
+                runner.clients = vec![ClientId::Codex];
+                let accounts = runner.activity_accounts(&[Some((Some(A.into()), Some(first())))], &[vec![path]]);
+                let account = accounts.get(&ClientId::Codex).unwrap();
+                let witness = account.identity;
+                assert!(account.legacy);
+                durable(accounts, ClientId::Codex, expected);
+                assert_eq!(witness, Some(at), "measured lookup and published witness use the pre-read stat");
+            }
+        }
+
+        #[test]
+        fn observed_account_snapshot_guard_also_applies_without_a_measurement_collector() {
+            let stand = Stand::new();
+            let path = stand.0.join("identity");
+            identity(&path, A, first());
+            let runner = stand.runner(Vec::new());
+            let collector = AccountCollector { path: path.clone(), read: Read::LocalThenSignIn };
+            let account = runner.activity_account(&collector, &None, vec![path], false);
+            assert!(account.source.is_none() && account.by.is_none());
+            assert_eq!(account.identity, Some(first()));
+            assert!(!account.legacy);
+            durable(std::collections::BTreeMap::from([(ClientId::Codex, account)]), ClientId::Codex, None);
+        }
+
+        #[test]
+        fn observed_accounts_from_a_disabled_claude_collector_follow_local_sign_in_only() {
+            let stand = Stand::new();
+            let path = stand.0.join(".claude.json");
+            let mut runner = stand.runner(Vec::new());
+            runner.clients = vec![ClientId::Claude];
+            for (email, at) in [("a@example.com", first()), ("b@example.com", second())] {
+                identity(
+                    &path,
+                    &format!(r#"{{"oauthAccount":{{"emailAddress":"{email}","organizationName":"Fixture"}}}}"#),
+                    at,
+                );
+                let expected = crate::model::pseudonym(Provider::Claude, &format!("{email}/Fixture"));
+                let accounts = runner.activity_accounts(&[], &[]);
+                let account = accounts.get(&ClientId::Claude).unwrap();
+                assert_eq!(account.identity, Some(at));
+                assert!(!account.legacy);
+                durable(accounts, ClientId::Claude, Some(&expected));
+            }
+            identity(&path, "{}", second() + Duration::from_secs(60));
+            durable(runner.activity_accounts(&[], &[]), ClientId::Claude, None);
+        }
     }
 
     #[test]
@@ -1295,6 +1584,58 @@ mod tests {
         assert!(events.is_empty(), "waiting at the hub's pace is not news");
         assert_eq!(sink.flushed, 1, "the hub answered: what it did not take goes now");
     }
+    #[test]
+    fn a_privacy_initialization_failure_is_reported_without_stopping_quota_checkins() {
+        struct Recording {
+            stop: Stop,
+            warnings: usize,
+            checkins: usize,
+        }
+        impl Sink for Recording {
+            fn managed(&self) -> bool {
+                true
+            }
+            fn activity_target(&self) -> Option<crate::observed::Target> {
+                Some(crate::observed::Target { namespace: "a".repeat(64), credential_scope: "b".repeat(64) })
+            }
+            fn activity_failed(&mut self) {
+                self.warnings += 1;
+            }
+            fn checkin_managed(&mut self, _: &[Ask], _: &[Provider]) -> crate::sink::CheckinAnswer {
+                self.checkins += 1;
+                self.stop.request(crate::stop::How::Exit);
+                crate::sink::CheckinAnswer {
+                    directives: Vec::new(),
+                    commands: Vec::new(),
+                    accounts: Vec::new(),
+                    policy: None,
+                }
+            }
+            fn deliver(&mut self, _: &Outcome) {
+                panic!("no collectors were configured");
+            }
+            fn activity_request(&mut self, _: &serde_json::Value, _: bool) -> crate::observed::Answer {
+                panic!("a broken privacy barrier must not send activity");
+            }
+        }
+        for lock_is_directory in [false, true] {
+            let root = std::env::temp_dir().join(format!("quotum-runner-privacy-{}", crate::config::random_hex()));
+            std::fs::create_dir_all(&root).unwrap();
+            if lock_is_directory {
+                std::fs::create_dir(root.join("activity-policy.lock")).unwrap();
+            } else {
+                std::fs::write(root.join("activity-policy.json"), "{}").unwrap();
+            }
+            let stop = Stop::new();
+            let paths = Paths { config: root.join("config.toml"), work: root.join("work"), state: root.clone() };
+            let mut runner = Runner::with_adapters(Config::default(), paths, Vec::new(), root.clone(), stop.clone());
+            let mut sink = Recording { stop, warnings: 0, checkins: 0 };
+            runner.run(&mut sink, |_| panic!("no collector events"));
+            assert_eq!((sink.warnings, sink.checkins), (1, 1));
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
     #[test]
     fn an_empty_local_scope_is_declared_once_without_starting_a_recovery_loop() {
         struct Empty {

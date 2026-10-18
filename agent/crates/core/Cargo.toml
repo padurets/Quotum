@@ -13,10 +13,18 @@ categories.workspace = true
 # Released as binaries and through npm, never on crates.io.
 publish = false
 
+[features]
+# Isolated recovery and resource probes; no diagnostic collector ships in normal builds.
+activity-bench = []
+
+[[example]]
+name = "observed_probe"
+required-features = ["activity-bench"]
+
 [dependencies]
 dirs = "7.0.0"
 jiff = "0.2.37"
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 toml = "1.1.6"

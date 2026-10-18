@@ -50,7 +50,7 @@ export type ExtendHub = (app: FastifyInstance, hub: Hub, guards: Guards) => void
 function errorCode(status: number, path: string): string {
   if (status === 413) return 'too_large';
   if (status >= 500) return 'internal_error';
-  return path.startsWith('/v1/ingest') ? 'invalid_batch' : 'invalid_request';
+  return path.startsWith('/v1/ingest') ? 'invalid_batch' : path.startsWith('/v1/activity') ? 'invalid_activity' : 'invalid_request';
 }
 
 /**

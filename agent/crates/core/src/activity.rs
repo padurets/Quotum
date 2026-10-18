@@ -363,6 +363,8 @@ struct Scope {
 /// spent between two looks.
 pub struct Activity {
     capture_complete: bool,
+    judging: bool,
+    aligned: HashSet<ProcessKey>,
     /// Folders that are not projects, as given and as the system resolves them.
     homes: Vec<PathBuf>,
     temps: Vec<PathBuf>,
@@ -382,6 +384,14 @@ pub struct Activity {
     scopes: HashMap<ProcessKey, Scope>,
     pending_unsafe: HashSet<ProcessKey>,
     counters: HashMap<ProcessKey, Counters>,
+}
+
+#[cfg(windows)]
+pub(crate) fn own_boot_witness() -> Option<String> {
+    let birth = sys::birth(std::process::id())?;
+    let length = u64::from_be_bytes(birth.get(..8)?.try_into().ok()?) as usize;
+    let boot = birth.get(8..8 + length)?;
+    (boot.len() >= 4).then(|| boot[..4].iter().map(|b| format!("{b:02x}")).collect())
 }
 
 impl Activity {
@@ -405,6 +415,8 @@ impl Activity {
         };
         Activity {
             capture_complete: false,
+            judging: true,
+            aligned: HashSet::new(),
             homes: both(home),
             temps,
             shielded,
@@ -472,6 +484,12 @@ impl Activity {
     }
 
     pub fn look(&mut self) -> Vec<Session> {
+        self.capture(true)
+    }
+
+    /// Ownership and cumulative counters may be observed more often than CPU is classified.
+    pub fn capture(&mut self, judge: bool) -> Vec<Session> {
+        self.judging = judge;
         let now = Instant::now();
         let wall = crate::model::now_ms();
         let (procs, complete) = sys::capture();
@@ -491,16 +509,47 @@ impl Activity {
         sessions
     }
 
+    /// Unobserved time supplies neither a compatible CPU window nor a working hold.
+    pub fn reset_evidence(&mut self) {
+        self.last.clear();
+        self.aligned.clear();
+        self.bases.clear();
+        self.counters.clear();
+    }
+
+    pub fn contributors(&self) -> usize {
+        self.scopes
+            .values()
+            .filter(|scope| {
+                scope
+                    .owner
+                    .as_ref()
+                    .and_then(|owner| self.scopes.get(owner))
+                    .and_then(|owner| owner.client)
+                    .is_some_and(|client| self.tracked.contains(&client))
+            })
+            .count()
+    }
+
     pub fn complete(&self) -> bool {
         self.capture_complete
     }
 
+    pub(crate) fn work_deadline(&self, session: &Session) -> Option<Instant> {
+        let key = cache_key(session.pid, session.started_at, session.native_birth.as_deref());
+        self.last.get(&key)?.busy_at.map(|at| at + std::time::Duration::from_millis(HOLD_MS as u64))
+    }
+
+    fn prune_replaced<'a>(&mut self, processes: impl Iterator<Item = &'a Proc>) {
+        let current: HashMap<_, _> = processes.filter_map(|p| Some((p.pid, p.key()?))).collect();
+        // A reused PID proves the older birth ended; absence alone proves nothing.
+        self.lifetimes.retain(|old, _| current.get(&old.0).is_none_or(|key| old == key));
+        self.scopes.retain(|old, _| current.get(&old.0).is_none_or(|key| old == key));
+        self.pending_unsafe.retain(|old| current.get(&old.0).is_none_or(|key| old == key));
+    }
+
     fn remember_process(&mut self, p: &mut Proc) {
         let Some(key) = p.key() else { return };
-        // A reused PID proves the older birth ended; absence alone proves nothing.
-        self.lifetimes.retain(|old, _| old.0 != p.pid || *old == key);
-        self.scopes.retain(|old, _| old.0 != p.pid || *old == key);
-        self.pending_unsafe.retain(|old| old.0 != p.pid || *old == key);
         let lifetime = self.lifetimes.entry(key).or_default();
         let replaced_image = lifetime.image.zip(p.image).is_some_and(|(before, after)| before != after);
         let changed_role = p.role != Role::Unavailable && lifetime.role != Some(p.role);
@@ -624,23 +673,27 @@ impl Activity {
             at += 1;
         }
         let mut validated: Vec<_> = procs.iter().filter(|p| relevant.contains(&p.pid)).filter_map(read).collect();
+        let checked: HashMap<_, _> = validated.iter().map(|p| (p.pid, p)).collect();
         self.capture_complete &= tree.len() < 4096
             && procs.iter().filter(|p| relevant.contains(&p.pid) && mine(p.pid)).all(|p| {
-                validated.iter().any(|v| v.same_process(p))
+                checked.get(&p.pid).is_some_and(|v| v.same_process(p))
                     && !(client_of(&p.name).is_some_and(|c| self.tracked.contains(&c)) && p.role == Role::Unavailable)
             });
         // The OS snapshot already brackets positive role evidence with birth reads.
         // Preserve it even when the very first additional validation fails. Newer
         // validated evidence then supersedes it, without crossing a process birth.
         let mut listed = procs.to_vec();
+        self.prune_replaced(listed.iter().filter(|p| relevant.contains(&p.pid)));
         for p in listed.iter_mut().filter(|p| relevant.contains(&p.pid)) {
             self.remember_process(p);
         }
         let listed_parents = self.remember_parents(&listed);
+        self.prune_replaced(validated.iter());
         for p in &mut validated {
             self.remember_process(p);
         }
         let validated_parents = self.remember_parents(&validated);
+        let validated_index: HashMap<_, _> = validated.iter().map(|p| (p.pid, p)).collect();
         let procs = listed.as_slice();
         let by_pid: HashMap<_, _> = procs.iter().map(|p| (p.pid, p)).collect();
         let mut shared: HashSet<_> = validated
@@ -654,7 +707,7 @@ impl Activity {
         // host information is unknown ownership, not evidence of a shared runtime.
         let mut paths = HashMap::new();
         for p in procs.iter().filter(|p| remote_node(&p.name)) {
-            let path = validated.iter().find(|q| q.pid == p.pid).and_then(|listed| {
+            let path = validated_index.get(&p.pid).and_then(|listed| {
                 let before = read(listed)?;
                 let path = exe(p.pid)?;
                 let after = read(&before)?;
@@ -668,7 +721,7 @@ impl Activity {
             .iter()
             .filter(|p| {
                 matches!(p.role, Role::Runtime | Role::Local)
-                    || validated.iter().any(|q| q.pid == p.pid && matches!(q.role, Role::Runtime | Role::Local))
+                    || validated_index.get(&p.pid).is_some_and(|q| matches!(q.role, Role::Runtime | Role::Local))
             })
             .filter(|p| {
                 for pid in ancestors(p.pid, &by_pid) {
@@ -713,7 +766,7 @@ impl Activity {
                     && (by_pid[&p.pid].role == Role::Unavailable || by_pid[&p.pid].role == p.role)
             };
             if let Some(lifetime) = by_pid[&f.pid].key().and_then(|key| self.lifetimes.get_mut(&key)) {
-                if validated.iter().find(|p| p.pid == f.pid).is_none_or(compatible) {
+                if validated_index.get(&f.pid).copied().is_none_or(compatible) {
                     lifetime.shared = true;
                 } else {
                     // Newer authority can make this birth eligible before its
@@ -722,7 +775,7 @@ impl Activity {
                     lifetime.reaped_unsafe = true;
                 }
             }
-            if validated.iter().any(compatible) {
+            if validated_index.get(&f.pid).copied().is_some_and(compatible) {
                 shared.insert(f.pid);
             }
         }
@@ -731,7 +784,7 @@ impl Activity {
             .filter(|f| !measuring.contains(&f.pid))
             .collect();
         let original = by_pid;
-        let by_pid: HashMap<_, _> = validated.iter().map(|p| (p.pid, p)).collect();
+        let by_pid = validated_index;
         let incomplete: HashSet<_> =
             planned.iter().filter(|f| f.tree.iter().any(|pid| !by_pid.contains_key(pid))).map(|f| f.pid).collect();
         // A boundary proven in the initial snapshot may already have exited or exec'd
@@ -795,11 +848,13 @@ impl Activity {
             }
         }
         let mut seen = HashMap::new();
+        let mut aligned = HashSet::new();
         let mut bases = HashMap::new();
         let mut counters = HashMap::new();
         let mut folders = Vec::new();
         let mut result = Vec::new();
         for f in found.into_iter().filter(|f| mine(f.pid)) {
+            let owned: HashSet<_> = f.tree.iter().copied().collect();
             let root = by_pid[&f.pid];
             let Some(key) = root.key() else { continue };
             let mut subjects: HashMap<ProcessKey, u64> = HashMap::new();
@@ -831,7 +886,7 @@ impl Activity {
                     // Reaping inside a clean subtree only transfers its CPU from
                     // a live child to its parent. Keep that sum as one counter.
                     for ancestor in ancestors(p.pid, &by_pid) {
-                        if !f.tree.contains(&ancestor) || !mine(ancestor) {
+                        if !owned.contains(&ancestor) || !mine(ancestor) {
                             break;
                         }
                         let above = by_pid[&ancestor];
@@ -863,11 +918,13 @@ impl Activity {
                     && complete
                     && !changed.contains(&key)
                     && !regrouped
+                    && (!self.judging || self.aligned.contains(&key))
             });
             if before.is_none() {
                 counter = Counters::default();
             }
-            let too_soon = before.is_some_and(|before| now.duration_since(before.at).as_millis() < MIN_LOOK_MS);
+            let too_soon =
+                before.is_some_and(|before| !self.judging || now.duration_since(before.at).as_millis() < MIN_LOOK_MS);
             if too_soon {
                 // judged keeps the previous sample on a short look. Keep its
                 // references too, while retaining observed CPU until judgement.
@@ -891,11 +948,14 @@ impl Activity {
             counter.assignments.extend(assignments);
             counter.subjects.retain(|key, _| self.lifetimes.contains_key(key) || counter.pending.contains_key(key));
             counter.assignments.retain(|key, _| self.lifetimes.contains_key(key));
-            let next = judged(before, counter.total, now, wall, working_share(f.client));
+            let next = judged_capture(before, counter.total, now, wall, working_share(f.client), self.judging);
             let started_at = root.times.unwrap().started;
             let working = if complete { next.working } else { None };
             let last_worked = next.last_worked(started_at, wall);
             if complete {
+                if self.judging || before.is_some() && self.aligned.contains(&key) {
+                    aligned.insert(key.clone());
+                }
                 seen.insert(key.clone(), next);
                 bases.insert(key.clone(), basis);
                 counters.insert(key.clone(), counter);
@@ -927,6 +987,7 @@ impl Activity {
                 self.capture_complete = false;
                 if let Some(key) = root.key() {
                     seen.remove(&key);
+                    aligned.remove(&key);
                     bases.remove(&key);
                     counters.remove(&key);
                     self.places.remove(&key);
@@ -938,6 +999,7 @@ impl Activity {
             valid
         });
         self.last = seen;
+        self.aligned = aligned;
         self.bases = bases;
         self.counters = counters;
         // Missing metadata never proves a birth ended. Positive replacement is
@@ -1015,7 +1077,12 @@ fn placing(dir: &Path, known: Option<&Path>, shielded: &[PathBuf]) -> Placing {
 
 /// A session seen again with its tree at `cpu` ms: working when it spent at least `share`
 /// of a core since the look before, and for `HOLD_MS` after.
+#[cfg(test)]
 fn judged(before: Option<&Seen>, cpu: u64, now: Instant, wall: Millis, share: f64) -> Seen {
+    judged_capture(before, cpu, now, wall, share, true)
+}
+
+fn judged_capture(before: Option<&Seen>, cpu: u64, now: Instant, wall: Millis, share: f64, judge: bool) -> Seen {
     let Some(before) = before else {
         return Seen { cpu, at: now, wall, busy_at: None, busy_wall: None, working: None };
     };
@@ -1023,7 +1090,7 @@ fn judged(before: Option<&Seen>, cpu: u64, now: Instant, wall: Millis, share: f6
     // A clock correction invalidates the remembered date, but never working or its hold.
     let continuous = ((wall as i128 - before.wall as i128) - elapsed as i128).abs() <= 2_000;
     let busy_wall = before.busy_wall.filter(|_| continuous);
-    if elapsed < MIN_LOOK_MS {
+    if !judge || elapsed < MIN_LOOK_MS {
         // Looked again too soon: it stays as it was, measured from the earlier look.
         return Seen {
             cpu: before.cpu,
@@ -1031,7 +1098,9 @@ fn judged(before: Option<&Seen>, cpu: u64, now: Instant, wall: Millis, share: f6
             wall: before.wall,
             busy_at: before.busy_at,
             busy_wall,
-            working: before.working,
+            working: before
+                .working
+                .map(|_| before.busy_at.is_some_and(|at| now.duration_since(at).as_millis() < HOLD_MS)),
         };
     }
     let busy = cpu.saturating_sub(before.cpu) as f64 / elapsed as f64 >= share;
@@ -2715,6 +2784,8 @@ mod tests {
         stand.worktree("home/dev/wt", gitdir, &stand.abs(gitdir));
         let mut activity = Activity {
             capture_complete: false,
+            judging: true,
+            aligned: HashSet::new(),
             homes: vec![stand.at("home")],
             temps: vec![stand.at("tmp")],
             shielded: Vec::new(),
@@ -2998,3 +3069,6 @@ mod tests {
 
 #[cfg(test)]
 pub(crate) mod attribution;
+
+#[cfg(test)]
+mod corpus;

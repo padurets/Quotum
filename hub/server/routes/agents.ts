@@ -4,6 +4,7 @@ import type {Hub} from '../api.js';
 import {Invalid} from '../domain/ingest.js';
 import {IngestError, type Credential} from '../ingest.js';
 import {Limiter, publicOrigin} from '../session.js';
+import {ActivityConflict} from '../domain/activity.js';
 
 /**
  * What agents talk to: the device-code flow (RFC 8628 style, JSON bodies), check-ins
@@ -45,6 +46,7 @@ export function agentRoutes(app: FastifyInstance, hub: Hub) {
       return work(credential);
     } catch (error) {
       if (error instanceof IngestError) return reply.code(403).send({error: error.code});
+      if (error instanceof ActivityConflict) return reply.code(409).send({error:error.code,...error.extra});
       if (error instanceof Invalid) return reply.code(400).send({error: invalid, detail: error.what});
       throw error;
     }
@@ -72,6 +74,10 @@ export function agentRoutes(app: FastifyInstance, hub: Hub) {
   // Up to 200 sessions with three names at their longest, in any script and escaped (spec: Reporting running agents).
   app.post('/v1/sessions', {bodyLimit: 512 * 1024, onRequest: early}, (request, reply) =>
     asAgent(request, reply, 'invalid_request', credential => ingest.sessions(credential, request.body)),
+  );
+
+  app.post('/v1/activity',{bodyLimit:512*1024,onRequest:early},(request,reply)=>
+    asAgent(request,reply,'invalid_activity',credential=>ingest.observedActivity(credential,request.body)),
   );
 
   app.post('/v1/ingest', {bodyLimit: config.ingest.bodyLimit, onRequest: early}, (request, reply) =>

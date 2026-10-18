@@ -43,6 +43,7 @@ import {IdleCpuDiagnostic,sourceIdentity,idleGeometry,planIdleEdge,idleBoundaryP
 import {idleRetentionScript,idleRetentionProblems,type IdleRetention} from './idleRetention.js';
 import {preparationOwnersScript} from './preparationOwners.js';
 import {observePreparations,retirementRoutesScript} from './retirementRoutes.js';
+import {ObservedWork} from './observed.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -433,12 +434,14 @@ async function main() {
     evidence.begin('work');
     const worked = await work(demo, stand, cdp);
     evidence.save('work', worked);
+    const observedWork=await workObserved(stand,cdp);
     const privateWork = await workPrivate(demo, stand, cdp);
     evidence.save('private-work', privateWork);
     const problems = [
       ...idleProblems(idle),
       ...phaseProblems,
       ...worked.problems,
+      ...observedWork.problems,
       ...privateWork.problems,
       ...chartProblems(measured.chartLatencies),
       ...(measured.historyBytes <= HISTORY_BYTES_PER_MEASUREMENT ? [] : [`history read ${measured.historyBytes} bytes per measurement, above budget`]),
@@ -452,7 +455,7 @@ async function main() {
       }),
     ];
     // Keep completed measurements available if a later browser phase stops the job.
-    say(`initial readings: ${JSON.stringify({idle:{scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,renders:reading.renders,mutations:reading.mutations},measured:{historyBytes:measured.historyBytes,ingestP95Ms:percentile(measured.ingestLatencies,.95),cardP95Ms:percentile(measured.latencies,.95),chartP95Ms:percentile(measured.chartLatencies,.95)},work:worked.reports,problems})}`);
+    say(`initial readings: ${JSON.stringify({idle:{scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,renders:reading.renders,mutations:reading.mutations},measured:{historyBytes:measured.historyBytes,ingestP95Ms:percentile(measured.ingestLatencies,.95),cardP95Ms:percentile(measured.latencies,.95),chartP95Ms:percentile(measured.chartLatencies,.95)},work:worked.reports,observedWork:observedWork.reports,observedWorkSetup:observedWork.setup,problems})}`);
     // The readings above are frozen: keyboard checks do not enter the performance budget.
     say('checking consecutive frequency saves with native arrow keys');
     await frequencyKeys(cdp);
@@ -524,6 +527,8 @@ async function main() {
         mutations: tally(measured.reading.mutations).outsideBy,
       },
       work: worked.reports,
+      observedWork:observedWork.reports,
+      observedWorkSetup:observedWork.setup,
       privateWork: privateWork.reports,
       money:monetary,
       credits,
@@ -931,6 +936,53 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
     problems.push(...renderProblems({card: source, renders: reading.renders, mutations: reading.mutations, from, to: Date.now()}));
   }
   return {reports, problems};
+}
+
+/** The interval endpoint has the same history and rendering budget as the released writer. */
+async function workObserved(stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp) {
+  say('checking captured intervals without extra history reads or unrelated renders');
+  const source=stand.sources.get(MEASURED)!,owner=stand.people.get(people(stand.set)[0].id)!;
+  const initial=new Requests(cdp);initial.counting=true;const setupFrom=Date.now();
+  const actor=await ObservedWork.open(owner,cards(stand.set).find(card=>card.id===MEASURED)!);
+  const reports:{at:number;reads:number;bytes:number;history:Requests['history']}[]=[],problems:string[]=[];
+  const setup={waitMs:0,historyRequests:0,historyBytes:0};
+  try {
+    await sleep(1000);
+    const authority=(await owner.get<Snapshot>('/api/overview?board='+owner.personalBoard)).workAuthority;
+    const readyBy=Date.now()+SHOWN_WITHIN;let previous='',stable=0;
+    // Joining a device changes the admitted cohort. Finish its cold baseline
+    // before measuring the history tail read caused by a completed interval.
+    while(stable<3){
+      const layout=await cdp.evaluate<string|null>(`(()=>{
+        const baseline=window.__quotumWalletState?.(${JSON.stringify(source)},${JSON.stringify(authority)});
+        if(!baseline?.authorityReady||baseline.periodLoading||baseline.periodError||baseline.workNeeded||baseline.preparation?.flights.length)return null;
+        if(document.querySelector('.agents-panel.is-loading,.history.is-loading,.activity.is-loading,.budget-history.is-loading,.subscription-funds.is-loading,.chart>svg[data-draw-ready="false"]'))return null;
+        if(document.getAnimations().some(animation=>animation.playState==='running'&&animation.effect?.target?.matches('.widget,.widget-body')))return null;
+        return JSON.stringify(Array.from(document.querySelectorAll('.widgets>.widget')).map(node=>{const box=node.getBoundingClientRect();return[box.x,box.y,box.width,box.height];}));
+      })()`);
+      stable=!initial.historyPending&&layout!==null&&layout===previous?stable+1:0;previous=layout??'';
+      if(stable<3){
+        if(Date.now()>=readyBy){
+          const state=await cdp.evaluate(`window.__quotumWalletState?.(${JSON.stringify(source)},${JSON.stringify(authority)})`);
+          console.error('bench: captured work setup '+JSON.stringify({state,pending:initial.historyPending,history:initial.history}));
+          throw new Stop('captured work configuration history did not settle');
+        }
+        await sleep(20);
+      }
+    }
+    initial.counting=false;
+    Object.assign(setup,{waitMs:Date.now()-setupFrom,historyRequests:initial.historyRequests,historyBytes:initial.historyBytes});
+    for(let i=0;i<3;i++) {
+      await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;
+      const from=Date.now(),at=await actor.report(i<2);
+      await sleep(1000);await drain(requests);requests.counting=false;
+      const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.historyRequests,bytes=requests.historyBytes;
+      reports.push({at,reads,bytes,history:requests.history});
+      if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`captured work read history ${reads} times, ${bytes} bytes`);
+      problems.push(...renderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from,to:Date.now()}));
+    }
+  }finally{initial.counting=false;await actor.close();await sleep(1000);}
+  return {reports,setup,problems};
 }
 
 async function workPrivate(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {

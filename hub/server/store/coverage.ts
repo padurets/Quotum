@@ -11,7 +11,31 @@ const digest=(tracking:Tracking)=>createHash('sha256').update(JSON.stringify([tr
 export class CoverageStore {
   constructor(private readonly db:DatabaseSync) {}
   revision():string {return String(this.db.prepare("SELECT value FROM meta WHERE key='coverageVersion'").get()?.value??0);}
-  private topology(user:string):number {return Number(this.db.prepare('SELECT version FROM owner_coverage_versions WHERE user_id=?').get(user)?.version??0);}
+  topology(user:string):number {return Number(this.db.prepare('SELECT version FROM owner_coverage_versions WHERE user_id=?').get(user)?.version??0);}
+
+  /** Current policy is separate from the proof carried by a delayed interval. */
+  policy(device:string,tracking:Tracking,now:number,user:string):boolean {
+    const previous=this.db.prepare('SELECT payload FROM device_tracking WHERE device_id=?').get(device);
+    const old=previous?JSON.parse(String(previous.payload)) as Tracking:null;
+    if(old&&JSON.stringify([old.clients,old.routeDisabled])===JSON.stringify([tracking.clients,tracking.routeDisabled]))return false;
+    this.db.prepare('DELETE FROM device_tracking_policy WHERE device_id=?').run(device);
+    for(const client of tracking.routeDisabled)this.db.prepare('INSERT INTO device_tracking_policy VALUES (?,?,0)').run(device,client);
+    this.db.prepare('INSERT INTO device_tracking VALUES (?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET payload=excluded.payload,last_at=excluded.last_at,epoch=excluded.epoch,topology_version=excluded.topology_version')
+      .run(device,JSON.stringify({...tracking,complete:false}),now,'observed',this.topology(user));
+    this.db.prepare("INSERT INTO meta VALUES ('coverageVersion','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1").run();
+    return true;
+  }
+
+  /** Only an issued proof and two completed compatible endpoints establish known time. */
+  recordCaptured(device:string,from:number,to:number,scope:string,epoch:string,version:number):boolean {
+    if(to<=from)return false;
+    const previous=this.db.prepare('SELECT from_at,to_at,scope_digest,epoch,topology_version FROM work_coverage WHERE device_id=? ORDER BY from_at DESC LIMIT 1').get(device);
+    if(previous&&previous.to_at===from&&previous.scope_digest===scope&&previous.epoch===epoch&&previous.topology_version===version)
+      this.db.prepare('UPDATE work_coverage SET to_at=? WHERE device_id=? AND from_at=?').run(to,device,Number(previous.from_at));
+    else this.db.prepare('INSERT INTO work_coverage VALUES (?,?,?,?,?,?)').run(device,from,to,scope,epoch,version);
+    this.db.prepare("INSERT INTO meta VALUES ('coverageVersion','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1").run();
+    return true;
+  }
 
   /** Returns policy changes separately from coverage changes. The caller owns the transaction. */
   record(device:string,user:string,tracking:Tracking|null,now:number,epoch:string=runtimeEpoch):{policy:boolean;coverage:boolean} {

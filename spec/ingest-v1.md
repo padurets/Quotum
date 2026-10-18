@@ -660,6 +660,172 @@ producer IDs, legacy ordinals and intervals. Stable high water is scoped to devi
 client and producer; released cross-namespace floors remain in effect. Changing source
 creates a context for the same producer without rewriting previous credit.
 
+## Observed activity intervals
+
+`POST /v1/activity` uses the same bearer authentication and device binding as
+`/v1/sessions`, with a 512 KiB body limit. Version 1 supports `hello`, `batch` and
+`presence`. Unlike the legacy session endpoint, it acknowledges a durable ordered
+prefix. Live presence never credits history on this path.
+
+All requests contain `version:1`, `op`, `agent`, `machine`, integer-millisecond
+`sentAt` and `queueId`. Queue, open, authority, capture, clock, context and witness
+IDs are opaque 32-character lower-case hexadecimal strings. Sequence numbers are
+safe integers starting at one. Digests are 64-character lower-case hexadecimal
+SHA-256 values. None of these references is a board identity.
+
+### Authority and compatibility
+
+Hello adds `openId`, `clock:{clockEpoch,tick,wall}`, `tracking`, optional
+`knownWitnessId`, optional `latest` and `acknowledgedThrough` (zero initially).
+The reply contains `version:1`, `protocol:"observed-intervals"`, persisted `hubId`,
+authenticated `deviceId`, `queueId`, `authorityEpoch`, `floorAt`,
+`acknowledgedThrough`, nullable `acceptedClockAnchor`, fresh `serverTime`, `topologyVersion`, `topologyWitness`
+and `coverageRefreshRequired`.
+`acceptedClockAnchor` is the exact committed prefix anchor, not a calibration from
+the current hello. It is null before accepted frames or after a committed skip.
+A sender that restored an uncalibrated local backup may recover this matching
+anchor after verifying the same remote binding. It persists the recovered mapping
+before preparing or publishing data. An already calibrated epoch is never rebound.
+If a remote cursor has consumed positions of an uncalibrated clock and its matching
+anchor cannot be recovered (including from an older reply without this field), the
+sender retires its unmappable suffix and chooses a fresh clock and capture identity.
+The sender persists that recovery or retirement before advancing its local cursor
+or reclaiming acknowledged evidence. A crash cannot make a consumed identity eligible
+for calibration again. An interrupted first calibration retains either the prior
+uncalibrated basis or its exact saved mapping, together with the durable intervals.
+The private origin of the active clock's sequence is retained independently of
+payload reclamation, including privacy cleanup. Removing an acknowledged segment
+cannot make that clock eligible for another first calibration.
+
+The first hello closes permissible legacy credit, then atomically establishes a
+sticky interval requirement and a floor at least the current hub time and the
+device's retained credited end. A retry or normal restart cannot move that floor.
+After activation, legacy session activity is suppressed before parsing it:
+`200 {accepted:0,activitySuppressed:n,requiredActivityProtocol:1}`. Its independently
+valid inventory may still be accepted. It changes neither presence nor coverage.
+All legacy credit paths, including quiet-session sweeps, check the saved barrier.
+Quota measurements and check-ins retain their independent admission rules.
+Version strings, silence and presence expiry never remove the barrier.
+
+A different queue receives `409 {error:"activity_binding",queueId,authorityEpoch}`.
+Only an empty replacement queue may explicitly compare and replace it with
+`replaceAuthorityEpoch` in hello. Replacement gets a fresh authority and a
+conservative floor. An existing queue must not replace itself after a mismatch.
+Old fenced requests receive `409 {error:"activity_stream_replaced"}`. Neither
+ordinary failure nor replacement enables legacy credit for a migrated device.
+
+An initially old hub's own JSON `404 {error:"not_found"}` permits legacy fallback
+and a later capability probe. An uncertain hello, proxy page, timeout, or any error
+after a successful binding does not permit fallback. A newer database layout cannot
+be opened by an older hub binary.
+
+### State, frames and acknowledgement
+
+A full state is `{tracking,contexts}`. Tracking has the same configured clients,
+route-disabled clients and completeness as session reports. Contexts are sorted by
+`contextId`, with at most 200 contexts and no duplicate context or producer IDs.
+Each context contains `contextId`, `clientId`, nullable `sessionId`, nullable
+`ordinal`, nullable captured `source:{provider,account,accountName}`, `accountBy`,
+`origin`, `project`, `folder`, integer `startedAt`, nullable `route`, nullable
+`lastWorkedAt` and `working:true|false|null`. Account pseudonyms, bounded names,
+origins and route evidence retain the session contract. An unidentified context
+has its released working-only ordinal; its context reference is never a producer
+ID. Null working means unknown, with no work or known-idle credit. Captured source
+evidence never falls back to the device's account at delivery time.
+
+State digests hash UTF-8 JSON of this fixed-field tuple, without Unicode
+normalization and with absent optional values represented by null:
+
+```
+[tracking.clients, tracking.routeDisabled, tracking.complete,
+ contexts.map(c => [c.contextId,c.clientId,c.sessionId,c.ordinal,
+   c.source ? [c.source.provider,c.source.account,c.source.accountName] : null,
+   c.accountBy,c.origin,c.project,c.folder,c.startedAt,
+   c.route ? [c.route.class,c.route.by,c.route.host,c.route.provider] : null,
+   c.working,c.lastWorkedAt])]
+```
+
+A batch adds `authorityEpoch`, nullable `clockAnchor`, nullable
+`topologyWitnessId`, optional full `checkpoint`, `frames`, optional `skip`, optional
+`latest` and optional `releaseWitnesses`. At most 64 frames and 64 releases fit
+within the whole request's 512 KiB bound. A checkpoint is the state before the
+batch's first frame. A frame contains `seq`, `captureEpoch`, `clockEpoch`,
+`fromAt`, `toAt`, `fromTick`, `toTick`, `baseStateDigest`, optional `nextState` and
+`complete`. It credits the base state over the half-open interval, then applies
+`nextState`. A zero-duration frame only changes state. Each completed frame spans
+at most 200,000 ms. Missing or mismatched state references are rejected.
+
+All frames in a batch share one clock epoch and captured witness. The anchor is
+`{clockEpoch,anchorTick,anchorAt}`; `fromAt=anchorAt+fromTick-anchorTick` and likewise
+for `toAt`. All dates, ticks and durations are exact safe integers in milliseconds.
+Context dates use that same trusted UTC basis before the state digest is computed,
+including `startedAt` and `lastWorkedAt`. Raw local dates can stay in the agent's
+journal; preparing a retry must use its original epoch's immutable mapping.
+Their canonical offset is `anchorAt-zeroWall-anchorTick`, where `zeroWall` is the
+private local epoch origin; the origin never enters a request. Thus a restored
+anchor also restores context dates and state digests despite small wall-clock drift.
+The historical hello send sample is validated against that clock's origin, even
+when independent capture has since advanced its high-water. Current continuity
+and the five-second first-calibration deadline must still hold.
+The anchor for an epoch is immutable. The accepted FIFO prefix saves only its
+current anchor, state and capture boundary. A new epoch requires a full checkpoint
+and a different capture epoch. Hello and presence never replace the prefix anchor.
+Fully committed duplicates are discarded before comparing against that anchor, so
+an old A retry after B cannot move B's mapping or require reclaimed A metadata.
+
+The first new frame must be `acknowledgedThrough+1`; otherwise the hub returns
+`409 {error:"activity_sequence",expectedSeq}`. A malformed request receives
+`400 {error:"invalid_activity",detail:<field>}` without reflecting its contents.
+The whole batch commits cursor, anchor, state, work and coverage together. Its
+reply contains `version:1`, `queueId`, `authorityEpoch`, `acknowledgedThrough`,
+`acceptedFrames`, `presenceAccepted`, `topologyVersion`,
+`coverageRefreshRequired` and `releasedWitnesses`. Failed transactions publish no
+memory changes or events. Repeating a committed prefix credits nothing again.
+
+Skip is a cumulative contiguous prefix declaration
+`{firstSeq,lastSeq,fromAt,toAt,reason}`. Reasons are `overflow`, `age`, `corruption`,
+`clock`, `privacy` or `recovery`; unknown time bounds are null. It preserves already
+committed work, marks the missing suffix unknown, advances the cursor and clears
+the trusted state and clock checkpoint. It never replaces an old sequence payload
+or creates known idle. The remaining suffix needs a full checkpoint. Frames outside
+the activation floor or retained history cannot resurrect older work; future
+intervals are refused. Lost local history after restoring an older hub backup is
+an explicit missing prefix, not recovered work.
+
+After a cursor rollback, the reference agent repeats hello with a conservative
+zero cursor and verifies its saved hub, device, queue and authority before declaring
+that missing prefix. A changed binding cannot authorize recovery or replacement.
+
+### Presence and coverage proofs
+
+`latest` is `{clockEpoch,tick,state}`, with its actual capture time. A presence
+operation supplies `authorityEpoch`, `clockAnchor`, `topologyWitnessId` and `latest`.
+A stale retry cannot refresh presence. The hub publishes fresh presence only after
+commit, keeps it for five minutes from capture, and never strengthens retained
+evidence or extends history from presence alone.
+
+A topology witness is `{id,topologyVersion,scopeDigest,issuedAt}`. The scope digest
+hashes JSON `[tracking.clients,tracking.routeDisabled]`. It is issued for the
+authenticated device, queue and authority, with at most 256 retained tuples per
+device. An unchanged `knownWitnessId`, or retry of an open with the same scope and
+topology, reuses the original ID and issuance time, including after a hub restart.
+Server time in each response is still fresh. A full registry returns null proof
+with `coverageRefreshRequired:true` and `reason:"witness_capacity"`; work continues.
+
+Completed coverage requires compatible complete endpoints, known working states,
+the captured proof's exact scope and the current topology version, and never starts
+before issuance. A missing or invalidated proof does not discard positive work.
+Changing topology and returning to the same devices does not revive the old proof.
+Feedback asks for a coalesced same-stream hello when the active proof needs refresh;
+an old replay must not replace a newer proof or trigger a hello for every batch.
+New proofs cannot retrospectively certify closed gaps. Existing holder, device,
+source-admission and board funding rules continue to apply on read.
+
+Witness release names only this queue's unreferenced IDs, is idempotent and commits
+with the batch. A lost release reply can be retried. It cannot delete a replacement
+ID, rewrite history or invalidate a completed duplicate. Internal queue references,
+clock bases and proof metadata never appear on boards or dashboard events.
+
 ## Connecting with a one-time code
 
 The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
@@ -676,6 +842,25 @@ The OAuth 2.0 device authorization flow (RFC 8628) with JSON bodies:
    A code gives one token; `slow_down` asks to poll 5 s less often.
 
 ## Privacy
+
+Observed activity intervals carry completed working, idle or unknown states and
+their captured bounded context, with opaque queue/clock references and a committed
+cursor for retries. They carry no bearer token in stored records, raw PID, native
+process birth, boot ID, uptime, filesystem path, client credentials or conversation.
+Internal authority and topology proofs stay private to the authenticated device.
+Hello echoes only that device's committed prefix clock anchor for local recovery;
+it exposes neither the private clock origin nor another stream's state.
+Captured account evidence is never replaced by a later login at delivery. A sticky
+capability can suppress legacy activity while independently accepting inventory
+and quota operations; suppressed data establishes neither history nor coverage.
+The reference agent protects an unbound local prefix with a private credential scope
+and retires it before replay if that scope changes. Confirmed bindings still verify
+the authenticated hub and device when a token rotates. These local guards are never
+sent to the hub. Accepted tracking restrictions persist before subsequent delivery,
+including when the desktop app is idle or coalesces an OFF/ON restart.
+Board admission, temporal attribution and funding redaction apply equally to delayed
+intervals, without revealing private scope or producer references. Presence alone
+never changes retained work.
 
 Measurement policy, local collector availability, current candidate identities,
 command IDs, device versions and producer identities are owner/control metadata.

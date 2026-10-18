@@ -1,6 +1,8 @@
 import type {Attention} from './attention.js';
 import {secretKind} from './domain/auth.js';
-import {CLOCK_TOLERANCE_MS, Invalid, parseBatch, parseCheckin, parseSessions, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
+import {CLOCK_TOLERANCE_MS, Invalid, parseBatch, parseCheckin, parseSessions, parseSender, subscriptionKey, toMeasurement, type AgentSender} from './domain/ingest.js';
+import {parseActivity} from './domain/activity.js';
+import {ActivityIngest} from './activity.js';
 import {deliveryOf,quotaObservation} from './domain/quota.js';
 import {Forecasts} from './forecasts.js';
 import {Sessions} from './sessions.js';
@@ -41,6 +43,7 @@ export class IngestError extends Error {
 export class Ingest {
   /** The coding agents running on the devices right now. */
   readonly live: Sessions;
+  readonly activity:ActivityIngest;
   /** Where the recent pace of each weekly window leads, one forecast per window for every board and /api/overview. */
   readonly forecasts: Forecasts;
   private observer: Touches | null = null;
@@ -54,6 +57,7 @@ export class Ingest {
     private readonly cadence: Cadence,
   ) {
     this.live = new Sessions(store);
+    this.activity=new ActivityIngest(store,this.live);
     this.forecasts = new Forecasts(store);
     this.measurementSelection = new MeasurementSelection(store, directory, duty, cadence,key=>{
       const sources=providers.flatMap(provider=>this.store.findSource(provider,key)??[]);
@@ -426,17 +430,48 @@ export class Ingest {
     tell(this.observer, o => o.touchSources([...new Set(sources)]));
   }
 
+  /** Completed intervals retain their captured evidence; presence never extends their credit. */
+  observedActivity(credential:Credential,body:unknown,now=Date.now()) {
+    const request=parseActivity(body);
+    return this.directory.transaction(()=>{
+      const device=this.device(credential,request,now),before=this.live.sourcesOf(device.id,now);
+      const result=this.activity.accept(device,request,now);
+      if(request.op==='hello'||result.presenceAccepted||'coverage' in result&&result.coverage)afterCommit(()=>{
+        const sources=[...new Set([...before,...this.live.sourcesOf(device.id,now),...('coverage' in result&&result.coverage?this.store.held(device.userId).map(s=>s.id):[])])];
+        tell(this.observer,o=>o.touchSources(sources));
+      });
+      return result;
+    });
+  }
+
+  sessions(credential: Credential, body: unknown, now = Date.now()): {accepted: number;activitySuppressed?:number;requiredActivityProtocol?:number} {
+    const sender=parseSender(body);
+    return this.directory.transaction(()=>{
+      const resolved=this.device(credential,sender,now);
+      // The persisted capability is checked before any activity-specific parsing.
+      if(this.activity.required(resolved.id)){
+        const input=body as Record<string,unknown>;
+        const sentAt=typeof input.sentAt==='string'?Date.parse(input.sentAt):NaN;
+        const skew=Number.isFinite(sentAt)&&Math.abs(now-sentAt)>CLOCK_TOLERANCE_MS?now-sentAt:0;
+        const inventory=parseSessions({...input,sentAt:new Date(now).toISOString(),sessions:[],clientSessions:[],tracking:null}).clients;
+        if(inventory!==null)this.directory.saveDeviceClients(resolved.id,resolved.userId,inventory.map(client=>({...client,observedAt:!Number.isFinite(sentAt)||client.observedAt==null?null:Math.min(now,client.observedAt+skew)})),now);
+        const count=(value:unknown)=>Array.isArray(value)?Math.min(200,value.length):0;
+        return {accepted:0,activitySuppressed:Math.min(200,count(input.sessions)+count(input.clientSessions)),requiredActivityProtocol:1};
+      }
+      return this.legacySessions(resolved,body,now);
+    });
+  }
+
   /**
    * Which coding agents run on a device now. A session is filed under the subscription
    * it names, else under the one this device last delivered for its provider; one the
    * hub does not know, or its person does not hold, keeps that raw binding. Board
    * projections admit device sessions independently and redact undisclosed funding.
    */
-  sessions(credential: Credential, body: unknown, now = Date.now()): {accepted: number} {
+  private legacySessions(device: Device, body: unknown, now: number): {accepted: number} {
     const report = parseSessions(body);
     const skew = Math.abs(now - report.sentAt) > CLOCK_TOLERANCE_MS ? now - report.sentAt : 0;
     return this.directory.transaction(() => {
-      const device = this.device(credential, report, now);
       const name = device.label ?? device.name;
       const legacy = report.sessions.map(({provider, account, accountName, ...session}) => {
         const source = account || accountName ? this.store.findSource(provider, subscriptionKey({provider, account, accountName}, device.userId)) : this.store.deviceSource(device.id, provider);

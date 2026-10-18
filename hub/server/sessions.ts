@@ -4,6 +4,7 @@ import type {SessionEvidence} from './domain/sessionEvidence.js';
 import type {Origin} from './domain/ingest.js';
 import type {Store, WorkKey} from './store/store.js';
 import {admitted,fundingOf,type WorkAccess} from './domain/workAccess.js';
+import {afterCommit} from './touches.js';
 
 /** A running coding agent as its machine reported it, on the subscription it spends. */
 export type LiveSession = SessionEvidence & {
@@ -94,6 +95,7 @@ export class Sessions {
 
   /** A machine's new list, from its person `user`, each session filed under its subscription. */
   report(device: string, user: string, sessions: (LiveSession & {source: string | null})[], now: number) {
+    if(this.requiresIntervals(device))return;
     this.sweep(now);
     const before = this.machines.get(device);
     if (before) this.credit(device, before, Math.min(now, before.at + CREDIT_MS));
@@ -105,6 +107,27 @@ export class Sessions {
     else this.machines.delete(device);
     this.store.clientSessionsChanged(user,device);
 
+  }
+
+  /** Close the released writer before its durable barrier, without publishing uncommitted presence. */
+  settleLegacy(device:string,now:number) {
+    const before=this.machines.get(device);
+    if(before)this.credit(device,before,Math.min(now,before.at+CREDIT_MS));
+  }
+
+  /** Captured presence never strengthens history evidence or credits receipt-time work. */
+  observed(device:string,user:string,sessions:(LiveSession&{source:string|null})[],at:number) {
+    const next:Machine={at,user,sessions:sessions.map(s=>({...s,clientId:s.clientId??'unknown'}))};
+    afterCommit(()=>{
+      const old=this.machines.get(device);
+      if(old&&old.at>=at)return;
+      if(next.sessions.length)this.machines.set(device,next);else this.machines.delete(device);
+      this.store.clientSessionsChanged(user,device);
+    });
+  }
+
+  private requiresIntervals(device:string):boolean {
+    return !!this.store.db.prepare('SELECT 1 FROM device_activity WHERE device_id=? AND requires_intervals=1').get(device);
   }
 
   /** Forgets machines gone quiet, crediting their last list as a new one would have. */
@@ -344,6 +367,7 @@ export class Sessions {
    * `until`; the store leaves out what a clock set back would credit twice.
    */
   private credit(device: string, machine: Machine, until: number) {
+    if(this.requiresIntervals(device))return;
     const from = machine.at;
     if (until <= from) return;
     const keys = keysOf(machine);

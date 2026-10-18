@@ -55,6 +55,7 @@ export type DeviceFailure = {device: string; provider: Provider; error: string; 
 
 /** A reset for everyone as a community tracker reported it. */
 export type Announcement = {at: number; url: string; text: string};
+type WorkCreditChanges={changed:boolean;since:number;evidence:boolean;sources:Set<string>};
 
 /** A source as a board shows it: with the people who measure it and whether they shared it here. */
 export type BoardSource = Source & {holders: string[]; sharedBy: string | null; budget?: BudgetAccess};
@@ -314,7 +315,7 @@ export class Store {
   }
 
   /** An idle report can strengthen an existing context without crediting any work. */
-  observeWork(device: string, keys: WorkKey[]): WorkKey[] {
+  observeWork(device: string, keys: WorkKey[],changes?:WorkCreditChanges): WorkKey[] {
     const read = this.db.prepare("SELECT id,account_by AS accountBy,route_class AS class,route_by AS by,route_host AS host,route_provider AS provider FROM agent_sessions WHERE device_id=? AND client=? AND COALESCE(source_id,'')=COALESCE(?,'') AND source_id IS ? AND origin=? AND project=? AND folder=? AND ((producer_id IS ? AND producer_id IS NOT NULL) OR (producer_id IS NULL AND ? IS NULL AND started_at=? AND ordinal=?))");
     const save = this.db.prepare('UPDATE agent_sessions SET account_by=?,route_class=?,route_by=?,route_host=?,route_provider=? WHERE id=?');
     let changed = false;
@@ -331,7 +332,8 @@ export class Store {
       const owner = String(this.db.prepare('SELECT user_id FROM devices WHERE id=?').get(device)?.user_id ?? '');
       this.db.prepare("INSERT INTO meta VALUES (?,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1").run('workEvidence:' + owner);
 
-      tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); o.touchSources([...this.links.held(owner).keys()]);});
+      if(changes){changes.changed=true;changes.evidence=true;}
+      else tell(this.observer, o => {o.touchClientSessions?.(owner); o.clientHistory?.(owner, 0); o.touchSources([...this.links.held(owner).keys()]);});
     }
     return result;
   }
@@ -894,7 +896,22 @@ export class Store {
    * would bring, even after the hub restarted or the machine went quiet in between. A
    * savepoint keeps it whole on its own (a sweep) and inside a request's transaction alike.
    */
-  creditWork(device: string, from: number, until: number, keys: WorkKey[]) {
+  creditWorkIntervals(device:string,slices:{from:number;to:number;keys:WorkKey[]}[],observations:WorkKey[]=[]) {
+    const changes:WorkCreditChanges={changed:false,since:Infinity,evidence:false,sources:new Set()};
+    for(const slice of slices)this.creditWork(device,slice.from,slice.to,slice.keys,changes);
+    if(observations.length)this.observeWork(device,observations,changes);
+    this.publishWorkCredit(device,changes);
+  }
+
+  private publishWorkCredit(device:string,changes:WorkCreditChanges) {
+    if(!changes.changed)return;
+    if(changes.changed)afterCommit(()=>{this.workGeneration++;});
+    const owner=String(this.db.prepare('SELECT user_id FROM devices WHERE id=?').get(device)?.user_id??'');
+    if(owner&&(Number.isFinite(changes.since)||changes.evidence))tell(this.observer,o=>o.clientHistory?.(owner,changes.evidence?0:changes.since,device,changes.evidence?undefined:[...changes.sources]));
+    if(owner&&changes.evidence)tell(this.observer,o=>{o.touchClientSessions?.(owner,device);o.touchSources(this.held(owner).map(s=>s.id));});
+  }
+
+  creditWork(device: string, from: number, until: number, keys: WorkKey[],changes?:WorkCreditChanges) {
     if (until <= from || !keys.length) return;
     const add = this.db.prepare(
       'INSERT INTO agent_sessions (device_id, client, source_id, origin, started_at, project, folder, ordinal, producer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
@@ -955,9 +972,9 @@ export class Store {
       this.db.exec('RELEASE credit');
       throw error;
     }
-    if(credited.size||Number.isFinite(changedFrom)||changedEvidence)afterCommit(()=>{this.workGeneration++;});
-    if(owner&&Number.isFinite(changedFrom))tell(this.observer,o=>o.clientHistory?.(owner,changedFrom,device,[...credited.keys()]));
-    if(changedEvidence&&owner){tell(this.observer,o=>{o.touchClientSessions?.(owner,device);o.clientHistory?.(owner,0,device);o.touchSources([...contexts(owner,device,'').held.keys()]);});}
+    const notification:WorkCreditChanges={changed:!!credited.size||Number.isFinite(changedFrom)||changedEvidence,since:changedFrom,evidence:changedEvidence,sources:new Set(credited.keys())};
+    if(changes){changes.changed||=notification.changed;changes.since=Math.min(changes.since,changedFrom);changes.evidence||=changedEvidence;for(const source of credited.keys())changes.sources.add(source);}
+    else this.publishWorkCredit(device,notification);
   }
 
   /** Retained credit resolved to the session's current source; legacy identity is unknown. */

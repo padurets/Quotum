@@ -38,11 +38,15 @@ fn cpu(rows: &mut [Proc], pid: u32, own: u64, reaped: u64) {
 }
 
 fn sample(activity: &mut Activity, rows: &[Proc], start: Instant, secs: u64) -> Vec<Session> {
+    sample_ms(activity, rows, start, secs * 1000)
+}
+
+fn sample_ms(activity: &mut Activity, rows: &[Proc], start: Instant, ms: u64) -> Vec<Session> {
     activity.observe(
         rows,
         900,
-        start + Duration::from_secs(secs),
-        WALL + secs as Millis * 1000,
+        start + Duration::from_millis(ms),
+        WALL + ms as Millis,
         &|p| Some(p.clone()),
         &|pid| {
             assert_ne!(pid, 12, "shared runtime's inherited cwd must never be read");
@@ -55,6 +59,50 @@ fn sample(activity: &mut Activity, rows: &[Proc], start: Instant, secs: u64) -> 
 
 fn session(sessions: &[Session], pid: u32) -> &Session {
     sessions.iter().find(|s| s.pid == pid).expect("session still visible")
+}
+
+#[test]
+fn extra_native_observations_preserve_idle_bursts_and_the_original_working_hold() {
+    let mut fixed = activity();
+    let mut fast = activity();
+    let mut rows = vec![proc(10, 1, "codex", Role::Unknown)];
+    let origin = Instant::now();
+    let mut previous = None;
+    for ms in (0..=180_000).step_by(1875) {
+        // Short redraws stay below the fifteen-second threshold. One larger
+        // burst crosses it; extra observations must never extend its hold.
+        let redraws = ms / 15_000 * 100 + if ms % 15_000 >= 5000 { 100 } else { 0 };
+        cpu(&mut rows, 10, 10_000 + redraws + if ms >= 90_000 { 600 } else { 0 }, 0);
+        fast.judging = ms % 15_000 == 0;
+        if fast.judging {
+            let sessions = sample_ms(&mut fixed, &rows, origin, ms);
+            let state = session(&sessions, 10);
+            previous = Some((state.working, state.last_worked));
+        }
+        let sessions = sample_ms(&mut fast, &rows, origin, ms);
+        let state = session(&sessions, 10);
+        assert_eq!((state.working, state.last_worked), previous.unwrap(), "capture at {ms}ms");
+        assert_eq!(state.working, (ms >= 15_000).then_some((90_000..150_000).contains(&ms)), "capture at {ms}ms");
+    }
+}
+
+#[test]
+fn a_root_discovered_between_judgements_waits_for_a_complete_baseline_window() {
+    let mut a = activity();
+    let mut rows = vec![proc(10, 1, "codex", Role::Unknown)];
+    let origin = Instant::now();
+    a.judging = false;
+    assert_eq!(session(&sample(&mut a, &rows, origin, 14), 10).working, None);
+    cpu(&mut rows, 10, 1000, 0);
+    a.judging = true;
+    assert_eq!(session(&sample(&mut a, &rows, origin, 15), 10).working, None);
+    a.judging = false;
+    cpu(&mut rows, 10, 1400, 0);
+    assert_eq!(session(&sample(&mut a, &rows, origin, 20), 10).working, None);
+    a.judging = true;
+    assert_eq!(session(&sample(&mut a, &rows, origin, 30), 10).working, Some(false));
+    cpu(&mut rows, 10, 2000, 0);
+    assert_eq!(session(&sample(&mut a, &rows, origin, 45), 10).working, Some(true));
 }
 
 pub(crate) fn corrected_sessions() -> Vec<Session> {

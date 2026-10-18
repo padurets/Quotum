@@ -272,7 +272,7 @@ pub fn start(shell: &Arc<Shell>) {
 fn begin(shell: &Arc<Shell>) {
     let _settings = shell.settings_ops.lock().unwrap_or_else(|e| e.into_inner());
     let seen = stat(&shell.paths);
-    let loaded = Config::load(&shell.paths.config);
+    let loaded = load_settings(&shell.paths, &shell.agent);
     let mut agent = shell.agent();
     agent.restart_pending = false;
     agent.seen = seen;
@@ -605,7 +605,7 @@ pub fn save_settings(shell: &Arc<Shell>, patch: &Patch) -> Result<(), String> {
 fn accept_settings(paths: &Paths, state: &Mutex<Agent>, writes: &Mutex<()>, patch: &Patch) -> Result<u64, String> {
     let _settings = writes.lock().unwrap_or_else(|e| e.into_inner());
     settings::save(&paths.config, patch)?;
-    let config = Config::load(&paths.config)?;
+    let config = load_settings(paths, state)?;
     let mut agent = state.lock().unwrap_or_else(|e| e.into_inner());
     // Publish accepted settings now; replacing the running worker is debounced.
     agent.config = config;
@@ -613,6 +613,26 @@ fn accept_settings(paths: &Paths, state: &Mutex<Agent>, writes: &Mutex<()>, patc
     agent.seen = stat(paths);
     agent.saves += 1;
     Ok(agent.saves)
+}
+
+/// File watchers and native saves accept the same durable privacy barrier, including Idle.
+fn load_settings(paths: &Paths, state: &Mutex<Agent>) -> Result<Config, String> {
+    let config = Config::load(&paths.config)?;
+    {
+        let agent = state.lock().unwrap_or_else(|e| e.into_inner());
+        let tightens = agent.config.sessions() && !config.sessions()
+            || agent.config.projects() && !config.projects()
+            || ClientId::ALL.into_iter().any(|client| {
+                agent.config.tracks(client) && !config.tracks(client)
+                    || agent.config.routes(client) && !config.routes(client)
+            });
+        if tightens && let Some(run) = &agent.run {
+            run.stop.request(How::Exit);
+        }
+    }
+    quotum_core::observed::update_privacy(paths, &config)
+        .map_err(|_| "could not persist activity privacy settings".to_string())?;
+    Ok(config)
 }
 
 /// The board's view of the agent (`app_state`). The intervals are always there, `null`
@@ -808,6 +828,111 @@ mod tests {
         let saved = Config::load(&paths.config).unwrap();
         assert!(!saved.sessions());
         assert_eq!(saved.account_name(Provider::Antigravity), Some("changed"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tracking_opt_out_persists_without_a_runner_and_survives_a_debounced_reenable() {
+        let dir = std::env::temp_dir().join(format!("quotum-settings-privacy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let paths = Paths { config: dir.join("config.toml"), work: dir.join("work"), state: dir.clone() };
+        let text = "[providers.claude]\nenabled=false\n[providers.codex]\nenabled=false\n[providers.antigravity]\nenabled=false\n";
+        let config = Config::parse(text).unwrap();
+        fs::write(&paths.config, text).unwrap();
+        let state = Mutex::new(Agent::new());
+        state.lock().unwrap().config = config.clone();
+        let before = quotum_core::observed::update_privacy(&paths, &config).unwrap();
+        let writes = Mutex::new(());
+        let off: Patch = serde_json::from_str(r#"{"sessions":false}"#).unwrap();
+        let on: Patch = serde_json::from_str(r#"{"sessions":true}"#).unwrap();
+        accept_settings(&paths, &state, &writes, &off).unwrap();
+        assert!(state.lock().unwrap().run.is_none());
+        let policy = || {
+            serde_json::from_slice::<serde_json::Value>(&fs::read(paths.state.join("activity-policy.json")).unwrap())
+                .unwrap()
+        };
+        let saved = policy();
+        assert_eq!(saved["enabled"], false);
+        let disabled = saved["revision"].as_str().unwrap().to_string();
+        assert_ne!(disabled, before);
+        accept_settings(&paths, &state, &writes, &on).unwrap();
+        let saved = policy();
+        assert_eq!(saved["enabled"], true);
+        let resumed = saved["revision"].as_str().unwrap();
+        assert_eq!(resumed, disabled);
+        assert_eq!(state.lock().unwrap().saves, 2);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn externally_loaded_opt_out_persists_before_an_idle_run_can_be_skipped() {
+        let dir = std::env::temp_dir().join(format!("quotum-external-privacy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let paths = Paths { config: dir.join("config.toml"), work: dir.join("work"), state: dir.clone() };
+        let providers = "[providers.claude]\nenabled=false\n[providers.codex]\nenabled=false\n[providers.antigravity]\nenabled=false\n";
+        fs::write(&paths.config, providers).unwrap();
+        let state = Mutex::new(Agent::new());
+        let initial = load_settings(&paths, &state).unwrap();
+        state.lock().unwrap().config = initial;
+        let policy = || {
+            serde_json::from_slice::<serde_json::Value>(&fs::read(paths.state.join("activity-policy.json")).unwrap())
+                .unwrap()
+        };
+        let before = policy()["revision"].clone();
+        // The watcher reads these external file edits; no native settings save or Runner is involved.
+        fs::write(&paths.config, format!("sessions=false\n{providers}")).unwrap();
+        let disabled = load_settings(&paths, &state).unwrap();
+        assert!(!disabled.sessions());
+        assert!(!Provider::ALL.into_iter().any(|p| disabled.enabled(p)));
+        let saved = policy();
+        assert_eq!(saved["enabled"], false);
+        assert_ne!(saved["revision"], before);
+        state.lock().unwrap().config = disabled;
+        fs::write(&paths.config, providers).unwrap();
+        load_settings(&paths, &state).unwrap();
+        assert_eq!(policy()["enabled"], true);
+        assert_eq!(policy()["revision"], saved["revision"]);
+        assert!(state.lock().unwrap().run.is_none());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn waiting_for_activity_privacy_does_not_hold_the_published_agent_state() {
+        let dir = std::env::temp_dir().join(format!("quotum-settings-state-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let paths = Paths { config: dir.join("config.toml"), state: dir.clone(), work: dir.join("work") };
+        quotum_core::observed::update_privacy(&paths, &Config::default()).unwrap();
+        let held = quotum_core::config::lock_file(&dir.join("activity-policy.lock")).unwrap();
+        let stop = Stop::new();
+        let mut agent = Agent::new();
+        agent.run = Some(Run { stop: stop.clone(), thread: thread::spawn(|| None), generation: 1 });
+        let state = Arc::new(Mutex::new(agent));
+        let other = state.clone();
+        let writing_paths = paths.clone();
+        let saving = thread::spawn(move || {
+            let patch: Patch = serde_json::from_str(r#"{"sessions":false}"#).unwrap();
+            accept_settings(&writing_paths, &other, &Mutex::new(()), &patch).unwrap();
+        });
+        let until = Instant::now() + Duration::from_secs(2);
+        while !stop.requested() {
+            assert!(Instant::now() < until);
+            thread::sleep(Duration::from_millis(5));
+        }
+        let responsive = loop {
+            if state.try_lock().is_ok() {
+                break true;
+            }
+            if Instant::now() >= until {
+                break false;
+            }
+            thread::sleep(Duration::from_millis(5));
+        };
+        drop(held);
+        saving.join().unwrap();
+        assert!(responsive, "an outstanding HTTP request must not block app_state readers");
         fs::remove_dir_all(dir).unwrap();
     }
 

@@ -232,7 +232,7 @@ export function parseMachine(machine: unknown): AgentBatch['machine'] {
 
 export const parseAgent = (value: unknown) => text(value, 'agent')!;
 
-function parseSender(body: unknown): AgentSender {
+export function parseSender(body: unknown): AgentSender {
   if (!isObject(body)) throw new Invalid('body');
   if (body.version !== 1) throw new Invalid('version');
   return {agent: parseAgent(body.agent), machine: parseMachine(body.machine)};
@@ -351,7 +351,7 @@ export type DeviceClient = {clientId: string; version: string | null; observedAt
 export type Tracking = {version:1;clients:string[];routeDisabled:string[];complete:boolean};
 export type SessionReport = AgentSender & {sentAt: number; sessions: AgentSession[]; clientSessions: ClientSession[]; clients: DeviceClient[] | null;tracking:Tracking|null};
 
-function trackingOf(value:unknown):Tracking|null {
+export function trackingOf(value:unknown):Tracking|null {
   if(!isObject(value)||value.version!==1||typeof value.complete!=='boolean'||!Array.isArray(value.clients)||!Array.isArray(value.routeDisabled))return null;
   const ids=(input:unknown[])=>{if(input.length>64||input.some(id=>!validClientId(id))||new Set(input).size!==input.length)return null;return (input as string[]).slice().sort();};
   const clients=ids(value.clients),routeDisabled=ids(value.routeDisabled);
@@ -363,7 +363,7 @@ function soft<T>(read: () => T): T | null {
   try { return read(); } catch (error) { if (error instanceof Invalid) return null; throw error; }
 }
 
-function sessionRoute(value: unknown): SessionRoute | null {
+export function sessionRoute(value: unknown): SessionRoute | null {
   if (!isObject(value) || (value.by !== 'session' && value.by !== 'machine')) return null;
   const kind = value.class === 'subscription' || value.class === 'api' ? value.class : 'unknown';
   const host = value.by === 'session' && typeof value.host === 'string' && value.host.length <= 253 && value.host.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) ? value.host : null;

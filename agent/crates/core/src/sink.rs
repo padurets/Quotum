@@ -95,6 +95,20 @@ pub trait Sink {
         false
     }
 
+    fn inventory(&mut self, _clients: &[crate::clients::InstalledClient]) -> bool {
+        false
+    }
+
+    fn activity_target(&self) -> Option<crate::observed::Target> {
+        None
+    }
+
+    fn activity_request(&mut self, _request: &Value, _bound: bool) -> crate::observed::Answer {
+        crate::observed::Answer::Unanswered
+    }
+
+    fn activity_failed(&mut self) {}
+
     /// Tells the hub which coding agents run on this machine now (all of them); whether it took the list.
     fn sessions(&mut self, _sessions: &[RunningSession]) -> bool {
         false
@@ -279,6 +293,7 @@ pub struct HubSink {
     configured: Option<Vec<Provider>>,
     commands: Vec<Option<String>>,
     accounts: Vec<Option<String>>,
+    activity_known: bool,
 }
 
 impl HubSink {
@@ -314,6 +329,7 @@ impl HubSink {
             configured: None,
             commands: Vec::new(),
             accounts: Vec::new(),
+            activity_known: false,
             retry_at: None,
             failures: 0,
             refused: None,
@@ -448,6 +464,9 @@ impl HubSink {
 }
 
 impl Sink for HubSink {
+    fn activity_failed(&mut self) {
+        (self.log)("activity: capture is unavailable; check local state and restart the agent");
+    }
     fn managed(&self) -> bool {
         true
     }
@@ -611,6 +630,68 @@ impl Sink for HubSink {
         self.refused.is_none() && self.sessions_unknown_until.is_none_or(|at| Instant::now() >= at)
     }
 
+    fn activity_target(&self) -> Option<crate::observed::Target> {
+        Some(crate::observed::Target {
+            namespace: crate::observed::digest(&serde_json::json!([self.base, self.machine.id])),
+            credential_scope: self.policy.credential_scope(),
+        })
+    }
+
+    fn activity_request(&mut self, request: &Value, bound: bool) -> crate::observed::Answer {
+        use crate::observed::Answer;
+        self.activity_known |= bound;
+        if self.refused.is_some() {
+            return Answer::Unanswered;
+        }
+        let mut body = request.clone();
+        body["version"] = serde_json::json!(1);
+        body["agent"] = serde_json::json!(AGENT);
+        body["machine"] = serde_json::json!(self.machine);
+        if serde_json::to_vec(&body).map_or(true, |bytes| bytes.len() > crate::observed::BODY_BYTES) {
+            return Answer::Unanswered;
+        }
+        let answer = self
+            .http
+            .post(&format!("{}/v1/activity", self.base))
+            .config()
+            .timeout_global(Some(Duration::from_secs(5)))
+            .build()
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .send_json(&body);
+        let Ok(mut response) = answer else {
+            return Answer::Unanswered;
+        };
+        if not_the_hub(&response).is_some() {
+            return Answer::Unanswered;
+        }
+        let status = response.status().as_u16();
+        let Ok(value) = response.body_mut().with_config().limit(64 * 1024).read_json::<Value>() else {
+            return Answer::Unanswered;
+        };
+        if status == 403 {
+            if let Some(reason) = value["error"].as_str().filter(|s| matches!(*s, "device_revoked" | "device_conflict"))
+            {
+                self.refused = Some(reason.into());
+            }
+        }
+        if status == 200 && value["version"] == 1 {
+            if request["op"] == "hello" {
+                if value["protocol"] != "observed-intervals" {
+                    return Answer::Unanswered;
+                }
+                self.activity_known = true;
+            }
+            return Answer::Accepted(value);
+        }
+        if status == 404 && value["error"] == "not_found" && !self.activity_known {
+            return Answer::Unsupported;
+        }
+        if status == 409 {
+            return Answer::Conflict(value);
+        }
+        Answer::Unanswered
+    }
+
     /// Best effort, and apart from measurements: a quick request that holds nothing back.
     /// A list the hub did not take is sent again at the next look; after a failure the hub
     /// is left alone for a minute. A hub that does not know this request (older than the
@@ -621,6 +702,26 @@ impl Sink for HubSink {
     }
 
     fn report(&mut self, report: &SessionReport) -> bool {
+        if self.activity_known {
+            return false;
+        }
+        self.send_session_report(report)
+    }
+
+    fn inventory(&mut self, clients: &[crate::clients::InstalledClient]) -> bool {
+        if !self.activity_known {
+            return false;
+        }
+        self.send_session_report(&SessionReport { clients: clients.to_vec(), ..SessionReport::default() })
+    }
+
+    fn refused(&self) -> Option<&str> {
+        self.refused.as_deref()
+    }
+}
+
+impl HubSink {
+    fn send_session_report(&mut self, report: &SessionReport) -> bool {
         if !self.takes_sessions() || self.sessions_retry_at.is_some_and(|at| Instant::now() < at) {
             return false;
         }
@@ -678,10 +779,6 @@ impl Sink for HubSink {
             self.sessions_retry_at = Some(Instant::now() + SESSIONS_RETRY);
         }
         false
-    }
-
-    fn refused(&self) -> Option<&str> {
-        self.refused.as_deref()
     }
 }
 
@@ -818,6 +915,61 @@ pub(crate) mod tests {
         let (path, body) = seen.lock().unwrap()[0].clone();
         assert_eq!(path, "/v1/sessions");
         body
+    }
+
+    #[test]
+    fn activity_fallback_requires_the_hubs_own_404_before_any_binding() {
+        use crate::observed::Answer;
+        let (url, _) = hub(|_, _| json(404, json!({"error":"not_found"})));
+        let (mut sender, _) = sink(&url, "activity-old-hub");
+        let request = json!({"op":"hello"});
+        assert!(matches!(sender.activity_request(&request, false), Answer::Unsupported));
+        assert!(matches!(sender.activity_request(&request, true), Answer::Unanswered));
+        assert!(!Sink::report(&mut sender, &SessionReport::default()));
+        for body in [json!({"error":"proxy_not_found"}), json!({"version":1})] {
+            let (url, _) = hub(move |_, _| json(404, body.clone()));
+            let (mut sender, _) = sink(&url, "activity-uncertain");
+            assert!(matches!(sender.activity_request(&request, false), Answer::Unanswered));
+        }
+    }
+
+    #[test]
+    fn provisional_activity_scope_changes_with_credentials_without_changing_the_destination_namespace() {
+        let (first, _) = sink("https://fixture.invalid", "provisional-scope");
+        let changed = HubSink::new(
+            &Hub { url: first.base.clone(), token: "another-synthetic-token".into() },
+            first.machine.clone(),
+            first.spool_file.clone(),
+            Box::new(|_| {}),
+        );
+        let a = first.activity_target().unwrap();
+        let b = changed.activity_target().unwrap();
+        assert_eq!(a.namespace, b.namespace);
+        assert_ne!(a.credential_scope, b.credential_scope);
+        assert_eq!(a.credential_scope.len(), 64);
+        assert!(!a.credential_scope.contains(&first.token));
+    }
+
+    #[test]
+    fn a_successful_activity_hello_keeps_inventory_separate_and_disables_legacy_credit() {
+        use crate::observed::Answer;
+        let (url, seen) = hub(|path, body| {
+            if path == "/v1/sessions" {
+                return json(200, json!({"accepted":0}));
+            }
+            if body["op"] == "hello" {
+                return json(200, json!({"version":1,"protocol":"observed-intervals"}));
+            }
+            json(404, json!({"error":"not_found"}))
+        });
+        let (mut sender, _) = sink(&url, "activity-sticky");
+        assert!(matches!(sender.activity_request(&json!({"op":"hello"}), false), Answer::Accepted(_)));
+        assert!(!Sink::report(&mut sender, &SessionReport::default()));
+        assert!(sender.inventory(&[]));
+        assert!(matches!(sender.activity_request(&json!({"op":"presence"}), false), Answer::Unanswered));
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.iter().filter(|(path, _)| path == "/v1/sessions").count(), 1);
+        assert_eq!(requests.iter().find(|(path, _)| path == "/v1/sessions").unwrap().1["sessions"], json!([]));
     }
 
     #[test]

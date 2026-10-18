@@ -261,7 +261,122 @@ exit within five seconds. It never retains raw output or reads client secrets.
 
 ### Tracking coverage and quota growth
 
-Session reports carry optional configured tracking scope and delivery completeness.
+The agent captures processes on a dedicated thread. Client version probes, quota
+collection and HTTP stay on the coordinator, with no capture lock held while they
+run. The worker publishes one immutable bounded snapshot and accepts at most eight
+pending metadata commands. Stopping the runner disconnects and joins this worker;
+the CLI and app use the same state directory and writer lock after their handoff.
+A replacement waits interruptibly for a preceding writer still finishing delivery.
+Permanent capture failure produces one bounded warning instead of silently leaving
+the quota loop without activity capture.
+
+Capture and classification have separate clocks. CPU thresholds and the one-minute
+hold use complete fifteen-second judgement windows. New roots first establish a
+baseline on that grid; extra looks do not judge short typing or redraw bursts or
+renew the hold. Capture aims at eight subdivisions per window while active, three
+after thirty seconds of known idle, and one with no clients. Capture prices use the
+greater of an EWMA and the last four costs to reduce subdivisions under pressure.
+Extra looks repay paced debt and reserve space for a judgement. Full judgement
+looks instead require room in a conservative rolling five-minute actual CPU ledger,
+including journal and command work. Costs are normalized by their mode's allowance
+at completion; changing mode or resetting the grid never erases spending or debt.
+Large descendant trees and large root rosters use the dense allowance. An aged
+price permits one new calibration only after debt repayment and with ledger room.
+No polling loop catches up missed captures. Thread CPU clocks measure capture,
+context, journal and control work; an unavailable CPU clock uses elapsed time as a
+conservative fallback. Waiting time spends no CPU allowance when the CPU clock is
+available. Delayed looks, clock faults, suspend,
+incomplete ownership and restarts break evidence instead of filling a gap with idle
+or work. A hold expiring between captures is cut at its monotonic deadline.
+
+Completed intervals go to a private segmented append journal before delivery. Its
+length-prefixed JSON records have checksums, a 512 KiB payload bound and immutable
+sequence numbers. A synced atomic manifest publishes a complete capture transaction;
+a crash discards uncommitted tail bytes, or explicitly retires a corrupt committed
+suffix while keeping its verified prefix. Full-state transitions too large together
+split into an old-state interval and a zero-duration new capture checkpoint. Batches
+carry at most 64 frames within 512 KiB. An acknowledged prefix is persisted before
+its files or referenced clock mappings and coverage proofs can be reclaimed.
+Before a calibrated clock can be sent, the manifest records its commitment. A partial
+metadata restore that loses that anchor explicitly retires its pending suffix and
+starts a new clock identity; it cannot recalibrate an epoch already known to the hub.
+For a coherent older backup, hello returns the authenticated stream's committed
+prefix anchor. The worker restores that exact mapping, including the canonical
+context-date offset derived from its private origin, before publishing it. If the
+remote cursor consumed positions of an uncalibrated clock without a recoverable
+matching anchor, its remaining intervals become explicit loss and capture starts
+with a new clock identity. Already calibrated mappings remain immutable.
+The exact mapping is persisted before its commitment marker; reopening completes
+a missing marker from the saved mapping. An interrupted first calibration therefore
+keeps the durable intervals. Recovery or durable retirement of a clock identity
+precedes local acknowledgement and reclamation. Retirement first removes the old
+private basis, so a crash after deleting its evidence cannot revive that identity.
+One manifest entry retains the active clock's first sequence independently of
+reclaimable segments. Privacy and credential retirement cannot erase that origin
+and make an already consumed clock appear new. Startup also checks the active
+metadata identity against this durable entry before continuing it.
+The hello's historical send sample is checked against its clock origin; later
+captures may legitimately advance the current high-water while HTTP is pending.
+Current clock continuity and the five-second calibration deadline still apply.
+
+One writer and a directory budget cover all destination namespaces, including inactive
+ones: 64 MiB on disk, at most 128 segments per namespace, 256 clock mappings and 256
+proofs, with 64 KiB manifest and 256 KiB metadata bounds. Inactive namespaces are
+validated and bounded before a writer starts. Seven-day expiry uses each completed
+frame's calibrated UTC endpoint. A fresh tail does not retain an expired prefix in
+the same segment; its file stays intact until the remaining suffix is retired or
+acknowledged. Every history attempt, including a retry, asks the writer to expire
+and prepare again. A prepared reply permits one immediate attempt within five
+seconds of the start of that maintenance; coordinator delays discard it. Both elapsed
+time and the private boot/tick/wall sample bound the handoff, including suspend and
+clock faults when the elapsed clock alone would look fresh. An immutable request
+already authorized within that bound may finish its five-second HTTP operation
+while capture retires later data, without holding a writer lock.
+Overflow, age, corruption and privacy restrictions persist explicit unknown
+loss before deleting payloads. Reporting, project or scope opt-out changes a durable
+privacy revision before a namespace can send again. Desktop file reloads apply the same
+barrier even when the new configuration leaves its agent idle. Queue binding is checked against
+the authenticated hub and device before replay; a bound mismatch fences the current
+capture run instead of replacing its authority. Before that binding exists, a private
+one-way credential scope prevents a changed credential from inheriting the pending
+prefix. Bound token rotation still requires the same remote device and authority.
+Desktop settings persist a restriction even when tracking is idle or a later save
+coalesces the restart. A private policy lock serializes that acceptance with delivery;
+subsequent sends require the worker's original privacy revision. Capture never waits
+on this lock. Missing clock metadata retires the unmappable suffix as explicit loss,
+preserving the verified prefix and allowing new observations to be delivered.
+A compatible boot clock and immutable anchor survive a process restart, while CPU
+baselines and holds do not. Native clocks
+include suspend; without a verified native boot clock, continuity is limited to one run.
+
+Agents using `/v1/activity` negotiate a persistent observed-interval capability.
+Schema 32 saves one fenced queue, accepted sequence, immutable prefix clock anchor
+and bounded state checkpoint per device, plus at most 256 issued topology proofs.
+The initial transaction closes the legacy writer and establishes an activation
+floor. Every legacy report and sweep checks the durable barrier; later presence
+never extends history. Unmigrated devices retain their existing session path.
+
+Completed working intervals enter the existing work ledger in chronological slices
+containing every concurrent key. Cursor, clock checkpoint, history and captured
+coverage commit together; notifications and live presence publish after commit.
+Retries discard their committed prefix before comparing the current anchor, so an
+older epoch can be retried after a newer one without remapping time. Missing FIFO
+prefixes need an explicit unknown skip. Queue replacement compares its authority
+and establishes a new conservative floor; it never reconstructs lost history.
+Captured account evidence never falls back to a login first seen at delivery.
+Account resolution checks sign-in metadata before and after reading local or measured
+evidence. A change leaves funding unknown; capture checks that same witness again.
+
+Coverage uses the witness captured with the interval, including its original
+issuance time, exact scope and current topology version. Rehello and hub restart
+reuse applicable proofs. Topology changes invalidate them even if the same devices
+return. Missing proof leaves positive work intact and asks for a coalesced refresh.
+Witness release is bounded and idempotent. These internal references never enter
+board projections; the existing admission and funding rules remain authoritative.
+
+Legacy session reports carry optional configured tracking scope and delivery completeness.
+An initially old hub still receives known roots when another root is unknown, with
+an incomplete witness that breaks coverage across the uncertain observation.
 The agent repeats empty reports every two minutes while that scope is enabled, and
 requires a positively acknowledged incomplete report after any capture or delivery fault.
 The hub stores completed intervals separately from positive work. Two compatible complete

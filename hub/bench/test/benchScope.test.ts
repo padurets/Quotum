@@ -30,7 +30,7 @@ const declarations=['parseArgs','main'].map(name=>{
 const code=ts.transpileModule(declarations.join('\n')+'\nglobalThis.selected={main,parseArgs};',{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS},
 }).outputText;
-type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close'|'retirement-binding-mismatch'|'retirement-debugger-active'|'retirement-probe-missing'|'idle-request'|'double-no-growth'|'owner-read'|'route-incomplete'|'route-read'|'route-past-abort';
+type Fault='red'|'throw'|'cancel'|'browser-close'|'demo-stop'|'idle'|'measure'|'work'|'observed-work'|'private-work'|'panning'|'credits'|'money'|'all-red'|'panning-throw'|'credits-throw'|'opening-metrics'|'idle-retention'|'idle-trace-cancel'|'idle-trace-throw'|'idle-binding'|'idle-profile-incomplete'|'idle-profile-close'|'retirement-binding-mismatch'|'retirement-debugger-active'|'retirement-probe-missing'|'idle-request'|'double-no-growth'|'owner-read'|'route-incomplete'|'route-read'|'route-past-abort';
 async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci=true,startedAt=Date.parse('2026-10-15T12:00:10Z')) {
   const calls:string[]=[],saved=new Map<string,unknown>(),diagnosticFiles=new Map<string,unknown>(),exits:number[]=[],statuses:string[]=[],logs:string[]=[];
   const injected:{interval:number;expression:string;kind:'idle-probe'}[]=[];
@@ -119,6 +119,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
       ingestLatencies:[1],latencies:[red('measure')?Infinity:1],chartLatencies:[red('measure')?Infinity:1],historyBytes:1,
       reading:{...reading,renders:[{node:'card',region:'card:fixture',time:false,kind:null,count:1}]}};},
     work:async()=>{mark('work');return{reports:[],problems:problems('work')};},
+    workObserved:async()=>{mark('observed-work');return{reports:[],setup:{},problems:problems('observed-work')};},
     workPrivate:async()=>{mark('private-work');return{reports:[],problems:problems('private-work')};},
     doubledIdle:async(_browser:unknown,_page:unknown,_base:unknown,_seconds:unknown,_cellMs:unknown,output:Evidence,_heard:unknown,baseline:number)=>{
       mark('double-idle');const result=idleSensitivity(baseline,fault==='double-no-growth'?[.01,.01]:[.6,.6],true);output.save('idle-double',result);return result;
@@ -159,7 +160,7 @@ async function run(args:string[]=[],fault?:Fault,env:Record<string,string>={},ci
   if(cancellationStarted)await exited;
   return{calls,saved,diagnosticFiles,exits,statuses,logs,error,waits,injected,fixtureStart:stand.start,parse:selected.parseArgs};
 }
-const tail=['measure','work','private-work','frequency','panning','credits','money'];
+const tail=['measure','work','observed-work','private-work','frequency','panning','credits','money'];
 const order=(calls:string[])=>calls.filter(call=>call==='history'||call==='openTab'||tail.includes(call));
 test('a CPU-only red baseline still records sensitivity and finishes red',async()=>{
   const result=await run([], 'idle', {QUOTUM_BENCH_DIAGNOSE_IDLE:'double'});
@@ -245,7 +246,7 @@ test('the actual full caller retains simultaneous history and every dashboard bu
   const result=await run([],'all-red');assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);
   assert.deepEqual(order(result.calls),['history','openTab',...tail]);assert.deepEqual(result.statuses,['failed']);
   const problems=(result.saved.get('result') as {problems:string[]}).problems;
-  for(const name of ['history','work','private-work','panning','credits','money'])assert.ok(problems.includes(name+'-red'));
+  for(const name of ['history','work','observed-work','private-work','panning','credits','money'])assert.ok(problems.includes(name+'-red'));
   for(const message of ['script took ','never showed on their card','never showed on their chart'])assert.ok(problems.some(value=>value.includes(message)));
 });
 for(const fault of ['red','throw','cancel','browser-close','demo-stop'] as const)test('history cannot pass '+fault,async()=>{
@@ -255,7 +256,7 @@ for(const fault of ['red','throw','cancel','browser-close','demo-stop'] as const
   for(const name of ['browser-close','demo-stop'])assert.equal(result.calls.filter(call=>call===name).length,1);
   if(fault==='throw')assert.ok(result.logs.includes('history-original'));
 });
-for(const fault of ['idle','measure','work','private-work','panning','credits','money'] as const)test('dashboard retains '+fault+' failure and the later tail',async()=>{
+for(const fault of ['idle','measure','work','observed-work','private-work','panning','credits','money'] as const)test('dashboard retains '+fault+' failure and the later tail',async()=>{
   const result=await run(['--scope','dashboard'],fault);assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);
   assert.deepEqual(order(result.calls),['openTab',...tail]);assert.deepEqual(result.statuses,['failed']);
   const problems=(result.saved.get('result') as {problems:string[]}).problems;
@@ -438,7 +439,7 @@ const modes=['cpu','trace'] as const;
 for(const mode of modes)for(const scope of mode==='cpu'?['all','dashboard']:['dashboard'])test('actual '+mode+' '+scope+' preserves its original prefix and complete tail',async()=>{
   const result=await run(['--scope',scope],undefined,{QUOTUM_BENCH_DIAGNOSE_PANNING:mode}),wrapper=mode==='cpu'?'profile':'trace';assert.equal(result.error,undefined);assert.deepEqual(result.exits,[0]);
   const selected=result.calls.filter(call=>call==='history'||call==='openTab'||call==='phase:idle'||tail.includes(call)||call.startsWith(wrapper+'-'));
-  assert.deepEqual(selected,[...(scope==='all'?['history']:[]),'openTab','phase:idle','measure','work','private-work','frequency',wrapper+'-start','panning',wrapper+'-stop','credits','money',wrapper+'-controls']);
+  assert.deepEqual(selected,[...(scope==='all'?['history']:[]),'openTab','phase:idle','measure','work','observed-work','private-work','frequency',wrapper+'-start','panning',wrapper+'-stop','credits','money',wrapper+'-controls']);
   assert.deepEqual(result.statuses,['diagnostic']);assert.deepEqual(safeEvidence(result.saved.get('scope')),{mode:scope});
   const value=result.saved.get('result') as {mode:string;panning:{initiator:string;period:string;timeline:{count:number;omitted:number;storedEntries:number;entries?:unknown}}[]};
   assert.equal(value.mode,scope);assert.deepEqual(value.panning.map(row=>row.initiator+'/'+row.period),['quota','session','activity','budget','funds'].flatMap(owner=>['24h','30d'].map(period=>owner+'/'+period)));
@@ -450,7 +451,7 @@ for(const mode of modes)test('dashboard '+mode+' retains simultaneous prefix and
   const result=await run(['--scope','dashboard'],'all-red',{QUOTUM_BENCH_DIAGNOSE_PANNING:mode});assert.equal(result.error,undefined);assert.deepEqual(result.exits,[1]);
   assert.deepEqual(order(result.calls),['openTab',...tail]);assert.deepEqual(result.statuses,['failed']);
   const problems=(result.saved.get('result') as {problems:string[]}).problems;
-  for(const name of ['work','private-work','panning','credits','money'])assert.ok(problems.includes(name+'-red'));
+  for(const name of ['work','observed-work','private-work','panning','credits','money'])assert.ok(problems.includes(name+'-red'));
   for(const message of ['script took ','never showed on their card','never showed on their chart'])assert.ok(problems.some(value=>value.includes(message)));
   assert.ok(result.calls.indexOf((mode==='cpu'?'profile':'trace')+'-controls')>result.calls.indexOf('money'));assert.ok(result.saved.has('diagnostic-panning-result'));
 });
