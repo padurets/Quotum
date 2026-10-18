@@ -693,6 +693,9 @@ The sender persists that recovery or retirement before advancing its local curso
 or reclaiming acknowledged evidence. A crash cannot make a consumed identity eligible
 for calibration again. An interrupted first calibration retains either the prior
 uncalibrated basis or its exact saved mapping, together with the durable intervals.
+The private origin of the active clock's sequence is retained independently of
+payload reclamation, including privacy cleanup. Removing an acknowledged segment
+cannot make that clock eligible for another first calibration.
 
 The first hello closes permissible legacy credit, then atomically establishes a
 sticky interval requirement and a floor at least the current hub time and the
@@ -761,6 +764,9 @@ journal; preparing a retry must use its original epoch's immutable mapping.
 Their canonical offset is `anchorAt-zeroWall-anchorTick`, where `zeroWall` is the
 private local epoch origin; the origin never enters a request. Thus a restored
 anchor also restores context dates and state digests despite small wall-clock drift.
+The historical hello send sample is validated against that clock's origin, even
+when independent capture has since advanced its high-water. Current continuity
+and the five-second first-calibration deadline must still hold.
 The anchor for an epoch is immutable. The accepted FIFO prefix saves only its
 current anchor, state and capture boundary. A new epoch requires a full checkpoint
 and a different capture epoch. Hello and presence never replace the prefix anchor.

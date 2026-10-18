@@ -72,7 +72,13 @@ impl Epoch {
         }
     }
     pub fn compatible(&self, reading: &Reading, restart: bool) -> bool {
-        if self.boot != reading.boot || restart && self.boot.is_none() || reading.tick < self.last_tick {
+        if restart && self.boot.is_none() || reading.tick < self.last_tick {
+            return false;
+        }
+        self.same_basis(reading)
+    }
+    fn same_basis(&self, reading: &Reading) -> bool {
+        if self.boot != reading.boot || reading.tick < self.zero_tick {
             return false;
         }
         let elapsed = i128::from(reading.tick) - i128::from(self.zero_tick);
@@ -82,7 +88,8 @@ impl Epoch {
         reading.tick.saturating_sub(self.zero_tick)
     }
     pub fn bind(&mut self, sent: &Reading, server: Millis) -> bool {
-        if self.anchor.is_some() || !self.compatible(sent, false) {
+        // The independent sampler may already have captured beyond this historical send sample.
+        if self.anchor.is_some() || !self.same_basis(sent) {
             return false;
         }
         let offset = if (server - sent.wall).abs() > 30_000 { server - sent.wall } else { 0 };
@@ -234,6 +241,25 @@ fn native() -> Option<(String, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_hello_sample_can_precede_later_captures_without_weakening_current_continuity() {
+        let origin = Reading { boot: Some("fixture".into()), tick: 1_000, wall: 10_000 };
+        let sent = Reading { tick: 2_000, wall: 11_000, ..origin.clone() };
+        let mut epoch = Epoch::new(&origin);
+        epoch.last_tick = 2_875;
+        assert!(!epoch.compatible(&sent, false));
+        assert!(epoch.compatible(&Reading { tick: 4_500, wall: 13_500, ..origin.clone() }, false));
+        assert!(epoch.bind(&sent, 13_500));
+        assert_eq!(epoch.anchor.unwrap().anchor_tick, 1_000);
+        for bad in [
+            Reading { tick: 999, wall: 9_999, ..origin.clone() },
+            Reading { boot: Some("other".into()), ..sent.clone() },
+            Reading { wall: sent.wall + 2_001, ..sent },
+        ] {
+            assert!(!Epoch::new(&origin).bind(&bad, bad.wall));
+        }
+    }
+
     #[test]
     fn a_recovered_anchor_restores_the_canonical_offset_even_with_small_wall_drift() {
         let first = Reading { boot: Some("boot".into()), tick: 1000, wall: 10_000 };

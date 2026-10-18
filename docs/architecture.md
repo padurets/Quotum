@@ -307,6 +307,13 @@ a missing marker from the saved mapping. An interrupted first calibration theref
 keeps the durable intervals. Recovery or durable retirement of a clock identity
 precedes local acknowledgement and reclamation. Retirement first removes the old
 private basis, so a crash after deleting its evidence cannot revive that identity.
+One manifest entry retains the active clock's first sequence independently of
+reclaimable segments. Privacy and credential retirement cannot erase that origin
+and make an already consumed clock appear new. Startup also checks the active
+metadata identity against this durable entry before continuing it.
+The hello's historical send sample is checked against its clock origin; later
+captures may legitimately advance the current high-water while HTTP is pending.
+Current clock continuity and the five-second calibration deadline still apply.
 
 One writer and a directory budget cover all destination namespaces, including inactive
 ones: 64 MiB on disk, at most 128 segments per namespace, 256 clock mappings and 256

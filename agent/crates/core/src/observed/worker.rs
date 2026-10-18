@@ -181,47 +181,69 @@ mod tests {
     #[test]
     fn every_interrupted_bind_keeps_clock_recovery_ahead_of_acknowledgement() {
         for matching in [false, true] {
-            let mut cuts = 0;
-            let mut completed = false;
-            for publication in 1..32 {
-                let (mut s, sent, accepted, _) = pending_clock();
-                let old_id = s.epoch.id.clone();
-                let anchor = matching.then_some(accepted.clone());
-                let control = binding(&s, sent, anchor.clone(), false, 2);
-                s.sampler.queue.interrupt_after(publication);
-                let interrupted = s.sampler.control(control, &mut s.epoch).is_err();
-                cuts += usize::from(interrupted);
-                s.reopen(publication);
-                let reading = s.sampler.clock.read();
-                s.record(s.epoch.tick(&reading), s.state(Some(false)), None);
-                let control = binding(&s, reading, anchor.clone(), true, 2);
-                s.sampler.control(control, &mut s.epoch).unwrap();
-                if !matching && s.epoch.anchor.is_none() {
+            for privacy in [false, true] {
+                let mut cuts = 0;
+                let mut completed = false;
+                for publication in 1..32 {
+                    let (mut s, sent, accepted, _) = pending_clock();
+                    let old_id = s.epoch.id.clone();
+                    if privacy {
+                        s.sampler.queue.apply_privacy("a".repeat(32)).unwrap();
+                        s.sampler.previous = None;
+                        s.sampler.run = crate::config::random_hex();
+                        s.record(s.epoch.tick(&sent), s.state(Some(false)), None);
+                    }
+                    let anchor = matching.then_some(accepted.clone());
+                    let control = binding(&s, sent, anchor.clone(), false, 2);
+                    s.sampler.queue.interrupt_after(publication);
+                    let interrupted = s.sampler.control(control, &mut s.epoch).is_err();
+                    cuts += usize::from(interrupted);
+                    s.reopen(publication);
                     let reading = s.sampler.clock.read();
                     s.record(s.epoch.tick(&reading), s.state(Some(false)), None);
-                    let control = binding(&s, reading, None, true, 2);
+                    let control = binding(&s, reading, anchor.clone(), true, 2);
                     s.sampler.control(control, &mut s.epoch).unwrap();
+                    if !matching && s.epoch.anchor.is_none() {
+                        let reading = s.sampler.clock.read();
+                        s.record(s.epoch.tick(&reading), s.state(Some(false)), None);
+                        let control = binding(&s, reading, None, true, 2);
+                        s.sampler.control(control, &mut s.epoch).unwrap();
+                    }
+                    if matching {
+                        assert_eq!(s.epoch.id, old_id);
+                        assert_eq!(s.epoch.anchor.as_ref(), Some(&accepted));
+                        assert_eq!(s.epoch.wall_offset, Some(500));
+                    } else {
+                        assert_ne!(s.epoch.id, old_id, "publication {publication} cannot revive the consumed identity");
+                        assert!(!s.sampler.queue.metadata.clocks.contains_key(&old_id));
+                    }
+                    let batch = s.sampler.queue.prepare().unwrap();
+                    assert!(!batch.frames.is_empty());
+                    assert!(batch.frames.iter().all(|frame| frame.seq > 2 && frame.from_tick == frame.to_tick));
+                    assert_eq!(batch.clock_anchor.as_ref().unwrap().clock_epoch, s.epoch.id);
+                    assert_eq!(s.work(), 0, "accepted work must not be credited again after a crash");
+                    if !interrupted {
+                        completed = true;
+                        break;
+                    }
                 }
-                if matching {
-                    assert_eq!(s.epoch.id, old_id);
-                    assert_eq!(s.epoch.anchor.as_ref(), Some(&accepted));
-                    assert_eq!(s.epoch.wall_offset, Some(500));
-                } else {
-                    assert_ne!(s.epoch.id, old_id, "publication {publication} cannot revive the consumed identity");
-                    assert!(!s.sampler.queue.metadata.clocks.contains_key(&old_id));
-                }
-                let batch = s.sampler.queue.prepare().unwrap();
-                assert!(!batch.frames.is_empty());
-                assert!(batch.frames.iter().all(|frame| frame.seq > 2 && frame.from_tick == frame.to_tick));
-                assert_eq!(batch.clock_anchor.as_ref().unwrap().clock_epoch, s.epoch.id);
-                assert_eq!(s.work(), 0, "accepted work must not be credited again after a crash");
-                if !interrupted {
-                    completed = true;
-                    break;
-                }
+                assert!(completed && cuts >= 4, "exercise the actual durable writes, then finish without interruption");
             }
-            assert!(completed && cuts >= 4, "exercise the actual durable writes, then finish without interruption");
         }
+    }
+
+    #[test]
+    fn restored_metadata_cannot_revive_an_old_active_clock_identity() {
+        let (mut s, _, _, _) = pending_clock();
+        let old = s.epoch.clone();
+        let fresh = Epoch::new(&s.sampler.clock.read());
+        s.sampler.queue.install_clock(fresh.clone()).unwrap();
+        s.sampler.queue.metadata.clocks.insert(old.id.clone(), old.clone());
+        s.sampler.queue.metadata.active_clock = Some(old.id.clone());
+        s.sampler.queue.save_metadata().unwrap();
+        s.reopen(0);
+        assert_ne!(s.epoch.id, old.id);
+        assert!(s.sampler.queue.is_current_clock(&s.epoch.id));
     }
 
     #[test]
@@ -636,7 +658,7 @@ impl Sampler {
         let saved =
             self.queue.metadata.active_clock.as_ref().and_then(|id| self.queue.metadata.clocks.get(id)).cloned();
         let epoch = match saved {
-            Some(epoch) if epoch.compatible(reading, true) => epoch,
+            Some(epoch) if self.queue.is_current_clock(&epoch.id) && epoch.compatible(reading, true) => epoch,
             Some(old) => {
                 self.queue.retire_unanchored(&old.id)?;
                 Epoch::new(reading)

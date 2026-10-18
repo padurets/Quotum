@@ -219,6 +219,12 @@ struct Segment {
 }
 
 #[derive(Serialize, Deserialize)]
+struct ClockStart {
+    clock: String,
+    first_seq: u64,
+}
+
+#[derive(Serialize, Deserialize)]
 struct Manifest {
     version: u8,
     namespace: String,
@@ -235,6 +241,8 @@ struct Manifest {
     credential_scope: Option<String>,
     #[serde(default)]
     anchored_clocks: BTreeSet<String>,
+    #[serde(default)]
+    clock_start: Option<ClockStart>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -388,7 +396,10 @@ impl Outbox {
                     && m.next_seq > m.ack
                     && m.next_seq <= SAFE_INTEGER
                     && m.segments.len() <= MAX_SEGMENTS
-                    && m.anchored_clocks.len() <= MAX_METADATA =>
+                    && m.anchored_clocks.len() <= MAX_METADATA
+                    && m.clock_start.as_ref().is_none_or(|start| {
+                        start.first_seq > 0 && start.first_seq <= m.next_seq && start.clock.len() == 32
+                    }) =>
             {
                 m
             }
@@ -413,6 +424,7 @@ impl Outbox {
                     privacy_revision: None,
                     credential_scope: None,
                     anchored_clocks: BTreeSet::new(),
+                    clock_start: None,
                 };
                 atomic(&file, &m, MANIFEST_BYTES)?;
                 m
@@ -459,7 +471,11 @@ impl Outbox {
         self.manifest.next_seq
     }
     pub fn clock_started_by(&self, clock: &str, through: u64) -> bool {
-        self.manifest.segments.iter().any(|segment| segment.clock == clock && segment.first <= through)
+        self.manifest.clock_start.as_ref().is_some_and(|start| start.clock == clock && start.first_seq <= through)
+            || self.manifest.segments.iter().any(|segment| segment.clock == clock && segment.first <= through)
+    }
+    pub fn is_current_clock(&self, clock: &str) -> bool {
+        self.manifest.clock_start.as_ref().is_none_or(|start| start.clock == clock)
     }
     pub fn rewind_acknowledgement(&mut self, through: u64) -> io::Result<()> {
         let old = self.manifest.ack;
@@ -788,6 +804,21 @@ impl Outbox {
     }
 
     pub fn install_clock(&mut self, epoch: Epoch) -> io::Result<()> {
+        let changed_clock = !self.manifest.clock_start.as_ref().is_some_and(|start| start.clock == epoch.id);
+        let first_seq = self.manifest.segments.iter().find(|segment| segment.clock == epoch.id).map_or_else(
+            || {
+                if self.manifest.clock_start.is_none()
+                    && self.metadata.clocks.contains_key(&epoch.id)
+                    && epoch.anchor.is_none()
+                {
+                    // An older manifest cannot prove when this existing unbound identity began.
+                    1
+                } else {
+                    self.manifest.next_seq
+                }
+            },
+            |segment| segment.first,
+        );
         self.metadata.active_clock = Some(epoch.id.clone());
         self.metadata_gc()?;
         while self.metadata.clocks.len() >= MAX_METADATA && !self.metadata.clocks.contains_key(&epoch.id) {
@@ -803,7 +834,12 @@ impl Outbox {
         self.save_metadata()?;
         if calibrated {
             self.manifest.anchored_clocks.retain(|id| self.metadata.clocks.contains_key(id));
-            self.manifest.anchored_clocks.insert(id);
+            self.manifest.anchored_clocks.insert(id.clone());
+        }
+        if changed_clock {
+            self.manifest.clock_start = Some(ClockStart { clock: id, first_seq });
+        }
+        if calibrated || changed_clock {
             // Both publications complete before the mapping can be used on the wire.
             self.save()?;
         }
@@ -1153,6 +1189,57 @@ mod tests {
             complete: true,
         }
     }
+    #[test]
+    fn a_clock_origin_survives_privacy_and_credential_reclamation() {
+        for credential in [false, true] {
+            let stand = Stand::new();
+            let mut q = stand.open();
+            let mut e = epoch();
+            e.anchor = None;
+            e.wall_offset = None;
+            q.install_clock(e.clone()).unwrap();
+            q.append(&state(), raw(&e, 0), None).unwrap();
+            if credential {
+                q.check_credentials("a".repeat(64)).unwrap();
+            } else {
+                q.apply_privacy("a".repeat(32)).unwrap();
+            }
+            assert!(q.manifest.segments.is_empty());
+            drop(q);
+            let mut q = stand.open();
+            assert!(q.clock_started_by(&e.id, 1));
+            assert!(!q.clock_started_by(&e.id, 0));
+            q.append(&state(), raw(&e, 1), None).unwrap();
+            assert!(q.clock_started_by(&e.id, 1), "a fresh checkpoint cannot erase the old identity's origin");
+            q.acknowledge(1, &[]).unwrap();
+            let mut fresh = epoch();
+            fresh.anchor = None;
+            fresh.wall_offset = None;
+            q.install_clock(fresh.clone()).unwrap();
+            assert!(!q.clock_started_by(&fresh.id, 1), "a genuinely new clock begins after the acknowledged cursor");
+            assert!(!q.is_current_clock(&e.id));
+        }
+    }
+
+    #[test]
+    fn a_legacy_unbound_clock_origin_is_conservative_after_reclamation() {
+        let stand = Stand::new();
+        let mut q = stand.open();
+        let mut e = epoch();
+        e.anchor = None;
+        e.wall_offset = None;
+        q.install_clock(e.clone()).unwrap();
+        q.append(&state(), raw(&e, 0), None).unwrap();
+        q.apply_privacy("a".repeat(32)).unwrap();
+        q.manifest.clock_start = None;
+        q.save().unwrap();
+        drop(q);
+        let mut q = stand.open();
+        q.install_clock(e.clone()).unwrap();
+        assert!(q.clock_started_by(&e.id, 1));
+        assert!(!q.clock_started_by(&e.id, 0));
+    }
+
     #[test]
     fn interrupted_first_calibration_preserves_pending_work_and_its_exact_mapping() {
         let mut cuts = 0;
