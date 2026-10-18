@@ -9,14 +9,15 @@ import {SETS} from '../../demo/catalogue.js';
 import {cards,people} from '../../demo/model.js';
 import {cellOf,cellStart} from '../../server/domain/history.js';
 import {creditSnapshot} from '../credits.js';
+import {safeEvidence} from '../evidence.js';
 import {MARGIN_MS,foreseenAt,overviewCards,stillProblems,stillSnapshot} from '../still.js';
 import {Store} from '../../server/store/store.js';
 import {Forecasts,hourShift,type Why} from '../../server/forecasts.js';
-import {FADE_FOR,PULSE_FOR} from '../../ui/lib/quota.js';
+import {dotChangesAt,dotOf,FADE_FOR,PULSE_FOR} from '../../ui/lib/quota.js';
 import {chartProblems,creditRenderProblems,HISTORY_BYTES_PER_MEASUREMENT,measuredProblems} from '../budget.js';
 
 /** Execute the whole production phase; the stand and CDP only supply its observations. */
-async function phase({resetIn=Infinity,fadesIn=-Infinity,forecastIn=Infinity,extraQuota=false,setupDrift=0}: {resetIn?:number;fadesIn?:number;forecastIn?:number;extraQuota?:boolean;setupDrift?:number}={},evidence={save(_name:string,_value:unknown){}}) {
+async function phase({resetIn=Infinity,fadesIn=-Infinity,fadingStale=false,forecastIn=Infinity,extraQuota=false,setupDrift=0}: {resetIn?:number;fadesIn?:number;fadingStale?:boolean;forecastIn?:number;extraQuota?:boolean;setupDrift?:number}={},evidence={save(_name:string,_value:unknown){}}) {
   const hour=3_600_000,anchor=Date.parse('2026-10-15T05:00:00Z');
   const forecastStore=Number.isFinite(forecastIn)?new Store(':memory:',anchor-hour):undefined;
   try {
@@ -37,7 +38,7 @@ async function phase({resetIn=Infinity,fadesIn=-Infinity,forecastIn=Infinity,ext
   const overview={board:{id:'board'},sources:[
     {id:source,successAt:start,staleAfterMs:3_600_000,windows:[{resetAt:null}]},
     {id:'claude:reset',successAt:start-600_000,staleAfterMs:3_600_000,windows:[{resetAt:Number.isFinite(boundary)?boundary:null}]},
-    ...(Number.isFinite(fadesIn)?[{id:'antigravity:measured',successAt:start+fadesIn-PULSE_FOR-FADE_FOR,staleAfterMs:3_600_000,windows:[]}]:[]),
+    ...(Number.isFinite(fadesIn)?[{id:'antigravity:measured',successAt:start+fadesIn-PULSE_FOR-FADE_FOR,staleAfterMs:3_600_000,windows:[],stale:fadingStale,error:null,quota:null}]:[]),
     ...(forecastStore&&forecastSource?[forecastStore.state(forecastSource)]:[]),
   ],forecast:{}};
   const owner={get:async()=>({...overview,forecast:forecasts&&forecastSource?{[forecastSource]:forecasts.of(forecastSource,now).value}:{}})};
@@ -77,7 +78,7 @@ async function phase({resetIn=Infinity,fadesIn=-Infinity,forecastIn=Infinity,ext
   const sourceFile=ts.createSourceFile('index.ts',readFileSync(new URL('../index.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
   const declaration=sourceFile.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='creditPhase');
   assert.ok(declaration);
-  const context={Date:class extends Date {static now(){return now;}},path,createHash,DatabaseSync:Ledger,Requests,SHOWN_WITHIN:5000,MARGIN_MS,FADE_FOR,PULSE_FOR,HISTORY_BYTES_PER_MEASUREMENT,Stop:Error,
+  const context={Date:class extends Date {static now(){return now;}},path,createHash,DatabaseSync:Ledger,Requests,SHOWN_WITHIN:5000,MARGIN_MS,FADE_FOR,PULSE_FOR,dotOf,dotChangesAt,HISTORY_BYTES_PER_MEASUREMENT,Stop:Error,
     cards,people,creditSnapshot,stillSnapshot,overviewCards,foreseenAt,stillProblems,cellOf,cellStart,chartProblems,creditRenderProblems,measuredProblems,say:()=>{},
     sleep:async(ms:number)=>{waits.push(ms);now+=ms;},drain:async()=>{now+=100;},
     selectMoney:async()=>{now+=50+setupDrift;},
@@ -120,9 +121,9 @@ for(const fadesIn of [8000,40_000,55_400])test(`credit setup waits for the earli
   for(const update of result.updates)assert.ok(update.from>started+fadesIn+MARGIN_MS);
 });
 
-test('credit setup keeps its original shared deadline when another card cannot finish fading',async()=>{
-  const failures:{name:string;value:{from:number;until:number;setupUntil:number;windowMs:number;resets:number[];fades:number[];forecasts:number[];waits:unknown[]}}[]=[];
-  await assert.rejects(phase({fadesIn:55_401},{save(name,value){failures.push({name,value:value as typeof failures[number]['value']});}}),/credit measurement has no quiet quota interval/);
+for(const fadingStale of [false,true])test(`credit setup keeps its deadline and records the fading card state (stale=${fadingStale})`,async()=>{
+  const failures:{name:string;value:{from:number;until:number;setupUntil:number;windowMs:number;resets:number[];fades:number[];forecasts:number[];waits:unknown[];fadingCards:{id:string;successAt:number;stale:boolean;warning:boolean;nextChangeAt:number|null}[]}}[]=[];
+  await assert.rejects(phase({fadesIn:55_401,fadingStale},{save(name,value){failures.push({name,value:safeEvidence(value) as typeof failures[number]['value']});}}),/credit measurement has no quiet quota interval/);
   assert.equal(failures.length,1);
   assert.equal(failures[0].name,'credit-setup-failure');
   const failed=failures[0].value;
@@ -132,6 +133,12 @@ test('credit setup keeps its original shared deadline when another card cannot f
   assert.deepEqual(Array.from(failed.resets),[]);
   assert.deepEqual(Array.from(failed.forecasts),[]);
   assert.deepEqual(Array.from(failed.waits),[],'the failed wait is never slept or added to completed waits');
+  assert.equal(failed.fadingCards.length,1,'the target credit source must not enter the unrelated fade evidence');
+  assert.equal(failed.fadingCards[0].id,'antigravity:measured');
+  assert.equal(failed.fadingCards[0].successAt,failed.until-MARGIN_MS-PULSE_FOR-FADE_FOR);
+  assert.equal(failed.fadingCards[0].stale,fadingStale);
+  assert.equal(failed.fadingCards[0].warning,fadingStale);
+  assert.equal(failed.fadingCards[0].nextChangeAt,fadingStale?null:failed.from+25_001);
 });
 
 test('an already faded measurement adds no setup wait',async()=>{

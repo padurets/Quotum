@@ -35,7 +35,7 @@ import {panningPairs, tracePanning, traceControls} from './panningDiagnostic.js'
 import {profilePanning, profileControls} from './cpuProfile.js';
 import {ChromeLaunchError} from './chrome.js';
 import {creditSnapshot} from './credits.js';
-import {FADE_FOR,PULSE_FOR} from '../ui/lib/quota.js';
+import {dotChangesAt,dotOf,FADE_FOR,PULSE_FOR} from '../ui/lib/quota.js';
 import {startupTrials} from './startupDiagnostic.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
@@ -639,7 +639,9 @@ async function creditPhase(demo:Demo,stand:Awaited<ReturnType<Demo['run']>>,cdp:
     if(!resets.length&&!fades.length&&!forecasts.length)break;
     const until=Math.max(...resets,...fades,...forecasts)+MARGIN_MS;
     if(until>setupUntil){
-      evidence.save('credit-setup-failure',{from,until,setupUntil,windowMs,resets,fades,forecasts,waits});
+      const fadingCards=cards.filter(card=>card.id!==source&&card.successAt!==null&&card.successAt+PULSE_FOR+FADE_FOR>=from)
+        .map(card=>({id:card.id,successAt:card.successAt,stale:card.stale,warning:dotOf(card,from).warn,nextChangeAt:dotChangesAt(card,from)}));
+      evidence.save('credit-setup-failure',{from,until,setupUntil,windowMs,resets,fades,forecasts,waits,fadingCards});
       throw new Stop('credit measurement has no quiet quota interval');
     }
     waits.push({from,until,resets,fades,forecasts});

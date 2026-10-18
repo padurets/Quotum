@@ -69,7 +69,7 @@ export function stillSnapshot(card: Card, start: number, observedAt: number) {
 type StillCard = {id: string; successAt: number | null; staleAfterMs: number | null; windows: {resetAt: number | null}[]; forecast: Record<string, {asOf: number}> | undefined};
 
 /** A board's cards as `/api/overview` tells them (`get` asks the hub), each with its forecasts. */
-export async function overviewCards(get: (path: string) => Promise<Snapshot>, board: string): Promise<StillCard[]> {
+export async function overviewCards(get: (path: string) => Promise<Snapshot>, board: string): Promise<(StillCard & Snapshot['sources'][number])[]> {
   const {sources, forecast} = await get(`/api/overview?board=${encodeURIComponent(board)}`);
   return sources.map(card => ({...card, forecast: forecast[card.id]}));
 }
