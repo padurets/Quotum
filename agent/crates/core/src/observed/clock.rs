@@ -153,12 +153,18 @@ fn native() -> Option<(String, u64)> {
             String::from_utf8(bytes[..36].to_vec()).ok()
         })
         .as_ref()?;
+    #[repr(C)]
+    struct Timebase {
+        numer: u32,
+        denom: u32,
+    }
     unsafe extern "C" {
         fn mach_continuous_time() -> u64;
+        fn mach_timebase_info(info: *mut Timebase) -> libc::c_int;
     }
-    let mut scale = libc::mach_timebase_info_data_t { numer: 0, denom: 0 };
+    let mut scale = Timebase { numer: 0, denom: 0 };
     // SAFETY: the output is a fixed native clock conversion structure.
-    if unsafe { libc::mach_timebase_info(&mut scale) } != 0 || scale.denom == 0 {
+    if unsafe { mach_timebase_info(&mut scale) } != 0 || scale.denom == 0 {
         return None;
     }
     // SAFETY: the continuous clock has no inputs or pointers.
