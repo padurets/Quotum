@@ -201,6 +201,10 @@ class BoardPeriod {
     const summary=tape.accounting.quotaSummary(line.sourceId,line.windowId,this.tapeRange(tape,now));
     return summary?{...line,...summary}:line;
   }
+  quotaSpendingAt(line:Line,now:number,rangeKey?:string):Pick<Line,'consumed'|'coveredMs'> {
+    const tape=this.tapes.get('quota');if(!tape||tape.selection.mode!=='live'||rangeKey!==undefined&&tape.rangeKey!==rangeKey)return line;
+    return tape.accounting.quotaSpendingSummary(line.sourceId,line.windowId,this.tapeRange(tape,now))??line;
+  }
   quotaOrderAt(line:Line,now:number,rangeKey:string,active:boolean){
     const tape=this.tapes.get('quota');
     if(!tape||tape.selection.mode!=='live'||tape.rangeKey!==rangeKey||evaluatedRange(tape.selection,now).from<tape.tape.from)return {slope:0,next:Infinity};

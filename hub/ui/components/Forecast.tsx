@@ -151,6 +151,7 @@ const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {ar
     // A rolling left edge changes credited work locally. Only the affected cell
     // reads its exact summary; its table and the other lines remain asleep.
     const lineAt=(now:number)=>range?line:boardPeriod.quotaAt(line,now,history!.range);
+    const spentAt=(now:number)=>range?line:boardPeriod.quotaSpendingAt(line,now,history!.range);
     const rangeCells=range?lineWork(line,true,resetAt,0):null;
     const workCell = (column: WorkColumn, now: number): Cell => {
       const value=lineAt(now),cells=range?rangeCells:lineWork(value,range,resetAt,now),perWork=cells&&'value' in cells.perwork?cells.perwork.value:null;
@@ -220,7 +221,7 @@ const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {ar
           };
         },
       },
-      spent: {time:'spent',changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>spentText(spentOf(lineAt(at))),undefined,line.sourceId,history!.range,line.windowId),at:now=>({content:spentText(spentOf(lineAt(now)))})},
+      spent: {time:'spent',changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>spentText(spentOf(spentAt(at))),undefined,line.sourceId,history!.range,line.windowId),at:now=>({content:spentText(spentOf(spentAt(now)))})},
       forecast: {
         time: 'forecast',
         changesAt: now => cellChangesAt(live, measuredAt, now, ahead, context, chosen),

@@ -203,11 +203,14 @@ class QuotaIndex {
     return points.sort((a,b)=>a[0]-b[0]);
   }
 
-  at(range:PeriodRange):QuotaSummary {
-    const lo=lower(this.times,range.from),end=lower(this.times,range.to),hi=Math.max(0,end-1),last=sampleAt(this.series.samples,end-1);
-    const first=sampleAt(this.series.samples,lower(this.times,range.from+1)-1);
-    const valid=(sample:typeof first,at:number)=>sample&&at<Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity)?100-sample.used:null;
+  at(range:PeriodRange,spendingOnly:true):Pick<QuotaSummary,'consumed'|'coveredMs'>;
+  at(range:PeriodRange,spendingOnly?:false):QuotaSummary;
+  at(range:PeriodRange,spendingOnly=false):QuotaSummary|Pick<QuotaSummary,'consumed'|'coveredMs'> {
+    const lo=lower(this.times,range.from),end=lower(this.times,range.to),hi=Math.max(0,end-1);
     const sum=(values:Numbers)=>hi>lo?numberAt(values,hi)!-numberAt(values,lo)!:0;
+    if(spendingOnly)return {consumed:sum(this.spent),coveredMs:sum(this.covered)};
+    const last=sampleAt(this.series.samples,end-1),first=sampleAt(this.series.samples,lower(this.times,range.from+1)-1);
+    const valid=(sample:typeof first,at:number)=>sample&&at<Math.min(sample.at+sample.staleAfterMs+1,sample.resetAt??Infinity,sample.validUntil??Infinity)?100-sample.used:null;
     const workRange={from:Math.max(range.from,this.known),to:range.to};
     const workLo=lower(this.times,workRange.from);
     return {consumed:sum(this.spent),coveredMs:sum(this.covered),remainingAtStart:valid(first,range.from),remainingAtEnd:valid(last,range.to),work:Number.isFinite(this.known)?{from:workRange.from,ms:workRange.to>workRange.from?this.activity?.read(workRange,true)??0:null,agentMs:workRange.to>workRange.from?this.activity?.read(workRange)??0:0,consumed:hi>workLo?numberAt(this.spent,hi)!-numberAt(this.spent,workLo)!:0,coveredMs:sum(this.worked),duringWork:sum(this.during)}:null};
@@ -498,6 +501,7 @@ export class PeriodAccounting {
   get quotaBytes(){let bytes=0;for(const index of this.quota.values())bytes+=index.bytes;return bytes;}
   get bytes(){let bytes=this.quotaBytes;for(const index of this.money.values())bytes+=index.bytes;for(const index of this.moneyWork.values())bytes+=index.bytes;return bytes;}
   quotaSummary(source:string,window:string,range:PeriodRange){return this.quota.get(source+'\n'+window)?.at(range);}
+  quotaSpendingSummary(source:string,window:string,range:PeriodRange){return this.quota.get(source+'\n'+window)?.at(range,true);}
   quotaWorkSlope(source:string,window:string,now:number,period:number,active:boolean){return this.quota.get(source+'\n'+window)?.workSlope(now,period,active);}
   moneySummary(source:string,meter:string,unit:string,range:PeriodRange){return this.money.get(source+'\n'+meter+'\n'+unit)?.at(range);}
   moneyWorkSummary(source:string,range:PeriodRange){return this.tape.fixed?.moneyWork?.find(row=>row.source===source)??this.moneyWork.get(source)?.at(range);}
