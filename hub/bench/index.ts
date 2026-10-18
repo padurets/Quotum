@@ -30,6 +30,7 @@ import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
 import {creditSnapshot} from './credits.js';
 import {IdleCpuDiagnostic,clientIdentity,sourceIdentity,idleGeometry,planIdleEdge,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
+import {ObservedWork} from './observed.js';
 
 /**
  * `npm run bench -- [--ci] [--cdp <http://host:port>]`: how much an open dashboard costs,
@@ -275,10 +276,12 @@ async function main() {
 
     const measured = await measure(stand, cdp);
     const worked = await work(demo, stand, cdp);
+    const observedWork=await workObserved(stand,cdp);
     const privateWork = await workPrivate(demo, stand, cdp);
     const problems = [
       ...idleProblems(idle),
       ...worked.problems,
+      ...observedWork.problems,
       ...privateWork.problems,
       ...chartProblems(measured.chartLatencies),
       ...(measured.historyBytes <= HISTORY_BYTES_PER_MEASUREMENT ? [] : [`history read ${measured.historyBytes} bytes per measurement, above budget`]),
@@ -292,7 +295,7 @@ async function main() {
       }),
     ];
     // Keep completed measurements available if a later browser phase stops the job.
-    say(`initial readings: ${JSON.stringify({idle:{scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,renders:reading.renders,mutations:reading.mutations},measured:{historyBytes:measured.historyBytes,ingestP95Ms:percentile(measured.ingestLatencies,.95),cardP95Ms:percentile(measured.latencies,.95),chartP95Ms:percentile(measured.chartLatencies,.95)},work:worked.reports,problems})}`);
+    say(`initial readings: ${JSON.stringify({idle:{scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,renders:reading.renders,mutations:reading.mutations},measured:{historyBytes:measured.historyBytes,ingestP95Ms:percentile(measured.ingestLatencies,.95),cardP95Ms:percentile(measured.latencies,.95),chartP95Ms:percentile(measured.chartLatencies,.95)},work:worked.reports,observedWork:observedWork.reports,problems})}`);
     // The readings above are frozen: keyboard checks do not enter the performance budget.
     say('checking consecutive frequency saves with native arrow keys');
     await frequencyKeys(cdp);
@@ -361,6 +364,7 @@ async function main() {
         mutations: tally(measured.reading.mutations).outsideBy,
       },
       work: worked.reports,
+      observedWork:observedWork.reports,
       privateWork: privateWork.reports,
       money:monetary,
       credits,
@@ -736,6 +740,27 @@ async function work(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cd
     problems.push(...renderProblems({card: source, renders: reading.renders, mutations: reading.mutations, from, to: Date.now()}));
   }
   return {reports, problems};
+}
+
+/** The interval endpoint has the same history and rendering budget as the released writer. */
+async function workObserved(stand:Awaited<ReturnType<Demo['run']>>,cdp:Cdp) {
+  say('checking captured intervals without extra history reads or unrelated renders');
+  const source=stand.sources.get(MEASURED)!,owner=stand.people.get(people(stand.set)[0].id)!;
+  const actor=await ObservedWork.open(owner,cards(stand.set).find(card=>card.id===MEASURED)!);
+  const reports:{at:number;reads:number;bytes:number}[]=[],problems:string[]=[];
+  try {
+    await sleep(1000);
+    for(let i=0;i<3;i++) {
+      await cdp.evaluate('__quotumBench.reset()');const requests=new Requests(cdp);requests.counting=true;
+      const from=Date.now(),at=await actor.report(i<2);
+      await sleep(1000);await drain(requests);requests.counting=false;
+      const reading=await cdp.evaluate<Reading>('__quotumBench.read()'),reads=requests.historyRequests,bytes=requests.historyBytes;
+      reports.push({at,reads,bytes});
+      if(reads!==1||bytes>HISTORY_BYTES_PER_MEASUREMENT)problems.push(`captured work read history ${reads} times, ${bytes} bytes`);
+      problems.push(...renderProblems({card:source,renders:reading.renders,mutations:reading.mutations,from,to:Date.now()}));
+    }
+  }finally{await actor.close();await sleep(1000);}
+  return {reports,problems};
 }
 
 async function workPrivate(demo: Demo, stand: Awaited<ReturnType<Demo['run']>>, cdp: Cdp) {
