@@ -29,6 +29,9 @@ pub(crate) struct Account {
 }
 
 #[cfg(test)]
+pub(crate) use tests::captured_accounts;
+
+#[cfg(test)]
 mod tests {
     use super::super::Anchor;
     use super::*;
@@ -103,6 +106,32 @@ mod tests {
                 .record(&state, &reading, &self.epoch, true, self.at + Duration::from_millis(ms), holds)
                 .unwrap();
         }
+        fn capture(&mut self, ms: u64, client: ClientId) {
+            self.sampler.salt = Some("0123456789abcdef0123456789abcdef".into());
+            self.sampler.scope.clients = vec![client.id().into()];
+            let wall = self.epoch.zero_wall + ms as i64;
+            self.sampler.clock = Arc::new(Clock::fixed(Reading {
+                boot: self.epoch.boot.clone(),
+                tick: self.epoch.zero_tick + ms,
+                wall,
+            }));
+            let session = Session {
+                client,
+                pid: 42,
+                native_birth: Some(vec![4, 2]),
+                started_at: self.epoch.zero_wall - 1_000,
+                project: Some("synthetic-project".into()),
+                folder: None,
+                working: Some(true),
+                last_worked: Some(self.epoch.zero_wall),
+                origin: crate::activity::Origin::Terminal,
+            };
+            let (state, holds, _, _) = self.sampler.state(vec![session], wall);
+            let reading = self.sampler.clock.read();
+            self.sampler
+                .record(&Arc::new(state), &reading, &self.epoch, true, self.at + Duration::from_millis(ms), holds)
+                .unwrap();
+        }
         fn work(&self) -> u64 {
             let batch = self.sampler.queue.prepare().unwrap();
             let mut state = batch.checkpoint.unwrap();
@@ -134,6 +163,77 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.root);
         }
+    }
+
+    /// Runner fixtures replace only process/clock inputs, then reopen the production journal.
+    pub(crate) fn captured_accounts(accounts: BTreeMap<ClientId, Account>, client: ClientId) -> Batch {
+        let mut s = Stand::new();
+        s.sampler.control(Control::Accounts(accounts), &mut s.epoch).unwrap();
+        s.capture(0, client);
+        s.capture(15_000, client);
+        let before = serde_json::to_vec(&s.sampler.queue.prepare().unwrap()).unwrap();
+        s.reopen(0);
+        let batch = s.sampler.queue.prepare().unwrap();
+        assert_eq!(serde_json::to_vec(&batch).unwrap(), before, "captured funding survives reopening unchanged");
+        batch
+    }
+
+    #[test]
+    fn observed_account_changes_after_publication_do_not_rebind_durable_work() {
+        let mut s = Stand::new();
+        let path = s.root.join("identity");
+        std::fs::write(&path, "synthetic sign-in metadata").unwrap();
+        let first = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let set_time = |at| {
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(at))
+                .unwrap();
+        };
+        set_time(first);
+        let source = Source { provider: "codex".into(), account: Some("a".repeat(24)), account_name: None };
+        let accounts = BTreeMap::from([(
+            ClientId::Codex,
+            Account {
+                source: Some(source.clone()),
+                by: Some("login".into()),
+                identity: Some(first),
+                paths: vec![path.clone()],
+                legacy: true,
+            },
+        )]);
+        s.sampler.control(Control::Accounts(accounts), &mut s.epoch).unwrap();
+        s.capture(0, ClientId::Codex);
+        s.capture(15_000, ClientId::Codex);
+        set_time(first + Duration::from_secs(60));
+        s.capture(30_000, ClientId::Codex);
+        s.capture(45_000, ClientId::Codex);
+        s.reopen(0);
+        let batch = s.sampler.queue.prepare().unwrap();
+        let mut state = batch.checkpoint.unwrap();
+        let producer = state.contexts[0].session_id.clone();
+        assert!(producer.is_some());
+        assert_eq!(state.contexts[0].source, Some(source.clone()));
+        let (mut funded, mut unfunded) = (0, 0);
+        for frame in batch.frames {
+            let context = &state.contexts[0];
+            assert_eq!(context.session_id, producer);
+            if context.working == Some(true) {
+                if context.source == Some(source.clone()) {
+                    funded += frame.to_tick - frame.from_tick;
+                } else {
+                    assert!(context.source.is_none() && context.account_by.is_none());
+                    unfunded += frame.to_tick - frame.from_tick;
+                }
+            }
+            if let Some(next) = frame.next_state {
+                state = next;
+            }
+        }
+        assert_eq!((funded, unfunded), (15_000, 15_000));
+        assert!(state.contexts[0].source.is_none(), "the changed sign-in cannot fund new work");
     }
 
     fn pending_clock() -> (Stand, Reading, Anchor, u64) {

@@ -597,48 +597,45 @@ impl Runner {
                 continue;
             };
             let index = self.adapters.iter().position(|a| a.provider() == provider);
-            let (source, by, paths) = if let Some(i) = index {
-                let collector = &self.adapters[i];
-                let paths = identity_paths[i].clone();
-                let account = if collector.identifies_account() {
-                    current_account(collector.local_account(&self.home), &accounts[i], last_activity(&paths)).flatten()
-                } else {
-                    None
-                };
-                let source = if account.is_some() || !collector.identifies_account() {
-                    Some(crate::observed::Source {
-                        provider: provider.id().into(),
-                        account,
-                        account_name: self.config.account_name(provider).map(|name| name.chars().take(120).collect()),
-                    })
-                } else {
-                    None
-                };
-                let by = source.as_ref().map(|s| if s.account.is_some() { "login" } else { "inferred" }.into());
-                (source, by, paths)
+            let account = if let Some(i) = index {
+                self.activity_account(self.adapters[i].as_ref(), &accounts[i], identity_paths[i].clone(), true)
             } else {
                 let collector = adapter(provider);
                 let paths = collector.identity_paths(&self.home);
-                let source = collector.local_account(&self.home).map(|account| crate::observed::Source {
-                    provider: provider.id().into(),
-                    account: Some(account),
-                    account_name: None,
-                });
-                let by = source.as_ref().map(|_| "login".into());
-                (source, by, paths)
+                self.activity_account(collector.as_ref(), &None, paths, false)
             };
-            result.insert(
-                client,
-                crate::observed::worker::Account {
-                    source,
-                    by,
-                    identity: last_activity(&paths),
-                    paths,
-                    legacy: index.is_some(),
-                },
-            );
+            result.insert(client, account);
         }
         result
+    }
+
+    fn activity_account(
+        &self,
+        collector: &dyn Collector,
+        measured: &Option<(Option<String>, Option<SystemTime>)>,
+        paths: Vec<PathBuf>,
+        legacy: bool,
+    ) -> crate::observed::worker::Account {
+        let provider = collector.provider();
+        let identity = last_activity(&paths);
+        let account = if collector.identifies_account() {
+            current_account(collector.local_account(&self.home), measured, identity).flatten()
+        } else {
+            None
+        };
+        // The resolved account and its reusable witness must describe the same sign-in.
+        let source = (identity == last_activity(&paths)
+            && (account.is_some() || (legacy && !collector.identifies_account())))
+        .then(|| crate::observed::Source {
+            provider: provider.id().into(),
+            account,
+            account_name: legacy
+                .then_some(self.config.account_name(provider))
+                .flatten()
+                .map(|name| name.chars().take(120).collect()),
+        });
+        let by = source.as_ref().map(|s| if s.account.is_some() { "login" } else { "inferred" }.into());
+        crate::observed::worker::Account { source, by, identity, paths, legacy }
     }
 
     fn running_with(
@@ -1010,6 +1007,170 @@ mod tests {
         assert_eq!(current_account(None, &measured, later), None, "signed in again since: not known");
         assert_eq!(current_account(None, &None, later), Some(None), "not measured yet: the hub's guess");
         assert_eq!(current_account(None, &Some((None, then)), then), Some(None), "measured, and named no account");
+    }
+
+    mod observed_accounts {
+        use super::*;
+        use std::path::Path;
+
+        const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaa";
+        const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbb";
+
+        fn first() -> SystemTime {
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_000)
+        }
+        fn second() -> SystemTime {
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_060)
+        }
+
+        #[derive(Clone, Copy)]
+        enum Read {
+            Local,
+            Measured,
+            LocalThenSignIn,
+            MeasuredThenSignIn,
+        }
+
+        struct AccountCollector {
+            path: PathBuf,
+            read: Read,
+        }
+        impl Collector for AccountCollector {
+            fn provider(&self) -> Provider {
+                Provider::Codex
+            }
+            fn measure(&mut self, _: &Context) -> Outcome {
+                panic!("account capture must not invoke a client");
+            }
+            fn activity_paths(&self, _: &Path) -> Vec<PathBuf> {
+                Vec::new()
+            }
+            fn local_account(&self, _: &Path) -> Option<String> {
+                let account = match self.read {
+                    Read::Local | Read::LocalThenSignIn => Some(std::fs::read_to_string(&self.path).unwrap()),
+                    _ => None,
+                };
+                if matches!(self.read, Read::LocalThenSignIn | Read::MeasuredThenSignIn) {
+                    // Publish another login after reading A, before returning it to Runner.
+                    identity(&self.path, B, second());
+                }
+                account
+            }
+        }
+
+        struct Stand(PathBuf);
+        impl Stand {
+            fn new() -> Self {
+                let path =
+                    std::env::temp_dir().join(format!("quotum-account-snapshot-{}", crate::config::random_hex()));
+                std::fs::create_dir(&path).unwrap();
+                Self(path)
+            }
+            fn runner(&self, adapters: Vec<Box<dyn Collector>>) -> Runner {
+                let paths =
+                    Paths { config: self.0.join("config.toml"), state: self.0.clone(), work: self.0.join("work") };
+                Runner::with_adapters(Config::default(), paths, adapters, self.0.clone(), Stop::new())
+            }
+        }
+        impl Drop for Stand {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        fn identity(path: &Path, contents: &str, at: SystemTime) {
+            std::fs::write(path, contents).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(at))
+                .unwrap();
+        }
+
+        fn durable(
+            accounts: std::collections::BTreeMap<ClientId, crate::observed::worker::Account>,
+            client: ClientId,
+            expected: Option<&str>,
+        ) {
+            let batch = crate::observed::worker::captured_accounts(accounts, client);
+            let checkpoint = batch.checkpoint.unwrap();
+            assert_eq!(checkpoint.contexts.len(), 1);
+            let context = &checkpoint.contexts[0];
+            assert_eq!(context.client_id, client.id());
+            assert_eq!(context.source.as_ref().and_then(|s| s.account.as_deref()), expected);
+            assert_eq!(context.account_by.as_deref(), expected.map(|_| "login"));
+            assert_eq!(context.working, Some(true));
+            assert_eq!(
+                context.session_id,
+                Some(crate::session_identity::identify("0123456789abcdef0123456789abcdef", client, &[4, 2])),
+                "funding uncertainty preserves the captured producer"
+            );
+            assert!(batch.frames.iter().all(|frame| frame.next_state.is_none()));
+            assert_eq!(batch.frames.iter().map(|frame| frame.to_tick - frame.from_tick).sum::<u64>(), 15_000);
+        }
+
+        #[test]
+        fn observed_account_resolution_rejects_mid_read_sign_in_and_keeps_stable_evidence() {
+            for (read, contents, at, expected) in [
+                (Read::Local, A, first(), Some(A)),
+                (Read::Local, B, second(), Some(B)),
+                (Read::Measured, A, first(), Some(A)),
+                (Read::Measured, B, second(), None),
+                (Read::LocalThenSignIn, A, first(), None),
+                (Read::MeasuredThenSignIn, A, first(), None),
+            ] {
+                let stand = Stand::new();
+                let path = stand.0.join("identity");
+                identity(&path, contents, at);
+                let collector = AccountCollector { path: path.clone(), read };
+                let mut runner = stand.runner(vec![Box::new(collector)]);
+                runner.clients = vec![ClientId::Codex];
+                let accounts = runner.activity_accounts(&[Some((Some(A.into()), Some(first())))], &[vec![path]]);
+                let account = accounts.get(&ClientId::Codex).unwrap();
+                let witness = account.identity;
+                assert!(account.legacy);
+                durable(accounts, ClientId::Codex, expected);
+                assert_eq!(witness, Some(at), "measured lookup and published witness use the pre-read stat");
+            }
+        }
+
+        #[test]
+        fn observed_account_snapshot_guard_also_applies_without_a_measurement_collector() {
+            let stand = Stand::new();
+            let path = stand.0.join("identity");
+            identity(&path, A, first());
+            let runner = stand.runner(Vec::new());
+            let collector = AccountCollector { path: path.clone(), read: Read::LocalThenSignIn };
+            let account = runner.activity_account(&collector, &None, vec![path], false);
+            assert!(account.source.is_none() && account.by.is_none());
+            assert_eq!(account.identity, Some(first()));
+            assert!(!account.legacy);
+            durable(std::collections::BTreeMap::from([(ClientId::Codex, account)]), ClientId::Codex, None);
+        }
+
+        #[test]
+        fn observed_accounts_from_a_disabled_claude_collector_follow_local_sign_in_only() {
+            let stand = Stand::new();
+            let path = stand.0.join(".claude.json");
+            let mut runner = stand.runner(Vec::new());
+            runner.clients = vec![ClientId::Claude];
+            for (email, at) in [("a@example.com", first()), ("b@example.com", second())] {
+                identity(
+                    &path,
+                    &format!(r#"{{"oauthAccount":{{"emailAddress":"{email}","organizationName":"Fixture"}}}}"#),
+                    at,
+                );
+                let expected = crate::model::pseudonym(Provider::Claude, &format!("{email}/Fixture"));
+                let accounts = runner.activity_accounts(&[], &[]);
+                let account = accounts.get(&ClientId::Claude).unwrap();
+                assert_eq!(account.identity, Some(at));
+                assert!(!account.legacy);
+                durable(accounts, ClientId::Claude, Some(&expected));
+            }
+            identity(&path, "{}", second() + Duration::from_secs(60));
+            durable(runner.activity_accounts(&[], &[]), ClientId::Claude, None);
+        }
     }
 
     #[test]

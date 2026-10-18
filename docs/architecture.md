@@ -364,6 +364,8 @@ older epoch can be retried after a newer one without remapping time. Missing FIF
 prefixes need an explicit unknown skip. Queue replacement compares its authority
 and establishes a new conservative floor; it never reconstructs lost history.
 Captured account evidence never falls back to a login first seen at delivery.
+Account resolution checks sign-in metadata before and after reading local or measured
+evidence. A change leaves funding unknown; capture checks that same witness again.
 
 Coverage uses the witness captured with the interval, including its original
 issuance time, exact scope and current topology version. Rehello and hub restart
