@@ -232,9 +232,12 @@ export function openTab(browser: Browser): Promise<{cdp: Cdp; close(): Promise<v
     try {
       tab = await deadline(10_000, pending => devtoolsJson(`${browser.endpoint}/json/new?about:blank`, pending, 'PUT'), create.signal) as typeof tab;
       if (!tab || typeof tab.id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(tab.id)) throw new Error('DevTools returned no target identity');
-    } catch {
+    } catch (error) {
       browser.owner?.failures.push('tab creation outcome unknown');
-      throw new Error('tab creation outcome unknown; no foreign targets were closed');
+      // Parser and transport errors may contain reply text or private endpoints.
+      const safe = error instanceof Error && /^(?:DevTools (?:HTTP [1-5][0-9]{2}|empty reply|reply exceeds 16 KiB|returned no target identity)|deadline exceeded)$/.test(error.message);
+      const reason = safe ? error.message : create.signal.aborted ? 'target creation cancelled' : error instanceof SyntaxError ? 'DevTools invalid JSON' : 'DevTools transport failed';
+      throw new Error(`tab creation outcome unknown (${reason}); no foreign targets were closed`);
     } finally {clearTimeout(late); signal?.removeEventListener('abort', cancelled);}
     let cdp: Cdp | undefined;
     const abortConnection = () => cdp?.close();

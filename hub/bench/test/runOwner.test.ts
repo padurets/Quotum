@@ -39,7 +39,7 @@ test('a lost create reply reports unknown ownership without listing or closing f
     calls.push(url);
     return new Promise<Response>((_, reject) => init.signal!.addEventListener('abort', () => reject(new Error('cancelled')), {once: true}));
   });
-  const opened = assert.rejects(openTab(browser), /outcome unknown/);
+  const opened = assert.rejects(openTab(browser), /outcome unknown \(target creation cancelled\)/);
   const closing = assert.rejects(owner.close(), /tab creation outcome unknown/);
   t.mock.timers.tick(5_000);
   await opened; await closing;
@@ -70,6 +70,44 @@ test('the run closes a real auxiliary proxy even when its caller has not reached
 test('a malformed creation identity cannot turn into an invented target to close', async t => {
   const calls: string[] = [];
   t.mock.method(globalThis, 'fetch', async (url: string) => {calls.push(url); return new Response('{}');});
-  await assert.rejects(openTab(attachedChrome('http://fixture.invalid')), /outcome unknown/);
+  await assert.rejects(openTab(attachedChrome('http://fixture.invalid')), /outcome unknown \(DevTools returned no target identity\)/);
+  assert.deepEqual(calls, ['http://fixture.invalid/json/new?about:blank']);
+});
+
+for (const [name, reply, reason] of [
+  ['HTTP failure', () => new Response('private-reply-canary', {status: 500}), 'DevTools HTTP 500'],
+  ['invalid JSON', () => new Response('private-reply-canary'), 'DevTools invalid JSON'],
+  ['empty reply', () => new Response(null), 'DevTools empty reply'],
+  ['oversized reply', () => new Response('private-reply-canary'.repeat(1_000)), 'DevTools reply exceeds 16 KiB'],
+  ['transport failure', () => {throw new Error('private-endpoint-canary', {cause: new Error('private-reply-canary')});}, 'DevTools transport failed'],
+] as const) test(`target creation retains a safe ${name} without inventing ownership`, async t => {
+  const owner = new RunOwner(), browser = await owner.start(async () => attachedChrome('http://private-endpoint-canary.invalid'));
+  const calls: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string) => {calls.push(url); return reply();});
+  await assert.rejects(openTab(browser), error => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, `tab creation outcome unknown (${reason}); no foreign targets were closed`);
+    assert.doesNotMatch(String(error.stack), /private-(?:reply|endpoint)-canary/);
+    assert.equal(error.cause, undefined);
+    return true;
+  });
+  await assert.rejects(owner.close(), /tab creation outcome unknown/);
+  assert.deepEqual(owner.failures, ['tab creation outcome unknown']);
+  assert.deepEqual(calls, ['http://private-endpoint-canary.invalid/json/new?about:blank']);
+});
+
+test('target creation retains its original ten-second deadline and unknown ownership', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const calls: string[] = [];
+  let aborted = false;
+  t.mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
+    calls.push(url);
+    return new Promise<Response>((_, reject) => init.signal!.addEventListener('abort', () => {
+      aborted = true; reject(new Error('private-endpoint-canary'));
+    }, {once: true}));
+  });
+  const opened = assert.rejects(openTab(attachedChrome('http://fixture.invalid')), /outcome unknown \(deadline exceeded\)/);
+  t.mock.timers.tick(9_999); await Promise.resolve(); assert.equal(aborted, false);
+  t.mock.timers.tick(1); await opened; assert.equal(aborted, true);
   assert.deepEqual(calls, ['http://fixture.invalid/json/new?about:blank']);
 });
