@@ -231,6 +231,40 @@ impl Runner {
         let mut commands: Vec<Option<String>> = vec![None; self.adapters.len()];
         let mut command_accounts: Vec<Option<String>> = vec![None; self.adapters.len()];
         let mut policy_contact = Instant::now();
+        let target = if !self.stop.requested() { sink.activity_target() } else { None };
+        let observed = target.is_some();
+        let route_policy = ClientId::ALL.into_iter().filter(|c| !self.config.routes(*c)).collect::<Vec<_>>();
+        let enabled = self.config.sessions() && !self.clients.is_empty();
+        let privacy = target.as_ref().and_then(|_| {
+            crate::observed::privacy::update(&self.paths, enabled, self.config.projects(), &self.clients, &route_policy)
+                .ok()
+        });
+        let mut activity_delivery = target.filter(|_| enabled).and_then(|target| {
+            let privacy = privacy.clone()?;
+            let mut clients = self.clients.iter().map(|c| c.id().to_string()).collect::<Vec<_>>();
+            clients.sort();
+            let mut route_disabled = ClientId::ALL
+                .into_iter()
+                .filter(|c| !self.config.routes(*c))
+                .map(|c| c.id().to_string())
+                .collect::<Vec<_>>();
+            route_disabled.sort();
+            crate::observed::worker::Worker::start(crate::observed::worker::Start {
+                paths: self.paths.clone(),
+                home: self.home.clone(),
+                clients: self.clients.clone(),
+                scope: crate::observed::Scope { version: 1, clients, route_disabled, complete: true },
+                namespace: target.namespace,
+                projects: self.config.projects(),
+                stop: self.stop.clone(),
+                privacy,
+            })
+            .ok()
+            .map(crate::observed::delivery::Delivery::new)
+        });
+        let mut observed_inventory = Inventory::default();
+        let mut inventory_at: Option<Instant> = None;
+        let mut inventory = Vec::new();
         if sink.managed() {
             policy = sink.checkin_managed(&[], &providers).policy;
             sink.flush();
@@ -239,7 +273,7 @@ impl Runner {
             }
         }
         let mut clock = Clock::new(now_ms());
-        let mut watch = self.config.sessions().then(|| Watch {
+        let mut watch = (self.config.sessions() && !observed).then(|| Watch {
             activity: Activity::new(self.home.clone(), self.config.projects()),
             looked: None,
             reported: None,
@@ -254,6 +288,28 @@ impl Runner {
         while !self.stop.requested() {
             if let Some(reason) = sink.refused() {
                 return Some(reason.to_string());
+            }
+            if let Some(delivery) = &mut activity_delivery {
+                #[cfg(all(feature = "activity-bench", target_os = "linux"))]
+                let context_cpu = crate::observed::probe::cpu();
+                delivery.accounts(self.activity_accounts(&accounts, &identity_paths));
+                #[cfg(all(feature = "activity-bench", target_os = "linux"))]
+                crate::observed::probe::CONTEXT_CPU_NS
+                    .fetch_add(crate::observed::probe::cpu() - context_cpu, std::sync::atomic::Ordering::Relaxed);
+                if inventory_at.is_none_or(|at| at.elapsed() >= LOOK_EVERY) {
+                    if let Some(capture) = delivery.worker.snapshot() {
+                        inventory = observed_inventory.look_running(
+                            &self.config,
+                            &self.clients,
+                            &self.home,
+                            &self.paths.work,
+                            &self.stop,
+                            &capture.paths,
+                        );
+                        inventory_at = Some(Instant::now());
+                    }
+                }
+                delivery.turn(sink, &inventory);
             }
             // Only while the list can go somewhere: no looking for a hub that does not take it
             // (now: an older one is asked again later, and looking starts over then).
@@ -517,6 +573,61 @@ impl Runner {
             .collect()
     }
 
+    fn activity_accounts(
+        &self,
+        accounts: &[Option<(Option<String>, Option<SystemTime>)>],
+        identity_paths: &[Vec<PathBuf>],
+    ) -> std::collections::BTreeMap<ClientId, crate::observed::worker::Account> {
+        let mut result = std::collections::BTreeMap::new();
+        for &client in &self.clients {
+            let Some(provider) = client.collector() else {
+                continue;
+            };
+            let index = self.adapters.iter().position(|a| a.provider() == provider);
+            let (source, by, paths) = if let Some(i) = index {
+                let collector = &self.adapters[i];
+                let paths = identity_paths[i].clone();
+                let account = if collector.identifies_account() {
+                    current_account(collector.local_account(&self.home), &accounts[i], last_activity(&paths)).flatten()
+                } else {
+                    None
+                };
+                let source = if account.is_some() || !collector.identifies_account() {
+                    Some(crate::observed::Source {
+                        provider: provider.id().into(),
+                        account,
+                        account_name: self.config.account_name(provider).map(|name| name.chars().take(120).collect()),
+                    })
+                } else {
+                    None
+                };
+                let by = source.as_ref().map(|s| if s.account.is_some() { "login" } else { "inferred" }.into());
+                (source, by, paths)
+            } else {
+                let collector = adapter(provider);
+                let paths = collector.identity_paths(&self.home);
+                let source = collector.local_account(&self.home).map(|account| crate::observed::Source {
+                    provider: provider.id().into(),
+                    account: Some(account),
+                    account_name: None,
+                });
+                let by = source.as_ref().map(|_| "login".into());
+                (source, by, paths)
+            };
+            result.insert(
+                client,
+                crate::observed::worker::Account {
+                    source,
+                    by,
+                    identity: last_activity(&paths),
+                    paths,
+                    legacy: index.is_some(),
+                },
+            );
+        }
+        result
+    }
+
     fn running_with(
         &self,
         seen: Vec<crate::activity::Session>,
@@ -627,7 +738,11 @@ impl Runner {
 /// The names a session is reported with: none when project names are turned off; its
 /// folder only where it is not its project. Each as long as a hub takes it (spec: text
 /// fields); the hub would cut it too.
-fn names(project: Option<String>, folder: Option<String>, allowed: bool) -> (Option<String>, Option<String>) {
+pub(crate) fn names(
+    project: Option<String>,
+    folder: Option<String>,
+    allowed: bool,
+) -> (Option<String>, Option<String>) {
     if !allowed {
         return (None, None);
     }

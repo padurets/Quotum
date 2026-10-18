@@ -6,6 +6,7 @@ import type {Device} from './store/directory.js';
 import type {Store, WorkKey} from './store/store.js';
 import {KEEP_MS, type Sessions, type LiveSession} from './sessions.js';
 import {afterCommit} from './touches.js';
+import {mergeEvidence} from './domain/sessionEvidence.js';
 
 type Cursor={device_id:string;queue_id:string;authority_epoch:string;floor_at:number;last_open_id:string;accepted_seq:number;
   checkpoint:string|null;clock_anchor:string|null;capture_epoch:string|null;last_tick:number|null;last_at:number|null;latest_at:number|null};
@@ -47,6 +48,7 @@ export class ActivityIngest {
       this.store.db.prepare('INSERT INTO device_activity(device_id,queue_id,authority_epoch,floor_at,last_open_id) VALUES (?,?,?,?,?)')
         .run(device.id,request.queueId,opaque(),Math.max(now,high,previousFloor),request.openId);
       row=this.cursor(device.id)!;
+      afterCommit(()=>this.live.forget([device.id]));
     }
     if(request.acknowledgedThrough>row.accepted_seq)throw new ActivityConflict('activity_sequence',{expectedSeq:row.accepted_seq+1});
     const topologyVersion=this.store.coverage.topology(device.userId),scope=activityScopeDigest(request.tracking);
@@ -84,8 +86,8 @@ export class ActivityIngest {
     return {topologyVersion:this.store.coverage.topology(device.userId),coverageRefreshRequired:!tracking||!this.witness(device,row,id,tracking)};
   }
 
-  private keys(device:Device,state:ActivityState):WorkKey[] {
-    return state.contexts.filter(c=>c.working===true).map(c=>({client:c.clientId,
+  private keys(device:Device,state:ActivityState,workingOnly=true):WorkKey[] {
+    return state.contexts.filter(c=>!workingOnly||c.working===true).map(c=>({client:c.clientId,
       source:c.source?this.store.findSource(c.source.provider,subscriptionKey(c.source,device.userId)):null,accountBy:c.accountBy,route:c.route,
       origin:c.origin,project:c.project??'',folder:c.folder??'',startedAt:c.startedAt,
       identity:c.sessionId?{kind:'stable' as const,sessionId:c.sessionId}:{kind:'legacy' as const,ordinal:c.ordinal!}}));
@@ -123,27 +125,38 @@ export class ActivityIngest {
       if(!state)throw new Invalid('checkpoint');
     }
     const slices:{from:number;to:number;keys:WorkKey[]}[]=[];
+    const prepared=new Map<ActivityState,{all:WorkKey[];working:WorkKey[];signature:string}>();
+    const keysOfState=(value:ActivityState)=>{let found=prepared.get(value);if(!found){const all=this.keys(device,value,false),working=all.filter((_,i)=>value.contexts[i].working===true);found={all,working,signature:JSON.stringify(working)};prepared.set(value,found);}return found;};
+    let previousSignature:string|null=null;
+    const observations=new Map<string,WorkKey>();
+    const observe=(value:ActivityState)=>{for(const key of keysOfState(value).all){
+      const identity=JSON.stringify([key.client,key.source,key.origin,key.project,key.folder,key.startedAt,key.identity]);
+      const before=observations.get(identity);observations.set(identity,before?{...key,...mergeEvidence(before,key)}:key);
+    }};
     let coverage=false;
     const retainedFrom=now-config.retention.sampleDays*86_400_000;
     for(const f of pending){
       if(f.seq!==cursor+1)throw new ActivityConflict('activity_sequence',{expectedSeq:cursor+1});
       if(f.toAt>now+CLOCK_TOLERANCE_MS)throw new Invalid('future interval');
       if(activityStateDigest(state!)!==f.baseStateDigest)throw new Invalid('baseStateDigest');
+      if(f===pending[0])observe(state!);
       if(capture===f.captureEpoch&&lastTick!==null&&f.fromTick!==lastTick)throw new Invalid('capture continuity');
       if(capture!==f.captureEpoch&&!supplied&&!f.nextState)throw new Invalid('capture checkpoint');
-      const from=Math.max(f.fromAt,row.floor_at,retainedFrom,lastAt??0),to=f.toAt,keys=this.keys(device,state!);
+      const from=Math.max(f.fromAt,row.floor_at,retainedFrom,lastAt??0),to=f.toAt,preparedState=keysOfState(state!),keys=preparedState.working;
       if(to>from&&keys.length){
         const previous=slices.at(-1);
-        if(previous?.to===from&&JSON.stringify(previous.keys)===JSON.stringify(keys))previous.to=to;
+        if(previous?.to===from&&previousSignature===preparedState.signature)previous.to=to;
         else slices.push({from,to,keys});
+        previousSignature=preparedState.signature;
       }
       const witness=this.witness(device,row,request.topologyWitnessId,state!.tracking);
       if(witness&&f.complete&&state!.tracking.complete&&state!.tracking.clients.length&&state!.contexts.every(c=>c.working!==null))
         coverage=this.store.coverage.recordCaptured(device.id,Math.max(from,witness.issued_at),to,witness.scope_digest,f.captureEpoch,witness.topology_version)||coverage;
+      if(f.nextState)observe(f.nextState);
       state=f.nextState??state;cursor=f.seq;prefixAnchor=request.clockAnchor;capture=f.captureEpoch;lastTick=f.toTick;lastAt=Math.max(lastAt??0,f.toAt);
     }
     // Every call includes all concurrent keys; mixed stable/legacy floors cannot clip a parallel producer.
-    this.store.creditWorkIntervals(device.id,slices);
+    this.store.creditWorkIntervals(device.id,slices,[...observations.values()]);
     if(pending.length||cursor!==row.accepted_seq)this.store.db.prepare('UPDATE device_activity SET accepted_seq=?,checkpoint=?,clock_anchor=?,capture_epoch=?,last_tick=?,last_at=? WHERE device_id=?')
       .run(cursor,state?JSON.stringify(state):null,prefixAnchor?JSON.stringify(prefixAnchor):null,capture,lastTick,lastAt,device.id);
     const releasedWitnesses=[...new Set(request.releaseWitnesses)];

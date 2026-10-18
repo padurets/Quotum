@@ -261,6 +261,44 @@ exit within five seconds. It never retains raw output or reads client secrets.
 
 ### Tracking coverage and quota growth
 
+The agent captures processes on a dedicated thread. Client version probes, quota
+collection and HTTP stay on the coordinator, with no capture lock held while they
+run. The worker publishes one immutable bounded snapshot and accepts at most eight
+pending metadata commands. Stopping the runner disconnects and joins this worker;
+the CLI and app use the same state directory and writer lock after their handoff.
+
+Capture and classification have separate clocks. CPU thresholds and the one-minute
+hold use complete fifteen-second judgement windows. New roots first establish a
+baseline on that grid; extra looks do not judge short typing or redraw bursts or
+renew the hold. Capture aims at eight subdivisions per window while active, three
+after thirty seconds of known idle, and one with no clients. A bounded cost allowance
+uses the greater of an EWMA and the last four costs, charges journal and command
+work too, and reduces subdivisions under pressure. It repays the initial calibration
+burst and never catches up with a polling loop. Delayed looks, clock faults, suspend,
+incomplete ownership and restarts break evidence instead of filling a gap with idle
+or work. A hold expiring between captures is cut at its monotonic deadline.
+
+Completed intervals go to a private segmented append journal before delivery. Its
+length-prefixed JSON records have checksums, a 512 KiB payload bound and immutable
+sequence numbers. A synced atomic manifest publishes a complete capture transaction;
+a crash discards uncommitted tail bytes, or explicitly retires a corrupt committed
+suffix while keeping its verified prefix. Full-state transitions too large together
+split into an old-state interval and a zero-duration new capture checkpoint. Batches
+carry at most 64 frames within 512 KiB. An acknowledged prefix is persisted before
+its files or referenced clock mappings and coverage proofs can be reclaimed.
+
+One writer and a directory budget cover all destination namespaces, including inactive
+ones: 64 MiB on disk, at most 128 segments per namespace, 256 clock mappings and 256
+proofs, with 64 KiB manifest and 256 KiB metadata bounds. Inactive namespaces are
+validated and bounded before a writer starts. Seven-day expiry uses only calibrated
+UTC. Overflow, age, corruption and privacy restrictions persist explicit unknown
+loss before deleting payloads. Reporting, project or scope opt-out changes a durable
+privacy revision before a namespace can send again. Queue binding is checked against
+the authenticated hub and device before replay; a bound mismatch fences the current
+capture run instead of replacing its authority. A compatible boot clock and immutable
+anchor survive a process restart, while CPU baselines and holds do not. Native clocks
+include suspend; without a verified native boot clock, continuity is limited to one run.
+
 Agents using `/v1/activity` negotiate a persistent observed-interval capability.
 Schema 32 saves one fenced queue, accepted sequence, immutable prefix clock anchor
 and bounded state checkpoint per device, plus at most 256 issued topology proofs.

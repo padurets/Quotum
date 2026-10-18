@@ -7,6 +7,7 @@ pub mod config;
 pub mod holder;
 pub mod measurement_policy;
 pub mod model;
+pub mod observed;
 pub mod process;
 pub mod providers;
 pub mod runner;

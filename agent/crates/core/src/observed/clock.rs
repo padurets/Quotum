@@ -1,0 +1,216 @@
+//! Private boot-clock continuity. Native values never enter an activity request.
+
+use std::time::Instant;
+
+use serde::{Deserialize, Serialize};
+
+use super::{Anchor, SAFE_INTEGER, State};
+use crate::model::{Millis, now_ms};
+use std::sync::Arc;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct Reading {
+    pub boot: Option<String>,
+    pub tick: u64,
+    pub wall: Millis,
+}
+
+pub(crate) struct Clock {
+    fallback: Instant,
+}
+
+impl Clock {
+    pub fn new() -> Self {
+        Self { fallback: Instant::now() }
+    }
+    pub fn read(&self) -> Reading {
+        let wall = now_ms();
+        match native() {
+            Some((boot, tick)) => Reading { boot: Some(boot), tick, wall },
+            None => Reading { boot: None, tick: self.fallback.elapsed().as_millis() as u64, wall },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Epoch {
+    pub id: String,
+    pub boot: Option<String>,
+    pub zero_tick: u64,
+    pub zero_wall: Millis,
+    pub last_tick: u64,
+    pub anchor: Option<Anchor>,
+    #[serde(default)]
+    pub wall_offset: Option<Millis>,
+}
+
+impl Epoch {
+    pub fn new(reading: &Reading) -> Self {
+        Self {
+            id: crate::config::random_hex(),
+            boot: reading.boot.clone(),
+            zero_tick: reading.tick,
+            zero_wall: reading.wall,
+            last_tick: reading.tick,
+            anchor: None,
+            wall_offset: None,
+        }
+    }
+    pub fn compatible(&self, reading: &Reading, restart: bool) -> bool {
+        if self.boot != reading.boot || restart && self.boot.is_none() || reading.tick < self.last_tick {
+            return false;
+        }
+        let elapsed = i128::from(reading.tick) - i128::from(self.zero_tick);
+        (i128::from(reading.wall) - i128::from(self.zero_wall) - elapsed).abs() <= 2_000
+    }
+    pub fn tick(&self, reading: &Reading) -> u64 {
+        reading.tick.saturating_sub(self.zero_tick)
+    }
+    pub fn bind(&mut self, sent: &Reading, server: Millis) -> bool {
+        if self.anchor.is_some() || !self.compatible(sent, false) {
+            return false;
+        }
+        let offset = if (server - sent.wall).abs() > 30_000 { server - sent.wall } else { 0 };
+        self.anchor =
+            Some(Anchor { clock_epoch: self.id.clone(), anchor_tick: self.tick(sent), anchor_at: sent.wall + offset });
+        self.wall_offset = Some(offset);
+        true
+    }
+
+    pub fn utc_state(&self, mut state: Arc<State>) -> Option<Arc<State>> {
+        let anchor = self.anchor.as_ref()?;
+        let offset = self.wall_offset.map(i128::from).unwrap_or_else(|| {
+            i128::from(anchor.anchor_at) - i128::from(self.zero_wall) - i128::from(anchor.anchor_tick)
+        });
+        if offset == 0 {
+            return Some(state);
+        }
+        let date = |at: Millis| {
+            let at = i128::from(at) + offset;
+            (0..=i128::from(SAFE_INTEGER)).contains(&at).then_some(at as Millis)
+        };
+        for context in &mut Arc::make_mut(&mut state).contexts {
+            context.started_at = date(context.started_at)?;
+            if let Some(at) = context.last_worked_at {
+                context.last_worked_at = Some(date(at)?);
+            }
+        }
+        Some(state)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn native() -> Option<(String, u64)> {
+    use std::sync::OnceLock;
+    static BOOT: OnceLock<Option<String>> = OnceLock::new();
+    let boot = BOOT
+        .get_or_init(|| {
+            let value = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+            let value = value.trim();
+            (value.len() == 36
+                && value
+                    .bytes()
+                    .enumerate()
+                    .all(|(i, b)| if [8, 13, 18, 23].contains(&i) { b == b'-' } else { b.is_ascii_hexdigit() }))
+            .then(|| value.to_string())
+        })
+        .as_ref()?;
+    // SAFETY: a fixed scalar clock read writes only this owned timespec.
+    let mut time: libc::timespec = unsafe { std::mem::zeroed() };
+    if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut time) } != 0 {
+        return None;
+    }
+    let tick = u64::try_from(time.tv_sec)
+        .ok()?
+        .checked_mul(1000)?
+        .checked_add(u64::try_from(time.tv_nsec).ok()? / 1_000_000)?;
+    Some((boot.clone(), tick))
+}
+
+#[cfg(target_os = "macos")]
+fn native() -> Option<(String, u64)> {
+    use std::sync::OnceLock;
+    static BOOT: OnceLock<Option<String>> = OnceLock::new();
+    let boot = BOOT
+        .get_or_init(|| {
+            let mut bytes = [0u8; 64];
+            let mut length = bytes.len();
+            // SAFETY: constant sysctl name and an owned bounded output buffer.
+            if unsafe {
+                libc::sysctlbyname(
+                    c"kern.bootsessionuuid".as_ptr(),
+                    bytes.as_mut_ptr().cast(),
+                    &mut length,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            } != 0
+                || !(36..=37).contains(&length)
+            {
+                return None;
+            }
+            String::from_utf8(bytes[..36].to_vec()).ok()
+        })
+        .as_ref()?;
+    unsafe extern "C" {
+        fn mach_continuous_time() -> u64;
+    }
+    let mut scale = libc::mach_timebase_info_data_t { numer: 0, denom: 0 };
+    // SAFETY: the output is a fixed native clock conversion structure.
+    if unsafe { libc::mach_timebase_info(&mut scale) } != 0 || scale.denom == 0 {
+        return None;
+    }
+    // SAFETY: the continuous clock has no inputs or pointers.
+    let tick = unsafe { mach_continuous_time() } as u128 * scale.numer as u128 / scale.denom as u128 / 1_000_000;
+    Some((boot.clone(), u64::try_from(tick).ok()?))
+}
+
+#[cfg(windows)]
+fn native() -> Option<(String, u64)> {
+    use std::sync::OnceLock;
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    static BOOT: OnceLock<Option<String>> = OnceLock::new();
+    let boot = BOOT.get_or_init(crate::activity::own_boot_witness).as_ref()?;
+    type Query = unsafe extern "system" fn(*mut u64);
+    // SAFETY: the system DLL and scalar API remain valid throughout the call.
+    unsafe {
+        let module = GetModuleHandleW(
+            c"kernel32.dll".to_bytes().iter().map(|&b| b as u16).chain([0]).collect::<Vec<_>>().as_ptr(),
+        );
+        if module.is_null() {
+            return None;
+        }
+        let address = GetProcAddress(module, c"QueryInterruptTimePrecise".as_ptr().cast())?;
+        let query: Query = std::mem::transmute(address);
+        let mut tick = 0;
+        query(&mut tick);
+        Some((boot.clone(), tick / 10_000))
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn native() -> Option<(String, u64)> {
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn restart_preserves_a_compatible_boot_basis_but_not_holds_or_clock_faults() {
+        let first = Reading { boot: Some("boot".into()), tick: 1000, wall: 10_000 };
+        let mut epoch = Epoch::new(&first);
+        assert!(epoch.bind(&first, 10_000));
+        let anchor = epoch.anchor.clone();
+        let later = Reading { tick: 5000, wall: 14_000, ..first.clone() };
+        assert!(epoch.compatible(&later, true));
+        assert!(!epoch.bind(&later, 20_000));
+        assert_eq!(epoch.anchor, anchor);
+        assert!(!epoch.compatible(&Reading { wall: 17_000, ..later.clone() }, true));
+        assert!(!epoch.compatible(&Reading { boot: Some("another".into()), ..later.clone() }, true));
+        assert!(!epoch.compatible(&Reading { tick: 0, ..later }, true));
+        let fallback = Epoch::new(&Reading { boot: None, ..first.clone() });
+        assert!(!fallback.compatible(&Reading { boot: None, ..first }, true));
+    }
+}

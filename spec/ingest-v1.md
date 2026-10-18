@@ -743,6 +743,9 @@ at most 200,000 ms. Missing or mismatched state references are rejected.
 All frames in a batch share one clock epoch and captured witness. The anchor is
 `{clockEpoch,anchorTick,anchorAt}`; `fromAt=anchorAt+fromTick-anchorTick` and likewise
 for `toAt`. All dates, ticks and durations are exact safe integers in milliseconds.
+Context dates use that same trusted UTC basis before the state digest is computed,
+including `startedAt` and `lastWorkedAt`. Raw local dates can stay in the agent's
+journal; preparing a retry must use its original epoch's immutable mapping.
 The anchor for an epoch is immutable. The accepted FIFO prefix saves only its
 current anchor, state and capture boundary. A new epoch requires a full checkpoint
 and a different capture epoch. Hello and presence never replace the prefix anchor.
@@ -767,6 +770,10 @@ or creates known idle. The remaining suffix needs a full checkpoint. Frames outs
 the activation floor or retained history cannot resurrect older work; future
 intervals are refused. Lost local history after restoring an older hub backup is
 an explicit missing prefix, not recovered work.
+
+After a cursor rollback, the reference agent repeats hello with a conservative
+zero cursor and verifies its saved hub, device, queue and authority before declaring
+that missing prefix. A changed binding cannot authorize recovery or replacement.
 
 ### Presence and coverage proofs
 

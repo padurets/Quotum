@@ -57,6 +57,25 @@ fn session(sessions: &[Session], pid: u32) -> &Session {
     sessions.iter().find(|s| s.pid == pid).expect("session still visible")
 }
 
+#[test]
+fn a_root_discovered_between_judgements_waits_for_a_complete_baseline_window() {
+    let mut a = activity();
+    let mut rows = vec![proc(10, 1, "codex", Role::Unknown)];
+    let origin = Instant::now();
+    a.judging = false;
+    assert_eq!(session(&sample(&mut a, &rows, origin, 14), 10).working, None);
+    cpu(&mut rows, 10, 1000, 0);
+    a.judging = true;
+    assert_eq!(session(&sample(&mut a, &rows, origin, 15), 10).working, None);
+    a.judging = false;
+    cpu(&mut rows, 10, 1400, 0);
+    assert_eq!(session(&sample(&mut a, &rows, origin, 20), 10).working, None);
+    a.judging = true;
+    assert_eq!(session(&sample(&mut a, &rows, origin, 30), 10).working, Some(false));
+    cpu(&mut rows, 10, 2000, 0);
+    assert_eq!(session(&sample(&mut a, &rows, origin, 45), 10).working, Some(true));
+}
+
 pub(crate) fn corrected_sessions() -> Vec<Session> {
     let mut a = activity();
     let mut rows = rows();

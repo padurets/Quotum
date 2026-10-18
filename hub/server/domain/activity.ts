@@ -62,7 +62,6 @@ function context(value:unknown):ActivityContext {
     if(providerOf(String(s.provider))!.measuredBy==='client'){
       const account=name(s.account,'account'),accountName=name(s.accountName,'accountName');
       if(account!==null&&!/^[a-f0-9]{24}$/.test(account))throw new Invalid('account');
-      if(account===null&&accountName===null)throw new Invalid('source account');
       source={provider:s.provider as ClientProvider,account,accountName};
     }
   }

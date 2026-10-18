@@ -198,3 +198,17 @@ test('context A to B to A and parallel legacy keys retain every slice with one h
     s.batch([s.frame(1,0,10_000,current,other)],{checkpoint:current});assert.equal(history,1);
   }finally{s.close();}
 });
+
+test('delayed work keeps captured funding and unknown funding never falls back to the devices latest account',()=>{
+  const s=setup();try{
+    const a=s.store.source('codex','a'.repeat(24),start),b=s.store.source('codex','b'.repeat(24),start);
+    s.store.hold(a,s.user.id,start);s.store.hold(b,s.user.id,start);
+    s.store.seenDevice(s.opened.deviceId,'codex',b,start+60_000);
+    const captured=state();captured.contexts[0].source={provider:'codex',account:'a'.repeat(24),accountName:null};
+    const unknown=state();unknown.contexts[0].project='unknown';
+    s.batch([s.frame(1,0,15_000,captured,unknown),s.frame(2,15_000,30_000,unknown)],{checkpoint:captured});
+    const rows=s.store.db.prepare('SELECT s.source_id AS source,sum(w.to_at-w.from_at) AS ms FROM agent_work w JOIN agent_sessions s ON s.id=w.session_id GROUP BY s.source_id ORDER BY s.source_id').all();
+    assert.deepEqual(rows.map(r=>[r.source,Number(r.ms)]),[[null,15_000],[a,15_000]]);
+    assert.equal(s.store.deviceSource(s.opened.deviceId,'codex'),b);
+  }finally{s.close();}
+});

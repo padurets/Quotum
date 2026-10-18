@@ -430,18 +430,13 @@ export class Ingest {
     tell(this.observer, o => o.touchSources([...new Set(sources)]));
   }
 
-  /**
-   * Which coding agents run on a device now. A session is filed under the subscription
-   * it names, else under the one this device last delivered for its provider; one the
-   * hub does not know, or its person does not hold, keeps that raw binding. Board
-   * projections admit device sessions independently and redact undisclosed funding.
-   */
+  /** Completed intervals retain their captured evidence; presence never extends their credit. */
   observedActivity(credential:Credential,body:unknown,now=Date.now()) {
     const request=parseActivity(body);
     return this.directory.transaction(()=>{
       const device=this.device(credential,request,now),before=this.live.sourcesOf(device.id,now);
       const result=this.activity.accept(device,request,now);
-      if(result.presenceAccepted||'coverage' in result&&result.coverage)afterCommit(()=>{
+      if(request.op==='hello'||result.presenceAccepted||'coverage' in result&&result.coverage)afterCommit(()=>{
         const sources=[...new Set([...before,...this.live.sourcesOf(device.id,now),...('coverage' in result&&result.coverage?this.store.held(device.userId).map(s=>s.id):[])])];
         tell(this.observer,o=>o.touchSources(sources));
       });
@@ -467,6 +462,12 @@ export class Ingest {
     });
   }
 
+  /**
+   * Which coding agents run on a device now. A session is filed under the subscription
+   * it names, else under the one this device last delivered for its provider; one the
+   * hub does not know, or its person does not hold, keeps that raw binding. Board
+   * projections admit device sessions independently and redact undisclosed funding.
+   */
   private legacySessions(device: Device, body: unknown, now: number): {accepted: number} {
     const report = parseSessions(body);
     const skew = Math.abs(now - report.sentAt) > CLOCK_TOLERANCE_MS ? now - report.sentAt : 0;
