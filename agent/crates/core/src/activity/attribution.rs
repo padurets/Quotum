@@ -82,11 +82,7 @@ fn extra_native_observations_preserve_idle_bursts_and_the_original_working_hold(
         let sessions = sample_ms(&mut fast, &rows, origin, ms);
         let state = session(&sessions, 10);
         assert_eq!((state.working, state.last_worked), previous.unwrap(), "capture at {ms}ms");
-        assert_eq!(
-            state.working,
-            (ms >= 15_000).then_some((90_000..150_000).contains(&ms)),
-            "capture at {ms}ms"
-        );
+        assert_eq!(state.working, (ms >= 15_000).then_some((90_000..150_000).contains(&ms)), "capture at {ms}ms");
     }
 }
 
