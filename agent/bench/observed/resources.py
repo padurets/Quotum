@@ -254,7 +254,7 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
                        deliveredContextMs=dict(positive=Hub.positive_context_ms,unknown=Hub.unknown_context_ms),stopDelaySeconds=result["wallSeconds"] - duration)
             row["observedContextCounts"]=sorted(set(Hub.context_counts))
             row["steadyOneCoreCPUPercent"] = 100 * (b[1]["cpuSeconds"]-a[1]["cpuSeconds"] + b[1]["childCPUSeconds"]-a[1]["childCPUSeconds"])/seconds
-            row["cpuCeilingPercent"] = 0.1 if args.roots==0 else 1.0 if args.roots*args.children>=256 else 0.5
+            row["cpuCeilingPercent"] = 0.1 if args.roots==0 else 1.0 if args.roots>=128 or args.roots*(args.children+1)>=256 else 0.5
             assert Hub.context_counts and max(Hub.context_counts)==args.roots, row
             assert not Hub.errors, row
             assert manifest["next_seq"] > 1, row

@@ -514,6 +514,7 @@ impl Sampler {
             #[cfg(all(feature = "activity-bench", target_os = "linux"))]
             let native_started = (super::probe::cpu(), Instant::now());
             let sessions = self.activity.capture(judge);
+            let roots = sessions.len();
             #[cfg(all(feature = "activity-bench", target_os = "linux"))]
             super::probe::cost(
                 "native",
@@ -579,7 +580,7 @@ impl Sampler {
                 started.elapsed().as_secs_f64() * 1000.0,
                 empty,
                 idle,
-                self.activity.contributors() >= 256,
+                Cadence::pressure(self.activity.contributors(), roots),
             );
             if self.legacy {
                 cadence.next = (now / 15_000 + 1) * 15_000;

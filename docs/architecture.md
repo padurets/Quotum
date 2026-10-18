@@ -273,7 +273,8 @@ baseline on that grid; extra looks do not judge short typing or redraw bursts or
 renew the hold. Capture aims at eight subdivisions per window while active, three
 after thirty seconds of known idle, and one with no clients. A bounded cost allowance
 uses the greater of an EWMA and the last four costs, charges journal and command
-work too, and reduces subdivisions under pressure. It repays the initial calibration
+work too, and reduces subdivisions under pressure. Large descendant trees and large
+root rosters use the dense cost allowance. It repays the initial calibration
 burst and never catches up with a polling loop. Delayed looks, clock faults, suspend,
 incomplete ownership and restarts break evidence instead of filling a gap with idle
 or work. A hold expiring between captures is cut at its monotonic deadline.

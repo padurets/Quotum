@@ -19,6 +19,11 @@ pub(crate) struct Cadence {
 }
 
 impl Cadence {
+    pub fn pressure(contributors: usize, roots: usize) -> bool {
+        // Each root also needs its own classifier, context and durable state.
+        contributors >= 256 || roots >= 128
+    }
+
     pub fn new() -> Self {
         Self {
             next: 0,
@@ -163,5 +168,30 @@ mod tests {
             c.completed(due, 7.0, false, false, false);
             now = due + 7;
         }
+    }
+
+    #[test]
+    fn a_full_roster_with_ninety_millisecond_capture_keeps_complete_judgement_windows() {
+        let mut c = Cadence::new();
+        let mut now = 0;
+        let mut captures = Vec::new();
+        loop {
+            let due = c.due(now);
+            if due > 120_000 {
+                break;
+            }
+            captures.push(due);
+            if c.should_judge(due) {
+                c.judged(due);
+            }
+            c.completed(due, 90.0, false, true, Cadence::pressure(200, 200));
+            now = due + 90;
+        }
+        let steady: Vec<_> = captures.iter().copied().filter(|&at| at >= 30_000).collect();
+        assert!(steady.len() >= 6, "a bounded full roster must keep observing after calibration: {captures:?}");
+        assert!(
+            steady.windows(2).all(|pair| pair[1] - pair[0] == 15_000),
+            "longer periods lose judgement continuity: {captures:?}"
+        );
     }
 }
