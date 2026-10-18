@@ -1017,3 +1017,20 @@ impl Sampler {
         }
     }
 }
+
+#[cfg(test)]
+impl Worker {
+    /// Delivery fixtures exercise a captured state and the real privacy gate without a native scan.
+    pub(super) fn with_capture(paths: Paths, privacy: String, capture: Capture) -> Self {
+        Self {
+            tx: None,
+            thread: None,
+            snapshot: Arc::new(Mutex::new(Some(Arc::new(capture)))),
+            failed: Arc::new(AtomicBool::new(false)),
+            retiring: Arc::new(AtomicBool::new(false)),
+            paths,
+            privacy,
+            clock: Arc::new(Clock::new()),
+        }
+    }
+}

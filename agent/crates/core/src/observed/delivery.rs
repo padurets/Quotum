@@ -507,6 +507,7 @@ mod tests {
     use super::*;
     use crate::config::Paths;
     use crate::model::Outcome;
+    use crate::observed::clock::{Epoch, Reading};
     use crate::observed::worker::Start;
     use crate::observed::{Context, Scope, State};
     use crate::stop::Stop;
@@ -522,24 +523,34 @@ mod tests {
             let root = std::env::temp_dir().join(format!("quotum-activity-delivery-{}", crate::config::random_hex()));
             let paths = Paths { config: root.join("config"), work: root.join("work"), state: root.join("state") };
             let privacy = super::super::privacy::update(&paths, true, true, &[ClientId::Codex], &[]).unwrap();
-            let worker = Worker::start(Start {
-                paths: paths.clone(),
-                home: root.clone(),
-                clients: Vec::new(),
-                scope: Scope { version: 1, clients: vec!["codex".into()], route_disabled: Vec::new(), complete: true },
-                namespace: "a".repeat(64),
-                credential_scope: "b".repeat(64),
-                projects: true,
-                stop: Stop::new(),
-                privacy,
-            })
-            .unwrap();
-            let until = Instant::now() + Duration::from_secs(5);
-            while worker.snapshot().is_none() {
-                assert!(!worker.failed());
-                assert!(Instant::now() < until);
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            let reading = Reading { boot: Some("fixture".into()), tick: 0, wall: now_ms() };
+            let epoch = Epoch::new(&reading);
+            let state = Arc::new(State {
+                tracking: Scope {
+                    version: 1,
+                    clients: vec!["codex".into()],
+                    route_disabled: Vec::new(),
+                    complete: true,
+                },
+                contexts: Vec::new(),
+            });
+            let capture = Capture {
+                latest: Latest { clock_epoch: epoch.id.clone(), tick: 0, state: state.clone() },
+                epoch,
+                reading,
+                witness: None,
+                paths: BTreeMap::new(),
+                queue_id: "a".repeat(32),
+                open_id: "b".repeat(32),
+                binding: None,
+                ack: 0,
+                sequence: 1,
+                digest: state.digest(),
+                order: Vec::new(),
+                legacy_ids: Vec::new(),
+                release_pending: false,
+            };
+            let worker = Worker::with_capture(paths.clone(), privacy, capture);
             Self { root, paths, delivery: Some(Delivery::new(worker)) }
         }
     }
