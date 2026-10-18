@@ -115,15 +115,16 @@ export function foreseenAt(card: StillCard): number | null {
  * forecasts worked out again. The benchmark stops on any of these: its numbers would not
  * be of a still board.
  * A measured card may restart its own dot; its quota and forecast deadlines still apply.
+ * Credit updates may admit dot clocks, bounded by their per-update render checks.
  */
-export function stillProblems(cards: StillCard[], from: number, to: number, fadingCard?: string): string[] {
+export function stillProblems(cards: StillCard[], from: number, to: number, fadingCard?: string, {allowDotClock=false}: {allowDotClock?:boolean}={}): string[] {
   const within = (at: number) => at >= from && at <= to;
   const found: string[] = [];
   for (const card of cards) {
     if (card.successAt === null) continue;
     if (card.staleAfterMs !== null && within(card.successAt + card.staleAfterMs)) found.push(`${card.id} goes stale`);
     // The dot changes from the measurement until it has faded out: any of that within the window.
-    if (card.id !== fadingCard && card.successAt <= to && card.successAt + PULSE_FOR + FADE_FOR >= from) found.push(`${card.id}'s dot still fades`);
+    if (!allowDotClock && card.id !== fadingCard && card.successAt <= to && card.successAt + PULSE_FOR + FADE_FOR >= from) found.push(`${card.id}'s dot still fades`);
     if (card.windows.some(w => w.resetAt !== null && within(w.resetAt))) found.push(`${card.id} has a limit that resets`);
     const foreseen = foreseenAt(card);
     if (foreseen !== null && foreseen >= from - MARGIN_MS && foreseen <= to + MARGIN_MS) found.push(`${card.id} has its forecasts worked out again`);

@@ -136,6 +136,9 @@ test('a stand that would change by itself during the window is told, card by car
   assert.deepEqual(stillProblems([measured],from,to,'measured'),[],'its own measurement may restart its dot');
   assert.deepEqual(stillProblems([{...measured,windows:[{resetAt:to}]}],from,to,'measured'),['measured has a limit that resets'],'the measured card keeps its quota deadline');
   assert.deepEqual(stillProblems([{...measured,id:'other'}],from,to,'measured'),["other's dot still fades"],'other cards stay under the original clock guard');
+  const creditClock={allowDotClock:true};
+  assert.deepEqual(stillProblems([{...measured,id:'other'}],from,to,'measured',creditClock),[],'credit rendering separately bounds natural dot clocks');
+  assert.deepEqual(stillProblems([{...measured,staleAfterMs:MIN,windows:[{resetAt:to}]}],from,to,'measured',creditClock),['measured goes stale','measured has a limit that resets']);
 });
 
 /**
@@ -171,6 +174,7 @@ test("a card's forecasts worked out again by themselves are told, as the overvie
 
   const told = ['codex:late has its forecasts worked out again'];
   assert.deepEqual(stillProblems([late], lateAt - MIN, lateAt + MIN), told);
+  assert.deepEqual(stillProblems([late],lateAt-MIN,lateAt+MIN,undefined,{allowDotClock:true}),told,'dot clock admission does not suppress forecast work');
   // Within a few seconds of either end: its frame may come in the window.
   assert.deepEqual(stillProblems([late], lateAt + MARGIN_MS / 2, lateAt + 3 * MIN), told);
   assert.deepEqual(stillProblems([late], lateAt - 3 * MIN, lateAt - MARGIN_MS / 2), told);
