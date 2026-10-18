@@ -263,7 +263,7 @@ for(const fault of ['idle','measure','work','private-work','panning','credits','
     fault==='measure'?problems.some(value=>value.includes('never showed on their card')):problems.includes(fault+'-red'));
 });
 const diagnostics={QUOTUM_BENCH_DIAGNOSE_PANNING:'cpu',QUOTUM_BENCH_DIAGNOSE_IDLE:'double',QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'profile',
-  QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'1',QUOTUM_BENCH_DIAGNOSE_STARTUP:'1',QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS:'1',
+  QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'1',QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS:'1',
   QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1',QUOTUM_BENCH_DIAGNOSE_NATIVE:'1',QUOTUM_BENCH_REVERSAL_PROBE:'1'};
 for(const scope of ['history','dashboard'])for(const [key,value] of Object.entries(diagnostics).filter(([key])=>scope!=='dashboard'||!['QUOTUM_BENCH_DIAGNOSE_PANNING','QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING','QUOTUM_BENCH_DIAGNOSE_IDLE_CPU'].includes(key)))test('partial '+scope+' rejects '+key,async()=>{
   const result=await run(['--scope',scope],undefined,{[key]:value});
@@ -342,7 +342,7 @@ test('the routing caller binds its exact bootstrap with the real source binding'
     }finally{binding.close();}assert.equal(listeners.size,0);
   }
 });
-for(const [mode,next] of [['timing','idle-cpu'],['cpu','browser-startup']])test('idle '+mode+' workflow uses the required dashboard prefix and unchanged deadline',()=>{
+for(const [mode,next] of [['timing','idle-cpu'],['cpu','paired-panning']])test('idle '+mode+' workflow uses the required dashboard prefix and unchanged deadline',()=>{
   const workflow=readFileSync(new URL('../../../.github/workflows/bench-diagnostics.yml',import.meta.url),'utf8').split('  idle-'+mode+':\n')[1].split('\n  '+next+':')[0];
   assert.ok(workflow.includes('npm run bench -- --ci --scope dashboard'));assert.ok(workflow.includes('timeout-minutes: 20'));assert.ok(!workflow.includes('continue-on-error:'));
   if(mode==='timing')assert.match(workflow,/QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING: routes/);

@@ -36,7 +36,6 @@ import {profilePanning, profileControls} from './cpuProfile.js';
 import {ChromeLaunchError} from './chrome.js';
 import {creditSnapshot} from './credits.js';
 import {dotChangesAt,dotOf,FADE_FOR,PULSE_FOR} from '../ui/lib/quota.js';
-import {startupTrials} from './startupDiagnostic.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
 import {traceIdle} from './idleTiming.js';
@@ -120,7 +119,6 @@ async function main() {
   const shortIdleProfile = idleCpuMode === 'retirement' || idleCpuMode === 'grid';
   const idleTimingDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING;
   const idleRoutingDiagnostic = idleTimingDiagnostic === 'routes';
-  const startupDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP;
   const startupWaitDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS;
   const poolDiagnostic = process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL;
   evidence.save('scope', {mode: options.scope});
@@ -135,23 +133,22 @@ async function main() {
   const bind = process.env.QUOTUM_BIND || '127.0.0.1';
   let address: ReturnType<typeof addressOf>, chrome: ReturnType<typeof findChrome>;
   try {
-    const otherDiagnostics = [idleDiagnostic, idleCpuMode, idleTimingDiagnostic, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE];
+    const otherDiagnostics = [idleDiagnostic, idleCpuMode, idleTimingDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE];
     const dashboardPanning = options.scope === 'dashboard' && options.ci && (panDiagnostic === 'cpu' || panDiagnostic === 'trace');
     const dashboardIdleTiming = options.scope === 'dashboard' && options.ci && !options.cdp && (idleTimingDiagnostic === '1' || idleRoutingDiagnostic)
-      && ![panDiagnostic, idleDiagnostic, idleCpuMode, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE].some(Boolean);
+      && ![panDiagnostic, idleDiagnostic, idleCpuMode, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE].some(Boolean);
     const dashboardIdleProfile = options.scope === 'dashboard' && options.ci && !options.cdp && (idleCpuMode === 'profile' || shortIdleProfile)
-      && ![panDiagnostic, idleDiagnostic, idleTimingDiagnostic, startupDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE].some(Boolean);
+      && ![panDiagnostic, idleDiagnostic, idleTimingDiagnostic, startupWaitDiagnostic, poolDiagnostic, process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE, process.env.QUOTUM_BENCH_REVERSAL_PROBE].some(Boolean);
     if ((panDiagnostic === 'cpu' || dashboardPanning) && (options.cdp || otherDiagnostics.some(Boolean))) throw new Stop('Panning diagnostics require an owned browser without another diagnostic mode');
     if (options.scope !== 'all' && [panDiagnostic, ...otherDiagnostics].some(Boolean) && !dashboardPanning && !dashboardIdleTiming && !dashboardIdleProfile) throw new Stop('Partial benchmark scopes cannot be combined with diagnostics');
     if(shortIdleProfile&&options.scope!=='dashboard')throw new Stop('Short idle profiling requires the dashboard CI scope');
     address = addressOf({...process.env, QUOTUM_PORT: process.env.QUOTUM_PORT || String(await freePort(bind))});
-    if (startupDiagnostic && (startupDiagnostic !== '1' || options.cdp || panDiagnostic || idleDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup diagnostic mode');
-    if (startupWaitDiagnostic && (startupWaitDiagnostic !== '1' || !options.ci || process.platform !== 'linux' || options.cdp || startupDiagnostic || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup wait diagnostic mode');
+    if (startupWaitDiagnostic && (startupWaitDiagnostic !== '1' || !options.ci || process.platform !== 'linux' || options.cdp || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup wait diagnostic mode');
     if (idleDiagnostic && (idleDiagnostic !== 'double' || panDiagnostic)) throw new Stop('Unknown or conflicting idle diagnostic mode');
     if (panDiagnostic && !['pairs', 'trace', 'cpu'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
-    if (idleCpuMode && (!['1','trace','profile','retirement','grid'].includes(idleCpuMode) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleTimingDiagnostic || startupDiagnostic || startupWaitDiagnostic || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
-    if (idleTimingDiagnostic && (!['1','routes'].includes(idleTimingDiagnostic) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleCpuMode || startupDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle timing diagnostic mode');
-    if(poolDiagnostic&&(poolDiagnostic!=='1'||!options.ci||options.cdp||panDiagnostic||idleDiagnostic||idleCpuMode||idleTimingDiagnostic||startupDiagnostic||startupWaitDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE))throw new Stop('Unknown or conflicting history pool diagnostic mode');
+    if (idleCpuMode && (!['1','trace','profile','retirement','grid'].includes(idleCpuMode) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleTimingDiagnostic || startupWaitDiagnostic || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
+    if (idleTimingDiagnostic && (!['1','routes'].includes(idleTimingDiagnostic) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleCpuMode || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle timing diagnostic mode');
+    if(poolDiagnostic&&(poolDiagnostic!=='1'||!options.ci||options.cdp||panDiagnostic||idleDiagnostic||idleCpuMode||idleTimingDiagnostic||startupWaitDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE))throw new Stop('Unknown or conflicting history pool diagnostic mode');
     await prepare(address);
     chrome = options.cdp ? null : findChrome(process.env);
     if (!options.cdp && !chrome) throw new Stop('No Chrome to run: set QUOTUM_CHROME, put google-chrome or chromium on PATH, or pass --cdp <http://host:port>.');
@@ -176,7 +173,7 @@ async function main() {
     }
     try {await owner.close();} catch (error) {code = 1; say(String(error));}
     try {await demo.stop();} catch {code = 1; say('demo cleanup failed');}
-    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || startupDiagnostic || startupWaitDiagnostic || poolDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
+    evidence.finish(cancelled ? 'cancelled' : code ? 'failed' : (process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE === '1' || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || startupWaitDiagnostic || poolDiagnostic) ? 'diagnostic' : 'passed', {browser: browser?.launchReport?.(), failures: owner.failures});
     process.exit(code);
   })();
   const set = panningSet(SETS[0]);
@@ -194,10 +191,6 @@ async function main() {
     const overview = () => overviewCards(path => ana.get<Snapshot>(path), board);
     heard = await hear(address.base, ana.cookie, board);
 
-    if(startupDiagnostic){
-      const code = await startupTrials(chrome!,!process.env.CI,owner,evidence);
-      await finish(code);return;
-    }
     browser = await owner.start(signal => options.cdp ? Promise.resolve(attachedChrome(options.cdp)) : launchChrome(chrome!, !process.env.CI, signal));
     evidence.save('browser', browser.launchReport?.() ?? {mode: 'attached'});
     if(process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE==='1'){

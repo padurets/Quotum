@@ -283,12 +283,6 @@ cannot revise it. The 20-second deadline, launch flags, cleanup and benchmark ph
 are unchanged. Without the flag, no extra process reads or samples run. This outcome
 is diagnostic and cannot satisfy the required benchmark. The `make bench` wrapper
 forwards the flag without loading preview configuration.
-The optional `benchmark-startup-diagnostics` PR label runs a fixed first/repeat launch
-pair on three runners after the same benchmark fixture preparation. Each launch keeps
-the 20-second deadline and a fresh profile. Numeric process, scheduler, I/O and pressure
-counters are sampled separately from performance gates; missing counters and sampling
-cost remain explicit. All six outcomes are retained, and a repeat success never replaces
-a first failure. These diagnostics cannot satisfy the canonical benchmark.
 An owned browser is ready only when its private `DevToolsActivePort` and a bounded
 loopback `/json/version` reply identify the same browser. Its stderr announcement
 is optional. Startup stays bounded at 20 seconds; cancellation drains pending tab
