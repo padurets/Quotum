@@ -30,6 +30,13 @@ fixture = pathlib.Path(__file__).with_name("client.c")
 ticks = os.sysconf("SC_CLK_TCK")
 
 
+def cgroup_limit(name):
+    try:
+        return pathlib.Path('/sys/fs/cgroup',name).read_text().strip()
+    except FileNotFoundError:
+        return None
+
+
 class Server(http.server.ThreadingHTTPServer):
     def handle_error(self, request, address):
         # A five-second client deadline can close a keep-alive socket during a fixture delay.
@@ -187,8 +194,7 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
         common = dict(mode=args.mode, roots=args.roots, ownedDescendants=args.roots * args.children,
                       binarySHA256=hashlib.sha256(probe.read_bytes()).hexdigest(), idle=args.idle, uiBursts=args.ui, unrelatedDescendants=args.unrelated,
                       environment=dict(kernel=os.uname().release,clockTicks=ticks,
-                          cgroupCPU=pathlib.Path('/sys/fs/cgroup/cpu.max').read_text().strip(),
-                          cgroupMemory=pathlib.Path('/sys/fs/cgroup/memory.max').read_text().strip()))
+                          cgroupCPU=cgroup_limit('cpu.max'),cgroupMemory=cgroup_limit('memory.max')))
         if args.mode == "capture":
             for period in [2, 15]:
                 command = [str(probe), "cadence", str(args.seconds), str(period), "true"] if args.baseline else [str(probe), "capture", str(args.seconds), str(period), str(root / "home")]
