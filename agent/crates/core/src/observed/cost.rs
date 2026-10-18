@@ -64,7 +64,14 @@ mod tests {
         let measured = cost.elapsed_ms(wall);
         let mut cadence = Cadence::new();
         cadence.judged(0);
-        cadence.completed(0, measured, false, false, false);
+        cadence.completed(wall.as_millis() as u64, measured, false, false, false);
         assert!(cadence.due(wall.as_millis() as u64) <= 15_000, "waiting spent {measured}ms of CPU allowance");
+    }
+
+    #[test]
+    fn unavailable_or_backward_thread_clocks_charge_elapsed_wall_time() {
+        let wall = Duration::from_millis(123);
+        assert_eq!(Cost(None).elapsed_ms(wall), 123.0);
+        assert_eq!(Cost(Some(Duration::MAX)).elapsed_ms(wall), 123.0);
     }
 }

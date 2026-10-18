@@ -57,8 +57,9 @@ fn replay(case: &Case, slots: u64, adaptive: bool, fast_judgement: bool) -> Vec<
         let end = if adaptive {
             // Deterministic costs force both the ordinary and pressure branches.
             let pressure = slots == 2;
-            cadence.completed(at, if pressure { 48.0 } else { 3.0 }, false, idle, pressure);
-            cadence.due(at + if pressure { 48 } else { 3 })
+            let cost = if pressure { 48 } else { 3 };
+            cadence.completed(at + cost, cost as f64, false, idle, pressure);
+            cadence.due(at + cost)
         } else {
             at + 15_000 / slots
         };

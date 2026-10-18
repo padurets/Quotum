@@ -770,7 +770,7 @@ impl Sampler {
                     .abs()
                     > 2000
             });
-            let late = now.saturating_sub(due) > 2000.max(period.unwrap_or(0) / 4);
+            let late = now.saturating_sub(cadence.deadline()) > 2000.max(period.unwrap_or(0) / 4);
             let clock_fault = !epoch.compatible(&reading, false);
             let missed_judgement = now.saturating_sub(cadence.judgement) > 3750;
             if clock_fault {
@@ -850,7 +850,7 @@ impl Sampler {
             #[cfg(all(feature = "activity-bench", target_os = "linux"))]
             super::probe::cost("capture", super::probe::cpu() - capture_cpu, started.elapsed().as_secs_f64() * 1000.0);
             cadence.completed(
-                now,
+                origin.elapsed().as_millis() as u64,
                 budget_cost.elapsed_ms(started.elapsed()),
                 empty,
                 idle,
