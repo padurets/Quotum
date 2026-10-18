@@ -260,7 +260,7 @@ day, not a script thrown together over a weekend. In practice that meant:
   consumption. The agent says when its next measurement is due, so a sparse series isn't
   mistaken for a gap.
 - **Few moving parts.** The agent has nine direct dependencies. The hub is Fastify and
-  the SQLite built into Node, and the UI is plain React with about 244 KB of gzipped
+  the SQLite built into Node, and the UI is plain React with about 311 KB of gzipped
   JavaScript. There is no telemetry. The hub reads the two reset trackers (or the
   mirror you name) every ten minutes; `QUOTUM_RESETS=off` turns that off. When you
   connect OpenRouter, DeepSeek or z.ai, it also reads their balances or quotas through
@@ -519,6 +519,15 @@ choose another or define personal rates in **Account settings → Currencies**.
 Purchased Codex credits require an updated agent and appear after its next measurement.
 Sharing a subscription does not automatically share its extra funds: enable that
 separately on each shared board. Reload open dashboard tabs after the upgrade.
+
+Upgrading from 0.7 preserves measurements, agent-work history, boards, settings and
+encrypted connections. Saved layouts move into one grid, and chart and table widgets
+share the board’s viewing period. Shared boards initially include sessions from every
+member’s saved devices; review **Board settings → Provided data** to change your
+devices’ participation. Existing client-to-subscription associations are preserved;
+manage dated assignments in **Settings → Clients and resources**. Update agents to
+use device measurement controls and retain observed work through delayed delivery.
+Reload open dashboard tabs after the upgrade.
 
 On each machine, run `quotum update`, then restart the background agent with
 `quotum stop` and `quotum start` (or restart its service). With npm, use the latest
@@ -786,11 +795,11 @@ Add the hashes of any new database layout steps to `RELEASED` in
 Refresh the README screenshots in both languages from the demo board, check the upgrade
 instructions and prepare the release notes outside the repository.
 
-For example, to prepare 0.7.0 on that branch:
+For example, to prepare 0.8.0 on that branch:
 
 ```sh
-(cd hub && npm version 0.7.0 --no-git-tag-version)
-# agent/Cargo.toml and desktop/Cargo.toml: version = "0.7.0"
+(cd hub && npm version 0.8.0 --no-git-tag-version)
+# agent/Cargo.toml and desktop/Cargo.toml: version = "0.8.0"
 (cd agent && cargo metadata --format-version 1 >/dev/null)
 (cd desktop && cargo metadata --format-version 1 >/dev/null)
 ```
@@ -804,8 +813,8 @@ commit to tag. Only after the maintainer approves that specific release:
 git fetch origin
 git switch main
 git pull --ff-only origin main
-git tag -a v0.7.0 -F /path/to/release-notes.md --cleanup=verbatim
-git push origin v0.7.0
+git tag -a v0.8.0 -F /path/to/release-notes.md --cleanup=verbatim
+git push origin v0.8.0
 ```
 
 [release.yml](.github/workflows/release.yml) refuses a tag that is not annotated or
