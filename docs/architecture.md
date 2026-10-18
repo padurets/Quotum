@@ -302,6 +302,11 @@ context-date offset derived from its private origin, before publishing it. If th
 remote cursor consumed positions of an uncalibrated clock without a recoverable
 matching anchor, its remaining intervals become explicit loss and capture starts
 with a new clock identity. Already calibrated mappings remain immutable.
+The exact mapping is persisted before its commitment marker; reopening completes
+a missing marker from the saved mapping. An interrupted first calibration therefore
+keeps the durable intervals. Recovery or durable retirement of a clock identity
+precedes local acknowledgement and reclamation. Retirement first removes the old
+private basis, so a crash after deleting its evidence cannot revive that identity.
 
 One writer and a directory budget cover all destination namespaces, including inactive
 ones: 64 MiB on disk, at most 128 segments per namespace, 256 clock mappings and 256

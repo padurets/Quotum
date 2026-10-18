@@ -95,7 +95,6 @@ fn queue(root: PathBuf, namespace: String) {
                     let binding: Binding =
                         serde_json::from_value(value["binding"].clone()).map_err(|_| io::ErrorKind::InvalidData)?;
                     queue.bind(binding)?;
-                    queue.acknowledge(value["ack"].as_u64().unwrap(), &[])?;
                     let mut epoch = queue.metadata.clocks.get(value["clockEpoch"].as_str().unwrap()).unwrap().clone();
                     let anchor =
                         serde_json::from_value(value["anchor"].clone()).map_err(|_| io::ErrorKind::InvalidData)?;
@@ -106,6 +105,7 @@ fn queue(root: PathBuf, namespace: String) {
                         return Err(io::ErrorKind::InvalidData.into());
                     }
                     queue.install_clock(epoch)?;
+                    queue.acknowledge(value["ack"].as_u64().unwrap(), &[])?;
                     queue.install_witness(
                         serde_json::from_value(value["witness"].clone()).map_err(|_| io::ErrorKind::InvalidData)?,
                     )?;

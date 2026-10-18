@@ -689,6 +689,10 @@ before preparing or publishing data. An already calibrated epoch is never reboun
 If a remote cursor has consumed positions of an uncalibrated clock and its matching
 anchor cannot be recovered (including from an older reply without this field), the
 sender retires its unmappable suffix and chooses a fresh clock and capture identity.
+The sender persists that recovery or retirement before advancing its local cursor
+or reclaiming acknowledged evidence. A crash cannot make a consumed identity eligible
+for calibration again. An interrupted first calibration retains either the prior
+uncalibrated basis or its exact saved mapping, together with the durable intervals.
 
 The first hello closes permissible legacy credit, then atomically establishes a
 sticky interval requirement and a floor at least the current hub time and the

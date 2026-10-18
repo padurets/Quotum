@@ -17,13 +17,27 @@ pub(crate) struct Reading {
 
 pub(crate) struct Clock {
     fallback: Instant,
+    #[cfg(test)]
+    fixed: Option<Reading>,
 }
 
 impl Clock {
     pub fn new() -> Self {
-        Self { fallback: Instant::now() }
+        Self {
+            fallback: Instant::now(),
+            #[cfg(test)]
+            fixed: None,
+        }
+    }
+    #[cfg(test)]
+    pub fn fixed(reading: Reading) -> Self {
+        Self { fallback: Instant::now(), fixed: Some(reading) }
     }
     pub fn read(&self) -> Reading {
+        #[cfg(test)]
+        if let Some(reading) = &self.fixed {
+            return reading.clone();
+        }
         let wall = now_ms();
         match native() {
             Some((boot, tick)) => Reading { boot: Some(boot), tick, wall },

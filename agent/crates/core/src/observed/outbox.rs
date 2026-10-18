@@ -280,6 +280,8 @@ pub(crate) struct Outbox {
     _lock: File,
     _budget: Option<File>,
     limit: u64,
+    #[cfg(test)]
+    interrupt_after: std::cell::Cell<Option<usize>>,
 }
 
 impl Drop for Outbox {
@@ -431,6 +433,8 @@ impl Outbox {
             _lock: lock,
             _budget: None,
             limit: QUEUE_BYTES,
+            #[cfg(test)]
+            interrupt_after: std::cell::Cell::new(None),
         };
         if out.metadata.clocks.len() > MAX_METADATA || out.metadata.witnesses.len() > MAX_METADATA {
             return Err(invalid());
@@ -503,10 +507,33 @@ impl Outbox {
         self.root.join(format!("{first:016x}.segment"))
     }
     fn save(&self) -> io::Result<()> {
-        atomic(&self.root.join("manifest.json"), &self.manifest, MANIFEST_BYTES)
+        atomic(&self.root.join("manifest.json"), &self.manifest, MANIFEST_BYTES)?;
+        #[cfg(test)]
+        self.published()?;
+        Ok(())
     }
     pub fn save_metadata(&self) -> io::Result<()> {
-        atomic(&self.root.join("metadata.json"), &self.metadata, METADATA_BYTES)
+        atomic(&self.root.join("metadata.json"), &self.metadata, METADATA_BYTES)?;
+        #[cfg(test)]
+        self.published()?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn interrupt_after(&self, publications: usize) {
+        assert!(publications > 0);
+        self.interrupt_after.set(Some(publications));
+    }
+
+    #[cfg(test)]
+    fn published(&self) -> io::Result<()> {
+        if let Some(left) = self.interrupt_after.get() {
+            self.interrupt_after.set(left.checked_sub(1).filter(|left| *left > 0));
+            if left == 1 {
+                return Err(io::Error::other("interrupted fixture publication"));
+            }
+        }
+        Ok(())
     }
 
     pub fn bind(&mut self, binding: Binding) -> io::Result<()> {
@@ -625,6 +652,15 @@ impl Outbox {
             drop(file);
             fs::remove_file(entry.path())?;
         }
+        // Metadata can have committed just before its marker. Recover that exact tuple before any wire use.
+        let mut commitments = self.manifest.anchored_clocks.clone();
+        commitments.retain(|id| self.metadata.clocks.contains_key(id));
+        commitments
+            .extend(self.metadata.clocks.iter().filter(|(_, epoch)| epoch.anchor.is_some()).map(|(id, _)| id.clone()));
+        if commitments != self.manifest.anchored_clocks {
+            self.manifest.anchored_clocks = commitments;
+            self.save()?;
+        }
         let lost_anchors: BTreeSet<_> = self
             .metadata
             .clocks
@@ -718,6 +754,8 @@ impl Outbox {
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e),
             }
+            #[cfg(test)]
+            self.published()?;
         }
         sync_dir(&self.root)?;
         self.metadata_gc()
@@ -758,20 +796,30 @@ impl Outbox {
             };
             self.lose(self.manifest.ack + 1, first.last, "overflow")?;
         }
-        if epoch.anchor.is_some() && !self.manifest.anchored_clocks.contains(&epoch.id) {
+        let calibrated = epoch.anchor.is_some() && !self.manifest.anchored_clocks.contains(&epoch.id);
+        let id = epoch.id.clone();
+        self.metadata.clocks.insert(id.clone(), epoch);
+        // An interrupted first calibration must retain either its old unbound basis or this exact tuple.
+        self.save_metadata()?;
+        if calibrated {
             self.manifest.anchored_clocks.retain(|id| self.metadata.clocks.contains_key(id));
-            self.manifest.anchored_clocks.insert(epoch.id.clone());
-            // Publish the calibration commitment before its metadata can be used on the wire.
+            self.manifest.anchored_clocks.insert(id);
+            // Both publications complete before the mapping can be used on the wire.
             self.save()?;
         }
-        self.metadata.clocks.insert(epoch.id.clone(), epoch);
-        self.save_metadata()
+        Ok(())
     }
 
     pub fn retire_unanchored(&mut self, clock: &str) -> io::Result<()> {
         if self.metadata.clocks.get(clock).is_some_and(|e| e.anchor.is_some()) {
             return Ok(());
         }
+        // Forget the identity before deleting its evidence; a crash must not permit it to be calibrated again.
+        self.metadata.clocks.remove(clock);
+        if self.metadata.active_clock.as_deref() == Some(clock) {
+            self.metadata.active_clock = None;
+        }
+        self.save_metadata()?;
         let first = self.manifest.segments.iter().find(|s| s.clock == clock).map(|s| s.first);
         let last = self.manifest.segments.iter().rfind(|s| s.clock == clock).map(|s| s.last);
         if let Some((first, last)) = first.zip(last) {
@@ -1025,6 +1073,9 @@ impl Outbox {
         }
         self.manifest.ack = through;
         self.manifest.losses.retain(|l| l.last_seq > through);
+        for loss in &mut self.manifest.losses {
+            loss.first_seq = loss.first_seq.max(through + 1);
+        }
         self.save()?;
         let mut changed = false;
         for id in released {
@@ -1046,7 +1097,7 @@ impl Outbox {
 mod tests {
     use super::*;
     use crate::observed::clock::Reading;
-    use crate::observed::{Context, Scope};
+    use crate::observed::{Anchor, Context, Scope};
 
     struct Stand(PathBuf);
     impl Stand {
@@ -1102,6 +1153,66 @@ mod tests {
             complete: true,
         }
     }
+    #[test]
+    fn interrupted_first_calibration_preserves_pending_work_and_its_exact_mapping() {
+        let mut cuts = 0;
+        let mut completed = false;
+        for publication in 1..8 {
+            let stand = Stand::new();
+            let mut q = stand.open();
+            let mut e = epoch();
+            e.anchor = None;
+            e.wall_offset = None;
+            q.install_clock(e.clone()).unwrap();
+            let mut first = raw(&e, 0);
+            first.to_tick = first.from_tick;
+            first.to_wall = first.from_wall;
+            q.append(&state(), first, None).unwrap();
+            q.append(&state(), raw(&e, 0), None).unwrap();
+            q.append(&state(), raw(&e, 1), None).unwrap();
+            let original = fs::read(q.file(1)).unwrap();
+            let anchor = Anchor { clock_epoch: e.id.clone(), anchor_tick: 35_000, anchor_at: e.zero_wall + 35_500 };
+            assert!(e.restore(anchor.clone()));
+            q.interrupt_after(publication);
+            let interrupted = q.install_clock(e.clone()).is_err();
+            cuts += usize::from(interrupted);
+            drop(q);
+            let mut q = stand.open();
+            let recovered = q.metadata.clocks.get(&e.id).unwrap();
+            assert_eq!(recovered.anchor.as_ref(), Some(&anchor));
+            assert_eq!(recovered.wall_offset, Some(500));
+            let mut next = epoch();
+            next.anchor = None;
+            next.wall_offset = None;
+            q.install_clock(next).unwrap();
+            assert!(
+                q.manifest.anchored_clocks.contains(&e.id),
+                "an inactive retained mapping is committed before wire use"
+            );
+            let batch = q.prepare().unwrap();
+            assert!(batch.skip.is_none());
+            assert_eq!(batch.frames.iter().map(|frame| frame.seq).collect::<Vec<_>>(), vec![1, 2, 3]);
+            assert_eq!(batch.frames.iter().map(|frame| frame.to_tick - frame.from_tick).sum::<u64>(), 4_000);
+            assert_eq!(batch.frames[1].from_at, e.zero_wall + 500);
+            assert_eq!(batch.frames[2].to_at, e.zero_wall + 4_500);
+            assert_eq!(batch.clock_anchor.as_ref(), Some(&anchor));
+            assert_eq!(batch.checkpoint.as_ref().unwrap().contexts[0].started_at, e.zero_wall + 500);
+            assert_eq!(fs::read(q.file(1)).unwrap(), original);
+            q.acknowledge(1, &[]).unwrap();
+            let suffix = serde_json::to_value(q.prepare().unwrap()).unwrap();
+            drop(q);
+            let mut q = stand.open();
+            assert_eq!(serde_json::to_value(q.prepare().unwrap()).unwrap(), suffix);
+            q.acknowledge(3, &[]).unwrap();
+            assert!(q.prepare().unwrap().frames.is_empty());
+            if !interrupted {
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed && cuts >= 2);
+    }
+
     #[test]
     fn provisional_credentials_cannot_transfer_a_pending_context_to_another_owner() {
         let stand = Stand::new();
