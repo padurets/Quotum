@@ -21,12 +21,11 @@ import {MoneyCard,QuotaCard,QuotaMark,AccessMark,BalanceMark} from './MoneyCard'
 import {cardId, colorOf, isWindowHidden, planOf, weeklyPlanOf, withColor, withHidden, withName, withPlan, withPlanned, withWindowHidden, type Arrange} from '../lib/view';
 import {CARD_COLORS, MIDDLE_STEP, PROVIDERS,hasSubscriptionCaps} from '../lib/providers';
 import {call} from '../lib/http';
-import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSourceAccess, useTitle} from '../lib/board';
+import {useCadence, useCard, useConnection, useMine, useRefresh, useResetsFor, useSessions, useSourceAccess, useTitle} from '../lib/board';
 import {providerOf} from '../../server/domain/providers';
 import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
-import {UsageWorkMark} from './UsageWorkMark';
 import {EyeOffIcon, HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
 import {RefreshAction} from './RefreshAction';
 import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
@@ -477,14 +476,14 @@ export function CardMark({source,compact=false}: {source: Card;compact?:boolean}
 /** The card's tray: reset news, additional funds, free resets and running agents. */
 function CardTray({source, funds}: {source: Card; funds?: ReactNode}) {
   const sessions = useSourcePeriodSessions(source.id);
+  const current = useSessions(source.id);
   const resets = useResetsFor(source.provider);
   const access = useSourceAccess(source.id);
   const quotaIssue=source.quota&&!source.quota.complete;
   const news=providerOf(source.provider)?.funding==='wallet'||source.balanceStatus||access||quotaIssue?<><BalanceMark source={source}/>{access&&<AccessMark id={source.id}/>}
     {quotaIssue&&<QuotaMark source={source}/>}</>:null;
   const selected=useTimeRange();
-  const allNews=!selected&&source.usageWork?.length?<>{news}<UsageWorkMark source={source}/></>:news;
-  return <Tray resets={resets} news={allNews} current={funds||source.resets?.available?<>{funds}{!!source.resets?.available&&<FreeResets resets={source.resets} observation={source.resources?.resets}/>}</>:null} sessions={sessions.rows} sessionPeriod={sessions} />;
+  return <Tray resets={resets} news={news} current={funds||source.resets?.available?<>{funds}{!!source.resets?.available&&<FreeResets resets={source.resets} observation={source.resources?.resets}/>}</>:null} sessions={selected?sessions.rows:current} sessionPeriod={selected?sessions:undefined} />;
 }
 
 /**

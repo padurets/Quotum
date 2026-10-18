@@ -2,12 +2,6 @@ import type {Catalog} from './index';
 
 /** Русский. Разница двух долей лимита тоже в «%»: всё здесь — доля лимита. */
 export const ru = {
-  'usageWork.mark': 'Данные о работе',
-  'usageWork.confirmed': 'Расход вырос без наблюдаемой работы',
-  'usageWork.partial': 'Расход вырос; данные о работе неполны',
-  'usageWork.growth': '{window}: +{value} процентных пунктов',
-  'usageWork.scope': 'Учтены настроенные клиенты на подключённых устройствах. Это не определяет другие запросы или того, кто их выполнил.',
-
   'connections.accounts': 'Аккаунты',
   'connections.tokens': 'Токены',
   'connections.devicesHelp': 'Выберите машину, чтобы посмотреть её состояние и настроить измерения.',

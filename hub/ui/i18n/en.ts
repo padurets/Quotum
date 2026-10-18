@@ -7,12 +7,6 @@ import type {Message} from './types';
  * monetary measurements keep their explicit units and never become window percentages.
  */
 export const en = {
-  'usageWork.mark': 'Work evidence',
-  'usageWork.confirmed': 'Usage rose without observed work',
-  'usageWork.partial': 'Usage rose; work data is incomplete',
-  'usageWork.growth': '{window}: +{value} percentage points',
-  'usageWork.scope': 'This covers configured clients on connected devices. It does not identify other requests or who made them.',
-
   'connections.accounts': 'Accounts',
   'connections.tokens': 'Tokens',
   'connections.devicesHelp': 'Choose a machine to inspect its state and configure measurements.',
