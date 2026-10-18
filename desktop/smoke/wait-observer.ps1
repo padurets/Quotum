@@ -6,14 +6,15 @@ using System.IO;
 using System.Threading.Tasks;
 public sealed class QuotumWaitCapture {
   readonly List<string> lines=new List<string>();
-  int length;
+  int length,published;
   public bool Overflow {get;private set;}
+  public int PublishedCount {get {return System.Threading.Volatile.Read(ref published);}}
   public Task Done {get;private set;}
   public QuotumWaitCapture(StreamReader reader) {
     Done=Task.Run(async()=>{
       string line;
       while((line=await reader.ReadLineAsync())!=null)lock(lines){
-        if(length+line.Length<=131072 && lines.Count<26){lines.Add(line);length+=line.Length;}
+        if(length+line.Length<=131072 && lines.Count<26){lines.Add(line);length+=line.Length;System.Threading.Volatile.Write(ref published,lines.Count);}
         else Overflow=true;
       }
     });
@@ -23,7 +24,7 @@ public sealed class QuotumWaitCapture {
 '@
 }
 function Start-WaitObserver($Owner,[string]$Worker=(Join-Path $PSScriptRoot 'windows-waitchain.ps1')) {
-  $observer=[pscustomobject]@{Process=$null;Output=$null;Errors=$null;Status='unavailable';Started=$false;StopReceipt=$null}
+  $observer=[pscustomobject]@{Process=$null;Output=$null;Errors=$null;Status='unavailable';Started=$false;StopReceipt=$null;HeldSampleWait=$null}
   try {
     $start=New-Object Diagnostics.ProcessStartInfo
     $start.FileName=(Get-Process -Id $PID).Path;$start.UseShellExecute=$false
@@ -52,6 +53,30 @@ function Watch-OwnedThreads($Observer,[uint32[]]$Threads) {
     $Observer.Process.StandardInput.WriteLine(($ids -join ','));$Observer.Process.StandardInput.Flush()
     $Observer.Started=$true
   } catch {$Observer.Status='unavailable'}
+}
+
+# Opt-in only, after successful native assertions. The caller keeps its original
+# deadline. Never take the capture lock or parse a row while the UI is paused.
+function Wait-WaitObserverSample($Observer,[scriptblock]$Remaining) {
+  if(-not $Observer -or $Observer.Status -ne 'ready' -or -not $Observer.Started -or -not $Observer.Output){return @{status='unavailable';rows=0}}
+  try {
+    while($true){
+      $left=[double](& $Remaining)
+      if(-not [double]::IsFinite($left)){return @{status='unavailable';rows=0}}
+      if($left -le 0){return @{status='deadline';rows=0}}
+      $rows=$Observer.Output.get_PublishedCount()
+      if($rows -gt 0){return @{status='received';rows=$rows}}
+      if($Observer.Output.Done.IsCompleted){return @{status='output-closed';rows=0}}
+      $left=[double](& $Remaining)
+      if(-not [double]::IsFinite($left)){return @{status='unavailable';rows=0}}
+      if($left -lt 1){return @{status='deadline';rows=0}}
+      Start-Sleep -Milliseconds ([int][Math]::Min(10,[Math]::Floor($left)))
+    }
+  } catch {
+    $cause=$_.Exception.GetBaseException()
+    if($cause -is [System.Management.Automation.PipelineStoppedException] -or $cause -is [OperationCanceledException]){throw}
+    return @{status='unavailable';rows=0}
+  }
 }
 
 function Set-WaitCleanupFailure($Cleanup,$Failure) {

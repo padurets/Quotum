@@ -2,8 +2,9 @@
 # Every run starts from a fresh profile of WebView2, as the first start on a machine does:
 # the one there is set aside and put back at the end.
 # -Diagnostics <dir> keeps bounded stage readings and owned process identities, passed or not.
-param([Parameter(Mandatory=$true)][string]$App, [string]$Report, [string]$Diagnostics)
+param([Parameter(Mandatory=$true)][string]$App, [string]$Report, [string]$Diagnostics, [switch]$AwaitHeldWaitSample)
 $ErrorActionPreference = 'Stop'
+if($AwaitHeldWaitSample -and -not $Diagnostics){throw 'AwaitHeldWaitSample requires Diagnostics'}
 # Relative to PowerShell's location: .NET would take them relative to the process's.
 if ($Report) { $Report = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Report) }
 if ($Diagnostics) { $Diagnostics = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Diagnostics) }
@@ -40,6 +41,7 @@ if (-not ('QuotumWindowProbe' -as [type])) {
 . (Join-Path $PSScriptRoot 'windows-progress.ps1')
 
 $manifest=[ordered]@{schemaVersion=1;status='running';sha=((& git rev-parse HEAD).Trim());run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT;platform='windows';packageHash=(Get-FileHash -LiteralPath $appPath -Algorithm SHA256).Hash;files=@();errors=@()}
+if($AwaitHeldWaitSample){$manifest.observation='await-first-row'}
 # Capture native facts in memory while any owned UI thread is paused.
 $nativePauseDepth=0
 $nativeResumeFailed=$false
@@ -136,6 +138,7 @@ function Save-ObservedPause($Observer,[string]$Kind,$From,$To,$Resumed,$Failure=
     $observed=Stop-WaitObserver $Observer
     if(-not $Diagnostics){return}
     $observed.pause=@{from=$From;to=$To;resumed=$Resumed}
+    if($AwaitHeldWaitSample){$observed.observation=@{mode='await-first-row';wait=$(if($Observer -and $Observer.HeldSampleWait){$Observer.HeldSampleWait}else{@{status='not-run';rows=0}})}}
     try {[IO.File]::WriteAllText((Join-Path $Diagnostics ('wait-chain-'+$Kind+'.json')),(ConvertTo-Json -InputObject $observed -Depth 9))} catch {Write-Warning 'Wait-chain artifact unavailable'}
     if(-not $observed.stopped){throw 'Wait observer cleanup unconfirmed'}
   } catch {
@@ -257,6 +260,10 @@ function Test-MainPanelHandoff([IntPtr]$Main) {
       Save-Stage 'main-handoff-loader' $loader
       if($loader -eq [IntPtr]::Zero){throw 'Main handoff: loader missing within 3s'}
       if(-not [QuotumWindowProbe]::Responsive($loader,$process.Id)){Save-Stage 'main-handoff-unresponsive-before-resume';throw 'Main handoff: loader unresponsive'}
+      if($AwaitHeldWaitSample){
+        $observer.HeldSampleWait=@{status='interrupted';rows=0}
+        $observer.HeldSampleWait=Wait-WaitObserverSample $observer ({($deadline-(Get-Date)).TotalMilliseconds}.GetNewClosure())
+      }
     } catch {$pauseFailure=$_;throw} finally {
       $resumed=$false
       try {if($Diagnostics){Save-Stage 'main-handoff-before-resume'}} finally {
@@ -506,6 +513,10 @@ try {
         $deadline=(Get-Date).AddSeconds(3)
         while([QuotumWindowProbe]::IsWindowVisible($loader) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 10}
         if([QuotumWindowProbe]::IsWindowVisible($loader)){throw 'Escape could not cancel native loading'}
+      }
+      if($AwaitHeldWaitSample){
+        $observer.HeldSampleWait=@{status='interrupted';rows=0}
+        $observer.HeldSampleWait=Wait-WaitObserverSample $observer ({3000-$loadingClock.ElapsedMilliseconds}.GetNewClosure())
       }
     } catch {$pauseFailure=$_;throw} finally {
       $resumed=$false
