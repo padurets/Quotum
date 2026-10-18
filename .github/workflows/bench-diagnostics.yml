@@ -181,11 +181,6 @@ jobs:
           cache: npm
           cache-dependency-path: hub/package-lock.json
       - run: npm ci
-      - name: Prepare the one-shot eligible body diagnostic
-        if: contains(github.event.pull_request.labels.*.name, 'benchmark-trace-diagnostics') && !contains(github.event.pull_request.labels.*.name, 'benchmark-cpu-diagnostics') && !contains(github.event.pull_request.labels.*.name, 'benchmark-history-pool-diagnostics')
-        run: node bench/renderEligibleBodiesOnce.mjs
-        env:
-          QUOTUM_DIAGNOSTIC_RENDER_BODIES: once
       - run: npm run build
       - run: |
           if [ "$QUOTUM_BENCH_DIAGNOSE_PANNING" = cpu ] || [ "$QUOTUM_BENCH_DIAGNOSE_PANNING" = trace ]; then
