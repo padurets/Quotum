@@ -24,6 +24,7 @@ parser.add_argument("--idle", action="store_true")
 parser.add_argument("--ui", action="store_true")
 parser.add_argument("--unrelated", type=int, default=0)
 parser.add_argument("--restore-after", type=int)
+parser.add_argument("--stall-sync", action="store_true")
 args = parser.parse_args()
 probe = args.probe.resolve()
 fixture = pathlib.Path(__file__).with_name("client.c")
@@ -62,6 +63,46 @@ class Hub(http.server.BaseHTTPRequestHandler):
     started = 0.0
     restoration = None
     slow_enabled = False
+    started_wall = 0
+    captured_roots = {}
+    birth_events = []
+    first_capture = None
+    discovery_dropped = 0
+
+    @classmethod
+    def observe(cls, state, at):
+        if state is None or at < cls.started_wall or not cls.started_wall:
+            return
+        cls.first_capture = at if cls.first_capture is None else min(at, cls.first_capture)
+        for context in state["contexts"]:
+            identity = context.get("sessionId") or (context["clientId"], context["startedAt"], context["ordinal"])
+            previous = cls.captured_roots.get(identity)
+            if previous is not None and previous[0] <= at:
+                continue
+            if previous is None and len(cls.captured_roots) >= 4096:
+                cls.discovery_dropped += 1
+                continue
+            cls.captured_roots[identity] = (at, context["startedAt"])
+
+    @classmethod
+    def discovery(cls):
+        pending=list(enumerate(cls.birth_events));controlled=[];offsets=[];uncertainty=[];unmatched=0
+        for at,birth in sorted(cls.captured_roots.values(),key=lambda row:row[1]):
+            if birth<cls.started_wall:
+                continue
+            nearest=min(pending,key=lambda row:abs(sum(row[1])/2-birth),default=None)
+            if nearest is None or abs(sum(nearest[1])/2-birth)>2000:
+                unmatched+=1
+                continue
+            pending.remove(nearest)
+            before,after=nearest[1];middle=(before+after)/2
+            controlled.append(at-middle);offsets.append(birth-middle);uncertainty.append(after-before)
+        return dict(firstCaptureAfterStartMs=None if cls.first_capture is None else cls.first_capture-cls.started_wall,
+                    existingRootCaptureMs=sorted(at-cls.started_wall for at,birth in cls.captured_roots.values() if birth<cls.started_wall),
+                    newRootBirthToCaptureMs=sorted(at-birth for at,birth in cls.captured_roots.values() if birth>=cls.started_wall),
+                    controlledNewRootCaptureMs=sorted(controlled),nativeBirthOffsetMs=offsets,
+                    controlledSpawnUncertaintyMs=uncertainty,unmatchedNewRoots=unmatched,
+                    dropped=cls.discovery_dropped,basis="capture timestamp before native scan")
 
     def log_message(self, *_):
         pass
@@ -83,6 +124,9 @@ class Hub(http.server.BaseHTTPRequestHandler):
             Hub.context_counts.extend(len(state["contexts"]) for state in states if state is not None)
             Hub.operations.append(dict(atMs=int(time.monotonic()*1000),op=body["op"],seq=[f["seq"] for f in body.get("frames",[])],latestTick=(body.get("latest") or {}).get("tick")))
             Hub.queue = body["queueId"]
+            if body.get("latest") and body.get("clockAnchor"):
+                anchor=body["clockAnchor"];latest=body["latest"]
+                Hub.observe(latest["state"],anchor["anchorAt"]+latest["tick"]-anchor["anchorTick"])
             scope = body.get("tracking")
             if body["op"] == "hello":
                 if body["acknowledgedThrough"]>Hub.cursor:
@@ -103,6 +147,8 @@ class Hub(http.server.BaseHTTPRequestHandler):
                     if body["frames"] and body["frames"][0]["seq"]>Hub.cursor+1:
                         return self.reply({"error":"activity_sequence","expectedSeq":Hub.cursor+1},409)
                     for frame in body["frames"]:
+                        Hub.observe(state,frame["fromAt"])
+                        Hub.observe(frame.get("nextState"),frame["toAt"])
                         if frame["seq"] <= Hub.cursor:
                             state = frame.get("nextState") or state
                             continue
@@ -175,6 +221,8 @@ def journal(root, manifest):
                     break
                 periods.append(record["toTick"] - record["fromTick"])
                 flags = [c["working"] for c in state["contexts"]]
+                Hub.observe(state,record["fromWall"])
+                Hub.observe(record.get("nextState"),record["toWall"])
                 known.append([record["fromTick"], record["toTick"], flags.count(True), flags.count(False), flags.count(None)])
                 state = record.get("nextState") or state
     return dict(pendingPeriodsMs=periods, pendingStates=known)
@@ -192,6 +240,7 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
         clients.extend(subprocess.Popen([str(client), "--noise", str(min(100, args.unrelated - i))], cwd=root, env=dict(os.environ, OBSERVED_IDLE="1")) for i in range(0,args.unrelated,100))
         time.sleep(args.warmup)
         common = dict(mode=args.mode, roots=args.roots, ownedDescendants=args.roots * args.children,
+                      warmupSeconds=args.warmup,requestedSeconds=args.seconds,churn=args.churn,stallSync=args.stall_sync,
                       binarySHA256=hashlib.sha256(probe.read_bytes()).hexdigest(), idle=args.idle, uiBursts=args.ui, unrelatedDescendants=args.unrelated,
                       environment=dict(kernel=os.uname().release,clockTicks=ticks,
                           cgroupCPU=cgroup_limit('cpu.max'),cgroupMemory=cgroup_limit('memory.max')))
@@ -208,6 +257,8 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
             duration = args.seconds + args.warmup + 2
             command = [str(probe), "run", str(duration), str(root / "daemon"), f"http://127.0.0.1:{server.server_port}", str(client), "60000" if args.mode == "slow" else "0"]
             env = dict(os.environ, OBSERVED_VERSION_MS="5000" if args.mode == "slow" else "0")
+            if args.stall_sync:
+                env["OBSERVED_SYNC_DELAY_MS"]="800"
             bootstrap = None
             if args.mode == "slow":
                 initial = command.copy()
@@ -218,6 +269,7 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
                 assert len(manifests)==1 and json.loads(manifests[0].read_text())["binding"] is not None
                 Hub.slow_enabled=True
             Hub.started=time.monotonic()
+            Hub.started_wall=int(time.time()*1000)
             child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
             origin = time.monotonic()
             samples = []
@@ -226,7 +278,9 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
                 if args.churn and clients and time.monotonic() - origin >= churn_at:
                     clients[0].terminate()
                     clients[0].wait(timeout=10)
+                    before_birth=int(time.time()*1000)
                     clients[0] = subprocess.Popen([str(client), str(args.children)], cwd=root, env=client_env)
+                    Hub.birth_events.append((before_birth,int(time.time()*1000)))
                     churn_at += 30.0
                 try:
                     samples.append((time.monotonic() - origin, snapshot(child.pid)))
@@ -253,18 +307,29 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
                        requests=Hub.requests, operations=Hub.operations, restoration=Hub.restoration,serverErrors=Hub.errors, deliveredPeriodsMs=Hub.periods,
                        deliveredContextMs=dict(positive=Hub.positive_context_ms,unknown=Hub.unknown_context_ms),stopDelaySeconds=result["wallSeconds"] - duration)
             row["observedContextCounts"]=sorted(set(Hub.context_counts))
+            row["discovery"]=Hub.discovery()
+            files=[p for p in (root/"daemon/state/activity").rglob('*') if p.is_file()]
+            row["queue"]["fileBytes"]=sum(p.stat().st_size for p in files)
+            row["queue"]["allocatedBytes"]=sum(p.stat().st_blocks*512 for p in files)
             row["steadyOneCoreCPUPercent"] = 100 * (b[1]["cpuSeconds"]-a[1]["cpuSeconds"] + b[1]["childCPUSeconds"]-a[1]["childCPUSeconds"])/seconds
             row["cpuCeilingPercent"] = 0.1 if args.roots==0 else 1.0 if args.roots>=128 or args.roots*(args.children+1)>=256 else 0.5
             assert Hub.context_counts and max(Hub.context_counts)==args.roots, row
             assert not Hub.errors, row
+            assert result["cadenceCostUsesCPU"],row
             assert manifest["next_seq"] > 1, row
             assert row["stopDelaySeconds"] < 6, row
             # Startup calibration repays its cost separately from the acceptance window.
             assert result["costs"]["capture"]["count"] >= int(args.seconds/15), row
             periods=[period for at,period in result["costs"]["capture"]["periodsMs"] if at-period>=args.warmup*1000]
             row["steadyPeriodsMs"]=periods
-            if periods:
-                assert max(periods)<=16_000, row
+            assert len(periods)>=max(1,int(args.seconds/15)-1),row
+            assert max(periods)<=16_000, row
+            if args.stall_sync:
+                assert result["syncDelayInjected"] and result["cadenceCostUsesCPU"],row
+                assert max(result["costs"][k]["wallMs"]["max"] for k in ["capture","control"])>=750,row
+            if args.churn:
+                expected=max(0,int((duration-16)/30))
+                assert len(row["discovery"]["controlledNewRootCaptureMs"])>=expected and not row["discovery"]["dropped"] and not row["discovery"]["unmatchedNewRoots"],row
             if args.mode == "adaptive" and args.seconds >= 300:
                 assert Hub.latest_history_tick >= duration * 1000 - 35_000, row
                 assert row["steadyOneCoreCPUPercent"] <= row["cpuCeilingPercent"], row

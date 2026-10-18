@@ -52,6 +52,18 @@ and dense windows rather than averaging away a failure. `--mode slow` uses a rea
 sixty-second collector delay, five-second version probe and timed-out HTTP response;
 capture must keep closing durable intervals while delivery waits.
 
+Discovery samples compare the first captured state with the native process birth,
+including pending journal states. Their timestamp precedes the native scan; the
+reported capture wall cost bounds the extra time until publication. `--churn` also
+reports detection of new roots, independently of HTTP receipt time. Queue file
+bytes and allocated filesystem blocks are reported separately.
+Churn also records the controlled process creation interval and its offset from
+the native birth date, so coarse OS birth timestamps do not inflate detection delay.
+
+`--stall-sync` pauses one durable write for 800 ms, 45 seconds into the runner. The worker must
+continue collecting without converting that wait into CPU debt. Progress checks
+require actual post-warm-up observations; an empty interval list cannot pass.
+
 `--mode capture --seconds 120` isolates the cost of equal two- and fifteen-second
 native looks. A pristine-version adapter can be passed with `--baseline`; its
 `cadence SECONDS PERIOD true` command must call that version's `Activity::look`
