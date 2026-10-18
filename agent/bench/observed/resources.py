@@ -257,7 +257,8 @@ with tempfile.TemporaryDirectory(prefix="observed-resources-") as temporary:
             assert not Hub.errors, row
             assert manifest["next_seq"] > 1, row
             assert row["stopDelaySeconds"] < 6, row
-            assert result["costs"]["capture"]["count"] >= int(duration/15), row
+            # Startup calibration repays its cost separately from the acceptance window.
+            assert result["costs"]["capture"]["count"] >= int(args.seconds/15), row
             periods=[period for at,period in result["costs"]["capture"]["periodsMs"] if at-period>=args.warmup*1000]
             row["steadyPeriodsMs"]=periods
             if periods:
