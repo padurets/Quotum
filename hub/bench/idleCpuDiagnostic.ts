@@ -17,9 +17,6 @@ type RawEvent={name:string;ph:string;ts?:number;dur?:number;tts?:number;tdur?:nu
 type CounterWindow={before:Record<string,number>;after:Record<string,number>;instrumentMs:number;seconds:number};
 type Save=(name:string,value:unknown,large?:boolean)=>void;
 type Profile=Parameters<typeof numericProfile>[0];
-export type IdleEdgePlan={boundary:number;from:number;to:number;cellMs:number;seconds:number;marginMs:30_000};
-export type IdleChartGeometry={widget:'quota'|'session'|'activity'|'budget'|'funds';count:number;axisEnd:number|null;from:number|null;to:number|null;ready:boolean;panning:boolean;visibleFrom:number|null;visibleTo:number|null};
-export type IdleGeometry={now:number;selected:boolean;charts:IdleChartGeometry[]};
 type ClockSource={sha256:string;lineNumber:number;columnNumber:number}|null;
 type ClockTiming=ReturnType<typeof ownedClockFires>[number]&{threadTs:number|null;threadDuration:number|null};
 const MAX_EVENTS=100_000,MAX_BYTES=32*1024*1024;
@@ -127,13 +124,6 @@ export function sourceIdentity(env:NodeJS.ProcessEnv=process.env,readHead=()=>ex
   return{mode:'diagnostic',status:checkoutSha?'complete':'insufficient-evidence',sourceHead:sha(env.QUOTUM_BENCH_SOURCE_SHA),checkoutSha,eventSha:sha(env.GITHUB_SHA),run:env.GITHUB_RUN_ID??null,attempt:env.GITHUB_RUN_ATTEMPT??null};
 }
 
-/** Waiting happens before the profiler and the original counter interval. */
-export function planIdleEdge(now:number,seconds:number,cellMs:number):IdleEdgePlan {
-  if(!Number.isSafeInteger(now)||seconds!==120||cellMs!==300_000)throw Error('Aligned diagnostics require the existing120s/5min idle phase');
-  const half=seconds*500,boundary=(Math.floor((now+half)/cellMs)+1)*cellMs;
-  return{boundary,from:boundary-half,to:boundary+half,cellMs,seconds,marginMs:30_000};
-}
-
 /** Trace callback coordinates are one-based; CPU sample coordinates are separate. */
 export function clockTimerSource(client:Client,directory=path.join(import.meta.dirname,'../dist/client/assets')):ClockSource {
   if(client.status!=='available')return null;
@@ -144,35 +134,6 @@ export function clockTimerSource(client:Client,directory=path.join(import.meta.d
     if(at<0||text.indexOf(body,at+1)>=0)return null;
     return{sha256:client.sha256,lineNumber:text.slice(0,at).split('\n').length,columnNumber:at-text.lastIndexOf('\n',at)};
   }catch{return null;}
-}
-
-/** Two passive snapshots reuse the native panning readout, outside elapsed counters. */
-export function idleGeometry(cdp:Pick<Cdp,'evaluate'>):Promise<IdleGeometry> {
-  return cdp.evaluate(`(() => {
-    const numeric=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
-    return {now:Date.now(),selected:new URLSearchParams(location.search).has('from'),charts:[['quota','[data-widget="quota-history"]',40],['session','[data-widget="quota-session-history"]',40],['activity','.activity',48],['budget','[data-widget="budget-history"]',76],['funds','.subscription-funds',76]].map(([widget,selector,left])=>{
-      const all=document.querySelectorAll(selector+' .chart'),chart=all[0],svg=chart?.querySelector(':scope > svg');
-      const empty={widget,count:all.length,axisEnd:numeric(chart?.dataset.axisEnd),from:numeric(svg?.dataset.drawFrom),to:numeric(svg?.dataset.drawTo),ready:svg?.dataset.drawReady==='true',panning:!!svg?.classList.contains('is-panning'),visibleFrom:null,visibleTo:null};
-      const slides=chart?.querySelector(widget==='activity'?'.plot-clip.is-band .plot-move .slides':'.plot-move[data-plot-main] .slides');
-      if(!svg||!slides||empty.from===null||empty.to===null)return empty;
-      const box=svg.viewBox.baseVal.width,r=svg.getBoundingClientRect(),scale=r.width/box,matrix=slides.getScreenCTM(),inner=box-left-12;
-      if(!matrix||!(matrix.a>0)||!(scale>0)||!(inner>0))return empty;
-      const timeAt=x=>empty.from+((x-matrix.e)/matrix.a-left)/inner*Math.max(60000,empty.to-empty.from);
-      return {...empty,visibleFrom:timeAt(r.left+left*scale),visibleTo:timeAt(r.right-12*scale)};
-    })};
-  })()`);
-}
-
-/** Planned wall time alone cannot credit an edge or a different chart. */
-export function idleEdgeProblems(plan:IdleEdgePlan,from:number,to:number,counterFrom:number,counterTo:number,before:IdleGeometry,after:IdleGeometry):string[] {
-  const problems:string[]=[];
-  if(to-from!==plan.seconds*1000||![from,to,counterFrom,counterTo].every(Number.isFinite)||counterFrom<from||counterTo<counterFrom||plan.boundary-counterFrom<plan.marginMs||counterTo-plan.boundary<plan.marginMs)problems.push('actual counter window missed the30s edge margins');
-  if(before.selected||after.selected||before.now>=plan.boundary||after.now<plan.boundary)problems.push('snapshots do not bracket a natural live edge');
-  for(const widget of ['quota','session','activity','budget','funds'] as const){
-    const previous=before.charts.filter(chart=>chart.widget===widget),next=after.charts.filter(chart=>chart.widget===widget),a=previous[0],b=next[0];
-    if(previous.length!==1||next.length!==1||!a||!b||a.count!==1||b.count!==1||!a.ready||!b.ready||a.panning||b.panning||![a.axisEnd,a.from,a.to,a.visibleFrom,a.visibleTo,b.axisEnd,b.from,b.to,b.visibleFrom,b.visibleTo].every(value=>typeof value==='number'&&Number.isFinite(value))||a.axisEnd!>=plan.boundary||b.axisEnd!<plan.boundary||!(a.to!>a.from!)||!(b.to!>b.from!)||!(b.visibleFrom!>a.visibleFrom!)||!(b.visibleTo!>a.visibleTo!))problems.push(widget+' actual chart geometry did not cross the selected edge');
-  }
-  return problems;
 }
 
 /** A TimerFire owns only its directly nested callback, not later asynchronous work. */
@@ -322,14 +283,6 @@ export class IdleCpuDiagnostic {
     if(!profileComplete||this.traceCleanup!=='complete'||this.tracing||!this.ended||this.omitted||this.invalid||this.invalidOwners||this.omittedOwners||this.clocks.length!==2||this.clocks.some(clock=>!clock.valid))problems.push('owned-frame trace, profile or clock evidence is incomplete');
     const receipt={mode:'diagnostic',kind:'Original unaligned CI idle timing; elapsed, thread durations and sampled widths are distinct. Observer overhead is unqualified; chart commits do not prove geometry, and asynchronous attribution remains unknown.',status:problems.length?'insufficient-evidence':'complete',actual:{from,to,cellMs,seconds:window.seconds,beforeTimestamp:window.before.Timestamp,afterTimestamp:window.after.Timestamp},charts:{renders:reading.renders.filter(row=>row.kind==='chart'),mutations:reading.mutations.filter(row=>row.kind==='chart')},clockFires:fires,profileStatus:this.profileStatus,problems};
     this.save('idle-cpu-original-trace',receipt);return receipt;
-  }
-  edgeReceipt(plan:IdleEdgePlan,from:number,to:number,counterFrom:number,counterTo:number,before:IdleGeometry,after:IdleGeometry,window:CounterWindow){
-    const problems=idleEdgeProblems(plan,from,to,counterFrom,counterTo,before,after);
-    const fires=ownedClockFires(this.events,this.sourceBinding,this.clockSource,window.before.Timestamp,window.after.Timestamp);
-    if(!fires.length)problems.push('no received-source-bound own Clock TimerFire in the original counter interval');
-    if(this.profileStatus!=='complete'||!this.ended||this.omitted||this.invalid)problems.push('CPU or owned-frame trace is incomplete');
-    const receipt={mode:'diagnostic',kind:'Temporally aligned natural edge; required benchmark timing is unchanged. Observer overhead and asynchronous attribution remain unqualified.',status:problems.length?'insufficient-evidence':'complete',plan,actual:{from,to,counterFrom,counterTo,marginBeforeMs:plan.boundary-counterFrom,marginAfterMs:counterTo-plan.boundary},before,after,clockFires:fires,problems};
-    this.save('idle-cpu-edge',receipt);return receipt;
   }
   async close(){
     this.active=false;this.binding.close();

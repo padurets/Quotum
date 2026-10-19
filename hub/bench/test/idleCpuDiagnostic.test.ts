@@ -7,7 +7,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import type {Cdp} from '../cdp.js';
 import type {Reading} from '../probe.js';
-import {IdleCpuDiagnostic,sourceIdentity,idleEdgeProblems,originalTraceProblems,ownedClockFires,planIdleEdge,type IdleGeometry} from '../idleCpuDiagnostic.js';
+import {IdleCpuDiagnostic,sourceIdentity,originalTraceProblems,ownedClockFires} from '../idleCpuDiagnostic.js';
 import {numericProfile,profileWindow} from '../cpuProfile.js';
 import {idleWindow,idlePhaseScript,idlePhaseProblems} from '../still.js';
 
@@ -173,8 +173,8 @@ test('original trace preserves a missed edge, missing chart and unavailable thre
 });
 
 /** Execute the actual index interval with the real collector and a passive transport. */
-async function originalIndex(collection:''|'1'|'trace'|'profile',boundaryFailure?:'opening'|'closing',failTraceStop=false,failProfileStop=false) {
-  let wall=540_000,plans=0,geometry=0,metricCalls=0,readingCalls=0,phaseFrom=0;
+async function originalIndex(collection:''|'trace'|'profile',boundaryFailure?:'opening'|'closing',failTraceStop=false,failProfileStop=false) {
+  let wall=540_000,metricCalls=0,readingCalls=0,phaseFrom=0;
   const ledger=new EventCounts(()=>wall);
   const heard:Heard={reset:window=>{cdp.commands.push('ORIGINAL.heard-reset');ledger.reset(window);},counts:()=>ledger.counts(),boardCounts:()=>ledger.boardCounts(),calendar:()=>ledger.calendar(),contacts:()=>ledger.contacts(),hints:()=>ledger.hints(),close:()=>{}};
   const saved:Saved[]=[],evidenceSaved:Saved[]=[],cdp=new class extends CurrentCdpFake {
@@ -196,10 +196,9 @@ async function originalIndex(collection:''|'1'|'trace'|'profile',boundaryFailure
   }({forbidProfiler:collection==='trace',failTraceStop,failStop:failProfileStop});
   const idleCpu=collection?new IdleCpuDiagnostic(cdp as unknown as Cdp,(name,value)=>saved.push({name,value}),client,true,collection==='trace'?'trace':'profile'):undefined;
   cdp.emit('Network.responseReceived',{type:'Script',requestId:'asset-1',response:{url:asset}});
-  const source=readFileSync(new URL('../index.ts',import.meta.url),'utf8'),start=source.indexOf('    let edgePlan:'),end=source.indexOf('    const measured =',start);
+  const source=readFileSync(new URL('../index.ts',import.meta.url),'utf8'),start=source.indexOf('    const cellMs = cellOf('),end=source.indexOf('    const measured =',start);
   assert.ok(start>=0&&end>start);
   const context={Date:class extends Date{static override now(){return wall;}},idleCpu,idleCpuMode:collection,shortIdleProfile:false,seconds:120,cdp,reading:traceReading,
-    planIdleEdge:(...args:Parameters<typeof planIdleEdge>)=>{plans++;return planIdleEdge(...args);},idleGeometry:async()=>{geometry++;return edgeGeometry(geometry>1);},
     idleWindow,idlePhaseScript,idlePhaseProblems,idleRetentionProblems:()=>[],
     cellOf:()=>300_000,sleep:async(ms:number)=>{cdp.commands.push('ORIGINAL.sleep:'+ms);wall+=Math.max(0,ms);if(ms===120_000){cdp.timestamp=121;for(let i=0;i<5;i++)ledger.push('event: ping\ndata: {}\n\n');}},
     overview:async()=>[],stillProblems:()=>[],Stop:Error,say:()=>{},heard,requests:{counting:false,count:0,byPath:{}},
@@ -210,17 +209,17 @@ async function originalIndex(collection:''|'1'|'trace'|'profile',boundaryFailure
   runInNewContext(ts.transpileModule(`async function run(){${source.slice(start,end)}\nreturn {from,to};}globalThis.run=run;`,{compilerOptions:{target:ts.ScriptTarget.ES2023}}).outputText,context);
   let failure:unknown;
   try{await context.run();}catch(error){failure=error;}finally{await idleCpu?.close();}
-  return{cdp,plans,geometry,saved,evidenceSaved,failure};
+  return{cdp,saved,evidenceSaved,failure};
 }
 const canonicalCounterSequence=['ORIGINAL.reset','ORIGINAL.phase-start','ORIGINAL.heard-reset','ORIGINAL.before-metrics','ORIGINAL.retention','ORIGINAL.readout:opening','ORIGINAL.sleep:120000','ORIGINAL.readout:closing','ORIGINAL.retention','ORIGINAL.after-metrics','ORIGINAL.readout:final','ORIGINAL.phase-stop'];
 test('actual trace index skips alignment and all geometry while preserving the original counter sequence',async()=>{
-  const {cdp,plans,geometry,saved,failure}=await originalIndex('trace');assert.equal(failure,undefined);assert.equal(plans,0);assert.equal(geometry,0);
+  const {cdp,saved,failure}=await originalIndex('trace');assert.equal(failure,undefined);
   assert.ok(!cdp.commands.some(command=>command.startsWith('Profiler.')));
   assert.deepEqual(cdp.commands.slice(cdp.commands.indexOf('ORIGINAL.reset'),cdp.commands.indexOf('ORIGINAL.phase-stop')+1),canonicalCounterSequence);
   assert.equal(result(saved,'idle-cpu-window').seconds,120);assert.ok(saved.some(row=>row.name==='idle-cpu-original-trace'));
 });
 test('actual original-profile index preserves the counter sequence and samples without alignment or geometry reads',async()=>{
-  const {cdp,plans,geometry,saved,failure}=await originalIndex('profile');assert.equal(failure,undefined);assert.equal(plans,0);assert.equal(geometry,0);
+  const {cdp,saved,failure}=await originalIndex('profile');assert.equal(failure,undefined);
   assert.deepEqual(cdp.commands.slice(cdp.commands.indexOf('ORIGINAL.reset'),cdp.commands.indexOf('ORIGINAL.phase-stop')+1),canonicalCounterSequence);
   assert.ok(cdp.commands.indexOf('Profiler.start')<cdp.commands.indexOf('ORIGINAL.reset'));
   assert.ok(cdp.commands.indexOf('Profiler.stop')>cdp.commands.indexOf('ORIGINAL.phase-stop'));
@@ -229,14 +228,9 @@ test('actual original-profile index preserves the counter sequence and samples w
   assert.equal(result(saved,'idle-cpu-original-trace').profileStatus,'complete');
 });
 test('actual ordinary index installs no diagnostic and retains the original120s sequence',async()=>{
-  const {cdp,plans,geometry,saved,failure}=await originalIndex('');assert.equal(failure,undefined);assert.equal(plans,0);assert.equal(geometry,0);assert.equal(saved.length,0);
+  const {cdp,saved,failure}=await originalIndex('');assert.equal(failure,undefined);assert.equal(saved.length,0);
   assert.ok(!cdp.commands.some(command=>/^(Profiler|Tracing|Debugger)\./.test(command)));
   assert.deepEqual(cdp.commands,['ORIGINAL.sleep:5000',...canonicalCounterSequence]);
-});
-test('actual mode1 index retains aligned geometry and the existing2ms profiler',async()=>{
-  const {cdp,plans,geometry,saved,failure}=await originalIndex('1');assert.equal(failure,undefined);assert.equal(plans,1);assert.equal(geometry,2);
-  assert.ok(cdp.commands.includes('Profiler.start'));assert.ok(cdp.commands.includes('Profiler.stop'));
-  assert.equal(result(saved,'idle-cpu-profile').samplingInterval,2000);assert.ok(saved.some(row=>row.name==='idle-cpu-edge'));
 });
 for(const boundary of ['opening','closing'] as const)test(`actual index retains ${boundary} measurement-boundary failures before trace cleanup`,async()=>{
   const {saved,evidenceSaved,failure}=await originalIndex('trace',boundary,true);assert.ok(failure);
@@ -283,41 +277,6 @@ test('profile windows reject a missing clock bridge',()=>{assert.equal(profileWi
 test('profile windows reject incompatible clock brackets',()=>{
   const incompatible=[clocks[0],{...clocks[1],before:5000,after:5002}];
   assert.equal(profileWindow(numericProfile(numericBase),incompatible,1000,1004).status,'insufficient-evidence');
-});
-
-const edgePlan=planIdleEdge(500_000,120,300_000);
-const edgeGeometry=(after=false):IdleGeometry=>({now:after?660_000:540_000,selected:false,charts:(['quota','session','activity','budget','funds'] as const).map(widget=>({widget,count:1,axisEnd:after?600_000:540_000,from:0,to:86_400_000,ready:true,panning:false,visibleFrom:after?60_000:0,visibleTo:after?86_460_000:86_400_000}))});
-const edgeProblems=(before=edgeGeometry(),after=edgeGeometry(true),counterFrom=540_010,counterTo=660_000)=>idleEdgeProblems(edgePlan,540_000,660_000,counterFrom,counterTo,before,after);
-test('aligned idle planning selects a future start and centres the existing120s window',()=>{
-  assert.deepEqual(edgePlan,{boundary:600_000,from:540_000,to:660_000,cellMs:300_000,seconds:120,marginMs:30_000});
-  for(const now of [0,1,239_999,240_000,299_999,500_000,539_999,540_000,599_999]){
-    const plan=planIdleEdge(now,120,300_000);assert.ok(plan.from>now);assert.ok(plan.from-now<=300_000);assert.equal(plan.to-plan.from,120_000);assert.equal(plan.boundary%300_000,0);
-  }
-  assert.throws(()=>planIdleEdge(1,300,300_000));assert.throws(()=>planIdleEdge(1,120,60_000));
-});
-test('natural idle edge needs actual movement with a stable drawing basis',()=>{assert.deepEqual(edgeProblems(),[]);});
-test('a late start or early finish cannot credit the planned edge',()=>{
-  assert.match(edgeProblems(undefined,undefined,570_001)[0],/margins/);
-  assert.match(edgeProblems(undefined,undefined,undefined,629_999)[0],/margins/);
-  assert.match(idleEdgeProblems(edgePlan,620_000,740_000,620_010,740_000,edgeGeometry(),edgeGeometry(true))[0],/margins/);
-});
-test('an absent or duplicate chart cannot credit four-chart movement',()=>{
-  const absent=edgeGeometry(true);absent.charts=absent.charts.filter(chart=>chart.widget!=='funds');assert.ok(edgeProblems(undefined,absent).some(problem=>problem.startsWith('funds')));
-  const duplicate=edgeGeometry(true);duplicate.charts.push({...duplicate.charts[0]});assert.ok(edgeProblems(undefined,duplicate).some(problem=>problem.startsWith('quota')));
-});
-test('wrong chart movement cannot replace the missing expected chart',()=>{
-  const wrong=edgeGeometry(true);const i=wrong.charts.findIndex(chart=>chart.widget==='funds');wrong.charts[i]={...wrong.charts[i],widget:'budget'};
-  assert.ok(edgeProblems(undefined,wrong).some(problem=>problem.startsWith('funds')));
-});
-test('render counts or shifted axis labels alone cannot prove plotted movement',()=>{
-  const unchanged=edgeGeometry(true);const chart=unchanged.charts.find(chart=>chart.widget==='activity')!;chart.visibleFrom=0;chart.visibleTo=86_400_000;
-  assert.ok(edgeProblems(undefined,unchanged).some(problem=>problem.startsWith('activity')));
-});
-test('panning, unready geometry and a non-crossed axis remain insufficient',()=>{
-  for(const patch of [{panning:true},{ready:false},{axisEnd:599_999},{visibleTo:null}]){
-    const after=edgeGeometry(true);Object.assign(after.charts.find(chart=>chart.widget==='budget')!,patch);assert.ok(edgeProblems(undefined,after).some(problem=>problem.startsWith('budget')));
-  }
-  const selected=edgeGeometry(true);selected.selected=true;assert.match(edgeProblems(undefined,selected)[0],/natural live/);
 });
 
 const clockSource={sha256:hash,lineNumber:9,columnNumber:250_437};

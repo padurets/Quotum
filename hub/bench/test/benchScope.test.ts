@@ -263,6 +263,11 @@ for(const fault of ['idle','measure','work','observed-work','private-work','pann
   assert.ok(fault==='idle'?problems.some(value=>value.startsWith('script took ')):
     fault==='measure'?problems.some(value=>value.includes('never showed on their card')):problems.includes(fault+'-red'));
 });
+test('retired aligned idle mode rejects before preparing or launching a browser',async()=>{
+  const result=await run([],undefined,{QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'1'});
+  assert.match(String(result.error),/Unknown or conflicting idle CPU diagnostic mode/);
+  assert.deepEqual(result.calls,['freePort']);
+});
 const diagnostics={QUOTUM_BENCH_DIAGNOSE_PANNING:'cpu',QUOTUM_BENCH_DIAGNOSE_IDLE:'double',QUOTUM_BENCH_DIAGNOSE_IDLE_CPU:'profile',
   QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING:'1',QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS:'1',
   QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL:'1',QUOTUM_BENCH_DIAGNOSE_NATIVE:'1',QUOTUM_BENCH_REVERSAL_PROBE:'1'};

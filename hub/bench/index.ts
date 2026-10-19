@@ -39,7 +39,7 @@ import {dotChangesAt,dotOf,FADE_FOR,PULSE_FOR} from '../ui/lib/quota.js';
 import {observeReversal} from './reversalDiagnostic.js';
 import {reloadHubProbe} from './panningReload.js';
 import {traceIdle} from './idleTiming.js';
-import {IdleCpuDiagnostic,sourceIdentity,idleGeometry,planIdleEdge,idleBoundaryProfile,retirementReadScript,gridSnapshotScript,type IdleEdgePlan,type IdleGeometry} from './idleCpuDiagnostic.js';
+import {IdleCpuDiagnostic,sourceIdentity,idleBoundaryProfile,retirementReadScript,gridSnapshotScript} from './idleCpuDiagnostic.js';
 import {idleRetentionScript,idleRetentionProblems,type IdleRetention} from './idleRetention.js';
 import {preparationOwnersScript} from './preparationOwners.js';
 import {observePreparations,retirementRoutesScript} from './retirementRoutes.js';
@@ -147,7 +147,7 @@ async function main() {
     if (startupWaitDiagnostic && (startupWaitDiagnostic !== '1' || !options.ci || process.platform !== 'linux' || options.cdp || panDiagnostic || idleDiagnostic || idleCpuMode || idleTimingDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting startup wait diagnostic mode');
     if (idleDiagnostic && (idleDiagnostic !== 'double' || panDiagnostic)) throw new Stop('Unknown or conflicting idle diagnostic mode');
     if (panDiagnostic && !['pairs', 'trace', 'cpu'].includes(panDiagnostic)) throw new Stop('Unknown panning diagnostic mode');
-    if (idleCpuMode && (!['1','trace','profile','retirement','grid'].includes(idleCpuMode) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleTimingDiagnostic || startupWaitDiagnostic || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
+    if (idleCpuMode && (!['trace','profile','retirement','grid'].includes(idleCpuMode) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleTimingDiagnostic || startupWaitDiagnostic || poolDiagnostic || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE || process.env.QUOTUM_BENCH_REVERSAL_PROBE)) throw new Stop('Unknown or conflicting idle CPU diagnostic mode');
     if (idleTimingDiagnostic && (!['1','routes'].includes(idleTimingDiagnostic) || !options.ci || options.cdp || panDiagnostic || idleDiagnostic || idleCpuMode || process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE)) throw new Stop('Unknown or conflicting idle timing diagnostic mode');
     if(poolDiagnostic&&(poolDiagnostic!=='1'||!options.ci||options.cdp||panDiagnostic||idleDiagnostic||idleCpuMode||idleTimingDiagnostic||startupWaitDiagnostic||process.env.QUOTUM_BENCH_DIAGNOSE_NATIVE))throw new Stop('Unknown or conflicting history pool diagnostic mode');
     await prepare(address);
@@ -303,17 +303,11 @@ async function main() {
     await sleep(warm - Date.now());
     if (heard.counts().history) throw new Stop('The stand credited agent work during warmup; its agents must be idle.');
 
-    let edgePlan:IdleEdgePlan|undefined,geometryBefore:IdleGeometry|undefined;
     const cellMs = cellOf(86_400_000);
-    if(idleCpuMode==='1')edgePlan=planIdleEdge(Date.now(),seconds,cellMs);
-    const planned = edgePlan?{...edgePlan,expectedTransitions:1}:idleWindow(Date.now(), seconds, cellMs);
+    const planned = idleWindow(Date.now(), seconds, cellMs);
     evidence.save('idle-plan', planned);
     say(`waiting ${Math.round((planned.from-Date.now())/1000)} s to include one real chart-cell transition`);
     await sleep(planned.from-Date.now());
-    if(edgePlan){
-      saveDiagnostic('idle-cpu-plan',{mode:'diagnostic',kind:'Temporally aligned diagnostic only; no canonical benchmark timing change.',...edgePlan});
-      geometryBefore=await idleGeometry(cdp);
-    }
     if(idleCpu)await idleCpu.start();
     const from = Date.now();
     const to = from + seconds * 1000;
@@ -368,7 +362,7 @@ async function main() {
         originalIdleTimingProblems = [...(traffic?.problems ?? []), ...phaseProblems, ...idleProblems(idle)];
         evidence.save(idleCpuMode?'idle-cpu-result':'idle-timing-result', {mode: 'diagnostic', problems: originalIdleTimingProblems.map(reason => ({reason})), scriptMsPerSecond: idle.scriptMsPerSecond});
       }
-      if(idleCpu)saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='1'?'Temporally aligned natural edge using the unchanged120s CI idle protocol; profiler and trace overhead is unqualified.':idleCpuMode==='trace'?'Original CI idle protocol; no CPU sampling, tracing overhead is unqualified.':'Original CI idle protocol with CPU sampling; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,reading,problems:originalIdleTimingProblems}});
+      if(idleCpu)saveDiagnostic('idle-cpu-result',{mode:'diagnostic',kind:idleCpuMode==='trace'?'Original CI idle protocol; no CPU sampling, tracing overhead is unqualified.':'Original CI idle protocol with CPU sampling; profiler and trace overhead is unqualified.',original:{seconds,from,to,cellMs,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,reading,problems:originalIdleTimingProblems}});
       return {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore};
     };
     let routingStatus:string|undefined;
@@ -379,7 +373,7 @@ async function main() {
       if(idleRoutingDiagnostic)routingStatus=result.status;
       return result.reading;
     };
-    const {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,counterFrom,counterTo,retentionBefore} = await observedIdle();
+    const {idle, phaseProblems, actualSeconds, events, boardEvents, deviceContacts, deviceHints, reading, phase, before, after, scriptMsPerSecond,retentionBefore} = await observedIdle();
     if(shortIdleProfile){
       const problems=[...originalIdleTimingProblems!];
       const original={seconds,from,to,cellMs,before,after,scriptMsPerSecond,requests:{count:requests.count,byPath:requests.byPath},events,boardEvents,deviceContacts,deviceHints,reading,phaseProblems};
@@ -396,12 +390,11 @@ async function main() {
     }
     if(idleCpu){
       const diagnosticProblems=originalIdleTimingProblems!;
-      const geometryAfter=idleCpuMode==='1'?await idleGeometry(cdp):undefined;
       const window={before,after,instrumentMs:reading.instrumentMs,seconds};
       await idleCpu.stop(window);
       await idleCpu.bindAndClose();
-      const edge=idleCpuMode==='1'?idleCpu.edgeReceipt(edgePlan!,from,to,counterFrom!,counterTo!,geometryBefore!,geometryAfter!,window):idleCpu.traceReceipt(from,to,cellMs,window,reading);
-      say(`diagnostic only: ${idleCpuMode==='1'?'aligned natural edge':'original idle '+idleCpuMode} ${edge.status}; observer overhead is unqualified`);
+      const edge=idleCpu.traceReceipt(from,to,cellMs,window,reading);
+      say(`diagnostic only: original idle ${idleCpuMode} ${edge.status}; observer overhead is unqualified`);
       await finish(diagnosticProblems.length||edge.status!=='complete'?1:0);return;
     }
     if (idleTimingDiagnostic) {
