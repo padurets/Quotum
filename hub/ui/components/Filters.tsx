@@ -1,5 +1,5 @@
 import {useRef,useState,type ReactNode} from 'react';
-import {ChevronDown,X} from 'lucide-react';
+import {ChevronDown,CircleHelp,X} from 'lucide-react';
 import {t,type Key} from '../i18n';
 import {Popover} from './Popover';
 import {Field} from './Kit';
@@ -8,7 +8,7 @@ import {Field} from './Kit';
 export function FilterPopover({label,count,changed,onReset,children,open,onOpenChange,width}:{label:Key;count?:number;changed:boolean;onReset:()=>void;children:ReactNode;open?:boolean;onOpenChange?:(open:boolean)=>void;width?:number}){
   const root=useRef<HTMLDivElement>(null);
   const anchor=useRef<HTMLSpanElement>(null);
-  return <div className="filter-control" data-filter={label} ref={root}>
+  return <div className={`filter-control${changed?' is-changed':''}`} data-filter={label} ref={root}>
     <Popover label={t(label)} horizontalAnchor={anchor} trigger={<span className="filter-trigger"><span ref={anchor}>{t(label)}</span>
       {!!count&&<span className="filter-count" aria-label={t('filters.excludedCount',{count})}>−{count}</span>}
       {changed&&count===undefined&&<i className="filter-changed" aria-hidden="true"/>}
@@ -35,7 +35,7 @@ export function FilterChoice({selected,onSelect,children}:{selected:boolean;onSe
 /** The disclosure and switch are siblings: neither control activates the other. */
 export function FilterGroup({label,icon,on,onChange,hidden,children}:{label:string;icon?:ReactNode;on:boolean;onChange:(on:boolean)=>void;hidden?:boolean;children?:((expanded:boolean)=>ReactNode)}){
   const [expanded,setExpanded]=useState(false),[visited,setVisited]=useState(false);
-  const heading=<span className="filter-group-label"><i className="filter-disclosure" aria-hidden="true">{children&&<ChevronDown size={14}/>}</i><i className="filter-logo" aria-hidden="true">{icon}</i><span>{label}</span></span>;
+  const heading=<span className="filter-group-label"><i className="filter-disclosure" aria-hidden="true">{children&&<ChevronDown size={14}/>}</i><i className="filter-logo" aria-hidden="true">{icon??<CircleHelp size={16}/>}</i><span>{label}</span></span>;
   return <div className={`filter-group${on?'':' is-off'}`} hidden={hidden}>
     {children?<>
     <FilterRow className="filter-group-toggle" on={on} onChange={onChange}><span className="sr-only">{label}</span></FilterRow>

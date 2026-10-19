@@ -1243,6 +1243,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .filter-control, .filter-trigger { display: inline-flex; align-items: center; gap: 6px; }
 .filter-control { flex: 0 0 auto; gap: 0; }
 .filter-control > .picker { margin-left: 0; }
+.filter-control.is-changed > .picker > .text-button { padding-right: 0; }
 .filter-count { padding: 1px 5px; border-radius: 5px; background: var(--hair-2); font-size: 10px; line-height: 16px; font-variant-numeric: tabular-nums; }
 .filter-changed { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); }
 .filter-control .filter-reset { width: 22px; height: 26px; padding: 4px; color: var(--text-3); }
@@ -1253,7 +1254,7 @@ body:has(.compact)::before, body:has(.compact)::after { display: none; }
 .filter-options { min-width: 0; }
 .filter-row { min-height: 34px; justify-content: flex-end; }
 .filter-row[aria-checked=false] span { opacity: 1; }
-.filter-row[aria-checked=false] > span { opacity: .45; }
+.filter-row[aria-checked=false] > span, .filter-row[aria-checked=false] > b { opacity: 1; color: var(--text-4); }
 .filter-group { position: relative; }
 .filter-group .filter-group-toggle { position: absolute; top: 0; right: 0; width: 44px; z-index: 1; }
 .filter-group-toggle > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

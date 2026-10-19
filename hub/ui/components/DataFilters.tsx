@@ -1,5 +1,5 @@
 import {useEffect,useState,useSyncExternalStore} from 'react';
-import {Save,RotateCcw} from 'lucide-react';
+import {Save,RotateCcw,Unlink} from 'lucide-react';
 import {dataFilters,useDataFilters} from '../lib/dataFilters';
 import {useBoardId,useNamed,useRole,type Named} from '../lib/board';
 import {setPrefs,usePref} from '../lib/prefs';
@@ -63,7 +63,7 @@ function Resources(){
   return <FilterPopover label="filters.resources" count={count} changed={!!filters&&resourcesRestricted(filters)} onReset={()=>{dataFilters.reset(RESOURCE_FILTERS,'all');setSearch('');}} open={open} onOpenChange={setOpen} width={320}>
     {(sources.length>10||!!search)&&<FilterSearch value={search} onChange={setSearch}/>}
     <div className="filter-options">{filters&&!!board&&sources.map(source=><Resource key={source.id} source={source} filters={filters} wallets={wallets} fundsUnit={funds.unit??undefined} visible={(source.title??source.id).toLocaleLowerCase().includes(search.toLocaleLowerCase())}/>)}
-      {filters&&facets.value?.funding.map(status=><FilterGroup key={status} label={t(status==='unknown'?'agents.unknownSource':'agents.notProvided')} on={matchesSelection(filters.sources,{status})} onChange={on=>dataFilters.toggle('sources',{status},on)}/>)}
+      {filters&&facets.value?.funding.map(status=><FilterGroup key={status} label={t(status==='unknown'?'agents.unknownSource':'agents.notProvided')} icon={status==='notProvided'?<Unlink size={16}/>:undefined} on={matchesSelection(filters.sources,{status})} onChange={on=>dataFilters.toggle('sources',{status},on)}/>)}
     </div>
     {facets.error&&<p className="popover-note" role="status">{t('filters.unavailable')}</p>}
     {!!state.conflicts&&<p className="popover-note">{t('filters.conflictCount',{count:state.conflicts})}</p>}
