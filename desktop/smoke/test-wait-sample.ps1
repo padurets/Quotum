@@ -69,15 +69,20 @@ $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot
 if($errors.Count){throw 'UI smoke did not parse'}
 $branches=@($ast.FindAll({param($node)
   $node -is [Management.Automation.Language.IfStatementAst] -and
-  $node.Clauses[0].Item1.Extent.Text -eq '$AwaitHeldWaitSample' -and
+  $node.Clauses[0].Item1.Extent.Text -in @('$AwaitHeldWaitSample','$AwaitHeldWaitSample -and -not $isControl') -and
   $node.Extent.Text.Contains('Wait-WaitObserverSample')
 },$true))
 if($branches.Count -ne 2){throw 'Both original paused scenarios must guard their opt-in wait'}
 foreach($branch in $branches){
-  foreach($case in @('default','expired','late','cancel')){
+  $loading=$branch.Extent.Text.Contains('loadingClock')
+  $condition=if($loading){'$AwaitHeldWaitSample -and -not $isControl'}else{'$AwaitHeldWaitSample'}
+  if($branch.Clauses[0].Item1.Extent.Text -ne $condition){throw 'Paused scenario changed its observation guard'}
+  $cases=@('default','expired','late','cancel')
+  if($loading){$cases+='stale-control'}
+  foreach($case in $cases){
     $observer=Sample-Control $(if($case -eq 'cancel'){'cancel'}else{'late'})
     $AwaitHeldWaitSample=$case -ne 'default'
-    $loading=$branch.Extent.Text.Contains('loadingClock')
+    $isControl=$case -eq 'stale-control'
     $fresh=$case -in @('late','cancel')
     $loadingClock=[pscustomobject]@{ElapsedMilliseconds=$(if($loading -eq $fresh){0}else{3000})}
     $deadline=if($loading -ne $fresh){(Get-Date).AddSeconds(3)}else{(Get-Date).AddSeconds(-1)}
@@ -91,7 +96,7 @@ foreach($branch in $branches){
     }else{
       if($observer.Output.Reads){throw 'Default or expired caller polled the observer'}
       if($case -eq 'expired' -and $observer.HeldSampleWait.status -ne 'deadline'){throw 'Caller replaced its original deadline'}
-      if($case -eq 'default' -and $observer.HeldSampleWait){throw 'Default smoke acquired an observation wait'}
+      if($case -in @('default','stale-control') -and $observer.HeldSampleWait){throw 'Unobserved smoke case acquired an observation wait'}
     }
   }
 }
