@@ -19,6 +19,7 @@ export const en = {
   "filters.clear": "Clear",
   "filters.include": "Include selected",
   "filters.exclude": "Exclude selected",
+  "filters.selection": "Selection rule",
   "filters.windows": "Subscription windows",
   "filters.unknownClient": "Unknown client",
   "filters.unavailable": "Filter options are unavailable",

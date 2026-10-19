@@ -6,6 +6,7 @@ import type {WorkFilter} from './dataFilters.js';
 
 export const PERIOD_SCOPES = ['quota','budget','funds'] as const;
 export type PeriodScope = typeof PERIOD_SCOPES[number];
+export type WorkFacets = {projects:(string|null)[];devices:{id:string;name:string}[];clients:(string|null)[];funding:('unknown'|'notProvided')[]};
 
 export type HistoryQuery = {cell?:string;from?:string;to?:string;meters?:string;unit?:string;currency?:string;meta?:string;scope?:string;work?:string;evidence?:string;cells?:string;sources?:string};
 export type PeriodRequest = {
@@ -19,6 +20,6 @@ export type PeriodReply = {
   quota?:PeriodSection<HistoryReply>;budget?:PeriodSection<HistoryReply>;funds?:PeriodSection<HistoryReply>;
   values?:PeriodSection<PeriodValues[]>;
   sessions?:PeriodSection<WorkTrace & {cursor:string}> | {state:'delta';basis:PeriodBasis;value:WorkDelta & {cursor:string}};
-  facets?:PeriodSection<{projects:(string|null)[];devices:{id:string;name:string}[];clients:(string|null)[]}>;
+  facets?:PeriodSection<WorkFacets>;
   sourceWork?:PeriodSection<import('./periodCurves.js').SourceWorkTape & {cursor:string}>|{state:'delta';basis:PeriodBasis;value:import('./periodCurves.js').SourceWorkTape & {cursor:string}};
 };

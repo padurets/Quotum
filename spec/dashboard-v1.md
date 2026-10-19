@@ -869,8 +869,9 @@ funding redaction and corrected names, before interval aggregation or fixed
 compaction. Session and detail cursor identity includes the canonical predicate;
 a mismatched detail predicate returns `400 history_range_invalid`.
 `facets` returns bounded projects (including null), public devices with their names,
-and clients from the unfiltered authorized period plus current roster. The selected
-cohort does not shrink these choices.
+clients, and a `funding` list containing `unknown` and/or `notProvided` only when
+those public funding categories occur in the unfiltered authorized period or current
+roster. The selected cohort does not shrink these choices.
 
 One authorized raw work read supplies the selected trace and independent
 source-wide curves. Live requests for quota work or budget `work:'1'` may request

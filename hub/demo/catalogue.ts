@@ -1668,12 +1668,18 @@ const activity: DemoSet = {
 };
 
 const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter and DeepSeek wallets, partial readings and private access failures'};
-export const FILTER_SCENES=['selected-empty','unfiltered-facets','resources-continue','member-current','save-restore'] as const;
-const dataFilters:DemoSet={...activity,id:'filters',about:'Saved empty project selection with retained resource measurements and reader recovery',entries:[
-  ...activity.entries.map(entry=>entry.kind==='board'?{...entry,name:'Filtered agents',members:['ben'],filterProjects:{mode:'include' as const,values:[]},expect:[{state:'widgets' as const}],look:[
+export const FILTER_SCENES=['mixed-resources','populated-work','selected-empty','unfiltered-facets','resources-continue','member-current','save-restore'] as const;
+const dataFilters:DemoSet={...SESSION_ANALYTICS,id:'filters',about:'Populated mixed-resource filter playground, with a separate saved-empty board',entries:[
+  ...SESSION_ANALYTICS.entries.filter(entry=>entry.kind!=='board').map(entry=>entry.kind==='card'?{...entry,
+    windows:[rolling({use:steady(0,120)}),...entry.windows],
+    on:{ana:entry.on!.ana,team:entry.on!.ana},
+  }:entry),
+  {kind:'board',id:'team',name:'Filter playground',owner:'ana',members:['boris','ben'],agents:true,agentsColumns:['client','subscription','active','concurrency'],agentsPlace:{x:0,y:0,w:6,h:12},
+    expect:[{state:'widgets'}],look:['Opens with all projects, devices and clients selected, four native subscriptions, wallets, key caps and subscription funds. Search among more than fifty projects; compare client, device and resource combinations across sessions and analytics.']},
+  ...activity.entries.filter(entry=>entry.kind!=='person').map(entry=>entry.kind==='board'?{...entry,name:'Empty project selection',members:['ben'],filterProjects:{mode:'include' as const,values:[]},expect:[{state:'widgets' as const}],look:[
     'The saved Projects selection is empty. Agent sessions and activity are empty; subscription measurements and estimates remain available.',
     'At 320/390/1440 px in EN/RU, open Projects, search and choose All; Restore returns to the empty defaults. Save and Restore use 26 px icon buttons. Ben can explore the same filters and cannot save opening defaults.',
-  ]}:entry),
+  ]}:entry.kind==='card'?{...entry,on:{compact:entry.on!.compact}}:entry),
   {kind:'person',id:'ben',name:'Ben',expect:[{state:'onboarding'}]},
 ]};
 const analytics:DemoSet={...all,id:'analytics',about:'Quota and wallet analytics with a separate subscription-funds chart, native quotas, z.ai, OpenRouter and DeepSeek'};

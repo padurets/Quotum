@@ -4,6 +4,7 @@ import {migrateFixed} from '../server/domain/fixedView.js';
 import type {View} from '../server/domain/view.js';
 import {COLUMNS, defaultWidth, starts, type Layout} from '../ui/lib/grid.js';
 import type {Store, WorkKey} from '../server/store/store.js';
+import {Directory} from '../server/store/directory.js';
 import {parseSessions} from '../server/domain/ingest.js';
 import {Agent, Person} from './client.js';
 import {
@@ -39,9 +40,12 @@ import {emailOf, PASSWORD} from './access.js';
 export {emailOf, PASSWORD} from './access.js';
 
 /** Connector scenes belong to the mixed team board; other boards keep their catalogue state. */
-export function shareConnectorScene(store: Store, stand: Stand, source: string, owner: string, at: number) {
+export function shareConnectorScene(store: Store, stand: Stand, source: string, owner: string, at: number, name?: string) {
   const team = stand.boards.get('team');
-  if (team) store.share(team, source, owner, at);
+  if (team) {
+    store.share(team, source, owner, at);
+    if(stand.set.id==='filters'&&name){const directory=new Directory(store.db),view=directory.view(team);view.names[source]=name;directory.saveView(team,view,owner,at);}
+  }
 }
 
 /** A set brought up on a hub: who is who there, by the catalogue's names. */

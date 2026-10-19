@@ -4,7 +4,7 @@ import {mergeSourceWorkTape,sameSourceWork,sourceWorkCurves,type SourceWorkTape,
 import {moneyReadSelection} from './moneySelection';
 import {subscriptionSelection} from './subscription';
 import {cellOf} from '../../server/domain/history';
-import {PERIOD_SCOPES,type PeriodScope,type HistoryQuery} from '../../server/domain/periodRead';
+import {PERIOD_SCOPES,type PeriodScope,type HistoryQuery,type WorkFacets} from '../../server/domain/periodRead';
 import {prepareAsync,preparations,type Preparation} from './prepare';
 import {useLayoutEffect,useRef,useState,useSyncExternalStore} from 'react';
 import {evaluatedRange,periodKey,type PeriodBasis,type PeriodSelection} from '../../server/domain/period';
@@ -72,7 +72,7 @@ class BoardPeriod {
   private sourceEpoch=0;
   private facetsNeeded=false;
   private facetsDemand=0;
-  private facetState:{value:{projects:(string|null)[];devices:{id:string;name:string}[];clients:(string|null)[]};loading:boolean;error:string|null}|{value:null;loading:boolean;error:string|null}={value:null,loading:false,error:null};
+  private facetState:{value:WorkFacets|null;loading:boolean;error:string|null}={value:null,loading:false,error:null};
   private readonly facetListeners=new Set<()=>void>();
   getFacets=()=>this.facetState;
   subscribeFacets=(listener:()=>void)=>{this.facetListeners.add(listener);return()=>{this.facetListeners.delete(listener);};};

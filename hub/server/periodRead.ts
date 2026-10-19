@@ -284,16 +284,17 @@ export class PeriodReader {
         response.sessions=delta&&part.state==='complete'?{state:'delta',basis,value:{...part.value,replaceFrom,replaceTo:workFrontier.to}}:part;
       }
       if(request.facets)response.facets=yield*section((function*(){
-        const projects=new Set<string|null>(),devices=new Map<string,string>(),clients=new Set<string|null>();
-        const add=(project:string|null,device:string,name:string,client:string|null)=>{
+        const projects=new Set<string|null>(),devices=new Map<string,string>(),clients=new Set<string|null>(),funding=new Set<'unknown'|'notProvided'>();
+        const add=(project:string|null,device:string,name:string,client:string|null,source:string|null,status?:'notProvided')=>{
+          if(source===null)funding.add(status??'unknown');
           client=client==='unknown'?null:client;
           if(!projects.has(project)){reserve(128+(project?.length??0)*2);projects.add(project);}
           if(!devices.has(device)){reserve(256+name.length*2);devices.set(device,name);}
           if(!clients.has(client)){reserve(128+(client?.length??0)*2);clients.add(client);}
         };
-        for(const row of work(range.from,cut)){add(row.project,row.device,row.rawContext?.deviceName??row.device,row.rawContext?.client??null);yield;}
-        if(access){const live=self.hub.ingest.live.board(access,now);for(const row of [...live.unattributedSessions,...[...live.sessions.values()].flat()]){add(row.project,row.device.id,row.device.name,row.clientId??null);yield;}}
-        return {projects:[...projects].sort(),devices:[...devices].map(([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id)),clients:[...clients].sort()};
+        for(const row of work(range.from,cut)){add(row.project,row.device,row.rawContext?.deviceName??row.device,row.rawContext?.client??null,row.source,row.sourceStatus);yield;}
+        if(access){const live=self.hub.ingest.live.board(access,now);for(const row of live.unattributedSessions){add(row.project,row.device.id,row.device.name,row.clientId??null,null,row.sourceStatus);yield;}for(const [source,rows] of live.sessions)for(const row of rows){add(row.project,row.device.id,row.device.name,row.clientId??null,source);yield;}}
+        return {projects:[...projects].sort(),devices:[...devices].map(([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id)),clients:[...clients].sort(),funding:[...funding].sort()};
       })());
       if(request.sourceWork&&selection.mode==='live'){
         // One cursor serves independently scheduled resource families. Its source

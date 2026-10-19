@@ -14,6 +14,7 @@ export const ru = {
   "filters.clear": "Очистить",
   "filters.include": "Включать выбранные",
   "filters.exclude": "Исключать выбранные",
+  "filters.selection": "Правило выбора",
   "filters.windows": "Окна подписок",
   "filters.unknownClient": "Неизвестный клиент",
   "filters.unavailable": "Варианты фильтра недоступны",

@@ -908,7 +908,14 @@ test('data filter catalogue keeps empty work recoverable beside supplier measure
   await assert.rejects(member.saveFilters(board,filters.filters),(error:unknown)=>(error as {status:number}).status===403);
   const all=structuredClone(filters.filters);all.projects={mode:'exclude',values:[]};await owner.saveFilters(board,all);
   assert.deepEqual((await owner.get<FilterEnvelope>('/api/boards/'+board+'/filters')).filters.projects,all.projects);
-  assert.deepEqual(FILTER_SCENES,['selected-empty','unfiltered-facets','resources-continue','member-current','save-restore']);
+  const populated=stand.boards.get('team')!,opening=await owner.get<FilterEnvelope>('/api/boards/'+populated+'/filters');
+  assert.deepEqual(opening.filters.projects,{mode:'exclude',values:[]});
+  const choices=expandPeriod(await owner.post<PeriodWireReply>('/api/boards/'+populated+'/period',{version:1,selection:{mode:'live',periodMs:24*HOUR},evaluatedAt:start,sessions:{},facets:true}));
+  assert.equal(choices.facets?.state,'complete');assert.equal(choices.sessions?.state,'complete');
+  if(choices.facets?.state!=='complete'||choices.sessions?.state!=='complete')throw new Error('incomplete populated filters scene');
+  assert.ok(choices.facets.value.projects.length>=57);assert.ok(choices.facets.value.devices.length>=5);
+  assert.ok(choices.sessions.value.refs.length>=125);
+  assert.deepEqual(FILTER_SCENES,['mixed-resources','populated-work','selected-empty','unfiltered-facets','resources-continue','member-current','save-restore']);
 });
 
 test('session comparison catalogue exposes grouped session columns and retained work with a whole union total',async t=>{

@@ -105,7 +105,6 @@ export function KeyMoneySettings({sources,hidden:_hidden,series}:{sources:readon
         {!s.keysCount&&selected.some(([id,m])=>id===s.id&&keyMeter(m))&&<button className="popover-row" onClick={()=>choose(s.id)}><span>{t('money.selectedDetails')}</span><b>›</b></button>}
       </div>)}</div>
     </>}
-    <div className="popover-section"><button className="popover-row" onClick={()=>dataFilters.reset('wallet','all')}>{t('money.resetSelection')}</button></div>
   </>;
 }
 

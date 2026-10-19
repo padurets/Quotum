@@ -43,6 +43,7 @@ test('project selection precedes live and fixed union, facets and cursor-bound d
   assert.equal(rows.reduce((sum,row)=>sum+row.workedMs,0),120*M);
   assert.equal(new PeriodCurves(live.sessions.value).all.read(live.basis.range,true),90*M);
   assert.deepEqual(live.facets.value.projects,['A','B','C'],'facets do not consume the selected cohort');
+  assert.deepEqual(live.facets.value.funding,[],'a board with only disclosed work has no neutral funding choices');
   const source=sourceWorkCurves(live.sourceWork.value).groups.source.get(h.source)!;
   assert.equal(source.read(live.basis.range,true),120*M);assert.equal(source.read(live.basis.range),165*M);
   assert.equal(JSON.stringify(live.sourceWork.value).includes('"project"'),false);
@@ -75,6 +76,19 @@ async function fixture() {
   const details=(body:unknown)=>app.inject({method:'POST',url:`/api/boards/${board}/period/sessions`,headers:{origin:'http://localhost',cookie:`quotum_session=${token}`},payload:body as object});
   return {store,directory,hub,app,user,board,source,device,read,credit,details};
 }
+
+test('funding facets describe authorized work before selection and exclude absent categories',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const board=h.directory.createBoard('Work only',h.user.id,now-3*H).id;
+  h.store.creditWork(h.device,now-H,now,[{source:h.source,client:'codex',origin:'terminal',project:'Private funding',folder:'',startedAt:now-H,identity:{kind:'stable',sessionId:'known'}}]);
+  const filters=defaultFilters();filters.projects={mode:'include',values:[]};
+  const request={version:1 as const,selection:{mode:'live' as const,periodMs:2*H},evaluatedAt:now,workFilter:workFilter(filters),facets:true as const};
+  const read=async()=>{const reply=(await h.read(request,board)).json<PeriodReply>();if(reply.facets?.state!=='complete')throw new Error('incomplete facets');return reply.facets.value;};
+  assert.deepEqual((await read()).funding,['notProvided']);
+  h.store.creditWork(h.device,now-H,now,[{source:null,client:'opencode',origin:'terminal',project:'Unknown funding',folder:'',startedAt:now-H,identity:{kind:'stable',sessionId:'unknown'}}]);
+  const both=await read();assert.deepEqual(both.funding,['notProvided','unknown']);
+  assert.deepEqual(both.projects,['Private funding','Unknown funding'],'empty selection does not erase available values');
+});
 
 test('a period response rechecks authentication after cooperative preparation',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});

@@ -7,11 +7,12 @@ import {boardPeriod} from '../lib/period';
 import {t,type Key} from '../i18n';
 import {quotaPeriods} from '../lib/subscription';
 import {windowName} from '../lib/quota';
+import {subscriptionFundsVisible} from '../lib/money';
 import {clientName} from '../../server/domain/clients';
 import {fundsRule,matchesSelection,matchesSource,type FilterFamily,type FamilyRef,type Selection} from '../../server/domain/dataFilters';
 import {moneyFamily,providerOf} from '../../server/domain/providers';
 import {Popover,SwitchRow} from './Popover';
-import {ErrorLine,Field} from './Kit';
+import {ErrorLine,Field,SelectField} from './Kit';
 import {KeyMoneySettings} from './MoneySettings';
 
 let requested=false;
@@ -31,12 +32,13 @@ function Dimension({family,label}:{family:'projects'|'devices'|'clients';label:K
   const options:{ref:string|null;name:string}[]=family==='projects'?(facets.value?.projects??[]).map(ref=>({ref,name:ref??t('activity.noProject')})):
     family==='devices'?(facets.value?.devices??[]).map(device=>({ref:device.id,name:device.name})):
       (facets.value?.clients??[]).map(ref=>({ref,name:ref?clientName(ref):t('filters.unknownClient')}));
-  if(family!=='devices')for(const ref of state.saved?.filters[family].values??[])if(!options.some(option=>option.ref===ref))options.push({ref,name:ref===null?t(family==='projects'?'activity.noProject':'filters.unknownClient'):family==='clients'?clientName(ref):ref});
   return <Popover label={t(label)} trigger={<span>{t(label)}</span>} open={open} onOpenChange={setOpen} width={288}>
-    <FamilyActions family={family}/>
-    {rule&&<div className="filter-family-actions">
-      {(['include','exclude'] as const).map(mode=><button key={mode} className="popover-row" aria-pressed={rule.mode===mode} onClick={()=>dataFilters.mode(family,mode)}>{t(mode==='include'?'filters.include':'filters.exclude')}</button>)}
+    {rule&&<div className="popover-body">
+      <SelectField compact label={t('filters.selection')} value={rule.mode} onChange={event=>dataFilters.mode(family,event.target.value as 'include'|'exclude')}>
+        <option value="include">{t('filters.include')}</option><option value="exclude">{t('filters.exclude')}</option>
+      </SelectField>
     </div>}
+    <FamilyActions family={family}/>
     {facets.loading&&<p className="popover-note">{t('desktop.loading')}</p>}
     {facets.error&&<p className="popover-note" role="status">{t('filters.unavailable')}</p>}
     {(options.length>10||!!search)&&<div className="popover-body"><Field label={t('filters.search')} type="search" value={search} onChange={event=>setSearch(event.target.value)}/></div>}
@@ -48,23 +50,27 @@ function Dimension({family,label}:{family:'projects'|'devices'|'clients';label:K
 function Resources(){
   const [open,setOpen]=useState(()=>{const value=requested;requested=false;return value;}),state=useDataFilters(),sources=useNamed(),board=useBoardId(),funds=usePref('funds');
   const [search,setSearch]=useState('');
+  const facets=useSyncExternalStore(boardPeriod.subscribeFacets,boardPeriod.getFacets);
+  useEffect(()=>open?boardPeriod.demandFacets():undefined,[open]);
   const filters=state.current;
   useEffect(()=>{const show=()=>{requested=false;setOpen(true);};window.addEventListener('quotum:open-filters',show);return()=>window.removeEventListener('quotum:open-filters',show);},[]);
-  const wallets=sources.filter(source=>moneyFamily(providerOf(source.provider))==='budget'&&source.budget?.enabled!==false);
+  const wallets=sources.filter(source=>moneyFamily(providerOf(source.provider))==='budget'&&source.budget?.enabled!==false&&source.meters?.some(meter=>meter.kind==='balance'||meter.kind==='cap'));
+  const hasWindows=sources.some(source=>quotaPeriods(source).length);
   return <Popover label={t('filters.resources')} trigger={<span>{t('filters.resources')}</span>} open={open} onOpenChange={setOpen} width={320}>
     <FamilyActions family="sources"/>
     {(sources.length>10||!!search)&&<div className="popover-body"><Field label={t('filters.search')} type="search" value={search} onChange={event=>setSearch(event.target.value)}/></div>}
     <div className="filter-options">{filters&&sources.filter(source=>(source.title??source.id).toLocaleLowerCase().includes(search.toLocaleLowerCase())).map(source=><div className="popover-section" key={source.id}>
       <SwitchRow on={matchesSource(filters,source.id)} onChange={on=>dataFilters.toggle('sources',{source:source.id},on)}>{source.title}</SwitchRow>
       {quotaPeriods(source).map(window=><SwitchRow key={window.id} on={matchesSelection(filters.windows,[source.id,window.id])} onChange={on=>dataFilters.toggle('windows',[source.id,window.id],on)}>{windowName(window)}</SwitchRow>)}
-      {source.budget?.enabled!==false&&moneyFamily(providerOf(source.provider))==='funds'&&<SwitchRow on={matchesSelection(fundsRule(filters,funds.unit??undefined),source.id)} onChange={on=>dataFilters.toggle('funds',source.id,on,funds.unit??undefined)}>{t('money.additionalFunds')}</SwitchRow>}
+      {subscriptionFundsVisible(source)&&<SwitchRow on={matchesSelection(fundsRule(filters,funds.unit??undefined),source.id)} onChange={on=>dataFilters.toggle('funds',source.id,on,funds.unit??undefined)}>{t('money.additionalFunds')}</SwitchRow>}
     </div>)}
-    {filters&&(['unknown','notProvided'] as const).map(status=><SwitchRow key={status} on={matchesSelection(filters.sources,{status})} onChange={on=>dataFilters.toggle('sources',{status},on)}>{t(status==='unknown'?'agents.unknownSource':'agents.notProvided')}</SwitchRow>)}
+    {filters&&facets.value?.funding.map(status=><SwitchRow key={status} on={matchesSelection(filters.sources,{status})} onChange={on=>dataFilters.toggle('sources',{status},on)}>{t(status==='unknown'?'agents.unknownSource':'agents.notProvided')}</SwitchRow>)}
     </div>
-    <div className="popover-section"><div className="popover-title">{t('money.data')}</div><FamilyActions family="wallet"/>
-      {open&&!!board&&<KeyMoneySettings sources={wallets} hidden={[]} series={[]}/>}</div>
-    <div className="popover-section"><div className="popover-title">{t('funds.data')}</div><FamilyActions family="funds"/></div>
-    <div className="popover-section"><div className="popover-title">{t('filters.windows')}</div><FamilyActions family="windows"/></div>
+    {!!wallets.length&&<div className="popover-section"><div className="popover-title">{t('money.data')}</div><FamilyActions family="wallet"/>
+      {open&&!!board&&<KeyMoneySettings sources={wallets} hidden={[]} series={[]}/>}</div>}
+    {sources.some(subscriptionFundsVisible)&&<div className="popover-section"><div className="popover-title">{t('funds.data')}</div><FamilyActions family="funds"/></div>}
+    {hasWindows&&<div className="popover-section"><div className="popover-title">{t('filters.windows')}</div><FamilyActions family="windows"/></div>}
+    {facets.error&&<p className="popover-note" role="status">{t('filters.unavailable')}</p>}
     {!!state.conflicts&&<p className="popover-note">{t('filters.conflictCount',{count:state.conflicts})}</p>}
     {!!state.saved&&Object.values(state.saved.unavailable).some(Boolean)&&<p className="popover-note">{t('filters.unavailableCount',{count:Object.values(state.saved.unavailable).reduce((sum,n)=>sum+n,0)})}</p>}
   </Popover>;
