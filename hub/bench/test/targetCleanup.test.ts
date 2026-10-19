@@ -1,12 +1,10 @@
 import {test, type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
-import {EventCounts} from '../stream.js';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {Cdp, openTab, type Browser} from '../cdp.js';
 import {RunOwner} from '../runOwner.js';
-import {idleSensitivity} from '../idleDiagnostic.js';
 
 type Caller = (...args: unknown[]) => Promise<unknown>;
 
@@ -98,37 +96,6 @@ for (const name of ['browserHistoryTraffic', 'browserCancellationTraffic']) for 
     assert.deepEqual(actions, name === 'browserHistoryTraffic' ? ['pool', 'observer', 'target'] : ['observer', 'key', 'target']);
     assert.ok(f.owner.failures.includes('history observer cleanup failed'));
     assert.ok(f.owner.failures.includes(name === 'browserHistoryTraffic' ? 'history pool cleanup failed' : 'history input cleanup failed'));
-    await f.retained();
-  });
-}
-
-for (const [file, name] of [['cpuProfile.ts', 'profileControls'], ['panningDiagnostic.ts', 'traceControls'], ['idleDiagnostic.ts', 'doubledIdle']]) {
-  for (const fails of [true, false]) test(`${name} retains target cleanup and ${fails ? 'preserves the original failure' : 'fails after a successful workload'}`, async t => {
-    let primary: Error, sent = 0;
-    const f = await target(t, async () => {if (fails && sent++ === 0) throw primary; return {};}); primary = f.primary;
-    const markers = Array.from({length: 6}, (_, index) => [
-      {stage: 'quotum-trace-control-start', ts: index * 1000, pid: 1, tid: 1},
-      {stage: 'quotum-trace-control-end', ts: index * 1000 + 100, pid: 1, tid: 1},
-    ]).flat();
-    let stamp = 0;
-    const run = caller(file, name, {
-      openTab, probeScript: () => '', Requests: class {}, idleWindow: () => ({from: 0, to: 120_000, boundary: 60_000}), sleep: async () => {},
-      metrics: async () => ({Timestamp: ++stamp}), scriptPerSecond: () => .15, idlePhaseScript: () => '', idlePhaseProblems: () => [], idleRetentionProblems:()=>[], idleObservationProblems: () => [], idleScriptProblems: () => [], idleSensitivity,
-      profileInterval: async (_cdp: unknown, _browser: unknown, work: () => Promise<unknown>, output: {saveTrace(name: string, value: unknown): void}) => {
-        await work(); output.saveTrace('profile', {status: 'complete', profile: {}, clocks: []});
-      },
-      profileWindow: (_profile: unknown, _clocks: unknown, from: number) => ({status: 'observed', certainFunctionSamples: from / 100 % 3 === 1 ? 0 : 30, possibleFunctionSamples: from / 100 % 3 === 1 ? 0 : 30}),
-      traceInterval: async (_cdp: unknown, _browser: unknown, work: () => Promise<unknown>, output: {saveTrace(name: string, value: unknown): void}) => {
-        await work(); output.saveTrace('trace', {status: 'complete', events: markers});
-      },
-      threadCpuWindow: (_trace: unknown, _pid: unknown, _tid: unknown, from: number) => ({status: 'observed', cpuInsideMs: from / 1000 % 3 === 1 ? 0 : 50, cpuOutsideMs: 0}),
-      Date,
-    });
-    const heard = new EventCounts();
-    const result = name === 'doubledIdle' ? run(f.browser, f.cdp, 'http://fixture.invalid', 120, 300_000, f.evidence, heard, .1,{retention:null,bootstrapSource:''}) : run(f.browser, f.evidence);
-    await assert.rejects(result, error => error === (fails ? f.primary : f.cleanup));
-    if (!fails) assert.ok(f.files.has(name === 'profileControls' ? 'cpu-controls' : name === 'traceControls' ? 'trace-controls' : 'idle-double'), 'the actual workload reached its successful result before cleanup');
-    assert.deepEqual(f.actions, ['target']);
     await f.retained();
   });
 }

@@ -1,10 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import type {Browser, Cdp} from '../cdp.js';
+import type {Cdp} from '../cdp.js';
 import {reload} from '../reload.js';
 import {panning} from '../panning.js';
-import {profilePanning} from '../cpuProfile.js';
-import {tracePanning} from '../panningDiagnostic.js';
 
 test('reload releases its load subscription on success, failure and a silent command', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
@@ -54,20 +52,4 @@ test('a failed panning scenario saves its original command before partial eviden
   assert.notDeepEqual(failure.command.lastAck, lastAck, 'partial and cleanup must actually replace the current command');
   assert.deepEqual(events.slice(events.indexOf('original-failure') + 1, events.indexOf('partial') + 1), ['snapshot', 'save:panning-failure', 'partial']);
   assert.ok(events.indexOf('partial') < events.indexOf('cleanup'));
-});
-
-test('both panning diagnostic wrappers forward snapshots with the original receiver and no command', async () => {
-  for (const wrap of [profilePanning, tracePanning]) {
-    const error = new Error('original wrapper failure'), receipt = {context: 'panning/quota/24h/held-shift-first-minus-12'};
-    let snapshots = 0;
-    const cdp = {
-      on: () => {}, off: () => {}, at: () => {},
-      send: async () => {assert.fail('snapshot forwarding must not send a command');},
-      evaluate: async () => {assert.fail('snapshot forwarding must not evaluate the page');},
-      snapshot() {assert.equal(this, cdp); snapshots++; return receipt;},
-    } as unknown as Cdp;
-    const run: typeof panning = async measured => {assert.equal(measured.snapshot?.(), receipt); throw error;};
-    await assert.rejects(wrap(cdp, {owned: true} as Browser, undefined, run, {status: 'unavailable'}), value => value === error);
-    assert.equal(snapshots, 1);
-  }
 });

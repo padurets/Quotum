@@ -2,15 +2,11 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {readFileSync,readdirSync} from 'node:fs';
 import path from 'node:path';
-import {setTimeout as wait} from 'node:timers/promises';
-import type {Browser,Cdp} from './cdp.js';
+import type {Cdp} from './cdp.js';
 import {bounded} from './reversalDiagnostic.js';
-import {numericProfile,profileInterval} from './cpuProfile.js';
+import {numericProfile} from './cpuProfile.js';
 import {ScriptBinding} from './scriptBinding.js';
 import type {Reading} from './probe.js';
-import {idleRetentionProblems,type IdleRetention} from './idleRetention.js';
-import {safeEvidence} from './evidence.js';
-import type {IdlePhase} from './still.js';
 
 type Client={status:'available';name:string;bytes:number;sha256:string}|{status:'unavailable'};
 type RawEvent={name:string;ph:string;ts?:number;dur?:number;tts?:number;tdur?:number;pid?:number;tid?:number;args?:{data?:{frame?:string;timerId?:number;timeout?:number;singleShot?:boolean;scriptId?:string|number;lineNumber?:number;columnNumber?:number;stackTrace?:unknown;message?:string}}};
@@ -26,85 +22,6 @@ const location=(value:any)=>{
   return Number.isSafeInteger(scriptId)&&scriptId>0&&Number.isSafeInteger(value?.lineNumber)&&value.lineNumber>=0&&Number.isSafeInteger(value?.columnNumber)&&value.columnNumber>=0
     ?{scriptId,lineNumber:value.lineNumber,columnNumber:value.columnNumber}:null;
 };
-
-export const retirementReadScript=`(()=>{const monotonicFrom=performance.now(),retention=window.__quotumIdleRetention();return {monotonicFrom,retention,monotonicTo:performance.now()};})()`;
-export const gridSnapshotScript=`window.__quotumGridSnapshot=()=>{const monotonicFrom=performance.now(),retention=window.__quotumIdleRetention(),phase=window.__quotumIdlePhase.read();return {monotonicFrom,retention,phase,monotonicTo:performance.now()};};void 0;`;
-export const gridReadScript='window.__quotumGridSnapshot()';
-type BoundaryRead={monotonicFrom:number;monotonicTo:number;retention:IdleRetention|null;phase?:IdlePhase};
-
-/** Observe one natural boundary inside the original idle counters, without a trace-clock join. */
-export async function idleBoundaryProfile(cdp:Cdp,browser:Browser,planned:{from:number;to:number;quotaBoundary:number;boundary?:number;cellMs?:number},opening:IdleRetention|null,save:Save,target:'retirement'|'grid'='retirement'){
-  const owner=browser.owner;
-  if(!browser.owned||!owner)throw Error('Idle boundary profiling requires an owned synthetic run');
-  return owner.operation(async()=>{
-    const grid=target==='grid',boundary=grid?planned.boundary!:planned.quotaBoundary;
-    // The canonical grid can be only five seconds before the original window closes.
-    const from=boundary-(grid?6000:5000),to=boundary+(grid?4000:5000),script=grid?gridReadScript:retirementReadScript;
-    if(![planned.from,planned.to,boundary].every(Number.isFinite)||!(planned.from<boundary&&to<planned.to)
-      ||grid&&(!Number.isFinite(planned.cellMs)||planned.cellMs!<=0||boundary%planned.cellMs! !==0||from<=planned.quotaBoundary||from<=planned.from))throw Error('Idle boundary profiling requires the original boundary window');
-    let before:BoundaryRead|null=null,after:BoundaryRead|null=null,finishedAt:number|null=null,failed=false,failure:unknown,writesFailed=false,runtimeAvailable=false;
-    let capture:{status?:string;samplingInterval?:number;profile?:{samples?:number[];startTime?:number;endTime?:number}}|undefined;
-    const write=(name:string,value:unknown,large=false)=>{try{
-      const safe=safeEvidence(value,'',0,large?100_000:10_000);
-      if(Buffer.byteLength(JSON.stringify(safe))>(large?32:1)*1024*1024)writesFailed=true;
-      save('idle-cpu-'+target+'-'+name,safe,large);
-    }catch{writesFailed=true;}};
-    write('plan',{mode:'diagnostic',kind:target,...planned,from,to,samplingInterval:250});
-    try{
-      const runtime=await bounded('idle boundary runtime',signal=>cdp.send<{product?:string;revision?:string;jsVersion?:string;protocolVersion?:string}>('Browser.getVersion',{},signal),5000,owner.signal);
-      const dotted=(value:unknown)=>typeof value==='string'&&/^\d+(?:\.\d+)+$/.test(value)&&value.length<=120?value:null;
-      const version=dotted(runtime.product?.replace(/^Chrome\//,'')),v8=dotted(runtime.jsVersion);
-      runtimeAvailable=!!version&&!!v8;
-      write('runtime',{chromium:{version,sha:/^@?[a-f\d]{40}$/.test(runtime.revision??'')?runtime.revision!.replace(/^@/,''):null},v8:{version:v8},protocol:{version:dotted(runtime.protocolVersion)}});
-      await wait(Math.max(0,from-Date.now()),undefined,{signal:owner.signal});
-      if(Date.now()>=boundary)throw Error('Idle boundary profiling missed the opening boundary');
-      await profileInterval(cdp,browser,async()=>{
-        before=await cdp.evaluate<BoundaryRead>(script,owner.signal);write('before',before);
-        await wait(Math.max(0,to-Date.now()),undefined,{signal:owner.signal});
-        after=await cdp.evaluate<BoundaryRead>(script,owner.signal);write('after',after);
-      },{save:(name,value)=>write(name,value),saveTrace:(name,value)=>{
-        if(name==='profile')capture=value as typeof capture;
-        write(name,value,true);
-      }},250);
-      finishedAt=Date.now();
-    }catch(error){failed=true;failure=error;}
-    const firstRead=before as BoundaryRead|null,lastRead=after as BoundaryRead|null;
-    const first=firstRead?.retention??null,last=lastRead?.retention??null;
-    const problems=grid?idleRetentionProblems(opening,first,opening?.at??NaN,first?.at??NaN,planned.quotaBoundary):idleRetentionProblems(first,last,first?.at??NaN,last?.at??NaN,boundary);
-    const basis=(value:IdleRetention|null)=>value?.quota?JSON.stringify([value.identity,value.generation,value.revision,value.proofEpoch,value.scopeKey,value.selection,
-      value.quota.cut,value.quota.cursor,value.quota.rows.map(row=>JSON.stringify([row.sourceId,row.windowId,row.count,row.first,row.second,row.third,row.last])).sort()]):null;
-    const due=(value:IdleRetention|null)=>value?.quota?.rows.filter(row=>row.second!==null&&row.second+1+(value.selection.periodMs??NaN)===boundary)
-      .map(row=>({sourceId:row.sourceId,windowId:row.windowId})).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)))??[];
-    const expected=grid?[]:due(opening),observed=grid?[]:due(first);
-    if(grid){
-      if(finishedAt===null||finishedAt>=planned.to)problems.push('grid profiling did not finish inside the original idle counters');
-      if(!first?.settled||!last?.settled||!basis(first)||basis(first)!==basis(last)||first.quota?.from!==last.quota?.from)problems.push('grid capture changed admitted storage or its basis');
-      if(!first||!last||!(first.at<boundary&&boundary<last.at)||first.retirementAt!==last.retirementAt||[first,last].some(value=>value.retirementAt===null||!finite(value.retirementAt)||value.retirementAt<=Math.max(last.at,finishedAt??last.at)))problems.push('grid capture overlaps quota retirement or misses its boundary');
-      const phase=(value:IdlePhase|undefined,advanced:boolean)=>!!value&&value.cellMs===planned.cellMs&&value.from===firstRead?.phase?.from
-        &&value.from<first!.at&&value.to<planned.to&&(advanced?value.to>boundary:value.to<boundary)
-        &&[value.starts,value.ends,value.transitions].every(values=>values.length===5)
-        &&value.starts.every(cell=>cell===Math.floor((boundary-1)/planned.cellMs!))
-        &&value.ends.every(cell=>cell===Math.floor((boundary-(advanced?0:1))/planned.cellMs!))
-        &&value.transitions.every(count=>count===(advanced?1:0));
-      if(!first||!phase(firstRead?.phase,false)||!phase(lastRead?.phase,true))problems.push('grid capture did not observe all five original axis transitions');
-    }else if(!opening?.settled||!basis(opening)||basis(opening)!==basis(first)||!expected.length||JSON.stringify(expected)!==JSON.stringify(observed))problems.push('retirement capture differs from the opening quota evidence');
-    if(!firstRead||!lastRead||![firstRead.monotonicFrom,firstRead.monotonicTo,lastRead.monotonicFrom,lastRead.monotonicTo].every(finite)
-      ||firstRead.monotonicFrom>firstRead.monotonicTo||firstRead.monotonicTo>=lastRead.monotonicFrom||lastRead.monotonicFrom>lastRead.monotonicTo)problems.push('retirement snapshot page clocks unavailable');
-    if(!first||!last||!(planned.from<first.at&&last.at<planned.to))problems.push('retirement capture escaped the original idle counters');
-    const samples=capture?.profile?.samples?.length??0;
-    if(capture?.status!=='complete'||capture.samplingInterval!==250||!samples||samples>100_000)problems.push('retirement CPU profile incomplete');
-    if(!runtimeAvailable)problems.push('retirement runtime identity unavailable');
-    if(failed)problems.push('retirement capture did not finish');
-    if(writesFailed)problems.push('retirement evidence write failed');
-    const receipt={mode:'diagnostic',kind:grid?'Natural grid boundary and coincident clock work; recording brackets both snapshots. Sampled widths are not thread CPU time or exclusive grid cost; observer overhead is unqualified.':'Natural quota retirement only; recording order brackets both snapshots. Sampled widths are not thread CPU time; observer overhead is unqualified.',
-      status:problems.length?'insufficient-evidence':'complete',planned,expectedRDue:expected,observedRDue:observed,samplingInterval:250,samples,
-      actual:{snapshotFrom:first?.at??null,snapshotTo:last?.at??null,finishedAt,profileStart:capture?.profile?.startTime??null,profileEnd:capture?.profile?.endTime??null},problems};
-    write('result',{...receipt,problems:problems.map(reason=>({reason}))});
-    if(writesFailed&&!problems.includes('retirement evidence write failed')){problems.push('retirement evidence write failed');receipt.status='insufficient-evidence';}
-    if(failed)throw failure;
-    return receipt;
-  });
-}
 
 /** Compiled positions are valid only for the bytes the page actually received. */
 export function clientIdentity(directory=path.join(import.meta.dirname,'../dist/client/assets')):Client {

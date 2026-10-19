@@ -3,7 +3,6 @@ import {panningProblems, type PanReading} from './panningBudget.js';
 import {panEvidenceScript, panTransactionsScript, panPartialScript, panErrorsScript} from './panEvidence.js';
 import {deadline} from './deadline.js';
 import {panningReload,type ReloadDiagnostic} from './panningReload.js';
-import {panMetrics, panCost} from './panningMetrics.js';
 import {panningSettlement} from './panningFailure.js';
 
 /** Native input against the real charts; the temporary layout brings all five into view. */
@@ -260,7 +259,6 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       interception = true;
       const wheel = (dx: number, shift = false) => cdp.send('Input.dispatchMouseEvent', {type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX: dx, deltaY: 0, modifiers: shift ? 8 : 0});
       const sent: Promise<unknown>[] = [];
-      const costStart = evidence?.timeline !== undefined ? await panMetrics(cdp) : undefined;
       at('wheel');
       progress(`${initiator}/${period}/wheel`);
       await cdp.evaluate('window.__quotumPan.feeding=true');
@@ -308,7 +306,6 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await cdp.evaluate('window.__quotumPan.feeding=false');
       await wait(240); await settled();
       await cdp.evaluate('window.__quotumPan.returnAfter=window.__quotumPan.returnSnapshot()');
-      const costEnd = costStart ? await panMetrics(cdp) : undefined;
       at('report');
       const report = await cdp.evaluate<PanReading>(`(() => {
         const p=window.__quotumPan;p.cleanup();
@@ -316,7 +313,6 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,mutationSamples:p.mutationSamples,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,wheelGapMs:p.wheelGapMs,segments,transactions:p.readTransactions(),outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34),timeline:p.timeline?.read()};
       })()`);
       report.initiator = initiator; report.period = period; report.series = geometry.series; report.sessionSeries=geometry.sessionSeries; report.sessionDensity=geometry.sessionDensity; report.edgeSeries=edgeSeries; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
-      if(costStart&&costEnd)report.cost=panCost(costStart,costEnd);
       reports.push(report);
       evidence?.save('panning-'+initiator+'-'+period,report);
       at('postconditions');

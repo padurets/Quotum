@@ -5,7 +5,6 @@ import path from 'node:path';
 import {browserProcess, type ProcessCleanup, type ProcessIdentity} from './browserProcess.js';
 import {deadline, devtoolsJson} from './deadline.js';
 import {nativeProcesses, type Browser} from './cdp.js';
-import {StartupWaits} from './startupWait.js';
 
 const FLAGS = [
   '--headless=new',
@@ -88,7 +87,6 @@ export type LaunchReport = {
   processes?: ProcessIdentity[];
   startupSamples?: {status: 'available' | 'unavailable'; omitted: number; samples: (ProcessIdentity & {elapsedMs: number})[]};
   startupSpans?: StartupSpanReport;
-  startupWaits?: ReturnType<StartupWaits['freeze']>;
 };
 
 export class ChromeLaunchError extends Error {
@@ -176,7 +174,6 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
     ownedGroup: group, stage: 'spawn', elapsedMs: 0, stdout: stdout.read(), stderr: stderr.read()};
   const samples: NonNullable<LaunchReport['startupSamples']> = state.startupSamples = {status: 'unavailable', omitted: 0, samples: []};
   let sampledAt = -Infinity;
-  const waits = process.env.QUOTUM_BENCH_DIAGNOSE_STARTUP_WAITS === '1' ? new StartupWaits(child.pid, process.pid, group && process.platform === 'linux') : undefined;
   const snapshot = () => ({...state, elapsedMs: Math.round(performance.now() - started), stdout: stdout.read(), stderr: stderr.read()});
   const startup = new AbortController();
   const cancel = () => {state.failure = 'cancelled'; startup.abort(new Error('Chrome startup cancelled'));};
@@ -218,7 +215,6 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
         if(root&&elapsedMs-sampledAt>=500){
           sampledAt=elapsedMs;samples.status='available';
           if(samples.samples.length<48)samples.samples.push({...root,elapsedMs});else samples.omitted++;
-          waits?.sample(root, elapsedMs);
         }
         let published: ReturnType<typeof activePort> = null;
         scan.portFrom = spans.clock();
@@ -268,14 +264,12 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
     }, startup.signal);
     signal?.removeEventListener('abort', cancel);
     state.startupSpans = spans.freeze();
-    if (waits) state.startupWaits = waits.freeze();
     console.error('bench: Chrome ready ' + JSON.stringify(snapshot()));
     return {endpoint, owned: true, close, launchReport: snapshot,
       ...(group && process.platform === 'linux' ? {observeProcesses: processOwner.observe} : {}),
       diagnostics: async (pids, _candidate, signal) => ({processes: child.pid && child.exitCode === null && child.signalCode === null ? await nativeProcesses(child.pid, pids, signal) : []})};
   } catch (error) {
     state.startupSpans = spans.freeze();
-    if (waits) state.startupWaits = waits.freeze();
     const original = snapshot();
     progress?.(original);
     try {await close();} catch { /* The report retains unconfirmed cleanup. */ }
