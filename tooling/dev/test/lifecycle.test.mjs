@@ -11,7 +11,7 @@ import {Pool, coderPool, externalUrl} from '../access.mjs';
 import {allocate, config, parseEnv, portFree, updateEnv} from '../config.mjs';
 import {command, dirtyGuard, info} from '../cli.mjs';
 import {build, fileHash, healthy, isolatedEnv, sourceBuild, start, stop} from '../runtime.mjs';
-import {context, git, hash, ownedMembers, processOf, readJson, saveJson, sleep, waitOwnedMembers} from '../system.mjs';
+import {context, git, hash, listenerOwned, ownedMembers, processOf, readJson, saveJson, sleep, waitOwnedMembers} from '../system.mjs';
 
 const cli = fileURLToPath(new URL('../cli.mjs', import.meta.url));
 function fixture(t) {
@@ -395,7 +395,7 @@ test('a stolen initial probe retries ascending, but an established busy port sta
   assert.equal(await portFree(saved), false);
 });
 
-test('a bind race after the final probe keeps the foreign listener and reports PORT_BUSY', async t => {
+for (const denied of [false, true]) test('a bind race after the final probe keeps the foreign listener and reports PORT_BUSY' + (denied ? ' with denied proc reads' : ''), async t => {
   const {ctx} = fixture(t);
   standIn(ctx);
   const c = {...config(ctx.root, {}), DEV_MODE: 'hub', DEV_PORT_START: String(await freeBase())};
@@ -407,12 +407,46 @@ const wait=setInterval(()=>{
  if(!existsSync(process.env.QUOTUM_DATA_DIR+'/allow-bind')) return;
  clearInterval(wait);
  const server=createServer();
- server.on('error',()=>{console.log(JSON.stringify({event:'error',code:'port_in_use'}));process.exit(1)});
+ server.on('error',()=>{process.stdout.write(JSON.stringify({event:'error',code:'port_in_use'})+'\\n',()=>{
+   if(!${denied}){process.exit(1);return;}
+   writeFileSync(process.env.QUOTUM_DATA_DIR+'/bind-reported','reported');
+   const drain=setInterval(()=>{
+     if(!existsSync(process.env.QUOTUM_DATA_DIR+'/proc-denied'))return;
+     clearInterval(drain);process.exit(1);
+   },10);
+ })});
  server.listen(Number(process.env.QUOTUM_PORT),'127.0.0.1');
 },10);
 `);
-  const starting = start(ctx, c, port, {inputs: 'bind-race', output: 'fixture'});
-  const outcome = assert.rejects(starting, error => error.code === 'PORT_BUSY');
+  let controller;
+  if (denied) {
+    controller = path.join(ctx.root, 'denied-probe.mjs');
+    writeFileSync(controller, `import fs from 'node:fs';
+import {syncBuiltinESMExports} from 'node:module';
+const read=fs.readFileSync;
+const data=JSON.parse(read(process.argv[3],'utf8')).data;
+fs.readFileSync=(file,...args)=>{
+ if(/^\\/proc\\/\\d+\\/net\\/tcp6?$/.test(String(file))&&fs.existsSync(data+'/bind-reported')){
+   fs.writeFileSync(data+'/proc-denied',JSON.stringify({code:'EACCES',path:String(file)}));
+   throw Object.assign(new Error('controlled proc denial'),{code:'EACCES'});
+ }
+ return read(file,...args);
+};
+syncBuiltinESMExports();
+await import(${JSON.stringify(new URL('../serve.mjs', import.meta.url).href)});
+`);
+  }
+  const starting = start(ctx, c, port, {inputs: 'bind-race', output: 'fixture', controller});
+  const outcome = assert.rejects(starting, error => {
+    if (denied) {
+      assert.equal(existsSync(path.join(ctx.local, 'hub-data/bind-reported')), true);
+      const proof = readJson(path.join(ctx.local, 'hub-data/proc-denied'));
+      assert.equal(proof?.code, 'EACCES');
+      assert.match(proof.path, /^\/proc\/\d+\/net\/tcp6?$/);
+    }
+    assert.equal(error.code, 'PORT_BUSY');
+    return true;
+  });
   for (let i = 0; i < 1000 && !existsSync(path.join(ctx.local, 'hub-data/before-bind')); i++) await sleep(10);
   assert.equal(existsSync(path.join(ctx.local, 'hub-data/before-bind')), true);
   const foreign = await listener(port);
@@ -647,6 +681,23 @@ await locked(path.join(ctx.shared,ctx.id+'.lock'),async()=>{
   assert.equal(processOf(journal.supervisor.pid), null);
   assert.equal(await portFree(port), true);
   assert.equal(readJson(path.join(ctx.local, 'lease.json')).initial, true);
+});
+
+test('unreadable socket ownership never authorizes a listener', async t => {
+  const {ctx, state} = await hubStand(t);
+  const read = fs.readFileSync;
+  fs.readFileSync = (file, ...args) => {
+    if (String(file).startsWith(`/proc/${state.hub.pid}/net/`)) throw Object.assign(new Error('controlled proc denial'), {code: 'EACCES'});
+    return read(file, ...args);
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.equal(listenerOwned(state.hub.pid, state.port), false);
+    assert.equal(await healthy(state), false);
+    assert.equal(await portFree(state.port), false);
+  } finally {fs.readFileSync = read; syncBuiltinESMExports();}
+  assert.equal(listenerOwned(state.hub.pid, state.port), true);
+  await stop(ctx);
 });
 
 test('transient environ unreadability is retried without weakening ownership verification', async t => {
