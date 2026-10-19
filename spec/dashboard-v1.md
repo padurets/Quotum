@@ -858,6 +858,10 @@ section containing the requested clipped rows, or a section error. Dashboard ses
 disclosures use 50 rows from the complete index, so a clock-driven membership change
 requires no detail request. Detail reads use the same accounting transport and memory limits.
 
+For requests with `workFilter`, a section's wire `basis` may be `0`, referring to
+the top-level basis. The shared decoder restores that exact basis before accounting.
+Requests without `workFilter` retain full section bases.
+
 The composite period request also accepts `workFilter`, `facets:true`, and
 `sourceWork:{cursor?}`. The work filter contains only sources, projects, devices
 and clients, using the data-filter selection codecs. It is applied after admission,

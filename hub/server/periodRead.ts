@@ -311,7 +311,7 @@ export class PeriodReader {
       }
       const before=replyBytes;
       try {
-        const dictionary=periodDictionary(response,reserve);
+        const dictionary=periodDictionary(response,reserve,!!filter);
         return compactJSON({...response,...(dictionary.moneySemantics.length?{moneySemantics:dictionary.moneySemantics}:{}),...(dictionary.rateLegs.length?{rateLegs:dictionary.rateLegs}:{})},dictionary.replacer);
       } catch(error){
         if(!(error instanceof HistoryLimit))throw error;

@@ -8,6 +8,20 @@ import {withShiftWindow,shifted} from '../domain/periodShift.js';
 import {withValueStates,periodValueAt,type PeriodValues} from '../domain/periodValues.js';
 import {brotliCompressSync,constants} from 'node:zlib';
 
+test('filter-aware section bases share the top-level commit without changing legacy replies',()=>{
+  const basis={run:'shared',revision:'17',evaluatedAt:1_800_000_000_123,evidenceCut:1_800_000_000_123,range:{from:1_799_996_400_123,to:1_800_000_000_123}};
+  const reply:PeriodReply={basis,values:{state:'complete',basis,value:[]},sourceWork:{state:'complete',basis,value:{version:1,from:basis.range.from,cut:basis.range.to,patterns:[],sources:[],cursor:'cursor'}},quota:{state:'error',error:'unavailable'}};
+  const encode=(compact:boolean)=>{const dictionary=periodDictionary(reply,()=>{},compact);return compactJSON(reply,dictionary.replacer);};
+  const legacy=JSON.parse(encode(false)),packed=encode(true),wire=JSON.parse(packed);
+  assert.deepEqual(legacy.values.basis,basis);assert.deepEqual(wire.basis,basis);
+  assert.equal(wire.values.basis,0);assert.equal(wire.sourceWork.basis,0);assert.deepEqual(wire.quota,reply.quota);
+  assert.ok(packed.length<encode(false).length-250);
+  const decoded=expandPeriod(wire);assert.deepEqual(decoded,reply);
+  if(decoded.values?.state==='complete')assert.equal(decoded.values.basis,decoded.basis);
+  assert.deepEqual(reply.values?.state==='complete'&&reply.values.basis,basis,'packing leaves the domain reply unchanged');
+  wire.values.basis=1;assert.throws(()=>expandPeriod(wire),/invalid_period_basis/);
+});
+
 test('period dictionaries preserve exact observations, null inheritance and recorded rate paths',()=>{
   const rate={id:'recorded',source:'manual',base:'credits:codex',from:'1000000',to:'40000',date:3,fetchedAt:4};
   const semantics:MeterSemantics={limit:null,resetAt:null,minutes:null,scope:null,label:null,scale:6,

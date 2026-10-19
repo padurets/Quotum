@@ -19,7 +19,9 @@ function* slots(reply:PeriodWireReply):Generator<Slot>{
 }
 
 /** Share complete repeated semantics; their amounts, observation times and provenance stay exact. */
-export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void){
+export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void,compactBases=false){
+  const sharedBases=new WeakSet<object>();
+  if(compactBases)for(const scope of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork'] as const){const part=reply[scope];if(part&&'basis' in part&&part.basis===reply.basis){reserve(64);sharedBases.add(part);}}
   const sequences=packPeriodSequences(reply,reserve);
   type Entry={value:WireSemantics;count:number;index?:number};
   const entries=new Map<string,Entry>();
@@ -43,6 +45,7 @@ export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void)
   const moneySemantics:WireSemantics[]=[];
   for(const entry of entries.values())if(entry.count>1){entry.index=moneySemantics.length;moneySemantics.push(entry.value);}
   return {moneySemantics,rateLegs,replacer:function(this:unknown,key:string,value:unknown){
+    if(key==='basis'&&this&&typeof this==='object'&&sharedBases.has(this))return 0;
     if(value&&typeof value==='object'&&sequences.has(value))return sequences.get(value);
     if(!this||typeof this!=='object'||key!=='semantics'&&key!=='openSemantics')return value;
     const entry=keys.get(this)?.[key];
@@ -52,6 +55,11 @@ export function periodDictionary(reply:PeriodReply,reserve:(bytes:number)=>void)
 
 /** Restore aliases in the already charged native JSON body without copying its cells. */
 export function expandPeriod(reply:PeriodWireReply,reserve:(bytes:number)=>void=()=>{}):PeriodReply{
+  for(const scope of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork'] as const){
+    const part=reply[scope] as {basis?:unknown}|undefined;
+    if(part?.basis===0)part.basis=reply.basis;
+    else if(typeof part?.basis==='number')throw new Error('invalid_period_basis');
+  }
   expandPeriodSequences(reply as PeriodReply,reserve);
   const dictionary=reply.moneySemantics;
   if(dictionary||reply.rateLegs){
