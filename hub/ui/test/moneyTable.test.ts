@@ -129,4 +129,19 @@ test('the actual active-time cell clock ignores raw measurement attributes until
   const stop=clock.subscribe(watch,()=>{callbacks++;clock.due(watch,cell.changesAt(now),now);});clock.due(watch,due,now);
   const start=now;while(timer&&(timer as {at:number}).at<=start+5000){const current=timer as {run:()=>void;at:number};now=current.at;timer=null;current.run();}
   assert.equal(callbacks,0,'raw active milliseconds cannot wake unchanged visible cells');stop();
+  const moneyWorkAt=boardPeriod.moneyWorkAt;
+  for(const column of ['active','rate','remaining']){const cell=context.exports.raw({...entry,kind:'cap'},column,now);assert.equal(cell.content,'—');assert.equal(cell.title,t('money.sourceWorkOnly'));}
+  const rate=context.exports.raw(entry,'rate',now),remaining=context.exports.raw(entry,'remaining',now);
+  assert.notEqual(rate.content,'—');assert.notEqual(remaining.content,'—');
+  try{
+    boardPeriod.moneyWorkAt=(source,at)=>({...moneyWorkAt(source,at)!,selectedWork:{from:at-H,activeMs:null,agentMs:0}});
+    const active=context.exports.raw(entry,'active',now);
+    assert.equal(active.content,'—');assert.equal(active.title,t('agents.activityUnknown'));
+    assert.equal(context.exports.raw(entry,'rate',now).content,rate.content);
+    assert.equal(context.exports.raw(entry,'remaining',now).content,remaining.content);
+    assert.ok(rate.title?.includes(t('filters.sourceWide')));
+    boardPeriod.moneyWorkAt=(source,at)=>({...moneyWorkAt(source,at)!,selectedWork:{from:at-H,activeMs:0,agentMs:0}});
+    assert.equal(context.exports.raw(entry,'active',now).content,activeHours('0'));
+    assert.equal(context.exports.raw(entry,'active',now).title,undefined);
+  }finally{boardPeriod.moneyWorkAt=moneyWorkAt;}
 });

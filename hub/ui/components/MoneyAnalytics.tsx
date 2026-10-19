@@ -168,10 +168,14 @@ export function MoneyTable({arrange}:{arrange:Arrange}) {
     const work=boardPeriod.moneyWorkAt(s.sourceId,now,history?.range);
     const values=moneyTableValues(s,range?.from??history!.since,range?.to??history!.to,work);
     if(id==='active'||id==='rate'||id==='remaining') {
+      if(s.kind!=='balance'||s.role&&s.role!=='total')return {content:'—',title:t('money.sourceWorkOnly')};
       const eligible=moneyWorkValues(s,work);
+      if(id==='active'){
+        const from=work?.selectedWork?.from??work?.knownFrom;
+        const title=eligible.active===null?t('agents.activityUnknown'):from!==undefined&&from!==null&&from>(range?.from??history!.since)?t('work.since',{time:stamp(from)}):undefined;
+        return {content:activeHours(eligible.active),title,activeMs:work?.selectedWork?.activeMs??undefined};
+      }
       const proof=work?[t('money.workEstimate'),t('filters.sourceWide'),t('money.workBasis',{active:activeHours(String(work.eligibleActiveMs))}),work.partial?t('money.partial'):null].filter(Boolean).join('\n'):t('money.noWorkRate');
-      if(eligible.active===null)return {content:'—',title:proof};
-      if(id==='active')return {content:activeHours(eligible.active),title:proof,activeMs:work!.selectedWork?.activeMs??undefined};
       if(id==='remaining')return {content:activeHours(eligible.remaining),title:proof};
       return {content:money(eligible.rate,s.unit,false,context),title:eligible.rate===null?t('money.workInsufficient')+'\n'+proof:proof};
     }
