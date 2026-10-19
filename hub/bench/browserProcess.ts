@@ -1,5 +1,6 @@
 import type {ChildProcess} from 'node:child_process';
 import {readFile, readdir} from 'node:fs/promises';
+import {deadline} from './deadline.js';
 
 export type ProcessIdentity = {pid: number; parent: number; group: number; session: number; birth: string; state: string;
   minorFaults: number | null; majorFaults: number | null; userTicks: number | null; systemTicks: number | null; blockIoTicks: number | null};
@@ -68,30 +69,34 @@ export function browserProcess(child: ChildProcess, group: boolean) {
     const started = performance.now();
     const result: ProcessCleanup = {status: 'residual', term: false, kill: false, reaped: false, pipesClosed: false, elapsedMs: 0};
     try {
-      while (performance.now() - started < 7_000) {
-        const current = await observe();
-        const workers = current.filter(value => value.state !== 'Z' && value.state !== 'X');
-        let portableGroupExists = false;
-        if (group && process.platform !== 'linux' && child.pid && !released) {
-          try {process.kill(-child.pid, 0); portableGroupExists = true;}
-          catch (error) {if ((error as NodeJS.ErrnoException).code === 'ESRCH') released = true; else throw error;}
-        }
-        if ((!child.pid || !live()) && !workers.length && !portableGroupExists && pipesClosed) {result.status = 'closed'; break;}
-        const canSignal = group && process.platform === 'linux'
-          ? !released && workers.some(value => value.group===child.pid&&value.session===child.pid&&known.get(value.pid) === value.birth)
-          : live();
-        if (canSignal && (!result.term || (!result.kill && performance.now() - started >= 5_000))) {
-          const signal = result.term ? 'SIGKILL' : 'SIGTERM';
-          try {
-            if (group) process.kill(-child.pid!, signal); else child.kill(signal);
-            if (signal === 'SIGTERM') result.term = true; else result.kill = true;
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {result.reason = 'signal failed'; break;}
-            released = true;
+      // Bound the wait for identity reads and forbid signals after cancellation.
+      await deadline(7_000, async signal => {
+        while (performance.now() - started < 7_000) {
+          const current = await observe(signal);
+          signal.throwIfAborted();
+          const workers = current.filter(value => value.state !== 'Z' && value.state !== 'X');
+          let portableGroupExists = false;
+          if (group && process.platform !== 'linux' && child.pid && !released) {
+            try {process.kill(-child.pid, 0); portableGroupExists = true;}
+            catch (error) {if ((error as NodeJS.ErrnoException).code === 'ESRCH') released = true; else throw error;}
           }
+          if ((!child.pid || !live()) && !workers.length && !portableGroupExists && pipesClosed) {result.status = 'closed'; break;}
+          const canSignal = group && process.platform === 'linux'
+            ? !released && workers.some(value => value.group===child.pid&&value.session===child.pid&&known.get(value.pid) === value.birth)
+            : live();
+          if (canSignal && (!result.term || (!result.kill && performance.now() - started >= 5_000))) {
+            const signal = result.term ? 'SIGKILL' : 'SIGTERM';
+            try {
+              if (group) process.kill(-child.pid!, signal); else child.kill(signal);
+              if (signal === 'SIGTERM') result.term = true; else result.kill = true;
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {result.reason = 'signal failed'; break;}
+              released = true;
+            }
+          }
+          await wait(25);
         }
-        await wait(25);
-      }
+      });
       if (result.status !== 'closed') result.reason ??= 'owned exit, group identity or pipe closure unconfirmed';
     } catch {result.reason = 'process identity unavailable';}
     finally {

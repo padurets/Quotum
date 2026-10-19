@@ -207,7 +207,7 @@ export async function launchedChrome(child: ChildProcess, profile: string, group
         pending.throwIfAborted();
         const scan = spans.scan();
         let processes: ProcessIdentity[];
-        try {processes = await processOwner.observe();} finally {scan.observeTo = spans.clock();}
+        try {processes = await processOwner.observe(pending);} finally {scan.observeTo = spans.clock();}
         pending.throwIfAborted();
         state.processes=processes.slice(0,32);
         const root=state.processes.find(process=>process.pid===child.pid),elapsedMs=Math.round(performance.now()-started);
