@@ -40,23 +40,48 @@ test('grouped columns sort union time and concurrency with unknowns last',()=>{
 });
 
 function renderer(input:WorkTrace=trace){
-  let savedSort:agents.AgentsSort=null,by:agents.AgentsBy='machine',owner=false,narrow=false,hidden:string[]=[],range={from:25_000,to:125_000},knownFrom=0;
+  let savedSort:agents.AgentsSort=null,by:agents.AgentsBy='machine',owner=false,narrow=false,hidden:string[]=[],range={from:input.anchor+25_000,to:input.anchor+125_000},knownFrom=input.knownFrom,now=range.to;
   const clicks=new Map<string,()=>void>();
-  const model=()=>{const work={...input,knownFrom},index=new PeriodIndex(work),rows=index.advance(range,200_000).rows,metrics=new PeriodActivity(work,index.curves);metrics.update(rows);return {rows,metrics};};
+  const model=()=>{const work={...input,knownFrom},index=new PeriodIndex(work),rows=index.advance(range,input.cut??input.anchor+200_000).rows,metrics=new PeriodActivity(work,index.curves);metrics.update(rows);return {rows,metrics};};
   const period={activitySummaryAt:(dimension:ActivityDimension,_now?:number,key?:string)=>model().metrics.summary(range,dimension,key),activitySummaryChangesAt:()=>null,activityRangeAt:()=>range,activityCoverageChangesAt:()=>null,workedAt:(_refs:string[],ms:number)=>ms,workedChangesAt:()=>null};
   const modules:Record<string,unknown>={react:React,'react/jsx-runtime':jsxRuntime,'../lib/table':sharedTable,'../lib/activity':activity,'../lib/format':format,'../lib/agents':agents,'../lib/view':view,
     '../i18n':i18n,'../lib/prefs':{setPrefs:(change:{agentsSort?:agents.AgentsSort})=>{if('agentsSort' in change)savedSort=change.agentsSort!;},usePref:(key:string)=>key==='agentsBy'?by:key==='agentsSort'?savedSort:'1h'},
-    '../lib/board':{useLineup:()=>['s'],useTitles:()=>({s:{provider:'codex',title:'Subscription'}})},'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>125_000,hubNow:()=>125_000},
+    '../lib/board':{useLineup:()=>['s'],useTitles:()=>({s:{provider:'codex',title:'Subscription'}})},'../lib/timeRange':{useTimeRange:()=>null},'../lib/clock':{useClock:()=>now,hubNow:()=>now},
     '../lib/period':{boardPeriod:period,usePeriodSessions:()=>({rows:model().rows,basis:{range},loading:false,error:null})},'./sizing':{useSizing:()=>null},'./PeriodStatus':{PeriodStatus:()=>null},
-    './Popover':{Popover:()=>null},'./Kit':{Modal:()=>null}};
+    './Popover':{Popover:()=>null},'./Kit':{Modal:({children}:{children:React.ReactNode})=>React.createElement('div',null,children)}};
   const compile=(file:string)=>{const context={exports:{} as Record<string,React.ComponentType<any>>,require:(name:string)=>modules[name]??{}};runInNewContext(ts.transpileModule(readFileSync(new URL(file,import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);return context.exports;};
   modules['./TableCell']=compile('../components/TableCell.tsx');
-  const common=compile('../components/TableWidget.tsx'),NativeHeading=common.TableHeading,NativeWidget=common.useTableWidget as (...args:any[])=>any;
-  modules['./TableWidget']={...common,useTableWidget:(...args:any[])=>{const widget=NativeWidget(...args);return {...widget,layout:narrow?'list':widget.layout};},TableHeading:(props:any)=>{if(props.sorting)clicks.set(props.id,()=>props.sorting.onSort(props.id));return React.createElement(NativeHeading,props);}};
-  const {AgentsPanel}=compile('../components/Agents.tsx');
-  return {set:(options:Partial<{by:agents.AgentsBy;owner:boolean;narrow:boolean;hidden:string[];range:typeof range;knownFrom:number}>)=>{by=options.by??by;owner=options.owner??owner;narrow=options.narrow??narrow;hidden=options.hidden??hidden;range=options.range??range;knownFrom=options.knownFrom??knownFrom;},click:(column:string)=>clicks.get(column)!(),
-    render:()=>renderToStaticMarkup(React.createElement(AgentsPanel,{arrange:{owner,view:{...EMPTY_VIEW,columns:{[AGENTS]:hidden},shownColumns:{[AGENTS]:['active','concurrency'].filter(id=>!hidden.includes(id))}},update:()=>{}}}))};
+  modules['./Time']=compile('../components/Time.tsx');
+  const common=compile('../components/TableWidget.tsx'),NativeHeading=common.TableHeading,NativeWidget=common.useTableWidget as (...args:any[])=>any,NativeLayout=common.useTableLayout as (...args:any[])=>any;
+  modules['./TableWidget']={...common,useTableWidget:(...args:any[])=>{const widget=NativeWidget(...args);return {...widget,layout:narrow?'list':widget.layout};},useTableLayout:(...args:any[])=>({...NativeLayout(...args),layout:narrow?'list':'table'}),TableHeading:(props:any)=>{if(props.sorting)clicks.set(props.id,()=>props.sorting.onSort(props.id));return React.createElement(NativeHeading,props);}};
+  const {AgentsPanel,AgentsDialog}=compile('../components/Agents.tsx');
+  const currentView=()=>({...EMPTY_VIEW,columns:{[AGENTS]:hidden},shownColumns:{[AGENTS]:['active','concurrency'].filter(id=>!hidden.includes(id))}});
+  return {set:(options:Partial<{by:agents.AgentsBy;owner:boolean;narrow:boolean;hidden:string[];range:typeof range;knownFrom:number;now:number}>)=>{by=options.by??by;owner=options.owner??owner;narrow=options.narrow??narrow;hidden=options.hidden??hidden;range=options.range??range;knownFrom=options.knownFrom??knownFrom;now=options.now??now;},click:(column:string)=>clicks.get(column)!(),
+    render:()=>renderToStaticMarkup(React.createElement(AgentsPanel,{arrange:{owner,view:currentView(),update:()=>{}}})),
+    dialog:(chosen=false)=>{
+      const groups=agents.groupsOf(model().rows.map(session=>({session,source:{id:'s',provider:'codex',title:'Subscription',sessions:[]}})),by);
+      return renderToStaticMarkup(React.createElement(AgentsDialog,{groups,by,initial:chosen?groups[0].key:null,agentsSort:null,sortBy:()=>{},color:()=>({}),empty:null,period:{rows:model().rows,basis:{range},loading:false,error:null},onClose:()=>{},restore:()=>null,
+        arrangement:(inGroup:boolean)=>{const {name,rest}=agents.columnsOf(by,inGroup);return {name,columns:rest.filter(column=>view.columnShown(currentView(),AGENTS,column))};}}));
+    }};
 }
+
+test('actual period rows keep relative last activity and exact hover times across grouping, layouts and dialogs in EN/RU',()=>{
+  const anchor=new Date(2026,9,19,12).getTime(),r=renderer({...trace,anchor,knownFrom:anchor,cut:anchor+200_000});
+  try {
+    for(const locale of ['en','ru'] as const)for(const by of ['project','machine','subscription','none'] as const)for(const narrow of [false,true]) {
+      i18n.setLocale(locale);r.set({by,narrow,now:anchor+425_000});
+      for(const html of [r.render(),r.dialog(),...(by==='none'?[]:[r.dialog(true)])]) {
+        const cells=[...html.matchAll(/<span data-time="activity" title="([^"]+)">([^<]+)<\/span>/g)];
+        assert.ok(cells.length,`${locale}/${by}/${narrow}: retained period rows render the actual relative time component`);
+        for(const [,title,text] of cells) {
+          assert.equal(text,i18n.t('time.minutesAgo',{n:5}));
+          assert.ok([100_000,125_000].some(offset=>title===format.stamp(anchor+offset)),title);
+        }
+        for(const footer of html.matchAll(/<footer\b[^>]*>(.*?)<\/footer>/gs))assert.ok(!footer[1].includes('data-time="activity"'),'totals contain period metrics, not a last-activity timestamp');
+      }
+    }
+  } finally {i18n.setLocale('en');}
+});
 
 test('the actual sessions table renders union metrics and separate whole-period totals in EN/RU',()=>{
   const r=renderer();try{

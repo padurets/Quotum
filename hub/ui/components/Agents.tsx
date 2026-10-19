@@ -267,7 +267,6 @@ function Tally({group, color}: {group: AgentGroup; color: Context['color']}) {
 
 /** Last observed work; the unseen sizing copy never subscribes to the page clock. */
 function LastActivity({group, still}: {group: AgentGroup; still: boolean}) {
-  if(group.rows[0]?.session.ref&&group.lastWorkedAt!==null)return <span>{stamp(group.lastWorkedAt)}</span>;
   if (group.working) return <>{t('time.now')}</>;
   if (group.lastWorkedAt === null)
     return (
