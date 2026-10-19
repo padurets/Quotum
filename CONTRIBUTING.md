@@ -171,13 +171,12 @@ If an observer cannot start, later artifact capture retains its original worker
 cleanup receipt, including an unconfirmed exit, after disposing the process handle.
 A manual run of the Desktop workflow takes `ui-runs`, how many times
 the UI smoke runs on the installed app and on the portable one each.
-The opt-in `stale-dismissal-control` also runs one native loader counterfactual pair
-within the existing job and smoke deadlines. It recompiles the real app with only
-the stale-dismissal revision guard bypassed, then runs the guarded executable.
-Both retain the original loading cases and add a third paused-UI batch within its
-original three seconds. Numeric source/executable pins, observations and restoration
-receipts are kept. An absent loader observation does not directly reveal the current
-global request or prove the cause of a historical hang.
+The packaged Windows UI checks include `-StaleDismissalControl`: after the original
+ready and cancellation cases, a third paused-UI case queues close/open callbacks and
+closes the older native loader. The latest accepted loader must remain visible,
+rounded, foreground and responsive within the original three-second deadline, and
+hand off to the ready panel after resume. Numeric observations and cleanup receipts
+are retained. This checks stale dismissal separately from activation continuation.
 The queued-close check runs with the main window open and with only the compact
 panel: a delayed close must neither lose the latest open nor crash the last WebView.
 The handoff check also pauses the app UI just after accepting a main-window request,

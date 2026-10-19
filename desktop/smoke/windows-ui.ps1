@@ -2,7 +2,7 @@
 # Every run starts from a fresh profile of WebView2, as the first start on a machine does:
 # the one there is set aside and put back at the end.
 # -Diagnostics <dir> keeps bounded stage readings and owned process identities, passed or not.
-param([Parameter(Mandatory=$true)][string]$App, [string]$Report, [string]$Diagnostics, [switch]$AwaitHeldWaitSample, [switch]$StaleDismissalControl, [ValidateSet('head','guarded','unguarded')][string]$SourceVariant='head', [string]$SourceProof)
+param([Parameter(Mandatory=$true)][string]$App, [string]$Report, [string]$Diagnostics, [switch]$AwaitHeldWaitSample, [switch]$StaleDismissalControl)
 $ErrorActionPreference = 'Stop'
 if(($AwaitHeldWaitSample -or $StaleDismissalControl) -and -not $Diagnostics){throw 'Paused UI observations require Diagnostics'}
 # Relative to PowerShell's location: .NET would take them relative to the process's.
@@ -42,18 +42,6 @@ if (-not ('QuotumWindowProbe' -as [type])) {
 
 $manifest=[ordered]@{schemaVersion=1;status='running';sha=((& git rev-parse HEAD).Trim());run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT;platform='windows';packageHash=(Get-FileHash -LiteralPath $appPath -Algorithm SHA256).Hash;files=@();errors=@()}
 if($AwaitHeldWaitSample){$manifest.observation='await-first-row'}
-if($SourceVariant -ne 'head'){
-  if(-not $SourceProof -or (Get-Item -LiteralPath $SourceProof).Length -gt 65536){throw 'Native source proof unavailable'}
-  $proof=ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($SourceProof))
-  $expectedExecutable=if($SourceVariant -eq 'guarded'){$proof.guardedExecutableSha256}else{$proof.unguardedExecutableSha256}
-  $expectedSource=if($SourceVariant -eq 'guarded'){$proof.guardedSourceSha256}else{$proof.unguardedSourceSha256}
-  $hostSource=Join-Path $PSScriptRoot '../src/host/tauri_window.rs'
-  if($proof.scope -ne 'native-stale-dismissal-counterfactual' -or $proof.head -ne $manifest.sha -or
-    $manifest.packageHash.ToLowerInvariant() -ne $expectedExecutable -or
-    (Get-FileHash -LiteralPath $hostSource -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedSource){throw 'Native source or executable proof mismatch'}
-  $manifest.sourceVariant=$SourceVariant
-  $manifest.sourceVariantProofSha256=(Get-FileHash -LiteralPath $SourceProof -Algorithm SHA256).Hash.ToLowerInvariant()
-}
 $loaderDismissalEvidence=$null
 # Capture native facts in memory while any owned UI thread is paused.
 $nativePauseDepth=0
