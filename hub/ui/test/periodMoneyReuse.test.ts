@@ -122,6 +122,9 @@ test('money preparation keeps cold history reusable across cached return and rep
   }
   try{
    period.activate(true);await settle();
+   const money=period.tapes.get('budget').tape.money.filter((group:any)=>group.workCounter);
+   assert.equal(money.length,12,'the real provider fixture has twelve native usage ledgers');
+   for(const group of money)assert.equal(group.workCounter.readings,group.readings,'identical financial and work observations occupy one retained array');
    assert.ok(period.get().rows.some((row:any)=>row.workedMs>0),'the retained work fixture must have positive credit inside its known period');
    const end=NOW-(length+DAY)*.5;await gesture('cold',end,{from:end-length,to:end});
    await gesture('warm-return',NOW,null);await gesture('warm-repeat',end,{from:end-length,to:end});

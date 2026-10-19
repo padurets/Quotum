@@ -26,7 +26,6 @@ import {providerOf} from '../../server/domain/providers';
 import {useClock} from '../lib/clock';
 import {FreeResets} from './ResetMarks';
 import {Tray} from './Tray';
-import {UsageWorkMark} from './UsageWorkMark';
 import {EyeOffIcon, HideRow, Popover, SlidersIcon, SwitchRow, TakeOffIcon} from './Popover';
 import {RefreshAction} from './RefreshAction';
 import {refreshChangesAt, refreshPending, refreshText} from '../lib/refresh';
@@ -482,9 +481,7 @@ function CardTray({source, funds}: {source: Card; funds?: ReactNode}) {
   const quotaIssue=source.quota&&!source.quota.complete;
   const news=providerOf(source.provider)?.funding==='wallet'||source.balanceStatus||access||quotaIssue?<><BalanceMark source={source}/>{access&&<AccessMark id={source.id}/>}
     {quotaIssue&&<QuotaMark source={source}/>}</>:null;
-  const selected=useTimeRange();
-  const allNews=!selected&&source.usageWork?.length?<>{news}<UsageWorkMark source={source}/></>:news;
-  return <Tray resets={resets} news={allNews} current={funds||source.resets?.available?<>{funds}{!!source.resets?.available&&<FreeResets resets={source.resets} observation={source.resources?.resets}/>}</>:null} sessions={sessions.rows} sessionPeriod={sessions} />;
+  return <Tray resets={resets} news={news} current={funds||source.resets?.available?<>{funds}{!!source.resets?.available&&<FreeResets resets={source.resets} observation={source.resources?.resets}/>}</>:null} sessions={sessions.rows} sessionPeriod={sessions} />;
 }
 
 /**

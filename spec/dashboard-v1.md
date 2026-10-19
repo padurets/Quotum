@@ -415,8 +415,8 @@ own historical allowance, generation and exclusive observation bounds.
 Findings end at the next known reset or after 24 hours, whichever comes first; an early
 reset or generation change removes them. Later ordinary work does not erase a past
 finding, while reattribution can remove it. The card event and shared deadline machinery
-update this status. All windows share one warning tray mark in dashboard and compact;
-its details distinguish incomplete data from fully witnessed absence of observed work.
+update this status. Dashboard and compact cards do not render these diagnostic findings
+as warnings.
 
 A source's `sessions` are the agents running on it, on the machines of its people on the
 board, each `{device, origin, project, folder, startedAt, lastWorkedAt, working,
