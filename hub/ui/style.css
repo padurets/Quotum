@@ -1269,6 +1269,10 @@ summary.filter-group-heading::-webkit-details-marker { display: none; }
 .filter-group.is-off .filter-group-heading { color: var(--text-4); cursor: default; }
 .filter-group-items { position: relative; margin-left: 38px; padding: 4px 0 8px 8px; }
 .filter-group-items::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 12px; width: 1px; background: var(--hair); pointer-events: none; }
+@media (max-width: 680px) {
+  .analytics-head-inner { align-items: flex-start; }
+  .data-filter-controls { display: grid; grid-template-columns: max-content max-content; gap: 8px; }
+}
 .filter-key-details { padding: 6px 0 0 8px; }
 .filter-key-details > summary { font-size: 12px; color: var(--text-3); cursor: pointer; }
 .filter-key-details[open] > summary { margin-bottom: 6px; }

@@ -1599,6 +1599,8 @@ adjacent cross that shows all again. Shared filter rows keep every switch on the
 right, including group headings and unknown resources. Dropdowns align with the
 filter label independently of its exclusion badge; unchanged filters reserve no
 status space. Search uses a short placeholder and an accessible hidden label.
+On phones the four data dimensions keep two columns sized to their content, so an
+exclusion badge cannot move the open control to another row.
 Resource groups use provider logos and inline
 disclosures; disabling a parent hides its children without changing their choices.
 Expandable and plain resource rows align their names; child guides have inset ends
