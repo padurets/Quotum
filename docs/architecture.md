@@ -1605,6 +1605,9 @@ recoverable through successive decreasing local edits, without an oversized work
 request. Parsed queued input, its canonical allowance and prepared membership sets
 share the existing 32 MiB server reservation; retained and staged facets share the
 browser's 15 MiB history pool. Work authority changes retire closed-menu facets too.
+Ordinary session and work changes invalidate their cached choices without a closed-menu
+read. Reopening checks that generation and the live evaluated range; an older reply
+cannot mark newer choices complete.
 The filter button forms its own group after the board controls. A small dot marks a
 non-default data selection or historical range, including while the row is hidden.
 The row starts closed and remembers its visibility in the reader's browser.

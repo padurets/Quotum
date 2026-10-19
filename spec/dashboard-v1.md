@@ -900,6 +900,9 @@ current roster for live selection. A fixed period excludes current-only roster f
 The selected cohort does not shrink these choices. The browser charges facets before
 adoption and retains them under its shared history budget; work-authority revocation
 invalidates them even while their controls are closed.
+Ordinary session and credited-work changes mark that cache dirty without reading
+while closed. Opening a control revalidates dirty facts and a live range that has
+moved since its last read; a superseded reply cannot acknowledge newer changes.
 
 One authorized raw work read supplies the selected trace and independent
 source-wide curves. Live requests for quota work or budget `work:'1'` may request
@@ -1777,7 +1780,7 @@ instructions to the native host.
 
 Candidates leave ingestion only after its transaction commits. They are not
 reconstructed from coalesced card frames. Pending candidates and coalesced per-window
-invalidations share the stream's buffer limit; overflow discards both and starts a new
+invalidations share a separate 256 KiB pending budget; overflow discards both and starts a new
 attention baseline. Before emission, a quota candidate must still name the current
 window semantics and ledger cycle. Changing kind, label or duration invalidates
 pending candidates even if the old values return before the next flush. The desktop

@@ -69,6 +69,38 @@ test('revocation retires cached facets while closed and reopening reads the auth
   }finally{await h.close();}
 });
 
+test('closed facet controls invalidate ordinary work changes and fetch the new choices only when reopened',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture();
+  try{
+    const stop=h.period.demandFacets();await flush();assert.deepEqual(h.period.getFacets().value.projects,['Work project']);stop();h.requests.length=0;
+    const authority=h.page.get().board!.workAuthority;assert.ok(authority);
+    h.store.creditWork(h.device,NOW-120000,NOW-60000,[{source:h.source,client:'opencode',origin:'terminal',project:'New project while closed',folder:'',startedAt:NOW-120000,identity:{kind:'stable',sessionId:'new-facet-project'}}]);h.events.flush();await flush();
+    assert.equal(h.page.get().board!.workAuthority,authority);assert.ok(h.period.get().rows.some((row:any)=>row.project==='New project while closed'));
+    assert.equal(h.requests.filter(request=>request.facets).length,0,'closed controls do not add reads');
+    const close=h.period.demandFacets();await flush();assert.deepEqual(h.period.getFacets().value.projects,['New project while closed','Work project']);assert.ok(h.period.getFacets().value.clients.includes('opencode'));close();
+    const reads=h.requests.filter(request=>request.facets).length,again=h.period.demandFacets();await flush();assert.equal(h.requests.filter(request=>request.facets).length,reads,'the same facts and evaluated range reuse their cache');again();
+  }finally{await h.close();}
+});
+
+test('a late facet reply cannot acknowledge changes received after its last consumer closed',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture();
+  try{
+    const gate=h.hold(),stop=h.period.demandFacets();await flush();const old=h.period.intent();stop();
+    h.event({type:'sessions',data:{source:h.source,sessions:[]}} as any);assert.equal(h.period.intent().revision,old.revision,'closed invalidation leaves unrelated work flights alone');
+    gate.release();await flush();assert.equal(h.period.getFacets().value,null,'an older receipt is not a current cached universe');
+    const reads=h.requests.filter(request=>request.facets).length,close=h.period.demandFacets();await flush();assert.ok(h.period.getFacets().value.projects.includes('Work project'));assert.equal(h.requests.filter(request=>request.facets).length,reads+1);close();
+  }finally{await h.close();}
+});
+
+test('reopening live facets rechecks the moving range without a timer or a closed-menu read',async t=>{
+  let now=NOW;t.mock.method(Date,'now',()=>now);const h=await fixture({periodName:'1h'});
+  try{
+    const stop=h.period.demandFacets();await flush();stop();h.requests.length=0;
+    now=NOW+59*60_000;h.advance(now);await flush();assert.equal(h.requests.filter(request=>request.facets).length,0);
+    const close=h.period.demandFacets();await flush();assert.deepEqual(h.period.getFacets().value.projects,[]);assert.equal(h.requests.filter(request=>request.facets).length,1);close();
+  }finally{await h.close();}
+});
+
 test('facets are charged before adoption and retained in the same history pool',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture();let pinned=0;
   try{

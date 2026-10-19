@@ -72,12 +72,16 @@ class BoardPeriod {
   private sourceEpoch=0;
   private facetsNeeded=false;
   private facetsDemand=0;
+  private facetGeneration=0;
+  private facetAt:number|null=null;
   private facetState:{value:WorkFacets|null;loading:boolean;error:string|null}={value:null,loading:false,error:null};
   private readonly facetListeners=new Set<()=>void>();
   getFacets=()=>this.facetState;
   subscribeFacets=(listener:()=>void)=>{this.facetListeners.add(listener);return()=>{this.facetListeners.delete(listener);};};
-  demandFacets=()=>{this.facetsDemand++;if(!this.facetState.value){this.facetsNeeded=true;this.facetState={...this.facetState,loading:true};for(const listener of this.facetListeners)listener();this.revision++;this.transport.change();}return()=>{this.facetsDemand--;};};
-  private resetFacets(){this.facetState={value:null,loading:this.facetsDemand>0,error:null};this.facetsNeeded=this.facetsDemand>0;for(const listener of this.facetListeners)listener();}
+  // Facts can change while closed; a live range can also move without a new event.
+  demandFacets=()=>{const first=this.facetsDemand++===0;if(!this.facetState.value||this.facetsNeeded||first&&this.selection.mode==='live'&&this.facetAt!==hubNow()){this.facetsNeeded=true;this.facetState={...this.facetState,loading:true};for(const listener of this.facetListeners)listener();this.revision++;this.transport.change();}return()=>{this.facetsDemand--;};};
+  private invalidateFacets(){this.facetGeneration++;this.facetsNeeded=true;}
+  private resetFacets(){this.invalidateFacets();this.facetAt=null;this.facetState={value:null,loading:this.facetsDemand>0,error:null};for(const listener of this.facetListeners)listener();}
   private facetBytes(value=this.facetState.value){return value?256+JSON.stringify(value).length*3+value.projects.length*32+value.devices.length*96+value.clients.length*32+value.funding.length*32:0;}
   private wantsWork=false;
   private workNeeded=false;
@@ -291,7 +295,7 @@ class BoardPeriod {
       ...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{}),
       ...(pending&&this.facetsDemand>0&&this.facetsNeeded?{facets:true as const}:{}),
       ...(filters&&this.selection.mode==='live'&&(queries.quota||queries.budget?.work==='1')?{sourceWork:{...(this.sourceCursor?{cursor:this.sourceCursor}:{})}}:{})};
-    return {board:board.id,generation:this.generation,resourceGeneration:this.resourceGeneration,revision:this.revision,proofEpoch:this.proofEpoch,request};
+    return {board:board.id,generation:this.generation,resourceGeneration:this.resourceGeneration,facetGeneration:this.facetGeneration,revision:this.revision,proofEpoch:this.proofEpoch,request};
   }
   private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
   private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence,...(this.workLimit?{loading:false,error:'filters_limit'}:{})};for(const listener of this.listeners)listener();}
@@ -415,13 +419,14 @@ class BoardPeriod {
     if(event?.type==='hub') {
       const hub=event.event;
       if(hub.type==='hello'||hub.type==='snapshot'||hub.type==='mine'||hub.type==='lineup') {
+        this.invalidateFacets();
         this.resourceGeneration++;
         this.generation++;this.revision++;if(hub.type==='hello'||changedWork||!this.index){this.cursor=undefined;this.workNeeded=wantsWork;}this.valuesNeeded=selection.mode==='range';
 
         if(hub.type==='snapshot'||hub.type==='hello')this.tick();
         this.transport.change();
       }else if(hub.type==='sessions'||hub.type==='unattributedSessions') {
-        if(this.facetsDemand>0){this.facetsNeeded=true;this.revision++;this.transport.change();}
+        this.invalidateFacets();if(this.facetsDemand>0){this.revision++;this.transport.change();}
         this.tick();
       }else if(hub.type==='history') {
         const included=hub.data.sources.some(id=>sources.includes(id));
@@ -430,7 +435,7 @@ class BoardPeriod {
         const relevant=included&&(selection.mode==='live'||hub.data.since<selection.to)||own;
         if(relevant){
           this.resourceGeneration++;
-          if(own&&this.facetsDemand>0)this.facetsNeeded=true;
+          if(own)this.invalidateFacets();
           const retired=own&&hub.data.workSince===0||included&&(hub.data.changes?hub.data.changes.some(c=>sources.includes(c.source)&&c.scope==='quota'&&(c.since===0||c.workSince===0)):hub.data.since===0);
           if(retired)this.retireWork();
           if(included&&selection.mode==='range')this.valuesNeeded=true;
@@ -558,7 +563,8 @@ class BoardPeriod {
     this.evaluatedAt=hubNow();this.tapes.clear();for(const [scope,tape] of prepared.tapes)this.tapes.set(scope,tape);
     const selectedFixedPending=PERIOD_SCOPES.filter(scope=>reply[scope]?.state==='complete'&&intent.request.selection.mode==='range'&&(scope==='quota'||scope==='budget'&&intent.request.budget?.work==='1')&&(JSON.stringify(intent.request.workFilter)??'')!==this.filterKey);
     for(const scope of PERIOD_SCOPES){const section=reply[scope];if(section?.state==='complete'&&section.value.tape){if(selectedFixedPending.includes(scope))this.dirtyScopes.add(scope);else this.dirtyScopes.delete(scope);}}
-    if(reply.facets){const part=reply.facets;this.facetsNeeded=false;this.facetState=part.state==='complete'?{value:part.value,loading:false,error:null}:{value:null,loading:false,error:part.error};for(const listener of this.facetListeners)listener();}
+    const staleFacets=!!reply.facets&&intent.facetGeneration!==this.facetGeneration;
+    if(reply.facets&&!staleFacets){const part=reply.facets;this.facetsNeeded=false;this.facetAt=intent.request.evaluatedAt;this.facetState=part.state==='complete'?{value:part.value,loading:false,error:null}:{value:null,loading:false,error:part.error};for(const listener of this.facetListeners)listener();}
     if(reply.values) {
       if(reply.values.state==='complete'){
         changed.add('quota');this.valuesNeeded=false;this.valuesProofEpoch=proofEpoch;for(const value of reply.values.value)this.setValue(value.id,{value,basis:reply.values.basis,loading:false,error:null});
@@ -583,9 +589,9 @@ class BoardPeriod {
     this.publishProjection([...changed]);
     this.retirementAt=intent.request.selection.mode==='live'?prepared.edge+intent.request.selection.periodMs:Infinity;
     this.scheduleClock();
-    // Source-wide summaries remain usable, but cannot complete another cohort's
-    // fixed direct hours. Reconsider even an already completed transport intent.
-    if(selectedFixedPending.length)this.transport.retry();
+    // Source-wide summaries remain usable while direct hours or facet choices need
+    // a newer reply. Reconsider even an already completed transport intent.
+    if(selectedFixedPending.length||staleFacets&&this.facetsDemand>0)this.transport.retry();
   }
   private async planRetirement(){
     if(this.selection.mode!=='live'){this.retirementAt=Infinity;return;}
