@@ -388,6 +388,9 @@ export type Title = {title: string; provider: string};
 
 /** The names worked out lately, by what they were worked out of: the same object for the same names, whoever asks. */
 const titles = new Map<string, Record<string, Title>>();
+// Private updates share the immutable board; every name reader reuses its derivation.
+const titleInputs = new WeakMap<BoardState, WeakMap<Record<string, string>, Record<string, Title>>>();
+const noTitles: Record<string, Title> = {};
 
 /**
  * Every source of the open board named (`titled`): by the owners when that tells them
@@ -396,8 +399,12 @@ const titles = new Map<string, Record<string, Title>>();
  * name changes.
  */
 export function titlesOf(board: BoardState | null, names: Record<string, string> = board?.view.names ?? {}): Record<string, Title> {
-  const named = (board?.lineup ?? []).flatMap(id => {
-    const card = board!.cards[id];
+  if (!board) return noTitles;
+  let inputs = titleInputs.get(board);
+  const cached = inputs?.get(names);
+  if (cached) return cached;
+  const named = board.lineup.flatMap(id => {
+    const card = board.cards[id];
     return card ? [{id, provider: card.provider, owners: card.owners}] : [];
   });
   const key = JSON.stringify([named, names]);
@@ -408,6 +415,8 @@ export function titlesOf(board: BoardState | null, names: Record<string, string>
     if (titles.size >= 4) titles.delete(titles.keys().next().value!);
     titles.set(key, value);
   }
+  if (!inputs) {inputs = new WeakMap(); titleInputs.set(board, inputs);}
+  inputs.set(names, value);
   return value;
 }
 
