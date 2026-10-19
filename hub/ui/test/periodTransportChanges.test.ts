@@ -2,6 +2,8 @@ import * as filterModelBindings from '../../server/domain/dataFilters';
 import * as filterRuntimeBindings from '../lib/filterSelection';
 import * as filterCurveBindings from '../../server/domain/periodCurves';
 import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
+import {publishDataFilters} from '../lib/filterSelection';
+import {fixture as runtimeFixture,flush as runtimeFlush,NOW as runtimeNow} from './periodRuntimeFixture';
 import * as retention from '../../server/domain/periodRetention';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,7 +13,7 @@ import ts from 'typescript';
 import {PeriodTransport,type PeriodIntent} from '../lib/periodTransport';
 import {HistoryPool} from '../lib/historyPool';
 import {HistoryStore} from '../lib/history';
-import {drain} from '../lib/prepare';
+import {drain,Preparations} from '../lib/prepare';
 import {PeriodAccounting} from '../lib/periodAccounting';
 import {PeriodIndex} from '../lib/periodIndex';
 import {PeriodActivity} from '../lib/periodActivity';
@@ -31,6 +33,38 @@ import {EMPTY_VIEW} from '../../server/domain/view';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
 
 const NOW=5_000_000;
+
+for(const failure of ['memory refusal','cancelled preparation'] as const)test('late native evidence survives '+failure+' and recovers through the actual coordinator',async t=>{
+  t.mock.method(Date,'now',()=>runtimeNow);publishDataFilters(defaultFilters(),true);
+  const h=await runtimeFixture(),jobs:(()=>void)[]=[];let pinned=0,time=0;
+  const scheduler=new Preparations({now:()=>++time,post:run=>jobs.push(run)});
+  try{
+    assert.equal(h.period.tapes.get('quota').tape.quota.length,1);
+    h.period.activate(false);const pending=h.hold();h.period.activate(true);await runtimeFlush();
+    assert.equal(h.requests[0].quota?.evidence,undefined,'the held response is a cold native baseline');
+    const resourceGeneration=h.period.intent().resourceGeneration;
+    const filters=defaultFilters();filters.projects={mode:'exclude',values:['Absent B']};publishDataFilters(filters,true);h.period.changed();
+    assert.equal(h.period.intent().resourceGeneration,resourceGeneration,'work selection preserves the resource flight');
+    if(failure==='memory refusal'){
+      pinned=h.pool.budget-100;h.pool.register({get estimatedBytes(){return pinned;},evictionCandidates:()=>[]});
+    }else h.prepareWith(scheduler);
+    pending.release();await runtimeFlush();
+    if(failure==='memory refusal'){
+      assert.equal(h.period.projectionState({range:'1h'},'quota').error,'history_limit');
+      pinned=0;h.requests.length=0;h.period.retryHistory('quota');await runtimeFlush();
+    }else{
+      assert.ok(scheduler.size,'the actual recipient is awaiting preparation');
+      assert.ok(h.pool.estimatedBytes>h.period.estimatedBytes,'cancelled preparation owns real staging');
+      const next=defaultFilters();next.projects={mode:'exclude',values:['Absent C']};publishDataFilters(next,true);h.period.changed();await runtimeFlush();
+      for(let i=0;jobs.length||h.pool.activeFlights;i++){assert.ok(i<1000);jobs.shift()?.();await runtimeFlush();}
+    }
+    assert.equal(h.period.projectionState({range:'1h'},'quota').error,undefined);
+    assert.equal(h.period.tapes.get('quota').tape.quota.length,1,'an unadopted cursor must not turn the retry into an empty native delta');
+    assert.equal(h.requests.filter(body=>body.quota).at(-1)?.quota?.meta,'','unadopted metadata must not suppress the retry baseline either');
+    assert.equal(h.period.tapes.get('quota').accounting.quotaSummary(h.source,'w',{from:runtimeNow-3_600_000,to:runtimeNow}).remainingAtEnd,83);
+    assert.equal(h.pool.estimatedBytes,h.period.estimatedBytes,'rejected and cancelled staging is released');
+  }finally{pinned=0;h.prepareWith(null);await h.close();scheduler.dispose();publishDataFilters(null,false);}
+});
 
 test('final transport admission fails requested extras without sending, losing the predicate, or retrying unchanged intent',async()=>{
   const pool=new HistoryPool(),replies:PeriodReply[]=[];let sent=0;

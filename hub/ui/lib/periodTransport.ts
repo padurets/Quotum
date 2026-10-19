@@ -9,6 +9,7 @@ export type PeriodIntent={board:string;generation:number;resourceGeneration?:num
 type Demand={scope:PeriodScope;query:HistoryQuery;signal?:AbortSignal;resolve(value:HistoryReply):void;reject(error:unknown):void};
 type Flight={role:'visible';intent:PeriodIntent;controller:AbortController;demands:Demand[];ownSlot:boolean;extras:boolean;preparing?:boolean};
 const aborted=()=>new DOMException('Aborted','AbortError');
+const cursorKey=(board:string,scope:PeriodScope,query:HistoryQuery)=>JSON.stringify([board,scope,query.meters,query.unit,query.currency,query.sources]);
 
 /** One event-loop collection combines chart sections with the period's other visible consumers. */
 export class PeriodTransport implements HistoryMember {
@@ -48,13 +49,23 @@ export class PeriodTransport implements HistoryMember {
   private current(intent:PeriodIntent){const current=this.intent();return current?.board===intent.board&&this.key(current)===this.key(intent);}
   private resourcesCurrent(intent:PeriodIntent){const current=this.intent();return current?.board===intent.board&&(intent.resourceGeneration===undefined?this.current(intent):current.resourceGeneration===intent.resourceGeneration);}
   private retire(){for(const flight of this.flights)if(flight.extras&&!this.current(flight.intent)&&!this.resourcesCurrent(flight.intent))this.abort(flight);}
+  private async adopt(reply:PeriodReply,intent:PeriodIntent,flight:Flight){
+    flight.preparing=true;
+    await this.receive(reply,intent,bytes=>this.pool.reserve(flight,bytes));
+    if(flight.controller.signal.aborted||!this.current(intent))return false;
+    // Preparation can reject individual sections. Only adopted evidence can name a later delta.
+    for(const scope of PERIOD_SCOPES){const part=reply[scope],query=intent.request[scope];if(query&&part?.state==='complete'){
+      if(part.value.tape)this.cursors.set(cursorKey(intent.board,scope,query),part.value.tape.cursor);
+      if(part.value.meta)this.metadata.set(scope,{board:intent.board,meters:query.meters,unit:query.unit,currency:query.currency,sources:query.sources,work:query.work,tag:part.value.meta});
+    }}
+    return true;
+  }
   private flush() {
     this.retire();
     const intent=this.intent();if(!intent)return;
     const key=this.key(intent);
     if(this.baselineKey!==key){this.baselineKey=key;this.baselineParts.clear();}
-    const cursorKey=(scope:PeriodScope,query:HistoryQuery)=>JSON.stringify([intent.board,scope,query.meters,query.unit,query.currency,query.sources]);
-    const baseline=PERIOD_SCOPES.some(scope=>intent.request[scope]&&!this.cursors.has(cursorKey(scope,intent.request[scope]!)));
+    const baseline=PERIOD_SCOPES.some(scope=>intent.request[scope]&&!this.cursors.has(cursorKey(intent.board,scope,intent.request[scope]!)));
     // First retain the bounded drawing cells, then its exact evidence. Their full
     // decoded bodies must not coexist while either is still waiting for preparation.
     const extras=(!baseline||!this.queue.length&&!this.flights.size)&&(!!intent.request.values||!!intent.request.sessions||!!intent.request.facets||!!intent.request.sourceWork||!!intent.request.quota||!!intent.request.budget||!!intent.request.funds)&&key!==this.completed&&key!==this.failed&&![...this.flights].some(f=>f.extras&&(this.key(f.intent)===key||this.resourcesCurrent(f.intent)));
@@ -74,7 +85,7 @@ export class PeriodTransport implements HistoryMember {
       for(const part of ['values','sessions','facets'] as const)if(this.baselineParts.has(part))delete body[part];
     }
     for(const scope of PERIOD_SCOPES){const original=body[scope];if(!original)continue;const query=body[scope]={...original};
-      query.evidence??=!extras?'skip':this.cursors.get(cursorKey(scope,query));
+      query.evidence??=!extras?'skip':this.cursors.get(cursorKey(intent.board,scope,query));
       // Drawing readers own their captured basis. Only our evidence-only sections borrow our token.
       if(extras&&!demands.some(demand=>demand.scope===scope)){
         const prior=this.metadata.get(scope);
@@ -94,15 +105,9 @@ export class PeriodTransport implements HistoryMember {
         // A→B→A is three generations. Equal target text does not revive the first response.
         const current=this.intent();
         if(current?.generation===intent.generation&&current.revision===intent.revision) {
-          flight.preparing=true;
-          await this.receive(reply,appliedIntent,bytes=>this.pool.reserve(flight,bytes));
+          const adopted=await this.adopt(reply,appliedIntent,flight);
           if(flight.controller.signal.aborted)return;
-          const latest=this.intent();
-          if(latest?.generation===intent.generation&&latest.revision===intent.revision){if(extras){if(!deferredBaseline)this.completed=key;if(baseline)for(const part of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork'] as const)if(body[part])this.baselineParts.add(part);}
-          for(const scope of PERIOD_SCOPES){const part=reply[scope],query=body[scope];if(query&&part?.state==='complete'){
-            if(part.value.tape)this.cursors.set(cursorKey(scope,query),part.value.tape.cursor);
-            if(part.value.meta)this.metadata.set(scope,{board:intent.board,meters:query.meters,unit:query.unit,currency:query.currency,sources:query.sources,work:query.work,tag:part.value.meta});
-          }}}
+          if(adopted&&extras){if(!deferredBaseline)this.completed=key;if(baseline)for(const part of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork'] as const)if(body[part])this.baselineParts.add(part);}
         }
         else if(this.resourcesCurrent(intent)){
           const current=this.intent()!;
@@ -111,12 +116,8 @@ export class PeriodTransport implements HistoryMember {
           const resources={...reply,sessions:undefined,facets:undefined};
           for(const scope of PERIOD_SCOPES){const part=resources[scope];if(part?.state==='complete'){
             resources[scope]=JSON.parse(JSON.stringify({...part,value:{...part.value,chunks:[]}},(key,value)=>key==='selectedWork'?undefined:value));
-            const query=body[scope];if(query){
-              if(part.value.tape)this.cursors.set(cursorKey(scope,query),part.value.tape.cursor);
-              if(part.value.meta)this.metadata.set(scope,{board:intent.board,meters:query.meters,unit:query.unit,currency:query.currency,sources:query.sources,work:query.work,tag:part.value.meta});
-            }
           }}
-          flight.preparing=true;await this.receive(resources,{...current,request:{...body,sessions:undefined,facets:undefined}},bytes=>this.pool.reserve(flight,bytes));
+          await this.adopt(resources,{...current,request:{...body,sessions:undefined,facets:undefined}},flight);
         }
         for(const demand of demands) {
           const part=reply[demand.scope];
