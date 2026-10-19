@@ -5,6 +5,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {follow,followPan, historyBegins, HistoryStore} from '../lib/history';
 import {HistoryPool} from '../lib/historyPool';
+import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {Pan} from '../lib/pan';
 import {covered} from '../lib/historyPlot';
 import {HistoryTile} from '../lib/historyTiles';
@@ -84,6 +85,27 @@ function harness(budget?: number, preparations?: Preparations, scope?: 'quota'|'
   const start = async () => {store.open('b'); store.hello('run'); store.snapshot(['s'], ['s w']); await flush();};
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
+
+for(const blocked of [false,true])test(`a delayed native-only strip fills without new input when activity is ${blocked?'blocked':'hidden'}`,async()=>{
+  const h=harness(undefined,undefined,'quota');
+  const answer=async(remaining:number)=>{
+    const read=pending(h)[0];assert.ok(read);const chunks:Chunk[]=[];
+    for(let from=read.from;from<read.to;){const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell)),chunk=empty(from,to);chunk.series=[{source:'s',window:'w',hold:H,open:null,cells:[[0,remaining,0,0]]}];chunks.push(chunk);from=to;}
+    await read.answer({chunks});
+  };
+  try{
+    h.store.choose('1h',{from:NOW-H,to:NOW-5*M});await h.start();
+    if(blocked){const filters=defaultFilters();filters.projects={mode:'include',values:Array.from({length:1600},(_,i)=>String(i).padStart(4,'0')+'x'.repeat(60))};h.store.setWorkFilter('large',workFilter(filters));}
+    else{h.store.setActivityActive(false);h.store.setWorkFilter('A');}
+    await flush();await answer(83);
+    h.store.pan({token:1,length:H,from:NOW-4*H,to:NOW-3*H,direction:-1});await flush();
+    const before=h.store.getPlot();assert.ok(before);assert.equal(before.series.length,0);
+    await answer(72);
+    const after=h.store.getPlot();assert.notEqual(after,before);assert.equal(after?.token,1);
+    assert.equal(after?.series.length,1);assert.ok(after!.coverage.length);assert.equal(h.store.getActivityPlot(),null);
+    if(blocked)assert.equal(h.store.get().error,'filters_limit');
+  }finally{h.store.close();}
+});
 
 test('selected activity COW refusal retains native buffers and recovers under the same real pool budget',async()=>{
   const pool=new HistoryPool(100_000),h=harness(undefined,undefined,'quota',pool);let pinned=0;

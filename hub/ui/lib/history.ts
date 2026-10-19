@@ -583,8 +583,8 @@ export class HistoryStore {
     const tiles = [...(this.grids.get(strip.cell)?.values() ?? [])].filter(t => t.readTo > t.readFrom && t.readTo > strip.k0 * strip.cell && t.readFrom <= strip.k1 * strip.cell).sort((a, b) => a.from - b.from);
     const separate=this.scope==='quota'&&(this.workKey!==undefined||!this.wantsActivity);
     const nativeTiles=separate?[...(this.grids.get(strip.cell)?.values()??[])].filter(t=>t.nativeTo>t.nativeFrom&&t.nativeTo>strip.k0*strip.cell&&t.nativeFrom<=strip.k1*strip.cell).sort((a,b)=>a.from-b.from):tiles;
-    const identity = `${this.epoch}:${this.interest?.token ?? this.plot?.token}:${strip.cell}:${strip.k0}:${strip.k1}:${this.windowsKey}:${this.cutTo}:${JSON.stringify(this.meta.known)}:${tiles.map(tile => `${tile.from},${tile.writeSeq},${tile.readFrom},${tile.readTo}`).join(';')}`;
     const nativeIdentity=JSON.stringify([this.nativeVersion,this.interest?.token,strip.cell,strip.k0,strip.k1,this.windowsKey,this.cutTo,nativeTiles.map(tile=>[tile.from,tile.nativeSeq,tile.nativeFrom,tile.nativeTo])]);
+    const identity = `${this.epoch}:${this.interest?.token ?? this.plot?.token}:${strip.cell}:${strip.k0}:${strip.k1}:${this.windowsKey}:${this.cutTo}:${JSON.stringify(this.meta.known)}:${tiles.map(tile => `${tile.from},${tile.writeSeq},${tile.readFrom},${tile.readTo}`).join(';')}:${separate?nativeIdentity:''}`;
     this.plotVersion = this.version;
     if (identity === this.plotIdentity) return;
     this.plotIdentity = identity;
