@@ -21,7 +21,15 @@ function moneyPage(broken?: 'blank' | 'scale' | 'slow-quota') {
   const balance='[data-widget="budget-history"]';
   const panel={querySelector:(child:string)=>child==='.chart>svg'?root:null,querySelectorAll:()=>broken==='blank'?[]:[line]};
   const context = {
-    localStorage: {getItem: () => '{}', setItem: (_key: string, value: string) => {ids = JSON.parse(value).money.selected.USD;}},
+    localStorage: {getItem: () => '{}', setItem: () => {}},
+    URL,location:{href:'https://fixture.invalid/?board=board'},
+    fetch:async(path:string,init?:{body:string})=>{
+      if(path==='/api/session')return {json:async()=>({user:{id:'user'},boards:[]})};
+      if(!init)return {json:async()=>({filters:{version:1},revision:1,authority:'fixture-authority'})};
+      const {filters}=JSON.parse(init.body);
+      ids=filters.wallet.values.map((ref:{source:string;kind:string;key?:string})=>[ref.source,ref.kind==='keyCap'?'key:'+ref.key+':cap':'balance']);
+      return {ok:true,status:200};
+    },
     Date: {now: () => frame * 16},
     requestAnimationFrame: (callback: (stamp: number) => void) => queueMicrotask(() => callback(++frame * 16)),
     document: {

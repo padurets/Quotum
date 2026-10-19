@@ -36,18 +36,33 @@ export async function frequencyKeys(cdp: Cdp) {
 /** Each phase keeps its intended monetary selection across the page reload. */
 export async function selectMoney(cdp: Cdp, ids: [string, string][], family:'budget'|'funds'='budget') {
   const panel=family==='funds'?'[data-widget="subscription-funds"]':'[data-widget="budget-history"]';
-  await cdp.evaluate(`(() => {
+  const draft=await cdp.evaluate<string>(`(async () => {
     const prefs = JSON.parse(localStorage.getItem('quotum.prefs') || '{}');
-    prefs.${family==='funds'?'funds':'money'} = {version:1,unit: 'USD', selected: {USD: ${JSON.stringify(ids)}}};
+    prefs.${family==='funds'?'funds':'money'} = {...prefs.${family==='funds'?'funds':'money'},version:1,unit:'USD'};
     prefs.muted = {};
     localStorage.setItem('quotum.prefs', JSON.stringify(prefs));
+    const session=await (await fetch('/api/session')).json(),board=new URL(location.href).searchParams.get('board')??session.boards.find(board=>board.personal)?.id;
+    if(!board||!session.user)throw new Error('money selection needs its authenticated board');
+    const url='/api/boards/'+encodeURIComponent(board)+'/filters',saved=await (await fetch(url)).json(),filters=saved.filters,ids=${JSON.stringify(ids)};
+    if(${JSON.stringify(family)}==='funds'){
+      filters.funds={mode:'include',values:[...new Set(ids.map(([source])=>source))]};
+    }else{
+      filters.wallet={mode:'only',values:ids.map(([source,meter])=>{const key=/^key:([^:]+):cap$/.exec(meter.replace(/^fx:[^:]+:/,''));return key?{source,kind:'keyCap',key:key[1]}:{source,kind:'balance'};})};
+    }
+    const response=await fetch(url,{method:'PUT',headers:{'content-type':'application/json','If-Match':'"'+saved.revision+'"'},body:JSON.stringify({filters,authority:saved.authority,replace:[${JSON.stringify(family==='funds'?'funds':'wallet')}]})});
+    if(!response.ok)throw new Error('money selection save failed: '+response.status);
+    return 'quotum.filters.'+JSON.stringify([session.user.id,board]);
   })()`);
+  // The old tab can receive its saved defaults before reload; clear only this
+  // benchmark tab's draft before the new document initializes its filter store.
+  const clearing=await cdp.send<{identifier:string}>('Page.addScriptToEvaluateOnNewDocument',{source:`sessionStorage.removeItem(${JSON.stringify(draft)})`});
   const loaded = new Promise<void>((resolve, reject) => {
     const late = setTimeout(() => reject(new Error('money view reload did not finish')), 5000);
     cdp.on('Page.loadEventFired', () => {clearTimeout(late); resolve();});
   });
   await cdp.send('Page.reload');
   await loaded;
+  if(clearing?.identifier)await cdp.send('Page.removeScriptToEvaluateOnNewDocument',{identifier:clearing.identifier});
   await cdp.evaluate(`(async () => {
     const end = Date.now() + 5000;
     let previous = '', stable = 0;

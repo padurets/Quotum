@@ -21,6 +21,7 @@ import {Store} from '../server/store/store.js';
 import {Directory} from '../server/store/directory.js';
 import type {Stand} from '../demo/setup.js';
 import type {Meter} from '../server/domain/meters.js';
+import {moneyFamily,providerOf} from '../server/domain/providers.js';
 
 /** Independently measured balances keep the monetary plot real at every pan edge. */
 export function seedPanningBudgets(file:string,stand:Stand) {
@@ -40,6 +41,9 @@ export function seedPanningBudgets(file:string,stand:Stand) {
       }
       const view=directory.view(owner.personalBoard);view.names[source]=index>=12?`Subscription funds ${index-11}`:`Budget ${index+1}`;directory.saveView(owner.personalBoard,view,owner.id,now);
     }
+    const saved=directory.filtersState(owner.personalBoard).filters;
+    saved.wallet={mode:'only',values:store.sources(owner.personalBoard).filter(source=>moneyFamily(providerOf(source.provider))==='budget').map(source=>({source:source.id,kind:'balance'}))};
+    directory.saveFilters(owner.personalBoard,saved,owner.id,now);
     store.db.exec('COMMIT');
   }catch(error){store.db.exec('ROLLBACK');throw error;}finally{store.close();}
 }

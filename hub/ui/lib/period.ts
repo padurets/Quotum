@@ -285,7 +285,7 @@ class BoardPeriod {
       ...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{}),
       ...(pending&&this.facetsDemand>0&&this.facetsNeeded?{facets:true as const}:{}),
       ...(filters&&this.selection.mode==='live'&&(queries.quota||queries.budget?.work==='1')?{sourceWork:{...(this.sourceCursor?{cursor:this.sourceCursor}:{})}}:{})};
-    if(this.workLimit||jsonBytes(request)>76*1024){delete request.sessions;delete request.facets;delete request.workFilter;}
+    if(this.workLimit||jsonBytes(request)>76*1024){delete request.sessions;delete request.workFilter;}
     return {board:board.id,generation:this.generation,resourceGeneration:this.resourceGeneration,revision:this.revision,proofEpoch:this.proofEpoch,request};
   }
   private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
@@ -326,9 +326,10 @@ class BoardPeriod {
     const filters=effectiveFilters(),nextFilter=filters?JSON.stringify(workFilter(filters)):'';
     const selectedChanged=nextFilter!==this.filterKey;this.filterKey=nextFilter;
     const sources=board.lineup.filter(id=>!filters||matchesSource(filters,id));
-    this.workLimit=!!filters&&jsonBytes({version:1,selection,evaluatedAt:hubNow(),sessions:{cursor:'x'.repeat(2048)},workFilter:workFilter(filters)})>76*1024;
+    const queries=this.queries(board,evaluatedRange(selection,hubNow()));
+    this.workLimit=!!filters&&jsonBytes({version:1,selection,evaluatedAt:hubNow(),...queries,sessions:{cursor:'x'.repeat(2048)},sourceWork:{cursor:'x'.repeat(2048)},facets:true,workFilter:workFilter(filters)})>76*1024;
     const wantsWork=!this.workLimit&&(sources.length>0||[AGENTS,ACTIVITY].some(id=>widgetVisible(board.view,id,board.lineup.length)));
-    const scopeKeys=Object.fromEntries(Object.entries(this.queries(board,evaluatedRange(selection,hubNow()))).map(([scope,query])=>[scope,this.queryKey(query,scope as PeriodScope)]));
+    const scopeKeys=Object.fromEntries(Object.entries(queries).map(([scope,query])=>[scope,this.queryKey(query,scope as PeriodScope)]));
     const changedScopes=PERIOD_SCOPES.filter(scope=>scopeKeys[scope]!==this.scopeKeys[scope]);
     const resourceIdentity=JSON.stringify([board.id,periodKey(selection),scopeKeys,board.workAuthority]);
     if(resourceIdentity!==this.resourceIdentity){this.resourceIdentity=resourceIdentity;this.resourceGeneration++;}
