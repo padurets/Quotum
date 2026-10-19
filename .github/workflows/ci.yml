@@ -492,6 +492,7 @@ jobs:
           import assert from 'node:assert/strict';
           import {createHash} from 'node:crypto';
           import {spawn} from 'node:child_process';
+          import {createServer} from 'node:http';
           import {readFile, writeFile, mkdir, readdir, readlink, open, stat} from 'node:fs/promises';
           import {constants} from 'node:fs';
           import path from 'node:path';
@@ -504,18 +505,20 @@ jobs:
           const hash=b=>createHash('sha256').update(b).digest('hex');
           const save=async(name,value)=>{const b=Buffer.from(JSON.stringify(value,null,2)+'\n');assert(b.length<=8*1024*1024);await writeFile(path.join(out,name+'.json'),b,{flag:'wx'});};
           await mkdir(out,{recursive:true});
-          const [{launchChrome},{RunOwner},{openTab,findChrome},{processIdentity}]=await Promise.all(
-            ['chrome','runOwner','cdp','browserProcess'].map(name=>import(pathToFileURL(path.join(root,'hub/bench',name+'.ts')))));
+          const [{launchChrome},{RunOwner},{openTab,findChrome},{processIdentity},{deadline}]=await Promise.all(
+            ['chrome','runOwner','cdp','browserProcess','deadline'].map(name=>import(pathToFileURL(path.join(root,'hub/bench',name+'.ts')))));
           const owner=new RunOwner(), results={mode:'method-calibration',status:'insufficient-evidence',limits:[
             'No dashboard performance or historical cause proof',
             'Function-code container only, not inlining leaf or exclusive function CPU',
             'Logging disables code compaction; observer effects remain unknown',
             'Map has no independent completeness footer; no claim of a complete native ledger']};
-          let browser,cdp,helper,helperExit,helperPid,helperEnded=false,invalidated=false;
+          let browser,cdp,helper,helperExit,helperPid,helperEnded=false,invalidated=false,fixture,pageUrl,assetUrl,armed=false;
+          const fixtureAbort=new AbortController();let fixtureListen;
           const rows=[],waiters=[],helperRaw=[],helperErr=[];let bytes=0,partial='',helperFailure;
           let cancelled=false;
           const cancel=()=>{
             cancelled=true;invalidated=true;helper?.stdin.destroy();
+            fixtureAbort.abort();
             for(const item of waiters.splice(0)){clearTimeout(item.timer);item.reject(Error('control-cancelled'));}
             void owner.close().catch(()=>{});
           };
@@ -546,24 +549,29 @@ jobs:
               window.__nativeSink=s; return {value:s,done:true};
             }
             return {A:calibrationA,B:calibrationB};
-          })();
-          //# sourceURL=quotum-native-calibration.js`;
+          })();`;
           const contexts=new Map(),invalidations=[];
           const invalidate=kind=>{invalidated=true;invalidations.push(kind);};
+          function nativeMain(events,pid){
+            const names=events.filter(e=>e.name==='thread_name'&&e.pid===pid&&e.args?.name==='CrRendererMain');
+            assert.equal(names.length,1);assert.equal(names[0].tid,pid);
+            assert(events.filter(e=>e.name==='thread_name'&&e.pid===pid&&e.tid===pid).every(e=>e.args?.name==='CrRendererMain'));
+            return names[0].tid;
+          }
           const readIdentity=async pid=>{
             const value=processIdentity(pid,await readFile(`/proc/${pid}/stat`,'utf8'));assert(value);return value;
           };
-          async function identity(pid,group){
+          async function identity(pid,group,mainTid){
             const before=await readIdentity(pid), status=await readFile(`/proc/${pid}/status`,'utf8');
             assert(before.group===group&&before.session===group&&before.state!=='Z');
             const uid=status.match(/^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)$/m);assert(uid&&uid.slice(1).every(x=>Number(x)===process.getuid()));
             assert(Number(status.match(/^Tgid:\s+(\d+)$/m)?.[1])===pid);
             assert((await readlink(`/proc/${pid}/ns/pid`))===await readlink('/proc/self/ns/pid'));
-            const tids=await readdir(`/proc/${pid}/task`);assert(tids.length<100);
-            const mains=[];for(const tid of tids)if((await readFile(`/proc/${pid}/task/${tid}/comm`,'utf8')).trim()==='CrRendererMain')mains.push(Number(tid));
-            assert.deepEqual(mains,[pid]);
+            assert.equal(mainTid,pid);
+            const task=processIdentity(mainTid,await readFile(`/proc/${pid}/task/${mainTid}/stat`,'utf8'));assert(task&&task.birth===before.birth);
+            const taskStatus=await readFile(`/proc/${pid}/task/${mainTid}/status`,'utf8');assert(Number(taskStatus.match(/^Tgid:\s+(\d+)$/m)?.[1])===pid);
             const after=await readIdentity(pid);assert.equal(after.birth,before.birth);
-            return {pid,group,session:before.session,birth:before.birth,mainTid:pid,uid:process.getuid(),namespaceEqual:true};
+            return {pid,group,session:before.session,birth:before.birth,mainTid,taskBirth:task.birth,uid:process.getuid(),namespaceEqual:true};
           }
           async function trace(stage){
             const events=[];let size=0,complete;
@@ -576,11 +584,11 @@ jobs:
               await Promise.race([done,wait(2000).then(()=>{throw Error('trace-drain-deadline');})]);
             }finally{cdp.off('Tracing.dataCollected',collected);cdp.off('Tracing.tracingComplete',complete);}
             await save('trace-'+stage,events);
-            const tree=await cdp.send('Page.getFrameTree',{},owner.signal), frame=tree.frameTree?.frame;assert(frame?.id&&frame.url==='about:blank');
+            const tree=await cdp.send('Page.getFrameTree',{},owner.signal), frame=tree.frameTree?.frame;assert(frame?.id&&frame.url===pageUrl);
             const frames=events.filter(e=>e.name==='TracingStartedInBrowser').flatMap(e=>e.args?.data?.frames??[])
               .filter(f=>f.frame===frame.id&&f.isOutermostMainFrame===true&&f.isInPrimaryMainFrame===true);
             assert.equal(frames.length,1);assert(Number.isSafeInteger(frames[0].processId)&&frames[0].processId>1);
-            return {frame:frame.id,loader:frame.loaderId??null,pid:frames[0].processId};
+            return {frame:frame.id,loader:frame.loaderId??null,pid:frames[0].processId,mainTid:nativeMain(events,frames[0].processId)};
           }
           async function mapRead(pid,stage){
             const file=await open(path.join(out,'maps',`perf-${pid}.map`),constants.O_RDONLY|constants.O_NOFOLLOW);
@@ -592,6 +600,15 @@ jobs:
             }finally{await file.close();}
           }
           try{
+            const requests={page:0,script:0,other:0};
+            fixture=createServer((request,response)=>{
+              if(request.url==='/calibration.js'){requests.script++;response.setHeader('Content-Type','text/javascript; charset=utf-8');response.end(source);}
+              else if(request.url==='/'){requests.page++;response.setHeader('Content-Type','text/html; charset=utf-8');response.end('<!doctype html><script src="/calibration.js"></script>');}
+              else{requests.other++;response.statusCode=404;response.end();}
+            });
+            fixtureListen=new Promise((resolve,reject)=>{fixture.once('error',reject);fixture.once('close',()=>reject(Error('fixture-closed-before-listen')));fixture.listen({port:0,host:'127.0.0.1',signal:fixtureAbort.signal},resolve);});
+            await deadline(1000,async()=>fixtureListen,owner.signal);
+            pageUrl='http://127.0.0.1:'+fixture.address().port+'/';assetUrl=pageUrl+'calibration.js';
             const maps=path.join(out,'maps');await mkdir(maps,{recursive:false});
             const chrome=findChrome(process.env);assert(chrome&&path.isAbsolute(chrome));
             const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
@@ -603,14 +620,28 @@ jobs:
             const runtime=await cdp.send('Browser.getVersion',{},owner.signal);
             assert(runtime.product==='Chrome/155.0.8059.39'&&runtime.jsVersion==='15.5.35.20'&&runtime.revision.replace(/^@/,'')==='3ff7ac5a9224be9156d7f8703a06e22890aafd34');
             cdp.on('Runtime.executionContextCreated',e=>{if(contexts.size>=16)invalidate('context-cap');else contexts.set(e.context.id,e.context);});
-            cdp.on('Runtime.executionContextDestroyed',()=>invalidate('context-destroyed'));
-            cdp.on('Runtime.executionContextsCleared',()=>invalidate('contexts-cleared'));
-            for(const name of ['Page.frameNavigated','Page.frameDetached','Inspector.detached','Inspector.targetCrashed'])cdp.on(name,()=>invalidate(name));
+            cdp.on('Runtime.executionContextDestroyed',e=>{contexts.delete(e.executionContextId);if(armed)invalidate('context-destroyed');});
+            cdp.on('Runtime.executionContextsCleared',()=>{contexts.clear();if(armed)invalidate('contexts-cleared');});
+            for(const name of ['Page.frameNavigated','Page.frameDetached','Inspector.detached','Inspector.targetCrashed'])cdp.on(name,()=>{if(armed)invalidate(name);});
             await cdp.send('Page.enable',{},owner.signal);await cdp.send('Runtime.enable',{},owner.signal);
-            await cdp.evaluate(source,owner.signal);
+            const responses=[];cdp.on('Network.responseReceived',e=>{if(e.type==='Script'&&e.response?.url===assetUrl){if(responses.length>=4)invalidate('response-cap');else responses.push({requestId:e.requestId,status:e.response.status,url:e.response.url});}});
+            cdp.on('Network.requestWillBeSent',e=>{if(e.request?.url===assetUrl&&e.redirectResponse)invalidate('script-redirect');});
+            await cdp.send('Network.enable',{},owner.signal);
+            await cdp.send('Page.setLifecycleEventsEnabled',{enabled:true},owner.signal);
+            let loaded,navigation;const loads=[],loading=new Promise(resolve=>{loaded=resolve;});
+            const onLoad=e=>{if(e.name!=='load')return;if(loads.length>=16)invalidate('load-cap');else loads.push(e);if(navigation&&e.loaderId===navigation.loaderId&&e.frameId===navigation.frameId)loaded();};
+            cdp.on('Page.lifecycleEvent',onLoad);
+            try{
+              await deadline(5000,async signal=>{
+                navigation=await cdp.send('Page.navigate',{url:pageUrl},signal);assert(navigation.frameId&&navigation.loaderId&&!navigation.errorText);
+                if(loads.some(e=>e.loaderId===navigation.loaderId&&e.frameId===navigation.frameId))loaded();
+                await loading;
+              },owner.signal);
+            }finally{cdp.off('Page.lifecycleEvent',onLoad);}
+            assert(await cdp.evaluate('Boolean(window.__nativeCalibration)',owner.signal));armed=true;
             // Warm both functions equally outside either sampling window.
             await cdp.evaluate('window.__nativeCalibration.A(100);window.__nativeCalibration.B(100);true',owner.signal);
-            const first=await trace('before'), expected=await identity(first.pid,launched.pid);
+            const first=await trace('before'), expected=await identity(first.pid,launched.pid,first.mainTid);
             const own=await browser.observeProcesses(owner.signal);assert(own.some(p=>p.pid===first.pid&&p.birth===expected.birth));
             const mapBefore=await mapRead(first.pid,'before');
             owner.signal.throwIfAborted();assert(!cancelled&&!invalidated);
@@ -644,8 +675,11 @@ jobs:
             helper.stdin.end('end\n');const ended=await event('end');const exit=await helperExit;helperEnded=true;assert.deepEqual(exit,{code:0,signal:null});assert(!helperFailure&&!partial);assert.equal(stderrBytes,0);
             assert.equal(ended.lost,0);assert.equal(ended.throttled,0);assert.equal(ended.overflow,0);results.helper.end=ended;
             const mapAfter=await mapRead(first.pid,'after');assert.equal(mapAfter.dev,mapBefore.dev);assert.equal(mapAfter.ino,mapBefore.ino);assert(mapAfter.bytes.subarray(0,mapBefore.bytes.length).equals(mapBefore.bytes));
-            const last=await trace('after');assert.deepEqual(last,first);assert.deepEqual(await identity(first.pid,launched.pid),expected);assert(!invalidated);
-            const parsed=[];cdp.on('Debugger.scriptParsed',e=>{if(e.url==='quotum-native-calibration.js')parsed.push(e);});
+            const last=await trace('after');assert.deepEqual(last,first);assert.deepEqual(await identity(first.pid,launched.pid,last.mainTid),expected);assert(!invalidated);
+            assert.equal(responses.length,1);assert.equal(requests.script,1);assert.equal(requests.page,1);
+            assert.equal(responses[0].status,200);assert.equal(responses[0].url,assetUrl);
+            const body=await cdp.send('Network.getResponseBody',{requestId:responses[0].requestId},owner.signal);assert.equal(body.base64Encoded,false);assert.equal(body.body,source);
+            const parsed=[];cdp.on('Debugger.scriptParsed',e=>{if(e.url===assetUrl)parsed.push(e);});
             await cdp.send('Debugger.enable',{},owner.signal);assert.equal(parsed.length,1);assert.equal(parsed[0].hash.toLowerCase(),hash(source));
             const mainContext=contexts.get(parsed[0].executionContextId);assert(mainContext?.auxData?.isDefault===true&&mainContext.auxData.frameId===first.frame);
             const received=await cdp.send('Debugger.getScriptSource',{scriptId:parsed[0].scriptId},owner.signal);assert.equal(received.scriptSource,source);
@@ -660,13 +694,14 @@ jobs:
             }
             await cdp.send('Runtime.releaseObjectGroup',{objectGroup:'native-calibration-location'},owner.signal);
             await cdp.send('Debugger.disable',{},owner.signal);
-            results.binding={runtime,frame:first,process:expected,source:{bytes:Buffer.byteLength(source),sha256:hash(source),parsed,locations},mapBefore:{bytes:mapBefore.bytes.length,sha256:mapBefore.sha256},mapAfter:{bytes:mapAfter.bytes.length,sha256:mapAfter.sha256}};
+            results.binding={runtime,frame:first,process:expected,source:{url:assetUrl,bytes:Buffer.byteLength(source),sha256:hash(source),receivedHash:hash(body.body),requests,parsed,locations},mapBefore:{bytes:mapBefore.bytes.length,sha256:mapBefore.sha256},mapAfter:{bytes:mapAfter.bytes.length,sha256:mapAfter.sha256}};
             const parseMap=bytes=>bytes.toString('utf8').trimEnd().split('\n').map(line=>{
               assert(Buffer.byteLength(line)<4096);const m=/^([a-f0-9]+) ([a-f0-9]+) (.+)$/i.exec(line);assert(m);return {start:BigInt('0x'+m[1]),end:BigInt('0x'+m[1])+BigInt('0x'+m[2]),label:m[3]};
             });
             const ranges=parseMap(mapAfter.bytes),existing=new Set(mapBefore.bytes.toString('utf8').trimEnd().split('\n'));
             const samples=rows.filter(r=>r.kind==='sample');assert(samples.length<=8192);assert.equal(samples.length,ended.samples);await save('samples',samples);
             const names={A:'calibrationA',B:'calibrationB'}, classified=[];
+            const functionLabel=new RegExp('^JS:[^ ]*(calibration[AB]) '+assetUrl.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+':(\\d+):(\\d+)$');
             for(const sample of samples){
               assert(['A','B'].includes(sample.phase)&&/^\d+$/.test(sample.time)&&/^\d+$/.test(sample.period));
               assert(sample.pid===first.pid&&sample.tid===first.pid&&/^[a-f0-9]+$/i.test(sample.ip));
@@ -675,7 +710,7 @@ jobs:
               // A later code creation cannot retroactively name an earlier instruction.
               const prior=owners.length===1&&existing.has(owners[0].start.toString(16)+' '+(owners[0].end-owners[0].start).toString(16)+' '+owners[0].label);
               const label=prior?owners[0].label:null;
-              const m=label&&/^(?:LazyCompile|Function):[^ ]*(calibration[AB]) quotum-native-calibration\.js:(\d+):(\d+)$/.exec(label);
+              const m=label&&functionLabel.exec(label);
               let name=m?.[1]??null;
               if(m){const phase=m[1]==='calibrationA'?'A':'B';if(Number(m[2])!==locations[phase].line||Number(m[3])!==locations[phase].column)name=null;}
               classified.push({phase:sample.phase,ip:sample.ip,owners:owners.length,name,label});
@@ -695,6 +730,15 @@ jobs:
             if(helper&&!helperEnded){helper.stdin.destroy();const exit=await Promise.race([helperExit,wait(11000).then(()=>null)]);results.helperCleanup={exit,pid:helperPid??null};if(!exit)results.status='cleanup-unconfirmed';}
             for(const item of waiters.splice(0)){clearTimeout(item.timer);item.reject(Error('control-cleanup'));}
             try{await owner.close();results.browserCleanup=browser?.launchReport();}catch{results.status='cleanup-unconfirmed';results.browserCleanup={failures:owner.failures};}
+            if(fixture){try{
+              fixtureAbort.abort();
+              await deadline(1500,async()=>{
+                await fixtureListen?.catch(()=>{});
+                const stopped=new Promise((resolve,reject)=>fixture.close(error=>error&&error.code!=='ERR_SERVER_NOT_RUNNING'?reject(error):resolve()));
+                fixture.closeAllConnections();await stopped;
+              });
+              assert(!fixture.listening);results.fixtureCleanup='closed';
+            }catch{results.status='cleanup-unconfirmed';results.fixtureCleanup='unknown';}}
             clearTimeout(outerDeadline);process.off('SIGTERM',cancel);process.off('SIGINT',cancel);
             if(helper){await writeFile(path.join(out,'helper-raw.log'),Buffer.concat(helperRaw),{flag:'wx'});await writeFile(path.join(out,'helper-stderr.log'),Buffer.concat(helperErr),{flag:'wx'});}
             if(cancelled)results.status='cancelled';
