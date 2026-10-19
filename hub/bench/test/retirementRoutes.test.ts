@@ -47,7 +47,41 @@ test('real retirement routes distinguish one incremental index from one complete
   assert.deepEqual(report.rows.map((r:any)=>({samples:r.samples,attempts:r.attempts,builds:r.builds,fallback:r.fallback,published:r.published})),[
     {samples:31,attempts:1,builds:0,fallback:0,published:true},{samples:31,attempts:1,builds:1,fallback:1,published:true},{samples:32,attempts:0,builds:0,fallback:0,published:true},
   ]);
+  const accepted={proofMatches:true,activitySame:true,knownSame:true,prefixColumns:true,spentZero:true,workedZero:true,duringZero:true};
+  assert.deepEqual(report.rows[0].firstGuard,accepted);
+  assert.deepEqual(report.rows[1].firstGuard,{...accepted,spentZero:false});
+  assert.equal(report.rows[2].firstGuard,undefined,'an unchanged index has no retirement guard reading');
   assert.deepEqual(safeEvidence(report),report,'only fixed classifications, booleans and counts leave the page');
+});
+
+for(const field of ['activity','known','worked','during','column'])test('actual fallback identifies the first retirement guard for '+field,()=>{
+  const h=fixture(),index=(h.prior as any).quota.get('private source 0\nw');
+  if(field==='activity')index.activity={};
+  else if(field==='known')index.known=0;
+  else if(field==='column')index.spent=new Float64Array(32);
+  else index[field]={length:32,base:1,values:null};
+  h.probe.start();
+  try{
+    h.run();const report=h.probe.stop(),guard=report.rows[0].firstGuard;
+    assert.equal(report.status,'complete');assert.equal(report.rows[0].builds,1,'the actual guard rejects incremental retirement');
+    const expected={proofMatches:true,activitySame:true,knownSame:true,prefixColumns:true,spentZero:true,workedZero:true,duringZero:true};
+    if(field==='activity')expected.activitySame=false;
+    else if(field==='known')expected.knownSame=false;
+    else if(field==='column')expected.prefixColumns=false;
+    else if(field==='worked')expected.workedZero=false;
+    else expected.duringZero=false;
+    assert.deepEqual(guard,expected);assert.deepEqual(safeEvidence(report),report);
+  }finally{h.probe.stop();}h.restored();
+});
+
+test('passing the first guard does not claim that later guards permit retirement',()=>{
+  const h=fixture(),index=(h.prior as any).quota.get('private source 0\nw');
+  index.deadlines={length:32,base:NaN,values:null};h.probe.start();
+  try{
+    h.run();const report=h.probe.stop();assert.equal(report.status,'complete');
+    assert.equal(report.rows[0].builds,1);assert.ok(Object.values(report.rows[0].firstGuard).every(value=>value===true));
+    assert.match(report.kind,/later guards remain unknown/);
+  }finally{h.probe.stop();}h.restored();
 });
 
 test('factory wrapping returns the original lazy iterator and preserves cancellation value',()=>{

@@ -1,5 +1,6 @@
 import type {Cdp} from './cdp.js';
 import {deadline} from './deadline.js';
+import {numberAt,SAMPLE_WIDTH} from '../server/domain/periodTape.js';
 
 /** Collect only after a completed reading; observer failures never replace its original error. */
 export async function observePreparations<T>(read:()=>Promise<T>,cdp:Pick<Cdp,'evaluate'>,evidence:{save(name:string,value:unknown):void},name:'idle-retirement-routes'|'idle-preparation-owners',signal?:AbortSignal){
@@ -18,6 +19,7 @@ export async function observePreparations<T>(read:()=>Promise<T>,cdp:Pick<Cdp,'e
 /** Count actual retirement factory routes without advancing or wrapping their iterators. */
 export function retirementRoutesScript() {
   return `pool=>{
+    const numberAt=${numberAt.toString()},width=${SAMPLE_WIDTH};
     let started=false,stopped=false,active=false,invalid=0,omitted=0,retirementCalls=0,unmatched=0,member,opening,accountingRef,call;
     let keys=new WeakMap(),rows=[],restores=[];
     const cap=2048;
@@ -56,7 +58,18 @@ export function retirementRoutesScript() {
       }else{
         if(!call){unmatched++;return;}
         const row=keys.get(args[0]);if(!row){unmatched++;return;}
-        if(kind==='attempt')row.attempts++;else{row.builds++;if(args[3]?.series===args[0])row.reuses++;}
+        if(kind==='attempt'){
+          row.attempts++;
+          const [series,activity,known,prior,tail]=args;
+          row.firstGuard={
+            proofMatches:tail.removed===1&&tail.before===prior.series&&tail.after===series
+              &&'columns' in prior.series.samples&&'columns' in series.samples
+              &&prior.series.samples.length/width===series.samples.length/width+1,
+            activitySame:prior.activity===activity,knownSame:Object.is(prior.known,known),
+            prefixColumns:['spent','worked','during'].every(key=>'base' in prior[key]),
+            spentZero:Object.is(numberAt(prior.spent,1),0),workedZero:Object.is(numberAt(prior.worked,1),0),duringZero:Object.is(numberAt(prior.during,1),0),
+          };
+        }else{row.builds++;if(args[3]?.series===args[0])row.reuses++;}
       }
     };
     const wrap=(target,name,kind)=>{
@@ -111,7 +124,7 @@ export function retirementRoutesScript() {
         }catch{invalid++;}
         finally{for(const restore of restores.reverse())try{restore();}catch{invalid++;}restores=[];}
         const shape=retirementCalls===1&&!!call&&call.tails>0&&call.retiring&&call.preparing&&call.fallbackCalls===1&&rows.length>0
-          &&rows.every(row=>row.published&&row.attempts===(row.tail?1:0)&&row.fallback<=1&&row.builds===row.fallback&&row.reuses<=row.builds&&(!row.tail||!row.reuses));
+          &&rows.every(row=>row.published&&row.attempts===(row.tail?1:0)&&row.fallback<=1&&row.builds===row.fallback&&row.reuses<=row.builds&&(!row.tail||!row.reuses&&!!row.firstGuard));
         const complete=started&&!invalid&&!omitted&&basisSame&&finished&&published&&shape;
         const report={mode:'diagnostic',status:complete?'complete':'insufficient-evidence',started,stopped,invalid,omitted,unmatched,
           basisSame,settled:finished,published,retirementCalls,tails:call?.tails??null,fallbackCalls:call?.fallbackCalls??0,rows,
@@ -119,7 +132,7 @@ export function retirementRoutesScript() {
           tailFullBuilds:complete?rows.filter(row=>row.tail&&row.builds).length:null,
           nonTailBuildCalls:complete?rows.filter(row=>!row.tail&&row.builds).length:null,
           quotaPrepareCalls:rows.reduce((sum,row)=>sum+row.builds,0),
-          kind:'Factory routes and admitted input counts only. No iterator advancement or CPU-cost attribution; observer overhead is unqualified.'};
+          kind:'Factory routes, input counts and first-guard operands only; later guards remain unknown. No iterator advancement or CPU-cost attribution; observer overhead is unqualified.'};
         keys=new WeakMap();member=opening=accountingRef=call=undefined;rows=[];
         return report;
       }

@@ -246,6 +246,10 @@ retirement factory calls through already admitted accounting objects, returning 
 original iterators without advancing or wrapping them. At most 2,048 rows identify
 one-tail incremental accounting and full-build fallback separately from non-tail
 preparations that may reuse observations. Other accounting factories stay separate.
+Each retirement attempt also records the first guard's proof, curve identity,
+knowledge boundary, prefix representation and zero-prefix checks as booleans, using
+the production numeric decoder. These describe factory-entry inputs; passing them
+does not establish that later deadline and integer guards pass.
 A complete route receipt requires one retirement, valid unchanged basis, settled
 boundaries and the exact published tape and indices. Missing runtime, cancellation,
 replacement, omitted rows or observer errors remain insufficient evidence. Exact
