@@ -111,7 +111,7 @@ test('money preparation keeps cold history reusable across cached return and rep
     const reply=fresh[expectedScope];assert.equal(reply?.state,'complete');const tape=reply.value.tape;assert.ok(tape);
     for(const row of tape.quota){row.samples=drain(retainSamplesPrepared(row.samples,row.samplesEncoding==='delta'));delete row.samplesEncoding;}
     const baseline=new PeriodAccounting(tape,work,workIndex.curves).project(shown.history,range,values),actual=period.project(shown.history,expectedScope,clockNow);
-    assert.equal(actual.since,range.from);assert.equal(actual.to,range.to);assert.deepEqual(actual.series,baseline.series,`${label}: exact quota projection`);assert.deepEqual(actual.meterSeries,baseline.meterSeries,`${label}: exact money projection`);
+    assert.equal(actual.since,range.from);assert.equal(actual.to,range.to);assert.deepEqual(actual.series,baseline.series,`${label}: exact quota projection`);assert.deepEqual(actual.meterSeries,baseline.meterSeries,`${label}: exact money projection`);assert.deepEqual(actual.moneyWork,baseline.moneyWork,`${label}: exact monetary work`);
     if(expectedScope==='quota'){const activity=new PeriodActivity(work,workIndex.curves);activity.update(rows);const expected=activity.project(baseline.activity,range);const knownFrom=Math.max(range.from,period.work.value.knownFrom),knownTo=Math.min(range.to,period.work.value.cut);expected.known=knownFrom<knownTo?{from:knownFrom,to:knownTo}:null;assert.deepEqual(actual.activity,expected,`${label}: exact activity and retained evidence cut`);}
    }
 
@@ -122,6 +122,9 @@ test('money preparation keeps cold history reusable across cached return and rep
   }
   try{
    period.activate(true);await settle();
+   const money=period.tapes.get('budget').tape.money.filter((group:any)=>group.workCounter);
+   assert.equal(money.length,12,'the real provider fixture has twelve native usage ledgers');
+   for(const group of money)assert.equal(group.workCounter.readings,group.readings,'identical financial and work observations occupy one retained array');
    assert.ok(period.get().rows.some((row:any)=>row.workedMs>0),'the retained work fixture must have positive credit inside its known period');
    const end=NOW-(length+DAY)*.5;await gesture('cold',end,{from:end-length,to:end});
    await gesture('warm-return',NOW,null);await gesture('warm-repeat',end,{from:end-length,to:end});

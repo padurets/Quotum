@@ -147,8 +147,23 @@ function* replace<T>(before:readonly T[],after:readonly T[],keep:(row:T)=>boolea
 }
 
 export const mergeTape=(previous:PeriodTape|undefined,next:PeriodTape)=>drain(mergeTapePrepared(previous,next));
+/** Work can use the same immutable native observations as financial accounting. */
+function* shareWorkReadings(group:MoneyTape,reserve:(bytes:number)=>void):Preparation<MoneyTape>{
+  const counter=group.workCounter;
+  if(!counter||!group.readings.length||counter.readings===group.readings||counter.readings.length!==group.readings.length)return group;
+  for(let i=0;i<group.readings.length;i++){if(!sameRow(group.readings[i],counter.readings[i]))return group;yield;}
+  reserve(512);
+  return {...group,workCounter:{...counter,readings:group.readings}};
+}
 export function* mergeTapePrepared(previous:PeriodTape|undefined,next:PeriodTape,reserve:(bytes:number)=>void=()=>{},release:(bytes:number)=>void=()=>{}):Preparation<PeriodTape> {
-  if(!previous||next.fixed||previous.fixed)return next;
+  if(!previous||next.fixed||previous.fixed){
+    let money:MoneyTape[]|undefined;
+    for(let i=0;i<next.money.length;i++){
+      const group=yield*shareWorkReadings(next.money[i],reserve);
+      if(group!==next.money[i]){if(!money){reserve(256+next.money.length*8);money=[...next.money];}money[i]=group;}
+    }
+    return money?{...next,money}:next;
+  }
   const complete=next.replaceFrom<=previous.from&&(next.replaceTo??Infinity)>=previous.cut;
   const from=complete?-Infinity:next.replaceFrom,to=complete?Infinity:next.replaceTo??Infinity;
   reserve(256+(previous.quota.length+next.quota.length+previous.money.length+next.money.length)*128);
@@ -173,7 +188,7 @@ export function* mergeTapePrepared(previous:PeriodTape|undefined,next:PeriodTape
       const spans=yield*replace(old.workCounter.spans,workCounter.spans,s=>s.to<from||s.from>=to,s=>s.from);
       workCounter={...workCounter,readings,spans};
     }
-    const merged:MoneyTape={...series,readings,spans,...(paired?{paired}:{}),...(workCounter?{workCounter}:{}),rates:undefined,rateBindings:undefined};
+    const merged=yield*shareWorkReadings({...series,readings,spans,...(paired?{paired}:{}),...(workCounter?{workCounter}:{}),rates:undefined,rateBindings:undefined},reserve);
     const keys=new Set<string>(),anchors=new Set<number>(),superseded=new Set<number>();
     for(const part of complete?[series]:[old,series])if(part)for(const dictionary of [part.rates,part.rateBindings?.entries])for(const key in dictionary){
       if(!keys.has(key)){reserve(128+key.length*2);keys.add(key);}yield;

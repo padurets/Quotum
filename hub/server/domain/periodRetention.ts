@@ -42,15 +42,15 @@ function* tail<T>(rows:readonly T[],start:number,reserve:(bytes:number)=>void):P
   if(!start)return rows as T[];
   reserve((rows.length-start)*16+32);const kept:T[]=[];for(let i=start;i<rows.length;i++){kept.push(rows[i]);yield;}return kept;
 }
-function* partAfter<T extends {readings:Reading[];spans:MeterSpan[]}>(part:T,from:number,reserve:(bytes:number)=>void):Preparation<T>{
-  const readings=yield*tail(part.readings,before(part.readings,from,r=>r.at),reserve);
+function* partAfter<T extends {readings:Reading[];spans:MeterSpan[]}>(part:T,from:number,reserve:(bytes:number)=>void,retainedReadings?:Reading[]):Preparation<T>{
+  const readings=retainedReadings??(yield*tail(part.readings,before(part.readings,from,r=>r.at),reserve));
   // The predecessor span retains its real head, endpoint and availability bounds.
   // Clipping its head would change gap classification and invent an observation.
   const spans=yield*tail(part.spans,before(part.spans,from,s=>s.from),reserve);
   return readings===part.readings&&spans===part.spans?part:{...part,readings,spans};
 }
 function* moneyAfter(group:MoneyTape,from:number,reserve:(bytes:number)=>void):Preparation<MoneyTape>{
-  const raw=yield*partAfter(group,from,reserve),paired=group.paired?yield*partAfter(group.paired,from,reserve):undefined,workCounter=group.workCounter?yield*partAfter(group.workCounter,from,reserve):undefined;
+  const raw=yield*partAfter(group,from,reserve),paired=group.paired?yield*partAfter(group.paired,from,reserve):undefined,workCounter=group.workCounter?yield*partAfter(group.workCounter,from,reserve,group.workCounter.readings===group.readings?raw.readings:undefined):undefined;
   const own=workCounter!==group.workCounter?{...raw,workCounter}:raw;
   if(!group.rates&&!group.rateBindings)return own===group&&paired===group.paired?group:{...own,...(paired?{paired}:{})};
   if(raw===group&&paired===group.paired){

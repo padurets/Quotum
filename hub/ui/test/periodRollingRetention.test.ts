@@ -5,11 +5,37 @@ import {expandPeriod} from '../../server/domain/periodWire';
 import {workedSessions} from '../../server/domain/periodWork';
 import {PeriodAccounting} from '../../server/domain/periodAccounting';
 import {PeriodIndex} from '../../server/domain/periodIndex';
-import {decodeSamples,sampleCount,mergeTape,bindRate,rateAt,type PeriodTape,type MoneyTape} from '../../server/domain/periodTape';
+import {decodeSamples,sampleCount,mergeTape,mergeTapePrepared,bindRate,rateAt,type PeriodTape,type MoneyTape} from '../../server/domain/periodTape';
 import {retainTape} from '../../server/domain/periodRetention';
 import {drain,Preparations} from '../lib/prepare';
 import {PERIOD_SCOPES} from '../../server/domain/periodRead';
 import type {Meter} from '../../server/domain/meters';
+
+test('financial and work observations share storage only when every native fact agrees',()=>{
+  const readings=Array.from({length:3},(_,i)=>({id:'usage',at:i*100,previousAt:i?(i-1)*100:null,kind:'counter' as const,unit:'USD',amount:String(i*1000000),limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:1000}));
+  for(const prior of [false,true])for(const change of ['none','dense','amount','deadline','predecessor'] as const){
+    const native=structuredClone(readings);
+    if(change==='dense')native.splice(1,0,{...native[0],at:50});
+    if(change==='amount')native[1].amount='1000001';
+    if(change==='deadline')native[1].staleAfterMs++;
+    if(change==='predecessor')native[1].previousAt=1;
+    const tape:PeriodTape={from:0,cut:301,replaceFrom:0,cursor:'current',quota:[],money:[{source:'wallet',meter:'balance',readings,spans:[],workCounter:{source:'wallet',unit:'USD',knownFrom:0,workFrom:0,readings:native,spans:[]}}]},before=JSON.stringify(tape);
+    const previous=prior?{...tape,money:[]}:undefined,merged=mergeTape(previous,tape);
+    assert.equal(JSON.stringify(merged),before);assert.equal(JSON.stringify(tape),before);
+    assert.equal(merged.money[0].workCounter!.readings===merged.money[0].readings,change==='none');
+    assert.equal(tape.money[0].workCounter!.readings,native,'the caller keeps its original generation');
+    if(change==='none'){
+      const retired=drain(retainTape(merged,150));
+      assert.equal(retired.money[0].workCounter!.readings,retired.money[0].readings,'clock retirement preserves the shared native suffix');
+      assert.deepEqual(retired.money[0].readings,readings.slice(1));
+      assert.deepEqual(merged.money[0].readings,readings,'retirement preserves the earlier generation');
+      const limited=new Error('capacity');
+      assert.throws(()=>drain(mergeTapePrepared(previous,tape,()=>{throw limited;})),error=>error===limited);
+      const canceled=mergeTapePrepared(previous,tape);assert.equal(canceled.next().done,false);canceled.return(tape);
+      assert.equal(JSON.stringify(tape),before);assert.equal(tape.money[0].workCounter!.readings,native);
+    }
+  }
+});
 
 test('financial reuse follows effective retention coverage and native evidence',()=>{
   const group:MoneyTape={source:'wallet',meter:'balance',displayUnit:'USD',retainedFrom:100,readings:[{id:'balance',at:5000,previousAt:null,kind:'balance',unit:'USD',amount:'1000000',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:1000}],spans:[{from:5000,to:6000,staleAfterMs:1000}]};

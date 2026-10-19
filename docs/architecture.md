@@ -1928,6 +1928,9 @@ Quota, budget and subscription-funds readers share that pool and a 15 MiB retain
 budget. Global eviction considers only nonvisible, unreserved tiles; an incoming frame
 that cannot fit fails losslessly without evicting the other reader's visible frame. Flights and reservations remain owned until commit or
 discard. Completed projections pin the current tile entry and its write sequence.
+Financial and work ledgers share their immutable native observations only when every
+reading agrees. Retention preserves that shared suffix, and the pool charges its storage
+once; differing observations and each ledger's spans retain their own charges.
 
 Each chart replaces one typed drawing model whole after preparation, then publishes
 its geometry and painters after the DOM commits. Input keeps the displayed model and
