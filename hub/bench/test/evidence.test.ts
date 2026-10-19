@@ -5,6 +5,21 @@ import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {clientIdentity, Evidence, safeEvidence} from '../evidence.js';
+import {measuredProblems} from '../budget.js';
+
+test('saved measurements retain the card identity needed to replay their render budget', t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-evidence-test-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const evidence = new Evidence(dir), root = path.join(dir, evidence.id);
+  const source = 'antigravity:4a6850d9ad60';
+  for (const region of [`card:${source}`, 'card:codex:58a998b30a2c']) {
+    const reading = {source, latencies: [10], renders: [{node: 'article.card#1', time: false, kind: null, region, count: 1}], mutations: [], from: 0, to: 1000};
+    const problems = (value: typeof reading) => measuredProblems({...value, card: value.source});
+    evidence.save('measured', reading);
+    const saved = JSON.parse(readFileSync(path.join(root, 'measured.json'), 'utf8'));
+    assert.deepEqual(problems(saved), problems(reading));
+  }
+});
 
 test('a phase manifest and completed readings survive a later failure with verifiable hashes', t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'quotum-evidence-test-'));
@@ -23,10 +38,12 @@ test('a phase manifest and completed readings survive a later failure with verif
 
 test('unsafe data is omitted and evidence overflow remains explicit', () => {
   const value = safeEvidence({cookie: 'canary-cookie', environment: {token: 'canary-token'}, commandLine: 'canary-command',
-    method: 'Runtime.evaluate', expression: 'canary-expression', name: 'https://private.invalid/canary-url', message: 'canary-conversation',
+    method: 'Runtime.evaluate', expression: 'canary-expression', name: 'https://private.invalid/canary-url', message: 'canary-conversation', source: 'canary-source',
+    unknownSource: {source: 'private-customer:0123456789ab'}, otherSource: {source: 'secret:0123456789ab'},
     mutation: {surface:'forecast',tag:'TD',attribute:'class'}, unknownMutation: {surface:'canary-surface',tag:'canary-tag',attribute:'canary-attribute'},
     values: Array.from({length: 10_003}, (_, i) => i)});
   assert.doesNotMatch(JSON.stringify(value), /canary|private/);
+  assert.deepEqual((value as {otherSource: unknown}).otherSource, {source: '[text omitted]'});
   assert.equal((value as {method: string}).method, 'Runtime.evaluate');
   assert.deepEqual((value as {mutation:unknown}).mutation, {surface:'forecast',tag:'TD',attribute:'class'});
   assert.deepEqual((value as {unknownMutation:unknown}).unknownMutation, {surface:'[text omitted]',tag:'[text omitted]',attribute:'[text omitted]'});

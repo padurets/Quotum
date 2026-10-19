@@ -3,6 +3,7 @@ import {execFileSync} from 'node:child_process';
 import {mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {providerOf} from '../server/domain/providers.js';
 
 const LIMIT = 1024 * 1024;
 const forbidden = /cookie|authorization|password|secret|credential|commandLine|expression|scriptSource|environment|stdout|stderr|stack/i;
@@ -24,6 +25,8 @@ export function safeEvidence(value: unknown, key = '', depth = 0, entryLimit = 1
   if (typeof value === 'string') {
     // Request classifications survive without admitting resource names or cursor text.
     if (requestLabels.get(key)?.has(value)) return value;
+    // Measurements use the same synthetic source IDs as their card regions.
+    if (key === 'source' && /^[a-z][a-z0-9-]{0,31}:[a-f0-9]{12}$/.test(value) && providerOf(value.split(':')[0])) return value;
     if (!labels.has(key) && !/^(id|.*Id|.*Hash|sha|tree|run|attempt|fixture)$/.test(key)) return '[text omitted]';
     if (value.length > 240 || /https?:\/\/|wss?:\/\/|(?:^|\s)(?:\/[\w.-]+){2,}|[A-Z]:\\|(?:token|cookie|secret|password)\s*[:=]/i.test(value)) return '[text omitted]';
     return value;
