@@ -1,12 +1,52 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {fixture,flush,NOW} from './periodRuntimeFixture';
+import {fixture,flush,NOW,H} from './periodRuntimeFixture';
 import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {publishDataFilters} from '../lib/filterSelection';
 import {lineWork,workText} from '../lib/work';
 import {workHours} from '../lib/format';
 import {HISTORY_BYTES_PER_MEASUREMENT} from '../../bench/budget';
 import {PeriodAccounting} from '../../server/domain/periodAccounting';
+import {expandPeriod} from '../../server/domain/periodWire';
+import {moneyWorkValues} from '../lib/moneyTable';
+import type {MeterHistory} from '../../server/domain/meterHistory';
+
+test('a late fixed source-wide reply leaves selected quota hours pending until the current predicate completes',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({fixed:true});
+  try{
+    const a=defaultFilters();a.projects={mode:'include',values:['Work project']};const gate=h.hold();publishDataFilters(a);h.period.changed();await flush();
+    assert.ok(h.requests.at(-1)?.quota);assert.ok(h.requests.at(-1)?.sessions);
+    const b=defaultFilters();b.projects={mode:'include',values:[]};publishDataFilters(b);h.period.changed();await flush();gate.release();await flush();
+    assert.equal(h.period.get().rows.length,0);assert.equal(h.pool.activeFlights,0);
+    assert.ok(h.requests.some(request=>request.quota&&request.workFilter?.projects.mode==='include'&&!request.workFilter.projects.values.length));
+    const selected=h.period.tapes.get('quota').tape.fixed.quota.map((row:any)=>row.selectedWork);
+    assert.ok(selected.length);assert.ok(selected.every((work:any)=>work?.ms===0&&work.agentMs===0),JSON.stringify(selected));
+  }finally{publishDataFilters(null,false);await h.close();}
+});
+
+test('a late fixed wallet reply preserves supplier estimates and reads confirmed empty selected hours',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({fixed:true,personal:true});
+  try{
+    const source=h.store.source('openrouter','wallet-filter',NOW-3*H);h.store.hold(source,h.alice.id,NOW-3*H);
+    const meter=(id:string,at:number,amount:string)=>({id,at,amount,kind:'counter' as const,unit:'USD',stale:false,staleAfterMs:2*H,limit:null,resetAt:null,minutes:null,scope:null,label:null});
+    for(const [at,amount] of [[NOW-H,'0'],[NOW-1,'1000000']] as const)h.store.record(source,{type:'meters',observedAt:at,staleAfterMs:2*H,meters:[meter('usage',at,amount),meter('credits',at,'15000000')],keys:[],inventoryComplete:true,inventoryError:null});
+    h.store.creditWork(h.device,NOW-H,NOW-1,[{source,client:'opencode',origin:'terminal',project:'Wallet project',folder:'',startedAt:NOW-H,identity:{kind:'stable',sessionId:'wallet-context'}}]);h.events.flush();await flush();
+    const queries=h.period.queries.bind(h.period);
+    h.period.queries=(board:any,range:any)=>({...queries(board,range),budget:{cell:'60000',from:String(range.from),to:String(range.to),unit:'USD',meters:JSON.stringify([[source,'balance']]),cells:'skip',work:'1'}});
+    publishDataFilters(defaultFilters());h.period.changed();await flush();h.requests.length=0;
+    const a=defaultFilters();a.projects={mode:'include',values:['Wallet project']};const gate=h.hold();publishDataFilters(a);h.period.changed();await flush();
+    const b=defaultFilters();b.projects={mode:'include',values:[]};publishDataFilters(b);h.period.changed();await flush();gate.release();await flush();
+    assert.equal(h.pool.activeFlights,0);assert.equal(h.period.get().rows.length,0);
+    const current=h.requests.find(request=>request.budget&&request.workFilter?.projects.mode==='include'&&!request.workFilter.projects.values.length);assert.ok(current,'the current predicate must complete fixed wallet hours');
+    const expected=expandPeriod(JSON.parse(h.reader.read(h.board,h.alice.id,current)));
+    assert.equal(expected.budget?.state,'complete');if(expected.budget?.state!=='complete')throw new Error('missing budget');
+    const fixed=expected.budget.value.tape?.fixed;assert.ok(fixed?.moneyWork);
+    const expectedWork=fixed.moneyWork.find(row=>row.source===source);
+    const actual=h.period.moneyWorkAt(source,NOW,h.period.workRangeKey),series={sourceId:source,meterId:'balance',kind:'balance',role:'total',unit:'USD',end:'14000000'} as MeterHistory;
+    assert.deepEqual(moneyWorkValues(series,actual),moneyWorkValues(series,expectedWork));
+    assert.equal(moneyWorkValues(series,actual).active,'0');assert.equal(moneyWorkValues(series,actual).rate,'1000000');
+  }finally{publishDataFilters(null,false);await h.close();}
+});
 
 test('a shifted retained fixed period never restores rows from a previous work predicate',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture({fixed:true});

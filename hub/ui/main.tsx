@@ -1,5 +1,5 @@
 import {followDataFilters} from './lib/filterSession';
-import {useDataFilters} from './lib/dataFilters';
+import {retireDataFilters,useDataFilters} from './lib/dataFilters';
 import {matchesSource} from '../server/domain/dataFilters';
 import {useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
@@ -305,6 +305,7 @@ function App() {
   // Everything below reads the language while rendering: a change re-renders the page.
   useLocale();
   const {session, failed, refresh, setSession} = useSession();
+  useLayoutEffect(()=>{if(session&&!session.user)retireDataFilters();},[session?.user?.id]);
   const path = usePath();
 
   if (!session) {

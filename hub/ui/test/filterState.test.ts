@@ -3,9 +3,41 @@ import assert from 'node:assert/strict';
 import {DataFilterState} from '../lib/filterState';
 import {defaultFilters,executableWorkFilters,sameFilters,type FilterEnvelope,type FilterUpdate} from '../../server/domain/dataFilters';
 import {mergeStoredFilters,projectStoredFilters,type StoredFilters} from '../../server/domain/dataFilterStorage';
+import {ApiError} from '../lib/http';
 
 const envelope=(revision=0):FilterEnvelope=>({filters:defaultFilters(),revision,authority:'authority-filter-test',unavailable:{sources:0,windows:0,wallet:0,funds:0,projects:0,devices:0,clients:0}});
 const storage=()=>{const values=new Map<string,string>();return {getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>{values.set(key,value);},removeItem:(key:string)=>{values.delete(key);}};};
+
+test('a delayed conflict cannot publish an authority superseded by the stream',async()=>{
+  let reject!:(error:unknown)=>void;const state=new DataFilterState({save:()=>new Promise<FilterEnvelope>((_yes,no)=>{reject=no;})});
+  state.open('u','b');state.accept(envelope(1));const pending=state.save();
+  const stale={...envelope(1),authority:'context-stale-B'};stale.filters.projects={mode:'exclude',values:['Private']};
+  const revoked={...envelope(1),authority:'context-current-C'};revoked.unavailable.projects=1;
+  state.accept(stale);state.accept(revoked);const current=state.get().current;reject(new ApiError(409,'filters_context_changed',stale));await pending;
+  assert.equal(state.get().saved?.authority,revoked.authority);assert.deepEqual(state.get().saved?.filters.projects.values,[]);assert.equal(state.get().current,current);assert.equal(state.get().saved?.unavailable.projects,1);
+});
+
+test('a delayed Save refresh cannot publish over a newer stream authority',async()=>{
+  let resolve!:(value:FilterEnvelope)=>void,refresh!:(value:FilterEnvelope)=>void;
+  const state=new DataFilterState({save:()=>new Promise<FilterEnvelope>(yes=>{resolve=yes;}),refresh:()=>new Promise<FilterEnvelope>(yes=>{refresh=yes;})});
+  state.open('u','b');state.accept(envelope(1));const pending=state.save();
+  const stale={...envelope(2),authority:'context-stale-B'};stale.filters.projects={mode:'exclude',values:['Private']};
+  state.accept({...envelope(2),authority:'context-C'});resolve(stale);await Promise.resolve();assert.ok(refresh);
+  const revoked={...envelope(2),authority:'context-current-D'};revoked.unavailable.projects=1;state.accept(revoked);
+  refresh(stale);await pending;assert.equal(state.get().saved?.authority,revoked.authority);assert.deepEqual(state.get().current?.projects.values,[]);assert.equal(state.get().saved?.unavailable.projects,1);
+});
+
+test('auth retirement drops clean loaded views, restores user drafts and rejects old-session Save publication',async()=>{
+  const memory=storage(),initial=envelope(1),latest=envelope(2);latest.filters.projects={mode:'exclude',values:['Saved']};
+  let resolve!:(value:FilterEnvelope)=>void;
+  const state=new DataFilterState({storage:memory,save:()=>new Promise<FilterEnvelope>(yes=>{resolve=yes;})});
+  state.open('u','b');state.accept(initial);state.retire();state.open('u','b');state.accept(latest);assert.deepEqual(state.get().current,latest.filters);assert.equal(state.get().dirty,false);
+  state.toggle('projects','Draft',false);const pending=state.save();state.retire();state.open('u','b');state.accept(latest);
+  assert.deepEqual(state.get().current?.projects.values,['Draft','Saved']);resolve({...envelope(3),filters:defaultFilters()});await pending;
+  assert.deepEqual(state.get().current?.projects.values,['Draft','Saved']);assert.equal(state.get().saved?.revision,2);
+  state.retire();state.open('u','b');state.accept(latest);assert.deepEqual(state.get().current?.projects.values,['Draft','Saved'],'old flight did not replace the persisted new-session draft');
+  state.open('other','b');state.accept(initial);state.open('u','b');state.accept(latest);assert.deepEqual(state.get().current?.projects.values,['Draft','Saved']);
+});
 
 test('foreign owner tabs preserve a dormant exclusion through a complete mode cycle without checkbox decisions',async()=>{
   let raw:StoredFilters={filters:defaultFilters(),retained:[]},revision=1;const allowed=(_family:unknown,ref:unknown)=>ref!=='hidden';

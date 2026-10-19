@@ -47,6 +47,9 @@ fn identifier(value: &Value) -> Option<&str> {
         !id.is_empty() && id.len() <= 120 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b"_:-".contains(&b))
     })
 }
+fn window_identifier(value: &Value) -> Option<&str> {
+    value.as_str().filter(|id| !id.is_empty() && id.chars().count() <= 120)
+}
 fn rule<T: Ord>(value: &Value, reference: impl Fn(&Value) -> Option<Option<T>>) -> Option<Rule<T>> {
     let object = value.as_object()?;
     if object.len() != 2 || !object.contains_key("mode") || !object.contains_key("values") {
@@ -87,7 +90,7 @@ fn mask(value: &Value) -> Option<Mask> {
         if values.len() != 2 {
             return None;
         }
-        Some(Some((identifier(&values[0])?.into(), identifier(&values[1])?.into())))
+        Some(Some((identifier(&values[0])?.into(), window_identifier(&values[1])?.into())))
     })?;
     Some(Mask { sources, windows })
 }
@@ -488,6 +491,31 @@ mod tests {
         assert!(board.resolve(&mut queued), "a project-only save does not reset a valid queued intent");
         board.apply("filters",json!({"revision":5,"authority":"filter-authority-test","filters":{"version":1,"sources":{"mode":"exclude","values":[]},"windows":{"mode":"include","values":["invalid"]}}}));
         assert!(!board.resolve(&mut queued), "malformed applicable masks fail closed");
+    }
+
+    #[test]
+    fn saved_masks_accept_released_window_text_without_blocking_other_windows() {
+        let mut board = Board::default();
+        ready_snapshot(
+            &mut board,
+            json!({"view":{"version":5,"hidden":[],"windows":[]},"sources":[{"id":"one","provider":"codex","successAt":1,"windows":[{"id":"week","kind":"weekly","label":null,"minutes":10080}]}]}),
+        );
+        for (index, window) in ["gemini-2.5:session".to_string(), "週".repeat(120), "🪟".repeat(120)].iter().enumerate()
+        {
+            board.apply(
+                "filters",
+                configuration(
+                    index as u64 + 1,
+                    json!({"mode":"exclude","values":[]}),
+                    json!({"mode":"exclude","values":[["one",window]]}),
+                ),
+            );
+            assert!(board.visible("one", Some("week")), "a valid exclusion must not invalidate the whole mask");
+            assert!(!board.mask.as_ref().unwrap().windows.admits(&("one".into(), window.clone())));
+        }
+        assert!(window_identifier(&json!("週".repeat(121))).is_none());
+        assert!(window_identifier(&json!("")).is_none());
+        assert!(identifier(&json!("bad.source")).is_none());
     }
 
     #[test]

@@ -14,6 +14,7 @@ export const dataFilters=new DataFilterState({storage,refresh:board=>call<Filter
 dataFilters.subscribe(()=>publishDataFilters(dataFilters.get().current));
 export const setFilterCards=(values:readonly Card[])=>{cards=values;};
 export const useDataFilters=()=>useSyncExternalStore(dataFilters.subscribe,dataFilters.get);
+export function retireDataFilters(){cards=[];dataFilters.retire();publishDataFilters(null,false);}
 
 setFilterWalletUnit(prefs().money.unit??undefined);
 onPrefs(()=>setFilterWalletUnit(prefs().money.unit??undefined));

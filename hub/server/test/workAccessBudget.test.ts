@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {centralFixture,at} from './centralFixture.js';
 import {HistoryTiles,HistoryLimit} from '../history.js';
 import {Events} from '../events.js';
-import {PeriodReader} from '../periodRead.js';
+import {PeriodReader,periodInputBytes} from '../periodRead.js';
 import {readHistory,ReadError} from '../historyRead.js';
 import {Store} from '../store/store.js';
 import {Directory} from '../store/directory.js';
@@ -132,7 +132,10 @@ test('a failed work capture errors every dependent section without fallback allo
 });
 
 for(const overflow of [false,true])test(`actual database changes revalidate work through a reserved current snapshot ${overflow?'and fail bounded':'before retrying a revoke'}`,async t=>{
- const ceiling=overflow?10_000:32*1024*1024,h=await fixture(t,ceiling),original=PeriodAccounting.prepare;let changes=0;
+ const body={version:1,selection:{mode:'range',from:at,to:at+H},evaluatedAt:at+2*H,sessions:{},quota:{cell:String(M),from:String(at),to:String(at+H),cells:'skip'}};
+ // Keep the original preparation capacity while ingress owns its separate charge
+ // under the same ceiling; otherwise the test never reaches the late guard.
+ const ceiling=overflow?10_000+periodInputBytes(body):32*1024*1024,h=await fixture(t,ceiling),original=PeriodAccounting.prepare;let changes=0;
  t.mock.method(PeriodAccounting,'prepare',function*(...args:Parameters<typeof original>){
    if(changes++===0)setImmediate(()=>{
      const policy=h.store.sessionDevices(h.board,h.owner.id)[0];h.store.setDeviceSessions(h.board,h.device.id,h.owner.id,false,policy.revision,at+2*H);
@@ -140,7 +143,6 @@ for(const overflow of [false,true])test(`actual database changes revalidate work
    });
    const until=performance.now()+12;do{yield;}while(performance.now()<until);return yield*original(...args);
  });
- const body={...h.body,selection:{mode:'range',from:at,to:at+H},quota:{...h.quota,cells:'skip'}};
  if(overflow)await assert.rejects(h.period.readAsync(h.board,h.owner.id,body),(e:unknown)=>e instanceof ReadError&&e.statusCode===413&&e.code==='history_limit');
  else{const result=JSON.parse(await h.period.readAsync(h.board,h.owner.id,body));assert.equal(result.sessions.state,'complete');assert.deepEqual(result.sessions.value.refs,[],'revoked captured access is never reused by the current guard');}
  assert.ok(h.calls.length>=2);assert.ok(h.calls.every(Boolean),'each actual-change revalidation is bounded');const reservation=h.tiles.reservation();try{reservation.add(ceiling);}finally{reservation.close();}

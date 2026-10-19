@@ -32,7 +32,7 @@ export class PeriodTransport implements HistoryMember {
   evidence(){return new Map(this.cursors);}
   restoreEvidence(cursors:ReadonlyMap<string,string>){this.cursors.clear();for(const [key,value] of cursors)this.cursors.set(key,value);}
   reset(){this.resetEpoch++;this.completed=this.failed=this.baselineKey='';this.baselineParts.clear();this.cursors.clear();this.metadata.clear();for(const flight of this.flights)this.abort(flight);for(const demand of this.queue)demand.reject(aborted());this.queue=[];}
-  retry(){this.failed='';this.change();}
+  retry(){this.completed=this.failed='';this.change();}
   read(scope:PeriodScope,query:HistoryQuery,signal?:AbortSignal):Promise<HistoryReply> {
     return new Promise((resolve,reject)=>{
       if(signal?.aborted){reject(aborted());return;}

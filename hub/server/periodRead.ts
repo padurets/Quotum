@@ -30,7 +30,7 @@ const object=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&
 const number=(v:unknown):v is number=>Number.isSafeInteger(v)&&(v as number)>=0;
 
 /** Retain the parsed body and its canonical copy under the shared ceiling while queued. */
-function inputBytes(raw:unknown) {
+export function periodInputBytes(raw:unknown) {
   let bytes=1024;const pending=[raw];
   while(pending.length){
     const value=pending.pop();
@@ -106,7 +106,7 @@ export class PeriodReader {
     try{
     // The original body survives the queued read for final cursor revalidation.
     // Charge it before deduplication, including repeated refs and predicate values.
-    input.add(inputBytes(raw));
+    input.add(periodInputBytes(raw));
     const {request,refs}=this.detailRequest(board,user,raw);
     const json=await this.readAsync(board,user,request,signal);
     this.detailRequest(board,user,raw);
@@ -129,7 +129,7 @@ export class PeriodReader {
   read(board:string,user:string,raw:unknown):string {return drain(this.prepareRead(board,user,raw));}
   async readAsync(board:string,user:string,raw:unknown,signal?:AbortSignal):Promise<string> {
     const input=this.history.reservation();
-    try{input.add(inputBytes(raw));
+    try{input.add(periodInputBytes(raw));
     for(let attempt=0;;attempt++){
       let check=()=>{};
       try{return await this.preparation.run(()=>this.prepareRead(board,user,raw,guard=>{check=guard;}),signal,()=>check());}

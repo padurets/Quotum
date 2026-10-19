@@ -11,12 +11,13 @@ type Env={save(board:string,revision:number,update:FilterUpdate):Promise<FilterE
 const fresh=(savedOnly:boolean):Entry=>({current:null,saved:null,savedOnly,conflicts:0,revisionFloor:0,originRevision:0,originProjection:null,originSequence:0,seq:0,resets:{},decisions:new Map(),materialize:{},saving:false,error:null,generation:0});
 const pendingIntents=(e:Entry)=>Object.keys(e.resets).length>0||e.decisions.size>0||Object.keys(e.materialize).length>0;
 const dirty=(e:Entry)=>!!e.current&&!!e.saved&&(!sameFilters(e.current,e.saved.filters)||pendingIntents(e));
+const readableEnvelope=(value:FilterEnvelope|null|undefined):value is FilterEnvelope=>!!value&&Number.isSafeInteger(value.revision)&&value.revision>=0&&typeof value.authority==='string'&&!!parseDataFilters(value.filters);
 
 /** One tab's view; persisted opening defaults never autosave its draft. */
 export class DataFilterState {
   private readonly entries=new Map<string,Entry>();
   private readonly listeners=new Set<()=>void>();
-  private key='';private board='';private savedOnly=false;
+  private key='';private board='';private user='';private savedOnly=false;
   private state:FilterState={current:null,saved:null,dirty:false,saving:false,error:null,generation:0,conflicts:0};
   constructor(private readonly env:Env){}
   get=()=>this.state;
@@ -24,11 +25,22 @@ export class DataFilterState {
   private entry(){return this.entries.get(this.key);}
   private publish(){const e=this.entry();this.state=e?{current:e.current,saved:e.saved,dirty:dirty(e),saving:e.saving,error:e.error,generation:e.generation,conflicts:e.conflicts}:{current:null,saved:null,dirty:false,saving:false,error:null,generation:0,conflicts:0};for(const listener of this.listeners)listener();}
   open(user:string,board:string,savedOnly=false){
+    if(this.user&&this.user!==user)this.retire();this.user=user;
     const key=JSON.stringify([user,board,...(savedOnly?['saved']:[])]);if(this.key===key&&this.savedOnly===savedOnly)return;
     this.key=key;this.board=board;this.savedOnly=savedOnly;
     if(!this.entries.has(key))this.entries.set(key,fresh(savedOnly));this.publish();
   }
   close(){this.key='';this.board='';this.publish();}
+  retire(){this.entries.clear();this.user='';this.close();}
+  private owns(e:Entry,key:string){return this.entries.get(key)===e;}
+  private canPublish(e:Entry,key:string,basis:FilterEnvelope,reply:FilterEnvelope){
+    return readableEnvelope(reply)&&this.owns(e,key)&&reply.revision>=e.revisionFloor&&(e.saved===basis||e.saved?.authority===reply.authority);
+  }
+  private async refreshAccepted(e:Entry,key:string,board:string){
+    const basis=e.saved;if(!basis||!this.env.refresh||this.key!==key||!this.owns(e,key))return;
+    try{const reply=await this.env.refresh(board);if(this.key===key&&this.canPublish(e,key,basis,reply))this.accept(reply);}
+    catch{/* The save error remains visible; a failed read cannot replace its accepted basis. */}
+  }
   private persist(entry:Entry,key=this.key){
     if(entry.savedOnly)return;
     try{if(!dirty(entry))this.env.storage?.removeItem('quotum.filters.'+key);
@@ -104,11 +116,13 @@ export class DataFilterState {
     const update:FilterUpdate={filters,authority,replace,...intents};if(!parseFilterUpdate(update)){e.error=new ApiError(413,'filters_limit');this.publish();return;}e.saving=true;e.error=null;this.publish();
     try{
       const reply=await this.env.save(board,e.saved.revision,update);
+      if(!this.owns(e,key))return;
       if(reply.revision<e.revisionFloor)return;
-      e.revisionFloor=reply.revision;
-      if(e.saved!==basis&&e.saved?.authority!==reply.authority){
+      const publish=this.canPublish(e,key,basis,reply);
+      if(readableEnvelope(reply))e.revisionFloor=reply.revision;
+      if(!publish){
         e.error=new ApiError(409,'filters_context_changed');
-        if(this.env.refresh){const latest=await this.env.refresh(board);if(this.key===key)this.accept(latest);}
+        await this.refreshAccepted(e,key,board);
         return;
       }
       e.saved=reply;if(e.originSequence<=seq){e.originRevision=reply.revision;e.originProjection=reply.filters;}
@@ -119,10 +133,14 @@ export class DataFilterState {
       if(e.seq===seq)e.current=reply.filters;
       this.persist(e,key);
     }catch(error){
+      if(!this.owns(e,key))return;
       const data=(error as {data?:FilterEnvelope}).data;
-      if(data?.filters&&this.key===key)this.accept(data);
       e.error=error;
-    }finally{e.saving=false;if(this.key===key)this.publish();}
+      if(readableEnvelope(data)){
+        const publish=this.canPublish(e,key,basis,data);e.revisionFloor=Math.max(e.revisionFloor,data.revision);
+        if(publish&&this.key===key)this.accept(data);else await this.refreshAccepted(e,key,board);
+      }
+    }finally{e.saving=false;if(this.key===key&&this.owns(e,key))this.publish();}
   }
 }
 

@@ -556,7 +556,8 @@ class BoardPeriod {
     for(const scope of PERIOD_SCOPES){const part=reply[scope];if(part){if(part.state==='error'){this.projectionErrors[scope]=part.error==='history_limit'?'history_limit':'history_failed';this.dirtyScopes.delete(scope);}else delete this.projectionErrors[scope];changed.add(scope);}}
     this.sourceTape=nextSourceTape;this.sourceCurves=nextSourceCurves;this.sourceCursor=nextSourceCursor;
     this.evaluatedAt=hubNow();this.tapes.clear();for(const [scope,tape] of prepared.tapes)this.tapes.set(scope,tape);
-    for(const scope of PERIOD_SCOPES){const section=reply[scope];if(section?.state==='complete'&&section.value.tape)this.dirtyScopes.delete(scope);}
+    const selectedFixedPending=PERIOD_SCOPES.filter(scope=>reply[scope]?.state==='complete'&&intent.request.selection.mode==='range'&&(scope==='quota'||scope==='budget'&&intent.request.budget?.work==='1')&&(JSON.stringify(intent.request.workFilter)??'')!==this.filterKey);
+    for(const scope of PERIOD_SCOPES){const section=reply[scope];if(section?.state==='complete'&&section.value.tape){if(selectedFixedPending.includes(scope))this.dirtyScopes.add(scope);else this.dirtyScopes.delete(scope);}}
     if(reply.facets){const part=reply.facets;this.facetsNeeded=false;this.facetState=part.state==='complete'?{value:part.value,loading:false,error:null}:{value:null,loading:false,error:part.error};for(const listener of this.facetListeners)listener();}
     if(reply.values) {
       if(reply.values.state==='complete'){
@@ -582,6 +583,9 @@ class BoardPeriod {
     this.publishProjection([...changed]);
     this.retirementAt=intent.request.selection.mode==='live'?prepared.edge+intent.request.selection.periodMs:Infinity;
     this.scheduleClock();
+    // Source-wide summaries remain usable, but cannot complete another cohort's
+    // fixed direct hours. Reconsider even an already completed transport intent.
+    if(selectedFixedPending.length)this.transport.retry();
   }
   private async planRetirement(){
     if(this.selection.mode!=='live'){this.retirementAt=Infinity;return;}
