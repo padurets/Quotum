@@ -1582,6 +1582,9 @@ board and tab; foreign saves only update Restore. Compact consumes saved default
 and follows the layout's hidden-card visibility. Native attention consumes saved
 defaults with its existing hidden-card admission, including a final check before
 notification delivery.
+Legacy wallet and funds preferences seed revision zero until that user edits the
+family or restores the board defaults. A receipt for each user, board and family
+survives clean tab drafts; the original preferences can still seed other boards.
 Separate stream configuration frames carry the authorized filter projection;
 snapshots carry only matching revision/authority references.
 The period coordinator applies work predicates to authorized intervals before

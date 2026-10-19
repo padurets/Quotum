@@ -8,6 +8,30 @@ import {ApiError} from '../lib/http';
 const envelope=(revision=0):FilterEnvelope=>({filters:defaultFilters(),revision,authority:'authority-filter-test',unavailable:{sources:0,windows:0,wallet:0,funds:0,projects:0,devices:0,clients:0}});
 const storage=()=>{const values=new Map<string,string>();return {getItem:(key:string)=>values.get(key)??null,setItem:(key:string,value:string)=>{values.set(key,value);},removeItem:(key:string)=>{values.delete(key);}};};
 
+test('Restore survives reload and fresh tabs without reapplying the legacy seed',()=>{
+  const migrationStorage=storage(),drafts=storage();
+  const seed=(filters:ReturnType<typeof defaultFilters>)=>({...filters,wallet:{mode:'only' as const,values:[{source:'openrouter:a',kind:'balance' as const}]},funds:{mode:'include' as const,values:['codex:a']}});
+  const open=(tab=drafts)=>{const state=new DataFilterState({storage:tab,migrationStorage,seed,save:async()=>envelope(1)});state.open('u','b');state.accept(envelope());return state;};
+  const first=open();assert.equal(first.get().current!.wallet.mode,'only');first.toggle('projects','P',false);first.restore();
+  assert.equal(first.get().dirty,false);
+  for(const tab of [drafts,storage()]){const next=open(tab);assert.deepEqual(next.get().current,envelope().filters);assert.equal(next.get().dirty,false);}
+});
+
+test('legacy seed consumption belongs to its user, board and explicitly edited family',()=>{
+  const migrationStorage=storage();
+  const seed=(filters:ReturnType<typeof defaultFilters>)=>({...filters,wallet:{mode:'only' as const,values:[{source:'openrouter:a',kind:'balance' as const}]},funds:{mode:'include' as const,values:['codex:a']}});
+  const open=(user='u',board='b')=>{const state=new DataFilterState({storage:storage(),migrationStorage,seed,save:async()=>envelope(1)});state.open(user,board);state.accept(envelope());return state;};
+  assert.equal(open().get().current!.wallet.mode,'only','an untouched seed remains available in a fresh tab');
+  const first=open();first.toggle('wallet',{source:'openrouter:a',kind:'balance'},false);
+  const next=open();assert.deepEqual(next.get().current!.wallet,envelope().filters.wallet);assert.deepEqual(next.get().current!.funds,{mode:'include',values:['codex:a']});
+  for(const state of [open('other'),open('u','other')])assert.equal(state.get().current!.wallet.mode,'only');
+  const rejected=open('rejected');rejected.toggle('wallet',{source:'invalid source',kind:'balance'},true);
+  assert.ok(rejected.get().error);assert.equal(open('rejected').get().current!.wallet.mode,'only','a refused edit cannot consume migration');
+  const left=open('concurrent'),right=open('concurrent');
+  left.toggle('wallet',{source:'openrouter:a',kind:'balance'},false);right.toggle('funds','codex:a',false);
+  assert.deepEqual(open('concurrent').get().current,envelope().filters,'two already open tabs cannot overwrite each other\'s family receipt');
+});
+
 test('a delayed conflict cannot publish an authority superseded by the stream',async()=>{
   let reject!:(error:unknown)=>void;const state=new DataFilterState({save:()=>new Promise<FilterEnvelope>((_yes,no)=>{reject=no;})});
   state.open('u','b');state.accept(envelope(1));const pending=state.save();

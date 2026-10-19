@@ -4,11 +4,12 @@ import {rebaseFilterProjection,resetFilter,setSelection,setWallet} from '../../s
 import {ApiError} from './http';
 
 type Intent<T>={value:T;seq:number};
-type Entry={current:DataFilters|null;saved:FilterEnvelope|null;savedOnly:boolean;conflicts:number;revisionFloor:number;originRevision:number;originProjection:DataFilters|null;originSequence:number;seq:number;resets:Partial<Record<FilterFamily,Intent<'all'|'none'>>>;
+type Migrated=Partial<Record<'wallet'|'funds',true>>;
+type Entry={current:DataFilters|null;saved:FilterEnvelope|null;savedOnly:boolean;migrated:Migrated;conflicts:number;revisionFloor:number;originRevision:number;originProjection:DataFilters|null;originSequence:number;seq:number;resets:Partial<Record<FilterFamily,Intent<'all'|'none'>>>;
   decisions:Map<string,Intent<FilterDecision>>;materialize:Partial<Record<'wallet'|'funds',Intent<string>>>;saving:boolean;error:unknown;generation:number};
 export type FilterState={current:DataFilters|null;saved:FilterEnvelope|null;dirty:boolean;saving:boolean;error:unknown;generation:number;conflicts:number};
-type Env={save(board:string,revision:number,update:FilterUpdate):Promise<FilterEnvelope>;refresh?(board:string):Promise<FilterEnvelope>;storage?:Pick<Storage,'getItem'|'setItem'|'removeItem'>;conflicts?:(filters:DataFilters)=>number;seed?:(filters:DataFilters)=>DataFilters};
-const fresh=(savedOnly:boolean):Entry=>({current:null,saved:null,savedOnly,conflicts:0,revisionFloor:0,originRevision:0,originProjection:null,originSequence:0,seq:0,resets:{},decisions:new Map(),materialize:{},saving:false,error:null,generation:0});
+type Env={save(board:string,revision:number,update:FilterUpdate):Promise<FilterEnvelope>;refresh?(board:string):Promise<FilterEnvelope>;storage?:Pick<Storage,'getItem'|'setItem'|'removeItem'>;migrationStorage?:Pick<Storage,'getItem'|'setItem'>;conflicts?:(filters:DataFilters)=>number;seed?:(filters:DataFilters)=>DataFilters};
+const fresh=(savedOnly:boolean):Entry=>({current:null,saved:null,savedOnly,migrated:{},conflicts:0,revisionFloor:0,originRevision:0,originProjection:null,originSequence:0,seq:0,resets:{},decisions:new Map(),materialize:{},saving:false,error:null,generation:0});
 const pendingIntents=(e:Entry)=>Object.keys(e.resets).length>0||e.decisions.size>0||Object.keys(e.materialize).length>0;
 const dirty=(e:Entry)=>!!e.current&&!!e.saved&&(!sameFilters(e.current,e.saved.filters)||pendingIntents(e));
 const readableEnvelope=(value:FilterEnvelope|null|undefined):value is FilterEnvelope=>!!value&&Number.isSafeInteger(value.revision)&&value.revision>=0&&typeof value.authority==='string'&&!!parseDataFilters(value.filters);
@@ -46,6 +47,27 @@ export class DataFilterState {
     try{if(!dirty(entry))this.env.storage?.removeItem('quotum.filters.'+key);
       else this.env.storage?.setItem('quotum.filters.'+key,JSON.stringify({current:entry.current,originRevision:entry.originRevision,originProjection:entry.originProjection,originSequence:entry.originSequence,resets:entry.resets,decisions:[...entry.decisions],materialize:entry.materialize,seq:entry.seq,conflicts:entry.conflicts}));}catch{/* Storage is optional; current intent remains in this tab. */}
   }
+  private opening(e:Entry,saved:DataFilters){
+    try{for(const family of ['wallet','funds'] as const)if((this.env.migrationStorage??this.env.storage)?.getItem('quotum.filters.migration.'+this.key+'.'+family)==='1')e.migrated[family]=true;
+    }catch{/* A missing migration receipt leaves the original seed available. */}
+    const seeded=e.migrated.wallet&&e.migrated.funds?saved:this.env.seed?.(saved)??saved;
+    const current=structuredClone(seeded),legacy={...current.legacy};
+    if(e.migrated.wallet){current.wallet=saved.wallet;if(saved.legacy?.walletByUnit)legacy.walletByUnit=saved.legacy.walletByUnit;else delete legacy.walletByUnit;}
+    if(e.migrated.funds){current.funds=saved.funds;
+      if(saved.legacy?.fundsByUnit)legacy.fundsByUnit=saved.legacy.fundsByUnit;else delete legacy.fundsByUnit;
+      if(saved.legacy?.fundsPreferredByUnit)legacy.fundsPreferredByUnit=saved.legacy.fundsPreferredByUnit;else delete legacy.fundsPreferredByUnit;
+    }
+    if(Object.keys(legacy).length)current.legacy=legacy;else delete current.legacy;
+    return current;
+  }
+  private consumeMigration(e:Entry,families:readonly FilterFamily[]){
+    if(e.savedOnly)return;
+    // This receipt outlives a clean tab draft, without changing another board's seed.
+    for(const family of families)if(family==='wallet'||family==='funds'){
+      e.migrated[family]=true;
+      try{(this.env.migrationStorage??this.env.storage)?.setItem('quotum.filters.migration.'+this.key+'.'+family,'1');}catch{/* Current intent still remains in this tab. */}
+    }
+  }
   accept(envelope:FilterEnvelope){
     const e=this.entry(),parsed=parseDataFilters(envelope.filters);if(!e||!parsed||!Number.isSafeInteger(envelope.revision)||envelope.revision<0||typeof envelope.authority!=='string')return;
     if(envelope.revision<e.revisionFloor)return;
@@ -53,7 +75,7 @@ export class DataFilterState {
     if(e.saved?.revision===envelope.revision&&e.saved.authority===envelope.authority&&sameFilters(e.saved.filters,parsed))return;
     const before=e.saved;e.saved={...envelope,filters:parsed};
     if(!e.current){
-      e.current=!this.savedOnly&&envelope.revision===0?this.env.seed?.(parsed)??parsed:parsed;e.originRevision=envelope.revision;e.originProjection=parsed;e.conflicts=!this.savedOnly&&envelope.revision===0?this.env.conflicts?.(parsed)??0:0;
+      e.current=!this.savedOnly&&envelope.revision===0?this.opening(e,parsed):parsed;e.originRevision=envelope.revision;e.originProjection=parsed;e.conflicts=!this.savedOnly&&envelope.revision===0&&!e.migrated.wallet?this.env.conflicts?.(parsed)??0:0;
       if(!executableWorkFilters(e.current)||!parseDataFilters(e.current))e.error=new ApiError(413,'filters_limit');
       try{const raw=!this.savedOnly&&this.env.storage?.getItem('quotum.filters.'+this.key),draft=raw?JSON.parse(raw):null,filters=draft&&parseDataFilters(draft.current);
         if(filters&&Number.isSafeInteger(draft.originRevision)&&draft.originRevision>=0&&Number.isSafeInteger(draft.seq)&&draft.seq>=0){
@@ -72,14 +94,14 @@ export class DataFilterState {
     e.generation++;this.persist(e);this.publish();
   }
   private intents(e:Entry){return {resets:Object.fromEntries(Object.entries(e.resets).map(([key,intent])=>[key,intent!.value])),decisions:[...e.decisions.values()].map(intent=>intent.value),materialize:Object.fromEntries(Object.entries(e.materialize).map(([key,intent])=>[key,intent!.value]))};}
-  private update(e:Entry,current:DataFilters){
+  private update(e:Entry,current:DataFilters,families:readonly FilterFamily[]){
     const parsed=parseDataFilters(current),fits=parsed&&executableWorkFilters(parsed);
     const before=e.current&&workFilterBytes(e.current),after=parsed&&workFilterBytes(parsed);
     const recovering=before&&after&&!executableWorkFilters(e.current!)&&after.every((bytes,i)=>bytes<=before[i])&&after.some((bytes,i)=>bytes<before[i]);
     if(!parsed||!fits&&!recovering){e.error=new ApiError(413,'filters_limit');this.publish();return false;}
     const envelope={filters:parsed,authority:e.saved?.authority??'a'.repeat(43),replace:[...FILTER_FAMILIES],...this.intents(e)};
     if(jsonBytes(envelope)>FILTER_BODY_LIMIT){e.error=new ApiError(413,'filters_limit');this.publish();return false;}
-    e.current=parsed;e.generation++;e.error=fits?null:new ApiError(413,'filters_limit');this.persist(e);this.publish();return true;
+    e.current=parsed;e.generation++;e.error=fits?null:new ApiError(413,'filters_limit');this.consumeMigration(e,families);this.persist(e);this.publish();return true;
   }
   toggle(family:FilterFamily,ref:FamilyRef,included:boolean,unit?:string,automatic=false){
     const e=this.entry();if(!e?.current||!e.saved)return;
@@ -94,7 +116,7 @@ export class DataFilterState {
     if(family==='wallet')current.wallet=setWallet(current.wallet,ref as Parameters<typeof setWallet>[1],included,automatic);
     else current[family]=setSelection(current[family] as Parameters<typeof setSelection>[0],ref,included) as never;
     const decision={family,ref,included} as FilterDecision;e.decisions.set(family+':'+filterRefKey(ref),{value:decision,seq});
-    if(!this.update(e,current)){e.resets=previous.resets;e.decisions=previous.decisions;e.materialize=previous.materialize;}
+    if(!this.update(e,current,[family])){e.resets=previous.resets;e.decisions=previous.decisions;e.materialize=previous.materialize;}
   }
   reset(family:FilterFamily|readonly FilterFamily[],mode:'all'|'none'){
     const e=this.entry();if(!e?.current)return;
@@ -104,9 +126,9 @@ export class DataFilterState {
       e.resets[part]={value:mode,seq:++e.seq};delete e.materialize[part as 'wallet'|'funds'];for(const [key,intent] of e.decisions)if(intent.value.family===part)e.decisions.delete(key);
       current=resetFilter(current,part,mode);
     }
-    if(!this.update(e,current)){e.resets=previous.resets;e.decisions=previous.decisions;e.materialize=previous.materialize;}
+    if(!this.update(e,current,typeof family==='string'?[family]:family)){e.resets=previous.resets;e.decisions=previous.decisions;e.materialize=previous.materialize;}
   }
-  restore(){const e=this.entry();if(!e?.saved)return;e.originSequence=++e.seq;e.conflicts=0;e.resets={};e.decisions.clear();e.materialize={};e.originRevision=e.saved.revision;e.originProjection=e.saved.filters;e.current=e.saved.filters;e.generation++;e.error=executableWorkFilters(e.current)?null:new ApiError(413,'filters_limit');this.persist(e);this.publish();}
+  restore(){const e=this.entry();if(!e?.saved)return;e.originSequence=++e.seq;e.conflicts=0;e.resets={};e.decisions.clear();e.materialize={};e.originRevision=e.saved.revision;e.originProjection=e.saved.filters;e.current=e.saved.filters;e.generation++;e.error=executableWorkFilters(e.current)?null:new ApiError(413,'filters_limit');this.consumeMigration(e,['wallet','funds']);this.persist(e);this.publish();}
   async save(){
     const e=this.entry();if(!e?.current||!e.saved||e.saving||e.saved.revision<e.revisionFloor)return;
     if(!parseDataFilters(e.current)||!executableWorkFilters(e.current)){e.error=new ApiError(413,'filters_limit');this.publish();return;}
