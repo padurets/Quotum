@@ -1578,9 +1578,10 @@ The v1 defaults live in `board_filters`, with their own revision and an opaque
 projection-authority precondition. Owner Save compares both atomically, merges
 authorized changes while retaining dormant raw rules, and explicitly adopts the
 initial revision zero. Readers keep current filters and dirty drafts per user,
-board and tab; foreign saves only update Restore. Compact and native attention
-consume saved defaults. Only native attention also retains its existing
-hidden-card admission, including a final check before notification delivery.
+board and tab; foreign saves only update Restore. Compact consumes saved defaults
+and follows the layout's hidden-card visibility. Native attention consumes saved
+defaults with its existing hidden-card admission, including a final check before
+notification delivery.
 Separate stream configuration frames carry the authorized filter projection;
 snapshots carry only matching revision/authority references.
 The period coordinator applies work predicates to authorized intervals before

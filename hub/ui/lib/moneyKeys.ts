@@ -4,11 +4,12 @@ import {walletRule} from '../../server/domain/dataFilters';
 import {useEffect,useState} from 'react';
 import type {Card,View} from './types';
 import type {KeyPart,Meter} from '../../server/domain/meters';
-import {ApiError,call} from './http';
+import {ApiError} from './http';
+import {readKeyIds} from './keyReads';
 import {MAX_METERS} from '../../server/domain/meterHistory';
 import {keyShown} from './view';
 
-export type KeyPage={keys:KeyPart[];meters:Meter[];total:number;inventory:Card['inventory']|null;next:string|null};
+export type {KeyPage} from './keyReads';
 
 /** Only explicitly enabled scales beyond the default preview need another read. */
 export function useShownKeys(source:Card,view:View|undefined,board:string) {
@@ -23,11 +24,10 @@ export function useShownKeys(source:Card,view:View|undefined,board:string) {
     const selected:string[]=JSON.parse(ids);
     if(selected.length>MAX_METERS){setExtra({source:source.id,keys:[],meters:[]});setError(new ApiError(413,'filters_limit'));return;}
     if(!board||!selected.length){setExtra(previous=>previous.source===source.id&&!previous.keys.length&&!previous.meters.length?previous:{source:source.id,keys:[],meters:[]});setError(null);return;}
-    let live=true;
-    const groups=Array.from({length:Math.ceil(selected.length/50)},(_,i)=>selected.slice(i*50,i*50+50));
-    Promise.all(groups.map(group=>call<KeyPage>('GET',`/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(source.id)}/keys?ids=${encodeURIComponent(JSON.stringify(group))}`)))
-      .then(pages=>{if(live){setExtra({source:source.id,keys:pages.flatMap(p=>p.keys),meters:pages.flatMap(p=>p.meters)});setError(null);}},failure=>{if(live)setError(failure);});
-    return()=>{live=false;};
+    let live=true;const controller=new AbortController();
+    readKeyIds(board,source.id,selected,controller.signal)
+      .then(parts=>{if(live){setExtra({source:source.id,...parts});setError(null);}},failure=>{if(live)setError(failure);});
+    return()=>{live=false;controller.abort();};
   },[board,source,ids]);
   const extras=extra.source===source.id?extra:{keys:[],meters:[]};
   const keys=[...(source.keys??[]),...extras.keys.filter(k=>!preview.has(k.id))].filter(k=>!view||keyShown(view,source.id,k.id,source.keys??[]));

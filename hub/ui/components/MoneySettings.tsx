@@ -16,7 +16,7 @@ import {ErrorLine} from './Kit';
 import {Popover,SlidersIcon,HideRow} from './Popover';
 import {FilterRow} from './Filters';
 import {KEYS_PER_PAGE} from './KeyPages';
-import type {KeyPage} from '../lib/moneyKeys';
+import {readKeyIds,type KeyPage} from '../lib/keyReads';
 
 /** Keys expand in place; additional batches preserve the rows already on screen. */
 export function KeyMoneySettings({sources,source:focused,hidden:_hidden,series,active=true}:{sources:readonly Named[];source?:Named;hidden:readonly string[];series:readonly MeterHistory[];active?:boolean}) {
@@ -37,15 +37,16 @@ export function KeyMoneySettings({sources,source:focused,hidden:_hidden,series,a
   const page:KeyPage|null=inCard?{keys:source!.keys!,meters:source!.meters??[],total:source!.keysCount!,inventory:source!.inventory,next:null}:loaded?.scope===scope?loaded.page:null;
   const stale=!inCard&&!!page&&loaded?.identity!==identity;
   const selectedKeys=JSON.stringify([...new Set(selected.filter(([id])=>id===sourceId).flatMap(([,meter])=>keyMeter(meter)?.[1]??[]))].sort());
-  const membershipContext=JSON.stringify([identity,selectedKeys]);
-  const [membership,setMembership]=useState<{context:string;keys:string[]}|null>(null);
+  const requestedKeys:string[]=JSON.parse(selectedKeys);
+  const [membership,setMembership]=useState<{identity:string;requested:Set<string>;keys:string[]}|null>(null);
+  const membershipReady=inCard||!requestedKeys.length||membership?.identity===identity&&requestedKeys.every(id=>membership.requested.has(id));
   useEffect(()=>{
-    if(!active||!keysOpen||!board||!sourceId||inCard||selectedKeys==='[]'||membership?.context===membershipContext)return;
-    let live=true;
-    call<KeyPage>('GET',`/api/boards/${encodeURIComponent(board)}/sources/${encodeURIComponent(sourceId)}/keys?ids=${encodeURIComponent(selectedKeys)}`)
-      .then(reply=>{if(live)setMembership({context:membershipContext,keys:reply.keys.map(key=>key.id)});},failure=>{if(live)setError(failure);});
-    return()=>{live=false;};
-  },[active,keysOpen,board,sourceId,inCard,selectedKeys,membershipContext,membership?.context]);
+    if(!active||!keysOpen||!board||!sourceId||membershipReady)return;
+    let live=true;const controller=new AbortController();
+    readKeyIds(board,sourceId,requestedKeys,controller.signal)
+      .then(reply=>{if(live)setMembership({identity,requested:new Set(requestedKeys),keys:reply.keys.map(key=>key.id)});},failure=>{if(live)setError(failure);});
+    return()=>{live=false;controller.abort();};
+  },[active,keysOpen,board,sourceId,selectedKeys,identity,membershipReady]);
   useEffect(()=>{
     if(!active||!keysOpen||!sourceId||!board||inCard)return;
     let live=true;setLoading(true);
@@ -77,8 +78,7 @@ export function KeyMoneySettings({sources,source:focused,hidden:_hidden,series,a
     const on=meters.some(meter=>has(id,meter)),extra=meters.filter(meter=>!has(id,meter)).length;
     return <FilterRow key={key} className={slot?'key-slot':undefined} on={on} value={value} disabled={loading||stale||!on&&(unavailable||selected.length+extra>MAX_METERS)} onChange={next=>toggle(id,meters,next)}>{label}</FilterRow>;
   };
-  const membershipReady=inCard||selectedKeys==='[]'||membership?.context===membershipContext;
-  const current=new Set(inCard?source?.keys?.map(key=>key.id):membership?.context===membershipContext?membership.keys:[]);
+  const current=new Set(inCard?source?.keys?.map(key=>key.id):membership?.identity===identity?membership.keys:[]);
   const archived=source&&membershipReady?archivedKeyGroups(source.id,selected,current,series):[];
   const keyRow=(id:string,label:string,meters:string[],archived=false)=>row(source!.id,meters,label,archived||!meters.length,archived?t('money.archived'):!meters.length?t('money.noCap'):undefined,id,true);
   return <>

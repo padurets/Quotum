@@ -19,12 +19,13 @@ import {referenceBalance,budgetVisible,balanceGroups,balanceRoleLabel,keyName} f
 import type {Named} from '../lib/board';
 import type {KeyPage} from '../lib/moneyKeys';
 import type {Meter} from '../../server/domain/meters';
+import * as keyBounds from '../../server/domain/sourceKeys';
 
 type Node={type:unknown;props:Record<string,unknown>;key?:string};
 const component=(name:string)=>({name});
 const switchRow=component('switch');
 const nodes=(value:unknown):Node[]=>Array.isArray(value)?value.flatMap(nodes):value&&typeof value==='object'&&'props' in value?[value as Node,...nodes((value as Node).props.children)]:[];
-const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
+const flush=async()=>{for(let i=0;i<60;i++)await Promise.resolve();};
 const meter=(id:string,amount='1'):Meter=>({id,amount,kind:id.endsWith(':cap')?'cap':'balance',unit:'USD',at:1,staleAfterMs:1000,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null});
 
 function fixture(selected:[string,string][]=[],budget?:{source:Named;context:CurrencyContext;others?:Named[]}) {
@@ -37,19 +38,27 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
   let source:Named={id:'s',title:'Account',provider:'openrouter',plan:'',successAt:revision,error:null,stale:false,windows:[],resets:null,owners:[],staleAfterMs:1000,measureIntervalMs:null,meters:[meter('balance')],keys:[],keysCount:20};
   if(budget)source=budget.source;
   const reads:string[]=[];
-  const call=async(_method:string,path:string):Promise<KeyPage>=>{
+  let paused=false;
+  const pending:{signal?:AbortSignal;reply:KeyPage;resolve:(reply:KeyPage)=>void}[]=[];
+  const call=async(_method:string,path:string,_body?:unknown,_timeout?:number,signal?:AbortSignal):Promise<KeyPage>=>{
     reads.push(path);const query=new URL(path,'https://fixture.invalid').searchParams;
     const all=Array.from({length:20},(_,i)=>({id:String(i),name:`Key ${i} revision ${revision}`,disabled:false,expiresAt:null,includeByok:false,at:revision,staleAfterMs:1000,presence:'observed' as const,missCount:0,periods:{day:null,week:null,month:null}}));
     const ids=query.get('ids'),from=Number(query.get('after')??0),keys=ids?all.filter(k=>(JSON.parse(ids) as string[]).includes(k.id)):all.slice(from,from+10);
-    return {keys,meters:keys.flatMap(k=>[meter(`key:${k.id}:usage`),...(revision===1?[meter(`key:${k.id}:cap`)]:[])]),total:20,inventory:null,next:ids||from===10?null:'10'};
+    if(ids&&(JSON.parse(ids) as string[]).length>50)throw new ApiError(400,'invalid_request');
+    const reply:KeyPage={keys,meters:keys.flatMap(k=>[meter(`key:${k.id}:usage`),...(revision===1?[meter(`key:${k.id}:cap`)]:[])]),total:20,inventory:null,next:ids||from===10?null:'10'};
+    if(ids&&paused)return new Promise(resolve=>pending.push({signal,reply,resolve}));
+    return reply;
   };
-  const context={exports:{} as {KeyMoneySettings:(props:{sources:Named[];hidden:string[];series:[];active:boolean})=>Node},require:(name:string)=>{
+  const keyContext={exports:{} as typeof import('../lib/keyReads'),require:(name:string)=>name.endsWith('/http')?{ApiError,call}:keyBounds};
+  runInNewContext(ts.transpileModule(readFileSync(new URL('../lib/keyReads.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,keyContext);
+  const context={AbortController,exports:{} as {KeyMoneySettings:(props:{sources:Named[];hidden:string[];series:[];active:boolean})=>Node},require:(name:string)=>{
     if(name==='../../server/domain/dataFilters')return filterModel;
     if(name.endsWith('/dataFilters'))return {useDataFilters:state.get,dataFilters:state};
     if(name==='react')return {useState:hooks.useState,useRef:hooks.useRef,useEffect:hooks.useLayoutEffect};
     if(name==='react/jsx-runtime')return {jsx:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),jsxs:(type:unknown,props:Node['props'],key?:string)=>({type,props,key}),Fragment:'fragment'};
     if(name.endsWith('/board'))return {useBoardId:()=> 'b',useCurrencyContext:()=>budget?.context??defaultCurrencyContext};
     if(name.endsWith('/http'))return {ApiError,call};
+    if(name.endsWith('/keyReads'))return keyContext.exports;
     if(name.endsWith('/moneySelection'))return {moneySelection,archivedKeyGroups,keyMeter,moneyChoices,toggleMoneyChoice};
     if(name.endsWith('/prefs'))return {usePref:(key:keyof typeof prefs)=>prefs[key],setPrefs:(patch:typeof prefs)=>{prefs=patch;}};
     if(name.endsWith('/money'))return {keyName,balanceRoleLabel,balanceGroups,referenceBalance,budgetVisible};
@@ -73,7 +82,7 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
   const keys=()=>nodes(tree).find(n=>n.type==='details'&&n.props.className==='filter-key-details');
   const openKeys=async(open=true)=>{const details=keys();assert.ok(details);(details.props.onToggle as (event:unknown)=>void)({currentTarget:{open}});await settle();};
   const loadMore=async()=>{const button=more();assert.ok(button);(button.props.onClick as ()=>void)();await settle();};
-  return {settle,render,more,keys,slots,reads,openKeys,loadMore,setActive:(value:boolean)=>{active=value;},selection:()=>moneySelection([source],[],prefs.money,budget?.context).selection,switches:()=>nodes(tree).filter(n=>n.type===switchRow),refresh:()=>{revision++;source={...source,successAt:revision};}};
+  return {settle,render,more,keys,slots,reads,openKeys,loadMore,pending,pauseMembership:()=>{paused=true;},resumeMembership:()=>{paused=false;pending.splice(0).forEach(({reply,resolve})=>resolve(reply));},setActive:(value:boolean)=>{active=value;},selection:()=>moneySelection([source],[],prefs.money,budget?.context).selection,switches:()=>nodes(tree).filter(n=>n.type===switchRow),refresh:()=>{revision++;source={...source,successAt:revision};}};
 }
 
 test('native and converted balance-only sources have balance switches without archived key controls',async t=>{
@@ -115,6 +124,29 @@ test('selected archived scales remain removable beside the live key list',async(
   assert.equal(f.slots().length,11);await f.loadMore();assert.equal(f.slots().length,21);
   const row=f.switches().find(n=>n.key==='gone')!;assert.equal(row.props.disabled,false);(row.props.onChange as (on:boolean)=>void)(false);await f.settle();assert.ok(!f.selection()!.ids.some(([,meter])=>meter.startsWith('key:gone:')));
   assert.equal(f.slots().length,20);assert.equal(f.more(),undefined);
+});
+
+test('a migrated selection above the key lookup limit keeps every archived cap individually removable',async()=>{
+  const f=fixture(Array.from({length:51},(_,i)=>['s',`key:gone-${i}:cap`]));await f.settle();await f.openKeys();
+  assert.equal(f.slots().length,61,'all 51 archived choices appear beside the first live page');
+  const membership=()=>f.reads.filter(path=>new URL(path,'https://fixture.invalid').searchParams.has('ids'));
+  assert.equal(membership().length,2);
+  for(let i=0;i<20;i++){
+    const row=f.switches().find(n=>n.key===`gone-${i}`);assert.ok(row);assert.equal(row.props.disabled,false);
+    (row.props.onChange as (on:boolean)=>void)(false);await f.settle();
+  }
+  assert.equal(f.selection()!.ids.length,32);assert.equal(membership().length,2,'deselecting a covered key needs no new membership read');
+});
+
+test('closing a resource cancels selected key membership and reopening uses its refreshed identity',async()=>{
+  const f=fixture([['s','key:gone:cap']]);f.pauseMembership();await f.settle();await f.openKeys();
+  assert.equal(f.pending.length,1);assert.equal(f.slots().length,10);
+  f.setActive(false);await f.settle();assert.equal(f.pending[0].signal?.aborted,true);
+  f.resumeMembership();await f.settle();assert.equal(f.slots().length,10,'a closed consumer ignores its late membership response');
+  f.refresh();await f.settle();const before=f.reads.length;
+  f.setActive(true);await f.settle();
+  assert.equal(f.reads.length,before+2,'the refreshed source reads its page and selected membership');
+  assert.equal(f.slots().length,11);assert.equal(f.switches().find(n=>n.key==='gone')?.props.disabled,false);
 });
 
 test('an expanded key list refreshes names and caps without losing the loaded range',async()=>{
