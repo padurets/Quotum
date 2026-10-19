@@ -290,7 +290,7 @@ class BoardPeriod {
     if(this.workLimit){delete queries.quota;if(queries.budget)queries.budget={...queries.budget,work:undefined};}
     const sourceNeeded=!!filters&&this.selection.mode==='live'&&!this.sourceTape;
     for(const scope of PERIOD_SCOPES)if(queries[scope]&&(this.projectionErrors[scope]&&!this.dirtyScopes.has(scope)||!this.needsTape(scope,this.queryKey(queries[scope]!,scope),range)&&!(sourceNeeded&&(scope==='quota'||queries[scope]?.work==='1'))))delete queries[scope];
-    const request={version:1 as const,selection:this.selection,evaluatedAt:hubNow(),...queries,...(filters?{workFilter:workFilter(filters)}:{}),
+    const request={version:1 as const,selection:this.selection,evaluatedAt:hubNow(),...queries,...(filters&&!this.workLimit?{workFilter:workFilter(filters)}:{}),
       ...(pending&&this.valuesNeeded&&this.selection.mode==='range'&&this.sourceIds.length?{values:this.sourceIds}:{}),
       ...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{}),
       ...(pending&&this.facetsDemand>0&&this.facetsNeeded?{facets:true as const}:{}),

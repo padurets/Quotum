@@ -44,16 +44,21 @@ test('final transport admission fails requested extras without sending, losing t
   }finally{transport.reset();}
 });
 
-test('resource-only transport omits an unused oversized predicate while work reads retain their admission boundary',async()=>{
+test('resource-only transport omits an unused predicate while work and facet reads retain their admission boundary',async()=>{
   const pool=new HistoryPool(),sent:PeriodRequest[]=[],replies:PeriodReply[]=[];
   const filters=defaultFilters();filters.projects={mode:'include',values:Array.from({length:1000},(_,i)=>`${i}`.padStart(83,'p'))};
-  let request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:NOW},evaluatedAt:NOW,workFilter:workFilter(filters),values:['A'],facets:true};
+  let request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:NOW},evaluatedAt:NOW,workFilter:workFilter(filters),values:['A']};
   let generation=0;
   const transport=new PeriodTransport(pool,()=>({board:'b',generation,revision:generation,request}),reply=>{replies.push(reply);},async(_board,body)=>{sent.push(body);return {basis:{run:'r',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:0,to:NOW}}};});
   try{
     transport.change();await flush();assert.equal(sent.length,1);assert.equal(sent[0].workFilter,undefined);assert.ok(request.workFilter);
+    request={...request,values:undefined,facets:true};generation++;transport.change();await flush();
+    assert.equal(sent.length,1);assert.deepEqual(replies.at(-1)?.facets,{state:'error',error:'history_limit'});
     request={...request,values:undefined,facets:undefined,sessions:{}};generation++;transport.change();await flush();
     assert.equal(sent.length,1);assert.deepEqual(replies.at(-1)?.sessions,{state:'error',error:'history_limit'});assert.equal(pool.activeFlights,0);
+    const valid=defaultFilters();valid.projects={mode:'exclude',values:['Absent project']};
+    request={...request,sessions:undefined,facets:true,workFilter:workFilter(valid)};generation++;transport.change();await flush();
+    assert.equal(sent.length,2);assert.deepEqual(sent[1].workFilter,workFilter(valid),'an independent facet read needs explicit choices too');
   }finally{transport.reset();}
 });
 const flush=async()=>{for(let i=0;i<180;i++)await Promise.resolve();};

@@ -82,13 +82,13 @@ export class PeriodTransport implements HistoryMember {
       }
     }
     if(body.sourceWork&&!body.quota&&body.budget?.work!=='1')delete body.sourceWork;
-    if(!body.quota&&!body.sessions&&body.budget?.work!=='1')delete body.workFilter;
+    if(!body.quota&&!body.sessions&&!body.facets&&body.budget?.work!=='1')delete body.workFilter;
     const appliedIntent={...intent,request:body};
     const resetEpoch=this.resetEpoch;
     const start=()=>{
       if(flight.controller.signal.aborted)return;
       if(extras&&!this.current(intent)&&!this.resourcesCurrent(intent)){this.abort(flight);this.schedule();return;}
-      const response=jsonBytes(body)>PERIOD_BODY_BYTES||body.workFilter&&(body.quota||body.sessions||body.budget?.work==='1')&&!executableWorkFilters(body.workFilter)?Promise.reject(new ApiError(413,'history_limit')):this.send(intent.board,body,flight.controller.signal,bytes=>this.pool.reserve(flight,bytes));
+      const response=jsonBytes(body)>PERIOD_BODY_BYTES||body.workFilter&&(body.quota||body.sessions||body.facets||body.budget?.work==='1')&&!executableWorkFilters(body.workFilter)?Promise.reject(new ApiError(413,'history_limit')):this.send(intent.board,body,flight.controller.signal,bytes=>this.pool.reserve(flight,bytes));
       response.then(async reply=>{
         if(flight.controller.signal.aborted)return;
         // A→B→A is three generations. Equal target text does not revive the first response.

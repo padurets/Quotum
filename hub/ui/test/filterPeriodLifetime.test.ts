@@ -90,11 +90,15 @@ test('revocation retires cached facets while closed and reopening reads the auth
 test('authorized absent choices follow the current predicate and late replies cannot restore revoked labels',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture();let stop:undefined|(()=>void);
   try{
-    h.selectRange({from:NOW-3*H,to:NOW-2*H});const filters=defaultFilters();filters.projects={mode:'exclude',values:['Work project']};publishDataFilters(filters);h.period.changed();
-    stop=h.period.demandFacets();await flush();assert.deepEqual(h.period.getFacets().value.projects,[]);assert.deepEqual(h.period.getFacets().value.retained.projects,['Work project']);
+    h.store.creditWork(h.device,NOW-120_000,NOW-60_000,[{source:h.source,client:'codex',origin:'terminal',project:'Other project',folder:'',startedAt:NOW-120_000,identity:{kind:'stable',sessionId:'other-absent-choice'}}]);h.events.flush();await flush();
+    h.selectRange({from:NOW-3*H,to:NOW-2*H});const filters=defaultFilters();filters.projects={mode:'exclude',values:['Other project','Work project']};publishDataFilters(filters);h.period.changed();await flush();
+    h.requests.length=0;stop=h.period.demandFacets();await flush();assert.equal(h.requests.length,1);assert.equal(h.requests[0].sessions,undefined,'first opening follows a settled baseline');assert.deepEqual(h.requests[0].workFilter?.projects,filters.projects);
+    assert.deepEqual(h.period.getFacets().value.projects,[]);assert.deepEqual(h.period.getFacets().value.retained.projects,filters.projects.values);
+    const partial=defaultFilters();partial.projects={mode:'exclude',values:['Other project']};publishDataFilters(partial);h.period.changed();await flush();
+    assert.deepEqual(h.period.getFacets().value.retained.projects,['Other project'],'restoring one absent choice preserves the other exclusion');
     stop!();h.requests.length=0;publishDataFilters(defaultFilters());h.period.changed();await flush();assert.ok(h.requests.every(request=>!request.facets),'closed controls never read for changed explicit choices');
     stop=h.period.demandFacets();await flush();assert.equal(h.period.getFacets().value.retained,undefined,'the same fixed range revalidates its explicit choice metadata');
-    publishDataFilters(filters);h.period.changed();await flush();assert.deepEqual(h.period.getFacets().value.retained.projects,['Work project']);
+    publishDataFilters(filters);h.period.changed();await flush();assert.deepEqual(h.period.getFacets().value.retained.projects,filters.projects.values);
     const gate=h.hold();h.store.creditWork(h.device,NOW-10*60_000,NOW-9*60_000,[{source:h.source,client:'codex',origin:'terminal',project:'New live work',folder:'',startedAt:NOW-10*60_000,identity:{kind:'stable',sessionId:'facet-receipt'}}]);h.events.flush();await flush();
     h.remove();assert.equal(h.period.getFacets().value,null);gate.release();await flush();
     assert.equal(JSON.stringify(h.period.getFacets().value).includes('Work project'),false);
