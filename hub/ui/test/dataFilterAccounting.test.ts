@@ -8,8 +8,39 @@ import type {WorkTrace} from '../../server/domain/periodWork';
 import type {PeriodTape} from '../../server/domain/periodTape';
 import {moneyWorkValues} from '../lib/moneyTable';
 import type {MeterHistory} from '../lib/moneyView';
+import {lineWork} from '../lib/work';
 const M=60_000,H=60*M;
 const trace=(spans:WorkTrace['spans']):WorkTrace=>({anchor:0,knownFrom:0,cut:2*H,refs:['A','B','C'].map(project=>({ref:project,source:'s',clientId:'codex',device:{id:'d',name:'Device'},origin:'terminal',project,folder:null,startedAt:0})),spans});
+
+test('selected quota and money hours distinguish unavailable periods from a known empty suffix',()=>{
+  const selected={...trace([]),knownFrom:H},full={...trace([[0,H,2*H]]),knownFrom:H};
+  const source=sourceWorkCurves(sourceWorkTape(new PeriodCurves(full),0,2*H,new Map([['s',H]]),()=>{}));
+  const readings=[0,2*H].map((at,i)=>({id:'usage',at,previousAt:i?0:null,kind:'counter' as const,unit:'USD',amount:i?'1000000':'0',limit:null,resetAt:null,minutes:null,scope:null,label:null,staleAfterMs:4*H}));
+  const spans=[{from:0,to:2*H,observedFrom:0,staleAfterMs:4*H}];
+  const tape:PeriodTape={from:0,cut:2*H,replaceFrom:0,cursor:'c',quota:[{source:'s',window:'w',workFrom:H,samples:packSamples([{at:0,used:0,resetAt:4*H,staleAfterMs:4*H},{at:2*H,used:10,resetAt:4*H,staleAfterMs:4*H}])}],money:[{source:'s',meter:'balance',role:'total',readings:readings.map(row=>({...row,id:'balance',kind:'balance',amount:'14000000'})),spans,workCounter:{source:'s',unit:'USD',knownFrom:0,workFrom:H,readings,spans}}]};
+  const accounting=drain(PeriodAccounting.prepare(tape,selected,undefined,undefined,undefined,undefined,source));
+  const series={sourceId:'s',meterId:'balance',kind:'balance',unit:'USD',end:'14000000',role:'total'} as MeterHistory;
+  for(const to of [H/2,H,H+M,2*H]){
+    const range={from:0,to},expected=to>H?0:null,quota=accounting.quotaSummary('s','w',range)!,money=accounting.moneyWorkSummary('s',range)!;
+    assert.equal(quota.selectedWork.ms,expected);assert.equal(money.selectedWork?.activeMs,expected);
+    const cells=lineWork({...quota,current:90,minutes:10080},true,4*H,2*H)!;
+    assert.deepEqual(cells.work,{none:expected===null?'unknown':'none'});
+    assert.deepEqual(cells.agenthours,{none:expected===null?'unknown':'none'});
+    assert.equal(moneyWorkValues(series,money).active,expected===null?null:'0');
+    const snapshot=accounting.fixed(range,M),fixed=new PeriodAccounting({...tape,fixed:snapshot},null);
+    assert.equal(snapshot.quota[0].selectedWork?.ms,expected);
+    assert.equal(fixed.moneyWorkSummary('s',range)?.selectedWork?.activeMs,expected);
+  }
+  assert.equal(accounting.quotaSummary('s','w',{from:H,to:2*H})!.work!.ms,H,'an empty selection does not erase source-wide work');
+});
+
+test('an empty selected cohort wakes when a rolling period first enters known work',()=>{
+  const tape:PeriodTape={from:-H,cut:3*H,replaceFrom:-H,cursor:'c',money:[],quota:[{source:'s',window:'w',workFrom:H,samples:packSamples([{at:-H,used:0,resetAt:6*H,staleAfterMs:6*H},{at:3*H,used:10,resetAt:6*H,staleAfterMs:6*H}])}]};
+  const accounting=drain(PeriodAccounting.prepare(tape,{...trace([]),anchor:-H,cut:3*H,knownFrom:H}));
+  assert.equal(accounting.quotaSummary('s','w',{from:0,to:H})!.selectedWork.ms,null);
+  assert.equal(accounting.changesAt(H,H,'s'),H+1,'the exclusive right edge must enter the known suffix before the native sample changes');
+  assert.equal(accounting.quotaSummary('s','w',{from:1,to:H+1})!.selectedWork.ms,0);
+});
 
 test('selected hours use the subset union while quota estimates use the independent source sweep',()=>{
   const full=trace([[0,0,H],[1,30*M,90*M],[2,75*M,120*M]]),selected=trace(full.spans.filter(([id])=>id<2));

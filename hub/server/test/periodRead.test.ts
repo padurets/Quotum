@@ -423,6 +423,30 @@ test('fixed work follows device admission independently of later subscription sh
   assert.deepEqual(workedSessions(reply.sessions.value,selection,now).map(r=>r.workedMs),[30*M]);
 });
 
+test('shared fixed quota hours stay unknown before admission and become zero only in a known empty suffix',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const shared=h.directory.createBoard('Boundary',h.user.id,now-3*H).id,known=now-H;
+  h.store.share(shared,h.source,h.user.id,now-3*H);
+  let policy=h.store.sessionDevices(shared,h.user.id)[0];h.store.setDeviceSessions(shared,h.device,h.user.id,false,policy.revision,now-2*H);
+  policy=h.store.sessionDevices(shared,h.user.id)[0];h.store.setDeviceSessions(shared,h.device,h.user.id,true,policy.revision,known);
+  for(const at of [now-3*H,now-2*H,known,now-1])h.store.record(h.source,{observedAt:at,plan:'',resets:null,staleAfterMs:4*H,windows:[{id:'weekly',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:now+H}]});
+  const summary=async(from:number,to:number,filters=defaultFilters())=>{
+    const response=await h.read({version:1,selection:{mode:'range',from,to},evaluatedAt:now,sessions:{},workFilter:workFilter(filters),quota:{cell:String(M),from:String(from),to:String(to),cells:'skip'},sourceWork:{}},shared);
+    assert.equal(response.statusCode,200,response.body);const reply=expandPeriod(response.json<PeriodWireReply>());
+    if(reply.quota?.state!=='complete')throw new Error('incomplete shared quota');
+    const row=reply.quota.value.tape?.fixed?.quota.find(row=>row.windowId==='weekly');assert.ok(row);return row;
+  };
+  for(const to of [known-M,known,known+M]){
+    const row=await summary(now-2*H,to),expected=to>known?0:null;
+    assert.equal(row.selectedWork?.ms,expected);assert.equal(row.selectedWork?.from,known);
+  }
+  h.credit(known+15*M,known+30*M);
+  const full=await summary(known,now),filters=defaultFilters();filters.projects={mode:'include',values:[]};
+  const empty=await summary(known,now,filters);
+  assert.equal(full.work?.ms,15*M);assert.equal(empty.selectedWork?.ms,0);assert.equal(empty.selectedWork?.agentMs,0);
+  assert.deepEqual(empty.work,full.work,'a known empty selection preserves the supplier estimate cohort');
+});
+
 
 test('a fixed range summarizes its own work without rewriting the retained live index',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});

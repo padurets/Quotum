@@ -368,10 +368,11 @@ export class PeriodAccounting {
   get bytes(){let bytes=this.quotaBytes;for(const index of this.money.values())bytes+=index.bytes;for(const index of this.moneyWork.values())bytes+=index.bytes;return bytes;}
   private directWork(source:string,range:PeriodRange,cutoff:number) {
     const from=Math.max(range.from,this.selectedKnown,cutoff),curve=this.selectedCurves?.groups.source.get(source);
-    return {from:Number.isFinite(from)?from:range.to,ms:Number.isFinite(from)?range.to>from?curve?.read({from,to:range.to},true)??0:0:null,agentMs:Number.isFinite(from)&&range.to>from?curve?.read({from,to:range.to})??0:0};
+    return {from:Number.isFinite(from)?from:range.to,ms:Number.isFinite(from)&&range.to>from?curve?.read({from,to:range.to},true)??0:null,agentMs:Number.isFinite(from)&&range.to>from?curve?.read({from,to:range.to})??0:0};
   }
   private directWorkChangesAt(source:string,now:number,period:number,cutoff:number) {
     const known=Math.max(this.selectedKnown,cutoff);if(!Number.isFinite(known))return Infinity;
+    if(now<=known)return known+1;
     const curve=this.selectedCurves?.groups.source.get(source),left=Math.max(now-period,known);
     return Math.min(curve?.next(now)??Infinity,left===now-period?(curve?.next(left)??Infinity)+period:known+period);
   }
