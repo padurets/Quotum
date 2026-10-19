@@ -618,7 +618,7 @@ The body is at most 256 KiB:
   version: 1;
   selection: {mode: 'live'; periodMs: number} | {mode: 'range'; from: number; to: number};
   evaluatedAt: number;
-  quota?: {cell: string; from: string; to: string; meters?: string; unit?: string; meta?: string; evidence?: string; cells?: 'skip'};
+  quota?: {cell: string; from: string; to: string; sources?: string; meters?: string; unit?: string; meta?: string; evidence?: string; cells?: 'skip'};
   budget?: {cell: string; from: string; to: string; meters: string; unit: string; currency?: string; meta?: string; evidence?: string; cells?: 'skip'; work?: '1'};
   funds?: {cell: string; from: string; to: string; meters: string; unit: string; currency?: string; meta?: string; evidence?: string; cells?: 'skip'};
   values?: string[];
@@ -627,6 +627,9 @@ The body is at most 256 KiB:
 ```
 
 Table height, grouping, sorting and page size do not change this read contract.
+The optional quota `sources` uses the same JSON-encoded source selection and
+authorization rules as [Reading history](#reading-history). Budget and funds
+sections do not accept it; their meter selections identify the requested sources.
 The sessions section carries the complete authorized index for the period within
 the existing history budget, or an explicit error; it does not silently truncate
 the roster to a display page. Widgets page that index locally and label their
@@ -905,6 +908,10 @@ roster; device labels require current device admission. These choices remain ind
 removable without changing the period universe or its exclusion counts. Dormant draft
 references supply no authority or display labels. A predicate change invalidates this
 metadata, including while closed; it shares the facet generation and revocation checks.
+An independent facets-only request retains the work filter for these explicit choices.
+Recovery from an oversized inherited predicate reads the unfiltered universe without
+sending that predicate. Closed controls do not request facets to calculate include
+counts; until a confirmed universe is available, they show the existing changed indicator.
 The browser charges facets before
 adoption and retains them under its shared history budget; work-authority revocation
 invalidates them even while their controls are closed.
@@ -980,6 +987,15 @@ now; it is rounded out and cut to the end of the cell containing `now + 30 secon
 the clock tolerance of ingest. After cutting, `to > from` and at most eight tiles may
 be touched. `from` is no earlier than the tile containing the start of the sample
 retention period. The hub credits machines that went quiet before reading the cells.
+
+Quota and legacy unscoped reads optionally accept `sources`, a JSON-encoded array
+of at most 2000 nonempty public source IDs, each at most 120 characters. Omission
+selects all authorized sources; `[]` selects none. Duplicate IDs have no additional
+effect. This selection narrows the read and grants no access: any unauthorized ID
+returns `404 not_found`, even alongside authorized IDs. Malformed selections and
+`sources` with `scope=budget` return `400 invalid_request`. Explicit `meters` must
+refer to sources within the selected set, or return `404 not_found`. Card layout
+visibility does not change this authorization or the admitted device cohort.
 
 ```ts
 {

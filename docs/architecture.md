@@ -1600,7 +1600,8 @@ Canonical defaults fit 256 KiB and their merge/projection envelopes 272 KiB. Ful
 period requests fit 256 KiB; Save and runtime share a 76 KiB minimal work template
 and 80 KiB detail limit. The transport checks the final encoded body after inserting
 evidence and metadata. Native-only reads omit an unused work predicate; work-sensitive
-reads preserve it in full. An inherited oversized predicate remains exact and
+reads preserve it in full, including a separate facet read for removable explicit choices.
+An inherited oversized predicate remains exact and
 recoverable through successive decreasing local edits, without an oversized work
 request. Parsed queued input, its canonical allowance and prepared membership sets
 share the existing 32 MiB server reservation; retained and staged facets share the
@@ -1619,7 +1620,9 @@ The filter button forms its own group after the board controls. A small dot mark
 non-default data selection or historical range, including while the row is hidden.
 The row starts closed and remembers its visibility in the reader's browser.
 Each data filter has on/off choices, a small minus-count tag for exclusions and an
-adjacent cross that shows all again. Shared filter rows keep every switch on the
+adjacent cross that shows all again. Include counts use a confirmed cached universe;
+until one is available, the existing changed dot appears without reading a closed menu.
+Shared filter rows keep every switch on the
 right, including group headings and unknown resources. Dropdowns align with the
 filter label independently of its exclusion badge; unchanged filters reserve no
 status space. Search uses a short placeholder and an accessible hidden label,
