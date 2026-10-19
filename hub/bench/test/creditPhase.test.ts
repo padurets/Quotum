@@ -8,20 +8,22 @@ import {SETS} from '../../demo/catalogue.js';
 import {cards,people} from '../../demo/model.js';
 import {cellOf,cellStart} from '../../server/domain/history.js';
 import {creditSnapshot} from '../credits.js';
-import {MARGIN_MS,overviewCards,stillProblems,stillSnapshot} from '../still.js';
+import {hourShift} from '../../server/forecasts.js';
+import {overviewCards,quietAfter,stillProblems,stillSnapshot} from '../still.js';
 import {chartProblems,creditRenderProblems,HISTORY_BYTES_PER_MEASUREMENT,measuredProblems} from '../budget.js';
 
 /** Execute the whole production phase; the stand and CDP only supply its observations. */
-async function phase({resetIn=Infinity,extraQuota=false,setupDrift=0}: {resetIn?:number;extraQuota?:boolean;setupDrift?:number}={}) {
-  const start=Date.parse('2026-10-15T04:50:58Z'),boundary=start+resetIn;
+async function phase({resetIn=Infinity,extraQuota=false,setupDrift=0,forecastEdge=false,baselineReset=false}: {resetIn?:number;extraQuota?:boolean;setupDrift?:number;forecastEdge?:boolean;baselineReset?:boolean}={}) {
+  const source='codex:credit',forecastAt=Date.parse('2026-10-15T05:00:00Z')+hourShift(source);
+  const start=forecastEdge?forecastAt-1900:Date.parse('2026-10-15T04:50:58Z');let boundary=start+resetIn;
   let now=start,probeFrom=now,amount='0',rows=0,coverage=0,lastChange=0,changedBalance=false;
   const selected=cards(SETS[0]).find(card=>card.provider==='codex'&&card.windows.length)!;
-  const source='codex:credit',waits:number[]=[];
+  const waits:number[]=[];let overviewReads=0;
   const overview={board:{id:'board'},sources:[
     {id:source,successAt:start,staleAfterMs:3_600_000,windows:[{resetAt:null}]},
     {id:'claude:reset',successAt:start-600_000,staleAfterMs:3_600_000,windows:[{resetAt:Number.isFinite(boundary)?boundary:null}]},
-  ],forecast:{}};
-  const owner={get:async()=>overview};
+  ],forecast:forecastEdge?{[source]:{weekly:{asOf:Math.floor(forecastAt/3_600_000)*3_600_000-3_600_000}}}:{}};
+  const owner={get:async()=>{if(++overviewReads===3&&baselineReset){boundary=now+1000;overview.sources[1].windows[0].resetAt=boundary;}return overview;}};
   const agent={ingest:async(snapshots: {balances?:{amount:string}[]}[])=>{
     now+=200;
     const balance=snapshots[0].balances?.[0];
@@ -57,15 +59,15 @@ async function phase({resetIn=Infinity,extraQuota=false,setupDrift=0}: {resetIn?
   const sourceFile=ts.createSourceFile('index.ts',readFileSync(new URL('../index.ts',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true);
   const declaration=sourceFile.statements.find(node=>ts.isFunctionDeclaration(node)&&node.name?.text==='creditPhase');
   assert.ok(declaration);
-  const context={Date:class extends Date {static now(){return now;}},path,DatabaseSync:Ledger,Requests,SHOWN_WITHIN:5000,MARGIN_MS,HISTORY_BYTES_PER_MEASUREMENT,Stop:Error,
-    cards,people,creditSnapshot,stillSnapshot,overviewCards,stillProblems,cellOf,cellStart,chartProblems,creditRenderProblems,measuredProblems,say:()=>{},
+  const context={Date:class extends Date {static now(){return now;}},path,DatabaseSync:Ledger,Requests,SHOWN_WITHIN:5000,HISTORY_BYTES_PER_MEASUREMENT,Stop:Error,
+    cards,people,creditSnapshot,stillSnapshot,overviewCards,quietAfter,stillProblems,cellOf,cellStart,chartProblems,creditRenderProblems,measuredProblems,say:()=>{},
     sleep:async(ms:number)=>{waits.push(ms);now+=ms;},drain:async()=>{now+=100;},
     selectMoney:async()=>{now+=50+setupDrift;},
   };
   const code=ts.transpileModule(declaration.getText(sourceFile)+'\nglobalThis.phase=creditPhase;', {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
   runInNewContext(code,context);
   const result=await (context as unknown as {phase:(demo:unknown,stand:unknown,cdp:unknown)=>Promise<{qualification:{from:number;to:number;waits:unknown[]};updates:{amount:string;from:number;to:number;renders:unknown[];mutations:unknown[]}[];problems:string[]}>}).phase({dir:'/unused'},stand,cdp);
-  return{result,waits,boundary};
+  return{result,waits,boundary,forecastAt};
 }
 
 test('credit phase waits past a natural quota reset before counting all four updates',async()=>{
@@ -86,6 +88,18 @@ test('a qualified credit phase still fails unrelated quota renders and mutations
   assert.ok(result.problems.every(problem=>problem.startsWith('subscription credit ')));
 });
 
-test('credit setup rejects a reset entering the interval during page preparation',async()=>{
-  await assert.rejects(phase({resetIn:50_000,setupDrift:10_000}),/baseline changes independently: claude:reset has a limit that resets/);
+test('credit phase qualifies after page preparation and waits when that setup approaches a reset',async()=>{
+  const {result,boundary}=await phase({resetIn:50_000,setupDrift:10_000});
+  assert.deepEqual(Array.from(result.problems),[]);assert.equal(result.qualification.waits.length,1);
+  assert.equal(result.updates.length,4);assert.ok(result.updates.every(update=>update.from>boundary));
+});
+
+test('credit phase waits past an hourly forecast before counting the same four isolated updates',async()=>{
+  const {result,forecastAt}=await phase({forecastEdge:true});
+  assert.deepEqual(Array.from(result.problems),[]);assert.equal(result.qualification.waits.length,1);
+  assert.equal(result.updates.length,4);assert.ok(result.updates.every(update=>update.from>forecastAt));
+});
+
+test('credit setup still rejects a reset introduced after the interval was qualified',async()=>{
+  await assert.rejects(phase({baselineReset:true}),/baseline changes independently: claude:reset has a limit that resets/);
 });
