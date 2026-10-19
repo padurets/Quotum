@@ -126,6 +126,30 @@ test('fixed facets exclude current-only roster values outside their historical r
   const live=(await h.read({...request,selection:{mode:'live',periodMs:2*H}})).json<PeriodReply>();
   if(fixed.facets?.state!=='complete'||live.facets?.state!=='complete')throw new Error('facets');
   assert.deepEqual(fixed.facets.value.projects,['Project']);assert.ok(live.facets.value.projects.includes('Current only'));
+  const filters=defaultFilters();filters.projects={mode:'exclude',values:['Current only']};
+  const chosen=(await h.read({...request,selection:{mode:'range',from:now-2*H,to:now-H},workFilter:workFilter(filters)})).json<PeriodReply>();
+  if(chosen.facets?.state!=='complete')throw new Error('explicit choices');
+  assert.deepEqual(chosen.facets.value.projects,['Project']);assert.deepEqual(chosen.facets.value.retained?.projects,['Current only'],'authorized current-only choices remain removable outside a fixed range');
+});
+
+test('fixed facets keep authorized explicit choices removable without enlarging the period universe',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  for(const [project,from,to] of [['A',150,140],['B',135,130],['C',30,20]] as const)h.store.creditWork(h.device,now-from*M,now-to*M,[{source:h.source,client:'codex',origin:'terminal',project,folder:'',startedAt:now-from*M,identity:{kind:'stable',sessionId:project}}]);
+  const idle=h.directory.saveDevice({userId:h.user.id,machine:{id:'idle-0123456789',name:'Idle laptop',os:'linux',arch:'x86_64'},agent:'quotum/0.6.0',tokenId:null},now-3*H).id;
+  const filters=defaultFilters();filters.projects={mode:'exclude',values:['A','B']};filters.devices={mode:'exclude',values:[idle]};filters.clients={mode:'exclude',values:['offline-client']};filters.sources={mode:'exclude',values:[{status:'unknown'}]};
+  const body:PeriodRequest={version:1,selection:{mode:'range',from:now-H,to:now},evaluatedAt:now,facets:true,workFilter:workFilter(filters),sessions:{}};
+  let reads=0;const original=h.store.agentWork.bind(h.store);t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{reads++;return original(...args);});
+  const response=await h.read(body);assert.equal(response.statusCode,200,response.body);const result=response.json<PeriodReply>();
+  if(result.facets?.state!=='complete')throw new Error('facets');
+  assert.equal(reads,1,'choice authorization does not extract a second raw ledger');assert.deepEqual(result.facets.value.projects,['C']);
+  assert.deepEqual(result.facets.value.retained,{projects:['A','B'],devices:[{id:idle,name:'Idle laptop'}],clients:['offline-client'],funding:['unknown']});
+  const board=h.directory.createBoard('Shared work',h.user.id,now-3*H).id;
+  const allowed=(await h.read(body,board)).json<PeriodReply>();if(allowed.facets?.state!=='complete')throw new Error('shared facets');
+  assert.deepEqual(allowed.facets.value.retained?.projects,['A','B']);
+  for(const device of h.store.sessionDevices(board,h.user.id))h.store.setDeviceSessions(board,device.id,h.user.id,false,device.revision,now);
+  const revoked=(await h.read(body,board)).json<PeriodReply>();if(revoked.facets?.state!=='complete')throw new Error('revoked facets');
+  assert.deepEqual(revoked.facets.value.projects,[]);assert.deepEqual(revoked.facets.value.retained?.projects,[]);assert.deepEqual(revoked.facets.value.retained?.devices,[]);
+  for(const value of ['"A"','"B"','Idle laptop',idle])assert.equal(JSON.stringify(revoked.facets).includes(value),false);
 });
 
 test('a period response rechecks authentication after cooperative preparation',async t=>{

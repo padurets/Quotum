@@ -897,19 +897,32 @@ a mismatched detail predicate returns `400 history_range_invalid`.
 clients, and a `funding` list containing `unknown` and/or `notProvided` only when
 those public funding categories occur in the unfiltered authorized period, or in the
 current roster for live selection. A fixed period excludes current-only roster facts.
-The selected cohort does not shrink these choices. The browser charges facets before
+The selected cohort does not shrink this universe. An optional `retained` object has
+the same `projects`, `devices`, `clients` and `funding` arrays: it contains only explicit
+choices from the request's work filter that are absent from the period but remain
+authorized. Project availability uses admitted retained work or the admitted current
+roster; device labels require current device admission. These choices remain individually
+removable without changing the period universe or its exclusion counts. Dormant draft
+references supply no authority or display labels. A predicate change invalidates this
+metadata, including while closed; it shares the facet generation and revocation checks.
+The browser charges facets before
 adoption and retains them under its shared history budget; work-authority revocation
 invalidates them even while their controls are closed.
 Ordinary session and credited-work changes mark that cache dirty without reading
 while closed. Opening a control revalidates dirty facts and a live range that has
 moved since its last read; a superseded reply cannot acknowledge newer changes.
 
-One authorized raw work read supplies the selected trace and independent
-source-wide curves. Live requests for quota work or budget `work:'1'` may request
+Selected traces, facets and independent source-wide curves borrow one authorized ledger.
+Their combined range is planned before extraction, including independent delta frontiers.
+Native history cells retain their separate predecessor-anchor and tile-cache rules.
+Live requests for quota work or budget `work:'1'` may request
 `sourceWork`: a separate complete/delta section with `version:1,from,cut,patterns,
 sources,replaceFrom?,replaceTo?,cursor`. Each source has `id,knownFrom,blocks`;
 blocks are flattened hour/pattern-index pairs. Patterns are flattened
 within-hour millisecond/count-delta pairs, with nonnegative counts returning to zero.
+Export, decoding and merging admit temporary arrays, indexes and dictionary keys before
+growth, release duplicate scratch, and release failed preparations under the same server
+and browser memory ceilings. Shared hour patterns remain shared after delta replacement.
 A delta replaces its exact interval, including empty tails and partial hours.
 Its source cohort is the complete authorized board set, shared across quota and
 budget queries, so independently scheduled families reuse one cursor.

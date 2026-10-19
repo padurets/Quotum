@@ -1608,6 +1608,13 @@ browser's 15 MiB history pool. Work authority changes retire closed-menu facets 
 Ordinary session and work changes invalidate their cached choices without a closed-menu
 read. Reopening checks that generation and the live evaluated range; an older reply
 cannot mark newer choices complete.
+The response keeps the period's facet universe separate from authorized explicit choices
+outside that period. Those choices remain individually removable. The hub confirms their
+project/device admission before returning labels; browser draft references do not provide
+that authority. Their metadata follows predicate, range and work-authority generations.
+Quota charts and tables subscribe to source/window presentation choices separately from
+their native history identity, so a window-only edit updates both on a quiet board without
+reading unchanged history or rebuilding for unrelated project-only presentation changes.
 The filter button forms its own group after the board controls. A small dot marks a
 non-default data selection or historical range, including while the row is hidden.
 The row starts closed and remembers its visibility in the reader's browser.

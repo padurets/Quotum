@@ -21,6 +21,7 @@ import {parseWorkFilter,type WorkFilter} from './domain/dataFilters.js';
 import {cellOf,cellStart,CLOCK_TOLERANCE_MS} from './domain/history.js';
 import {PeriodCurves,sourceWorkTape,type SourceWorkCurves} from './domain/periodCurves.js';
 import {sourceWorkFrom} from './domain/workAccess.js';
+import {retainedWorkChoices} from './dataFilters.js';
 
 class PeriodChanged extends Error {}
 
@@ -341,7 +342,9 @@ export class PeriodReader {
         };
         for(const row of work(range.from,cut)){add(row.project,row.device,row.rawContext?.deviceName??row.device,row.rawContext?.client??null,row.source,row.sourceStatus);yield;}
         if(access&&selection.mode==='live'){const live=self.hub.ingest.live.board(access,now);for(const row of live.unattributedSessions){add(row.project,row.device.id,row.device.name,row.clientId??null,null,row.sourceStatus);yield;}for(const [source,rows] of live.sessions)for(const row of rows){add(row.project,row.device.id,row.device.name,row.clientId??null,source);yield;}}
-        return {projects:[...projects].sort(),devices:[...devices].map(([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id)),clients:[...clients].sort(),funding:[...funding].sort()};
+        const value={projects:[...projects].sort(),devices:[...devices].map(([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id)),clients:[...clients].sort(),funding:[...funding].sort()};
+        const retained=retainedWorkChoices(store,work.ensureAccess!(),self.hub.ingest,filter,value,now,reserve,release);
+        return {...value,...(retained?{retained}:{})};
       })());
       if(sourcePlan){
         const {sources,delta,patch,cursor}=sourcePlan;

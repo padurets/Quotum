@@ -7,7 +7,8 @@ import type {WorkFilter} from './dataFilters.js';
 export const PERIOD_SCOPES = ['quota','budget','funds'] as const;
 export const PERIOD_BODY_BYTES = 256 * 1024;
 export type PeriodScope = typeof PERIOD_SCOPES[number];
-export type WorkFacets = {projects:(string|null)[];devices:{id:string;name:string}[];clients:(string|null)[];funding:('unknown'|'notProvided')[]};
+export type WorkChoices = {projects:(string|null)[];devices:{id:string;name:string}[];clients:(string|null)[];funding:('unknown'|'notProvided')[]};
+export type WorkFacets = WorkChoices & {retained?:WorkChoices};
 
 export type HistoryQuery = {cell?:string;from?:string;to?:string;meters?:string;unit?:string;currency?:string;meta?:string;scope?:string;work?:string;evidence?:string;cells?:string;sources?:string};
 export type PeriodRequest = {

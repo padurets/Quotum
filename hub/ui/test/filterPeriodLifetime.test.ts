@@ -87,6 +87,20 @@ test('revocation retires cached facets while closed and reopening reads the auth
   }finally{await h.close();}
 });
 
+test('authorized absent choices follow the current predicate and late replies cannot restore revoked labels',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture();let stop:undefined|(()=>void);
+  try{
+    h.selectRange({from:NOW-3*H,to:NOW-2*H});const filters=defaultFilters();filters.projects={mode:'exclude',values:['Work project']};publishDataFilters(filters);h.period.changed();
+    stop=h.period.demandFacets();await flush();assert.deepEqual(h.period.getFacets().value.projects,[]);assert.deepEqual(h.period.getFacets().value.retained.projects,['Work project']);
+    stop!();h.requests.length=0;publishDataFilters(defaultFilters());h.period.changed();await flush();assert.ok(h.requests.every(request=>!request.facets),'closed controls never read for changed explicit choices');
+    stop=h.period.demandFacets();await flush();assert.equal(h.period.getFacets().value.retained,undefined,'the same fixed range revalidates its explicit choice metadata');
+    publishDataFilters(filters);h.period.changed();await flush();assert.deepEqual(h.period.getFacets().value.retained.projects,['Work project']);
+    const gate=h.hold();h.store.creditWork(h.device,NOW-10*60_000,NOW-9*60_000,[{source:h.source,client:'codex',origin:'terminal',project:'New live work',folder:'',startedAt:NOW-10*60_000,identity:{kind:'stable',sessionId:'facet-receipt'}}]);h.events.flush();await flush();
+    h.remove();assert.equal(h.period.getFacets().value,null);gate.release();await flush();
+    assert.equal(JSON.stringify(h.period.getFacets().value).includes('Work project'),false);
+  }finally{stop?.();publishDataFilters(null,false);await h.close();}
+});
+
 test('closed facet controls invalidate ordinary work changes and fetch the new choices only when reopened',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture();
   try{

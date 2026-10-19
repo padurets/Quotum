@@ -82,7 +82,7 @@ class BoardPeriod {
   demandFacets=()=>{const first=this.facetsDemand++===0;if(!this.facetState.value||this.facetsNeeded||first&&this.selection.mode==='live'&&this.facetAt!==hubNow()){this.facetsNeeded=true;this.facetState={...this.facetState,loading:true};for(const listener of this.facetListeners)listener();this.revision++;this.transport.change();}return()=>{this.facetsDemand--;};};
   private invalidateFacets(){this.facetGeneration++;this.facetsNeeded=true;}
   private resetFacets(){this.invalidateFacets();this.facetAt=null;this.facetState={value:null,loading:this.facetsDemand>0,error:null};for(const listener of this.facetListeners)listener();}
-  private facetBytes(value=this.facetState.value){return value?256+JSON.stringify(value).length*3+value.projects.length*32+value.devices.length*96+value.clients.length*32+value.funding.length*32:0;}
+  private facetBytes(value=this.facetState.value){if(!value)return 0;const choices=[value,...(value.retained?[value.retained]:[])];return 256+JSON.stringify(value).length*3+choices.reduce((bytes,value)=>bytes+value.projects.length*32+value.devices.length*96+value.clients.length*32+value.funding.length*32,0);}
   private wantsWork=false;
   private workNeeded=false;
   private liveEvidence=false;
@@ -354,6 +354,7 @@ class BoardPeriod {
     this.selection=selection;this.sourceIds=sources;this.wantsWork=wantsWork;this.scopeKeys=scopeKeys;
     if(changedWork)this.retireWork();
     if(selectedChanged){
+      this.invalidateFacets();
       this.generation++;this.revision++;preparations()?.cancel(this.preparationOwner);this.cursor=undefined;this.index=null;this.activity=null;this.activityRetained=null;
       this.workEvidence++;this.work={...empty(),loading:wantsWork};this.workRows=[];const oldSources=[...this.rowsBySource.keys()];this.rowsBySource.clear();for(const id of oldSources)for(const listener of this.sourceListeners.get(id)??[])listener();this.workNeeded=wantsWork;this.publishWork();
       if(selection.mode==='range')for(const scope of PERIOD_SCOPES)if(scopeKeys[scope])this.dirtyScopes.add(scope);
