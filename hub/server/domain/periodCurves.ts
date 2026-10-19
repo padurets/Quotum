@@ -70,7 +70,7 @@ export class WorkTimeline {
 }
 
 export type SourceWorkTape={version:1;from:number;cut:number;patterns:number[][];sources:{id:string;knownFrom:number|null;blocks:number[]}[];replaceFrom?:number;replaceTo?:number};
-export type SourceWorkCurves={groups:{source:ReadonlyMap<string,WorkTimeline>};knownFrom:number;available?:boolean};
+export type SourceWorkCurves={groups:{source:ReadonlyMap<string,WorkTimeline>};knownFrom:number;available?:boolean;bytes?:number};
 export function sourceWorkTape(curves:{groups:{source:ReadonlyMap<string,WorkTimeline>}},from:number,cut:number,sources:ReadonlyMap<string,number|null>,reserve:(bytes:number)=>void):SourceWorkTape {
   const patterns:number[][]=[],ids=new Map<string,number>();
   const pattern=(values:number[])=>{const key=values.join(',');let id=ids.get(key);if(id===undefined){reserve(160+values.length*32);id=patterns.length;ids.set(key,id);patterns.push(values);}return id;};
@@ -82,6 +82,7 @@ export function sourceWorkTape(curves:{groups:{source:ReadonlyMap<string,WorkTim
 /** Strict source-only decoding shares Curve and WorkTimeline's millisecond arithmetic. */
 export function sourceWorkCurves(tape:SourceWorkTape,reserve:(bytes:number)=>void=()=>{}):SourceWorkCurves {
   if(tape.version!==1||!Number.isSafeInteger(tape.from)||!Number.isSafeInteger(tape.cut)||tape.cut<tape.from||!Array.isArray(tape.patterns)||!Array.isArray(tape.sources))throw new Error('invalid_source_work');
+  let bytes=0;
   const patterns=tape.patterns.map(pattern=>{
     if(!Array.isArray(pattern)||pattern.length%2)throw new Error('invalid_source_work');
     const changes:[number,number][]=[];let count=0,previous=-1;
@@ -89,16 +90,16 @@ export function sourceWorkCurves(tape:SourceWorkTape,reserve:(bytes:number)=>voi
       if(!Number.isSafeInteger(at)||at<0||at>WORK_BLOCK_MS||at<=previous||!Number.isSafeInteger(delta)||!Number.isSafeInteger(count)||count<0)throw new Error('invalid_source_work');
       changes.push([at,delta]);previous=at;
     }
-    if(count!==0)throw new Error('invalid_source_work');reserve(160+changes.length*64);return new Curve(changes);
+    if(count!==0)throw new Error('invalid_source_work');reserve(160+changes.length*64);const curve=new Curve(changes);bytes+=160+curve.bytes;return curve;
   });
   const source=new Map<string,WorkTimeline>();let knownFrom=Infinity;
   for(const row of tape.sources){
     if(typeof row.id!=='string'||!row.id||source.has(row.id)||row.knownFrom!==null&&!Number.isSafeInteger(row.knownFrom)||!Array.isArray(row.blocks)||row.blocks.length%2)throw new Error('invalid_source_work');
     const blocks:[number,Curve][]=[];let previous=-Infinity;
     for(let i=0;i<row.blocks.length;i+=2){const hour=row.blocks[i],index=row.blocks[i+1];if(!Number.isSafeInteger(hour)||hour<=previous||!Number.isSafeInteger(index)||!patterns[index])throw new Error('invalid_source_work');blocks.push([hour,patterns[index]]);previous=hour;}
-    reserve(256+blocks.length*64);source.set(row.id,new WorkTimeline(blocks));if(row.knownFrom!==null)knownFrom=Math.min(knownFrom,row.knownFrom);
+    reserve(256+blocks.length*64);const timeline=new WorkTimeline(blocks);source.set(row.id,timeline);bytes+=256+row.id.length*2+timeline.bytes;if(row.knownFrom!==null)knownFrom=Math.min(knownFrom,row.knownFrom);
   }
-  return {groups:{source},knownFrom,available:Number.isFinite(knownFrom)};
+  return {groups:{source},knownFrom,available:Number.isFinite(knownFrom),bytes};
 }
 
 /** Replace the exact interval, including an empty tail and cuts inside an hour. */

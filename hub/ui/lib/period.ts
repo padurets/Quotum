@@ -634,7 +634,9 @@ class BoardPeriod {
     const next=this.receiving.then(run).finally(()=>{this.retiring=false;this.scheduleClock();});this.receiving=next.catch(()=>{});
   }
   private measureBytes(){
-    this.bytes=(this.sourceTape?JSON.stringify(this.sourceTape).length*3+this.sourceTape.patterns.reduce((sum,p)=>sum+p.length*64,0)+this.sourceTape.sources.reduce((sum,s)=>sum+s.blocks.length*64,0):0)+JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+(this.work.value?0:JSON.stringify(this.workRows).length*3)+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
+    // Decoding scratch has gone; retain the tape and the actual shared typed
+    // buffers, as for the selected work index, rather than its construction maps.
+    this.bytes=(this.sourceTape?JSON.stringify(this.sourceTape).length*3:0)+(this.sourceCurves?.bytes??0)+JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+(this.work.value?0:JSON.stringify(this.workRows).length*3)+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
   }
   /** The current stream is authoritative even while an older analytical reply is being prepared. */
   private present(rows:WorkedSession[]) {

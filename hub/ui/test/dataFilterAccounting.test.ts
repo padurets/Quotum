@@ -57,6 +57,17 @@ test('a month of unchanged source hours shares its patterns through a clipped em
   assert.equal(JSON.stringify(before),original,'a refused merge leaves the retained tape intact');
 });
 
+test('retained source curve bytes count shared pattern buffers once and each timeline separately',()=>{
+  const tape={version:1 as const,from:0,cut:720*H,patterns:[[0,1,H,-1]],sources:['a','b'].map(id=>({id,knownFrom:0,blocks:Array.from({length:720},(_,hour)=>[hour,0]).flat()}))};
+  let scratch=0;const curves=sourceWorkCurves(tape,bytes=>scratch+=bytes);
+  const timelines=[...curves.groups.source.values()];
+  // One pattern has two changes in four Float64 columns. Each hour has three
+  // Float64 prefixes and a shared pattern reference; source maps own their rows.
+  assert.equal(curves.bytes,160+2*4*8+timelines.reduce((sum,t)=>sum+t.bytes,0)+2*(256+2));
+  assert.ok(scratch>curves.bytes!,'construction tuples are temporary, not retained buffers');
+  assert.equal(timelines[0].read({from:0,to:720*H}),720*H);assert.equal(timelines[1].read({from:0,to:720*H}),720*H);
+});
+
 test('shared source patterns preserve exact replacement integrals across whole and partial hours',()=>{
   const tape=(spans:WorkTrace['spans'])=>sourceWorkTape(new PeriodCurves({...trace(spans),cut:4*H}),0,4*H,new Map([['s',0]]),()=>{});
   const before=tape([[0,0,3*H],[1,H/2,2*H+H/2],[2,3*H,4*H]]),patch=tape([[0,H,4*H],[1,0,H/2]]);
