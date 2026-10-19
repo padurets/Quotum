@@ -1093,8 +1093,8 @@ Quota work uses device-admitted stretches with currently held, disclosed funding
 additionally cut at each device's admission and the source's grant. For proven steps
 starting at or after `S`, `w` adds the delta, overlap with that subscription's quota
 work union, and the whole delta when that overlap is positive. Work before `S` is not
-attributed. Hidden cards have no quota series in the frame; their admitted sessions
-remain in Activity. The released tuple shapes and omission defaults are unchanged.
+attributed. Layout hiding does not remove authorized quota series from the frame;
+admitted sessions remain in Activity. The released tuple shapes and omission defaults are unchanged.
 
 Activity includes the full device-admitted stretches within each cell, independently
 of card visibility and source grant boundaries. `active` is their

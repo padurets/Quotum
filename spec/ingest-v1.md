@@ -873,7 +873,7 @@ status follows the existing financial authority and never enriches a quota-only 
 projection. No new provider credential, API call or model request is introduced.
 Reported nonempty plan names may become timestamped subscription-history events.
 Repeated names and empty reports add no event. Dashboard readers receive only plan
-observations allowed by their board's source visibility, sharing start and retention;
+observations allowed by their board's source grants, sharing start and retention;
 an internal predecessor does not extend that access. No extra client collection or
 provider request is required.
 
@@ -993,7 +993,7 @@ subscription's shared observation clock; it adds no device fields or persisted i
 Manual client links belong to their owner and are kept separately from account and
 route evidence. Neither rule IDs nor disagreements or suggestions are shared.
 Shared sessions may expose only the route class and a recognized catalogue provider,
-after current holding and board visibility checks. Hosts and custom gateway hints stay
+after current holding and provided-source grant checks. Hosts and custom gateway hints stay
 private. The history API uses board-scoped display fragment and row references; neither
 reveals producer identity. Linking work never proves the cost of an individual request.
 

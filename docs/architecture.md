@@ -769,10 +769,10 @@ under a twentieth of a percent an hour foresee nothing past a week of work. A re
 what is left unknown until the next measurement, used up or not: the forecast by work
 waits for it where agents worked, and where none did says so. Where none of the agents
 worked, there is no share either. The share counts a step that any work
-touches whole, so it is an upper bound. A board shows the work of its
-members who hold each subscription it shows, but those of hidden cards: on a shared
-board from the later of their joining it and the subscription coming to it, on a
-personal board all of it. Work the board does not show (off the board, from before) is
+touches whole, so it is an upper bound. Source-wide quota estimates use admitted
+work with held, disclosed subscription funding, independently of card layout. Shared
+boards clip it at device admission and the source's grant; personal boards retain
+their own captured credit. Work outside these bounds is
 not in its hours while the window's spending is, and so is spending outside tracked
 agents (claude.ai, a phone, machines without Quotum, cloud tasks): the share while
 active says how far to trust the pace.
@@ -871,7 +871,7 @@ them), kept for 90 days.
   tooltip; the verdict stays.
 
   The producer records the actual observed plan boundary used at its confirmation
-  hour. Each board filters this provenance by visibility, sharing and retention;
+  hour. Each board filters this provenance by source grants, sharing and retention;
   expiry updates only the provenance, leaving the shared numeric model intact. A
   compatible weekly forecast's tooltip gives the plan observation and explains its
   confirmation after an hour, including a forecast waiting for more data.
@@ -1130,7 +1130,7 @@ remaining amount once. Composition stays in the existing disclosure.
 Money history first computes native accounting and coverage, then applies the reader's
 currency outside the shared native tile cache. Original CNY provenance avoids repeated
 rounding. Exchange movements cannot create spending or top-up events; balance-only
-accounting stays unavailable. History requests validate board visibility and ownership
+accounting stays unavailable. History requests validate board membership, source grants and ownership
 of the selected currency. A price revision refreshes the selected monetary history when
 a previously missing path becomes available. Native reference mode keeps its existing
 request, packing and performance behavior. Subscription selection remains independent.
