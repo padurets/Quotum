@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {compose, targetOf, type Chunk, type HistoryMeta} from '../../server/domain/history';
 import {covered, plotBar, plotGroups, plotOf, type PlotGroup} from '../lib/historyPlot';
 import {groupRegistry} from '../lib/plotRegistry';
+import {CATEGORY_COLORS} from '../lib/providers';
+import {OTHER_COLOR} from '../lib/activity';
 import {HistoryTile} from '../lib/historyTiles';
 
 const M = 60_000, H = 60 * M, NOW = 48 * H;
@@ -45,12 +47,26 @@ test('a moving edge immediately changes 60 minutes to 55, using whole-cell compo
   assert.equal(plotBar({...buffer, coverage: [[0, 5 * M], [10 * M, 2 * H]]}, 0, moved, 'project'), null, 'one unread contributing cell hides the whole bar');
 });
 
-test('plot metadata preserves surviving colors through a rank swap and new groups', () => {
-  const seed = [{key: 'P', name: 'P', color: 'blue'}, {key: 'Q', name: 'Q', color: 'violet'}];
-  const next = groupRegistry(seed, seed, [{key: 'Q', name: 'Q'}, {key: 'R', name: 'R'}]);
-  assert.equal(next.find(g => g.key === 'Q')!.color, 'violet');
-  assert.ok(next.find(g => g.key === 'R')!.color !== 'violet');
-  assert.deepEqual(groupRegistry(seed, next, [{key: 'Q', name: 'Q'}]).map(g => g.key), ['P', 'Q']);
+test('plot metadata extends a seven-group seed through Nord Warm and neutral overflow without recolouring surviving groups', () => {
+  const seed = CATEGORY_COLORS.slice(0, 7).map((color, i) => ({key: `g${i}`, name: `Group ${i}`, color}));
+  const group = (i: number) => ({key: `g${i}`, name: `Group ${i}`});
+  const eighth = groupRegistry(seed, seed, [group(7), group(1)]);
+  assert.equal(eighth[7].color, '#5e81ac');
+  const ninth = groupRegistry(seed, eighth, [group(8), group(7), group(1)]);
+  assert.equal(ninth[8].color, '#b48ead');
+  const overflow = groupRegistry(seed, ninth, [group(10), group(9), group(8), group(7), group(1)]);
+  assert.deepEqual(overflow.map(g => g.color), [...CATEGORY_COLORS, OTHER_COLOR, OTHER_COLOR]);
+  assert.equal(new Set(overflow.map(g => g.key)).size, 11, 'neutral groups keep independent identities');
+
+  const reversed = groupRegistry(seed, overflow, [group(9), group(1), group(7), group(8), group(10)]);
+  assert.deepEqual(reversed, overflow, 'rank swaps and reversal keep every surviving colour');
+  const returned = groupRegistry(seed, reversed, [group(1)]);
+  assert.deepEqual(returned, seed, 'returning to the seed removes only transient groups');
+
+  const freed = groupRegistry(seed, overflow, [group(9), group(8), group(10), group(11)]);
+  assert.equal(freed.find(g => g.key === 'g9')!.color, OTHER_COLOR, 'a surviving neutral group is not promoted');
+  assert.equal(freed.find(g => g.key === 'g11')!.color, '#5e81ac', 'a new group can use a released slot');
+  assert.equal(seed.length, 7, 'navigation leaves the seed unchanged');
 });
 
 test('a changed strip reuses immutable activity cells while retaining exact edge accounting', () => {

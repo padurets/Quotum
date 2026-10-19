@@ -25,9 +25,8 @@ export const OTHER_COLOR = 'var(--other)';
 /**
  * The colour of each group of a stack: a subscription has its card's, as on the chart;
  * projects and machines take CATEGORY_COLORS by agent-hours, so a project may change
- * colour when the period does. Past as many as there are
- * colours told apart, the rest share a neutral: each is still a group of its own, named
- * in the tooltip and switched off and on in the legend.
+ * colour when the period does. Past the palette, the rest share a neutral: each is
+ * still a group of its own, named in the tooltip and switched off and on in the legend.
  */
 export function groupColors(groups: ActivityGroup[], by: ActivityDimension, view: View, providerOf: (source: string) => string): string[] {
   return groups.map((group, rank) => (by === 'source' ? group.key==='unknown'||group.key==='notProvided'?OTHER_COLOR : colorOf(view, group.key, providerOf(group.key)) : (CATEGORY_COLORS[rank] ?? OTHER_COLOR)));
