@@ -77,6 +77,33 @@ async function fixture() {
   return {store,directory,hub,app,user,board,source,device,read,credit,details};
 }
 
+test('independent source and session delta frontiers share their complete raw range',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const body:PeriodRequest={version:1,selection:{mode:'live',periodMs:H},evaluatedAt:now,quota:{cell:String(M),from:String(now-H),to:String(now),cells:'skip',evidence:'skip'},sessions:{},sourceWork:{},workFilter:workFilter(defaultFilters())};
+  const baseline=(await h.read(body)).json<PeriodReply>();
+  if(baseline.sessions?.state!=='complete'||baseline.sourceWork?.state!=='complete')throw new Error('baseline');
+  h.credit(now-30*M,now-25*M,'old');
+  const sessions=(await h.read({...body,sessions:{cursor:baseline.sessions.value.cursor},sourceWork:undefined})).json<PeriodReply>();
+  if(sessions.sessions?.state!=='delta')throw new Error('sessions');
+  h.credit(now-2*M,now-M,'new');
+  const ranges:[number,number][]=[];const original=h.store.agentWork.bind(h.store);
+  t.mock.method(h.store,'agentWork',(...args:Parameters<Store['agentWork']>)=>{ranges.push([args[0],args[1]]);return original(...args);});
+  const reply=await h.read({...body,sessions:{cursor:sessions.sessions.value.cursor},sourceWork:{cursor:baseline.sourceWork.value.cursor}});
+  assert.equal(reply.statusCode,200,reply.body);const delta=reply.json<PeriodReply>();
+  if(delta.sessions?.state!=='delta'||delta.sourceWork?.state!=='delta')throw new Error('independent deltas');
+  assert.deepEqual(ranges,[[now-30*M,now]],'the older source cursor must widen the first extraction');
+  assert.equal(delta.sessions.value.replaceFrom,now-2*M);assert.equal(delta.sourceWork.value.replaceFrom,now-30*M);
+  const rows=workedSessions(mergeWork(mergeWork(baseline.sessions.value,sessions.sessions.value),delta.sessions.value),delta.basis.range,now);
+  assert.deepEqual(rows.map(row=>row.workedMs).sort((a,b)=>a-b),[M,5*M]);
+  assert.equal(sourceWorkCurves(delta.sourceWork.value).groups.source.get(h.source)!.read(delta.basis.range,true),6*M);
+  ranges.length=0;
+  const reverse=(await h.read({...body,sessions:{cursor:baseline.sessions.value.cursor},sourceWork:{cursor:delta.sourceWork.value.cursor}})).json<PeriodReply>();
+  if(reverse.sessions?.state!=='delta'||reverse.sourceWork?.state!=='delta')throw new Error('reverse deltas');
+  assert.deepEqual(ranges,[[now-30*M,now]],'an older sessions cursor remains independent of a current source cursor');
+  assert.equal(reverse.sessions.value.replaceFrom,now-30*M);assert.equal(reverse.sourceWork.value.replaceFrom,now);
+  assert.equal(workedSessions(mergeWork(baseline.sessions.value,reverse.sessions.value),reverse.basis.range,now).reduce((sum,row)=>sum+row.workedMs,0),6*M);
+});
+
 test('funding facets describe authorized work before selection and exclude absent categories',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   const board=h.directory.createBoard('Work only',h.user.id,now-3*H).id;

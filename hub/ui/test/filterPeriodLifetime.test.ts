@@ -11,6 +11,24 @@ import {expandPeriod} from '../../server/domain/periodWire';
 import {moneyWorkValues} from '../lib/moneyTable';
 import type {MeterHistory} from '../../server/domain/meterHistory';
 
+test('an open filter shares one full raw extraction with incremental sessions and source work',async t=>{
+  t.mock.method(Date,'now',()=>NOW);publishDataFilters(defaultFilters());const h=await fixture();
+  let stop:undefined|(()=>void);
+  try{
+    stop=h.period.demandFacets();await flush();h.requests.length=0;
+    const ranges:[number,number][]=[];const original=h.store.agentWork.bind(h.store);
+    t.mock.method(h.store,'agentWork',(...args:Parameters<typeof original>)=>{ranges.push([args[0],args[1]]);return original(...args);});
+    h.store.creditWork(h.device,NOW-120_000,NOW-60_000,[{source:h.source,client:'codex',origin:'terminal',project:'New project',folder:'',startedAt:NOW-120_000,identity:{kind:'stable',sessionId:'new-project'}}]);
+    h.events.flush();await flush();
+    assert.equal(h.requests.length,1,'the production coordinator coalesces work consumers');
+    const request=h.requests[0];assert.ok(request.sessions?.cursor);assert.ok(request.sourceWork?.cursor);assert.equal(request.facets,true);
+    assert.deepEqual(ranges,[[NOW-H,NOW]],'the raw ledger is extracted once for the complete consumer range');
+    assert.deepEqual(h.period.getFacets().value?.projects,['New project','Work project']);
+    assert.ok(h.period.get().rows.some((row:{project:string|null})=>row.project==='New project'));
+    assert.ok(h.pool.estimatedBytes<h.pool.budget);assert.equal(h.pool.activeFlights,0);
+  }finally{stop?.();publishDataFilters(null,false);await h.close();}
+});
+
 test('a late fixed source-wide reply leaves selected quota hours pending until the current predicate completes',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture({fixed:true});
   try{

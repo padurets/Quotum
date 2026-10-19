@@ -18,7 +18,7 @@ import {drain,type Preparation} from './domain/prepare.js';
 import {PeriodPreparation} from './periodPrepare.js';
 import {selectionOf} from './domain/meterHistory.js';
 import {parseWorkFilter,type WorkFilter} from './domain/dataFilters.js';
-import {cellOf} from './domain/history.js';
+import {cellOf,cellStart,CLOCK_TOLERANCE_MS} from './domain/history.js';
 import {PeriodCurves,sourceWorkTape,type SourceWorkCurves} from './domain/periodCurves.js';
 import {sourceWorkFrom} from './domain/workAccess.js';
 
@@ -182,6 +182,28 @@ export class PeriodReader {
     const reserve=(bytes:number)=>{reservation.add(bytes);replyBytes+=bytes;};
     const release=(bytes:number)=>{reservation.remove(bytes);replyBytes-=bytes;};
     const cell=cellOf(range.to-range.from),fixedRange={from:Math.max(0,Math.floor(range.from/cell)*cell-cell),to:Math.min(Math.ceil(range.to/cell)*cell+cell,now)};
+    const sourcePlan=request.sourceWork&&selection.mode==='live'?(()=>{
+      // Resource families keep one source cursor, independently of selected sessions.
+      const sources=new Set(shown.keys());
+      const key=createHash('sha256').update(JSON.stringify([sourceIdentity,[...sources].sort()])).digest('base64url'),previous=self.decode(request.sourceWork.cursor);
+      const delta=previous?.identity===key&&previous.revision>=self.workFloor&&previous.revision<=revision&&range.from>=previous.from;
+      const patch=frontier(delta?previous:null,self.workChanges,true),cursor=self.encode({identity:key,revision,from:patch.coveredFrom,cut:patch.coveredTo});
+      return {sources,delta,patch,cursor};
+    })():null;
+    // Plan every consumer before the first extraction, including independently advanced cursors.
+    const workRanges:import('./domain/period.js').PeriodRange[]=[];
+    const includeWork=(from:number,to:number)=>{
+      if(Number.isFinite(from)&&Number.isFinite(to)&&from<to)workRanges.push({from,to});
+    };
+    if(selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip'||request.budget?.work==='1'))includeWork(fixedRange.from,fixedRange.to);
+    if(selection.mode==='live'&&request.sessions)includeWork(replaceFrom,workFrontier.to);
+    if(request.facets)includeWork(range.from,cut);
+    if(sourcePlan)includeWork(sourcePlan.patch.from,sourcePlan.patch.to);
+    if(request.quota&&request.quota.cells!=='skip'){
+      const query=request.quota,cell=Number(query.cell);
+      includeWork(Number(query.from),Math.min(Math.ceil(Number(query.to)/cell)*cell,cellStart(now+CLOCK_TOLERANCE_MS,cell)+cell,now));
+    }
+    workRange=workRanges.reduce<import('./domain/period.js').PeriodRange|null>((kept,part)=>({from:Math.min(part.from,kept?.from??part.from),to:Math.max(part.to,kept?.to??part.to)}),null);
     if(guard){
       const sources=new Map<string,Set<HistoryScope>>();
       const include=(id:string,scope:HistoryScope)=>{let scopes=sources.get(id);if(!scopes)sources.set(id,scopes=new Set());scopes.add(scope);};
@@ -196,7 +218,7 @@ export class PeriodReader {
         }
       }
       for(const id of request.values??[]){include(id,'quota');include(id,'budget');}
-      const workUpper=request.quota||request.sessions||request.budget?.work==='1'?Math.max(upper,selection.mode==='range'?fixedRange.to:workFrontier.to):0;
+      const workUpper=workRange?.to??0;
       const currency=()=>JSON.stringify([store.currencies.registryRevision(user),store.currencies.pathRevision(user),store.db.prepare("SELECT value FROM meta WHERE key='currencyRatesRevision::public'").get()?.value??0]);
       const currencyKey=currency();
       if(!directory.boards(user).some(part=>part.id===board))fail(404,'board_not_found');
@@ -226,7 +248,6 @@ export class PeriodReader {
         }
       });
     }
-    workRange=selection.mode==='range'&&(request.sessions||request.quota&&request.quota.evidence!=='skip'||request.budget?.work==='1')?fixedRange:request.sessions?{from:replaceFrom,to:workFrontier.to}:null;
     function* section<T>(read:Preparation<T>):Preparation<PeriodSection<T>> {
       const before=replyBytes;
       try {return {state:'complete',basis,value:yield*read};}
@@ -322,13 +343,8 @@ export class PeriodReader {
         if(access&&selection.mode==='live'){const live=self.hub.ingest.live.board(access,now);for(const row of live.unattributedSessions){add(row.project,row.device.id,row.device.name,row.clientId??null,null,row.sourceStatus);yield;}for(const [source,rows] of live.sessions)for(const row of rows){add(row.project,row.device.id,row.device.name,row.clientId??null,source);yield;}}
         return {projects:[...projects].sort(),devices:[...devices].map(([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id)),clients:[...clients].sort(),funding:[...funding].sort()};
       })());
-      if(request.sourceWork&&selection.mode==='live'){
-        // One cursor serves independently scheduled resource families. Its source
-        // cohort follows board access, rather than whichever family read last.
-        const sources=new Set(shown.keys());
-        const key=createHash('sha256').update(JSON.stringify([sourceIdentity,[...sources].sort()])).digest('base64url'),previous=self.decode(request.sourceWork.cursor);
-        const delta=previous?.identity===key&&previous.revision>=self.workFloor&&previous.revision<=revision&&range.from>=previous.from;
-        const patch=frontier(delta?previous:null,self.workChanges,true),cursor=self.encode({identity:key,revision,from:patch.coveredFrom,cut:patch.coveredTo});
+      if(sourcePlan){
+        const {sources,delta,patch,cursor}=sourcePlan;
         const part=yield*section((function*(){
           const curves=yield*fullSourceCurves({from:patch.from,to:patch.to}),known=sourceWorkFrom(work.ensureAccess!());
           const value=sourceWorkTape(curves,patch.coveredFrom,patch.coveredTo,new Map([...sources].map(id=>[id,known[id]??null])),reserve);
