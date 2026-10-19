@@ -16,7 +16,9 @@ import {mergeWork,workedSessions} from '../domain/periodWork.js';
 import {deepSeekMeasurement} from '../connectors/deepseek.js';
 import {periodValues,nearbyPeriodValues} from '../periodValues.js';
 import {periodValueAt,hasPeriodValue,withValueStates} from '../domain/periodValues.js';
-import {HistoryLimit} from '../history.js';
+import {HistoryLimit,HistoryTiles} from '../history.js';
+import {PeriodReader} from '../periodRead.js';
+import {Events} from '../events.js';
 import {sharedWork} from '../periodWork.js';
 import {expandPeriod,type PeriodWireReply} from '../domain/periodWire.js';
 import {HISTORY_BYTES_PER_MEASUREMENT} from '../../bench/budget.js';
@@ -445,6 +447,44 @@ test('shared fixed quota hours stay unknown before admission and become zero onl
   const empty=await summary(known,now,filters);
   assert.equal(full.work?.ms,15*M);assert.equal(empty.selectedWork?.ms,0);assert.equal(empty.selectedWork?.agentMs,0);
   assert.deepEqual(empty.work,full.work,'a known empty selection preserves the supplier estimate cohort');
+});
+
+test('a refused source-curve publication cannot escape through a sibling fixed section and recovers after capacity returns',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  const start=now-H,tiles=new HistoryTiles(h.store),events=new Events(h.hub,undefined,{now:()=>now,after:()=>()=>{}},null),reader=new PeriodReader(h.hub,tiles,events);
+  t.after(()=>events.close());const ceiling=32*1024*1024;let used=0;
+  const reservation=tiles.reservation.bind(tiles);
+  t.mock.method(tiles,'reservation',()=>{
+    const own=reservation();let bytes=0;
+    return {add:(size:number)=>{own.add(size);bytes+=size;used+=size;},remove:(size:number)=>{own.remove(size);bytes-=size;used-=size;},close:()=>{own.close();used-=bytes;bytes=0;}};
+  });
+  const pin=tiles.reservation();t.after(()=>pin.close());
+  const wallet=h.store.source('openrouter','fixed-source-wallet',now-3*H);h.store.hold(wallet,h.user.id,now-3*H);
+  h.store.record(h.source,{observedAt:start,plan:'',resets:null,staleAfterMs:4*H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:17,remaining:83,resetAt:now+H}]});
+  const meter=(id:string,at:number,amount:string)=>({id,at,amount,kind:'counter' as const,unit:'USD',stale:false,staleAfterMs:4*H,limit:null,resetAt:null,minutes:null,scope:null,label:null});
+  for(const [at,amount] of [[start,'0'],[now-1,'1000000']] as const)h.store.record(wallet,{type:'meters',observedAt:at,staleAfterMs:4*H,meters:[meter('usage',at,amount),meter('credits',at,'15000000')],keys:[],inventoryComplete:true,inventoryError:null});
+  for(let i=0;i<128;i++)h.store.creditWork(h.device,start+10*M+i,start+20*M+i,[{source:wallet,client:'opencode',origin:'terminal',project:'P'+i,folder:'',startedAt:start,identity:{kind:'stable',sessionId:String(i)}}]);
+  let refused:PeriodCurves['groups']['source']|undefined,reused=0;
+  const prepare=PeriodCurves.prepare;
+  t.mock.method(PeriodCurves,'prepare',function*(...args:Parameters<typeof prepare>){
+    const curves=yield*prepare(...args);
+    if(args[0].refs.length===128&&!refused){refused=curves.groups.source;pin.add(ceiling-used-curves.bytes+1);}
+    return curves;
+  });
+  const accounting=PeriodAccounting.prepare;
+  t.mock.method(PeriodAccounting,'prepare',function*(...args:Parameters<typeof accounting>){if(refused&&args[6]?.groups.source===refused)reused++;return yield*accounting(...args);});
+  const filters=defaultFilters();filters.projects={mode:'include',values:[]};
+  const query={cell:String(M),from:String(start),to:String(now),cells:'skip'};
+  const request:PeriodRequest={version:1,selection:{mode:'range',from:start,to:now},evaluatedAt:now,workFilter:workFilter(filters),quota:query,budget:{...query,unit:'USD',meters:JSON.stringify([[wallet,'balance']]),work:'1'},values:[h.source]};
+  const failed=JSON.parse(reader.read(h.board,h.user.id,request)) as PeriodReply;
+  assert.ok(refused);assert.equal(failed.quota?.state,'error');assert.equal(reused,0,'no sibling consumes a candidate whose retained charge failed');
+  assert.equal(failed.values?.state,'complete','unrelated values remain independently readable');
+  pin.close();assert.equal(used,0,'every failed producer/request reservation is released');
+  const recovered=expandPeriod(JSON.parse(reader.read(h.board,h.user.id,request)) as PeriodWireReply);
+  assert.equal(recovered.quota?.state,'complete');assert.equal(recovered.budget?.state,'complete');
+  if(recovered.budget?.state!=='complete')throw new Error('budget did not recover');
+  const value=recovered.budget.value.tape!.fixed!.moneyWork![0];
+  assert.equal(value.activeMs,10*M+127);assert.equal(value.selectedWork?.activeMs,0);assert.equal(reused,0);assert.equal(used,0);
 });
 
 

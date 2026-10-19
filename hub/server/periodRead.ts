@@ -284,8 +284,8 @@ export class PeriodReader {
         const trace=yield*preparePeriodWork(self.hub,self.history,board,shown,range,views.sourceWide,now,charge,size=>{reservation.remove(size);bytes-=size;},()=>undefined);
         charge(importWorkBytes(trace));
         const curves=yield*PeriodCurves.prepare(trace);
-        sourceCurves={groups:{source:curves.groups.source},knownFrom:trace.knownFrom,available:trace.available};
-        charge(curves.bytes);retained=curves.bytes;return sourceCurves;
+        charge(curves.bytes);retained=curves.bytes;
+        return sourceCurves={groups:{source:curves.groups.source},knownFrom:trace.knownFrom,available:trace.available};
       }finally{reservation.remove(bytes-retained);}
     }
     function* temporary<T>(read:()=>Preparation<T>):Preparation<T>{const before=replyBytes;try{return yield*read();}finally{reservation.remove(replyBytes-before);replyBytes=before;}}
