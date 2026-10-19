@@ -494,8 +494,9 @@ class BoardPeriod {
           let sourceBytes=JSON.stringify(sourcePart.value).length*3;
           charge('sourceWork',sourceBytes);
           const reserve=(bytes:number)=>{sourceBytes+=bytes;charge('sourceWork',sourceBytes);};
-          nextSourceTape=sourcePart.state==='delta'&&nextSourceTape?mergeSourceWorkTape(nextSourceTape,sourcePart.value,reserve):sourcePart.value;
-          nextSourceCurves=sourceWorkCurves(nextSourceTape,reserve,previousSourceTape&&previousSourceCurves?{tape:previousSourceTape,curves:previousSourceCurves}:undefined);nextSourceCursor=sourcePart.value.cursor;
+          const release=(bytes:number)=>{sourceBytes-=bytes;charge('sourceWork',sourceBytes);};
+          nextSourceTape=sourcePart.state==='delta'&&nextSourceTape?mergeSourceWorkTape(nextSourceTape,sourcePart.value,reserve,release):sourcePart.value;
+          nextSourceCurves=sourceWorkCurves(nextSourceTape,reserve,previousSourceTape&&previousSourceCurves?{tape:previousSourceTape,curves:previousSourceCurves}:undefined,release);nextSourceCursor=sourcePart.value.cursor;
         }catch(error){if(error!==limited)throw error;nextSourceCurves={groups:{source:new Map()},knownFrom:Infinity,available:false};reply.sourceWork={state:'error',error:'history_limit'};discard('sourceWork');}
       }
       const incomingTapes=new Map<PeriodScope,PeriodTape>();
