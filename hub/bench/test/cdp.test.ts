@@ -99,6 +99,7 @@ const connection = (socket: Socket) => new (Cdp as unknown as new (socket: unkno
 
 test('a protocol rejection keeps its original command through cleanup without retaining browser text', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
+  t.mock.method(performance,'now',()=>10000+2/7);
   for (const method of ['Runtime.evaluate', 'Network.getResponseBody']) {
     const socket = new Socket(), cdp = connection(socket);
     try {
@@ -109,7 +110,9 @@ test('a protocol rejection keeps its original command through cleanup without re
       assert.ok(original);
       assert.equal(original.id, 1); assert.equal(original.method, method); assert.equal(original.context, 'board/open');
       assert.equal(original.reason, 'the browser rejected the command');
-      assert.ok(Number.isFinite(original.elapsedMs)); assert.equal(original.deadline - original.started, 30_000);
+      // Subtracting fractional timestamps can round the interval in either direction.
+      assert.ok(Number.isFinite(original.elapsedMs)); assert.ok(Number.isFinite(original.started));
+      assert.equal(original.deadline, original.started + 30_000);
       const cleanup = cdp.send('Emulation.setCPUThrottlingRate', {rate: 1}); socket.answer(2, {}); await cleanup;
       assert.equal(cdp.snapshot().lastAck?.id, 2);
       const timed = assert.rejects(cdp.send('Performance.getMetrics'), /no browser response/);
