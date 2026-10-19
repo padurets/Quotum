@@ -80,9 +80,9 @@ export function sourceWorkTape(curves:{groups:{source:ReadonlyMap<string,WorkTim
 }
 
 /** Strict source-only decoding shares Curve and WorkTimeline's millisecond arithmetic. */
-export function sourceWorkCurves(tape:SourceWorkTape,reserve:(bytes:number)=>void=()=>{}):SourceWorkCurves {
+export function sourceWorkCurves(tape:SourceWorkTape,reserve:(bytes:number)=>void=()=>{},retained?:{tape:SourceWorkTape;curves:SourceWorkCurves}):SourceWorkCurves {
   if(tape.version!==1||!Number.isSafeInteger(tape.from)||!Number.isSafeInteger(tape.cut)||tape.cut<tape.from||!Array.isArray(tape.patterns)||!Array.isArray(tape.sources))throw new Error('invalid_source_work');
-  let bytes=0;
+  let bytes=0;const owned=new Set<Curve>();
   const patterns=tape.patterns.map(pattern=>{
     if(!Array.isArray(pattern)||pattern.length%2)throw new Error('invalid_source_work');
     const changes:[number,number][]=[];let count=0,previous=-1;
@@ -90,16 +90,20 @@ export function sourceWorkCurves(tape:SourceWorkTape,reserve:(bytes:number)=>voi
       if(!Number.isSafeInteger(at)||at<0||at>WORK_BLOCK_MS||at<=previous||!Number.isSafeInteger(delta)||!Number.isSafeInteger(count)||count<0)throw new Error('invalid_source_work');
       changes.push([at,delta]);previous=at;
     }
-    if(count!==0)throw new Error('invalid_source_work');reserve(160+changes.length*64);const curve=new Curve(changes);bytes+=160+curve.bytes;return curve;
+    if(count!==0)throw new Error('invalid_source_work');reserve(160+changes.length*64);return new Curve(changes);
   });
   const source=new Map<string,WorkTimeline>();let knownFrom=Infinity;
   for(const row of tape.sources){
     if(typeof row.id!=='string'||!row.id||source.has(row.id)||row.knownFrom!==null&&!Number.isSafeInteger(row.knownFrom)||!Array.isArray(row.blocks)||row.blocks.length%2)throw new Error('invalid_source_work');
     const blocks:[number,Curve][]=[];let previous=-Infinity;
     for(let i=0;i<row.blocks.length;i+=2){const hour=row.blocks[i],index=row.blocks[i+1];if(!Number.isSafeInteger(hour)||hour<=previous||!Number.isSafeInteger(index)||!patterns[index])throw new Error('invalid_source_work');blocks.push([hour,patterns[index]]);previous=hour;}
-    reserve(256+blocks.length*64);const timeline=new WorkTimeline(blocks);source.set(row.id,timeline);bytes+=256+row.id.length*2+timeline.bytes;if(row.knownFrom!==null)knownFrom=Math.min(knownFrom,row.knownFrom);
+    // Unchanged accounting indexes keep this timeline too. Share it instead of
+    // retaining an uncounted old copy behind their otherwise reusable prefixes.
+    const prior=retained?.curves.groups.source.get(row.id);
+    reserve(256+blocks.length*64);const timeline=prior&&sameSourceWork(retained!.tape,tape,row.id)?prior:new WorkTimeline(blocks);
+    source.set(row.id,timeline);bytes+=256+row.id.length*2+drain(timeline.measure(owned,reserve));if(row.knownFrom!==null)knownFrom=Math.min(knownFrom,row.knownFrom);
   }
-  return {groups:{source},knownFrom,available:Number.isFinite(knownFrom),bytes};
+  return {groups:{source},knownFrom,available:Number.isFinite(knownFrom),bytes:bytes+owned.size*160};
 }
 
 /** Replace the exact interval, including an empty tail and cuts inside an hour. */

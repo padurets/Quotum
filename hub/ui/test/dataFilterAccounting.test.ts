@@ -66,6 +66,13 @@ test('retained source curve bytes count shared pattern buffers once and each tim
   assert.equal(curves.bytes,160+2*4*8+timelines.reduce((sum,t)=>sum+t.bytes,0)+2*(256+2));
   assert.ok(scratch>curves.bytes!,'construction tuples are temporary, not retained buffers');
   assert.equal(timelines[0].read({from:0,to:720*H}),720*H);assert.equal(timelines[1].read({from:0,to:720*H}),720*H);
+  const emptyTail=mergeSourceWorkTape(tape,{version:1,from:0,cut:720*H+1,replaceFrom:720*H,replaceTo:720*H+1,patterns:[],sources:[]});
+  const shared=sourceWorkCurves(emptyTail,()=>{},{tape,curves});
+  for(const id of ['a','b'])assert.equal(shared.groups.source.get(id),curves.groups.source.get(id),'unchanged accounting and its decoder must own the same timeline');
+  assert.equal(shared.bytes,curves.bytes);
+  const edited={...emptyTail,sources:emptyTail.sources.map(row=>row.id==='a'?{...row,blocks:row.blocks.slice(2)}:row)},changed=sourceWorkCurves(edited,()=>{},{tape:emptyTail,curves:shared});
+  assert.notEqual(changed.groups.source.get('a'),shared.groups.source.get('a'));assert.equal(changed.groups.source.get('b'),shared.groups.source.get('b'));
+  assert.equal(changed.groups.source.get('a')!.read({from:0,to:720*H}),719*H);
 });
 
 test('shared source patterns preserve exact replacement integrals across whole and partial hours',()=>{
