@@ -33,10 +33,8 @@ export const DASHES = ['', '7 5', '2 4', '10 3 2 3'];
 
 /**
  * Colours of projects and machines on the activity widget, by their rank in the period:
- * first hues no provider has (teal, violet, lime), then the rest. Every one stands clear
- * of the status colours (ΔE2000 at least 20 from --ok, --warn and --crit) and of the
- * providers' own (14), 17 at least from each other and from the neutral of the rest
- * (--other in style.css), and keeps 3:1 contrast with the surface; ui/test/activity.test.ts
- * checks all of it.
+ * Nord Warm in a deliberate warm-to-cool order. Nearby hues are distinguished by names,
+ * values and series highlighting. Each keeps 3:1 contrast with the surface; groups past
+ * the nine colours use the neutral --other in style.css.
  */
-export const CATEGORY_COLORS = ['#67cfe3', '#cd93ff', '#75a322', '#0593bf', '#97854b', '#3f8f7f', '#eab0d1'];
+export const CATEGORY_COLORS = ['#bf616a', '#d08770', '#ebcb8b', '#a3be8c', '#8fbcbb', '#88c0d0', '#81a1c1', '#5e81ac', '#b48ead'];

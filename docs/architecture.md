@@ -724,8 +724,9 @@ full-width table into a list, where every value keeps its heading.
 A widget stacks agent-hours by subscription, project or machine in bars of an hour
 (the period's cells where those are longer; shorter bars where a range holds fewer
 than twenty hours). Four agents over an hour make a bar 4h tall. The legend's groups
-add up to the total in every split; projects and machines take seven colours by their
-agent-hours, and those past them share a neutral one. Each group is its own however
+add up to the total in every split; projects and machines take nine Nord Warm colours by their
+agent-hours, in order: red, orange, yellow, green, teal, frost, blue, deep blue and purple.
+Those past them share a neutral one. Each group is its own however
 small. Above the stacks are agent-hours, active time, recorded sessions and the average
 at once (agent-hours divided by active time). Active time is not drawn: it is in the
 totals and tooltips. A bar's tooltip gives these totals first, then its group parts;
@@ -1891,8 +1892,11 @@ compositor transforms while the SVG's coordinate system stays unchanged. Two sho
 edge bars in their own SVG are recomputed when the draft crosses a cell; moving within
 a cell only translates the prepared artwork
 and updates its clip. The final 160 ms fold stays inside SVG to preserve stroke widths.
-A temporary shared registry keeps plot and
-legend colors and dashes consistent, adding new groups with a pending total. Visible
+A temporary shared registry keeps plot interiors, edge bars, legend markers and readouts
+consistent in colour and dash, adding new groups with a pending total. Surviving groups
+keep their colours through rank changes and reversal; new projects and machines take
+the next free Nord Warm colour, or neutral when all nine are in use. Muting a group
+does not release its colour. Resource series keep their card colours. Visible
 missing cells are read immediately in contiguous batches of at most eight tiles.
 The nearest unread edge comes first, without crossing fresh cells or another tile
 owner. Only a visible miss can add a nearby buffer in the direction of movement:
