@@ -6,7 +6,6 @@ type SessionDensity={groups:number;nonempty:number;intersecting:number;leftOnly:
 export type PanReading = {
   initiator: 'quota' | 'session' | 'activity' | 'budget' | 'funds'; period: string; series: number; budgetSeries: number; fundsSeries: number; sessionSeries:number; charts: number; rate: number;
   sessionDensity?:SessionDensity;
-  timeline?: {status: string; count: number; omitted: number; entries: unknown[]};
   transactions?: PanTransactions;
   cost?: {valid: boolean; scriptMs: number; taskMs: number; seconds: number};
   frames: number[]; latency: number[]; inputs: number; updated: number;

@@ -10,7 +10,7 @@ import {openTab, type Browser, type Cdp} from './cdp';
 import {HISTORY_COHORT_TAKES, historyCutInvalidation, historyIdentity, bodyTotals, readUnion, stableHistory, trafficProblems, transferFor} from './historyTrafficBudget';
 import {HISTORY_ATTEMPT_HEADER, HISTORY_CODEC_PARAMS, historyBody, historyProxy, type BodyCount, type Transfer} from './historyProxy';
 import {observeReversal} from './reversalDiagnostic';
-import {historyPoolReceiptScript,historyPoolCriticalReceiptScript} from './historyPoolReceipt';
+import {historyPoolReceiptScript} from './historyPoolReceipt';
 import {ScriptBinding} from './scriptBinding';
 import {clientIdentity} from './evidence';
 import {deadline} from './deadline';
@@ -251,8 +251,8 @@ export async function prepareHistoryTarget(cdp: Pick<Cdp, 'send' | 'evaluate'>, 
 
 type TrafficProxy = {url: string; transfers: Transfer[]; phase(value: string, latency?: number): void; settled(value: string): Promise<void>};
 
-async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>,poolMode:'full'|'critical'='full') {
-  const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp,process.env.QUOTUM_BENCH_DIAGNOSE_IDLE_TIMING==='1');
+async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string, name: string, length: number, future: number, poolEvidence?:Pick<Evidence, 'save'>) {
+  const tab = await openTab(browser), cdp = tab.cdp, bodies = new HistoryBodies(cdp);
   const poolName=name.replace(/[^a-zA-Z0-9_-]/g,'-');
   const poolBinding=poolEvidence?new ScriptBinding(cdp,clientIdentity(),(file,value)=>poolEvidence.save('pool-'+poolName+'-'+file,value)):null;
   let poolCaptured=false;
@@ -285,7 +285,7 @@ async function historyPage(browser: Browser, proxy: TrafficProxy, cookie: string
     await cdp.send('Emulation.setFocusEmulationEnabled', {enabled: true});
     await cdp.send('Emulation.setDeviceMetricsOverride', {width: 1280, height: 900, deviceScaleFactor: 1, mobile: false});
     const split = cookie.indexOf('='); await cdp.send('Network.setCookie', {name: cookie.slice(0, split), value: cookie.slice(split + 1), url: proxy.url, httpOnly: true, sameSite: 'Lax'});
-    if(poolEvidence)await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:poolMode==='critical'?historyPoolCriticalReceiptScript():historyPoolReceiptScript()});
+    if(poolEvidence)await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:historyPoolReceiptScript()});
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', {source: historyPageScript(length === DAY ? '24h' : '30d')});
     await cdp.send('Page.navigate', {url: proxy.url});
     const settled = async (seed = false) => {
@@ -337,10 +337,9 @@ export async function browserHistoryTraffic(browser: Browser, proxy: TrafficProx
     for (let take = 1; take <= HISTORY_COHORT_TAKES; take++) {
       const name = `browser/${length / DAY}d/${future ? 'history' : 'activity'}/${latency}ms/${fraction}/take${take}`;
       evidence?.save('traffic-stage', {name, stage: 'seed'});
-      const poolMode=process.env.QUOTUM_BENCH_DIAGNOSE_PANNING==='cpu'?'critical':'full';
-      const poolTarget=poolMode==='critical'?name==='browser/30d/activity/0ms/0.5/take1':length===DAY&&!future&&[100,400].includes(latency)&&fraction===.5&&take===1;
-      const poolEvidence=(process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'||poolMode==='critical')&&poolTarget?evidence:undefined;
-      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence,poolMode);
+      const poolTarget=length===DAY&&!future&&[100,400].includes(latency)&&fraction===.5&&take===1;
+      const poolEvidence=process.env.QUOTUM_BENCH_DIAGNOSE_HISTORY_POOL==='1'&&poolTarget?evidence:undefined;
+      const {cdp, bodies, settled, geometry, cell, seeds, close,capturePool} = await historyPage(browser, proxy, cookie, name, length, future,poolEvidence);
       let observer:Awaited<ReturnType<typeof observeReversal>>|null=null, status='failed';
       try {
         observer=await observeReversal(cdp,browser,{postmortem:true,closeTarget:close});

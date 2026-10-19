@@ -1,12 +1,12 @@
 import type {Cdp} from './cdp.js';
 import {panningProblems, type PanReading} from './panningBudget.js';
-import {panEvidenceScript, panTransactionsScript, panPartialScript, panErrorsScript} from './panEvidence.js';
+import {panTransactionsScript, panPartialScript, panErrorsScript} from './panEvidence.js';
 import {deadline} from './deadline.js';
 import {panningReload,type ReloadDiagnostic} from './panningReload.js';
 import {panningSettlement} from './panningFailure.js';
 
 /** Native input against the real charts; the temporary layout brings all five into view. */
-export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {timeline?: boolean; frameIds?: boolean; save(name: string, value: unknown): void}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic) {
+export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Partial<Pick<Cdp, 'at'|'off'|'snapshot'>>, pace: (ms: number) => Promise<unknown> = ms => new Promise(resolve => setTimeout(resolve, ms)), options?: {save(name: string, value: unknown): void}|ReloadDiagnostic, diagnoseReload?:ReloadDiagnostic) {
   const evidence=typeof options==='function'?undefined:options;
   diagnoseReload??=typeof options==='function'?options:undefined;
   cdp.at?.('panning/setup');
@@ -89,7 +89,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       await cdp.evaluate(`(() => {
         const initiator=${JSON.stringify(initiator)},period=${JSON.stringify(period)};
         window.__quotumPan?.errors?.stop();
-        const timeline=${panEvidenceScript(evidence?.timeline === true, 10_000, evidence?.frameIds === true)},transactions=${panTransactionsScript()},staged=new Set();let nextRequest=0;
+        const transactions=${panTransactionsScript()};let nextRequest=0;
         const charts=['quota-history','activity','budget-history','subscription-funds','quota-session-history'].map(id=>document.querySelector('[data-widget="'+id+'"] .chart>svg')),driver=({quota:0,activity:1,budget:2,funds:3,session:4})[initiator],root=charts[driver],views=charts.map(svg=>svg.viewBox.baseVal.width),scales=charts.map((svg,i)=>svg.getBoundingClientRect().width/views[i]),size=svg=>svg.getAttribute('viewBox')+':'+svg.style.height,sizes=charts.map(size);
         // PlotLayer retains these owners while React replaces their path children.
         // Repeated selectors inside every production RAF would load the measurement itself.
@@ -98,7 +98,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
         for(let i=0;i<4;i++,clip=clip.firstElementChild)clips.push(clip);
         const bands=[...charts[1].parentElement.querySelectorAll('.plot-move')].filter(layer=>layer.querySelector('.activity-stack'));
         const connected=()=>layers.every((layer,i)=>layer.isConnected!==false&&slides[i].isConnected!==false)&&clips.every(clip=>clip.isConnected!==false);
-        const probe=window.__quotumPan={initiator,period,errors:${panErrorsScript()},frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:Array(5).fill(0),synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,mutationSamples:[],undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[],timeline,wheelGapMs:0,lastWheel:null};
+        const probe=window.__quotumPan={initiator,period,errors:${panErrorsScript()},frames:[],latency:[],responses:[],inputs:0,updated:0,chartUpdates:Array(5).fill(0),synchronized:true,pending:[],last:0,pushesDuring:0,pushesAfter:0,forbiddenMutations:0,mutationSamples:[],undimmed:getComputedStyle(root).opacity==='1',sizeStable:true,coldReads:0,peakFlights:0,maxTiles:0,duplicateReads:0,flights:new Map(),running:true,feeding:false,segment:'wheel',samples:[],wheelGapMs:0,lastWheel:null};
         const originalPush=history.pushState.bind(history);probe.originalPush=originalPush;
         history.pushState=(...args)=>{if(probe.feeding){probe.pushesDuring++;transactions.push(probe.segment,root.dataset.panToken===undefined?NaN:Number(root.dataset.panToken));}else probe.pushesAfter++;originalPush(...args);};
         probe.returnSnapshot=()=>({now:Date.now(),url:location.search,charts:charts.map((svg,i)=>{
@@ -149,7 +149,6 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
           gesture.pixels=Math.max((gesture.origin-gesture.maxEnd)/gesture.scale,Math.min((gesture.origin-gesture.minEnd)/gesture.scale,wanted));
           probe.inputs++;
           const input={id:probe.inputs,...captured,segment:probe.segment,pixels:gesture.pixels,clamped:Math.abs(wanted-gesture.pixels)>1e-9,gesture};
-          if(timeline)timeline.add('input',{inputId:input.id,token:Number(token),stamp:captured.at,delivered:captured.delivered,segment:input.segment,pixels:input.pixels,requestedPixels:gesture.requestedPixels,clamped:input.clamped});
           probe.pending.push(input);
         };
         for(const type of types){owner.addEventListener(type,capture,true);window.addEventListener(type,input);}
@@ -160,20 +159,13 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
           const sections=legacy?[Object.fromEntries(url.searchParams)]:['quota','budget','funds'].filter(scope=>body[scope]&&body[scope].cells!=='skip').map(scope=>({...body[scope],scope:scope==='funds'?'budget':scope}));
           const ranges=sections.map(q=>({scope:JSON.stringify([q.scope,q.meters,q.unit,q.currency]),cell:Number(q.cell),from:Number(q.from),to:Number(q.to)}));
           for(const q of ranges){for(const f of probe.flights.values())for(const other of f)if(other.scope===q.scope&&other.cell===q.cell&&other.from<q.to&&other.to>q.from)probe.duplicateReads++;probe.maxTiles=Math.max(probe.maxTiles,Math.floor((q.to-1)/(q.cell*60))-Math.floor(q.from/(q.cell*60))+1);}
-          const id=++nextRequest,signal=args[1]?.signal,aborted=()=>{if(timeline)timeline.add('history-abort',{requestId:id});probe.flights.delete(id);};probe.flights.set(id,ranges);signal?.addEventListener('abort',aborted,{once:true});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.coldReads++;
-          if(timeline)for(const {cell,from,to}of ranges)timeline.add('history-start',{requestId:id,cell,from,to});
+          const id=++nextRequest,signal=args[1]?.signal,aborted=()=>{probe.flights.delete(id);};probe.flights.set(id,ranges);signal?.addEventListener('abort',aborted,{once:true});probe.peakFlights=Math.max(probe.peakFlights,probe.flights.size);probe.coldReads++;
           try {
             const response=await originalFetch(...args);
-            if(timeline){
-              timeline.add('history-headers',{requestId:id,status:response.status});
-              const json=response.json.bind(response);
-              response.json=async()=>{timeline.add('history-body-start',{requestId:id});try{const value=await json();staged.add(id);if(staged.size>32)staged.delete(staged.values().next().value);timeline.add('history-body-ready',{requestId:id});return value;}catch(error){timeline.add('history-body-failed',{requestId:id});throw error;}};
-            }
             return response;
           }finally{probe.flights.delete(id);signal?.removeEventListener('abort',aborted);}
         };
         probe.observer=new MutationObserver(records=>{
-          if(timeline && probe.running)for(const record of records){const chart=charts.indexOf(record.target);if(chart>=0&&['data-draw-ready','data-draw-from','data-draw-to'].includes(record.attributeName))timeline.add('draw-commit',{chart,from:Number(record.target.dataset.drawFrom),to:Number(record.target.dataset.drawTo),ready:record.target.dataset.drawReady==='true',candidateRequests:[...staged].slice(-32)});}
           if(!probe.running||!probe.feeding)return;
           for(const record of records){const element=record.target.nodeType===1?record.target:record.target.parentElement,panel=element?.closest('.card,.topbar,.agents-panel,.forecast,.budget-table,.activity-totals');if(!panel)continue;const clock=element.closest('[data-time]'),timeOnly=clock&&clock.getAttribute('data-time')!=='chart';if(!timeOnly){
             probe.forbiddenMutations++;
@@ -182,29 +174,19 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
           }}
         });probe.observer.observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true});
         const originalRAF=window.requestAnimationFrame||requestAnimationFrame;
-        const schedule=${evidence?.timeline === true && evidence?.frameIds === true ? 'timeline.wrap(originalRAF)' : 'callback=>originalRAF.call(window,callback)'};
-        let previous=charts.map(()=>'0:1'),phase='idle',lastFrame=null,paintedToken=null,observedAnimation=null,observedPending=false;
-        const consume=(count,now,stamp,reachedGesture)=>{const reached=probe.pending.slice(0,count).filter(input=>input.gesture===reachedGesture);probe.pending=probe.pending.filter((input,i)=>i>=count||input.gesture!==reachedGesture);for(const input of reached){const ms=now-input.at;probe.latency.push(ms);if(timeline)timeline.add('credit',{inputId:input.id,frameId:stamp,token:Number(input.gesture.token),stamp:input.at,delivered:input.delivered,credited:now,pixels:input.pixels,segment:input.segment});probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size});}};
+        const schedule=callback=>originalRAF.call(window,callback);
+        let previous=charts.map(()=>'0:1'),phase='idle',lastFrame=null,paintedToken=null;
+        const consume=(count,now,stamp,reachedGesture)=>{const reached=probe.pending.slice(0,count).filter(input=>input.gesture===reachedGesture);probe.pending=probe.pending.filter((input,i)=>i>=count||input.gesture!==reachedGesture);for(const input of reached){const ms=now-input.at;probe.latency.push(ms);probe.responses.push({ms,queued:input.delivered-input.at,processed:now-input.delivered,segment:input.segment,requests:probe.flights.size});}};
         const sample=(stamp,afterCallback=false)=>{
           if(!probe.running)return;
           const now=performance.now(),demand=probe.pending.length,layers=owners(),active=!!root.dataset.panEnd;
           const folds=active?[]:layers.map((layer,i)=>{
             for(const owner of [layer,slides[i]]){const animation=owner.getAnimations().find(a=>a.playState==='running');if(animation)return{owner,animation};}
             return null;
-          }),folding=folds.some(Boolean),folded=folds[driver]?driver:folds.findIndex(Boolean),fold=folds[folded],foldAnimation=fold?.animation??null;
+          }),folding=folds.some(Boolean);
           probe.sizeStable&&=connected()&&charts.every((svg,i)=>svg.isConnected&&size(svg)===sizes[i]);
           const matrices=layers.map((layer,i)=>{const owner=folds[i]?.owner,transform=active?layer.style.transform:owner?getComputedStyle(owner).transform:'none',matrix=matrixOf(transform);return owner&&owner!==layer?{a:matrix.a,e:matrix.e*scales[i]}:matrix;}),current=matrices.map(matrix=>matrix.e+':'+matrix.a);
           const nextPhase=active?'pan':folding?'fold':'idle';
-          // Keep the observed pending start as well as moving frames in opt-in
-          // evidence. A smooth moving portion alone cannot prove a short fold.
-          if(timeline){
-            const pending=!!foldAnimation?.pending;
-            if(nextPhase!==phase||foldAnimation!==observedAnimation||pending!==observedPending){
-              const number=value=>typeof value==='number'&&Number.isFinite(value)?value:null;
-              timeline.add('presentation-phase',{phase:nextPhase,frameId:stamp,chart:folding?folded:null,pending,htmlOwner:folding?fold.owner===layers[folded]:null,currentTime:number(foldAnimation?.currentTime),startTime:number(foldAnimation?.startTime)});
-              observedAnimation=foldAnimation;observedPending=pending;
-            }
-          }
           // The wheel's intentional 200 ms rest is stationary, before the fold begins.
           if(nextPhase!==phase||active&&paintedToken!==root.dataset.panToken){probe.last=0;lastFrame=null;previous=nextPhase==='pan'?charts.map(svg=>(Number(svg.dataset.panBase||0))+':1'):current;phase=nextPhase;paintedToken=root.dataset.panToken;}
           const moved=current.map((value,i)=>value!==previous[i]);
@@ -219,7 +201,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
             if(reached>=0)consume(reached+1,now,stamp,gesture);
           }
           if(active&&moved.every(Boolean)||folding&&moved.some(Boolean)){
-            if(stamp!==lastFrame){if(timeline)timeline.add('frame',{frameId:stamp,from:probe.last,to:now,segment:folding?'fold':probe.segment,pending:demand,pose:matrices.map(value=>[value.a,value.e]),requests:[...probe.flights.keys()]});probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:demand,requests:probe.flights.size});}probe.last=now;lastFrame=stamp;}
+            if(stamp!==lastFrame){probe.updated++;if(probe.last){const ms=now-probe.last;probe.frames.push(ms);probe.samples.push({ms,segment:folding?'fold':probe.segment,pending:demand,requests:probe.flights.size});}probe.last=now;lastFrame=stamp;}
           }
           if(!active&&!folding&&probe.pending.length&&charts.every(svg=>svg.dataset.drawReady==='true'&&!svg.classList.contains('is-panning'))){
             // Release may commit the last coalesced input before its own RAF.
@@ -227,7 +209,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
             const ends=charts.map(svg=>Number(svg.parentElement.dataset.axisEnd)),selected=new URLSearchParams(location.search).has('to');
             let reached=-1;
             for(let i=0;i<probe.pending.length;i++){const input=probe.pending[i],g=input.gesture;const tolerance=selected?1.1:8*g.scale+1.1;if(g===gesture&&g.started&&g.scale>0&&ends.every(end=>Math.abs(end-(g.origin-input.pixels*g.scale))<=tolerance))reached=i;}
-            if(reached>=0){if(timeline)timeline.add('final-geometry',{frameId:stamp,ends});consume(reached+1,now,stamp,probe.pending[reached].gesture);}
+            if(reached>=0){consume(reached+1,now,stamp,probe.pending[reached].gesture);}
           }
           if(!active&&!folding)probe.last=0;
           previous=current;probe.undimmed&&=charts.every(svg=>!svg.closest('.is-loading')&&(!svg.style.opacity||svg.style.opacity==='1'));
@@ -310,7 +292,7 @@ export async function panning(cdp: Pick<Cdp, 'send' | 'evaluate' | 'on'> & Parti
       const report = await cdp.evaluate<PanReading>(`(() => {
         const p=window.__quotumPan;p.cleanup();
         const segments={};for(const segment of ['wheel','drag','return','fold']){const values=p.samples.filter(s=>s.segment===segment).map(s=>s.ms).sort((a,b)=>a-b);segments[segment]={count:values.length,p95:values[Math.ceil(values.length*.95)-1]??0,max:values.at(-1)??0};}
-        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,mutationSamples:p.mutationSamples,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,wheelGapMs:p.wheelGapMs,segments,transactions:p.readTransactions(),outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34),timeline:p.timeline?.read()};
+        return {frames:p.frames,latency:p.latency,inputs:p.inputs,updated:p.updated,chartUpdates:p.chartUpdates,synchronized:p.synchronized,pushesDuring:p.pushesDuring,pushesAfter:p.pushesAfter,forbiddenMutations:p.forbiddenMutations,mutationSamples:p.mutationSamples,undimmed:p.undimmed,sizeStable:p.sizeStable,coldReads:p.coldReads,peakFlights:p.peakFlights,maxTiles:p.maxTiles,duplicateReads:p.duplicateReads,wheelGapMs:p.wheelGapMs,segments,transactions:p.readTransactions(),outliers:p.samples.filter(s=>s.ms>50),responses:p.responses.filter(r=>r.ms>34)};
       })()`);
       report.initiator = initiator; report.period = period; report.series = geometry.series; report.sessionSeries=geometry.sessionSeries; report.sessionDensity=geometry.sessionDensity; report.edgeSeries=edgeSeries; report.budgetSeries = geometry.budgetSeries; report.fundsSeries = geometry.fundsSeries; report.charts = geometry.charts; report.rate = 4; report.expectedPushes = 3;
       reports.push(report);

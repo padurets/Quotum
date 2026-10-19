@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
-import {panEvidenceScript, panTransactionsScript, panPartialScript, panErrorsScript, type PanTransactions} from '../panEvidence.js';
+import {panTransactionsScript, panPartialScript, panErrorsScript, type PanTransactions} from '../panEvidence.js';
 import {deadline} from '../deadline.js';
 import {panningSettlement} from '../panningFailure.js';
 import {safeEvidence} from '../evidence.js';
@@ -14,7 +14,7 @@ const edgeSeries=():PanReading['edgeSeries']=>['wheel','drag'].map(stage=>({stag
 const source = readFileSync(new URL('../panning.ts', import.meta.url), 'utf8');
 const probe = source.match(/await cdp\.evaluate\(`(\(\(\) => \{\n\s*const initiator=[\s\S]+?\}\)\(\))`\);/)![1];
 
-function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota', timeline = false, frameIds = false) {
+function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quota') {
   let time = 0;
   let observe:(records:unknown[])=>void=()=>{};
   const callbacks: ((stamp: number) => void)[] = [], listeners = new Map<string, (event: object) => void>(), bubble = new Map<string, (event: object) => void>();
@@ -54,8 +54,8 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
     DOMMatrix: class {a: number; e: number; constructor(value: string | undefined) {this.a = Number(value?.match(/scaleX\(([-.\d]+)\)/)?.[1] ?? 1);this.e = Number(value?.match(/translateX\(([-.\d]+)px\)/)?.[1] ?? 0);if(value?.startsWith('scaleX'))this.e*=this.a;}},
     window: {fetch: async () => ({}), requestAnimationFrame: schedule, addEventListener: (type: string, callback: (event: object) => void) => bubble.set(type, callback), removeEventListener: (type:string,callback:(event:object)=>void) => {if(bubble.get(type)===callback)bubble.delete(type);}},
   };
-  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${JSON.stringify(period)}', JSON.stringify('24h')).replace('${panEvidenceScript(evidence?.timeline === true, 10_000, evidence?.frameIds === true)}', panEvidenceScript(timeline,10_000,frameIds)).replace('${panTransactionsScript()}', panTransactionsScript()).replace('${panErrorsScript()}',panErrorsScript()).replace("${evidence?.timeline === true && evidence?.frameIds === true ? 'timeline.wrap(originalRAF)' : 'callback=>originalRAF.call(window,callback)'}",timeline&&frameIds?'timeline.wrap(originalRAF)':'callback=>originalRAF.call(window,callback)'), context);
-  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]; timeline: {read(): {entries: {kind: string; inputId?: number; frameId?: number; rafFrom?:number|null;rafTo?:number|null}[]}}}}).__quotumPan;
+  runInNewContext(probe.replace('${JSON.stringify(initiator)}', JSON.stringify(initiator)).replace('${JSON.stringify(period)}', JSON.stringify('24h')).replace('${panTransactionsScript()}', panTransactionsScript()).replace('${panErrorsScript()}',panErrorsScript()), context);
+  const reading = (context.window as typeof context.window & {__quotumPan: PanReading & {running:boolean; feeding: boolean; cleanup(): void; readTransactions(): PanTransactions; pending: object[]}}).__quotumPan;
   for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: '-1000000000', panMaxEnd: '1000000000'});
   const limits = (min: number, max: number) => {for (const svg of [historySvg, activitySvg, budgetSvg, fundsSvg, sessionSvg]) Object.assign(svg.dataset, {panMinEnd: String(min), panMaxEnd: String(max)});};
   const wheel = (stamp: number, delivered: number, deltaMode = 0, handled = () => {}, deltaX = initiator==='activity'?7:12) => {
@@ -80,17 +80,6 @@ function fixture(initiator: 'quota'|'session'|'activity'|'budget'|'funds' = 'quo
   return {reading, wheel, limits, listeners, bubble, update, frame, runFrame,observe:(records:unknown[])=>observe(records), requestFrame: context.window.requestAnimationFrame, context,sessionSvg,sessionLayer,historySvg, activitySvg, budgetSvg, fundsSvg, fundsLayer, budgetLayer, historyLayer, activityLayer, activityClip};
 }
 
-test('opt-in callback handles follow the actual movement samples without changing frame credit',()=>{
-  const f=fixture('quota',true,true);
-  f.wheel(0,0);const first=f.requestFrame(()=>f.update(1,16));f.runFrame(16);
-  f.wheel(20,20);const second=f.requestFrame(()=>f.update(2,32));f.runFrame(32);
-  const entries=f.reading.timeline.read().entries.filter(entry=>entry.kind==='frame');
-  assert.deepEqual(Array.from(entries,entry=>[entry.rafFrom,entry.rafTo]),[[null,first],[first,second]]);
-  assert.deepEqual(Array.from(f.reading.frames),[16]);assert.equal(f.reading.updated,2);
-  assert.equal(f.reading.pending.length,0);assert.equal(f.reading.latency.length,2);
-  f.reading.cleanup();
-});
-
 test('the original probe records a native generation pause before a handler writes the address', () => {
   const f=fixture();f.reading.feeding=true;
   f.wheel(100,114.2);
@@ -104,7 +93,7 @@ test('the original probe records a native generation pause before a handler writ
   assert.ok(!JSON.stringify(safeEvidence(evidence)).includes('private'));
 });
 
-test('a failed scenario retains its original wheel receipts and pending inputs without a timeline', () => {
+test('a failed scenario retains its original wheel receipts and pending inputs', () => {
   const f=fixture();f.reading.feeding=true;
   f.wheel(100,114.2);f.wheel(432.5,432.5,0,()=>f.context.history.pushState());
   const partial=runInNewContext(panPartialScript('quota','24h'),f.context);
@@ -112,7 +101,6 @@ test('a failed scenario retains its original wheel receipts and pending inputs w
   assert.equal(partial.transactions.maxStampGap,332.5);assert.equal(partial.transactions.pushesDuring,1);
   assert.equal(partial.pushesDuring,1);assert.equal(partial.pending.length,2);
   assert.equal(partial.pending[1].inputId,2);assert.equal(partial.pending[1].stamp,432.5);
-  assert.equal(partial.timeline,undefined);
 });
 
 test('failure evidence cannot credit an earlier or retired scenario probe', () => {
@@ -483,8 +471,8 @@ test('the fold interval remains open until the last data plot finishes its anima
   assert.deepEqual(Array.from(f.reading.latency), [150]);
 });
 
-test('diagnostic phases retain pending animation time without manufacturing moving frames', () => {
-  const f = fixture('quota', true);
+test('a pending animation does not manufacture moving frames', () => {
+  const f = fixture('quota');
   for (const svg of [f.historySvg, f.activitySvg, f.budgetSvg, f.fundsSvg, f.sessionSvg]) delete svg.dataset.panEnd;
   const animation = {playState: 'running', pending: true, currentTime: 0, startTime: null as number | null};
   f.historyLayer.getAnimations = () => [animation];
@@ -496,13 +484,7 @@ test('diagnostic phases retain pending animation time without manufacturing movi
   animation.currentTime = 30;
   f.historyLayer.style.transform = 'translateX(20px) scaleX(.8)'; f.runFrame(100);
   animation.playState = 'finished'; f.historyLayer.style.transform = 'none'; f.runFrame(230);
-  const entries = JSON.parse(JSON.stringify(safeEvidence(f.reading.timeline.read().entries)));
-  assert.deepEqual(entries.filter((entry: {kind: string}) => entry.kind === 'presentation-phase').map(({id: _id, ...entry}: Record<string, unknown>) => entry), [
-    {at: 10, kind: 'presentation-phase', phase: 'fold', frameId: 10, chart: 0, pending: true, htmlOwner: true, currentTime: 0, startTime: null},
-    {at: 80, kind: 'presentation-phase', phase: 'fold', frameId: 80, chart: 0, pending: false, htmlOwner: true, currentTime: 10, startTime: 70},
-    {at: 230, kind: 'presentation-phase', phase: 'idle', frameId: 230, chart: null, pending: false, htmlOwner: null, currentTime: null, startTime: null},
-  ]);
-  assert.deepEqual(Array.from(f.reading.frames), [20], 'phase records do not change the moving-frame budget');
+  assert.deepEqual(Array.from(f.reading.frames), [20], 'only actual movement contributes to the frame budget');
 });
 
 test('causal input positions preserve the line and page wheel units', () => {
@@ -606,17 +588,14 @@ test('funds input requires its own data layer to move with the other charts',()=
 });
 
 
-test('original input/frame correlation retains delayed input and final-geometry failures', () => {
-  const f=fixture('quota',true);
+test('coalesced input is credited only when its own position has reached the data layers', () => {
+  const f=fixture('quota');
   f.wheel(10,30);f.wheel(20,31);
   f.requestFrame(()=>f.update(1,32));f.runFrame(31);
-  let entries=f.reading.timeline.read().entries;
-  assert.equal(entries.filter(entry=>entry.kind==='credit').length,1);
-  assert.equal(entries.find(entry=>entry.kind==='credit')?.inputId,1);
+  assert.equal(f.reading.latency.length,1);
+  assert.equal(f.reading.pending.length,1);
   f.requestFrame(()=>f.update(2,60));f.runFrame(59);
-  entries=f.reading.timeline.read().entries;
-  const credits=entries.filter(entry=>entry.kind==='credit');
-  assert.equal(credits.length,2);
-  assert.notEqual(credits[0].frameId,credits[1].frameId);
+  assert.equal(f.reading.latency.length,2);
+  assert.equal(f.reading.pending.length,0);
   assert.equal(f.reading.latency[1],40);
 });

@@ -38,7 +38,7 @@ test('a failed panning scenario saves its original command before partial eviden
     evaluate: async (source: string) => {
       lastAck = {id: ++id, method: 'Runtime.evaluate'};
       if (first) {first = false; return 'auto';}
-      if (source.includes("status:'partial'")) {events.push('partial'); return {inputs: 17, timeline: {status: 'complete'}};}
+      if (source.includes("status:'partial'")) {events.push('partial'); return {inputs: 17};}
       events.push('original-failure'); failedAck = lastAck; failedContext = context;
       throw error;
     },

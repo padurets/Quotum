@@ -39,11 +39,8 @@ traffic and cancellation checks; `--scope dashboard` selects idle, measurements,
 frequency, all ten native panning scenarios, subscription credits and currency checks.
 The `bench` check passes only when both jobs succeed; a failed, skipped or cancelled job
 fails this check. The default `--scope all` keeps the full local run and its original
-order. CPU panning and dashboard trace diagnostics require an owned browser and no
-other diagnostic mode. CPU and trace may use `--ci --scope dashboard`; other diagnostic
-modes require the full scope. The existing CPU/trace job uses this dashboard prefix.
-Default/all CPU runs keep the full prefix, and default/all trace keeps its diagnostic-only
-short prefix. Separate jobs retain normal warmup, chart-grid alignment and budgets.
+order. Optional diagnostics require the full scope. Separate jobs retain normal warmup,
+chart-grid alignment and budgets.
 DevTools commands keep their thirty-second response deadline. An explicit renderer
 crash or target-detach event fails pending commands immediately, even if the socket
 stays open, and retains the original failure before cleanup. It does not retry work.

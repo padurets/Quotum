@@ -1,24 +1,3 @@
-/** Numeric original-interval evidence; no layout reads, console work or payload strings. */
-export function panEvidenceScript(enabled: boolean, limit = 10_000, frameIds = false): string {
-  return `(() => {
-    if(!${enabled})return null;
-    const limit=${limit},entries=new Array(limit);let count=0;${frameIds?'let currentRAF=null,previousRAF=null;':''}
-    return {
-      ${frameIds?`wrap(original){return callback=>{
-        let handle;
-        handle=original.call(window,stamp=>{
-          const previous=currentRAF;currentRAF=handle;
-          try{return callback.call(window,stamp);}finally{currentRAF=previous;}
-        });
-        return handle;
-      };},
-      `:''}add(kind,values){const id=++count;entries[(id-1)%limit]={id,at:performance.now(),kind,...values${frameIds?",...(kind==='frame'?{rafFrom:values.from>0?previousRAF:null,rafTo:currentRAF}:{})":''}};${frameIds?"if(kind==='frame')previousRAF=currentRAF;":''}},
-      read(){const size=Math.min(count,limit),start=count>limit?count%limit:0;
-        return {status:count>limit?'insufficient-evidence':'complete',count,omitted:Math.max(0,count-limit),entries:Array.from({length:size},(_,i)=>entries[(start+i)%limit])};}
-    };
-  })()`;
-}
-
 export type PanTransactions = {
   status: string; wheelEvents: number; invalidClocks: number; stampRegressions: number;
   maxStampGap: number | null; maxDeliveryGap: number | null; pushesDuring: number; omitted: number;
@@ -87,7 +66,7 @@ export function panPartialScript(initiator?: string, period?: string): string {
     const errors=p.errors?.active?p.errors.read():undefined;
     if(!p.running)return errors?{status:'unavailable',errors}:{status:'unavailable'};
     return {status:'partial',errors,inputs:p.inputs,updated:p.updated,frames:p.frames,latency:p.latency,
-      responses:p.responses,timeline:p.timeline?.read(),transactions:p.readTransactions(),
+      responses:p.responses,transactions:p.readTransactions(),
       pushesDuring:p.pushesDuring,forbiddenMutations:p.forbiddenMutations,
       pending:p.pending.map(input=>({inputId:input.id,stamp:input.at,delivered:input.delivered,pixels:input.pixels}))};
   })()`;
