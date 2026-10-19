@@ -48,13 +48,18 @@ const addB=(h:Awaited<ReturnType<typeof fixture>>,show=true)=>{
 const excludeB=()=>{const filters=defaultFilters();filters.projects={mode:'exclude',values:['B']};return filters;};
 const move=(loader:HistoryStore,token:number)=>loader.pan({token,length:H,from:NOW-H-M,to:NOW-M,direction:0});
 
-for(const kind of ['cached strip','active strip','late reply','A→B→A','client off','device off','fixed range'] as const)test(`the actual activity drawing follows work filters through ${kind} without replacing native buffers`,async()=>{
+for(const kind of ['cached strip','active strip','late reply','A→B→A','client off','device off','fixed range','cold native-only'] as const)test(`the actual activity drawing follows work filters through ${kind} without replacing native buffers`,async()=>{
   const originalNow=Date.now;Date.now=()=>NOW;publishDataFilters(defaultFilters());
   const h=await fixture({personal:true,fixed:kind==='fixed range'});let d:Awaited<ReturnType<typeof drawings>>|undefined,gate:ReturnType<typeof h.hold>|undefined,stop=()=>{};
   try{
-    addB(h);await flush();assert.ok(h.period.get().rows.some((row:{project:string})=>row.project==='B'));
+    addB(h,kind!=='cold native-only');await flush();assert.ok(h.period.get().rows.some((row:{project:string})=>row.project==='B'));
     if(kind==='late reply')gate=h.hold();
-    d=await drawings(h);stop=wire(h,d);
+    d=await drawings(h,kind!=='cold native-only');stop=wire(h,d);
+    if(kind==='cold native-only'){
+      assert.equal(d.loader.getFinancial().history!.series.length,1);
+      const before=h.requests.length;showActivity(h);publishDataFilters({...defaultFilters()});await flush();
+      assert.ok(h.requests.slice(before).some(body=>body.quota?.sources==='[]'),'showing activity fills its own previously unread coverage');
+    }
     let oldFlight:{controller:AbortController}|undefined,native:Float64Array[]=[];
     if(kind==='late reply'){
       oldFlight=[...(d.loader as unknown as {flights:Set<{controller:AbortController}>}).flights][0];assert.ok(oldFlight);
@@ -107,22 +112,29 @@ test('a hidden activity widget defers its selected drawing read while native cha
   }finally{await flush();stop();d?.close();await h.close();publishDataFilters(null,false);Date.now=originalNow;}
 });
 
-test('a selected activity request failure preserves native history and Retry recovers the same filtered strip',async()=>{
+for(const failure of ['history_limit','history_failed'] as const)test(`a selected activity ${failure} keeps native measurements live and its own Retry recovers the strip`,async()=>{
   const originalNow=Date.now;Date.now=()=>NOW;publishDataFilters(defaultFilters());
   const h=await fixture({personal:true});let d:Awaited<ReturnType<typeof drawings>>|undefined,stop=()=>{},gate:ReturnType<typeof h.hold>|undefined;
   try{
     addB(h);await flush();d=await drawings(h);stop=wire(h,d);
     move(d.loader,1);await flush();assert.ok(names(d.loader).includes('B'));d.loader.endPan(false);await flush();
     const native=buffers(d.loader),financial=d.loader.getFinancial();assert.ok(native.length);
-    gate=h.hold();publishDataFilters(excludeB());await flush();gate.reject(new ApiError(413,'history_limit'));await flush();
-    assert.equal(d.loader.get().error,'history_limit');
+    gate=h.hold();publishDataFilters(excludeB());await flush();gate.reject(failure==='history_limit'?new ApiError(413,'history_limit'):new Error('offline'));await flush();
+    assert.equal(d.loader.get().error,failure);
     assert.equal(d.loader.getFinancial(),financial);
     assert.ok(native.every(value=>buffers(d!.loader).includes(value)));
     assert.equal(d.loader.getActivityPlot(),null);
-    h.period.retry();d.loader.retry();await flush();
+    const before=h.requests.length;
+    h.store.record(h.source,{observedAt:NOW-M/2,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:28,remaining:72,resetAt:NOW+H}]});h.events.flush();await flush();
+    assert.equal(h.page.get().board!.cards[h.source].windows[0].remaining,72);
+    assert.equal(h.period.quotaAt({sourceId:h.source,windowId:'w'},NOW,'1h').remainingAtEnd,72);
+    assert.equal(d.loader.getFinancial().history!.series[0].points.at(-1)![1],72,'the actual native drawing catches up without selected Retry');
+    assert.equal(d.loader.getFinancial().error,undefined);assert.equal(d.loader.get().error,failure);
+    assert.ok(h.requests.slice(before).some(body=>body.quota&&body.quota.cells!=='skip'));
+    d.loader.retry();await flush();
     assert.equal(d.loader.get().error,undefined);assert.equal(h.period.get().error,null);
     move(d.loader,2);await flush();assert.equal(names(d.loader).includes('B'),false);
-    assert.ok(native.every(value=>buffers(d!.loader).includes(value)));
+    assert.equal(d.loader.getFinancial().history!.series[0].points.at(-1)![1],72);
     assert.equal(d.loader.getPlot()?.series.length,1);
   }finally{
     gate?.release();await flush();stop();d?.close();await h.close();publishDataFilters(null,false);Date.now=originalNow;

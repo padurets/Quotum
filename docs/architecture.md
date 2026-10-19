@@ -2018,6 +2018,10 @@ an empty source selection and skipped native evidence. Its metadata never replac
 the native basis, and it cannot complete a pending native summary. Both projections
 keep the same transport slots and memory budget. A hidden activity widget defers its
 refill until shown; activity failures do not discard the native frame.
+Their error state and retry belong to activity alone: new native measurements still
+read and commit their own cells, including while activity waits for memory or its
+retry deadline. Retry also repeats failed selected period evidence. Native failures
+remain visible to their own chart while its last complete frame is retained.
 
 Each chart replaces one typed drawing model whole after preparation, then publishes
 its geometry and painters after the DOM commits. Input keeps the displayed model and

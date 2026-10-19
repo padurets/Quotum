@@ -163,15 +163,18 @@ export function consumer(h: any) {
 import {HistoryStore,follow} from '../lib/history';
 import {expandHistory} from '../../server/domain/history';
 
-export async function drawings(h:any){
- const loader=new HistoryStore({now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,meta,activityOnly)=>h.period.transport.read('quota',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??''},signal,activityOnly).then((reply:import('../../server/domain/history').HistoryReply)=>expandHistory(reply,meta)),setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,'quota',h.pool);
- const stop=follow(loader,h.page);loader.choose(h.settings.range,h.selectedRange());loader.open(h.board);loader.setWorkFilter(JSON.stringify(filterRuntimeBindings.effectiveFilters()?filterModelBindings.workFilter(filterRuntimeBindings.effectiveFilters()!):null));loader.hello(h.events.epoch);
+export async function drawings(h:any,activity=true){
+ const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
+ const retry=source.split('\n').find(line=>line.trimStart().startsWith('retry:'));assert.ok(retry);
+ const retryContext={retry:null as any,boardPeriod:h.period,scope:'quota',family:'budget'};
+ runInNewContext(ts.transpileModule('globalThis.retry=({'+retry+'}).retry;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,retryContext);
+ const loader=new HistoryStore({now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,meta,activityOnly)=>h.period.transport.read('quota',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??''},signal,activityOnly).then((reply:import('../../server/domain/history').HistoryReply)=>expandHistory(reply,meta)),retry:retryContext.retry,setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,'quota',h.pool);
+ const stop=follow(loader,h.page);loader.setActivityActive(activity);loader.choose(h.settings.range,h.selectedRange());loader.open(h.board);loader.setWorkFilter(JSON.stringify(filterRuntimeBindings.effectiveFilters()?filterModelBindings.workFilter(filterRuntimeBindings.effectiveFilters()!):null));loader.hello(h.events.epoch);
  const board=h.page.get().board;loader.snapshot(board.lineup,Object.values(board.cards).flatMap((c:any)=>c.windows.map((w:any)=>`${c.id} ${w.id}`)),board.historyStart,board.workAuthority);await flush();
  const slots:any[]=[];let cursor=0;
  const useRef=(current:any)=>slots[cursor++]??(slots[cursor-1]={current});
  const useMemo=(read:any,deps:any[])=>{const box=useRef(null);if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;};
  const context={useRef,useMemo,useSyncExternalStore:(_s:any,read:any)=>read(),pan:{active:()=>null,onPhase:()=>()=>{}},hubNow:()=>NOW,planEventsAt,planEventsDeadline,shallowEqual,useClock:()=>NOW,fundsHistory:{},page:h.page,timeRange:h.selectedRange,timeRangeKey,prefs:()=>h.settings,boardPeriod:h.period,read:null as any};
- const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
  runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
  const render=()=>{cursor=0;return context.read(loader,true);};
  return {loader,render,close:()=>{stop();loader.close();}};

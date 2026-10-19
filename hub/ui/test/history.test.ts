@@ -89,12 +89,12 @@ test('selected activity COW refusal retains native buffers and recovers under th
   const pool=new HistoryPool(100_000),h=harness(undefined,undefined,'quota',pool);let pinned=0;
   pool.register({get estimatedBytes(){return pinned;},evictionCandidates:()=>[]});
   h.store.setWorkFilter('A');h.store.choose('1h',{from:NOW-H,to:NOW-5*M});
-  const answer=async()=>{
+  const answer=async(remaining=80)=>{
     const read=pending(h)[0];assert.ok(read);
     const chunks:Chunk[]=[];
     for(let from=read.from;from<read.to;){
       const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell)),chunk=empty(from,to);
-      chunk.series=[{source:'s',window:'w',hold:H,open:null,cells:[[0,80,0,0]]}];
+      chunk.series=[{source:'s',window:'w',hold:H,open:null,cells:[[0,remaining,0,0]]}];
       chunk.activity={sessions:[['a','s','A','device']],devices:{device:'Device'},cells:[[0,M,[0],[['p','A',M]]]]};
       chunks.push(chunk);from=to;
     }
@@ -107,9 +107,58 @@ test('selected activity COW refusal retains native buffers and recovers under th
     pinned=pool.budget-pool.estimatedBytes-32;await flush();await answer();
     assert.equal(h.store.get().error,'history_limit');assert.equal(h.store.getFinancial(),financial);
     for(const tile of old){const kept=grid.get(tile.cell)!.get(tileOf(tile.from,tile.cell))!;assert.ok(kept);assert.equal((kept as any).series.get('s w').values,(tile as any).series.get('s w').values);}
+    h.store.news(NOW-10*M);await flush();await answer(72);
+    assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],72,'native updates still fit under the original pinned budget');
+    assert.equal(h.store.getFinancial().error,undefined);assert.equal(h.store.get().error,'history_limit');
     pinned=0;h.store.retry();await flush();await answer();assert.equal(h.store.get().error,undefined);
     assert.equal(h.store.get().history?.series.length,1);
+    assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],72,'the selected retry cannot replace fresh native facts');
   }finally{pinned=0;h.store.close();assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);}
+});
+
+test('a native drawing failure remains visible to its financial subscriber while its complete frame is retained',async()=>{
+  const h=harness(undefined,undefined,'quota');
+  try{
+    h.store.choose('1h',{from:NOW-H,to:NOW-5*M});await h.start();await pending(h)[0].answer();
+    const frame=h.store.getFinancial().history;assert.ok(frame);
+    h.store.news(NOW-10*M);await flush();await pending(h)[0].fail(new Error('offline'));
+    assert.equal(h.store.getFinancial().history,frame);assert.equal(h.store.getFinancial().error,'history_failed');
+    h.store.retry();await flush();await pending(h)[0].answer();assert.equal(h.store.getFinancial().error,undefined);
+  }finally{h.store.close();}
+});
+
+test('an activity retry waits independently while new native cells continue through the same reader',async()=>{
+  const h=harness(undefined,undefined,'quota');
+  const answer=async(remaining:number)=>{
+    const read=pending(h)[0];assert.ok(read);const chunks:Chunk[]=[];
+    for(let from=read.from;from<read.to;){const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell)),chunk=empty(from,to);chunk.series=[{source:'s',window:'w',hold:H,open:null,cells:[[0,remaining,0,0]]}];chunks.push(chunk);from=to;}
+    await read.answer({chunks});
+  };
+  try{
+    h.store.setWorkFilter('A');h.store.choose('1h',{from:NOW-H,to:NOW-5*M});await h.start();await answer(83);
+    h.store.setWorkFilter('B');await flush();await pending(h)[0].fail(new Error('offline'));
+    assert.equal(h.store.get().error,'history_failed');assert.equal(h.timers.size,1);
+    h.store.news(NOW-10*M);await flush();await answer(72);
+    assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],72);assert.equal(h.store.getFinancial().error,undefined);
+    assert.equal(h.store.get().error,'history_failed');assert.equal(h.timers.size,1);
+    const reads=h.reads.length;await h.advance(14_999);assert.equal(h.reads.length,reads);
+    await h.advance(1);assert.equal(h.reads.length,reads+1);await answer(83);
+    assert.equal(h.store.get().error,undefined);assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],72);
+  }finally{h.store.close();assert.equal(h.timers.size,0);}
+});
+
+test('the same error code in activity cannot conceal a new native failure from its subscriber',async()=>{
+  const h=harness(undefined,undefined,'quota');
+  try{
+    h.store.setWorkFilter('A');h.store.choose('1h',{from:NOW-H,to:NOW-5*M});await h.start();await pending(h)[0].answer();
+    const frame=h.store.getFinancial().history;assert.ok(frame);
+    h.store.setWorkFilter('B');await flush();await pending(h)[0].fail(new Error('offline'));
+    assert.equal(h.store.get().error,'history_failed');assert.equal(h.store.getFinancial().error,undefined);
+    h.store.news(NOW-10*M);await flush();await pending(h)[0].fail(new Error('offline'));
+    assert.equal(h.store.get().error,'history_failed');assert.equal(h.store.getFinancial().error,'history_failed');
+    assert.equal(h.store.getFinancial().history,frame);
+    h.store.retry();await flush();await pending(h)[0].answer();assert.equal(h.store.getFinancial().error,undefined);
+  }finally{h.store.close();}
 });
 
 test('settings retain live invalidations without reading history until the dashboard returns', async () => {
@@ -927,6 +976,33 @@ function cooperativeHarness(pool?: HistoryPool, scope?: 'quota'|'budget') {
   const internals = h.store as unknown as {responses: Map<object, {started: boolean}>; reservations: Map<string, object>; flights: Set<object>; grids: Map<number, Map<number, {readFrom: number; readTo: number; writeSeq: number}>>};
   return {...h, tasks, tick, finish, internals, preparations};
 }
+
+test('changing selected work between a native commit and composition cannot credit the previous financial frame',async()=>{
+  const h=cooperativeHarness(undefined,'quota');
+  const answer=async(remaining:number)=>{
+    const read=pending(h)[0];assert.ok(read);
+    const chunks:Chunk[]=[];
+    for(let from=read.from;from<read.to;){
+      const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell)),chunk=empty(from,to);
+      chunk.series=[{source:'s',window:'w',hold:H,open:null,cells:[[0,remaining,0,0]]}];
+      chunks.push(chunk);from=to;
+    }
+    await read.answer({chunks});
+  };
+  try{
+    h.store.setWorkFilter('A');h.store.choose('1h',{from:NOW-H,to:NOW-5*M});
+    await h.start();await answer(83);await h.finish();
+    assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],83);
+    h.store.news(NOW-10*M);await flush();await answer(72);
+    assert.ok(h.internals.responses.size);
+    for(let i=0;h.internals.responses.size&&i<10_000;i++)h.tick();
+    assert.equal(h.internals.responses.size,0,'the new native cells have atomically committed');
+    assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],83,'composition has not run yet');
+    h.store.setWorkFilter('B');h.store.setActivityActive(false);
+    await h.finish();
+    assert.equal(h.store.getFinancial().history!.series[0].points.at(-1)![1],72,'only the completed native frame advances its publication version');
+  }finally{h.store.close();}
+});
 
 test('release retains its last strip while preparing only the complete selected frame', async () => {
   const h = cooperativeHarness(); await h.start(); await h.reads[0].answer(); await h.finish();

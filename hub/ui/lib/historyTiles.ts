@@ -9,6 +9,7 @@ const HEAD = 248; // 61 uint32 offsets, padded to a float64 boundary.
 type PackedSeries = {source: string; window: string; values: Float64Array; ends?: Float64Array};
 type Session = Chunk['activity']['sessions'][number];
 type Group = ['s' | 'p' | 'd', string];
+type Plane = 'all'|'native'|'activity';
 
 /** A tile owns one buffer per series and one for sparse activity, without cell objects. */
 export class HistoryTile {
@@ -68,8 +69,9 @@ export class HistoryTile {
 
   /** A private COW tile keeps every published buffer untouched until response commit. */
   staged(chunk: Chunk, known: HistoryMeta['known']): Preparation<HistoryTile>;
-  staged(chunk: Chunk, known: HistoryMeta['known'], admit: (bytes: number) => boolean,now?:number,native?:boolean): Preparation<HistoryTile | null>;
-  *staged(chunk: Chunk, known: HistoryMeta['known'], admit?: (bytes: number) => boolean,now=0,native=true): Preparation<HistoryTile | null> {
+  staged(chunk: Chunk, known: HistoryMeta['known'], admit: (bytes: number) => boolean,now?:number,plane?:Plane): Preparation<HistoryTile | null>;
+  *staged(chunk: Chunk, known: HistoryMeta['known'], admit?: (bytes: number) => boolean,now=0,plane:Plane='all'): Preparation<HistoryTile | null> {
+    const native=plane!=='activity';
     const copy = new HistoryTile(this.from, this.cell);
     copy.readFrom = this.readFrom; copy.readTo = this.readTo; copy.validTo = this.validTo;
     copy.writeSeq = this.writeSeq; copy.shownAt = this.shownAt;
@@ -91,7 +93,7 @@ export class HistoryTile {
       if (!admit(bytes)) return false;
       reserved = bytes; return true;
     };
-    for (const step of copy.mergePrepared(chunk, known,now,native)) {
+    for (const step of copy.mergePrepared(chunk, known,now,plane)) {
       if (!fits()) return null;
       yield step;
     }
@@ -101,7 +103,8 @@ export class HistoryTile {
 
   merge(chunk: Chunk, known: HistoryMeta['known']) {drain(this.mergePrepared(chunk, known));}
 
-  private *mergePrepared(chunk: Chunk, known: HistoryMeta['known'],now=0,native=true): Preparation<void> {
+  private *mergePrepared(chunk: Chunk, known: HistoryMeta['known'],now=0,plane:Plane='all'): Preparation<void> {
+    const native=plane!=='activity';
     const first = (chunk.from - this.from) / this.cell;
     const last = (chunk.to - this.from) / this.cell;
     if(native){
@@ -152,47 +155,49 @@ export class HistoryTile {
         if (!kept) {this.series.delete(key); this.seriesBytes -= s.values.byteLength + (s.ends?.byteLength ?? 0) + 256;}
       }
     }
-    const rows = yield* this.activityRowsPrepared();
-    const translated: number[] = [];
-    const sessionIndexes = new Map<string, number>();
-    for (let i = 0; i < this.sessions.length; i++) {sessionIndexes.set(this.sessions[i][0], i); yield;}
-    for (const session of chunk.activity.sessions) {
-      let index = sessionIndexes.get(session[0]);
-      const snapshot: Session = [...session];
-      if (index === undefined) {index = this.sessions.push(snapshot) - 1; sessionIndexes.set(session[0], index);}
-      else this.sessions[index] = snapshot;
-      translated.push(index); yield;
-    }
-    for (const key in chunk.activity.devices) {this.devices[key] = chunk.activity.devices[key]; yield;}
-    const groupIndexes = new Map<string, number>();
-    for (let i = 0; i < this.groups.length; i++) {groupIndexes.set(JSON.stringify(this.groups[i]), i); yield;}
-    for (let i = first; i < last; i++) rows[i] = [];
-    for (const [i, active, members, groups] of chunk.activity.cells) {
-      const row = [active, members.length];
-      for (const member of members) {
-        yield;
-        const [index, ms] = typeof member === 'number' ? [member, active] : member;
-        row.push(translated[index], ms);
+    if(plane!=='native'){
+      const rows = yield* this.activityRowsPrepared();
+      const translated: number[] = [];
+      const sessionIndexes = new Map<string, number>();
+      for (let i = 0; i < this.sessions.length; i++) {sessionIndexes.set(this.sessions[i][0], i); yield;}
+      for (const session of chunk.activity.sessions) {
+        let index = sessionIndexes.get(session[0]);
+        const snapshot: Session = [...session];
+        if (index === undefined) {index = this.sessions.push(snapshot) - 1; sessionIndexes.set(session[0], index);}
+        else this.sessions[index] = snapshot;
+        translated.push(index); yield;
       }
-      row.push(groups.length);
-      for (const [dim, key, ms] of groups) {
-        yield;
-        const id = JSON.stringify([dim, key]);
-        let index = groupIndexes.get(id);
-        if (index === undefined) {index = this.groups.push([dim, key]) - 1; groupIndexes.set(id, index);}
-        row.push(index, ms);
+      for (const key in chunk.activity.devices) {this.devices[key] = chunk.activity.devices[key]; yield;}
+      const groupIndexes = new Map<string, number>();
+      for (let i = 0; i < this.groups.length; i++) {groupIndexes.set(JSON.stringify(this.groups[i]), i); yield;}
+      for (let i = first; i < last; i++) rows[i] = [];
+      for (const [i, active, members, groups] of chunk.activity.cells) {
+        const row = [active, members.length];
+        for (const member of members) {
+          yield;
+          const [index, ms] = typeof member === 'number' ? [member, active] : member;
+          row.push(translated[index], ms);
+        }
+        row.push(groups.length);
+        for (const [dim, key, ms] of groups) {
+          yield;
+          const id = JSON.stringify([dim, key]);
+          let index = groupIndexes.get(id);
+          if (index === undefined) {index = this.groups.push([dim, key]) - 1; groupIndexes.set(id, index);}
+          row.push(index, ms);
+        }
+        rows[first + i] = row;
       }
-      rows[first + i] = row;
+      yield* this.compact(rows);
+      let size = 0;
+      for (const row of rows) {size += row.length; yield;}
+      this.activity = new ArrayBuffer(HEAD + size * 8);
+      const offsets = new Uint32Array(this.activity, 0, 61);
+      const values = new Float64Array(this.activity, HEAD);
+      let at = 0;
+      for (let i = 0; i < rows.length; i++) {offsets[i] = at; for (const value of rows[i]) {values[at++] = value; yield;}}
+      offsets[60] = at;
     }
-    yield* this.compact(rows);
-    let size = 0;
-    for (const row of rows) {size += row.length; yield;}
-    this.activity = new ArrayBuffer(HEAD + size * 8);
-    const offsets = new Uint32Array(this.activity, 0, 61);
-    const values = new Float64Array(this.activity, HEAD);
-    let at = 0;
-    for (let i = 0; i < rows.length; i++) {offsets[i] = at; for (const value of rows[i]) {values[at++] = value; yield;}}
-    offsets[60] = at;
     if(native){
       const resets: Chunk['resets'] = [], grants: Chunk['grants'] = [];
       for (const row of this.resets) {if (row[2] < chunk.from || row[2] >= chunk.to) resets.push(row); yield;}
@@ -253,7 +258,7 @@ export class HistoryTile {
   /** Only the read interval is materialized; old epoch data stays held until replaced. */
   chunk(known: HistoryMeta['known'], plot = false,now=Date.now()): Chunk {return drain(this.chunkPrepared(known, plot,now));}
 
-  *chunkPrepared(known: HistoryMeta['known'], plot = false,now=Date.now(),plane:'all'|'native'|'activity'='all'): Preparation<Chunk> {
+  *chunkPrepared(known: HistoryMeta['known'], plot = false,now=Date.now(),plane:Plane='all'): Preparation<Chunk> {
     const readFrom=plane==='native'?this.nativeFrom:this.readFrom,readTo=plane==='native'?this.nativeTo:this.readTo;
     const first = (readFrom - this.from) / this.cell;
     const chunk: Chunk = {from: readFrom, to: readTo, series: [], activity: {sessions: [], devices: {}, cells: []}, resets: [], grants: []};
