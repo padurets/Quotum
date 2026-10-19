@@ -151,7 +151,7 @@ function ViewingControls({widgets}: {widgets: string[]}) {
   return (
     <div className="analytics-head-inner">
       <DataFilterControls/>
-      {charts && <FilterPopover label="history.horizon" changed={horizon!=='auto'} onReset={()=>setPrefs({horizon:'auto'})} open={horizonOpen} onOpenChange={setHorizonOpen}>
+      {charts && <FilterPopover label="history.horizon" width={128} changed={horizon!=='auto'} onReset={()=>setPrefs({horizon:'auto'})} open={horizonOpen} onOpenChange={setHorizonOpen}>
         {HORIZONS.map(value=><FilterChoice key={value} selected={horizon===value} onSelect={()=>{setPrefs({horizon:value});setHorizonOpen(false);}}>{horizonName(value)}</FilterChoice>)}
       </FilterPopover>}
       <div className="filter-viewing"><PeriodSwitch historyStart={historyStart} /><FilterSaveActions/></div>
