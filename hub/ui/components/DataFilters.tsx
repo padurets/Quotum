@@ -12,7 +12,7 @@ import {RESOURCE_FILTERS,excludedCount,excludedResources,resourcesRestricted,sel
 import {clientName} from '../../server/domain/clients';
 import {fundsRule,matchesSelection,matchesSource,type DataFilters,type FamilyRef,type Selection} from '../../server/domain/dataFilters';
 import {moneyFamily,providerOf} from '../../server/domain/providers';
-import {FilterGroup,FilterPopover,FilterRow,FilterSearch} from './Filters';
+import {FilterGroup,FilterOptions,FilterPopover,FilterRow,FilterSearch} from './Filters';
 import {ErrorLine} from './Kit';
 import {KeyMoneySettings} from './MoneySettings';
 import {logoOf} from './logos';
@@ -34,7 +34,7 @@ function Dimension({family,label}:{family:'projects'|'devices'|'clients';label:K
     {facets.loading&&<p className="popover-note">{t('desktop.loading')}</p>}
     {facets.error&&<p className="popover-note" role="status">{t('filters.unavailable')}</p>}
     {(options.length>10||!!search)&&<FilterSearch value={search} onChange={setSearch}/>}
-    <div className="filter-options">{rule&&options.filter(option=>option.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())).map(option=><FilterRow key={JSON.stringify(option.ref)} on={matchesSelection(rule as Selection<FamilyRef>,option.ref)} onChange={on=>dataFilters.toggle(family,option.ref,on)}>{option.name}</FilterRow>)}</div>
+    <FilterOptions>{rule&&options.filter(option=>option.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())).map(option=><FilterRow key={JSON.stringify(option.ref)} on={matchesSelection(rule as Selection<FamilyRef>,option.ref)} onChange={on=>dataFilters.toggle(family,option.ref,on)}>{option.name}</FilterRow>)}</FilterOptions>
     {!!state.saved?.unavailable[family]&&<p className="popover-note">{t('filters.unavailableCount',{count:state.saved.unavailable[family]})}</p>}
   </FilterPopover>;
 }
@@ -62,9 +62,9 @@ function Resources(){
   const count=filters?excludedResources(filters,sources,facets.value,money.unit??undefined,funds.unit??undefined):0;
   return <FilterPopover label="filters.resources" count={count} changed={!!filters&&resourcesRestricted(filters)} onReset={()=>{dataFilters.reset(RESOURCE_FILTERS,'all');setSearch('');}} open={open} onOpenChange={setOpen} width={320}>
     {(sources.length>10||!!search)&&<FilterSearch value={search} onChange={setSearch}/>}
-    <div className="filter-options">{filters&&!!board&&sources.map(source=><Resource key={source.id} source={source} filters={filters} wallets={wallets} fundsUnit={funds.unit??undefined} visible={(source.title??source.id).toLocaleLowerCase().includes(search.toLocaleLowerCase())}/>)}
+    <FilterOptions>{filters&&!!board&&sources.map(source=><Resource key={source.id} source={source} filters={filters} wallets={wallets} fundsUnit={funds.unit??undefined} visible={(source.title??source.id).toLocaleLowerCase().includes(search.toLocaleLowerCase())}/>)}
       {filters&&facets.value?.funding.map(status=><FilterGroup key={status} label={t(status==='unknown'?'agents.unknownSource':'agents.notProvided')} icon={status==='notProvided'?<Unlink size={16}/>:undefined} on={matchesSelection(filters.sources,{status})} onChange={on=>dataFilters.toggle('sources',{status},on)}/>)}
-    </div>
+    </FilterOptions>
     {facets.error&&<p className="popover-note" role="status">{t('filters.unavailable')}</p>}
     {!!state.conflicts&&<p className="popover-note">{t('filters.conflictCount',{count:state.conflicts})}</p>}
     {!!state.saved&&Object.values(state.saved.unavailable).some(Boolean)&&<p className="popover-note">{t('filters.unavailableCount',{count:Object.values(state.saved.unavailable).reduce((sum,n)=>sum+n,0)})}</p>}

@@ -21,6 +21,10 @@ export function FilterSearch({value,onChange}:{value:string;onChange:(value:stri
   return <div className="popover-body"><Field label={t('filters.search')} compact placeholder={t('filters.search')} type="search" value={value} onChange={event=>onChange(event.target.value)}/></div>;
 }
 
+export function FilterOptions({children}:{children:ReactNode}){
+  return <div className="filter-options popover-scroll">{children}</div>;
+}
+
 /** Every on/off filter uses the same trailing switch, including group headings. */
 export function FilterRow({on,onChange,children,value,className='',disabled}:{on:boolean;onChange:(on:boolean)=>void;children:ReactNode;value?:string;className?:string;disabled?:boolean}){
   return <button type="button" className={`popover-row filter-row ${className}`} role="switch" aria-checked={on} disabled={disabled} onClick={()=>onChange(!on)}>

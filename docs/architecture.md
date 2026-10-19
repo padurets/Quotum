@@ -1598,7 +1598,8 @@ Each data filter has on/off choices, a small minus-count tag for exclusions and 
 adjacent cross that shows all again. Shared filter rows keep every switch on the
 right, including group headings and unknown resources. Dropdowns align with the
 filter label independently of its exclusion badge; unchanged filters reserve no
-status space. Search uses a short placeholder and an accessible hidden label.
+status space. Search uses a short placeholder and an accessible hidden label,
+outside the scrolling options so it stays in view.
 On phones the four data dimensions keep two columns sized to their content, so an
 exclusion badge cannot move the open control to another row.
 Resource groups use provider logos and inline
