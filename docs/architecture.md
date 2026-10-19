@@ -386,13 +386,15 @@ with measurement history. Installed-client inventory is never coverage evidence.
 
 A source-level helper compares adjacent native quota observations over the last 24 hours.
 Growth of at least one percentage point within 30 minutes and the same valid reset period
-can produce one tray finding per window. Reported caps retain actual native endpoints
-before sparse deduplication, with their own allowance and generation. Any overlapping
-resolved work from current holders vetoes the finding, including work outside the reader's
-board. Complete coverage of all current holder devices makes it confirmed; other cases
+can produce one diagnostic finding per window, exposed as `usageWork` in card events.
+Reported caps retain actual native endpoints before sparse deduplication, with their
+own allowance and generation. Any overlapping resolved work from current holders vetoes
+the finding, including work outside the reader's board. Complete coverage of all current
+holder devices makes it confirmed; other cases
 explicitly report incomplete work data. This describes configured observation only.
 Findings contain no actor guesses, private scope, holder identity or money attribution.
-They expire at reset or 24 hours and share existing event deadlines and warning surfaces.
+They expire at reset or 24 hours and share existing event deadlines. Dashboard and
+compact cards do not render these findings as warnings.
 
 ## Scheduling
 

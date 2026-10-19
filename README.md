@@ -701,9 +701,7 @@ account differences remain private.
 The budget table can show resource spending per active hour and remaining active hours
 when a resource reports a spending counter and at least 30 minutes of eligible work.
 These are estimates from adjacent observations, not prices of individual requests or
-sessions. Balance-only resources have no such estimate. A subscription's warning mark
-distinguishes quota growth with complete observations and no attributed work from
-growth during incomplete observation; silence never proves that no work happened.
+sessions. Balance-only resources have no such estimate.
 
 My connections also shows each device's Quotum version, its installed client observations
 and the origins of retained measurements. There you can allow measurements for the whole
