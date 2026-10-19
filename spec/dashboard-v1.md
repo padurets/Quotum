@@ -563,7 +563,7 @@ shownZero, shownLeft, comfy, points, basis}`, worked out as of `asOf`:
   the reset at that pace, else null. For `needData`, only `{hours}`; else null.
 
 - `planSince` (optional): the actual observed plan boundary used by the producer at
-  `asOf`, or null when unknown. It is filtered by this board's source visibility,
+  `asOf`, or null when unknown. It is filtered by this board's source grants,
   sharing start and retention. It is not the beginning of a subscription. Expiry can
   send a forecast replacement changing only this provenance, without recalculating
   the shared forecast or its confirmation time. The compatible weekly forecast's
@@ -609,7 +609,7 @@ reset leaving the history) goes out when it does.
 ## Reading the board period
 
 `POST /api/boards/:board/period` is a read-only, authenticated, origin-checked operation.
-The response is JSON with `Cache-Control: no-store`. Board access and visible source
+The response is JSON with `Cache-Control: no-store`. Board access and authorized source
 capabilities are checked on every request; a cursor grants no additional access.
 The body is at most 256 KiB:
 
@@ -633,7 +633,7 @@ the roster to a display page. Widgets page that index locally and label their
 footer summary for the complete selected period across all pages.
 
 Times are safe integer milliseconds. Period lengths are between fifteen minutes and
-31 days, within retained history. `values` contains at most 2000 visible source ids.
+31 days, within retained history. `values` contains at most 2000 authorized source ids.
 The hub clamps `evaluatedAt` to its own clock. Live selects
 `[evaluatedAt-periodMs,evaluatedAt)`; a fixed interval keeps its exact endpoints.
 The evidence cut cannot extend into the future. Independently of the selected endpoints,
@@ -1371,8 +1371,8 @@ invalidate both relevant scopes. Scope never grants access or adds private rate 
 information to a shared event.
 
 `GET /api/history` additionally accepts `unit` and `meters`: a JSON array of at most
-32 logical `[sourceId, meterId]` pairs, sorted and deduplicated. Sources must be visible
-on the board. `balance` resolves its internal counter pair without spending extra
+32 logical `[sourceId, meterId]` pairs, sorted and deduplicated. Sources must be authorized
+for the board. `balance` resolves its internal counter pair without spending extra
 selection slots. Cache keys include the selection. Without these fields the existing
 window protocol is unchanged. A selection containing a hub-measured subscription
 also returns the board's native window series, so subscription quotas share its
@@ -1644,7 +1644,7 @@ are absent from every shared projection. Credential details remain owner-only. T
 ## Privacy
 
 Plan-event names, preceding observations and forecast plan boundaries disclose only
-visible source evidence inside this board's history grant and retention period.
+authorized source evidence inside this board's history grant and retention period.
 Predecessors retained for internal housekeeping never extend that grant. These
 fields include no private account labels, owner identities or collector credentials.
 
@@ -1683,8 +1683,8 @@ The optional `identityRef` identifies their one original row within this board/r
 distinct-agent counts deduplicate by it, or by `ref` for older tuples. It reveals neither database session
 ids nor how many sessions other boards have. These are coding-agent sessions, separate
 from sign-in sessions. A restart changes the references and `run` together.
-Metadata tokens are scoped to the board, hub instance and exact visible metadata.
-They grant no access: every history request checks board membership and visibility
+Metadata tokens are scoped to the board, hub instance and exact authorized metadata.
+They grant no access: every history request checks board membership and source grants
 before deciding whether it may omit unchanged metadata.
 The device joining or re-enable cutoff applies to shared session history and live
 workedMs. Source quota work also obeys its source grant; a hidden card never hides
@@ -1789,7 +1789,7 @@ native submission does not guarantee the operating system displayed it.
 
 The full current key inventory is read through
 `GET /api/boards/:board/sources/:source/keys?limit=50&after=<cursor>`.
-Board membership and visible source are required; a member may read measurements.
+Board membership and an authorized financial source are required; a member may read measurements.
 The response is `{keys, meters, total, inventory, next}` with at most 50 keys. Total
 counts retained current keys and does not promise supplier completeness. A cursor is
 bound to source, ordering revision and this hub run. A changed ordering returns
@@ -1799,10 +1799,11 @@ No credential records enter this endpoint.
 Alternatively, `ids` is a JSON array of 1–50 opaque key ids, mutually exclusive with
 `after` and `limit`. It returns only those current keys and their meters in inventory
 order, with `next: null`. Enabled scales beyond the preview use this bounded read when
-their source changes; they never poll. Membership and source visibility still apply.
-The shared Accounts and keys picker shows current keys and selected archived key caps
-through pages of at most ten keys. Selected current keys on other pages are not
-duplicated. An open page reloads after a successful source measurement.
+their source changes; they never poll. Membership and financial source grants still apply; hiding a card does not revoke them.
+The common Resources filter shows current keys and selected archived key caps in
+an inline list that appends batches of at most ten. Selected keys outside the
+loaded inventory are not duplicated. An open list reloads after a successful
+source measurement.
 
 ## Mixed Codex subscription and credit balance
 
@@ -1990,7 +1991,7 @@ recognized provider; hosts, custom gateway hints and link details stay owner-pri
 Prepared event batches recheck current attribution authority before disclosure. A
 long-poll lease whose authority changed discards its entire undisclosed queue and
 returns one fresh permitted snapshot, together with current financial bindings.
-Holding release/reacquisition, link changes, revocation, joining/sharing/visibility
+Holding release/reacquisition, link changes, revocation, joining/sharing/grant
 cutoffs and reached temporal boundaries cannot revive an older queued generation.
 Each SSE reader is checked after batch preparation and before its send.
 
@@ -2013,7 +2014,7 @@ Money values are exact decimal integer strings. Active time is the union of perm
 resolved work; agent time counts the separate retained contexts. Financial basis uses
 whole adjacent accepted native counter pairs, including unchanged endpoints captured
 at observation time. An edge is carried once at its closing cell. Crossing period,
-retention or visibility boundaries and discontinuous observations are excluded from
+retention or grant boundaries and discontinuous observations are excluded from
 the basis and identify partial data. Work after the last actual observation never
 extends its basis. No source link prices an individual session, project or key.
 

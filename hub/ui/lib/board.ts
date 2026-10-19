@@ -1,4 +1,4 @@
-import type {FilterEnvelope} from '../../server/domain/dataFilters';
+import {matchesSource,matchesSelection,type DataFilters,type FilterEnvelope} from '../../server/domain/dataFilters';
 import {budgetVisible} from './money';
 import {defaultCurrencyContext,DEFAULT_CURRENCY,type CurrencyContext} from '../../server/domain/currency';
 import {useMemo} from 'react';
@@ -343,12 +343,12 @@ export const useDevicesRevision = () => usePage(s => s.devicesRevision ?? 0);
 export const useDeviceContact = (device: string, baseline: number | null) => usePage(s => Math.max(s.deviceContacts?.[device] ?? 0,baseline ?? 0) || null);
 export const useHistoryStart = () => usePage(s => s.board?.historyStart ?? null);
 /** Membership only: changing a figure never re-renders the compact list itself. */
-export const useVisibleLimits = () => usePage(s => {
+export const useVisibleLimits = (filters:DataFilters|null) => usePage(s => {
   const b = s.board;
-  if (!b) return NONE;
+  if (!b||!filters) return NONE;
   return b.lineup.filter(id => {
     const card=b.cards[id],periods=card?quotaPeriods(card):[];
-    return !b.view.hidden.includes(`source:${id}`)&&(!!card&&budgetVisible(card)||!periods.length||periods.some(w=>!b.view.windows.includes(`${id}/${w.id}`)));
+    return matchesSource(filters,id)&&!b.view.hidden.includes(`source:${id}`)&&(!!card&&budgetVisible(card)||!periods.length||periods.some(w=>!b.view.windows.includes(`${id}/${w.id}`)&&matchesSelection(filters.windows,[id,w.id])));
   });
 }, shallowEqual);
 export const useLineup = () => usePage(s => s.board?.lineup ?? NONE);

@@ -116,7 +116,8 @@ for(const local of [false,true])test(`a changed ${local?'local':'remote'} sessio
   let current=session('alice'),next=current;
   const reader=new SessionReader(async()=>next,value=>{current=value;},()=>{});
   const Dashboard=()=>null;
-  const context={exports:{} as {App:()=>{type:unknown;key:string|null;props:{user:{id:string}}}},Dashboard,useLocale:()=>{},usePath:()=> '/',useSession:()=>({session:current,failed:false,refresh:()=>reader.refresh(),setSession:(value:Session)=>reader.accept(value)}),require:()=>jsxRuntime};
+  let retired=0;
+  const context={exports:{} as {App:()=>{type:unknown;key:string|null;props:{user:{id:string}}}},Dashboard,useLayoutEffect:(run:()=>void)=>run(),retireDataFilters:()=>{retired++;},AuthScreen:()=>null,OpenInApp:()=>null,useLocale:()=>{},usePath:()=> '/',useSession:()=>({session:current,failed:false,refresh:()=>reader.refresh(),setSession:(value:Session)=>reader.accept(value)}),require:()=>jsxRuntime};
   const source=readFileSync(new URL('../main.tsx',import.meta.url),'utf8'),from=source.indexOf('function App()');
   runInNewContext(ts.transpileModule(source.slice(from,source.indexOf('\ncreateRoot(',from))+'\nexports.App=App;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText,context);
   let key:string|null|undefined,scope:{open:boolean;accounts:ReturnType<typeof fixture>};
@@ -133,6 +134,8 @@ for(const local of [false,true])test(`a changed ${local?'local':'remote'} sessio
   assert.equal(bob.accounts.rows().length,0,'previous owner hints cannot survive a failed new-owner load');
   assert.equal(bob.accounts.errors().length,1);assert.equal(bob.accounts.removing(),false);
   active=bob;active.accounts.unmount();
+  assert.equal(retired,0,'an authenticated refresh does not retire tab drafts');
+  reader.accept({...current,user:null});context.exports.App();assert.equal(retired,1,'signing out retires loaded filter views in both modes');
 });
 
 test('z.ai form keeps its destination and requires unknown expiry plus same-account consent for replacement',async()=>{

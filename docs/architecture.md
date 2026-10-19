@@ -1770,8 +1770,8 @@ is only about how one person looks (the board's period, the chart's
 horizon, lines and groups switched off in either chart's legend, whether it draws the plan and the forecast, what agent activity is stacked by, reset announcements, the lock on the widgets,
 the agents and quota tables' sort orders, the chosen board and language) stays in their browser.
 The controls above the mixed widget grid own the common period and forecast
-horizon. Shared wallet data selection is accessible from both wallet widgets,
-including a table whose chart is hidden. Each widget keeps its display settings, such as
+horizon. Shared wallet data selection lives in the common Resources filter and remains
+accessible when either wallet widget is hidden. Each widget keeps its display settings, such as
 columns, forecast visibility, stacking and legend choices.
 A fixed accounting interval is exactly `[from,to)`: card values use the latest retained
 observation strictly before `to`, with validity evaluated at `to`. Missing predecessors

@@ -370,12 +370,17 @@ export class PeriodAccounting {
     const from=Math.max(range.from,this.selectedKnown,cutoff),curve=this.selectedCurves?.groups.source.get(source);
     return {from:Number.isFinite(from)?from:range.to,ms:Number.isFinite(from)?range.to>from?curve?.read({from,to:range.to},true)??0:0:null,agentMs:Number.isFinite(from)&&range.to>from?curve?.read({from,to:range.to})??0:0};
   }
+  private directWorkChangesAt(source:string,now:number,period:number,cutoff:number) {
+    const known=Math.max(this.selectedKnown,cutoff);if(!Number.isFinite(known))return Infinity;
+    const curve=this.selectedCurves?.groups.source.get(source),left=Math.max(now-period,known);
+    return Math.min(curve?.next(now)??Infinity,left===now-period?(curve?.next(left)??Infinity)+period:known+period);
+  }
   quotaSummary(source:string,window:string,range:PeriodRange){const index=this.quota.get(source+'\n'+window);return index?{...index.at(range),selectedWork:this.directWork(source,range,index.series.workFrom===null?Infinity:index.series.workFrom??0)}:undefined;}
   quotaWorkSlope(source:string,window:string,now:number,period:number,active:boolean){
     const index=this.quota.get(source+'\n'+window);if(!index)return;
     const curve=this.selectedCurves?.groups.source.get(source),known=Math.max(this.selectedKnown,index.series.workFrom===null?Infinity:index.series.workFrom??0);
     const left=Math.max(now-period,known),slope=(at:number)=>active?Number(curve?.working(at)??false):curve?.slope(at)??0;
-    return {slope:slope(now)-(left===now-period?slope(left):0),next:Math.min(index.changesAt(now,period),curve?.next(now)??Infinity,left===now-period?(curve?.next(left)??Infinity)+period:known+period)};
+    return {slope:slope(now)-(left===now-period?slope(left):0),next:Math.min(index.changesAt(now,period),this.directWorkChangesAt(source,now,period,known))};
   }
   moneySummary(source:string,meter:string,unit:string,range:PeriodRange){return this.money.get(source+'\n'+meter+'\n'+unit)?.at(range);}
   moneyWorkSummary(source:string,range:PeriodRange){const fixed=this.tape.fixed?.moneyWork?.find(row=>row.source===source);if(fixed)return fixed;const index=this.moneyWork.get(source);if(!index)return;const selected=this.directWork(source,range,index.counter.workFrom??Infinity);return {...index.at(range),selectedWork:{from:selected.from,activeMs:selected.ms,agentMs:selected.agentMs}};}
@@ -413,9 +418,9 @@ export class PeriodAccounting {
   }
   changesAt(now:number,period:number,source?:string):number|null {
     if(this.tape.fixed)return null;
-    let next=Infinity;for(const index of this.quota.values())if(!source||index.series.source===source)next=Math.min(next,index.changesAt(now,period));
+    let next=Infinity;for(const index of this.quota.values())if(!source||index.series.source===source)next=Math.min(next,index.changesAt(now,period),this.directWorkChangesAt(index.series.source,now,period,index.series.workFrom===null?Infinity:index.series.workFrom??0));
     for(const index of this.money.values())if(!source||index.group.source===source)next=Math.min(next,index.changesAt(now,period));
-    for(const index of this.moneyWork.values())if(!source||index.counter.source===source)next=Math.min(next,index.changesAt(now,period)??Infinity);
+    for(const index of this.moneyWork.values())if(!source||index.counter.source===source)next=Math.min(next,index.changesAt(now,period)??Infinity,this.directWorkChangesAt(index.counter.source,now,period,index.counter.workFrom??Infinity));
     return Number.isFinite(next)?next:null;
   }
 }

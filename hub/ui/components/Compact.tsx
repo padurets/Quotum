@@ -1,6 +1,6 @@
 import {useDataFilters} from '../lib/dataFilters';
 import {followDataFilters} from '../lib/filterSession';
-import {matchesSource,matchesWork} from '../../server/domain/dataFilters';
+import {matchesWork} from '../../server/domain/dataFilters';
 import {budgetVisible, subscriptionFundsVisible} from '../lib/money';
 import {memo, useEffect, useLayoutEffect, useRef} from 'react';
 import {useBoard} from '../lib/session';
@@ -55,11 +55,16 @@ export function Compact({live,user}: {live: ReturnType<typeof startLive>;user:st
   const [board] = useBoard();
   useLayoutEffect(()=>board?followDataFilters(user,board.id,true):undefined,[user,board?.id]);
   const filters=useDataFilters();
-  const lineup = useVisibleLimits();
+  const lineup = useVisibleLimits(filters.current);
   const view = useServerView();
   const state = useApp();
   const connection = useConnection();
   const root = useRef<HTMLDivElement>(null);
+  useEffect(()=>{
+    const open=()=>inApp()?void app.openMain():location.assign('/');
+    window.addEventListener('quotum:open-filters',open);
+    return()=>window.removeEventListener('quotum:open-filters',open);
+  },[]);
   useEffect(() => { if (board) live.open(board.id); return () => live.close(); }, [board?.id, live]);
   useEffect(() => {
     if (state?.agent.state === 'held' || state?.agent.state === 'taking_over') void app.openMain();
@@ -79,7 +84,7 @@ export function Compact({live,user}: {live: ReturnType<typeof startLive>;user:st
     observer.observe(element);
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
   }, []);
-  const ids = view ? ordered(view.layout, lineup.filter(id=>!!filters.current&&matchesSource(filters.current,id)).map(cardId)).map(w => w.id).filter(id => !isHidden(view, id)).map(id => id.slice(7)) : [];
+  const ids = view ? ordered(view.layout,lineup.map(cardId)).map(w => w.id).filter(id => !isHidden(view, id)).map(id => id.slice(7)) : [];
   return <div className={`compact glass${inApp() ? " is-native" : ""}`} ref={root}>
     <header>
       <h1>{t('desktop.limits')}</h1>
