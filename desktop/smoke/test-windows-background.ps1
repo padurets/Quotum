@@ -143,6 +143,20 @@ foreach($case in $cases){
   Write-Output "$status $($case.name): caught=$caught clock=$([QuotumWindowProbe]::Clock) pauses=$([QuotumWindowProbe]::Pauses) posts=$([QuotumWindowProbe]::Posts) resumes=$([QuotumWindowProbe]::Resumes)"
   if(-not $ok){$failed.Add($case.name)}
 }
+# The opt-in third loader case has no wait observer, even with the WCT option on.
+# Stub only its extra native batch; execute the actual outer pause and resume.
+function Test-StaleLoaderDismissal($Loader,$Clock,$UiThread) {
+  if(-not [QuotumWindowProbe]::Suspended){throw 'Native control ran without the outer UI pause'}
+  $script:batchCalls++
+}
+[QuotumWindowProbe]::Reset(0,0,'');Reset-EvidenceControl
+$window=[IntPtr]1;$process=[pscustomobject]@{Id=99};$cancel=$false
+$observer=$null;$paused=$null;$pauseFrom=$null;$pauseFailure=$null;$result=@{}
+$isControl=$true;$AwaitHeldWaitSample=$true;$batchCalls=0;$caught=$false
+try {. $pause} catch {$caught=$true} finally {$isControl=$false;$AwaitHeldWaitSample=$false}
+$ok=-not $caught -and $batchCalls -eq 1 -and [QuotumWindowProbe]::Pauses -eq 1 -and [QuotumWindowProbe]::Resumes -eq 1 -and -not [QuotumWindowProbe]::Suspended -and $nativePauseDepth -eq 0 -and [QuotumEvidenceWriter]::Violations -eq 0
+Write-Output "$(if($ok){'PASS'}else{'FAIL'}) opt-in-loader-with-wait-option: caught=$caught batch=$batchCalls resumes=$([QuotumWindowProbe]::Resumes)"
+if(-not $ok){$failed.Add('opt-in-loader-with-wait-option')}
 # Execute all three actual guarded pause blocks, including exceptions after the
 # pause, a failed sink after resume, and native resume failure with a first cause.
 $blocks=@(@{name='loader';body=$pause;resume='ui-resume'})

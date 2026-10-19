@@ -30,6 +30,10 @@ on:
         description: Diagnose a successful paused UI within its original deadline
         type: boolean
         default: false
+      stale-dismissal-control:
+        description: Compare the native loader with and without its stale dismissal guard
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -229,6 +233,7 @@ jobs:
         env:
           UI_RUNS: ${{ inputs.ui-runs || 1 }}
           AWAIT_HELD_WAIT_SAMPLE: ${{ inputs.await-held-wait-sample || false }}
+          STALE_DISMISSAL_CONTROL: ${{ inputs.stale-dismissal-control || false }}
         run: |
           # windows.ps1 fails with an exit code, which alone would not end the step.
           function Smoke([string]$Mode, [string]$App) {
@@ -286,6 +291,98 @@ jobs:
           if ($stop) { throw "UI smoke stopped: $stop" }
           if ($failed.Count) { throw "UI smoke failed in $($failed.Count) runs: $($failed -join ', ')" }
           if (-not (Test-Path -LiteralPath "$profiles\EBWebView\quotum-ci-sentinel")) { throw 'The UI smoke did not put the profile of WebView2 back' }
+          if ($env:STALE_DISMISSAL_CONTROL -eq 'true') {
+            if (@(& git status --porcelain).Count) { throw 'Native control requires the clean committed source' }
+            $control = Join-Path $diagnostics 'stale-dismissal-pair'
+            $copies = Join-Path $env:RUNNER_TEMP 'Quotum stale dismissal binaries'
+            New-Item -ItemType Directory -Force $control,$copies | Out-Null
+            Copy-Item -LiteralPath $portable -Destination "$copies\guarded" -Recurse
+            Copy-Item -LiteralPath $portable -Destination "$copies\unguarded" -Recurse
+            $guarded = Join-Path $copies 'guarded/Quotum/quotum-desktop.exe'
+            $unguarded = Join-Path $copies 'unguarded/Quotum/quotum-desktop.exe'
+            $release = 'desktop/target/${{ matrix.target }}/release'
+            $bundle = Join-Path $release 'bundle'
+            if ((Get-FileHash -LiteralPath (Join-Path $release 'quotum-desktop.exe') -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $guarded -Algorithm SHA256).Hash) { throw 'Current build and packaged executable differ' }
+            Copy-Item -LiteralPath $bundle -Destination "$copies\bundle" -Recurse
+            $savedBundle = @(Get-ChildItem -LiteralPath "$copies\bundle" -File -Recurse | ForEach-Object {
+              @{relative=[IO.Path]::GetRelativePath("$copies\bundle",$_.FullName);sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}
+            })
+            $hostSource = 'desktop/src/host/tauri_window.rs'
+            $original = [IO.File]::ReadAllBytes((Join-Path $PWD $hostSource))
+            $body = [IO.File]::ReadAllText((Join-Path $PWD $hostSource))
+            $newline = if ($body.Contains("`r`n")) {"`r`n"} else {"`n"}
+            $guard = @('        if !toggle.requested(request) {','            return;','        }') -join $newline
+            if ($body.IndexOf($guard) -lt 0 -or $body.IndexOf($guard) -ne $body.LastIndexOf($guard)) { throw 'Native dismissal guard is not unique' }
+            $proof = [ordered]@{scope='native-stale-dismissal-counterfactual';head=((& git rev-parse HEAD).Trim());file=$hostSource;guardedSourceSha256=(Get-FileHash -LiteralPath $hostSource -Algorithm SHA256).Hash.ToLowerInvariant();guardedExecutableSha256=(Get-FileHash -LiteralPath $guarded -Algorithm SHA256).Hash.ToLowerInvariant()}
+            $sourceProof = Join-Path $control 'build-source.json'
+            $primary = $null
+            $restoreErrors = [Collections.Generic.List[string]]::new()
+            $stage = 'guard-bypass'
+            try {
+              # Recompile the real Rust application; no runtime policy switch is added.
+              [IO.File]::WriteAllText((Join-Path $PWD $hostSource),$body.Replace($guard,'        let _ = request;'),[Text.UTF8Encoding]::new($false))
+              $dirty = @(& git diff --name-only)
+              if ($dirty.Count -ne 1 -or $dirty[0] -ne $hostSource) { throw 'Native counterfactual changed other source' }
+              $patch = Join-Path $control 'unguarded-source.patch'
+              [IO.File]::WriteAllText($patch,((& git diff -- $hostSource) -join "`n")+"`n")
+              if ((Get-Item -LiteralPath $patch).Length -gt 8192) { throw 'Native counterfactual patch exceeds its bound' }
+              $proof.patchSha256=(Get-FileHash -LiteralPath $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+              $proof.unguardedSourceSha256=(Get-FileHash -LiteralPath $hostSource -Algorithm SHA256).Hash.ToLowerInvariant()
+              $stage = 'build'
+              Push-Location desktop
+              try {
+                npx --yes @tauri-apps/cli@2.12.0 build --target ${{ matrix.target }} --bundles nsis -- --locked
+                if ($LASTEXITCODE) { throw 'Native counterfactual build failed' }
+              } finally { Pop-Location }
+              Copy-Item -LiteralPath (Join-Path $release 'quotum-desktop.exe') -Destination $unguarded -Force
+              if ((Get-FileHash -LiteralPath $hostSource -Algorithm SHA256).Hash.ToLowerInvariant() -ne $proof.unguardedSourceSha256) { throw 'Native source changed during the build' }
+              $dirty = @(& git diff --name-only)
+              if ($dirty.Count -ne 1 -or $dirty[0] -ne $hostSource) { throw 'Native build changed other source' }
+              $proof.unguardedExecutableSha256=(Get-FileHash -LiteralPath $unguarded -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($proof.guardedExecutableSha256 -eq $proof.unguardedExecutableSha256) { throw 'Native counterfactual executable did not change' }
+              [IO.File]::WriteAllText($sourceProof,(ConvertTo-Json -InputObject $proof -Depth 4))
+              $stage = 'old-smoke'
+              $oldError = $null
+              try { ./desktop/smoke/windows-ui.ps1 $unguarded -Diagnostics "$control\unguarded" -StaleDismissalControl -SourceVariant unguarded -SourceProof $sourceProof }
+              catch { $oldError = $_.Exception.Message }
+              $stage = 'old-qualification'
+              $old = Get-Content -LiteralPath "$control\unguarded\stale-dismissal-control.json" -Raw | ConvertFrom-Json
+              $oldReport = Get-Content -LiteralPath "$control\unguarded\report.json" -Raw | ConvertFrom-Json
+              if ($oldError -ne 'Stale dismissal control: new loader not observed within 3s' -or $old.status -ne 'qualified' -or
+                $old.outcome -ne 'accepted-loader-unobserved' -or -not $old.trayResumed -or $old.pipelinePassed -or
+                -not $oldReport.failed -or $oldReport.passed -or $oldReport.errorCount -or @($oldReport.leftovers).Count) { throw 'Native OLD did not qualify the batch, missing loader observation and cleanup' }
+            } catch { $primary = $_ } finally {
+              # Every restoration is independent; a cleanup error cannot hide the first failure.
+              try {
+                [IO.File]::WriteAllBytes((Join-Path $PWD $hostSource),$original)
+                if ((Get-FileHash -LiteralPath $hostSource -Algorithm SHA256).Hash.ToLowerInvariant() -ne $proof.guardedSourceSha256) { throw 'Source hash mismatch' }
+              } catch { $restoreErrors.Add('source') }
+              try {
+                Copy-Item -LiteralPath $guarded -Destination (Join-Path $release 'quotum-desktop.exe') -Force
+                if ((Get-FileHash -LiteralPath (Join-Path $release 'quotum-desktop.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -ne $proof.guardedExecutableSha256) { throw 'Executable hash mismatch' }
+              } catch { $restoreErrors.Add('executable') }
+              foreach ($saved in $savedBundle) {
+                try {
+                  $destination=Join-Path $bundle $saved.relative
+                  New-Item -ItemType Directory -Force (Split-Path $destination -Parent) | Out-Null
+                  Copy-Item -LiteralPath (Join-Path "$copies\bundle" $saved.relative) -Destination $destination -Force
+                  if ((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -ne $saved.sha256) { throw 'Package hash mismatch' }
+                } catch { $restoreErrors.Add('package:'+ $saved.relative) }
+              }
+              try {
+                [IO.File]::WriteAllText((Join-Path $control 'restoration.json'),(ConvertTo-Json -InputObject @{primaryStage=$stage;primaryFailed=($null -ne $primary);restored=($restoreErrors.Count -eq 0);errors=$restoreErrors.ToArray()} -Depth 4))
+              } catch { $restoreErrors.Add('restoration-receipt') }
+            }
+            if ($primary) {
+              if ($restoreErrors.Count) { Write-Warning ('Native control restoration failed: '+($restoreErrors -join ', ')) }
+              throw $primary
+            }
+            if ($restoreErrors.Count) { throw ('Native control restoration failed: '+($restoreErrors -join ', ')) }
+            ./desktop/smoke/windows-ui.ps1 $guarded -Diagnostics "$control\guarded" -StaleDismissalControl -SourceVariant guarded -SourceProof $sourceProof
+            $new = Get-Content -LiteralPath "$control\guarded\stale-dismissal-control.json" -Raw | ConvertFrom-Json
+            if ($new.status -ne 'qualified' -or $new.outcome -ne 'preserved-accepted-request' -or -not $new.trayResumed -or -not $new.pipelinePassed) { throw 'Native NEW did not qualify preservation and the original smoke' }
+            if (@(& git status --porcelain).Count) { throw 'Native control left changed source' }
+          }
       # Preserve bounded native stage evidence for each exact build, passed or not.
       - name: Native smoke diagnostics (Linux)
         if: always() && runner.os == 'Linux'

@@ -78,5 +78,43 @@ Test-Receipt 'omitted-activations-since-input' {
 } $unknown
 Test-Receipt 'future-input-baseline' {param($f,$b)$b.Epoch=4} $unknown
 Test-Receipt 'counter-overflow' {param($f,$b)$f.Before.Callbacks=[long]::MaxValue;$f.After.Callbacks=[long]::MaxValue} $unknown
+# Extract only the production smoke's pure batch qualifier; do not start an app.
+$parseErrors=$null
+$uiAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'windows-ui.ps1'),[ref]$null,[ref]$parseErrors)
+if($parseErrors.Count){throw 'Windows UI script syntax failed'}
+$qualifier=@($uiAst.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-LoaderBatchState'},$true))
+if($qualifier.Count -ne 1){throw 'Native batch qualifier unavailable'}
+Invoke-Expression $qualifier[0].Extent.Text
+function Test-Batch([string]$Name,[scriptblock]$Arrange,[string]$Expected) {
+  $f=New-RequestFrame;$b=New-RequestHeader 1 1
+  $f.Before.Callbacks=3;$f.After.Callbacks=3;$f.Before.SequenceBefore=4;$f.Before.SequenceAfter=4;$f.After.SequenceBefore=4;$f.After.SequenceAfter=4
+  $f.Rows[0].Values=[long[]]@(102,3,21,2,0,1,0,0,0,0)
+  $f.Rows[6].Sequence=2;$f.Rows[6].Epoch=3;$f.Rows[6].Values=[long[]]@(102,0,21,6,500,0,0,0,0,0)
+  & $Arrange $f $b
+  $e=[QuotumWindowProbe]::QualifyRequests($f,$b,2646,10000)
+  $state=Get-LoaderBatchState $e $b 100 500
+  if($state -ne $Expected){throw "Batch state mismatch: $Name ($state)"}
+  if($e.OriginalPostedInputAccepted -or $e.FreshWorkerAtFailedDeadline -or $e.ProductionAcceptance -or $e.CausalPass){throw "Batch widened original evidence: $Name"}
+  $controls.Add(@{name='batch-'+$Name;status=$e.Status;link=$e.LinkStatus;batch=$state;passed=$true})
+}
+Test-Batch 'latest-show-with-two-callbacks' {} 'new-show'
+Test-Batch 'old-hide-is-only-a-marker' {param($f,$b)$f.Rows[6].Values[0]=100;$f.Rows[6].Values[3]=8} 'old-hide'
+Test-Batch 'old-show-is-pending' {param($f,$b)$f.Rows[6].Values[0]=100} 'pending'
+Test-Batch 'only-one-callback' {param($f,$b)$f.Before.Callbacks=2;$f.After.Callbacks=2;$f.Rows[0].Values[1]=2} 'unknown'
+Test-Batch 'extra-callback' {param($f,$b)$f.Before.Callbacks=4;$f.After.Callbacks=4;$f.Rows[0].Values[1]=4} 'unknown'
+Test-Batch 'another-request' {param($f,$b)$f.Rows[0].Values[0]=103} 'unknown'
+Test-Batch 'another-loader' {param($f,$b)$f.Rows[6].Values[4]=501} 'unknown'
+Test-Batch 'another-thread' {param($f,$b)$f.Rows[6].Values[2]=44} 'unknown'
+Test-Batch 'another-lifetime' {param($f,$b)$b.Lifetime=2} 'unknown'
+Test-Batch 'another-process-birth' {param($f,$b)$b.Birth=999} 'unknown'
+Test-Batch 'unchanged-publication' {param($f,$b)$b.SequenceBefore=4;$b.SequenceAfter=4} 'unknown'
+Test-Batch 'unchanged-memory-epoch' {param($f,$b)$b.Epoch=3} 'unknown'
+Test-Batch 'partial-snapshot' {param($f,$b)$f.Rows[6].Values=[long[]]::new(9)} 'unknown'
+Test-Batch 'extra-blur-decision' {param($f,$b)Add-Inactive $f} 'unknown'
+Test-Batch 'prior-blur-is-outside-batch' {param($f,$b)Add-Inactive $f;$b.Activations=1} 'new-show'
+Test-Batch 'omitted-activation' {
+  param($f,$b)$f.Before.Epoch=10;$f.After.Epoch=10;$f.Before.Activations=9;$f.After.Activations=9
+  for($ordinal=2;$ordinal -le 9;$ordinal++){$slot=7+($ordinal-1)%8;$f.Rows[$slot].Sequence=2;$f.Rows[$slot].Epoch=$ordinal;$f.Rows[$slot].Values=[long[]]@(100,$ordinal,21,3,500,0,400,0,0,0)}
+} 'unknown'
 if($Report){[IO.File]::WriteAllText($Report,(ConvertTo-Json -InputObject ([ordered]@{schemaVersion=1;scope='fabricated numeric qualifier controls';nativeExecuted=$false;count=$controls.Count;controls=$controls.ToArray()}) -Depth 6))}
 Write-Host "Windows request qualifier: $($controls.Count) synthetic controls passed"

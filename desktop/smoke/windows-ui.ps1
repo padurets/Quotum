@@ -2,9 +2,9 @@
 # Every run starts from a fresh profile of WebView2, as the first start on a machine does:
 # the one there is set aside and put back at the end.
 # -Diagnostics <dir> keeps bounded stage readings and owned process identities, passed or not.
-param([Parameter(Mandatory=$true)][string]$App, [string]$Report, [string]$Diagnostics, [switch]$AwaitHeldWaitSample)
+param([Parameter(Mandatory=$true)][string]$App, [string]$Report, [string]$Diagnostics, [switch]$AwaitHeldWaitSample, [switch]$StaleDismissalControl, [ValidateSet('head','guarded','unguarded')][string]$SourceVariant='head', [string]$SourceProof)
 $ErrorActionPreference = 'Stop'
-if($AwaitHeldWaitSample -and -not $Diagnostics){throw 'AwaitHeldWaitSample requires Diagnostics'}
+if(($AwaitHeldWaitSample -or $StaleDismissalControl) -and -not $Diagnostics){throw 'Paused UI observations require Diagnostics'}
 # Relative to PowerShell's location: .NET would take them relative to the process's.
 if ($Report) { $Report = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Report) }
 if ($Diagnostics) { $Diagnostics = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Diagnostics) }
@@ -42,6 +42,19 @@ if (-not ('QuotumWindowProbe' -as [type])) {
 
 $manifest=[ordered]@{schemaVersion=1;status='running';sha=((& git rev-parse HEAD).Trim());run=$env:GITHUB_RUN_ID;attempt=$env:GITHUB_RUN_ATTEMPT;platform='windows';packageHash=(Get-FileHash -LiteralPath $appPath -Algorithm SHA256).Hash;files=@();errors=@()}
 if($AwaitHeldWaitSample){$manifest.observation='await-first-row'}
+if($SourceVariant -ne 'head'){
+  if(-not $SourceProof -or (Get-Item -LiteralPath $SourceProof).Length -gt 65536){throw 'Native source proof unavailable'}
+  $proof=ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($SourceProof))
+  $expectedExecutable=if($SourceVariant -eq 'guarded'){$proof.guardedExecutableSha256}else{$proof.unguardedExecutableSha256}
+  $expectedSource=if($SourceVariant -eq 'guarded'){$proof.guardedSourceSha256}else{$proof.unguardedSourceSha256}
+  $hostSource=Join-Path $PSScriptRoot '../src/host/tauri_window.rs'
+  if($proof.scope -ne 'native-stale-dismissal-counterfactual' -or $proof.head -ne $manifest.sha -or
+    $manifest.packageHash.ToLowerInvariant() -ne $expectedExecutable -or
+    (Get-FileHash -LiteralPath $hostSource -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedSource){throw 'Native source or executable proof mismatch'}
+  $manifest.sourceVariant=$SourceVariant
+  $manifest.sourceVariantProofSha256=(Get-FileHash -LiteralPath $SourceProof -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+$loaderDismissalEvidence=$null
 # Capture native facts in memory while any owned UI thread is paused.
 $nativePauseDepth=0
 $nativeResumeFailed=$false
@@ -145,6 +158,95 @@ function Save-ObservedPause($Observer,[string]$Kind,$From,$To,$Resumed,$Failure=
     $manifest.errors+=@('wait observer cleanup unconfirmed')
     try {Save-Manifest} catch {}
     if($null -eq $Failure){throw}
+  }
+}
+
+# This batch owns exactly two posted tray callbacks and the old loader's close.
+# The existing single-callback qualifier stays unchanged; it cannot qualify +2.
+function Get-LoaderBatchState($Evidence,$Baseline,[long]$Request,[long]$Loader) {
+  if(-not $Evidence -or $Evidence.Status -ne 'qualified'){return 'unknown'}
+  $h=$Evidence.Frame.After;$a=$Evidence.Frame.Rows[0];$r=$Evidence.Frame.Rows[6]
+  if($h.Window -ne $Baseline.Window -or $h.Thread -ne $Baseline.Thread -or $h.Birth -ne $Baseline.Birth -or
+    $h.Lifetime -ne $Baseline.Lifetime -or $h.Callbacks -ne $Baseline.Callbacks+2 -or
+    $h.Activations -lt $Baseline.Activations -or $h.Activations-$Baseline.Activations -gt 8 -or
+    $h.Epoch -le $Baseline.Epoch -or $h.SequenceBefore -le $Baseline.SequenceBefore -or
+    $a.Sequence -eq 0 -or $a.Values[0] -ne $Request+2 -or $a.Values[1] -ne $h.Callbacks -or
+    $a.Values[2] -ne $h.Thread -or $a.Values[3] -ne 2 -or $a.Values[5] -ne 1){return 'unknown'}
+  # Any additional blur decision makes this schedule insufficient, not a policy failure.
+  foreach($row in $Evidence.Frame.Rows[7..14]){
+    if($row.Sequence -gt 0 -and $row.Values[1] -gt $Baseline.Activations -and ($row.Values[9] -band 16)){return 'unknown'}
+  }
+  if($r.Sequence -eq 0 -or $r.Values[2] -ne $h.Thread -or $r.Values[4] -ne $Loader){return 'unknown'}
+  if($r.Values[0] -eq $Request+2 -and $r.Values[3] -in @(6,7)){return 'new-show'}
+  if($r.Values[0] -eq $Request -and $r.Values[3] -in @(8,9)){return 'old-hide'}
+  return 'pending'
+}
+function Test-StaleLoaderDismissal([IntPtr]$Loader,$Clock,[uint32]$UiThread) {
+  $c=[ordered]@{scope='native-stale-dismissal-control';status='insufficient';outcome='unknown';posted=@();before=$null;after=$null;surface=$null;sampleFromMs=$null;sampleEndMs=$null;outsideSample=$null;responseEndMs=$null;trayResumed=$false;elapsedMs=$null;pipelinePassed=$false;productionAcceptance=$false;freshWorkerAtFailedDeadline=$false}
+  $script:loaderDismissalEvidence=$c
+  try {
+    do {
+      $a=[QuotumWindowProbe]::Requests($process.Id,$true)
+      $surface=[QuotumWindowProbe]::Snapshot($Loader,$process.Id)
+      if($a.Status -eq 'qualified' -and $a.LinkStatus -eq 'qualified' -and $a.CallbackAccepted -and $a.WantedCompact -and
+        $a.Frame.Rows[6].Values[0] -eq $a.Request -and $a.Frame.Rows[6].Values[3] -in @(6,7) -and
+        $surface.Owned -and $surface.Visible -and $surface.Foreground -and $surface.Rounded -and $surface.LoadingPhase -eq 1){break}
+      Start-Sleep -Milliseconds 10
+    }while($Clock.ElapsedMilliseconds -lt 3000)
+    if($Clock.ElapsedMilliseconds -ge 3000){throw 'Stale dismissal control: initial loader unqualified'}
+    $tray=[IntPtr]$a.Frame.After.Window
+    if($surface.Thread -ne $a.Frame.After.Thread -or $surface.Thread -eq $UiThread){throw 'Stale dismissal control: native threads unqualified'}
+    $paused=$null;$pauseFailure=$null
+    try {
+      $paused=Enter-NativePause { [QuotumWindowProbe]::PauseUi($tray,$process.Id,$surface.Thread) }
+      $a=[QuotumWindowProbe]::Requests($process.Id,$true)
+      $surface=[QuotumWindowProbe]::Snapshot($Loader,$process.Id)
+      if($Clock.ElapsedMilliseconds -ge 3000 -or $a.Status -ne 'qualified' -or $a.LinkStatus -ne 'qualified' -or
+        -not $a.CallbackAccepted -or -not $a.WantedCompact -or $surface.LoadingPhase -ne 1 -or
+        -not $surface.Owned -or -not $surface.Visible -or -not $surface.Foreground -or
+        $a.Frame.Rows[6].Values[0] -ne $a.Request -or $a.Frame.Rows[6].Values[3] -notin @(6,7)){
+        throw 'Stale dismissal control: tray paused outside idle loader'
+      }
+      $c.before=$a;$baseline=$a.Frame.After;$request=$a.Request
+      foreach($name in @('toggle-close','toggle-open')){
+        $posted=[QuotumWindowProbe]::PostMessage($tray,0x8002,[IntPtr]::Zero,[IntPtr]0x10400)
+        $c.posted+=@{kind=$name;posted=$posted;ms=$Clock.ElapsedMilliseconds}
+        if(-not $posted){throw 'Stale dismissal control: tray batch not posted'}
+      }
+      $posted=[QuotumWindowProbe]::PostMessage($Loader,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
+      $c.posted+=@{kind='close-old-loader';posted=$posted;ms=$Clock.ElapsedMilliseconds}
+      if(-not $posted){throw 'Stale dismissal control: loader close not posted'}
+    }catch{$pauseFailure=$_;throw}finally{
+      if($paused){$c.trayResumed=Resume-NativePause $paused {param($target) [QuotumWindowProbe]::ResumeUi($target)} $pauseFailure}
+    }
+    if(-not $c.trayResumed -or $c.posted.Count -ne 3 -or $c.posted[-1].ms -ge 3000){throw 'Stale dismissal control: batch exceeded the original deadline'}
+    $state='unknown'
+    do {
+      if($Clock.ElapsedMilliseconds -ge 3000){break}
+      $from=$Clock.ElapsedMilliseconds
+      $after=[QuotumWindowProbe]::Requests($process.Id,$true)
+      $surface=[QuotumWindowProbe]::Snapshot($Loader,$process.Id)
+      $end=$Clock.ElapsedMilliseconds
+      if($end -ge 3000){$c.outsideSample=@{fromMs=$from;endMs=$end;evidence=$after;surface=$surface};break}
+      $c.after=$after;$c.surface=$surface;$c.sampleFromMs=$from;$c.sampleEndMs=$end
+      $state=Get-LoaderBatchState $after $baseline $request $Loader.ToInt64()
+      if($state -eq 'new-show' -and $surface.Owned -and $surface.Thread -eq $baseline.Thread -and $surface.Visible -and $surface.Foreground -and
+        $surface.Rounded -and $surface.LoadingPhase -eq 1){
+        $responsive=[QuotumWindowProbe]::Responsive($Loader,$process.Id);$c.responseEndMs=$Clock.ElapsedMilliseconds
+        if($responsive -and $c.responseEndMs -lt 3000){$c.status='qualified';$c.outcome='preserved-accepted-request';return}
+      }
+      Start-Sleep -Milliseconds 10
+    }while($Clock.ElapsedMilliseconds -lt 3000)
+    if($state -eq 'old-hide' -and $c.surface.Owned -and $c.surface.Thread -eq $baseline.Thread -and $c.surface.LoadingPhase -eq 1 -and -not $c.surface.Visible){
+      # This is the last complete reading before the unchanged deadline, not a
+      # direct observation of the global toggle or a claim that B can never show.
+      $c.status='qualified';$c.outcome='accepted-loader-unobserved'
+      throw 'Stale dismissal control: new loader not observed within 3s'
+    }
+    throw 'Stale dismissal control: native schedule insufficient'
+  }finally{
+    $c.elapsedMs=$Clock.ElapsedMilliseconds
+    $result.staleDismissal=@{status=$c.status;outcome=$c.outcome;elapsedMs=$c.elapsedMs;trayResumed=$c.trayResumed}
   }
 }
 
@@ -488,8 +590,13 @@ try {
   $deadline=(Get-Date).AddSeconds(5)
   while((-not [QuotumWindowProbe]::IsIconic($window) -or [QuotumWindowProbe]::Foreground($window)) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 50}
   if(-not [QuotumWindowProbe]::IsIconic($window) -or [QuotumWindowProbe]::Foreground($window)){throw 'Could not put the test UI thread in the background'}
-  foreach($cancel in @($false,$true)) {
-    $observer=$loadingObservers[[int]$cancel]
+  $loadingCases=@($false,$true)
+  if($StaleDismissalControl){$loadingCases+=$false}
+  $loadingIndex=0
+  foreach($cancel in $loadingCases) {
+    $isControl=$StaleDismissalControl -and $loadingIndex -eq 2
+    $loadingIndex++
+    $observer=if($isControl){$null}else{$loadingObservers[[int]$cancel]}
     $paused=$null;$pauseFrom=$null;$pauseFailure=$null
     try {
       $paused=Enter-NativePause { [QuotumWindowProbe]::PauseUi($window,$process.Id) }
@@ -507,14 +614,15 @@ try {
       if($loader -eq [IntPtr]::Zero){throw 'Paused UI: loader missing within 3s'}
       if(-not [QuotumWindowProbe]::Responsive($loader,$process.Id)){Save-Stage 'paused-ui-unresponsive-before-resume';throw 'Paused UI: loader unresponsive'}
       if(-not [QuotumWindowProbe]::Rounded($loader)){throw 'Native loader has square corners'}
-      $result.loadingMs=$loadingClock.ElapsedMilliseconds
+      if($isControl){$result.staleLoaderMs=$loadingClock.ElapsedMilliseconds;Test-StaleLoaderDismissal $loader $loadingClock $ui.Thread}
+      else{$result.loadingMs=$loadingClock.ElapsedMilliseconds}
       if($cancel){
         [void][QuotumWindowProbe]::PostMessage($loader,0x100,[IntPtr]27,[IntPtr]::Zero)
         $deadline=(Get-Date).AddSeconds(3)
         while([QuotumWindowProbe]::IsWindowVisible($loader) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 10}
         if([QuotumWindowProbe]::IsWindowVisible($loader)){throw 'Escape could not cancel native loading'}
       }
-      if($AwaitHeldWaitSample){
+      if($AwaitHeldWaitSample -and -not $isControl){
         $observer.HeldSampleWait=@{status='interrupted';rows=0}
         $observer.HeldSampleWait=Wait-WaitObserverSample $observer ({3000-$loadingClock.ElapsedMilliseconds}.GetNewClosure())
       }
@@ -527,7 +635,7 @@ try {
         } finally {
           Save-Stage 'ui-resume' $window $resumed
           $kind=if($cancel){'cancel-loading'}else{'ready-loading'}
-          Save-ObservedPause $observer $kind $pauseFrom $resumeFrom $resumed $pauseFailure
+          if(-not $isControl){Save-ObservedPause $observer $kind $pauseFrom $resumeFrom $resumed $pauseFailure}
         }
       }
     }
@@ -666,6 +774,10 @@ try {
       $safe=[ordered]@{passed=$result.passed;firstWindowMs=$result.firstWindowMs;windows=$result.windows;cycles=$result.cycles;panels=$result.panels;errorCount=$result.errors.Count;failed=$failed;leftovers=$result.leftovers}
       [IO.File]::WriteAllText((Join-Path $Diagnostics 'report.json'), (ConvertTo-Json -InputObject $safe -Depth 6))
       Copy-Item -LiteralPath "$work/processes.json" -Destination $Diagnostics -ErrorAction SilentlyContinue
+      if($loaderDismissalEvidence -and -not $nativePauseDepth -and -not $nativeResumeFailed){
+        $loaderDismissalEvidence.pipelinePassed=$result.passed
+        Write-NativeJson 'stale-dismissal-control.json' $loaderDismissalEvidence 10
+      }
       $manifest.requestProbeScope='last-natural-owner-snapshot'
       $manifest.requestProbeOriginalPostedInputAccepted=$false
       $manifest.requestProbeFreshWorkerAtFailedDeadline=$false
