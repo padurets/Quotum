@@ -140,3 +140,24 @@ for(const failure of ['history_limit','history_failed'] as const)test(`a selecte
     gate?.release();await flush();stop();d?.close();await h.close();publishDataFilters(null,false);Date.now=originalNow;
   }
 });
+
+for(const cold of [false,true])test(`an oversized selected predicate cannot become unfiltered activity in a ${cold?'cold':'warm'} drawing`,async()=>{
+  const originalNow=Date.now;Date.now=()=>NOW;publishDataFilters(defaultFilters());
+  const h=await fixture({personal:true});let d:Awaited<ReturnType<typeof drawings>>|undefined,stop=()=>{};
+  try{
+    addB(h);await flush();
+    const large=defaultFilters();large.projects={mode:'include',values:Array.from({length:1600},(_,i)=>String(i).padStart(4,'0')+'x'.repeat(60))};
+    if(cold){publishDataFilters(large);h.period.changed();await flush();}
+    d=await drawings(h);stop=wire(h,d);
+    if(!cold){move(d.loader,1);await flush();assert.ok(names(d.loader).includes('B'));d.loader.endPan(false);publishDataFilters(large);await flush();}
+    assert.equal(h.period.get().error,'filters_limit');assert.equal(d.loader.get().error,'filters_limit');assert.equal(d.render().error,'filters_limit');assert.equal(d.render().loading,false);
+    assert.equal(d.loader.getActivityPlot(),null);assert.ok(d.loader.getFinancial().history?.series.length);assert.equal(d.loader.getFinancial().error,undefined);
+    h.store.record(h.source,{observedAt:NOW-M/2,plan:'',resets:null,staleAfterMs:H,windows:[{id:'w',kind:'weekly',label:null,minutes:10080,used:28,remaining:72,resetAt:NOW+H}]});h.events.flush();await flush();
+    assert.equal(d.loader.getFinancial().history!.series[0].points.at(-1)![1],72,'native observations remain available without the oversized work predicate');
+    move(d.loader,2);await flush();const c=consumer({...h,...d});c.pan();assert.deepEqual(c.settle().names,[]);assert.equal(d.loader.getActivityPlot(),null);assert.ok(d.loader.getPlot()?.series.length);
+    d.loader.retry();await flush();assert.equal(d.loader.get().error,'filters_limit');assert.equal(d.loader.getActivityPlot(),null);
+    d.loader.endPan(false);const range={from:NOW-H-M,to:NOW-M};h.selectRange(range);d.loader.choose('1h',range);await flush();assert.equal(d.loader.get().error,'filters_limit');assert.equal(d.loader.getActivityPlot(),null);
+    publishDataFilters(defaultFilters());await flush();assert.equal(d.loader.get().error,undefined);assert.equal(h.period.get().error,null);
+    move(d.loader,3);await flush();assert.ok(names(d.loader).includes('B'),'a smaller executable predicate restores the selected drawing');
+  }finally{await flush();stop();d?.close();await h.close();publishDataFilters(null,false);Date.now=originalNow;}
+});

@@ -2022,6 +2022,10 @@ Their error state and retry belong to activity alone: new native measurements st
 read and commit their own cells, including while activity waits for memory or its
 retry deadline. Retry also repeats failed selected period evidence. Native failures
 remain visible to their own chart while its last complete frame is retained.
+A stored work predicate that exceeds the executable limit makes selected activity
+unavailable until the selection is narrowed. Native drawings continue through their
+own coverage; their unselected activity cells cannot fill a selected strip, including
+after a pan, period change or retry.
 
 Each chart replaces one typed drawing model whole after preparation, then publishes
 its geometry and painters after the DOM commits. Input keeps the displayed model and

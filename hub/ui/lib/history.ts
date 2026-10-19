@@ -1,5 +1,5 @@
 import {onDataFilters,filtersReady,effectiveFilters} from './filterSelection';
-import {workFilter} from '../../server/domain/dataFilters';
+import {executableWorkFilters,workFilter,type WorkFilter} from '../../server/domain/dataFilters';
 import {HistoryPool,historyPool} from './historyPool';
 import {boardPeriod,followPeriod} from './period';
 import type {HistoryScope} from '../../server/domain/history';
@@ -44,7 +44,7 @@ export type HistoryEnv = {
   schedule?(run: () => void): void;
   preparations?: Preparations | null;
 };
-export type Shown = {history: History | null; loading: boolean;presentation:number;error?:'history_limit'|'history_failed'};
+export type Shown = {history: History | null; loading: boolean;presentation:number;error?:'history_limit'|'history_failed'|'filters_limit'};
 type HistoryBoundary = {board: string; at: number; start: number};
 type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead';activityOnly:boolean};
 type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean; limited?: boolean};
@@ -65,6 +65,7 @@ export class HistoryStore {
   private lineupKey = '';
   private workAuthority: string | undefined;
   private workKey: string | undefined;
+  private workAvailable=true;
   private nativeVersion=0;
   private composedNativeVersion=-1;
   private shownNativeVersion=0;
@@ -150,7 +151,7 @@ export class HistoryStore {
   }
 
   setActivityActive(active:boolean){if(active===this.activityActive)return;this.activityActive=active;this.cancelProjection();if(!active)this.clearActivityPlot();this.version++;this.plotVersion=-1;this.needsCompose=true;this.schedule();}
-  private get wantsActivity(){return this.activityActive&&!this.activityError;}
+  private get wantsActivity(){return this.activityActive&&this.workAvailable&&!this.activityError;}
 
   open(board: string) {
     if (board === this.board) return;
@@ -174,6 +175,7 @@ export class HistoryStore {
     this.board = null;
     this.workAuthority = undefined;
     this.workKey=undefined;
+    this.workAvailable=true;
     this.setBoundary(null);
     this.ready = false;
     this.historyLimit=false;this.readError=false;this.activityError=null;
@@ -262,9 +264,10 @@ export class HistoryStore {
   }
 
   /** Selected activity has a lifetime of its own; native observations keep theirs. */
-  setWorkFilter(key:string) {
+  setWorkFilter(key:string,filter?:WorkFilter) {
     if(this.scope==='budget'||key===this.workKey)return false;
-    const initialized=this.workKey!==undefined;this.workKey=key;
+    const available=!filter||executableWorkFilters(filter);
+    const initialized=this.workKey!==undefined;this.workKey=key;this.workAvailable=available;
     if(!initialized&&!this.grids.size&&!this.flights.size)return false;
     this.presentation++;this.epoch++;
     this.cancelProjection();this.abortFlights();
@@ -420,7 +423,7 @@ export class HistoryStore {
     const history = this.shown;
     const nativeLoading = !this.historyLimit && !this.readError && (!history && this.ready || !this.plotPending && !!history && history.range !== this.target().key);
     const nativeError=this.historyLimit?'history_limit' as const:this.readError?'history_failed' as const:undefined;
-    const loading=!this.activityError&&nativeLoading,error=nativeError??this.activityError??undefined;
+    const loading=this.workAvailable&&!this.activityError&&nativeLoading,error=!this.workAvailable?'filters_limit' as const:nativeError??this.activityError??undefined;
     if (history !== this.state.history || loading !== this.state.loading||error!==this.state.error||this.presentation!==this.state.presentation) {
       this.state = {history, loading,presentation:this.presentation,...(error?{error}:{})};
       for (const listener of this.listeners) listener();
@@ -772,7 +775,7 @@ export class HistoryStore {
 
   private read(target: Target, from: number, to: number, role: Flight['role']) {
     if(this.pool)for(const waiting of [...this.flights])if(!this.pool.isActive(waiting)&&waiting.role===role)this.abort(waiting);
-    const activityOnly=this.scope==='quota'&&this.workKey!==undefined&&this.nativeFull(target.cell,from,to);
+    const activityOnly=this.scope==='quota'&&this.wantsActivity&&this.workKey!==undefined&&this.nativeFull(target.cell,from,to);
     const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role,activityOnly};
     this.flights.add(flight);
     const meta = this.meta?.run === this.run ? this.meta : undefined;
@@ -1113,7 +1116,7 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
         else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since, hub.data.workAuthority);
       }
     }
-    if(state.board){loader.setWorkFilter(selectedWorkKey());loader.setMeters(selection(state));}
+    if(state.board){loader.setWorkFilter(selectedWorkKey(),effectiveFilters()??undefined);loader.setMeters(selection(state));}
   });
 }
 const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).flatMap(card => card.windows.map(window => `${card.id} ${window.id}`));
@@ -1121,7 +1124,7 @@ const selectedWorkKey=()=>{const filters=effectiveFilters();return JSON.stringif
 if(typeof window!=='undefined')followPeriod();
 follow(quotaHistory,page);follow(budgetHistory,page);follow(fundsHistory,page,'funds');
 page.listen((_event,state)=>activeReaders(state));
-onDataFilters(()=>{if(quotaHistory.setWorkFilter(selectedWorkKey()))pan.cancel();for(const [reader,scope,family] of [[quotaHistory,'quota','budget'],[budgetHistory,'budget','budget'],[fundsHistory,'budget','funds']] as const)reader.setMeters(selectedMeters(page.get(),scope,family));activeReaders();});
+onDataFilters(()=>{if(quotaHistory.setWorkFilter(selectedWorkKey(),effectiveFilters()??undefined))pan.cancel();for(const [reader,scope,family] of [[quotaHistory,'quota','budget'],[budgetHistory,'budget','budget'],[fundsHistory,'budget','funds']] as const)reader.setMeters(selectedMeters(page.get(),scope,family));activeReaders();});
 
 /** The plot follows the gesture; only its completion chooses exact quantities. */
 export function followPan(loader: HistoryStore, gesture: Pick<Pan, 'get' | 'subscribe'>, selectedRange: () => TimeRange | null) {

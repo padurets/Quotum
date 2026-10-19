@@ -45,7 +45,8 @@ export function setSelection<T extends FamilyRef>(rule:Selection<T>,ref:T,includ
 export function setWallet(rule:Wallet,ref:MoneyRef,included:boolean,automatic=false):Wallet {
   if(rule.mode==='only')return {mode:'only',values:setSelection({mode:'include',values:rule.values},ref,included).values};
   const include=rule.include.filter(value=>filterRefKey(value)!==filterRefKey(ref)),exclude=rule.exclude.filter(value=>filterRefKey(value)!==filterRefKey(ref));
-  if(!included)exclude.push(ref);else if(!automatic)include.push(ref);
+  // A preview can move around a manually pinned key; only an off or reset removes it.
+  if(!included)exclude.push(ref);else if(!automatic||rule.include.some(value=>filterRefKey(value)===filterRefKey(ref)))include.push(ref);
   return {mode:'auto',include:canonicalRefs(include),exclude:canonicalRefs(exclude)};
 }
 export function resetFilter(filters:DataFilters,family:FilterFamily,mode:'all'|'none'):DataFilters {

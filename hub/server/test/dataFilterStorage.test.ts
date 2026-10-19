@@ -6,6 +6,25 @@ import {mergeStoredFilters,parseStoredFilters,projectStoredFilters,sameStoredFil
 const update=(filters=defaultFilters(),replace:FilterUpdate['replace']=['projects']):FilterUpdate=>({filters,replace,authority:'authority-storage'});
 const allowed=(_family:unknown,ref:unknown)=>typeof ref==='object'&&ref!==null&&'source' in ref?ref.source!=='hidden':ref!=='hidden';
 
+for(const existing of [false,true])test(`an ${existing?'existing':'in-flight'} explicit wallet pin survives entering and leaving the automatic preview`,()=>{
+  const cap={source:'wallet',kind:'keyCap' as const,key:'K'},balance={source:'wallet',kind:'balance' as const};
+  let raw:StoredFilters={filters:defaultFilters(),retained:[]};
+  if(existing)raw.filters.wallet={mode:'auto',include:[cap],exclude:[]};
+  const draft=structuredClone(raw.filters);draft.wallet={mode:'auto',include:[cap],exclude:[balance]};
+  raw=mergeStoredFilters(raw,{...update(draft,['wallet']),decisions:[{family:'wallet',ref:balance,included:false},...(!existing?[{family:'wallet' as const,ref:cap,included:true}]:[])]},()=>true,()=>true)!;
+  raw=parseStoredFilters(JSON.parse(JSON.stringify(raw)))!;
+  assert.deepEqual(raw.filters.wallet,{mode:'auto',include:[cap],exclude:[balance]});
+  assert.equal(matchesWallet(projectStoredFilters(raw,()=>true).filters.wallet,cap,false),true,'a later preview reorder cannot turn off a manual pin');
+  const revoked=(_family:unknown,ref:unknown)=>JSON.stringify(ref)!==JSON.stringify(cap);
+  raw=mergeStoredFilters(raw,update(projectStoredFilters(raw,revoked).filters,['wallet']),revoked,()=>false)!;
+  assert.equal(matchesWallet(projectStoredFilters(raw,()=>true).filters.wallet,cap,false),true,'an unrelated save also preserves the dormant pin');
+  const off=structuredClone(raw.filters);off.wallet={mode:'auto',include:[],exclude:[balance,cap]};
+  const disabled=mergeStoredFilters(raw,{...update(off,['wallet']),decisions:[{family:'wallet',ref:cap,included:false}]},()=>true,()=>true)!;
+  assert.equal(matchesWallet(disabled.filters.wallet,cap,true),false,'the explicit off still wins over preview membership');
+  const reset=mergeStoredFilters(raw,{...update(defaultFilters(),['wallet']),resets:{wallet:'all'}},()=>true,()=>true)!;
+  assert.deepEqual(reset.filters.wallet,{mode:'auto',include:[],exclude:[]});assert.equal(matchesWallet(reset.filters.wallet,cap,false),false);
+});
+
 for(const included of [false,true])test(`repeated modes preserve a dormant explicit ${included?'on':'off'} until reset`,()=>{
   let raw:StoredFilters={filters:defaultFilters(),retained:[]};raw.filters.projects={mode:included?'include':'exclude',values:['hidden']};
   for(let i=0;i<4;i++){
