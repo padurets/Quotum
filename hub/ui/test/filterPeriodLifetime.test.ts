@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {fixture,flush,NOW} from './periodRuntimeFixture';
 import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import {publishDataFilters} from '../lib/filterSelection';
+import {lineWork,workText} from '../lib/work';
+import {workHours} from '../lib/format';
 
 test('changing filters while the selected baseline waits retires each generation and retains supplier evidence',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture();
@@ -32,5 +34,22 @@ test('an inherited oversized work selection keeps unfiltered recovery facets and
     assert.ok(h.period.getFacets().value?.projects.includes('Work project'),'recovery choices use the unfiltered authorized universe');
     stop();publishDataFilters(defaultFilters());h.period.changed();await flush();
     assert.equal(h.period.get().error,null);assert.equal(h.period.get().rows.length,1);
+  }finally{publishDataFilters(null,false);await h.close();}
+});
+
+test('a source-work error retires supplier estimates while selected direct hours remain available',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture();
+  try{
+    publishDataFilters(defaultFilters());h.period.changed();await flush();
+    const tape=h.period.tapes.get('quota'),window=tape.tape.quota[0].window;
+    const read=()=>h.period.quotaAt({sourceId:h.source,windowId:window},NOW,'1h');
+    assert.ok(read().work.ms>0);const selected=read().selectedWork.ms;
+    const intent=h.period.intent();
+    await h.period.receive({basis:h.period.get().basis,sourceWork:{state:'error',error:'unavailable'}},intent);
+    assert.equal(read().work,null);assert.equal(read().selectedWork.ms,selected);
+    const line=read(),cells=lineWork({...line,current:line.remainingAtEnd,minutes:60},false,null,NOW)!;
+    assert.deepEqual(cells.work,{value:selected});assert.deepEqual(cells.perwork,{none:'unknown'});
+    assert.equal(workText('work',cells.work,line.work,NOW-3_600_000,null,null,line.selectedWork).content,workHours(selected));
+    assert.equal(h.period.get().error,null);
   }finally{publishDataFilters(null,false);await h.close();}
 });

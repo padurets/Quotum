@@ -154,7 +154,9 @@ const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {ar
     const workCell = (column: WorkColumn, now: number): Cell => {
       const value=lineAt(now),cells=lineWork(value,range,resetAt,now),perWork=cells&&'value' in cells.perwork?cells.perwork.value:null;
       const since=range?history!.since:boardPeriod.rangeAt('quota',now,history!.range)?.from??history!.since;
-      return cells&&value.work?workText(column,cells[column],value.work,since,resetAt,perWork):{content:'—'};
+      if(!cells)return {content:'—'};
+      const text=workText(column,cells[column],value.work,since,resetAt,perWork,value.selectedWork);
+      return column==='work'||column==='agenthours'?text:{...text,title:[text.title,t('filters.sourceWide')].filter(Boolean).join('\n')};
     };
     const timed=(column:WorkColumn):Cell|TimedCell=>range?workCell(column,0):{time:column,
       changesAt:now=>boardPeriod.cellChangesAt('quota',now,at=>JSON.stringify(workCell(column,at)),column==='workleft'?at=>workLeftChangesAt(lineAt(at),resetAt,at):undefined,line.sourceId,history!.range),at:now=>workCell(column,now)};
