@@ -101,7 +101,7 @@ export async function tracePanning(cdp: Cdp, browser: Browser, evidence?: TraceE
 export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promise<T>, evidence?: TraceEvidence, timers = false, flushStacks = false) {
   if(!browser.owned)throw new Error('browser-wide tracing requires an owned synthetic browser');
   const events:SafeTrace[]=[];
-  const sanitize=traceSanitizer(timers,flushStacks);
+  const sanitize=traceSanitizer(timers,flushStacks,browser.blinkRuntimeStats);
   // Page is already enabled by the benchmark. A frame alias alone outlives navigation.
   const documentLifetime=flushStacks?{frameNavigated:0,frameDetached:0,documentOpened:0}:undefined;
   const lifetimeListeners=documentLifetime?(['frameNavigated','frameDetached','documentOpened'] as const)
@@ -150,7 +150,8 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
     await deadline(5000,async signal=>{
       // Broad task instrumentation can outgrow the unchanged drain deadline.
       // Timeline and compositor events retain the measured work and thread clocks.
-      await cdp.send('Tracing.start',{categories:timers||flushStacks?'cc,devtools.timeline,disabled-by-default-devtools.timeline.stack':'cc,devtools.timeline',transferMode:'ReportEvents'},signal);
+      const categories=['cc','devtools.timeline',...(timers||flushStacks?['disabled-by-default-devtools.timeline.stack']:[]),...(browser.blinkRuntimeStats?['v8','disabled-by-default-v8.runtime_stats']:[])].join(',');
+      await cdp.send('Tracing.start',{categories,transferMode:'ReportEvents'},signal);
       await clock('start',signal);
     },browser.owner?.signal);
     const result=await run();succeeded=true;return result;
@@ -176,6 +177,14 @@ export async function traceInterval<T>(cdp: Cdp, browser: Browser, run:()=>Promi
     cdp.off('Tracing.dataCollected',collected);cdp.off('Tracing.tracingComplete',complete);
     for(const [method,listener]of lifetimeListeners)cdp.off(method,listener);
     const report={mode:'diagnostic',status:omitted||!ended?'insufficient-evidence':'complete',scheduler:'unavailable',threadClock:{status:events.some(event=>event.threadTs!==undefined)?'available':'unavailable'},omitted,bytes,cleanup,collection,drain,...(documentLifetime?{documentLifetime}:{}),events};
+    if(browser.blinkRuntimeStats)Object.assign(report,{blinkRuntimeStats:{
+      payloads:events.filter(event=>event.runtime).length,
+      missing:events.filter(event=>event.runtime?.status==='missing').length,
+      invalid:events.reduce((sum,event)=>sum+(event.runtime?.invalid??0),0),
+      unknown:events.reduce((sum,event)=>sum+(event.runtime?.unknown??0),0),
+      omitted:events.reduce((sum,event)=>sum+(event.runtime?.omitted??0),0),
+      kind:'Fixed Blink counters in elapsed microseconds; complete bound enclosing roots can include sibling callbacks and microtasks. CPU, complete coverage, observer overhead and throttling effects remain unqualified.',
+    }});
     if(timerEvidence)Object.assign(report,{timerEvidence:{...timerEvidence,
       status:ended&&cleanup==='complete'&&!omitted&&timerEvidence.install>0&&!timerEvidence.invalid&&!timerEvidence.missingInstallOwners&&!timerEvidence.invalidOwners&&!timerEvidence.omittedOwners?'captured':'insufficient-evidence',
       kind:'Raw timer fields; source ownership, coordinate convention, carry-in lifetimes and observer and extra stack-capture overhead remain unqualified'}});

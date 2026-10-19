@@ -6,11 +6,36 @@ const TIMERS = new Set(['TimerInstall','TimerRemove','TimerFire']);
 const CLOCK_MARKERS = new Set(['quotum-trace-clock-start','quotum-trace-clock-end','quotum-trace-control-start','quotum-trace-control-end']);
 const STATES = new Set(['STATE_PRESENTED_ALL','STATE_PRESENTED_PARTIAL','STATE_DROPPED','STATE_NO_UPDATE_DESIRED']);
 const BREAKDOWN = ['handle_input_events_us','animate_us','style_update_us','layout_update_us','accessibility_update_us','prepaint_us','compositing_inputs_us','paint_us','composite_commit_us','update_layers_us','begin_main_sent_to_started_us'] as const;
+// Fixed Blink counters only: runtime builds may also emit dynamic counter names.
+const RUNTIME_COUNTERS = new Set([
+  'Blink_V8',
+  ...['AssociateObjectWithWrapper','CreateWrapper','HasInstance','ToExecutionContext','ToV8DOMWindow','ToV8SequenceInternal','SetReturnValueFromStringSlow','V8ExternalStringSlow'].map(name=>'Blink_Bindings_'+name),
+  ...['CollectGarbage','GcEpilogue','GcPrologue','PerformIdleLazySweep'].map(name=>'Blink_GC_'+name),
+  ...['DocumentFragmentParseHTML','ParserAppendChild','ReplaceChildrenWithFragment','HTMLTokenizerNextToken','ConstructTree'].map(name=>'Blink_Parsing_'+name),
+  'Blink_Style_ProcessStyleSheet','Blink_Style_UpdateStyle','Blink_Layout_UpdateLayout',
+  ...['ElementGetBoundingClientRect','ElementGetInnerHTML','EventTargetDispatchEvent','HTMLElementClick','NodeAppendChild','NodeRemoveChild','WindowSetTimeout','ElementInnerHTML_Getter','ElementInnerHTML_Setter','NodeName_Getter'].map(name=>'Blink_'+name),
+]);
+type RuntimeStats = {status:'observed'|'missing'|'insufficient-evidence';counters:Record<string,{count:number;elapsedMicroseconds:number}>;invalid:number;unknown:number;omitted:number};
+function runtimeStats(value:unknown):RuntimeStats {
+  const report:RuntimeStats={status:'observed',counters:{},invalid:0,unknown:0,omitted:0};
+  if(value===undefined)return {...report,status:'missing'};
+  if(!value||typeof value!=='object'||Array.isArray(value))return {...report,status:'insufficient-evidence',invalid:1};
+  const entries=Object.entries(value);
+  report.omitted=Math.max(0,entries.length-4096);
+  for(const [name,pair]of entries.slice(0,4096)) {
+    if(!Array.isArray(pair)||pair.length!==2||!Number.isSafeInteger(pair[0])||pair[0]<0||typeof pair[1]!=='number'||!Number.isFinite(pair[1])||pair[1]<0){report.invalid++;continue;}
+    if(RUNTIME_COUNTERS.has(name))report.counters[name]={count:pair[0],elapsedMicroseconds:pair[1]};
+    else report.unknown++;
+  }
+  if(report.invalid||report.omitted)report.status='insufficient-evidence';
+  return report;
+}
 type Fields = Record<string,unknown>;
 type TraceEvent = {name:string;ph:string;ts?:unknown;dur?:unknown;tts?:unknown;tdur?:unknown;pid?:unknown;tid?:unknown;id2?:unknown;args?:unknown};
 type SourceFrames = {status:string;frames:{scriptId:number;lineNumber:number;columnNumber:number}[];invalid:number;omitted:number};
 export type SafeTrace = {name:string;phase:string;ts?:number;duration?:number;threadTs?:number;threadDuration?:number;pid?:number;tid?:number;stage?:string;trackId?:number;
   source?:{scriptId:number;lineNumber:number;columnNumber:number};
+  runtime?:RuntimeStats;
   timer?:{id?:number;timeout?:number;singleShot?:boolean;invalid:number;ownerFrames:SourceFrames};
   flush?:SourceFrames;
   callbackId?:number;contextFrame?:number;
@@ -36,15 +61,16 @@ const sourceFrames = (original:unknown,minCoordinate=0):SourceFrames => {
 };
 
 /** Async tracks are scoped to this interval and process. Their original opaque IDs never leave it. */
-export function traceSanitizer(timers = false, flushStacks = false) {
+export function traceSanitizer(timers = false, flushStacks = false, blinkRuntimeStats = false) {
   const tracks = new Map<string,number>();
   const contexts = new Map<string,number>();
   return (event:TraceEvent):SafeTrace|undefined => {
-    if((!NAMES.has(event.name)&&!(timers&&TIMERS.has(event.name)))||!['B','E','X','I','b','e'].includes(event.ph))return;
+    if((!NAMES.has(event.name)&&!(timers&&TIMERS.has(event.name))&&!(blinkRuntimeStats&&event.name==='BlinkRuntimeCallStats'))||!['B','E','X','I','b','e'].includes(event.ph))return;
     const args=fields(event.args),data=fields(args.data);
     const stage=event.name==='TimeStamp'&&typeof data.message==='string'&&CLOCK_MARKERS.has(data.message)?data.message:undefined;
     if(event.name==='TimeStamp'&&!stage)return;
     const safe:SafeTrace={name:event.name,phase:event.ph,ts:numeric(event.ts),duration:numeric(event.dur),threadTs:numeric(event.tts),threadDuration:numeric(event.tdur),pid:integer(event.pid),tid:integer(event.tid),stage};
+    if(blinkRuntimeStats&&event.name==='BlinkRuntimeCallStats'&&(event.ph!=='B'||args['runtime-call-stats']!==undefined))safe.runtime=runtimeStats(args['runtime-call-stats']);
     if(flushStacks&&(event.name==='FireAnimationFrame'||event.name==='FunctionCall'||stage)) {
       // RAF IDs can collide between Blink's internal and web callback collections.
       if(event.name==='FireAnimationFrame')safe.callbackId=integer(data.id);

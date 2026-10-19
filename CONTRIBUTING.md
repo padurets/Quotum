@@ -114,6 +114,14 @@ The native trace also counts existing Page navigation, frame-detachment and
 document-open events until its drain ends. Any such event, missing counter or
 changed page time origin prevents a document-lifetime match; frame aliases alone
 do not prove it. The benchmark already enables Page before tracing.
+The opt-in panning trace also enables Blink runtime counters in its owned browser
+from launch. It keeps fixed counter names, counts and elapsed microseconds, with
+missing, invalid, unknown and omitted pairs explicit. These are not CPU readings
+or a complete inventory of native operations. Counters belong to a complete bound
+enclosing Blink root, which can include sibling callbacks and later microtasks;
+they cannot be assigned to one callback merely because it lies inside that root.
+Instant payloads and unfinished begin/end pairs establish no execution interval.
+Counter collection and its interaction with CPU throttling have unqualified overhead.
 Trace events retain both
 elapsed and thread CPU time where Chrome supplies them, with start/end page clock
 markers. Host request/response timestamps bracket the existing metric reads to bound

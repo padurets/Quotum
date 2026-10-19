@@ -154,17 +154,19 @@ function activePort(profile: string): {port: number; browserPath: string; metada
   } finally {closeSync(fd);}
 }
 
-export async function launchChrome(file: string, sandbox: boolean, signal?: AbortSignal, progress?: (report: LaunchReport) => void): Promise<Browser> {
+export async function launchChrome(file: string, sandbox: boolean, signal?: AbortSignal, progress?: (report: LaunchReport) => void, blinkRuntimeStats = false): Promise<Browser> {
   if (signal?.aborted) throw new Error('Chrome startup cancelled');
   const profile = mkdtempSync(path.join(os.tmpdir(), 'quotum-bench-chrome-'));
   const group = process.platform !== 'win32';
   let child: ChildProcess;
   try {
-    child = spawn(file, [...FLAGS, ...(sandbox ? [] : ['--no-sandbox']), '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], {
+    child = spawn(file, [...FLAGS, ...(blinkRuntimeStats ? ['--enable-blink-features=BlinkRuntimeCallStats'] : []), ...(sandbox ? [] : ['--no-sandbox']), '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], {
       stdio: ['ignore', 'pipe', 'pipe'], detached: group,
     });
   } catch (error) {rmSync(profile, {recursive: true, force: true}); throw error;}
-  return launchedChrome(child, profile, group, signal, file, progress);
+  const browser = await launchedChrome(child, profile, group, signal, file, progress);
+  if (blinkRuntimeStats) browser.blinkRuntimeStats = true;
+  return browser;
 }
 
 /** Ownership begins before the first readiness await, including failed spawn and cancellation. */

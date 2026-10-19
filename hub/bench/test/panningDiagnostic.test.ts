@@ -4,6 +4,7 @@ import {traceInterval, tracePanning} from '../panningDiagnostic.js';
 import type {Cdp} from '../cdp.js';
 import {safeEvidence} from '../evidence.js';
 import type {SafeTrace} from '../traceEvents.js';
+import {traceSanitizer} from '../traceEvents.js';
 
 function fixture() {
   const listeners=new Map<string,(value:unknown)=>void>(),sent:string[]=[],files=new Map<string,unknown>(),starts:object[]=[];
@@ -18,6 +19,51 @@ function fixture() {
 
 const flushFrame={scriptId:'8',lineNumber:9,columnNumber:245638,functionName:'private-canary',url:'https://private-canary.invalid'};
 const flushEvent=(name:string,stackTrace:unknown)=>({name,ph:'B',ts:100,pid:3,tid:4,args:{beginData:{stackTrace},data:{stackTrace:[{...flushFrame,scriptId:'99'}]}}});
+
+test('owned Blink tracing keeps native envelope boundaries and only fixed numeric counters',async()=>{
+  const f=fixture(),browser={owned:true,blinkRuntimeStats:true,endpoint:'fixture',close:async()=>{}};
+  const events=[
+    {name:'BlinkRuntimeCallStats',ph:'B',ts:10,pid:3,tid:4,args:{private:'private-canary'}},
+    {name:'BlinkRuntimeCallStats',ph:'E',ts:40,pid:3,tid:4,args:{'runtime-call-stats':{
+      Blink_V8:[1,8.25],Blink_Layout_UpdateLayout:[2,12.5],
+      'private-canary':[1,7],Blink_DocumentCookie_Getter:[1,7],Blink_NodeAppendChild:[-1,7],Blink_Style_UpdateStyle:[1,'private-canary'],
+    }}},
+    {name:'BlinkRuntimeCallStats',ph:'X',ts:50,dur:4,pid:3,tid:4,args:{'runtime-call-stats':{}}},
+  ];
+  await traceInterval(f.cdp,browser,async()=>{f.listeners.get('Tracing.dataCollected')?.({value:events});},f.evidence);
+  assert.deepEqual(f.starts,[{categories:'cc,devtools.timeline,v8,disabled-by-default-v8.runtime_stats',transferMode:'ReportEvents'}]);
+  const report=safeEvidence(f.files.get('trace')) as {events:SafeTrace[];blinkRuntimeStats:{payloads:number;invalid:number;unknown:number;omitted:number;missing:number}};
+  assert.deepEqual(report.events.map(({phase,ts,duration,pid,tid})=>({phase,ts,duration,pid,tid})),[
+    {phase:'B',ts:10,duration:undefined,pid:3,tid:4},{phase:'E',ts:40,duration:undefined,pid:3,tid:4},{phase:'X',ts:50,duration:4,pid:3,tid:4},
+  ]);
+  assert.equal(report.events[0].runtime,undefined);
+  assert.deepEqual(report.events[1].runtime,{status:'insufficient-evidence',counters:{Blink_V8:{count:1,elapsedMicroseconds:8.25},Blink_Layout_UpdateLayout:{count:2,elapsedMicroseconds:12.5}},invalid:2,unknown:2,omitted:0});
+  assert.deepEqual(report.events[2].runtime,{status:'observed',counters:{},invalid:0,unknown:0,omitted:0});
+  for(const [key,value]of Object.entries({payloads:2,invalid:2,unknown:2,omitted:0,missing:0}))assert.equal(report.blinkRuntimeStats[key as keyof typeof report.blinkRuntimeStats],value);
+  assert.doesNotMatch(JSON.stringify(report),/private-canary|runtime-call-stats|"args"|cookie/i);
+  assert.equal(f.listeners.size,0);
+  const ordinary=fixture();
+  await traceInterval(ordinary.cdp,{owned:true,endpoint:'fixture',close:async()=>{}},async()=>{ordinary.listeners.get('Tracing.dataCollected')?.({value:events});},ordinary.evidence);
+  assert.equal((ordinary.files.get('trace') as {events:unknown[]}).events.length,0);
+  assert.equal((ordinary.files.get('trace') as {blinkRuntimeStats?:unknown}).blinkRuntimeStats,undefined);
+});
+
+test('missing, malformed and bounded-out native counters remain explicit without exposing names',()=>{
+  const sanitize=traceSanitizer(false,false,true);
+  const event=(stats:unknown)=>({name:'BlinkRuntimeCallStats',ph:'X',ts:10,dur:30,pid:3,tid:4,args:{'runtime-call-stats':stats}});
+  assert.equal(sanitize(event(undefined))?.runtime?.status,'missing');
+  for(const phase of ['I','B']) {
+    const instant=sanitize({...event({Blink_V8:[1,0]}),ph:phase,dur:undefined});
+    assert.equal(instant?.phase,phase);assert.equal(instant?.duration,undefined);
+    assert.deepEqual(instant?.runtime,{status:'observed',counters:{Blink_V8:{count:1,elapsedMicroseconds:0}},invalid:0,unknown:0,omitted:0});
+  }
+  for(const value of [null,[],7,'private-canary'])assert.deepEqual(sanitize(event(value))?.runtime,{status:'insufficient-evidence',counters:{},invalid:1,unknown:0,omitted:0});
+  for(const pair of [[1],[1,2,3],[.5,2],[1,Infinity],[1,NaN],[1,-1],[Number.MAX_SAFE_INTEGER+1,2]])assert.equal(sanitize(event({Blink_V8:pair}))?.runtime?.invalid,1);
+  const many=Object.fromEntries(Array.from({length:4097},(_,i)=>['private-canary-'+i,[1,1]]));
+  const safe=sanitize(event(many));
+  assert.deepEqual(safe?.runtime,{status:'insufficient-evidence',counters:{},invalid:0,unknown:4096,omitted:1});
+  assert.doesNotMatch(JSON.stringify(safe),/private-canary/);
+});
 
 test('native trace retains the synchronous flush callsite separately from invalidation and callback locations',async()=>{
   const f=fixture();
