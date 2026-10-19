@@ -296,9 +296,9 @@ export class PeriodReader {
         return {projects:[...projects].sort(),devices:[...devices].map(([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id)),clients:[...clients].sort()};
       })());
       if(request.sourceWork&&selection.mode==='live'){
-        const sources=new Set<string>();
-        if(request.quota){let ids=[...shown.keys()];if(request.quota.sources){try{ids=JSON.parse(request.quota.sources);}catch{fail(400,'invalid_request');}}for(const id of ids)sources.add(id);}
-        if(request.budget?.work==='1')for(const id of store.moneyWorkSources(board,selectionOf(JSON.parse(request.budget.meters??'[]'),request.budget.unit)))sources.add(id);
+        // One cursor serves independently scheduled resource families. Its source
+        // cohort follows board access, rather than whichever family read last.
+        const sources=new Set(shown.keys());
         const key=createHash('sha256').update(JSON.stringify([sourceIdentity,[...sources].sort()])).digest('base64url'),previous=self.decode(request.sourceWork.cursor);
         const delta=previous?.identity===key&&previous.revision>=self.workFloor&&previous.revision<=revision&&range.from>=previous.from;
         const patch=frontier(delta?previous:null,self.workChanges,true),cursor=self.encode({identity:key,revision,from:patch.coveredFrom,cut:patch.coveredTo});

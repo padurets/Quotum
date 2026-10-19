@@ -71,6 +71,8 @@ test('live source deltas stay small on a board with many known empty resources',
     const delta=JSON.parse(json);
     assert.equal(delta.sourceWork.state,'delta');assert.equal(delta.sourceWork.value.sources.length,0);
     assert.ok(Buffer.byteLength(json)+512<HISTORY_BYTES_PER_MEASUREMENT,`${Buffer.byteLength(json)} bytes before HTTP headers: ${JSON.stringify(Object.fromEntries(Object.entries(delta).map(([key,value])=>[key,JSON.stringify(value).length])))}`);
+    const narrowed=JSON.parse(h.reader.read(h.board,h.alice.id,{...request,quota:{...quota,sources:JSON.stringify([h.source]),evidence:delta.quota.value.tape.cursor},sourceWork:{cursor:delta.sourceWork.value.cursor}}));
+    assert.equal(narrowed.sourceWork.state,'delta','independent resource selections must not replace the shared source cursor with another cohort');
   }finally{publishDataFilters(null,false);await h.close();}
 });
 

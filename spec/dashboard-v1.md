@@ -875,6 +875,8 @@ sources,replaceFrom?,replaceTo?,cursor`. Each source has `id,knownFrom,blocks`;
 blocks are flattened hour/pattern-index pairs. Patterns are flattened
 within-hour millisecond/count-delta pairs, with nonnegative counts returning to zero.
 A delta replaces its exact interval, including empty tails and partial hours.
+Its source cohort is the complete authorized board set, shared across quota and
+budget queries, so independently scheduled families reuse one cursor.
 Its source rows omit empty replacement curves; omitted sources retain their known
 boundary and their work outside that interval. A complete section supplies the full
 authorized source set, including known empty sources.
