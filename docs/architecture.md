@@ -1613,6 +1613,9 @@ The response keeps the period's facet universe separate from authorized explicit
 outside that period. Those choices remain individually removable. The hub confirms their
 project/device admission before returning labels; browser draft references do not provide
 that authority. Their metadata follows predicate, range and work-authority generations.
+Source-work tape, curves and cursor are adopted together after bounded preparation.
+A limit refusal retains the previous baseline and cursor while making its estimates
+unavailable; failed preparation releases only successfully admitted scratch.
 Quota charts and tables subscribe to source/window presentation choices separately from
 their native history identity, so a window-only edit updates both on a quiet board without
 reading unchanged history or rebuilding for unrelated project-only presentation changes.

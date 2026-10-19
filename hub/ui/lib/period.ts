@@ -488,18 +488,21 @@ class BoardPeriod {
     const retainedFrom=intent.request.selection.mode==='live'?evaluatedRange(intent.request.selection,hubNow()).from:null;
     const queryKeyFor=(scope:PeriodScope)=>this.queryKey(intent.request[scope]!,scope);
     function* build():Preparation<{work:WorkTrace|null;index:PeriodIndex|null;activity:PeriodActivity|null;tapes:typeof priorTapes;edge:number}> {
-      const sourcePart=reply.sourceWork;
+      let sourcePart=reply.sourceWork;
       if(sourcePart){
         if(sourcePart.state==='error')nextSourceCurves={groups:{source:new Map()},knownFrom:Infinity,available:false};
         else try{
           let sourceBytes=JSON.stringify(sourcePart.value).length*3;
           charge('sourceWork',sourceBytes);
-          const reserve=(bytes:number)=>{sourceBytes+=bytes;charge('sourceWork',sourceBytes);};
-          const release=(bytes:number)=>{sourceBytes-=bytes;charge('sourceWork',sourceBytes);};
-          nextSourceTape=sourcePart.state==='delta'&&nextSourceTape?mergeSourceWorkTape(nextSourceTape,sourcePart.value,reserve,release):sourcePart.value;
-          nextSourceCurves=sourceWorkCurves(nextSourceTape,reserve,previousSourceTape&&previousSourceCurves?{tape:previousSourceTape,curves:previousSourceCurves}:undefined,release);nextSourceCursor=sourcePart.value.cursor;
+          const reserve=(bytes:number)=>{charge('sourceWork',sourceBytes+bytes);sourceBytes+=bytes;};
+          const release=(bytes:number)=>{charge('sourceWork',sourceBytes-bytes);sourceBytes-=bytes;};
+          const tape=sourcePart.state==='delta'&&nextSourceTape?mergeSourceWorkTape(nextSourceTape,sourcePart.value,reserve,release):sourcePart.value;
+          const curves=sourceWorkCurves(tape,reserve,previousSourceTape&&previousSourceCurves?{tape:previousSourceTape,curves:previousSourceCurves}:undefined,release);
+          nextSourceTape=tape;nextSourceCurves=curves;nextSourceCursor=sourcePart.value.cursor;
         }catch(error){if(error!==limited)throw error;nextSourceCurves={groups:{source:new Map()},knownFrom:Infinity,available:false};reply.sourceWork={state:'error',error:'history_limit'};discard('sourceWork');}
       }
+      // Later preparation may pause; a rejected decoded body must be unreachable.
+      sourcePart=undefined;
       const incomingTapes=new Map<PeriodScope,PeriodTape>();
       // Compact each decoded column before allocating work or accounting indexes.
       // Progress replaces reservations as scratch buffers become unreachable.
