@@ -910,6 +910,10 @@ test('data filter catalogue keeps empty work recoverable beside supplier measure
   assert.deepEqual((await owner.get<FilterEnvelope>('/api/boards/'+board+'/filters')).filters.projects,all.projects);
   const populated=stand.boards.get('team')!,opening=await owner.get<FilterEnvelope>('/api/boards/'+populated+'/filters');
   assert.deepEqual(opening.filters.projects,{mode:'exclude',values:[]});
+  const mixed=await owner.get<Snapshot>('/api/overview?board='+populated);
+  const native=mixed.sources.filter(source=>cards(set).some(card=>card.id.startsWith('sessions-')&&stand.sources.get(card.id)===source.id));
+  assert.equal(native.length,4);
+  assert.ok(native.every(source=>source.windows.some(window=>window.kind==='session'&&window.resetAt!==null&&window.resetAt>start)),'five-hour limits must remain current when the review starts');
   const choices=expandPeriod(await owner.post<PeriodWireReply>('/api/boards/'+populated+'/period',{version:1,selection:{mode:'live',periodMs:24*HOUR},evaluatedAt:start,sessions:{},facets:true}));
   assert.equal(choices.facets?.state,'complete');assert.equal(choices.sessions?.state,'complete');
   if(choices.facets?.state!=='complete'||choices.sessions?.state!=='complete')throw new Error('incomplete populated filters scene');

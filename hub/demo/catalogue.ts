@@ -1671,7 +1671,7 @@ const money:DemoSet={...all,id:'money',about:'Subscriptions beside OpenRouter an
 export const FILTER_SCENES=['mixed-resources','populated-work','selected-empty','unfiltered-facets','resources-continue','member-current','save-restore'] as const;
 const dataFilters:DemoSet={...SESSION_ANALYTICS,id:'filters',about:'Populated mixed-resource filter playground, with a separate saved-empty board',entries:[
   ...SESSION_ANALYTICS.entries.filter(entry=>entry.kind!=='board').map(entry=>entry.kind==='card'?{...entry,
-    windows:[rolling({use:steady(0,120)}),...entry.windows],
+    windows:[rolling({offset:-HOUR,use:steady(0,120)}),...entry.windows],
     on:{ana:entry.on!.ana,team:entry.on!.ana},
   }:entry),
   {kind:'board',id:'team',name:'Filter playground',owner:'ana',members:['boris','ben'],agents:true,agentsColumns:['client','subscription','active','concurrency'],agentsPlace:{x:0,y:0,w:6,h:12},
