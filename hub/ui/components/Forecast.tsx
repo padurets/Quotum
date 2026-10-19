@@ -31,6 +31,7 @@ import {ofTimeRange} from '../lib/timeRange';
 import {useForecastsOf, useLineup, useNamed, useResetNews} from '../lib/board';
 import {quotaHistory, useHistory} from '../lib/history';
 import {boardPeriod} from '../lib/period';
+import {useQuotaPresentation} from '../lib/dataFilters';
 import {observationDeadline} from '../../server/domain/resources';
 import {t, useLocale, type Key} from '../i18n';
 import {useTableWidget, WidgetPages, TableMeasure, TableSortMenu} from './TableWidget';
@@ -117,6 +118,7 @@ const SortedForecast=memo(function SortedForecast({rows,models,columns,fixed,ran
  * parts of their own.
  */
 const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {arrange: Arrange;kind?:QuotaKind}) {
+  const selection=useQuotaPresentation();
   const widget=kind==='session'?QUOTA_SESSION_TABLE:QUOTA_TABLE;
   const {history, loading,error} = useHistory();
   const sources = useNamed(arrange.view.names,'quota');
@@ -129,7 +131,7 @@ const WindowForecast = memo(function WindowForecast({arrange,kind='weekly'}: {ar
   const range = !!selected;
   // Window names are text: they are rebuilt when the language changes.
   const locale = useLocale();
-  const lines = useMemo(() => subscriptionLinesOf(history, sources, view, kind), [history, sources, view.windows, view.hidden, view.colors, kind, locale]);
+  const lines = useMemo(() => subscriptionLinesOf(history, sources, view, kind), [history, sources, view.windows, view.hidden, view.colors, kind, locale,selection]);
   const modeColumns = range ? RANGE_COLUMNS : LIVE_COLUMNS;
   const columns = useMemo(() => modeColumns.filter(column => columnShown(view, widget, column)), [modeColumns, view, widget]);
   const panel = useRef<HTMLElement>(null);

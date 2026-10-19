@@ -16,7 +16,7 @@ test('the actual History producer retains data on clock wakes and keeps forecast
   const start = source.indexOf('  const prepared = usePrepared(');
   const region = source.slice(start, source.indexOf('\n  const legend = useMemo(', start));
   type Result = {prepared: {ready: boolean}; model: {forecasts: unknown[]; markers: {at: number}[]}; currentHints: {forecast: boolean; zeros: number[]}; wantedTo: number};
-  const context = {...hook, now: H, measured: H, from: 0, frame: {from: 0, to: H, future: H, live: true}, authority: 0, history: {board: 'b', events: []}, drawing: {board: 'b', events: []}, strip: null,
+  const context = {...hook, selection:'null', now: H, measured: H, from: 0, frame: {from: 0, to: H, future: H, live: true}, authority: 0, history: {board: 'b', events: []}, drawing: {board: 'b', events: []}, strip: null,
     sources: [{id: 's', successAt: H, windows: [{id: 'w', kind: 'weekly', resetAt: 3 * H}]}], view: {},
     prefs: {kind: 'weekly', muted: {}, showPlan: false, showForecast: false, horizon: 'auto'}, locale: 'en',
     futureSources: [] as unknown[], futureForecasts: {}, futureLineup: [], futureNews: null, futureCodex: null, futureView: {},

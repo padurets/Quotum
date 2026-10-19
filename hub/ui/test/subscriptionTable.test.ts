@@ -25,6 +25,7 @@ import type {Card,History,Kind} from '../lib/types';
 import {EMPTY_VIEW} from '../../server/domain/view';
 import {mapZai,decodeZai} from '../../server/connectors/zai';
 import {composeMeters,meterCells} from '../../server/domain/meterHistory';
+import {quotaPresentationKey} from '../lib/filterSelection';
 
 const M=60_000;
 const measured=mapZai(decodeZai(JSON.stringify({code:200,success:true,data:{limits:[{type:'CREDIT_LIMIT',unit:3,number:5,usage:2000,currentValue:800},{type:'CREDIT_LIMIT',unit:6,number:1,usage:10000,currentValue:2000}]}})),0).measurement!;
@@ -35,6 +36,7 @@ const base:History={range:'24h',live:true,since:0,to:M,cellMs:M,historyStart:0,e
 let history:History|null=base,kind:Kind='weekly',sources=[cap,native],error:'history_limit'|null=null;
 let layout:'table'|'list'='table';
 const modules:Record<string,unknown>={'../../server/domain/resources':resources,react:React,'react/jsx-runtime':jsxRuntime,'../lib/format':format,'../lib/quota':quota,'../lib/forecast':forecast,'../lib/forecastSort':forecastSort,'../lib/plan':plan,'../lib/work':work,'../lib/view':view,'../lib/subscription':subscription,'../lib/timeRange':timeRange,'../i18n':i18n,
+  '../lib/dataFilters':{useQuotaPresentation:quotaPresentationKey},
   '../lib/period':{boardPeriod:{quotaAt:(line:unknown)=>line,quotaOrderAt:()=>({slope:0,next:Infinity}),rangeAt:()=>history?{from:history.since,to:history.to}:null,cellChangesAt:()=>null}},
   '../lib/prefs':{usePref:()=>null},'../lib/board':{useNamed:()=>sources,useLineup:()=>sources.map(s=>s.id),useForecastsOf:()=>[{},{}],useResetNews:()=>null},'../lib/clock':{hubNow:()=>M,useClock:()=>M,clock:new PageClock({now:()=>M,visible:()=>false,setTimeout:()=>null,clearTimeout:()=>{}})},'../lib/history':{quotaHistory:{retry:()=>{}},useHistory:()=>({history,loading:false,error})},'./AnalyticsPanel':panel,'./Popover':{Popover:()=>null},'./MoneyAnalytics':{MoneyTable:()=>{throw new Error('a subscription reached the money table');}}};
 const cellContext = {exports: {}, require: (name: string) => modules[name] ?? {}};

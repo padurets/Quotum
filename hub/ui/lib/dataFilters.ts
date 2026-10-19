@@ -2,7 +2,7 @@ import {useSyncExternalStore} from 'react';
 import type {FilterEnvelope,FilterUpdate} from '../../server/domain/dataFilters';
 import {DataFilterState} from './filterState';
 import {call} from './http';
-import {publishDataFilters,setFilterWalletUnit} from './filterSelection';
+import {publishDataFilters,setFilterWalletUnit,onDataFilters,quotaPresentationKey} from './filterSelection';
 import {seedDataFilters,seedConflicts} from './filterSeed';
 import {onPrefs,prefs} from './prefs';
 import type {Card} from './types';
@@ -14,6 +14,7 @@ export const dataFilters=new DataFilterState({storage,refresh:board=>call<Filter
 dataFilters.subscribe(()=>publishDataFilters(dataFilters.get().current));
 export const setFilterCards=(values:readonly Card[])=>{cards=values;};
 export const useDataFilters=()=>useSyncExternalStore(dataFilters.subscribe,dataFilters.get);
+export const useQuotaPresentation=()=>useSyncExternalStore(onDataFilters,quotaPresentationKey);
 export function retireDataFilters(){cards=[];dataFilters.retire();publishDataFilters(null,false);}
 
 setFilterWalletUnit(prefs().money.unit??undefined);

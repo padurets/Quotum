@@ -26,6 +26,7 @@ import {pan, usePanning} from '../lib/pan';
 import {usePrepared} from './prepared';
 import {axisNavigation, navigationKey} from '../lib/axisNavigation';
 import {historyProjection, type ProjectionHints} from '../lib/historyProjection';
+import {useQuotaPresentation} from '../lib/dataFilters';
 
 /**
  * The chart's own settings: whether it draws the plan and the forecast (where either has
@@ -65,6 +66,7 @@ function HistorySettings({arrange, kind, planAvailable, forecastAvailable}: {arr
  * forecast's line goes when the table no longer says where its window leads.
  */
 const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arrange: Arrange;kind?:QuotaKind}) {
+  const selection=useQuotaPresentation();
   const widget=kind==='session'?QUOTA_SESSION_HISTORY:QUOTA_HISTORY;
   const {history,drawing,loading,error,presentation:authority} = useHistory();
   const strip = useHistoryPlot();
@@ -178,7 +180,7 @@ const WindowHistory = memo(function WindowHistory({arrange,kind='weekly'}: {arra
       if (points.length) forecasts.push({key: line.key, name: line.name, color: line.color, dash: line.dash, points, zero: drawn.zero, at: drawn.at, until: drawn.until}); yield;
     }
     return {futureFacts: ahead.map(a => ({zero: a.drawn.zero, until: a.drawn.until})), hints, lines, visible, markers, plans: [...plans.values()], forecasts, to, from, measured, now: strip ? now : measured, cellMs: strip?.cell ?? history?.cellMs ?? 60_000, strip, frame, planAvailable, forecastAvailable, planShown, forecastShown, moments: [...chartMoments(markers, ahead.map(a => a.drawn), to), ...[...plans.values()].map(plan => plan.until!)], registry: nextRegistry};
-  }, [drawing, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, navigationKey(navigation)], `${authority}:${history?.board}:${prefs.kind}`);
+  }, [drawing, strip, sources, view, prefs, locale, futureSources, futureForecasts, futureLineup, futureNews, futureCodex, futureView, navigationKey(navigation),selection], `${authority}:${history?.board}:${prefs.kind}`);
   const model = prepared.value;
   useLayoutEffect(() => {if (model) registry.current = model.registry;}, [model]);
   const lines = model?.lines ?? [];
