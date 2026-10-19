@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       diagnostic_ref:
-        description: Full public commit SHA for optional benchmark diagnostics
+        description: Full public commit SHA for the independent idle CPU control
         required: true
         type: string
       expected_client_sha256:
@@ -36,19 +36,6 @@ on:
         required: false
         type: boolean
         default: false
-      quota_screen:
-        description: Collect two serial fresh-browser idle windows on each of two runners
-        required: false
-        type: boolean
-        default: false
-      screen_coin:
-        description: Frozen order coin, exactly 0 or 1
-        required: false
-        type: string
-      screen_client_sha256:
-        description: Previously verified common diagnostic client SHA256
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -170,7 +157,7 @@ jobs:
           if-no-files-found: warn
 
   idle-cpu-control:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && !inputs.quota_screen }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -219,112 +206,6 @@ jobs:
             ${{ runner.temp }}/quotum-idle-control/
             hub/dist/client/assets/index-*.js
           if-no-files-found: warn
-
-  # Temporary, diagnostic-only omission screen; neither arm satisfies the app gate.
-  quota-path-screen:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_ref != '' && inputs.quota_screen }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        pair: [0, 1]
-    steps:
-      - name: Start the unchanged job deadline before preparation
-        run: |
-          python3 - <<'PY'
-          import json, os, time
-          from pathlib import Path
-          Path(os.environ['RUNNER_TEMP'], 'quota-screen-deadline.json').write_text(json.dumps({'deadline': time.monotonic() + 18 * 60}))
-          PY
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.diagnostic_ref }}
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: hub/package-lock.json
-      - run: npm ci
-        working-directory: hub
-      - run: npm run build
-        working-directory: hub
-      - name: Verify original source and client before the temporary transformation
-        working-directory: hub
-        env:
-          EXPECTED_SOURCE: ${{ inputs.diagnostic_ref }}
-          EXPECTED_ORIGINAL: ${{ inputs.expected_client_sha256 }}
-          SCREEN_COIN: ${{ inputs.screen_coin }}
-          CONFLICTING_MODES: ${{ inputs.trace_only || inputs.original_timing || inputs.retirement || inputs.grid }}
-        run: |
-          node --import tsx --input-type=module <<'JS'
-          import {execFileSync} from 'node:child_process';
-          import {clientIdentity} from './bench/evidence.ts';
-          const actual=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),client=clientIdentity();
-          if(!/^[a-f0-9]{40}$/.test(process.env.EXPECTED_SOURCE??'')||actual!==process.env.EXPECTED_SOURCE||actual!==process.env.GITHUB_SHA||execFileSync('git',['status','--porcelain'],{encoding:'utf8'}).trim()||client.status!=='available'||client.sha256!==process.env.EXPECTED_ORIGINAL||!['0','1'].includes(process.env.SCREEN_COIN??'')||process.env.CONFLICTING_MODES==='true')throw Error('Screen source, original client or mode mismatch');
-          JS
-      - name: Prepare the common diagnostic client and serial browser prefix
-        run: |
-          node .github/scripts/quota-screen-prepare.mjs "$GITHUB_WORKSPACE" "$RUNNER_TEMP/quota-screen-source"
-          cp "$RUNNER_TEMP/quota-screen-source/hub/bench/.quota-path-screen.ts" hub/bench/
-          cp "$RUNNER_TEMP/quota-screen-source/hub/bench/.quota-path-stream.ts" hub/bench/
-          cp "$RUNNER_TEMP/quota-screen-source/hub/ui/lib/period.ts" hub/ui/lib/period.ts
-      - run: npm run build
-        working-directory: hub
-      - name: Verify the common diagnostic compiled client
-        working-directory: hub
-        env:
-          EXPECTED_CLIENT: ${{ inputs.screen_client_sha256 }}
-        run: |
-          node --import tsx --input-type=module <<'JS'
-          import {clientIdentity} from './bench/evidence.ts';
-          const client=clientIdentity();
-          if(!/^[a-f0-9]{64}$/.test(process.env.EXPECTED_CLIENT??'')||client.status!=='available'||client.sha256!==process.env.EXPECTED_CLIENT)throw Error('Common diagnostic client differs');
-          JS
-      - name: Collect both original idle windows within the existing deadline
-        working-directory: hub
-        env:
-          QUOTUM_SCREEN_PAIR: ${{ matrix.pair }}
-          QUOTUM_SCREEN_COIN: ${{ inputs.screen_coin }}
-          QUOTUM_SCREEN_DEADLINE: ${{ runner.temp }}/quota-screen-deadline.json
-          QUOTUM_BENCH_DIAGNOSTICS_DIR: ${{ runner.temp }}/quota-screen-results
-        run: |
-          export QUOTUM_CHROME="$(command -v google-chrome)"
-          python3 - <<'PY'
-          import json
-          import math
-          import os
-          from pathlib import Path
-          import shutil
-          import sys
-          import time
-
-          out = Path(os.environ['QUOTUM_BENCH_DIAGNOSTICS_DIR'])
-          out.mkdir(parents=True, exist_ok=True)
-          deadline = json.loads(Path(os.environ['QUOTUM_SCREEN_DEADLINE']).read_text())['deadline']
-          remaining = math.floor(deadline - time.monotonic() - 30)
-          if remaining <= 0 or shutil.disk_usage(out).free < 8 * 1024**3:
-              (out / 'launch.json').write_text(json.dumps({'status': 'not-started', 'remainingSeconds': remaining}))
-              sys.exit(2)
-          (out / 'launch.json').write_text(json.dumps({'status': 'launching', 'remainingSeconds': remaining,
-                                                    'monotonicAt': time.monotonic(), 'deadline': deadline}))
-          # Replace this launcher: the existing subreaper owns timeout and all adopted children.
-          os.execvp(sys.executable, [sys.executable, '../desktop/smoke/monitor.py', '--grace', '3', '--expect-exit', '0', '--',
-                                   'timeout', '--signal=TERM', '--kill-after=30s', str(remaining) + 's',
-                                   'node', '--import', 'tsx', 'bench/.quota-path-screen.ts', '--ci', '--scope', 'dashboard'])
-          PY
-      - name: Retain every outcome and exact transformed source
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: quota-screen-${{ matrix.pair }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          include-hidden-files: true
-          path: |
-            ${{ runner.temp }}/quota-screen-results/
-            ${{ runner.temp }}/quota-screen-source/
-            ${{ runner.temp }}/quota-screen-deadline.json
-            hub/dist/client/assets/index-*.js
-          if-no-files-found: error
 
   managed-keys:
     if: ${{ !inputs.diagnostic_ref }}
