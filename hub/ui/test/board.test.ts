@@ -21,10 +21,10 @@ const card = (id: string, used = 50, extra: Partial<Card> = {}): Card => ({
 
 const VIEW = {version:5 as const, layout: {columns: 6, places: {}}, names: {}, hidden: [], shown: [], windows: [], plans: {}, unplanned: [], colors: {}, columns: {}, shownColumns: {}};
 test('repeated card name readers do not rescan unchanged board data on private contact updates',()=>{
-  const initial=reduce(INITIAL,hub({type:'snapshot',data:snapshot({cards:[card('s1')],sources:['s1']})}));
+  const initial=reduce(INITIAL,hub({type:'snapshot',data:snapshot({sources:[card('s1')]})}));
   let reads=0;
   const board={...initial.board!,cards:new Proxy(initial.board!.cards,{get(target,key,receiver){if(key==='s1')reads++;return Reflect.get(target,key,receiver);}})};
-  const first=titlesOf(board);reads=0;
+  const first=titlesOf(board);assert.equal(first.s1.provider,'codex');assert.equal(reads,1);reads=0;
   const next=reduce({...initial,board},hub({type:'deviceContacts',data:{devices:[{deviceId:'d',lastSeenAt:1000}]}}));
   for(let i=0;i<100;i++)assert.equal(titlesOf(next.board),first);
   assert.equal(reads,0,'subscriber count must not multiply the cost of unchanged card names');
