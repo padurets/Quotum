@@ -133,6 +133,8 @@ export const SESSION_ACTIVITY_SCENES=[
  *
  * In-flight frequency changes and fixed handover are held by server/test/frequency.test.ts;
  * permission loss and late replies are checked on the live menu.
+ * An in-flight filter save is held by ui/test/filterState.test.ts; the saving indicator
+ * and disabled actions are checked on the live menu with a delayed response.
  * Continuous panning, partial loading and future folding are short-lived transitions:
  * ui/test/pan.test.ts, history.test.ts and historyPlot.test.ts hold their input,
  * cancellation, coverage and whole-cell accounting; bench/panning.ts exercises native
