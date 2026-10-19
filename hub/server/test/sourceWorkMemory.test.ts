@@ -50,6 +50,27 @@ test('source merging refuses before cloning the retained directory and releases 
   assert.equal(clones,0);assert.equal(memory.bytes,initial);memory.pool.release(memory.flight);
 });
 
+test('partial replacements share identical source patterns without pinning released duplicate arrays',()=>{
+  const before=tape(Array.from({length:4000},(_,i)=>[i*100,i%2?-1:1]).flat());
+  before.sources=Array.from({length:40},(_,i)=>({id:'codex:'+i,knownFrom:0,blocks:[0,0]}));
+  const patch:SourceWorkTape={version:1,from:0,cut:H,replaceFrom:100_000,replaceTo:200_000,patterns:[],sources:[]};
+  const initial=JSON.stringify(before).length*3+JSON.stringify(patch).length*3,memory=staged(initial,1300*1024),original=Map.prototype.set;
+  let references:Map<readonly number[],number>|undefined,unaccounted=0;
+  Map.prototype.set=function<K,V>(this:Map<K,V>,key:K,value:V){if(Array.isArray(key)&&typeof value==='number')references=this as unknown as Map<readonly number[],number>;return Reflect.apply(original,this,[key,value]);};
+  try{
+    const release=(size:number)=>{
+      memory.drop(size);let duplicateCells=0;const seen=new Set<number>();
+      for(const [values,id] of references??[]){if(seen.has(id))duplicateCells+=values.length;else seen.add(id);}
+      unaccounted=Math.max(unaccounted,duplicateCells*16-(memory.bytes-initial));
+    };
+    const merged=mergeSourceWorkTape(before,patch,memory.add,release);
+    assert.equal(unaccounted,0,'released scratch must not remain pinned by a pattern-reference cache');
+    assert.equal(merged.sources.length,40);assert.equal(merged.patterns.length,1);
+    const expected=sourceWorkCurves(before).groups.source.get('codex:0')!.read({from:0,to:H},true)-50_000;
+    assert.equal(sourceWorkCurves(merged).groups.source.get('codex:39')!.read({from:0,to:H},true),expected);
+  }finally{Map.prototype.set=original;memory.pool.release(memory.flight);}
+});
+
 test('shared source patterns release duplicate scratch while preserving exact work and partial replacements',()=>{
   const input=tape(Array.from({length:200},(_,i)=>[i*1000,i%2?-1:1]).flat());input.cut=24*H;input.sources[0].blocks=Array.from({length:24},(_,hour)=>[hour,0]).flat();
   const curves=sourceWorkCurves(input);let bytes=0,peak=0;

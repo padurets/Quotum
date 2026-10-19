@@ -185,8 +185,12 @@ export class PeriodReader {
     const cell=cellOf(range.to-range.from),fixedRange={from:Math.max(0,Math.floor(range.from/cell)*cell-cell),to:Math.min(Math.ceil(range.to/cell)*cell+cell,now)};
     const sourcePlan=request.sourceWork&&selection.mode==='live'?(()=>{
       // Resource families keep one source cursor, independently of selected sessions.
-      const sources=new Set(shown.keys());
-      const key=createHash('sha256').update(JSON.stringify([sourceIdentity,[...sources].sort()])).digest('base64url'),previous=self.decode(request.sourceWork.cursor);
+      const sources=shown;
+      let scratch=256;for(const id of sources.keys())scratch+=128+id.length*4;
+      reserve(scratch);let key:string;
+      try{key=createHash('sha256').update(JSON.stringify([sourceIdentity,[...sources.keys()].sort()])).digest('base64url');}
+      finally{release(scratch);}
+      const previous=self.decode(request.sourceWork.cursor);
       const delta=previous?.identity===key&&previous.revision>=self.workFloor&&previous.revision<=revision&&range.from>=previous.from;
       const patch=frontier(delta?previous:null,self.workChanges,true),cursor=self.encode({identity:key,revision,from:patch.coveredFrom,cut:patch.coveredTo});
       return {sources,delta,patch,cursor};
@@ -349,9 +353,14 @@ export class PeriodReader {
       if(sourcePlan){
         const {sources,delta,patch,cursor}=sourcePlan;
         const part=yield*section((function*(){
-          const curves=yield*fullSourceCurves({from:patch.from,to:patch.to}),known=sourceWorkFrom(work.ensureAccess!());
-          const value=sourceWorkTape(curves,patch.coveredFrom,patch.coveredTo,new Map([...sources].map(id=>[id,known[id]??null])),reserve,release);
-          return {...value,...(delta?{sources:value.sources.filter(source=>source.blocks.length)}:{}),cursor,replaceFrom:patch.from,replaceTo:patch.to};
+          const curves=yield*fullSourceCurves({from:patch.from,to:patch.to}),access=work.ensureAccess!();
+          const scratch=256+access.devices.size*128+sources.size*512;reserve(scratch);
+          try{
+            const known=sourceWorkFrom(access),directory=new Map<string,number|null>();
+            for(const id of sources.keys())directory.set(id,known[id]??null);
+            const value=sourceWorkTape(curves,patch.coveredFrom,patch.coveredTo,directory,reserve,release);
+            return {...value,...(delta?{sources:value.sources.filter(source=>source.blocks.length)}:{}),cursor,replaceFrom:patch.from,replaceTo:patch.to};
+          }finally{release(scratch);}
         })());
         response.sourceWork=delta&&part.state==='complete'?{state:'delta',basis,value:part.value}:part;
       }

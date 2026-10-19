@@ -138,12 +138,12 @@ export function mergeSourceWorkTape(before:SourceWorkTape,patch:SourceWorkTape,r
     sourceWorkCurves(patch,memory.add,undefined,memory.drop);memory.drop(memory.bytes);
     const from=patch.from,cut=patch.cut,replaceFrom=patch.replaceFrom??from,replaceTo=patch.replaceTo??cut;
     memory.add(256);const patterns:number[][]=[],dictionary=new Map<string,number>(),sources:SourceWorkTape['sources']=[],references=new Map<readonly number[],number>();
-    const pattern=(values:number[])=>{
-      let id=references.get(values);if(id!==undefined)return id;
+    const pattern=(values:number[],shared:boolean)=>{
+      let id=shared?references.get(values):undefined;if(id!==undefined)return id;
       const keyBytes=64+values.length*64;memory.add(keyBytes);const key=values.join(',');id=dictionary.get(key);
       if(id===undefined){memory.add(160+values.length*32);id=patterns.length;dictionary.set(key,id);patterns.push(values);memory.drop(keyBytes-(64+key.length*2));}
       else memory.drop(keyBytes);
-      memory.add(64);references.set(values,id);return id;
+      if(shared){memory.add(64);references.set(values,id);}return id;
     };
     const incoming=new Map<string,SourceWorkTape['sources'][number]>();
     for(const row of patch.sources){memory.add(64);incoming.set(row.id,row);}
@@ -173,7 +173,7 @@ export function mergeSourceWorkTape(before:SourceWorkTape,patch:SourceWorkTape,r
           const arrays=128+changes.size*128;memory.add(arrays);scratch+=arrays;
           values=[...changes].filter(([,delta])=>delta!==0).sort(([a],[b])=>a-b).flat();
         }
-        if(values?.length){const id=pattern(values);memory.add(32);blocks.push(hour,id);}
+        if(values?.length){const id=pattern(values,!scratch);memory.add(32);blocks.push(hour,id);}
         memory.drop(scratch);
       }
       sources.push({id:row.id,knownFrom:row.knownFrom,blocks});
