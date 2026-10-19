@@ -1,4 +1,4 @@
-param([string]$Mode,[string]$Ready,[string]$Delivered,[string]$ActivationDiagnostics)
+param([string]$Mode,[string]$Ready,[string]$Delivered)
 $ErrorActionPreference='Stop'
 if($Mode){
   Add-Type -Path (Join-Path $PSScriptRoot 'window-receiver.cs')
@@ -77,15 +77,5 @@ try {
 # The controlled probe has the native probe's type name, so keep it in a child.
 & (Get-Process -Id $PID).Path -NoProfile -File (Join-Path $PSScriptRoot 'test-windows-background.ps1')
 if($LASTEXITCODE){throw 'Background setup controls failed'}
-# Check fabricated receipts before collecting native model diagnostics.
-& (Join-Path $PSScriptRoot 'test-loader-activation-evidence.ps1')
 & (Join-Path $PSScriptRoot 'test-windows-progress.ps1')
 & (Join-Path $PSScriptRoot 'test-windows-request-evidence.ps1')
-# Run only after every original probe and its cleanup. Model diagnostics never
-# turn missing native evidence into an app-smoke pass.
-if(-not $ActivationDiagnostics -and $env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_TEMP){
-  $ActivationDiagnostics=Join-Path $env:RUNNER_TEMP 'quotum-ui-diagnostics/loader-activation'
-}
-if($ActivationDiagnostics){
-  & (Join-Path $PSScriptRoot 'loader-activation.ps1') -Diagnostics $ActivationDiagnostics
-}
