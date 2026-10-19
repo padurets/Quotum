@@ -1,5 +1,6 @@
 import type {HistoryReply} from '../../server/domain/history';
-import {PERIOD_SCOPES,type PeriodScope,type HistoryQuery,type PeriodRequest,type PeriodReply} from '../../server/domain/periodRead';
+import {PERIOD_BODY_BYTES,PERIOD_SCOPES,type PeriodScope,type HistoryQuery,type PeriodRequest,type PeriodReply} from '../../server/domain/periodRead';
+import {executableWorkFilters,jsonBytes} from '../../server/domain/dataFilters';
 import {ApiError} from './http';
 import {expandPeriod,type PeriodWireReply} from '../../server/domain/periodWire';
 import type {HistoryPool,HistoryMember} from './historyPool';
@@ -81,12 +82,14 @@ export class PeriodTransport implements HistoryMember {
       }
     }
     if(body.sourceWork&&!body.quota&&body.budget?.work!=='1')delete body.sourceWork;
+    if(!body.quota&&!body.sessions&&body.budget?.work!=='1')delete body.workFilter;
     const appliedIntent={...intent,request:body};
     const resetEpoch=this.resetEpoch;
     const start=()=>{
       if(flight.controller.signal.aborted)return;
       if(extras&&!this.current(intent)&&!this.resourcesCurrent(intent)){this.abort(flight);this.schedule();return;}
-      this.send(intent.board,body,flight.controller.signal,bytes=>this.pool.reserve(flight,bytes)).then(async reply=>{
+      const response=jsonBytes(body)>PERIOD_BODY_BYTES||body.workFilter&&(body.quota||body.sessions||body.budget?.work==='1')&&!executableWorkFilters(body.workFilter)?Promise.reject(new ApiError(413,'history_limit')):this.send(intent.board,body,flight.controller.signal,bytes=>this.pool.reserve(flight,bytes));
+      response.then(async reply=>{
         if(flight.controller.signal.aborted)return;
         // A→B→A is three generations. Equal target text does not revive the first response.
         const current=this.intent();
@@ -125,7 +128,7 @@ export class PeriodTransport implements HistoryMember {
         if(error instanceof ApiError&&[401,403,404].includes(error.status)&&this.current(intent))this.accessLost();
         if(extras){if(!deferredBaseline)this.failed=key;if(baseline&&this.baselineKey===key)for(const part of [...PERIOD_SCOPES,'values','sessions','facets','sourceWork'] as const)if(body[part])this.baselineParts.add(part);}
         for(const demand of demands)demand.reject(error);
-        if(extras){const current=this.intent();if(current?.generation===intent.generation&&current.revision===intent.revision){const section={state:'error' as const,error:error instanceof ApiError&&error.code==='history_limit'?'history_limit' as const:'unavailable' as const};this.receive({basis:{run:'',revision:'',evaluatedAt:intent.request.evaluatedAt,evidenceCut:0,range:{from:0,to:0}},...Object.fromEntries(PERIOD_SCOPES.filter(scope=>body[scope]).map(scope=>[scope,section])),...(body.values?{values:section}:{}),...(body.sessions?{sessions:section}:{})},appliedIntent);}}
+        if(extras){const current=this.intent();if(current?.generation===intent.generation&&current.revision===intent.revision){const section={state:'error' as const,error:error instanceof ApiError&&error.code==='history_limit'?'history_limit' as const:'unavailable' as const};this.receive({basis:{run:'',revision:'',evaluatedAt:intent.request.evaluatedAt,evidenceCut:0,range:{from:0,to:0}},...Object.fromEntries(PERIOD_SCOPES.filter(scope=>body[scope]).map(scope=>[scope,section])),...(body.values?{values:section}:{}),...(body.sessions?{sessions:section}:{}),...(body.facets?{facets:section}:{}),...(body.sourceWork?{sourceWork:section}:{})},appliedIntent);}}
       })
         .finally(()=>{if(flight.controller.signal.aborted)for(const demand of demands)demand.reject(aborted());this.pool.release(flight);this.flights.delete(flight);if(resetEpoch===this.resetEpoch)this.schedule();});
     };

@@ -192,7 +192,16 @@ invalid references, duplicate families and invalid units are rejected.
 
 The transaction compares both revision and authority before merging. Untouched
 families remain exact. Changed families preserve dormant explicit membership;
-mode changes re-encode its boolean meaning. Explicit decisions apply last. Missing
+mode changes retain its boolean meaning, including a decision that coincides with
+the new default. Private storage uses `{filters, retained}` with scoped
+`{family,ref,included,unit?}` decisions for those otherwise unrepresentable rules;
+the whole wrapper fits 256 KiB. Existing plain payloads remain readable. Unit scope
+is restricted to an existing legacy wallet/funds branch. A reset clears that family's
+ledger as well as its ordinary and legacy rules. Authorized replacement follows
+the submitted visible membership; unavailable decisions survive it. The private
+ledger never enters a public envelope or read predicate. Its unavailable projects
+participate in the authority fingerprint, and unavailable counts deduplicate references
+across ordinary rules, legacy branches and the ledger. Explicit decisions apply last. Missing
 preconditions return `428 filters_reload_required`; malformed input returns
 `400 invalid_request`; stale revision returns `409 filters_conflict`; changed access
 returns `409 filters_context_changed`. Both conflicts include the current authorized
@@ -205,8 +214,13 @@ The common filter row exposes Resources, Projects, Devices and Clients to every
 reader. Current selection and dirty drafts belong to one user, board and browser
 tab. Foreign saves update the Restore baseline without replacing that active view.
 An owner saves opening defaults explicitly with the 26 px Save icon; Restore uses
-the latest acknowledged defaults. Edits made while Save is in flight stay dirty.
-Family All/Automatic and Clear affect only that family's data selection.
+the latest acknowledged defaults. Edits made while Save is in flight stay dirty,
+including Restore. A late Save cannot revert a newer accepted authority basis.
+Tab drafts retain the validated origin projection; authority-only regrant rebases
+untouched ordinary and legacy unit rules after reload. Explicit reset, checkbox and
+materialization intents remain dirty even when the visible projection equals saved.
+The adjacent cross shows all for its family; Resources resets sources, windows,
+wallets and funds atomically.
 
 Snapshots and board frames carry only `filtersRevision` and `filtersAuthority`.
 A separate `filters` frame carries the projected envelope, after its snapshot or
@@ -220,9 +234,15 @@ Compact uses saved defaults. Native attention also uses the saved source/window
 mask and its existing hidden-card admission, rechecked at the final delivery sink.
 
 Canonical filters have a 256 KiB UTF-8 ceiling. The merge request and projected
-envelope have a 272 KiB ceiling. A new saved work predicate must also fit the existing
-76 KiB period request and 80 KiB filtered detail envelope, including reserved cursor
+envelope have a 272 KiB ceiling. A new saved work predicate must also fit a minimal
+76 KiB work-only template and 80 KiB filtered detail envelope, including reserved cursor
 space; otherwise Save returns `413 filters_limit` without adoption or mutation.
+The full composite period body has its separate 256 KiB limit. Runtime uses the same
+executable-predicate check as Save. Inherited oversized intent stays exact with
+`filters_limit`; metadata-valid decreasing local edits may proceed while still over
+the work/detail limits, so several family resets can restore admission. A new edit
+cannot turn an executable predicate into an oversized one. Restore also accepts
+oversized saved intent exactly. Selected work is not requested until it is executable.
 References express selection intent, never authority: every read still checks
 membership, source grants, device admission and financial consent.
 
@@ -591,7 +611,7 @@ reset leaving the history) goes out when it does.
 `POST /api/boards/:board/period` is a read-only, authenticated, origin-checked operation.
 The response is JSON with `Cache-Control: no-store`. Board access and visible source
 capabilities are checked on every request; a cursor grants no additional access.
-The body is at most 76 KiB:
+The body is at most 256 KiB:
 
 ```ts
 {
@@ -637,6 +657,11 @@ Preparation may yield to other requests. The hub rechecks authority and relevant
 evidence before completing it; a conflicting change restarts the whole read once.
 Repeated changes return `503 unavailable`, with no mixed or partially published answer.
 Disconnecting the reader cancels its queued or active preparation.
+Parsed waiting bodies and a canonical-copy allowance are charged before joining the
+serial preparation queue, under the same 32 MiB history reservation as preparation.
+Details also retain and charge their original input before deduplication, through
+final cursor revalidation. Completion, failure, cancellation and restart release
+these reservations. Queue pressure may honestly exhaust preparation capacity.
 Each section is either
 `{state:'complete', basis, value}` or
 `{state:'error', error:'history_limit'|'history_range_invalid'|'unavailable'}`.
@@ -870,8 +895,11 @@ compaction. Session and detail cursor identity includes the canonical predicate;
 a mismatched detail predicate returns `400 history_range_invalid`.
 `facets` returns bounded projects (including null), public devices with their names,
 clients, and a `funding` list containing `unknown` and/or `notProvided` only when
-those public funding categories occur in the unfiltered authorized period or current
-roster. The selected cohort does not shrink these choices.
+those public funding categories occur in the unfiltered authorized period, or in the
+current roster for live selection. A fixed period excludes current-only roster facts.
+The selected cohort does not shrink these choices. The browser charges facets before
+adoption and retains them under its shared history budget; work-authority revocation
+invalidates them even while their controls are closed.
 
 One authorized raw work read supplies the selected trace and independent
 source-wide curves. Live requests for quota work or budget `work:'1'` may request

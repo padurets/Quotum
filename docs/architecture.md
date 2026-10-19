@@ -1420,7 +1420,7 @@ and its limits.
   needs is measured, never stored), names and colours
   given to cards, the hidden widgets (and those
   off by default, the list of agents, turned on), the columns hidden in a widget's table,
-  the agents' and the limits' (and those off by default turned on), the windows hidden inside cards and the spending
+  the agents' and the limits' (and those off by default turned on), and the spending
   plans, or that a card has none. Agent sessions and activity include admitted device
   work independently of card visibility or subscription sharing.
   It is stored once per board, like a dashboard in Grafana: the owner arranges it and
@@ -1584,13 +1584,27 @@ Separate stream configuration frames carry the authorized filter projection;
 snapshots carry only matching revision/authority references.
 The period coordinator applies work predicates to authorized intervals before
 building session, activity or direct-hour indexes. Facets come from the unfiltered
-period and current roster. One raw read also supplies independent source-wide
+period, adding the current roster only for a live period. One raw read also supplies independent source-wide
 curves for supplier rates and forecasts, transported as a source-only live sweep
 or compact fixed summary. Work-filter changes retire selected indexes and details,
 while source evidence retains its own cursor, cache identity and generation.
-Canonical defaults fit 256 KiB, their merge/projection envelopes 272 KiB, period
-requests 76 KiB and details 80 KiB. An inherited oversized predicate remains
-recoverable in the common controls without an oversized work request.
+The private storage wrapper keeps boolean decisions that coincide with a changed
+rule's default; repeated include/exclude or wallet auto/only transitions cannot
+forget a dormant exclusion. Its filters and retained decisions together fit
+256 KiB. Public projections disclose no unavailable references or private ledger.
+Per-unit migration branches retain their own decisions until materialization or reset.
+Dirty tab drafts retain their origin projection for authority-only rebase after reload;
+reset intent stays dirty even when the visible projection is unchanged. Restore
+creates a new edit boundary that a pending Save cannot overwrite.
+Canonical defaults fit 256 KiB and their merge/projection envelopes 272 KiB. Full
+period requests fit 256 KiB; Save and runtime share a 76 KiB minimal work template
+and 80 KiB detail limit. The transport checks the final encoded body after inserting
+evidence and metadata. Native-only reads omit an unused work predicate; work-sensitive
+reads preserve it in full. An inherited oversized predicate remains exact and
+recoverable through successive decreasing local edits, without an oversized work
+request. Parsed queued input, its canonical allowance and prepared membership sets
+share the existing 32 MiB server reservation; retained and staged facets share the
+browser's 15 MiB history pool. Work authority changes retire closed-menu facets too.
 The filter button forms its own group after the board controls. A small dot marks a
 non-default data selection or historical range, including while the row is hidden.
 The row starts closed and remembers its visibility in the reader's browser.

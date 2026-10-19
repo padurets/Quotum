@@ -218,8 +218,9 @@ quotas in credits, unknown resets, exhausted and closed allowances, partial and
 unsupported readings, and private access failures. The other catalogue cards remain
 available through Add widget.
 `DEV_SET=analytics DEV_STILL=true make dev` shows native quotas, z.ai, OpenRouter and DeepSeek with the quota and budget analytics and the separate subscription-funds chart.
-`DEV_SET=filters DEV_STILL=true make dev` opens a shared board with an empty saved
-project selection beside retained resource measurements. Sign in as Ana to save
+`DEV_SET=filters DEV_STILL=true make dev` opens a populated mixed-resource board and
+a separate board with an empty saved project selection beside retained resource
+measurements. Sign in as Ana to save
 opening defaults, or Ben to explore current filters and Restore without Save.
 `DEV_SET=links DEV_STILL=true make dev` shows temporal client links, suggestions with
 their exact free intervals, inactive targets, account disagreements, spending per

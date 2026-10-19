@@ -8,6 +8,40 @@ import {workHours} from '../lib/format';
 import {HISTORY_BYTES_PER_MEASUREMENT} from '../../bench/budget';
 import {PeriodAccounting} from '../../server/domain/periodAccounting';
 
+test('a shifted retained fixed period never restores rows from a previous work predicate',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({fixed:true});
+  try{
+    publishDataFilters(defaultFilters());h.period.changed();await flush();assert.equal(h.period.get().rows.length,1);
+    const empty=defaultFilters();empty.projects={mode:'include',values:[]};publishDataFilters(empty);h.period.changed();await flush();assert.equal(h.period.get().rows.length,0);
+    h.selectRange({from:NOW-3_600_000-1,to:NOW-1});assert.equal(h.period.get().rows.length,0);await flush();assert.equal(h.period.get().rows.length,0);
+    assert.ok(h.requests.at(-1)?.workFilter);assert.deepEqual(h.requests.at(-1)?.workFilter?.projects,empty.projects);
+  }finally{publishDataFilters(null,false);await h.close();}
+});
+
+test('revocation retires cached facets while closed and reopening reads the authorized universe',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture();
+  try{
+    const stop=h.period.demandFacets();await flush();assert.ok(h.period.getFacets().value.projects.includes('Work project'));stop();h.requests.length=0;
+    let published=0;const unlisten=h.period.subscribeFacets(()=>{published++;});h.remove();
+    assert.equal(h.period.getFacets().value,null);assert.ok(published>0);await flush();
+    assert.ok(h.requests.every(request=>!request.facets));const close=h.period.demandFacets();await flush();
+    assert.deepEqual(h.period.getFacets().value.projects,[]);close();unlisten();
+  }finally{await h.close();}
+});
+
+test('facets are charged before adoption and retained in the same history pool',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture();let pinned=0;
+  try{
+    const baseline=h.pool.estimatedBytes,intent=h.period.intent(),basis=h.period.get().basis;
+    const value={projects:Array.from({length:10000},(_,i)=>`${i}`.padStart(100,'p')),devices:[],clients:[],funding:[]};
+    await h.period.receive({basis,facets:{state:'complete',basis,value}},intent);
+    assert.equal(h.period.getFacets().value,value);assert.ok(h.pool.estimatedBytes>baseline+3_000_000);
+    pinned=h.pool.budget-h.pool.estimatedBytes-1024;h.pool.register({get estimatedBytes(){return pinned;},evictionCandidates:()=>[]});
+    await h.period.receive({basis,facets:{state:'complete',basis,value:{...value,projects:[...value.projects,'another']}}},intent);
+    assert.equal(h.period.getFacets().value,null);assert.equal(h.period.getFacets().error,'history_limit');assert.ok(h.pool.estimatedBytes<=h.pool.budget);
+  }finally{pinned=0;await h.close();}
+});
+
 test('changing filters while the selected baseline waits retires each generation and retains supplier evidence',async t=>{
   t.mock.method(Date,'now',()=>NOW);const h=await fixture();
   try{

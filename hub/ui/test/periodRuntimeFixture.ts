@@ -51,6 +51,7 @@ export const flush=async()=>{for(let i=0;i<300;i++)await Promise.resolve();};
 
 /** Actual producer, wire JSON boundary, page reducer, transport and bounded server reader. */
 export async function fixture({personal=false,ownerDevice=false,transportLive=false,privateWork=false,unknown=false,current=false,stable=true,fixed=false,tableOnly=false,periodName="1h",creditFrom=NOW-3*M,creditTo=NOW-2*M,clocked=false,sessionMs=24*H}={}) {
+  let selectedRange=fixed?{from:NOW-H,to:NOW}:null;
   const start=NOW-Math.max(3*H,periodOf(periodName).ms+H);
   const store=new Store(':memory:',start),directory=new Directory(store.db);
   const alice=directory.createUser('a@example.com','Alice','unused',start),bob=directory.createUser('b@example.com','Bob','unused',start);
@@ -95,13 +96,13 @@ export async function fixture({personal=false,ownerDevice=false,transportLive=fa
     fetchPeriod:async(_board:string,body:PeriodRequest)=>{requests.push(body);const reply=expandPeriod(JSON.parse(reader.read(board,alice.id,JSON.parse(JSON.stringify(body)))));const pending=wait;wait=null;await pending;return reply;},
     periodTextChangesAt,page,pan,preparations:()=>preparer,prepareAsync:(owner:object,work:Parameters<typeof drain>[0],valid:()=>boolean)=>prepareAsync(owner,work,valid,preparer),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,
     packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,shifted,hasPeriodValue,periodValueAt,empty:()=>({value:null,basis:null,loading:false,error:null}),sameJson,
-    timeRange:()=>fixed?{from:NOW-H,to:NOW}:null,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
+    timeRange:()=>selectedRange,prefs:()=>settings,periodOf,cellOf,moneyReadSelection,subscriptionSelection,PERIOD_SCOPES,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,ACTIVITY,AGENTS,widgetVisible,noSessions:[],noValue:{}};
   runInNewContext(ts.transpileModule(code.slice(code.indexOf('class BoardPeriod'),code.indexOf('export const boardPeriod')).replace('class BoardPeriod','export class BoardPeriod'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod();pan.onPhase(()=>period.refreshWorkClock());page.listen((event,state)=>period.changed(event,state));period.activate(true);await flush();
   assert.equal(period.get().error,null);assert.equal(period.get().rows.length,1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
   const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;timers.delete(next[0]);next[1].run();events.flush();}now=at;if(!clocked)period.tick();};
   const jump=(at:number)=>{now=at;for(const [token,timer] of [...timers])if(timer.at<=at){timers.delete(token);timer.run();}events.flush();if(clocked)pageClock.wakeDue();else period.tick();};
-  return {hub,device,owner,advance,jump,pan,clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
+  return {hub,device,owner,advance,jump,pan,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
     report:(working=false,at=NOW)=>{now=at;hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(at).toISOString(),sessions:[{provider:'codex',...(funding?{account:(privateWork?'b':'a').repeat(24)}:{}),sessionId:stable?'c'.repeat(32):null,origin:'terminal',project:'Work project',folder:'Private folder',startedAt:new Date(start).toISOString(),lastWorkedAt:new Date(NOW-2*M).toISOString(),working}]},at);events.flush();},
     endIdle:()=>{hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(NOW).toISOString(),sessions:[]},NOW);events.flush();},
     event:(event:HubEvent)=>page.dispatch({type:'hub',event}),

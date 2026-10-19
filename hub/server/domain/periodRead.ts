@@ -5,6 +5,7 @@ import type {WorkTrace, WorkDelta} from './periodWork.js';
 import type {WorkFilter} from './dataFilters.js';
 
 export const PERIOD_SCOPES = ['quota','budget','funds'] as const;
+export const PERIOD_BODY_BYTES = 256 * 1024;
 export type PeriodScope = typeof PERIOD_SCOPES[number];
 export type WorkFacets = {projects:(string|null)[];devices:{id:string;name:string}[];clients:(string|null)[];funding:('unknown'|'notProvided')[]};
 

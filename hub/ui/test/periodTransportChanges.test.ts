@@ -1,6 +1,7 @@
 import * as filterModelBindings from '../../server/domain/dataFilters';
 import * as filterRuntimeBindings from '../lib/filterSelection';
 import * as filterCurveBindings from '../../server/domain/periodCurves';
+import {defaultFilters,workFilter} from '../../server/domain/dataFilters';
 import * as retention from '../../server/domain/periodRetention';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,6 +31,31 @@ import {EMPTY_VIEW} from '../../server/domain/view';
 import {AGENTS,ACTIVITY,QUOTA_WIDGETS,BUDGET_WIDGETS,SUBSCRIPTION_FUNDS,widgetVisible} from '../../server/domain/widgets';
 
 const NOW=5_000_000;
+
+test('final transport admission fails requested extras without sending, losing the predicate, or retrying unchanged intent',async()=>{
+  const pool=new HistoryPool(),replies:PeriodReply[]=[];let sent=0;
+  const request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:3_600_000},evaluatedAt:3_600_000,workFilter:workFilter(defaultFilters()),values:Array.from({length:2000},(_,i)=>'s'.repeat(255)+i),sessions:{},facets:true};
+  const intent={board:'board',generation:1,revision:1,request};
+  const transport=new PeriodTransport(pool,()=>intent,reply=>{replies.push(reply);},async()=>{sent++;throw new Error('unexpected HTTP');});
+  try{
+    transport.change();await flush();assert.equal(sent,0);assert.equal(replies.length,1);
+    for(const key of ['values','sessions','facets'] as const)assert.deepEqual(replies[0][key],{state:'error',error:'history_limit'});
+    transport.change();await flush();assert.equal(replies.length,1);assert.ok(request.workFilter);assert.equal(pool.activeFlights,0);assert.equal(pool.estimatedBytes,0);
+  }finally{transport.reset();}
+});
+
+test('resource-only transport omits an unused oversized predicate while work reads retain their admission boundary',async()=>{
+  const pool=new HistoryPool(),sent:PeriodRequest[]=[],replies:PeriodReply[]=[];
+  const filters=defaultFilters();filters.projects={mode:'include',values:Array.from({length:1000},(_,i)=>`${i}`.padStart(83,'p'))};
+  let request:PeriodRequest={version:1,selection:{mode:'range',from:0,to:NOW},evaluatedAt:NOW,workFilter:workFilter(filters),values:['A'],facets:true};
+  let generation=0;
+  const transport=new PeriodTransport(pool,()=>({board:'b',generation,revision:generation,request}),reply=>{replies.push(reply);},async(_board,body)=>{sent.push(body);return {basis:{run:'r',revision:'1',evaluatedAt:NOW,evidenceCut:NOW,range:{from:0,to:NOW}}};});
+  try{
+    transport.change();await flush();assert.equal(sent.length,1);assert.equal(sent[0].workFilter,undefined);assert.ok(request.workFilter);
+    request={...request,values:undefined,facets:undefined,sessions:{}};generation++;transport.change();await flush();
+    assert.equal(sent.length,1);assert.deepEqual(replies.at(-1)?.sessions,{state:'error',error:'history_limit'});assert.equal(pool.activeFlights,0);
+  }finally{transport.reset();}
+});
 const flush=async()=>{for(let i=0;i<180;i++)await Promise.resolve();};
 type Coordinator={activate(active:boolean):void;changed():void;retry():void;retryHistory(scope:PeriodScope):void;transport:PeriodTransport;get():{value:WorkTrace|null;loading:boolean;error:string|null};getValue(id:string):{loading:boolean;error:string|null};projectionState(history:Pick<History,'range'>,scope:PeriodScope):{ready:boolean;error?:string}};
 type Attempt={body:PeriodRequest;signal:AbortSignal};

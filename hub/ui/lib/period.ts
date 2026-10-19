@@ -1,5 +1,5 @@
 import {effectiveFilters,filtersReady,onDataFilters} from './filterSelection';
-import {matchesSource,workFilter,jsonBytes} from '../../server/domain/dataFilters';
+import {executableWorkFilters,matchesSource,workFilter} from '../../server/domain/dataFilters';
 import {mergeSourceWorkTape,sameSourceWork,sourceWorkCurves,type SourceWorkTape,type SourceWorkCurves} from '../../server/domain/periodCurves';
 import {moneyReadSelection} from './moneySelection';
 import {subscriptionSelection} from './subscription';
@@ -76,7 +76,9 @@ class BoardPeriod {
   private readonly facetListeners=new Set<()=>void>();
   getFacets=()=>this.facetState;
   subscribeFacets=(listener:()=>void)=>{this.facetListeners.add(listener);return()=>{this.facetListeners.delete(listener);};};
-  demandFacets=()=>{this.facetsDemand++;if(!this.facetState.value){this.facetsNeeded=true;this.facetState={...this.facetState,loading:true};this.revision++;this.transport.change();}return()=>{this.facetsDemand--;};};
+  demandFacets=()=>{this.facetsDemand++;if(!this.facetState.value){this.facetsNeeded=true;this.facetState={...this.facetState,loading:true};for(const listener of this.facetListeners)listener();this.revision++;this.transport.change();}return()=>{this.facetsDemand--;};};
+  private resetFacets(){this.facetState={value:null,loading:this.facetsDemand>0,error:null};this.facetsNeeded=this.facetsDemand>0;for(const listener of this.facetListeners)listener();}
+  private facetBytes(value=this.facetState.value){return value?256+JSON.stringify(value).length*3+value.projects.length*32+value.devices.length*96+value.clients.length*32+value.funding.length*32:0;}
   private wantsWork=false;
   private workNeeded=false;
   private liveEvidence=false;
@@ -117,9 +119,9 @@ class BoardPeriod {
     }
     const range=evaluatedRange(this.selection,hubNow());
     if(!this.active||!page.get().board||this.workNeeded||this.work.loading||this.work.error||this.valuesNeeded||[...this.values.values()].some(value=>value.loading||value.error)||PERIOD_SCOPES.some(scope=>this.projectionErrors[scope]||this.scopeKeys[scope]&&this.needsTape(scope,this.scopeKeys[scope]!,range)))return;
-    const tapes=new Map([...this.tapes].map(([scope,tape])=>[scope,{...tape}])),work=this.work,index=this.index,activity=this.activity,workSelection=this.workSelection,workRangeKey=this.workRangeKey,cursor=this.cursor,liveEvidence=this.liveEvidence,values=new Map(this.values),cursors=this.transport.evidence(),bytes=this.bytes;
+    const tapes=new Map([...this.tapes].map(([scope,tape])=>[scope,{...tape}])),work=this.work,index=this.index,activity=this.activity,workSelection=this.workSelection,workRangeKey=this.workRangeKey,cursor=this.cursor,liveEvidence=this.liveEvidence,values=new Map(this.values),cursors=this.transport.evidence(),bytes=this.bytes-this.facetBytes();
     const sourceTape=this.sourceTape,sourceCurves=this.sourceCurves,sourceCursor=this.sourceCursor;
-    const context=JSON.stringify([this.authority,this.scopeKeys]);
+    const context=JSON.stringify([this.authority,this.scopeKeys,this.filterKey]);
     const workProofEpoch=this.workProofEpoch,valuesProofEpoch=this.valuesProofEpoch,reusable=workProofEpoch===this.proofEpoch&&(!values.size||valuesProofEpoch===this.proofEpoch)&&[...tapes.values()].every(t=>t.proofEpoch===this.proofEpoch);
     // Proofs and alternative states are immutable and shared by shifted summaries.
     // Summaries exclude shared shift proofs; a whole value sequence bounds its largest replay.
@@ -127,7 +129,7 @@ class BoardPeriod {
       +[...tapes.values()].reduce((sum,{tape})=>sum+JSON.stringify({...tape,fixed:tape.fixed?{...tape.fixed,shift:undefined}:undefined}).length*6,0)
       +JSON.stringify([...values.values()]).length*3;
     this.valueCache.delete(periodKey(this.selection));
-    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,this.scopeKeys])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,selection.to)),restore:selection=>{
+    this.retained.set(this.cacheKey,{bytes:bytes+this.cacheKey.length*2+context.length*2+256,copyBytes,at:hubNow(),fits:selection=>reusable&&selection.mode==='range'&&work.value?.fixed!==undefined&&canShift(work.value.fixed,selection)&&context===JSON.stringify([this.authority,this.scopeKeys,this.filterKey])&&[...tapes.values()].every(({tape})=>tape.fixed&&canShift(tape.fixed,selection))&&[...values.values()].every(v=>hasPeriodValue(v.value,selection.to)),restore:selection=>{
       this.workEvidence++;
       this.tapes.clear();for(const [scope,tape] of tapes)this.tapes.set(scope,tape);
       this.work=work;this.index=index;this.activity=activity;this.activityRetained=null;this.workSelection=workSelection;this.workRangeKey=workRangeKey;this.cursor=cursor;this.liveEvidence=liveEvidence;this.bytes=bytes;
@@ -280,20 +282,21 @@ class BoardPeriod {
   }
   private intent():PeriodIntent|null {
     const board=page.get().board;if(!board||!this.active||!filtersReady())return null;
-    const pending=!pan.get(),range=evaluatedRange(this.selection,hubNow()),queries=pending?this.queries(board,range):{};
-    for(const scope of PERIOD_SCOPES)if(queries[scope]&&(this.projectionErrors[scope]&&!this.dirtyScopes.has(scope)||!this.needsTape(scope,this.queryKey(queries[scope]!,scope),range)))delete queries[scope];
-    const filters=effectiveFilters();
+    const pending=!pan.get(),range=evaluatedRange(this.selection,hubNow()),queries=pending?this.queries(board,range):{},filters=effectiveFilters();
+    if(this.workLimit){delete queries.quota;if(queries.budget)queries.budget={...queries.budget,work:undefined};}
+    const sourceNeeded=!!filters&&this.selection.mode==='live'&&!this.sourceTape;
+    for(const scope of PERIOD_SCOPES)if(queries[scope]&&(this.projectionErrors[scope]&&!this.dirtyScopes.has(scope)||!this.needsTape(scope,this.queryKey(queries[scope]!,scope),range)&&!(sourceNeeded&&(scope==='quota'||queries[scope]?.work==='1'))))delete queries[scope];
     const request={version:1 as const,selection:this.selection,evaluatedAt:hubNow(),...queries,...(filters?{workFilter:workFilter(filters)}:{}),
       ...(pending&&this.valuesNeeded&&this.selection.mode==='range'&&this.sourceIds.length?{values:this.sourceIds}:{}),
       ...(pending&&this.wantsWork&&this.workNeeded?{sessions:{...(this.cursor?{cursor:this.cursor}:{})}}:{}),
       ...(pending&&this.facetsDemand>0&&this.facetsNeeded?{facets:true as const}:{}),
       ...(filters&&this.selection.mode==='live'&&(queries.quota||queries.budget?.work==='1')?{sourceWork:{...(this.sourceCursor?{cursor:this.sourceCursor}:{})}}:{})};
-    if(this.workLimit||jsonBytes(request)>76*1024){delete request.sessions;delete request.workFilter;}
     return {board:board.id,generation:this.generation,resourceGeneration:this.resourceGeneration,revision:this.revision,proofEpoch:this.proofEpoch,request};
   }
   private setValue(id:string,value:Reading<PeriodValues>){this.values.set(id,value);for(const listener of this.valueListeners.get(id)??[])listener();}
   private publishWork() {this.workState={...this.work,rows:this.workRows,evidence:this.workEvidence,...(this.workLimit?{loading:false,error:'filters_limit'}:{})};for(const listener of this.listeners)listener();}
   private retireWork() {
+    this.resetFacets();
     this.sourceEpoch++;
     this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;
     this.retained.clear();preparations()?.cancel(this.preparationOwner);
@@ -309,7 +312,7 @@ class BoardPeriod {
     this.measureBytes();clock.due(this.watch,null,hubNow());
   }
   private clear() {
-    this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;this.facetState={value:null,loading:false,error:null};this.facetsNeeded=this.facetsDemand>0;
+    this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;this.resetFacets();
     this.workEvidence++;this.retirementAt=Infinity;
     this.proofEpoch++;this.workProofEpoch=-1;this.valuesProofEpoch=-1;this.dirtyScopes.clear();
     this.retained.clear();this.cacheKey='';
@@ -328,10 +331,10 @@ class BoardPeriod {
     if(snapshot||!this.identity||event?.type==='hub'&&event.event.type==='history'&&event.event.data.workAuthority)this.workAuthority=board.workAuthority;
     const selected=timeRange(),selection:PeriodSelection=selected?{mode:'range',...selected}:{mode:'live',periodMs:periodOf(prefs().range).ms};
     const filters=effectiveFilters(),nextFilter=filters?JSON.stringify(workFilter(filters)):'';
-    const selectedChanged=nextFilter!==this.filterKey;this.filterKey=nextFilter;
+    const selectedChanged=nextFilter!==this.filterKey;
     const sources=board.lineup.filter(id=>!filters||matchesSource(filters,id));
     const queries=this.queries(board,evaluatedRange(selection,hubNow()));
-    this.workLimit=!!filters&&jsonBytes({version:1,selection,evaluatedAt:hubNow(),...queries,sessions:{cursor:'x'.repeat(2048)},sourceWork:{cursor:'x'.repeat(2048)},facets:true,workFilter:workFilter(filters)})>76*1024;
+    this.workLimit=!!filters&&!executableWorkFilters(filters);
     const wantsWork=!this.workLimit&&(sources.length>0||[AGENTS,ACTIVITY].some(id=>widgetVisible(board.view,id,board.lineup.length)));
     const scopeKeys=Object.fromEntries(Object.entries(queries).map(([scope,query])=>[scope,this.queryKey(query,scope as PeriodScope)]));
     const changedScopes=PERIOD_SCOPES.filter(scope=>scopeKeys[scope]!==this.scopeKeys[scope]);
@@ -343,6 +346,7 @@ class BoardPeriod {
     if(event?.type==='hub'&&['history','hello','snapshot','mine','lineup'].includes(event.event.type))this.retained.clear();
     const cacheKey=JSON.stringify([identity,scopeKeys,nextFilter]);
     if(cacheKey!==this.cacheKey){this.retainCurrent();this.cacheKey=cacheKey;}
+    this.filterKey=nextFilter;
     this.selection=selection;this.sourceIds=sources;this.wantsWork=wantsWork;this.scopeKeys=scopeKeys;
     if(changedWork)this.retireWork();
     if(selectedChanged){
@@ -353,7 +357,7 @@ class BoardPeriod {
       this.publishProjection(['quota','budget']);
     }
     if(identity!==this.identity) {
-      this.facetState={value:null,loading:this.facetsDemand>0,error:null};this.facetsNeeded=this.facetsDemand>0;
+      this.resetFacets();
       const oldBoard=this.identity?JSON.parse(this.identity)[0]:null;
       this.identity=identity;this.generation++;this.revision++;
       this.workEvidence++;this.retirementAt=Infinity;
@@ -470,6 +474,7 @@ class BoardPeriod {
     if(reply.sessions&&reply.sessions.state!=='error')try{charge('work',workBytes(reply.sessions.value,0));}catch(error){if(error!==limited)throw error;reply.sessions={state:'error',error:'history_limit'};}
     // Card states are adopted unchanged; only their reading wrappers are new.
     if(reply.values?.state==='complete')try{charge('values',JSON.stringify(reply.values.value).length*3+reply.values.value.length*768);}catch(error){if(error!==limited)throw error;reply.values={state:'error',error:'history_limit'};}
+    if(reply.facets?.state==='complete')try{charge('facets',this.facetBytes(reply.facets.value));}catch(error){if(error!==limited)throw error;reply.facets={state:'error',error:'history_limit'};}
     const priorWork=this.work.value,priorIndex=this.index,priorTapes=new Map(this.tapes);
     const previousSourceCurves=this.sourceCurves,previousSourceTape=this.sourceTape,sourceEpoch=this.sourceEpoch;
     let nextSourceTape=this.sourceTape,nextSourceCurves=previousSourceCurves,nextSourceCursor=this.sourceCursor;
@@ -636,7 +641,7 @@ class BoardPeriod {
   private measureBytes(){
     // Decoding scratch has gone; retain the tape and the actual shared typed
     // buffers, as for the selected work index, rather than its construction maps.
-    this.bytes=(this.sourceTape?JSON.stringify(this.sourceTape).length*3:0)+(this.sourceCurves?.bytes??0)+JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+(this.work.value?0:JSON.stringify(this.workRows).length*3)+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
+    this.bytes=this.facetBytes()+(this.sourceTape?JSON.stringify(this.sourceTape).length*3:0)+(this.sourceCurves?.bytes??0)+JSON.stringify([...this.values.values()]).length*3+workBytes(this.work.value,this.index?.curves.bytes)+(this.work.value?0:JSON.stringify(this.workRows).length*3)+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0)+[...this.tapes.values()].reduce((sum,t)=>sum+tapeBytes(t.tape)+t.accounting.bytes,0);
   }
   /** The current stream is authoritative even while an older analytical reply is being prepared. */
   private present(rows:WorkedSession[]) {

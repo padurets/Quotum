@@ -1,8 +1,7 @@
 import type {FastifyInstance} from 'fastify';
 import type {Guards,Hub} from '../api.js';
 import {FILTER_BODY_LIMIT,FILTER_BYTES,jsonBytes,parseFilterUpdate} from '../domain/dataFilters.js';
-import {mergeFilters,projectFilters} from '../domain/dataFilterMerge.js';
-import type {DataFilters} from '../domain/dataFilters.js';
+import {mergeStoredFilters,projectStoredFilters} from '../domain/dataFilterStorage.js';
 import {executableWorkFilters,filterContext,filterEnvelope} from '../dataFilters.js';
 
 export function dataFilterRoutes(app:FastifyInstance,hub:Hub,guards:Guards) {
@@ -22,13 +21,11 @@ export function dataFilterRoutes(app:FastifyInstance,hub:Hub,guards:Guards) {
       const board=access.board.id,context=filterContext(hub.store,board,hub.ingest),current=hub.directory.filtersState(board),envelope=filterEnvelope(hub.directory,hub.store,board,context);
       if(current.revision!==Number(match.slice(1,-1)))return reply.code(409).send({error:'filters_conflict',...envelope});
       if(context.authority!==update.authority)return reply.code(409).send({error:'filters_context_changed',...envelope});
-      const merged=mergeFilters(current.filters,update,context.allowed,context.automatic);
+      const merged=mergeStoredFilters(current,update,context.allowed,context.automatic);
       if(!merged)return reply.code(400).send({error:'invalid_request'});
-      if(!executableWorkFilters(filterEnvelopeFor(merged,context)))return reply.code(413).send({error:'filters_limit'});
-      hub.directory.saveFilters(board,merged,access.user.id,Date.now());
+      if(!executableWorkFilters(projectStoredFilters(merged,context.allowed).filters))return reply.code(413).send({error:'filters_limit'});
+      hub.directory.saveFilters(board,merged.filters,access.user.id,Date.now(),merged.retained);
       return reply.header('Cache-Control','no-store').send(filterEnvelope(hub.directory,hub.store,board,filterContext(hub.store,board,hub.ingest)));
     });
   });
 }
-
-const filterEnvelopeFor=(filters:DataFilters,context:ReturnType<typeof filterContext>)=>projectFilters(filters,context.allowed).filters;

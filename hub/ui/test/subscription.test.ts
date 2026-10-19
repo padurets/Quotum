@@ -12,8 +12,21 @@ import {QUOTA_IDS,type Meter} from '../../server/domain/meters';
 import type {Card,History,HistorySeries,Win} from '../lib/types';
 import {targetOf,type Chunk} from '../../server/domain/history';
 import {setLocale} from '../i18n';
+import {defaultFilters} from '../../server/domain/dataFilters';
+import {publishDataFilters} from '../lib/filterSelection';
 
 const M=60_000;
+
+test('canonical all source selection stays open to future grants while explicit include remains bounded',()=>{
+  const filters=defaultFilters();
+  try{
+    publishDataFilters(filters);assert.equal(subscriptionSelection([native],EMPTY_VIEW),undefined);
+    filters.sources={mode:'include',values:[{source:native.id}]};publishDataFilters({...filters});
+    assert.deepEqual(subscriptionSelection([native,{...native,id:'future'}],EMPTY_VIEW)?.sources,[native.id]);
+    filters.sources={mode:'include',values:[]};publishDataFilters({...filters});
+    assert.deepEqual(subscriptionSelection([native],EMPTY_VIEW)?.sources,[]);
+  }finally{publishDataFilters(null,false);}
+});
 const meter=(id:string,limit='2000000000',amount='800000000'):Meter=>({id,kind:'cap',unit:'credits:zai',amount,limit,at:0,resetAt:3*M,scope:'five_hour',minutes:300,label:null,stale:false,staleAfterMs:10*M});
 const five=meter(QUOTA_IDS[0]),week={...meter(QUOTA_IDS[1],'10000000000','2000000000'),scope:'week' as const,minutes:10080};
 const zai:Card&{title:string}={id:'zai:fixture',title:'Personal',provider:'zai',plan:'lite',windows:[],meters:[five,week],resets:null,owners:[],error:null,successAt:0,stale:false,staleAfterMs:10*M,measureIntervalMs:null};

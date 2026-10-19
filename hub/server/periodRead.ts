@@ -6,7 +6,7 @@ import {compactJSON, HistoryLimit, type HistoryTiles} from './history.js';
 import {periodDictionary} from './domain/periodWire.js';
 import {fail,readHistory,ReadError} from './historyRead.js';
 import {evaluatedRange,parsePeriod,type PeriodBasis,type PeriodSection} from './domain/period.js';
-import {PERIOD_SCOPES,type PeriodReply,type PeriodRequest} from './domain/periodRead.js';
+import {PERIOD_BODY_BYTES,PERIOD_SCOPES,type PeriodReply,type PeriodRequest} from './domain/periodRead.js';
 import type {HistoryScope,HistoryReply} from './domain/history.js';
 import {periodValues,prepareNearbyPeriodValues} from './periodValues.js';
 import {sharedWork,selectedWork,periodWork,preparePeriodWork} from './periodWork.js';
@@ -28,6 +28,21 @@ type Cursor = {identity:string;revision:number;from:number;cut:number};
 type Change = {revision:number;source:string;since:number;owner?:string;device?:string};
 const object=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const number=(v:unknown):v is number=>Number.isSafeInteger(v)&&(v as number)>=0;
+
+/** Retain the parsed body and its canonical copy under the shared ceiling while queued. */
+function inputBytes(raw:unknown) {
+  let bytes=1024;const pending=[raw];
+  while(pending.length){
+    const value=pending.pop();
+    if(typeof value==='string')bytes+=64+value.length*2;
+    else if(value&&typeof value==='object'){
+      bytes+=128;
+      if(Array.isArray(value)){bytes+=value.length*16;for(const part of value)pending.push(part);}
+      else for(const [key,part] of Object.entries(value)){bytes+=64+key.length*2;pending.push(part);}
+    }else bytes+=16;
+  }
+  return bytes*2;
+}
 
 /** A short journal proves delta frontiers. Falling behind it requires a bounded baseline. */
 export class PeriodReader {
@@ -87,10 +102,17 @@ export class PeriodReader {
     return this.detailRows(this.read(board,user,request),refs);
   }
   async detailsAsync(board:string,user:string,raw:unknown,signal?:AbortSignal):Promise<string> {
+    const input=this.history.reservation();
+    try{
+    // The original body survives the queued read for final cursor revalidation.
+    // Charge it before deduplication, including repeated refs and predicate values.
+    input.add(inputBytes(raw));
     const {request,refs}=this.detailRequest(board,user,raw);
     const json=await this.readAsync(board,user,request,signal);
     this.detailRequest(board,user,raw);
     return this.detailRows(json,refs);
+    }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}
+    finally{input.close();}
   }
   private detailRows(json:string,refs:Set<string>) {
     const reservation=this.history.reservation();
@@ -106,11 +128,15 @@ export class PeriodReader {
   }
   read(board:string,user:string,raw:unknown):string {return drain(this.prepareRead(board,user,raw));}
   async readAsync(board:string,user:string,raw:unknown,signal?:AbortSignal):Promise<string> {
+    const input=this.history.reservation();
+    try{input.add(inputBytes(raw));
     for(let attempt=0;;attempt++){
       let check=()=>{};
       try{return await this.preparation.run(()=>this.prepareRead(board,user,raw,guard=>{check=guard;}),signal,()=>check());}
       catch(error){if(!(error instanceof PeriodChanged))throw error;if(attempt===1)fail(503,'unavailable');}
     }
+    }catch(error){if(error instanceof HistoryLimit)fail(413,'history_limit');throw error;}
+    finally{input.close();}
   }
   private *prepareRead(board:string,user:string,raw:unknown,guard?:(check:()=>void)=>void):Preparation<string> {
     const self=this;
@@ -293,7 +319,7 @@ export class PeriodReader {
           if(!clients.has(client)){reserve(128+(client?.length??0)*2);clients.add(client);}
         };
         for(const row of work(range.from,cut)){add(row.project,row.device,row.rawContext?.deviceName??row.device,row.rawContext?.client??null,row.source,row.sourceStatus);yield;}
-        if(access){const live=self.hub.ingest.live.board(access,now);for(const row of live.unattributedSessions){add(row.project,row.device.id,row.device.name,row.clientId??null,null,row.sourceStatus);yield;}for(const [source,rows] of live.sessions)for(const row of rows){add(row.project,row.device.id,row.device.name,row.clientId??null,source);yield;}}
+        if(access&&selection.mode==='live'){const live=self.hub.ingest.live.board(access,now);for(const row of live.unattributedSessions){add(row.project,row.device.id,row.device.name,row.clientId??null,null,row.sourceStatus);yield;}for(const [source,rows] of live.sessions)for(const row of rows){add(row.project,row.device.id,row.device.name,row.clientId??null,source);yield;}}
         return {projects:[...projects].sort(),devices:[...devices].map(([id,name])=>({id,name})).sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id)),clients:[...clients].sort(),funding:[...funding].sort()};
       })());
       if(request.sourceWork&&selection.mode==='live'){
@@ -327,7 +353,7 @@ export class PeriodReader {
 export function periodRoutes(app:FastifyInstance,guards:Guards,reader:PeriodReader) {
   for(const [path,limit,read] of [
     ['/api/boards/:board/period/sessions',80*1024,reader.detailsAsync.bind(reader)],
-    ['/api/boards/:board/period',76*1024,reader.readAsync.bind(reader)],
+    ['/api/boards/:board/period',PERIOD_BODY_BYTES,reader.readAsync.bind(reader)],
   ] as const)app.post<{Params:{board:string}}>(path,{bodyLimit:limit},async(request,reply)=>{
     const access=guards.board(request,reply,request.params.board);if(!access)return reply;
     const controller=new AbortController(),abort=()=>controller.abort();

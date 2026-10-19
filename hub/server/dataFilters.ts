@@ -1,8 +1,8 @@
 import {createHash} from 'node:crypto';
 import type {Store} from './store/store.js';
 import type {Directory} from './store/directory.js';
-import {type DataFilters,type FilterAuthority,type FilterEnvelope,type MoneyRef} from './domain/dataFilters.js';
-import {projectFilters} from './domain/dataFilterMerge.js';
+import {type FilterAuthority,type FilterEnvelope,type MoneyRef} from './domain/dataFilters.js';
+import {parseStoredFilters,projectStoredFilters,storedProjectRefs} from './domain/dataFilterStorage.js';
 import {moneyFamily,providerOf,supportsQuota} from './domain/providers.js';
 import type {Ingest} from './ingest.js';
 
@@ -28,7 +28,8 @@ export function filterContext(store:Store,board:string,ingest?:Ingest,capturedAc
   const names=store.db.prepare('SELECT n.user_id,n.reported,n.name FROM project_names n WHERE n.user_id IN (SELECT user_id FROM devices WHERE id IN (SELECT value FROM json_each(?))) ORDER BY n.user_id,n.reported').all(devices);
   const labels=store.db.prepare('SELECT id,COALESCE(label,name) AS name FROM devices WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id').all(devices);
   const raw=store.db.prepare('SELECT payload FROM board_filters WHERE board_id=?').get(board);
-  const explicitProjects=raw?(JSON.parse(String(raw.payload)) as DataFilters).projects.values:[];
+  const stored=raw?parseStoredFilters(JSON.parse(String(raw.payload))):null;
+  const explicitProjects=stored?storedProjectRefs(stored):[];
   // Ordinary work credits and samples do not change this projection precondition.
   // Availability of saved dormant decisions does: a newly visible rule must not
   // disappear in a replacement based on the earlier projection.
@@ -38,8 +39,8 @@ export function filterContext(store:Store,board:string,ingest?:Ingest,capturedAc
   return {allowed,authority,automatic};
 }
 export function filterEnvelope(directory:Directory,store:Store,board:string,context=filterContext(store,board)):FilterEnvelope {
-  const {filters:raw,revision}=directory.filtersState(board);
-  return {...projectFilters(raw,context.allowed),revision,authority:context.authority};
+  const raw=directory.filtersState(board);
+  return {...projectStoredFilters(raw,context.allowed),revision:raw.revision,authority:context.authority};
 }
 
 export {executableWorkFilters} from './domain/dataFilters.js';

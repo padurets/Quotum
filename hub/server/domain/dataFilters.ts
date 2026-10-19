@@ -36,10 +36,11 @@ const project = (value:unknown):value is string|null => value===null||typeof val
 const client = (value:unknown):value is string|null => value===null||typeof value==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(value);
 const funding = (value:unknown):value is FundingRef => object(value)&&(Object.keys(value).length===1)&&
   (id(value.source)||value.status==='unknown'||value.status==='notProvided');
-const windowRef = (value:unknown):value is WindowRef => Array.isArray(value)&&value.length===2&&value.every(id);
+const windowRef = (value:unknown):value is WindowRef => Array.isArray(value)&&value.length===2&&id(value[0])&&typeof value[1]==='string'&&value[1].length>0&&[...value[1]].length<=120;
 const money = (value:unknown):value is MoneyRef => object(value)&&id(value.source)&&
   (value.kind==='balance'&&keys(value,['source','kind'])||value.kind==='keyCap'&&id(value.key)&&keys(value,['source','kind','key']));
 const validators:{[F in FilterFamily]:(value:unknown)=>value is FamilyRefs[F]} = {sources:funding,windows:windowRef,wallet:money,funds:id,projects:project,devices:id,clients:client};
+export const validFilterRef=(family:FilterFamily,ref:unknown):ref is FamilyRef=>validators[family](ref);
 
 /** Identities never include display currency or an object's incoming key order. */
 export function filterRefKey(value:FamilyRef):string {
@@ -111,6 +112,18 @@ export const workFilter = ({sources,projects,devices,clients}:WorkFilter):WorkFi
 export type FilterWork = {source:string|null;sourceStatus?:'notProvided';project:string|null;device:string;clientId?:string|null};
 export const matchesWork = (filters:WorkFilter,row:FilterWork) => matchesSource(filters,row.source,row.sourceStatus)&&matchesSelection(filters.projects,row.project)&&matchesSelection(filters.devices,row.device)&&matchesSelection(filters.clients,row.clientId==='unknown'?null:row.clientId??null);
 
+export function prepareWorkFilter(filters:WorkFilter,reserve:(bytes:number)=>void=()=>{}) {
+  function compile<T extends FamilyRef>(selection:Selection<T>) {
+    const included=selection.mode==='include';
+    if(!selection.values.length){reserve(64);return ()=>!included;}
+    reserve(128+selection.values.reduce((bytes,ref)=>bytes+128+filterRefKey(ref).length*2,0));
+    const keys=new Set(selection.values.map(filterRefKey));
+    return (value:T)=>keys.has(filterRefKey(value))===included;
+  }
+  const source=compile(filters.sources),project=compile(filters.projects),device=compile(filters.devices),client=compile(filters.clients);
+  return (row:FilterWork)=>source(row.source===null?{status:row.sourceStatus??'unknown'}:{source:row.source})&&project(row.project)&&device(row.device)&&client(row.clientId==='unknown'?null:row.clientId??null);
+}
+
 export type FilterAuthority = (family:FilterFamily,ref:FamilyRef,unit?:string)=>boolean;
 export type FilterEnvelope = {filters:DataFilters;revision:number;authority:string;unavailable:Record<FilterFamily,number>};
 export type FilterDecision = {[F in FilterFamily]:{family:F;ref:FamilyRefs[F];included:boolean}}[FilterFamily];
@@ -133,8 +146,9 @@ export function parseFilterUpdate(value:unknown):FilterUpdate|null {
 }
 
 /** Reserve the released cursor and detail envelope before accepting an opening default. */
-export function executableWorkFilters(filters:DataFilters) {
+export function workFilterBytes(filters:WorkFilter) {
   const predicate=workFilter(filters);
-  return jsonBytes({version:1,selection:{mode:'live',periodMs:86_400_000},evaluatedAt:Number.MAX_SAFE_INTEGER,sessions:{cursor:'x'.repeat(2048)},workFilter:predicate})<=76*1024&&
-    jsonBytes({version:1,selection:{mode:'live',periodMs:86_400_000},evaluatedAt:Number.MAX_SAFE_INTEGER,cursor:'x'.repeat(2048),refs:Array.from({length:100},()=> '01234567'),workFilter:predicate})<=80*1024;
+  return [jsonBytes({version:1,selection:{mode:'live',periodMs:86_400_000},evaluatedAt:Number.MAX_SAFE_INTEGER,sessions:{cursor:'x'.repeat(2048)},workFilter:predicate}),
+    jsonBytes({version:1,selection:{mode:'live',periodMs:86_400_000},evaluatedAt:Number.MAX_SAFE_INTEGER,cursor:'x'.repeat(2048),refs:Array.from({length:100},()=> '01234567'),workFilter:predicate})] as const;
 }
+export function executableWorkFilters(filters:WorkFilter){const [work,details]=workFilterBytes(filters);return work<=76*1024&&details<=80*1024;}

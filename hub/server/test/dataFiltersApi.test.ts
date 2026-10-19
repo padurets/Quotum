@@ -71,16 +71,31 @@ test('filter endpoints enforce membership, origin, preconditions, strict shapes 
   assert.equal(reply.statusCode,413);assert.equal(reply.json().error,'filters_limit');assert.equal(h.directory.filtersState(h.board.id).revision,0);
 });
 
+test('source mode cycles store private dormant decisions and a reset clears them even with an equal projection',async t=>{
+  const h=await fixture(t),other=h.store.source('claude','other-account',h.now);h.store.hold(other,h.owner.id,h.now);h.store.share(h.board.id,other,h.owner.id,h.now);
+  const initial=await h.get(),first=structuredClone(initial.filters);first.sources={mode:'exclude',values:[{source:h.source}]};
+  assert.equal((await h.put(initial,{filters:first,replace:['sources']})).statusCode,200);
+  h.store.unshare(h.board.id,h.source);
+  let basis=await h.get(),draft=structuredClone(basis.filters);draft.sources={mode:'include',values:[{source:other}]};
+  let reply=await h.put(basis,{filters:draft,replace:['sources']});assert.equal(reply.statusCode,200,reply.body);assert.equal(reply.body.includes(h.source),false);assert.equal(reply.body.includes('retained'),false);
+  assert.equal(h.directory.filtersState(h.board.id).retained.length,1);
+  basis=reply.json();draft=structuredClone(basis.filters);draft.sources={mode:'exclude',values:[]};
+  reply=await h.put(basis,{filters:draft,replace:['sources']});assert.equal(reply.statusCode,200,reply.body);
+  h.store.share(h.board.id,h.source,h.owner.id,h.now+1);basis=await h.get();assert.deepEqual(basis.filters.sources,{mode:'exclude',values:[{source:h.source}]});
+  h.store.unshare(h.board.id,h.source);basis=await h.get();const revision=basis.revision;
+  reply=await h.put(basis,{replace:['sources'],resets:{sources:'all'}});assert.equal(reply.statusCode,200);assert.equal(reply.json().revision,revision+1);assert.deepEqual(h.directory.filtersState(h.board.id).retained,[]);
+});
+
 test('layout 32 upgrades window/key choices atomically, keeping hidden geometry and rejecting old writers',async t=>{
   const db=new DatabaseSync(':memory:');t.after(()=>db.close());for(const step of STEPS.slice(0,32))db.exec(step);
   db.exec("PRAGMA user_version=32; INSERT INTO boards VALUES('b','',1,'u',0)");
-  const legacy:FixedView={...structuredClone(EMPTY_VIEW),version:4,hidden:['source:wallet'],shown:['budget-history','wallet/key:extra'],windows:['wallet/key:off','claude:a/week'],layout:{columns:6,places:{'source:wallet':{x:0,w:3,y:0,h:7},'budget-history':{x:3,w:3,y:1,h:10}}}};
+  const legacy:FixedView={...structuredClone(EMPTY_VIEW),version:4,hidden:['source:wallet'],shown:['budget-history','wallet/key:extra'],windows:['wallet/key:off','claude:a/gemini-2.5:session','claude:a/週期:weekly'],layout:{columns:6,places:{'source:wallet':{x:0,w:3,y:0,h:7},'budget-history':{x:3,w:3,y:1,h:10}}}};
   db.prepare('INSERT INTO views VALUES (?,?,?,?,?)').run('b',JSON.stringify(encodeFixedView(legacy)),'u',0,8);
   assert.ok(decodeFixedView(encodeFixedView(legacy)));assert.equal(decodeView(encodeFixedView(legacy)),null);
   migrate(db,1);const directory=new Directory(db),view=directory.viewState('b'),filters=directory.filtersState('b');
   assert.equal(view.revision,9);assert.equal(view.view.version,5);assert.deepEqual(view.view.windows,[]);assert.deepEqual(view.view.hidden,legacy.hidden);assert.deepEqual(view.view.layout,legacy.layout);
   assert.deepEqual(view.view.shown,['budget-history']);assert.equal(filters.revision,0);
-  assert.deepEqual(filters.filters.windows,{mode:'exclude',values:[['claude:a','week']]});
+  assert.deepEqual(filters.filters.windows,{mode:'exclude',values:[['claude:a','gemini-2.5:session'],['claude:a','週期:weekly']]});
   assert.deepEqual(filters.filters.wallet,{mode:'auto',include:[{source:'wallet',kind:'keyCap',key:'extra'}],exclude:[{source:'wallet',kind:'keyCap',key:'off'}]});
   const before=db.prepare('SELECT * FROM views').get();migrate(db,2);assert.deepEqual(db.prepare('SELECT * FROM views').get(),before);
   const h=await fixture(t),state=h.directory.viewState(h.board.id);

@@ -30,7 +30,7 @@ export function quotaRemaining(source:Card,id:string):number|null {
 
 /** Both periods travel with ordinary subscription history, not a separate analytics mode. */
 export function subscriptionSelection(cards:readonly Card[],view:Pick<View,'hidden'|'windows'>):MeterSelection|undefined {
-  const filters=effectiveFilters(),sources=filters?cards.filter(card=>matchesSource(filters,card.id)).map(card=>card.id):undefined;
+  const filters=effectiveFilters(),sources=filters&&!(filters.sources.mode==='exclude'&&!filters.sources.values.length)?cards.filter(card=>matchesSource(filters,card.id)).map(card=>card.id):undefined;
   const shown=cards.filter(c=>hasSubscriptionCaps(c.provider)&&(!filters||matchesSource(filters,c.id)));
   if(!shown.length)return sources?{unit:'USD',ids:[],sources}:undefined;
   const unit=shown.flatMap(c=>(c.meters??[]).filter(m=>quotaMeter(providerOf(c.provider),m.id))).find(m=>m.kind==='cap')?.unit??'credits:zai';

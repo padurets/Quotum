@@ -111,18 +111,43 @@ export function filtersFromView(view:{windows:readonly string[];shown:readonly s
 }
 
 /** A regrant exposes raw decisions, while a foreign save leaves an open view alone. */
-export function rebaseFilterProjection(current:DataFilters,before:DataFilters,after:DataFilters,intents:Pick<FilterUpdate,'resets'|'decisions'>):DataFilters {
+export function rebaseFilterProjection(current:DataFilters,before:DataFilters,after:DataFilters,intents:Pick<FilterUpdate,'resets'|'decisions'|'materialize'>):DataFilters {
   const result=structuredClone(current);
   for(const family of FILTER_FAMILIES){
     if(intents.resets?.[family])continue;
     const touched=new Set(intents.decisions?.filter(d=>d.family===family).map(d=>filterRefKey(d.ref)));
-    if(family==='wallet'){
+    const selection=<T extends FamilyRef>(rule:Selection<T>,prior:Selection<T>,next:Selection<T>)=>{
+      const existing=new Set(prior.values.map(filterRefKey));
+      for(const ref of next.values)if(!existing.has(filterRefKey(ref))&&!touched.has(filterRefKey(ref)))rule=setSelection(rule,ref,next.mode==='include');
+      return rule;
+    };
+    const wallet=(rule:Wallet,prior:Wallet,next:Wallet)=>{
       const explicit=(rule:Wallet)=>rule.mode==='only'?rule.values.map(ref=>({ref,included:true})):[...rule.include.map(ref=>({ref,included:true})),...rule.exclude.map(ref=>({ref,included:false}))];
-      const prior=new Set(explicit(before.wallet).map(d=>filterRefKey(d.ref)));
-      for(const {ref,included} of explicit(after.wallet))if(!prior.has(filterRefKey(ref))&&!touched.has(filterRefKey(ref)))result.wallet=setWallet(result.wallet,ref,included);
+      const existing=new Set(explicit(prior).map(d=>filterRefKey(d.ref)));
+      for(const {ref,included} of explicit(next))if(!existing.has(filterRefKey(ref))&&!touched.has(filterRefKey(ref)))rule=setWallet(rule,ref,included);
+      return rule;
+    };
+    if(family==='wallet'){
+      const unit=intents.materialize?.wallet;
+      result.wallet=wallet(result.wallet,walletRule(before,unit),walletRule(after,unit));
+      if(!unit&&after.legacy?.walletByUnit)for(const [unit,rule] of Object.entries(after.legacy.walletByUnit)){
+        result.legacy??={};result.legacy.walletByUnit??={};
+        result.legacy.walletByUnit[unit]=wallet(result.legacy.walletByUnit[unit]??{mode:'only',values:[]},before.legacy?.walletByUnit?.[unit]??{mode:'only',values:[]},rule) as OnlyWallet;
+      }
     }else {
-      const prior=new Set(before[family].values.map(filterRefKey));
-      for(const ref of after[family].values)if(!prior.has(filterRefKey(ref))&&!touched.has(filterRefKey(ref)))result[family]=setSelection(result[family] as Selection<FamilyRef>,ref,after[family].mode==='include') as never;
+      const unit=family==='funds'?intents.materialize?.funds:undefined;
+      result[family]=selection(result[family] as Selection<FamilyRef>,family==='funds'?fundsRule(before,unit):before[family],family==='funds'?fundsRule(after,unit):after[family]) as never;
+      if(family==='funds'&&!unit){
+        if(after.legacy?.fundsByUnit)for(const [unit,rule] of Object.entries(after.legacy.fundsByUnit)){
+          result.legacy??={};result.legacy.fundsByUnit??={};
+          result.legacy.fundsByUnit[unit]=selection(result.legacy.fundsByUnit[unit]??{mode:'include',values:[]},before.legacy?.fundsByUnit?.[unit]??{mode:'include',values:[]},rule);
+        }
+        if(after.legacy?.fundsPreferredByUnit)for(const [unit,refs] of Object.entries(after.legacy.fundsPreferredByUnit)){
+          result.legacy??={};result.legacy.fundsPreferredByUnit??={};
+          const prior=new Set(before.legacy?.fundsPreferredByUnit?.[unit]??[]);
+          result.legacy.fundsPreferredByUnit[unit]=canonicalRefs([...(result.legacy.fundsPreferredByUnit[unit]??[]),...refs.filter(ref=>!prior.has(ref)&&!touched.has(filterRefKey(ref)))]);
+        }
+      }
     }
   }
   return result;

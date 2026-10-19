@@ -90,6 +90,17 @@ test('funding facets describe authorized work before selection and exclude absen
   assert.deepEqual(both.projects,['Private funding','Unknown funding'],'empty selection does not erase available values');
 });
 
+test('fixed facets exclude current-only roster values outside their historical range',async t=>{
+  t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
+  h.credit(now-90*M,now-80*M);
+  h.hub.ingest.live.report(h.device,h.user.id,[{clientId:'codex',source:h.source,sessionId:'current-only',device:{id:h.device,name:'Laptop'},origin:'terminal',project:'Current only',folder:null,startedAt:now-M,sentStartedAt:now-M,lastWorkedAt:now,working:true}],now);
+  const request={version:1 as const,evaluatedAt:now,facets:true as const};
+  const fixed=(await h.read({...request,selection:{mode:'range',from:now-2*H,to:now-H}})).json<PeriodReply>();
+  const live=(await h.read({...request,selection:{mode:'live',periodMs:2*H}})).json<PeriodReply>();
+  if(fixed.facets?.state!=='complete'||live.facets?.state!=='complete')throw new Error('facets');
+  assert.deepEqual(fixed.facets.value.projects,['Project']);assert.ok(live.facets.value.projects.includes('Current only'));
+});
+
 test('a period response rechecks authentication after cooperative preparation',async t=>{
   t.mock.method(Date,'now',()=>now);const h=await fixture();t.after(async()=>{await h.app.close();h.store.close();});
   const original=PeriodAccounting.prepare;
