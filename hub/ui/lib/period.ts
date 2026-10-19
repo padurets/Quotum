@@ -117,6 +117,7 @@ class BoardPeriod {
     const range=evaluatedRange(this.selection,hubNow());
     if(!this.active||!page.get().board||this.workNeeded||this.work.loading||this.work.error||this.valuesNeeded||[...this.values.values()].some(value=>value.loading||value.error)||PERIOD_SCOPES.some(scope=>this.projectionErrors[scope]||this.scopeKeys[scope]&&this.needsTape(scope,this.scopeKeys[scope]!,range)))return;
     const tapes=new Map([...this.tapes].map(([scope,tape])=>[scope,{...tape}])),work=this.work,index=this.index,activity=this.activity,workSelection=this.workSelection,workRangeKey=this.workRangeKey,cursor=this.cursor,liveEvidence=this.liveEvidence,values=new Map(this.values),cursors=this.transport.evidence(),bytes=this.bytes;
+    const sourceTape=this.sourceTape,sourceCurves=this.sourceCurves,sourceCursor=this.sourceCursor;
     const context=JSON.stringify([this.authority,this.scopeKeys]);
     const workProofEpoch=this.workProofEpoch,valuesProofEpoch=this.valuesProofEpoch,reusable=workProofEpoch===this.proofEpoch&&(!values.size||valuesProofEpoch===this.proofEpoch)&&[...tapes.values()].every(t=>t.proofEpoch===this.proofEpoch);
     // Proofs and alternative states are immutable and shared by shifted summaries.
@@ -129,6 +130,7 @@ class BoardPeriod {
       this.workEvidence++;
       this.tapes.clear();for(const [scope,tape] of tapes)this.tapes.set(scope,tape);
       this.work=work;this.index=index;this.activity=activity;this.activityRetained=null;this.workSelection=workSelection;this.workRangeKey=workRangeKey;this.cursor=cursor;this.liveEvidence=liveEvidence;this.bytes=bytes;
+      this.sourceTape=sourceTape;this.sourceCurves=sourceCurves;this.sourceCursor=sourceCursor;
       for(const id of new Set([...this.values.keys(),...values.keys()]))this.setValue(id,values.get(id)??noValue);
       if(selection.mode==='range'&&workSelection.mode==='range'&&periodKey(selection)!==periodKey(workSelection)){
         const value={...work.value!,fixed:shifted(work.value!.fixed!,selection)!};
@@ -217,7 +219,7 @@ class BoardPeriod {
     return summary?{...series,...summary}:series;
   }
   moneyWorkAt(source:string,now:number,rangeKey?:string){
-    const tape=this.tapes.get('budget'),value=tape&&this.workRangeKey===tape.rangeKey&&(!!this.work.value||!!this.sourceCurves)&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;
+    const tape=this.tapes.get('budget'),value=tape&&(tape.tape.fixed||this.workRangeKey===tape.rangeKey&&(!!this.work.value||!!this.sourceCurves))&&(rangeKey===undefined||rangeKey===tape.rangeKey)?tape.accounting.moneyWorkSummary(source,this.tapeRange(tape,now)):undefined;
     return value&&this.selectedPending()?{...value,selectedWork:{from:now,activeMs:null,agentMs:0}}:value;
   }
   rangeAt(scope:PeriodScope,now:number,rangeKey?:string){const tape=this.tapes.get(scope);return tape&&(rangeKey===undefined||tape.rangeKey===rangeKey)?this.tapeRange(tape,now):null;}
@@ -375,7 +377,10 @@ class BoardPeriod {
         preparations()?.cancel(this.preparationOwner);this.tapes.clear();this.cursor=undefined;this.index=null;this.activity=null;this.work={...this.work,value:null};this.liveEvidence=false;this.transport.forgetEvidence();
         clock.due(this.watch,null,hubNow());
       }
-      this.bytes=(this.sourceTape?JSON.stringify(this.sourceTape).length*3+this.sourceTape.patterns.reduce((sum,p)=>sum+p.length*64,0)+this.sourceTape.sources.reduce((sum,s)=>sum+s.blocks.length*64,0):0)+JSON.stringify([...this.values.values()]).length*3+JSON.stringify(this.workRows).length*3+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0);
+      // The previous target's supplier evidence now belongs to its evictable LRU
+      // entry. Fixed summaries do not need a second visible copy of that ledger.
+      this.sourceTape=null;this.sourceCurves=undefined;this.sourceCursor=undefined;
+      this.bytes=JSON.stringify([...this.values.values()]).length*3+JSON.stringify(this.workRows).length*3+(this.activityRetained?JSON.stringify(this.activityRetained).length*3:0);
       historyPool.release(valueStaging);
       this.workNeeded=wantsWork&&(!this.work.value||range.from<this.work.value.anchor||range.to>(this.work.value.cut??0)&&!this.liveEvidence);
       const saved=this.retained.has(cacheKey)?[cacheKey,this.retained.get(cacheKey)!] as const:[...this.retained].find(([,entry])=>entry.fits(selection));

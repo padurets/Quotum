@@ -350,7 +350,9 @@ test('rolling work stays exact while clock ticks leave chart and table revisions
   assert.equal(period.getProjectionRevision('quota'),revision);
 });
 
-test('complete live and fixed targets share the LRU and cached return performs no read',async()=>{
+test('complete live and fixed targets share supplier evidence in the LRU and cached return performs no read',async t=>{
+  filterRuntimeBindings.publishDataFilters(filterModelBindings.defaultFilters());
+  t.after(()=>filterRuntimeBindings.publishDataFilters(null,false));
   let selected:{from:number;to:number}|null=null,reads=0,stagedRestores=0;
   const board={meta:{personal:true},id:'b',lineup:['s'],view:{hidden:[]},cards:{s:{budget:false}}},state={board};
   const pool=new HistoryPool();
@@ -360,10 +362,11 @@ test('complete live and fixed targets share the LRU and cached return performs n
     const work:WorkTrace={anchor:body.selection.mode==='live'?range.from:anchor,cut,knownFrom:0,refs:[ref('a')],spans:[[0,0,60_000]]};
     const tape={from:anchor,cut,replaceFrom:anchor,cursor:'q',money:[],quota:[{source:'s',window:'w',samples:[anchor,10,-1,3_600_000,-1]}]};
     return {basis,...(body.quota?{quota:{state:'complete',basis,value:{run:'r',now:5_000_000,historyStart:0,known:{work:0,sources:{}},chunks:[],tape:body.selection.mode==='live'?tape:fixedTape(tape,work,range,60_000,()=>{})}}}:{}),
+      ...(body.sourceWork&&body.selection.mode==='live'?{sourceWork:{state:'complete' as const,basis,value:{...filterCurveBindings.sourceWorkTape(new filterCurveBindings.PeriodCurves(work),range.from,range.to,new Map([['s',0]]),()=>{}),cursor:'supplier'}}}:{}),
       ...(body.sessions?{sessions:{state:'complete',basis,value:{...(body.selection.mode==='live'?work:fixedWork(work,range,60_000,5_000_000,()=>{})),cursor:'w'}}}:{}),
       ...(body.values?{values:{state:'complete',basis,value:[withValueStates({id:'s',provider:'codex',windows:[],meters:[],keys:[],validFor:{from:0,to:1_400_500}},[{id:'s',provider:'codex',windows:[],meters:[],keys:[],validFor:{from:0,to:1_400_500}},{id:'s',provider:'codex',windows:[],meters:[],keys:[],currencyUnavailable:true,validFor:{from:1_400_500,to:9_000_000}}],()=>{})]}}:{})};
   };
-  const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event?:unknown):void;get():{rows:{workedMs:number}[]};getValue(id:string):{value:{currencyUnavailable?:boolean}};estimatedBytes:number}},
+  const context={exports:{} as {BoardPeriod:new()=>{activate(active:boolean):void;changed(event?:unknown):void;get():{rows:{workedMs:number}[]};getValue(id:string):{value:{currencyUnavailable?:boolean}};estimatedBytes:number;sourceTape:unknown;sourceCursor:string|undefined}},
     hubNow:()=>5_000_000,retention,historyPool:pool,clock:{watch:()=>({}),subscribe:()=>{},due:()=>{}},PeriodTransport,fetchPeriod:send,page:{get:()=>state},pan:{get:()=>null},preparations:()=>null,
     prepareAsync:async(_owner:unknown,work:Parameters<typeof drain>[0])=>drain(work),evaluatedRange,periodKey,PeriodAccounting,PeriodIndex,PeriodActivity,packWorkPrepared,workPreparationBytes,mergeWorkPrepared,retainSamplesPrepared,sampleBytes,mergeTapePrepared,canShift,hasPeriodValue,periodValueAt,
     shifted:(fixed:Parameters<typeof shifted>[0],range:{from:number;to:number})=>{assert.ok(pool.estimatedBytes>period.estimatedBytes,'the copy is reserved before allocation');stagedRestores++;return shifted(fixed,range);},
@@ -374,8 +377,11 @@ test('complete live and fixed targets share the LRU and cached return performs n
   runInNewContext(ts.transpileModule(body,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
   const period=new context.exports.BoardPeriod(),flush=async()=>{for(let i=0;i<8;i++)await settle();};period.activate(true);await flush();
   assert.equal(reads,1);assert.equal(period.get().rows[0].workedMs,60_000);
+  const supplier=period.sourceTape;assert.ok(supplier);assert.equal(period.sourceCursor,'supplier');
   selected={from:123,to:1_400_123};period.changed();await flush();assert.equal(reads,2);assert.equal(period.get().rows[0].workedMs,59_877);
+  assert.equal(period.sourceTape,null,'a fixed target must not pin its cached live supplier ledger a second time');
   selected=null;period.changed();await flush();assert.equal(reads,2,'the live ledger is retained in the shared budget');
+  assert.equal(period.sourceTape,supplier);assert.equal(period.sourceCursor,'supplier');
   selected={from:900,to:1_400_900};period.changed();await flush();assert.equal(reads,2,'a repeated gesture can move its exact endpoints within proven evidence bounds');assert.equal(period.get().rows[0].workedMs,59_100);assert.ok(period.estimatedBytes>0);assert.ok(pool.estimatedBytes<15*1024*1024);
   assert.equal(period.getValue('s').value.currencyUnavailable,true,'a changed value state is selected by its own exclusive bounds');
   selected={from:300,to:1_400_300};period.changed();await flush();assert.equal(reads,2);assert.equal(period.getValue('s').value.currencyUnavailable,undefined);assert.equal(period.get().rows[0].workedMs,59_700);

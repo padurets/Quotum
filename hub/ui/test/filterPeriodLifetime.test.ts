@@ -89,3 +89,16 @@ test('an unchanged source sweep never wakes the budget table projection',async t
     assert.equal(h.period.getProjectionRevision('budget'),revision);
   }finally{publishDataFilters(null,false);await h.close();}
 });
+
+test('fixed wallet estimates remain available while the selected session baseline is unavailable',async t=>{
+  t.mock.method(Date,'now',()=>NOW);const h=await fixture({fixed:true});
+  try{
+    publishDataFilters(defaultFilters());h.period.changed();await flush();
+    const old=h.period.tapes.get('quota'),work={source:h.source,unit:'USD',activeMs:3_600_000,agentMs:3_600_000,spent:'1000000',duringWork:'1000000',eligibleActiveMs:3_600_000,eligibleAgentMs:3_600_000,coveredMs:3_600_000,knownFrom:NOW-3_600_000,partial:false,estimate:true,selectedWork:{from:NOW-3_600_000,activeMs:null,agentMs:0}};
+    const tape={...old.tape,quota:[],money:[],fixed:{...old.tape.fixed,moneyWork:[work]}};
+    h.period.tapes.set('budget',{...old,tape,accounting:new PeriodAccounting(tape,null)});
+    h.period.work={value:null,basis:null,loading:false,error:'unavailable'};h.period.workRangeKey='unavailable';
+    const value=h.period.moneyWorkAt(h.source,NOW,old.rangeKey);
+    assert.equal(value.eligibleActiveMs,3_600_000);assert.equal(value.selectedWork.activeMs,null);
+  }finally{publishDataFilters(null,false);await h.close();}
+});
