@@ -42,6 +42,7 @@ import {reduce,INITIAL,type HubEvent} from '../lib/board';
 import {PageClock} from '../lib/clock';
 import {Pan} from '../lib/pan';
 import {Live} from '../lib/live';
+import {timeRangeKey} from '../lib/timeRange';
 
 import {Pairing} from '../../server/pairing';
 import {Setup} from '../../server/setup';
@@ -102,7 +103,7 @@ export async function fixture({personal=false,ownerDevice=false,transportLive=fa
   assert.equal(period.get().error,null);assert.equal(period.get().rows.length,1);const initialRequests=requests.slice();requests.length=0;frames.length=0;
   const advance=(at:number)=>{for(let count=0;;count++){assert.ok(count<10000);const next=[...timers].sort((a,b)=>a[1].at-b[1].at)[0];if(!next||next[1].at>at)break;now=next[1].at;timers.delete(next[0]);next[1].run();events.flush();}now=at;if(!clocked)period.tick();};
   const jump=(at:number)=>{now=at;for(const [token,timer] of [...timers])if(timer.at<=at){timers.delete(token);timer.run();}events.flush();if(clocked)pageClock.wakeDue();else period.tick();};
-  return {hub,device,owner,advance,jump,pan,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
+  return {hub,device,owner,advance,jump,pan,selectedRange:()=>selectedRange,selectRange:(range:typeof selectedRange)=>{selectedRange=range;period.changed();},clock:pageClock,initialRequests,prepareWith:(value:Preparations|null)=>{preparer=value;},settings,pool,reader,store,directory,board,alice,bob,source,credit,events,period,page,frames,requests,
     report:(working=false,at=NOW)=>{now=at;hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(at).toISOString(),sessions:[{provider:'codex',...(funding?{account:(privateWork?'b':'a').repeat(24)}:{}),sessionId:stable?'c'.repeat(32):null,origin:'terminal',project:'Work project',folder:'Private folder',startedAt:new Date(start).toISOString(),lastWorkedAt:new Date(NOW-2*M).toISOString(),working}]},at);events.flush();},
     endIdle:()=>{hub.ingest.sessions({kind:'device',device:directory.deviceById(device)!},{version:1,agent:'quotum/0.6.0',machine:{id:'machine-0123456789',name:'Work laptop',os:'linux',arch:'x86_64'},sentAt:new Date(NOW).toISOString(),sessions:[]},NOW);events.flush();},
     event:(event:HubEvent)=>page.dispatch({type:'hub',event}),
@@ -136,14 +137,14 @@ export function consumer(h: any) {
   const prefs={range:'1h',activityBy:'project',muted:{}};
   const context={chartSeriesMuted,ACTIVITY,
     exports:{} as any,React,...parent,memo:(f:any)=>f,useMemo:(f:any,deps:any[])=>{const slot=parent.useRef(null) as any;if(!slot.current||deps.some((v,i)=>!Object.is(v,slot.current.deps[i])))slot.current={deps,value:f()};return slot.current.value;},
-    useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useHistory:()=>h.render(),useHistoryPlot:()=>h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
+    useEffect:()=>{},useSeriesFocus:()=>{},seriesFocusStyle:()=>({}),useId:()=> 'c',useHistory:()=>h.render(),useHistoryPlot:(activity=false)=>activity?h.loader.getActivityPlot():h.loader.getPlot(),usePlot:()=>({plot:undefined,onBase:()=>{}}),
     useLineup:()=>h.page.get().board!.lineup,usePersonalBoard:()=>false,useTitles:()=>titles,
-    useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>null,useBoardId:()=>h.board,
+    useChartMuted:()=>prefs.muted,usePref:(key:keyof typeof prefs)=>prefs[key],useLocale:()=> 'en',useTimeRange:()=>h.selectedRange(),useBoardId:()=>h.board,
     axisNavigation:()=>({context:'b',range:'1h'}),useClock:()=>NOW,usePanning:()=>panning,
     pan:{get:()=>null,active:()=>null,subscribe:()=>()=>{}},useHistoryBegins:()=>0,frameOf:()=>({from:NOW-H,to:NOW,live:true}),measuredTo:()=>NOW,
     activityEmpty,groupColors,groupRegistry,mutedKey,plotGroupsPrepared,StackPaths,stacksHeight:()=>160,activityScale,niceTicks,cellStart,MINUTE:60_000,EMPTY_ACTIVITY,groupName:(g:any)=>g.name??g.key,cardId,isHidden,t:(s:any)=>s,
     quotaHistory:{retry:()=>{}},AnalyticsPanel:()=>null,ActivitySettings:()=>null,Totals:()=>null,LegendItem:()=>null,
-    setTimeRange:()=>{},navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
+    setTimeRange:()=>{},timeRangeKey,navigationKey,useTimeAxis:()=>axis,useTip:()=>({tip:{current:null},style:{}}),
     PlotLayer:()=>null,PlotOverlay:()=>null,Tooltip:()=>null,clock:()=>'',shortDay:()=>'',workHours:()=>'',stamp:()=>'',
     CSS:{escape:(id:any)=>id},Stacks:null as any};
   runInNewContext(ts.transpileModule(source.slice(source.indexOf('export const Activity ='))+'\nglobalThis.Stacks=Stacks;',{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
@@ -163,13 +164,13 @@ import {HistoryStore,follow} from '../lib/history';
 import {expandHistory} from '../../server/domain/history';
 
 export async function drawings(h:any){
- const loader=new HistoryStore({now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,meta)=>h.period.transport.read('quota',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??''},signal).then((reply:import('../../server/domain/history').HistoryReply)=>expandHistory(reply,meta)),setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,'quota',h.pool);
- const stop=follow(loader,h.page);loader.choose(h.settings.range,null);loader.open(h.board);loader.hello(h.events.epoch);
+ const loader=new HistoryStore({now:()=>NOW,preparations:null,read:(_board,cell,from,to,signal,_meters,meta,activityOnly)=>h.period.transport.read('quota',{cell:String(cell),from:String(from),to:String(to),meta:meta?.meta??''},signal,activityOnly).then((reply:import('../../server/domain/history').HistoryReply)=>expandHistory(reply,meta)),setTimeout:()=>({}),clearTimeout:()=>{},dropTimeRange:()=>{}},undefined,'quota',h.pool);
+ const stop=follow(loader,h.page);loader.choose(h.settings.range,h.selectedRange());loader.open(h.board);loader.setWorkFilter(JSON.stringify(filterRuntimeBindings.effectiveFilters()?filterModelBindings.workFilter(filterRuntimeBindings.effectiveFilters()!):null));loader.hello(h.events.epoch);
  const board=h.page.get().board;loader.snapshot(board.lineup,Object.values(board.cards).flatMap((c:any)=>c.windows.map((w:any)=>`${c.id} ${w.id}`)),board.historyStart,board.workAuthority);await flush();
  const slots:any[]=[];let cursor=0;
  const useRef=(current:any)=>slots[cursor++]??(slots[cursor-1]={current});
  const useMemo=(read:any,deps:any[])=>{const box=useRef(null);if(!box.current||deps.some((v,i)=>!Object.is(v,box.current.deps[i])))box.current={deps,value:read()};return box.current.value;};
- const context={useRef,useMemo,useSyncExternalStore:(_s:any,read:any)=>read(),pan:{active:()=>null,onPhase:()=>()=>{}},hubNow:()=>NOW,planEventsAt,planEventsDeadline,shallowEqual,useClock:()=>NOW,fundsHistory:{},page:h.page,timeRange:()=>null,prefs:()=>h.settings,boardPeriod:h.period,read:null as any};
+ const context={useRef,useMemo,useSyncExternalStore:(_s:any,read:any)=>read(),pan:{active:()=>null,onPhase:()=>()=>{}},hubNow:()=>NOW,planEventsAt,planEventsDeadline,shallowEqual,useClock:()=>NOW,fundsHistory:{},page:h.page,timeRange:h.selectedRange,timeRangeKey,prefs:()=>h.settings,boardPeriod:h.period,read:null as any};
  const source=readFileSync(new URL('../lib/history.ts',import.meta.url),'utf8');
  runInNewContext(ts.transpileModule(source.slice(source.indexOf('function usePeriodHistory('),source.indexOf('export function useHistory('))+'\nglobalThis.read=usePeriodHistory;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,Object.assign(context,filterModelBindings,filterRuntimeBindings,filterCurveBindings));
  const render=()=>{cursor=0;return context.read(loader,true);};

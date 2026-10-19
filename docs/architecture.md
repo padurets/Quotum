@@ -2010,6 +2010,15 @@ Financial and work ledgers share their immutable native observations only when e
 reading agrees. Retention preserves that shared suffix, and the pool charges its storage
 once; differing observations and each ledger's spans retain their own charges.
 
+Selected activity cells have their own filter identity, coverage and prepared strip.
+Changing a project, device or client retires those cells and pending selected jobs,
+while native buffers, their coverage and the quota chart's prepared strip survive.
+When native coverage is already fresh, the same quota reader can refill activity with
+an empty source selection and skipped native evidence. Its metadata never replaces
+the native basis, and it cannot complete a pending native summary. Both projections
+keep the same transport slots and memory budget. A hidden activity widget defers its
+refill until shown; activity failures do not discard the native frame.
+
 Each chart replaces one typed drawing model whole after preparation, then publishes
 its geometry and painters after the DOM commits. Input keeps the displayed model and
 its composed SVG matrix and CSS offset until that handoff. Finishing a gesture commits

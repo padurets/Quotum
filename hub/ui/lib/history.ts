@@ -1,4 +1,5 @@
 import {onDataFilters,filtersReady,effectiveFilters} from './filterSelection';
+import {workFilter} from '../../server/domain/dataFilters';
 import {HistoryPool,historyPool} from './historyPool';
 import {boardPeriod,followPeriod} from './period';
 import type {HistoryScope} from '../../server/domain/history';
@@ -31,7 +32,7 @@ export type HistoryEnv = {
   clock?:PageClock;
   /** Budget work may live outside this reader; quota history also owns activity. */
   workInPresentation?:boolean;
-  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis): Promise<HistoryAnswer>;
+  read(board: string, cell: number, from: number, to: number, signal?: AbortSignal, meters?: MeterSelection, meta?: HistoryBasis, activityOnly?:boolean): Promise<HistoryAnswer>;
   now(): number;
   /** Elapsed time stays independent of corrections to the estimated hub clock. */
   elapsedNow?(): number;
@@ -45,7 +46,7 @@ export type HistoryEnv = {
 };
 export type Shown = {history: History | null; loading: boolean;presentation:number;error?:'history_limit'|'history_failed'};
 type HistoryBoundary = {board: string; at: number; start: number};
-type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead'};
+type Flight = {seq: number; epoch: number; target: string; newsSeq: number; cell: number; from: number; to: number; touched: number; startedAt: number; controller: AbortController; role: 'visible' | 'ahead';activityOnly:boolean};
 type ResponseOwner = {answer: HistoryAnswer; keys: string[]; started: boolean; limited?: boolean};
 type TilePin = {tile: HistoryTile; seq: number; from: number; to: number};
 export type PlotInterest = {token: number; length: number; from: number; to: number; direction: -1 | 0 | 1};
@@ -54,6 +55,7 @@ export type PlotInterest = {token: number; length: number; from: number; to: num
 export class HistoryStore {
   private board: string | null = null;
   private active = true;
+  private activityActive=true;
   private ready = false;
   private run: string | null = null;
   private epoch = 0;
@@ -62,6 +64,11 @@ export class HistoryStore {
   private newsSeq = 0;
   private lineupKey = '';
   private workAuthority: string | undefined;
+  private workKey: string | undefined;
+  private nativeVersion=0;
+  private composedNativeVersion=-1;
+  private financialVersion=-1;
+  private nativePresentation=0;
   private snapshotEvidence:string|undefined;
   private windowsKey = '';
   private windows = new Set<string>();
@@ -110,12 +117,15 @@ export class HistoryStore {
   private plotIdentity = '';
   private aheadStopped = false;
   private readonly plotListeners = new Set<() => void>();
+  private activityPlot:PlotBuffer|null=null;
+  private readonly activityPlotListeners=new Set<()=>void>();
+  private nativePlotIdentity='';
   private readonly plotOwner = {};
   private readonly composeOwner = {};
   private composeIdentity = '';
   private readonly responses = new Map<Flight, ResponseOwner>();
   private readonly reservations = new Map<string, Flight>();
-  private readonly plotChunks = new Map<string, {tile: HistoryTile; seq: number; from: number; to: number; chunk: Chunk}>();
+  private readonly plotChunks = new Map<string, {tile: HistoryTile|null; seq: number; from: number; to: number; chunk: Chunk;deadline?:number}>();
   private readonly planWatch:ReturnType<PageClock['watch']>;
   private stopPlanClock:(()=>void)|null=null;
   private planDeadline=Infinity;
@@ -136,6 +146,8 @@ export class HistoryStore {
     }
   }
 
+  setActivityActive(active:boolean){if(active===this.activityActive)return;this.activityActive=active;this.needsCompose=true;this.schedule();}
+
   open(board: string) {
     if (board === this.board) return;
     this.close();
@@ -153,9 +165,11 @@ export class HistoryStore {
   close() {
     this.cancelProjection();
     this.presentation++;
+    this.nativePresentation++;
     this.epoch++;
     this.board = null;
     this.workAuthority = undefined;
+    this.workKey=undefined;
     this.setBoundary(null);
     this.ready = false;
     this.historyLimit=false;this.readError=false;
@@ -223,6 +237,7 @@ export class HistoryStore {
     if([...this.windows].some(window=>!next.has(window)))this.retirePresentation();
     this.windowsKey = key;
     this.windows = next;
+    this.nativeVersion++;
     this.needsCompose = true;
     this.version++;
     this.publish();
@@ -241,6 +256,21 @@ export class HistoryStore {
     this.publish();
   }
 
+  /** Selected activity has a lifetime of its own; native observations keep theirs. */
+  setWorkFilter(key:string) {
+    if(this.scope==='budget'||key===this.workKey)return false;
+    const initialized=this.workKey!==undefined;this.workKey=key;
+    if(!initialized&&!this.grids.size&&!this.flights.size)return false;
+    this.presentation++;this.epoch++;
+    this.cancelProjection();this.abortFlights();
+    for(const tiles of this.grids.values())for(const [id,tile] of tiles)tiles.set(id,tile.retireActivity());
+    for(const key of this.plotChunks.keys())if(!key.startsWith('native:'))this.plotChunks.delete(key);
+    this.plotIdentity='';this.plotVersion=-1;this.version++;
+    this.setActivityPlot(null);this.needsCompose=true;
+    this.historyLimit=false;this.readError=false;this.clear('retry');this.clear('settle');
+    this.schedule();this.publish();return true;
+  }
+
   news(since: number, workAuthority?: string) {
     if (workAuthority || since === 0) this.workAuthority = workAuthority;
     this.newsSeq++;
@@ -254,6 +284,7 @@ export class HistoryStore {
     else {
       for (const [cell, tiles] of this.grids) for (const tile of tiles.values()) {
         if (tile.to > since) tile.validTo = Math.min(tile.validTo, Math.max(tile.readFrom, cellStart(since, cell)));
+        if (tile.to > since) tile.nativeValidTo = Math.min(tile.nativeValidTo, Math.max(tile.nativeFrom, cellStart(since, cell)));
       }
       for (const flight of this.flights) if (flight.epoch === this.epoch && flight.to > since) flight.touched = Math.min(flight.touched, cellStart(since, flight.cell));
     }
@@ -284,6 +315,8 @@ export class HistoryStore {
   subscribeFinancial=(listener:()=>void)=>{this.financialListeners.add(listener);return()=>{this.financialListeners.delete(listener);};};
   getPlot = () => {if(this.expirePlans())this.publish();return this.plot;};
   getDrawingPlot = () => {if(this.expirePlans())this.publish();return this.drawingPlot;};
+  getActivityPlot=()=>{if(this.expirePlans())this.publish();return this.activityPlot;};
+  subscribeActivityPlot=(listener:()=>void)=>{this.activityPlotListeners.add(listener);return()=>{this.activityPlotListeners.delete(listener);};};
   subscribePlot = (listener: () => void) => {this.plotListeners.add(listener); return () => void this.plotListeners.delete(listener);};
 
   /** Geometry changes do not choose a committed target or compose its totals. */
@@ -344,6 +377,7 @@ export class HistoryStore {
   private invalidate() {
     this.cancelProjection();
     this.epoch++;
+    this.nativeVersion++;
     this.cohort = this.interest ? `${this.interest.token}:${this.epoch}:${this.plotTarget().cell}` : '';
     this.optional.clear();
     this.inheritedExtra = false;
@@ -356,7 +390,7 @@ export class HistoryStore {
     this.strip = null;
     this.plotChunks.clear();
     this.setPlot(null);
-    for (const tiles of this.grids.values()) for (const tile of tiles.values()) tile.readFrom = tile.validTo = tile.readTo = tile.from;
+    for (const tiles of this.grids.values()) for (const tile of tiles.values()) {tile.readFrom = tile.validTo = tile.readTo = tile.from;tile.nativeFrom=tile.nativeValidTo=tile.nativeTo=tile.from;}
     this.needsCompose = true;
   }
 
@@ -371,6 +405,7 @@ export class HistoryStore {
   /** A different resource or authority cannot borrow the previous complete frame. */
   private retirePresentation() {
     this.presentation++;
+    this.nativePresentation++;
     this.shown=null;
     this.cancelProjection();this.strip=null;this.plotChunks.clear();this.setPlot(null);
   }
@@ -384,8 +419,11 @@ export class HistoryStore {
     this.state = {history, loading,presentation:this.presentation,...(error?{error}:{})};
     for (const listener of this.listeners) listener();
     const prior=this.financialState,old=prior.history;
-    const same=history===old||!!history&&!!old&&history.meterSeries===old.meterSeries&&history.range===old.range&&history.since===old.since&&history.cellMs===old.cellMs&&history.historyStart===old.historyStart;
-    if(!same||loading!==prior.loading||error!==prior.error||this.presentation!==prior.presentation){this.financialState={history:same?old:history,loading,presentation:this.presentation,...(error?{error}:{})};for(const listener of this.financialListeners)listener();}
+    const sameNative=this.scope==='quota'&&!!history&&!!old&&this.nativeVersion===this.financialVersion&&history.range===old.range&&history.range===this.target().key&&history.cellMs===old.cellMs&&history.historyStart===old.historyStart;
+    const same=sameNative||history===old||!!history&&!!old&&(this.scope!=='quota'||history.series===old.series)&&history.meterSeries===old.meterSeries&&history.range===old.range&&history.since===old.since&&history.cellMs===old.cellMs&&history.historyStart===old.historyStart;
+    const financialLoading=sameNative?prior.loading:loading,financialError=sameNative?prior.error:error;
+    this.financialVersion=this.nativeVersion;
+    if(!same||financialLoading!==prior.loading||financialError!==prior.error||this.nativePresentation!==prior.presentation){this.financialState={history:same?old:history,loading:financialLoading,presentation:this.nativePresentation,...(financialError?{error:financialError}:{})};for(const listener of this.financialListeners)listener();}
   }
   private schedulePlanClock(){
     if(this.scope==='budget')return;
@@ -405,6 +443,7 @@ export class HistoryStore {
     const plotChanged=!!this.plot&&plotEvents!==this.plot.events;
     changed||=!!this.shown&&shownEvents!==this.shown.events||plotChanged||!!this.drawingPlot&&drawingEvents!==this.drawingPlot.events;
     if(!changed)return false;
+    this.nativeVersion++;
     this.cancelProjection();this.version++;this.plotVersion=-1;this.plotChunks.clear();
     if(this.shown&&shownEvents!==this.shown.events)this.shown={...this.shown,events:shownEvents!};
     if(this.plot&&plotChanged)this.plot={...this.plot,events:plotEvents!};
@@ -428,11 +467,21 @@ export class HistoryStore {
   }
 
   private full(target: Target) {
+    if(this.scope==='quota'&&!this.activityActive)return this.nativeFull(target.cell,target.k0*target.cell,(target.k1+1)*target.cell);
     for (let k = target.k0; k <= target.k1; k++) {
       const at = k * target.cell;
       if (this.cutTo !== null && at >= this.cutTo) continue;
       const tile = this.grids.get(target.cell)?.get(tileOf(at, target.cell));
       if (!tile || at < tile.readFrom || at >= tile.readTo) return false;
+    }
+    return true;
+  }
+
+  private nativeFull(cell:number,from:number,to:number) {
+    for(let at=from;at<to;at+=cell){
+      if(this.cutTo!==null&&at>=this.cutTo)continue;
+      const tile=this.grids.get(cell)?.get(tileOf(at,cell));
+      if(!tile||at<tile.nativeFrom||at>=tile.nativeValidTo)return false;
     }
     return true;
   }
@@ -443,7 +492,8 @@ export class HistoryStore {
       const at = k * target.cell;
       if (this.cutTo !== null && at >= this.cutTo) continue;
       const tile = this.grids.get(target.cell)?.get(tileOf(at, target.cell));
-      if (tile && at >= tile.readFrom && at < tile.validTo) continue;
+      if(this.scope==='quota'&&!this.activityActive&&tile&&at>=tile.nativeFrom&&at<tile.nativeValidTo)continue;
+      if (tile && at >= tile.readFrom && at < tile.validTo&&(this.scope!=='quota'||this.workKey===undefined||at>=tile.nativeFrom&&at<tile.nativeValidTo)) continue;
       if ([...this.flights].some(f => f.epoch === this.epoch && f.cell === target.cell && f.from <= at && f.to > at && f.touched > at)) continue;
       bad.push(at);
     }
@@ -462,6 +512,7 @@ export class HistoryStore {
     if (!this.board || !this.ready || !this.run || this.historyLimit) return;
     if(this.meters||this.pool){this.evict();if(this.historyLimit)return;}
     const target = this.target();
+    if(this.scope==='quota'&&!this.activityActive&&this.shown?.range===target.key&&this.composedNativeVersion===this.nativeVersion)this.needsCompose=false;
     if(this.scope==='budget'&&this.meters?.ids.length===0){
       this.meta??={run:this.run,now:this.env.now(),historyStart:this.historyStart,known:{work:0,sources:{}}};
       this.prepareCompose(target);return;
@@ -520,11 +571,14 @@ export class HistoryStore {
     if (this.plotVersion === this.version) return;
     const strip = this.strip;
     const tiles = [...(this.grids.get(strip.cell)?.values() ?? [])].filter(t => t.readTo > t.readFrom && t.readTo > strip.k0 * strip.cell && t.readFrom <= strip.k1 * strip.cell).sort((a, b) => a.from - b.from);
+    const separate=this.scope==='quota'&&this.workKey!==undefined;
+    const nativeTiles=separate?[...(this.grids.get(strip.cell)?.values()??[])].filter(t=>t.nativeTo>t.nativeFrom&&t.nativeTo>strip.k0*strip.cell&&t.nativeFrom<=strip.k1*strip.cell).sort((a,b)=>a.from-b.from):tiles;
     const identity = `${this.epoch}:${this.interest?.token ?? this.plot?.token}:${strip.cell}:${strip.k0}:${strip.k1}:${this.windowsKey}:${this.cutTo}:${JSON.stringify(this.meta.known)}:${tiles.map(tile => `${tile.from},${tile.writeSeq},${tile.readFrom},${tile.readTo}`).join(';')}`;
+    const nativeIdentity=JSON.stringify([this.nativeVersion,this.interest?.token,strip.cell,strip.k0,strip.k1,this.windowsKey,this.cutTo,nativeTiles.map(tile=>[tile.from,tile.nativeSeq,tile.nativeFrom,tile.nativeTo])]);
     this.plotVersion = this.version;
     if (identity === this.plotIdentity) return;
     this.plotIdentity = identity;
-    const retained = new Set(tiles.map(tile => `${tile.cell}:${tile.from}`));
+    const retained = new Set([...tiles.map(tile => `${tile.cell}:${tile.from}`),...nativeTiles.map(tile=>`native:${tile.cell}:${tile.from}`)]);
     for (const key of this.plotChunks.keys()) if (!retained.has(key)) this.plotChunks.delete(key);
     const intervals: [number, number][] = [];
     for (const tile of tiles) {
@@ -537,22 +591,39 @@ export class HistoryStore {
     const coverage: Coverage = intervals.sort((a, b) => a[0] - b[0]);
     const pins = this.pins(tiles), meta = this.meta, windows = this.windows;
     const token = this.interest?.token ?? this.plot?.token ?? 0, epoch = this.epoch, version = this.version;
-    const valid = () => this.plotIdentity === identity && this.epoch === epoch && this.plotPending && this.windows === windows && this.pinsValid(pins);
-    const work = function* (store: HistoryStore): Preparation<PlotBuffer> {
+    const nativePins=this.pins(nativeTiles);
+    const valid = () => this.plotIdentity === identity && this.epoch === epoch && this.plotPending && this.windows === windows && this.pinsValid(pins)&&this.pinsValid(nativePins);
+    const work = function* (store: HistoryStore): Preparation<{activity:PlotBuffer;native:PlotBuffer}> {
       const chunks: Chunk[] = [];
       for (const {tile, seq, from, to} of pins) {
         const key = `${tile.cell}:${tile.from}`;
         let saved = store.plotChunks.get(key);
         if (!saved || saved.tile !== tile || saved.seq !== seq || saved.from !== from || saved.to !== to) {
-          const chunk = yield* tile.chunkPrepared(meta.known, true,store.env.now());
+          const chunk = yield* tile.chunkPrepared(meta.known, true,store.env.now(),separate?'activity':'all');
           saved = {tile, seq, from, to, chunk};
           if (valid()) store.plotChunks.set(key, saved);
         }
         chunks.push(saved.chunk); yield;
       }
-      return yield* plotPrepared(chunks, meta, strip, coverage, windows, token, epoch, version);
+      const activity=yield* plotPrepared(chunks, meta, strip, coverage, windows, token, epoch, version);
+      if(!separate)return {activity,native:activity};
+      if(store.nativePlotIdentity===nativeIdentity&&store.drawingPlot)return {activity,native:store.drawingPlot};
+      const nativeChunks:Chunk[]=[],nativeCoverage:[number,number][]=[];
+      for(const {tile} of nativePins){
+        const key=`native:${tile.cell}:${tile.from}`,from=tile.nativeFrom,to=tile.nativeTo,seq=tile.nativeSeq;
+        let saved=store.plotChunks.get(key);
+        if(!saved||saved.seq!==seq||saved.from!==from||saved.to!==to||saved.deadline!==tile.planDeadline){
+          const chunk=yield*tile.chunkPrepared(meta.known,true,store.env.now(),'native');saved={tile:null,seq,from,to,chunk,deadline:tile.planDeadline};
+          if(valid())store.plotChunks.set(key,saved);
+        }
+        nativeChunks.push(saved.chunk);
+        const a=Math.max(from,strip.k0*strip.cell),b=Math.min(to,(strip.k1+1)*strip.cell),last=nativeCoverage.at(-1);
+        if(last&&last[1]===a)last[1]=b;else nativeCoverage.push([a,b]);yield;
+      }
+      if(store.cutTo!==null&&store.cutTo<=(strip.k1+1)*strip.cell)nativeCoverage.push([store.cutTo,(strip.k1+1)*strip.cell]);
+      return {activity,native:yield*plotPrepared(nativeChunks,meta,strip,nativeCoverage,windows,token,epoch,version)};
     };
-    prepare(this.plotOwner, work(this), valid, plot => this.setPlot(plot), this.preparations);
+    prepare(this.plotOwner, work(this), valid, plots => this.setPlot(plots.activity,nativeIdentity,plots.native), this.preparations);
   }
 
   private pins(tiles: HistoryTile[]): TilePin[] {return tiles.map(tile => ({tile, seq: tile.writeSeq, from: tile.readFrom, to: tile.readTo}));}
@@ -565,13 +636,14 @@ export class HistoryStore {
     const identity = `${epoch}:${version}:${target.key}:${target.k0}:${target.k1}`;
     if (identity === this.composeIdentity) return;
     this.composeIdentity = identity;
-    const tiles = [...(this.grids.get(target.cell)?.values() ?? [])].filter(t => t.readTo > t.readFrom && t.readTo > target.k0 * target.cell && t.readFrom <= target.k1 * target.cell).sort((a, b) => a.from - b.from);
+    const native=this.scope==='quota'&&!this.activityActive;
+    const tiles = [...(this.grids.get(target.cell)?.values() ?? [])].filter(t => native?t.nativeTo>t.nativeFrom&&t.nativeTo>target.k0*target.cell&&t.nativeFrom<=target.k1*target.cell:t.readTo > t.readFrom && t.readTo > target.k0 * target.cell && t.readFrom <= target.k1 * target.cell).sort((a, b) => a.from - b.from);
     const pins = this.pins(tiles);
     const valid = () => !this.interest && this.board === board && this.epoch === epoch && this.version === version && this.windows === windows && this.composeIdentity === identity && this.target().key === target.key && this.pinsValid(pins);
     const owner=this;
     const work = function* (): Preparation<History> {
       const chunks: Chunk[] = [];
-      for (const {tile} of pins) {chunks.push(yield* tile.chunkPrepared(meta.known,false,target.now)); yield;}
+      for (const {tile} of pins) {chunks.push(yield* tile.chunkPrepared(meta.known,false,target.now,native?'native':'all')); yield;}
       const history={...yield*composePrepared(chunks,meta,target,windows),board},previous=owner.shown?.meterSeries;
       if(owner.meters?.work&&history.meterSeries&&previous){
         const stable=new Map(previous.map(series=>[JSON.stringify([series.sourceId,series.meterId,series.kind,series.unit]),series]));
@@ -583,6 +655,7 @@ export class HistoryStore {
     prepare(this.composeOwner, work(), valid, history => {
       for (const {tile} of pins) tile.shownAt = this.env.now();
       this.shown = history;
+      this.composedNativeVersion=this.nativeVersion;
       this.needsCompose = false;
       if (this.plotPending) {this.plotPending = false; this.strip = null; this.plotChunks.clear(); this.preparations?.cancel(this.plotOwner); this.setPlot(null);}
       this.publish();
@@ -691,26 +764,32 @@ export class HistoryStore {
 
   private read(target: Target, from: number, to: number, role: Flight['role']) {
     if(this.pool)for(const waiting of [...this.flights])if(!this.pool.isActive(waiting)&&waiting.role===role)this.abort(waiting);
-    const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role};
+    const activityOnly=this.scope==='quota'&&this.workKey!==undefined&&this.nativeFull(target.cell,from,to);
+    const flight: Flight = {seq: ++this.seq, epoch: this.epoch, target: target.key, newsSeq: this.newsSeq, cell: target.cell, from, to, touched: Infinity, startedAt: this.elapsedNow(), controller: new AbortController(), role,activityOnly};
     this.flights.add(flight);
     const meta = this.meta?.run === this.run ? this.meta : undefined;
     const board=this.board!,meters=this.meters;
     const start=()=>{
       if(flight.controller.signal.aborted||flight.epoch!==this.epoch){this.abort(flight);return;}
+      if(flight.activityOnly&&!this.nativeFull(target.cell,from,to))flight.activityOnly=false;
       flight.startedAt=this.elapsedNow();
-      this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
+      this.env.read(board, target.cell, from, to, flight.controller.signal, meters, meta,flight.activityOnly).then(answer => this.merge(flight, answer), error => this.failed(flight, error));
     };
     if(this.pool)this.pool.request(this,flight,start,()=>this.abort(flight));else start();
   }
 
   private abort(flight: Flight) {this.preparations?.cancel(flight); this.releaseResponse(flight); flight.controller.abort();}
   private abortFlights() {for (const flight of [...this.flights]) this.abort(flight);}
-  private setPlot(plot: PlotBuffer | null) {
+  private setActivityPlot(plot:PlotBuffer|null){if(this.activityPlot===plot)return;this.activityPlot=plot;for(const listener of this.activityPlotListeners)listener();}
+  private setPlot(plot: PlotBuffer | null,nativeIdentity='',native=plot) {
     if(plot){const events=planEventsAt(plot.events,this.env.now());if(events!==plot.events)plot={...plot,events};}
     // Both snapshots share the prepared arrays. Moving quantities must not
     // replace the balance drawing; new data and authority replace both.
-    this.drawingPlot=plot;
-    this.setPlotFrame(plot);
+    this.setActivityPlot(plot);
+    if(plot&&nativeIdentity&&nativeIdentity===this.nativePlotIdentity)return;
+    this.nativePlotIdentity=nativeIdentity;
+    this.drawingPlot=native;
+    this.setPlotFrame(native);
   }
   private setPlotFrame(plot: PlotBuffer | null) {
     if(plot&&this.meters&&this.meta) {
@@ -760,7 +839,7 @@ export class HistoryStore {
       })) {this.abort(flight); this.schedule(); continue;}
       for (const key of response.keys) this.reservations.set(key, flight);
       response.started = true;
-      const pins = new Map<HistoryTile, {seq: number; from: number; to: number; staged: HistoryTile; chunks: Chunk[]}>();
+      const pins = new Map<HistoryTile, {seq: number; from: number; to: number; staged: HistoryTile; chunks: {chunk:Chunk;native:boolean}[]}>();
       const valid = () => this.responses.get(flight) === response && this.flights.has(flight) && !flight.controller.signal.aborted && flight.epoch === this.epoch && response.answer.run === this.run && response.keys.every(key => this.reservations.get(key) === flight) && [...pins].every(([base, pin]) => this.grids.get(base.cell)?.get(tileOf(base.from, base.cell)) === base && base.writeSeq === pin.seq && base.readFrom === pin.from && base.readTo === pin.to);
       const work = function* (store: HistoryStore): Preparation<void> {
         let completed = false;
@@ -774,10 +853,11 @@ export class HistoryStore {
           const admit = (bytes: number) => !store.pool || store.pool.reserve(flight, otherGrowth + Math.max(0, bytes - base.bytes));
           // Include new empty tile headers before preparation can yield, too.
           if (!admit(pin.staged.bytes)) {response.limited = true; completed = true; return;}
-          const staged = yield* pin.staged.staged(chunk, response.answer.known, admit,store.env.now());
+          const native=!flight.activityOnly;
+          const staged = yield* pin.staged.staged(chunk, response.answer.known, admit,store.env.now(),native);
           if (!staged) {response.limited = true; completed = true; return;}
           pin.staged = staged;
-          pin.chunks.push(chunk);
+          pin.chunks.push({chunk,native});
           if(store.pool&&!store.pool.reserve(flight,[...pins].reduce((sum,[base,pin])=>sum+Math.max(0,pin.staged.bytes-base.bytes),0))) {
             response.limited=true;completed=true;return;
           }
@@ -789,12 +869,12 @@ export class HistoryStore {
         }
       };
       prepare(flight, work(this), valid, () => {
-        if(response.limited){if(flight.role==='ahead'){this.aheadStopped=true;this.abort(flight);this.schedule();}else this.limit();return;}
+        if(response.limited){if(flight.role==='ahead'){this.aheadStopped=true;this.abort(flight);this.schedule();}else this.limit(flight.activityOnly);return;}
         // No yield between the last ownership check and the entire response's publication.
         for (const [base, {staged, chunks}] of pins) {
           staged.readFrom = base.readFrom; staged.readTo = base.readTo; staged.validTo = base.validTo;
           staged.writeSeq = flight.seq;
-          for (const chunk of chunks) {
+          for (const {chunk,native} of chunks) {
             const freshEnd = Math.max(chunk.from, Math.min(chunk.to, cellStart(flight.touched, flight.cell)));
             if (staged.readFrom === staged.readTo) {staged.readFrom = chunk.from; staged.readTo = chunk.to; staged.validTo = freshEnd;}
             else if (chunk.from <= staged.readTo && chunk.to >= staged.readFrom) {
@@ -802,12 +882,22 @@ export class HistoryStore {
               else if (chunk.from <= staged.validTo) staged.validTo = Math.max(staged.validTo, freshEnd);
               staged.readFrom = Math.min(staged.readFrom, chunk.from); staged.readTo = Math.max(staged.readTo, chunk.to);
             }
+            if(native){
+              staged.nativeSeq=flight.seq;
+              if(staged.nativeFrom===staged.nativeTo){staged.nativeFrom=chunk.from;staged.nativeTo=chunk.to;staged.nativeValidTo=freshEnd;}
+              else if(chunk.from<=staged.nativeTo&&chunk.to>=staged.nativeFrom){
+                if(chunk.from<staged.nativeFrom&&freshEnd<staged.nativeFrom)staged.nativeValidTo=freshEnd;
+                else if(chunk.from<=staged.nativeValidTo)staged.nativeValidTo=Math.max(staged.nativeValidTo,freshEnd);
+                staged.nativeFrom=Math.min(staged.nativeFrom,chunk.from);staged.nativeTo=Math.max(staged.nativeTo,chunk.to);
+              }
+            }
           }
           this.grids.get(base.cell)!.set(tileOf(base.from, base.cell), staged);
         }
         const answer = response.answer;
         this.readError=false;
-        if (flight.seq > this.metaSeq) {
+        if(!flight.activityOnly)this.nativeVersion++;
+        if (flight.seq > this.metaSeq&&!flight.activityOnly) {
           this.metaSeq = flight.seq;
           this.meta = {run: answer.run, now: answer.now, historyStart: answer.historyStart, known: answer.known, ...(answer.meta ? {meta: answer.meta} : {})};
           this.metaAt = flight.startedAt;
@@ -847,7 +937,7 @@ export class HistoryStore {
     const target = this.interest ? this.plotTarget() : this.target();
     const needed = flight.cell === target.cell && this.bad(target).some(at => at >= flight.from && at < flight.to);
     if(!needed){this.aheadStopped=true;this.schedule();return;}
-    if(error instanceof ApiError&&error.code==='history_limit') {this.limit();return;}
+    if(error instanceof ApiError&&error.code==='history_limit') {this.limit(flight.activityOnly);return;}
     if (this.interest) {
       const visible = this.plotTarget();
       const needed = flight.cell === visible.cell && this.bad(visible).some(at => at >= flight.from && at < flight.to);
@@ -869,9 +959,10 @@ export class HistoryStore {
     this.timers.set('retry', this.env.setTimeout(() => {this.clear('retry'); this.schedule();}, RETRY_MS));
   }
 
-  private limit() {
+  private limit(activityOnly=false) {
     this.historyLimit=true;
     this.cancelProjection();this.abortFlights();
+    if(activityOnly){this.setActivityPlot(null);this.clear('retry');this.publish();return;}
     this.grids.clear();this.plotChunks.clear();this.strip=null;
     this.shown=null;this.setPlot(null);this.clear('retry');this.publish();
   }
@@ -935,7 +1026,7 @@ export {historyPool} from './historyPool';
 function reader(scope: HistoryScope, family: MoneyFamily = 'budget') {
   const value=new HistoryStore({
     workInPresentation:scope!=='budget',
-    read: (_board, cell, from, to, signal, meters, meta) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{...(meters.sources?{sources:JSON.stringify(meters.sources)}:{}),unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal).then(reply=>expandHistory(reply,meta)),
+    read: (_board, cell, from, to, signal, meters, meta,activityOnly) => boardPeriod.transport.read(family==='funds'?'funds':scope,{cell:String(cell),from:String(from),to:String(to),...(pan.get()?{evidence:'skip'}:{}),meta:meta?.meta??'',...(meters?{...(meters.sources?{sources:JSON.stringify(meters.sources)}:{}),unit:meters.unit,meters:JSON.stringify(meters.ids),...(meters.displayCurrency?{currency:meters.displayCurrency}:{}),...(meters.work?{work:'1'}:{})}:{})},signal,activityOnly).then(reply=>expandHistory(reply,meta)),
     now: hubNow,
     setTimeout: (run, ms) => setTimeout(run, ms),
     clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
@@ -955,6 +1046,7 @@ const selectedMeters = (state: PageState, scope: HistoryScope, family: MoneyFami
 };
 function activeReaders(state=page.get()) {
   const board=state.board;
+  quotaHistory.setActivityActive(!!board&&widgetVisible(board.view,ACTIVITY,board.lineup.length));
   quotaHistory.setActive(shellActive&&filtersReady()&&!!board&&[ACTIVITY,...QUOTA_WIDGETS].some(id=>widgetVisible(board.view,id,board.lineup.length)));
   fundsHistory.setActive(shellActive&&filtersReady()&&!!board&&widgetVisible(board.view,SUBSCRIPTION_FUNDS,board.lineup.length));
   budgetHistory.setActive(shellActive&&filtersReady()&&!!board&&BUDGET_WIDGETS.some(id=>widgetVisible(board.view,id,board.lineup.length)));
@@ -993,14 +1085,15 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
         else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since, hub.data.workAuthority);
       }
     }
-    if(state.board)loader.setMeters(selection(state));
+    if(state.board){loader.setWorkFilter(selectedWorkKey());loader.setMeters(selection(state));}
   });
 }
 const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).flatMap(card => card.windows.map(window => `${card.id} ${window.id}`));
+const selectedWorkKey=()=>{const filters=effectiveFilters();return JSON.stringify(filters?workFilter(filters):null);};
 if(typeof window!=='undefined')followPeriod();
 follow(quotaHistory,page);follow(budgetHistory,page);follow(fundsHistory,page,'funds');
 page.listen((_event,state)=>activeReaders(state));
-onDataFilters(()=>{for(const [reader,scope,family] of [[quotaHistory,'quota','budget'],[budgetHistory,'budget','budget'],[fundsHistory,'budget','funds']] as const)reader.setMeters(selectedMeters(page.get(),scope,family));activeReaders();});
+onDataFilters(()=>{if(quotaHistory.setWorkFilter(selectedWorkKey()))pan.cancel();for(const [reader,scope,family] of [[quotaHistory,'quota','budget'],[budgetHistory,'budget','budget'],[fundsHistory,'budget','funds']] as const)reader.setMeters(selectedMeters(page.get(),scope,family));activeReaders();});
 
 /** The plot follows the gesture; only its completion chooses exact quantities. */
 export function followPan(loader: HistoryStore, gesture: Pick<Pan, 'get' | 'subscribe'>, selectedRange: () => TimeRange | null) {
@@ -1087,9 +1180,10 @@ function usePeriodHistory(loader:HistoryStore,rolling=false,financial=false):Sho
   return {...result,drawing};
 }
 export function useHistory(rolling=false) {return usePeriodHistory(quotaHistory,rolling);}
+export function useQuotaFinancialHistory(){return usePeriodHistory(quotaHistory,false,true);}
 export function useBudgetHistory(family:MoneyFamily='budget',rolling=false) {return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling);}
 export function useBudgetFinancialHistory(family:MoneyFamily='budget',rolling=false){return usePeriodHistory(family==='funds'?fundsHistory:budgetHistory,rolling,true);}
-export function useHistoryPlot(): PlotBuffer | null {return useSyncExternalStore(quotaHistory.subscribePlot, quotaHistory.getPlot, quotaHistory.getPlot);}
+export function useHistoryPlot(activity=false): PlotBuffer | null {return useSyncExternalStore(activity?quotaHistory.subscribeActivityPlot:quotaHistory.subscribePlot, activity?quotaHistory.getActivityPlot:quotaHistory.getPlot, activity?quotaHistory.getActivityPlot:quotaHistory.getPlot);}
 export function useBudgetHistoryPlot(family: MoneyFamily = 'budget'): PlotBuffer | null {const reader=family==='funds'?fundsHistory:budgetHistory;return useSyncExternalStore(reader.subscribePlot, reader.getDrawingPlot, reader.getDrawingPlot);}
 /** A fresh answer from either resource family supersedes the board's initial snapshot. */
 export function historyBegins(board: string | null, snapshot: number | null, answers: readonly (HistoryBoundary | null)[]): number {

@@ -85,6 +85,33 @@ function harness(budget?: number, preparations?: Preparations, scope?: 'quota'|'
   return {store, reads, advance, start, now: () => now, dropped: () => dropped, timers, correctClock: (ms: number) => {now += ms;}};
 }
 
+test('selected activity COW refusal retains native buffers and recovers under the same real pool budget',async()=>{
+  const pool=new HistoryPool(100_000),h=harness(undefined,undefined,'quota',pool);let pinned=0;
+  pool.register({get estimatedBytes(){return pinned;},evictionCandidates:()=>[]});
+  h.store.setWorkFilter('A');h.store.choose('1h',{from:NOW-H,to:NOW-5*M});
+  const answer=async()=>{
+    const read=pending(h)[0];assert.ok(read);
+    const chunks:Chunk[]=[];
+    for(let from=read.from;from<read.to;){
+      const to=Math.min(read.to,tileEnd(tileOf(from,read.cell),read.cell)),chunk=empty(from,to);
+      chunk.series=[{source:'s',window:'w',hold:H,open:null,cells:[[0,80,0,0]]}];
+      chunk.activity={sessions:[['a','s','A','device']],devices:{device:'Device'},cells:[[0,M,[0],[['p','A',M]]]]};
+      chunks.push(chunk);from=to;
+    }
+    await read.answer({chunks});
+  };
+  try{
+    await h.start();await answer();
+    const grid=cacheOf(h.store),old=[...grid.values()].flatMap(tiles=>[...tiles.values()]);assert.ok(old.length);
+    const financial=h.store.getFinancial();h.store.setWorkFilter('B');
+    pinned=pool.budget-pool.estimatedBytes-32;await flush();await answer();
+    assert.equal(h.store.get().error,'history_limit');assert.equal(h.store.getFinancial(),financial);
+    for(const tile of old){const kept=grid.get(tile.cell)!.get(tileOf(tile.from,tile.cell))!;assert.ok(kept);assert.equal((kept as any).series.get('s w').values,(tile as any).series.get('s w').values);}
+    pinned=0;h.store.retry();await flush();await answer();assert.equal(h.store.get().error,undefined);
+    assert.equal(h.store.get().history?.series.length,1);
+  }finally{pinned=0;h.store.close();assert.equal(pool.estimatedBytes,0);assert.equal(pool.activeFlights,0);}
+});
+
 test('settings retain live invalidations without reading history until the dashboard returns', async () => {
   const h = harness();
   h.store.setActive(false);
