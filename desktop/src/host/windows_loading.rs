@@ -243,13 +243,16 @@ impl Panel {
         }
     }
     fn dismiss(&self, blur: bool) {
+        let request = self.request.get();
         let _phase = self.probe.then(|| Phase::new(self.hwnd.get(), 11));
-        self.request_probe.mark(6, self.request.get(), 10, self.hwnd.get() as u64, usize::from(blur), 0);
+        self.request_probe.mark(6, request, 10, self.hwnd.get() as u64, usize::from(blur), 0);
         if let Some(shell) = self.shell.upgrade() {
-            crate::tauri_window::dismiss_panel(&shell, blur);
+            crate::tauri_window::dismiss_panel(&shell, request, blur);
         }
-        self.request_probe.mark(6, self.request.get(), 11, self.hwnd.get() as u64, usize::from(blur), 0);
-        self.hide();
+        self.request_probe.mark(6, request, 11, self.hwnd.get() as u64, usize::from(blur), 0);
+        if self.request.get() == request {
+            self.hide();
+        }
     }
     unsafe fn paint(&self, hwnd: HWND) {
         let _phase = self.probe.then(|| Phase::new(hwnd, 12));

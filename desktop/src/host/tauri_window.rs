@@ -59,9 +59,12 @@ pub fn toggle_panel(shell: &Arc<Shell>, point: Option<(i32, i32)>) {
         close_unwanted_panel(shell);
     }
 }
-pub fn dismiss_panel(shell: &Arc<Shell>, blur: bool) {
+pub fn dismiss_panel(shell: &Arc<Shell>, request: u64, blur: bool) {
     {
         let mut toggle = shell.host.panel_toggle.lock().unwrap_or_else(|e| e.into_inner());
+        if !toggle.requested(request) {
+            return;
+        }
         if blur {
             toggle.blur(Instant::now(), crate::tray::cursor_position());
         } else {
