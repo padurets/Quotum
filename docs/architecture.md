@@ -1595,11 +1595,14 @@ The filter button forms its own group after the board controls. A small dot mark
 non-default data selection or historical range, including while the row is hidden.
 The row starts closed and remembers its visibility in the reader's browser.
 Each data filter has on/off choices, a small minus-count tag for exclusions and an
-adjacent cross that shows all again. Resource groups use provider logos and inline
+adjacent cross that shows all again. Shared filter rows keep every switch on the
+right, including group headings and unknown resources. Status and reset slots keep
+their width as choices change. Resource groups use provider logos and inline
 disclosures; disabling a parent hides its children without changing their choices.
 Wallet key batches append within that disclosure instead of replacing the menu
 with another screen. The horizon uses the same dropdown style without its selected
-value in the trigger. Save and Restore sit at the right end of the complete row.
+value in the trigger. Restore precedes Save at the right end of the complete row;
+the date arrows stay beside them as the period caption changes.
 Hiding it preserves the selected period and shared chart horizon; while open,
 it keeps them available during scrolling. Board navigation and widget management
 stay in the header. Five-hour limits, weekly limits and wallet balance

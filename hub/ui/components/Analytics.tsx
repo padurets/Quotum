@@ -8,7 +8,8 @@ import {QUOTA_WIDGETS, BUDGET_WIDGETS, ACTIVITY, SUBSCRIPTION_FUNDS} from '../..
 import {t, useLocale} from '../i18n';
 import {pan} from '../lib/pan';
 import {Popover} from './Popover';
-import {DataFilterControls,FilterPopover,FilterSaveActions} from './DataFilters';
+import {DataFilterControls,FilterSaveActions} from './DataFilters';
+import {FilterChoice,FilterPopover} from './Filters';
 
 const Arrow = ({back}: {back: boolean}) => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -108,7 +109,7 @@ function PeriodSwitch({historyStart}: {historyStart: number}) {
       {selected && (
         <button
           type="button"
-          className="icon-button"
+          className="icon-button period-clear"
           aria-label={t('history.rangeClear')}
           title={t('history.rangeClear')}
           onClick={() => {
@@ -151,10 +152,9 @@ function ViewingControls({widgets}: {widgets: string[]}) {
     <div className="analytics-head-inner">
       <DataFilterControls/>
       {charts && <FilterPopover label="history.horizon" changed={horizon!=='auto'} onReset={()=>setPrefs({horizon:'auto'})} open={horizonOpen} onOpenChange={setHorizonOpen}>
-        {HORIZONS.map(value=><button type="button" key={value} className="popover-row" aria-pressed={horizon===value} onClick={()=>{setPrefs({horizon:value});setHorizonOpen(false);}}><i className={`check ${horizon===value?'on':''}`}/><span>{horizonName(value)}</span></button>)}
+        {HORIZONS.map(value=><FilterChoice key={value} selected={horizon===value} onSelect={()=>{setPrefs({horizon:value});setHorizonOpen(false);}}>{horizonName(value)}</FilterChoice>)}
       </FilterPopover>}
-      <PeriodSwitch historyStart={historyStart} />
-      <FilterSaveActions/>
+      <div className="filter-viewing"><PeriodSwitch historyStart={historyStart} /><FilterSaveActions/></div>
     </div>
   );
 }

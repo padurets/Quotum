@@ -1680,7 +1680,7 @@ const dataFilters:DemoSet={...SESSION_ANALYTICS,id:'filters',about:'Populated mi
       'Resources have small provider logos and inline disclosures. Turning a resource off hides its child choices and turning it back on preserves them. Wallet keys expand in place; Load more appends rows without a nested screen, Back action or page replacement. Test EN/RU at 320/390/1440 px.']},
   ...activity.entries.filter(entry=>entry.kind!=='person').map(entry=>entry.kind==='board'?{...entry,name:'Empty project selection',members:['ben'],filterProjects:{mode:'include' as const,values:[]},expect:[{state:'widgets' as const}],look:[
     'The saved Projects selection is empty. Agent sessions and activity are empty; subscription measurements and estimates remain available.',
-    'At 320/390/1440 px in EN/RU, use the Projects cross to show all; Restore returns to the empty defaults. Search narrows the available switches and the minus-count describes the exclusions. Save and Restore use 26 px icon buttons at the right end of the row. Ben can explore the same filters and cannot save opening defaults.',
+    'At 320/390/1440 px in EN/RU, use the Projects cross to show all; Restore returns to the empty defaults. Search narrows the available switches and the minus-count describes the exclusions without moving the menu. Every filter switch stays on the right, including unknown resources and keys. Restore precedes Save at the right end of the row; the date arrows stay there as their caption changes. Ben can explore the same filters and cannot save opening defaults.',
   ]}:entry.kind==='card'?{...entry,on:{compact:entry.on!.compact}}:entry),
   {kind:'person',id:'ben',name:'Ben',expect:[{state:'onboarding'}]},
 ]};

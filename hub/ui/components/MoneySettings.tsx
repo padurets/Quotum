@@ -13,7 +13,8 @@ import {MAX_METERS} from '../../server/domain/meterHistory';
 import {withHidden,type Arrange} from '../lib/view';
 import {t} from '../i18n';
 import {ErrorLine} from './Kit';
-import {Popover,SwitchRow,SlidersIcon,HideRow} from './Popover';
+import {Popover,SlidersIcon,HideRow} from './Popover';
+import {FilterRow} from './Filters';
 import {KEYS_PER_PAGE} from './KeyPages';
 import type {KeyPage} from '../lib/moneyKeys';
 
@@ -74,7 +75,7 @@ export function KeyMoneySettings({sources,source:focused,hidden:_hidden,series,a
   };
   const row=(id:string,meters:string[],label:string,unavailable=false,value?:string,key=meters.join(':'),slot=false)=>{
     const on=meters.some(meter=>has(id,meter)),extra=meters.filter(meter=>!has(id,meter)).length;
-    return <SwitchRow key={key} className={slot?'key-slot':undefined} on={on} value={value} disabled={loading||stale||!on&&(unavailable||selected.length+extra>MAX_METERS)} onChange={next=>toggle(id,meters,next)}>{label}</SwitchRow>;
+    return <FilterRow key={key} className={slot?'key-slot':undefined} on={on} value={value} disabled={loading||stale||!on&&(unavailable||selected.length+extra>MAX_METERS)} onChange={next=>toggle(id,meters,next)}>{label}</FilterRow>;
   };
   const membershipReady=inCard||selectedKeys==='[]'||membership?.context===membershipContext;
   const current=new Set(inCard?source?.keys?.map(key=>key.id):membership?.context===membershipContext?membership.keys:[]);

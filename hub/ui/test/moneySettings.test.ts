@@ -58,7 +58,8 @@ function fixture(selected:[string,string][]=[],budget?:{source:Named;context:Cur
     if(name.endsWith('/meterHistory'))return {MAX_METERS:32};
     if(name.endsWith('/view'))return {};
     if(name.endsWith('/i18n'))return {t:(key:string)=>key};
-    if(name==='./Popover')return {SwitchRow:switchRow};
+    if(name==='./Filters')return {FilterRow:switchRow};
+    if(name==='./Popover')return {};
     if(name==='./KeyPages')return {KEYS_PER_PAGE:10};
     if(name==='./Kit')return {ErrorLine:component('error')};
     throw new Error(name);
