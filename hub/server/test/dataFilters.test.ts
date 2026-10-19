@@ -93,6 +93,15 @@ test('v4 migration separates native windows and key caps without excluding hidde
   assert.deepEqual(filters.wallet,{mode:'auto',include:[cap('pinned')],exclude:[cap('off')]});
 });
 
+test('v4 native window IDs retain key prefixes and slash scopes as window exclusions',()=>{
+  const windows=['key:session','scope/key:x:session','scope/key:x:weekly'];
+  for(const provider of ['claude','codex','antigravity']){
+    const source=provider+':a',filters=filtersFromView({windows:windows.map(id=>source+'/'+id),shown:[]});
+    assert.deepEqual(filters.windows,{mode:'exclude',values:windows.map(id=>[source,id])});
+    assert.deepEqual(filters.wallet,{mode:'auto',include:[],exclude:[]});
+  }
+});
+
 test('metadata that fits storage can still be too large for an executable work request',()=>{
   const filters=defaultFilters();filters.projects={mode:'include',values:Array.from({length:1000},(_,i)=>String(i).padStart(4,'0')+'p'.repeat(79))};
   assert.ok(parseDataFilters(filters));assert.equal(executableWorkFilters(filters),false);

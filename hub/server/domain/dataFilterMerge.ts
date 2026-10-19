@@ -1,5 +1,6 @@
 import {canonicalRefs,defaultFilters,filterRefKey,FILTER_FAMILIES,FILTER_BYTES,jsonBytes,parseDataFilters,walletRule,fundsRule,
   type DataFilters,type FilterAuthority,type FilterFamily,type FamilyRef,type FilterUpdate,type Selection,type Wallet,type MoneyRef,type OnlyWallet} from './dataFilters.js';
+import {providerOf,supportsQuota} from './providers.js';
 
 /** A projected document is safe to disclose; dormant intent stays in raw storage. */
 export function projectFilters(raw:DataFilters,allowed:FilterAuthority) {
@@ -104,10 +105,16 @@ export function mergeFilters(raw:DataFilters,update:FilterUpdate,allowed:FilterA
 /** Extract the released v4 membership without treating hidden cards as exclusions. */
 export function filtersFromView(view:{windows:readonly string[];shown:readonly string[]}):DataFilters {
   const filters=defaultFilters();
-  const key=(value:string)=>/^(.+)\/key:([^/]+)$/.exec(value);
-  for(const value of view.windows){const match=key(value);if(match&&filters.wallet.mode==='auto')filters.wallet.exclude.push({source:match[1],kind:'keyCap',key:match[2]});
+  const key=(value:string):MoneyRef|null=>{
+    const at=value.indexOf('/'),source=value.slice(0,at);
+    // Native window IDs can contain both slashes and a leading key: scope.
+    if(at<=0||supportsQuota(providerOf(source.split(':')[0])))return null;
+    const match=/^key:([^/]+)$/.exec(value.slice(at+1));
+    return match?{source,kind:'keyCap',key:match[1]}:null;
+  };
+  for(const value of view.windows){const match=key(value);if(match&&filters.wallet.mode==='auto')filters.wallet.exclude.push(match);
     else {const at=value.indexOf('/');if(at>0)filters.windows.values.push([value.slice(0,at),value.slice(at+1)]);}}
-  for(const value of view.shown){const match=key(value);if(match&&filters.wallet.mode==='auto')filters.wallet.include.push({source:match[1],kind:'keyCap',key:match[2]});}
+  for(const value of view.shown){const match=key(value);if(match&&filters.wallet.mode==='auto')filters.wallet.include.push(match);}
   const parsed=parseDataFilters(filters);if(!parsed)throw new Error('Invalid migrated board filters');return parsed;
 }
 

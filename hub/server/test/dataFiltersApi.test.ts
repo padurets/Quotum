@@ -89,13 +89,13 @@ test('source mode cycles store private dormant decisions and a reset clears them
 test('layout 32 upgrades window/key choices atomically, keeping hidden geometry and rejecting old writers',async t=>{
   const db=new DatabaseSync(':memory:');t.after(()=>db.close());for(const step of STEPS.slice(0,32))db.exec(step);
   db.exec("PRAGMA user_version=32; INSERT INTO boards VALUES('b','',1,'u',0)");
-  const legacy:FixedView={...structuredClone(EMPTY_VIEW),version:4,hidden:['source:wallet'],shown:['budget-history','wallet/key:extra'],windows:['wallet/key:off','claude:a/gemini-2.5:session','claude:a/週期:weekly'],layout:{columns:6,places:{'source:wallet':{x:0,w:3,y:0,h:7},'budget-history':{x:3,w:3,y:1,h:10}}}};
+  const legacy:FixedView={...structuredClone(EMPTY_VIEW),version:4,hidden:['source:wallet'],shown:['budget-history','wallet/key:extra'],windows:['wallet/key:off','claude:a/gemini-2.5:session','claude:a/週期:weekly','antigravity:a/key:session','antigravity:a/scope/key:x:session'],layout:{columns:6,places:{'source:wallet':{x:0,w:3,y:0,h:7},'budget-history':{x:3,w:3,y:1,h:10}}}};
   db.prepare('INSERT INTO views VALUES (?,?,?,?,?)').run('b',JSON.stringify(encodeFixedView(legacy)),'u',0,8);
   assert.ok(decodeFixedView(encodeFixedView(legacy)));assert.equal(decodeView(encodeFixedView(legacy)),null);
   migrate(db,1);const directory=new Directory(db),view=directory.viewState('b'),filters=directory.filtersState('b');
   assert.equal(view.revision,9);assert.equal(view.view.version,5);assert.deepEqual(view.view.windows,[]);assert.deepEqual(view.view.hidden,legacy.hidden);assert.deepEqual(view.view.layout,legacy.layout);
   assert.deepEqual(view.view.shown,['budget-history']);assert.equal(filters.revision,0);
-  assert.deepEqual(filters.filters.windows,{mode:'exclude',values:[['claude:a','gemini-2.5:session'],['claude:a','週期:weekly']]});
+  assert.deepEqual(filters.filters.windows,{mode:'exclude',values:[['antigravity:a','key:session'],['antigravity:a','scope/key:x:session'],['claude:a','gemini-2.5:session'],['claude:a','週期:weekly']]});
   assert.deepEqual(filters.filters.wallet,{mode:'auto',include:[{source:'wallet',kind:'keyCap',key:'extra'}],exclude:[{source:'wallet',kind:'keyCap',key:'off'}]});
   const before=db.prepare('SELECT * FROM views').get();migrate(db,2);assert.deepEqual(db.prepare('SELECT * FROM views').get(),before);
   const h=await fixture(t),state=h.directory.viewState(h.board.id);
