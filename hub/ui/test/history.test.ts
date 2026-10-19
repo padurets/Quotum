@@ -1586,6 +1586,23 @@ test('a financial grant revision clears warm history and rejects a response from
 });
 
 
+test('private device contacts reuse selected resources while new card evidence scans them again',async()=>{
+  const h=harness(undefined,undefined,'budget'),store=createStore(reduce,INITIAL),stop=follow(h.store,store);
+  let scans=0;
+  const meters=[{id:'balance',unit:'USD',kind:'balance' as const,amount:'10000000',at:NOW,staleAfterMs:10*M,stale:false,limit:null,resetAt:null,minutes:null,scope:null,label:null}];
+  const card={id:'wallet',provider:'openrouter',plan:'',resets:null,owners:[],windows:[],error:null,successAt:NOW,stale:false,staleAfterMs:10*M,measureIntervalMs:null,get meters(){scans++;return meters;}};
+  const snapshot:Snapshot={board:{id:'b',name:'',personal:true},view:EMPTY_VIEW,historyStart:0,sources:[card],sessions:{},cadence:{},refresh:{},forecast:{},mine:[],boards:[],resets:{resets:{},trackers:[],past:{}}};
+  try{
+    store.dispatch({type:'board-open',id:'b'});store.dispatch({type:'hub',event:{type:'hello',data:{epoch:'run'}}});store.dispatch({type:'hub',event:{type:'snapshot',data:snapshot}});await flush();
+    assert.deepEqual(h.reads[0].meters?.ids,[['wallet','balance']]);await h.reads[0].answer();scans=0;
+    for(let i=0;i<20;i++)store.dispatch({type:'hub',event:{type:'deviceContacts',data:{devices:[{deviceId:'d',lastSeenAt:NOW+i}]}}});
+    assert.equal(scans,0,'a heartbeat must not inspect unchanged financial resources');assert.equal(h.reads.length,1);
+    const changed={...card,successAt:NOW+1,get meters(){scans++;return meters;}};scans=0;
+    store.dispatch({type:'hub',event:{type:'card',data:changed}});
+    assert.ok(scans>0,'new card evidence invalidates the cached selection');
+  }finally{stop();h.store.close();}
+});
+
 test('subscription funds read independently from wallet budgets and retire on financial revoke',async()=>{
   const before=prefs(),pool=new HistoryPool(),b=harness(undefined,undefined,'budget',pool),f=harness(undefined,undefined,'budget',pool),store=createStore(reduce,INITIAL);
   const stopB=follow(b.store,store),stopF=follow(f.store,store,'funds');

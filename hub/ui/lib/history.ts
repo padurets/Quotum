@@ -1,4 +1,4 @@
-import {onDataFilters,filtersReady} from './filterSelection';
+import {onDataFilters,filtersReady,effectiveFilters} from './filterSelection';
 import {HistoryPool,historyPool} from './historyPool';
 import {boardPeriod,followPeriod} from './period';
 import type {HistoryScope} from '../../server/domain/history';
@@ -964,6 +964,14 @@ export const historyReaders = {setActive(active: boolean) {shellActive=active;bo
 /** Event changes identify resources; a reader's choices never mutate another board's selections. */
 export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>, family: MoneyFamily = 'budget') {
   const scope=loader.scope??'quota';
+  let inputs:unknown[]|undefined,meters:MeterSelection|undefined;
+  const selection=(state:PageState)=>{
+    const board=state.board,next=[board?.id,board?.lineup,board?.cards,board?.view,board?.currencies,prefs()[family==='funds'?'funds':'money'],effectiveFilters()];
+    // Contacts update private device times, leaving every selection input shared.
+    // Reuse both the resource scan and the reader's already compared query.
+    if(!inputs||next.some((value,index)=>value!==inputs![index])){inputs=next;meters=selectedMeters(state,scope,family);}
+    return meters;
+  };
   return store.listen((event, state) => {
     if (event.type === 'board-open') {pan.cancel(); loader.open(event.id);}
     else if (event.type === 'board-close') {pan.cancel(); loader.close();}
@@ -978,14 +986,14 @@ export function follow(loader: HistoryStore, store: Store<PageState, PageEvent>,
       else if (hub.type === 'lineup') {loader.lineup(state.board?.lineup ?? []); if(scope==='quota')loader.setWindows(windowsOf(state));}
       else if (hub.type === 'card'&&scope==='quota') loader.setWindows(windowsOf(state));
       else if (hub.type === 'history') {
-        const selected=scope==='budget'?new Set(selectedMeters(state,scope,family)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
+        const selected=scope==='budget'?new Set(selection(state)?.ids.map(([source])=>source)):new Set(state.board?.lineup??[]);
         const changes=hub.data.changes?.filter(change=>change.scope===scope&&selected.has(change.source)&&(scope!=='budget'||change.workSince===undefined||change.since<change.workSince));
         const workSince = scope==='quota'?hub.data.workSince : undefined;
         if(changes?.length || workSince !== undefined)loader.news(Math.min(...(changes ?? []).map(change=>change.since), workSince ?? Infinity), hub.data.workAuthority);
         else if(!hub.data.changes&&hub.data.sources.some(source=>selected.has(source)))loader.news(hub.data.since, hub.data.workAuthority);
       }
     }
-    if(state.board)loader.setMeters(selectedMeters(state,scope,family));
+    if(state.board)loader.setMeters(selection(state));
   });
 }
 const windowsOf = (state: PageState) => Object.values(state.board?.cards ?? {}).flatMap(card => card.windows.map(window => `${card.id} ${window.id}`));
