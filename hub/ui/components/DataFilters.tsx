@@ -77,7 +77,7 @@ export function FilterSaveActions(){
   const state=useDataFilters(),owner=useRole()==='owner';
   return <div className="filter-save-actions">
     <button className="icon-button" title={t('filters.restore')} aria-label={t('filters.restore')} disabled={!state.saved||!state.dirty} onClick={()=>dataFilters.restore()}><RotateCcw size={16}/></button>
-    {owner&&<button className="icon-button" title={t('filters.save')} aria-label={t('filters.save')} aria-busy={state.saving} disabled={!state.saved||state.saving||!state.dirty&&state.saved.revision>0} onClick={()=>void dataFilters.save()}><Save size={16}/></button>}
+    {owner&&<button className="icon-button" title={t(state.saving?'filters.saving':'filters.save')} aria-label={t(state.saving?'filters.saving':'filters.save')} aria-busy={state.saving} disabled={!state.saved||state.saving||!state.dirty&&state.saved.revision>0} onClick={()=>void dataFilters.save()}>{state.saving?<span className="spinner" aria-hidden="true"/>:<Save size={16}/>}</button>}
     <ErrorLine error={state.error}/>
   </div>;
 }

@@ -14,6 +14,7 @@ export const en = {
   "filters.active": "Data filters are active",
   "filters.clients": "Clients",
   "filters.save": "Save filters on board",
+  "filters.saving": "Saving filters…",
   "filters.restore": "Restore saved filters",
   "filters.showAll": "Show all: {filter}",
   "filters.excludedCount": "Excluded: {count}",

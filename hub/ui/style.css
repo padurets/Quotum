@@ -239,7 +239,9 @@ body.is-resizing-bottom-right, body.is-resizing-bottom-right * { cursor: nwse-re
 /* ---------- popovers ---------- */
 .picker { position: relative; display: flex; margin-left: 10px; }
 .icon-button { position: relative; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 1px solid transparent; border-radius: 7px; background: none; color: var(--text-3); transition: color .15s, background .15s, border-color .15s; }
-.icon-button:hover, .icon-button[aria-expanded=true] { color: var(--text); background: #ffffff0a; border-color: var(--hair); }
+.icon-button:hover:not(:disabled), .icon-button[aria-expanded=true] { color: var(--text); background: #ffffff0a; border-color: var(--hair); }
+.icon-button:disabled { opacity: .35; cursor: default; }
+.icon-button[aria-busy=true] { opacity: 1; cursor: wait; }
 .icon-button svg { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; }
 .badge { position: absolute; top: -3px; right: -3px; min-width: 13px; height: 13px; padding: 0 3px; border-radius: 7px; background: #262a3d; color: var(--text-2); font-size: 9px; font-style: normal; line-height: 13px; text-align: center; }
 .popover {

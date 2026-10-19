@@ -9,6 +9,7 @@ export const ru = {
   "filters.active": "Фильтры данных включены",
   "filters.clients": "Клиенты",
   "filters.save": "Сохранить фильтры на доске",
+  "filters.saving": "Сохранение фильтров…",
   "filters.restore": "Восстановить сохранённые фильтры",
   "filters.showAll": "Показать всё: {filter}",
   "filters.excludedCount": "Исключено: {count}",
